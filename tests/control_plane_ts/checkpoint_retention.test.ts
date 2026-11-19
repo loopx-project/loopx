@@ -75,3 +75,15 @@ test("existing artifact Effect entry delegates to the sole typed retention selec
   assert.deepEqual(await checkpointArtifacts({action: "retention_plan", input: {policy, points, now: 3000}}), plan());
   await assert.rejects(checkpointArtifacts({action: "retention_plan", input: {}, execute: true}), /request/);
 });
+
+test("retention points and pins use bare lowercase SHA-256 identities", () => {
+  const sha256 = "a".repeat(64);
+  const point = {...points[0], sha256};
+  assert.deepEqual(ids(plan({pins: [{id: point.id, sha256}]}, [point]).retained), [point.id]);
+  for (const invalid of ["", "a".repeat(63), "a".repeat(65), "A".repeat(64),
+    "g".repeat(64), `sha256:${sha256}`]) {
+    assert.throws(() => plan({}, [{...point, sha256: invalid}]), /invalid retention point identity/);
+    assert.throws(() => plan({pins: [{id: point.id, sha256: invalid}]}, [point]),
+      /invalid retention point identity/);
+  }
+});

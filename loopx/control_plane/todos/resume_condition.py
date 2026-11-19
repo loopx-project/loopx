@@ -34,16 +34,17 @@ TODO_RESUME_KIND_VALUES = {
 }
 
 _TODO_ID_PATTERN = re.compile(r"^todo_[a-z0-9_-]{3,64}$")
+_MONITOR_CHANGE_SCOPE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.:/-]{0,95}$")
 _CAPABILITY_PATTERN = re.compile(r"^[a-z][a-z0-9_:-]{0,63}$")
 _RESUME_WHEN_PATTERN = re.compile(
-    r"^[a-z][a-z0-9_-]{0,31}(?::[a-z0-9_.:@-]{1,96})?$"
+    r"^[a-z][a-z0-9_-]{0,31}(?::[a-z0-9_.:@#/-]{1,181})?$"
 )
 _RESUME_PR_MERGED_PATTERN = re.compile(
     r"^pr_merged:(?:[a-z\d_.-]{1,80}/[a-z\d_.-]{1,100})?#[1-9]\d{0,8}$"
 )
 _RESUME_AT_PATTERN = re.compile(
     r"^resume_at:(?P<timestamp>[1-9]\d{3}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"
-    r"(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2}))$",
+    r"(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2}))$",
     re.IGNORECASE,
 )
 _PR_REF_NUMBER_PATTERN = re.compile(
@@ -78,6 +79,9 @@ _RESUME_ITEM_FIELDS = (
     "resume_ready",
     "resume_monitor_generation",
     "material_change_generation",
+    "material_change_scope_generations",
+    "next_due_at",
+    "expires_at",
 )
 
 
@@ -121,11 +125,14 @@ def normalize_todo_resume_when(value: Any) -> str | None:
             return None
         if not 1000 <= utc.year <= 9999:
             return None
-        canonical = (
-            utc.isoformat(timespec="milliseconds")
-            if utc.microsecond
-            else utc.replace(microsecond=0).isoformat()
-        ).replace("+00:00", "Z")
+        if utc.microsecond % 1000:
+            canonical = utc.strftime("%Y-%m-%dT%H:%M:%S") + "." + f"{utc.microsecond:06d}".rstrip("0") + "Z"
+        else:
+            canonical = (
+                utc.isoformat(timespec="milliseconds")
+                if utc.microsecond
+                else utc.replace(microsecond=0).isoformat()
+            ).replace("+00:00", "Z")
         return f"{TODO_RESUME_KIND_RESUME_AT}:{canonical}"
     candidate = candidate.lower()
     if candidate.startswith(f"{TODO_RESUME_KIND_RESUME_AT}:"):
@@ -144,8 +151,18 @@ def normalize_supported_todo_resume_when(value: Any) -> str | None:
     if not candidate:
         return None
     kind, separator, target = candidate.partition(":")
-    if kind in {TODO_RESUME_KIND_TODO_DONE, TODO_RESUME_KIND_MONITOR_CHANGED}:
-        return candidate if separator and _TODO_ID_PATTERN.match(target) else None
+    if kind == TODO_RESUME_KIND_MONITOR_CHANGED:
+        monitor_id, scope_separator, scope = target.partition("@")
+        return candidate if (
+            separator
+            and _TODO_ID_PATTERN.fullmatch(monitor_id)
+            and (
+                not scope_separator
+                or bool(_MONITOR_CHANGE_SCOPE_PATTERN.fullmatch(scope))
+            )
+        ) else None
+    if kind == TODO_RESUME_KIND_TODO_DONE:
+        return candidate if separator and _TODO_ID_PATTERN.fullmatch(target) else None
     if kind == TODO_RESUME_KIND_PR_MERGED:
         return candidate if _RESUME_PR_MERGED_PATTERN.match(candidate) else None
     if kind == TODO_RESUME_KIND_CAPACITY_AVAILABLE:
@@ -153,6 +170,17 @@ def normalize_supported_todo_resume_when(value: Any) -> str | None:
     if kind == TODO_RESUME_KIND_RESUME_AT:
         return candidate if _RESUME_AT_PATTERN.match(candidate) else None
     return None
+
+
+def todo_resume_dependency_id(value: Any) -> str | None:
+    """Decode the supported wire token for bounded source transport, not readiness."""
+    candidate = normalize_supported_todo_resume_when(value)
+    if candidate is None:
+        return None
+    kind, _, target = candidate.partition(":")
+    if kind == TODO_RESUME_KIND_MONITOR_CHANGED:
+        return target.partition("@")[0]
+    return target if kind == TODO_RESUME_KIND_TODO_DONE else None
 
 
 def require_supported_todo_resume_when(value: Any) -> str | None:
@@ -165,7 +193,7 @@ def require_supported_todo_resume_when(value: Any) -> str | None:
         return normalized
     raise ValueError(
         "resume_when must use a supported condition: todo_done:<todo_id>, "
-        "monitor_changed:<monitor_todo_id>, pr_merged:[owner/repo]#<number>, "
+        "monitor_changed:<monitor_todo_id>[@<scope>], pr_merged:[owner/repo]#<number>, "
         "capacity_available:<capability>, or "
         "resume_at:<timezone-aware-rfc3339-timestamp>"
     )

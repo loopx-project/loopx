@@ -1,4 +1,4 @@
-"""Versioned ownership of generated Todo regions, not a general Markdown parser.
+"""Versioned ownership of generated Todo regions.
 
 Legacy import accepts the actual LoopX-produced H2/list/metadata grammar.
 New projections have paired markers, shared by the writer and readers.
@@ -110,6 +110,7 @@ def find_todo_regions(lines: list[str], *, visible: frozenset[int] | None = None
                 or task
                 or parse_todo_metadata_line(content) is not None
                 or content.startswith("<!-- loopx:todo-section-projection-v0 ")
+                or content.startswith("<!-- loopx:todo-archive-pointer ")
                 or legacy_continuation
             )
             if not generated:

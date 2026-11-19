@@ -82,3 +82,62 @@ qualification does not establish installation or original-consumer adoption.
 确切身份冲突、缺少语义增量的拒绝，以及写回后的单次扣额。必须用已安装 CLI
 的隔离合成场景证明旧的提前绑定失败，才将源码验证视为修复。源码/PR 验收
 不代表已经安装或原请求方已经采用。
+
+## Review context changes before writeback / 写回前的评审上下文变化
+
+An enabled stride review can become stale between delivery and writeback.
+For a context-ID mismatch within the same obligation, the semantic writeback
+owner keeps `stride_review_basis_mismatch` and returns
+`host_action=read_current_replan_context` with
+`replan_transition.context_recovery`. The JSON CLI saves the exact complete
+write-time `replan_context`, `stride_control` and recovery guidance in a private,
+immutable file. Its response carries received/current IDs, the file and digest,
+and generic index/selection commands. It does not activate context delivery or
+advance a native baseline. Native semantic-owner responses and non-POSIX CLI
+recovery remain complete inline.
+There is no automatic acceptance or reference replacement. Read the applicable
+Goal, acceptance, constraints, stride contract and decision-relevant facts;
+supporting evidence and history are available on demand. Whole-file traversal
+is not a prerequisite. Reassess before retrying the original writeback with its same
+Goal/Agent/Turn/obligation and settlement identity. The rejection emits no
+unbound retry command; it commits no writeback or quota spend. Another relevant
+change can reject the retry again. If private publication fails, the compact
+response identifies unavailable transport; repair it and retry the unchanged
+original writeback for current recovery, preserving any earlier committed
+refinement receipt. It neither substitutes an old basis nor repeats admission.
+Other validation failures retain their
+existing repair route, and stride-off behavior is unchanged.
+
+启用 stride 的评审可能在投递与写回之间过期。同一 obligation 内发生 context ID
+不匹配时，语义写回 owner 保留 `stride_review_basis_mismatch`，给出
+`host_action=read_current_replan_context`。JSON CLI 将完整的写入时 `replan_context`、
+`stride_control` 与恢复指引保存在私有不可变文件中；`replan_transition.context_recovery`
+返回收到/当前 ID、文件路径与摘要，以及通用索引/选读命令。不会启用差分交付、
+推进原生基线；语义 owner 与非 POSIX CLI 仍返回完整内联响应。不会自动接受提案或替换引用。消费者先读
+适用的 Goal、验收、约束、stride 合同和决策必要事实，按需读取证据与历史，不要求
+遍历整份文件；重新判断后，再使用
+原 Goal/Agent/Turn/obligation 和结算身份重试原写回。拒绝响应不再给出丢失身份的
+通用重试命令，不写入进展或扣额；相关事实再次变化仍可再次拒绝。私有落盘失败时，
+紧凑响应说明传输不可用；修复后重试原写回以取得当前恢复文件，保留先前已提交的
+refinement 回执，不替换成旧依据或重复准入。其他校验失败
+保留原恢复路径，stride 关闭时的行为不变。
+
+This does not classify another agent's outcome as irrelevant. Shared acceptance
+and requirement-status changes remain in the review basis until an explicit
+dependency-scoping contract qualifies narrower invalidation. A successful
+same-Turn recovery is not evidence of fewer model tokens or better outcomes.
+The File/SQLite CLI test covers a source change, readback of the changed facts,
+reassessment, accepted writeback and an idempotent single spend; it does not
+qualify installed-host adoption or the complete unified-contract migration.
+
+Autonomous-replan settlement guidance uses `--delivery-boundary semantic_closeout`,
+including Todo-bound reviews whose work remains open. Ordinary in-flight work
+retains its existing boundary; the projection does not grant completion or spend.
+
+自主重规划的结算指引使用 `--delivery-boundary semantic_closeout`，包括工作仍未完成的
+Todo 绑定评审。普通未完成工作保留原边界；投影不授予完成或扣额权限。
+
+这不把其他 Agent 的 outcome 自动判为无关。共享验收和要求状态的变化仍属于评审
+依据；只有明确的依赖范围契约通过验收，才能缩小失效范围。同 Turn 恢复成功不
+证明模型 token 减少或效果改善。File/SQLite CLI 测试覆盖来源变化、新事实读回、
+重新判断、有效写回及幂等单次扣额，不代表已安装宿主采用或完整统一契约迁移完成。

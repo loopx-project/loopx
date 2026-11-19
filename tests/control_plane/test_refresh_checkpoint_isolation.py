@@ -18,6 +18,7 @@ from loopx.extensions.lark.presentation import explore_results
 from loopx.extensions.runtime import install_extension
 from loopx.global_registry import sync_project_registry_to_global
 from loopx.state_refresh import render_state_refresh_markdown
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from tests.control_plane.test_refresh_checkpoint_recovery import first_refresh as first_refresh
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, REPO_ROOT, TODO_ID, TURN_ID,
@@ -110,7 +111,7 @@ def test_stdout_recovery_requires_confirmation_to_resume_external_delivery(
         pytest.fail(f"Unexpected notification failure: {type(error).__name__}")
 
     monkeypatch.setattr(goal_channel_lifecycle, "_exception_reason", unexpected_notification_failure)
-    project, runtime, registry = _write_fixture(tmp_path)
+    project, runtime, registry = _write_fixture(tmp_path, provider="sqlite")
     shared = tmp_path / "shared-runtime"
     monkeypatch.setenv("LOOPX_RUNTIME_ROOT", str(shared))
     monkeypatch.setenv("PYTHONPATH", str(REPO_ROOT))
@@ -123,7 +124,7 @@ def test_stdout_recovery_requires_confirmation_to_resume_external_delivery(
         rc = cli.main(["--format", output, *argv])
         stdout = capsys.readouterr().out
         assert rc == expected_rc, stdout
-        return json.loads(stdout) if output == "json" else stdout
+        return read_cli_policy_payload(stdout, returncode=rc) if output == "json" else stdout
 
     if baseline:
         run([*prefix, "refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
@@ -133,9 +134,15 @@ def test_stdout_recovery_requires_confirmation_to_resume_external_delivery(
     binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
     guard = run([*prefix, "quota", "should-run", "--codex-app", *binding,
-                 "--scan-path", str(project)])
+                 ])
     assert guard["decision"] == "run", guard
     _append_blocking_user_gate(project)
+    from canonical_authority_fixture import advance_canonical_fixture_authority, read_fixture_todos
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    advance_canonical_fixture_authority(runtime, GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=GOAL_ID,
+            todos=read_fixture_todos(project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"),
+            handoff_mode="soft_claim", leases=[]), operation_id="fixture-delivery-gate")
     _configure_sinks(registry, runtime)
     sync = sync_project_registry_to_global(
         registry_path=registry, runtime_root_override=str(shared), goal_id=GOAL_ID,

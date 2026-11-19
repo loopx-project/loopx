@@ -34,11 +34,12 @@ def _is_projection_derived_result_key(key: str, *, goal_id: str) -> bool:
 
 
 def resolve_explore_source_registry(
-    *, registry_path: Path, goal_id: str
+    *, registry_path: Path, goal_id: str, runtime_root_override: str | None = None
 ) -> tuple[Path, dict[str, Any]]:
     route = resolve_goal_source_runtime_route(
         registry_path=registry_path,
         goal_id=goal_id,
+        runtime_root_override=runtime_root_override,
     )
     return (
         Path(str(route["source_registry"])),

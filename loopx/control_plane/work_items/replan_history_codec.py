@@ -16,11 +16,18 @@ from typing import Any, Literal
 from ..effect_runtime import MAX_REQUEST_BYTES, EffectRuntimeRejected, effect_runtime_result
 from ..runtime.time import now_utc, parse_timestamp
 from ..goals.goal_vision_policy import normalize_effective_turn_replan_threshold
-from ..todos.contract import normalize_todo_claimed_by, normalize_todo_id, normalize_todo_id_list
+from ..todos.contract import (
+    normalize_todo_claimed_by, normalize_todo_id, normalize_todo_id_list,
+    normalize_todo_watch_only,
+)
 from ..todos.resume_planning import build_todo_resume_planning_request
 
 REPLAN_HISTORY_NEUTRAL_CLASSIFICATIONS = {
     "quota_slot_spent", "quota_slot_voided", "delivery_completion_spend_accounted_v0",
+    # A rejected/no-change review is an observation, not new work that can
+    # trigger or expire another review. Reuse these canonical writeback values
+    # for history projection, retained ACK windows and lane selection alike.
+    "replan_noop", "repair_noop",
 }
 
 
@@ -31,6 +38,7 @@ def effective_turn_cadence_context(
     registry_path: Path | None = None,
     goal_ref: dict[str, str] | None = None,
     source_admission: dict[str, Any] | None = None,
+    tolerate_malformed_history: bool = False,
 ) -> dict[str, Any] | None:
     """Encode a Goal whose live cadence was resolved by the caller."""
     profile = goal.get("execution_profile") or {}
@@ -47,9 +55,15 @@ def effective_turn_cadence_context(
         "goal_ref": goal_ref,
         "source_admission": source_admission,
         "threshold": threshold,
+        "stride_strategy": profile.get("stride_strategy", "off"),
         "settlement_source": {
             "runtime_root": str(runtime_root.resolve()),
             "goal_id": goal["id"],
+            **(
+                {"tolerate_malformed_history": True}
+                if tolerate_malformed_history
+                else {}
+            ),
         },
     }
 
@@ -78,8 +92,12 @@ def _run_fact(run: Mapping[str, Any], ack_recorded: Callable[..., bool]) -> dict
         "turn_id": _progress_turn_instance_id(run),
         "accepted_ack": ack_recorded(run),
         "progress": progress_observation_from_run(run),
+        **({"todo_id": run.get("todo_id"), "blocked_retry": run["blocked_retry"],
+            "delivery_outcome": run.get("delivery_outcome")}
+           if isinstance(run.get("blocked_retry"), dict) else {}),
         "monitor": {
             "target_id": str(target.get("target_id") or "").strip() or None,
+            "target_schema": target.get("schema_version"),
             "mode": str(target.get("monitor_mode") or "").strip() or None,
             "material_change": (
                 event.get("material_change")
@@ -111,6 +129,8 @@ def _todo_facts(value: Any, *, include_resume: bool, frontier: bool = False) -> 
             "claim": normalize_todo_claimed_by(item.get("claimed_by")),
             "public_claim": str(item.get("claimed_by") or "").strip() or None,
             "target": str(item.get("target_key") or item.get("todo_id") or "monitor").strip(),
+            "target_key": str(item.get("target_key") or "").strip() or None,
+            "watch_only": normalize_todo_watch_only(item.get("watch_only")) is True,
             "no_change_count": count,
             "due_at": _timestamp(item.get("next_due_at")),
             "expires_at": _timestamp(item.get("expires_at")),
@@ -165,7 +185,7 @@ def project_replan_history(
     needs_resume = operation == "all" and any(
         row["monitor"]["mode"] == "blocked_successor_wait_without_material_transition"
         for row in facts)
-    params = {
+    params: dict[str, Any] = {
         "schema_version": "replan_history_request_v0", "operation": operation,
         "runs": facts,
         "agent_id": str(agent_id or "").strip() or None,
@@ -182,9 +202,14 @@ def project_replan_history(
         # Carry one observation for the complete current source. Expiry is
         # interpreted by the shared TypeScript Monitor owner, not this codec.
         params["observed_at"] = now_utc().timestamp()
+    if operation in {"all", "periodic"}:
+        # Preserve the native retry's microsecond deadline; TS reuses the
+        # settlement owner instead of a second expiry policy or bridge call.
+        params["retry_observed_at"] = now_utc().isoformat()
     if effective_turn_cadence is not None:
         params["settlement_source"] = effective_turn_cadence["settlement_source"]
         params["periodic_threshold"] = effective_turn_cadence["threshold"]
+        params["stride_strategy"] = effective_turn_cadence.get("stride_strategy", "off")
     try:
         if effective_turn_cadence is None:
             result = project_replan_request(params)

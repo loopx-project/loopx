@@ -17,6 +17,7 @@ from .core import (
 )
 from ...control_plane.content_digest import ENVELOPED_SHA256_PATTERN
 from ...control_plane.digest_envelope import sha256_envelope
+from ...public_safe_text import PUBLIC_SAFE_SLUG_PATTERN
 
 GENERATION_BUNDLE_SCHEMA = "periodic_report_generation_bundle_v0"
 GENERATION_RECEIPT_SCHEMA = "periodic_report_generation_receipt_v0"
@@ -25,7 +26,6 @@ EXTENSION_READINESS_SCHEMA = "periodic_report_extension_readiness_v0"
 DELIVERY_INTENT_SCHEMA = "periodic_report_delivery_intent_v0"
 DELIVERY_RECEIPT_SCHEMA = "periodic_report_delivery_receipt_v0"
 
-_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 _VERSION_RE = re.compile(r"^[0-9a-z][a-z0-9_.+-]{0,127}$")
 _DEPENDENCY_POLICIES = {"required", "optional", "disabled"}
 _PROVIDER_STATUSES = {"ready", "unavailable", "unknown"}
@@ -69,7 +69,7 @@ def _text(value: object, label: str, *, maximum: int = 500) -> str:
 
 def _token(value: object, label: str) -> str:
     token = _text(value, label, maximum=128).lower()
-    if not _TOKEN_RE.fullmatch(token):
+    if not PUBLIC_SAFE_SLUG_PATTERN.fullmatch(token):
         raise ValueError(f"{label} must be a lower-snake-like public token")
     return token
 

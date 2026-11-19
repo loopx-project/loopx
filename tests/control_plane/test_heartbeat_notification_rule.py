@@ -94,6 +94,23 @@ def test_rendered_task_bodies_keep_execution_obligation_authority() -> None:
         assert "Missing vision: same-turn checkpoint-context" not in body
 
 
+def test_codex_app_quiet_completion_is_host_control_not_chat(tmp_path) -> None:
+    variants = [{mode: True} for mode in ("full", "compact", "brief", "thin")]
+    variants.append({
+        "thin": True, "turn_envelope": True,
+        "decision_output_root": tmp_path, "turn_instance_id": "fixture-quiet-turn",
+    })
+    for variant in variants:
+        body = build_heartbeat_prompt(
+            goal_id="quiet-completion-fixture", agent_id="worker-a",
+            registered_agents=["worker-a"], runtime_profile="codex_app_heartbeat",
+            **variant,
+        )["task_body"]
+        assert "DONT_NOTIFY: no chat text" in body, variant
+        assert "required host quiet result in full" in body, variant
+        assert "response with the skip reason" not in body, variant
+
+
 def test_all_heartbeat_modes_scope_no_spend_to_observation() -> None:
     # Build the shipped payload, including the short/default worker entrypoint.
     # An unchanged artifact may still accompany a validated route elimination;
@@ -127,12 +144,15 @@ def test_todo_closeout_does_not_invent_successors_or_skip_turn_settlement(tmp_pa
         assert "no invented successor" in body
         assert "settlement_plan" in body
         assert "projected monitor/continuation" in body
-        assert "keep open" in body or "Wait=open" in body
-        assert "no wait spend" in body.lower()
-        assert "continue only admitted work" in body or "admitted P1/P2" in body
+        assert "No useful independent work before an evidenced due time" in body
+        assert "--status deferred --resume-when resume_at:" in body
+        assert "settle original Turn, then yield to host scheduler" in body
+        assert "Fresh admission on resume" in body
+        assert "No spend for waiting alone" in body
+        assert "continue only admitted work" in body.lower() or "admitted P1/P2" in body
         for stale in ("Done -> successor first", "Done->successor",
                       "open + monitor_changed + successor", "wait->monitor+successor/work",
-                      "no-follow-up completion"):
+                      "no-follow-up completion", "Wait=open"):
             assert stale not in body
 
 
@@ -169,7 +189,13 @@ def test_generic_task_bodies_follow_user_language_without_forcing_chinese() -> N
         body = renderer(**kwargs)
         expected_policy = (
             LANGUAGE_POLICY_THIN
-            if renderer in (render_brief_heartbeat_task_body, render_thin_heartbeat_task_body)
+            if renderer in (
+                render_brief_heartbeat_task_body,
+                render_thin_heartbeat_task_body,
+                render_visible_goal_task_body,
+                render_traex_visible_goal_task_body,
+                render_ark_managed_agent_goal_task_body,
+            )
             else LANGUAGE_POLICY
         )
         assert expected_policy in body, renderer.__name__
@@ -206,9 +232,9 @@ def test_language_policy_preserves_blocker_and_native_goal_continuation() -> Non
     brief = " ".join(render_brief_heartbeat_task_body(**kwargs).split())
     assert "settlement_plan.ordered_steps" in brief
     assert "preserve exact identities/effect ids and actual outcomes" in brief
-    assert "Wait: keep open; follow projected monitor/continuation" in brief
-    assert "continue only admitted work" in brief
-    assert "No wait spend" in brief
+    assert "Other waits: projected monitor/continuation" in brief
+    assert "continue only admitted work" in brief.lower()
+    assert "No spend for waiting alone" in brief
     assert "Finish Goal only on terminal no-follow-up" in brief
 
     for renderer in (
@@ -219,7 +245,7 @@ def test_language_policy_preserves_blocker_and_native_goal_continuation() -> Non
         body = renderer(**kwargs)
         assert "After settlement recheck quota" in body, renderer.__name__
         assert "should_run=false` + terminal no-follow-up" in body, renderer.__name__
-        assert "otherwise obey the next action or wait guidance" in body, renderer.__name__
+        assert "else next action/wait" in body, renderer.__name__
 
 
 def test_heartbeat_recommendation_mirrors_execution_obligation_in_replan() -> None:

@@ -105,14 +105,34 @@ def _audit_owners(request: dict[str, Any]) -> dict[str, Any]:
 
 @contextmanager
 def _regular_input(path: Path, limit: int) -> Iterator[BinaryIO]:
+    # O_NOFOLLOW and os.getuid are POSIX-only. A bare reference to either raises
+    # AttributeError on a host that does not define it, so this reader would
+    # surface an untyped crash instead of its own refusal -- and the readback is
+    # reachable without the platform gate verify_state_backup applies. Ask for
+    # what this host has, and refuse a symlink here when the open cannot.
+    getuid = getattr(os, "getuid", None)
+    if getuid is None:
+        raise StateRecoveryError("recovery_input_unavailable")
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except OSError as exc:
         raise StateRecoveryError("recovery_input_unavailable") from exc
+    try:
+        # Where the host has no no-follow flag the open cannot refuse a link, and
+        # inspecting the path first only moves the race to the open below. Bind the
+        # descriptor to the entry before anything is read: a link opens to its
+        # target, whose device and inode differ from the link's own.
+        opened, entry = os.fstat(fd), os.lstat(path)
+        _require(not stat.S_ISLNK(entry.st_mode)
+                 and (entry.st_dev, entry.st_ino) == (opened.st_dev, opened.st_ino),
+                 "recovery_input_unavailable")
+    except BaseException:
+        os.close(fd)
+        raise
     with os.fdopen(fd, "rb") as handle:
         info = os.fstat(handle.fileno())
         _require(stat.S_ISREG(info.st_mode), "recovery_input_not_regular")
-        _require(info.st_uid == os.getuid() and not info.st_mode & 0o077, "recovery_input_not_private")
+        _require(info.st_uid == getuid() and not info.st_mode & 0o077, "recovery_input_not_private")
         _require(0 < info.st_size <= limit, "recovery_capacity_exceeded")
         yield handle
 
@@ -128,10 +148,33 @@ def _sha(handle: BinaryIO) -> tuple[str, int]:
     return digest.hexdigest(), count
 
 
+class _ArchiveInput(io.RawIOBase):
+    """Witness the compressed bytes actually consumed by the parser."""
+
+    def __init__(self, handle: BinaryIO):
+        super().__init__()
+        self.handle = handle
+        self.digest = hashlib.sha256()
+        self.total = 0
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: Any) -> int:
+        data = self.handle.read(min(len(buffer), MAX_ARCHIVE_BYTES - self.total + 1))
+        self.total += len(data)
+        _require(self.total <= MAX_ARCHIVE_BYTES, "recovery_capacity_exceeded")
+        self.digest.update(data)
+        buffer[:len(data)] = data
+        return len(data)
+
+
 class _BoundedGzip(io.RawIOBase):
     def __init__(self, handle: BinaryIO, archive_size: int):
         super().__init__()
-        self.source = gzip.GzipFile(fileobj=handle, mode="rb")
+        self.archive = _ArchiveInput(handle)
+        self.compressed = io.BufferedReader(self.archive, buffer_size=_CHUNK)
+        self.source = gzip.GzipFile(fileobj=self.compressed, mode="rb")
         self.limit = min(MAX_EXPANDED_BYTES, archive_size * MAX_EXPANSION_RATIO)
         self.total = 0
 
@@ -141,6 +184,13 @@ class _BoundedGzip(io.RawIOBase):
         self.total += len(data)
         _require(self.total <= self.limit, "recovery_capacity_exceeded")
         return data
+
+    def close(self) -> None:
+        try:
+            self.source.close()
+        finally:
+            self.compressed.close()
+            super().close()
 
 
 class _RecoveryTarInfo(tarfile.TarInfo):
@@ -350,7 +400,7 @@ def _scan(handle: BinaryIO, archive_size: int, output: Path | None = None) -> di
             ValueError, OverflowError, KeyError, RecursionError) as exc:
         raise StateRecoveryError("archive_unreadable") from exc
     finally:
-        stream.source.close()
+        stream.close()
     _require(embedded is not None, "embedded_manifest_missing")
     _check_links(links)
     # Links are materialized last and no member may live beneath a link.
@@ -361,7 +411,8 @@ def _scan(handle: BinaryIO, archive_size: int, output: Path | None = None) -> di
         for name, target in links:
             _directories(output, PurePosixPath(name).parts[:-1])
             os.symlink(target, output / name)
-    return {"embedded_manifest": embedded, "files": files, "logical_bytes": logical,
+    return {"archive_sha256": stream.archive.digest.hexdigest(), "archive_size_bytes": stream.archive.total,
+            "embedded_manifest": embedded, "files": files, "logical_bytes": logical,
             "sqlite_members": sqlite_members, "standalone_sqlite_members": standalone,
             "entry_count": len(names)}
 
@@ -383,6 +434,8 @@ def verify_state_backup(
         _runtime("state.recovery.archive.verify", {"external_manifest": external,
             "archive_sha256": archive_sha, "archive_size_bytes": archive_size})
         observation = _scan(archive_handle, archive_size)
+        _require(observation["archive_sha256"] == archive_sha
+                 and observation["archive_size_bytes"] == archive_size, "recovery_input_changed")
         verified = _runtime("state.recovery.manifest.verify", {
             "external_manifest": external, "embedded_manifest": observation["embedded_manifest"],
             "archive_sha256": archive_sha, "archive_size_bytes": archive_size,

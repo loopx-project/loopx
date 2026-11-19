@@ -1,0 +1,906 @@
+{
+  "synthetic": true,
+  "observed_at": "2026-10-27T05:54:48.992688+00:00",
+  "implementation_baseline": "218aa087b66bb99038b1ce7d782110741a5e42ae",
+  "prepublish_target": "bafbafc258de72029b54ea016103c0a7bd2409c9",
+  "source_sha256": {
+    "loopx/cli_commands/turn_run_once.py": "550160370adb28ad46dce9ee34e9531cd48ed68829a19dea3f6e5996e3c8ad3f",
+    "loopx/control_plane/turn_driver/executor.py": "596dcf1e5052fcec17aef22f44f55d7b7a0286db691355ae7c127d238c87bf03",
+    "loopx/control_plane/turn_driver/recovery.py": "1307b0eee7ff96fe4393932c90a525b5cfbe2eb6863e4e755f4832f95f8671a3",
+    "loopx/control_plane/turn_driver/turn_journal.ts": "acb7f24c1408dc459e407d214a9a728b936199995209d5321dc839f68018dd0c",
+    "loopx/control_plane/turn_driver/turn_journal_effect_readback.ts": "a047c804d79c3d0be3ab2e416744460d5745423f374699a2d9acc3fd21258d3b",
+    "pyproject.toml": "5ee122852c42eb0679d680abba87e6177e332a00c2ab57ad5eaf895b91206ea0",
+    "tests/control_plane/test_turn_interruption_recovery.py": "d3e0a932595d61561d02a1c660b63b5d2a9e9c85efd5c6a08d5b8be7fc46a2e2",
+    "tests/control_plane/turn_interruption_oracle.py": "830de844dbeea4862cc6feca932c959e5942a63594abc7b07c93718d4ae21e4f",
+    "tests/control_plane/test_turn_recovery_state_machine.py": "f785de49a7ef3143920a2f0b156acc1917060d4e6b2ffc013e96dff0371c9099",
+    "tests/control_plane/check_turn_recovery_mutations.py": "cd49c479fc6ea9ab5de1bb56c7a3d9233a187ea67b6bc3d4a685882e8b4e76fb",
+    "tests/control_plane_ts/turn_journal.test.ts": "3cb34482ed73bb1de38ee1e1088ecbea21cb8bc94892b0443d7de94d05f156e7",
+    "tests/test_loopx_turn_executor.py": "b51bc6ff032b375fb7fee4751d7433547f58121aea3cfedd3716b881ed283fb3",
+    "tests/models/turn_recovery/TurnRecovery.tla": "3e362eb09bb43e0e9c4636bee2c657608808998dcab2170e9d1f958ead0a1677",
+    "tests/models/turn_recovery/TurnRecovery.cfg": "4c1227941d232389407df78d44d32b02ac554edb3b17c0bfb3cd49872f878cf5",
+    "tests/models/turn_recovery/Unsafe.cfg": "2fabe115ffeb2b1fd2b5937058217541f73250221b5afb77d26cbf18f84f288b",
+    "tests/models/turn_recovery/requirements.txt": "e819a8b3a3b2bc35a2b15132233e73aa713fe9f79e8d4366712b5545e634a27d",
+    "tests/requirements-stage2c-linux-py311.txt": "eace18917359f05ad4b402362550c53a9c49c742638900b48981fdb8fbe25b65"
+  },
+  "scope": "One original Turn, local cooperative owners, durable result reuse; unknown Host outcomes refuse redispatch.",
+  "scenarios": [
+    {
+      "provider": "file",
+      "boundary": "intent",
+      "signal": "SIGKILL",
+      "before": {
+        "goal_id": "loopx-turn-real-cli-e2e",
+        "status": "in_progress",
+        "completed_phases": [],
+        "host_attempt_count": 1,
+        "turn_key": "sha256:739af8ca99ce328242060ef0ddfdcaefda95dd221321134685796305c68b17df"
+      },
+      "original_effect_id": "loopx-turn-real-cli-e2e:codex-turn-e2e:todo_turnreale2e01:synthetic-export-original",
+      "downstream_records": [],
+      "artifact": null,
+      "recovery_status": null,
+      "recovery_reason": "host_outcome_unknown",
+      "recorded_effects": {
+        "host_invoked": null,
+        "state_written": false,
+        "quota_spent": false,
+        "scheduler_acknowledged": false
+      },
+      "downstream_calls": 0,
+      "settlements": 0,
+      "capture_sha256": "d0f17d287727307305dd955071390b3366b81268d1f83445a62695e6623f0b81",
+      "stop_observation": "host_not_started"
+    },
+    {
+      "provider": "sqlite",
+      "boundary": "intent",
+      "signal": "SIGKILL",
+      "before": {
+        "goal_id": "loopx-turn-real-cli-e2e",
+        "status": "in_progress",
+        "completed_phases": [],
+        "host_attempt_count": 1,
+        "turn_key": "sha256:375b2e8d9c4ea7ca0135ea6d26a268390032cd1a2e651f1180521a79e352186c"
+      },
+      "original_effect_id": "loopx-turn-real-cli-e2e:codex-turn-e2e:todo_turnreale2e01:synthetic-export-original",
+      "downstream_records": [],
+      "artifact": null,
+      "recovery_status": null,
+      "recovery_reason": "host_outcome_unknown",
+      "recorded_effects": {
+        "host_invoked": null,
+        "state_written": false,
+        "quota_spent": false,
+        "scheduler_acknowledged": false
+      },
+      "downstream_calls": 0,
+      "settlements": 0,
+      "capture_sha256": "e35f621778bdc3114ab8a8aec7f6b33b2c99688a0860bd6226563dabdaa74cb1",
+      "stop_observation": "host_not_started"
+    },
+    {
+      "provider": "file",
+      "boundary": "receipt",
+      "signal": "SIGKILL",
+      "before": {
+        "goal_id": "loopx-turn-real-cli-e2e",
+        "status": "committed",
+        "completed_phases": [
+          "host_execute",
+          "typed_result",
+          "validation",
+          "durable_writeback",
+          "quota_spend",
+          "scheduler_apply",
+          "scheduler_ack"
+        ],
+        "host_attempt_count": 1,
+        "turn_key": "sha256:af24ce582eef1847d6f4403e64d0e1ba5bc14b247ee1872d42253a0069c58820"
+      },
+      "original_effect_id": "loopx-turn-real-cli-e2e:codex-turn-e2e:todo_turnreale2e01:synthetic-export-original",
+      "downstream_records": [
+        [
+          1,
+          "name,score\nZ,3\nA,1\nM,1\n"
+        ]
+      ],
+      "artifact": "name,score\nZ,3\nA,1\nM,1\n",
+      "recovery_status": "committed",
+      "recovery_reason": null,
+      "recorded_effects": null,
+      "downstream_calls": 1,
+      "settlements": 1,
+      "capture_sha256": "e928af0ad759c9ca81163137322e68b2edbf65002d8a655cf0298b6419674f7c",
+      "stop_observation": "host_stopped"
+    },
+    {
+      "provider": "sqlite",
+      "boundary": "receipt",
+      "signal": "SIGKILL",
+      "before": {
+        "goal_id": "loopx-turn-real-cli-e2e",
+        "status": "committed",
+        "completed_phases": [
+          "host_execute",
+          "typed_result",
+          "validation",
+          "durable_writeback",
+          "quota_spend",
+          "scheduler_apply",
+          "scheduler_ack"
+        ],
+        "host_attempt_count": 1,
+        "turn_key": "sha256:d91afea5c4f507579777fe8226418ac6edfd2e5936dcd0854c00e5ac5b63cfb3"
+      },
+      "original_effect_id": "loopx-turn-real-cli-e2e:codex-turn-e2e:todo_turnreale2e01:synthetic-export-original",
+      "downstream_records": [
+        [
+          1,
+          "name,score\nZ,3\nA,1\nM,1\n"
+        ]
+      ],
+      "artifact": "name,score\nZ,3\nA,1\nM,1\n",
+      "recovery_status": "committed",
+      "recovery_reason": null,
+      "recorded_effects": null,
+      "downstream_calls": 1,
+      "settlements": 1,
+      "capture_sha256": "9177a5957e8aeb22469699f4ce92cb17f9f46e6f2ee53f9019f8a58911e0761f",
+      "stop_observation": "host_stopped"
+    },
+    {
+      "provider": "file",
+      "boundary": "revoked",
+      "signal": "SIGKILL",
+      "before": {
+        "goal_id": "loopx-turn-real-cli-e2e",
+        "status": "in_progress",
+        "completed_phases": [
+          "host_execute",
+          "typed_result"
+        ],
+        "host_attempt_count": 1,
+        "turn_key": "sha256:5e8a10c59d1409120e0340009ab5c2ee512f60179fb5eab2b673defcfab0d309"
+      },
+      "original_effect_id": "loopx-turn-real-cli-e2e:codex-turn-e2e:todo_turnreale2e01:synthetic-export-original",
+      "downstream_records": [
+        [
+          1,
+          "name,score\nZ,3\nA,1\nM,1\n"
+        ]
+      ],
+      "artifact": "name,score\nZ,3\nA,1\nM,1\n",
+      "recovery_status": null,
+      "recovery_reason": "goal_not_registered",
+      "recorded_effects": {
+        "host_invoked": true,
+        "state_written": false,
+        "quota_spent": false,
+        "scheduler_acknowledged": false
+      },
+      "downstream_calls": 1,
+      "settlements": 0,
+      "capture_sha256": "c4c594bfd2be69f7ac2bac2c10b2c436c33f4acff304b1a96d290f71b076e834",
+      "stop_observation": "host_stopped"
+    },
+    {
+      "provider": "sqlite",
+      "boundary": "revoked",
+      "signal": "SIGKILL",
+      "before": {
+        "goal_id": "loopx-turn-real-cli-e2e",
+        "status": "in_progress",
+        "completed_phases": [
+          "host_execute",
+          "typed_result"
+        ],
+        "host_attempt_count": 1,
+        "turn_key": "sha256:d374142b0ef3a21d58dc97ede994dd8e6d35b321f824868182f462e553f69235"
+      },
+      "original_effect_id": "loopx-turn-real-cli-e2e:codex-turn-e2e:todo_turnreale2e01:synthetic-export-original",
+      "downstream_records": [
+        [
+          1,
+          "name,score\nZ,3\nA,1\nM,1\n"
+        ]
+      ],
+      "artifact": "name,score\nZ,3\nA,1\nM,1\n",
+      "recovery_status": null,
+      "recovery_reason": "goal_not_registered",
+      "recorded_effects": {
+        "host_invoked": true,
+        "state_written": false,
+        "quota_spent": false,
+        "scheduler_acknowledged": false
+      },
+      "downstream_calls": 1,
+      "settlements": 0,
+      "capture_sha256": "56273701d31f5763cae8f8d212abcc5c5886971732f2bb5bd315ca3f235e50eb",
+      "stop_observation": "host_stopped"
+    },
+    {
+      "provider": "file",
+      "boundary": "tool",
+      "signal": "SIGKILL",
+      "before": {
+        "goal_id": "loopx-turn-real-cli-e2e",
+        "status": "in_progress",
+        "completed_phases": [],
+        "host_attempt_count": 1,
+        "turn_key": "sha256:5c32ef00a7520160e6c2b1f63071b4145882e3fb0dd0c47b86f0c8b839c636cb"
+      },
+      "original_effect_id": "loopx-turn-real-cli-e2e:codex-turn-e2e:todo_turnreale2e01:synthetic-export-original",
+      "downstream_records": [
+        [
+          1,
+          "name,score\nZ,3\nA,1\nM,1\n"
+        ]
+      ],
+      "artifact": "name,score\nZ,3\nA,1\nM,1\n",
+      "recovery_status": null,
+      "recovery_reason": "host_outcome_unknown",
+      "recorded_effects": {
+        "host_invoked": null,
+        "state_written": false,
+        "quota_spent": false,
+        "scheduler_acknowledged": false
+      },
+      "downstream_calls": 1,
+      "settlements": 0,
+      "capture_sha256": "124caa6e91818c97e3f99976672a682ee7c191b4dc2a31d3c5ac30e1d020d989",
+      "stop_observation": "host_stopped"
+    },
+    {
+      "provider": "sqlite",
+      "boundary": "tool",
+      "signal": "SIGKILL",
+      "before": {
+        "goal_id": "loopx-turn-real-cli-e2e",
+        "status": "in_progress",
+        "completed_phases": [],
+        "host_attempt_count": 1,
+        "turn_key": "sha256:e58c173a436bda7c5d8e9dd93783bd9d5770950b2275fb4b8c8d6c8324910034"
+      },
+      "original_effect_id": "loopx-turn-real-cli-e2e:codex-turn-e2e:todo_turnreale2e01:synthetic-export-original",
+      "downstream_records": [
+        [
+          1,
+          "name,score\nZ,3\nA,1\nM,1\n"
+        ]
+      ],
+      "artifact": "name,score\nZ,3\nA,1\nM,1\n",
+      "recovery_status": null,
+      "recovery_reason": "host_outcome_unknown",
+      "recorded_effects": {
+        "host_invoked": null,
+        "state_written": false,
+        "quota_spent": false,
+        "scheduler_acknowledged": false
+      },
+      "downstream_calls": 1,
+      "settlements": 0,
+      "capture_sha256": "ca7253837b56988c3d59d68a518095a6a3a5a2d28dd6e2f1390d0ef8656e8209",
+      "stop_observation": "host_stopped"
+    },
+    {
+      "provider": "file",
+      "boundary": "result",
+      "signal": "SIGKILL",
+      "before": {
+        "goal_id": "loopx-turn-real-cli-e2e",
+        "status": "in_progress",
+        "completed_phases": [
+          "host_execute",
+          "typed_result"
+        ],
+        "host_attempt_count": 1,
+        "turn_key": "sha256:8dbb0ba0ae12752c0c75fd92f31e9ed8ea1f031403709c81a4383961d59d00de"
+      },
+      "original_effect_id": "loopx-turn-real-cli-e2e:codex-turn-e2e:todo_turnreale2e01:synthetic-export-original",
+      "downstream_records": [
+        [
+          1,
+          "name,score\nZ,3\nA,1\nM,1\n"
+        ]
+      ],
+      "artifact": "name,score\nZ,3\nA,1\nM,1\n",
+      "recovery_status": "committed",
+      "recovery_reason": null,
+      "recorded_effects": null,
+      "downstream_calls": 1,
+      "settlements": 1,
+      "capture_sha256": "d089c3674521a76652c010285a6bfb9b98ad08ed28c38f57785cce2b051b9e7a",
+      "stop_observation": "host_stopped"
+    },
+    {
+      "provider": "sqlite",
+      "boundary": "result",
+      "signal": "SIGKILL",
+      "before": {
+        "goal_id": "loopx-turn-real-cli-e2e",
+        "status": "in_progress",
+        "completed_phases": [
+          "host_execute",
+          "typed_result"
+        ],
+        "host_attempt_count": 1,
+        "turn_key": "sha256:95662538d142728c911463561768a91af1c8d7a31e58195a0233b2f1c58bea64"
+      },
+      "original_effect_id": "loopx-turn-real-cli-e2e:codex-turn-e2e:todo_turnreale2e01:synthetic-export-original",
+      "downstream_records": [
+        [
+          1,
+          "name,score\nZ,3\nA,1\nM,1\n"
+        ]
+      ],
+      "artifact": "name,score\nZ,3\nA,1\nM,1\n",
+      "recovery_status": "committed",
+      "recovery_reason": null,
+      "recorded_effects": null,
+      "downstream_calls": 1,
+      "settlements": 1,
+      "capture_sha256": "1a442c4fb938283887cf201d0eeaf3537d7e0f9f689307df9c243c89a126cbd3",
+      "stop_observation": "host_stopped"
+    },
+    {
+      "provider": "file",
+      "boundary": "writeback",
+      "signal": "SIGKILL",
+      "before": {
+        "goal_id": "loopx-turn-real-cli-e2e",
+        "status": "in_progress",
+        "completed_phases": [
+          "host_execute",
+          "typed_result",
+          "validation"
+        ],
+        "host_attempt_count": 1,
+        "turn_key": "sha256:6130efe5d571cc52ec5046f28f0a2dd3d6f47bcc6c79fc81edd2fbe9d948bc09"
+      },
+      "original_effect_id": "loopx-turn-real-cli-e2e:codex-turn-e2e:todo_turnreale2e01:synthetic-export-original",
+      "downstream_records": [
+        [
+          1,
+          "name,score\nZ,3\nA,1\nM,1\n"
+        ]
+      ],
+      "artifact": "name,score\nZ,3\nA,1\nM,1\n",
+      "recovery_status": "committed",
+      "recovery_reason": null,
+      "recorded_effects": null,
+      "downstream_calls": 1,
+      "settlements": 1,
+      "capture_sha256": "70d7f044c3c2e98429ab32627077bd6a81db243e63bfc95689e4387dc82406bf",
+      "stop_observation": "host_stopped"
+    },
+    {
+      "provider": "sqlite",
+      "boundary": "writeback",
+      "signal": "SIGKILL",
+      "before": {
+        "goal_id": "loopx-turn-real-cli-e2e",
+        "status": "in_progress",
+        "completed_phases": [
+          "host_execute",
+          "typed_result",
+          "validation"
+        ],
+        "host_attempt_count": 1,
+        "turn_key": "sha256:463dbed359b9aedf28e61cb004975794e54d3f823513444100b3d715a2be52fc"
+      },
+      "original_effect_id": "loopx-turn-real-cli-e2e:codex-turn-e2e:todo_turnreale2e01:synthetic-export-original",
+      "downstream_records": [
+        [
+          1,
+          "name,score\nZ,3\nA,1\nM,1\n"
+        ]
+      ],
+      "artifact": "name,score\nZ,3\nA,1\nM,1\n",
+      "recovery_status": "committed",
+      "recovery_reason": null,
+      "recorded_effects": null,
+      "downstream_calls": 1,
+      "settlements": 1,
+      "capture_sha256": "5a7f03a9b2bbc4f03d53243b609d899733dd4ea7f9e2566b9038f998e0e3d291",
+      "stop_observation": "host_stopped"
+    },
+    {
+      "provider": "file",
+      "boundary": "spend",
+      "signal": "SIGKILL",
+      "before": {
+        "goal_id": "loopx-turn-real-cli-e2e",
+        "status": "in_progress",
+        "completed_phases": [
+          "host_execute",
+          "typed_result",
+          "validation",
+          "durable_writeback"
+        ],
+        "host_attempt_count": 1,
+        "turn_key": "sha256:9559bef4274019dd35fb1fa1cfb9d73e5caee53b547a4ef0a6b1a933f1efb6b9"
+      },
+      "original_effect_id": "loopx-turn-real-cli-e2e:codex-turn-e2e:todo_turnreale2e01:synthetic-export-original",
+      "downstream_records": [
+        [
+          1,
+          "name,score\nZ,3\nA,1\nM,1\n"
+        ]
+      ],
+      "artifact": "name,score\nZ,3\nA,1\nM,1\n",
+      "recovery_status": "committed",
+      "recovery_reason": null,
+      "recorded_effects": null,
+      "downstream_calls": 1,
+      "settlements": 1,
+      "capture_sha256": "f1e8e176df8f20dbbebe8c298f8f2a48a489b0c45b1b1d1c6a076d9868ce240b",
+      "stop_observation": "host_stopped"
+    },
+    {
+      "provider": "sqlite",
+      "boundary": "spend",
+      "signal": "SIGKILL",
+      "before": {
+        "goal_id": "loopx-turn-real-cli-e2e",
+        "status": "in_progress",
+        "completed_phases": [
+          "host_execute",
+          "typed_result",
+          "validation",
+          "durable_writeback"
+        ],
+        "host_attempt_count": 1,
+        "turn_key": "sha256:d604cd52cc7b1182e52f16b8de2781983244c6528fa0fff0f1c898bcc716c017"
+      },
+      "original_effect_id": "loopx-turn-real-cli-e2e:codex-turn-e2e:todo_turnreale2e01:synthetic-export-original",
+      "downstream_records": [
+        [
+          1,
+          "name,score\nZ,3\nA,1\nM,1\n"
+        ]
+      ],
+      "artifact": "name,score\nZ,3\nA,1\nM,1\n",
+      "recovery_status": "committed",
+      "recovery_reason": null,
+      "recorded_effects": null,
+      "downstream_calls": 1,
+      "settlements": 1,
+      "capture_sha256": "d2cf819367dd9f2ec7657466ca3ce047e32fbfcaf185e7542e722651f18f172f",
+      "stop_observation": "host_stopped"
+    },
+    {
+      "provider": "file",
+      "boundary": "normal",
+      "signal": null,
+      "before": null,
+      "original_effect_id": null,
+      "downstream_records": [
+        [
+          1,
+          "name,score\nZ,3\nA,1\nM,1\n"
+        ]
+      ],
+      "artifact": "name,score\nZ,3\nA,1\nM,1\n",
+      "recovery_status": "committed",
+      "recovery_reason": null,
+      "recorded_effects": null,
+      "downstream_calls": 1,
+      "settlements": 1,
+      "capture_sha256": null,
+      "stop_observation": null
+    },
+    {
+      "provider": "sqlite",
+      "boundary": "normal",
+      "signal": null,
+      "before": null,
+      "original_effect_id": null,
+      "downstream_records": [
+        [
+          1,
+          "name,score\nZ,3\nA,1\nM,1\n"
+        ]
+      ],
+      "artifact": "name,score\nZ,3\nA,1\nM,1\n",
+      "recovery_status": "committed",
+      "recovery_reason": null,
+      "recorded_effects": null,
+      "downstream_calls": 1,
+      "settlements": 1,
+      "capture_sha256": null,
+      "stop_observation": null
+    }
+  ],
+  "model": {
+    "tool": "TLC2 2026.10.26.231022 fad899c",
+    "jar_sha256": "78f7e2c6bf9a8b65eda665a23e94431255587e0b43a834a4e2af1723562d9b4a",
+    "safe": {
+      "distinct_states": 80,
+      "generated_states": 160,
+      "depth": 10,
+      "invariants_and_temporal_properties": "passed"
+    },
+    "guard_removed": {
+      "exit_code": 12,
+      "invariant": "NoReplacement",
+      "distinct_states": 55,
+      "generated_states": 84,
+      "depth": 7
+    }
+  },
+  "mutations": [
+    {
+      "mutation": "unknown_dispatch_guard",
+      "rejected": true,
+      "exit_code": 1
+    },
+    {
+      "mutation": "stale_generation_guard",
+      "rejected": true,
+      "exit_code": 1
+    },
+    {
+      "mutation": "current_authority_guard",
+      "rejected": true,
+      "exit_code": 1
+    },
+    {
+      "mutation": "settlement_dedup",
+      "rejected": true,
+      "exit_code": 1
+    },
+    {
+      "mutation": "drop_original_requirement",
+      "rejected": true
+    }
+  ],
+  "pr_dedup": {
+    "open_prs": 38,
+    "paginated_file_records": 706,
+    "heads": [
+      {
+        "number": 7455,
+        "head": "3854bcda12163263eb7da7580d7cc8b0a27583bc",
+        "draft": false,
+        "files_count": 1
+      },
+      {
+        "number": 7454,
+        "head": "7362bdc3f3ae90775037560739d66f4916d0033a",
+        "draft": false,
+        "files_count": 2
+      },
+      {
+        "number": 7453,
+        "head": "2f422f98fc5a2c782b3db3795a88ccc4b881503d",
+        "draft": false,
+        "files_count": 1
+      },
+      {
+        "number": 7451,
+        "head": "b9ca4d1acd85cf7adf429f127bd610513f1ccca8",
+        "draft": false,
+        "files_count": 5
+      },
+      {
+        "number": 7442,
+        "head": "80918d50e9a57eac3c67886fffd865fde10bc9a8",
+        "draft": false,
+        "files_count": 2
+      },
+      {
+        "number": 7440,
+        "head": "4bc97062eeec25fef3650e1525f8b45e15f8160e",
+        "draft": false,
+        "files_count": 8
+      },
+      {
+        "number": 7430,
+        "head": "275e59c25686f9e353e3c5966b4d06c289a6ed0b",
+        "draft": true,
+        "files_count": 42
+      },
+      {
+        "number": 7427,
+        "head": "dc16fce9a8b34a073cc664643c7afd20201b2592",
+        "draft": false,
+        "files_count": 7
+      },
+      {
+        "number": 7411,
+        "head": "f60d86ab68b5d7a9458d5314a78671d5f3ed2878",
+        "draft": false,
+        "files_count": 20
+      },
+      {
+        "number": 7398,
+        "head": "50ed43b9ac9688cb25a3679744159b40ebe4a265",
+        "draft": false,
+        "files_count": 4
+      },
+      {
+        "number": 7392,
+        "head": "714b4bb7fcd3d50f8eec35d858914a7101201dcb",
+        "draft": false,
+        "files_count": 45
+      },
+      {
+        "number": 7321,
+        "head": "576af8b44def7095aaec839c5e159ed49829d88d",
+        "draft": false,
+        "files_count": 4
+      },
+      {
+        "number": 7298,
+        "head": "d8daa76e604f856efccdaf7b7887edc97ec8178d",
+        "draft": false,
+        "files_count": 7
+      },
+      {
+        "number": 7252,
+        "head": "d9fdf9906a262ded01a7852ce5b738c0f0496ec2",
+        "draft": false,
+        "files_count": 3
+      },
+      {
+        "number": 7222,
+        "head": "48c24a21d2093cb7d969a28250dca68aa0dafb0c",
+        "draft": false,
+        "files_count": 7
+      },
+      {
+        "number": 7206,
+        "head": "16ee3e49b09efe0254226c189fff5706893b8c89",
+        "draft": false,
+        "files_count": 4
+      },
+      {
+        "number": 7205,
+        "head": "0c0128e309603a23f64b734d4e739248d396b911",
+        "draft": false,
+        "files_count": 4
+      },
+      {
+        "number": 7082,
+        "head": "81d84aaa67385730992c1262cabef93934883236",
+        "draft": true,
+        "files_count": 5
+      },
+      {
+        "number": 6902,
+        "head": "0567e08ab72410f8fb9487910e22be5935eb88c3",
+        "draft": true,
+        "files_count": 10
+      },
+      {
+        "number": 6900,
+        "head": "26778194f41752717637da79089a4e242914f80f",
+        "draft": true,
+        "files_count": 8
+      },
+      {
+        "number": 6875,
+        "head": "132b18f7f6ede65ae2b7d6e717c7c01f94bd5928",
+        "draft": false,
+        "files_count": 2
+      },
+      {
+        "number": 6838,
+        "head": "eac81014fd3a8842ddd420d7908657af107c6787",
+        "draft": true,
+        "files_count": 176
+      },
+      {
+        "number": 6764,
+        "head": "fd90ba87bc3cb439f4badb7debf443f492b39724",
+        "draft": true,
+        "files_count": 3
+      },
+      {
+        "number": 5969,
+        "head": "d83590b21bfae9d309b64a4429d9f24748d97fcb",
+        "draft": true,
+        "files_count": 10
+      },
+      {
+        "number": 5958,
+        "head": "e6fbd896a2e1d77ac3339afb498383aafeabd464",
+        "draft": true,
+        "files_count": 4
+      },
+      {
+        "number": 5677,
+        "head": "6e03113c7b5e1330947b6bff4d60b58d22e3007f",
+        "draft": false,
+        "files_count": 53
+      },
+      {
+        "number": 5598,
+        "head": "a0611332053b9c23c5a5fa628c0b55646f26cd5e",
+        "draft": false,
+        "files_count": 5
+      },
+      {
+        "number": 5385,
+        "head": "ad478f4753b5cfeaa5ee5248fceb8a06c8c28c2b",
+        "draft": false,
+        "files_count": 9
+      },
+      {
+        "number": 5291,
+        "head": "b78744a33904d75c0d6bdcf44e8c6f7000a9dcf0",
+        "draft": false,
+        "files_count": 13
+      },
+      {
+        "number": 5248,
+        "head": "a8dac55dffc8d2e428c5d0206587d839765bd872",
+        "draft": false,
+        "files_count": 51
+      },
+      {
+        "number": 4439,
+        "head": "7ae8e609834da025c8faa88025b2f446e97f010e",
+        "draft": false,
+        "files_count": 12
+      },
+      {
+        "number": 4368,
+        "head": "f640844a54fdb80e7ca489d723b5a9dfcf020de0",
+        "draft": false,
+        "files_count": 4
+      },
+      {
+        "number": 4140,
+        "head": "1d526c908b3ed5c87ede8784d95132adcd680ad1",
+        "draft": true,
+        "files_count": 7
+      },
+      {
+        "number": 4023,
+        "head": "451fd72407ce53b82898653c1370eb80fad1f842",
+        "draft": false,
+        "files_count": 68
+      },
+      {
+        "number": 3834,
+        "head": "c714bb740fbe309f6cc85d89fe98db7e189ad172",
+        "draft": false,
+        "files_count": 8
+      },
+      {
+        "number": 3412,
+        "head": "af5c5a75b2953de288c3c9f003fb9fc82512a3ca",
+        "draft": false,
+        "files_count": 10
+      },
+      {
+        "number": 3313,
+        "head": "5c6e6a7267caa1d9a3d3673588e3ee4dd9131b40",
+        "draft": false,
+        "files_count": 15
+      },
+      {
+        "number": 3200,
+        "head": "f6549a9e9f1f21cb1600de2765b461840c26a196",
+        "draft": false,
+        "files_count": 67
+      }
+    ],
+    "semantic_overlap": {
+      "7430": "complete contract composition/capture and Host input; does not gate unresolved Host attempts or legacy cached-result recovery lifetime",
+      "3412": "prepared settlement effect readback; does not cover Host dispatch uncertainty",
+      "6838": "tracking changes share existing launch authority; not the executor recovery callsite",
+      "7454": "Windows tzdata dependency and CI; independent of test-only Hypothesis pin",
+      "7205/7206": "Same Stage 2C file, but those PRs only upgrade setuptools to 84.1.0; this change adds Hypothesis/sortedcontainers and retains all existing pins"
+    }
+  },
+  "retained_failures": [
+    {
+      "kind": "native_continuity",
+      "baseline_failed": 6,
+      "candidate_failed": 6,
+      "binary": "Codex 0.164.0",
+      "paid_model": false,
+      "signatures": {
+        "candidate_missing": 2,
+        "incomplete_model_visible_json": 4
+      },
+      "baseline_revision": "218aa087b66bb99038b1ce7d782110741a5e42ae",
+      "candidate_revision": "9d9b1183489164246c4ae770a06a8d43b28b00ef",
+      "final_native_qualification": "not_established"
+    },
+    {
+      "kind": "revocation_regression_before_fix",
+      "cases": 2,
+      "observed": "retired Goal still wrote back and spent during cached-result recovery",
+      "fixed_by": "pass legacy lifetime admission into driver and check it before original-journal continuation"
+    },
+    {
+      "kind": "normal_control_setup",
+      "cases": 2,
+      "observed": "unsupported python -m loopx test invocation",
+      "corrected": "use installed loopx console entrypoint; final 16-case matrix passed"
+    },
+    {
+      "kind": "ci_dependency_integration",
+      "revision": "4472325f287a4f4d7ffb7a889c311511e8e98a0e",
+      "failures": [
+        "Hypothesis missing from existing Stage 2C hash lock",
+        "Pygments 2.19.2 rejected by GHSA-5239-wwwm-4pmq"
+      ],
+      "correction": "add Hypothesis and sortedcontainers pinned distribution hashes; use existing repository Pygments 2.21.0; no security exemption",
+      "local_revalidation": "176 passed; kernel invariants 7 passed; whole kernel ruff scope passed"
+    },
+    {
+      "kind": "followup_ci",
+      "revision": "e9719aa665046173f863218da72be9318540cc55",
+      "failures": [
+        "verifier setuptools 83.0.0 rejected by GHSA-xmj3-9gf7-h52w",
+        "browser Goal drawer header geometry assertion"
+      ],
+      "resolution": [
+        "verifier environment pins 84.1.0; standard project build isolation; fresh full 176 selection passed",
+        "UI assertion is already addressed by PR 7427; no duplicate UI change made; CI not claimed green"
+      ]
+    }
+  ],
+  "unverified": [
+    "independent personnel review",
+    "third-party rerun",
+    "paid-model outcome",
+    "native continuity (six retained failures)",
+    "Windows SIGKILL qualification",
+    "power-loss durability",
+    "continuous fencing of arbitrary legacy/external tools",
+    "requirement edits during interruption as a separate revision-change experiment"
+  ],
+  "qualification_runs": {
+    "core_selection": {
+      "passed": 173,
+      "failed": 2,
+      "failure_kind": "invalid normal-control CLI test invocation; corrected in final matrix"
+    },
+    "final_process_matrix": {
+      "passed": 16,
+      "failed": 0
+    },
+    "typescript_selection": {
+      "passed": 138,
+      "failed": 0
+    },
+    "delegated_lease_processes": {
+      "passed": 16,
+      "failed": 0,
+      "profile": "before formatter-only dependency correction; same production source bytes"
+    },
+    "typecheck_control_plane": "passed",
+    "ruff_changed_paths": "passed",
+    "pip_check_clean_environment": "passed",
+    "hypothesis": {
+      "examples": 30,
+      "max_actions": 12,
+      "status": "passed",
+      "version": "6.142.4"
+    },
+    "secure_dependency_selection": {
+      "passed": 176,
+      "failed": 0,
+      "includes": "core recovery selection, 16-case process matrix, state machine, source-lifetime and host tests, Stage 2C lock coverage"
+    },
+    "kernel_static_invariants": {
+      "passed": 7,
+      "failed": 0
+    },
+    "kernel_ruff_scope": "passed",
+    "pygments": "2.21.0",
+    "verifier_environment_setuptools": "84.1.0",
+    "project_build_isolation": "uses unchanged pyproject.toml setuptools==83.0.0",
+    "patched_verifier_selection": {
+      "passed": 176,
+      "failed": 0,
+      "fresh_environment": true
+    }
+  },
+  "submission_target": "71057d44f0d50a3636fcd8796f7c98717ce41742"
+}

@@ -41,7 +41,12 @@ MATERIAL_LIFECYCLE_CATALOG_ENTRY: dict[str, Any] = {
             "command": "loopx material-lifecycle architecture --format json",
             "purpose": "Render the default-off Stage-0 inventory, migration, lifecycle, and bounded-rerank boundaries.",
             "write_boundary": "stateless contract output only; no source store, backup, goal state, provider, or external write",
-        }
+        },
+        {
+            "command": "loopx material-lifecycle plan-wave-rerank --input - --format json",
+            "purpose": "Preview deterministic wave-based material rerank moves and bounds across horizon waves, effort bands, primary-over-secondary lineage, and orthogonal shortlist caps.",
+            "write_boundary": "stateless preview output only; apply_authorized remains false and no source store or Core state is mutated",
+        },
     ],
     "implemented_protocols": [
         {
@@ -84,6 +89,21 @@ MATERIAL_LIFECYCLE_CATALOG_ENTRY: dict[str, Any] = {
             "module": "loopx.capabilities.material_lifecycle.rebuild",
             "doc": "docs/reference/protocols/material-lifecycle-architecture-v0.md",
         },
+        {
+            "schema_version": "material_ranked_state_repair_plan_v0",
+            "module": "loopx.capabilities.material_lifecycle.ranked_state",
+            "doc": "docs/reference/protocols/material-lifecycle-architecture-v0.md",
+        },
+        {
+            "schema_version": "material_ranked_state_repair_apply_receipt_v0",
+            "module": "loopx.capabilities.material_lifecycle.ranked_state",
+            "doc": "docs/reference/protocols/material-lifecycle-architecture-v0.md",
+        },
+        {
+            "schema_version": "material_lifecycle_ranking_apply_receipt_v0",
+            "module": "loopx.capabilities.material_lifecycle.ranked_state",
+            "doc": "docs/reference/protocols/material-lifecycle-architecture-v0.md",
+        },
     ],
     "smokes": ["python3 examples/material-lifecycle-contract-smoke.py"],
     "docs": [
@@ -96,6 +116,8 @@ MATERIAL_LIFECYCLE_CATALOG_ENTRY: dict[str, Any] = {
         "Snapshot and verified backup precede dual-read reconciliation; cutover and rollback remain owner-gated.",
         "Decision Context may supply revisioned evidence, but Material Lifecycle owns candidate, archive, and rerank receipts.",
         "Oversized ranked entries are rebuilt into independently sortable entries; overflow cannot be hidden outside the ranked set.",
+        "Derived ranked summaries are repaired without changing membership or order, and every resulting authority revision has one applied ranking-lineage receipt.",
+        "Archiving a ranked material must remove only that material while preserving every remaining entry identity and relative order.",
         "LoopX ships the canonical loopx-material source, but discovery uses an explicit managed project copy rather than a global skill install.",
         "A project-local skill makes the workflow discoverable; it does not replace explicit goal-scoped Material Lifecycle authority.",
         "Concrete legacy adapters, exploration providers, source profiles, and material-store writes remain deferred to private dogfood.",

@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
-import { goalHostDeliveryWindows, goalHostSurfaces, goalIdentity, hostSurfaceLabel, presentGoalActivity, type GoalActivity, type WorkspaceGoalExecution } from "./goal-activity";
+import { goalHostSurfaces, goalIdentity, goalObservationGaps, hostSurfaceLabel, presentGoalActivity, type GoalActivity, type WorkspaceGoalExecution } from "./goal-activity";
+import { ContextHelp } from "./context-help";
 import { useWorkspaceI18n, type WorkspaceMessageKey } from "./i18n";
 import type { WorkspaceGoal } from "./personal-workspace-model";
 
@@ -44,33 +45,56 @@ export function useExecutionDetail(execution: WorkspaceGoalExecution | undefined
 
 export function useGoalActivity(goal: GoalActivitySubject): GoalActivity & {
   text: string;
-  windowBadge: { state: "stale" | "missing"; labelKey: "activity.hostWindowStaleShort" | "activity.hostWindowMissingShort" } | null;
+  windowBadge: { state: "stale" | "missing"; text: string } | null;
 } {
   const { t } = useWorkspaceI18n();
   const activity = presentGoalActivity(goal);
   const detail = useExecutionDetail(goal.execution);
-  const hostWindows = goalHostDeliveryWindows(goal);
+  const gaps = goalObservationGaps(goal);
   const parts = [t(activity.labelKey as WorkspaceMessageKey)];
-  if (activity.alsoKey) parts.push(t(activity.alsoKey as WorkspaceMessageKey, { host: hostNames(goalHostSurfaces(goal)) }));
+  if (activity.alsoKey && !(gaps.unavailable && activity.alsoKey === "activity.executionUnknown")) parts.push(t(activity.alsoKey as WorkspaceMessageKey, { host: hostNames(goalHostSurfaces(goal)) }));
   if (activity.labelKey === "activity.running" || activity.labelKey === "activity.hostClaimed") parts.push(...detail);
-  for (const hostWindow of hostWindows) {
-    const host = hostSurfaceLabel(hostWindow.hostSurface);
-    const agent = hostWindow.agentId || "Agent";
-    if (hostWindow.state === "stale") {
-      parts.push(t("activity.hostWindowStale", { host, agent, hours: Math.round((hostWindow.ageHours ?? 0) * 10) / 10 }));
-    } else if (hostWindow.state === "missing") {
-      parts.push(t("activity.hostWindowMissing", { host, agent }));
-    } else {
-      parts.push(t("activity.hostWindowFresh", { host, agent }));
-    }
-  }
-  const missedWindow = hostWindows.find((window) => window.state === "stale" || window.state === "missing");
-  const windowBadge = missedWindow?.state === "stale"
-    ? { state: "stale" as const, labelKey: "activity.hostWindowStaleShort" as const }
-    : missedWindow?.state === "missing"
-      ? { state: "missing" as const, labelKey: "activity.hostWindowMissingShort" as const }
-      : null;
+  const windowBadge = goal.activationState === "stopped" || (activity.labelKey === "activity.observationUnavailable" && gaps.unavailable)
+    || (!gaps.missing && !gaps.stale && !gaps.incomplete) ? null : {
+    state: gaps.stale ? "stale" as const : "missing" as const,
+    text: gaps.unavailable ? t("activity.observationUnavailable")
+      : gaps.missing || gaps.stale ? t("activity.observationGaps", { count: gaps.missing + gaps.stale })
+        : t("activity.observationIncomplete"),
+  };
   return { ...activity, text: parts.join(" · "), windowBadge };
+}
+
+const observationReasons: Readonly<Record<string, WorkspaceMessageKey>> = {
+  unsupported_host: "activity.reason.unsupportedHost",
+  store_unavailable: "activity.reason.storeUnavailable",
+  thread_not_found: "activity.reason.threadNotFound",
+  record_unrecognized: "activity.reason.recordUnrecognized",
+  no_turn_marker: "activity.reason.noTurnMarker",
+  unparseable_observation: "activity.reason.unparseableObservation",
+};
+
+/** A sibling of the Goal navigation button so help never selects a Goal. */
+export function GoalActivityHelp({ goal }: { goal: GoalActivitySubject }) {
+  const { locale, t } = useWorkspaceI18n();
+  const threads = goal.hostThreadActivity?.threads ?? [];
+  if (!goal.hostThreadActivity || goal.activationState === "stopped" || goal.loadState) return null;
+  return <ContextHelp label={t("activity.observationDetails", { goal: goal.title })}>
+    {goal.hostThreadActivity?.completeness === "incomplete" ? <p>{t("activity.observationIncomplete")}</p> : null}
+    <ul className="personal-goal-observation-list">{threads.map((thread, index) => {
+      const reason = thread.reason || thread.deliveryWindow?.reason;
+      const time = thread.lastEventAt ? relativeTime(thread.lastEventAt, locale) : null;
+      const state = thread.state === "turn_open" ? "activity.observedOpen"
+        : thread.state === "idle" ? "activity.observedEnded"
+          : thread.state === "archived" ? "activity.observedArchived" : "activity.observationUnavailable";
+      return <li key={`${thread.agentId}:${thread.hostSurface}:${index}`}>
+        <strong>{thread.agentId || "Agent"} · {hostSurfaceLabel(thread.hostSurface)}</strong>
+        <p>{t(state)}{time ? ` · ${time}` : ""}</p>
+        {thread.deliveryWindow?.state === "stale" ? <p>{t("activity.hostWindowStale", {hours: Math.round((thread.deliveryWindow.ageHours ?? 0) * 10) / 10})}</p> : null}
+        {reason && observationReasons[reason] ? <p>{t(observationReasons[reason])}</p>
+          : thread.state === "unknown" ? <p>{t("activity.reason.recordUnrecognized")}</p> : null}
+      </li>;
+    })}</ul>
+  </ContextHelp>;
 }
 
 export function GoalIdentityMark({ goal, size = "md" }: { goal: GoalActivitySubject; size?: "md" | "lg" }) {
@@ -88,12 +112,11 @@ export function GoalIdentityMark({ goal, size = "md" }: { goal: GoalActivitySubj
 }
 
 export function GoalActivityChip({ goal }: { goal: GoalActivitySubject }) {
-  const { t } = useWorkspaceI18n();
   const activity = useGoalActivity(goal);
   return (
     <span className={`personal-goal-activity-chip is-${activity.tone}${activity.live ? " is-live" : ""}`} title={activity.text}>
       <span aria-hidden="true" className="personal-goal-activity-dot" />
-      {activity.windowBadge ? <span className={`personal-goal-window-badge is-${activity.windowBadge.state}`}>{t(activity.windowBadge.labelKey)}</span> : null}
+      {activity.windowBadge ? <span className={`personal-goal-window-badge is-${activity.windowBadge.state}`}>{activity.windowBadge.text}</span> : null}
       <span>{activity.text}</span>
     </span>
   );

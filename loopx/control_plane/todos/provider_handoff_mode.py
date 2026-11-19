@@ -15,10 +15,8 @@ from ..effect_runtime import (
 from ..runtime.time import now_local_iso
 
 
-def read_canonical_handoff_mode(*, runtime_root: Path, goal_id: str) -> dict[str, Any] | None:
+def read_canonical_handoff_mode(*, runtime_root: Path, goal_id: str) -> dict[str, Any]:
     source = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id, include_leases=True)
-    if source is None:
-        return None
     return {key: source[key] for key in ("handoff_mode", "source_authority", "provider_revision",
                                         "decision_read_from_provider", "legacy_fallback_used")}
 

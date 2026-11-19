@@ -8,6 +8,8 @@ import pytest
 
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.control_plane.coordination.local_authority import (
+    CanonicalAuthorityRequired,
+    LocalCoordinationAuthorityUnavailable,
     read_canonical_todos_if_promoted,
 )
 from loopx.control_plane.coordination.runtime_shadow import (
@@ -45,6 +47,11 @@ def api(tmp_path, monkeypatch, request):
         initialize_canonical_authority(
             runtime, goal, projection, state_path=state, provider=request.param
         )
+    cold_state = tmp_path / "unpromoted.md"
+    cold_state.write_text("---\nhandoff_mode: soft_claim\n---\n\n## Agent Todo\n")
+    rows.append(
+        {"id": "unpromoted", "repo": str(tmp_path), "state_file": cold_state.name}
+    )
     registry.write_text(
         json.dumps({"common_runtime_root": str(runtime), "goals": rows})
     )
@@ -56,7 +63,7 @@ def api(tmp_path, monkeypatch, request):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    def call(action="", body=None, origin=None):
+    def call(action="", body=None, origin=None, *, goal_id="example"):
         connection = http.client.HTTPConnection(
             "127.0.0.1", server.server_port, timeout=90
         )
@@ -64,7 +71,7 @@ def api(tmp_path, monkeypatch, request):
         if origin:
             headers["Origin"] = origin
         path = "/api/chat/goal-ownership" + (
-            f"/{action}" if action else "?goal_id=example"
+            f"/{action}" if action else f"?goal_id={goal_id}"
         )
         connection.request(
             "POST" if body is not None else "GET",
@@ -108,6 +115,44 @@ def read(runtime, goal="example"):
     return read_canonical_todos_if_promoted(
         runtime_root=runtime, goal_id=goal, include_leases=True
     )
+
+
+def test_registered_unpromoted_goal_is_readable_without_migration_or_policy_fallback(api):
+    call, runtime, registry = api
+    source = registry.parent / "unpromoted.md"
+    before = source.read_bytes(), registry.read_bytes(), read(runtime)
+    code, result = call(goal_id="unpromoted")
+    assert code == 200 and result == {
+        "ok": True,
+        "goal_id": "unpromoted",
+        "canonical": False,
+        "current_mode": None,
+        "provider_revision": None,
+    }
+    # Readability neither adopts the Markdown mode nor admits migration writes.
+    assert (
+        call("preview", {"goal_id": "unpromoted", "mode": "hard_lease"})[0] == 409
+    )
+    with pytest.raises(CanonicalAuthorityRequired):
+        read(runtime, "unpromoted")
+    assert (source.read_bytes(), registry.read_bytes(), read(runtime)) == before
+    assert call(goal_id="unregistered")[0] == 400
+
+
+def test_policy_provider_outage_is_not_an_unpromoted_goal(api, monkeypatch):
+    call, _, _ = api
+
+    def unavailable(**_):
+        raise LocalCoordinationAuthorityUnavailable(
+            "private provider failure", code="provider_unavailable", payload={}
+        )
+
+    monkeypatch.setattr(
+        "loopx.presentation.goal_ownership_api.read_canonical_handoff_mode", unavailable
+    )
+    code, result = call()
+    assert code == 503 and result["error_code"] == "goal_ownership_unavailable"
+    assert "private provider failure" not in json.dumps(result)
 
 
 def test_browser_migration_preserves_assigned_metadata_and_original_retry(api):

@@ -1,6 +1,8 @@
 """Public evidence must not acquire account, local-network or file authority."""
+import asyncio
 import io
 import ipaddress
+import json
 import socket
 import ssl
 import threading
@@ -66,6 +68,26 @@ def test_github_diff_transport_failure_recovers_canonical_source_in_same_budget(
     assert state["closed"] == ["8.8.8.8", "1.1.1.1", "9.9.9.9"]
     assert all(set(headers) == {"Accept-Encoding", "User-Agent"}
                for _, _, _, _, headers in state["attempts"])
+
+
+def test_github_diff_recovery_honors_exact_source_scope_before_dns(github_diff_transport):
+    state = github_diff_transport
+    original = "https://github.com/example/project/pull/42.diff"
+    with pytest.raises(ValueError, match="public source URL not authorized"):
+        reader.fetch(original, deadline=110.0, allowed_urls={original})
+    assert state["dns"] == ["github.com"]
+    assert [attempt[0] for attempt in state["attempts"]] == ["github.com", "github.com"]
+    assert len(state["closed"]) == 2
+
+
+def test_public_url_scope_rejects_initial_destination_before_dns(monkeypatch):
+    def resolve(host):
+        pytest.fail(f"unapproved destination resolved: {host}")
+
+    monkeypatch.setattr(reader, "public_addresses", resolve)
+    with pytest.raises(ValueError, match="public source URL not authorized"):
+        reader.fetch("https://source.example/unlisted.png", deadline=time.monotonic() + 10,
+                     allowed_urls={"https://source.example/listed.png"})
 
 
 @pytest.mark.parametrize("host", ["github.com", "patch-diff.githubusercontent.com"])
@@ -426,6 +448,148 @@ def test_public_json_truncation_hashes_the_full_response(monkeypatch):
     assert result["truncated"] is True
     assert result["sha256"] == hashlib.sha256(body).hexdigest()
     assert result["images"] == [] and result["images_read"] is False
+
+
+def test_long_public_source_continues_without_losing_unicode_or_mixing_revisions(monkeypatch):
+    import hashlib
+    text = "开头🙂" * 40_000 + "\nONLY_IN_THE_TAIL\n"
+    body = text.encode("utf-8")
+    monkeypatch.setattr(reader, "fetch", lambda *a, **k: (
+        "https://example.org/source", "text/plain", body))
+    first = reader.article("https://example.org/source", deadline=time.monotonic() + 5)
+    assert first["text"] == text[:100_000]
+    assert first["next_offset"] == 100_000
+    tail = reader.article("https://example.org/source", deadline=time.monotonic() + 5,
+                          offset=first["next_offset"], expected_sha256=first["sha256"])
+    assert first["text"] + tail["text"] == text
+    assert tail["text_start"] == 100_000 and tail["text_end"] == len(text)
+    assert tail["next_offset"] is None and tail["truncated"] is True
+    assert tail["characters"] == len(text)
+    assert first["sha256"] == tail["sha256"] == hashlib.sha256(body).hexdigest()
+    assert tail["images_read"] is False
+
+
+@pytest.mark.parametrize("offset,digest", [
+    (-1, None), (True, None), ("1", None), (None, None),
+    (4_000_001, "a" * 64), (1, None), (1, ""), (1, "not-a-digest"),
+    (1, "A" * 64), (0, False), (0, "a" * 63),
+])
+def test_invalid_public_text_page_never_starts_observation(monkeypatch, offset, digest):
+    def forbidden(*a, **k):
+        pytest.fail("invalid page must be rejected before network or worker IO")
+    monkeypatch.setattr(reader, "_observation", forbidden)
+    result = reader.read_public_url("https://example.org/source", offset=offset, expected_sha256=digest)
+    assert result == {"ok": False, "error": "public_source_unavailable_or_rejected"}
+
+
+@pytest.fixture
+def public_source_mcp(monkeypatch):
+    from mcp.server.fastmcp import FastMCP
+    servers = []
+    monkeypatch.setattr(FastMCP, "run", lambda server: servers.append(server))
+    reader.main()  # Exercise the production registration, not a separate test server.
+    assert len(servers) == 1
+    return servers[0]
+
+
+@pytest.mark.parametrize("tool,arguments,error", [
+    *(("read_public_url", {"offset": offset, "expected_sha256": "a" * 64},
+        "public_source_unavailable_or_rejected")
+       for offset in (False, True, "1", 1.0, None, -1, reader.MAX_BYTES + 1)),
+    *(("read_public_url", {"expected_sha256": digest}, "public_source_unavailable_or_rejected")
+       for digest in ("null", "false", "[]", False, "a" * 63, "A" * 64)),
+    ("read_public_url", {"offset": 1}, "public_source_unavailable_or_rejected"),
+    *(("read_public_image", {"index": index}, "public_image_unavailable_or_rejected")
+       for index in (False, True, "0", 0.0, None, -1, reader.MAX_IMAGES)),
+])
+def test_mcp_rejects_raw_invalid_parameters_before_sdk_coercion(
+        public_source_mcp, monkeypatch, tool, arguments, error):
+    from mcp.shared.memory import create_connected_server_and_client_session
+    calls = []
+    monkeypatch.setattr(reader, "_observation", lambda *a, **k: calls.append((a, k)) or {
+        "ok": True, "metadata": {"ok": True}, "pixels": "cGl4ZWxz"})
+
+    async def request():
+        async with create_connected_server_and_client_session(public_source_mcp) as client:
+            return await client.call_tool(tool, {"url": "https://example.org/source", **arguments})
+    result = asyncio.run(request())
+    assert calls == []  # A sanitized error after IO would not protect this boundary.
+    assert len(result.content) == 1 and result.content[0].type == "text"
+    assert json.loads(result.content[0].text) == {"ok": False, "error": error}
+
+
+def test_mcp_valid_pages_images_and_private_url_rejection(public_source_mcp, monkeypatch):
+    import base64
+    import hashlib
+    from mcp.shared.memory import create_connected_server_and_client_session
+    body = ("公共🙂" * 40_000).encode()
+    png = io.BytesIO()
+    Image.new("RGB", (2, 1), "red").save(png, format="PNG")
+    pixels = png.getvalue()
+    calls = []
+    monkeypatch.setattr(reader, "fetch", lambda *a, **k: (
+        "https://example.org/source", "text/plain", body))
+    def observe(kind, url, index=None, **kwargs):
+        calls.append((kind, index, kwargs))
+        if kind == "text":
+            return reader.article(url, deadline=time.monotonic() + 5, **kwargs)
+        return {"metadata": {"ok": True, "index": index, "sha256": hashlib.sha256(pixels).hexdigest()},
+                "pixels": base64.b64encode(pixels).decode()}
+    monkeypatch.setattr(reader, "_observation", observe)
+
+    async def request():
+        async with create_connected_server_and_client_session(public_source_mcp) as client:
+            tools = {t.name: t.inputSchema for t in (await client.list_tools()).tools}
+            assert set(tools) == {"read_public_url", "read_public_image"}
+            assert tools["read_public_url"]["properties"]["offset"]["type"] == "integer"
+            assert tools["read_public_image"]["properties"]["index"]["type"] == "integer"
+            first = (await client.call_tool("read_public_url", {"url": "https://example.org/source"})).structuredContent
+            explicit_initial = await client.call_tool("read_public_url", {
+                "url": "https://example.org/source", "offset": 0, "expected_sha256": None})
+            assert explicit_initial.structuredContent == first
+            tail = (await client.call_tool("read_public_url", {"url": "https://example.org/source",
+                "offset": first["next_offset"], "expected_sha256": first["sha256"]})).structuredContent
+            assert first["text"] + tail["text"] == body.decode()
+            assert tail["next_offset"] is None and tail["sha256"] == first["sha256"]
+            changed = await client.call_tool("read_public_url", {"url": "https://example.org/source",
+                "offset": 1, "expected_sha256": "b" * 64})
+            assert changed.structuredContent == {"ok": False, "error": "public_source_changed"}
+            image = await client.call_tool("read_public_image", {"url": "https://example.org/source", "index": 0})
+            assert json.loads(image.content[0].text)["index"] == 0
+            assert image.content[1].type == "image" and base64.b64decode(image.content[1].data) == pixels
+            before = len(calls)
+            for tool, extra, error in (("read_public_url", {}, "public_source_unavailable_or_rejected"),
+                    ("read_public_image", {"index": 0}, "public_image_unavailable_or_rejected")):
+                rejected = await client.call_tool(tool, {"url": "https://127.0.0.1/private", **extra})
+                assert json.loads(rejected.content[0].text) == {"ok": False, "error": error}
+            assert len(calls) == before
+    asyncio.run(request())
+
+
+def test_public_text_page_rejects_changed_source_and_out_of_range(monkeypatch):
+    import hashlib
+    original = b"a" * 100_000 + b"original tail"
+    changed = b"a" * 100_000 + b"changed tail"
+    monkeypatch.setattr(reader, "fetch", lambda *a, **k: (
+        "https://example.org/source", "text/plain", changed))
+    result = reader.article("https://example.org/source", deadline=time.monotonic() + 5,
+                            offset=100_000, expected_sha256=hashlib.sha256(original).hexdigest())
+    assert result == {"ok": False, "error": "public_source_changed"}
+    with pytest.raises(ValueError, match="offset"):
+        reader.article("https://example.org/source", deadline=time.monotonic() + 5,
+                       offset=len(changed) + 1, expected_sha256=hashlib.sha256(changed).hexdigest())
+
+
+def test_public_text_page_keeps_html_image_inventory_without_reading_pixels(monkeypatch):
+    body = ("<p>" + "public " * 20_000 + '</p><img src="/figure.png" alt="chart">').encode()
+    monkeypatch.setattr(reader, "fetch", lambda *a, **k: (
+        "https://example.org/article", "text/html", body))
+    first = reader.article("https://example.org/article", deadline=time.monotonic() + 5)
+    tail = reader.article("https://example.org/article", deadline=time.monotonic() + 5,
+                          offset=first["next_offset"], expected_sha256=first["sha256"])
+    assert first["text"] + tail["text"] == "public " * 19_999 + "public"
+    assert tail["images"] == first["images"] == [{"index": 0, "url": "https://example.org/figure.png", "alt": "chart"}]
+    assert tail["images_read"] is False
 
 
 @pytest.mark.parametrize("mime", ["application/octet-stream", "image/png", "application/javascript", "application/jsonp"])

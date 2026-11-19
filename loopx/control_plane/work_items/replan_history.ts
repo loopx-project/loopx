@@ -8,6 +8,9 @@ import {
 import { projectTodoResumePlanning } from "../todos/resume_planning.ts";
 import { monitorIsActive } from "../todos/summary_lanes.ts";
 import { authorityUnicodeCompare } from "../coordination/authority_store_codec.ts";
+import { qualifySettlementHistory } from "../quota/settlement_phase.ts";
+import { MONITOR_TARGET_SCHEMA } from "../scheduler/monitor_successor.ts";
+import { normalizeStrideStrategy } from "./stride_policy.ts";
 
 export const PROGRESS_RESULT_CLASSES = [
   "advanced", "unchanged", "blocked", "exploration_exhausted", "no_followup",
@@ -20,6 +23,7 @@ interface Progress {
 }
 interface Monitor {
   target: string | null;
+  targetSchema: string | null;
   mode: string | null;
   material: boolean | null;
   frontier: string | null;
@@ -27,6 +31,7 @@ interface Monitor {
   key: string | null;
 }
 interface Run {
+  retryFacts: JsonObject;
   agent: string | null;
   publicAgent: string | null;
   monitorAgent: string | null;
@@ -43,6 +48,8 @@ interface MonitorTodo {
   claim: string | null;
   publicClaim: string | null;
   target: string;
+  targetKey: string | null | undefined;
+  watchOnly: boolean;
   count: number;
   due: number | null;
   expiry: number | null;
@@ -53,6 +60,7 @@ interface Todos {
   resume: JsonObject | null;
 }
 interface Request {
+  retryObservedAt: string | null;
   operation: "all" | "progress" | "periodic" | "monitor_streak" | "frontier_monitor_streak";
   observedAt: number | null;
   agent: string | null;
@@ -61,6 +69,7 @@ interface Request {
   neutral: ReadonlySet<string>;
   stall: number;
   periodic: number;
+  stride: string;
   monitor: number;
   streak: number;
   monitorSchema: string;
@@ -128,17 +137,25 @@ function decode(value: unknown): Request {
   }
   return {
     operation, observedAt,
+    retryObservedAt: optionalNonEmptyString(raw.retry_observed_at, "retry_observed_at"),
     agent: optionalNonEmptyString(raw.agent_id, "agent_id"),
     monitorAgent: optionalNonEmptyString(raw.monitor_agent_id, "monitor_agent_id"),
-    neutral: new Set(requireStringArray(raw.neutral_classifications, "neutral_classifications")),
+    // Older callers may omit canonical no-change writebacks. They are neutral
+    // for lane selection, work counting and feedback selection alike.
+    neutral: new Set([...requireStringArray(raw.neutral_classifications, "neutral_classifications"),
+      "replan_noop", "repair_noop"]),
     stall: integer(raw.stall_threshold, "stall_threshold", 2),
     periodic: integer(raw.periodic_threshold, "periodic_threshold", 1),
+    stride: normalizeStrideStrategy(raw.stride_strategy),
     monitor: integer(raw.monitor_threshold, "monitor_threshold", 1),
     streak: integer(raw.streak_threshold, "streak_threshold", 1),
     monitorSchema: requireNonEmptyString(raw.monitor_schema, "monitor_schema"),
     runs: rows(raw.runs, "runs", row => {
       const monitor = requireJsonObject(row.monitor, "monitor");
       return {
+        retryFacts: {todo_id: row.todo_id, blocked_retry: row.blocked_retry,
+          delivery_outcome: row.delivery_outcome, progress_observation: row.progress,
+          turn_instance_id: row.turn_id},
         agent: optionalNonEmptyString(row.agent_id, "run.agent_id"),
         publicAgent: optionalNonEmptyString(row.public_agent_id, "public_agent_id"),
         monitorAgent: optionalNonEmptyString(row.monitor_agent_id, "run.monitor_agent_id"),
@@ -148,6 +165,7 @@ function decode(value: unknown): Request {
         progress: decodeProgress(row.progress),
         monitor: {
           target: optionalNonEmptyString(monitor.target_id, "target_id"),
+          targetSchema: optionalNonEmptyString(monitor.target_schema, "target_schema"),
           mode: optionalNonEmptyString(monitor.mode, "mode"),
           material: monitor.material_change == null
             ? null : requireBoolean(monitor.material_change, "material_change"),
@@ -163,6 +181,8 @@ function decode(value: unknown): Request {
         id: optionalNonEmptyString(row.id, "monitor.id"), claim: optionalNonEmptyString(row.claim, "claim"),
         publicClaim: optionalNonEmptyString(row.public_claim, "public_claim"),
         target: text(row.target, "monitor.target"),
+        targetKey: row.target_key === undefined ? undefined : optionalNonEmptyString(row.target_key, "monitor.target_key"),
+        watchOnly: row.watch_only === undefined ? false : requireBoolean(row.watch_only, "watch_only"),
         count: integer(row.no_change_count, "no_change_count", Number.MIN_SAFE_INTEGER),
         due: time(row.due_at, "due_at"), expiry: time(row.expires_at, "expires_at"),
       })),
@@ -175,9 +195,12 @@ function decode(value: unknown): Request {
 }
 
 /** Scope before ACK: a peer's acknowledgement cannot discharge this lane. */
+function historyLane(request: Request): string | null {
+  return request.agent ?? (request.operation === "all"
+    ? request.runs.find(run => !request.neutral.has(run.classification) && run.agent)?.agent ?? null : null);
+}
 function historyWindow(request: Request): Run[] {
-  const agent = request.agent ?? (request.operation === "all"
-    ? request.runs.find(run => !request.neutral.has(run.classification) && run.agent)?.agent : null);
+  const agent = historyLane(request);
   const result: Run[] = [];
   for (const run of request.runs) {
     if (agent && run.agent && run.agent !== agent) continue;
@@ -231,9 +254,11 @@ function progressTrigger(runs: readonly Run[], request: Request): Trigger | null
 }
 function periodicTrigger(runs: readonly Run[], request: Request, qualified?: ReadonlySet<string>): Trigger | null {
   const durable: Run[] = [];
-  // Monitor liveness receipts are durable, but only a material transition is
-  // work for the periodic direction review. Monitor-specific triggers still
-  // inspect every poll in the unfiltered history window.
+  // Monitor liveness and unsuccessful replan records are durable observations,
+  // not work for another periodic review. Counting a no-op would let a review
+  // rotate its own obligation merely by writing another record. Filter before
+  // Turn de-duplication so an actual work row from that Turn remains eligible;
+  // monitor-specific triggers still inspect the unfiltered history window.
   for (const run of distinctTurns(runs.filter(row => (!qualified ||
       (row.agent && row.turn && qualified.has(JSON.stringify([row.agent, row.turn])))) && row.classification &&
       (row.classification !== "quota_monitor_poll" || row.monitor.material === true)))) {
@@ -241,6 +266,16 @@ function periodicTrigger(runs: readonly Run[], request: Request, qualified?: Rea
     if (durable.length >= request.periodic) break;
   }
   if (durable.length < request.periodic) return null;
+  // A periodic counter supplies no new evidence about the latest accepted
+  // blocked work. Respect that lane's original bounded retry until it expires;
+  // do not ACK/reset the counter. Fresh work, typed stalls and external feedback
+  // retain their own triggers, and independent Todos remain selectable.
+  const latestWork = runs.find(run => run.classification &&
+    (run.classification !== "quota_monitor_poll" || run.monitor.material === true));
+  const lane = request.agent ?? sole(runs.map(run => run.agent));
+  if (lane && latestWork?.agent === lane && qualifySettlementHistory(
+    [latestWork.retryFacts], request.retryObservedAt,
+  ).active_retry_indexes.length) return null;
   return {
     kind: "periodic_review_due", section: "run_history",
     text: `latest ${durable.length} ${qualified ? "settled work Turns" : "durable public run records"} since last autonomous replan reached periodic review threshold ${request.periodic}`,
@@ -295,6 +330,7 @@ function monitorTrigger(runs: readonly Run[], request: Request): Trigger | null 
     };
   }
   const repeated = signals.filter(run => (run.monitor.todo || run.monitor.key) &&
+    !isIntentionalWatch(run, request, signals[0]!.observedAt) &&
     ["due_monitor_observed_without_material_transition", "external_monitor_observed_without_material_transition"]
       .includes(run.monitor.mode!)).slice(0, request.monitor);
   const target = sole(repeated.map(run => run.monitor.target));
@@ -305,9 +341,22 @@ function monitorTrigger(runs: readonly Run[], request: Request): Trigger | null 
     latest_generated_at: repeated[0]!.generatedAt, agent_id: sole(repeated.map(run => run.agent)),
   };
 }
+function isIntentionalWatch(run: Run, request: Request, observedAt: number | null): boolean {
+  const digest = run.monitor.targetSchema === MONITOR_TARGET_SCHEMA;
+  const agent = run.monitorAgent ?? (digest ? null : request.monitorAgent);
+  if (!agent) return false;
+  const target = run.monitor.key ?? (digest ? null : run.monitor.target);
+  return request.todos.monitors.some(row => {
+    if (!row.watchOnly || (row.claim && row.claim !== agent) ||
+        (run.monitor.todo ? row.id !== run.monitor.todo : !run.monitor.key) ||
+        (row.expiry !== null && (observedAt === null || !monitorIsActive({expiresAt: row.expiry}, observedAt)))) return false;
+    const legacyLabel = row.targetKey === undefined || (!digest && !run.monitor.key && row.targetKey === null);
+    return (legacyLabel ? row.target : row.targetKey) === target;
+  });
+}
 function monitorStreak(request: Request): Trigger | null {
   const frontier = request.operation === "frontier_monitor_streak";
-  const stalled = request.todos.monitors.filter(row => row.count >= request.streak &&
+  const stalled = request.todos.monitors.filter(row => !row.watchOnly && row.count >= request.streak &&
     (request.observedAt === null || monitorIsActive({expiresAt: row.expiry}, request.observedAt)))
     .sort((a, b) => b.count - a.count || (frontier ? authorityUnicodeCompare(a.target, b.target) : 0))[0];
   if (!stalled || !frontier && request.todos.advancements.some(row => row.status === "open" &&
@@ -327,6 +376,7 @@ function monitorStreak(request: Request): Trigger | null {
 }
 
 export function projectReplanHistory(value: unknown, qualified?: ReadonlySet<string>): JsonObject {
+  // Work-shape decisions do not silently reconfigure the review interval.
   const request = decode(value);
   const runs = historyWindow(request);
   let trigger: Trigger | null;

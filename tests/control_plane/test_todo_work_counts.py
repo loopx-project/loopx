@@ -36,20 +36,13 @@ def test_incomplete_legacy_summary_cannot_invent_hidden_advancement():
     assert counts["complete"] is False
 
 
-def test_list_and_status_compactors_preserve_semantic_counts():
-    from loopx.control_plane.todos.list_projection import (
-        compact_agent_lane_todo_summary, compact_explicit_limit_todo_summary, compact_thin_todo_summary,
-    )
+def test_status_compactor_preserves_semantic_counts():
     from loopx.control_plane.todos.quota_summary import _compact_agent_lane_status_todo_summary
 
     summary = compact_todo_group([work(i) for i in range(21)], source_section="Agent Todo", role="agent")
-    projections = [compact_agent_lane_todo_summary(summary, role="agent"),
-        compact_explicit_limit_todo_summary(summary, role="agent", item_limit=1),
-        compact_thin_todo_summary(summary, role="agent", items_matched=21, items_returned=1, item_limit_per_role=1),
-        _compact_agent_lane_status_todo_summary(summary, role="agent")]
-    for projected in projections:
-        assert todo_summary_open_task_counts(projected)["advancement"] == 21
-        assert projected["work_counts"]["complete"] is True
+    projected = _compact_agent_lane_status_todo_summary(summary, role="agent")
+    assert todo_summary_open_task_counts(projected)["advancement"] == 21
+    assert projected["work_counts"]["complete"] is True
 
 
 def test_incomplete_scoped_snapshot_does_not_certify_monitor_only():

@@ -1,14 +1,19 @@
 """Real heartbeat coverage for an unbound, automatically scheduled Vision wait."""
 from __future__ import annotations
 
+from dataclasses import replace
 import json
+from math import ceil
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from time import monotonic
 
 import pytest
+from canonical_authority_fixture import read_fixture_todos, initialize_canonical_source_fixture
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 
 from loopx.control_plane.effect_runtime import restart_effect_runtime
 
@@ -29,7 +34,7 @@ def isolated_effect(tmp_path: Path, monkeypatch):
     restart_effect_runtime()
 
 
-def fixture(root: Path, resume: str = FUTURE) -> tuple[Path, Path, Path]:
+def fixture(root: Path, resume: str = FUTURE, *, with_vision: bool = True) -> tuple[Path, Path, Path]:
     project, runtime = root / "project", root / "runtime"
     state = project / f".codex/goals/{GOAL}/ACTIVE_GOAL_STATE.md"
     state.parent.mkdir(parents=True)
@@ -56,6 +61,8 @@ def fixture(root: Path, resume: str = FUTURE) -> tuple[Path, Path, Path]:
                    "coordination": {"registered_agents": [AGENT], "agent_model": "peer_v1"},
                    "quota": {"compute": 1.0, "window_hours": 24, "allowed_slots": 20}}],
     }), encoding="utf-8")
+    if not with_vision:
+        return registry, runtime, state
     runs = runtime / f"goals/{GOAL}/runs"
     runs.mkdir(parents=True)
     run = {"goal_id": GOAL, "agent_id": AGENT,
@@ -78,22 +85,19 @@ def cli(registry: Path, runtime: Path, *args: str) -> tuple[int, dict]:
         cwd=REPO, env={**os.environ, "PYTHONPATH": str(REPO), "LOOPX_USAGE_PING": "0"},
         capture_output=True, text=True, check=False, timeout=90,
     )
-    return result.returncode, json.loads(result.stdout)
+    return result.returncode, read_cli_policy_payload(result.stdout, returncode=result.returncode)
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_future_vision_wait_is_quiet_without_binding_or_poll(tmp_path, isolated_effect, monkeypatch, provider):
     from canonical_authority_fixture import initialize_canonical_authority
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 
     registry, runtime, state = fixture(tmp_path)
-    if provider != "legacy":
-        if provider == "sqlite":
-            monkeypatch.setenv("NODE_OPTIONS", os.environ.get("NODE_OPTIONS", "") + " --experimental-sqlite")
-        rc, listed = cli(registry, runtime, "todo", "list", "--goal-id", GOAL)
-        assert rc == 0, listed
-        projection = build_todo_runtime_shadow_projection(goal_id=GOAL, handoff_mode="soft_claim", todos=listed["todos"])
-        initialize_canonical_authority(runtime, GOAL, projection, state_path=state, provider=provider)
+    if provider == "sqlite":
+        monkeypatch.setenv("NODE_OPTIONS", os.environ.get("NODE_OPTIONS", "") + " --experimental-sqlite")
+    projection = build_todo_runtime_shadow_projection(goal_id=GOAL, handoff_mode="soft_claim", todos=read_fixture_todos(state))
+    initialize_canonical_authority(runtime, GOAL, projection, state_path=state, provider=provider)
     original_state = state.read_bytes()
     args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL,
             "--agent-id", AGENT, "--turn-instance-id", "scheduled-before-due")
@@ -138,8 +142,140 @@ def test_future_vision_wait_is_quiet_without_binding_or_poll(tmp_path, isolated_
     assert not any(run.get("classification") in ("quota_monitor_poll", "quota_slot_spent") for run in runs)
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("optional_notice", [False, True])
+def test_multiple_future_waits_keep_the_original_unbound_turn_quiet(
+    tmp_path, isolated_effect, monkeypatch, provider, optional_notice,
+):
+    registry, runtime, state = fixture(tmp_path)
+    waiting_ids = [TODO, *(f"todo_scheduled_{index}" for index in range(6))]
+    with state.open("a", encoding="utf-8") as output:
+        for todo_id in waiting_ids[1:]:
+            output.write(
+                f"\n- [ ] [P1] Retain scheduled work {todo_id}.\n"
+                f"  <!-- loopx:todo todo_id={todo_id} status=deferred claimed_by={AGENT} "
+                f"task_class=advancement_task action_kind=validate resume_when={FUTURE} -->\n"
+            )
+        if optional_notice:
+            output.write(
+                "\n## User Todo / Owner Review Reading Queue\n\n"
+                "- [ ] [P2] Review the optional public draft.\n"
+                f"  <!-- loopx:todo todo_id=todo_optional_draft status=open "
+                f"task_class=user_action bound_agent={AGENT} -->\n"
+            )
+    vision = runtime / f"goals/{GOAL}/runs/vision.json"
+    run = json.loads(vision.read_text())
+    run["agent_vision"]["todo_delta"] = [f"retain:{todo_id}" for todo_id in waiting_ids]
+    vision.write_text(json.dumps(run), encoding="utf-8")
+    (vision.parent / "index.jsonl").write_text(
+        json.dumps({**run, "json_path": str(vision)}) + "\n", encoding="utf-8",
+    )
+    if provider == "sqlite":
+        monkeypatch.setenv("NODE_OPTIONS", os.environ.get("NODE_OPTIONS", "") + " --experimental-sqlite")
+    initialize_canonical_source_fixture(runtime, GOAL, state_path=state, provider=provider)
+    original = state.read_bytes()
+    args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL,
+            "--agent-id", AGENT, "--turn-instance-id", "multiple-scheduled-waits")
+    for _ in range(2):
+        rc, guard = cli(registry, runtime, *args)
+        assert rc == 0, guard
+        assert guard["effective_action"] == "agent_scope_wait"
+        assert guard["vision_wait_state"]["waiting_todo_count"] == len(waiting_ids)
+        assert "settlement_identity" not in guard["heartbeat_receipt"]
+        contract = guard["interaction_contract"]
+        assert contract["agent_channel"]["must_attempt"] is False, contract
+        assert contract["agent_channel"]["quiet_noop_allowed"] is True, contract
+        assert contract["agent_channel"]["delivery_allowed"] is False
+        assert contract["user_channel"]["action_required"] is False
+        assert not any("monitor-poll" in action for action in contract["cli_channel"]["next_cli_actions"])
+        assert guard["scheduler_hint"]["action"] == "backoff_until_state_change"
+    assert state.read_bytes() == original
+    runs = [json.loads(line) for line in (vision.parent / "index.jsonl").read_text().splitlines()]
+    assert not any(run.get("classification") in ("quota_monitor_poll", "quota_slot_spent") for run in runs)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("scenario", ["before_due", "successor_due", "monitor_due", "unproven"])
+def test_watch_only_monitor_preserves_dated_successor_wait(
+    tmp_path, isolated_effect, monkeypatch, provider, scenario,
+):
+    past = "2026-01-01T00:00:00Z"
+    monitor = "todo_watch_only"
+    monitor_due = past if scenario == "monitor_due" else FUTURE.removeprefix("resume_at:")
+    resume = f"resume_at:{past}" if scenario == "successor_due" else FUTURE
+    if scenario == "unproven":
+        resume = "capacity_available:external_runner"
+    registry, runtime, state = fixture(tmp_path, resume)
+    review = "todo_independent_review"
+    with state.open("a", encoding="utf-8") as output:
+        output.write(
+            "\n- [ ] [P1] Keep the independent review at its own scheduled instant.\n"
+            f"  <!-- loopx:todo todo_id={review} status=deferred claimed_by={AGENT} "
+            "task_class=advancement_task action_kind=validate resume_when=resume_at:2099-01-02T00:00:00Z -->\n"
+            "\n- [ ] [P1] Observe feedback at its own scheduled instant.\n"
+            f"  <!-- loopx:todo todo_id={monitor} status=open claimed_by={AGENT} "
+            "task_class=continuous_monitor action_kind=external_evidence_poll "
+            f"target_key=synthetic-feedback cadence=24h next_due_at={monitor_due} "
+            f"watch_only=true unblocks_todo_id={TODO} -->\n"
+        )
+    vision = runtime / f"goals/{GOAL}/runs/vision.json"
+    run = json.loads(vision.read_text())
+    run["agent_vision"]["todo_delta"] = [f"retain:{TODO}", f"retain:{review}"]
+    vision.write_text(json.dumps(run), encoding="utf-8")
+    index = vision.parent / "index.jsonl"
+    index.write_text(json.dumps({**run, "json_path": str(vision)}) + "\n", encoding="utf-8")
+    if provider == "sqlite":
+        monkeypatch.setenv("NODE_OPTIONS", os.environ.get("NODE_OPTIONS", "") + " --experimental-sqlite")
+    initialize_canonical_source_fixture(runtime, GOAL, state_path=state, provider=provider)
+    original = state.read_bytes()
+    args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL, "--agent-id", AGENT,
+            "--available-capability", "network", "--available-capability", "external_evidence_poll",
+            "--turn-instance-id")
+    details = ("--include-detail", "agent-todos") if scenario == "unproven" else ()
+    saved_alias = ("--turn-envelope",) if details else ()
+    rc, first = cli(registry, runtime, *args, "watch-first", *details, *saved_alias)
+    assert rc == 0, first
+    if scenario == "successor_due":
+        assert first["effective_action"] == "successor_replan_required"
+        assert first["selected_todo"]["todo_id"] == TODO
+    elif scenario == "monitor_due":
+        assert first["effective_action"] == "normal_run"
+        assert first["work_lane_contract"]["lane"] == "continuous_monitor"
+        assert first["selected_todo"]["todo_id"] == monitor
+    elif scenario == "before_due":
+        assert first["heartbeat_receipt"]["status"] == "committed"
+        rc, replay = cli(registry, runtime, *args, "watch-first")
+        assert rc == 0, replay
+        assert replay["heartbeat_receipt"]["status"] == "replayed"
+        rc, later = cli(registry, runtime, *args, "watch-second")
+        assert rc == 0, later
+        for guard in (first, replay, later):
+            assert guard["effective_action"] == "monitor_quiet_skip"
+            receipt = guard["heartbeat_receipt"]
+            assert receipt["stall_observation"] == "not_applicable"
+            assert "settlement_identity" not in receipt
+            assert guard["goal_frontier_projection"]["replan_required"] is False
+            assert guard["interaction_contract"]["agent_channel"]["quiet_noop_allowed"] is True
+            assert guard["vision_wait_state"]["resume_when"] == FUTURE
+    else:
+        assert first["heartbeat_receipt"]["stall_observation"] == "appended"
+        rc, replay = cli(registry, runtime, *args, "watch-first", *details)
+        assert rc == 0, replay
+        assert replay["heartbeat_receipt"]["status"] == "replayed"
+        assert first["heartbeat_receipt"]["event_id"] == replay["heartbeat_receipt"]["event_id"]
+        for guard in (first, replay):
+            assert guard["effective_action"] == "monitor_quiet_skip"
+            assert guard["vision_wait_state"]["resume_when"] == resume
+            assert "settlement_identity" not in guard["heartbeat_receipt"]
+    assert state.read_bytes() == original
+    runs = [json.loads(line) for line in index.read_text().splitlines()]
+    assert not any(run.get("classification") == "quota_slot_spent" for run in runs)
+    assert sum(run.get("classification") == "quota_monitor_poll" for run in runs) == (scenario == "unproven")
+
+
 def test_due_vision_wait_restores_explicit_resume(tmp_path, isolated_effect):
     registry, runtime, state = fixture(tmp_path, "resume_at:2026-01-01T00:00:00Z")
+    initialize_canonical_source_fixture(runtime, GOAL, state_path=state, provider="sqlite")
     original = state.read_bytes()
     rc, guard = cli(registry, runtime, "quota", "should-run", "--codex-app",
                     "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", "scheduled-due")
@@ -157,12 +293,36 @@ def test_due_vision_wait_restores_explicit_resume(tmp_path, isolated_effect):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_automatic_wait_does_not_remove_a_real_user_gate(tmp_path, isolated_effect, provider):
+    registry, runtime, state = fixture(tmp_path)
+    with state.open("a", encoding="utf-8") as output:
+        output.write(
+            "\n## User Todo / Owner Review Reading Queue\n\n"
+            "- [ ] [P0] Approve the protected publication.\n"
+            f"  <!-- loopx:todo todo_id=todo_publication_gate status=open "
+            f"task_class=user_gate blocks_agent={AGENT} -->\n"
+        )
+    initialize_canonical_source_fixture(runtime, GOAL, state_path=state, provider=provider)
+    original = state.read_bytes()
+    rc, guard = cli(registry, runtime, "quota", "should-run", "--codex-app",
+                    "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", "gated-scheduled-work")
+    assert rc == 0, guard
+    contract = guard["interaction_contract"]
+    assert contract["user_channel"]["action_required"] is True
+    assert contract["agent_channel"]["delivery_allowed"] is False
+    assert contract["agent_channel"]["quiet_noop_allowed"] is False
+    assert contract["cli_channel"]["spend_allowed_now"] is False
+    assert state.read_bytes() == original
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_real_cli_worker_keeps_automatic_wait_alive_and_honors_explicit_stop(
     tmp_path, isolated_effect, monkeypatch, provider,
 ):
     from argparse import Namespace
     from canonical_authority_fixture import initialize_canonical_authority
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.goals.activation_service import set_goal_activation_state
 
     monkeypatch.syspath_prepend(str(REPO / "scripts"))
     import external_scheduler_worker as worker
@@ -170,30 +330,46 @@ def test_real_cli_worker_keeps_automatic_wait_alive_and_honors_explicit_stop(
     registry, runtime, state = fixture(tmp_path)
     if provider == "sqlite":
         monkeypatch.setenv("NODE_OPTIONS", os.environ.get("NODE_OPTIONS", "") + " --experimental-sqlite")
-    rc, listed = cli(registry, runtime, "todo", "list", "--goal-id", GOAL)
-    assert rc == 0, listed
     initialize_canonical_authority(runtime, GOAL, build_todo_runtime_shadow_projection(
-        goal_id=GOAL, handoff_mode="soft_claim", todos=listed["todos"],
+        goal_id=GOAL, handoff_mode="soft_claim", todos=read_fixture_todos(state),
     ), state_path=state, provider=provider)
     original_state = state.read_bytes()
     packets, sleeps = [], []
 
     def real_probe(command, **kwargs):
-        # Adapt process transport only: every reply is produced by the real CLI
-        # against the isolated authority, with a fresh Turn identity.
-        rc, packet = cli(registry, runtime, *command[command.index("quota"):],
-                         "--turn-instance-id", f"scheduled-worker-{len(packets)}")
-        assert rc == 0, packet
-        packets.append(packet)
+        # Compare the actual worker view with the full CLI's policy diagnostics
+        # on the same authority state. Neither observer starts a Turn.
+        args = command[command.index("quota"):]
+        assert args[-1] == "--scheduler-observation"
+        started = monotonic()
+        rc, packet = cli(registry, runtime, *args)
+        raw_rc, raw = cli(registry, runtime, *args[:-1], "--context-delivery", "off",
+                          "--include-detail", "scheduler")
+        assert rc == raw_rc == 0, (packet, raw)
+        tick, source = worker.parse_tick(packet), worker.parse_tick(raw)
+        remaining, source_remaining = tick.recheck_after_seconds, source.recheck_after_seconds
+        if source_remaining is not None:
+            assert remaining is not None and 0 <= remaining - source_remaining <= ceil(monotonic() - started)
+        else:
+            assert remaining is None
+        assert replace(tick, recheck_after_seconds=source_remaining) == source
+        assert not packet.get("heartbeat_receipt")
+        packets.append(raw)
         return packet
 
     def advance_host(seconds):
         sleeps.append(seconds)
         assert len(sleeps) <= 4, "explicit stop must end the actual worker"
         if len(sleeps) == 4:
-            stopped = json.loads(registry.read_text())
-            stopped["goals"][0]["activation_state"] = "stopped"
-            registry.write_text(json.dumps(stopped))
+            stopped = set_goal_activation_state(
+                registry_path=registry,
+                goal_id=GOAL,
+                state="stopped",
+                reason="The Host explicitly stopped the scheduled wait.",
+                actor_kind="owner",
+                execute=True,
+            )
+            assert stopped["readback"]["verified"] is True, stopped
 
     monkeypatch.setattr(worker, "run_quota_should_run", real_probe)
     monkeypatch.setattr(worker, "_run_wake", lambda *a, **kw: pytest.fail("a pending wait cannot wake the model"))
@@ -219,12 +395,99 @@ def test_real_cli_worker_keeps_automatic_wait_alive_and_honors_explicit_stop(
     assert not any(run.get("classification") in ("quota_monitor_poll", "quota_slot_spent") for run in runs)
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_deferred_todo_without_vision_wakes_original_agent_at_deadline(tmp_path, isolated_effect, monkeypatch, provider):
+    from argparse import Namespace
+    from contextlib import redirect_stdout
+    from datetime import datetime, timedelta, timezone
+    from io import StringIO
+    from loopx import entrypoint
+    from loopx.control_plane.runtime import time as runtime_time
+
+    monkeypatch.syspath_prepend(str(REPO / "scripts"))
+    import external_scheduler_worker as worker
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    due = now + timedelta(hours=2, seconds=17)
+
+    class FixtureDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz) if tz else now.replace(tzinfo=None)
+
+    monkeypatch.setattr(runtime_time, "datetime", FixtureDatetime)
+    registry, runtime, state = fixture(tmp_path, f"resume_at:{due.isoformat()}", with_vision=False)
+    initialize_canonical_source_fixture(runtime, GOAL, state_path=state, provider=provider)
+    observations = []
+    wakes = []
+
+    def command(*args):
+        out = StringIO()
+        with redirect_stdout(out):
+            rc = entrypoint.main(["--format", "json", "--registry", str(registry),
+                                  "--runtime-root", str(runtime), *args])
+        data = json.loads(out.getvalue())
+        assert rc == 0, data
+        return data
+
+    def probe(argv, **kwargs):
+        guard = command(*argv[argv.index("quota"):])
+        if not observations:
+            # The managed runtime and CLI host consume the same scoped due time.
+            managed = command("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
+                              "--runtime-profile", "ark_managed_agent_goal", "--context-delivery", "off")
+            continuation = managed["scheduler_hint"]["goal_runtime_continuation"]
+            assert continuation["disposition"] == "defer"
+            local = guard["scheduler_hint"]["cold_path_detail"]["local_scheduler"]
+            assert continuation["recheck_after_seconds"] == local["recheck_after_seconds"] == 7217
+        observations.append(guard)
+        return guard
+
+    def sleep(seconds):
+        nonlocal now
+        assert 0 < seconds <= (due - now).total_seconds()
+        now += timedelta(seconds=seconds)
+        assert len(observations) < 20
+
+    def wake(*args, **kwargs):
+        guard = observations[-1]
+        assert now == due and not wakes
+        assert guard["effective_action"] == "successor_replan_required"
+        assert guard["selected_todo"]["todo_id"] == TODO
+        source = command("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
+                         "--runtime-profile", "generic_cli", "--context-delivery", "off",
+                         "--include-detail", "scheduler")
+        assert worker.parse_tick(guard) == worker.parse_tick(source)
+        assert source["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+        updated = command("todo", "update", "--goal-id", GOAL, "--agent-id", AGENT,
+                          "--todo-id", TODO, "--status", "open", "--clear-resume-when",
+                          "--reason", "Scheduled condition satisfied")
+        assert updated.get("ok"), updated
+        readback = command("todo", "list", "--goal-id", GOAL, "--todo-id", TODO)
+        assert readback["todo"]["status"] == "open"
+        assert readback["todo"]["todo_id"] == TODO
+        wakes.append(TODO)
+        return worker.CappedProcessResult(75, b"", None)
+
+    monkeypatch.setattr(worker, "run_quota_should_run", probe)
+    monkeypatch.setattr(worker, "_run_wake", wake)
+    args = Namespace(cli_bin="loopx", registry=str(registry), runtime_root=str(runtime),
+                     runtime_profile="generic_cli", goal_id=GOAL, agent_id=AGENT,
+                     state_file=str(tmp_path / "worker.json"), once=False, wake_cmd="fixture",
+                     wake_stop_exit_code=75, error_backoff_seconds=5, quota_timeout_seconds=30,
+                     wake_timeout_seconds=None)
+    assert worker.run_worker(args, sleep=sleep) == 0
+    assert wakes == [TODO] and len(observations) > 3
+    assert all(not item["interaction_contract"]["agent_channel"]["must_attempt"] for item in observations[:-1])
+
+
 def test_independent_work_is_not_silenced_by_scheduled_wait(tmp_path, isolated_effect):
     registry, runtime, state = fixture(tmp_path)
     with state.open("a", encoding="utf-8") as output:
         output.write("\n- [ ] [P2] Validate independent public evidence.\n"
                      f"  <!-- loopx:todo todo_id=todo_independent status=open claimed_by={AGENT} "
                      "task_class=advancement_task action_kind=validate -->\n")
+    initialize_canonical_source_fixture(runtime, GOAL, state_path=state, provider="sqlite")
     rc, guard = cli(registry, runtime, "quota", "should-run", "--codex-app",
                     "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", "independent-work")
     assert rc == 0, guard
@@ -243,11 +506,9 @@ def test_bound_monitor_keeps_exact_turn_and_agent_fences(tmp_path, isolated_effe
                      f"  <!-- loopx:todo todo_id=todo_result_monitor status=open claimed_by={AGENT} "
                      "task_class=continuous_monitor action_kind=observe target_key=public-result "
                      "cadence=10m next_due_at=2026-01-01T00:00:00Z -->\n")
-    rc, listed = cli(registry, runtime, "todo", "list", "--goal-id", GOAL)
-    assert rc == 0, listed
     initialize_canonical_authority(
         runtime, GOAL,
-        build_todo_runtime_shadow_projection(goal_id=GOAL, todos=listed["todos"], handoff_mode="soft_claim"),
+        build_todo_runtime_shadow_projection(goal_id=GOAL, todos=read_fixture_todos(state), handoff_mode="soft_claim"),
         state_path=state,
     )
     rc, guard = cli(registry, runtime, "quota", "should-run", "--codex-app",
@@ -277,11 +538,13 @@ def test_bound_monitor_keeps_exact_turn_and_agent_fences(tmp_path, isolated_effe
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("historical_gap", [False, True])
 def test_blocked_replan_closes_without_debit_and_retains_scheduled_work(
-    tmp_path, isolated_effect, monkeypatch, provider,
+    tmp_path, isolated_effect, monkeypatch, provider, historical_gap,
 ):
     from canonical_authority_fixture import initialize_canonical_authority
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
 
     registry, runtime, state = fixture(tmp_path)
     with state.open("a", encoding="utf-8") as output:
@@ -292,20 +555,43 @@ def test_blocked_replan_closes_without_debit_and_retains_scheduled_work(
             "cadence=30m next_due_at=2099-01-01T00:00:00Z "
             "consecutive_no_change=8 max_no_change_before_replan=5 result_hash=source-v1 -->\n"
         )
+        if historical_gap:
+            output.write(
+                "\n- [x] [P1] Retain an independent completed result.\n"
+                f"  <!-- loopx:todo todo_id=todo_prior_result status=done claimed_by={AGENT} "
+                "task_class=advancement_task action_kind=validate completion_continuation=active_goal -->\n"
+                "\n- [ ] [P1] Keep the peer's independent work.\n"
+                "  <!-- loopx:todo todo_id=todo_peer_work status=open claimed_by=peer-worker "
+                "task_class=advancement_task action_kind=validate -->\n"
+            )
+    if historical_gap:
+        # Peer work keeps the shared Goal advancing but is not selectable by
+        # this Agent; its old lifecycle warning must not veto another duty.
+        document = json.loads(registry.read_text())
+        document["goals"][0]["coordination"]["registered_agents"].append("peer-worker")
+        registry.write_text(json.dumps(document))
     if provider == "sqlite":
         monkeypatch.setenv("NODE_OPTIONS", os.environ.get("NODE_OPTIONS", "") + " --experimental-sqlite")
-    rc, before = cli(registry, runtime, "todo", "list", "--goal-id", GOAL)
-    assert rc == 0, before
+    # Provision the synthetic canonical source before exercising real CLI reads;
+    # normal readers must not fall back to an unmigrated Markdown source.
+    todos = parse_active_state_todos(state.read_text(), item_limit=None)["agent_todos"]["items"]
     initialize_canonical_authority(
         runtime, GOAL,
-        build_todo_runtime_shadow_projection(goal_id=GOAL, handoff_mode="soft_claim", todos=before["todos"]),
+        build_todo_runtime_shadow_projection(goal_id=GOAL, handoff_mode="soft_claim", todos=todos),
         state_path=state, provider=provider,
     )
+    rc, before = cli(registry, runtime, "todo", "list", "--goal-id", GOAL)
+    assert rc == 0, before
+    if historical_gap:
+        assert before["agent_todos"]["completed_without_successor_count"] == 1
     turn = "blocked-source-review"
     rc, guard = cli(registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL,
                     "--agent-id", AGENT, "--turn-instance-id", turn)
     assert rc == 0, guard
     assert guard["effective_action"] == "autonomous_replan_required"
+    assert [row["kind"] for row in guard["autonomous_replan_obligation"]["triggers"]] == [
+        "monitor_no_change_streak",
+    ]
     identity = guard["heartbeat_receipt"]["settlement_identity"]
     obligation = identity["replan_obligation_id"]
     assert identity["binding_kind"] == "autonomous_replan"
@@ -356,8 +642,9 @@ def test_blocked_replan_closes_without_debit_and_retains_scheduled_work(
         assert refused["ok"] is False and not refused.get("appended"), refused
         assert state.read_bytes() == unchanged_state
     rc, refreshed = cli(registry, runtime, *refresh_args)
-    assert rc == 0, refreshed
+    assert rc == 0, json.dumps(refreshed)
     assert refreshed["settlement_identity"] == identity
+    assert refreshed["autonomous_replan_ack"]["semantic_delta"]["accepted"] is True
     assert refreshed["settlement_progress"]["state"] == "settled", refreshed["settlement_progress"]
     assert refreshed["settlement_progress"]["closeout_kind"] == "typed_blocked_writeback_no_spend"
     rc, replay = cli(registry, runtime, *refresh_args)
@@ -372,9 +659,13 @@ def test_blocked_replan_closes_without_debit_and_retains_scheduled_work(
     rc, later = cli(registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL,
                     "--agent-id", AGENT, "--turn-instance-id", "after-blocked-review")
     assert rc == 0, later
+    assert (later.get("autonomous_replan_obligation") or {}).get("obligation_id") != obligation
     assert later["interaction_contract"]["agent_channel"]["must_attempt"] is False
     rc, after = cli(registry, runtime, "todo", "list", "--goal-id", GOAL)
     assert rc == 0, after
+    if historical_gap:
+        assert after["agent_todos"]["completed_without_successor_count"] == 1
+        assert next(row for row in after["todos"] if row["todo_id"] == "todo_peer_work")["claimed_by"] == "peer-worker"
     for original in before["todos"]:
         current = next(row for row in after["todos"] if row["todo_id"] == original["todo_id"])
         for field in ("status", "text", "claimed_by", "resume_when", "consecutive_no_change",

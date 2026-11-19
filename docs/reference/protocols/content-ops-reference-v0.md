@@ -73,7 +73,7 @@ unknown reuse boundary, version mismatch or empty facts. It never substitutes
 the source's assertions for facts about the caller's subject.
 
 Discover this route through the existing capability catalog. In the packaged
-frontend, open **Settings → Capabilities → a Goal → Reference styles**.
+frontend, open **Settings → Capabilities → a Goal → Content production → Source style references**.
 Import an authorized catalog, filter references, choose a structure and supply
 your own facts to prepare an attributed outline. Capture/correction is an
 optional request-JSON section. Downloads are new private review artifacts;

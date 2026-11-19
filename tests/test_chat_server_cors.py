@@ -5,6 +5,7 @@ import http.client
 import json
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -113,6 +114,45 @@ def test_chat_capabilities_expose_public_runtime_identity() -> None:
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+def test_readiness_is_independent_of_blocked_capability_discovery(monkeypatch):
+    from loopx.dashboard_launcher import _probe_existing_chat
+    server, thread = _start_server()
+    entered, release = threading.Event(), threading.Event()
+    requests, results = [], []
+
+    def blocked():
+        requests.append("capabilities")
+        entered.set()
+        assert release.wait(5)
+        return []
+    monkeypatch.setattr(server.runtime_controller, "capabilities", blocked)
+    def full_read():
+        response = _request(server.server_port, method="GET", origin=None)
+        results.append(response.read())
+    reader = threading.Thread(target=full_read)
+    reader.start()
+    try:
+        assert entered.wait(3)
+        start = time.monotonic()
+        assert _probe_existing_chat("127.0.0.1", server.server_port) == "matching"
+        assert time.monotonic() - start < 0.5
+        response = _request(server.server_port, method="GET", origin=None, path="/api/chat/readiness")
+        payload = json.loads(response.read())
+        assert payload == {"ok": True, "schema_version": "loopx_chat_readiness_v1",
+            "state": "ready", "runtime_identity": server.runtime_identity}
+        assert requests == ["capabilities"] and not results
+        denied = _request(server.server_port, method="GET", origin="https://foreign.example", path="/api/chat/readiness")
+        assert denied.status == 403
+        denied.read()
+    finally:
+        release.set()
+        reader.join(5)
+        server.shutdown()
+        thread.join(5)
+        server.server_close()
+    assert len(results) == 1
 
 
 def test_chat_keeps_its_startup_identity_after_package_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -438,7 +478,7 @@ def test_chat_status_forwards_valid_goal_activation_scope(monkeypatch) -> None:
         calls.append(kwargs)
         return {"ok": True, "scope": kwargs.get("activation_state_filter")}
 
-    monkeypatch.setattr("loopx.chat_status_api.collect_status", fake_collect_status)
+    monkeypatch.setattr("loopx.chat.status_api.collect_status", fake_collect_status)
     server, thread = _start_server()
     server.goal_subagent_configuration_enabled = True
     try:
@@ -466,7 +506,7 @@ def test_chat_status_forwards_valid_goal_activation_scope(monkeypatch) -> None:
 
 def test_chat_status_rejects_invalid_goal_activation_scope(monkeypatch) -> None:
     monkeypatch.setattr(
-        "loopx.chat_status_api.collect_status",
+        "loopx.chat.status_api.collect_status",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("must fail before collection")),
     )
     server, thread = _start_server()
@@ -534,8 +574,8 @@ def test_workspace_directory_still_fails_on_an_unreadable_registry(tmp_path) -> 
 
 def test_workspace_directory_skips_expensive_projection_and_respects_scope(monkeypatch) -> None:
     registry = {"goals": [{"id": "alpha", "display_name": "Alpha"}, {"id": "beta"}]}
-    monkeypatch.setattr("loopx.chat_status_api.load_project_registry", lambda _: registry)
-    monkeypatch.setattr("loopx.chat_status_api.collect_status", lambda **_: (_ for _ in ()).throw(AssertionError("directory must not collect status")))
+    monkeypatch.setattr("loopx.chat.status_api.load_project_registry", lambda _: registry)
+    monkeypatch.setattr("loopx.chat.status_api.collect_status", lambda **_: (_ for _ in ()).throw(AssertionError("directory must not collect status")))
     server, thread = _start_server()
     server.selected_goal_id = "alpha"
     try:
@@ -556,12 +596,12 @@ def test_workspace_directory_skips_expensive_projection_and_respects_scope(monke
 
 def test_workspace_scoped_status_revision_and_membership_fences(monkeypatch) -> None:
     registry = {"goals": [{"id": "alpha"}, {"id": "beta"}]}
-    monkeypatch.setattr("loopx.chat_status_api.load_registry", lambda _: registry)
+    monkeypatch.setattr("loopx.chat.status_api.load_registry", lambda _: registry)
     calls = []
     def collect(**kwargs):
         calls.append(kwargs["goal_id"])
         return {"ok": True}
-    monkeypatch.setattr("loopx.chat_status_api.collect_status", collect)
+    monkeypatch.setattr("loopx.chat.status_api.collect_status", collect)
     server, thread = _start_server()
     try:
         response = _request(server.server_address[1], method="GET", origin=None, path="/status.json?goal_id=alpha")
@@ -576,7 +616,7 @@ def test_workspace_scoped_status_revision_and_membership_fences(monkeypatch) -> 
         def racing_collect(**kwargs):
             registry["goals"].pop()
             return {"ok": True}
-        monkeypatch.setattr("loopx.chat_status_api.collect_status", racing_collect)
+        monkeypatch.setattr("loopx.chat.status_api.collect_status", racing_collect)
         response = _request(server.server_address[1], method="GET", origin=None, path="/status.json?goal_id=alpha")
         response.read()
         assert response.status == 409
@@ -649,13 +689,13 @@ def _status_failure(kind: str) -> BaseException:
     )],
 )
 def test_workspace_status_access_error_contract(monkeypatch, kind: str, access: bool) -> None:
-    monkeypatch.setattr("loopx.chat_status_api.load_registry", lambda _: {"goals": [{"id": "alpha"}]})
+    monkeypatch.setattr("loopx.chat.status_api.load_registry", lambda _: {"goals": [{"id": "alpha"}]})
     failure = _status_failure(kind)
 
     def fail(**_kwargs):
         raise failure
 
-    monkeypatch.setattr("loopx.chat_status_api.collect_status", fail)
+    monkeypatch.setattr("loopx.chat.status_api.collect_status", fail)
     server, thread = _start_server()
     try:
         response = _request(server.server_address[1], method="GET", origin=None, path="/status.json?goal_id=alpha")
@@ -675,9 +715,9 @@ def test_workspace_access_code_does_not_change_other_status_routes(monkeypatch, 
     def fail(*_args, **_kwargs):
         raise PermissionError("synthetic confidential diagnostic")
 
-    monkeypatch.setattr("loopx.chat_status_api.load_registry", fail)
-    monkeypatch.setattr("loopx.chat_status_api.load_project_registry", fail)
-    monkeypatch.setattr("loopx.chat_status_api.collect_status", fail)
+    monkeypatch.setattr("loopx.chat.status_api.load_registry", fail)
+    monkeypatch.setattr("loopx.chat.status_api.load_project_registry", fail)
+    monkeypatch.setattr("loopx.chat.status_api.collect_status", fail)
     server, thread = _start_server()
     try:
         response = _request(server.server_address[1], method="GET", origin=None, path="/status.json" + query)
@@ -685,6 +725,43 @@ def test_workspace_access_code_does_not_change_other_status_routes(monkeypatch, 
         assert json.loads(response.read()) == {
             "ok": False, "error": "LoopX status could not be projected for the workspace.",
         }
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_workspace_legacy_storage_refusal_exposes_recovery_without_mutation(tmp_path) -> None:
+    state = tmp_path / "GOAL.md"
+    source = "# Original Goal\n\n## Agent Todo\n\n- [ ] Original private task\n  <!-- loopx:todo todo_id=todo_original role=agent status=open -->\n"
+    state.write_text(source)
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({
+        "schema_version": 1,
+        "common_runtime_root": str(tmp_path / "runtime"),
+        "goals": [{"id": "alpha", "repo": str(tmp_path), "state_file": state.name}],
+    }))
+    server, thread = _start_server()
+    server.registry_path = registry
+    server.runtime_root = tmp_path / "runtime"
+    server.runtime_root.mkdir()
+    server.runtime_root_override = str(server.runtime_root)
+    try:
+        response = _request(server.server_port, method="GET", origin=None, path="/status.json?goal_id=alpha")
+        assert response.status == 503
+        assert json.loads(response.read()) == {
+            "ok": False,
+            "error": "This Goal needs a storage upgrade. Open its storage settings to review recovery.",
+            "error_code": "canonical_authority_required",
+        }
+        response = _request(server.server_port, method="GET", origin=None,
+                            path="/api/chat/goal-storage?goal_id=alpha")
+        observed = json.loads(response.read())
+        assert response.status == 200, observed
+        assert observed["current"]["canonical"] is False
+        assert observed["cold_source"]["active_todo_count"] == 1
+        assert observed["pending_preview"] is None
+        assert state.read_text() == source
     finally:
         server.shutdown()
         thread.join(timeout=5)

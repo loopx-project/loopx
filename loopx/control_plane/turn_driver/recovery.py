@@ -95,6 +95,11 @@ def require_turn_recovery_continuation(
         if assessment.error is not None
         else "LoopX Turn journal recovery is blocked"
     )
+    if assessment.decision.get("reason") == "host_outcome_unknown":
+        message = (
+            "Original Host attempt outcome is unknown; reconcile its execution and "
+            "downstream effects before retrying. Preserve the original Turn journal."
+        )
     raise TurnRecoveryBlockedError(assessment.decision, message)
 
 

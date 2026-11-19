@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .field_shapes import REPORT_LANGUAGE_PATTERN, SUPPORTING_CONTENT_KINDS
 from .adapters import (
     PeriodicReportSourceAdapter,
     build_periodic_report_source_result,
@@ -44,8 +44,6 @@ _SECTION_TITLES = {
         "supporting_evidence": "支撑证据",
     },
 }
-_LANGUAGE_RE = re.compile(r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
-_SUPPORTING_CONTENT_KINDS = {"coverage", "runtime", "delivery_receipt"}
 _MAX_PRIMARY_ITEMS = 8
 _MAX_SUPPORTING_ITEMS = 16
 
@@ -80,7 +78,7 @@ def _snapshot_ref(projection: Mapping[str, Any], *, language: str) -> str:
 
 def _language(value: object) -> str:
     language = str(value or "en").strip()
-    if not _LANGUAGE_RE.fullmatch(language):
+    if not REPORT_LANGUAGE_PATTERN.fullmatch(language):
         raise ValueError(
             "project_progress.language must be a BCP-47-like language tag"
         )
@@ -126,7 +124,7 @@ def build_project_progress_periodic_report_source(
         if section_spec is None:
             raise ValueError(f"{label}.content_kind is invalid")
         visibility = str(item.get("visibility") or "primary").strip().lower()
-        if content_kind in _SUPPORTING_CONTENT_KINDS:
+        if content_kind in SUPPORTING_CONTENT_KINDS:
             supporting_count += 1
         elif visibility == "supporting":
             supporting_count += 1

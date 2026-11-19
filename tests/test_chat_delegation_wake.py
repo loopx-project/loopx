@@ -916,13 +916,15 @@ def test_the_in_turn_tool_pins_the_conversation_it_runs_in(mode, monkeypatch):  
     adapter.goal_driver = type("D", (), {
         "turn_start_handler": None, "stopped": __import__("threading").Event()})()
     turn_id = service.store.load_session(sid)["active_turn_id"]
-    service.prepare(sid, turn_id, adapter, lambda name, arguments: {"ok": True}, lambda *a, **k: None)
-
-    adapter.session.read_tool_handler("loopx_collaboration", {
-        "action": "start", "binding_id": "review", "operation_id": "op-1",
-        "brief": {"schema_version": "collaboration_brief_v0"}})
-
-    assert pinned == [{"session_id": sid, "turn_id": turn_id}]
+    lock = service.prepare(sid, turn_id, adapter, lambda name, arguments: {"ok": True}, lambda *a, **k: None)
+    try:
+        result = adapter.session.read_tool_handler("loopx_collaboration", {
+            "action": "start", "binding_id": "review", "operation_id": "op-1",
+            "brief": {"schema_version": "collaboration_brief_v0"}})
+        assert result["ok"], result
+        assert pinned == [{"session_id": sid, "turn_id": turn_id}]
+    finally:
+        lock.__exit__(None, None, None)
 
 
 # The public reference enumerates the wake receipt vocabulary, and operators read

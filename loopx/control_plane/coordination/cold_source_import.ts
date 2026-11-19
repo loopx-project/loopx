@@ -5,7 +5,7 @@
 import {createHash} from "node:crypto";
 import {createReadStream} from "node:fs";
 import {lstat, readFile, readdir, statfs} from "node:fs/promises";
-import {join, isAbsolute, relative, resolve} from "node:path";
+import {join, isAbsolute, relative} from "node:path";
 import type {JsonObject} from "../effect_program.ts";
 import {durableWriteJson} from "../effect_runtime_io.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
@@ -234,13 +234,16 @@ export async function executeColdSourceImport(value: unknown,
   try {
     const input = requireJsonObject(value, "cold source import request");
     const action = input.action;
+    const bindSourceRegistry = (action === "apply" || action === "readback")
+      && Object.hasOwn(input, "expected_source_registry");
+    const sourceRegistryKeys = bindSourceRegistry ? ["expected_source_registry"] : [];
     if (input.schema_version !== COLD_SOURCE_IMPORT_REQUEST_SCHEMA ||
         (action !== "prepare" && action !== "apply" && action !== "recover" && action !== "readback") ||
         !hasExactAuthorityKeys(input, action === "prepare"
           ? ["schema_version", "action", "runtime_root", "goal_id", "operation_id", "projection", "source_snapshot", "target_handoff_mode", "target_provider", "source_backup"]
           : action === "apply"
-            ? ["schema_version", "action", "runtime_root", "goal_id", "operation_id", "expected_plan_sha256", "writers_stopped"]
-            : ["schema_version", "action", "runtime_root", "goal_id", "operation_id", "expected_plan_sha256"])) {
+            ? ["schema_version", "action", "runtime_root", "goal_id", "operation_id", "expected_plan_sha256", "writers_stopped", ...sourceRegistryKeys]
+            : ["schema_version", "action", "runtime_root", "goal_id", "operation_id", "expected_plan_sha256", ...sourceRegistryKeys])) {
       reject("cold_import_request_invalid");
     }
     const root = requireLocalAuthorityRuntimeRoot(input.runtime_root);
@@ -312,6 +315,12 @@ export async function executeColdSourceImport(value: unknown,
         fence_id: `cold-import:${operation}`, import_operation_id: operation, import_plan_sha256: raw.plan_sha256};
       if (prior.status === "loaded" && !same(prior.fence, fence)) reject("cold_import_fence_conflict");
       const source = plan.source as ShadowRequest;
+      if (bindSourceRegistry) {
+        // The host resolves the current source before entering the effect.
+        // The immutable plan does not authorize a source the host no longer selects.
+        const registration = requireJsonObject(source.source_snapshot.registry_source, "retained registry source");
+        if (registration.path !== input.expected_source_registry) reject("source_registry_changed_retry");
+      }
       const projection = requireJsonObject(plan.target_projection, "import target projection");
       const identity = {operation_id: operation, projection_sha256: canonicalAuthoritySha256(projection),
         receipt: {schema_version: "loopx_cold_source_import_receipt_v0", goal_id: goal,

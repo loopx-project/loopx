@@ -27,6 +27,18 @@ AckRecorded = Callable[[dict[str, Any]], bool]
 
 MAX_AUTONOMOUS_REPLAN_TRIGGERS = 3
 AUTONOMOUS_REPLAN_STALL_THRESHOLD = 2
+AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID = "autonomous_replan_default_v0"
+AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION = (
+    "stop only the affected path when required access, destructive git, production actions, "
+    "or owner-only decisions exceed existing user authority. Keep authorized private reads "
+    "within their storage and publication boundaries; do not expose credentials or disclose "
+    "private material beyond that authority. Continue independent authorized replan work "
+    "while honoring explicit stops"
+)
+AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION = (
+    "stop this replan path until a compatible reader validates its digest-bound "
+    "review guard"
+)
 REPLAN_NOVELTY_POLICY_SCHEMA_VERSION = "replan_evidence_delivery_policy_v0"
 TODO_LIFECYCLE_SETTLEMENT_RESOLUTION_MODE = "todo_lifecycle_settlement"
 REPLAN_NOVELTY_GUIDANCE = (
@@ -82,6 +94,7 @@ def project_todo_lifecycle_settlement_reentry(
     lifecycle_actor_args: str,
     scoped_cli_args: str,
     runtime_root: str | None = None,
+    quota_guard_action: str | None = None,
 ) -> dict[str, Any] | None:
     """Adapt a lifecycle obligation to the TS-owned reentry projection."""
 
@@ -106,6 +119,7 @@ def project_todo_lifecycle_settlement_reentry(
         triggers=triggers,
         lifecycle_actor_args=shlex.split(lifecycle_actor_args),
         quota_scoped_args=shlex.split(scoped_cli_args),
+        quota_guard_argv=shlex.split(quota_guard_action) if quota_guard_action else None,
     )
 
 
@@ -121,6 +135,7 @@ def build_autonomous_replan_cli_actions(
     lifecycle_actor_args: str = "",
     runtime_root: str | None = None,
     successor_closeout_guard: str | None = None,
+    quota_guard_action: str | None = None,
 ) -> list[str]:
     lifecycle_reentry = project_todo_lifecycle_settlement_reentry(
         payload,
@@ -128,6 +143,7 @@ def build_autonomous_replan_cli_actions(
         lifecycle_actor_args=lifecycle_actor_args,
         scoped_cli_args=scoped_cli_args,
         runtime_root=runtime_root,
+        quota_guard_action=quota_guard_action,
     )
     if lifecycle_reentry is not None:
         return list(lifecycle_reentry["next_cli_actions"])
@@ -160,10 +176,13 @@ def build_autonomous_replan_cli_actions(
     obligation: Mapping[str, Any] = (
         raw_obligation if isinstance(raw_obligation, Mapping) else payload
     )
-    if writeback_contract.get("preferred_input") == "verified_replan_writeback":
+    preferred_input = writeback_contract.get("preferred_input")
+    if preferred_input == "verified_replan_writeback":
         return [quota_spend_action] if settlement_chain_ready else []
     semantic_delta_args = (
-        writeback_contract.get("cli_semantic_args")
+        ""
+        if preferred_input == "exact_historical_ack"
+        else writeback_contract.get("cli_semantic_args")
         or replan_writeback_requirements(obligation)["cli_semantic_args"]
     )
     delivery_args = (
@@ -177,6 +196,7 @@ def build_autonomous_replan_cli_actions(
         f"{cli_prefix} --format json refresh-state --goal-id {goal_id} "
         "--progress-scope agent_lane "
         "--classification bounded_replan_progress "
+        "--delivery-boundary semantic_closeout "
         f"{delivery_args}{semantic_delta_args}"
         f"{settlement_args}{scoped_cli_args}"
     )
@@ -256,6 +276,30 @@ def ensure_replan_novelty_policy(
             default=str,
         ).encode("utf-8")
     ).hexdigest()[:16]
+    # The pre-stable acceptance checkpoint included the current Todo timestamp.
+    # Derive its exact original obligation from the same canonical trigger set.
+    # This preserves an already-admitted Turn only while its owner/source still
+    # matches; it does not mint an alternative identity for a fresh admission.
+    legacy_revisions = {
+        (trigger.get("kind"), trigger.get("frontier_revision")): trigger["legacy_frontier_revision"]
+        for trigger in normalized.get("triggers") or []
+        if isinstance(trigger, dict)
+        and trigger.get("kind") in {"goal_acceptance_stale", "goal_acceptance_unbound"}
+        and isinstance(trigger.get("legacy_frontier_revision"), str)
+    }
+    if legacy_revisions:
+        legacy_identity = [
+            {**trigger, "frontier_revision": legacy_revisions.get(
+                (trigger.get("kind"), trigger.get("frontier_revision")), trigger.get("frontier_revision"),
+            )} if "frontier_revision" in trigger else trigger
+            for trigger in trigger_identity
+        ]
+        normalized["legacy_obligation_id"] = "replan-" + hashlib.sha256(json.dumps(
+            {**identity_payload, "trigger_identity": legacy_identity},
+            sort_keys=True, ensure_ascii=True, default=str,
+        ).encode("utf-8")).hexdigest()[:16]
+    else:
+        normalized.pop("legacy_obligation_id", None)
     return normalized
 
 
@@ -610,13 +654,7 @@ def build_autonomous_replan_obligation(
             else ["keep", "split", "add", "retire", "ask_decision"]
         ),
         todo_actions=todo_actions[:3],
-        stop_condition=(
-            "stop only the affected path when required access, destructive git, production actions, "
-            "or owner-only decisions exceed existing user authority. Keep authorized private reads "
-            "within their storage and publication boundaries; do not expose credentials or disclose "
-            "private material beyond that authority. Continue independent authorized replan work "
-            "while honoring explicit stops"
-        ),
+        stop_condition=AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION,
         recommended_action=recommended_action,
         agent_id=replan_agent_id,
         extra_fields=extra_fields,

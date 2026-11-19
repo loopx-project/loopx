@@ -1211,13 +1211,14 @@ main blocker or keeps following a stale local-only benchmark staging todo.
 **Trigger**
 
 - a typed machine-configuration namespace is about to change; the built-in
-  namespaces are `change_quality_qualification`, `codex_chat`, `goal_storage`,
-  `manager_runtime`, `periodic_report`, `pull_request_review`,
+  namespaces are `change_quality_qualification`, `codex_chat`, `context_delivery`,
+  `explore_harness`, `goal_storage`, `manager_runtime`, `periodic_report`, `pull_request_review`,
   `steward_executor`, and `todo_replan_cadence`. The public catalog returned by
   `loopx machine-config describe` is authoritative, so this inventory has to stay
   complete rather than approximate;
 - `goal_storage` carries the storage target a newly created Goal is fixed to
-  (`new_goal_provider`, `file` by default or `sqlite` after reviewed promotion).
+  (`new_goal_provider`, canonical `sqlite` with hard leases by default; explicit
+  `file` and soft-claim creation choices remain available).
   It does not promote existing Goals or migrate their data, and existing Goals
   keep the selection they were created with; see
   `docs/reference/local-authority-provider-selection.md`;
@@ -1227,6 +1228,14 @@ main blocker or keeps following a stale local-only benchmark staging todo.
   attached Agent, or a LoopX Agent Loop, and it grants no permissions and
   stores no credentials; see
   `docs/integrations/session-runtime-control-plane-adapter.md#projection-boundary`;
+- `context_delivery` controls differential native Codex context (`off` by default).
+  A saved preference neither proves host readiness nor actual delta use; known
+  context loss keeps full context and unsupported declarations refuse. It grants
+  no execution authority; see `docs/reference/required-work-context.md#machine-default`;
+- `explore_harness` sets the default exploration mode (`off` by default) for new
+  and existing Goals; explicit Goal modes take precedence. Planning supplies
+  evidence and read-only guidance, while execution authority stays separate;
+  see `loopx/capabilities/explore/README.md#machine-default`;
 - `pull_request_review` carries `review_order` (`forward` by default, or
   `reverse`) and Goal-owned `agent_orders` for registered Agent overrides.
   Commands resolve explicit direction, Agent, Goal, then machine; reverse inverts
@@ -1319,9 +1328,14 @@ reward signals, oracle information, or unbounded human hints.
 
 **Validation**
 
-- `examples/worker-bridge-active-user-after-start-observation-smoke.py`
-- `examples/worker-bridge-install-contract-smoke.py`
+- [`examples/worker-bridge-active-user-after-start-observation-smoke.py`](https://github.com/loopx-project/loopx/blob/0cd999ca0dd6290c9b48b84bc23c5f6b40630516/examples/worker-bridge-active-user-after-start-observation-smoke.py)
+- [`examples/worker-bridge-install-contract-smoke.py`](https://github.com/loopx-project/loopx/blob/0cd999ca0dd6290c9b48b84bc23c5f6b40630516/examples/worker-bridge-install-contract-smoke.py)
 - benchmark active-user protocol docs.
+
+The linked scripts are historical versions. They were removed from the current
+checkout in [#3267](https://github.com/loopx-project/loopx/pull/3267). Current
+checks include `examples/worker-bridge-active-user-feed-smoke.py` and
+`examples/cli-worker-bridge-command-modularization-smoke.py`.
 
 #### IP-033 Recorded Rejection Is Not Absent Authority
 
@@ -2193,9 +2207,7 @@ the stable schema.
 **Validation**
 
 - `docs/reference/protocols/protocol-action-packet-decision-v0.md`
-- `docs/product/runtimes/codex-cli/codex-cli-same-open-tui-continuation-observation.md`
 - `examples/interaction-pattern-catalog-smoke.py`
-- `examples/codex-cli-visible-attach-acceptance-smoke.py`
 
 #### IP-028 Connector Runtime Boundary
 
@@ -2688,7 +2700,7 @@ keep "we stopped supporting this" from becoming "this was never configured".
    (`loopx/control_plane/coordination/local_authority_shadow.ts:57`) rather than
    disappearing into a transport error, because a rejection that looks like a
    transient failure invites a retry loop.
-3. **Clearing is neither enable nor bootstrap.** One setting is retired; the
+3. One setting is retired; the
    replacement capture path is configured on its own terms.
    `apply_coordination_shadow_changes` is documented as "Clear retired settings
    and configure the transaction-bound shadow independently"
@@ -2923,7 +2935,7 @@ from a meta/controller poll that was only authorized to observe.
 **Validation**
 
 - `regression/external-evidence-observation-real-codex.py`
-- `deprecate/benchmark-legacy/examples/benchmark-lifecycle-state-smoke.py` (retired)
+- [Retired benchmark lifecycle smoke](https://github.com/loopx-project/loopx/blob/54d42da44283bb414b24f71d16642c25cbcaf5dd/deprecate/benchmark-legacy/examples/benchmark-lifecycle-state-smoke.py) (Git history only)
 - `docs/state-interaction-model.md`
 
 #### IP-015 Benchmark Lifecycle Countability

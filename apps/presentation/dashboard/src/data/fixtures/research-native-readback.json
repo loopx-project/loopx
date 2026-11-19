@@ -1,0 +1,100 @@
+{
+  "description": "Fully synthetic ordinary-reading example. Real pack registration and HTTP projection; no analysis execution or benchmark evidence.",
+  "goal_id": "synthetic-research-readback",
+  "display_name": "研究结果示例 · Synthetic research",
+  "events": [
+    {
+      "schema_version": "loopx_explore_result_event_v0",
+      "goal_id": "synthetic-research-readback",
+      "event_kind": "node",
+      "recorded_at": "2026-01-01T00:05:00Z",
+      "title": "继续搜索是否改善了任务结果？",
+      "boundary": {
+        "raw_task_text_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_trajectory_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "credential_values_recorded": false,
+        "absolute_paths_recorded": false
+      },
+      "agent_id": "researcher",
+      "result_id": "search-question",
+      "node_kind": "question",
+      "status": "open",
+      "event_id": "0ca879d4626cf3ff",
+      "summary": "保留失败与未完成工作，按同一指标阅读实际反馈。"
+    },
+    {
+      "schema_version": "loopx_explore_result_event_v0",
+      "goal_id": "synthetic-research-readback",
+      "event_kind": "finding",
+      "recorded_at": "2026-01-01T00:05:00Z",
+      "title": "后续候选的测量改善，实际保留未知",
+      "boundary": {
+        "raw_task_text_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_trajectory_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "credential_values_recorded": false,
+        "absolute_paths_recorded": false
+      },
+      "agent_id": "researcher",
+      "evidence_refs": [
+        "artifact:synthetic-native-facts"
+      ],
+      "result_id": "search-finding",
+      "node_id": "search-question",
+      "status": "tentative",
+      "event_id": "16223912d13b5d74",
+      "summary": "合成测量从 7 降至 3，另有一次无效提交。没有保留记录，不把最佳数值视为最终采用。"
+    }
+  ],
+  "analyses": [
+    {
+      "title": "固定窗口 · 合成测量",
+      "artifacts": {
+        "facts.txt": "Synthetic baseline: candidate-one measured error 7 points.\nSynthetic invalid candidate: candidate-two has no score.\nSynthetic later result: candidate-three measured error 3 points.\nActual retention was not captured; no causal treatment claim is made.\n",
+        "native.json": "{\"schema_version\": \"trajectory_native_outcomes_v1\", \"scope\": {\"goal_id\": \"synthetic-research-readback\", \"case_id\": \"synthetic-search\", \"run_id\": \"synthetic-run\", \"revision\": \"fixed-synthetic-evidence\", \"window\": \"2026-01-01T00:00:00Z/2026-01-01T00:10:00Z\"}, \"start\": \"2026-01-01T00:00:00Z\", \"end\": \"2026-01-01T00:10:00Z\", \"complete\": true, \"metric\": {\"name\": \"error\", \"unit\": \"points\", \"higher_is_better\": false}, \"retained_result_id\": null, \"samples\": [{\"submission_index\": 1, \"result_id\": \"result-1\", \"candidate_ref\": \"candidate-1\", \"submitted_at\": null, \"observed_at\": \"2026-01-01T00:01:00Z\", \"valid\": true, \"value\": 7, \"citation\": {\"source_id\": \"facts\", \"first_line\": 1, \"last_line\": 1}}, {\"submission_index\": 2, \"result_id\": \"result-2\", \"candidate_ref\": \"candidate-2\", \"submitted_at\": null, \"observed_at\": \"2026-01-01T00:02:00Z\", \"valid\": false, \"value\": null, \"citation\": {\"source_id\": \"facts\", \"first_line\": 2, \"last_line\": 2}}, {\"submission_index\": 3, \"result_id\": \"result-3\", \"candidate_ref\": \"candidate-3\", \"submitted_at\": null, \"observed_at\": \"2026-01-01T00:03:00Z\", \"valid\": true, \"value\": 3, \"citation\": {\"source_id\": \"facts\", \"first_line\": 3, \"last_line\": 3}}]}"
+      },
+      "native_outcomes_json": "native.json",
+      "input": {
+        "schema_version": "trajectory_assessment_input_v1",
+        "scope": {
+          "goal_id": "synthetic-research-readback",
+          "case_id": "synthetic-search",
+          "run_id": "synthetic-run",
+          "revision": "fixed-synthetic-evidence",
+          "window": "2026-01-01T00:00:00Z/2026-01-01T00:10:00Z"
+        },
+        "objective": "Reduce error while preserving validity; distinguish observations from model judgments.",
+        "selection": {
+          "rule": "One fixed synthetic reading episode, not a study population.",
+          "population_episodes": null,
+          "exhaustive": false
+        },
+        "sources": [
+          {
+            "id": "facts",
+            "artifact": "facts.txt",
+            "artifact_sha256": "ed821a74d173951332e04af2884601fd3bdeb8956b2bb0b811a0f50b91b732a7",
+            "first_line": 1,
+            "text": "Synthetic baseline: candidate-one measured error 7 points.\nSynthetic invalid candidate: candidate-two has no score.\nSynthetic later result: candidate-three measured error 3 points.\nActual retention was not captured; no causal treatment claim is made.\n"
+          }
+        ],
+        "episodes": [
+          {
+            "id": "search-episode",
+            "question": "Did the later search test useful task progress?",
+            "source_ids": [
+              "facts"
+            ],
+            "eligible_metrics": [
+              "benefit_test"
+            ]
+          }
+        ]
+      },
+      "outputs": {}
+    }
+  ]
+}

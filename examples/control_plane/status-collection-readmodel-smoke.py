@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from loopx import status as status_module  # noqa: E402
+from loopx.control_plane.goals import coordination_observation  # noqa: E402
 from loopx.control_plane.status import collection as collection_read_model  # noqa: E402
 
 
@@ -55,6 +56,8 @@ def write_registry(root: Path) -> Path:
                     {
                         "id": GOAL_ID,
                         "domain": "loopx-platform",
+                        "coordination": {"agent_model": "peer_v1",
+                            "registered_agents": ["codex-product-capability"]},
                         "status": "active",
                         "repo": str(project),
                         "state_file": state_file,
@@ -75,6 +78,8 @@ def write_registry(root: Path) -> Path:
         + "\n",
         encoding="utf-8",
     )
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+    import_fixture_authority(registry_path, GOAL_ID, provider="sqlite")
     return registry_path
 
 
@@ -91,19 +96,24 @@ def scrub_volatile(value: Any) -> Any:
     return value
 
 
-def assert_wrapper_parity(registry_path: Path, runtime_root: Path, scan_root: Path) -> None:
+def assert_wrapper_parity(registry_path: Path, runtime_root: Path) -> None:
     kwargs: dict[str, Any] = {
         "registry_path": registry_path,
         "runtime_root_override": str(runtime_root),
-        "scan_roots": [scan_root],
         "limit": 3,
         "include_task_graph": True,
         "goal_id": GOAL_ID,
         "available_capabilities": ["network", "material_lifecycle"],
     }
-    # Compare one observation time without hiding freshness or coverage fields.
-    with patch.object(
-        collection_read_model, "now_utc_iso", return_value="2026-01-01T00:00:00Z"
+    # Both adapters sample time independently; keep complete freshness/provider
+    # comparisons deterministic even when the two reads cross a wall-clock second.
+    with (
+        patch.object(
+            collection_read_model, "now_utc_iso", return_value="2026-01-01T00:00:00Z"
+        ),
+        patch.object(
+            coordination_observation, "now_local_iso", return_value="2026-01-01T00:00:00Z"
+        ),
     ):
         wrapper = status_module.collect_status(**kwargs)
         direct = collection_read_model.collect_status(
@@ -233,7 +243,6 @@ def assert_context_orchestration() -> None:
     payload = collection_read_model.collect_status(
         registry_path=Path("registry.json"),
         runtime_root_override="runtime-override",
-        scan_roots=[Path("project")],
         limit=2,
         goal_id=GOAL_ID,
         available_capabilities=["network", "material_lifecycle"],
@@ -280,7 +289,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as raw_root:
         root = Path(raw_root)
         registry_path = write_registry(root)
-        assert_wrapper_parity(registry_path, root / "runtime", root / "project")
+        assert_wrapper_parity(registry_path, root / "runtime")
     assert_context_orchestration()
     print("status-collection-readmodel-smoke ok")
 

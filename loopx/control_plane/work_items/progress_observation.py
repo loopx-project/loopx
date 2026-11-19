@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import hashlib
 import json
 import shlex
 from collections.abc import Iterable, Mapping
-from typing import Any
 
 from ...turn_identity import normalize_turn_instance_id
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
@@ -248,12 +249,15 @@ def replan_successor_transition_allowed(
         raise ValueError(str(exc)) from None
     if not isinstance(result, Mapping) or not isinstance(result.get("allowed"), bool):
         raise RuntimeError("TypeScript transition eligibility shape mismatch")
-    return result["allowed"]
+    return cast(bool, result["allowed"])
 
 
 def guarded_replan_transition_delta(
     *, guard_scoped: bool, selected_obligation_id: str | None,
     transition_candidates: list[dict[str, Any]], stride_strategy: str = "off",
+    goal_id: str | None = None, agent_id: str | None = None,
+    guard_recorded_at: str | None = None,
+    guard_turn_instance_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Adapt revalidated canonical receipts to the TS-owned exact Turn gate."""
     try:
@@ -262,6 +266,10 @@ def guarded_replan_transition_delta(
             "selected_obligation_id": selected_obligation_id,
             "transition_candidates": transition_candidates,
             "stride_strategy": stride_strategy,
+            "goal_id": goal_id,
+            "agent_id": agent_id,
+            "guard_recorded_at": guard_recorded_at,
+            "guard_turn_instance_id": guard_turn_instance_id,
         })
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from None

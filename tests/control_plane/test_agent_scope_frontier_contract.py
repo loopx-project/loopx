@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 import subprocess
 import sys
 
 import pytest
+from canonical_authority_fixture import advance_canonical_fixture_authority, read_fixture_todos
+from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 
 from examples.control_plane.quota_plan_fixtures import (
     SCOPED_AGENT_ID,
@@ -21,6 +22,7 @@ from loopx.control_plane.testing.quota_fixtures import (
     quota_status_payload,
     quota_todo_item,
 )
+from loopx.control_plane.testing.model_tool_behavior import QuotaToolContext
 from loopx.control_plane.work_items.goal_route_hint import build_goal_route_hint
 from loopx.quota import build_quota_should_run, render_quota_should_run_markdown
 
@@ -160,11 +162,15 @@ def test_cli_should_run_reads_disposable_state_and_emits_v1(tmp_path):
     state = project / ".codex/goals/half-speed/ACTIVE_GOAL_STATE.md"
     with state.open("a", encoding="utf-8") as stream:
         stream.write(
-            "\n## Agent Todo\n\n"
+            "\n"
             "- [ ] [P0] Complete the claimed prerequisite.\n"
             "  <!-- loopx:todo todo_id=todo_prerequisite status=open "
             "task_class=advancement_task claimed_by=codex-main-control -->\n"
         )
+    advance_canonical_fixture_authority(runtime, "half-speed",
+        build_todo_runtime_shadow_projection(goal_id="half-speed", todos=read_fixture_todos(state),
+                                             handoff_mode="soft_claim"),
+        operation_id="source-prerequisite-fixture")
     result = subprocess.run(
         [
             sys.executable,
@@ -184,15 +190,13 @@ def test_cli_should_run_reads_disposable_state_and_emits_v1(tmp_path):
             SCOPED_AGENT_ID,
             "--runtime-profile",
             "outer_controller",
-            "--scan-path",
-            str(project),
         ],
         cwd=Path(__file__).resolve().parents[2],
         capture_output=True,
         text=True,
         check=True,
     )
-    guard = json.loads(result.stdout)
+    guard = QuotaToolContext.from_output(result.stdout).packet
     assert guard["effective_action"] == "reassignment_required"
     assert guard["should_run"] is False
     assert guard["agent_scope_frontier"]["schema_version"] == "agent_scope_frontier_v1"

@@ -94,17 +94,19 @@ def promoted_goal(tmp_path: Path, record_format, provider):
     return goal, runtime, state
 
 
-@pytest.mark.parametrize("display", ["stale", "missing", "invalid_utf8"])
+@pytest.mark.parametrize("display", ["stale", "missing", "invalid_utf8", "truncated"])
 def test_status_uses_provider_and_allows_native_monitor_writeback_without_display(promoted_goal, display, monkeypatch):
     goal, runtime, state = promoted_goal
     if display == "invalid_utf8":
         state.write_bytes(b"\xff")
+    elif display == "truncated":
+        state.write_text("# Goal\n\n## Next Action\n\nKeep the human narrative.\n")
     original = state.read_bytes()
     if display == "missing":
         state.unlink()
     for name in ("parse_active_state_todos",):
         monkeypatch.setattr(
-            f"loopx.status.{name}",
+            f"loopx.control_plane.todos.active_state_todo_parser.{name}",
             lambda *_args, **_kwargs: pytest.fail("promoted read must not parse legacy Todos"),
         )
     fields = active_state_todo_fields(goal, runtime_root=runtime)
@@ -130,6 +132,47 @@ def test_unavailable_provider_does_not_restore_stale_display_tasks(promoted_goal
     assert "todo_stale" in state.read_text()
 
 
+def test_review_materials_follow_canonical_text_without_rewriting_authority(
+    tmp_path, provider, record_format,
+):
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    material = docs / "review.md"
+    material.write_text("# Review\n\n## Proof\nSynthetic evidence.\n", encoding="utf-8")
+    state = tmp_path / "ACTIVE_GOAL_STATE.md"
+    state.write_text("## User Todo\n- [ ] Read `docs/stale.md`.\n", encoding="utf-8")
+    goal = {"id": "goal-a", "repo": str(tmp_path), "state_file": str(state)}
+    records = [{
+        "schema_version": "todo_item_v0", "todo_id": "todo_review", "index": 1,
+        "role": "user", "status": "open", "done": False, "archive_state": "active",
+        "source_section": "User Todo", "task_class": "user_action",
+        "text": ("Read [Review](docs/review.md#proof) and `../outside.md`. "
+                 f"Private [reference]({tmp_path / 'private.md'})."),
+    }]
+    runtime = tmp_path / "runtime"
+    initialize_canonical_authority(runtime, goal["id"], _projection(goal["id"], records, record_format),
+        state_path=state, provider=provider)
+    # A valid stale projection still must not supply current links.
+    state.write_text("## User Todo\n- [ ] Read `docs/stale.md`.\n", encoding="utf-8")
+    before_state = state.read_bytes()
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal["id"])
+    for exists in (True, False):
+        if not exists:
+            material.unlink()
+        fields = active_state_todo_fields(goal, runtime_root=runtime)
+        [todo] = fields["user_todos"]["items"]
+        review, outside = todo["review_materials"]
+        assert review == {"label": "Review", "path": "docs/review.md#proof", "anchor": "proof", "exists": exists}
+        assert outside["exists"] is False
+        assert "resolved_path" not in json.dumps(fields)
+        assert "docs/stale.md" not in json.dumps(fields)
+        assert str(tmp_path) not in json.dumps(todo["review_materials"])
+        assert state.read_bytes() == before_state
+        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal["id"]) == before
+
+
 def test_empty_canonical_collection_is_an_explicit_empty_read_model(tmp_path):
     state = tmp_path / "state.md"
     state.write_text("# Goal\n\n## Agent Todo\n\n- [ ] Stale work\n")
@@ -146,26 +189,58 @@ def test_empty_canonical_collection_is_an_explicit_empty_read_model(tmp_path):
         assert fields[f"{role}_todos"]["total_count"] == 0
 
 
-def test_unpromoted_status_retains_markdown_without_starting_authority(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "loopx.control_plane.coordination.local_authority.effect_runtime_result",
-        lambda *_args, **_kwargs: pytest.fail("unpromoted reads must not start TS authority"),
-    )
+def test_global_status_keeps_unmigrated_goal_visible_without_hiding_canonical_work(
+    promoted_goal, tmp_path,
+):
+    from loopx.status import collect_status
+
+    goal, runtime, _ = promoted_goal
+    old_state = tmp_path / "legacy.md"
+    old_state.write_text("# Goal\n\n## Agent Todo\n\n- [ ] Obsolete work\n")
+    unmigrated = {**goal, "id": "legacy-goal", "state_file": str(old_state)}
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"schema_version": 1, "goals": [goal, unmigrated],
+                                   "common_runtime_root": str(runtime)}))
+    payload = collect_status(registry_path=registry, runtime_root_override=str(runtime), limit=5)
+    items = {item["goal_id"]: item for item in payload["attention_queue"]["items"]}
+    assert items[goal["id"]]["agent_todos"]["items"][0]["todo_id"] == "todo_canonical"
+    refused = items["legacy-goal"]
+    assert refused["error_code"] == "canonical_authority_required"
+    assert refused["todo_source"] == "unavailable"
+    assert refused["authority_read"]["legacy_fallback_used"] is False
+    assert "agent_todos" not in refused
+    assert "Obsolete work" in old_state.read_text()
+
+
+@pytest.mark.parametrize("display_exists", [False, True])
+def test_unmigrated_status_refuses_markdown_before_reading_it(tmp_path, monkeypatch, display_exists):
     state = tmp_path / "state.md"
     goal = {"id": "goal-a", "repo": str(tmp_path), "state_file": str(state)}
-    assert active_state_todo_fields(goal, runtime_root=tmp_path / "runtime") == {}
-    state.write_text("# Goal\n\n## Agent Todo\n\n- [ ] Legacy work\n")
-    fields = active_state_todo_fields(goal, runtime_root=tmp_path / "runtime")
-    assert fields["agent_todos"]["items"][0]["text"] == "Legacy work"
+    if display_exists:
+        state.write_text("# Goal\n\n## Agent Todo\n\n- [ ] Legacy work\n")
+    original = state.read_bytes() if display_exists else None
+    monkeypatch.setattr(
+        "loopx.control_plane.todos.active_state_todo_parser.parse_active_state_todos",
+        lambda *_args, **_kwargs: pytest.fail("ordinary status must never parse legacy Todos"),
+    )
+    with pytest.raises(LocalCoordinationAuthorityUnavailable) as error:
+        active_state_todo_fields(goal, runtime_root=tmp_path / "runtime")
+    assert error.value.code == "canonical_authority_required"
+    assert error.value.payload["legacy_fallback_used"] is False
+    assert (state.read_bytes() if state.exists() else None) == original
 
 
-@pytest.mark.parametrize("display", ["missing", "invalid_utf8", "invalid_user_todo"])
+@pytest.mark.parametrize(
+    "display", ["missing", "invalid_utf8", "invalid_user_todo", "truncated"]
+)
 def test_public_status_cli_uses_canonical_contract_and_attention(promoted_goal, tmp_path, display):
     goal, runtime, state = promoted_goal
     if display == "missing":
         state.unlink()
     elif display == "invalid_utf8":
         state.write_bytes(b"\xff")
+    elif display == "truncated":
+        state.write_text("# Goal\n\n## Next Action\n\nKeep the human narrative.\n")
     else:
         state.write_text(
             "# Goal\n\n## User Todo\n\n- [ ] Obsolete display-only gate\n"
@@ -289,7 +364,9 @@ def test_canonical_todo_semantics_without_display(tmp_path, provider, record_for
                               "--format", "json", "status", "--goal-id", goal["id"]],
                              capture_output=True, text=True, timeout=60)
     assert process.returncode == (1 if expected_code else 0), process.stdout + process.stderr
-    assert json.loads(process.stdout)["contract"]["ok"] is (expected_code is None)
+    status_contract = json.loads(process.stdout)["contract"]
+    assert status_contract["ok"] is (expected_code is None)
+    assert status_contract.get("error_diagnostics", []) == result["error_diagnostics"]
     assert not state.exists()
 
 
@@ -356,10 +433,15 @@ def test_whole_status_reuses_the_contract_snapshot_and_refreshes_next_request(
 
     monkeypatch.setattr(status_module, 'build_attention_queue', remove_then_project)
     arguments = dict(registry_path=registry, runtime_root_override=str(runtime),
-                     scan_roots=[], limit=5, goal_id=goal['id'],
-                     include_public_boundary_scan=False)
+                     limit=5, goal_id=goal['id'])
     payload = status_module.collect_status(**arguments)
     assert len(reads) == 1
+    snapshot = reads[0]
+    assert "todos" not in snapshot and "todo_ids" not in snapshot
+    rows = snapshot["todo_contract_rows"]
+    assert {row["todo_id"] for row in rows} == {"todo_canonical", "todo_gate"}
+    assert all("text" not in row and "decision_scope" not in row for row in rows)
+    assert next(row for row in rows if row["todo_id"] == "todo_gate")["global_gate"] is True
     queue = next(item for item in payload['attention_queue']['items'] if item['goal_id'] == goal['id'])
     assert queue['agent_todos']['items'][0]['todo_id'] == 'todo_canonical'
     assert queue['standing_decision_authority']['entries'][0]['outcome'] == 'reject'
@@ -368,3 +450,105 @@ def test_whole_status_reuses_the_contract_snapshot_and_refreshes_next_request(
     with pytest.raises(local_authority.LocalCoordinationAuthorityUnavailable):
         status_module.collect_status(**arguments)
     assert 'todo_stale' in state.read_text()
+
+
+@pytest.mark.parametrize("shared_authority", [False, True])
+def test_global_status_reads_source_authority_and_preserves_explicit_override(
+    promoted_goal, tmp_path, provider, record_format, shared_authority, monkeypatch,
+):
+    import loopx.status as status_module
+    from loopx.control_plane.coordination import local_authority
+
+    goal, source_runtime, state = promoted_goal
+    goal = {**goal, "coordination": {"registered_agents": ["agent-a"]}}
+    source_registry = tmp_path / "source-registry.json"
+    source_registry.write_text(json.dumps({
+        "goals": [goal], "common_runtime_root": str(source_runtime),
+    }))
+    shared_runtime = tmp_path / "shared-runtime"
+    registry = tmp_path / "global-registry.json"
+    registry.write_text(json.dumps({
+        "registry_role": "global-local", "common_runtime_root": str(shared_runtime),
+        "goals": [{**goal, "source_registry": str(source_registry)}],
+    }))
+    if shared_authority:
+        shadow = {
+            "schema_version": "todo_item_v0", "todo_id": "todo_shadow", "index": 1,
+            "role": "agent", "status": "open", "done": False,
+            "text": "Shared projection must not replace source work", "priority": "P1",
+            "archive_state": "active", "source_section": "Agent Todo",
+        }
+        initialize_canonical_authority(shared_runtime, goal["id"],
+            _projection(goal["id"], [shadow], record_format),
+            state_path=state, provider=provider)
+    before = local_authority.read_canonical_todos_if_promoted(
+        runtime_root=source_runtime, goal_id=goal["id"],
+    )
+    state_before = state.read_bytes()
+    reads = []
+    original = local_authority.read_canonical_todos_if_promoted
+
+    def observe(**kwargs):
+        reads.append((kwargs["runtime_root"], kwargs["goal_id"]))
+        return original(**kwargs)
+
+    monkeypatch.setattr(local_authority, "read_canonical_todos_if_promoted", observe)
+    arguments = dict(registry_path=registry, runtime_root_override=None,
+                     limit=5, goal_id=goal["id"])
+    payload = status_module.collect_status(**arguments)
+    work = next(item for item in payload["attention_queue"]["items"]
+                if item["goal_id"] == goal["id"] and item.get("agent_todos"))
+    assert [item["todo_id"] for item in work["agent_todos"]["items"]] == ["todo_canonical"]
+    # Contract and attention consume one request-local source read.
+    assert reads == [(source_runtime.resolve(), goal["id"])]
+    assert not any(error.get("code") == "canonical_authority_required"
+                   for error in payload.get("error_diagnostics", []))
+    if shared_authority:
+        overridden = status_module.collect_status(
+            **{**arguments, "runtime_root_override": str(shared_runtime)},
+        )
+        work = next(item for item in overridden["attention_queue"]["items"]
+                    if item["goal_id"] == goal["id"] and item.get("agent_todos"))
+        assert [item["todo_id"] for item in work["agent_todos"]["items"]] == ["todo_shadow"]
+    else:
+        with pytest.raises(local_authority.LocalCoordinationAuthorityUnavailable) as error:
+            status_module.collect_status(
+                **{**arguments, "runtime_root_override": str(shared_runtime)},
+            )
+        assert error.value.code == "canonical_authority_required"
+    after = original(runtime_root=source_runtime, goal_id=goal["id"])
+    assert after["provider_revision"] == before["provider_revision"]
+    assert after["todos"] == before["todos"]
+    assert state.read_bytes() == state_before
+
+
+@pytest.mark.parametrize("source_failure", ["missing", "invalid", "absent_goal"])
+def test_global_status_never_uses_valid_shared_shadow_when_source_route_fails(
+    promoted_goal, tmp_path, provider, record_format, source_failure,
+):
+    import loopx.status as status_module
+
+    goal, source_runtime, state = promoted_goal
+    source_registry = tmp_path / "source-registry.json"
+    if source_failure == "invalid":
+        source_registry.write_text("{invalid")
+    elif source_failure == "absent_goal":
+        source_registry.write_text(json.dumps({
+            "goals": [], "common_runtime_root": str(source_runtime),
+        }))
+    shared_runtime = tmp_path / "shared-runtime"
+    initialize_canonical_authority(shared_runtime, goal["id"],
+        _projection(goal["id"], [], record_format), state_path=state, provider=provider)
+    registry = tmp_path / "global-registry.json"
+    registry.write_text(json.dumps({
+        "registry_role": "global-local", "common_runtime_root": str(shared_runtime),
+        "goals": [{**goal, "source_registry": str(source_registry)}],
+    }))
+    state_before = state.read_bytes()
+    with pytest.raises(LocalCoordinationAuthorityUnavailable) as error:
+        status_module.collect_status(registry_path=registry, runtime_root_override=None,
+                                     limit=5, goal_id=goal["id"])
+    assert error.value.code == "canonical_todo_contract_diagnostics_unavailable"
+    assert error.value.payload["write_admitted"] is False
+    assert error.value.payload["legacy_fallback_used"] is False
+    assert state.read_bytes() == state_before

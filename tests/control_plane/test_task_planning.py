@@ -3,9 +3,15 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import shlex
 from pathlib import Path
 
 import pytest
+
+from canonical_authority_fixture import (
+    advance_canonical_fixture_authority, initialize_canonical_source_fixture, read_fixture_todos,
+)
+from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 
 from loopx.cli import main
 from loopx.control_plane.goals.start_contract import (
@@ -15,8 +21,8 @@ from loopx.control_plane.goals.start_contract import (
 from loopx.control_plane.goals.task_planning import build_task_planning_packet
 
 
-@pytest.fixture
-def bound_goal(tmp_path):
+@pytest.fixture(params=["file", "sqlite"])
+def bound_goal(tmp_path, request):
     state = tmp_path / "state.md"
     state.write_text("# Active Goal State\n\n## Agent Todos\n\n## User Todos\n")
     registry = tmp_path / "registry.json"
@@ -24,6 +30,7 @@ def bound_goal(tmp_path):
         json.dumps(
             {
                 "schema_version": "0.1",
+                "common_runtime_root": str(tmp_path / "runtime"),
                 "goals": [
                     {
                         "id": "planning-goal",
@@ -37,6 +44,9 @@ def bound_goal(tmp_path):
             }
         )
     )
+    initialize_canonical_source_fixture(
+        tmp_path / "runtime", "planning-goal", state_path=state, provider=request.param,
+    )
     return dict(
         registry_path=registry,
         goal_id="planning-goal",
@@ -44,6 +54,15 @@ def bound_goal(tmp_path):
         text="Investigate the failure, then repair and validate it.\nKeep the API stable.",
         project=tmp_path,
         runtime_root_arg=str(tmp_path / "runtime"),
+    )
+
+
+def _replace_frontier(bound_goal, operation_id):
+    advance_canonical_fixture_authority(
+        Path(bound_goal["runtime_root_arg"]), bound_goal["goal_id"],
+        build_todo_runtime_shadow_projection(goal_id=bound_goal["goal_id"],
+            todos=read_fixture_todos(bound_goal["project"] / "state.md"),
+            handoff_mode="soft_claim", leases=[]), operation_id=operation_id,
     )
 
 
@@ -82,6 +101,7 @@ def test_existing_plan_is_an_incremental_frontier_not_a_new_goal(bound_goal):
 
 ## User Todos
 """)
+    _replace_frontier(bound_goal, "fixture-existing-plan")
     packet = build_task_planning_packet(**bound_goal)
     assert packet["runnable_todo_ids"] == ["todo_existing"]
     assert [step["id"] for step in packet["ordered_steps"]] == [
@@ -90,6 +110,33 @@ def test_existing_plan_is_an_incremental_frontier_not_a_new_goal(bound_goal):
         "read_back_authored_todos",
     ]
     assert all(item["todo_id"] != "todo_peer" for item in packet["existing_todos"])
+
+
+@pytest.mark.parametrize("fine_grained", [False, True])
+def test_planning_scope_is_sufficient_to_start_without_exhaustive_decomposition(bound_goal, fine_grained):
+    registry = bound_goal["registry_path"]
+    contents = json.loads(registry.read_text())
+    if fine_grained:
+        contents["goals"][0]["execution_profile"] = {"turn_granularity": "fine"}
+        registry.write_text(json.dumps(contents))
+    packet = build_task_planning_packet(**bound_goal)
+    planner = packet["planner"]
+    assert planner == goal_planner_contract(fine_grained=fine_grained)
+    for clause in (
+        "minimum sufficient plan: next step and decisive validation",
+        "Diagnostics and feedback may come first to strengthen delivery",
+        "replan uncertain later work",
+        "no fixed-count filler or exhaustive decomposition",
+    ):
+        assert clause in planner["budget_policy"]
+    assert planner["profiles"]["clear_bounded_problem"][
+        "may_reuse_current_todo_when_it_already_represents_the_plan"] is True
+    assert planner["required_before_todo_write"] is True
+    assert packet["execution_handoff"]["requires_quota_guard"] is True
+    assert packet["execution_handoff"]["planning_is_advancement"] is False
+    assert "do not substitute them for the requested deliverable" in planner["first_delivery_guidance"]
+    assert "existing acceptance, feedback and authority limits" in planner["first_delivery_guidance"]
+    assert planner.get("maximum_runnable_todos_written_ahead") == (1 if fine_grained else None)
 
 
 def test_unknown_identity_rejected_without_creating_it(bound_goal):
@@ -109,9 +156,10 @@ def test_full_frontier_and_live_blockers_ignore_display_order_and_terminal_items
         f"  <!-- loopx:todo todo_id=todo_gate_{status} status={status} task_class=user_gate action_kind=approve blocks_agent=planner -->"
         for status in ("open", "blocked", "done", "deferred")
     ]
-    for ordered in (work, list(reversed(work))):
+    for position, ordered in enumerate((work, list(reversed(work)))):
         state.write_text("# Active Goal State\n\n## Agent Todos\n" + "\n".join(ordered)
                          + "\n\n## User Todos\n" + "\n".join(gates) + "\n")
+        _replace_frontier(bound_goal, f"fixture-frontier-order-{position}")
         packet = build_task_planning_packet(**bound_goal)
         assert set(packet["runnable_todo_ids"]) == {f"todo_work_{i}" for i in range(40)}
         assert set(packet["blocking_todo_ids"]) == {"todo_gate_open", "todo_gate_blocked"}
@@ -169,3 +217,104 @@ def test_public_cli_returns_a_read_only_checkpoint_and_rejects_execution(bound_g
         assert main(command + ["--execute"]) == 1
     assert "unsupported" in json.loads(output.getvalue())["error"]
     assert not list(Path(bound_goal["runtime_root_arg"]).rglob("*rollout*"))
+
+
+def test_first_plan_declares_then_links_and_reads_canonical_requirements(bound_goal):
+    def cli(*args, expected_status=0):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            status = main(list(args))
+        result = json.loads(output.getvalue())
+        assert status == expected_status, result
+        return result
+
+    prefix = [
+        "--format", "json", "--registry", str(bound_goal["registry_path"]),
+        "--runtime-root", bound_goal["runtime_root_arg"],
+    ]
+    route = ["--goal-id", "planning-goal", "--agent-id", "planner"]
+    plan_args = [
+        *prefix, "todo", "plan", *route, "--project",
+        str(bound_goal["project"]), "--text", bound_goal["text"],
+    ]
+    before = cli(*plan_args)
+    assert before["goal_acceptance"]["planning_requirements"]["linked_todo_ids"] == []
+    assert before["existing_todos"] == []
+    authoring = before["ordered_steps"][0]["goal_requirements"]
+    path = bound_goal["project"] / "requirements.json"
+
+    def refine_args(revision, operation):
+        bindings = {
+            "<agent-authored-file>": str(path),
+            "<current-provider-revision>": revision,
+            "<stable-original-operation-id>": operation,
+        }
+        program, *args = shlex.split(authoring["refine_command_template"])
+        assert program == "loopx"
+        return [bindings.get(arg, arg) for arg in args]
+
+    def fill(value, bindings):
+        if isinstance(value, dict):
+            return {key: fill(item, bindings) for key, item in value.items()}
+        if isinstance(value, list):
+            return [fill(item, bindings) for item in value]
+        return bindings.get(value, value)
+
+    document = fill(authoring["declaration_document_template"], {
+        "<outcome-id>": "repair",
+        "<outcome-objective>": bound_goal["text"],
+        "<requirement-id>": "stable-api",
+        "<requirement-description>": "Keep the API stable while repairing the failure.",
+        "<source-ref>": "user-task",
+        "<source-summary>": bound_goal["text"],
+    })
+    path.write_text(json.dumps(document))
+    initial_revision = before["goal_acceptance"]["provider_revision"]
+    declaration = refine_args(initial_revision, "first-declaration")
+    cli(*declaration)  # The write committed, but its caller lost the response.
+    declared = cli(*declaration)
+    assert declared["status"] in {"replayed", "recovered"}
+    outcome = declared["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]
+    assert outcome["todo_ids"] == []
+    assert not cli(*plan_args)["existing_todos"], "Declaration precedes task Todos"
+    written = cli(
+        *prefix, "todo", "add", "--goal-id", "planning-goal", "--role", "agent",
+        "--claimed-by", "planner", "--text", "[P0] Reproduce and repair the failure.",
+        "--task-class", "advancement_task", "--action-kind", "implement", "--execute",
+    )
+
+    link = fill(authoring["link_document_template"], {
+        "<same-outcome-id>": "repair", "<actual-todo-id>": written["todo_id"],
+    })
+    path.write_text(json.dumps(link))
+    stale = cli(*refine_args(initial_revision, "stale-link"), expected_status=1)
+    assert stale["ok"] is False
+    assert stale["error"] == "goal_acceptance_provider_revision_mismatch"
+    current = cli(*shlex.split(authoring["inspect_command"])[1:])
+    command = refine_args(current["provider_revision"], "link-first-work")
+    linked = cli(*command)
+    replay = cli(*command)
+    assert replay["status"] in {"replayed", "recovered"}
+    assert replay["goal_acceptance_contract"] == linked["goal_acceptance_contract"]
+    after = cli(*plan_args)
+    assert after["goal_acceptance"]["planning_requirements"] == {
+        "agent_id": "planner", "declaration_current": True,
+        "outcome_ids": ["repair"], "linked_todo_ids": [written["todo_id"]],
+    }
+    contract = after["goal_acceptance"]["goal_acceptance_contract"]
+    assert contract.get("criteria", []) == [], "Independent checks stay optional"
+    outcome, = contract["outcome_requirements"]["outcomes"]
+    assert outcome["sources"] == [{"ref": "user-task", "summary": bound_goal["text"]}]
+    assert after["goal_waiting_on"] == before["goal_waiting_on"]
+
+
+def test_shared_planning_preserves_open_intent_and_stop_in_both_entries(bound_goal):
+    guidance = goal_planner_contract()["goal_requirements_guidance"]
+    for requirement in ("source-grounded overall requirements", "an open-ended objective stays open-ended",
+        "maximum timeout is not a requirement to spend it", "independent executable checks", "optional",
+        "Unchanged declarations need no rewrite", "reuse the existing outcome",
+        "only for missing requirements", "accurate wait/Stop", "not an additional model call"):
+        assert requirement in guidance
+    packet = build_task_planning_packet(**bound_goal)
+    assert packet["planner"]["goal_requirements_guidance"] == guidance
+    assert guidance in build_goal_start_prompt(goal_text=bound_goal["text"], goal_id="planning-goal", agent_id="planner", fine_grained=False)

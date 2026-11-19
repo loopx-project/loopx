@@ -1,3 +1,4 @@
+import {planUserCompletion} from "../../loopx/control_plane/todos/user_completion.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {observeOwnerAttention, ownerAttentionHealth, ownerAttentionReferences, planOwnerAttention} from "../../loopx/control_plane/presentation/owner_attention.ts";
@@ -112,4 +113,213 @@ test("readable rendering preserves legacy pending, unknown and delivered notices
     const restored = plan(JSON.parse(JSON.stringify(persisted)), [reviewTask]);
     assert.deepEqual(restored, persisted, "unchanged source cannot re-notify or rewrite an old intent");
   }
+});
+
+const snapshot = (state: JsonObject, goals: JsonObject[], unavailable: string[], scope = ["alpha", "beta"]) =>
+  planOwnerAttention({state, goals, scope_goal_ids: scope, unavailable_goal_ids: unavailable,
+    source_complete: unavailable.length === 0});
+const goal = (goal_id: string, todos: JsonObject[]) => ({goal_id, todos});
+
+test("one unreadable Goal holds its own notices while healthy sources continue and recover once", () => {
+  const base = snapshot(empty(), [goal("alpha", []), goal("beta", [])], []);
+  const pending = snapshot(base, [goal("alpha", [task]), goal("beta", [])], []);
+  const missing = snapshot(pending, [goal("beta", [task])], ["alpha"]);
+  assert.equal(missing.error_code, "source_incomplete");
+  assert.deepEqual(ownerAttentionHealth({state: missing}).source_coverage,
+    {goal_count: 2, read_goal_count: 1, unavailable_goal_count: 1});
+  const held = rows(missing).find(row => row.goal_id === "alpha")!;
+  assert.equal(held.id, rows(pending)[0].id);
+  assert.equal(held.status, "pending", "unavailable is not withdrawn");
+  assert.equal(held.source_current, false);
+  assert.equal(rows(missing).find(row => row.goal_id === "beta")!.source_current, true);
+  assert.throws(() => observeOwnerAttention({state: missing, id: held.id,
+    event: "write_started", now: 100, intent: {}}));
+  const restored = snapshot(JSON.parse(JSON.stringify(missing)), [goal("alpha", [task]), goal("beta", [task])], []);
+  assert.equal(restored.error_code, null);
+  assert.equal(rows(restored).length, 2);
+  assert.equal(rows(restored)[0].id, held.id, "recovery preserves the original notice identity");
+  assert.equal(rows(restored)[0].source_current, true);
+  assert.equal(rows(snapshot(missing, [goal("beta", [task])], [], ["beta"]))[0].status, "superseded",
+    "a confirmed scope removal still withdraws an unsent notice");
+  const changed = snapshot(missing, [goal("alpha", [{...task, note: "Updated decision"}]), goal("beta", [task])], []);
+  assert.equal(rows(changed)[0].status, "superseded");
+  assert.equal(rows(changed).length, 3);
+});
+
+test("first-enable missing Goals baseline on recovery without suppressing later changes or new Goals", () => {
+  const first = snapshot(empty(), [goal("alpha", [task])], ["beta"]);
+  assert.deepEqual(first.baseline_pending_goal_ids, ["beta"]);
+  const restarted = snapshot(JSON.parse(JSON.stringify(first)), [goal("alpha", [task])], ["beta"]);
+  const recovered = snapshot(restarted, [goal("alpha", [task]), goal("beta", [task])], []);
+  assert.equal(rows(recovered).length, 0, "unknown initial history must not become a recovery burst");
+  assert.deepEqual(recovered.baseline_pending_goal_ids, []);
+  const changed = snapshot(recovered, [goal("alpha", [task]), goal("beta", [{...task, note: "New terms"}])], []);
+  assert.equal(rows(changed).length, 1);
+  const added = snapshot(recovered, [goal("alpha", [task]), goal("beta", [task]), goal("gamma", [task])], [],
+    ["alpha", "beta", "gamma"]);
+  assert.equal(rows(added).length, 1, "newly registered Goals after enable retain discovery semantics");
+});
+
+test("missing sources preserve frozen unknown sends and recovered locators without reopening creates", () => {
+  const pending = snapshot(snapshot(empty(), [goal("alpha", []), goal("beta", [])], []),
+    [goal("alpha", [task]), goal("beta", [])], []);
+  const id = rows(pending)[0].id;
+  const started = observeOwnerAttention({state: pending, id, event: "write_started", now: 100,
+    intent: {text: rows(pending)[0].body, route: {source: "original"}}});
+  for (const state of [started, observeOwnerAttention({state: started, id,
+    event: "write_observed", now: 100, message_id: "om_original"})]) {
+    const missing = snapshot(state, [goal("beta", [task])], ["alpha"]);
+    const held = rows(missing)[0];
+    assert.equal(held.status, "unconfirmed");
+    assert.deepEqual(held.intent, rows(started)[0].intent);
+    const recovered = snapshot(missing, [goal("alpha", [task]), goal("beta", [task])], []);
+    assert.equal(rows(recovered).length, 2);
+    assert.equal(rows(recovered)[0].status, "unconfirmed");
+    assert.equal(rows(recovered)[0].message_id, rows(state)[0].message_id);
+    assert.throws(() => observeOwnerAttention({state: recovered, id, event: "write_started", now: 100, intent: {}}));
+  }
+});
+
+test("partial coverage must exhaustively partition a complete authorized scope", () => {
+  const state = empty();
+  const valid = {state, goals: [goal("alpha", [])], scope_goal_ids: ["alpha", "beta"],
+    unavailable_goal_ids: ["beta"], source_complete: false};
+  assert.doesNotThrow(() => planOwnerAttention(valid));
+  for (const extra of [
+    {scope_goal_ids: ["alpha", "beta", "omitted"]},
+    {scope_goal_ids: ["alpha", "alpha", "beta"]},
+    {unavailable_goal_ids: ["alpha", "beta"]},
+    {unavailable_goal_ids: ["foreign"]}, {source_complete: true},
+    {goals: [goal("alpha", []), goal("alpha", [])]}, {unavailable_goal_ids: undefined},
+  ]) assert.throws(() => planOwnerAttention({...valid, ...extra}));
+  assert.throws(() => ownerAttentionHealth({state: {...state,
+    source_coverage: {goal_count: 2, read_goal_count: 2, unavailable_goal_count: 1}}}));
+});
+
+test("source diagnostics identify the unavailable Goal and retain no raw error details", () => {
+  const base = snapshot(empty(), [goal("alpha", []), goal("beta", [])], []);
+  const input = {state: base, goals: [goal("alpha", [task])], scope_goal_ids: ["alpha", "beta"],
+    unavailable_goal_ids: ["beta"], source_complete: false,
+    source_failures: [{goal_id: "beta", error_code: "canonical_authority_required", error: "private path"}]};
+  const missing = planOwnerAttention(input);
+  const health = ownerAttentionHealth({state: JSON.parse(JSON.stringify(missing))});
+  assert.deepEqual(health.source_failures, [{goal_id: "beta", error_code: "canonical_authority_required"}]);
+  assert.ok(!JSON.stringify(health).includes("private path"));
+  assert.equal(rows(missing).length, 1);
+  assert.equal(rows(missing)[0].source_current, true, "diagnostics do not hold healthy delivery");
+  const restored = snapshot(missing, [goal("alpha", [task]), goal("beta", [])], []);
+  assert.deepEqual(ownerAttentionHealth({state: restored}).source_failures, []);
+  assert.equal(rows(restored).length, 1, "changing diagnostics cannot create another notice");
+  // Journals written before this optional field remain readable. The next
+  // full snapshot supplies the missing Goal identity without guessing a cause.
+  const {source_failures: _oldField, ...legacy} = missing;
+  assert.deepEqual(ownerAttentionHealth({state: legacy}).source_failures, []);
+  assert.deepEqual(snapshot(legacy, [goal("alpha", [task])], ["beta"]).source_failures,
+    [{goal_id: "beta", error_code: "source_unavailable"}]);
+  for (const source_failures of [[],
+    [{goal_id: "alpha", error_code: "source_unavailable"}],
+    [{goal_id: "foreign", error_code: "source_unavailable"}],
+    [{goal_id: "beta", error_code: "unknown"}],
+    [{goal_id: "beta", error_code: "source_unavailable"}, {goal_id: "beta", error_code: "source_unavailable"}]])
+    assert.throws(() => planOwnerAttention({...input, source_failures}));
+  assert.deepEqual(ownerAttentionHealth({state: {...missing, source_failures: []}}).source_failures, []);
+  for (const source_failures of [null, [{goal_id: "beta", error_code: "private path"}]]) {
+    const retained = {...missing, source_failures};
+    assert.equal(ownerAttentionHealth({state: retained}).available, true);
+    assert.deepEqual(ownerAttentionHealth({state: retained}).source_failures, []);
+    assert.equal(rows(snapshot(retained, [goal("alpha", [task])], ["beta"])).length, 1);
+  }
+  const oldWriter = {...missing, source_coverage: {goal_count: 2, read_goal_count: 2, unavailable_goal_count: 0}};
+  assert.deepEqual(ownerAttentionHealth({state: oldWriter}).source_failures, [], "ignore stale optional diagnosis");
+  const current = snapshot(oldWriter, [goal("alpha", [task]), goal("beta", [])], []);
+  assert.deepEqual(current.source_failures, []);
+  assert.equal(rows(current).length, 1, "old-writer metadata cannot retire or duplicate the original notice");
+});
+
+const terminal = {todo_id: "todo_failed", text: "Build the preview", outcome: "reject",
+  reason: "Review rejected the proposal", evidence: "https://example.org/review", terminal_outcome_count: 1};
+const failurePlan = (state: JsonObject, failures: JsonObject[]) => planOwnerAttention({state,
+  goals: [{goal_id: "alpha", todos: [], failures}], source_complete: true});
+
+test("reject and cancel each create one stable terminal subject with complete terms", () => {
+  for (const outcome of ["reject", "cancel"]) {
+    const failure = {...terminal, outcome};
+    const state = failurePlan(failurePlan(empty(), []), [failure]);
+    assert.equal(rows(state).length, 1);
+    const notice = rows(state)[0];
+    assert.equal(notice.key, "alpha/todo_failed/terminal");
+    const {text, reason, evidence, terminal_outcome_count} = failure;
+    assert.equal(notice.digest, canonicalAuthoritySha256({text, note: outcome, reason, evidence, terminal_outcome_count}));
+    for (const term of [text, outcome, reason, evidence, "需要所有者决定", "1 项"]) assert.ok(String(notice.body).includes(term));
+    assert.deepEqual(failurePlan(JSON.parse(JSON.stringify(state)), [failure]), state);
+    const changed = failurePlan(state, [{...failure, reason: "Revised review reason"}]);
+    assert.equal(rows(changed).length, 2);
+    assert.equal(rows(changed)[0].status, "superseded");
+    assert.equal(rows(changed)[1].generation, 2);
+  }
+});
+
+test("a second terminal outcome changes generation even when latest terms are otherwise identical", () => {
+  const first = failurePlan(failurePlan(empty(), []), [terminal]);
+  const second = failurePlan(first, [{...terminal, terminal_outcome_count: 2}]);
+  assert.equal(rows(second).length, 2);
+  assert.equal(rows(second)[0].status, "superseded");
+  assert.equal(rows(second)[1].generation, 2);
+  assert.notEqual(rows(second)[0].digest, rows(second)[1].digest);
+  assert.ok(String(rows(second)[1].body).includes("2 项"));
+});
+
+test("resolved, deferred, superseded or cleared terminal outcomes withdraw unsent failure notices", () => {
+  for (const change of [{status: "done"}, {status: "deferred"}, {status: "blocked", superseded_by: "todo_new"},
+    {status: "blocked", decision_scope_outcomes: []}]) {
+    const pending = failurePlan(failurePlan(empty(), []), [terminal]);
+    const resolved = planOwnerAttention({state: pending, source_complete: true,
+      goals: [{goal_id: "alpha", todos: [{...task, todo_id: terminal.todo_id, role: "agent", ...change}], failures: []}]});
+    assert.equal(rows(resolved)[0].status, "superseded");
+    assert.equal((resolved.subjects as JsonObject[])[0].active, false);
+  }
+});
+
+test("two failures remain distinct and terminal size failures retain the existing cap", () => {
+  const base = failurePlan(empty(), []);
+  const state = failurePlan(base, [terminal, {...terminal, todo_id: "todo_second", outcome: "cancel"}]);
+  assert.deepEqual(rows(state).map(row => row.key), ["alpha/todo_failed/terminal", "alpha/todo_second/terminal"]);
+  const long = rows(failurePlan(base, [{...terminal, reason: "题".repeat(9000)}]))[0];
+  assert.equal(long.status, "failed");
+  assert.equal(long.error_code, "notice_content_too_large");
+});
+
+test("absent failures preserves the ordinary plan byte for byte", () => {
+  const base = plan(empty(), []);
+  for (const todos of [[], [reviewTask], [{...task, status: "done"}]]) {
+    const legacy = plan(base, todos);
+    const explicit = planOwnerAttention({state: base, source_complete: true,
+      goals: [{goal_id: "alpha", todos, failures: []}]});
+    assert.equal(JSON.stringify(legacy), JSON.stringify(explicit));
+    assert.ok(!JSON.stringify(legacy).includes("/terminal"));
+  }
+});
+
+
+test("native in-place terminal scope replacement advances generation and identical identities stay stable", () => {
+  const scope = {schema_version: "decision_scope_v0", kind: "direction", granularity: "action", scope_key: "preview"};
+  const gate = {todo_id: "todo_review_a", role: "user", task_class: "user_gate", status: "open",
+    unblocks_todo_id: terminal.todo_id, decision_scope: scope};
+  let target: JsonObject = {todo_id: terminal.todo_id, role: "agent", status: "blocked"};
+  target = {...target, ...planUserCompletion(gate, [target], "reject").updates};
+  target = {...target, ...planUserCompletion({...gate, todo_id: "todo_review_b",
+    decision_scope: {...scope, scope_key: "publish"}}, [target], "reject").updates};
+  const project = (row: JsonObject): JsonObject => ({...terminal, terminal_outcome_count: 2,
+    terminal_outcome_identities: row.decision_scope_outcomes});
+  const first = failurePlan(failurePlan(empty(), []), [project(target)]);
+  assert.equal(rows(first)[0].generation, 1);
+  target = {...target, ...planUserCompletion(gate, [target], "cancel").updates};
+  assert.deepEqual((target.decision_scope_outcomes as JsonObject[]).map(row => row.outcome), ["cancel", "reject"]);
+  const second = failurePlan(first, [project(target)]);
+  assert.equal(rows(second)[1].generation, 2);
+  assert.notEqual(rows(second)[0].digest, rows(second)[1].digest);
+  assert.equal(rows(second)[0].body, rows(second)[1].body);
+  assert.deepEqual(failurePlan(second, [project(target)]), second);
+  const reordered = {...project(target), terminal_outcome_identities: [...target.decision_scope_outcomes as JsonObject[]].reverse()};
+  assert.deepEqual(failurePlan(second, [reordered]), second);
 });

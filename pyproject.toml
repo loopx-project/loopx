@@ -4,16 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "loopx"
-version = "2.0.0a1"
+version = "2.4.0"
 description = "A Loop Engineering control plane for long-running agent goals (requires Node.js 22.22.3+)."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE", "LICENSE-MIT"]
 authors = [{ name = "LoopX contributors" }]
-# No Python runtime dependencies, but the TypeScript control plane needs a
-# system Node.js >= 22.22.3 (MINIMUM_NODE_VERSION); pip cannot install it.
-dependencies = []
+# Windows does not supply the IANA database used by zoneinfo for schedules.
+# The TypeScript control plane also needs system Node.js >= 22.22.3
+# (MINIMUM_NODE_VERSION); pip cannot install it.
+dependencies = ["tzdata; sys_platform == 'win32'"]
 
 [project.urls]
 Homepage = "https://loopx-project.github.io/loopx/"
@@ -23,6 +24,9 @@ Issues = "https://github.com/loopx-project/loopx/issues"
 Changelog = "https://github.com/loopx-project/loopx/releases"
 
 [project.optional-dependencies]
+input-token-estimates = [
+  "tiktoken==0.12.0",
+]
 ego-source-reader = [
   "mcp==1.30.0",
 ]
@@ -30,17 +34,26 @@ public-source-reader = [
   "mcp==1.30.0",
   "resvg-py==0.5.0",
   "defusedxml==0.7.1",
-  "pillow>=11,<13",
+  "pillow>=11,<14",
 ]
 deepseek-harness = [
   "deepseek-harness-sdk==0.1.5rc1",
 ]
+# Selected unit tests only; integration, lint and full-suite validation use test.
+test-core = [
+  "distlib>=0.3.9,<1; sys_platform == 'win32'",
+  "jsonschema>=4.23,<5",
+  "pyyaml>=6,<7",
+  "pytest>=9.0.3,<10",
+]
 test = [
+  "hypothesis==6.142.4",
+  "tiktoken==0.12.0",
   "distlib>=0.3.9,<1; sys_platform == 'win32'",
   "docker==7.2.0",
   "resvg-py==0.5.0",
   "defusedxml==0.7.1",
-  "pillow>=11,<13",
+  "pillow>=11,<14",
   "jsonschema>=4.23,<5",
   "mcp==1.30.0",
   "pyyaml>=6,<7",
@@ -68,11 +81,12 @@ include = ["loopx*"]
 
 [tool.setuptools.package-data]
 "loopx" = ["web/chat/*.html", "web/chat/*.json", "web/chat/assets/*", "web/chat/manifest.webmanifest", "web/chat/pwa/*"]
+"loopx.cli_commands" = ["public_default_contract.json"]
 "loopx.control_plane" = ["*.json", "*.ts", "presentation/*.ts"]
 "loopx.semantics" = ["*.json"]
 "loopx.control_plane.agents" = ["*.ts"]
 "loopx.control_plane.capabilities" = ["*.ts"]
-"loopx.control_plane.collaboration" = ["*.ts"]
+"loopx.control_plane.collaboration" = ["*.ts", "*.json"]
 "loopx.control_plane.coordination" = ["*.ts", "*.json"]
 "loopx.control_plane.goals" = ["*.ts"]
 "loopx.control_plane.goals.goal_frontier" = ["*.ts"]
@@ -85,7 +99,7 @@ include = ["loopx*"]
 "*" = ["README.md", "README.zh-CN.md", "docs/*.md", "docs/protocols/*.md"]
 "loopx.capabilities.content_ops" = ["templates/*.json", "experiences/*.json"]
 "loopx.capabilities.pr_review_queue" = ["experiences/*/*/*.json", "experiences/*.md"]
-"loopx.capabilities.manager_context" = ["skills/loopx-manager/SKILL.md"]
+"loopx.capabilities.manager_context" = ["*.ts", "skills/loopx-manager/SKILL.md"]
 "loopx.extensions.lark" = ["extension.toml", "README.md", "docs/*.md"]
 "loopx.extensions.openviking_periodic_report" = ["extension.toml"]
 "loopx.extensions.openviking_semantic_preference" = ["extension.toml"]
@@ -126,6 +140,7 @@ include = ["loopx*"]
   "skills/loopx-project/references/start-and-connect.md",
   "skills/loopx-project/references/installation-and-diagnosis.md",
   "skills/loopx-project/references/autonomous-execution.md",
+  "skills/loopx-project/references/outcome-refinement.md",
   "skills/loopx-project/references/heartbeat-hosts.md",
   "skills/loopx-project/references/handoff-and-feedback.md",
   "skills/loopx-project/references/materials-explore-quality.md",
@@ -187,8 +202,8 @@ include = ["loopx*"]
 
 [tool.pytest.ini_options]
 markers = ["stage2c_e2e: real process Stage 2C correctness and recovery acceptance"]
-# Private snapshots and packaging copies are not source tests; optional provider tests run in ark-turn.yml.
-norecursedirs = [".local", "build", "dist", "deprecate", "packages/loopx-ark-turn"]
+# Private snapshots and packaging copies are not source tests; optional provider suites have dedicated workflows.
+norecursedirs = [".local", "build", "dist", "deprecate", "packages/loopx-ark-turn", "packages/loopx-memt-turn"]
 
 [tool.coverage.run]
 source = ["loopx"]

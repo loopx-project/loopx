@@ -10,6 +10,11 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from loopx.chat_action_store import (
+    AUTHENTICATED_LARK_CARD_CALLBACK,
+    HUMAN_ACTOR_CLASS,
+    ChatActionStore,
+)
 from loopx.control_plane.effect_runtime import EffectRuntimeRejected
 
 from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import (
@@ -84,6 +89,11 @@ def pack(tmp_path):
             )
         ],
         "limitations": ["Synthetic process; not model quality evidence"],
+        "synthesis": {
+            "summary": {"text": "A valid negative result narrows the next investigation.", "episode_ids": ["episode"],
+                        "citations": [dict(source_id="source", first_line=2, last_line=2)]},
+            "findings": [], "next_experiments": [],
+        },
     }
     executable = tmp_path / "codex-fixture"
     executable.write_text(
@@ -128,6 +138,7 @@ def test_scope_discovery_execute_read_citation_and_changed_source_history(pack):
     )
     with pytest.raises(PackUnavailable, match="citation_not_in_result"):
         read_citation(**operation, source_id="source", first_line=1, last_line=2)
+
     (sources / "result.txt").write_text("changed", encoding="utf-8")
     assert discover(**scope)["packs"][0]["reason_code"] == "source_changed"
     with pytest.raises(PackUnavailable, match="source_changed"):
@@ -143,6 +154,208 @@ def test_scope_discovery_execute_read_citation_and_changed_source_history(pack):
         ]
         == citation["text"]
     )
+
+
+def test_repeated_artifact_excerpts_share_one_fresh_read(pack, monkeypatch):
+    scope, _, _, input_path, sources, _ = pack
+    data = json.loads(input_path.read_text())
+    data["sources"].append({**data["sources"][0], "id": "prior", "first_line": 1, "text": "Prior question"})
+    data["episodes"][0]["source_ids"].append("prior")
+    input_path.write_text(json.dumps(data))
+    calls = []
+    original = type(input_path).read_bytes
+
+    def observed(path):
+        if path == sources / "result.txt":
+            calls.append(path)
+        return original(path)
+
+    monkeypatch.setattr(type(input_path), "read_bytes", observed)
+    registered = register_pack(**scope, input_path=input_path, source_root=sources, title="Multiple excerpts")
+    assert len(calls) == 1
+    calls.clear()
+    before = inspect_pack(**scope, pack_id=registered["pack_id"])
+    assert before["availability"] == "available" and len(calls) == 1
+    # No cross-request cache: same-length replacement with restored timestamps
+    # must still invalidate the pack, rather than trusting path/size/mtime.
+    path = sources / "result.txt"
+    stat = path.stat()
+    original_bytes = original(path)
+    path.write_bytes(original_bytes.replace(b"Prior", b"Other"))
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    calls.clear()
+    after = inspect_pack(**scope, pack_id=registered["pack_id"])
+    assert after["reason_code"] == "source_changed" and len(calls) == 1
+
+
+@pytest.mark.parametrize("correction,reason", [
+    ({"artifact_sha256": "0" * 64}, "source_changed"),
+    ({"text": "An unsupported second excerpt"}, "excerpt_mismatch"),
+])
+def test_shared_artifact_does_not_skip_later_digest_or_excerpt(pack, correction, reason):
+    scope, _, _, input_path, sources, _ = pack
+    data = json.loads(input_path.read_text())
+    data["sources"].append({**data["sources"][0], "id": "later", **correction})
+    data["episodes"][0]["source_ids"].append("later")
+    input_path.write_text(json.dumps(data))
+    with pytest.raises(PackUnavailable, match=reason):
+        register_pack(**scope, input_path=input_path, source_root=sources, title="Invalid later excerpt")
+
+
+def test_continuation_reuses_identical_excerpts_despite_other_capture_bytes(pack):
+    scope, operation, registered, path, sources, provider = pack
+    assert execute_pack(**operation, codex=provider)["status"] == "succeeded"
+    original = inspect_pack(**scope, pack_id=registered["pack_id"])["result"]
+    old_directory = next((scope["runtime_root"] / "benchmark" / "trajectory-assessments").glob("*/jobs")) / operation["analysis_key"]
+    old_bytes = {p.name: p.read_bytes() for p in old_directory.iterdir() if p.is_file()}
+    evidence = (sources / "result.txt").read_bytes() + b"Unselected capture metadata changed\n"
+    (sources / "result.txt").write_bytes(evidence)
+    data = json.loads(path.read_text())
+    data["scope"]["revision"] = "capture-2"
+    data["sources"][0]["artifact_sha256"] = hashlib.sha256(evidence).hexdigest()
+    path.write_text(json.dumps(data))
+    successor = register_pack(**scope, input_path=path, source_root=sources, title="Updated capture", base_pack_id=registered["pack_id"])
+    assert register_pack(**scope, input_path=path, source_root=sources, title="Updated capture", base_pack_id=registered["pack_id"])["pack_id"] == successor["pack_id"]
+    before = inspect_pack(**scope)
+    assert before["job"] is None and before["result"] is None
+    assert before["continuation"]["can_reuse"] is True
+    assert before["continuation"]["sources"] == dict(added=[], revised=[], removed=[])
+    new_operation = {**scope, "pack_id": successor["pack_id"], "analysis_key": successor["analysis_key"]}
+    completed = execute_pack(**new_operation, codex="must-not-run")
+    assert completed["reused"] and completed["reused_from_analysis_key"] == operation["analysis_key"]
+    reused_output = json.loads((old_directory.parent / successor["analysis_key"] / "model-output.json").read_text())
+    assert set(reused_output) == {"assessments", "limitations", "synthesis"}
+    assert reused_output["synthesis"] == original["synthesis"]
+    view = inspect_pack(**scope)
+    assert view["result"]["scope"]["revision"] == "capture-2"
+    assert view["result"]["metrics"] == original["metrics"]
+    assert view["result"]["evidence_manifest"][0]["artifact_sha256"] == data["sources"][0]["artifact_sha256"]
+    assert read_citation(**new_operation, source_id="source", first_line=2, last_line=2)["applicability"] == "current"
+    assert all((old_directory / name).read_bytes() == contents for name, contents in old_bytes.items())
+
+
+def test_new_evidence_reassesses_old_judgments_and_complete_denominator(pack, tmp_path):
+    scope, operation, registered, path, sources, provider = pack
+    execute_pack(**operation, codex=provider)
+    previous = inspect_pack(**scope)["result"]
+    data = json.loads(path.read_text())
+    later = b"The earlier proxy was not representative; no native test occurred.\n"
+    (sources / "later.txt").write_bytes(later)
+    data["sources"].append(dict(id="later", artifact="later.txt", artifact_sha256=hashlib.sha256(later).hexdigest(), first_line=1, text=later.decode().strip()))
+    data["episodes"][0]["source_ids"].append("later")
+    data["episodes"].append(dict(id="follow-up", question="Did follow-up test utility?", source_ids=["later"], eligible_metrics=["benefit_test"]))
+    data["selection"]["population_episodes"] = 2
+    data["scope"].update(revision="corrected", window="original and later evidence")
+    path.write_text(json.dumps(data))
+    successor = register_pack(**scope, input_path=path, source_root=sources, title="Later evidence", base_pack_id=registered["pack_id"])
+    before = inspect_pack(**scope)
+    assert before["continuation"]["can_reuse"] is False
+    assert before["continuation"]["reassessed_episode_ids"] == ["episode", "follow-up"]
+    assert before["continuation"]["new_pair_count"] == 1
+    assert before["continuation"]["compared_pair_count"] is None
+    revised = {"assessments": [dict(episode_id=e, metric="benefit_test", verdict=v, reason="Later evidence corrects the earlier interpretation", citations=[dict(source_id="later", first_line=1, last_line=1)] if v != "unknown" else []) for e, v in [("episode", "no"), ("follow-up", "unknown")]], "limitations": ["Synthetic counterevidence"]}
+    revised["synthesis"] = {"summary": {"text": "The earlier interpretation was refuted by later evidence.", "episode_ids": ["episode"],
+                                      "citations": [dict(source_id="later", first_line=1, last_line=1)]}, "findings": [], "next_experiments": []}
+    executable = tmp_path / "reassessment"
+    executable.write_text(f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\nprompt=sys.stdin.read()\nassert 'The earlier proxy' in prompt and '原始测量' in prompt\nPath(sys.argv[sys.argv.index('-o')+1]).write_text({json.dumps(revised)!r})\n")
+    executable.chmod(0o700)
+    new_operation = {**scope, "pack_id": successor["pack_id"], "analysis_key": successor["analysis_key"]}
+    execute_pack(**new_operation, codex=str(executable))
+    view = inspect_pack(**scope)
+    benefit = next(row for row in view["result"]["metrics"] if row["metric"] == "benefit_test")
+    assert (benefit["yes"], benefit["no"], benefit["unknown"], benefit["eligible"]) == (0, 1, 1, 2)
+    assert view["continuation"]["verdict_changes"] == [dict(episode_id="episode", metric="benefit_test", before="yes", after="no")]
+    assert view["continuation"]["compared_pair_count"] == 1
+    assert inspect_pack(**scope, pack_id=registered["pack_id"])["result"] == previous
+
+
+def test_disjoint_research_units_have_zero_comparisons_without_overwriting_prior_result(pack, tmp_path):
+    scope, operation, registered, path, sources, provider = pack
+    execute_pack(**operation, codex=provider)
+    previous = inspect_pack(**scope)["result"]
+    old_files = {p: p.read_bytes() for p in scope["runtime_root"].glob("benchmark/trajectory-assessments/*/jobs/*/*") if p.is_file()}
+    raw = json.loads(next(p for p in old_files if p.name == "model-output.json").read_text())
+    data = json.loads(path.read_text())
+    data["scope"]["revision"] = "different-research-unit"
+    data["episodes"][0]["id"] = "new-question"
+    raw["assessments"][0]["episode_id"] = "new-question"
+    raw["synthesis"]["summary"]["episode_ids"] = ["new-question"]
+    path.write_text(json.dumps(data))
+    successor = register_pack(**scope, input_path=path, source_root=sources, title="Different research unit", base_pack_id=registered["pack_id"])
+    assert inspect_pack(**scope)["continuation"]["compared_pair_count"] is None
+    executable = tmp_path / "disjoint-output-fixture"
+    executable.write_text(f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\nsys.stdin.read()\nPath(sys.argv[sys.argv.index('-o')+1]).write_text({json.dumps(raw)!r})\n")
+    executable.chmod(0o700)
+    execute_pack(**scope, pack_id=successor["pack_id"], analysis_key=successor["analysis_key"], codex=str(executable))
+    delta = inspect_pack(**scope)["continuation"]
+    assert (delta["compared_pair_count"], delta["new_pair_count"], delta["removed_pair_count"]) == (0, 1, 1)
+    assert delta["verdict_changes"] == []
+    assert inspect_pack(**scope, pack_id=registered["pack_id"])["result"] == previous
+    assert all(p.read_bytes() == content for p, content in old_files.items())
+
+
+def test_continuation_does_not_cross_owner_run_or_revoked_source(pack, tmp_path):
+    scope, operation, registered, path, sources, provider = pack
+    execute_pack(**operation, codex=provider)
+    data = json.loads(path.read_text())
+    data["scope"]["run_id"] = "unrelated"
+    path.write_text(json.dumps(data))
+    with pytest.raises(EffectRuntimeRejected, match="different Goal/case/run"):
+        register_pack(**scope, input_path=path, source_root=sources, title="Wrong run", base_pack_id=registered["pack_id"])
+    with pytest.raises(PackUnavailable, match="pack_not_registered"):
+        register_pack(**{**scope, "owner_goal_id": "other-owner"}, input_path=path, source_root=sources, title="Wrong owner", base_pack_id=registered["pack_id"])
+    data["scope"].update(run_id="run", revision="current")
+    path.write_text(json.dumps(data))
+    copied = tmp_path / "current-sources"
+    copied.mkdir()
+    (copied / "result.txt").write_bytes((sources / "result.txt").read_bytes())
+    successor = register_pack(**scope, input_path=path, source_root=copied, title="Current snapshot", base_pack_id=registered["pack_id"])
+    (sources / "result.txt").unlink()
+    view = inspect_pack(**scope)
+    assert view["availability"] == "available"
+    assert not view["continuation"]["base_available"] and not view["continuation"]["can_reuse"]
+    assert view["continuation"]["compared_pair_count"] is None
+    assert view["continuation"]["reassessed_episode_ids"] == ["episode"]
+    result = execute_pack(**scope, pack_id=successor["pack_id"], analysis_key=successor["analysis_key"], codex=provider)
+    assert result["status"] == "succeeded" and not result["reused"]
+
+
+def test_display_usage_captures_bind_registered_successor_versions():
+    from pathlib import Path
+
+    from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import _pack_id
+
+    fixture = Path(__file__).resolve().parents[2] / "apps/presentation/dashboard/src/data/fixtures/research-usage-real-captures.json"
+    data = json.loads(fixture.read_text())
+    lineage = {row["registered_pack_id"]: row for row in data["lineage"]}
+    for captured in data["packs"]:
+        source = lineage[captured["pack_id"]]
+        assert captured["continuation"]["base_pack_id"] == source["original_pack_id"]
+        usage = {key: value for key, value in captured["solver_usage"].items()
+                 if key not in {"applicability", "reason_code"}}
+        assert usage["artifact_sha256"] == source["source_sha256"]
+        record = {"owner_goal_id": data["owner_goal_id"], "title": captured["title"],
+                  "analysis_key": captured["analysis_key"], "solver_usage": usage,
+                  "base_pack_id": source["original_pack_id"]}
+        assert _pack_id(data["owner_goal_id"], record) == captured["pack_id"]
+
+
+def test_registration_can_preserve_the_current_selection(pack):
+    scope, _, original, input_path, sources, _ = pack
+    args = dict(**scope, input_path=input_path, source_root=sources,
+                title="Another captured version", base_pack_id=original["pack_id"])
+    alternate = register_pack(**args, select_default=False)
+    catalog = discover(**scope)
+    assert catalog["default_pack_id"] == original["pack_id"]
+    assert {p["pack_id"] for p in catalog["packs"]} == {original["pack_id"], alternate["pack_id"]}
+    assert inspect_pack(**scope, pack_id=alternate["pack_id"])["job"] is None
+    # Selection is not part of frozen evidence identity; legacy callers still
+    # select their registration without mutating either captured version.
+    assert register_pack(**args)["pack_id"] == alternate["pack_id"]
+    assert discover(**scope)["default_pack_id"] == alternate["pack_id"]
+    empty = {**scope, "runtime_root": scope["runtime_root"] / "empty"}
+    first = register_pack(**{**args, **empty, "base_pack_id": None}, select_default=False)
+    assert discover(**empty)["default_pack_id"] == first["pack_id"]
 
 
 def test_native_results_register_through_real_cli_and_read_without_analysis(pack, tmp_path):
@@ -164,14 +377,18 @@ def test_native_results_register_through_real_cli_and_read_without_analysis(pack
     result = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
         "--runtime-root", str(scope["runtime_root"]), "--format", "json", "benchmark", "trajectory-pack-register",
         "--goal-id", scope["owner_goal_id"], "--input-json", str(input_path), "--source-root", str(sources),
-        "--title", "Native outcome window", "--native-outcomes-json", native_path.name],
+        "--title", "Native outcome window", "--native-outcomes-json", native_path.name,
+        "--base-pack-id", original["pack_id"], "--preserve-default"],
         capture_output=True, text=True, check=True)
     registered = json.loads(result.stdout)
+    assert discover(**scope)["default_pack_id"] == original["pack_id"]
     assert registered["analysis_key"] == original["analysis_key"]
     assert "native_outcomes" not in original
     assert registered["native_outcomes"]["projection"]["initial"]["value"] == 2
     view = inspect_pack(**scope, pack_id=registered["pack_id"])
     assert view["job"] is None and view["result"] is None
+    assert view["continuation"]["base_pack_id"] == original["pack_id"]
+    assert not view["continuation"]["base_available"]
     assert view["native_outcomes"]["projection"]["retained"]["candidate_ref"] == "candidate-a"
     citation = read_citation(**scope, pack_id=registered["pack_id"], analysis_key=registered["analysis_key"],
         source_id="source", first_line=2, last_line=2)
@@ -187,6 +404,46 @@ def test_native_results_register_through_real_cli_and_read_without_analysis(pack
     assert read_citation(**scope, pack_id=registered["pack_id"], analysis_key=registered["analysis_key"],
         source_id="source", first_line=2, last_line=2)["applicability"] == "historical"
     assert not list((scope["runtime_root"] / "benchmark" / "trajectory-assessments").glob("*/jobs/*"))
+
+
+def test_native_improvement_citations_are_readable_without_model_execution(pack):
+    scope, _, _, input_path, sources, _ = pack
+    evidence = "Native results\nolder best: 100\nbaseline: 12\nretained: 15\nApplied retained source; verified hash\n"
+    (sources / "result.txt").write_text(evidence)
+    data = json.loads(input_path.read_text())
+    data["sources"][0].update(first_line=1, text=evidence,
+        artifact_sha256=hashlib.sha256(evidence.encode()).hexdigest())
+    input_path.write_text(json.dumps(data))
+    native = {
+        "schema_version": "trajectory_native_outcomes_v1", "scope": data["scope"],
+        "start": "2026-01-01T00:00:00Z", "end": "2026-01-01T00:10:00Z", "complete": False,
+        "metric": {"name": "utility", "unit": "points", "higher_is_better": True},
+        "retained_result_id": "result-9",
+        "comparison": {"baseline_result_id": "result-7",
+            "retention_citation": {"source_id": "source", "first_line": 5, "last_line": 5}},
+        "samples": [{"submission_index": index, "result_id": f"result-{index}", "candidate_ref": f"candidate-{index}",
+            "submitted_at": "2026-01-01T00:01:00Z", "observed_at": "2026-01-01T00:02:00Z",
+            "valid": True, "value": value, "citation": {"source_id": "source", "first_line": line, "last_line": line}}
+            for index, value, line in [(2, 100, 2), (7, 12, 3), (9, 15, 4)]],
+    }
+    path = sources / "comparison.json"
+    path.write_text(json.dumps(native))
+    registered = register_pack(**scope, input_path=input_path, source_root=sources,
+        title="Source-bound retained improvement", native_outcomes_json=path.name)
+    operation = {**scope, "pack_id": registered["pack_id"], "analysis_key": registered["analysis_key"]}
+    view = inspect_pack(**scope, pack_id=registered["pack_id"])
+    assert view["native_outcomes"]["projection"]["retained_improvement"]["value"] == 3
+    assert view["native_outcomes"]["projection"]["initial"] is None
+    assert view["result"] is None and view["job"] is None
+    assert read_citation(**operation, source_id="source", first_line=3, last_line=3)["text"] == "baseline: 12"
+    assert read_citation(**operation, source_id="source", first_line=5, last_line=5)["text"] == "Applied retained source; verified hash"
+    with pytest.raises(PackUnavailable, match="citation_not_in_result"):
+        read_citation(**operation, source_id="source", first_line=1, last_line=1)
+    path.write_text("{}")
+    old = inspect_pack(**scope, pack_id=registered["pack_id"])
+    assert old["native_outcomes"]["applicability"] == "historical"
+    assert old["native_outcomes"]["projection"]["retained_improvement"]["value"] == 3
+    assert read_citation(**operation, source_id="source", first_line=5, last_line=5)["applicability"] == "historical"
 
 
 def test_native_capture_cannot_borrow_another_run_or_escape_source_root(pack):
@@ -370,6 +627,121 @@ def test_missing_source_blocks_new_execution_and_leaves_registration_visible(pac
         execute_pack(**operation, codex="must-not-run")
 
 
+@pytest.mark.parametrize("encoding", ["default", None, "source_text_aliases_v1", "source_text_aliases_with_literals_v1", "source_text_aliases_with_literal_values_v1", "source_text_aliases_with_literal_values_v2", "source_text_aliases_with_literal_values_v3", "source_text_aliases_with_literal_values_v4"])
+@pytest.mark.parametrize("context", [False, True])
+def test_full_history_display_uses_the_same_job_and_preserves_original_versions(pack, tmp_path, encoding, context):
+    from loopx.capabilities.benchmark_toolkit.trajectory_assessment import prepare
+
+    scope, _, initial, input_path, sources, _ = pack
+    data = json.loads(input_path.read_text())
+    history = {"ok": True, "goal_id": "solver", "total": 2, "next_cursor": None, "items": [
+        dict(schema_version="loopx_explore_result_event_v0", event_id="question-old", result_id="question", goal_id="solver", event_kind="node",
+             node_kind="question", recorded_at="2026-01-01T00:00:00Z", title="Does V18 help?", summary="Not established.", status="open"),
+        dict(schema_version="loopx_explore_result_event_v0", event_id="question-new", result_id="question", goal_id="solver", event_kind="node",
+             node_kind="question", recorded_at="2026-01-02T00:00:00Z", title="Does V19 help?", summary="Still unknown.", status="blocked"),
+    ]}
+    if encoding in {"default", "source_text_aliases_with_literal_values_v1", "source_text_aliases_with_literal_values_v2", "source_text_aliases_with_literal_values_v3", "source_text_aliases_with_literal_values_v4"}:
+        history["items"][0]["summary"] = "Trial4failed2checks"
+    text = json.dumps(history, ensure_ascii=False)
+    (sources / "history.json").write_text(text)
+    data["sources"].append(dict(id="history", artifact="history.json", artifact_sha256=hashlib.sha256(text.encode()).hexdigest(), first_line=1, text=text))
+    data["display_snapshot"] = dict(schema_version="research_display_snapshot_v1", source_id="history", source_namespace="source-a")
+    if encoding is not None and encoding != "default":
+        data["display_snapshot"]["translation_encoding"] = encoding
+    context_citation = dict(source_id="source", first_line=2, last_line=2)
+    if context:
+        data["display_snapshot"]["contexts"] = [dict(event_id="question-old", field="summary", citations=[context_citation])]
+    input_path.write_text(json.dumps(data))
+    registered = register_pack(**scope, input_path=input_path, source_root=sources, title="Whole history · synthetic",
+                               config=None if encoding == "default" else initial["config"])
+    if encoding == "default":
+        prepared = prepare(input_path, model="gpt-6.1-sol", effort="max", service_tier="fast")
+        assert prepared["input"]["display_snapshot"]["translation_encoding"] == "source_text_aliases_with_literal_values_v4"
+        assert prepared["analysis_key"] == registered["analysis_key"]
+        assert json.loads(input_path.read_text()) == data
+    current = inspect_pack(**scope, pack_id=registered["pack_id"], output_language="zh")
+    assert current["display_request"]["eligible"] == 4 and current["job"] is None
+    provider = tmp_path / "display-provider"
+    provider.write_text(f"#!{sys.executable}\n" + '''
+import json,sys
+from pathlib import Path
+prompt = sys.stdin.read()
+fields = json.loads(prompt.split("\\n\\ndisplay_fields:\\n")[1])
+def translation(field):
+    if field.get("literals") == ["Trial4failed2checks"]:
+        assert field["explanation_numbers"] == ["4", "2"]
+        return "第4次尝试有2项检查未通过（" + field["text"] + "）。"
+    return "译文：" + field["text"]
+output = {"assessments":[{"episode_id":"episode","metric":"benefit_test","verdict":"unknown","reason":"合成过程测试，未验证实际收益。","citations":[]}],
+          "limitations":["合成译文，非模型质量验收。"], "episode_questions":[{"episode_id":"episode","question":"是否有帮助？"}],
+          "synthesis":{"summary":{"text":"原生测量为负，不能推断更广泛的收益。","episode_ids":["episode"],"citations":[{"source_id":"source","first_line":2,"last_line":2}]},"findings":[],"next_experiments":[]},
+          "display_translations":[{"field_id":f["field_id"], "text":translation(f)} for f in fields[:-1]]}
+Path(sys.argv[sys.argv.index('-o')+1]).write_text(json.dumps(output))
+print(json.dumps({"type":"turn.completed", "usage":{"input_tokens":19,"output_tokens":7}}))
+''')
+    provider.chmod(0o700)
+    operation = dict(**scope, pack_id=registered["pack_id"], analysis_key=current["analysis_key"], output_language="zh")
+    assert execute_pack(**operation, codex=str(provider))["status"] == "succeeded"
+    result = inspect_pack(**scope, pack_id=registered["pack_id"], output_language="zh")
+    assert result["result"]["display"]["coverage"] == dict(eligible=4, translated=3, missing=1, invalid=0)
+    if context:
+        field = next(field for field in result["result"]["display"]["fields"] if field["field"] == "summary")
+        assert field["context_citations"] == [context_citation]
+        assert read_citation(**operation, **context_citation)["text"] == data["sources"][0]["text"]
+        with pytest.raises(PackUnavailable, match="citation_not_in_result"):
+            read_citation(**operation, source_id="history", first_line=1, last_line=1)
+    else:
+        assert not any("context_citations" in field for field in result["result"]["display"]["fields"])
+    if encoding in {"default", "source_text_aliases_with_literal_values_v1", "source_text_aliases_with_literal_values_v2", "source_text_aliases_with_literal_values_v3", "source_text_aliases_with_literal_values_v4"}:
+        assert any(field["text"] == "第4次尝试有2项检查未通过（Trial4failed2checks）。"
+                   for field in result["result"]["display"]["fields"])
+    assert result["job"]["usage"]["input_tokens"] == 19  # one shared attempt, not four new jobs
+    assert len(result["result"]["metrics"]) == 6 and result["result"]["metrics"][1]["unknown"] == 1
+    assert execute_pack(**operation, codex="must-not-run")["reused"] is True
+    assert inspect_pack(**scope, pack_id=registered["pack_id"], output_language="en")["result"] is None
+    with pytest.raises(PackUnavailable, match="analysis_key"):
+        execute_pack(**{**operation, "output_language": "en"}, codex="must-not-run")
+    successful_provider = provider.read_text().replace("for f in fields[:-1]", "for f in fields")
+    provider.write_text(f"#!{sys.executable}\nimport sys\nsys.exit(9)\n")
+    with pytest.raises(ValueError, match="Codex exited 9"):
+        execute_pack(**operation, codex=str(provider), retry=True)
+    prior = inspect_pack(**scope, pack_id=registered["pack_id"], output_language="zh")
+    assert prior["job"]["status"] == "failed" and prior["job"]["attempt"] == 2
+    assert prior["result_attempt"] == 1 and prior["result_job"]["usage"]["input_tokens"] == 19
+    assert prior["result"] == result["result"]
+    if encoding == "default":
+        # A failed retry keeps the prior successful response reusable. Readback
+        # contains restored literals, so it cannot substitute for raw output.
+        successor_input = json.loads(input_path.read_text())
+        successor_input["scope"]["revision"] = "successor-capture"
+        successor_path = tmp_path / "successor.json"
+        successor_path.write_text(json.dumps(successor_input))
+        successor = register_pack(**scope, input_path=successor_path, source_root=sources,
+                                  title="Same evidence, new capture", base_pack_id=registered["pack_id"])
+        successor_view = inspect_pack(**scope, pack_id=successor["pack_id"], output_language="zh")
+        assert successor_view["continuation"]["base_available"] and successor_view["continuation"]["can_reuse"]
+        assert successor_view["job"] is None
+        reuse = execute_pack(**scope, pack_id=successor["pack_id"], analysis_key=successor_view["analysis_key"],
+                             output_language="zh", codex="must-not-run")
+        assert reuse["status"] == "succeeded" and reuse["reused"]
+        reused = inspect_pack(**scope, pack_id=successor["pack_id"], output_language="zh")
+        assert reused["result"]["display"] == prior["result"]["display"]
+        assert reused["result"]["metrics"] == prior["result"]["metrics"]
+        assert reused["continuation"]["verdict_changes"] == []
+    provider.write_text(successful_provider)
+    assert execute_pack(**operation, codex=str(provider), retry=True)["status"] == "succeeded"
+    result = inspect_pack(**scope, pack_id=registered["pack_id"], output_language="zh")
+    assert result["result"]["display"]["coverage"]["missing"] == 0 and result["result_attempt"] == 3
+    assert execute_pack(**operation, codex="must-not-run", retry=True)["reused"] is True
+    old = result["result"]["display"]
+    (sources / "history.json").write_text(text + " ")
+    changed = inspect_pack(**scope, pack_id=registered["pack_id"], output_language="zh")
+    assert changed["applicability"] == "historical" and changed["result"]["display"] == old
+    with pytest.raises(PackUnavailable, match="source_changed"):
+        execute_pack(**operation, codex="must-not-run")
+    assert json.loads(input_path.read_text()) == data
+
+
 def test_method_upgrade_reads_verified_old_result_without_rejudging(pack, monkeypatch):
     from loopx.capabilities.benchmark_toolkit import (
         trajectory_assessment_store as store,
@@ -380,11 +752,11 @@ def test_method_upgrade_reads_verified_old_result_without_rejudging(pack, monkey
     current = inspect_pack(**scope)
     original_prepare = store._prepared
 
-    def upgraded_method(record):
+    def upgraded_method(record, output_language=None):
         # Simulate a new method identity at the typed-owner boundary. The real
         # old method, child process and stored receipt were exercised above.
         return {
-            **original_prepare(record),
+            **original_prepare(record, output_language),
             "analysis_key": "b" * 64,
             "method_version": "future-method",
         }
@@ -411,6 +783,62 @@ def test_method_upgrade_reads_verified_old_result_without_rejudging(pack, monkey
     result_file.write_text("{}", encoding="utf-8")
     with pytest.raises(PackUnavailable, match="historical_result_unverified"):
         inspect_pack(**scope)
+
+
+def test_revised_producer_preserves_frozen_legacy_job_and_requires_new_execution(pack):
+    from loopx.capabilities.benchmark_toolkit.trajectory_assessment import prepare
+
+    scope, operation, current, input_path, sources, provider = pack
+    assert current["config"]["research_synthesis_revision"] == 2
+    prepared = prepare(input_path, model="gpt-6.1-sol", effort="max", service_tier="fast")
+    assert prepared["analysis_key"] == current["analysis_key"]
+    legacy = register_pack(**scope, input_path=input_path, source_root=sources,
+        title="Frozen legacy analysis", config={key: value for key, value in current["config"].items()
+                                              if key != "research_synthesis_revision"})
+    legacy_operation = {**scope, "pack_id": legacy["pack_id"], "analysis_key": legacy["analysis_key"]}
+    execute_pack(**legacy_operation, codex=provider)
+    old = inspect_pack(**scope, pack_id=legacy["pack_id"])
+    before = {path: path.read_bytes() for path in scope["runtime_root"].glob("**/jobs/*/*") if path.is_file()}
+    assert current["analysis_key"] != legacy["analysis_key"]
+    pending = inspect_pack(**scope, pack_id=current["pack_id"])
+    assert pending["job"] is None and pending["result"] is None
+    execute_pack(**operation, codex=provider)
+    new = inspect_pack(**scope, pack_id=current["pack_id"])
+    assert new["result"]["method_version"] == "research-episodes-synthesis-v2"
+    assert new["result"]["metrics"] == old["result"]["metrics"]
+    assert inspect_pack(**scope, pack_id=legacy["pack_id"]) == old
+    assert all(path.read_bytes() == content for path, content in before.items())
+    retained = {path: path.read_bytes() for path in scope["runtime_root"].glob("**/jobs/*/*") if path.is_file()}
+    selection = register_pack(**scope, input_path=input_path, source_root=sources,
+        title="Case-selection analysis", config={**current["config"], "research_synthesis_revision": 3},
+        base_pack_id=current["pack_id"])
+    selection_operation = {**scope, "pack_id": selection["pack_id"], "analysis_key": selection["analysis_key"]}
+    assert selection["analysis_key"] != current["analysis_key"]
+    assert inspect_pack(**scope, pack_id=selection["pack_id"])["job"] is None
+    execute_pack(**selection_operation, codex=provider)
+    selected = inspect_pack(**scope, pack_id=selection["pack_id"])
+    assert selected["result"]["method_version"] == "research-episodes-synthesis-v3"
+    assert selected["result"]["metrics"] == new["result"]["metrics"]
+    assert inspect_pack(**scope, pack_id=current["pack_id"]) == new
+    assert all(path.read_bytes() == content for path, content in retained.items())
+    retained = {path: path.read_bytes() for path in scope["runtime_root"].glob("**/jobs/*/*") if path.is_file()}
+    decision = register_pack(**scope, input_path=input_path, source_root=sources,
+        title="Decision-scoped analysis", config={**current["config"], "research_synthesis_revision": 4},
+        base_pack_id=selection["pack_id"])
+    decision_operation = {**scope, "pack_id": decision["pack_id"], "analysis_key": decision["analysis_key"]}
+    assert decision["analysis_key"] != selection["analysis_key"]
+    pending = inspect_pack(**scope, pack_id=decision["pack_id"])
+    assert pending["job"] is None and pending["result"] is None
+    execute_pack(**decision_operation, codex=provider)
+    decided = inspect_pack(**scope, pack_id=decision["pack_id"])
+    assert decided["result"]["method_version"] == "research-episodes-synthesis-v4"
+    assert decided["result"]["metrics"] == selected["result"]["metrics"]
+    assert inspect_pack(**scope, pack_id=selection["pack_id"]) == selected
+    assert all(path.read_bytes() == content for path, content in retained.items())
+    # Every version uses the same literal, source-qualified reader.
+    for op in [legacy_operation, operation, selection_operation, decision_operation]:
+        assert read_citation(**op, source_id="source", first_line=2, last_line=2)["text"] == (
+            "The native measurement did not improve utility · 原始测量。")
 
 
 def _usage_fixture():
@@ -447,6 +875,206 @@ def _usage_fixture():
     for i, event in enumerate(events):
         event["timestamp"] = f"2026-01-01T00:00:0{i}Z"
     return "\n".join(json.dumps(e) for e in events) + "\n"
+
+
+def _request_usage_fixture():
+    """Two Turns; one compaction request absent from the legacy counters."""
+
+    def tokens(i, c, o):
+        return dict(
+            input_tokens=i,
+            cached_input_tokens=c,
+            output_tokens=o,
+            cache_write_input_tokens=0,
+            reasoning_output_tokens=0,
+            total_tokens=i + o,
+        )
+
+    def request(response, turn, usage, thread, turn_usage=None):
+        return dict(
+            type="token_usage_record",
+            payload=dict(
+                thread_id="solver-session",
+                session_id="solver-session",
+                turn_id=turn,
+                root_turn_id=turn,
+                response_id=response,
+                usage=usage,
+                thread_token_usage=thread,
+                turn_token_usage=turn_usage or usage,
+                private_response_text="SYNTHETIC-PRIVATE-DO-NOT-TRANSPORT",
+            ),
+        )
+
+    rows = [json.loads(line) for line in _usage_fixture().splitlines()]
+    compact = request(
+        "compact", "a", tokens(20, 10, 7), tokens(120, 70, 17), tokens(120, 70, 17)
+    )
+    rows[2:2] = [request("one", "a", tokens(100, 60, 10), tokens(100, 60, 10))]
+    rows[4:4] = [
+        compact,
+        dict(
+            type="compacted",
+            payload=dict(
+                compaction_response_id="compact",
+                latest_token_usage_record=compact["payload"],
+                replacement_history="SYNTHETIC-PRIVATE-DO-NOT-TRANSPORT",
+            ),
+        ),
+    ]
+    rows[8:8] = [request("two", "b", tokens(40, 20, 5), tokens(160, 90, 22))]
+    for i, row in enumerate(rows):
+        row["timestamp"] = (
+            datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=i)
+        ).isoformat()
+    return "\n".join(json.dumps(row) for row in rows) + "\n"
+
+@pytest.mark.parametrize("counter_basis", ["ordinary_requests", "all_requests"])
+def test_request_usage_native_cli_replay_privacy_and_historical_readback(
+    pack, monkeypatch, counter_basis
+):
+    import loopx.capabilities.benchmark_toolkit.trajectory_assessment_store as store
+
+    scope, _, old, input_path, sources, _ = pack
+    capture = sources / "usage.jsonl"
+    rows = _request_usage_fixture().splitlines()
+    if counter_basis == "all_requests":
+        data = [json.loads(row) for row in rows]
+        counter = data[9]["payload"]["info"]
+        counter["total_token_usage"].update(input_tokens=160, cached_input_tokens=90, output_tokens=22, total_tokens=182)
+        counter["last_token_usage"].update(input_tokens=60, cached_input_tokens=30, output_tokens=12, total_tokens=72)
+        rows = [json.dumps(row) for row in data]
+    # Exercise the real large-snapshot transport with repeated observations,
+    # while the independent three-request total remains 160 input / 22 output.
+    rows[3:3] = [rows[2]] * 2500
+    capture.write_text("\n".join(rows) + "\n")
+    args = dict(
+        **scope,
+        input_path=input_path,
+        source_root=sources,
+        title=old["title"],
+        usage_jsonl="usage.jsonl",
+        usage_session_id="solver-session",
+    )
+    actual = store.effect_runtime_result
+    transported = []
+
+    def observe(command, params, **kwargs):
+        if command == "benchmark.trajectory.codex-usage":
+            transported.append(params)
+        return actual(command, params, **kwargs)
+
+    monkeypatch.setattr(store, "effect_runtime_result", observe)
+    registered = register_pack(**args)
+    view = inspect_pack(**scope)
+    facts = view["solver_usage"]["projection"]
+    assert facts["input_tokens"] == (160 if counter_basis == "all_requests" else 140)
+    assert facts["output_tokens"] == (22 if counter_basis == "all_requests" else 15)
+    coverage = facts["request_coverage"]
+    assert coverage["status"] == "verified"
+    assert coverage["counter_basis"] == counter_basis
+    assert coverage["all_requests"]["output_tokens"] == 22
+    assert coverage["compaction"]["output_tokens"] == 7
+    assert coverage["unique_requests"] == 3 and coverage["compaction_requests"] == 1
+    assert coverage["duplicate_records"] == 2500
+    assert len(json.dumps(transported).encode()) > 1024 * 1024
+    assert transported and "SYNTHETIC-PRIVATE" not in json.dumps(transported)
+    assert "SYNTHETIC-PRIVATE" not in json.dumps(view)
+    registry = sources.parent / "request-registry.json"
+    registry.write_text('{"projects":{}}')
+    prefix = [
+        sys.executable,
+        "-m",
+        "loopx.entrypoint",
+        "--registry",
+        str(registry),
+        "--runtime-root",
+        str(scope["runtime_root"]),
+        "--format",
+        "json",
+        "benchmark",
+    ]
+    cli_args = [
+        "trajectory-pack-register",
+        "--goal-id",
+        scope["owner_goal_id"],
+        "--input-json",
+        str(input_path),
+        "--source-root",
+        str(sources),
+        "--title",
+        old["title"],
+        "--usage-jsonl",
+        "usage.jsonl",
+        "--usage-session-id",
+        "solver-session",
+    ]
+    replay = subprocess.run([*prefix, *cli_args], capture_output=True, text=True)
+    assert replay.returncode == 0, replay.stdout + replay.stderr
+    assert json.loads(replay.stdout)["pack_id"] == registered["pack_id"]
+    read = subprocess.run(
+        [*prefix, "trajectory-packs", "--goal-id", scope["owner_goal_id"]],
+        capture_output=True,
+        text=True,
+    )
+    assert read.returncode == 0
+    current = next(
+        p
+        for p in json.loads(read.stdout)["packs"]
+        if p["pack_id"] == registered["pack_id"]
+    )
+    assert current["solver_usage"] == view["solver_usage"]
+    assert inspect_pack(**scope, pack_id=registered["pack_id"])["job"] is None
+    # A partial serialized record is not silently promoted into complete coverage.
+    capture.write_text(capture.read_text() + '{"type":"token_usage_record"')
+    with pytest.raises(ValueError):
+        register_pack(**args)
+    stale = inspect_pack(**scope, pack_id=registered["pack_id"])["solver_usage"]
+    assert stale["reason_code"] == "source_changed" and stale["projection"] == facts
+    # A valid counter capture with inconsistent optional evidence remains readable.
+    capture.write_text(
+        _request_usage_fixture().replace('"response_id": "two"', '"response_id": "one"')
+    )
+    invalid = register_pack(**args)
+    failed = inspect_pack(**scope, pack_id=invalid["pack_id"])["solver_usage"][
+        "projection"
+    ]
+    assert failed["request_coverage"]["status"] == "unavailable"
+    assert (
+        failed["input_tokens"] == 140
+        and "all_requests" not in failed["request_coverage"]
+    )
+    assert (
+        inspect_pack(**scope, pack_id=registered["pack_id"])["solver_usage"][
+            "projection"
+        ]
+        == facts
+    )
+    assert not list(scope["runtime_root"].rglob("receipt.json"))
+
+
+def test_legacy_saved_request_coverage_is_read_without_inventing_counter_basis(pack):
+    import loopx.capabilities.benchmark_toolkit.trajectory_assessment_store as store
+
+    scope, _, old, input_path, sources, _ = pack
+    (sources / "usage.jsonl").write_text(_request_usage_fixture())
+    current = register_pack(**scope, input_path=input_path, source_root=sources,
+        title=old["title"], usage_jsonl="usage.jsonl", usage_session_id="solver-session")
+    owner, record = store._resolve(**scope, pack_id=current["pack_id"])
+    # A separately registered synthetic historical record, never an active Goal
+    # migration or a rewrite of the new capture's identity.
+    del record["solver_usage"]["projection"]["request_coverage"]["counter_basis"]
+    legacy_id = store._pack_id(scope["owner_goal_id"], record)
+    path = owner / "packs" / f"{legacy_id}.json"
+    path.write_text(json.dumps(record))
+    index = json.loads((owner / "packs.json").read_text())
+    index["pack_ids"].append(legacy_id)
+    (owner / "packs.json").write_text(json.dumps(index))
+    before = path.read_bytes()
+    coverage = inspect_pack(**scope, pack_id=legacy_id)["solver_usage"]["projection"]["request_coverage"]
+    assert coverage["status"] == "verified" and "counter_basis" not in coverage
+    assert coverage["all_requests"]["input_tokens"] == 160
+    assert path.read_bytes() == before
 
 
 def test_optional_solver_usage_is_read_only_scoped_and_separate_from_model(pack):
@@ -572,7 +1200,7 @@ def test_large_usage_real_cli_register_readback_and_replay(pack, monkeypatch):
     )
     assert (
         len(json.dumps(params, separators=(",", ":")).encode())
-        > effect_runtime.MAX_REQUEST_BYTES
+        > 2 * 1024 * 1024  # Keep the original complete 4,500-Turn counter history.
     )
     registry = sources.parent / "registry.json"
     registry.write_text('{"projects":{}}')
@@ -636,7 +1264,9 @@ def test_large_usage_real_cli_register_readback_and_replay(pack, monkeypatch):
     assert "solver_usage" not in inspect_pack(**scope, pack_id=old["pack_id"])
     assert view["job"] is None and view["result"] is None
 
-    # The method opts into a bounded channel, not a larger ordinary RPC wire.
+    # Keep the original 2 MiB refusal and reduced private-channel negative.
+    # The complete counter history above qualifies the current default wire.
+    monkeypatch.setattr(effect_runtime, "MAX_REQUEST_BYTES", 2 * 1024 * 1024)
     with pytest.raises(
         effect_runtime.EffectRuntimeRejected, match="request is oversized"
     ):
@@ -656,3 +1286,589 @@ def test_large_usage_real_cli_register_readback_and_replay(pack, monkeypatch):
             usage_session_id="solver-session",
         )
     assert len(discover(**scope)["packs"]) == 2
+
+
+def test_observed_usage_preserves_incomplete_cost_and_default_gate(pack):
+    from loopx.control_plane.effect_runtime import EffectRuntimeRejected
+
+    scope, _, old, input_path, sources, _ = pack
+    args = dict(
+        **scope,
+        input_path=input_path,
+        source_root=sources,
+        title=old["title"],
+        usage_jsonl="usage.jsonl",
+        usage_session_id="solver-session",
+    )
+    path = sources / "usage.jsonl"
+    path.write_text("\n".join(_usage_fixture().splitlines()[:-1]) + "\n")
+    before = path.read_bytes()
+    with pytest.raises(EffectRuntimeRejected, match="completed Turn"):
+        register_pack(**args)
+    registered = register_pack(**args, include_incomplete_usage=True)
+    assert registered["analysis_key"] == old["analysis_key"]
+    view = inspect_pack(**scope)["solver_usage"]
+    assert view["projection"]["method"] == "codex_observed_session_counters_v1"
+    assert view["projection"]["input_tokens"] == 140
+    assert view["projection"]["incomplete_turn"]["usage"]["input_tokens"] == 40
+    assert view["projection"]["completed_turns"] == 1
+    assert register_pack(**args, include_incomplete_usage=True) == registered
+    assert path.read_bytes() == before
+    assert inspect_pack(**scope)["job"] is None
+    with pytest.raises(ValueError, match="requires a usage capture"):
+        register_pack(
+            **{**args, "usage_jsonl": None, "usage_session_id": None},
+            include_incomplete_usage=True,
+        )
+    path.write_bytes(before + b'{"broken":')
+    with pytest.raises(ValueError):
+        register_pack(**args, include_incomplete_usage=True)
+    assert inspect_pack(**scope)["solver_usage"]["applicability"] == "historical"
+    path.unlink()
+    assert inspect_pack(**scope)["solver_usage"]["reason_code"] == "source_unavailable"
+
+
+@pytest.mark.parametrize("resumed", [False, True])
+def test_observed_usage_real_cli_without_model_dispatch(pack, resumed):
+    from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import read_usage_turn
+
+    scope, _, old, input_path, sources, _ = pack
+    rows = [json.loads(line) for line in (_request_usage_fixture() if resumed else _usage_fixture()).splitlines()]
+    if resumed:
+        first_end = next(row for row in rows if row["payload"].get("type") == "task_complete")
+        first_end["payload"].update(type="turn_aborted", reason="SYNTHETIC-PRIVATE-ABORT-REASON")
+    else:
+        rows[-1]["payload"] = {"type": "turn_aborted", "reason": "SYNTHETIC-PRIVATE-ABORT-REASON"}
+        rows.append({"type": "event_msg", "timestamp": "2026-01-01T00:00:07Z",
+                     "payload": {"type": "token_count", "info": None}})
+    path = sources / "usage.jsonl"
+    path.write_text("\n".join(map(json.dumps, rows)) + "\n")
+    original = path.read_bytes()
+    registry = sources.parent / 'registry-observed.json'
+    registry.write_text('{"projects":{}}')
+    prefix = [sys.executable, '-m', 'loopx.entrypoint', '--registry', str(registry),
+              '--runtime-root', str(scope['runtime_root']), '--format', 'json', 'benchmark']
+    args = ['trajectory-pack-register', '--goal-id', scope['owner_goal_id'],
+            '--input-json', str(input_path), '--source-root', str(sources), '--title', old['title'],
+            '--usage-jsonl', 'usage.jsonl', '--usage-session-id', 'solver-session']
+    default = subprocess.run([*prefix, *args], text=True, capture_output=True)
+    reason = 'aborted Turn' if resumed else 'completed Turn'
+    assert default.returncode != 0 and reason in default.stdout + default.stderr
+    observed = subprocess.run([*prefix, *args, '--include-incomplete-usage'], text=True, capture_output=True)
+    assert observed.returncode == 0, observed.stdout + observed.stderr
+    record = json.loads(observed.stdout)
+    discovery = subprocess.run([*prefix, 'trajectory-packs', '--goal-id', scope['owner_goal_id']], text=True, capture_output=True)
+    assert discovery.returncode == 0
+    view = next(x for x in json.loads(discovery.stdout)['packs'] if x['pack_id'] == record['pack_id'])
+    projection = view['solver_usage']['projection']
+    assert projection['input_tokens'] == 140 and projection['completed_turns'] == 1
+    if resumed:
+        assert projection['incomplete_turn'] is None
+        [interrupted] = projection['interrupted_turns']
+        assert interrupted['turn_id'] == 'a' and interrupted['usage']['input_tokens'] == 100
+        assert projection['request_coverage']['compaction_requests'] == 1
+        assert projection['request_coverage']['all_requests']['input_tokens'] == 160
+        evidence = read_usage_turn(**scope, pack_id=record['pack_id'],
+                                   analysis_key=record['analysis_key'], turn_id='a')
+        boundary = json.loads(evidence['text'])['events'][-1]['payload']
+        assert boundary == {'type': 'turn_aborted', 'turn_id': 'a'}
+        assert 'SYNTHETIC-PRIVATE-ABORT-REASON' not in evidence['text']
+    else:
+        assert projection['incomplete_turn']['usage']['input_tokens'] == 40
+        assert projection['incomplete_turn']['last_line'] == len(rows)
+        evidence = read_usage_turn(**scope, pack_id=record['pack_id'],
+                                   analysis_key=record['analysis_key'], turn_id='b')
+        events = json.loads(evidence['text'])['events']
+        assert [event['line'] for event in events] == [3, 5, 6]
+        assert 'SYNTHETIC-PRIVATE-ABORT-REASON' not in evidence['text']
+    assert path.read_bytes() == original
+    assert inspect_pack(**scope, pack_id=record['pack_id'])['job'] is None
+    assert not list(scope['runtime_root'].rglob('receipt.json'))
+
+
+@pytest.mark.parametrize("coverage", ["complete", "partial", "conflicting", "invalid_cache"])
+def test_loopx_input_attribution_real_transport_and_privacy(pack, monkeypatch, coverage):
+    import loopx.capabilities.benchmark_toolkit.trajectory_assessment_store as store
+
+    scope, _, old, input_path, sources, _ = pack
+    rows = [json.loads(line) for line in _request_usage_fixture().splitlines()]
+    annotations = []
+    for response, turn, total, loopx, cached in [
+        ("one", "a", 100, 20, 12), ("compact", "a", 20, 5, 4),
+        ("two", "b", 40, 15, 10),
+    ]:
+        annotations.append(dict(type="loopx_input_token_attribution", payload=dict(
+            method="provider_input_token_attribution_v1", response_id=response,
+            session_id="solver-session", thread_id="solver-session", turn_id=turn,
+            root_turn_id=turn, input_tokens=total, loopx_input_tokens=loopx,
+            loopx_cached_input_tokens=cached,
+            raw_packet="SYNTHETIC-PRIVATE-PACKET-DO-NOT-TRANSPORT")))
+    if coverage == "partial":
+        annotations = annotations[:1]
+    if coverage == "conflicting":
+        conflict = json.loads(json.dumps(annotations[0]))
+        conflict["payload"]["loopx_input_tokens"] = 21
+        annotations.append(conflict)
+    if coverage == "invalid_cache":
+        annotations[0]["payload"]["loopx_cached_input_tokens"] = True
+    path = sources / "usage.jsonl"
+    path.write_text("\n".join(json.dumps(row) for row in [*rows, *annotations]) + "\n")
+    original = path.read_bytes()
+    actual = store.effect_runtime_result
+    transported = []
+
+    def observe(command, params, **kwargs):
+        if command == "benchmark.trajectory.codex-usage":
+            transported.append(params)
+        return actual(command, params, **kwargs)
+
+    monkeypatch.setattr(store, "effect_runtime_result", observe)
+    registered = register_pack(**scope, input_path=input_path, source_root=sources,
+        title="Synthetic attributed input", usage_jsonl="usage.jsonl", usage_session_id="solver-session")
+    assert registered["analysis_key"] == old["analysis_key"]
+    view = inspect_pack(**scope, pack_id=registered["pack_id"])
+    usage = view["solver_usage"]["projection"]
+    assert usage["input_tokens"] == 140
+    assert usage["request_coverage"]["status"] == "verified"
+    attribution = usage["loopx_input"]
+    assert attribution["status"] == ("unavailable" if coverage in {"conflicting", "invalid_cache"} else coverage)
+    if coverage == "complete":
+        assert attribution["loopx_input_tokens"] == 40
+        assert attribution["total_input_tokens"] == 160
+        assert attribution["input_fraction"] == 0.25
+        assert attribution["uncached_input_fraction"] == 0.2
+    elif coverage == "partial":
+        assert attribution["input_fraction"] is None
+        assert attribution["input_fraction_bounds"] == [0.125, 0.5]
+    else:
+        assert "input_fraction" not in attribution
+    assert transported and "SYNTHETIC-PRIVATE-PACKET" not in json.dumps(transported)
+    assert path.read_bytes() == original
+    assert view["job"] is None and view["result"] is None
+    assert "loopx_input" not in inspect_pack(**scope, pack_id=old["pack_id"]).get("solver_usage", {}).get("projection", {})
+
+
+@pytest.mark.parametrize("incomplete", [False, True])
+def test_turn_counter_evidence_preserves_baseline_and_excludes_content(pack, incomplete):
+    from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import read_usage_turn
+
+    scope, _, old, input_path, sources, _ = pack
+    rows = [json.loads(line) for line in _usage_fixture().splitlines()]
+    for row in rows:
+        row["payload"]["private_prompt"] = "MUST_NOT_REACH_BROWSER"
+    if incomplete:
+        rows.pop()
+    capture = sources / "usage.jsonl"
+    capture.write_text("\n".join(map(json.dumps, rows)) + "\n")
+    registered = register_pack(**scope, input_path=input_path, source_root=sources,
+        title=old["title"], usage_jsonl="usage.jsonl", usage_session_id="solver-session",
+        include_incomplete_usage=incomplete)
+    operation = dict(**scope, pack_id=registered["pack_id"], analysis_key=registered["analysis_key"])
+    before = {path: path.read_bytes() for path in scope["runtime_root"].rglob("*") if path.is_file()}
+    evidence = read_usage_turn(**operation, turn_id="b")
+    events = json.loads(evidence["text"])["events"]
+    assert [event["line"] for event in events] == ([3, 5, 6] if incomplete else [3, 5, 6, 7])
+    assert events[0]["payload"]["info"]["total_token_usage"]["input_tokens"] == 100
+    assert events[2]["payload"]["info"]["total_token_usage"]["input_tokens"] == 140
+    assert "MUST_NOT_REACH_BROWSER" not in json.dumps(evidence)
+    assert evidence["evidence_kind"] == "usage_counters"
+    assert not list(scope["runtime_root"].rglob("receipt.json"))
+    assert all(path.read_bytes() == content for path, content in before.items())
+    for changes, reason in [({"turn_id": "other"}, "usage_turn_not_captured"),
+                            ({"analysis_key": "0" * 64}, "analysis_key_mismatch"),
+                            ({"owner_goal_id": "other-owner"}, "pack_not_registered")]:
+        with pytest.raises(PackUnavailable, match=reason):
+            read_usage_turn(**(operation | {"turn_id": "b"} | changes))
+    capture.write_text(capture.read_text() + "{}\n")
+    with pytest.raises(PackUnavailable, match="source_changed"):
+        read_usage_turn(**operation, turn_id="b")
+    capture.unlink()
+    with pytest.raises(PackUnavailable, match="source_unavailable"):
+        read_usage_turn(**operation, turn_id="b")
+
+
+def test_authored_case_survives_source_change_and_revises_without_model_job(pack, tmp_path):
+    scope, _, original, input_path, sources, _ = pack
+    citation = dict(source_id="source", first_line=2, last_line=2)
+    study = dict(title="Observed negative result", language="en", summary="No gain was measured.",
+                 citations=[citation], sections=[dict(id="background", title="What was measured",
+                 text="Utility remained unchanged. The mechanism is unresolved.", citations=[citation])],
+                 limitations=["Synthetic illustration, not a benchmark finding."])
+    document = tmp_path / "case-study.json"
+    document.write_text(json.dumps(study), encoding="utf-8")
+    registered = register_pack(**scope, input_path=input_path, source_root=sources,
+                               title="Case reading", case_study_json=document)
+    op = {**scope, "pack_id": registered["pack_id"], "analysis_key": registered["analysis_key"]}
+    assert registered["pack_id"] != original["pack_id"]
+    assert registered["analysis_key"] == original["analysis_key"]
+    view = inspect_pack(**scope, pack_id=registered["pack_id"])
+    assert view["case_study"] == study and view["result"] is None and view["job"] is None
+    assert read_citation(**op, **citation)["text"].startswith("The native measurement")
+    with pytest.raises(PackUnavailable, match="citation_not_in_result"):
+        read_citation(**op, source_id="source", first_line=1, last_line=2)
+    assert register_pack(**scope, input_path=input_path, source_root=sources,
+                         title="Case reading", case_study_json=document)["pack_id"] == registered["pack_id"]
+    study["summary"] = "The evidence does not establish a treatment effect."
+    document.write_text(json.dumps(study), encoding="utf-8")
+    revised = register_pack(**scope, input_path=input_path, source_root=sources,
+                            title="Revised reading", case_study_json=document)
+    assert revised["pack_id"] != registered["pack_id"]
+    assert inspect_pack(**scope, pack_id=registered["pack_id"])["case_study"]["summary"] == "No gain was measured."
+    (sources / "result.txt").write_text("source replaced", encoding="utf-8")
+    historical = inspect_pack(**scope, pack_id=registered["pack_id"])
+    assert historical["applicability"] == "historical"
+    assert historical["case_study"] == view["case_study"]
+    assert read_citation(**op, **citation)["text"].startswith("The native measurement")
+    assert not list(scope["runtime_root"].glob("benchmark/trajectory-assessments/*/jobs/*"))
+    assert "case_study" not in inspect_pack(**scope, pack_id=original["pack_id"])
+
+
+def test_human_attention_registration_discovery_and_evidence_need_no_analysis(pack):
+    scope, _, original, input_path, sources, _ = pack
+    data = json.loads(input_path.read_text())
+    citation = {"source_id": "source", "first_line": 2, "last_line": 2}
+    event = {"event_id": "human-input-1", "episode_id": "episode", "kind": "correction",
+             "necessity": "avoidable", "occurred_at": "2026-01-01T00:10:00Z",
+             "active": None, "request": None, "citation": citation}
+    text = json.dumps({"schema_version": "trajectory_human_attention_v1", "scope": data["scope"],
+                       "start": "2026-01-01T00:00:00Z", "end": "2026-01-01T01:00:00Z",
+                       "complete": False, "events": [event, event]})
+    (sources / "attention.json").write_text(text)
+    data["human_attention_source_id"] = "attention"
+    data["sources"].append({"id": "attention", "artifact": "attention.json",
+                            "artifact_sha256": hashlib.sha256(text.encode()).hexdigest(), "first_line": 1, "text": text})
+    input_path.write_text(json.dumps(data))
+    registered = register_pack(**scope, input_path=input_path, source_root=sources, title="Human observations")
+    assert registered["human_attention"]["projection"]["total"] == 1
+    view = inspect_pack(**scope)
+    assert view["job"] is None and view["result"] is None
+    projection = view["human_attention"]["projection"]
+    assert projection["active_ms"] is None and projection["wait_ms"] is None
+    assert projection["optimization_points"] == [{"kind": "correction", "event_ids": [event["event_id"]]}]
+    assert discover(**scope)["packs"][-1]["human_attention"] == view["human_attention"]
+    op = {**scope, "pack_id": registered["pack_id"], "analysis_key": registered["analysis_key"]}
+    observed = read_citation(**op, **citation)
+    assert observed["text"].startswith("The native measurement")
+    with pytest.raises(PackUnavailable, match="analysis_key_mismatch"):
+        read_citation(**{**op, "analysis_key": original["analysis_key"]}, **citation)
+    assert "human_attention" not in inspect_pack(**scope, pack_id=original["pack_id"])
+    (sources / "attention.json").write_text("source replaced")
+    historical = inspect_pack(**scope)
+    assert historical["human_attention"]["applicability"] == "historical"
+    assert historical["human_attention"]["projection"] == projection
+    assert read_citation(**op, **citation)["applicability"] == "historical"
+    assert not list(scope["runtime_root"].glob("benchmark/trajectory-assessments/*/jobs/*"))
+
+
+def test_authenticated_loopx_card_decisions_capture_through_registration_cli(
+    pack, tmp_path
+):
+    scope, _, original, input_path, sources, _ = pack
+    store = ChatActionStore(scope["runtime_root"] / "chat" / "actions")
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    start = now - timedelta(minutes=10)
+    operation_delivered = now - timedelta(minutes=8)
+    operation_confirmed = now - timedelta(minutes=3)
+    review_delivered = now - timedelta(minutes=6)
+    review_confirmed = now - timedelta(minutes=2)
+    end = now + timedelta(minutes=1)
+
+    operation = store.create_preview(
+        action_kind="operation.execute",
+        summary="Confirm one bounded synthetic operation",
+        normalized_parameters={
+            "goal_id": "solver",
+            "payload_digest": "a" * 64,
+            "projection_digest": "b" * 64,
+            "destination_account_ref": "account:synthetic",
+            "expires_at": (now + timedelta(hours=1)).isoformat(),
+            "authorized_principals": ["lark:ou_attention_fixture"],
+            "executor": {"revision": "fixture-v1"},
+        },
+        context={"kind": "goal", "goal_id": "solver"},
+        expected_state_fingerprint="operation-state",
+        permission_classification="protected",
+        validation_evidence=[],
+        available_transitions=["cancel"],
+        idempotency_key="attention-operation-fixture",
+    )
+    operation = store.arm_operation(operation["proposal_id"])
+    operation = store.record_operation_delivery(
+        operation["proposal_id"],
+        delivery={
+            "provider": "lark",
+            "message_id": "om_attention_operation",
+            "chat_id": "oc_attention_fixture",
+            "app_id": "cli_attention_fixture",
+            "binding_digest": "c" * 64,
+            "card_digest": "d" * 64,
+            "delivered_at": operation_delivered.isoformat(),
+        },
+    )
+    with pytest.raises(ValueError, match="human actor"):
+        store.decide_operation(
+            operation["proposal_id"],
+            decision="confirm",
+            confirmation={
+                "provider": "lark",
+                "event_id": "evt_attention_operation",
+                "principal": "lark:ou_attention_fixture",
+                "message_id": "om_attention_operation",
+                "chat_id": "oc_attention_fixture",
+                "app_id": "cli_attention_fixture",
+                "surface_kind": "group_message_card",
+                "interaction_kind": "button_callback",
+                "confirmation_digest": operation["operation"]["confirmation_digest"],
+                "card_digest": "d" * 64,
+                "confirmed_at": operation_confirmed.isoformat(),
+                "actor_class": "system",
+                "verification_kind": AUTHENTICATED_LARK_CARD_CALLBACK,
+            },
+        )
+    store.decide_operation(
+        operation["proposal_id"],
+        decision="confirm",
+        confirmation={
+            "provider": "lark",
+            "event_id": "evt_attention_operation",
+            "principal": "lark:ou_attention_fixture",
+            "message_id": "om_attention_operation",
+            "chat_id": "oc_attention_fixture",
+            "app_id": "cli_attention_fixture",
+            "surface_kind": "group_message_card",
+            "interaction_kind": "button_callback",
+            "confirmation_digest": operation["operation"]["confirmation_digest"],
+            "card_digest": "d" * 64,
+            "confirmed_at": operation_confirmed.isoformat(),
+            "actor_class": HUMAN_ACTOR_CLASS,
+            "verification_kind": AUTHENTICATED_LARK_CARD_CALLBACK,
+        },
+    )
+
+    review = store.create_preview(
+        action_kind="team.plan",
+        summary="Review one bounded synthetic team plan",
+        normalized_parameters={"goal_id": "solver"},
+        context={"kind": "goal", "goal_id": "solver"},
+        expected_state_fingerprint="review-state",
+        permission_classification="durable_write",
+        validation_evidence=[],
+        available_transitions=["apply", "cancel"],
+        idempotency_key="attention-review-fixture",
+    )
+    store.prepare_review_card_delivery(
+        review["proposal_id"],
+        audience_ids=["goal:solver"],
+        authorized_principal="lark:ou_attention_fixture",
+    )
+    submitted_card = {"schema": "2.0", "body": {"elements": []}}
+    card_digest = hashlib.sha256(
+        json.dumps(
+            submitted_card,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    store.record_review_card_delivery(
+        review["proposal_id"],
+        audience_id="goal:solver",
+        delivery={
+            "provider": "lark",
+            "message_id": "om_attention_review",
+            "chat_id": "oc_attention_fixture",
+            "app_id": "cli_attention_fixture",
+            "cli_bin": "lark-cli",
+            "sender_profile": "attention-fixture",
+            "binding_digest": "e" * 64,
+            "card_digest": card_digest,
+            "submitted_card": submitted_card,
+            "delivered_at": review_delivered.isoformat(),
+            "authorized_principal": "lark:ou_attention_fixture",
+        },
+    )
+    store.decide_review_card(
+        review["proposal_id"],
+        decision="reject",
+        confirmation={
+            "provider": "lark",
+            "event_id": "evt_attention_review",
+            "principal": "lark:ou_attention_fixture",
+            "message_id": "om_attention_review",
+            "chat_id": "oc_attention_fixture",
+            "app_id": "cli_attention_fixture",
+            "audience_id": "goal:solver",
+            "state_fingerprint": "review-state",
+            "card_digest": card_digest,
+            "confirmed_at": review_confirmed.isoformat(),
+            "actor_class": HUMAN_ACTOR_CLASS,
+            "verification_kind": AUTHENTICATED_LARK_CARD_CALLBACK,
+        },
+    )
+    # Model a receipt written before explicit human markers were introduced.
+    # Only the complete historical authenticated-card shape is eligible for
+    # conservative backfill; the source projection labels it as legacy.
+    stored_actions = json.loads(store.path.read_text(encoding="utf-8"))
+    legacy_confirmation = stored_actions["proposals"][review["proposal_id"]][
+        "review_card"
+    ]["confirmation"]
+    legacy_confirmation.pop("actor_class")
+    legacy_confirmation.pop("verification_kind")
+
+    spoofed_operation = json.loads(
+        json.dumps(stored_actions["proposals"][operation["proposal_id"]])
+    )
+    spoofed_operation["proposal_id"] = "proposal-spoofed-surface"
+    spoofed_operation["operation"]["confirmation"].update(
+        event_id="evt_spoofed_surface", surface_kind="dashboard"
+    )
+    stored_actions["proposals"][spoofed_operation["proposal_id"]] = spoofed_operation
+
+    incomplete_legacy = json.loads(
+        json.dumps(stored_actions["proposals"][review["proposal_id"]])
+    )
+    incomplete_legacy["proposal_id"] = "proposal-incomplete-legacy"
+    incomplete_legacy["review_card"]["confirmation"].pop("event_id")
+    stored_actions["proposals"][incomplete_legacy["proposal_id"]] = incomplete_legacy
+
+    cross_goal = json.loads(
+        json.dumps(stored_actions["proposals"][operation["proposal_id"]])
+    )
+    cross_goal["proposal_id"] = "proposal-cross-goal"
+    cross_goal["normalized_parameters"]["goal_id"] = "other-goal"
+    cross_goal["operation"]["confirmation"]["event_id"] = "evt_cross_goal"
+    stored_actions["proposals"][cross_goal["proposal_id"]] = cross_goal
+    store.path.write_text(
+        json.dumps(stored_actions, ensure_ascii=False), encoding="utf-8"
+    )
+
+    unchanged_input = input_path.read_bytes()
+    registry = tmp_path / "attention-registry.json"
+    registry.write_text(json.dumps({"goals": []}), encoding="utf-8")
+    command = [
+        sys.executable,
+        "-m",
+        "loopx.cli",
+        "--registry",
+        str(registry),
+        "--runtime-root",
+        str(scope["runtime_root"]),
+        "--format",
+        "json",
+        "benchmark",
+        "trajectory-pack-register",
+        "--goal-id",
+        scope["owner_goal_id"],
+        "--input-json",
+        str(input_path),
+        "--source-root",
+        str(sources),
+        "--title",
+        "Authenticated LoopX attention",
+        "--loopx-human-attention-start",
+        start.isoformat().replace("+00:00", "Z"),
+        "--loopx-human-attention-end",
+        end.isoformat().replace("+00:00", "Z"),
+        "--preserve-default",
+    ]
+    source_before = {
+        path.relative_to(sources): path.read_bytes()
+        for path in sources.rglob("*")
+        if path.is_file()
+    }
+    runtime_before = {
+        path.relative_to(scope["runtime_root"]): path.read_bytes()
+        for path in scope["runtime_root"].rglob("*")
+        if path.is_file()
+    }
+    invalid_data = json.loads(unchanged_input)
+    invalid_data["sources"][0]["artifact_sha256"] = "0" * 64
+    invalid_input = tmp_path / "attention-input-with-changed-source.json"
+    invalid_input.write_text(json.dumps(invalid_data), encoding="utf-8")
+    invalid_command = [
+        str(invalid_input) if argument == str(input_path) else argument
+        for argument in command
+    ]
+    invalid = subprocess.run(
+        invalid_command, capture_output=True, text=True, check=False
+    )
+    assert invalid.returncode == 1
+    assert json.loads(invalid.stdout)["error"] == "source_changed"
+    assert {
+        path.relative_to(sources): path.read_bytes()
+        for path in sources.rglob("*")
+        if path.is_file()
+    } == source_before
+    assert {
+        path.relative_to(scope["runtime_root"]): path.read_bytes()
+        for path in scope["runtime_root"].rglob("*")
+        if path.is_file()
+    } == runtime_before
+    completed = subprocess.run(command, capture_output=True, text=True, check=True)
+    registered = json.loads(completed.stdout)
+    projection = registered["human_attention"]["projection"]
+    assert projection["complete"] is False
+    assert projection["total"] == 2
+    assert projection["counts"]["approval"] == 1
+    assert projection["counts"]["review"] == 1
+    assert projection["required"] == 0
+    assert projection["unknown"] == 2
+    assert projection["active_ms"] is None
+    assert projection["wait_ms"] == 6 * 60 * 1000
+    assert projection["optimization_points"] == []
+    assert input_path.read_bytes() == unchanged_input
+    assert inspect_pack(**scope, pack_id=original["pack_id"]).get("human_attention") is None
+
+    view = inspect_pack(**scope, pack_id=registered["pack_id"])
+    assert view["job"] is None and view["result"] is None
+    assert view["human_attention"]["projection"] == projection
+    first_event = projection["events"][0]
+    observed = read_citation(
+        **scope,
+        pack_id=registered["pack_id"],
+        analysis_key=registered["analysis_key"],
+        **first_event["citation"],
+    )
+    assert '"actor_class":"human"' in observed["text"]
+    assert '"verification_kind":"lark_authenticated_card_callback_v1"' in observed["text"]
+    assert "ou_attention_fixture" not in observed["text"]
+    assert "payload" not in observed["text"]
+    legacy_event = projection["events"][1]
+    legacy_observed = read_citation(
+        **scope,
+        pack_id=registered["pack_id"],
+        analysis_key=registered["analysis_key"],
+        **legacy_event["citation"],
+    )
+    assert '"actor_class":"human"' in legacy_observed["text"]
+    assert (
+        '"verification_kind":"legacy_lark_authenticated_card_callback_v0"'
+        in legacy_observed["text"]
+    )
+    assert "ou_attention_fixture" not in legacy_observed["text"]
+    receipt_artifact = next(sources.glob("loopx-human-attention-receipts-*.jsonl"))
+    assert "evt_cross_goal" not in receipt_artifact.read_text(encoding="utf-8")
+    assert len(list(sources.glob("loopx-human-attention-*.json*"))) == 2
+    replay = subprocess.run(command, capture_output=True, text=True, check=True)
+    assert json.loads(replay.stdout)["pack_id"] == registered["pack_id"]
+
+    other_principal = json.loads(
+        json.dumps(stored_actions["proposals"][operation["proposal_id"]])
+    )
+    other_principal["proposal_id"] = "proposal-other-principal"
+    other_principal["normalized_parameters"]["authorized_principals"] = [
+        "lark:ou_other_fixture"
+    ]
+    other_principal["operation"]["confirmation"].update(
+        event_id="evt_other_principal", principal="lark:ou_other_fixture"
+    )
+    stored_actions["proposals"][other_principal["proposal_id"]] = other_principal
+    store.path.write_text(
+        json.dumps(stored_actions, ensure_ascii=False), encoding="utf-8"
+    )
+    mixed = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert mixed.returncode == 1
+    assert json.loads(mixed.stdout)["error"] == (
+        "LoopX attention capture requires one human principal"
+    )
+    assert len(list(sources.glob("loopx-human-attention-*.json*"))) == 2

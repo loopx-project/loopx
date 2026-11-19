@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Generic, Literal, TypeAlias, TypeVar
 
 from .effect_runtime import EffectRuntimeRejected, effect_runtime_result
@@ -203,6 +204,7 @@ def require_turn_provider_step_kind(
 class SettlementBindingKind(StrEnum):
     TODO = "todo"
     AUTONOMOUS_REPLAN = "autonomous_replan"
+    REQUEST = "request"
     UNBOUND = "unbound"
 
 
@@ -228,6 +230,7 @@ def _settlement_identity_full(
     todo_id: str | None,
     turn_instance_id: str,
     replan_obligation_id: str | None,
+    request_subject_json: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     try:
         result = effect_runtime_result(
@@ -238,6 +241,7 @@ def _settlement_identity_full(
                 "todo_id": todo_id,
                 "turn_instance_id": turn_instance_id,
                 "replan_obligation_id": replan_obligation_id,
+                **({"request_subject": json.loads(request_subject_json)} if request_subject_json is not None else {}),
             },
         )
     except EffectRuntimeRejected as exc:
@@ -258,6 +262,7 @@ class SettlementIdentity:
     todo_id: str | None
     turn_instance_id: str
     replan_obligation_id: str | None = None
+    request_subject: Mapping[str, Any] | None = None
     _runtime_identity: Mapping[str, Any] = field(
         init=False,
         repr=False,
@@ -276,11 +281,14 @@ class SettlementIdentity:
             self.todo_id,
             self.turn_instance_id,
             self.replan_obligation_id,
+            json.dumps(dict(self.request_subject), sort_keys=True) if self.request_subject is not None else None,
         )
         object.__setattr__(self, "todo_id", identity.get("todo_id"))
         object.__setattr__(
             self, "replan_obligation_id", identity.get("replan_obligation_id")
         )
+        subject = identity.get("request_subject")
+        object.__setattr__(self, "request_subject", MappingProxyType(dict(subject)) if subject is not None else None)
         object.__setattr__(self, "_runtime_identity", identity)
         object.__setattr__(self, "_runtime_payload", payload)
 
@@ -296,12 +304,13 @@ class SettlementIdentity:
     def effect_id(self) -> str:
         return str(self._runtime_identity["effect_id"])
 
-    def as_dict(self) -> dict[str, str]:
-        return {key: str(value) for key, value in self._runtime_payload.items()}
+    def as_dict(self) -> dict[str, Any]:
+        return {**self._runtime_payload,
+            **({"request_subject": dict(self._runtime_payload["request_subject"])} if self.request_subject is not None else {})}
 
     @classmethod
     def from_runtime_payload(cls, payload: Any) -> SettlementIdentity:
-        """Decode a TS-owned identity without issuing a second runtime request."""
+        """Decode a TS-owned identity; saved requests reuse the strict decoder."""
 
         if not isinstance(payload, Mapping):
             raise RuntimeError("TypeScript settlement identity shape mismatch")
@@ -321,6 +330,16 @@ class SettlementIdentity:
         replan_obligation_id = (
             str(payload.get("replan_obligation_id") or "").strip() or None
         )
+        request_subject = payload.get("request_subject")
+        if request_subject is not None:
+            # New request identities also enter through saved transaction plans.
+            # Reuse the typed decoder; Python equality accepts True == 1.
+            verified = cls(goal_id=str(payload["goal_id"]), agent_id=str(payload["agent_id"]),
+                todo_id=todo_id, replan_obligation_id=replan_obligation_id,
+                turn_instance_id=str(payload["turn_instance_id"]), request_subject=request_subject)
+            if verified.as_dict() != payload:
+                raise RuntimeError("TypeScript settlement identity shape mismatch")
+            return verified
         if bool(todo_id) == bool(replan_obligation_id):
             raise RuntimeError("TypeScript settlement identity shape mismatch")
         binding_kind = (
@@ -344,6 +363,7 @@ class SettlementIdentity:
             str(payload["turn_instance_id"]),
         )
         object.__setattr__(instance, "replan_obligation_id", replan_obligation_id)
+        object.__setattr__(instance, "request_subject", request_subject)
         object.__setattr__(
             instance,
             "_runtime_identity",
@@ -353,6 +373,7 @@ class SettlementIdentity:
                 "todo_id": todo_id,
                 "turn_instance_id": instance.turn_instance_id,
                 "replan_obligation_id": replan_obligation_id,
+                **({"request_subject": request_subject} if request_subject is not None else {}),
                 "binding_kind": binding_kind.value,
                 "binding_id": str(binding_id),
                 "effect_id": str(payload["effect_id"]),
@@ -615,6 +636,7 @@ class SettlementStep:
     conditional: bool = False
     command_condition: str | None = None
     vision_authoring: Mapping[str, Any] | None = None
+    semantic_closeout_command_template: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         step: dict[str, Any] = {
@@ -632,6 +654,8 @@ class SettlementStep:
             step["command_condition"] = self.command_condition
         if self.vision_authoring is not None:
             step["vision_authoring"] = dict(self.vision_authoring)
+        if self.semantic_closeout_command_template is not None:
+            step["semantic_closeout_command_template"] = self.semantic_closeout_command_template
         return step
 
 
@@ -778,19 +802,20 @@ def effect_program_from_ordered_steps(
     ordered_steps: Sequence[Mapping[str, Any]],
     *,
     execution_mode: str | None = None,
+    include_raw: bool = True,
 ) -> EffectProgram:
-    """Map existing `guided_transaction.ordered_steps` onto an effect program."""
+    """Map ordered steps onto an effect program, including source fields by default."""
 
-    payload = effect_runtime_result(
-        "effect.program_from_ordered_steps",
-        {
-            "ordered_steps": [
-                dict(step) if isinstance(step, Mapping) else step
-                for step in ordered_steps
-            ],
-            "execution_mode": execution_mode,
-        },
-    )
+    params: dict[str, object] = {
+        "ordered_steps": [
+            dict(step) if isinstance(step, Mapping) else step
+            for step in ordered_steps
+        ],
+        "execution_mode": execution_mode,
+    }
+    if not include_raw:
+        params["include_raw"] = False
+    payload = effect_runtime_result("effect.program_from_ordered_steps", params)
     if not isinstance(payload, Mapping) or not isinstance(payload.get("steps"), list):
         raise RuntimeError("TypeScript Effect Program shape mismatch")
     steps = tuple(
@@ -808,6 +833,13 @@ def effect_program_from_ordered_steps(
     return EffectProgram(
         steps=steps, execution_mode=str(mode) if mode is not None else None
     )
+
+
+def reject_retired_quota_format(payload: Mapping[str, object]) -> None:
+    """Send retired carriers to the typed reader; supported rendering adds no RPC."""
+    for candidate in (payload, payload.get("contract_capsule")):
+        if isinstance(candidate, Mapping) and "protocol_action_packet" in candidate:
+            interpret_quota_should_run_packet(candidate)
 
 
 def interpret_quota_should_run_packet(

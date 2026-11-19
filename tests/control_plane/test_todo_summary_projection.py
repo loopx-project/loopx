@@ -31,27 +31,31 @@ def test_user_request_creator_survives_summary_and_compact_workspace_projection(
     assert "created_by" not in project_asset_todo_summary(legacy, role="user")["items"][0]
 
 
-def test_recent_completions_compare_instants_not_offset_strings():
-    items = [row(1, status="done", no_followup=True, completed_at="2026-01-01T10:00:00+08:00"),
-             row(2, status="done", no_followup=True, completed_at="2026-01-01T03:00:00Z")]
-    result = summarize(items)
-    assert [item["todo_id"] for item in result["recent_completed_advancement_items"]] == [
-        "todo_summary_2", "todo_summary_1"]
+def test_project_asset_keeps_full_source_capability_actions_beyond_item_caps():
+    from loopx.control_plane.todos.todo_summary import project_asset_todo_summary
 
-
-def test_recent_completions_preserve_microseconds_across_offsets():
-    items = [row(2, status="done", no_followup=True, completed_at="2026-01-01T10:00:00.000001+08:00"),
-             row(1, status="done", no_followup=True, completed_at="2026-01-01T02:00:00.000002Z")]
-    result = summarize(items)
-    assert [item["todo_id"] for item in result["recent_completed_advancement_items"]] == [
-        "todo_summary_1", "todo_summary_2"]
-
-
-def test_invalid_completion_time_does_not_displace_known_recent_work():
-    result = summarize([row(1, status="done", no_followup=True, completed_at="unknown"),
-                        row(2, status="done", no_followup=True, completed_at="2026-01-01T03:00:00Z")])
-    assert [item["todo_id"] for item in result["recent_completed_advancement_items"]] == ["todo_summary_2"]
-    assert result["advancement_done_count"] == 2  # Still retained as completed work.
+    actions = {
+        "schema_version": "todo_capability_actions_v0",
+        "total_count": 7,
+        "groups": [{
+            "action_kind": "review_periodic_report",
+            "count": 7,
+            "latest_at": "2026-11-06T00:00:00Z",
+            "items": [{"todo_id": "todo_report_7", "text": "Edition 7", "role": "user",
+                       "task_class": "user_action", "action_kind": "review_periodic_report",
+                       "capability_binding_ref": "periodic-report-review:r" + "a" * 64}],
+        }],
+    }
+    summary = compact_todo_group(
+        [row(1, role="user", task_class="user_action")],
+        role="user",
+        source_section="User Todo",
+        item_limit=1,
+    )
+    summary["capability_actions"] = actions
+    compact = project_asset_todo_summary(summary, role="user", item_limit=1)
+    assert compact["capability_actions"] == actions
+    assert len(compact["items"]) == 1
 
 
 def test_summary_caps_do_not_change_work_counts_or_hide_a_peer():
@@ -61,15 +65,6 @@ def test_summary_caps_do_not_change_work_counts_or_hide_a_peer():
     assert len(result["claimed_open_items"]) == 16
     assert {item["claimed_by"] for item in result["claimed_open_items"]} == {"agent-a", "agent-b"}
     assert result["claimed_open_count"] == 32
-
-
-def test_late_edit_does_not_make_an_old_completion_recent():
-    result = summarize([row(1, status="done", no_followup=True,
-                            completed_at="2026-01-01T00:00:00Z", updated_at="2026-09-01T00:00:00Z"),
-                        row(2, status="done", no_followup=True,
-                            completed_at="2026-02-01T00:00:00Z")])
-    assert [item["todo_id"] for item in result["recent_completed_advancement_items"]] == [
-        "todo_summary_2", "todo_summary_1"]
 
 
 def test_a_selection_cannot_restore_a_lost_full_source_proof():
@@ -84,12 +79,12 @@ def test_a_selection_cannot_restore_a_lost_full_source_proof():
 def test_long_history_stays_inside_the_runtime_request_budget(monkeypatch):
     """A whole-source batch must not outgrow the co-deployed runtime's request."""
     from loopx.control_plane import effect_runtime
-    from loopx.control_plane.effect_runtime import MAX_REQUEST_BYTES
+    from loopx.control_plane.effect_runtime import MAX_LOCAL_SNAPSHOT_BYTES
     requests = []
     original = effect_runtime.effect_runtime_result
 
     def track(method, request, **kwargs):
-        if method == "todo.summary.project":
+        if method == "todo.read":
             requests.append(request)
         return original(method, request, **kwargs)
 
@@ -100,7 +95,7 @@ def test_long_history_stays_inside_the_runtime_request_budget(monkeypatch):
     assert result["done_count"] == 4096
     request = requests[0]
     encoded = json.dumps(request, separators=(",", ":")).encode()
-    assert len(encoded) < MAX_REQUEST_BYTES
+    assert len(encoded) < MAX_LOCAL_SNAPSHOT_BYTES
 
 
 def test_no_wait_skips_resume_preparation_but_keeps_archived_successor(monkeypatch):
@@ -194,7 +189,7 @@ def test_filtered_summary_fuses_validation_without_another_succession_rpc(monkey
     monkeypatch.setattr(succession_warning, "effect_runtime_result", track)
     selected = filtered_todo_summary(source, role="agent", todo_id="todo_summary_1")
     assert selected["done_count"] == 1 and not selected.get("completed_without_successor_count")
-    assert calls.count("todo.summary.project") == 1
+    assert calls.count("todo.read") == 1
     assert "todo.succession.project" not in calls
     next(item for item in source["items"] if item["todo_id"] == "todo_summary_1")["no_followup"] = True
     import pytest
@@ -237,7 +232,7 @@ def test_selected_frontier_uses_the_summary_crossing_after_python_attachment_ret
     monkeypatch.setattr(effect_runtime, "effect_runtime_result", track)
     selected = filtered_todo_summary(source, role="agent", agent_id="agent-a", item_limit=1)
     assert selected["advancement_frontier_revision_index"]["claimed_advancement_counts"] == {"agent-a": 24}
-    assert calls == ["todo.summary.project"]
+    assert calls == ["todo.read"]
     assert not hasattr(frontier_revision, "attach_advancement_frontier_revision_index")
     assert not hasattr(frontier_revision, "build_advancement_frontier_revision_index")
 
@@ -251,9 +246,9 @@ def test_missing_batched_frontier_never_falls_back_to_another_owner_call(monkeyp
     original = effect_runtime.effect_runtime_result
 
     def drop_index(method, request, **kwargs):
-        assert method == "todo.summary.project"
+        assert method == "todo.read"
         result = original(method, request, **kwargs)
-        result["fields"].pop("advancement_frontier_revision_index")
+        result["summary"].pop("advancement_frontier_revision_index")
         return result
 
     monkeypatch.setattr(effect_runtime, "effect_runtime_result", drop_index)

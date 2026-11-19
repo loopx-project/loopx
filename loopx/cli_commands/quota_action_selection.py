@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.error_codes import (
     HeartbeatReceiptIdentityConflictError,
     QuotaActionSelectionConflictError,
@@ -13,6 +14,7 @@ from ..control_plane.quota.error_codes import (
 from ..control_plane.quota.heartbeat_receipt import (
     find_heartbeat_receipt,
     heartbeat_receipt_pending_action_todo_id,
+    heartbeat_receipt_semantic_replan_obligation_id,
     heartbeat_receipt_settlement_replan_obligation_id,
     heartbeat_receipt_settlement_todo_id,
     retain_pending_heartbeat_action_selection,
@@ -73,6 +75,7 @@ def _requested_quota_action_todo_id(
         bool(getattr(args, "turn_instance_id", None))
         or bool(args.codex_app)
         or bool(getattr(args, "trae_app", False))
+        or bool(getattr(args, "antigravity_app", False))
         or args.runtime_profile
         in {profile.value for profile in GUIDED_START_TURN_RUNTIME_PROFILES}
     ):
@@ -86,6 +89,7 @@ def load_requested_quota_action_selection(
     runtime_root: Path,
     turn_instance_id: str | None,
     goal_ref: Mapping[str, object] | None = None,
+    retained_todo_id: str | None = None,
 ) -> RequestedQuotaActionSelection:
     requested_todo_id = _requested_quota_action_todo_id(args)
     if not turn_instance_id:
@@ -104,25 +108,37 @@ def load_requested_quota_action_selection(
         turn_instance_id=turn_instance_id,
         goal_ref=goal_ref,
     )
+    if retained_todo_id is not None and existing:
+        # A first-call inline retry has not published a receipt. A concurrent
+        # caller acquiring this Turn must not be overwritten by its local choice.
+        raise HeartbeatReceiptIdentityConflictError(
+            "heartbeat receipt appeared during first-call selection reentry; "
+            "read the existing Turn receipt before retrying the original choice"
+        )
     if not existing:
         return RequestedQuotaActionSelection(
             requested_todo_id=requested_todo_id,
             receipt=None,
             receipt_bound_todo_id=None,
             receipt_bound_replan_obligation_id=None,
-            receipt_pending_action_todo_id=None,
+            receipt_pending_action_todo_id=retained_todo_id,
             receipt_identity_upgraded=False,
         )
     details_value = existing.get("details")
     details: Mapping[str, object] = (
         details_value if isinstance(details_value, Mapping) else {}
     )
+    # Recovery discovery can name a replan without admitting its settlement.
+    # Only a bound Todo carries that generation beside its settlement identity.
+    receipt_todo_id = heartbeat_receipt_settlement_todo_id(existing)
     return RequestedQuotaActionSelection(
         requested_todo_id=requested_todo_id,
         receipt=existing,
-        receipt_bound_todo_id=heartbeat_receipt_settlement_todo_id(existing),
+        receipt_bound_todo_id=receipt_todo_id,
         receipt_bound_replan_obligation_id=(
-            heartbeat_receipt_settlement_replan_obligation_id(existing)
+            (heartbeat_receipt_semantic_replan_obligation_id(existing)
+             if receipt_todo_id else None)
+            or heartbeat_receipt_settlement_replan_obligation_id(existing)
         ),
         receipt_pending_action_todo_id=(
             heartbeat_receipt_pending_action_todo_id(existing)
@@ -151,6 +167,10 @@ def _requested_quota_action_selection_preflight(
                 "current selected Todo: explicitly requested Todo differs"
             )
         return None
+    if payload.get("effective_action") == EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value:
+        # Recovery preempts the choice. Keep the exact recovery actions in the
+        # response; the rollout owner leaves this Turn unbound until reentry.
+        return None
     interaction = payload.get("interaction_contract")
     agent_channel = (
         interaction.get("agent_channel") if isinstance(interaction, Mapping) else None
@@ -170,7 +190,7 @@ def _requested_quota_action_selection_preflight(
         agent_delivery_allowed=agent_delivery_allowed,
     )
     if receipt_bound_replan_obligation_id:
-        if not receipt_identity_upgraded:
+        if not receipt_identity_upgraded and not receipt_pending_action_todo_id:
             # A Turn that started directly in autonomous replan has no Todo
             # selection authority to replace.  A later same-Turn --todo-id is
             # therefore a harmless settled replay, not successor delivery.
@@ -298,17 +318,24 @@ def inline_action_selection_reentry_args(
     preflight: ActionSelectionPreflightResult,
     turn_instance_id: str | None,
 ) -> argparse.Namespace | None:
-    """Adapt one typed reentry instruction after the exact choice is durable."""
+    """Adapt one typed reentry, retaining the choice until the final receipt.
+
+    Before the first receipt there is no effect to recover: the caller can
+    carry its choice directly into one fresh guard. Existing receipts still
+    require durable retention before reentry.
+    """
     qualification = payload.get("action_selection_qualification")
     if (
         not isinstance(qualification, Mapping)
         or qualification.get("inline_reentry_allowed") is not True
-        or preflight.receipt is None
         or selection.requested_todo_id is None
         or turn_instance_id is None
-        or heartbeat_receipt_pending_action_todo_id(preflight.receipt)
-        != selection.requested_todo_id
     ):
+        return None
+    if preflight.receipt is None:
+        if selection.receipt is not None:
+            return None
+    elif heartbeat_receipt_pending_action_todo_id(preflight.receipt) != selection.requested_todo_id:
         return None
     # Re-enter the real guard; changed quota, gates, leases and capabilities
     # must be read again. No explicit selection on this hop means no recursion.

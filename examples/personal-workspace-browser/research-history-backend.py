@@ -1,16 +1,19 @@
 """Disposable read-only HTTP owner for a captured Explore event log.
 
-The default is three real EdgeBench research checkpoints. The history route
+The default is the complete saved Explore log from a recent Grid benchmark run.
+Older real checkpoints and synthetic boundary cases use explicit fixtures. The history route
 and pagination are production code; execution state is never restored and
 model dispatch is never called. Explicit fixture paths support regressions.
 """
 import argparse
+from contextlib import suppress
 import hashlib
 import json
 from pathlib import Path
 import signal
 import tempfile
-from urllib.parse import urlparse
+import sys
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from loopx.capabilities.explore.result_log import validate_explore_result_event
 from loopx.chat_action_store import ChatActionStore
@@ -22,18 +25,37 @@ from loopx.chat_server import (
 )
 from loopx.chat_store import ChatSessionStore
 from loopx.control_plane.effect_runtime import restart_effect_runtime
+from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import DEFAULT_CONFIG, register_pack, inspect_pack, execute_pack
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests" / "control_plane"))
+from canonical_authority_fixture import initialize_canonical_authority
+from host_process_fixture import write_python_host_fixture
+
+
+def materialize_analysis(source_root: Path, analysis: dict) -> Path:
+    """Preserve the captured UTF-8 artifact bytes that its digests describe."""
+    source_root.mkdir()
+    for name, text in analysis["artifacts"].items():
+        path = source_root / name
+        assert path.parent == source_root, "Fixture artifacts must be flat"
+        path.write_bytes(text.encode("utf-8"))
+    input_path = source_root / "input.json"
+    input_path.write_bytes(json.dumps(analysis["input"], ensure_ascii=False).encode("utf-8"))
+    return input_path
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--assets-dir", type=Path, help="Frozen packaged UI for before/after inspection.")
     parser.add_argument("--fixture", type=Path, action="append",
         help="Captured-event wrapper; repeat for independently selectable Goals.")
+    parser.add_argument("--workspace-directory", action="store_true",
+        help="Serve the production directory for scoped Goal navigation tests.")
     args = parser.parse_args()
     fixtures = Path(__file__).resolve().parents[2] / "apps/presentation/dashboard/src/data/fixtures"
-    sources = args.fixture or [fixtures / name for name in (
-        "edgebench-research-history.json", "edgebench-graph-checkpoint-history.json",
-        "edgebench-ad-checkpoint-history.json")]
+    sources = args.fixture or [fixtures / "edgebench-grid-context-on-20261103-history.json"]
     captures = []
     original = {}
     for source in sources:
@@ -44,6 +66,11 @@ def main():
         assert capture["goal_id"] not in {item["goal_id"] for item in captures}, "Duplicate captured Goal"
         captures.append(capture)
         original[source] = source_bytes
+        # Frozen API responses retain real analysis identity and usage without
+        # registering execution state or launching a synthetic analysis job.
+        for record in [*capture.get("analysis_readbacks", {}).values(), *capture.get("analysis_citations", [])]:
+            encoded = json.dumps(record["response"], ensure_ascii=False, separators=(",", ":")).encode()
+            assert hashlib.sha256(encoded).hexdigest() == record["response_sha256"], "Changed analysis readback"
     goal_id = captures[0]["goal_id"]
     source_digests = {capture["goal_id"]: hashlib.sha256(original[source]).hexdigest()
         for source, capture in zip(sources, captures)}
@@ -63,26 +90,96 @@ def main():
                 "adapter": {"kind": "read_only_project_map_v0", "status": "connected-read-only"}})
             log = runtime / "goals" / captured_goal / "explore-result-log.jsonl"
             log.parent.mkdir(parents=True)
-            log.write_text("".join(json.dumps(event, ensure_ascii=False) + "\n" for event in capture["events"]))
+            log.write_bytes("".join(json.dumps(event, ensure_ascii=False) + "\n" for event in capture["events"]).encode("utf-8"))
+            initialize_canonical_authority(runtime, captured_goal, build_todo_runtime_shadow_projection(
+                goal_id=captured_goal, todos=capture.get("todos", []), handoff_mode="soft_claim"), state_path=state, provider="sqlite")
             original.update({path: path.read_bytes() for path in (state, log)})
         registry = root / "registry.json"
         registry.write_text(json.dumps({"schema_version": 1, "common_runtime_root": str(runtime), "goals": goals}))
         original[registry] = registry.read_bytes()
-        metrics = {"history_reads": 0, "mutation_attempts": 0}
+        # Optional boundary-test analysis uses the real pack verifier, process/job
+        # owner and HTTP reader. It never enables model dispatch from the page.
+        fixture_config = {**DEFAULT_CONFIG, "research_synthesis": False}
+        fixture_config.pop("research_synthesis_revision", None)
+        for capture in captures:
+            for index, analysis in enumerate(capture.get("analyses", [])):
+                source_root = root / f"analysis-{capture['goal_id']}-{index}"
+                input_path = materialize_analysis(source_root, analysis)
+                case_study_path = None
+                if "case_study" in analysis:
+                    case_study_path = source_root / "case-study.json"
+                    case_study_path.write_text(json.dumps(analysis["case_study"], ensure_ascii=False), encoding="utf-8")
+                scope = dict(runtime_root=runtime, owner_goal_id=capture["goal_id"])
+                registered = register_pack(**scope, input_path=input_path, source_root=source_root, title=analysis["title"],
+                                           config=analysis.get("config", fixture_config),
+                                           case_study_json=case_study_path,
+                                           usage_jsonl=analysis.get("usage_jsonl"),
+                                           usage_session_id=analysis.get("usage_session_id"),
+                                           include_incomplete_usage=analysis.get("include_incomplete_usage", False),
+                                           include_tool_context=analysis.get("include_tool_context", False),
+                                           native_outcomes_json=analysis.get("native_outcomes_json"))
+                for language, output in analysis["outputs"].items():
+                    # Exercise saved artifacts from before language-scoped
+                    # generation without rewriting their registered identity.
+                    language = None if language == "original" else language
+                    provider = write_python_host_fixture(root / f"analysis-provider-{index}-{language}",
+                        ("#!python\n" if sys.platform == "win32" else f"#!{sys.executable}\n")
+                        + "import sys\nfrom pathlib import Path\n"
+                        f"sys.stdin.read()\nPath(sys.argv[sys.argv.index('-o')+1]).write_bytes({json.dumps(output, ensure_ascii=False).encode()!r})\n"
+                        "print('{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}')\n")
+                    selected = inspect_pack(**scope, pack_id=registered["pack_id"], output_language=language)
+                    execute_pack(**scope, pack_id=registered["pack_id"], analysis_key=selected["analysis_key"], output_language=language, codex=str(provider))
+        metrics = {"history_reads": 0, "analysis_reads": 0, "citation_reads": 0, "mutation_attempts": 0}
 
         class Handler(ChatRequestHandler):
+            def _send_json(self, payload, *, status=200):
+                parsed = urlparse(self.path)
+                if status == 200 and parsed.path == "/status.json" and "run_history" in payload:
+                    goal = parse_qs(parsed.query).get("goal_id", [""])[0]
+                    query = "?" + urlencode({"goal_id": goal}) if goal else ""
+                    payload = {**payload, "local_dashboard_api": {
+                        **(payload.get("local_dashboard_api") or {}),
+                        "read_only_sources": [{"id": "research-preview", "label": "Research preview",
+                            "status_url": f"http://127.0.0.1:{self.server.server_port}/status.json{query}"}],
+                    }}
+                return super()._send_json(payload, status=status)
+
             def do_GET(self):
-                path = urlparse(self.path).path
+                parsed = urlparse(self.path)
+                path = parsed.path
+                if not args.workspace_directory and path == "/status.json" and parse_qs(parsed.query).get("view") == ["workspace-directory"]:
+                    # Like the runtime workspace reader, use the full-status
+                    # fallback: directory-only hydration omits source identity.
+                    return self._send_error("Use the captured source's full status read.", status=404)
                 if path == "/fixture/readback":
                     return self._send_json({"ok": True, **metrics,
                         "source_unchanged": all(path.read_bytes() == value for path, value in original.items()),
                         "fixture_sha256": source_digests[goal_id], "fixtures": source_digests})
                 if path == "/api/chat/explore-results":
                     metrics["history_reads"] += 1
+                query = parse_qs(parsed.query)
+                capture = next((item for item in captures if query.get("goal_id") == [item["goal_id"]]), None)
+                if capture and capture.get("analysis_readbacks") and path.startswith("/api/chat/research-analysis"):
+                    if path == "/api/chat/research-analysis":
+                        metrics["analysis_reads"] += 1
+                        language = query.get("output_language", ["original"])[0]
+                        record = capture["analysis_readbacks"].get(language)
+                        if "pack_id" in query:
+                            record = next((item for item in capture["analysis_readbacks"].values()
+                                if query == parse_qs(urlparse(item["request_path"]).query)), None)
+                        if record and ("compare_pack_id" in query or query.get("pack_id", [record["response"]["pack"]["pack_id"]]) == [record["response"]["pack"]["pack_id"]]):
+                            return self._send_json(record["response"])
+                    elif path == "/api/chat/research-analysis/citation":
+                        metrics["citation_reads"] += 1
+                        for record in capture.get("analysis_citations", []):
+                            if query == parse_qs(urlparse(record["request_path"]).query):
+                                return self._send_json(record["response"])
+                    return self._send_error("This readback was not captured; the fixture cannot recover the original source.", status=404)
                 if path in {"/healthz", "/status.json", "/api/chat/explore-results",
-                    "/api/chat/capabilities", "/api/chat/endpoints", "/api/chat/sessions",
+                    "/api/chat/capabilities", "/api/chat/endpoints", "/api/chat/sessions", "/api/chat/goal-configuration",
+                    "/api/chat/research-analysis", "/api/chat/research-analysis/citation", "/api/chat/research-analysis/usage-turn",
                     "/api/actions", "/api/chat/goals/contexts", "/api/chat/goal-results",
-                    "/api/chat/sidebar-goal-order", "/api/chat/usage-statistics",
+                    "/api/chat/sidebar-goal-order", "/api/chat/usage-statistics", "/api/chat/todo/detail",
                     "/api/chat/delivery-review", "/api/chat/goal-acceptance", "/api/chat/projects",
                     DEFAULT_EXTENSION_PRESENTATION_SURFACES_PATH, DEFAULT_EXTENSION_PROJECTION_PATH,
                 } or path.startswith("/chat/"):
@@ -91,16 +188,21 @@ def main():
 
             def do_POST(self):
                 metrics["mutation_attempts"] += 1
+                # Drain bounded request bodies before closing the connection.
+                self.connection.settimeout(5.0)
+                with suppress(ValueError):
+                    self._read_json()
                 self._send_error("The research display fixture is read-only.", status=405)
 
             do_PUT = do_POST
             do_DELETE = do_POST
+            do_PATCH = do_POST
 
         server = ChatHTTPServer(("127.0.0.1", args.port), Handler)
         server.registry_path, server.runtime_root = registry, runtime
         server.runtime_root_override, server.selected_goal_id = str(runtime), None
         server.scan_roots, server.limit, server.verbose = [], 10, False
-        server.assets_dir = default_chat_assets_dir()
+        server.assets_dir = args.assets_dir or default_chat_assets_dir()
         # Native empty stores keep ordinary read-only workspace hydration real.
         # No captured execution state or machine runtime is admitted here.
         server.chat_store = ChatSessionStore(runtime)
@@ -118,7 +220,7 @@ def main():
         print(json.dumps({"port": server.server_port, "goal_id": goal_id,
             "goal_ids": [item["goal_id"] for item in captures],
             "event_count": sum(len(item["events"]) for item in captures),
-            "url": f"http://127.0.0.1:{server.server_port}/chat/?goalId={goal_id}&view=overview"}), flush=True)
+            "url": f"http://127.0.0.1:{server.server_port}/chat/?goalId={goal_id}&view=research"}), flush=True)
         try:
             server.serve_forever()
         finally:

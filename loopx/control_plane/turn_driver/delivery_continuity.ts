@@ -1,4 +1,5 @@
 import type { JsonObject } from "../effect_program.ts";
+import {normalizeGoalPathDeltaOutcome} from "../goals/vision_checkpoint.ts";
 import {
   DELIVERY_BOUNDARY_RESULT_SCHEMA,
   DELIVERY_CONTINUITY_RESULT_SCHEMA,
@@ -60,6 +61,8 @@ interface DeliveryContinuityFacts {
   previous_delivery_outcome: MaterialDeliveryOutcome | null;
   current_todo: DeliveryContinuityTodo | null;
   preemptions: readonly DeliveryContinuityPreemption[];
+  previous_delivery_boundary: DeliveryBoundary | null;
+  previous_path_delta: JsonObject | null;
 }
 
 export type DeliveryContinuityDecision =
@@ -71,6 +74,8 @@ export type DeliveryContinuityReason =
   | DeliveryContinuityPreemption
   | "no_previous_todo"
   | "previous_delivery_not_progress"
+  | "previous_delivery_closed"
+  | "previous_path_replanned"
   | "current_todo_missing"
   | "todo_identity_changed"
   | "todo_not_open"
@@ -118,6 +123,8 @@ interface DeliveryRoutingRequest {
   agent_id: string;
   previous_todo_id: string | null;
   previous_delivery_outcome: MaterialDeliveryOutcome | null;
+  previous_delivery_boundary: DeliveryBoundary | null;
+  previous_path_delta: JsonObject | null;
   continuity_todo: DeliveryContinuityTodo | null;
   fallback_todo: DeliveryContinuityTodo | null;
   replan_todo: DeliveryContinuityTodo | null;
@@ -213,6 +220,14 @@ function resolveDeliveryContinuity(
       todoId,
     );
   }
+  // Progress is not a promise to repeat that work. Honor the explicit prior
+  // closeout/path decision; never infer completion or intent from prose.
+  if (request.previous_delivery_boundary === "semantic_closeout") {
+    return result("release_for_reselection", "previous_delivery_closed", todoId);
+  }
+  if (request.previous_path_delta?.outcome === "replan") {
+    return result("release_for_reselection", "previous_path_replanned", todoId);
+  }
   const todo = request.current_todo;
   if (todo === null) {
     return result("release_for_reselection", "current_todo_missing", todoId);
@@ -302,6 +317,11 @@ function decodeDeliveryRoutingRequest(value: unknown): DeliveryRoutingRequest {
   if (request.schema_version !== DELIVERY_ROUTING_REQUEST_SCHEMA) {
     throw new EffectRuntimeRequestError("Delivery routing request schema mismatch");
   }
+  const priorPath = request.previous_path_delta == null ? null
+    : requireJsonObject(request.previous_path_delta, "previous_path_delta");
+  // This is a readback of an already committed authoring decision. Compact
+  // history need not repeat the full authoring packet; reuse its typed outcome.
+  if (priorPath) priorPath.outcome = normalizeGoalPathDeltaOutcome(priorPath.outcome);
   return {
     schema_version: DELIVERY_ROUTING_REQUEST_SCHEMA,
     agent_id: requireNonEmptyString(request.agent_id, "agent_id"),
@@ -313,6 +333,9 @@ function decodeDeliveryRoutingRequest(value: unknown): DeliveryRoutingRequest {
       request.previous_delivery_outcome,
       "previous_delivery_outcome",
     ),
+    previous_delivery_boundary: request.previous_delivery_boundary == null ? null
+      : requireStringLiteral(request.previous_delivery_boundary, DELIVERY_BOUNDARIES, "previous_delivery_boundary"),
+    previous_path_delta: priorPath,
     continuity_todo: currentTodo(request.continuity_todo, "continuity_todo"),
     fallback_todo: currentTodo(request.fallback_todo, "fallback_todo"),
     replan_todo: currentTodo(request.replan_todo, "replan_todo"),
@@ -360,6 +383,8 @@ export function evaluateDeliveryRoute(value: unknown): DeliveryRoutingResult {
       agent_id: request.agent_id,
       previous_todo_id: request.previous_todo_id,
       previous_delivery_outcome: request.previous_delivery_outcome,
+      previous_delivery_boundary: request.previous_delivery_boundary,
+      previous_path_delta: request.previous_path_delta,
       current_todo: request.continuity_todo,
       preemptions: request.preemptions,
     });

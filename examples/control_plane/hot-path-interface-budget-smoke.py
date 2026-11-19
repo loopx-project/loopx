@@ -37,6 +37,7 @@ from loopx.status import collect_status  # noqa: E402
 from loopx.control_plane.scheduler.execution_context import (  # noqa: E402
     scheduler_execution_context_for_runtime_profile,
 )
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
 
 
 GOAL_ID = "interface-budget-goal"
@@ -78,9 +79,16 @@ SURFACE_BUDGETS = {
         # 15,419/18,636 characters, 378/513 nested keys, and 52/53 top-level
         # keys. Keep the complete typed envelope rather than dropping source
         # facts that the consumer must inspect before it spends compute.
-        "max_json_chars": 20_500,
-        "max_nested_keys": 525,
-        "max_top_level_keys": 54,
+        # Native canary isolation adds a parent directory to every fixture
+        # path: the same payload is 20,341 chars direct / 20,509 in the runner.
+        # Retain complete source paths and 491 chars of runner headroom.
+        "max_json_chars": 21_000,
+        # Explicitly importing this same fixture exposes the current canonical
+        # read shape on both base/head: 20,287 chars, 564 nested / 54 top-level
+        # keys. Preserve source/Task provenance; retain 11 nested and one
+        # top-level key of margin for the cadence check.
+        "max_nested_keys": 575,
+        "max_top_level_keys": 55,
     },
     "dashboard_status_json": {
         "owner": "operator dashboard",
@@ -93,7 +101,9 @@ SURFACE_BUDGETS = {
         # The original longer temp root exposes 23,274 chars with unchanged
         # 336 nested / 26 top-level keys. Preserve source revisions and full
         # paths; 24k leaves 726 chars without widening structural guards.
-        "max_json_chars": 24_000,
+        # The same canonical fixture is 24,315 chars on both base/head; the
+        # 25k ceiling retains 685 chars without dropping authority metadata.
+        "max_json_chars": 25_000,
         "max_nested_keys": 350,
         "max_top_level_keys": 27,
     },
@@ -150,6 +160,7 @@ def write_registry(root: Path) -> tuple[Path, Path]:
         + "\n",
         encoding="utf-8",
     )
+    import_fixture_authority(registry_path, GOAL_ID)
     return registry_path, project
 
 
@@ -363,7 +374,6 @@ def assert_cadence_projection(
     status_payload = collect_status(
         registry_path=registry_path,
         runtime_root_override=str(root / "runtime"),
-        scan_roots=[project],
         limit=5,
     )
     items = status_payload["attention_queue"]["items"]
@@ -402,7 +412,6 @@ def main() -> int:
         status_payload = collect_status(
             registry_path=registry_path,
             runtime_root_override=str(root / "runtime"),
-            scan_roots=[project],
             limit=5,
         )
         assert "presentation_surfaces" not in status_payload, status_payload
@@ -459,6 +468,17 @@ def main() -> int:
             assert_surface("quota_should_run_json", quota_payload),
             assert_surface("dashboard_status_json", status_payload),
         ]
+        oversized_quota = {
+            **quota_payload,
+            "reason": "x" * int(SURFACE_BUDGETS["quota_should_run_json"]["max_json_chars"]),
+        }
+        try:
+            assert_surface("quota_should_run_json", oversized_quota)
+        except AssertionError as error:
+            assert error.args[0][0] == "quota_should_run_json", error
+            assert error.args[0][1] > SURFACE_BUDGETS["quota_should_run_json"]["max_json_chars"], error
+        else:
+            raise AssertionError("quota character budget accepted an oversized payload")
         cadence = build_interface_budget_cadence(
             summaries,
             checked_at="2099-01-01T00:10:00+00:00",

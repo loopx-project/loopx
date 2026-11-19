@@ -9,5 +9,6 @@
   {"query": "shadow capture oversized RPC response", "relevant": "shadow_proof_transport_amplification"},
   {"query": "review retains duplicate protocol compatibility decoders", "relevant": "review_compatibility_assumption_gap"},
   {"query": "contract criteria runner failed workspace completion", "relevant": "acceptance_validation_failure_flattened"},
-  {"query": "canonical activation stopped peer delegation still accepted", "relevant": "goal_activation_consumer_drift"}
+  {"query": "canonical activation stopped peer delegation still accepted", "relevant": "goal_activation_consumer_drift"},
+  {"query": "complete source failed Session retry callback empty envelope", "relevant": "complete_source_retry_callback_drift"}
 ]

@@ -16,7 +16,7 @@ The chain proven here:
    projection output; this fixture has no event log, so the real basis is
    the markdown sequence 0) and submits through the production CLI.
 4. The legal settlement runs the quota-returned ``next_cli_actions``
-   verbatim (refresh-state writeback + quota spend-slot) — no hand-written
+   with the authored Vision evidence (refresh-state writeback + quota spend-slot) — no hand-written
    ACK row is ever appended.
 5. After settlement, the settled obligation can no longer anchor a
    proposal: a new proposal naming it fails closed with nothing retained.
@@ -45,7 +45,7 @@ TURN_ID = "turn-amendment-lifecycle-1"
 
 def _write_fixture(root: Path) -> tuple[Path, Path, Path]:
     """One isolated, healthy synthetic Goal: active, one registered agent,
-    one open Todo, an empty runtime (no event log, no run rows)."""
+    one open canonical Todo and no prior run rows."""
 
     project = root / "project"
     runtime = root / "runtime"
@@ -95,6 +95,8 @@ def _write_fixture(root: Path) -> tuple[Path, Path, Path]:
                             "agent_model": "peer_v1",
                         },
                         "authority_sources": [],
+                        # This fixture tests amendment admission and settlement.
+                        "execution_profile": {"stride_strategy": "off"},
                         "quota": {
                             "compute": 1.0,
                             "window_hours": 24,
@@ -108,6 +110,10 @@ def _write_fixture(root: Path) -> tuple[Path, Path, Path]:
         )
         + "\n",
         encoding="utf-8",
+    )
+    from canonical_authority_fixture import initialize_canonical_source_fixture
+    initialize_canonical_source_fixture(
+        runtime, GOAL_ID, state_path=state_path, provider="sqlite",
     )
     return project, runtime, registry_path
 
@@ -215,6 +221,8 @@ def test_production_quota_obligation_survives_the_full_amendment_lifecycle(
         runtime,
         "quota",
         "should-run",
+        "--context-delivery",
+        "off",
         "--codex-app",
         "--goal-id",
         GOAL_ID,
@@ -222,8 +230,6 @@ def test_production_quota_obligation_survives_the_full_amendment_lifecycle(
         AGENT_ID,
         "--turn-instance-id",
         TURN_ID,
-        "--scan-path",
-        str(project),
     )
     assert guard_rc == 0, guard
     assert guard["decision"] == "autonomous_replan_required", guard
@@ -243,8 +249,8 @@ def test_production_quota_obligation_survives_the_full_amendment_lifecycle(
     assert settlement_identity["turn_instance_id"] == TURN_ID
     assert settlement_identity["todo_id"] == TODO_ID
 
-    # 3. The proposal binds the real Stage 1 basis (markdown goal, so the
-    #    real sequence is 0) and the quota-returned obligation, verbatim.
+    # 3. The proposal binds the real canonical snapshot (no event append
+    #    sequence) and the quota-returned obligation, verbatim.
     align_rc, alignment = _run_cli(
         registry_path,
         runtime,
@@ -258,7 +264,7 @@ def test_production_quota_obligation_survives_the_full_amendment_lifecycle(
     )
     assert align_rc == 0, alignment
     basis = alignment["source_basis"]
-    assert basis["revision_basis"] == "markdown_active_state"
+    assert basis["revision_basis"] == "canonical_todo_snapshot"
     assert basis["state_event_basis_sequence"] == 0
 
     proposal = {
@@ -309,9 +315,7 @@ def test_production_quota_obligation_survives_the_full_amendment_lifecycle(
     assert listed["rows"][0]["proposal_id"] == "gap_lifecycle_001"
     assert listed["rows"][0]["replan_obligation_id"] == obligation_id
 
-    # 4. Legal settlement: run the quota-returned next_cli_actions verbatim
-    #    (refresh-state writeback with the typed semantic successor, then
-    #    the quota spend) — the actual close flow, never a hand-written ACK.
+    # 4. Legal settlement uses the admitted proposal as this Turn's new evidence.
     cli_channel = guard["interaction_contract"]["cli_channel"]
     refresh_command = next(
         action
@@ -325,32 +329,44 @@ def test_production_quota_obligation_survives_the_full_amendment_lifecycle(
         assert f"--turn-instance-id {TURN_ID}" in command
         assert "--todo-id" in command or "--replan-obligation-id" in command
 
-    refresh_command = (
-        refresh_command.replace(
-            "<advanced|blocked|exploration_exhausted|no_followup>",
-            "advanced",
-        )
-        .replace("<surface-id>", "surface-lifecycle-successor")
-        .replace("<hypothesis-id>", "hypothesis-lifecycle-successor")
-        .replace("<probe-kind>", "probe-lifecycle-successor")
-        .replace("<evidence-id>", "evidence-lifecycle-successor")
-    )
+    vision = tmp_path / "admitted-proposal-vision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "active",
+        "vision_patch": {
+            "acceptance_summary": "Keep the original completion criteria while the admitted amendment awaits review.",
+        },
+        "path_delta": {
+            "outcome": "continue",
+            "prior_assumption": "The bounded slice was stalled without an admitted amendment proposal.",
+            "observed_reality": "The proposal was admitted for review without changing canonical authority.",
+            "retained": ["Original Goal objective, completion criteria and proposal review authority."],
+            "evidence_refs": [listed["rows"][0]["proposal_id"]],
+        },
+    }), encoding="utf-8")
+    evidence = {
+        "<advanced|blocked|exploration_exhausted|no_followup>": "advanced",
+        "<surface-id>": "surface:amendment-proposal",
+        "<hypothesis-id>": "hypothesis:proposal-admission",
+        "<probe-kind>": "probe:admission-readback",
+        "<evidence-id>": listed["rows"][0]["proposal_id"],
+    }
+    refresh_args = [evidence.get(arg, arg) for arg in _projected_cli_args(refresh_command)]
     refresh_rc, refresh = _run_cli(
         registry_path,
         runtime,
-        *_projected_cli_args(refresh_command),
+        *refresh_args,
+        "--agent-vision-json", str(vision),
         "--no-global-sync",
         "--suppress-external-sinks",
     )
-    assert refresh_rc == 0, refresh
+    assert refresh_rc == 0, refresh.get("error") or refresh
     assert refresh["settlement_result"]["ok"] is True, refresh
 
     spend_rc, spend = _run_cli(
         registry_path,
         runtime,
         *_projected_cli_args(spend_command),
-        "--scan-path",
-        str(project),
     )
     assert spend_rc == 0, spend
     assert spend["settlement_result"]["ok"] is True, spend
@@ -380,6 +396,8 @@ def test_production_quota_obligation_survives_the_full_amendment_lifecycle(
         runtime,
         "quota",
         "should-run",
+        "--context-delivery",
+        "off",
         "--codex-app",
         "--goal-id",
         GOAL_ID,
@@ -387,8 +405,6 @@ def test_production_quota_obligation_survives_the_full_amendment_lifecycle(
         AGENT_ID,
         "--turn-instance-id",
         "turn-amendment-lifecycle-2",
-        "--scan-path",
-        str(project),
     )
     assert settled_guard_rc == 0, settled_guard
     assert settled_guard.get("replan_action_packet") is None, settled_guard

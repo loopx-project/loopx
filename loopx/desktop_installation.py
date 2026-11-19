@@ -8,6 +8,7 @@ import plistlib
 import re
 import sys
 from typing import Any
+from xml.parsers.expat import ExpatError
 
 
 def desktop_installation_status(
@@ -44,7 +45,7 @@ def desktop_installation_status(
                 value = identity.get("source_revision")
                 if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value):
                     revision = value
-        except (OSError, ValueError, plistlib.InvalidFileException):
+        except (OSError, ValueError, plistlib.InvalidFileException, ExpatError):
             pass
         valid_installed = isinstance(installed_revision, str) and re.fullmatch(
             r"[0-9a-f]{40}", installed_revision

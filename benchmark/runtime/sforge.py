@@ -15,22 +15,46 @@ from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 from sforge.harness.agent.codex import CodexAgent
+from loopx.control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL
 
 from benchmark.edgebench.feedback import FEEDBACK_MODES
 from benchmark.edgebench.feedback_hook import FEEDBACK_PAYLOAD
 
-from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, prepare_codex_home
+from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, codex_settings, native_child_instructions, prepare_codex_home
 from .codex_offline import CodexOffline, MODEL_CATALOG_REMOTE, stage_portable_python
+from .codex_readiness import native_readiness_budget
 from .harbor import (
     BenchmarkCodex, _CONTROL, _CODEX_HOME, _PYTHON, _SCHEDULER_STATE, _SRC,
 )
+from .research_probe import resolve_execution_observation
 from .scheduler import worker_command
-from .worker import PHASE_WORK_RESERVE_SECONDS
 
 
 # Experiment profiles, local to the research runner; not new LoopX modes.
-PROFILES = ("official", "single", "native-goal", "heartbeat-resume", "heartbeat-explore")
+PROFILE_MODES = {
+    "official": "plain",
+    "single": "plain",
+    "native-goal": "native-goal",
+    "heartbeat-resume": "heartbeat",
+    "heartbeat-explore": "heartbeat",
+    "turn-resume": "turn",
+}
+PROFILES = tuple(PROFILE_MODES)
 DEFAULT_TIMEOUT_SECONDS = 18 * 60 * 60
+_RUNTIME_CREDENTIAL_PLACEHOLDER = "runtime-managed-credential"
+
+
+def profile_execution(profile, *, task_entry=None, context_delivery=None,
+                      turn_envelope=False, complete_turn=False,
+                      validation_command=None, native_child_limit=None):
+    """Resolve the native experiment arm through the shared runtime contract."""
+    if profile not in PROFILE_MODES:
+        raise ValueError("Unknown benchmark worker profile")
+    return Execution(
+        mode=PROFILE_MODES[profile], task_entry=task_entry, context_delivery=context_delivery,
+        turn_envelope=turn_envelope, complete_turn=complete_turn, native_child_limit=native_child_limit,
+        validation_command=() if validation_command is None else validation_command,
+    )
 
 
 class SForgeEnvironment:
@@ -90,66 +114,99 @@ class SForgeWorker(CodexAgent):
                  workspace_instructions: str | None = None,
                  task_objective: str | None = None,
                  task_entry: str | None = None,
+                 validation_command: list[str] | tuple[str, ...] | None = None,
                  turn_envelope: bool = False,
+                 context_delivery: str | None = None,
+                 execution_observation: str | None = None,
+                 native_child_limit: int | None = None,
+                 provider_request_admission: bool = False,
                  native_goal_continue: bool = False,
+                 native_readiness_total_seconds: float | None = None,
+                 native_readiness_attempt_seconds: float | None = None,
                  replan_after_turns: int | None = None,
                  replan_after_todos: int | None = None,
                  stride_strategy: str | None = None,
                  planning_horizon_goal: bool | None = None,
                  checkpoint_request_path: str | None = None,
                  checkpoint_request: bytes | None = None,
-                 warm_start=None):
+                 warm_start=None, research_sidecar: bool = False,
+                 native_result_scope: dict | None = None, complete_turn: bool = False):
         super().__init__(config)
-        if profile not in PROFILES:
-            raise ValueError("Unknown benchmark worker profile")
-        if not isinstance(turn_envelope, bool) or (
-            turn_envelope and profile not in {"heartbeat-resume", "heartbeat-explore"}
+        self.execution = profile_execution(
+            profile, task_entry=task_entry,
+            context_delivery=context_delivery, turn_envelope=turn_envelope,
+            complete_turn=complete_turn, validation_command=validation_command,
+            native_child_limit=native_child_limit,
+        )
+        self.turn_envelope = self.execution.turn_envelope
+        self.context_delivery = self.execution.context_delivery
+        self.task_entry = self.execution.task_entry
+        self.native_child_limit = self.execution.native_child_limit
+        self.native_readiness_budget = native_readiness_budget(
+            native_readiness_total_seconds, native_readiness_attempt_seconds)
+        if self.native_readiness_budget is not None and (
+            profile in {"official", "single"} or config.agent_api_base_url or warm_start is not None
         ):
-            raise ValueError("turn_envelope requires a heartbeat worker")
-        self.turn_envelope = turn_envelope
-        if timeout_seconds <= PHASE_WORK_RESERVE_SECONDS:
-            raise ValueError("Worker budget must exceed the 160s startup/settlement reserve")
+            raise ValueError("Native readiness budget requires a fresh native Goal or heartbeat worker")
+        if self.native_child_limit is not None and (not feedback_prompt or not workspace_instructions):
+            raise ValueError("Native child authorization requires the explicit task prompt and workspace instructions")
+        self.execution_observation = resolve_execution_observation(execution_observation)
+        if self.execution_observation is not None and not profile.startswith("heartbeat-"):
+            raise ValueError("execution_observation requires a heartbeat worker")
+        if native_result_scope is not None and (
+                profile != "heartbeat-explore" or feedback != "native"):
+            raise ValueError("Native result comparison requires native Explore")
+        self.native_result_scope = native_result_scope
+        if type(provider_request_admission) is not bool:
+            raise ValueError("provider_request_admission must be a boolean opt-in")
+        if provider_request_admission and not profile.startswith("heartbeat-"):
+            raise ValueError("provider_request_admission requires a heartbeat profile")
+        if provider_request_admission:
+            if not (config.agent_api_base_url or "").strip() or not (config.agent_api_key or "").strip():
+                raise ValueError("provider_request_admission requires a custom provider URL and API key")
+            if (os.environ.get("CODEX_WIRE_API") or "responses") != "responses":
+                raise ValueError("provider_request_admission requires the Responses wire API")
+        self.provider_request_admission = provider_request_admission
+        if timeout_seconds <= 0:
+            raise ValueError("Worker budget must be positive")
         if not config.agent_model or not config.agent_effort:
             raise ValueError("Explicit model and reasoning effort are required")
         if config.agent_api_base_url and not config.agent_api_key:
             raise ValueError("Custom model provider requires an API credential")
         if not config.agent_api_base_url and not os.environ.get("CODEX_AUTH_JSON_PATH"):
             raise ValueError("Set CODEX_AUTH_JSON_PATH to the trial credential source")
-        if task_entry == "loopx-planned" and not profile.startswith("heartbeat-"):
-            raise ValueError("loopx-planned requires a heartbeat profile")
-        self.task_entry = Execution(
-            mode="heartbeat" if profile.startswith("heartbeat-") else "plain",
-            task_entry=task_entry,
-        ).task_entry
         if replan_after_turns is not None and replan_after_todos is not None:
             raise ValueError("Choose replan_after_turns or replan_after_todos, not both")
         if replan_after_todos is not None:
             if type(replan_after_todos) is not int or not 1 <= replan_after_todos <= 5:
                 raise ValueError("replan_after_todos must be an integer between 1 and 5")
-            if not profile.startswith("heartbeat-"):
-                raise ValueError("replan_after_todos requires a heartbeat profile")
+            if not self.execution.uses_loopx:
+                raise ValueError("replan_after_todos requires a heartbeat profile or turn-resume")
         if replan_after_turns is not None:
             if (type(replan_after_turns) is not int or
                     not 1 <= replan_after_turns <= 6):
                 raise ValueError("replan_after_turns must be an integer between 1 and 6")
-            if not profile.startswith("heartbeat-"):
-                raise ValueError("replan_after_turns requires a heartbeat profile")
+            if not self.execution.uses_loopx:
+                raise ValueError("replan_after_turns requires a heartbeat profile or turn-resume")
         if (replan_after_turns is None and replan_after_todos is None
-                and profile.startswith("heartbeat-")):
+                and self.execution.uses_loopx):
             replan_after_turns = DEFAULT_REPLAN_AFTER_TURNS
         self.replan_after_turns = replan_after_turns
         self.replan_after_todos = replan_after_todos
-        if stride_strategy is not None and not profile.startswith("heartbeat-"):
-            raise ValueError("stride_strategy requires a heartbeat profile")
+        if stride_strategy is not None and not self.execution.uses_loopx:
+            raise ValueError("stride_strategy requires a heartbeat profile or turn-resume")
         if stride_strategy is not None:
             from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_strategy
             stride_strategy = normalize_stride_strategy(stride_strategy)
         if planning_horizon_goal is not None:
             if not isinstance(planning_horizon_goal, bool):
                 raise ValueError("planning_horizon_goal must be a boolean")
-            if not profile.startswith("heartbeat-"):
-                raise ValueError("planning_horizon_goal requires a heartbeat profile")
-        self.planning_horizon_goal = planning_horizon_goal
+            if not self.execution.uses_loopx:
+                raise ValueError("planning_horizon_goal requires a heartbeat profile or turn-resume")
+        self.planning_horizon_goal = (
+            DEFAULT_PLANNING_HORIZON_GOAL if planning_horizon_goal is None and self.execution.uses_loopx
+            else planning_horizon_goal
+        )
         self.stride_strategy = stride_strategy
         self.checkpoint_request_path = None
         self.checkpoint_request = checkpoint_request
@@ -164,10 +221,17 @@ class SForgeWorker(CodexAgent):
                 raise ValueError("checkpoint_request_path requires a heartbeat profile")
             from .checkpoint import normalize_checkpoint_request_path
             self.checkpoint_request_path = normalize_checkpoint_request_path(checkpoint_request_path)
+        if type(research_sidecar) is not bool:
+            raise ValueError("research_sidecar requires an explicit boolean")
+        self.research_sidecar = research_sidecar
         self.warm_start = warm_start
         if warm_start is not None:
+            if research_sidecar and not warm_start.research_sidecar:
+                raise ValueError("Managed research storage requires matching warm receiver selection")
             if not profile.startswith("heartbeat-") or feedback != "native" or self.task_entry != "loopx-planned":
                 raise ValueError("Warm checkpoint continuation requires a planned native heartbeat worker")
+            if getattr(warm_start, "native_child_limit", None) != self.native_child_limit:
+                raise ValueError("Worker native child limit differs from the warm start request")
             warm_start.verify(cwd)
         self.profile, self.cwd = profile, cwd
         if feedback not in FEEDBACK_MODES:
@@ -190,6 +254,11 @@ class SForgeWorker(CodexAgent):
             or task_objective not in feedback_prompt
         ):
             raise ValueError("Task objective must occur in the native task prompt")
+        if self.native_child_limit is not None:
+            assert feedback_prompt is not None and workspace_instructions is not None
+            authorization = native_child_instructions(self.native_child_limit)
+            feedback_prompt = authorization + feedback_prompt
+            workspace_instructions = authorization + workspace_instructions
         self.feedback = feedback
         self.feedback_prompt = feedback_prompt
         self.workspace_instructions = workspace_instructions
@@ -197,15 +266,19 @@ class SForgeWorker(CodexAgent):
         self.instructions_installed = False
         self.prompt_installed = False
         self.timeout_seconds = timeout_seconds
-        # Let one call use the trial budget. The shared worker recomputes the
-        # remaining deadline on every continuation, retaining cleanup time.
-        self.turn_timeout = timeout_seconds - PHASE_WORK_RESERVE_SECONDS
+        # The phase owns the total budget. No separate per-wake cap is needed;
+        # the scheduler's transport watchdog may outlive bounded child cleanup.
+        self.turn_timeout = timeout_seconds
         self.runtime = None
         self.prepared = False
         # Only the official profile delegates continuation to SForge. Heartbeat
         # workers already run a scheduler: restarting it after terminal/quiescent
         # exit duplicates that owner and can exhaust the native resume limit.
         self.resume_cmd = CodexAgent.resume_cmd if profile == "official" else None
+        # SForge signs this declaration into the runtime protocol.  The setup
+        # callback below is shared by every profile, but only the official
+        # profile installs the Codex stop hook inside that callback.
+        self.stop_hook = CodexAgent.stop_hook if profile == "official" else None
 
     def install_stop_hook(self, backend, handle, log_dir, logger):
         self.environment = SForgeEnvironment(
@@ -218,16 +291,93 @@ class SForgeWorker(CodexAgent):
             # Solver execution must never inherit this setup-only proxy.
             self.environment.setup_env = {}
 
+    def _install_research_directory(self, backend, handle, *, restored: bool):
+        from .research_artifacts import RESEARCH_DIRECTORY
+        directory = shlex.quote(RESEARCH_DIRECTORY)
+        # Fresh images cannot contribute unrelated data at this reserved path.
+        # Warm restore has already verified bytes and modes; do not chmod them.
+        prepare = (f"test -d {directory} && test ! -L {directory}" if restored else
+                   f"mkdir -m 0700 {directory}")
+        result = backend.exec_run(handle, ["/bin/sh", "-c",
+            f'test "$(readlink -f /tmp)" = /tmp && '
+            f'workspace=$(readlink -f -- {shlex.quote(self.cwd)}) && test -n "$workspace" && '
+            f'case {directory}/ in "$workspace/"*) exit 1;; esac && '
+            f'case "$workspace/" in {directory}/*) exit 1;; esac && '
+            f'{prepare} && chown agent:agent {directory}'], user="root")
+        if result.exit_code:
+            raise RuntimeError("Research directory is unavailable or conflicts with existing task data")
+
+    def _install_native_result_scope(self, backend, handle):
+        from .sforge_native_result import NativeResultScope, _SCOPE_FILE
+
+        assert self.native_result_scope is not None and self.runtime is not None
+        spec = dict(self.native_result_scope)
+        judge_url = spec.pop("judge_url")
+        # This exec runs before the solver and inherits the route supplied
+        # by the run-scoped native registration, not a task's shell override.
+        observed = backend.exec_run(handle, ["/bin/sh", "-c", 'printf "%s" "${SFORGE_FEEDBACK_URL:-}"'],
+                                    user="root")
+        if observed.exit_code:
+            raise RuntimeError("Could not read the native run's feedback route")
+        # Fetch once through the worker's actual route, before its solver starts.
+        # The protected Python/source paths exclude task imports and shell env.
+        context = backend.exec_run(handle, [f"{_PYTHON}/bin/python3", "-I", "-c",
+            f"import json,runpy,sys; sys.path.insert(0, {_SRC!r}); "
+            "from loopx.capabilities.explore.candidate_content import candidate_manifest_sha256; "
+            "from loopx.capabilities.explore.result_writeback import record_work_finding; "
+            "module=runpy.run_path(sys.argv[1]); "
+            "print(json.dumps(module['read_run_evaluation_context'](sys.argv[2])))",
+            f"{_SRC}/benchmark/runtime/sforge_native_result.py", observed.output], user="root")
+        if context.exit_code:
+            raise RuntimeError("Native result product APIs or evaluator conditions are unavailable; disable "
+                               "--native-result-comparison for ordinary native feedback")
+        scope = NativeResultScope(relay=observed.output, goal=self.runtime.goal_id,
+                                  agent=self.runtime.agent_id, evaluation_context=json.loads(context.output), **spec)
+        data = scope.install_bytes(judge_url)
+        target = shlex.quote(str(_SCOPE_FILE))
+        parent = shlex.quote(str(_SCOPE_FILE.parent))
+        prepare = backend.exec_run(handle, ["/bin/sh", "-c",
+            f"test ! -L {parent} && mkdir -p {parent} && chown root:root {parent} && "
+            f"chmod 0755 {parent} && test ! -e {target} && test ! -L {target}"], user="root")
+        if prepare.exit_code:
+            raise RuntimeError("Native result scope cannot be staged safely")
+        with tempfile.TemporaryDirectory(prefix="native-feedback-scope-") as directory:
+            source = Path(directory) / "scope.json"
+            source.write_bytes(data)
+            backend.copy_to_container(handle, source, PurePosixPath(str(_SCOPE_FILE)))
+        protected = backend.exec_run(handle, ["/bin/sh", "-c",
+            f"test ! -L {target} && chown root:root {target} && chmod 0644 {target}"], user="root")
+        if protected.exit_code:
+            raise RuntimeError("Native result scope could not be protected")
+
     def _install_worker(self, backend, handle, log_dir, logger):
         self.backend, self.handle = backend, handle
         self.log_dir = log_dir
+        research_paths = []
         effort = self._config.agent_effort
         common = dict(logs_dir=log_dir / "worker", model_name=self._config.agent_model,
                       reasoning_effort=effort)
+        runtime_base_url = self._config.agent_api_base_url
+        runtime_api_key = self._config.agent_api_key
         if self._config.agent_api_base_url:
+            route = backend.exec_run(
+                handle,
+                ["/bin/bash", "-c", 'printf "%s" "${OPENAI_BASE_URL:-}"'],
+                user="agent",
+            )
+            runtime_base_url = (getattr(route, "output", "") or "").strip()
+            if route.exit_code or not runtime_base_url:
+                raise RuntimeError("Could not read the effective model route from the trial")
+            if runtime_base_url != self._config.agent_api_base_url:
+                # SForge may replace a provider route with a host credential
+                # gateway after constructing this Agent. Keep the provider
+                # credential on the host and give child runtimes a non-secret
+                # value; SForge supplies the same effective route to the outer
+                # solver process.
+                runtime_api_key = _RUNTIME_CREDENTIAL_PLACEHOLDER
             common["extra_env"] = {
-                "OPENAI_BASE_URL": self._config.agent_api_base_url,
-                "OPENAI_API_KEY": self._config.agent_api_key,
+                "OPENAI_BASE_URL": runtime_base_url,
+                "OPENAI_API_KEY": runtime_api_key,
                 "CODEX_AUTH_JSON_PATH": "",
             }
         if self.profile in {"official", "single"}:
@@ -242,10 +392,10 @@ class SForgeWorker(CodexAgent):
                     shutil.copyfile(os.environ["CODEX_AUTH_JSON_PATH"], home / "auth.json")
                     (home / "auth.json").chmod(0o600)
                 prepare_codex_home(
-                    home, execution=Execution(mode="plain"), workspace=Path(self.cwd),
+                    home, execution=Execution(mode="plain", native_child_limit=self.native_child_limit), workspace=Path(self.cwd),
                     model=self._config.agent_model, effort=effort,
-                    base_url=self._config.agent_api_base_url or "",
-                    api_key=self._config.agent_api_key or "", wire_api="responses", skills=None,
+                    base_url=runtime_base_url or "",
+                    api_key=runtime_api_key or "", wire_api="responses", skills=None,
                     model_catalog=offline._model_catalog_source,
                     model_catalog_destination=(Path(MODEL_CATALOG_REMOTE)
                                                if offline._model_catalog_staged else None),
@@ -264,14 +414,20 @@ class SForgeWorker(CodexAgent):
             if self.profile == "official":
                 super().install_stop_hook(backend, handle, log_dir, logger)
         else:
-            mode = "native-goal" if self.profile == "native-goal" else "heartbeat"
             self.runtime = BenchmarkCodex(
-                **common, execution_mode=mode,
-                iteration_context="resume" if mode == "heartbeat" else "fresh",
-                turn_timeout_sec=self.turn_timeout,
+                **common, execution_mode=self.execution.mode,
+                iteration_context=self.execution.context,
+                validation_command=self.execution.validation_command,
+                turn_timeout_sec=None,
                 scheduler_timeout_sec=self.timeout_seconds,
                 task_entry=self.task_entry,
                 turn_envelope=self.turn_envelope,
+                **({"complete_turn": True} if self.execution.complete_turn else {}),
+                context_delivery=self.context_delivery,
+                **({"execution_observation": self.execution_observation}
+                   if self.execution_observation is not None else {}),
+                native_child_limit=self.native_child_limit,
+                **({"provider_request_admission": True} if self.provider_request_admission else {}),
                 native_goal_continue=self.native_goal_continue,
                 replan_after_turns=self.replan_after_turns,
                 replan_after_todos=self.replan_after_todos,
@@ -284,8 +440,33 @@ class SForgeWorker(CodexAgent):
                     "defer_codex_home": True} if self.warm_start is not None else {}),
             )
             asyncio.run(self.runtime.install(self.environment))
+            if self.feedback == "native" and (self.execution_observation is not None
+                                              or self.native_result_scope is not None):
+                asyncio.run(self.runtime._install_research_entrypoint(
+                    self.environment, "loopx-bind-native-candidate", "sforge_candidate_binding.py",
+                    "--generated-file", "Native candidate verification is unavailable to the benchmark worker",
+                ))
+            if self.native_result_scope is not None:
+                self._install_native_result_scope(backend, handle)
             if self.warm_start is not None:
-                research_paths = asyncio.run(self.warm_start.stage(self.environment, self.cwd))
+                route_settings = {}
+                if runtime_base_url:
+                    worker_env = self.runtime._worker_env(cwd=self.cwd)
+                    route_settings = {
+                        "provider_base_url": runtime_base_url,
+                        "effective_config": codex_settings(
+                            execution=self.runtime.execution, workspace=Path(self.cwd),
+                            model=worker_env["MODEL_NAME"], effort=worker_env["REASONING_EFFORT"],
+                            base_url=runtime_base_url,
+                            wire_api=worker_env["CODEX_WIRE_API"],
+                            web_search=worker_env["LOOPX_WEB_SEARCH"],
+                            model_catalog=self.runtime._model_catalog_source,
+                            model_catalog_destination=(Path(MODEL_CATALOG_REMOTE)
+                                if self.runtime._model_catalog_staged else None),
+                        ).encode("utf-8"),
+                    }
+                research_paths = asyncio.run(self.warm_start.stage(
+                    self.environment, self.cwd, **route_settings))
                 self._warm_command("workspace", user="root")
                 result = backend.exec_run(handle,
                     ["chown", "-R", "-P", "agent:agent", self.cwd, *research_paths], user="root")
@@ -302,6 +483,9 @@ class SForgeWorker(CodexAgent):
                     f"chmod 0600 {shlex.quote(self.checkpoint_request_path)}"], user="root")
                 if result.exit_code:
                     raise RuntimeError("Could not protect the explicit checkpoint declaration")
+        if self.research_sidecar:
+            from .research_artifacts import RESEARCH_DIRECTORY
+            self._install_research_directory(backend, handle, restored=RESEARCH_DIRECTORY in research_paths)
         # Prompt replacement describes the policy; the feedback mode owns access.
         if self.feedback != "native":
             result = backend.exec_run(handle, ["rm", "-f", "/usr/local/bin/sforge-submit"], user="root")
@@ -334,29 +518,43 @@ class SForgeWorker(CodexAgent):
                 raise RuntimeError("Best-only Codex delivery hooks are unreadable by worker")
         (log_dir / "worker-profile.json").write_text(json.dumps({
             "profile": self.profile, "model": self._config.agent_model,
+            **self.execution.validation_receipt(),
             "task_entry": self.task_entry,
             "reasoning_effort": effort, "timeout_seconds": self.timeout_seconds,
             "loopx_usage_ping_enabled": False,
+            **({"research_directory": RESEARCH_DIRECTORY} if self.research_sidecar else {}),
             **({"checkpoint_capture_enabled": True}
                if self.checkpoint_request_path is not None else {}),
             **({"planning_timeout_seconds": None}
                if self.task_entry == "loopx-planned" else {}),
             "stop_hook": self.profile == "official",
+            **({"native_child_limit": self.native_child_limit}
+               if self.native_child_limit is not None else {}),
             **(self.runtime._turn_envelope_receipt() if self.runtime is not None else {}),
+            **({"provider_request_admission": "on"} if self.provider_request_admission else {}),
             **({"native_goal_continue": True} if self.native_goal_continue else {}),
+            **({"native_readiness_budget": dict(zip(("total_seconds", "attempt_seconds"),
+                                                    self.native_readiness_budget))}
+               if self.native_readiness_budget is not None else {}),
             "outer_resume": self.resume_cmd is not None,
             "explore_graph": self.profile == "heartbeat-explore",
             "explore_harness": self.profile == "heartbeat-explore",
             "feedback": self.feedback,
+            **({"native_result_comparison": True} if self.native_result_scope is not None else {}),
+            **({"execution_observation": self.execution_observation}
+               if self.execution_observation is not None else {}),
             **({"feedback_delivery": "codex_hooks", "feedback_payload": FEEDBACK_PAYLOAD}
                if self.feedback == "best-only" else {}),
             **(self.runtime._replan_receipt() if self.runtime and
-               self.profile.startswith("heartbeat-") else {}),
+               self.execution.uses_loopx else {}),
         }, indent=2))
 
     def format_run_cmd(self, prompt_path, *, model=None, cwd="", internet=True, resume=False):
-        if self.workspace_instructions is not None and not self.instructions_installed and self.warm_start is None:
-            self._install_workspace_instructions()
+        if self.workspace_instructions is not None and not self.instructions_installed:
+            if self.warm_start is None:
+                self._install_workspace_instructions()
+            elif self.research_sidecar:
+                self._install_restored_research_instructions()
         if self.feedback_prompt is not None and not self.prompt_installed:
             with tempfile.TemporaryDirectory(prefix="benchmark-prompt-") as directory:
                 prompt = Path(directory) / "task.md"
@@ -388,8 +586,18 @@ class SForgeWorker(CodexAgent):
                 raise RuntimeError("Native task prompt is unavailable")
             self.runtime._phase_number = 1
             if self.runtime.execution.uses_loopx:
-                asyncio.run(self.runtime._prepare_phase(self.environment, result.stdout, cwd=self.cwd))
-                if self.profile == "heartbeat-explore":
+                if self.warm_start is not None:
+                    # The sealed Goal, task graph, review counters and strategy
+                    # are the continuing state. Do not bootstrap, seed another
+                    # task, or reset an existing configuration during restore.
+                    if self.native_child_limit is not None:
+                        asyncio.run(self.runtime._verify_phase_configuration(self.environment, cwd=self.cwd))
+                    asyncio.run(self.runtime._write_task_document(self.environment, result.stdout))
+                    if self.native_child_limit is None:
+                        asyncio.run(self.runtime._verify_phase_configuration(self.environment, cwd=self.cwd))
+                else:
+                    asyncio.run(self.runtime._prepare_phase(self.environment, result.stdout, cwd=self.cwd))
+                if self.profile == "heartbeat-explore" and self.warm_start is None:
                     observed = asyncio.run(self.runtime._loopx(self.environment, [
                         "configure-goal", "--goal-id", self.runtime.goal_id,
                         "--explore-graph-enabled", "--explore-harness-enabled",
@@ -412,7 +620,8 @@ class SForgeWorker(CodexAgent):
         if self.warm_start is not None:
             env["LOOPX_WARM_START"] = f"{_CONTROL}/warm-start.json"
         command = worker_command(env, python=f"{_PYTHON}/bin/python3", source=_SRC,
-                                 state_file=_SCHEDULER_STATE, host_timeout=self.turn_timeout)
+                                 state_file=_SCHEDULER_STATE, host_timeout=self.turn_timeout,
+                                 resume_budget_stop=self.warm_start is not None)
         if self.task_entry == "loopx-planned" and self.warm_start is None:
             env["LOOPX_PLANNING_RESULT"] = "/opt/loopx-benchmark/control/planning-phase-001.json"
             command = [f"{_PYTHON}/bin/python3", "-m", "benchmark.runtime.sforge_entry", *command]
@@ -431,8 +640,19 @@ class SForgeWorker(CodexAgent):
             # environment. Do not duplicate it in the logged shell command.
             env.pop("OPENAI_API_KEY", None)
         exports = " ".join(f"{key}={shlex.quote(value)}" for key, value in env.items())
+        # Run once at receiver execution entry, before its phase clock and
+        # scheduler. Do not turn route failures into an unknown native request
+        # or count setup failure against solver time. Custom API providers keep
+        # their own admission path; no observer runs on every heartbeat wake.
+        readiness = ""
+        if not self._config.agent_api_base_url:
+            readiness_options = (f" --total-seconds {self.native_readiness_budget[0]}"
+                                 f" --attempt-seconds {self.native_readiness_budget[1]}"
+                                 if self.native_readiness_budget is not None else "")
+            readiness = (f"env {exports} {shlex.quote(f'{_PYTHON}/bin/python3')} "
+                         f"-m benchmark.runtime.codex_readiness{readiness_options}; ")
         return self._execution_command(
-            f"set -eu; {clock}"
+            f"set -eu; {readiness}{clock}"
             f"export LOOPX_PHASE_DEADLINE_EPOCH=$(cat {deadline}); "
             f"remaining=$(( LOOPX_PHASE_DEADLINE_EPOCH - $(date +%s) )); "
             f'if test "$remaining" -le 0; then test -f {started}; exit $?; fi; '
@@ -465,9 +685,21 @@ class SForgeWorker(CodexAgent):
 
     def _install_workspace_instructions(self):
         """Preserve task instructions and verify the policy before model entry."""
+        self._append_workspace_policy("<!-- EdgeBench native feedback policy -->", self.workspace_instructions)
+
+    def _install_restored_research_instructions(self):
+        from benchmark.edgebench.prompts import research_artifact_instructions
+        # Preserve the sealed task instructions and earlier feedback policy.
+        # Only the runner-owned storage location changes in this continuation;
+        # the original checkpoint remains untouched and independently verifiable.
+        self._append_workspace_policy("<!-- EdgeBench restored research storage -->",
+            "For this continuation, the following research storage instructions "
+            "replace earlier workspace-storage guidance. Existing implementation and "
+            "research artifacts are retained.\n\n" + research_artifact_instructions(checkpoint=True))
+
+    def _append_workspace_policy(self, marker: str, policy: str):
         path = shlex.quote(str(PurePosixPath(self.cwd) / "AGENTS.md"))
-        marker = "<!-- EdgeBench native feedback policy -->"
-        block = f"\n\n{marker}\n\n{self.workspace_instructions}"
+        block = f"\n\n{marker}\n\n{policy}"
         check = f"test ! -L {path} && {{ test ! -e {path} || test -f {path}; }}"
         read = asyncio.run(self.environment.exec(f"{check} && {{ test ! -f {path} || cat {path}; }}"))
         if read.return_code:

@@ -1,5 +1,4 @@
-import {projectTodoHandoffContext} from "./handoff_projection.ts";
-/** Whole-source summary decisions. Python materializes these ordinals as public
+/** Whole-source summary decisions. The native read owner materializes public
  * display records; counts and closure never depend on a presentation budget. */
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
@@ -7,7 +6,7 @@ import {requireBoolean, requireJsonObject, requireStringLiteral} from "../runtim
 import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 import {countDeferredTodoWork, projectTodoSummaryLanes, type TodoSummaryLane} from "./summary_lanes.ts";
 import {projectSummaryFrontierIndex} from "./frontier_revision.ts";
-import {projectTodoClosure, projectTodoSuccession, SUCCESSION_FACT_COLUMNS, SUCCESSION_EVALUATION_COLUMNS} from "./succession.ts";
+import {projectTodoClosure, validateTodoSuccession} from "./succession.ts";
 
 type Format = "raw" | "compact" | "active" | "recent" | "gap";
 interface DisplayLane {indices: number[]; format: Format}
@@ -18,57 +17,17 @@ interface SummaryProjection {
   fields: JsonObject;
   lanes: Record<string, DisplayLane>;
   orchestration: {candidate_items: number[]; user_blocker_items: number[]};
-  handoff_context?: JsonObject[];
 }
 
-/** The declared order is this request version's schema, not a hint: the same
- * cells in a different order would silently change meaning. */
-export const TODO_SUMMARY_PROJECTION_COLUMNS = [
-  "status", "done", "task_class", "has_resume", "resume_ready", "resume_evaluated",
-  "acceptance_blocked", "claimed", "preferred", "watch_only", "due_at", "expires_at",
-  "sort", "completed_at", "updated_at", "completion_index", "linked_user_action",
-  "no_followup", "successor_gap", "handoff_state", "replan", "todo_id", "claim",
-  "bound", "blocks", "global", "excluded",
-] as const;
-
-/** One whole-source batch carries every Todo, so the co-deployed adapter sends
- * columnar facts. Decoding restores the row objects the lane and closure owners
- * already validate; nothing is defaulted or inferred from absence. */
-function decodeRows(request: JsonObject): JsonObject[] {
-  const columns = request.columns;
-  if (!Array.isArray(columns) || columns.length !== TODO_SUMMARY_PROJECTION_COLUMNS.length ||
-      columns.some((name, index) => name !== TODO_SUMMARY_PROJECTION_COLUMNS[index])) {
-    throw new EffectRuntimeRequestError("Todo summary row columns do not match the typed adapter order");
-  }
-  if (!Array.isArray(request.rows)) {
-    throw new EffectRuntimeRequestError("Todo summary rows must be a list");
-  }
-  return request.rows.map((value, ordinal) => {
-    if (!Array.isArray(value) || value.length !== columns.length) {
-      throw new EffectRuntimeRequestError(`Todo summary row ${ordinal} does not match its declared columns`);
-    }
-    return Object.fromEntries(TODO_SUMMARY_PROJECTION_COLUMNS.map((name, index) => [name, value[index]]));
-  });
-}
-
-/** Co-deployed callers can fuse evidence validation with summary projection.
- * This is the same succession owner, not a cache, graph truncation or bypass.
- * Legacy v1 callers retain their existing path; v2 requires the carrier. */
 function validateSummarySuccession(request: JsonObject, rows: readonly JsonObject[]): void {
-  if (request.schema_version === "todo_summary_projection_request_v1") return;
   const source = requireJsonObject(request.succession, "summary succession");
-  if (source.evaluations === undefined) {
-    throw new EffectRuntimeRequestError("summary requires full-source succession evaluations");
-  }
-  const result = projectTodoSuccession(source);
-  const evaluations = result.evaluations as unknown[][];
-  const facts = source.rows as unknown[][];
-  if (evaluations.length !== rows.length) {
+  if (!Array.isArray(source.facts) || !Array.isArray(source.evaluations) ||
+      source.facts.length !== rows.length || source.evaluations.length !== rows.length) {
     throw new EffectRuntimeRequestError("summary succession cardinality mismatch");
   }
   for (const [index, row] of rows.entries()) {
-    const fact = Object.fromEntries(SUCCESSION_FACT_COLUMNS.map((name, column) => [name, facts[index][column]]));
-    const evaluation = Object.fromEntries(SUCCESSION_EVALUATION_COLUMNS.map((name, column) => [name, evaluations[index][column]]));
+    const fact = requireJsonObject(source.facts[index], "summary succession facts");
+    const evaluation = validateTodoSuccession(fact, source.evaluations[index]);
     if (row.todo_id !== fact.todo_id || row.status !== fact.status || row.no_followup !== fact.no_followup ||
         (row.task_class === "advancement_task") !== fact.advancement ||
         row.successor_gap !== evaluation.successor_gap || row.handoff_state !== evaluation.handoff_state ||
@@ -102,11 +61,6 @@ function claimedVisibility(indices: readonly number[], rows: readonly JsonObject
 
 export function projectTodoSummary(value: unknown): SummaryProjection {
   const request = requireJsonObject(value, "Todo summary request");
-  if (request.schema_version !== "todo_summary_projection_request_v1" &&
-      request.schema_version !== "todo_summary_projection_request_v2" &&
-      request.schema_version !== "todo_summary_projection_request_v3") {
-    throw new EffectRuntimeRequestError("Todo summary request schema mismatch");
-  }
   const role = request.role === null ? null : requireStringLiteral(request.role, ["user", "agent"], "role");
   if (request.source_section !== null && typeof request.source_section !== "string") {
     throw new EffectRuntimeRequestError("source_section must be text or null");
@@ -116,13 +70,11 @@ export function projectTodoSummary(value: unknown): SummaryProjection {
     throw new EffectRuntimeRequestError("item_limit must be a non-negative integer or null");
   }
   const full = requireBoolean(request.full_selection, "full_selection");
-  const rows = decodeRows(request);
+  if (!Array.isArray(request.rows)) throw new EffectRuntimeRequestError("Todo summary rows must be a list");
+  const rows = request.rows.map(value => requireJsonObject(value, "Todo summary row"));
   validateSummarySuccession(request, rows);
-  if (request.handoff_sources !== undefined && (!Array.isArray(request.handoff_sources) || request.handoff_sources.length !== rows.length)) {
-    throw new EffectRuntimeRequestError("summary handoff cardinality mismatch");
-  }
 
-  // The co-deployed adapter sends source facts, not prose or full Todo bodies.
+  // Source validation precedes every selection and display limit.
   for (const row of rows) {
     if ((row.claim !== null && typeof row.claim !== "string") || row.claimed !== Boolean(row.claim)) {
       throw new EffectRuntimeRequestError("summary claimant facts disagree");
@@ -154,12 +106,10 @@ export function projectTodoSummary(value: unknown): SummaryProjection {
     })), selected.deferred_items.length),
   };
   const lanes: Record<string, DisplayLane> = {};
-  if (request.schema_version === "todo_summary_projection_request_v3") {
-    if (role === "agent") {
-      fields.advancement_frontier_revision_index = projectSummaryFrontierIndex(request.frontier_rows, rows, source);
-    } else if (request.frontier_rows !== null) {
-      throw new EffectRuntimeRequestError("non-Agent summary must omit frontier source facts");
-    }
+  if (role === "agent") {
+    fields.advancement_frontier_revision_index = projectSummaryFrontierIndex(request.frontier_rows, rows, source);
+  } else if (request.frontier_rows !== null) {
+    throw new EffectRuntimeRequestError("non-Agent summary must omit frontier source facts");
   }
   const lane = (name: string, indices: readonly number[], cap: number | null = null, format: Format = "compact") => {
     lanes[name] = {indices: cap === null ? [...indices] : indices.slice(0, cap), format};
@@ -233,15 +183,7 @@ export function projectTodoSummary(value: unknown): SummaryProjection {
   Object.assign(fields, projectTodoClosure({schema_version: "todo_closure_request_v0", role,
     source_section: request.source_section, full_selection: fullSelection, rows: source.map(index => rows[index])}));
   return {schema_version: "todo_summary_projection_v0",
-    ...(request.handoff_sources === undefined ? {} : {handoff_context: projectTodoHandoffContext(
-      (request.handoff_sources as unknown[]).map((value, index) => {
-        const context = requireJsonObject(value, "summary handoff source");
-        // Reuse the same normalized source facts, rather than sending another
-        // Todo identity/claim/exclusion/class copy for every historical row.
-        return {...context, metadata: {...requireJsonObject(context.metadata ?? {}, "handoff metadata"),
-          todo_id: rows[index].todo_id, claimed_by: rows[index].claim, excluded_agents: rows[index].excluded},
-          texts: {...requireJsonObject(context.texts ?? {}, "handoff texts"), task_class: rows[index].task_class}};
-      }))}), source_indices: source, full_selection: fullSelection, fields, lanes,
+    source_indices: source, full_selection: fullSelection, fields, lanes,
     orchestration: {
       candidate_items: role === "agent" ? selected.projected_open_items.filter(index => rows[index].task_class === "advancement_task") : [],
       user_blocker_items: role === "user" ? selected.projected_open_items.filter(index => rows[index].linked_user_action === true) : [],

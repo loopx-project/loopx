@@ -126,6 +126,48 @@ def test_common_context_and_human_display_are_independent(monkeypatch):
     assert source == before
 
 
+@pytest.mark.parametrize("placement", ["item", "asset", "item_todos", "asset_todos"])
+@pytest.mark.parametrize("wire", ["v2", "legacy_enabled", "legacy_disabled", "removed"])
+def test_handoff_retains_configured_checks_from_each_readback_source(placement, wire):
+    source = status_fixture()
+    item = source["attention_queue"]["items"][0]
+    asset = item["project_asset"]
+    asset["agent_member"] = {"agent_id": "agent-a", "agent_model": "fixture-agent"}
+    source["run_history"]["goals"][0]["latest_runs"] = []
+    checks = {
+        "objective": "Validate the selected export",
+        "non_goals": ["No unrelated cleanup"],
+        "criteria": [{"id": "export", "description": "Preserve the source citation"}],
+        "scope": {"kind": "selected_work", "todo_ids": ["todo_export"]},
+        "revision": 3,
+        "digest": "sha256:" + "a" * 64,
+        "status": "unverified",
+    }
+    document = copy.deepcopy(checks)
+    if wire.startswith("legacy_"):
+        document["enabled"] = wire == "legacy_enabled"
+    elif wire == "removed":
+        document = {"revision": 4}
+    targets = {
+        "item": item,
+        "asset": asset,
+        "item_todos": item.setdefault("agent_todos", {}),
+        "asset_todos": asset["agent_todos"],
+    }
+    targets[placement]["goal_acceptance_contract"] = document
+    before = copy.deepcopy(source)
+
+    handoff = build_project_agent_handoff(source, goal_id="handoff-contract")
+
+    assert handoff["ok"], handoff
+    core = handoff["replan_context"]["core_goal"]
+    assert core["acceptance_contract"] == (
+        document if wire in {"v2", "legacy_enabled"} else None
+    )
+    assert core["objective"] is None, "A selected check objective is not the whole Goal"
+    assert source == before
+
+
 def test_restore_cli_success_does_not_execute_or_adopt(tmp_path):
     packet = build_review_packet(status_fixture(), goal_id="handoff-contract")
     code, payload = receive(tmp_path, packet)
@@ -253,8 +295,6 @@ def test_handoff_only_does_not_construct_review_packet(monkeypatch, capsys, tmp_
         action_kind=None,
         review_url=None,
         agent_id=None,
-        scan_path=[],
-        scan_root=".",
         limit=5,
         available_capabilities=None,
     )

@@ -207,6 +207,22 @@ already-canonical Goals use the [reviewed File/SQLite cutover](file-authority-st
 Retain verified backups, stop writers, settle leases and preserve newer writes
 on reverse migration. Supported historical backup/format/receipt readers remain.
 
+When an older Goal cannot load, the App preserves the storage owner's
+`canonical_authority_required` error and offers **Review storage upgrade**.
+This opens the existing Goal storage inspector directly, without automatic
+retries or migration. Canonical-only settings wait until status can be read;
+the inspector remains available after reload. Read-only sources retain their
+read-only boundary. Reviewed preview, stopped writers and explicit import
+confirmation are still required. Packaged desktop/mobile validation covers
+File/SQLite recovery, response loss and refusal of unsettled work; this does
+not establish that an installed user's Goals have been migrated.
+
+旧版 Goal 无法加载时，App 显示存储升级原因，并通过“检查存储升级”直接打开
+现有存储检查页，不自动重试或迁移。状态恢复前暂不加载依赖 canonical 存储的
+设置，重载后仍可检查存储。只读来源保留只读边界；迁移仍须审阅预览、停止写入
+并明确确认。打包后的桌面和手机验证覆盖 File/SQLite 恢复、响应丢失及未结算
+工作的拒绝；这些证据不代表用户已安装的 Goal 已完成迁移。
+
 After reviewed import or promotion, reconnect the registered Goal with ordinary
 bootstrap, without `--force`:
 
@@ -461,8 +477,8 @@ than guessing a replacement; explicit original-receipt readback remains availabl
 Pre-upgrade browser-only handles remain explicitly readable through the original
 API/CLI recovery path. A new server does not automatically adopt an unscoped
 browser cache from a possibly different runtime or registry.
-The operator-led POSIX stop path is exercised with actual owned Host processes
-and native unpromoted-source leases on File/SQLite: import refuses while the
+The operator-led POSIX stop path uses an owned pre-cutover Host process fixture,
+retained migration lease inventory, and native cleanup on File/SQLite: import refuses while the
 Host runs and after it exits with an active lease; native release permits
 cutover. The imported released lease retains its identity and history, and a
 restart using the old grant is rejected before the actual Host launches.

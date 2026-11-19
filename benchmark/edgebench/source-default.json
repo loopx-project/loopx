@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/huangruiteng/EdgeBench.git",
+  "ref": "476b34d17e759a7dbcf9ec36a12ff42b757b462a",
+  "compatibility_patch": {
+    "id": "nonfinite-checkpoint-v2",
+    "relative_path": "compatibility/nonfinite-checkpoint-v2.patch",
+    "sha256": "02d21096a2e55f625d3c8beee2335728caf08aa6c75a5a27b1ab412bc46323bf"
+  }
+}

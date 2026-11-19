@@ -222,7 +222,6 @@ def test_promoted_source_recreation_fences_old_acceptance(
     assert current["status"] == "loaded"
     assert current["contract"] is None
     assert current["goal_acceptance_contract"] == {
-        "enabled": False,
         "lifecycle_state": "active",
         "goal_ref": goal_ref,
     }
@@ -310,7 +309,6 @@ def test_recreation_retry_repairs_acceptance_after_source_publication(
     ]
     assert current["status"] == "loaded"
     assert current["goal_acceptance_contract"] == {
-        "enabled": False,
         "lifecycle_state": "active",
         "goal_ref": goal_ref,
     }
@@ -348,7 +346,6 @@ def test_historical_recreation_migrates_legacy_acceptance_to_retired_instance(
     assert current["status"] == "loaded"
     assert current["contract"] is None
     assert current["goal_acceptance_contract"] == {
-        "enabled": False,
         "lifecycle_state": "active",
         "goal_ref": goal_ref,
     }
@@ -398,7 +395,6 @@ def test_historical_replay_does_not_replace_a_later_acceptance_successor(
     )
     assert current["status"] == "loaded"
     assert current["goal_acceptance_contract"] == {
-        "enabled": False,
         "lifecycle_state": "active",
         "goal_ref": goal_c,
     }

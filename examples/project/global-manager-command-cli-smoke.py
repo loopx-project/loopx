@@ -21,7 +21,7 @@ from loopx.control_plane.coordination.authority_source_capture import (  # noqa:
     build_todo_runtime_shadow_projection,
     capture_todo_archive_dependencies,
 )
-from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted  # noqa: E402
+from loopx.control_plane.coordination.local_authority import CanonicalAuthorityRequired, read_canonical_todos_if_promoted  # noqa: E402
 from loopx.control_plane.todos.goal_todo_projection import project_goal_todo_items  # noqa: E402
 
 GOAL_ID = "smoke-goal"
@@ -335,7 +335,9 @@ def assert_risks_payload(
     boundary_rows = [
         row for row in risks if row["kind"] == "public_boundary_violation"
     ]
-    assert len(boundary_rows) >= 2, payload
+    # The status hot path does not scan repository content. Its risk projection
+    # must not invent public-boundary observations from uninspected files.
+    assert boundary_rows == [], payload
     assert len({row["occurrence_id"] for row in boundary_rows}) == len(boundary_rows)
     assert all(row["category"] == "boundary_warning" for row in boundary_rows)
     assert payload["groups"]["rollback_candidates"] == [], payload
@@ -459,7 +461,6 @@ def assert_unhealthy_status_envelope(
         runtime=runtime,
         command="status",
         output_format="json",
-        command_args=["--scan-path", str(safe_input)],
         check=False,
     )
     status_payload = json.loads(status_proc.stdout)
@@ -472,7 +473,6 @@ def assert_unhealthy_status_envelope(
         runtime=runtime,
         command="global-gates",
         output_format="json",
-        command_args=["--scan-path", str(safe_input)],
         check=False,
     )
     assert gates_proc.returncode != 0, gates_proc
@@ -490,7 +490,6 @@ def assert_unhealthy_status_envelope(
         runtime=runtime,
         command="global-todos",
         output_format="json",
-        command_args=["--scan-path", str(safe_input)],
         check=False,
     )
     assert todos_proc.returncode != 0, todos_proc
@@ -507,7 +506,6 @@ def assert_unhealthy_status_envelope(
         runtime=runtime,
         command="global-risks",
         output_format="json",
-        command_args=["--scan-path", str(safe_input)],
         check=False,
     )
     assert risks_proc.returncode == 0, risks_proc
@@ -542,8 +540,6 @@ def run_scenario(provider: str | None) -> None:
                 AGENT_ID,
                 "--limit",
                 "5",
-                "--scan-path",
-                str(safe_input),
             ],
         )
         gates_proc = run_cli(
@@ -556,8 +552,6 @@ def run_scenario(provider: str | None) -> None:
                 AGENT_ID,
                 "--limit",
                 "5",
-                "--scan-path",
-                str(safe_input),
             ],
         )
         markdown_proc = run_cli(
@@ -570,8 +564,6 @@ def run_scenario(provider: str | None) -> None:
                 AGENT_ID,
                 "--limit",
                 "5",
-                "--scan-path",
-                str(safe_input),
             ],
         )
         todos_proc = run_cli(
@@ -584,8 +576,6 @@ def run_scenario(provider: str | None) -> None:
                 AGENT_ID,
                 "--limit",
                 "5",
-                "--scan-path",
-                str(safe_input),
             ],
         )
         todos_markdown_proc = run_cli(
@@ -598,8 +588,6 @@ def run_scenario(provider: str | None) -> None:
                 AGENT_ID,
                 "--limit",
                 "5",
-                "--scan-path",
-                str(safe_input),
             ],
         )
         risks_args = [
@@ -609,8 +597,6 @@ def run_scenario(provider: str | None) -> None:
             "1h",
             "--limit",
             "8",
-            "--scan-path",
-            str(risk_input),
         ]
         risks_proc = run_cli(
             registry=registry,
@@ -665,8 +651,21 @@ def run_scenario(provider: str | None) -> None:
 
 def main() -> int:
     os.environ["NODE_OPTIONS"] = os.environ.get("NODE_OPTIONS", "") + " --experimental-sqlite"
-    # Keep historical read compatibility alongside both canonical providers.
-    for provider in (None, "file", "sqlite"):
+    # Unmigrated ordinary reads refuse; both real providers retain the complete journey.
+    with tempfile.TemporaryDirectory(prefix="loopx-global-manager-unmigrated-") as tmp:
+        root = Path(tmp)
+        registry, runtime, _, _, fixture_files = write_fixture(root)
+        before = snapshot_files([registry, *fixture_files])
+        for goal_id in (GOAL_ID, RUNNABLE_GOAL_ID, DEFERRED_GOAL_ID):
+            try:
+                read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal_id)
+            except CanonicalAuthorityRequired as error:
+                assert error.payload["write_admitted"] is False
+                assert error.payload["legacy_fallback_used"] is False
+            else:
+                raise AssertionError("Ordinary manager reads require canonical authority")
+        assert snapshot_files([registry, *fixture_files]) == before
+    for provider in ("file", "sqlite"):
         run_scenario(provider)
     print("global-manager-command-cli-smoke ok")
     return 0

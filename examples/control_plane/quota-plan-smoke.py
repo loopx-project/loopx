@@ -30,7 +30,7 @@ from loopx.control_plane.scheduler.execution_context import (  # noqa: E402
     scheduler_execution_context_for_runtime_profile,
 )
 
-from quota_plan_fixtures import (  # noqa: E402
+from examples.control_plane.quota_plan_fixtures import (  # noqa: E402
     _nested_value,
     _short_hash,
     assert_dry_run_left_cli_fixture_unchanged,
@@ -57,7 +57,7 @@ APP_SCHEDULER_CONTEXT = scheduler_execution_context_for_runtime_profile(
 )
 
 
-def assert_plan_shape(plan: dict, markdown: str | None = None) -> None:
+def assert_plan_shape(plan: dict, markdown: str | None = None, *, expected_user_todos: int = 1) -> None:
     eligible_ids = [item["goal_id"] for item in plan["groups"]["eligible"]]
     operator_gate_ids = [item["goal_id"] for item in plan["groups"]["operator_gate"]]
     throttled_ids = [item["goal_id"] for item in plan["groups"]["throttled"]]
@@ -73,7 +73,7 @@ def assert_plan_shape(plan: dict, markdown: str | None = None) -> None:
     assert gated["quota"]["blocked_action_scope"] == "gated_delivery", gated
     assert "operator_question" in gated, gated
     if "user_todos" in gated:
-        assert gated["user_todos"]["open_count"] == 1, gated
+        assert gated["user_todos"]["open_count"] == expected_user_todos, gated
     assert "throttled-half" not in eligible_ids, eligible_ids
     if markdown is not None:
         assert "next_automatic_turn=full-speed" in markdown, markdown
@@ -1020,9 +1020,9 @@ def assert_heartbeat_recommendation_lifecycle() -> None:
     assert mapped_decision["execution_obligation"]["kind"] == "quiet_noop_if_unchanged", mapped_decision
     scheduler = mapped_decision["scheduler_hint"]
     assert scheduler["action"] == "backoff_until_fresh_evidence", mapped_decision
-    assert scheduler["codex_app"]["recommended_interval_minutes"] == 60, mapped_decision
-    assert scheduler["codex_app"]["recommended_rrule"] == "FREQ=MINUTELY;INTERVAL=60", mapped_decision
-    assert scheduler["codex_app"]["example_progression_minutes"] == [60], mapped_decision
+    assert scheduler["app_automation"]["recommended_interval_minutes"] == 60, mapped_decision
+    assert scheduler["app_automation"]["recommended_rrule"] == "FREQ=MINUTELY;INTERVAL=60", mapped_decision
+    assert scheduler["app_automation"]["example_progression_minutes"] == [60], mapped_decision
     assert scheduler["unchanged_poll"]["limits"]["codex_cli_tui"] == 3, mapped_decision
     assert scheduler["unchanged_poll"]["final_quota_replan_check_enabled"] is True, mapped_decision
     assert "local_scheduler" not in scheduler, scheduler
@@ -1425,7 +1425,7 @@ def main() -> int:
     assert_slot_preview(build_quota_slot_preview(status_payload, goal_id="near-limit-half", slots=1))
     with tempfile.TemporaryDirectory(prefix="loopx-quota-plan-smoke-") as tmp:
         cli_plan, cli_markdown = run_cli_quota_plan(Path(tmp))
-    assert_plan_shape(cli_plan, cli_markdown)
+    assert_plan_shape(cli_plan, cli_markdown, expected_user_todos=0)
     with tempfile.TemporaryDirectory(prefix="loopx-quota-should-run-smoke-") as tmp:
         assert_throttled_cli_should_run(run_cli_throttled_should_run(Path(tmp)))
     with tempfile.TemporaryDirectory(prefix="loopx-quota-slot-smoke-") as tmp:

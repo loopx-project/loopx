@@ -115,10 +115,15 @@ def pytest_configure(config: pytest.Config) -> None:
     if delay:
         # Capture the original descriptor before per-test fd capture starts,
         # so a blocked worker's diagnostic is visible before it returns.
-        if sys.__stderr__ is None:
+        # execnet redirects descriptor 2 (and thus sys.__stderr__) to NUL
+        # on Windows, preserving the controller's stderr in sys.stderr.
+        # pytest has suspended global capture during configuration, so this
+        # is the live transport stream rather than a per-test capture file.
+        stderr = sys.stderr if os.name == "nt" and hasattr(config, "workerinput") else sys.__stderr__
+        if stderr is None:
             raise pytest.UsageError("--ci-stall-after requires an original stderr file descriptor")
         try:
-            config.stash[_STACK_FD] = os.dup(sys.__stderr__.fileno())
+            config.stash[_STACK_FD] = os.dup(stderr.fileno())
         except (AttributeError, OSError, ValueError) as error:
             raise pytest.UsageError("--ci-stall-after requires an original stderr file descriptor") from error
     # xdist sends TestReports to the controller. Worker output would duplicate

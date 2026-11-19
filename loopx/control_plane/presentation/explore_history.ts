@@ -2,12 +2,19 @@
  * Event kinds/statuses/relationships remain owned by Explore result_log.py.
  * Local display grouping must not turn parentage or time into supporting evidence.
  */
+import {normalizeExploreExecutionObservation} from "../capabilities/explore_execution_observation.ts";
+import {normalizeExploreMeasurements, projectExploreMeasurementFeedback, type ExploreMeasurement} from "../capabilities/explore_measurements.ts";
+import {normalizeWorkYardstickCapture, type WorkYardstickCapture} from "../work_items/yardstick_decision.ts";
+import type {JsonObject} from "../runtime_decode.ts";
 export type ExploreHistoryEvent = {
   schema_version: string; event_id: string; goal_id: string; event_kind: string;
   result_id: string; recorded_at: string; title: string; summary: string;
   status: string; node_kind: string; blocked_reason: string; parent_id: string;
   node_id: string; from_node: string; to_node: string; edge_type: string;
   agent_id: string; run_id: string; evidence_refs: string[]; supersedes: string; confidence: number | null;
+  execution_observation?: JsonObject;
+  measurements?: ExploreMeasurement[];
+  work_yardstick?: WorkYardstickCapture;
 };
 export type ExploreHistoryPage = {goal_id: string; items: ExploreHistoryEvent[]; total: number; next_cursor: string | null};
 export type ExploreHistoryNode = {id: string; latest: ExploreHistoryEvent; updates: ExploreHistoryEvent[]; findings: ExploreHistoryEvent[]; revisions: ExploreHistoryEvent[]};
@@ -48,7 +55,7 @@ export function parseExploreHistoryPage(input: unknown, goalId: string): Explore
     }
     if (fields.some(key => raw[key] !== undefined && typeof raw[key] !== "string")
         || (raw.evidence_refs !== undefined && (!Array.isArray(raw.evidence_refs) || raw.evidence_refs.some(ref => typeof ref !== "string")))
-        || (raw.confidence !== undefined && (typeof raw.confidence !== "number" || !Number.isFinite(raw.confidence) || raw.confidence < 0 || raw.confidence > 1))) {
+        || (raw.confidence !== undefined && raw.confidence !== null && (typeof raw.confidence !== "number" || !Number.isFinite(raw.confidence) || raw.confidence < 0 || raw.confidence > 1))) {
       throw new Error("Invalid Explore history evidence");
     }
     // Normalize key order too, so replay equality is independent of JSON key order.
@@ -58,16 +65,19 @@ export function parseExploreHistoryPage(input: unknown, goalId: string): Explore
       ...Object.fromEntries(fields.map(key => [key, raw[key] ?? ""])),
       evidence_refs: [...(raw.evidence_refs as string[] | undefined ?? [])],
       confidence: typeof raw.confidence === "number" ? raw.confidence : null,
+      ...(raw.execution_observation === undefined ? {} : {
+        execution_observation: normalizeExploreExecutionObservation({observation: raw.execution_observation}),
+      }),
+      ...(raw.work_yardstick === undefined ? {} : {work_yardstick: normalizeWorkYardstickCapture({
+        capture: raw.work_yardstick, goal_id: goalId, agent_id: raw.agent_id ?? "", evidence_refs: raw.evidence_refs ?? [],
+      })}),
+      ...(raw.measurements === undefined ? {} : {measurements: normalizeExploreMeasurements(raw.measurements)}),
     } as ExploreHistoryEvent;
   });
   return {goal_id: goalId, items, total: page.total as number, next_cursor: page.next_cursor as string | null};
 }
 
-export function projectExploreHistory(events: readonly ExploreHistoryEvent[], goalId: string) {
-  const unique = new Map<string, ExploreHistoryEvent>();
-  const nodes = new Map<string, ExploreHistoryNode>();
-  const edges = new Map<string, ExploreHistoryEvent>();
-  const findings = new Map<string, ExploreHistoryEvent>();
+export function mergeExploreHistoryEvents(unique: Map<string, ExploreHistoryEvent>, events: readonly ExploreHistoryEvent[], goalId: string) {
   for (const event of events) {
     if (event.goal_id !== goalId) throw new Error("Explore history Goal mismatch");
     const previous = unique.get(event.event_id);
@@ -76,6 +86,16 @@ export function projectExploreHistory(events: readonly ExploreHistoryEvent[], go
       continue;
     }
     unique.set(event.event_id, event);
+  }
+}
+
+export function projectExploreHistory(events: readonly ExploreHistoryEvent[], goalId: string) {
+  const unique = new Map<string, ExploreHistoryEvent>();
+  mergeExploreHistoryEvents(unique, events, goalId);
+  const nodes = new Map<string, ExploreHistoryNode>();
+  const edges = new Map<string, ExploreHistoryEvent>();
+  const findings = new Map<string, ExploreHistoryEvent>();
+  for (const event of unique.values()) {
     if (event.event_kind === "node") {
       const node = nodes.get(event.result_id);
       if (node) {node.latest = event; node.updates.push(event);}
@@ -92,8 +112,13 @@ export function projectExploreHistory(events: readonly ExploreHistoryEvent[], go
   }
   const times = [...unique.values()].map(event => Date.parse(event.recorded_at)).filter(Number.isFinite);
   const links = [...edges.values()];
+  const recordedOrder = new Map([...unique.keys()].map((id, index) => [id, index]));
+  const measurementFeedback = projectExploreMeasurementFeedback([...findings.values()].map(event => ({
+    ...event, finding_id: event.result_id, recorded_order: recordedOrder.get(event.event_id),
+  })));
   return {
     events: [...unique.values()], nodes: [...nodes.values()], edges: links, findings: [...findings.values()],
+    ...(measurementFeedback.length ? {measurementFeedback} : {}),
     startAt: times.length ? new Date(Math.min(...times)).toISOString() : null,
     endAt: times.length ? new Date(Math.max(...times)).toISOString() : null,
     unknownTimeCount: unique.size - times.length,

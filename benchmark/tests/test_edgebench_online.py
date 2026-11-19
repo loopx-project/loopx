@@ -2,6 +2,7 @@
 import hashlib
 import json
 import logging
+import math
 from types import SimpleNamespace
 
 import pytest
@@ -220,6 +221,117 @@ def test_offline_scoring_retains_failed_points_and_is_restartable(tmp_path, monk
     (queue.directory / "capture-1.tar.gz").write_bytes(b"changed")
     with pytest.raises(ValueError, match="digest"):
         offline_scoring.score_captures(tmp_path, task, None, None)
+
+
+@pytest.mark.parametrize("score,max_round,min_round", [
+    (-2.5, "capture-3", "capture-2"), (float("inf"), "capture-2", "capture-1"),
+    (float("-inf"), "capture-3", "capture-2"), (float("nan"), "capture-3", "capture-1"),
+])
+@pytest.mark.parametrize("direction", ["maximize", "minimize"])
+@pytest.mark.parametrize("policy", ["score_first", "pass_rate_first", "valid_then_score"])
+def test_offline_nonfinite_reports_preserve_native_selection_on_restart(
+        tmp_path, monkeypatch, score, max_round, min_round, direction, policy):
+    from sforge.harness.grading import EvalReport
+    from benchmark.edgebench import offline_scoring
+    from benchmark.runtime import sforge_json
+
+    queue = sampler(tmp_path)
+    for archive in (b"first", b"nonfinite", b"final"):
+        queue.capture(archive, final=archive == b"final")
+    receipt = tmp_path / "runtime-receipt.json"
+    receipt.write_text(json.dumps(dict(status="terminal", feedback="best-only", task="fixture",
+                                       run_id="run", task_sha256="source-pin")))
+    native_before = receipt.read_bytes(), (queue.directory / "index.json").read_bytes()
+    task = SimpleNamespace(task_id="fixture", judge=SimpleNamespace(score_direction=direction, selection=policy))
+    calls = []
+    literal = {"sforge_nonfinite_json": 1, "value": {"score": None},
+               "nonfinite_values": [{"path": ["score"], "kind": "nan"}]}
+
+    def grade(**kwargs):
+        calls.append(kwargs["archive"])
+        return EvalReport(task_id="fixture", submission_id=kwargs["submission_id"], pass_rate=1,
+            score={b"first": 1.0, b"nonfinite": score, b"final": 2.0}[kwargs["archive"]],
+            metrics={"measured": score, "literal": literal, "missing": None})
+
+    monkeypatch.setattr(offline_scoring, "judge_submission", grade)
+    for _ in range(2):
+        result = offline_scoring.score_captures(tmp_path, task, None, None)
+        assert result["offline_scoring_complete"] and result["failed_captures"] == 0
+        assert result["best_round"] == (max_round if direction == "maximize" else min_round)
+        for entry in result["entries"]:
+            measured = entry["metrics"]["measured"]
+            assert math.isnan(measured) if math.isnan(score) else measured == score
+            assert entry["metrics"]["literal"] == literal and entry["metrics"]["missing"] is None
+        restored = sforge_json.loads((tmp_path / "offline-scoring/result.json").read_text())
+        assert restored["best_round"] == result["best_round"]
+        if math.isfinite(score):
+            assert (tmp_path / "offline-scoring/result.json").read_text() == json.dumps(result, allow_nan=False)
+    assert calls == [b"first", b"nonfinite", b"final"]  # Cached scores are decoded before native ranking.
+    assert (receipt.read_bytes(), (queue.directory / "index.json").read_bytes()) == native_before
+
+
+def test_offline_nan_incumbent_and_malformed_cached_transport_are_not_regraded(tmp_path, monkeypatch):
+    from sforge.harness.grading import EvalReport
+    from benchmark.edgebench import offline_scoring
+
+    queue = sampler(tmp_path)
+    queue.capture(b"first")
+    queue.capture(b"final", final=True)
+    (tmp_path / "runtime-receipt.json").write_text(json.dumps(dict(
+        status="terminal", feedback="best-only", task="fixture", run_id="run", task_sha256="source-pin")))
+    task = SimpleNamespace(task_id="fixture", judge=SimpleNamespace(score_direction="maximize", selection="score_first"))
+    calls = []
+
+    def grade(**kwargs):
+        calls.append(kwargs["archive"])
+        return EvalReport(task_id="fixture", submission_id=kwargs["submission_id"], pass_rate=1,
+                          score=float("nan") if kwargs["archive"] == b"first" else 10.0)
+
+    monkeypatch.setattr(offline_scoring, "judge_submission", grade)
+    for _ in range(2):
+        result = offline_scoring.score_captures(tmp_path, task, None, None)
+        # Preserve native first-entry comparison semantics, including NaN.
+        assert result["best_round"] == "capture-1" and math.isnan(result["best_score"])
+    prior = (tmp_path / "offline-scoring/result.json").read_bytes()
+    path = tmp_path / "offline-scoring/capture-1/score.json"
+    wire = json.loads(path.read_text())
+    wire["nonfinite_values"].append(wire["nonfinite_values"][0])
+    path.write_text(json.dumps(wire))
+    with pytest.raises(ValueError, match="Duplicate"):
+        offline_scoring.score_captures(tmp_path, task, None, None)
+    assert calls == [b"first", b"final"]
+    assert (tmp_path / "offline-scoring/result.json").read_bytes() == prior
+
+
+def test_offline_cli_summary_uses_the_same_lossless_transport(tmp_path, monkeypatch, capsys):
+    from contextlib import nullcontext
+    import sys
+    import docker
+    from sforge.harness.config import SForgeConfig
+    from sforge.harness.grading import EvalReport
+    from benchmark.edgebench import offline_scoring
+    from benchmark.runtime import sforge_json
+
+    sampler(tmp_path).capture(b"final", final=True)
+    task_file = tmp_path / "fixture.json"
+    task_file.write_text("{}")
+    (tmp_path / "runtime-receipt.json").write_text(json.dumps(dict(status="terminal", feedback="best-only",
+        task="fixture", run_id="run", task_sha256=hashlib.sha256(task_file.read_bytes()).hexdigest())))
+    task = SimpleNamespace(task_id="fixture", judge=SimpleNamespace(score_direction="maximize", selection="score_first"))
+    monkeypatch.setattr(sys, "argv", ["offline_scoring", "--trial", str(tmp_path), "--tasks-dir", str(tmp_path)])
+    monkeypatch.setattr(offline_scoring, "load_benchmark", lambda path: None)
+    monkeypatch.setattr(offline_scoring, "make_task_spec", lambda *args: task)
+    monkeypatch.setattr(offline_scoring, "load_config", lambda: SForgeConfig())
+    monkeypatch.setattr(offline_scoring, "cohort_lock", nullcontext)
+    monkeypatch.setattr(docker, "from_env", lambda: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(offline_scoring, "resource_preflight", lambda *args, **kwargs: None)
+    monkeypatch.setattr(offline_scoring, "create_backend_from_config", lambda config: None)
+    monkeypatch.setattr(offline_scoring, "judge_submission", lambda **kwargs: EvalReport(
+        task_id="fixture", submission_id=kwargs["submission_id"], score=float("inf"), pass_rate=1))
+    assert offline_scoring.main() == 0
+    summary = sforge_json.loads(capsys.readouterr().out)
+    assert summary["best_score"] == float("inf") and summary["best_round"] == "capture-1"
+    assert summary["offline_scoring_complete"] and "entries" not in summary
 
 
 def test_offline_needs_terminal_solver_final_capture_and_exclusive_capacity(tmp_path, monkeypatch):

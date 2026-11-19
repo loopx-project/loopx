@@ -7,13 +7,13 @@ import json
 from collections.abc import Callable
 
 from ..control_plane.operator_provider import operator_provider_environ
+from ..control_plane.quota.turn_envelope import COMPLETE_TURN_HOST_REQUEST_SCHEMA, LOOPX_TURN_HOST_REQUEST_SCHEMA
 from ..control_plane.turn_driver.driver import SessionBindingScope, SUPPORTED_ITERATION_CONTEXT_POLICIES
 from ..control_plane.turn_driver.host_binding import (
     MANAGED_TURN_HOST,
     resolve_default_turn_host,
 )
 from ..control_plane.turn_driver.execution_profile import REASONING_EFFORTS
-from ..paths import default_public_scan_root
 
 # Explicit host choices stay per-command: planning may name any host the Turn
 # driver routes, while run-once only ships built-in adapters for these three.
@@ -90,17 +90,6 @@ def register_turn_commands(
         action="store_true",
         help="Include session binding and transaction receipt planning detail.",
     )
-    plan.add_argument(
-        "--scan-root",
-        default=default_public_scan_root(),
-        help="Public files to scan for obvious private material.",
-    )
-    plan.add_argument(
-        "--scan-path",
-        action="append",
-        default=[],
-        help="Specific public file or directory to scan. Repeatable.",
-    )
     plan.add_argument("--limit", type=int, default=5)
 
     managed_step = command_sub.add_parser(
@@ -150,17 +139,6 @@ def register_turn_commands(
             "journal retry policy."
         ),
     )
-    managed_step.add_argument(
-        "--scan-root",
-        default=default_public_scan_root(),
-        help="Public files to scan for obvious private material.",
-    )
-    managed_step.add_argument(
-        "--scan-path",
-        action="append",
-        default=[],
-        help="Specific public file or directory to scan. Repeatable.",
-    )
     managed_step.add_argument("--limit", type=int, default=5)
 
     run_once = command_sub.add_parser(
@@ -193,6 +171,10 @@ def register_turn_commands(
     )
     run_once.add_argument("--project", required=True)
     run_once.add_argument(
+        "--delegation-context-json",
+        help="Host locator for an existing delegation operation; original work is verified and captured, never an execution grant.",
+    )
+    run_once.add_argument(
         "--automation-id",
         help="Stable automation identity for an automation-scoped execution interval.",
     )
@@ -209,6 +191,11 @@ def register_turn_commands(
             "the Turn request from stdin and emits one result JSON object; shell "
             "parsing is never used."
         ),
+    )
+    run_once.add_argument(
+        "--host-adapter-request-schema",
+        choices=[LOOPX_TURN_HOST_REQUEST_SCHEMA, COMPLETE_TURN_HOST_REQUEST_SCHEMA],
+        help="Request schema supported by the generic CLI adapter. Required for a v1 Host invocation.",
     )
     run_once.add_argument(
         "--validation-command-json",
@@ -349,9 +336,14 @@ def register_turn_commands(
         action="store_true",
         help="Retry a failed transaction from its last side-effect-safe phase.",
     )
-    run_once.add_argument(
+    resume = run_once.add_mutually_exclusive_group()
+    resume.add_argument(
         "--resume-turn-key",
         help="Resume the exact journaled transaction without recomputing its plan.",
+    )
+    resume.add_argument(
+        "--resume-turn-instance-id",
+        help="After a lost reply, resume only the unique original journal for this Goal, Agent and Turn instance.",
     )
     run_once.add_argument(
         "--no-global-sync",
@@ -363,12 +355,6 @@ def register_turn_commands(
         action="store_true",
         help="Invoke the host and commit validated writeback/quota effects.",
     )
-    run_once.add_argument(
-        "--scan-root",
-        default=default_public_scan_root(),
-        help="Public files to scan for obvious private material.",
-    )
-    run_once.add_argument("--scan-path", action="append", default=[])
     run_once.add_argument("--limit", type=int, default=5)
 
 

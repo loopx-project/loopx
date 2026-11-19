@@ -1,6 +1,8 @@
 """Adapt registered host-local Agent observations to the typed state owner."""
+
+from typing import Any, TYPE_CHECKING, cast
+
 from pathlib import Path
-from typing import Any
 
 from ...agent_registry import load_goal_from_registry, registered_agent_ids_for_goal
 from ..effect_runtime import effect_runtime_result
@@ -33,6 +35,10 @@ def agent_capability_memory(
     return result
 
 
+if TYPE_CHECKING:
+    from ..capability_hooks import TurnStartHookRegistration
+
+
 def turn_start_hook(
     *,
     registry_path: Path,
@@ -40,7 +46,7 @@ def turn_start_hook(
     goal_id: str,
     agent_id: str,
     available: Any,
-):
+) -> "TurnStartHookRegistration":
     """Persist invocation observations through the admitted turn-start hook."""
 
     from ..capability_hooks import (
@@ -153,4 +159,4 @@ def resolve_agent_capabilities(
         agent_identity["runtime_available_capabilities"] = availability[
             "runtime_available"
         ]
-    return availability
+    return cast(dict[str, Any], availability)

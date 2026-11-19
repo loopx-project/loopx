@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlparse
 
 from .control_plane.runtime.runtime_projection_route import (
@@ -45,6 +45,28 @@ from .history import load_registry
 from .paths import resolve_runtime_root
 from .registry import registry_goals
 from .repository_identity import normalize_repository_identity
+
+
+def manager_source_scope_resolver(
+    server: Any, *, registry_path: Path, executor_runtime_root: Path,
+) -> Callable[[dict[str, Any]], list[str] | None]:
+    """Keep the default manager's native and legacy source routing together."""
+    from .extensions.lark.manager_routing import authorized_manager_goal_ids
+
+    def read(session):
+        controller = server.runtime_controller
+        if isinstance(session.get("steward_context"), dict):
+            bindings = controller.project_contexts.conversation_bindings
+            if bindings is None:
+                raise ValueError("Steward conversation bindings are unavailable")
+            return bindings.steward_scope(session)
+        return authorized_manager_goal_ids(
+            build_lark_goal_topic_runtime_snapshot(
+                registry_path=server.registry_path, runtime_root_override=server.runtime_root_override,
+            ), session, runtime_root=controller.coordination_runtime_root,
+            registry_path=registry_path, executor_runtime_root=executor_runtime_root,
+        )
+    return read
 
 
 def _compact_text(value: Any, *, limit: int = 600) -> str:
@@ -331,6 +353,11 @@ def reconcile_lark_manager_route(
 
 
 class LarkChatRequestMixin(RoomWorkChatRequestMixin):
+    if TYPE_CHECKING:
+        # Host-provided response fields used by this mixin; no runtime override.
+        def _send_error(self, message: str, *, status: int = 400,
+                        gate: dict[str, str] | None = None, error_code: str | None = None) -> None: ...
+
     """Loopback HTTP handlers for Goal repository and Lark topic connections."""
 
     server: Any
@@ -438,14 +465,34 @@ class LarkChatRequestMixin(RoomWorkChatRequestMixin):
         cli_bin = self._require_lark_cli()
         if cli_bin is None:
             return
+        query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+        try:
+            if set(query) - {"verify", "app_ref"} or any(len(values) != 1 for values in query.values()):
+                raise ValueError("Invalid Lark App query")
+            verification = query.get("verify", ["true"])[0]
+            if verification not in {"true", "false"}:
+                raise ValueError("Lark App verify must be true or false")
+            app_ref = query.get("app_ref", [None])[0]
+            runner = self._lark_runner()
+            # Settings observations have a bounded probe. Mutation owners keep
+            # their existing fresh provider/identity checks and timeout policy.
+            def observation_runner(args: list[str], cwd: Path | None, timeout: float | None) -> dict[str, Any]:
+                return runner(args, cwd, min(timeout or 5, 5))
+            apps = list_lark_apps(
+                runner=observation_runner if query else runner,
+                cli_bin=cli_bin, verify=verification == "true", app_ref=app_ref,
+            )
+        except ValueError as exc:
+            self._send_error(str(exc), status=400, error_code="invalid_lark_app")
+            return
+        except RuntimeError as exc:
+            self._send_error(str(exc), status=502, error_code="lark_configuration_unavailable")
+            return
         self._send_json(
             {
                 "ok": True,
                 "schema_version": "loopx_lark_apps_v0",
-                "apps": list_lark_apps(
-                    runner=self._lark_runner(),
-                    cli_bin=cli_bin,
-                ),
+                "apps": apps,
             }
         )
 
@@ -668,10 +715,13 @@ class LarkChatRequestMixin(RoomWorkChatRequestMixin):
                             cached_auth[key] = original_runner(args, cwd, timeout)
                         return cached_auth[key]
                 for profile in selected_profiles if configured else []:
-                    if any(row["transport_ref"] == profile for row in configured):
+                    shared_private = next((row for row in configured if row["transport_ref"] == profile), None)
+                    if shared_private is not None and shared_private.get("audience", "owner") != "owner":
                         raise ValueError("this App owns a private listener; disconnect it first")
                     identity = _app_identity_for_private_guard(profile, provider_runner, cli_bin)
-                    if identity and any(row["provider_ref"] == identity_ref(identity) for row in configured):
+                    if shared_private is not None and (not identity or shared_private["provider_ref"] != identity_ref(identity)):
+                        raise ValueError("the shared App identity changed; verify its original profile")
+                    if identity and any(row["provider_ref"] == identity_ref(identity) and row["transport_ref"] != profile for row in configured):
                         raise ValueError("this App alias owns a private listener; disconnect it first")
             executor_endpoint_id = (
                 manager_executor_endpoint_default(

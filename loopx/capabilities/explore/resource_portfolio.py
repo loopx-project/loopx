@@ -46,11 +46,17 @@ def normalize_resource_counts(
     counts: dict[str, int] = {}
     for raw_key, raw_count in (values or {}).items():
         key = normalize_resource_lane_key(raw_key)
+        if key in counts:
+            raise ValueError(f"{field_name} repeats resource lane {key!r}")
         try:
             count = int(raw_count)
-        except (TypeError, ValueError) as exc:
+        except (OverflowError, TypeError, ValueError) as exc:
             raise ValueError(f"{field_name}[{key!r}] must be a non-negative integer") from exc
-        if count < 0:
+        if (
+            isinstance(raw_count, bool)
+            or count < 0
+            or (not isinstance(raw_count, str) and raw_count != count)
+        ):
             raise ValueError(f"{field_name}[{key!r}] must be a non-negative integer")
         counts[key] = count
     return dict(sorted(counts.items()))

@@ -125,14 +125,97 @@ def resolve_goal_state(repo: str | None, state_file: str | None) -> Path | None:
     return state_path if state_path.is_absolute() else Path(repo).expanduser() / state_path
 
 
+def _published_state_text(raw: bytes, *, goal_id_map: dict[str, str], path_map: dict[str, str]) -> str | None:
+    """The text ``copy_rewritten_text_file`` publishes for ``raw``; ``None`` if it is not UTF-8.
+
+    Newlines are normalized the way ``Path.read_text`` does, so the preflight and
+    the writer see one and the same document.
+    """
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return rewrite_text(text, goal_id_map=goal_id_map, path_map=path_map)
+
+
 def copy_rewritten_text_file(source: Path, target: Path, *, goal_id_map: dict[str, str], path_map: dict[str, str]) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        text = source.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
+    text = _published_state_text(source.read_bytes(), goal_id_map=goal_id_map, path_map=path_map)
+    if text is None:
         shutil.copy2(source, target)
         return
-    atomic_write_state_text(target, rewrite_text(text, goal_id_map=goal_id_map, path_map=path_map))
+    atomic_write_state_text(target, text)
+
+
+def _directory_entry(path: Path) -> Path:
+    """The directory entry ``path`` names: resolved parent plus the final name."""
+    return path.parent.resolve() / path.name
+
+
+def _plan_active_state_copies(
+    resolved_pairs: list[tuple[dict[str, Any], dict[str, Any], Path | None, Path | None]],
+    *,
+    goal_id_map: dict[str, str],
+    path_map: dict[str, str],
+) -> list[str]:
+    """Simulate the batch in write order and return each pair's disposition.
+
+    Refuses to replace a different live target state with the legacy copy: a
+    repeated migration (for example ``--all-goals`` after more legacy Goals
+    appear) must not roll back Todos completed or added at the target since the
+    first copy. Identical content and in-place rewrites remain idempotent.
+
+    A target planned by an earlier pair, or a source an earlier pair writes or
+    rewrites in place, is judged by the bytes that pair will publish, so preview
+    and execute reach the same verdict and the same source-presence answer.
+    """
+    planned: dict[Path, bytes] = {}
+    dispositions: list[str] = []
+    for _source_goal, _target_goal, source_path, target_path in resolved_pairs:
+        if not source_path or not target_path:
+            dispositions.append("missing_state_file")
+            continue
+        # The writer replaces the target's directory entry, so a write is keyed by
+        # that entry (resolved parent + final name). A target is never a symlink
+        # (checked below); a source may be one and is read through it.
+        source_entry = _directory_entry(source_path)
+        target_entry = _directory_entry(target_path)
+        raw = planned.get(source_entry)
+        if raw is None:
+            raw = planned.get(source_path.resolve())
+        if raw is None:
+            if not source_path.exists():
+                dispositions.append("source_state_missing")
+                continue
+            raw = source_path.read_bytes()
+        text = _published_state_text(raw, goal_id_map=goal_id_map, path_map=path_map)
+        new_bytes = raw if text is None else text.encode("utf-8")
+        if target_path.is_symlink():
+            # The writer replaces the target's directory entry, which swaps a link
+            # for a regular file. That changes what every later read through the
+            # link chain sees, so no plan can stay faithful: refuse, in place or not.
+            raise ValueError(
+                f"active state target is a symbolic link: {target_path}; "
+                "refusing to publish over it"
+            )
+        in_place = target_entry in (source_entry, source_path.resolve())
+        # Every pair that publishes to one file must publish the same document,
+        # in place or not: an in-place pair that follows an earlier pair rewrites
+        # what that pair planned, not what is on disk.
+        earlier = planned.get(target_entry)
+        if earlier is not None and earlier != new_bytes:
+            raise ValueError(
+                f"selected Goals map to the same active state file with different content: {target_path}"
+            )
+        if not in_place and earlier is None and target_path.exists() and target_path.read_bytes() != new_bytes:
+            raise ValueError(
+                f"migrated active state already exists with different content: {target_path}; "
+                "refusing to overwrite it with the legacy copy"
+            )
+        planned[target_entry] = new_bytes
+        dispositions.append("copy")
+    return dispositions
 
 
 def copy_active_state_files(
@@ -142,21 +225,28 @@ def copy_active_state_files(
     path_map: dict[str, str],
     execute: bool,
 ) -> list[dict[str, Any]]:
+    resolved_pairs = [
+        (
+            source_goal,
+            target_goal,
+            resolve_goal_state(source_goal.get("repo"), source_goal.get("state_file")),
+            resolve_goal_state(target_goal.get("repo"), target_goal.get("state_file")),
+        )
+        for source_goal, target_goal in pairs
+    ]
+    # Plan the whole batch before the first copy so a conflict leaves no partial write.
+    dispositions = _plan_active_state_copies(resolved_pairs, goal_id_map=goal_id_map, path_map=path_map)
     results: list[dict[str, Any]] = []
-    for source_goal, target_goal in pairs:
-        source_path = resolve_goal_state(source_goal.get("repo"), source_goal.get("state_file"))
-        target_path = resolve_goal_state(target_goal.get("repo"), target_goal.get("state_file"))
+    for (_source_goal, target_goal, source_path, target_path), disposition in zip(resolved_pairs, dispositions):
         row: dict[str, Any] = {
             "goal_id": target_goal.get("id"),
             "source": str(source_path) if source_path else None,
             "target": str(target_path) if target_path else None,
             "copied": False,
         }
-        if not source_path or not target_path:
-            row["skipped_reason"] = "missing_state_file"
-        elif not source_path.exists():
-            row["skipped_reason"] = "source_state_missing"
-        elif execute:
+        if disposition != "copy":
+            row["skipped_reason"] = disposition
+        elif execute and source_path and target_path:
             copy_rewritten_text_file(
                 source_path,
                 target_path,

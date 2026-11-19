@@ -44,8 +44,6 @@ def _diagnose(
             "diagnose",
             "--goal-id",
             GOAL_ID,
-            "--scan-path",
-            str(readme),
         ]
     )
     return exit_code, json.loads(capsys.readouterr().out)
@@ -129,8 +127,6 @@ def test_diagnose_markdown_exposes_the_orphan_without_mutation_commands(
             "diagnose",
             "--goal-id",
             GOAL_ID,
-            "--scan-path",
-            str(readme),
         ]
     )
 

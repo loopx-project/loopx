@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -42,15 +43,12 @@ def assert_doc() -> None:
         "Codex CLI First-Run Rehearsal",
         "PyPI install/update with packaged workflow skills and an archive fallback",
         "one-message Codex CLI TUI bootstrap",
-        "proof-capture fixtures for later visible automation",
+        "bounded isolated-headless turns via `loopx turn`",
         "Start LoopX for this repo",
         "python3 -m pip install --upgrade loopx",
         "loopx workflow-skills --install",
         "loopx codex-cli-bootstrap-message --project . --goal-id <goal-id> --message-only",
-        "loopx codex-cli-tui-bootstrap-smoke-bundle",
-        "loopx --format json codex-cli-visible-attach-acceptance",
-        "does not prove same-open-TUI automation",
-        "Same-TUI automation stays optional until the proof path passes",
+        "Same-TUI automation stays optional until a safe attach primitive is proven",
         "must not:",
         "require cloning the LoopX repo",
         "read raw Codex transcripts, session files, stdout, stderr, credentials, or private paths",
@@ -76,7 +74,7 @@ def assert_indexes() -> None:
     assert f"../product/runtimes/codex-cli/{link}" in getting_started, getting_started
     assert "PyPI" in product, product
     assert "one-message TUI bootstrap" in product, product
-    assert "proof-capture fixtures" in getting_started, getting_started
+    assert "explicit `loopx turn` boundaries" in getting_started, getting_started
 
 
 def assert_cli_surfaces_align() -> None:
@@ -95,26 +93,20 @@ def assert_cli_surfaces_align() -> None:
     assert not message.startswith("/goal "), message
     assert "setup/bootstrap instruction" in normalized, message
     assert "/goal <loader task_body>" in normalized, message
-    assert "python3 -m pip install --upgrade loopx" in normalized, message
-    assert "workflow-skills --install" in normalized, message
+    assert "loopx doctor" in normalized, message
+    if os.name == "nt":
+        assert "| bash" not in normalized, message
+        assert (
+            "install-windows.ps1" in normalized
+            or "-m pip install --upgrade loopx" in normalized
+        ), message
+    else:
+        assert "python3 -m pip install --upgrade loopx" in normalized, message
+        assert "workflow-skills --install" in normalized, message
     assert "Codex CLI TUI" in normalized, message
     assert "quota should-run" in normalized, message
     assert "settlement_plan.ordered_steps" in normalized, message
     assert "raw Codex transcripts" in normalized, message
-
-    bundle = run_cli(
-        "codex-cli-tui-bootstrap-smoke-bundle",
-        "--project",
-        "/tmp/public-codex-cli-project",
-        "--goal-id",
-        GOAL_ID,
-        "--agent-id",
-        AGENT_ID,
-    )
-    normalized_bundle = normalize(bundle)
-    assert "Codex CLI TUI Bootstrap Smoke Bundle" in normalized_bundle, bundle
-    assert "runs_codex: `False`" in normalized_bundle, bundle
-    assert "requires_loopx_repo_clone: `False`" in normalized_bundle, bundle
 
 
 def main() -> int:

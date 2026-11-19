@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Mapping
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,22 @@ _observation: ContextVar[dict[str, Any] | None] = ContextVar("usage_observation"
 
 class UsageSettingsInputError(ValueError):
     """Typed input rejection from the existing TypeScript settings owner."""
+
+
+class UsageSettingsUnavailable(RuntimeError):
+    """Public-safe host failure; never carry child output or exception text."""
+
+    def __init__(self, code: object = None, *, message: str | None = None) -> None:
+        self.code = ("mutation_lock_timeout" if code == "mutation_lock_timeout"
+                     else "usage_statistics_unavailable")
+        super().__init__(message or (
+            "Usage settings are busy. Wait for the current settings operation to finish, then retry."
+            if self.code == "mutation_lock_timeout" else
+            "Usage settings unavailable. Run loopx usage-ping status before retrying a change."
+        ))
+
+    def as_payload(self) -> dict[str, object]:
+        return {"ok": False, "error": self.code, "message": str(self)}
 
 
 def select_operation(args: Any) -> None:
@@ -100,21 +117,40 @@ def _request(action: str, path: Path, **fields: Any) -> dict[str, Any]:
 def _command() -> list[str]:
     node = shutil.which("node")
     if node is None:
-        raise RuntimeError("Usage settings require the supported Node.js runtime.")
+        raise UsageSettingsUnavailable(message="Usage settings require the supported Node.js runtime.")
     # Keep the Python sender's proxy behavior when moving I/O to Node. This
     # native flag is available in the repository's supported Node versions.
     return [node, "--no-warnings", "--use-env-proxy", "--experimental-strip-types", str(_ENTRY)]
 
 
 def control(action: str, path: Path | None = None, **fields: Any) -> dict[str, Any]:
-    result = subprocess.run(_command(), input=json.dumps(_request(action, path or state_path(), **fields)),
-                            capture_output=True, text=True, encoding="utf-8", timeout=4, check=False)
-    payload = json.loads(result.stdout)
+    try:
+        result = subprocess.run(_command(), input=json.dumps(_request(action, path or state_path(), **fields)),
+                                capture_output=True, text=True, encoding="utf-8", timeout=4, check=False)
+    except (OSError, subprocess.TimeoutExpired, UnicodeError):
+        raise UsageSettingsUnavailable() from None
+    try:
+        payload = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError):
+        raise UsageSettingsUnavailable() from None
     if isinstance(payload, dict) and payload.get("error") == "usage_context_invalid":
         raise UsageSettingsInputError("Invalid device deployment context; see the usage-ping reference.")
     if result.returncode or not isinstance(payload, dict) or "error" in payload:
-        raise RuntimeError("Usage settings unavailable. Inspect the local usage-ping.json; disable can repair invalid state.")
+        raise UsageSettingsUnavailable(payload.get("error") if isinstance(payload, dict) else None)
     return payload
+
+
+def _environment_suppressed(environment: Mapping[str, str] | None = None) -> bool:
+    """Negative-only host hint; the TS owner still decides every observation."""
+    env = os.environ if environment is None else environment
+    # Match ECMAScript String.trim, including FEFF and excluding U+0085.
+    whitespace = (" \t\n\r\v\f\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005"
+                  "\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff")
+    return (
+        env.get("LOOPX_USAGE_PING", "").strip(whitespace).lower() in {"0", "false", "no", "off"}
+        or env.get("DO_NOT_TRACK", "").strip(whitespace) not in {"", "0"}
+        or env.get("CI", "").strip(whitespace).lower() not in {"", "0", "false"}
+    )
 
 
 def begin(command: str) -> tuple[str, float] | None:
@@ -122,7 +158,7 @@ def begin(command: str) -> tuple[str, float] | None:
     _observation.set({})
     # Negative-only scheduling hints for common unattended environments. These
     # cannot authorize collection; TS still checks every supported switch value.
-    if os.environ.get("LOOPX_USAGE_PING") == "0" or os.environ.get("DO_NOT_TRACK") == "1" or os.environ.get("CI") == "true":
+    if _environment_suppressed():
         return None
     # Whole-runtime migration includes this machine state. Detached observation
     # would invalidate its preview or rollback receipt even with other hosts stopped.
@@ -217,6 +253,8 @@ def _pin_caller_paths(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def _detach(request: dict[str, Any], *, command: list[str] | None = None) -> None:
+    if _environment_suppressed():
+        return
     request = _pin_caller_paths(request)
     kwargs: dict[str, Any] = {"stdin": subprocess.PIPE, "stdout": subprocess.DEVNULL,
                               "stderr": subprocess.DEVNULL, "close_fds": True,

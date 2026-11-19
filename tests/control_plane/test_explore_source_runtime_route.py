@@ -105,6 +105,19 @@ def test_global_goal_route_uses_source_registry_relative_runtime(
     assert Path(route["source_runtime_root"]) == project / ".loopx" / "runtime"
 
 
+def test_relative_runtime_belongs_to_registry_even_when_goal_repo_differs(tmp_path: Path) -> None:
+    for relative_registry in ("registry.json", ".loopx/registry.json"):
+        owner = tmp_path / relative_registry.replace("/", "-")
+        registry = owner / relative_registry
+        _write_registry(registry, runtime_root="runtime")
+        payload = json.loads(registry.read_text())
+        payload["goals"][0]["repo"] = str(tmp_path / "separate-goal-checkout")
+        registry.write_text(json.dumps(payload))
+        route = resolve_goal_source_runtime_route(registry_path=registry, goal_id=GOAL_ID)
+        assert Path(route["source_runtime_root"]) == owner / "runtime"
+        assert route["status"] == "project_registry"
+
+
 def test_feishu_sync_uses_source_rows_and_visual_marker(tmp_path: Path) -> None:
     project = tmp_path / "project"
     source_registry = project / ".loopx" / "registry.json"

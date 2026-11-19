@@ -7,11 +7,114 @@ from pathlib import Path
 
 import pytest
 import test_quota_settlement_cli as fixture
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import (
+    initialize_canonical_authority, isolate_sqlite_runtime,
+    read_fixture_todos,
+    without_resume_observation_time as stable,
+)
 
 from loopx.cli import main as cli_main
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.quota.settlement import read_heartbeat_settlement
+from loopx.control_plane.todos.contract import TODO_DECISION_SCOPE_OUTCOME_SCHEMA_VERSION
+from loopx.control_plane.todos.provider_projection import project_current_canonical_todos
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_retired_step_has_one_writable_basis_across_status_and_quota(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = fixture._write_fixture(tmp_path)
+    state = fixture._configure_read_only_todo(project)
+    fixture._initialize_fixture_authority(project, runtime, provider=provider)
+    project_current_canonical_todos(registry_path=registry, runtime_root=runtime, goal_id=fixture.GOAL_ID)
+    original_state = state.read_bytes()
+    authority = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=fixture.GOAL_ID)
+
+    def run(*args: str) -> dict:
+        code, payload = fixture._run_cli(registry, runtime, *args, cwd=project)
+        assert code == 0, payload
+        return payload
+
+    def current_routes() -> tuple[dict, dict]:
+        status = run("status", "--include-task-graph", "--limit", "1")
+        item = next(row for row in status["attention_queue"]["items"]
+                    if row["goal_id"] == fixture.GOAL_ID)
+        action = next(row for row in item["agent_next_actions"]
+                      if row["agent_id"] == fixture.AGENT_ID)
+        quota = run("quota", "should-run", "--goal-id", fixture.GOAL_ID,
+                    "--agent-id", fixture.AGENT_ID, "--codex-app", "--limit", "1")
+        assert quota["effective_action"] == "normal_run", quota
+        return action, quota["agent_lane_next_action"]
+
+    refresh = ("refresh-state", "--goal-id", fixture.GOAL_ID,
+               "--agent-id", fixture.AGENT_ID, "--no-global-sync", "--suppress-external-sinks")
+    initial, initial_quota = current_routes()
+    old_basis = initial["next_action_basis"]
+    assert initial_quota["next_action_basis"] == old_basis
+    run(*refresh, "--next-action", "Continue the old experiment.", "--next-action-basis", old_basis)
+    guidance = "The evidence invalidated the experiment; choose another method."
+    run(*refresh, "--recommended-action", guidance)
+    # Later observations push the explicit decision outside both recent windows.
+    for _ in range(2):
+        run(*refresh)
+    retired, retired_quota = current_routes()
+    assert "next_step" not in retired
+    assert "next_step" not in retired_quota
+    assert retired["next_action_basis"] == retired_quota["next_action_basis"] != old_basis
+    index = runtime / "goals" / fixture.GOAL_ID / "runs/index.jsonl"
+    before = index.read_bytes()
+    code, rejected = fixture._run_cli(registry, runtime, *refresh,
+        "--next-action", "Continue the old experiment.", "--next-action-basis", old_basis, cwd=project)
+    assert code == 1 and rejected["error_code"] == "next_action_basis_conflict", rejected
+    assert index.read_bytes() == before
+    run(*refresh, "--next-action", "Evaluate the newly supported route.",
+        "--next-action-basis", retired_quota["next_action_basis"])
+    run(*refresh)
+    current, current_quota = current_routes()
+    assert current["next_step"] == current_quota["next_step"] == "Evaluate the newly supported route."
+    assert current["next_action_basis"] == current_quota["next_action_basis"]
+    assert state.read_bytes() == original_state
+    after = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=fixture.GOAL_ID)
+    for key in ("provider_revision", "cursor", "todos"):
+        assert after[key] == authority[key]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_quota_next_action_preserves_canonical_decision_receipt_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = fixture._write_fixture(tmp_path)
+    state = fixture._configure_read_only_todo(project)
+    rows = read_fixture_todos(state)
+    target = next(row for row in rows if row["todo_id"] == fixture.TODO_ID)
+    target["decision_scope_outcomes"] = [{
+        "schema_version": TODO_DECISION_SCOPE_OUTCOME_SCHEMA_VERSION,
+        "outcome": "reject",
+        "decision_scope": {"schema_version": "decision_scope_v0", "kind": "direction",
+                           "granularity": "action", "scope_key": "previous_route"},
+        "source_todo_id": "todo_previous_gate",
+    }]
+    initialize_canonical_authority(runtime, fixture.GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=fixture.GOAL_ID, todos=rows,
+            handoff_mode="soft_claim", leases=[]), state_path=state, provider=provider)
+    code, source = fixture._run_cli(registry, runtime, "todo", "list",
+        "--goal-id", fixture.GOAL_ID, cwd=project)
+    assert code == 0, source
+    canonical = next(row for row in source["todos"] if row["todo_id"] == fixture.TODO_ID)
+    version = canonical["decision_scope_outcomes"][0]["schema_version"]
+    assert version == TODO_DECISION_SCOPE_OUTCOME_SCHEMA_VERSION
+    code, guard = fixture._run_cli(registry, runtime, "quota", "should-run",
+        "--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID, "--codex-app",
+        cwd=project)
+    assert code == 0, guard
+    action = guard["agent_lane_next_action"]
+    assert action["todo_id"] == canonical["todo_id"]
+    assert action["decision_scope_outcomes"][0]["schema_version"] == version
+
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -41,15 +144,14 @@ def test_waiting_original_turn_preserves_other_todo_step_and_settles_once(
                 "--format", "json", *args])
             return code, json.loads(capsys.readouterr().out)
 
-    code, initial = run("todo", "list", "--goal-id", fixture.GOAL_ID)
-    assert code == 0, initial
+    source_todos = read_fixture_todos(state)
     canonical = initialize_canonical_authority(runtime, fixture.GOAL_ID,
-        build_todo_runtime_shadow_projection(goal_id=fixture.GOAL_ID, todos=initial["todos"],
+        build_todo_runtime_shadow_projection(goal_id=fixture.GOAL_ID, todos=source_todos,
             handoff_mode="soft_claim", leases=[]), state_path=state, provider=provider)
     binding = ("--agent-id", fixture.AGENT_ID, "--todo-id", fixture.TODO_ID,
         "--turn-instance-id", "original-next-action-turn")
-    guard_args = ("quota", "should-run", "--goal-id", fixture.GOAL_ID, "--codex-app",
-        "--scan-path", str(project), *binding)
+    guard_args = ("quota", "should-run", "--context-delivery", "off", "--goal-id", fixture.GOAL_ID, "--codex-app",
+         *binding)
     code, admitted = run(*guard_args)
     assert code == 0 and admitted["normal_delivery_allowed"], admitted
     identity = admitted["heartbeat_receipt"]["settlement_identity"]
@@ -106,14 +208,14 @@ def test_waiting_original_turn_preserves_other_todo_step_and_settles_once(
     code, settled = run(*guard_args)
     assert code == 0 and settled["effective_action"] == "heartbeat_settled_skip", settled
     code, after = run("todo", "list", "--goal-id", fixture.GOAL_ID)
-    assert code == 0 and after["todos"] == before["todos"], after
+    assert code == 0 and stable(after["todos"]) == stable(before["todos"]), after
     assert after["authority_read"]["provider_revision"] == before["authority_read"]["provider_revision"]
     final = read_heartbeat_settlement(runtime, goal_id=fixture.GOAL_ID,
         agent_id=fixture.AGENT_ID, todo_id=fixture.TODO_ID, turn_instance_id=binding[-1])
     assert final is not None and final.writeback == writeback.writeback
-    code, next_guard = run("quota", "should-run", "--goal-id", fixture.GOAL_ID,
+    code, next_guard = run("quota", "should-run", "--context-delivery", "off", "--goal-id", fixture.GOAL_ID,
         "--agent-id", fixture.AGENT_ID, "--todo-id", fixture.ALTERNATIVE_TODO_ID,
-        "--turn-instance-id", "fresh-alternative-turn", "--codex-app", "--scan-path", str(project))
+        "--turn-instance-id", "fresh-alternative-turn", "--codex-app", )
     assert code == 0 and next_guard["normal_delivery_allowed"], next_guard
     route = next_guard["agent_lane_next_action"]
     assert route["todo_id"] == fixture.ALTERNATIVE_TODO_ID
@@ -128,22 +230,21 @@ def test_todoless_replan_refuses_step_and_recovers_original_settlement(
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = fixture._write_fixture(tmp_path)
-    fixture._configure_autonomous_replan_fixture(project, runtime, registry)
+    fixture._configure_autonomous_replan_fixture(project, runtime, registry, stride_strategy="off")
     state = project / f".codex/goals/{fixture.GOAL_ID}/ACTIVE_GOAL_STATE.md"
 
     def run(*args: str) -> tuple[int, dict]:
         return fixture._run_cli(registry, runtime, *args, cwd=project)
 
-    code, listed = run("todo", "list", "--goal-id", fixture.GOAL_ID)
-    assert code == 0, listed
+    source_todos = read_fixture_todos(state)
     initialize_canonical_authority(runtime, fixture.GOAL_ID,
         build_todo_runtime_shadow_projection(goal_id=fixture.GOAL_ID,
-            todos=listed["todos"], handoff_mode="soft_claim", leases=[]),
+            todos=source_todos, handoff_mode="soft_claim", leases=[]),
         state_path=state, provider=provider)
     turn = "replan-recommendation-recovery"
     guard_args = ("quota", "should-run", "--codex-app", "--goal-id", fixture.GOAL_ID,
         "--agent-id", fixture.AGENT_ID, "--turn-instance-id", turn,
-        "--scan-path", str(project))
+        )
     code, guard = run(*guard_args)
     assert code == 0 and guard["decision"] == "autonomous_replan_required", guard
     identity = guard["heartbeat_receipt"]["settlement_identity"]
@@ -184,7 +285,7 @@ def test_todoless_replan_refuses_step_and_recovers_original_settlement(
     spend = ("quota", "spend-slot", "--goal-id", fixture.GOAL_ID,
         "--agent-id", fixture.AGENT_ID, "--replan-obligation-id", identity["replan_obligation_id"],
         "--turn-instance-id", turn, "--source", "heartbeat", "--slots", "1", "--execute",
-        "--scan-path", str(project))
+        )
     code, spent = run(*spend)
     assert code == 0 and spent["settlement_result"]["ok"], spent
     code, replay = run(*spend)

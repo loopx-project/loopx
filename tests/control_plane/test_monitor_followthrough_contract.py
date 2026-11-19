@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from canonical_authority_fixture import assert_todo_read_unchanged
+
 import json
 from pathlib import Path
 
@@ -370,7 +372,6 @@ def test_unchanged_due_poll_reloads_status_before_followthrough_decision(
     status_payload = collect_status(
         registry_path=registry,
         runtime_root_override=str(runtime),
-        scan_roots=[Path(__file__).resolve()],
         limit=20,
     )
     reloaded_status: dict | None = None
@@ -380,7 +381,6 @@ def test_unchanged_due_poll_reloads_status_before_followthrough_decision(
         reloaded_status = collect_status(
             registry_path=registry,
             runtime_root_override=str(runtime),
-            scan_roots=[Path(__file__).resolve()],
             limit=20,
         )
         return reloaded_status
@@ -1103,13 +1103,10 @@ def test_material_poll_user_followup_requires_explicit_class_without_writeback(
     )
     assert "todo_writeback" not in result
     assert state.read_text(encoding="utf-8") == before_state
-    assert (
-        list_goal_todos(
+    assert_todo_read_unchanged(list_goal_todos(
             registry_path=registry,
             goal_id=GOAL_ID,
-        )
-        == before_todos
-    )
+        ), before_todos)
 
 
 def test_material_poll_explicit_user_gate_blocks_bound_agent(
@@ -1224,7 +1221,6 @@ def test_material_poll_reload_failure_reports_persisted_writeback(
     status_payload = collect_status(
         registry_path=registry,
         runtime_root_override=str(runtime),
-        scan_roots=[Path(__file__).resolve()],
         limit=20,
     )
 

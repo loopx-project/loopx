@@ -214,8 +214,8 @@ def test_todo_list_validation_preserves_exact_unsupported_diagnostic() -> None:
 
     assert str(exc_info.value) == (
         "todo list only accepts --goal-id, optional --role, --status, --todo-id, "
-        "--agent-id, --limit, --thin, --project, --state-file, --dry-run, and "
-        "--format; "
+        "--agent-id, --limit, --thin, --summary, --include-archived, --project, "
+        "--state-file, --dry-run, and --format; "
         "unsupported: --note, --evidence"
     )
 
@@ -349,7 +349,9 @@ def test_deprecated_scheduler_detail_alias_is_hidden_from_help(
     assert "--include-scheduler-detail" not in help_text
 
 
+@pytest.mark.parametrize("mode", ["status", "plan"])
 def test_quota_collection_failure_payload_is_path_free_by_default(
+    mode: str,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -360,7 +362,7 @@ def test_quota_collection_failure_payload_is_path_free_by_default(
 
     monkeypatch.setattr(quota_command, "collect_status", fail_collect_status)
 
-    exit_code = main(["--format", "json", "quota", "status"])
+    exit_code = main(["--format", "json", "quota", mode])
 
     assert exit_code == 1
     payload = json.loads(capsys.readouterr().out)
@@ -503,8 +505,25 @@ def test_quota_action_selection_requires_turn_identity() -> None:
         validate_quota_command_request(args)
 
     assert str(exc_info.value) == (
-        "`loopx quota should-run --todo-id` requires --turn-instance-id"
+        "`loopx quota should-run --todo-id` requires --turn-instance-id or --begin-turn"
     )
+
+
+def test_monitor_change_scope_requires_material_transition() -> None:
+    args = build_parser().parse_args(
+        [
+            "quota",
+            "monitor-poll",
+            "--goal-id",
+            "goal",
+            "--material-change-scope",
+            "case-a/run-1",
+        ]
+    )
+    with pytest.raises(ValueError, match="requires quota monitor-poll --material-change"):
+        validate_quota_command_request(args)
+    args.material_change = True
+    validate_quota_command_request(args)
 
 
 @pytest.mark.parametrize(
@@ -538,7 +557,7 @@ def test_quota_action_selection_requires_turn_identity() -> None:
             ],
             "todo claim only accepts --todo-id, --claimed-by, --agent-id, optional --role, "
             "--claim-operation-id, --task-lease-idempotency-key, "
-            "--task-lease-expected-version, --project, --state-file, and --dry-run; unsupported: "
+            "--task-lease-expected-version, --project, --state-file, --dry-run, and --thin; unsupported: "
             "--decision-outcome, --next-agent-todo",
         ),
     ],
@@ -557,7 +576,7 @@ def test_todo_claim_validation_preserves_exact_diagnostics(
     assert str(exc_info.value) == expected
 
 
-@pytest.mark.parametrize("command", ["add", "list", "update", "complete", "supersede"])
+@pytest.mark.parametrize("command", ["add", "list"])
 @pytest.mark.parametrize("operation_id", ["retry-one", ""])
 def test_claim_operation_id_is_not_silently_ignored_by_other_commands(command, operation_id):
     args = build_parser().parse_args([
@@ -565,6 +584,18 @@ def test_claim_operation_id_is_not_silently_ignored_by_other_commands(command, o
     ])
     with pytest.raises(ValueError, match="supported only by todo claim"):
         validate_shared_todo_options(args)
+
+
+@pytest.mark.parametrize("command", ["update", "complete", "supersede"])
+@pytest.mark.parametrize("operation_id", ["retry-one", ""])
+def test_managed_claim_reference_is_retained_for_the_execution_owner(command, operation_id):
+    args = build_parser().parse_args([
+        "todo", command, "--goal-id", "example-goal", "--claim-operation-id", operation_id,
+    ])
+    validate_shared_todo_options(args)
+    # Scope validation admits the supported caller without dropping its raw
+    # reference. The native owner still rejects an invalid empty value.
+    assert args.claim_operation_id == operation_id
 
 
 @pytest.mark.parametrize(

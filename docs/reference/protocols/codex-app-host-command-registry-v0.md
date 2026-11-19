@@ -154,11 +154,13 @@ After parsing, the host hands the agent or CLI a compact packet:
 ```
 
 Codex App CLI reads `CODEX_THREAD_ID` when `--thread-id` is omitted, including
-`codex-app-ssh` remote sessions. A stable thread ID with no binding returns an
-identity gate that requires selecting an existing lane when registered agents
-exist; fresh registration is the default only for a goal with no registered
-lanes or explicit `--new-peer`. Selecting an existing lane is an explicit
-takeover choice. The selected fresh or existing identity must be persisted with
+`codex-app-ssh` remote sessions. A stable thread ID with no binding defaults to
+a fresh-Agent registration preview even when registered agents exist. Selecting
+an existing lane is an explicit takeover choice and is never the default.
+Fresh registration is also the default for a goal with no registered lanes or
+an explicit `--new-peer`. A caller without a stable thread ID keeps the
+fail-closed identity gate when lanes exist. The selected fresh or existing
+identity must be persisted with
 `loopx bind-agent-thread --execute`, and its source/global readback must verify
 before Todo writeback. Later `/loopx` calls in the same
 `(host_surface, goal_id, thread_id)` reuse that agent ID and carry it through
@@ -233,6 +235,11 @@ fields can rerun the advertised command or pass
 `--include-command-pack-detail`. Both modes must produce the same host-action
 projection before a compact default is promoted.
 
+If the recommendation repeats the planning prompt, the default packet supplies
+`recommended_next_step.plan_prompt_ref` as a JSON Pointer to the complete
+prompt in that same packet. Follow it without a second command. The ordered
+planning step and the explicit detail view retain their inline text.
+
 `start-goal --project <path>` keeps that exact project route. In particular, a
 fresh linked worktree must not silently inherit a goal registered by another
 worktree that shares its Git common directory. The lower-level
@@ -250,8 +257,10 @@ cannot expose its automation tools, so the visible `/goal` owns continuation.
 used alongside an editor. The legacy `codex-ide` value remains accepted as a
 compatibility alias but is not offered by the selection gate. If the option is
 omitted, the command returns a read-only `host_surface_selection` gate with
-exact rerun commands; it must not connect a project, write todos, activate a
-host, or spend quota.
+compact default choices and exact rerun commands for common hosts. Omitted
+surfaces remain discoverable through `full_choices_detail_command`, which
+reruns the same read-only gate with `--include-command-pack-detail`; neither
+projection may connect a project, write todos, activate a host, or spend quota.
 
 ## Permission Boundary
 

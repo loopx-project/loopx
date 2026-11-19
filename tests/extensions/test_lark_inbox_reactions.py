@@ -13,6 +13,7 @@ import pytest
 from loopx.extensions.lark import inbox_reactions as inbox_reactions_module
 from loopx.extensions.lark.event_inbox import load_lark_event_inbox_config
 from loopx.extensions.lark.inbox_reactions import (
+    _reconcile_outbound_input_reactions,
     complete_lark_event_inbox_reactions,
     ensure_lark_event_inbox_received_reaction,
     lark_inbox_reaction_receipts,
@@ -126,6 +127,117 @@ class ReactionRunner:
                 "stderr": "",
             }
         raise AssertionError(call)
+
+
+def test_outbound_feedback_reuses_journals_without_capturing_or_settling_input(tmp_path):
+    config, inbox, project = _fixture(tmp_path)
+    settings = json.loads(config.read_text())
+    settings["reply"]["received_reaction_policy"] = "retain"
+    config.write_text(json.dumps(settings))
+    original = (inbox / "om_reaction_fixture.json").read_bytes()
+    runner = ReactionRunner()
+    target = "om_verified_app_input"
+    from concurrent.futures import ThreadPoolExecutor
+
+    def receive(_):
+        return _reconcile_outbound_input_reactions(project=project, config_path=config,
+            message_id=target, processing=False, complete=False, before_write=lambda: True, runner=runner)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(receive, range(4)))
+    assert all(result["ok"] for result in results)
+    assert sum(result["created_count"] for result in results) == 1
+    assert sum(result["external_writes_performed"] for result in results) == 1
+    for processing, complete, created, deleted in ((True, False, 1, 0), (False, True, 0, 1), (False, True, 0, 0)):
+        result = _reconcile_outbound_input_reactions(project=project, config_path=config,
+            message_id=target, processing=processing, complete=complete,
+            before_write=lambda: True, runner=runner)
+        assert result["ok"]
+        assert (result["created_count"], result["deleted_count"]) == (created, deleted)
+        assert result["external_writes_performed"] == bool(created + deleted)
+    assert [json.loads(call[call.index("--data") + 1])["reaction_type"]["emoji_type"]
+            for call in runner.calls if "create" in call] == ["Get", "OnIt"]
+    assert sum("delete" in call for call in runner.calls) == 1
+    assert set(lark_inbox_reaction_receipts(inbox=inbox, message_id=target)) == {"received"}
+    assert not (inbox / f"{target}.json").exists()
+    assert not (inbox / "processed.json").exists()
+    assert (inbox / "om_reaction_fixture.json").read_bytes() == original
+    assert not lark_inbox_reaction_receipts(inbox=inbox, message_id="om_reaction_fixture")
+
+
+def test_outbound_feedback_retains_known_write_counts_when_processing_fails(tmp_path):
+    config, inbox, project = _fixture(tmp_path)
+    settings = json.loads(config.read_text())
+    settings["reply"]["received_reaction_policy"] = "retain"
+    config.write_text(json.dumps(settings))
+    runner = ReactionRunner()
+
+    def fail_processing(args):
+        if "create" in args and json.loads(args[args.index("--data") + 1])["reaction_type"]["emoji_type"] == "OnIt":
+            return {"returncode": 1}
+        return runner(args)
+
+    result = _reconcile_outbound_input_reactions(project=project, config_path=config,
+        message_id="om_app_partial_feedback", processing=True, complete=False,
+        before_write=lambda: True, runner=fail_processing)
+    assert not result["ok"]
+    assert result["created_count"] == 1 and result["external_writes_performed"]
+    assert set(lark_inbox_reaction_receipts(inbox=inbox, message_id="om_app_partial_feedback")) == {"received"}
+
+
+def test_outbound_feedback_rechecks_authority_before_creation_and_cleanup(tmp_path):
+    config, inbox, project = _fixture(tmp_path)
+    settings = json.loads(config.read_text())
+    settings["reply"]["received_reaction_policy"] = "retain"
+    config.write_text(json.dumps(settings))
+    runner = ReactionRunner()
+    checks = iter((True, False))
+    result = _reconcile_outbound_input_reactions(project=project, config_path=config,
+        message_id="om_app_authority", processing=False, complete=False,
+        before_write=lambda: next(checks), runner=runner)
+    assert not result["ok"] and runner.calls == []
+    assert list((inbox / "reactions" / "received-operations").glob("*.json")) == []
+    for processing in (False, True):
+        assert _reconcile_outbound_input_reactions(project=project, config_path=config,
+            message_id="om_app_authority", processing=processing, complete=False,
+            before_write=lambda: True, runner=runner)["ok"]
+    before = list(runner.calls)
+    # Revocation before a terminal effect cannot erase the processing receipt.
+    with pytest.raises(ValueError, match="authority"):
+        _reconcile_outbound_input_reactions(project=project, config_path=config,
+            message_id="om_app_authority", processing=False, complete=True,
+            before_write=lambda: False, runner=runner)
+    assert runner.calls == before
+    assert "processing" in lark_inbox_reaction_receipts(inbox=inbox, message_id="om_app_authority")
+
+
+@pytest.mark.parametrize("processing", [False, True])
+def test_outbound_feedback_retains_an_unknown_provider_write_without_retry(tmp_path, processing):
+    config, inbox, project = _fixture(tmp_path)
+    settings = json.loads(config.read_text())
+    settings["reply"]["received_reaction_policy"] = "retain"
+    config.write_text(json.dumps(settings))
+    runner = ReactionRunner()
+    target = "om_app_lost_receipt"
+    if processing:
+        assert _reconcile_outbound_input_reactions(project=project, config_path=config,
+            message_id=target, processing=False, complete=False,
+            before_write=lambda: True, runner=runner)["ok"]
+    calls = len(runner.calls)
+
+    def lost_reply(args):
+        result = runner(args)
+        if "create" in args:
+            raise OSError("synthetic response lost after the provider write")
+        return result
+
+    for _ in range(2):
+        result = _reconcile_outbound_input_reactions(project=project, config_path=config,
+            message_id=target, processing=processing, complete=False,
+            before_write=lambda: True, runner=lost_reply)
+        assert not result["ok"]
+    assert len(runner.calls) == calls + 1
+    assert not (inbox / f"{target}.json").exists()
 
 
 def test_received_reaction_boundary_acknowledges_pending_message_once(

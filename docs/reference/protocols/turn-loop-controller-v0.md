@@ -21,6 +21,15 @@ or product default of three Turns. The budget applies to continued
 `validated_progress` on the same Todo, not a chain of completed Todos and not
 fine-grained planning mode.
 
+The proposed [controller model session](../../architecture/rfcs/controller-executor-unified-contract-v0.md)
+is a separate role: it reasons about work and exchanges tasks/results with an
+executor. This deterministic transition owner continues to validate disposition
+inputs; the model session neither replaces it nor acquires scheduler authority.
+
+中文：[controller 模型会话提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
+中的 controller 负责工作判断与任务/结果交互；本页的纯状态转移 owner 继续验证
+接续输入。模型会话不替代该 owner，也不因此取得 scheduler 权限。
+
 ## Inputs
 
 | Input | Shape | Notes |

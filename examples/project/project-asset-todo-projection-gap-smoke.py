@@ -70,6 +70,12 @@ def write_fixture(root: Path) -> tuple[Path, Path]:
         + "\n",
         encoding="utf-8",
     )
+    original_display = state_path.read_bytes()
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+
+    for record in json.loads(registry_path.read_text())["goals"]:
+        import_fixture_authority(registry_path, record["id"], provider="sqlite")
+    state_path.write_bytes(original_display)
     return registry_path, runtime
 
 
@@ -78,6 +84,7 @@ def run_cli(
     runtime: Path,
     *args: str,
     output_format: str = "json",
+    check: bool = True,
 ) -> dict | str:
     result = subprocess.run(
         [
@@ -93,7 +100,7 @@ def run_cli(
             *args,
         ],
         cwd=REPO_ROOT,
-        check=True,
+        check=check,
         capture_output=True,
         text=True,
     )
@@ -141,19 +148,30 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="loopx-project-asset-todo-gap-") as raw_tmp:
         registry_path, runtime = write_fixture(Path(raw_tmp))
+        incomplete = run_cli(registry_path, runtime, "status", check=False)
+        assert incomplete["ok"] is True, incomplete
+        assert incomplete["contract_errors"] == [], incomplete
+        assert any("state_projection_gap" in warning
+                   for warning in incomplete["contract_warnings"]), incomplete
+        before = run_cli(registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID)
+        state = registry_path.parent.parent / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+        state.write_text(state.read_text(encoding="utf-8") + "\n## Agent Todo\n",
+                         encoding="utf-8")
         payload = run_cli(registry_path, runtime, "status")
+        assert payload["ok"] is True, payload
         item = attention_item(payload)  # type: ignore[arg-type]
         project_asset = item["project_asset"]
-        projected_gap = project_asset["todo_projection_gap"]
-        assert projected_gap["kind"] == "project_asset_todo_projection_gap", projected_gap
-        assert projected_gap["missing_roles"] == ["user", "agent"], projected_gap
-        assert "user_todos" not in project_asset, project_asset
-        assert "agent_todos" not in project_asset, project_asset
-        assert item["todo_projection_gap"]["missing_roles"] == ["user", "agent"], item
-
+        # Canonical empty roles are available facts even when the old display
+        # omitted a section. The pure gap cases above still cover missing data.
+        assert "todo_projection_gap" not in project_asset
+        assert "todo_projection_gap" not in item
+        assert project_asset["user_todos"]["open"] == 0
+        assert project_asset["agent_todos"]["open"] == 0
+        after = run_cli(registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID)
+        assert after["todos"] == before["todos"] == []
+        assert after["authority_read"] == before["authority_read"]
         markdown = run_cli(registry_path, runtime, "status", output_format="markdown")
-        assert "todo_projection_gap" in markdown, markdown
-        assert "missing_roles=user,agent" in markdown, markdown
+        assert "todo_projection_gap" not in markdown, markdown
 
     print("project-asset-todo-projection-gap-smoke ok")
     return 0

@@ -27,7 +27,10 @@ from loopx.host_loop_activation import (
     normalize_agent_type,
     scheduler_command_binding_for_agent_type,
 )
-from loopx.project_prompt import render_accountable_progress_refresh_command
+from loopx.project_prompt import (
+    render_accountable_progress_refresh_command,
+    render_cli_command_prefix,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -342,7 +345,9 @@ def test_goal_hosts_delegate_spend_to_live_settlement_not_static_templates(
     assert refresh_command not in task_body
     assert spend_command not in task_body
     assert "settlement_plan.ordered_steps" in task_body
-    assert "preserve identities/flags" in task_body
+    assert "preserve exact identities/effect ids and actual outcomes" in task_body
+    assert "Preserve command flags" in task_body
+    assert "truthful evidence" in task_body
     assert "<PUBLIC_SAFE_PROGRESS_CLASSIFICATION>" in refresh_command
     assert "<ACTUAL_DELIVERY_BATCH_SCALE>" in refresh_command
     assert "<ACTUAL_DELIVERY_OUTCOME>" in refresh_command
@@ -365,7 +370,7 @@ def test_heartbeat_prompt_commands_keep_explicit_runtime_root() -> None:
         registered_agents=["runtime-agent"],
     )
 
-    command_prefix = f"loopx --runtime-root {runtime_root}"
+    command_prefix = render_cli_command_prefix(runtime_root=runtime_root)
 
     assert payload["quota_guard_command"].startswith(
         f"{command_prefix} --format json quota should-run "
@@ -383,7 +388,7 @@ def test_heartbeat_prompt_commands_keep_explicit_runtime_root() -> None:
         f"{command_prefix} heartbeat-prompt "
     )
     assert '"$HOME/.codex/loopx/registry.global.json"' not in payload["task_body"]
-    assert f"--runtime-root {runtime_root}" in payload["task_body"]
+    assert command_prefix in payload["task_body"]
 
 
 @pytest.mark.parametrize(
@@ -400,7 +405,7 @@ def test_goal_hosts_enter_live_contract_without_a_mandatory_skill_detour(
     )
     task_body = " ".join(payload["task_body"].split())
 
-    assert "Use the current `interaction_contract`, not remembered commands" in task_body
+    assert "Use current `interaction_contract`" in task_body
     assert "loopx-project" in task_body
     assert "loopx-self-repair" in task_body
     assert "Progress is not a new Goal boundary" in task_body
@@ -445,10 +450,11 @@ def test_goal_hosts_reuse_thin_dispatch_and_stay_compact() -> None:
             "preserve exact identities/effect ids",
         ):
             assert obligation in payload["task_body"]
-        # Current authority/continuation clauses measure 2,862–3,166 normalized
-        # chars on this fixed fixture. Keep a tight regression guard and the
-        # native host's separate hard cap, without shortening those obligations.
-        assert payload["interface_budget"]["budget_char_count"] <= 3_200
+        # The known first-guard choice adds 63 useful normalized characters:
+        # the largest fixed host fixture is 3,262, leaving 38 under this
+        # regression allowance. Keep the native host's hard cap separate.
+        assert "Known new-Turn choice: add `--todo-id <id>` to first guard" in payload["task_body"]
+        assert payload["interface_budget"]["budget_char_count"] <= 3_300
         assert payload["interface_budget"]["max_chars"] == 4_000
         assert payload["interface_budget"]["within_budget"] is True
 
@@ -773,6 +779,7 @@ def test_traex_cli_is_an_exact_visible_goal_host_on_the_generic_cli_loop() -> No
     assert packet["activation_method"] == "set_visible_goal"
     assert packet["host_mutation"]["owner"] == "TraeX CLI TUI"
     assert packet["host_mutation"]["host_command"] == "/goal <task_body>"
+    assert packet["host_mutation"]["preferred_tool"] == "create_goal"
     assert packet["host_mutation"]["requires_host_feature_flag"] == (
         "[features] goals = true in ~/.trae/traecli.toml"
     )
@@ -1101,7 +1108,7 @@ def test_traex_visible_goal_allows_policy_words_in_goal_identity() -> None:
     )
 
     assert prompt["ok"] is True
-    assert "LoopX goal `scheduler-reliability`" in prompt["task_body"]
+    assert "goal `scheduler-reliability`" in prompt["task_body"]
 
 
 def test_traex_visible_goal_keeps_adversarial_capabilities_outside_task_body(

@@ -83,7 +83,7 @@ def parse_issue_meta_surface_block(
     fields: dict[str, str] = {}
     for match in ISSUE_META_SURFACE_FIELD_PATTERN.finditer(block):
         key = str(match.group("key") or "").strip().lower().replace("-", "_")
-        value = str(match.group("value") or "").strip().strip("\"'")
+        value: str | None = str(match.group("value") or "").strip().strip("\"'")
         if key and value:
             fields[key] = value
     if not fields:

@@ -17,6 +17,7 @@ def receipt_bound_lifecycle_candidate(
 ) -> dict[str, Any] | None:
     facts = project_replan_semantics({
         "operation": "lifecycle_source", "guard_recorded_at": guard_recorded_at,
+        "selected_obligation_id": selected_obligation_id,
         "agent_id": agent_id, "items": items,
     })
     if not facts.get("items"):
@@ -31,9 +32,13 @@ def receipt_bound_lifecycle_candidate(
         "selected_obligation_id": selected_obligation_id,
         "guard_recorded_at": guard_recorded_at, "agent_id": agent_id, "items": items,
     })
+    from ..goals.goal_frontier.ack_policy import replan_successor_transition_ack
+
     return {"obligation": result["obligation"], "source_obligation": source,
             "guard_recorded_at": guard_recorded_at, "items": items,
-            "ack": None, "lifecycle_settled": facts["settled"]}
+            "ack": replan_successor_transition_ack(None, agent_id=agent_id,
+                replan_obligation=source, agent_todo_items=items),
+            "lifecycle_settled": facts["settled"]}
 
 
 def attach_receipt_replan_context(
@@ -43,11 +48,22 @@ def attach_receipt_replan_context(
     explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None,
     goal_acceptance_contract: Mapping[str, Any] | None,
     todo_items: Iterable[Mapping[str, Any]] | None = None,
+    receipt_bound_replan_obligation_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Contextualize pending receipt actions without borrowing a new frontier."""
     from .progress_observation import build_replan_context
 
     current = dict(current) if current else None
+    if current and receipt_bound_replan_obligation_id and current.get("legacy_obligation_id") == receipt_bound_replan_obligation_id:
+        # Resolve compatibility before computing context/delivery identities.
+        # The typed owner verifies the exact source-derived alias; no receipt
+        # or historical ACK is rewritten to the new digest.
+        current = project_replan_semantics({
+            "operation": "receipt_bound_obligation", "guard_scoped": True,
+            "selected_obligation_id": receipt_bound_replan_obligation_id,
+            "current_obligation": current, "transition_candidates": [],
+            "replay_phase": "open", "agent_id": agent_id,
+        })["obligation"]
     obligations = [current] if current else []
     pending = lifecycle_candidate if lifecycle_candidate and not lifecycle_candidate["lifecycle_settled"] else None
     if pending:

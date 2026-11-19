@@ -65,7 +65,7 @@ class ACPStdioAdapter:
     execution_mode: bool = False
     startup_timeout_sec: float = 30.0
     idle_timeout_sec: float = 180.0
-    hard_timeout_sec: float = 900.0
+    hard_timeout_sec: float | None = None
     # Grace window for the agent to exit on stdin EOF and release any
     # per-session lock before LoopX signals the process.
     _graceful_exit_timeout_sec: float = 5.0
@@ -89,7 +89,7 @@ class ACPStdioAdapter:
         resume_thread_id: str | None = None,
         startup_timeout_sec: float | None = None,
         idle_timeout_sec: float = 180.0,
-        hard_timeout_sec: float = 900.0,
+        hard_timeout_sec: float | None = None,
         execution_mode: bool = False,
         config_values: dict[str, str] | None = None,
     ) -> "ACPStdioAdapter":
@@ -390,7 +390,7 @@ class ACPStdioAdapter:
         params: dict[str, Any],
         *,
         request_id: int | None = None,
-        timeout_sec: float,
+        timeout_sec: float | None,
         on_notification: Callable[[dict[str, Any]], None] | None = None,
         on_activity: Callable[[], None] | None = None,
         idle_timeout_sec: float | None = None,
@@ -403,7 +403,7 @@ class ACPStdioAdapter:
             self._write(
                 {"jsonrpc": "2.0", "id": selected_id, "method": method, "params": params}
             )
-            deadline = time.monotonic() + timeout_sec
+            deadline = time.monotonic() + timeout_sec if timeout_sec is not None else float("inf")
             idle_deadline = (
                 time.monotonic() + idle_timeout_sec if idle_timeout_sec is not None else deadline
             )
@@ -517,7 +517,8 @@ class ACPStdioAdapter:
             )
         except TimeoutError as exc:
             elapsed = time.monotonic() - started_at
-            error_code = "hard_timeout" if elapsed >= self.hard_timeout_sec else "idle_timeout"
+            error_code = ("hard_timeout" if self.hard_timeout_sec is not None
+                          and elapsed >= self.hard_timeout_sec else "idle_timeout")
             summary = (
                 "ACP Chat turn reached its hard time limit."
                 if error_code == "hard_timeout"

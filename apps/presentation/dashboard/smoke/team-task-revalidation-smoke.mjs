@@ -40,12 +40,17 @@ try {
   await page.route("**/api/chat/sessions/*/loopx", async route => {
     const body = route.request().postDataJSON();
     if (!["read", "revalidate"].includes(body?.operation)) return route.fallback();
+    console.log(`HTTP ${body.operation}: ${body.operation_id}`);
+    const started = Date.now();
     const response = await page.request.post(`${origin}/api/chat/sessions/recovery/loopx`, {data: {
       operation: body.operation, operation_id: ["accepted-analysis", "synthesis-1"].includes(body.operation_id) ? selected : body.operation_id}});
+    const {status, worker_active, recovery_required} = await response.json();
+    console.log(`HTTP ${body.operation} returned ${response.status()} in ${Date.now() - started}ms`,
+      {status, worker_active, recovery_required});
     return route.fulfill({response});
   });
   await page.getByText("LoopX · 正在推进", {exact: true}).waitFor();
-  await command("task-failure");
+  await command("task-failure-active");
   await page.getByRole("button", {name: "团队执行情况", exact: true}).click();
   const dialog = page.getByRole("dialog", {name: "团队执行情况"});
   await dialog.getByRole("button", {name: "查看证据与反馈", exact: true}).first().click();
@@ -54,7 +59,32 @@ try {
   await mkdir(outputDir, {recursive: true});
   await page.setViewportSize({width: 390, height: 844});
   const failure = evidence.getByRole("region", {name: "原任务验收失败"});
-  await failure.getByRole("button", {name: "复核原任务", exact: true}).waitFor();
+  const revalidate = failure.getByRole("button", {name: "复核原任务", exact: true});
+  await revalidate.waitFor();
+  assert.equal(await revalidate.isDisabled(), true);
+  await failure.getByText("原执行仍在收尾。结束后选择“重新检查交付”，再复核原任务。", {exact: true}).waitFor();
+  const active = await command("task-inspect");
+  assert.equal(active.operation.worker_active, true);
+  const duplicateResponse = await page.request.post(`${origin}/api/chat/sessions/recovery/loopx`, {data: {
+    operation: "revalidate", operation_id: "failure-1"}});
+  assert.equal(duplicateResponse.ok(), true, await duplicateResponse.text());
+  const duplicateReadback = await duplicateResponse.json();
+  assert.equal(duplicateReadback.operation_id, active.operation.operation_id);
+  assert.equal(duplicateReadback.status, "rejected");
+  assert.equal(duplicateReadback.worker_active, true);
+  assert.equal(duplicateReadback.task_failure.turn_key, active.operation.task_failure.turn_key);
+  const duplicate = await command("task-inspect");
+  assert.equal(duplicate.record_sha256, active.record_sha256);
+  assert.equal(duplicate.host_calls, "1");
+  await page.screenshot({path: resolve(outputDir, "team-original-worker-finishing-mobile.png")});
+  await page.setViewportSize({width: 1280, height: 900});
+  await recheck.focus();
+  assert.equal(await recheck.evaluate(element => element === document.activeElement), true);
+  await page.screenshot({path: resolve(outputDir, "team-original-worker-finishing-desktop.png")});
+  await page.setViewportSize({width: 390, height: 844});
+  await command("task-release");
+  await recheck.click();
+  await revalidate.click({trial: true});
   const before = await command("task-inspect");
   await failure.getByRole("button", {name: "复核原任务", exact: true}).click();
   await failure.getByRole("button", {name: "复核原任务", exact: true}).waitFor();
@@ -67,13 +97,19 @@ try {
   const recover = evidence.getByRole("button", {name: "恢复原执行", exact: true});
   await recover.scrollIntoViewIfNeeded();
   await page.screenshot({path: resolve(outputDir, "team-original-recovery-mobile.png")});
+  await page.setViewportSize({width: 1280, height: 900});
+  await page.screenshot({path: resolve(outputDir, "team-original-recovery-desktop.png")});
+  await page.setViewportSize({width: 390, height: 844});
   await recover.click();
+  let actual;
   for (let attempt = 0; attempt < 30; attempt++) {
-    const actual = await command("task-inspect");
+    actual = await command("task-inspect");
     assert.equal(actual.host_calls, "1");
     if (actual.operation.status === "accepted") break;
     await new Promise(done => setTimeout(done, 500));
   }
+  const {status, worker_active, recovery_required} = actual.operation;
+  assert.equal(status, "accepted", JSON.stringify({status, worker_active, recovery_required}));
   await recheck.click();
   await evidence.getByLabel("证据内容: output.json").waitFor();
   assert.equal(await failure.count(), 0);
@@ -81,7 +117,7 @@ try {
   assert.equal(after.operation.status, "accepted");
   assert.equal(before.operation.operation_id, after.operation.operation_id);
   assert.equal(after.host_calls, "1");
-  console.log("PASS: packaged original task failure, unchanged failure and committed response-loss recovery without repeating Host");
+  console.log("PASS: packaged active-worker revalidation readback, disabled action, release, unchanged failure and same-Turn response-loss recovery without repeating Host");
 } catch (error) {
   if (workspace) console.error({body: (await workspace.page.locator("body").innerText()).slice(-3000), errors: workspace.errors});
   throw error;

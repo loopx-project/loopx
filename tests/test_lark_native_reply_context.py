@@ -50,7 +50,10 @@ def test_native_reply_retains_exact_reference_and_original_authority(ordinary, g
         requests = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
         native_input = next(request["params"]["input"] for request in requests if request["method"] == "turn/start")
         assert "local reading preview" in json.dumps(native_input)
-        assert "Current user message: Approved" in json.dumps(native_input)
+        # The original operator material reaches the model verbatim, including
+        # its own line breaks; the prompt is no longer whitespace-collapsed.
+        native_text = "".join(block.get("text", "") for block in native_input)
+        assert "Current user message:\nApproved" in native_text
         # The source and eventual return remain the same canonical conversation.
         transport.reconcile()
         assert all(profile == "notes-app" for profile, _ in provider.writes)
@@ -110,7 +113,10 @@ def test_reference_read_is_bounded_and_unavailable_is_explicit(ordinary, parent_
             assert "Review layout only." in message
             assert "HIDDEN CALLBACK PAYLOAD" not in message
         elif parent_kind == "long":
-            assert "OUTSIDE CONTEXT BUDGET" not in message
+            # Bounded head+tail excerpt: the tail survives with the middle
+            # explicitly elided, and the encoded budget still holds.
+            assert "OUTSIDE CONTEXT BUDGET" in message
+            assert "chars omitted" in message
             assert '"complete":false' in message and len(message) < 4500
         else:
             assert "Referenced message context could not be read" in message
@@ -231,6 +237,31 @@ def test_reference_is_frozen_before_first_core_admission(ordinary, monkeypatch):
         assert row["message"] == captured["reply_context_message"]
         assert "A different scope" not in row["message"]
         assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)["status"] == "completed"
+    finally:
+        runtime.close()
+
+
+def test_long_astral_reference_is_readable_through_original_session_http(ordinary):  # noqa: F811
+    _, runtime, provider, transport = connect(ordinary)
+    _, _, _, request_http, _, _, _ = ordinary
+    event = quoted(provider)
+    provider.messages[event["parent_id"]]["content"] = "🧭" * 3000
+    try:
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        row = native_request(transport, event)
+        assert runtime.wait_for_turn(
+            session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10
+        )["status"] == "completed"
+        status, inventory = request_http(
+            f"/api/chat/sessions/{row['session_id']}?message_limit=200"
+        )
+        assert status == 200, inventory
+        user_message = next(
+            item["text"] for item in inventory["messages"] if item["role"] == "user"
+        )
+        assert "chars omitted" in user_message
+        assert user_message.endswith("Current user message:\nApproved")
+        user_message.encode("utf-8")
     finally:
         runtime.close()
 

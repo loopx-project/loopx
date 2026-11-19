@@ -8,10 +8,11 @@ from pathlib import Path
 import pytest
 
 from canonical_authority_fixture import (
-    initialize_canonical_authority,
+    advance_canonical_fixture_authority, initialize_canonical_source_fixture, read_fixture_todos,
     isolate_sqlite_runtime,
 )
 from loopx.cli import main as cli_main
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from loopx.control_plane.coordination.runtime_shadow import (
     build_todo_runtime_shadow_projection,
 )
@@ -67,8 +68,9 @@ def test_interrupted_binding_survives_new_due_successor(
                     *args,
                 ]
             )
-            return rc, json.loads(capsys.readouterr().out)
+            return rc, read_cli_policy_payload(capsys.readouterr().out, returncode=rc)
 
+    initialize_canonical_source_fixture(runtime, GOAL_ID, state_path=state, provider=provider)
     rc, vision = cli(
         "refresh-state",
         "--goal-id",
@@ -101,9 +103,8 @@ def test_interrupted_binding_survives_new_due_successor(
             )
         )
 
-    rc, listed = cli("todo", "list", "--goal-id", GOAL_ID, "--limit", "200")
-    assert rc == 0, listed
-    initialize_canonical_authority(
+    listed = {"todos": read_fixture_todos(state)}
+    advance_canonical_fixture_authority(
         runtime,
         GOAL_ID,
         build_todo_runtime_shadow_projection(
@@ -121,8 +122,7 @@ def test_interrupted_binding_survives_new_due_successor(
             handoff_mode="hard_lease",
             leases=[],
         ),
-        state_path=state,
-        provider=provider,
+        operation_id="fixture-retained-frontier",
     )
 
     old_turn, new_turn = "interrupted-original", "current-after-interruption"
@@ -134,6 +134,9 @@ def test_interrupted_binding_survives_new_due_successor(
         "--turn-instance-id",
         old_turn,
     )
+    rc, claimed = cli("todo", "claim", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID, "--todo-id", TODO_ID)
+    assert rc == 0 and claimed["execution_managed"] is True, claimed
     rc, admitted = cli(
         "quota",
         "should-run",
@@ -141,8 +144,6 @@ def test_interrupted_binding_survives_new_due_successor(
         "--goal-id",
         GOAL_ID,
         *old_binding,
-        "--scan-path",
-        str(project),
     )
     assert rc == 0 and admitted["normal_delivery_allowed"], json.dumps(
         admitted, indent=2
@@ -184,8 +185,6 @@ def test_interrupted_binding_survives_new_due_successor(
         AGENT_ID,
         "--turn-instance-id",
         new_turn,
-        "--scan-path",
-        str(project),
     )
     assert (
         rc == 0 and recovering["effective_action"] == "unsettled_host_turn_recovery"
@@ -199,8 +198,6 @@ def test_interrupted_binding_survives_new_due_successor(
         "--goal-id",
         GOAL_ID,
         *old_binding,
-        "--scan-path",
-        str(project),
     )
     assert rc == 0, reentry
     assert reentry["heartbeat_receipt"]["settlement_identity"] == identity
@@ -225,8 +222,6 @@ def test_interrupted_binding_survives_new_due_successor(
         old_turn,
         "--todo-id",
         TODO_ID,
-        "--scan-path",
-        str(project),
     )
     assert rc == 1, peer
     assert peer["error_code"] == "quota_action_selection_rejected"
@@ -283,8 +278,6 @@ def test_interrupted_binding_survives_new_due_successor(
         AGENT_ID,
         "--turn-instance-id",
         new_turn,
-        "--scan-path",
-        str(project),
     )
     assert rc == 0, fresh
     assert fresh["effective_action"] != "unsettled_host_turn_recovery"
@@ -306,8 +299,13 @@ def test_interrupted_binding_survives_new_due_successor(
         "--status",
         "open",
         "--clear-resume-when",
+        "--reason",
+        "Resume the verified due successor.",
     )
     assert rc == 0, json.dumps(resumed, indent=2)
+    rc, claimed = cli("todo", "claim", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID, "--todo-id", due_id)
+    assert rc == 0 and claimed["execution_managed"] is True, claimed
     rc, selected = cli(
         "quota",
         "should-run",
@@ -320,8 +318,6 @@ def test_interrupted_binding_survives_new_due_successor(
         new_turn,
         "--todo-id",
         due_id,
-        "--scan-path",
-        str(project),
     )
     assert rc == 0, selected
     new_identity = selected["heartbeat_receipt"]["settlement_identity"]

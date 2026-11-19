@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from threading import Event, get_ident
 
 import pytest
+from managed_effect_runtime_fixture import stop_disposable_effect_runtimes
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -34,13 +35,17 @@ from loopx.file_lock import lock_holder_host_label  # noqa: E402
 HOST = '''import json, os, sys, time
 from pathlib import Path
 from loopx.control_plane.turn_driver.host_candidate import build_result
+from loopx.control_plane.quota.turn_envelope import turn_host_lineage
 from loopx.control_plane.collaboration.inbox import acknowledge
 from loopx.control_plane.collaboration.peers import return_result
+# The generic Host protocol sends UTF-8 over a pipe, whose Python 3.11
+# Windows default is a locale codec rather than the console's UTF-8 mode.
+sys.stdin.reconfigure(encoding='utf-8')
 request = json.load(sys.stdin)
 workspace = Path.cwd()
 root = Path(sys.argv[1])
-envelope = request['turn_envelope']
-actor = envelope['agent_id']
+identity = turn_host_lineage(request)
+actor = identity['agent_id']
 counter = workspace / 'host-invocations'
 counter.write_text(str(int(counter.read_text()) + 1 if counter.exists() else 1))
 if (root / 'ignore-term').exists():
@@ -54,9 +59,9 @@ if (root / 'hold').exists():
     while not (root / 'release').exists(): time.sleep(0.1)
 delegation = json.loads((workspace / 'DELEGATION.json').read_text())
 if not (root / 'skip-adoption').exists():
-    acknowledge(root / 'runtime', envelope['goal_id'], actor, delegation['request_id'], 'adopt', 'Independently checked the requested scope.')
-    return_result(root / 'runtime', envelope['goal_id'], actor, delegation['request_id'], 'Independent member conclusion; host acceptance is separate.')
-print(json.dumps(build_result(request, {'result_kind':'validated_progress', 'classification':'artifact_written', 'summary':'Fixture host supplied output for independent verification.', 'next_action':'Return verified evidence.'}, host_name='Fixture')))
+    acknowledge(root / 'runtime', identity['goal_id'], actor, delegation['request_id'], 'adopt', 'Independently checked the requested scope.')
+    return_result(root / 'runtime', identity['goal_id'], actor, delegation['request_id'], 'Independent member conclusion; host acceptance is separate.')
+print(json.dumps(build_result(request, {'result_kind':'validated_progress', 'classification':'artifact_written', 'summary':'Fixture host supplied output for independent verification.', 'next_action':'Return verified evidence.', 'work_evidence':['artifact:delegation-output'], 'validation_evidence':['check:independent-member-result']}, host_name='Fixture')))
 '''
 
 
@@ -65,19 +70,14 @@ def service(tmp_path, request, monkeypatch):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     # Each case owns a private server. Do not accumulate five-minute idle
     # runtimes across the delegation suite, including failed setup/test cases.
-    runtime_env = os.environ.copy()
-    run_cleanup = subprocess.run  # Tests may replace the shared module before teardown.
+    original_run = subprocess.run  # Tests may replace the shared module before teardown.
     def retire_runtime():
-        run_cleanup([
-            sys.executable, "-c",
-            "from pathlib import Path; import sys; "
-            "from loopx.control_plane.effect_runtime import _runtime_dir, restart_effect_runtime; "
-            "assert _runtime_dir().parent == Path(sys.argv[1]); "
-            "result = restart_effect_runtime(); "
-            "assert result['status'] in {'stopped', 'not_running'}, result",
-            str(tmp_path),
-        ], cwd=Path(__file__).resolve().parents[1], env=runtime_env,
-            capture_output=True, text=True, timeout=30, check=True)
+        # Reap in the spawning parent: a cleanup subprocess cannot retire its
+        # sibling's zombie. The shared helper authenticates the publication path
+        # inside this private root, independent of later routing monkeypatches.
+        with pytest.MonkeyPatch.context() as cleanup:
+            cleanup.setattr(subprocess, "run", original_run)
+            stop_disposable_effect_runtimes(tmp_path)
     request.addfinalizer(retire_runtime)
     root = tmp_path / "team"
     demo.prepare(root, provider=request.param)
@@ -88,7 +88,7 @@ def service(tmp_path, request, monkeypatch):
     config.write_text(json.dumps({"schema_version": "loopx_local_delegation_v0", "bindings": [{
         "id": "analysis", "agent_id": "analyst", "todo_id": "todo_analyst-initial", "requesters": ["lead"],
         "workspace": str(root / "analyst" / "initial"), "timeout_seconds": 60, "output_refs": ["output.json"],
-        "host_args": ["--host", "generic-cli", "--iteration-context", "fresh", "--host-command-json",
+        "host_args": ["--host", "generic-cli", "--iteration-context", "fresh", "--host-adapter-request-schema", "loopx_turn_host_request_v1", "--host-command-json",
                       json.dumps([sys.executable, str(host), str(root)])],
     }]}))
     return root, Delegations(root / "runtime", root / "registry.json", demo.GOAL, "lead", config)
@@ -101,13 +101,42 @@ def brief():
             "return_requirement": "Return the independently checked artifact"}
 
 
+def test_fixture_host_revalidates_utf8_input_under_a_non_utf8_pipe(service):
+    """The fixture must reach task validation with the original UTF-8 identity."""
+    root, runner = service
+    host = root / "fixture-host.py"
+    # Model the Windows Python 3.11 pipe default without changing the parent
+    # transport or requiring a platform-dependent locale on the test runner.
+    host.write_text("import sys; sys.stdin.reconfigure(encoding='cp1252')\n"
+                    + host.read_text(encoding="utf-8"), encoding="utf-8")
+    output = root / "analyst/initial/output.json"
+    saved = output.read_bytes()
+    output.write_text("{}", encoding="utf-8")
+    request = {**brief(), "context": "Read the synthetic résumé: 报告 € → evidence."}
+    runner.start("analysis", "analysis-1", request)
+    rejected = wait(runner)
+    assert rejected["status"] == "rejected", rejected
+    assert "task_failure" in rejected, rejected
+    assert rejected["task_failure"]["resume_mode"] == "revalidate_cached_result"
+    turn_key = rejected["task_failure"]["turn_key"]
+    assert (root / "analyst/initial/host-invocations").read_text() == "1"
+
+    output.write_bytes(saved)
+    runner.revalidate("analysis-1")
+    accepted = wait(runner)
+    assert accepted["status"] == "accepted", accepted
+    assert "task_failure" not in accepted
+    assert json.loads(runner.path("analysis-1").read_text())["turn_key"] == turn_key
+    assert (root / "analyst/initial/host-invocations").read_text() == "1"
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_delegation_fixture_isolates_cached_and_child_runtime_routes(tmp_path, monkeypatch, provider):
     """A warmed parent must use the same private Effect server as its CLI."""
     from types import SimpleNamespace
 
     from loopx.control_plane.effect_runtime import (
-        _runtime_dir, _serving_runtime_identity, restart_effect_runtime, effect_runtime_result,
+        _pid_is_alive, _runtime_dir, _serving_runtime_identity, restart_effect_runtime, effect_runtime_result,
     )
 
     cached, isolated = tmp_path / "cached", tmp_path / "isolated"
@@ -123,7 +152,7 @@ def test_delegation_fixture_isolates_cached_and_child_runtime_routes(tmp_path, m
         "from loopx.control_plane.effect_runtime import _runtime_dir; print(_runtime_dir())",
     ], text=True).strip()
     assert Path(child) == _runtime_dir()
-    effect_runtime_result("runtime.ping", {})
+    fixture_pid = effect_runtime_result("runtime.ping", {})["pid"]
     assert _serving_runtime_identity() is not None
     try:
         # Teardown targets the captured route, even if another test changed
@@ -141,6 +170,10 @@ def test_delegation_fixture_isolates_cached_and_child_runtime_routes(tmp_path, m
             finally:
                 restart_effect_runtime()
         assert _serving_runtime_identity() is None, "fixture must retire its private runtime before the next case"
+        assert not _pid_is_alive(fixture_pid), "locator retirement alone does not prove process exit"
+        if os.name == "posix":
+            with pytest.raises(ChildProcessError):
+                os.waitpid(fixture_pid, os.WNOHANG)
     finally:
         restart_effect_runtime()
 
@@ -264,8 +297,9 @@ def wait(service, operation="analysis-1"):
     while time.monotonic() < deadline:
         result = service.read(operation)
         if result["status"] in {"accepted", "rejected"}:
-            return result
-        if result.get("error"):
+            if not result["worker_active"]:
+                return result
+        elif result.get("error"):
             pytest.fail(str(result))
         time.sleep(0.25)
     pytest.fail(str(service.read(operation)))
@@ -279,7 +313,8 @@ def test_confirmed_wake_reaches_native_acceptance_through_real_delegation_and_tu
     from loopx.cli import build_parser
     from loopx.control_plane.collaboration.operation_wake import dispatch_confirmed_operation_wake
     from loopx.control_plane.turn_driver.codex_cli import load_codex_cli_session
-    from loopx.control_plane.turn_driver.codex_operation_host import run_codex_operation_host, operation_tool_handler
+    from loopx.control_plane.turn_driver.codex_operation_host import run_codex_operation_host
+    from loopx.control_plane.turn_driver.managed_operation_host import operation_tool_handler
     from test_codex_operation_host import FAKE_SERVER
     from test_loopx_turn_codex_cli import _request
 
@@ -374,6 +409,8 @@ def test_confirmed_wake_reaches_native_acceptance_through_real_delegation_and_tu
 
 
 def test_detached_result_reconnects_without_duplicate_execution(service):
+    from loopx.control_plane.goals.activation_service import set_goal_activation_state
+
     root, original = service
     (root / "hold").touch()
     async def disconnect_requester():
@@ -394,7 +431,12 @@ def test_detached_result_reconnects_without_duplicate_execution(service):
                 inventory = await session.call_tool("list_delegations", {})
                 assert not inventory.isError and json.loads(inventory.content[0].text)["items"] == []
                 assert json.loads(inventory.content[0].text)["projection_envelope"]["complete"]
-                assert "stop_delegation" in {tool.name for tool in (await session.list_tools()).tools}
+                tools = (await session.list_tools()).tools
+                assert "stop_delegation" in {tool.name for tool in tools}
+                start = next(tool for tool in tools if tool.name == "start_delegation")
+                assert "complete goal, relevant corrections, intended reader, language and original result destination" in start.description
+                assert "negative results and unknowns" in start.description
+                assert "No worker is launched" not in start.description
                 result = await session.call_tool("start_delegation", {
                     "binding_id": "analysis", "operation_id": "analysis-1", "brief": brief()})
                 assert not result.isError
@@ -450,14 +492,20 @@ def test_detached_result_reconnects_without_duplicate_execution(service):
     original_brief = brief()
     with pytest.raises(Exception, match="no delegation grant"):
         ungranted.start("analysis", "other", original_brief)
-    registry = json.loads(original.registry.read_text())
-    registry["goals"][0]["status"] = "stopped"
-    original.registry.write_text(json.dumps(registry))
+    stopped = set_goal_activation_state(
+        registry_path=original.registry, goal_id=original.goal_id, state="stopped",
+        runtime_root_override=str(original.root), actor_kind="owner", execute=True,
+    )
+    assert stopped["ok"] and stopped["readback"]["verified"], stopped
     assert reconnected.read("analysis-1")["status"] == "accepted"
     with pytest.raises(ValueError, match="stopped"):
         reconnected.start("analysis", "new-operation", original_brief)
-    registry["goals"][0]["status"] = "active"
-    original.registry.write_text(json.dumps(registry))
+    assert not reconnected.path("new-operation").exists()
+    resumed = set_goal_activation_state(
+        registry_path=original.registry, goal_id=original.goal_id, state="active",
+        runtime_root_override=str(original.root), actor_kind="owner", execute=True,
+    )
+    assert resumed["ok"] and resumed["readback"]["verified"], resumed
     output = root / "analyst" / "initial" / "output.json"
     output.write_text("{}")
     with pytest.raises(ValueError, match="acceptance rejected"):
@@ -1259,7 +1307,9 @@ def test_lost_turn_reply_with_damaged_history_never_restarts_host(service, monke
         path.write_text("{damaged", encoding="utf-8")
     else:
         damaged = json.loads(original)
-        damaged["plan"]["turn_envelope"]["agent_id"] = "foreign-agent"
+        assert damaged["plan"]["schema_version"] == "loopx_turn_plan_v1"
+        assert "turn_envelope" not in damaged["plan"]
+        damaged["plan"]["work_contract"]["agent_identity"]["agent_id"] = "foreign-agent"
         path.write_text(json.dumps(damaged), encoding="utf-8")
     monkeypatch.setattr(runner, "_record_turn_result", record)
     runner.execute("analysis-recovery")

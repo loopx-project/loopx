@@ -49,7 +49,7 @@ type DeliveryWorkspaceCausalityOperation =
 
 export interface SettlementWorkspaceRequirement extends JsonObject {
   schema_version: typeof SETTLEMENT_WORKSPACE_REQUIREMENT_SCHEMA_VERSION;
-  settlement_binding_kind: "todo" | "autonomous_replan";
+  settlement_binding_kind: "todo" | "autonomous_replan" | "request";
   requirement: DeliveryWorkspaceRequirement;
   source: string;
   reason: string;
@@ -154,7 +154,7 @@ export function resolveSettlementWorkspaceRequirement(
 ): SettlementWorkspaceRequirement {
   if (
     settlementBindingKind !== "todo" &&
-    settlementBindingKind !== "autonomous_replan"
+    settlementBindingKind !== "autonomous_replan" && settlementBindingKind !== "request"
   ) {
     throw new EffectRuntimeRequestError(
       "settlement_binding_kind must be todo or autonomous_replan",
@@ -170,13 +170,14 @@ export function resolveSettlementWorkspaceRequirement(
       reason: causality.reason,
     };
   }
-  if (settlementBindingKind === "autonomous_replan") {
+  if (settlementBindingKind === "autonomous_replan" || settlementBindingKind === "request") {
     return {
       schema_version: SETTLEMENT_WORKSPACE_REQUIREMENT_SCHEMA_VERSION,
       settlement_binding_kind: settlementBindingKind,
       requirement: "not_required",
       source: "typed_settlement_identity",
-      reason: "autonomous_replan_is_non_repository_control_plane_work",
+      reason: settlementBindingKind === "request" ? "request_uses_operator_bound_workspace"
+        : "autonomous_replan_is_non_repository_control_plane_work",
     };
   }
   if (hasCompleteLegacySettlementReceipts(legacySettlementEvidence)) {

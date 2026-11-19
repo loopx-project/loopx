@@ -171,7 +171,7 @@ def test_continuous_source_churn_exhausts_bounded_retry_without_success(tmp_path
     assert len(calls) == 3
 
 
-def test_inactive_legacy_inspection_does_not_project_todos(tmp_path, monkeypatch):
+def test_unmigrated_inspection_refuses_missing_and_expired_source_without_projection(tmp_path, monkeypatch):
     registry = tmp_path / "registry.json"
     state = tmp_path / "state.md"
     state.write_text("---\nhandoff_mode: hard_lease\n---\n# Synthetic state\n")
@@ -181,17 +181,24 @@ def test_inactive_legacy_inspection_does_not_project_todos(tmp_path, monkeypatch
         raise AssertionError("inactive inspection must not parse Todo history")
     monkeypatch.setattr(list_readback, "list_goal_todos", forbidden_projection)
     runtime = tmp_path / "runtime"
-    missing = _inspect(registry, runtime)
-    assert missing["active"] is False and missing["lease"] is None
+    original_state = state.read_bytes()
+    with pytest.raises(LocalCoordinationAuthorityUnavailable) as missing:
+        _inspect(registry, runtime)
+    assert missing.value.code == "canonical_authority_required"
     lease_path = runtime / "goals" / GOAL / "task-leases" / f"{TODO}.json"
     lease_path.parent.mkdir(parents=True)
     lease_path.write_text(json.dumps({"schema_version": "task_lease_v0", "status": "active", "expires_at": "2000-01-01T00:00:00Z"}))
-    expired = _inspect(registry, runtime)
-    assert expired["active"] is False and expired["handoff_mode"] == "hard_lease"
+    original_lease = lease_path.read_bytes()
+    with pytest.raises(LocalCoordinationAuthorityUnavailable) as expired:
+        _inspect(registry, runtime)
+    assert expired.value.code == "canonical_authority_required"
+    assert lease_path.read_bytes() == original_lease
+    assert state.read_bytes() == original_state
+    assert not (runtime / "authority").exists()
 
 
 @pytest.mark.parametrize("mode", ["legacy", "soft_claim", "hard_lease"])
-def test_retained_source_inspection_never_projects_current_execution(tmp_path, monkeypatch, mode):
+def test_retained_source_inspection_requires_canonical_authority_without_projection(tmp_path, monkeypatch, mode):
     registry = tmp_path / "registry.json"
     state = tmp_path / "state.md"
     state.write_text(f"---\nhandoff_mode: {mode}\n---\n# Synthetic state\n")
@@ -207,14 +214,14 @@ def test_retained_source_inspection_never_projects_current_execution(tmp_path, m
     def forbidden_projection(**_):
         raise AssertionError("retained source inspection must not revive Todo admission")
     monkeypatch.setattr(list_readback, "list_goal_todos", forbidden_projection)
-    result = _inspect(registry, runtime)
-    assert result["active"] is False
-    assert result["lease"] == lease
+    original_state = state.read_bytes()
+    with pytest.raises(LocalCoordinationAuthorityUnavailable) as error:
+        _inspect(registry, runtime)
+    assert error.value.code == "canonical_authority_required"
+    assert error.value.payload["ok"] is False
     assert lease_path.read_bytes() == original
-    assert result["executor_constraint"]["reason"] == "canonical_authority_required"
-    assert result["execution_policy"]["supported"] is False
-    assert result["execution_policy"]["execution_authority_granted"] is False
-    assert "todo_projection_required" not in result
+    assert state.read_bytes() == original_state
+    assert not (runtime / "authority").exists()
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 from pathlib import PurePosixPath
-from typing import Any
 import re
 
 from .agent_registry import normalize_registered_agents
@@ -178,7 +179,7 @@ def compact_peer_task_coordination_policy(coordination: Any) -> dict[str, Any] |
 
     policy = coordination if isinstance(coordination, dict) else {}
     peer_policy = (
-        policy.get("peer_task_coordination")
+        cast(dict[str, Any], policy.get("peer_task_coordination"))
         if isinstance(policy.get("peer_task_coordination"), dict)
         else {}
     )

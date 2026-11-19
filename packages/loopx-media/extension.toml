@@ -1,0 +1,16 @@
+schema_version = "loopx_extension_manifest_v0"
+id = "loopx-media"
+version = "0.4.0"
+requires_loopx_api = ">=1,<2"
+permissions = ["content_media_write", "content_media_generate"]
+
+[runtime]
+protocol = "content_ops_media_renderer_v0"
+entrypoint = "loopx-media"
+doctor_args = ["--doctor"]
+required_permissions = ["content_media_write", "content_media_generate"]
+timeout_seconds = 120
+
+[[implements]]
+capability_id = "content-ops"
+protocol = "content_ops_media_renderer_v0"

@@ -11,7 +11,7 @@ export type ExecutionIdentity = UnknownIdentity | RecordedIdentity;
 const unavailable = (reason: string): UnknownIdentity => ({status: "unavailable", reason});
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
-const providers = new Map<string, string>([["openai", "OpenAI"], ["anthropic", "Anthropic"], ["google", "Google"]]);
+const providers = new Map<string, string>([["openai", "OpenAI"], ["anthropic", "Anthropic"], ["google", "Google"], ["deepseek", "DeepSeek"]]);
 // Only a provider's ordinary model name is publishable. Endpoint/router labels
 // remain unavailable; do not guess a provider from a model prefix or configuration.
 const publicModel = (value: unknown): value is string => typeof value === "string"
@@ -19,7 +19,7 @@ const publicModel = (value: unknown): value is string => typeof value === "strin
 
 /** Read its latest recorded Turn identity, without claiming execution/authority. */
 export async function readCodexExecutionIdentity(params: Record<string, unknown>): Promise<ExecutionIdentity> {
-  const {home, path, thread_id: thread} = params;
+  const {home, path, thread_id: thread, allow_completed_turn: allowCompletedTurn} = params;
   if (typeof home !== "string" || typeof path !== "string" || typeof thread !== "string" || !thread)
     return unavailable("session_not_bound");
   try {
@@ -66,6 +66,7 @@ export async function readCodexExecutionIdentity(params: Record<string, unknown>
         return {status: "runtime_reported", model: context.model, provider,
           reasoning_effort: effort, observation_id, active_turn_verified};
       };
+      let finished = false;
       for (const line of lines.reverse()) {
         if (!line.trim()) continue;
         // Parse only metadata envelopes, never project conversational content.
@@ -74,14 +75,19 @@ export async function readCodexExecutionIdentity(params: Record<string, unknown>
         const payload = record.payload;
         if (record.type === "turn_context" && !context) context = payload;
         if (record.type !== "event_msg") continue;
-        if (["task_complete", "task_completed", "turn_aborted"].includes(String(payload.type)))
-          return unavailable("no_active_turn");
+        if (["task_complete", "task_completed", "turn_aborted"].includes(String(payload.type))) {
+          if (allowCompletedTurn === true && !context) {
+            finished = true;
+            continue;
+          }
+          return unavailable(allowCompletedTurn === true ? "turn_identity_unavailable" : "no_active_turn");
+        }
         if (payload.type !== "task_started") continue;
         if (!context || typeof payload.turn_id !== "string" || !payload.turn_id
           || context.turn_id !== payload.turn_id) return unavailable("turn_identity_unavailable");
         const end = await file.stat();
         if (end.ino !== start.ino || end.size < start.size) return unavailable("source_changed_during_read");
-        return project(true);
+        return project(!finished);
       }
       // Long Turns can push their opening event outside this bounded read.
       // The latest context still records its model, but it cannot prove liveness.

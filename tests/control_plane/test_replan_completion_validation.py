@@ -106,8 +106,6 @@ def test_qualified_path_replan_settles_without_completing_validation_todo(
         TODO_ID,
         "--turn-instance-id",
         turn_id,
-        "--scan-path",
-        str(project),
     )
     assert guard_rc == 0, guard
     assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
@@ -168,8 +166,6 @@ def test_qualified_path_replan_settles_without_completing_validation_todo(
         TODO_ID,
         "--turn-instance-id",
         turn_id,
-        "--scan-path",
-        str(project),
     )
     spend_rc, spend = _run_cli(registry, runtime, *spend_args)
     assert spend_rc == 0, spend
@@ -192,7 +188,7 @@ def test_qualified_path_replan_settles_without_completing_validation_todo(
 
     guard_args = (
         "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
-        "--agent-id", AGENT_ID, "--scan-path", str(project),
+        "--agent-id", AGENT_ID,
     )
     for selection in ((), ("--todo-id", TODO_ID)):
         rc, replay = _run_cli(

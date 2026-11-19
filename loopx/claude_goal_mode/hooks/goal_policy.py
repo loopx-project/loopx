@@ -52,6 +52,7 @@ Claude Code analogue of Codex's identity-scoped heartbeat prompt.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -115,19 +116,6 @@ def _gh_prefix():
     return [_exe] if _exe else [__import__("sys").executable, "-m", "loopx.cli"]
 
 
-def emit(decision=None, reason=""):
-    if decision is None:
-        sys.stdout.write("{}")  # no-op: defer to normal permission flow
-        return
-    sys.stdout.write(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": decision,
-            "permissionDecisionReason": reason,
-        }
-    }))
-
-
 def _runtime_profile_flag_is_unsupported(out: subprocess.CompletedProcess) -> bool:
     diagnostic = str(out.stderr or "").lower()
     return (
@@ -156,6 +144,7 @@ def should_run(registry, goal_id, agent_id=None) -> bool | None:
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
             timeout=10,
+            env={**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"},
         )
         if _runtime_profile_flag_is_unsupported(out):
             out = subprocess.run(
@@ -163,6 +152,7 @@ def should_run(registry, goal_id, agent_id=None) -> bool | None:
                 capture_output=True,
                 text=True, encoding="utf-8", errors="replace",
                 timeout=10,
+                env={**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"},
             )
     except Exception:
         return None  # caller fails CLOSED on None for non-read-only tools
@@ -267,8 +257,15 @@ def decide(ev: dict) -> dict:
     # gate Bash with the destructive denylist (the hook is the whole gate).
     if tool in WRITE_TOOLS:
         fp = ti.get("file_path") or ti.get("notebook_path") or ""
-        if scope and not any(within(fp, s) for s in scope):
-            return d("deny", f"'{fp}' outside goal write_scope {scope}")
+        if scope:
+            if not fp.strip():
+                return d(
+                    "deny",
+                    "unreadable PreToolUse event (missing file_path/notebook_path) - failing closed under goal-mode",
+                )
+            resolved_fp = fp if Path(fp).is_absolute() else str(Path(cwd) / fp)
+            if not any(within(resolved_fp, s) for s in scope):
+                return d("deny", f"'{fp}' outside goal write_scope {scope}")
         return d("allow", "write within goal scope")
     if tool == "Bash":
         low = (ti.get("command") or "").lower()

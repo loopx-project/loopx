@@ -65,6 +65,54 @@ def canonical_execution(tmp_path, monkeypatch, request):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX owned process-group qualification")
+@pytest.mark.parametrize("revoke", [False, True])
+def test_long_ttl_checks_authority_without_rewriting_lease(canonical_execution, tmp_path, revoke):
+    context, command, selected = canonical_execution
+    command("task-lease", "renew", *selected, "--owner", "worker", "--idempotency-key",
+            "original-execution", "--expected-version", "1", "--ttl-seconds", "2700")
+    context["lease"] = command("task-lease", "inspect", *selected)["lease"]
+    context["ttl_seconds"] = 2700
+    version = context["lease"]["version"]
+    trace = tmp_path / "commands.jsonl"
+    relay = """import json,subprocess,sys
+from pathlib import Path
+with Path(sys.argv[1]).open('a') as stream:
+    stream.write(json.dumps({'phase':sys.argv[2]})+'\\n')
+result=subprocess.run(sys.argv[3:],capture_output=True,text=True)
+print(result.stdout,end='')
+sys.exit(result.returncode)
+"""
+    for field, phase in (("renew_argv", "renew"), ("read_argv", "read")):
+        context[field] = [sys.executable, "-c", relay, str(trace), phase, *context[field]]
+    released = []
+
+    def ready(_text):
+        if revoke and not released:
+            released.append(command("task-lease", "release", *selected, "--owner", "worker",
+                "--idempotency-key", "original-execution", "--expected-version", str(version)))
+
+    started = time.monotonic()
+    observed = run_host_process([sys.executable, "-c",
+        "import time;print('ready',flush=True);time.sleep(33);print('finished')"],
+        project=tmp_path, input_text="", timeout_seconds=50, delegated_lease=context, on_stdout=ready)
+    phases = [json.loads(line)["phase"] for line in trace.read_text().splitlines()]
+    current = command("task-lease", "inspect", *selected)["lease"]
+    assert "renew" not in phases, "periodic proof must not rewrite a healthy long-lived lease"
+    assert phases.count("read") >= (2 if revoke else 3), phases
+    assert current["lease_epoch"] == context["lease"]["lease_epoch"]
+    assert current["idempotency_key"] == context["lease"]["idempotency_key"]
+    if revoke:
+        assert released[0]["ok"] is True
+        assert observed["outcome"] == "cancelled" and observed["output_complete"] is False
+        assert observed["lease_failure"] == {"reason": "lease_inactive", "boundary": "renewal"}
+        assert time.monotonic() - started < 45, "revocation must retain the existing proof cadence"
+    else:
+        assert observed["outcome"] == "exited" and observed["output_complete"] is True
+        assert "lease_failure" not in observed
+        assert current["version"] == version
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX owned process-group qualification")
 @pytest.mark.parametrize("fault", ["rejected", "hung", "lost_reply", "late_reply"])
 def test_real_renewal_faults_keep_original_deadline_and_identity(canonical_execution, tmp_path, fault, record_property):
     context, command, selected = canonical_execution

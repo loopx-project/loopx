@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import shlex
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
 
 from ...agent_registry import registered_agent_ids_for_goal
 from ..agents.agent_scope import agent_scope_item_matches_agent_or_unclaimed
@@ -19,11 +20,12 @@ from ..status.autonomous_replan_projection import (
 )
 from ..todos.active_state_todo_parser import parse_active_state_todos
 from ..todos.quota_summary import (
-    select_planning_inventory_source_items,
-    select_quota_todo_summary,
+    select_quota_todo_summaries_with_terminal,
 )
 from ..todos.succession_warning import todo_succession_gap_items
 from .autonomous_replan_ack import (
+    drop_unowned_recorded_replan_acks,
+    historical_ack_candidates_with_writeback_order,
     latest_monitor_replan_frontier_identity,
     watch_lane_continuation_todo_ids,
 )
@@ -32,6 +34,8 @@ from .autonomous_replan_obligation import (
     project_todo_lifecycle_settlement_reentry,
 )
 from .progress_observation import guarded_replan_transition_delta, semantic_delta_from_writeback
+from .lifecycle_recovery import attach_receipt_replan_context
+from .replan_semantics_codec import project_replan_semantics
 from ..effect_runtime import effect_runtime_request_scope
 from .repair_delta import (
     build_repair_delta_contract,
@@ -131,12 +135,18 @@ def project_replan_writeback_rejection(
     capability_guard = obligation.get("capability_guard")
     if isinstance(capability_guard, Mapping) and rejection.semantic_delta.get("readback_actions"):
         next_cli_actions = rejection.semantic_delta["readback_actions"]
+    context_recovery = rejection.semantic_delta.get("context_recovery")
+    if isinstance(context_recovery, Mapping):
+        # TS owns the mismatch classification and complete review basis. Reading
+        # that basis precedes retry; the generic unbound writeback command would
+        # merely repeat the rejection and can lose the original Turn identity.
+        next_cli_actions = []
     return {
         "schema_version": REPLAN_WRITEBACK_REJECTION_SCHEMA_VERSION,
         "required": True,
         "host_action": (
-            "settle_todo_lifecycle"
-            if lifecycle_reentry is not None
+            "read_current_replan_context" if isinstance(context_recovery, Mapping)
+            else "settle_todo_lifecycle" if lifecycle_reentry is not None
             else "read_current_capability_evidence" if capability_guard
             else "write_typed_semantic_delta"
         ),
@@ -147,6 +157,7 @@ def project_replan_writeback_rejection(
         "reason_code": rejection.semantic_delta.get("reason_code"),
         "triggers": triggers,
         "next_cli_actions": next_cli_actions,
+        **({"context_recovery": dict(context_recovery)} if isinstance(context_recovery, Mapping) else {}),
         **({"capability_guard": dict(capability_guard)} if isinstance(capability_guard, Mapping) else {}),
     }
 
@@ -221,8 +232,12 @@ def qualify_replan_writeback(
     capability_evidence: CapabilityReplanEvidence | None = None,
     guard_capability: Mapping[str, Any] | None = None,
     receipt_bound_guard_recorded_at: str | None = None,
+    receipt_bound_guard_turn_instance_id: str | None = None,
+    receipt_bound_replan_review: Mapping[str, Any] | None = None,
+    admission_event_id: str | None = None,
     replan_source_route: Mapping[str, Any] | None = None,
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Return the shared open obligation and the writeback's typed delta.
 
@@ -242,7 +257,7 @@ def qualify_replan_writeback(
     )
     registered_agent_ids = registered_agent_ids_for_goal(registry_goal)
     agent_identity = (
-        build_quota_agent_identity(registry_goal, agent_id=safe_agent_id)
+        build_quota_agent_identity(cast(dict[str, Any], registry_goal), agent_id=safe_agent_id)
         if registered_agent_ids
         else {
             "agent_id": safe_agent_id,
@@ -251,21 +266,8 @@ def qualify_replan_writeback(
     )
     raw_user_todos = todo_projection.get("user_todos")
     raw_agent_todos = todo_projection.get("agent_todos")
-    user_todos = select_quota_todo_summary(
-        raw_user_todos,
-        None,
-        agent_identity=agent_identity,
-        filter_user_gate_blocks_agent=True,
-    )
-    agent_todos = select_quota_todo_summary(
-        raw_agent_todos,
-        None,
-        agent_identity=agent_identity,
-    )
-    agent_todo_source_items = select_planning_inventory_source_items(
-        raw_agent_todos,
-        None,
-        include_terminal=True,
+    user_todos, agent_todos, agent_todo_source_items = select_quota_todo_summaries_with_terminal(
+        raw_user_todos, raw_agent_todos, agent_identity=agent_identity,
     )
     agent_todo_completion_items = (
         [
@@ -276,27 +278,36 @@ def qualify_replan_writeback(
         if isinstance(raw_agent_todos, dict)
         else []
     )
+    owned_history, _ = drop_unowned_recorded_replan_acks(
+        list(newest_first_runs or []), goal_id=goal_id, goal_ref=goal_ref,
+    )
     run_obligation = autonomous_replan_obligation_from_runs(
-        newest_first_runs,
+        owned_history,
         agent_todos=agent_todos,
         agent_id=safe_agent_id,
         external_progress_review=external_progress_review,
         effective_turn_cadence=effective_turn_cadence,
     )
     status_payload = {
-        **(dict(replan_source_route or {})
-           if ((registry_goal or {}).get("execution_profile") or {}).get("stride_strategy", "off") != "off"
-           else {}),
+        **dict(replan_source_route or {}),
         "run_history": {
             "goals": [
                 {
                     **(registry_goal or {}),
                     "id": goal_id,
-                    "latest_runs": list(newest_first_runs or []),
+                    "latest_runs": owned_history,
                 }
             ]
         }
     }
+    status_payload["receipt_bound_replan_ack_candidates"] = historical_ack_candidates_with_writeback_order(
+        owned_history, goal_id=goal_id, agent_id=safe_agent_id,
+        obligation_id=guard_semantic_replan_obligation_id, guard_scoped=guard_scoped,
+        source_route=replan_source_route,
+        guard_recorded_at=receipt_bound_guard_recorded_at,
+        guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
+        goal_ref=goal_ref, admission_event_id=admission_event_id,
+    )
     if capability_evidence is not None:
         status_payload["bounded_research_frontier"] = capability_evidence.frontier
     context = build_goal_frontier_projection_context_from_status(
@@ -323,13 +334,13 @@ def qualify_replan_writeback(
         neutral_replan_ack_classifications=(
             AUTONOMOUS_RUN_HISTORY_NEUTRAL_CLASSIFICATIONS
         ),
-        registered_agent_ids=list(agent_identity["registered_agents"]),
+        registered_agent_ids=list(cast(dict[str, Any], agent_identity)["registered_agents"]),
         goal_status=str((registry_goal or {}).get("status") or "active"),
         receipt_bound_replan_obligation_id=(guard_semantic_replan_obligation_id if guard_scoped else None),
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
         agent_profile=(
-            agent_identity.get("agent_profile")
-            if isinstance(agent_identity.get("agent_profile"), dict)
+            cast(dict[str, Any], cast(dict[str, Any], agent_identity).get("agent_profile"))
+            if isinstance(cast(dict[str, Any], agent_identity).get("agent_profile"), dict)
             else None
         ),
     )
@@ -349,6 +360,10 @@ def qualify_replan_writeback(
             stride_strategy=((registry_goal or {}).get("execution_profile") or {}).get(
                 "stride_strategy", "off"
             ),
+            goal_id=goal_id,
+            agent_id=safe_agent_id,
+            guard_recorded_at=receipt_bound_guard_recorded_at,
+            guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
         )
         if transition_delta is not None:
             # This closes only the selected Turn obligation. The freshly
@@ -366,6 +381,33 @@ def qualify_replan_writeback(
             context.get("replan_transition_candidates", [])
             if isinstance(candidate.get("obligation"), dict) and
             candidate["obligation"].get("obligation_id") == guard_semantic_replan_obligation_id), None)
+    # Every selected replan retains its exact receipt-bound source. A missing
+    # reconstruction must not fall through as an unselected future obligation
+    # and commit an unqualified writeback. Plain outcome reviews additionally
+    # carry a scalar source; lifecycle/transition reviews need the same owner.
+    if guard_scoped and guard_semantic_replan_obligation_id:
+        obligation = project_replan_semantics({
+            "operation": "receipt_bound_obligation", "guard_scoped": True,
+            "selected_obligation_id": guard_semantic_replan_obligation_id,
+            "agent_id": safe_agent_id, "replay_phase": "open",
+            "current_obligation": obligation,
+            "receipt_review": receipt_bound_replan_review,
+            "transition_candidates": context.get("replan_transition_candidates", []),
+            "stride_strategy": context["stride_strategy"],
+            "goal_id": goal_id,
+            "guard_recorded_at": receipt_bound_guard_recorded_at,
+            "guard_turn_instance_id": receipt_bound_guard_turn_instance_id,
+        })["obligation"]
+        if obligation and not obligation.get("replan_context") and not obligation.get("settlement_action_packet"):
+            obligation = attach_receipt_replan_context(
+                obligation, None, goal_id=goal_id, agent_id=safe_agent_id,
+                source_status=status_payload, stride_strategy=context["stride_strategy"],
+                explore_reader=replan_explore_reader,
+                goal_acceptance_contract=(
+                    contract if isinstance(contract := (agent_todos or {}).get("goal_acceptance_contract"), Mapping) else None
+                ),
+                todo_items=agent_todo_source_items,
+            )
     if not obligation:
         # A validated Todo transition can discharge the read-model obligation
         # before refresh. Preserve that evidence in this run so periodic review
@@ -421,6 +463,9 @@ def enforce_open_replan_writeback(
     guard_scoped: bool = False,
     guard_semantic_replan_obligation_id: str | None = None,
     receipt_bound_guard_recorded_at: str | None = None,
+    receipt_bound_guard_turn_instance_id: str | None = None,
+    receipt_bound_replan_review: Mapping[str, Any] | None = None,
+    admission_event_id: str | None = None,
     todo_fields: dict[str, Any] | None = None,
     external_progress_review: Mapping[str, Any] | None = None,
     capability_evidence: CapabilityReplanEvidence | None = None,
@@ -428,6 +473,7 @@ def enforce_open_replan_writeback(
     effective_turn_cadence: dict[str, Any] | None = None,
     replan_source_route: Mapping[str, Any] | None = None,
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Fail closed unless concrete typed evidence satisfies the selected replan.
 
@@ -456,7 +502,11 @@ def enforce_open_replan_writeback(
         capability_evidence=capability_evidence,
         guard_capability=guard_capability,
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
+        receipt_bound_guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
+        receipt_bound_replan_review=receipt_bound_replan_review,
+        admission_event_id=admission_event_id,
         replan_source_route=replan_source_route, replan_explore_reader=replan_explore_reader,
+        goal_ref=goal_ref,
     )
     if not obligation:
         if isinstance(semantic_delta, dict) and semantic_delta.get("accepted") is True:
@@ -503,6 +553,9 @@ def qualify_refresh_replan_writeback(
     settlement_guard_scoped: bool,
     settlement_guard_semantic_replan_obligation_id: str | None,
     receipt_bound_guard_recorded_at: str | None = None,
+    receipt_bound_guard_turn_instance_id: str | None = None,
+    receipt_bound_replan_review: Mapping[str, Any] | None = None,
+    admission_event_id: str | None = None,
     newest_first_runs: list[dict[str, Any]],
     state_text: str,
     goal_id: str,
@@ -519,6 +572,7 @@ def qualify_refresh_replan_writeback(
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
     capability_evidence: CapabilityReplanEvidence | None = None,
     guard_capability: Mapping[str, Any] | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> RefreshReplanQualification:
     """Qualify one refresh's replan delta and accountable settlement outcome."""
 
@@ -588,7 +642,11 @@ def qualify_refresh_replan_writeback(
             settlement_guard_semantic_replan_obligation_id
         ),
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
+        receipt_bound_guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
+        receipt_bound_replan_review=receipt_bound_replan_review,
+        admission_event_id=admission_event_id,
         replan_source_route=replan_source_route, replan_explore_reader=replan_explore_reader,
+        goal_ref=goal_ref,
     )
     if semantic_delta:
         if semantic_delta.get("retirement") and delivery_outcome != "outcome_gap":

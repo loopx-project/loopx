@@ -23,7 +23,7 @@ AGENT = "claude"
 _FAIL_COMMAND = f'{shlex.quote(sys.executable)} -c "raise SystemExit(1)"'
 
 
-def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
+def _write_fixture(tmp_path: Path, *, provider="file", mode="soft_claim") -> tuple[Path, Path]:
     repo = tmp_path / "repo"
     repo.mkdir()
     runtime = tmp_path / "runtime"
@@ -75,9 +75,9 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
         build_todo_runtime_shadow_projection(
             goal_id=GOAL_ID,
             todos=[],
-            handoff_mode="soft_claim",
+            handoff_mode=mode,
         ),
-        state_path=state,
+        state_path=state, provider=provider,
     )
     return registry, state
 
@@ -180,32 +180,60 @@ def test_mcp_advancement_validation_precedes_controller_owned_settlement(
     assert ("terminal_closeout" in payload["settlement"]) is no_follow_up
     assert _agent_todo_status(state, todo_id) == "done"
 
-def test_expected_lease_version_annotation_rejects_bool_at_the_boundary() -> None:
-    """FastMCP validates tool arguments with pydantic, and lax pydantic
-    coerces JSON ``true`` to ``1`` BEFORE any loopx code runs - by the time
-    the lease CAS compares versions the bool is indistinguishable from a
-    legitimate 1.  The boundary annotation is therefore the only place the
-    rejection can happen, and it is single-sourced so the control-plane
-    method and the FastMCP wrapper cannot drift."""
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_mcp_claim_reference_completes_once_with_managed_execution(tmp_path, monkeypatch, provider):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 
-    import pydantic
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, state = _write_fixture(tmp_path, provider=provider, mode="hard_lease")
+    todo_id = _add_todo(registry)
+    control = _control(registry)
+    claimed = json.loads(control.claim_task(todo_id, AGENT))
+    assert claimed["ok"] and claimed["execution_managed"], claimed
+    assert "lease" not in claimed
+    reference = claimed["claim_operation_id"]
+    other = add_goal_todo(registry_path=registry, goal_id=GOAL_ID, role="agent",
+        text="A different bounded change.", task_class="advancement_task", claimed_by=AGENT)
+    foreign_reference = json.loads(control.claim_task(other["todo_id"], AGENT))["claim_operation_id"]
+    for invalid in ("", foreign_reference):
+        denied = _first_json_blob(control.complete_task(todo_id, AGENT, "evidence:validated", claim_operation_id=invalid))
+        assert not denied["ok"], denied
+        assert _agent_todo_status(state, todo_id) == "open"
+    args = dict(claim_operation_id=reference)
+    completed = _first_json_blob(control.complete_task(todo_id, AGENT, "evidence:validated", **args))
+    assert completed["ok"] and completed["completed"], completed
+    assert completed["settlement"]["quota_spend"]["appended"]
+    def snapshot():
+        return read_canonical_todos_if_promoted(runtime_root=tmp_path / "runtime", goal_id=GOAL_ID, include_leases=True)
+    before = snapshot()
+    assert next(lease for lease in before["leases"] if lease["todo_id"] == todo_id)["status"] == "released"
+    replay = _first_json_blob(control.complete_task(todo_id, AGENT, "evidence:validated", **args))
+    assert replay["ok"], replay
+    assert snapshot() == before
+    assert _agent_todo_status(state, todo_id) == "done"
 
-    from loopx import goal_mode_mcp
 
-    adapter = pydantic.TypeAdapter(goal_mode_mcp.ExpectedTaskLeaseVersion)
-    for disguised in (True, False):
-        try:
-            adapter.validate_python(disguised)
-        except pydantic.ValidationError:
-            pass
-        else:
-            raise AssertionError(f"bool {disguised} was coerced to an int")
-    assert adapter.validate_python(7) == 7
-    assert adapter.validate_python(None) is None
+def test_mcp_completion_schema_exposes_task_reference_not_lease_protocol(monkeypatch):
+    import asyncio
+    from mcp.server.fastmcp.exceptions import ToolError
+    from loopx.goal_mode_mcp import create_fastmcp_server
 
-    import typing
-
-    hints = typing.get_type_hints(
-        goal_mode_mcp.GoalModeMCPControlPlane.complete_task, include_extras=True
-    )
-    assert hints["task_lease_expected_version"] == goal_mode_mcp.ExpectedTaskLeaseVersion
+    server, control = create_fastmcp_server(GoalModeMCPConfig(
+        server_name="test", runtime_profile="claude_code", legacy_host_surface="claude_code"), lambda: {})
+    tool = next(tool for tool in asyncio.run(server.list_tools()) if tool.name == "complete_task")
+    properties = tool.inputSchema["properties"]
+    assert "claim_operation_id" in properties
+    assert not any("lease" in name for name in properties)
+    with pytest.raises(TypeError, match="unexpected keyword"):
+        control.complete_task("todo", AGENT, "evidence", task_lease_expected_version=1)
+    writes = []
+    monkeypatch.setattr(control, "complete_task", lambda *args, **kwargs: writes.append(kwargs) or "completed")
+    for retired in ({"task_lease_expected_version": 1}, {"task_lease_idempotency_key": "old"}):
+        with pytest.raises(ToolError, match="Unsupported complete_task"):
+            asyncio.run(server.call_tool("complete_task", {
+                "todo_id": "todo", "agent_id": AGENT, "evidence": "evidence", **retired}))
+    assert writes == []
+    asyncio.run(server.call_tool("complete_task", {
+        "todo_id": "todo", "agent_id": AGENT, "evidence": "evidence", "claim_operation_id": "accepted-claim"}))
+    assert len(writes) == 1 and writes[0]["claim_operation_id"] == "accepted-claim"

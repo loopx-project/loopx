@@ -123,6 +123,10 @@ def _write_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
         + "\n",
         encoding="utf-8",
     )
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+
+    for record in json.loads(registry.read_text())["goals"]:
+        import_fixture_authority(registry, record["id"], provider="sqlite")
     return project, runtime, workspace, registry
 
 
@@ -164,6 +168,8 @@ def _write_fake_runner(root: Path, workspace: Path) -> Path:
                 "    payload = {",
                 "        'result_kind': 'validated_progress',",
                 "        'classification': 'managed_step_fake_runner',",
+                f"        'work_evidence': ['artifact:{MARKER_NAME}'],",
+                "        'validation_evidence': ['fixture:independent-marker-validator'],",
                 "        'summary': 'Same-Turn retry produced the marker.',",
                 "        'recommended_action': 'Inspect the marker.',",
                 "        'next_action': 'Confirm exactly one quota slot was spent.',",
@@ -262,8 +268,6 @@ def _base_argv(
         json.dumps(_validator_command()),
         "--validation-failure-kind",
         "repair_required",
-        "--scan-root",
-        str(registry.parent.parent),
         "--no-global-sync",
         "--timeout-seconds",
         "60",
@@ -355,8 +359,6 @@ def main() -> int:
                     "dsh",
                     "--execution-mode",
                     "isolated-headless",
-                    "--scan-root",
-                    str(registry.parent.parent),
                     "--observed-attempt",
                     "1",
                     "--observed-max-attempts",

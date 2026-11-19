@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 700" width="1100" height="700" style="background-color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif;">
+<!-- Header -->
+<text x="70" y="48" font-size="22" font-weight="700" fill="#111827">EdgeBench Sol 6.1-xhigh 五臂轨迹与跃升点对比 (Score-Time Trajectories)</text>
+<text x="70" y="76" font-size="13" fill="#4b5563">对比维度：Official 基线 / Native-Goal / Explore-Off (定频重规划) / Explore-On (探索账本) / Stride (分层步长)</text>
+<!-- Legend -->
+<g transform="translate(70, 96)">
+<rect x="0" y="0" width="14" height="14" rx="3" fill="#2563eb"/>
+<text x="20" y="12" font-size="12" fill="#374151">Official (原生单会话)</text>
+<rect x="180" y="0" width="14" height="14" rx="3" fill="#9ca3af"/>
+<text x="200" y="12" font-size="12" fill="#374151">Native-Goal (原生目标模式)</text>
+<rect x="380" y="0" width="14" height="14" rx="3" fill="#dc2626"/>
+<text x="400" y="12" font-size="12" fill="#374151">Explore-Off (定频续跑)</text>
+<rect x="560" y="0" width="14" height="14" rx="3" fill="#16a34a"/>
+<text x="580" y="12" font-size="12" fill="#374151">Explore-On (探索账本)</text>
+<rect x="740" y="0" width="14" height="14" rx="3" fill="#8b5cf6"/>
+<text x="760" y="12" font-size="12" fill="#374151">Stride (证据自适应步长)</text>
+</g>
+<!-- Panel 1: portfolio_risk_calibration -->
+<g transform="translate(70, 140)">
+<rect x="0" y="0" width="280" height="420" fill="#f9fafb" stroke="#e5e7eb" rx="6"/>
+<text x="12" y="24" font-size="14" font-weight="600" fill="#1f2937">Portfolio Risk (越高越好)</text>
+<line x1="35" y1="40" x2="35" y2="385" stroke="#9ca3af" stroke-width="1.2"/>
+<line x1="35" y1="385" x2="265" y2="385" stroke="#9ca3af" stroke-width="1.2"/>
+<text x="35" y="402" font-size="10" fill="#6b7280">0h</text>
+<text x="140.0" y="402" font-size="10" fill="#6b7280">9h</text>
+<text x="245" y="402" font-size="10" fill="#6b7280">18h</text>
+<line x1="35" y1="298.8" x2="265" y2="298.8" stroke="#e5e7eb" stroke-dasharray="3,3"/>
+<line x1="35" y1="212.5" x2="265" y2="212.5" stroke="#e5e7eb" stroke-dasharray="3,3"/>
+<line x1="35" y1="126.2" x2="265" y2="126.2" stroke="#e5e7eb" stroke-dasharray="3,3"/>
+<line x1="35" y1="40.0" x2="265" y2="40.0" stroke="#e5e7eb" stroke-dasharray="3,3"/>
+<path d="M 35 385 Q 92.5 168.2, 150.0 75.2 L 265.0 75.2" fill="none" stroke="#2563eb" stroke-width="2.0" />
+<circle cx="265.0" cy="75.2" r="4" fill="#2563eb"/>
+<path d="M 35 385 Q 46.8 276.6, 58.5 230.2 L 82.0 230.2" fill="none" stroke="#9ca3af" stroke-width="2.0" stroke-dasharray="4,3"/>
+<circle cx="82.0" cy="230.2" r="4" fill="#9ca3af"/>
+<path d="M 35 385 Q 92.5 288.2, 150.0 246.8 L 265.0 246.8" fill="none" stroke="#dc2626" stroke-width="2.0" />
+<circle cx="265.0" cy="246.8" r="4" fill="#dc2626"/>
+<path d="M 35 385 Q 92.5 259.5, 150.0 205.7 L 265.0 205.7" fill="none" stroke="#16a34a" stroke-width="2.8" />
+<circle cx="265.0" cy="205.7" r="4" fill="#16a34a"/>
+<path d="M 35 385 Q 92.5 240.8, 150.0 179.0 L 265.0 179.0" fill="none" stroke="#8b5cf6" stroke-width="2.8" />
+<circle cx="265.0" cy="179.0" r="4" fill="#8b5cf6"/>
+</g>
+<!-- Panel 2: grid_turing_robot -->
+<g transform="translate(400, 140)">
+<rect x="0" y="0" width="280" height="420" fill="#f9fafb" stroke="#e5e7eb" rx="6"/>
+<text x="12" y="24" font-size="14" font-weight="600" fill="#1f2937">Grid Robot (越低越好)</text>
+<line x1="35" y1="40" x2="35" y2="385" stroke="#9ca3af" stroke-width="1.2"/>
+<line x1="35" y1="385" x2="265" y2="385" stroke="#9ca3af" stroke-width="1.2"/>
+<text x="35" y="402" font-size="10" fill="#6b7280">0h</text>
+<text x="140.0" y="402" font-size="10" fill="#6b7280">9h</text>
+<text x="245" y="402" font-size="10" fill="#6b7280">18h</text>
+<line x1="35" y1="298.8" x2="265" y2="298.8" stroke="#e5e7eb" stroke-dasharray="3,3"/>
+<line x1="35" y1="212.5" x2="265" y2="212.5" stroke="#e5e7eb" stroke-dasharray="3,3"/>
+<line x1="35" y1="126.2" x2="265" y2="126.2" stroke="#e5e7eb" stroke-dasharray="3,3"/>
+<line x1="35" y1="40.0" x2="265" y2="40.0" stroke="#e5e7eb" stroke-dasharray="3,3"/>
+<path d="M 35 335.7 L 53.1 84.8 L 265.0 84.8" fill="none" stroke="#2563eb" stroke-width="2.0" />
+<circle cx="265.0" cy="84.8" r="4" fill="#2563eb"/>
+<path d="M 35 335.7 L 53.1 277.6 L 124.4 277.6" fill="none" stroke="#9ca3af" stroke-width="2.0" stroke-dasharray="4,3"/>
+<circle cx="124.4" cy="277.6" r="4" fill="#9ca3af"/>
+<path d="M 35 335.7 L 53.1 207.1 L 184.5 207.1" fill="none" stroke="#dc2626" stroke-width="2.0" />
+<circle cx="184.5" cy="207.1" r="4" fill="#dc2626"/>
+<path d="M 35 335.7 L 53.1 170.1 L 265.0 170.1" fill="none" stroke="#16a34a" stroke-width="2.8" />
+<circle cx="265.0" cy="170.1" r="4" fill="#16a34a"/>
+<path d="M 35 335.7 L 53.1 131.2 L 265.0 131.2" fill="none" stroke="#8b5cf6" stroke-width="2.8" />
+<circle cx="265.0" cy="131.2" r="4" fill="#8b5cf6"/>
+<rect x="55" y="160" width="130" height="48" rx="4" fill="#fee2e2" stroke="#ef4444" opacity="0.9"/>
+<text x="62" y="178" font-size="10" font-weight="600" fill="#991b1b">9.5h 原地微调平台期</text>
+<text x="62" y="195" font-size="9" fill="#7f1d1d">4次Replan只改超参常数</text>
+</g>
+<!-- Panel 3: ad_placement_optimization -->
+<g transform="translate(730, 140)">
+<rect x="0" y="0" width="280" height="420" fill="#f9fafb" stroke="#e5e7eb" rx="6"/>
+<text x="12" y="24" font-size="14" font-weight="600" fill="#1f2937">Ad Placement (越高越好)</text>
+<line x1="35" y1="40" x2="35" y2="385" stroke="#9ca3af" stroke-width="1.2"/>
+<line x1="35" y1="385" x2="265" y2="385" stroke="#9ca3af" stroke-width="1.2"/>
+<text x="35" y="402" font-size="10" fill="#6b7280">0h</text>
+<text x="140.0" y="402" font-size="10" fill="#6b7280">9h</text>
+<text x="245" y="402" font-size="10" fill="#6b7280">18h</text>
+<line x1="35" y1="298.8" x2="265" y2="298.8" stroke="#e5e7eb" stroke-dasharray="3,3"/>
+<line x1="35" y1="212.5" x2="265" y2="212.5" stroke="#e5e7eb" stroke-dasharray="3,3"/>
+<line x1="35" y1="126.2" x2="265" y2="126.2" stroke="#e5e7eb" stroke-dasharray="3,3"/>
+<line x1="35" y1="40.0" x2="265" y2="40.0" stroke="#e5e7eb" stroke-dasharray="3,3"/>
+<path d="M 35 385 L 88.7 187.9 L 160.2 178.9 L 213.9 178.9" fill="none" stroke="#2563eb" stroke-width="2.0" />
+<circle cx="213.9" cy="178.9" r="4" fill="#2563eb"/>
+<path d="M 35 385 L 58.0 355.7 L 88.7 338.7 L 111.7 338.7" fill="none" stroke="#9ca3af" stroke-width="2.0" stroke-dasharray="4,3"/>
+<circle cx="111.7" cy="338.7" r="4" fill="#9ca3af"/>
+<path d="M 35 385 L 88.7 174.3 L 160.2 166.0 L 213.9 293.0" fill="none" stroke="#dc2626" stroke-width="2.0" />
+<circle cx="213.9" cy="293.0" r="4" fill="#dc2626"/>
+<path d="M 35 385 L 88.7 125.3 L 160.2 119.4 L 213.9 119.4" fill="none" stroke="#16a34a" stroke-width="2.8" />
+<circle cx="213.9" cy="119.4" r="4" fill="#16a34a"/>
+<path d="M 35 385 L 88.7 85.2 L 160.2 81.2 L 213.9 81.2" fill="none" stroke="#8b5cf6" stroke-width="2.8" />
+<circle cx="213.9" cy="81.2" r="4" fill="#8b5cf6"/>
+<rect x="90" y="80" width="145" height="48" rx="4" fill="#dcfce7" stroke="#22c55e" opacity="0.9"/>
+<text x="96" y="98" font-size="10" font-weight="600" fill="#166534">守住最佳解 (Incumbent)</text>
+<text x="96" y="115" font-size="9" fill="#14532d">拒绝劣质候选，防止终态倒退</text>
+</g>
+<g transform="translate(70, 580)">
+<rect x="0" y="0" width="960" height="80" rx="8" fill="#f3f4f6" stroke="#d1d5db"/>
+<text x="24" y="28" font-size="13" font-weight="700" fill="#1f2937">因果归因核心发现 (Key Causal Findings):</text>
+<text x="24" y="48" font-size="12" fill="#374151">1. 机械缩小步长 ("做小一点") 导致在局部次优解上陷入无效 Replan (Grid 9.5 小时原地微调，仅降低 1.7% 成本)。</text>
+<text x="24" y="66" font-size="12" fill="#374151">2. 证据自适应 Stride 与严密候选门禁 (Incumbent Retention) 能跳出微调陷阱，并在后程劣质扰动时保住全局最高分。</text>
+</g>
+</svg>

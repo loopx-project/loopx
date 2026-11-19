@@ -2,21 +2,70 @@
 
 This fixture runs the real FileAuthorityStore in a Node process. It deliberately
 does not claim that a shadow qualification can promote canonical authority.
+Resolve TypeScript modules from the imported package so source and installed
+wheel tests exercise the same Python and TypeScript build.
 """
 from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 import subprocess
 import tempfile
 
+import loopx
+
+
+def assert_todo_read_unchanged(current, previous):
+    """Compare complete readback except validated evaluator/observation clocks."""
+    def stable(payload):
+        payload = without_resume_observation_time(payload)
+        envelope = payload["projection_envelope"]
+        assert envelope["schema_version"] == "loopx_projection_envelope_v0"
+        for key in ("observed_at", "served_at"):
+            assert datetime.fromisoformat(envelope.pop(key).replace("Z", "+00:00")).tzinfo is not None
+        for source in envelope["sources"]:
+            assert datetime.fromisoformat(source.pop("last_read_at").replace("Z", "+00:00")).tzinfo is not None
+        return payload
+
+    assert stable(current) == stable(previous)
+
+
+def empty_todo_display(state_path: Path) -> None:
+    """Remove display work without deleting Goal intent, acceptance or stops.
+
+    Quota admission still requires those Goal sections. Empty Todo sections
+    independently prove that the real provider owns work selection; a missing
+    entire Goal is a different, deliberately fail-closed health case.
+    """
+    from loopx.control_plane.todos.machine_section_projection import render_canonical_todo_sections
+
+    state_path.write_text(render_canonical_todo_sections(
+        state_path.read_text(), [], provider_revision="synthetic-empty-display",
+    ).markdown)
+
+
+def without_resume_observation_time(value):
+    """Compare all readback facts except the typed evaluator's observation time."""
+    if isinstance(value, list):
+        return [without_resume_observation_time(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    is_resume = value.get("schema_version") == "todo_resume_condition_v0"
+    if is_resume and "evaluated_at" in value:
+        assert datetime.fromisoformat(value["evaluated_at"].replace("Z", "+00:00")).tzinfo is not None
+    return {key: without_resume_observation_time(item) for key, item in value.items()
+            if not (is_resume and key == "evaluated_at")}
+
 
 def initialize_canonical_authority(runtime_root: Path, goal_id: str, projection: dict, *, state_path: Path, provider: str = "file") -> dict:
-    repository = Path(__file__).resolve().parents[2]
-    module = repository / "loopx/control_plane/coordination/file_authority_store.ts"
-    fence_module = repository / "loopx/control_plane/coordination/legacy_writer_fence.ts"
-    codec_module = repository / "loopx/control_plane/coordination/authority_store_codec.ts"
+    if provider not in ("file", "sqlite"):
+        raise ValueError("Canonical local fixtures support File/SQLite only; PostgreSQL requires its service-owned fixture")
+    package = Path(loopx.__file__).resolve().parent
+    module = package / "control_plane/coordination/file_authority_store.ts"
+    fence_module = package / "control_plane/coordination/legacy_writer_fence.ts"
+    codec_module = package / "control_plane/coordination/authority_store_codec.ts"
     script = (
         f"import {{FileAuthorityStore}} from {json.dumps(module.as_uri())};"
         f"import {{selectLocalSqliteAuthority,openLocalAuthorityStore}} from {json.dumps((module.parent / 'local_authority_provider.ts').as_uri())};"
@@ -41,6 +90,70 @@ def initialize_canonical_authority(runtime_root: Path, goal_id: str, projection:
     result = json.loads(process.stdout)
     assert result["status"] == "applied", result
     return result
+
+
+def read_fixture_todos(state_path: Path) -> list[dict]:
+    """Read authored input before initializing a disposable canonical fixture."""
+    from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
+    from loopx.control_plane.todos.todo_summary import structured_todo_item
+
+    # Attention summaries intentionally shorten text. Seeding their preview as
+    # canonical authority would erase the tail before the consumer is tested.
+    items, _, _ = parse_todo_source(state_path.read_text(encoding="utf-8"), state_path=state_path)
+    return [
+        structured_todo_item(item, role=role, source_section=item["source_section"], text_limit=None)
+        for role in ("user", "agent") for item in items[role]
+    ]
+
+
+def advance_canonical_fixture_authority(
+    runtime_root: Path, goal_id: str, projection: dict, *, operation_id: str,
+) -> dict:
+    """Advance an already initialized disposable store through its real CAS.
+
+    Consumer fixtures may author a later synthetic state, but must not replace
+    storage bytes, reset lineage, re-import Markdown or re-engage its fence.
+    """
+    module = Path(loopx.__file__).resolve().parent / "control_plane/coordination/local_authority_provider.ts"
+    script = (
+        f"import {{openLocalAuthorityStore}} from {json.dumps(module.as_uri())};"
+        "let input='';for await(const chunk of process.stdin)input+=chunk;"
+        "const request=JSON.parse(input);"
+        "const store=await openLocalAuthorityStore(request.root,request.goal);"
+        "const head=await store.loadAuthority();"
+        "if(head.status!=='loaded')throw new Error(JSON.stringify(head));"
+        "const result=await store.commitAuthority({expected_provider_revision:head.provider_revision,"
+        "operation_id:request.operation_id,events:[],next_projection:request.projection,receipts:[]});"
+        "process.stdout.write(JSON.stringify(result));"
+    )
+    process = subprocess.run(
+        ["node", "--no-warnings", "--experimental-strip-types", "--input-type=module", "-e", script],
+        input=json.dumps({"root": str(runtime_root), "goal": goal_id,
+                         "projection": projection, "operation_id": operation_id}),
+        capture_output=True, text=True, check=False, timeout=45,
+    )
+    assert process.returncode == 0, process.stderr
+    result = json.loads(process.stdout)
+    assert result["status"] == "applied", result
+    return result
+
+
+def initialize_canonical_source_fixture(
+    runtime_root: Path, goal_id: str, *, state_path: Path,
+    provider: str = "file", handoff_mode: str = "soft_claim",
+    leases: list[dict] | None = None,
+) -> dict:
+    """Finalize source authoring once; later changes use the canonical writer."""
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+
+    return initialize_canonical_authority(
+        runtime_root, goal_id,
+        build_todo_runtime_shadow_projection(
+            goal_id=goal_id, todos=read_fixture_todos(state_path),
+            handoff_mode=handoff_mode, leases=leases or [],
+        ),
+        state_path=state_path, provider=provider,
+    )
 
 
 def isolate_sqlite_runtime(tmp_path, monkeypatch):

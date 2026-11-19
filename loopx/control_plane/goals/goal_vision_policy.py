@@ -17,6 +17,10 @@ GOAL_VISION_ADVANCEMENT_POLICY_CHOICES = tuple(
 DEFAULT_EFFECTIVE_TURN_REPLAN_THRESHOLD = 6
 MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD = 6
 
+# Original Goal context is part of ordinary work selection. An explicit false
+# remains available for rollback and controlled comparisons.
+DEFAULT_PLANNING_HORIZON_GOAL = True
+
 # Explicit completed-Todo cadence remains bounded by the retained evidence
 # window. This is a legacy-unit limit, not the product default.
 COMPLETED_TODO_CHAIN_REPLAN_THRESHOLD = 5
@@ -44,17 +48,6 @@ def completed_todo_replan_threshold(profile: Any) -> int:
     if not isinstance(profile, dict) or "replan_after_completed_todos" not in profile:
         return COMPLETED_TODO_CHAIN_REPLAN_THRESHOLD
     return normalize_completed_todo_replan_threshold(profile["replan_after_completed_todos"])
-
-
-def normalize_goal_vision_advancement_policy(value: Any) -> str:
-    candidate = str(value or "").strip().lower().replace("-", "_")
-    try:
-        return GoalVisionAdvancementPolicy(candidate).value
-    except ValueError as exc:
-        raise ValueError(
-            "agent_vision.advancement_policy must be one of: "
-            + ", ".join(GOAL_VISION_ADVANCEMENT_POLICY_CHOICES)
-        ) from exc
 
 
 def goal_vision_repeats_advancement_until_closed(value: Any) -> bool:

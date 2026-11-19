@@ -8,8 +8,7 @@ from loopx.control_plane.todos.durable_completion import (
     project_durable_completion_intent,
     project_durable_completion_outcome,
     project_durable_terminal_completion_readback,
-    read_persisted_todo_record,
-    read_persisted_todo_record_with_source,
+    read_durable_completion_evidence,
 )
 
 TODO_DONE = {
@@ -246,7 +245,7 @@ def test_fails_closed_when_todo_is_not_durably_done() -> None:
         )
 
 
-def test_read_persisted_todo_record_projects_declared_successor(
+def test_read_durable_completion_evidence_projects_declared_successor(
     tmp_path: Path,
 ) -> None:
     state_file = tmp_path / "ACTIVE_GOAL_STATE.md"
@@ -271,16 +270,8 @@ def test_read_persisted_todo_record_projects_declared_successor(
         ),
         encoding="utf-8",
     )
-    todo, existing_todo_ids, projection_source = read_persisted_todo_record_with_source(
-        state_file,
-        todo_id="todo_fixture0001",
-    )
-    assert projection_source == "materialized"
-    assert existing_todo_ids == {"todo_fixture0001", "todo_fixture0002"}
-    outcome = project_durable_completion_outcome(
-        todo=todo,
-        expected_todo_id="todo_fixture0001",
-        existing_todo_ids=existing_todo_ids,
+    outcome = read_durable_completion_evidence(
+        state_file, todo_id="todo_fixture0001", operation="outcome",
     )
     assert outcome == {
         "todo_id": "todo_fixture0001",
@@ -289,7 +280,7 @@ def test_read_persisted_todo_record_projects_declared_successor(
     }
 
 
-def test_read_persisted_todo_record_fails_closed_when_todo_is_missing(
+def test_read_durable_completion_evidence_fails_closed_when_todo_is_missing(
     tmp_path: Path,
 ) -> None:
     state_file = tmp_path / "ACTIVE_GOAL_STATE.md"
@@ -313,7 +304,6 @@ def test_read_persisted_todo_record_fails_closed_when_todo_is_missing(
         ValueError,
         match="was not found in persisted Todo lifecycle state",
     ):
-        read_persisted_todo_record(
-            state_file,
-            todo_id="todo_fixture0001",
+        read_durable_completion_evidence(
+            state_file, todo_id="todo_fixture0001", operation="outcome",
         )

@@ -54,19 +54,18 @@ def status_projection_cache_key(
     *,
     registry_path: Path,
     runtime_root: Path,
-    scan_roots: list[Path],
     limit: int,
     include_task_graph: bool,
     goal_id: str | None,
     available_capabilities: Any = None,
     agent_lane_id: str | None = None,
+    include_presentation_projections: bool = True,
 ) -> str:
     request = {
         "schema_version": STATUS_PROJECTION_CACHE_SCHEMA_VERSION,
         "collector": "collect_status",
         "registry_path": str(registry_path.expanduser().resolve()),
         "runtime_root": str(runtime_root.expanduser()),
-        "scan_roots": [str(path.expanduser().resolve()) for path in scan_roots],
         "limit": max(0, int(limit)),
         "include_task_graph": bool(include_task_graph),
         "goal_id": str(goal_id or "").strip() or None,
@@ -75,6 +74,10 @@ def status_projection_cache_key(
             available_capabilities
         ),
     }
+    if not include_presentation_projections:
+        # Decision-only payloads omit presentation projections; keep them out of
+        # the default status key so a display read never serves a reduced view.
+        request["presentation_projections"] = False
     encoded = json.dumps(
         request,
         ensure_ascii=True,
@@ -132,23 +135,23 @@ def status_projection_cache_metadata(
     *,
     registry_path: Path,
     runtime_root: Path,
-    scan_roots: list[Path],
     limit: int,
     include_task_graph: bool,
     goal_id: str | None,
     max_age_seconds: int,
     available_capabilities: Any = None,
     agent_lane_id: str | None = None,
+    include_presentation_projections: bool = True,
 ) -> dict[str, Any]:
     key = status_projection_cache_key(
         registry_path=registry_path,
         runtime_root=runtime_root,
-        scan_roots=scan_roots,
         limit=limit,
         include_task_graph=include_task_graph,
         goal_id=goal_id,
         available_capabilities=available_capabilities,
         agent_lane_id=agent_lane_id,
+        include_presentation_projections=include_presentation_projections,
     )
     normalized_capabilities = _normalized_available_capabilities(
         available_capabilities
@@ -162,7 +165,6 @@ def status_projection_cache_metadata(
         "agent_lane_id": str(agent_lane_id or "").strip() or None,
         "limit": max(0, int(limit)),
         "include_task_graph": bool(include_task_graph),
-        "scan_roots": [str(path.expanduser()) for path in scan_roots],
         "available_capabilities": normalized_capabilities,
     }
 
@@ -171,24 +173,24 @@ def load_status_projection_cache(
     *,
     registry_path: Path,
     runtime_root: Path,
-    scan_roots: list[Path],
     limit: int,
     include_task_graph: bool,
     goal_id: str | None,
     max_age_seconds: int,
     available_capabilities: Any = None,
     agent_lane_id: str | None = None,
+    include_presentation_projections: bool = True,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     metadata = status_projection_cache_metadata(
         registry_path=registry_path,
         runtime_root=runtime_root,
-        scan_roots=scan_roots,
         limit=limit,
         include_task_graph=include_task_graph,
         goal_id=goal_id,
         max_age_seconds=max_age_seconds,
         available_capabilities=available_capabilities,
         agent_lane_id=agent_lane_id,
+        include_presentation_projections=include_presentation_projections,
     )
     path = Path(str(metadata["path"]))
     metadata["hit"] = False
@@ -200,7 +202,7 @@ def load_status_projection_cache(
         return None, metadata
     try:
         cache_record = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         metadata["miss_reason"] = "unreadable"
         metadata["error"] = str(exc)
         return None, metadata
@@ -246,7 +248,6 @@ def write_status_projection_cache(
     *,
     registry_path: Path,
     runtime_root: Path,
-    scan_roots: list[Path],
     limit: int,
     include_task_graph: bool,
     goal_id: str | None,
@@ -254,17 +255,18 @@ def write_status_projection_cache(
     max_age_seconds: int,
     available_capabilities: Any = None,
     agent_lane_id: str | None = None,
+    include_presentation_projections: bool = True,
 ) -> dict[str, Any]:
     metadata = status_projection_cache_metadata(
         registry_path=registry_path,
         runtime_root=runtime_root,
-        scan_roots=scan_roots,
         limit=limit,
         include_task_graph=include_task_graph,
         goal_id=goal_id,
         max_age_seconds=max_age_seconds,
         available_capabilities=available_capabilities,
         agent_lane_id=agent_lane_id,
+        include_presentation_projections=include_presentation_projections,
     )
     path = Path(str(metadata["path"]))
     path.parent.mkdir(parents=True, exist_ok=True)

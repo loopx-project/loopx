@@ -39,6 +39,8 @@ import time, sqlite3
 Path('/data').mkdir()
 Path('/phase').write_text(str(int(time.time())+7200))
 Path('/link').symlink_to('/data', target_is_directory=True)
+Path('/data/build-output').write_bytes(b'compiled artifact')
+Path('/data/build-alias').hardlink_to('/data/build-output')
 db=sqlite3.connect('/data/research.sqlite')
 db.execute('PRAGMA journal_mode=WAL')
 db.execute('PRAGMA wal_autocheckpoint=0')
@@ -112,8 +114,8 @@ def test_archive_keeps_private_directory_modes_without_special_bits(writer, tmp_
     assert (copied / "child").stat().st_mode & 0o7777 == 0o700
 
 
-@pytest.mark.parametrize("fault", [None, "source_moved", "expired", "read_race", "late_native",
-    "retention", "retention_default", "retention_off", "retention_pin", "retention_failure"])
+@pytest.mark.parametrize("fault", [None, "source_moved", "source_missing", "source_missing_image", "expired", "read_race", "late_native",
+    "retention", "retention_default", "retention_off", "retention_pin", "retention_failure", "continued_clock"])
 def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writer, tmp_path, monkeypatch, fault):
     from loopx.control_plane.effect_runtime import effect_runtime_result
     from benchmark.edgebench.checkpoint_worker import _archive
@@ -128,16 +130,26 @@ def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writ
         "Path('/logs/agent/checkpoint-controller').mkdir(parents=True); "
         "Path('/opt/loopx-benchmark/control').mkdir(parents=True); "
         "Path('/opt/loopx-benchmark/control/phase-deadline').write_bytes(Path('/phase').read_bytes())"]).exit_code == 0
-    prepared = _archive(container, "/candidate", tmp_path / "prepared")
+    continued_clock = "/opt/loopx-benchmark/control/continued-phase-deadline"
+    if fault == "continued_clock":
+        assert container.exec_run(["python", "-c", "from pathlib import Path; "
+            f"Path({continued_clock!r}).write_text(str(int(Path('/phase').read_text()) + .25) + '\\n'); "
+            "Path('/opt/loopx-benchmark/control/phase-deadline').write_text('1')"]).exit_code == 0
+    source = "/no such image" if fault == "source_missing_image" else "/candidate"
+    if fault == "source_missing_image":
+        assert container.exec_run(["mv", "/candidate", source]).exit_code == 0
+    prepared = _archive(container, source, tmp_path / "prepared")
     probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe",
         "components": [{"id": "code", "source_path": str(prepared)}]})
     nonce = "e" * 32
-    request = {"capture_id": nonce, "components": [{"id": "code", "source_path": "/candidate"}],
+    request = {"capture_id": nonce, "components": [{"id": "code", "source_path": source}],
         "point_metadata": {"synthetic_boundary": True}, "source_sha256": probe["source_sha256"],
         "source_witness": probe["source_witness"],
         "deadline_epoch": time.time() + (-1 if fault == "expired" else 8 if fault == "late_native" else 30)}
     if fault == "source_moved":
         assert container.exec_run(["python", "-c", "from pathlib import Path; Path('/candidate').write_text('later')"]).exit_code == 0
+    if fault in {"source_missing", "source_missing_image"}:
+        assert container.exec_run(["rm", source]).exit_code == 0
     assert container.exec_run(["python", "-c", "from pathlib import Path; "
         "Path('/logs/agent/checkpoint-controller/ready.json').write_text(" + repr(json.dumps(request)) + ")"]).exit_code == 0
     if fault == "read_race":
@@ -184,7 +196,8 @@ def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writ
             return original_capture(*args, **kwargs)
         monkeypatch.setattr(checkpoint_supervisor, "capture_worker", with_old_point)
     supervisor = CheckpointSupervisor(files[0], tmp_path / "points", retention_policy=policy_file,
-                                      retention_enabled=fault != "retention_off")
+                                      retention_enabled=fault != "retention_off",
+                                      **({"phase_deadline_path": continued_clock} if fault == "continued_clock" else {}))
     supervisor.bind({"SFORGE_TOKEN": token})
     supervisor.start(container)
     try:
@@ -194,15 +207,24 @@ def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writ
         supervisor.close()
     response = json.loads((tmp_path / "points" / (nonce + ".json")).read_bytes())
     assert response["ok"] is (fault in {None, "read_race", "retention", "retention_default",
-                                      "retention_off", "retention_pin", "retention_failure"})
+                                      "retention_off", "retention_pin", "retention_failure", "continued_clock"})
     unit = tmp_path / "points" / nonce
-    if fault in {None, "read_race", "retention", "retention_default", "retention_off", "retention_pin", "retention_failure"}:
+    if response["ok"]:
         manifest = json.loads((unit / "checkpoint.json").read_bytes())
         metadata = manifest["point_metadata"]
         assert metadata["synthetic_boundary"] is True
         assert metadata["worker_file_snapshot"]["prepared_source_verified"] is True
         assert (unit / "components/code").read_text() == "retained"
         assert response["capture"]["research_point_qualified"] is False
+        if fault == "continued_clock":
+            capsule = unit / "components" / metadata["worker_file_snapshot"]["native_capsule_component_id"]
+            raw = container.exec_run(["cat", continued_clock]).output
+            assert (capsule / "components/host_phase_deadline").read_bytes() == raw
+            budget = json.loads((capsule / "checkpoint.json").read_bytes())["point_metadata"]["host_phase_budget"]
+            assert budget["source_deadline_epoch"] == float(raw)
+            assert budget["source_deadline_epoch"] % 1 == .25
+            assert budget["remaining_seconds"] == float(raw) - budget["captured_at_epoch"]
+            assert container.exec_run(["cat", "/opt/loopx-benchmark/control/phase-deadline"]).output == b"1"
         if fault in {"retention", "retention_default"}:
             assert not (tmp_path / "points/old").exists()
             receipt = json.loads((tmp_path / "points/retention-last.json").read_bytes())
@@ -220,6 +242,13 @@ def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writ
             assert (tmp_path / "points/retention-error.json").exists()
     else:
         assert not unit.exists()
+        if fault in {"source_missing", "source_missing_image"}:
+            reply = container.exec_run(["cat", "/logs/agent/checkpoint-controller/" + nonce + ".json"])
+            assert reply.exit_code == 0
+            assert json.loads(reply.output) == response
+            assert response["error_kind"] == ("ImageNotFound" if fault == "source_missing_image" else "NotFound")
+            assert response["missing_component_id"] == "code"
+            assert source.encode() not in reply.output
         if fault != "late_native":
             assert not (Path(json.loads(files[0].read_bytes())["bank_root"]) / nonce).exists()
     container.reload()
@@ -386,6 +415,9 @@ def test_controller_cli_captures_frozen_worker_with_original_native_point(
     assert metadata["native_cursor_qualified"] is False and metadata["process_memory_captured"] is False
     assert metadata["native_capsule_component_id"] == "native_capsule_1"
     assert int((unit / "components/native_capsule/counter").read_text()) == observed[0]
+    copied = unit / "components/native_capsule"
+    assert (copied / "build-output").read_bytes() == (copied / "build-alias").read_bytes() == b"compiled artifact"
+    assert (copied / "build-output").stat().st_ino != (copied / "build-alias").stat().st_ino
     nested = unit / "components/native_capsule_1"
     capsule = json.loads((nested / "checkpoint.json").read_bytes())
     native = capsule["point_metadata"]["native_reference"]

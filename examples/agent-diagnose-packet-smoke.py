@@ -239,6 +239,8 @@ def write_agent_scoped_registry(root: Path, runtime: Path) -> Path:
         + "\n",
         encoding="utf-8",
     )
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+    import_fixture_authority(registry, SCOPED_GOAL_ID, provider="sqlite")
     return registry
 
 
@@ -302,6 +304,8 @@ def write_capability_scoped_registry(root: Path, runtime: Path) -> Path:
         + "\n",
         encoding="utf-8",
     )
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+    import_fixture_authority(registry, CAPABILITY_GOAL_ID, provider="sqlite")
     return registry
 
 
@@ -353,7 +357,7 @@ def main() -> int:
         scheduler_hint = selected["quota_signals"]["scheduler_hint"]
         assert scheduler_hint["schema_version"] == "diagnose_scheduler_hint_summary_v0", selected
         assert "local_scheduler" not in str(scheduler_hint), scheduler_hint
-        assert scheduler_hint["codex_app"]["no_spend_for_cadence_change"] is True, scheduler_hint
+        assert scheduler_hint["app_automation"]["no_spend_for_cadence_change"] is True, scheduler_hint
         assert selected["agent_reasoning_checklist"], selected
         assert any(
             " diagnose " in command and f"--goal-id {GOAL_ID}" in command

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import os
+import re
 import shlex
 from pathlib import Path
 from typing import Any
 
+from .command_invocation import loopx_cli_argv
 from .control_plane.projects.identity import default_goal_id
 from .control_plane.projects.registry_codec import load_registry
 from .paths import (
@@ -20,7 +23,7 @@ from .control_plane.scheduler.execution_context import (
     scheduler_runtime_profile_for_execution_context,
 )
 from .control_plane.todos.contract import normalize_required_capabilities
-from .install_contract import NO_CLONE_INSTALL_URL
+from . import install_contract
 
 DEFAULT_HANDOFF_OBJECTIVE = "<OBJECTIVE_FROM_GOAL_DOC>"
 DEFAULT_HANDOFF_DOMAIN = "<DOMAIN>"
@@ -38,10 +41,39 @@ def shell_arg(value: str) -> str:
     return shlex.quote(value)
 
 
+_SHELL_SAFE_ARGUMENT = re.compile(r"^[A-Za-z0-9_./-]+$")
+
+
+def _is_windows_host() -> bool:
+    return os.name == "nt"
+
+
+def shell_arg_for_host(value: str) -> str:
+    """Quote one argument for the shell that will run the generated command."""
+
+    if _is_windows_host() and not _SHELL_SAFE_ARGUMENT.fullmatch(value):
+        return install_contract.powershell_literal(value)
+    return shell_arg(value)
+
+
 def render_optional_cli_arg(flag: str, value: str | None) -> str:
     if not value:
         return ""
-    return f" {flag} {shell_arg(value)}"
+    return f" {flag} {shell_arg_for_host(value)}"
+
+
+def host_command(value: str) -> str:
+    """Render an executable as the first token of a host-shell command."""
+
+    return install_contract.host_command_name(value)
+
+
+def render_turn_bootstrap(*, value: str = "<current_time_iso>") -> str:
+    """Assign the per-wake Turn identity with the host shell's syntax."""
+
+    if _is_windows_host():
+        return f'$LOOPX_TURN = "{value}"'
+    return f"LOOPX_TURN={value}"
 
 
 def render_cli_command_prefix(
@@ -50,11 +82,14 @@ def render_cli_command_prefix(
     runtime_root: str | Path | None = None,
     registry_path: str | Path | None = None,
 ) -> str:
-    prefix = shell_arg(cli_bin)
+    argv = loopx_cli_argv(None if cli_bin == "loopx" else cli_bin)
+    prefix = " ".join(
+        [host_command(argv[0]), *(shell_arg_for_host(arg) for arg in argv[1:])]
+    )
     if runtime_root is not None:
-        prefix += f" --runtime-root {shell_arg(str(runtime_root))}"
+        prefix += f" --runtime-root {shell_arg_for_host(str(runtime_root))}"
     if registry_path is not None:
-        prefix += f" --registry {shell_arg(str(registry_path))}"
+        prefix += f" --registry {shell_arg_for_host(str(registry_path))}"
     return prefix
 
 
@@ -75,21 +110,22 @@ def render_goal_start_bootstrap_command(
     display_name: str | None = None,
 ) -> str:
     objective = goal_text or "<exact /loopx goal text>"
-    lines = [
-        f"cd {shell_arg(project)}",
-        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} bootstrap \\",
-        "  --project . \\",
-        f"  --goal-id {shell_arg(goal_id)} \\",
-        f"  --objective {shell_arg(objective)} \\",
-        f"  --adapter-kind {shell_arg(DEFAULT_HANDOFF_ADAPTER_KIND)} \\",
-        f"  --adapter-status {shell_arg(DEFAULT_HANDOFF_ADAPTER_STATUS)}",
-    ]
+    command = (
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)}"
+        " bootstrap"
+        " --project ."
+        f" --goal-id {shell_arg_for_host(goal_id)}"
+        f" --objective {shell_arg_for_host(objective)}"
+        f" --adapter-kind {shell_arg_for_host(DEFAULT_HANDOFF_ADAPTER_KIND)}"
+    )
     if display_name:
-        lines.insert(-1, f"  --display-name {shell_arg(display_name)} \\")
+        command += f" --display-name {shell_arg_for_host(display_name)}"
+    command += (
+        f" --adapter-status {shell_arg_for_host(DEFAULT_HANDOFF_ADAPTER_STATUS)}"
+    )
     if fine_grained:
-        lines[-1] += " \\"
-        lines.append("  --fine-grained")
-    return "\n".join(lines)
+        command += " --fine-grained"
+    return "\n".join([f"cd {shell_arg_for_host(project)}", command])
 
 
 def render_register_agent_command(
@@ -101,8 +137,8 @@ def render_register_agent_command(
 ) -> str:
     return (
         f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
-        f"register-agent --goal-id {shell_arg(goal_id)} "
-        f"--agent-id {shell_arg(agent_id)} --require-new"
+        f"register-agent --goal-id {shell_arg_for_host(goal_id)} "
+        f"--agent-id {shell_arg_for_host(agent_id)} --require-new"
     )
 
 
@@ -115,25 +151,13 @@ def shell_arg_or_placeholder(value: str) -> str:
 
 def render_available_capability_args(values: Any) -> str:
     return "".join(
-        f" --available-capability {shell_arg(capability)}"
+        f" --available-capability {shell_arg_for_host(capability)}"
         for capability in normalize_required_capabilities(values)
     )
 
 
 def render_cli_preflight(*, cli_bin: str = "loopx") -> str:
-    cli_bin_arg = shell_arg(cli_bin)
-    return f"""export PATH="$HOME/.local/bin:$PATH"
-install_script="$HOME/loopx/scripts/install-local.sh"
-if ! command -v {cli_bin_arg} >/dev/null 2>&1; then
-  if [ -x "$install_script" ]; then
-    "$install_script"
-    export PATH="$HOME/.local/bin:$PATH"
-  else
-    echo "loopx is not on PATH; clone the LoopX repo and run scripts/install-local.sh" >&2
-    exit 1
-  fi
-fi
-{cli_bin_arg} doctor >/dev/null"""
+    return install_contract.doctor_preflight_command(cli_bin=cli_bin)
 
 
 def render_codex_cli_install_preflight(
@@ -141,30 +165,10 @@ def render_codex_cli_install_preflight(
     cli_bin: str = "loopx",
     doctor_agent_type: str | None = None,
 ) -> str:
-    cli_bin_arg = shell_arg(cli_bin)
-    doctor_agent_arg = (
-        f" --agent-type {shell_arg(doctor_agent_type)}"
-        if doctor_agent_type
-        else ""
+    return install_contract.codex_cli_install_preflight(
+        cli_bin=cli_bin,
+        doctor_agent_type=doctor_agent_type,
     )
-    return f"""export PATH="$HOME/.local/bin:$PATH"
-if ! command -v {cli_bin_arg} >/dev/null 2>&1; then
-  if command -v python3 >/dev/null 2>&1 && python3 -m pip --version >/dev/null 2>&1; then
-    python3 -m pip install --upgrade loopx
-    if command -v {cli_bin_arg} >/dev/null 2>&1; then
-      {cli_bin_arg} workflow-skills --install --cli-bin {cli_bin_arg}
-    fi
-  fi
-  if ! command -v {cli_bin_arg} >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
-    curl -fsSL {NO_CLONE_INSTALL_URL} | bash
-    export PATH="$HOME/.local/bin:$PATH"
-  fi
-  if ! command -v {cli_bin_arg} >/dev/null 2>&1; then
-    echo "loopx is not on PATH; use a Python 3.11+ environment, the archive fallback, or a contributor checkout" >&2
-    exit 1
-  fi
-fi
-{cli_bin_arg} doctor{doctor_agent_arg} >/dev/null"""
 
 
 def render_quota_guard_command(
@@ -203,7 +207,11 @@ def render_quota_guard_command(
         scheduler_execution_context=scheduler_execution_context,
     )
     if heartbeat_turn_receipt:
-        turn_arg = ' --turn-instance-id "${LOOPX_TURN:?}"'
+        turn_arg = (
+            " --turn-instance-id $LOOPX_TURN"
+            if _is_windows_host()
+            else ' --turn-instance-id "${LOOPX_TURN:?}"'
+        )
     elif begin_turn:
         turn_arg = " --begin-turn"
     else:
@@ -308,6 +316,7 @@ def render_heartbeat_prompt_command(
     *,
     cli_bin: str = "loopx",
     runtime_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
     agent_id: str | None = None,
     agent_scope: str = "Codex CLI /goal visible TUI loop",
     body: str = "thin",
@@ -329,8 +338,11 @@ def render_heartbeat_prompt_command(
         if visible_goal_host
         else ""
     )
+    prefix = render_cli_command_prefix(
+        cli_bin=cli_bin, runtime_root=runtime_root, registry_path=registry_path
+    )
     return (
-        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
+        f"{prefix} "
         f"heartbeat-prompt --{shell_arg(body)} "
         f"--goal-id {shell_arg(goal_id)}{agent_arg}{scope_arg}{capability_args}"
         f"{scheduler_args}{visible_goal_arg}" + (" --bootstrap" if bootstrap else "")
@@ -342,6 +354,7 @@ def render_heartbeat_prompt_json_command(
     *,
     cli_bin: str = "loopx",
     runtime_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
     agent_id: str | None = None,
     agent_scope: str = "Codex CLI /goal visible TUI loop",
     body: str = "thin",
@@ -363,8 +376,11 @@ def render_heartbeat_prompt_json_command(
         if visible_goal_host
         else ""
     )
+    prefix = render_cli_command_prefix(
+        cli_bin=cli_bin, runtime_root=runtime_root, registry_path=registry_path
+    )
     return (
-        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
+        f"{prefix} "
         f"--format json heartbeat-prompt --{shell_arg(body)} "
         f"--goal-id {shell_arg(goal_id)}{agent_arg}{scope_arg}{capability_args}"
         f"{scheduler_args}{visible_goal_arg}" + (" --bootstrap" if bootstrap else "")
@@ -387,29 +403,24 @@ def render_connect_command(
     cli_bin: str = "loopx",
     runtime_root: str | Path | None = None,
 ) -> str:
-    lines = [
-        f"cd {shell_arg(project)}",
-        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} connect \\",
-        f"  --goal-id {shell_arg(goal_id)} \\",
-        f"  --objective {shell_arg(objective)} \\",
-        f"  --domain {shell_arg(domain)} \\",
-        f"  --goal-doc {shell_arg(goal_doc)} \\",
-        f"  --adapter-kind {shell_arg(adapter_kind)} \\",
-        f"  --adapter-status {shell_arg(adapter_status)}",
-    ]
+    command = (
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} connect"
+        f" --goal-id {shell_arg_for_host(goal_id)}"
+        f" --objective {shell_arg_for_host(objective)}"
+        f" --domain {shell_arg_for_host(domain)}"
+        f" --goal-doc {shell_arg_for_host(goal_doc)}"
+        f" --adapter-kind {shell_arg_for_host(adapter_kind)}"
+        f" --adapter-status {shell_arg_for_host(adapter_status)}"
+    )
     if next_probe:
-        lines[-1] += " \\"
-        lines.append(f"  --next-probe {shell_arg(next_probe)}")
+        command += f" --next-probe {shell_arg_for_host(next_probe)}"
     if spawn_allowed:
-        lines[-1] += " \\"
-        lines.append("  --spawn-allowed")
+        command += " --spawn-allowed"
         for allowed_domain in allowed_domains:
-            lines[-1] += " \\"
-            lines.append(f"  --allowed-domain {shell_arg(allowed_domain)}")
+            command += f" --allowed-domain {shell_arg_for_host(allowed_domain)}"
         for scope in write_scope:
-            lines[-1] += " \\"
-            lines.append(f"  --write-scope {shell_arg(scope)}")
-    return "\n".join(lines)
+            command += f" --write-scope {shell_arg_for_host(scope)}"
+    return "\n".join([f"cd {shell_arg_for_host(project)}", command])
 
 
 def build_new_project_prompt(
@@ -443,10 +454,10 @@ def build_new_project_prompt(
         if isinstance(existing_registry, dict) and existing_registry.get("common_runtime_root")
         else None
     )
-    active_state_path = rel_or_abs(
+    active_state_path = Path(rel_or_abs(
         registered_goal_state_file(project.expanduser(), resolved_goal_id, existing_registry),
         project.expanduser(),
-    )
+    )).as_posix()
     allowed_domains = allowed_domains or []
     write_scope = write_scope or []
     connect_command = render_connect_command(
@@ -526,16 +537,14 @@ def render_codex_cli_bootstrap_connect_command(
     goal_id: str,
     cli_bin: str,
 ) -> str:
-    return "\n".join(
-        [
-            f"cd {shell_arg(project)}",
-            f"{shell_arg(cli_bin)} bootstrap \\",
-            "  --project . \\",
-            f"  --goal-id {shell_arg(goal_id)} \\",
-            f"  --adapter-kind {shell_arg(DEFAULT_HANDOFF_ADAPTER_KIND)} \\",
-            f"  --adapter-status {shell_arg(DEFAULT_HANDOFF_ADAPTER_STATUS)}",
-        ]
+    command = (
+        f"{host_command(cli_bin)} bootstrap"
+        " --project ."
+        f" --goal-id {shell_arg_for_host(goal_id)}"
+        f" --adapter-kind {shell_arg_for_host(DEFAULT_HANDOFF_ADAPTER_KIND)}"
+        f" --adapter-status {shell_arg_for_host(DEFAULT_HANDOFF_ADAPTER_STATUS)}"
     )
+    return "\n".join([f"cd {shell_arg_for_host(project)}", command])
 
 
 def build_codex_cli_bootstrap_message(
@@ -651,126 +660,6 @@ def build_codex_cli_bootstrap_message(
         "quota_spend_command": quota_spend_command,
         "first_run_validation_checklist": first_run_validation_checklist,
         "message": message,
-    }
-
-
-def build_codex_cli_tui_bootstrap_smoke_bundle(
-    *,
-    project: Path,
-    goal_id: str | None,
-    agent_id: str | None,
-    cli_bin: str,
-) -> dict[str, Any]:
-    bootstrap = build_codex_cli_bootstrap_message(
-        project=project,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        cli_bin=cli_bin,
-    )
-    resolved_project = str(bootstrap["project"])
-    resolved_goal_id = str(bootstrap["goal_id"])
-    agent_arg = f" --agent-id {shell_arg(agent_id)}" if agent_id else ""
-    message_only_command = (
-        f"{shell_arg(cli_bin)} codex-cli-bootstrap-message "
-        f"--project {shell_arg(resolved_project)} "
-        f"--goal-id {shell_arg(resolved_goal_id)}{agent_arg} --message-only"
-    )
-    review_packet_command = (
-        f"{shell_arg(cli_bin)} codex-cli-bootstrap-message "
-        f"--project {shell_arg(resolved_project)} "
-        f"--goal-id {shell_arg(resolved_goal_id)}{agent_arg}"
-    )
-    boundary = {
-        "runs_codex": False,
-        "reads_raw_transcripts": False,
-        "reads_session_files": False,
-        "reads_credentials": False,
-        "mutates_codex_session": False,
-        "spends_loopx_quota": False,
-        "requires_loopx_repo_clone": False,
-    }
-    validation_checklist = [
-        "archive installer works from a temporary GitHub-style tarball or existing install",
-        "message-only command prints only the setup paste block, not the Markdown review packet",
-        "paste block includes no-clone install repair, project bootstrap/connect, thin heartbeat generation, loop activation, and quota guard",
-        "accountable progress refresh then quota spend remain later post-delivery commands inside the paste block, not setup or smoke side effects",
-        "no raw Codex transcripts, session files, credentials, stdout, stderr, or private paths are read",
-    ]
-    return {
-        "ok": True,
-        "schema_version": "codex_cli_tui_bootstrap_smoke_bundle_v0",
-        "project": resolved_project,
-        "goal_id": resolved_goal_id,
-        "agent_id": agent_id,
-        "cli_bin": cli_bin,
-        "install_repair_command": bootstrap["install_repair_command"],
-        "review_packet_command": review_packet_command,
-        "message_only_command": message_only_command,
-        "heartbeat_prompt_command": bootstrap["heartbeat_prompt_command"],
-        "heartbeat_prompt_json_command": bootstrap["heartbeat_prompt_json_command"],
-        "quota_guard_command": bootstrap["quota_guard_command"],
-        "refresh_command": bootstrap["refresh_command"],
-        "progress_refresh_command": bootstrap["progress_refresh_command"],
-        "quota_spend_command": bootstrap["quota_spend_command"],
-        "validation_checklist": validation_checklist,
-        "boundary": boundary,
-    }
-
-
-def build_codex_cli_exec_handoff(
-    *,
-    project: Path,
-    goal_id: str | None,
-    agent_id: str | None,
-    cli_bin: str,
-    codex_bin: str,
-) -> dict[str, Any]:
-    bootstrap = build_codex_cli_bootstrap_message(
-        project=project,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        cli_bin=cli_bin,
-    )
-    resolved_project = str(project.expanduser())
-    resolved_goal_id = str(bootstrap["goal_id"])
-    agent_arg = f" --agent-id {shell_arg(agent_id)}" if agent_id else ""
-    message_only_command = (
-        f"{shell_arg(cli_bin)} codex-cli-bootstrap-message "
-        f"--project {shell_arg(resolved_project)} "
-        f"--goal-id {shell_arg(resolved_goal_id)}{agent_arg} --message-only"
-    )
-    return {
-        "ok": True,
-        "schema_version": "codex_cli_exec_handoff_v0",
-        "mode": "headless_fallback_disabled_for_goal_mode_bootstrap",
-        "primary_experience": "codex_cli_tui_goal_bootstrap",
-        "project": resolved_project,
-        "goal_id": resolved_goal_id,
-        "agent_id": agent_id,
-        "cli_bin": cli_bin,
-        "codex_bin": codex_bin,
-        "disabled_reason": (
-            "Default Codex CLI LoopX bootstrap must stay visible in the TUI; "
-            "headless codex exec handoff is disabled to avoid accidental hidden execution."
-        ),
-        "session_probe_command": f"{shell_arg(cli_bin)} codex-cli-session-probe --codex-bin {shell_arg(codex_bin)}",
-        "quota_guard_command": bootstrap["quota_guard_command"],
-        "progress_refresh_command": bootstrap["progress_refresh_command"],
-        "refresh_command": bootstrap["refresh_command"],
-        "quota_spend_command": bootstrap["quota_spend_command"],
-        "heartbeat_prompt_json_command": bootstrap["heartbeat_prompt_json_command"],
-        "message_only_command": message_only_command,
-        "handoff_command": "",
-        "boundary": {
-            "runs_codex": False,
-            "reads_raw_transcripts": False,
-            "reads_credentials": False,
-            "reads_session_files": False,
-            "mutates_codex_session": False,
-            "spends_loopx_quota": False,
-            "headless_execution_disabled": True,
-            "provides_executable_headless_command": False,
-        },
     }
 
 
@@ -1207,83 +1096,4 @@ Codex App:
 - agent_id: `{payload.get("agent_id") or "(not provided)"}`
 - cli_bin: `{payload.get("cli_bin")}`
 - heartbeat_prompt_drift_check: `{payload.get("heartbeat_prompt_command")}`
-"""
-
-
-def render_codex_cli_tui_bootstrap_smoke_bundle_markdown(payload: dict[str, Any]) -> str:
-    boundary = payload.get("boundary") or {}
-    checklist = "\n".join(f"- {item}" for item in payload.get("validation_checklist", []))
-    return f"""# Codex CLI TUI Bootstrap Smoke Bundle
-
-This packet is for validating the first-run Codex CLI path without launching or
-mutating a real Codex session.
-
-## Commands
-
-```bash
-{payload.get("message_only_command", "")}
-```
-
-- review_packet: `{payload.get("review_packet_command")}`
-- heartbeat_prompt: `{payload.get("heartbeat_prompt_command")}`
-- heartbeat_prompt_json: `{payload.get("heartbeat_prompt_json_command")}`
-- quota_guard: `{payload.get("quota_guard_command")}`
-- accountable_progress_refresh: `{payload.get("progress_refresh_command")}`
-- quota_spend_after_validation: `{payload.get("quota_spend_command")}`
-- optional_state_only_refresh_after_spend: `{payload.get("refresh_command")}`
-
-## Fresh Repo Install Repair
-
-```bash
-{payload.get("install_repair_command", "")}
-```
-
-## Transcript-Free Boundary
-
-- runs_codex: `{boundary.get("runs_codex")}`
-- reads_raw_transcripts: `{boundary.get("reads_raw_transcripts")}`
-- reads_session_files: `{boundary.get("reads_session_files")}`
-- reads_credentials: `{boundary.get("reads_credentials")}`
-- mutates_codex_session: `{boundary.get("mutates_codex_session")}`
-- spends_loopx_quota: `{boundary.get("spends_loopx_quota")}`
-- requires_loopx_repo_clone: `{boundary.get("requires_loopx_repo_clone")}`
-
-## Validation Checklist
-
-{checklist}
-"""
-
-
-def render_codex_cli_exec_handoff_markdown(payload: dict[str, Any]) -> str:
-    boundary = payload.get("boundary") or {}
-    return f"""# Codex CLI Exec Handoff Disabled
-
-The default Codex CLI LoopX bootstrap is visible setup, then thin
-`/goal <task_body>` activation. Headless `codex exec` handoff is disabled here
-to avoid accidental hidden execution. Use the message-only command below inside
-the visible Codex CLI TUI.
-
-````bash
-{payload.get("message_only_command", "")}
-````
-
-## Guard Commands
-
-- session_probe: `{payload.get("session_probe_command")}`
-- quota_guard: `{payload.get("quota_guard_command")}`
-- accountable_progress_refresh: `{payload.get("progress_refresh_command")}`
-- quota_spend: `{payload.get("quota_spend_command")}`
-- optional_state_only_refresh_after_spend: `{payload.get("refresh_command")}`
-- disabled_reason: {payload.get("disabled_reason")}
-
-## Boundary
-
-- runs_codex: `{boundary.get("runs_codex")}`
-- reads_raw_transcripts: `{boundary.get("reads_raw_transcripts")}`
-- reads_credentials: `{boundary.get("reads_credentials")}`
-- reads_session_files: `{boundary.get("reads_session_files")}`
-- mutates_codex_session: `{boundary.get("mutates_codex_session")}`
-- spends_loopx_quota: `{boundary.get("spends_loopx_quota")}`
-- headless_execution_disabled: `{boundary.get("headless_execution_disabled")}`
-- provides_executable_headless_command: `{boundary.get("provides_executable_headless_command")}`
 """

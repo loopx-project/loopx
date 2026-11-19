@@ -237,13 +237,11 @@ def _agent_commands(
     *,
     goal_id: str | None,
     registry_path: Path,
-    scan_roots: list[Path],
     limit: int,
     agent_id: str | None,
     available_capabilities: Any = None,
 ) -> list[str]:
     registry_arg = shlex.quote(str(registry_path))
-    scan_args = " ".join(f"--scan-path {shlex.quote(str(path))}" for path in scan_roots)
     diagnose = f"loopx --registry {registry_arg} diagnose"
     status = f"loopx --registry {registry_arg} status"
     agent_arg = f" --agent-id {shlex.quote(agent_id)}" if agent_id else ""
@@ -252,9 +250,6 @@ def _agent_commands(
         scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
     )
     goal_arg = f" --goal-id {shlex.quote(goal_id)}" if goal_id else ""
-    if scan_args:
-        diagnose = f"{diagnose} {scan_args}"
-        status = f"{status} {scan_args}"
     commands = [
         f"{diagnose}{goal_arg}{agent_arg}{capability_args} --limit {max(1, limit)}",
         f"{status}{goal_arg}{agent_arg} --limit {max(1, limit)}",
@@ -455,7 +450,6 @@ def _build_goal_packet(
     item: dict[str, Any] | None,
     quota: dict[str, Any],
     registry_path: Path,
-    scan_roots: list[Path],
     limit: int,
     agent_id: str | None,
     available_capabilities: Any = None,
@@ -499,7 +493,6 @@ def _build_goal_packet(
         "agent_commands": _agent_commands(
             goal_id=goal_id or None,
             registry_path=registry_path,
-            scan_roots=scan_roots,
             limit=limit,
             agent_id=agent_id,
             available_capabilities=available_capabilities,
@@ -556,7 +549,6 @@ def collect_diagnosis(
     *,
     registry_path: Path,
     runtime_root_override: str | None,
-    scan_roots: list[Path],
     limit: int,
     goal_id: str | None = None,
     agent_id: str | None = None,
@@ -567,7 +559,6 @@ def collect_diagnosis(
     status_payload = collect_status(
         registry_path=registry_path,
         runtime_root_override=runtime_root_override,
-        scan_roots=scan_roots,
         limit=limit,
         goal_id=goal_id,
         available_capabilities=available_capabilities,
@@ -592,7 +583,6 @@ def collect_diagnosis(
             item=item,
             quota=quota,
             registry_path=registry_path,
-            scan_roots=scan_roots,
             limit=limit,
             agent_id=agent_id,
             available_capabilities=available_capabilities,
@@ -618,7 +608,6 @@ def collect_diagnosis(
             item=selected_item,
             quota={"ok": True, "goal_id": selected_goal_id, "agent_id": agent_id, "should_run": False},
             registry_path=registry_path,
-            scan_roots=scan_roots,
             limit=limit,
             agent_id=agent_id,
             available_capabilities=available_capabilities,

@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timezone
 
-from loopx.chat_manager_history import read_manager_delivery_history
+from loopx.chat.manager_history import read_manager_delivery_history
 from loopx.capabilities.manager_context import evidence_goal_scope, POLICY_SCHEMA
 
 
@@ -141,7 +141,7 @@ def test_report_retains_concrete_findings_without_fetching_artifacts(tmp_path):
 
 
 def test_detail_missing_invalid_truncated_and_redacted_are_explicit():
-    from loopx.chat_manager_history import _recorded_details
+    from loopx.chat.manager_history import _recorded_details
 
     detail = _recorded_details({
         "vision_checkpoint": {"unchanged_reason": "x" * 1000},

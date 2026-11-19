@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, Callable, cast
+
 import json
 import os
 import re
@@ -9,7 +11,6 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Callable
 
 from .selection_execution import normalize_fresh_audit_exact_heads
 
@@ -84,6 +85,7 @@ def _recover_git_pr_files(
     if any(not isinstance(oid, str) or not re.fullmatch(r"[0-9a-f]{40}", oid)
            for oid in (head, base)):
         return None
+    head, base = cast(str, head), cast(str, base)
     try:
         remote = _read_git(["remote", "get-url", "origin"], cwd=cwd).decode().strip()
         match = re.fullmatch(
@@ -176,11 +178,11 @@ def _fetch_complete_pr_files(
         current = run_gh_json(["pr", "view", number, "--json", ",".join(version_fields),
                                "--repo", repository], cwd=cwd)
         return isinstance(current, dict) and all(
-            current.get(key) == snapshot.get(key) for key in version_fields
+            current.get(key) == cast(dict[str, Any], snapshot).get(key) for key in version_fields
         )
 
     try:
-        if recover and (any(type(snapshot.get(key)) is not int or snapshot[key] < 0
+        if recover and (any(type(cast(dict[str, Any], snapshot).get(key)) is not int or cast(dict[str, Any], snapshot)[key] < 0
                             for key in version_fields[2:]) or not same_snapshot()):
             return None
         payload = run_gh_json(
@@ -192,13 +194,15 @@ def _fetch_complete_pr_files(
         pages = payload if all(isinstance(page, list) for page in payload) else [payload]
         files: list[dict[str, Any]] = []
         observed: list[dict[str, Any]] = []
+        paths: set[str] = set()
         for page in pages:
             for item in page:
                 if not isinstance(item, dict):
                     return None
                 path = item.get("filename") or item.get("path")
-                if not isinstance(path, str) or not path:
+                if not isinstance(path, str) or not path or path in paths:
                     return None
+                paths.add(path)
                 if recover and any(type(item.get(key)) is not int for key in ("additions", "deletions")):
                     return None
                 additions = int(item.get("additions") or 0)
@@ -210,16 +214,75 @@ def _fetch_complete_pr_files(
                 observed.append(row | {"status": item.get("status"),
                                        "previous_filename": item.get("previous_filename")})
         if len(files) == expected_count:
-            return files if not recover or same_snapshot() else None
+            # REST pages are not pinned to the GraphQL detail's revision. Even
+            # an ordinary PR can change without changing its file count.
+            return files if snapshot is None or same_snapshot() else None
         if not recover or not files or len(files) > expected_count:
             return None
         recovered = _recover_git_pr_files(
-            repository=repository, snapshot=snapshot, observed=observed, cwd=cwd,
+            repository=repository, snapshot=cast(dict[str, Any], snapshot), observed=observed, cwd=cwd,
         )
         return recovered if recovered is not None and same_snapshot() else None
     except Exception:
         # This provider's failed read remains an explicit incomplete source.
         return None
+
+
+def fetch_complete_pr_reviews(*, repository: str, number: str, cwd: Path | None,
+                              run_gh_json: GitHubJsonRunner) -> list[dict[str, Any]]:
+    """One complete provider history for queue coverage and approval closeout."""
+    pages = run_gh_json(["api", "--paginate", "--slurp",
+                        f"repos/{repository}/pulls/{number}/reviews?per_page=100"],
+                       **({"cwd": cwd} if cwd is not None else {}))
+    if not isinstance(pages, list) or not pages or any(not isinstance(page, list) for page in pages):
+        raise ValueError("paginated review readback is incomplete")
+    reviews = [row for page in pages for row in page]
+    if any(not isinstance(row, dict) for row in reviews):
+        raise ValueError("review readback is malformed")
+    return reviews
+
+
+def _attach_review_provenance(row: dict[str, Any], details: dict[str, Any], *,
+                              repository: str, number: str, cwd: Path | None,
+                              run_gh_json: GitHubJsonRunner) -> bool:
+    author = row.get("author")
+    author = author.get("login") if isinstance(author, dict) else None
+    # This only avoids unnecessary provider reads. Eligibility belongs to TS;
+    # no association, state or actor-type policy is duplicated here.
+    if not author or not any(isinstance(review, dict)
+            and isinstance(review.get("author"), dict) and review["author"].get("login")
+            and review["author"]["login"].casefold() != author.casefold()
+            for review in details["reviews"]):
+        return True
+    try:
+        reviews = fetch_complete_pr_reviews(repository=repository, number=number,
+                                            cwd=cwd, run_gh_json=run_gh_json)
+        normalized = []
+        for review in reviews:
+            user = review.get("user") or {}
+            if (not isinstance(user, dict) or not isinstance(user.get("login"), str)
+                    or type(review.get("id")) is not int or any(
+                        not isinstance(review.get(key), str)
+                        for key in ("state", "commit_id", "html_url"))):
+                raise ValueError("review provenance readback is malformed")
+            normalized.append({"id": review.get("id"), "url": review.get("html_url"),
+                "author": {"login": user.get("login"), "is_bot": {"User": False, "Bot": True}.get(cast(str, user.get("type")))},
+                "authorAssociation": review.get("author_association"), "state": review.get("state"),
+                "submittedAt": review.get("submitted_at"), "commit": {"oid": review.get("commit_id")},
+                "body": review.get("body")})
+        after = run_gh_json(["pr", "view", number, "--json", "headRefOid,baseRefOid",
+                             "--repo", repository], cwd=cwd)
+        if not isinstance(after, dict) or any(after.get(key) != row.get(key)
+                for key in ("headRefOid", "baseRefOid")):
+            return False
+    except Exception:
+        # Unknown coverage is not a reason to skip work. Retain the ordinary
+        # versioned detail read and its existing body/conclusion qualification.
+        row["reviews_complete"] = False
+        return True
+    details["reviews"] = normalized
+    row["reviews_complete"] = True
+    return True
 
 
 def attach_pr_review_details(
@@ -259,6 +322,8 @@ def attach_pr_review_details(
         key not in details for key in detail_fields
     ):
         return False
+    if not isinstance(details["reviews"], list):
+        return False
     # Query the version alongside computed merge fields: an unversioned
     # GitHub detail query can return UNKNOWN while readiness has known state.
     # Never combine details from a different head/base with the list snapshot.
@@ -282,6 +347,9 @@ def attach_pr_review_details(
         if detail_files is None:
             return False
         details["files"] = detail_files
+    if not _attach_review_provenance(row, details, repository=repository, number=number,
+                                    cwd=cwd, run_gh_json=run_gh_json):
+        return False
     for key in detail_fields:
         row[key] = details[key]
     return True

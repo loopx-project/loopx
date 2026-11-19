@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestContext } from "node:test";
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
-import { canonicalAuthorityBytes, canonicalAuthoritySha256 } from "../../loopx/control_plane/coordination/authority_store_codec.ts";
+import { canonicalAuthoritySha256 } from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import { TODO_CANONICAL_READ_RECORD_FIELDS } from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import * as schemas from "../../loopx/control_plane/coordination/coordination_state_contract.generated.ts";
 import { FileAuthorityStore } from "../../loopx/control_plane/coordination/file_authority_store.ts";

@@ -15,7 +15,7 @@ def project_native_arbitration(
 ) -> SchedulerArbitration:
     result = effect_runtime_result("work_item.interaction_reads.project", {
         "required_reads": [], "goal_id": None, "goal_state_file": None,
-        "goal_acceptance_enabled": False, "should_run": False,
+        "goal_acceptance_checks_present": False, "should_run": False,
         "delivery_allowed": False, "selection_required": False,
         "has_replan": False, "settlement_only": False,
         "arbitration_facts": _scheduler_arbitration_facts(

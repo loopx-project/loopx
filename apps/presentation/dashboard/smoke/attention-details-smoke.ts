@@ -39,6 +39,11 @@ for (const task_class of ["user_action", undefined, "unknown_future_class"]) {
 const action = { ...row, details: attentionDetails({ ...source, task_class: "user_action" }) };
 const boundAction = attentionDetails(todoItemSchema.parse({ ...source, task_class: "user_action", bound_agent: "codex-delivery" }));
 assert(boundAction.boundAgent === "codex-delivery", "canonical User action actor survives schema and projection");
+const reviewSource = {...source, role: "user", task_class: "user_action", action_kind: "review_periodic_report",
+  capability_binding_ref: `periodic-report-review:r${"a".repeat(64)}`};
+assert(attentionDetails(todoItemSchema.parse(reviewSource)).reportReview, "native report edition survives the production schema");
+for (const changed of [{role: "agent"}, {task_class: "user_gate"}, {capability_binding_ref: "periodic-report-review:r../other"}])
+  assert(!attentionDetails(todoItemSchema.parse({...reviewSource, ...changed})).reportReview, "prose or another role cannot select report review");
 assert(!canHandleUserAction({ ...row, details: attentionDetails(source) }), "a User gate is decided, not marked done");
 const { todo_id: _omitted, ...idless } = source;
 assert(!canHandleUserAction({ ...action, details: attentionDetails({ ...idless, task_class: "user_action" }) }), "missing todo_id cannot be written");

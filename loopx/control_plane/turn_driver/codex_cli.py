@@ -7,7 +7,8 @@ import os
 import re
 import shutil
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,7 @@ from .subagent_execution_topology import (
     child_execution_receipts_json_schema,
 )
 from ...extensions.codex_native_child import native_child_observer
+from .codex_input_trace import capture_codex_input_source
 from .codex_sessions import (
     CODEX_CLI_SESSION_SCHEMA_VERSION as CODEX_CLI_SESSION_SCHEMA_VERSION,
     _discard_codex_cli_session,
@@ -32,20 +34,32 @@ from .codex_sessions import (
 from .driver import SUPPORTED_ITERATION_CONTEXT_POLICIES
 from .executor import (
     HOST_AGENT_VISION_JSON_MAX_CHARS,
-    HOST_REWARD_MEMORY_REFLECTION_JSON_MAX_CHARS,
+    HOST_PROGRESS_OBSERVATION_JSON_MAX_CHARS,
+    HOST_RESULT_EVIDENCE_LIMITS,
     HOST_RESULT_TEXT_LIMITS,
-    LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION,
-    reward_memory_automation_enabled,
+    MATERIAL_HOST_RESULT_KINDS,
 )
+from ..capability_hooks import capability_result_fields
 from .execution_profile import require_supported_reasoning_effort
 from .host_failure import BuiltInHostError
-from .host_process_transport import HostOutputLines, run_host_process
-from .transaction import LOOPX_TURN_RESULT_SCHEMA_VERSION, TRANSACTION_PHASES
+from .host_candidate import assert_turn_host_request_version, execution_profile_present
+from .host_process_transport import (
+    HostOutputLines,
+    HostProcessInterruptionUnconfirmed,
+    run_host_process,
+)
+from .transaction import (
+    LOOPX_TURN_RESULT_SCHEMA_VERSION,
+    STOP_RESULT_KINDS as STOP_HOST_RESULT_KINDS,
+    TRANSACTION_PHASES,
+)
 
 
 CODEX_STDIO_MCP_SERVER_SCHEMA_VERSION = "codex_stdio_mcp_server_v0"
+LOOPX_DELEGATION_CODEX_MCP_SERVER_NAME = "loopx_delegation"
 CODEX_CLI_RESULT_KINDS = (
     "validated_progress",
+    "validated_completion",
     "repair_required",
     "replan_required",
     "user_action_required",
@@ -163,8 +177,28 @@ def normalize_codex_stdio_mcp_server(
     }
 
 
+def collaboration_mcp_turn_environment(
+    server: Mapping[str, Any] | None,
+    *,
+    turn_key: str,
+    lineage: Mapping[str, str],
+    project: Path,
+) -> dict[str, str]:
+    """Bind the built-in collaboration server to this invocation only."""
+    if not server or server["name"] != LOOPX_DELEGATION_CODEX_MCP_SERVER_NAME:
+        return {}
+    return {
+        "LOOPX_TURN_KEY": turn_key,
+        "LOOPX_TURN_GOAL_ID": lineage["goal_id"],
+        "LOOPX_TURN_AGENT_ID": lineage["agent_id"],
+        "LOOPX_TURN_WORKSPACE": str(project.resolve()),
+    }
+
+
 def _codex_mcp_config_arguments(
     value: Mapping[str, Any] | None,
+    *,
+    turn_environment: Mapping[str, str],
 ) -> list[str]:
     server = normalize_codex_stdio_mcp_server(value)
     if server is None:
@@ -180,6 +214,10 @@ def _codex_mcp_config_arguments(
         f"mcp_servers.{name}.startup_timeout_sec=30",
         f"mcp_servers.{name}.tool_timeout_sec=60",
     ]
+    pairs.extend(
+        f"mcp_servers.{name}.env.{key}={json.dumps(value, ensure_ascii=False)}"
+        for key, value in turn_environment.items()
+    )
     return [item for pair in pairs for item in ("-c", pair)]
 
 
@@ -192,6 +230,12 @@ def _has_subagent_topology(request: Mapping[str, Any] | None) -> bool:
 
 def codex_cli_result_schema(
     request: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return _result_schema(request)
+
+
+def _result_schema(
+    request: Mapping[str, Any] | None, *, checked: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     text_limits = dict(HOST_RESULT_TEXT_LIMITS)
     properties: dict[str, Any] = {
@@ -251,13 +295,22 @@ def codex_cli_result_schema(
             "type": "string",
             "maxLength": HOST_AGENT_VISION_JSON_MAX_CHARS,
         },
+        "progress_observation_json": {
+            "type": "string",
+            "maxLength": HOST_PROGRESS_OBSERVATION_JSON_MAX_CHARS,
+        },
         "summary": {"type": "string", "maxLength": text_limits["summary"]},
     }
-    if reward_memory_automation_enabled(request, operation="automatic_ingest"):
-        properties["reward_memory_reflection_json"] = {
-            "type": "string",
-            "maxLength": HOST_REWARD_MEMORY_REFLECTION_JSON_MAX_CHARS,
+    for evidence_field, (max_items, max_item_chars, _max_total_chars) in (
+        HOST_RESULT_EVIDENCE_LIMITS.items()
+    ):
+        properties[evidence_field] = {
+            "type": ["array", "null"],
+            "items": {"type": "string", "maxLength": max_item_chars},
+            "minItems": 1,
+            "maxItems": max_items,
         }
+    properties.update(capability_result_fields(request))
     if _has_subagent_topology(request):
         child_receipts = child_execution_receipts_json_schema()
         child_receipt_properties = child_receipts["items"]["properties"]
@@ -266,6 +319,9 @@ def codex_cli_result_schema(
             "enum": ["codex-cli"],
         }
         properties["child_execution_receipts"] = child_receipts
+    if checked is None:
+        execution_profile_present(request or {})
+    # Codex strict output requires every property and forbids conditional schemas.
     return {
         "type": "object",
         "properties": properties,
@@ -274,32 +330,133 @@ def codex_cli_result_schema(
     }
 
 
+def normalize_codex_result(
+    request: Mapping[str, Any], result: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Translate strict-output null placeholders at both Codex boundaries."""
+    normalized = dict(result)
+    kind = normalized.get("result_kind")
+    if not isinstance(kind, str):
+        return normalized
+    if kind in STOP_HOST_RESULT_KINDS:
+        for field in HOST_RESULT_EVIDENCE_LIMITS:
+            if normalized.get(field) is None:
+                normalized.pop(field, None)
+    elif kind in MATERIAL_HOST_RESULT_KINDS:
+        if execution_profile_present(request) and any(
+            normalized.get(field) is None for field in HOST_RESULT_EVIDENCE_LIMITS
+        ):
+            raise BuiltInHostError("codex_material_result_missing_evidence")
+    # Preserve non-null evidence, including malformed/empty arrays, for the
+    # existing executor validator. Legacy material results may omit evidence.
+    return normalized
+
+
 def _prompt(request: Mapping[str, Any]) -> str:
+    return _render_prompt(request, checked=_checked_prompt_context(request))
+
+
+def _checked_prompt_context(
+    request: Mapping[str, Any], *, include_session_lineage: bool = False,
+) -> dict[str, Any] | None:
+    from ..quota.turn_envelope import assert_turn_envelope_consumer_version
+
+    envelope = _mapping(request.get("turn_envelope"))
+    from ..quota.turn_envelope import complete_turn_host_source
+
+    # The complete owner checks the adapter version, source and lineage in one
+    # call. Keep the standalone version gate only for historical requests.
+    try:
+        checked = complete_turn_host_source(request, operation="host_dispatch_context",
+                                        include_session_lineage=include_session_lineage,
+                                        include_model_context=True)
+    except RuntimeError:
+        # Preserve the historical diagnostic precedence for doubly malformed
+        # input without imposing a second bridge call on valid requests.
+        if "turn_envelope" in request:
+            assert_turn_envelope_consumer_version(envelope)
+        raise
+    return checked
+
+
+def prepare_codex_cli_input(request: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Prepare one launch's prompt and schema from one complete-source check.
+
+    This value never crosses an attempt/result boundary or enters a cache.
+    Standalone consumers still validate independently; historical requests keep
+    their existing prompt/schema readers. Launch and result authority stay with
+    the original Host and outer executor.
+    """
+    checked = _checked_prompt_context(request)
+    if checked is None:
+        return _prompt(request), codex_cli_result_schema(request)
+    return _render_prompt(request, checked=checked), _result_schema(request, checked=checked)
+
+
+def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | None) -> str:
+    from ..quota.turn_envelope import assert_turn_envelope_consumer_version
+    from ..quota.turn_envelope import projected_host_model_input
+
+    envelope = _mapping(request.get("turn_envelope"))
+    complete_input = projected_host_model_input(request, checked) if checked is not None else None
+    complete = complete_input is not None
+    if not complete:
+        assert_turn_envelope_consumer_version(envelope)
+    model_request: Mapping[str, Any] = complete_input if complete_input is not None else request
+    detail = _mapping((complete_input if complete_input is not None else envelope).get("detail_ref"))
+    staged = _mapping(detail.get("replan_action_packet")).get("review")
+    if staged and not complete:
+        from .host_candidate import extract_turn_authority, replan_prompt_instruction
+
+        authority = extract_turn_authority(request)
+        # The journal/executor retains the full signed envelope. The model gets
+        # its verified authority and immutable readers, not a second executor.
+        model_request = {key: value for key, value in request.items() if key != "turn_envelope"}
+        model_request["turn_authority"] = authority
     request_json = json.dumps(
-        request, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        model_request, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
     instructions = [
         "Execute exactly one bounded LoopX Turn in the current workspace.",
-        "Use the TurnEnvelope as the source of truth. Read work_context and remaining required_reads before primary_action; do not repeat fulfilled reads; perform work only when its contract allows it. The selected Todo summary is not its full requirements, and completing that work does not prove Goal completion.",
+        ("Use task_context for the admitted work. Its interaction_contract.agent_channel carries work_context, required_reads and primary_action; the outer adapter retains the complete original source and Core effect instructions. " if complete else ("Use turn_authority as the verified authority for this Turn. " if staged else "Use the TurnEnvelope as the source of truth. "))
+        + "Read work_context and remaining required_reads before primary_action; do not repeat fulfilled reads; perform work only when its contract allows it. The selected Todo summary is not its full requirements, and completing that work does not prove Goal completion.",
         "Do not write LoopX state, spend quota, or apply scheduler changes; the adapter owns those effects.",
-        "Return only the schema-constrained result. For validated_progress, repair_required, or replan_required, fill every material field with public-safe evidence.",
-        "For those material results, set path_delta_mode=material_replan only when this Turn changes a prior assumption, route, scope, acceptance rule, or stops prior work; then provide a complete bounded agent vision packet with goal_path_delta_v0 in agent_vision_json and leave vision_unchanged_reason empty.",
-        "For routine continuation, retry, successor creation, or no-change replanning, set path_delta_mode=unchanged, leave agent_vision_json empty, and provide vision_unchanged_reason.",
+        "Return only the schema-constrained result. Use validated_completion when the selected Todo's full requirements are met; the adapter runs its declared completion validation and durably completes it before accountable writeback. Use validated_progress for partial work; progress alone never completes a Todo. Neither result proves Goal closure. For validated_progress, validated_completion, repair_required, or replan_required, fill every material field with public-safe evidence.",
+        "For those material results, preserve the actual delivery_batch_scale and delivery_outcome selected from the signed execution_profile's work and outcome requirements. Return work_evidence and validation_evidence as separate non-empty arrays of short public-safe strings; name the artifact or observed work in the first and the independent command or readback in the second. For legacy requests without execution_profile, use null when evidence is not supplied. For stop results, set both evidence fields to null.",
+        "For those material results, set path_delta_mode=material_replan and result_kind=replan_required only when this Turn changes a prior assumption, route, scope, acceptance rule, or stops prior work; then provide a complete bounded agent vision packet with goal_path_delta_v0 in agent_vision_json and leave vision_unchanged_reason empty.",
+        "For routine continuation, retry, successor creation, or no-change replanning, explicitly set path_delta_mode=unchanged. Reuse the current checkpoint with vision_unchanged_reason and empty agent_vision_json, or record new progress/completion evidence in a fresh agent_vision_json packet with path_delta.outcome continue or no_change and empty vision_unchanged_reason.",
+        "When replan_action_packet requires a semantic delta, return progress_observation_json as a JSON-encoded typed_progress_observation_v0 with result_class, the observed surface_id/hypothesis_id/probe_kind or blocker/coverage fields, and opaque evidence_ids. Report only independently checked evidence; a plan summary or a vision change alone cannot substitute for the required observation. Otherwise leave this field empty.",
         "For user_action_required, wait, or iteration_failed, leave material-only fields empty and explain the stop in summary. iteration_failed ends only this iteration and never requests a retry or successor.",
         'completed_phases must be exactly ["host_execute","typed_result"], and turn_key must match the request.',
     ]
-    recall = _mapping(request.get("reward_memory_recall"))
-    if (reward_memory_automation_enabled(request, operation="automatic_recall")
-            and _mapping(recall.get("context")).get("guidance")):
-        instructions.append(
-            "When reward_memory_recall contains guidance, treat it as private, non-authoritative decision context: apply it only when it fits current evidence and never treat it as new action authority."
-        )
-    if reward_memory_automation_enabled(request, operation="automatic_ingest"):
-        instructions.append(
-            "Set reward_memory_reflection_json to an empty string unless independent task evidence established a reusable experience. For eligible evidence, return one compact JSON object using schema_version=turn_reward_memory_reflection_v1, status=eligible, a configured surface_id, outcome_kind in research|simulation|real|engineering, content_summary, reasoning_summary, confidence in low|medium|high, and 1-5 opaque evidence_refs. Also include experience using schema_version=procedural_experience_contract_v0 with non-empty applicability and limitations lists, observed_outcome, attribution, the same evidence_refs, and future_behavior containing trigger, action, validation, and stop_condition. A fact recap without a future behavior change and non-generalization boundary is not eligible memory. Legacy v0 reflections are audit-only and cannot become durable memory. Never use your own summary as evidence. Settlement may ingest it only when the caller-declared Todo validator attests the exact reflection digest and evidence; ordinary validator success remains awaiting and makes no provider write."
-        )
-    boundary = _mapping(_mapping(request.get("turn_envelope")).get("boundary"))
-    if boundary.get("checkpointed_boundary_authority"):
+    if complete:
+        from .host_candidate import TURN_EXECUTION_BOUNDARY_RULE, goal_acceptance_prompt_instruction
+
+        instructions.insert(2,
+            "Read the supplied task_context before dependent work. "
+            "The host has validated the complete original observation and derived this task view. "
+            "detail_ref.captured_decision preserves its Goal/Agent/Turn and source hash provenance; "
+            "it is not a prerequisite filesystem read when that observation is present here. "
+            "The private capture may be unreadable from sandboxed tools. Use detail_ref.full_decision "
+            "only for original context missing after compaction; never rerun admission to recover it. "
+            "Other required reads remain mandatory. "
+            "Missing or invalid original evidence still holds dependent work and closure; "
+            "inline delivery grants no new permissions.")
+        instructions.insert(2, TURN_EXECUTION_BOUNDARY_RULE)
+        acceptance = goal_acceptance_prompt_instruction(_mapping(request.get("work_contract")))
+        if acceptance:
+            instructions.insert(2, acceptance)
+    if staged and not complete:
+        instructions.append(replan_prompt_instruction(authority))
+    elif staged:
+        from .host_candidate import replan_prompt_instruction
+
+        instructions.append(replan_prompt_instruction(
+            _mapping(model_request.get("detail_ref")), packet_path="detail_ref.replan_action_packet"))
+    instructions.extend(request.get("capability_instructions") or ())
+    checkpointed_approval = (checked["checkpointed_write_approval"] if checked is not None
+        else _mapping(envelope.get("boundary")).get("checkpointed_boundary_authority"))
+    if checkpointed_approval:
         instructions.append(
             "The boundary's checkpointed_boundary_authority records existing write approval "
             "only within its active_write_scope. It satisfies the write approval requirement "
@@ -348,7 +505,7 @@ def codex_cli_session_id_from_jsonl(value: str) -> str | None:
 
 
 def _diagnostic_failure_category(line: str) -> str | None:
-    text = line.lower()
+    text = line.lower().replace("’", "'")
     if any(
         marker in text
         for marker in (
@@ -384,6 +541,7 @@ def _diagnostic_failure_category(line: str) -> str | None:
             "exceeded your current quota",
             "check your plan and billing",
             "usage is not included",
+            "you've hit your usage limit",
             "upgrade to plus",
         )
     ):
@@ -590,6 +748,44 @@ def _select_failure_category(categories: list[str]) -> str | None:
     )
 
 
+class CodexFailureObservation:
+    """Reduce native error frames without retaining provider text or tool output."""
+
+    def __init__(self) -> None:
+        self.structured: set[str] = set()
+        self.diagnostics: set[str] = set()
+
+    def observe_event(self, event: Mapping[str, Any]) -> None:
+        structured, diagnostic = _event_failure_categories(event)
+        if structured:
+            self.structured.add(structured)
+        if diagnostic:
+            self.diagnostics.add(diagnostic)
+
+    def observe_stdout(self, line: str) -> bool:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(event, Mapping):
+            return False
+        self.observe_event(event)
+        return True
+
+    def observe_stderr(self, line: str) -> None:
+        if category := _diagnostic_failure_category(line):
+            self.diagnostics.add(category)
+
+    def category(self, *, complete: bool = True) -> str:
+        if not complete:
+            return "unknown"
+        return (_select_failure_category(list(self.structured))
+                or _select_failure_category(list(self.diagnostics)) or "exit_nonzero")
+
+    def failure_kind(self, *, complete: bool = True) -> str:
+        return _FAILURE_KINDS.get(self.category(complete=complete), "unknown")
+
+
 def _codex_command(
     *,
     codex_bin: str,
@@ -601,6 +797,7 @@ def _codex_command(
     reasoning_effort: str | None,
     session_id: str | None,
     mcp_server: Mapping[str, Any] | None,
+    mcp_turn_environment: Mapping[str, str],
 ) -> list[str]:
     if session_id:
         command = [
@@ -638,11 +835,38 @@ def _codex_command(
                 f"model_reasoning_effort={json.dumps(reasoning_effort)}",
             ]
         )
-    command.extend(_codex_mcp_config_arguments(mcp_server))
+    command.extend(_codex_mcp_config_arguments(
+        mcp_server, turn_environment=mcp_turn_environment,
+    ))
     if session_id:
         command.append(session_id)
     command.append("-")
     return command
+
+
+def _run_codex_exec(
+    command: list[str],
+    *,
+    project: Path,
+    input_text: str,
+    timeout_seconds: float | None,
+    on_stdout: Callable[[str], None],
+    on_stderr: Callable[[str], None],
+    launch_guard: Callable[[], AbstractContextManager[None]],
+    check_running: Callable[[], None] | None,
+) -> dict[str, Any]:
+    try:
+        observation = run_host_process(
+            command, project=project, input_text=input_text, timeout_seconds=timeout_seconds,
+            drain_timeout_seconds=OUTPUT_DRAIN_TIMEOUT_SECONDS, on_stdout=on_stdout, on_stderr=on_stderr,
+            launch_guard=launch_guard, check_running=check_running,
+            interrupt_before_terminate=check_running is not None,
+        )
+    except HostProcessInterruptionUnconfirmed as exc:
+        raise BuiltInHostError("codex_cli_stop_unconfirmed") from exc
+    if check_running is not None:
+        check_running()
+    return observation
 
 
 def run_codex_cli_host(
@@ -659,8 +883,7 @@ def run_codex_cli_host(
     goal_admission: FirstPartyHostGoalAdmission | None = None,
     registry_path: Path | None = None,
 ) -> dict[str, Any]:
-    if request.get("schema_version") != LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION:
-        raise ValueError("unsupported LoopX Turn host request schema")
+    assert_turn_host_request_version(request)
     if sandbox not in CODEX_CLI_SANDBOXES:
         raise ValueError(f"Codex CLI sandbox must be one of {CODEX_CLI_SANDBOXES}")
     if reasoning_effort is not None:
@@ -670,6 +893,16 @@ def run_codex_cli_host(
     if not resolved or not Path(resolved).exists():
         raise ValueError("Codex CLI executable is unavailable")
     lineage = _lineage(request)
+    admission = goal_admission
+    if admission is None and registry_path is not None:
+        admission = FirstPartyHostGoalAdmission.for_plan(
+            registry_path=registry_path, goal_id=lineage["goal_id"], planned_goal_ref=request.get("goal_ref"),
+            agent_id=lineage["agent_id"],
+        )
+    launch_scope = FirstPartyHostGoalAdmission.launch_scope_for_plan(
+        admission=admission, registry_path=registry_path,
+        goal_id=lineage["goal_id"], planned_goal_ref=request.get("goal_ref"),
+    )
     planned_session = _mapping(request.get("session"))
     planned_action = str(planned_session.get("action") or "")
     context_policy = _mapping(planned_session.get("context_policy"))
@@ -759,9 +992,10 @@ def run_codex_cli_host(
         temporary = Path(directory)
         schema_path = temporary / "result-schema.json"
         output_path = temporary / "last-message.json"
+        input_text, result_schema = prepare_codex_cli_input(request)
         schema_path.write_text(
             json.dumps(
-                codex_cli_result_schema(request),
+                result_schema,
                 ensure_ascii=False,
                 separators=(",", ":"),
             ),
@@ -777,10 +1011,12 @@ def run_codex_cli_host(
             reasoning_effort=reasoning_effort,
             session_id=session_id,
             mcp_server=mcp_server,
+            mcp_turn_environment=collaboration_mcp_turn_environment(
+                mcp_server, turn_key=request["turn_key"], lineage=lineage, project=project,
+            ),
         )
         observed_session: list[str] = []
-        structured_failure_categories: set[str] = set()
-        diagnostic_failure_categories: set[str] = set()
+        failures = CodexFailureObservation()
 
         def observe_event(line: str) -> None:
             try:
@@ -801,24 +1037,26 @@ def run_codex_cli_host(
                         record_child()
                     else:
                         goal_admission.accept_result(record_child)
-                structured, diagnostic = _event_failure_categories(event)
-                if structured:
-                    structured_failure_categories.add(structured)
-                if diagnostic:
-                    diagnostic_failure_categories.add(diagnostic)
+                failures.observe_event(event)
 
         def observe_stderr(line: str) -> None:
-            category = _diagnostic_failure_category(line)
-            if category:
-                diagnostic_failure_categories.add(category)
+            failures.observe_stderr(line)
 
         events = HostOutputLines(observe_event)
         diagnostics = HostOutputLines(observe_stderr)
-        observed = run_host_process(command, project=project, input_text=_prompt(request),
-            timeout_seconds=timeout_seconds, drain_timeout_seconds=OUTPUT_DRAIN_TIMEOUT_SECONDS,
-            on_stdout=events.feed, on_stderr=diagnostics.feed)
-        events.finish()
-        diagnostics.finish()
+        def check_running() -> None:
+            assert admission is not None
+            admission.require_running(operation="codex_cli_host_continue")
+
+        with capture_codex_input_source(project, input_text, lineage["goal_id"], observed_session):
+            observed = _run_codex_exec(
+                command, project=project, input_text=input_text, timeout_seconds=timeout_seconds,
+                on_stdout=events.feed, on_stderr=diagnostics.feed,
+                launch_guard=lambda: launch_scope("codex_cli_host_launch"),
+                check_running=check_running if admission is not None else None,
+            )
+            events.finish()
+            diagnostics.finish()
         returncode = observed["returncode"]
         timed_out = observed["outcome"] == "timeout"
         output_observation_incomplete = not (observed["output_complete"] and events.complete and diagnostics.complete)
@@ -838,15 +1076,7 @@ def run_codex_cli_host(
                 failure_kind="executor_timeout",
                 recovery_kind=("resume_session" if observed_session else None),
             )
-        category = (
-            "unknown"
-            if output_observation_incomplete
-            else (
-                _select_failure_category(list(structured_failure_categories))
-                or _select_failure_category(list(diagnostic_failure_categories))
-                or "exit_nonzero"
-            )
-        )
+        category = failures.category(complete=not output_observation_incomplete)
         if session_scope == "todo" and returncode != 0 and category in SESSION_INVALIDATING_FAILURE_CATEGORIES:
             discard_session()
         if observed_session and (
@@ -870,4 +1100,4 @@ def run_codex_cli_host(
             raise BuiltInHostError("codex_cli_final_result_missing") from exc
         if not isinstance(result, dict):
             raise BuiltInHostError("codex_cli_final_result_not_object")
-        return result
+        return normalize_codex_result(request, result)

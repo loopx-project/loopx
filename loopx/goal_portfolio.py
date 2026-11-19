@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .agent_registry import registered_agent_ids_for_goal
+from .control_plane.effect_runtime import effect_runtime_request_scope
 from .control_plane.goals.activation import goal_activation_state
 from .control_plane.goals.goal_ref_validation import exact_goal_ref
 from .control_plane.quota.should_run import build_quota_should_run
@@ -186,10 +187,8 @@ def _read_goal(
             else collect_status(
                 registry_path=registry_path,
                 runtime_root_override=runtime_root_override,
-                scan_roots=[],
                 limit=8,
                 goal_id=goal_id,
-                include_public_boundary_scan=False,
             )
         )
         if include_goal_attention:
@@ -327,6 +326,7 @@ def _read_goal(
     return row
 
 
+@effect_runtime_request_scope()
 def build_goal_portfolio(
     *,
     registry_path: Path,
@@ -339,6 +339,7 @@ def build_goal_portfolio(
     include_goal_lifecycle: bool = False,
     include_goal_attention: bool = False,
     include_goal_instance_id: bool = False,
+    read_status: bool = True,
 ) -> dict[str, Any]:
     """Read only the requested registry scope; never derive inventory from chat."""
     if not 1 <= limit <= 128 or not 0 < max_age_hours <= 8760:
@@ -393,7 +394,8 @@ def build_goal_portfolio(
     shared_status = None
     before = {}
     if (
-        goal_ids is None
+        read_status
+        and goal_ids is None
         and 1 < len(inspected) <= limit
         and all(counts[g] == 1 for g in inspected)
     ):
@@ -402,9 +404,7 @@ def build_goal_portfolio(
             shared_status = collect_status(
                 registry_path=registry_path,
                 runtime_root_override=runtime_root_override,
-                scan_roots=[],
                 limit=max(8, len(inspected)),
-                include_public_boundary_scan=False,
                 **({"activation_state_filter": "active"} if not include_stopped else {}),
             )
         except (OSError, ValueError, KeyError, TypeError, RuntimeError):
@@ -423,6 +423,9 @@ def build_goal_portfolio(
                     "warnings": ["duplicate_registry_identity"],
                 }
             )
+        elif not read_status:
+            rows.append({"goal_id": goal_id, "quality": SourceQuality.OMITTED.value,
+                         "progress": "unknown", "warnings": ["goal_not_read"]})
         elif positions[goal_id] >= limit:
             rows.append(
                 {
@@ -466,7 +469,7 @@ def build_goal_portfolio(
         changed = True
     if changed:
         for row in rows:
-            if row["quality"] != "omitted" or row["goal_id"] in stopped:
+            if not read_status or row["quality"] != "omitted" or row["goal_id"] in stopped:
                 row.update(quality="conflicting", progress="unknown", activation_state="unknown")
                 row["warnings"].append("inventory_changed_during_collection")
                 if row.get("goal_lifecycle", {}).get("status") != "unavailable":

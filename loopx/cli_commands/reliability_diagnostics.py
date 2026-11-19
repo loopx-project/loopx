@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -89,6 +90,11 @@ def register_reliability_diagnostics_commands(
         action="store_true",
         help="Include integrity evidence from the same ledger read; grants no control authority.",
     )
+    status.add_argument(
+        "--expected-binding",
+        help="JSON object pinning provider_id, observer_id, session_id and typed run_identity; requires --as-of and --max-observation-age-ms.",
+    )
+    status.add_argument("--max-observation-age-ms", type=int)
 
 
 def _render(payload: dict[str, Any]) -> str:
@@ -104,6 +110,7 @@ def _render(payload: dict[str, Any]) -> str:
             )
             for key in (
                 "stage",
+                "binding",
                 "signals",
                 "reason_codes",
                 "lost_event_count",
@@ -254,8 +261,16 @@ def handle_reliability_diagnostics_command(
             if command == "receipt":
                 payload["receipt"] = build_integrity_receipt(reading)
             else:
+                expected_binding = None
+                if args.expected_binding is not None:
+                    expected_binding = json.loads(args.expected_binding)
+                    if not isinstance(expected_binding, dict):
+                        raise ValueError("expected_binding must be a JSON object")
                 payload["projection"] = build_diagnostic_projection(
-                    reading, as_of=args.as_of
+                    reading,
+                    as_of=args.as_of,
+                    expected_binding=expected_binding,
+                    max_observation_age_ms=args.max_observation_age_ms,
                 )
                 if args.with_receipt:
                     payload["receipt"] = build_integrity_receipt(reading)

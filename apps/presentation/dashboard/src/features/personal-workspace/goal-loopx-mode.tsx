@@ -1,16 +1,199 @@
+import {ContextHelp} from "./context-help";
 import {useEffect, useRef, useState} from "react";
 import {Pause, Play, Settings2, Users, X} from "lucide-react";
-import {fetchLoopXMode, updateLoopXMode, type LoopXModeSnapshot, type LoopXModeSettings} from "../../data/chat";
+import {fetchLoopXMode, updateLoopXMode, fetchManagedTaskEntry, startManagedTaskTurn,
+  type ManagedConversationTarget, type ManagedTaskEntry, type ManagedTaskTurn, type LoopXModeSnapshot, type LoopXModeSettings} from "../../data/chat";
 import {useWorkspaceI18n} from "./i18n";
 import {GoalTeamWork} from "./goal-team-work";
 import "./goal-loopx-mode.css";
 
-export function GoalLoopXMode({sessionId, onPrepare, onExecute, onChange}: {
+type GoalLoopXModeProps = {
   sessionId?: string;
   onPrepare: () => Promise<string>;
   onExecute: (operation: "start" | "resume", settings?: LoopXModeSettings) => void;
   onChange: (snapshot: LoopXModeSnapshot | null) => void;
-}) {
+  managed?: {target: ManagedConversationTarget; onObserve: () => Promise<void>};
+};
+
+/** The existing primary control has distinct native and coordinator owners. */
+export function GoalLoopXMode(props: GoalLoopXModeProps) {
+  return props.managed ? <ManagedTaskMode key={JSON.stringify(props.managed.target)} {...props.managed}/>
+    : <CoordinatorMode {...props}/>;
+}
+
+type TaskAttempt = {operationId: string; todoId: string; turnId?: string; status?: string};
+const terminalTaskTurn = (status?: string) => ["completed", "failed", "interrupted", "timed_out"].includes(status ?? "");
+function readTaskAttempt(key: string): TaskAttempt | null {
+  const stored = sessionStorage.getItem(key);
+  if (stored === null) return null;
+  const value: unknown = JSON.parse(stored);
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Unreadable original Task request");
+  const attempt = value as Record<string, unknown>;
+  if (Object.keys(attempt).some(field => !["operationId", "todoId", "turnId", "status"].includes(field))
+    || typeof attempt.operationId !== "string" || !/^[A-Za-z0-9._:-]{1,100}$/.test(attempt.operationId)
+    || typeof attempt.todoId !== "string" || !attempt.todoId
+    || attempt.turnId !== undefined && (typeof attempt.turnId !== "string" || !attempt.turnId)
+    || attempt.status !== undefined && (typeof attempt.status !== "string" || !attempt.status)) throw new Error("Unreadable original Task request");
+  return attempt as TaskAttempt;
+}
+function observedTaskTurn(read: ManagedTaskEntry | null, attempt: TaskAttempt | null): ManagedTaskTurn | null {
+  if (!read) return null;
+  const creation = read.task.creation_request;
+  return read.turn ?? (creation && creation.operation_id === attempt?.operationId ? read.task.creation_turn ?? null : null);
+}
+
+function ManagedTaskMode({target, onObserve}: NonNullable<GoalLoopXModeProps["managed"]>) {
+  const zh = useWorkspaceI18n().locale === "zh-CN";
+  const storageKey = `loopx-managed-task:${JSON.stringify([target.goalId, target.agentId, target.sessionId])}`;
+  const [retained, setRetained] = useState<{attempt: TaskAttempt | null; unreadable: boolean}>(() => {
+    try {return {attempt: readTaskAttempt(storageKey), unreadable: false};} catch {return {attempt: null, unreadable: true};}
+  });
+  const attempt = retained.attempt;
+  const attemptRef = useRef(attempt); attemptRef.current = attempt;
+  const [read, setRead] = useState<ManagedTaskEntry | null>(null);
+  const [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const flight = useRef(false), live = useRef(true), revision = useRef(0);
+  const observe = useRef(onObserve); observe.current = onObserve;
+  const seenTurn = useRef("");
+  const shown = useRef(retained.unreadable || Boolean(attempt));
+  const [refresh, setRefresh] = useState(0);
+  function retain(next: TaskAttempt) {
+    sessionStorage.setItem(storageKey, JSON.stringify(next));
+    if (sessionStorage.getItem(storageKey) !== JSON.stringify(next)) throw new Error("Original request could not be retained");
+    attemptRef.current = next; setRetained({attempt: next, unreadable: false});
+  }
+  async function accept(turn: ManagedTaskTurn) {
+    if (!live.current) return;
+    const current = attemptRef.current!;
+    retain({...current, turnId: turn.turn_id, status: turn.status});
+    const signature = JSON.stringify([turn.turn_id, turn.status]);
+    if (seenTurn.current !== signature) {
+      // The existing history/recovery owner adopts this exact Session and stream.
+      await observe.current();
+      seenTurn.current = signature;
+    }
+  }
+  useEffect(() => {
+    live.current = true;
+    const controller = new AbortController();
+    let reading = false, needsReadback = false, timer: number | undefined;
+    function scheduleReadback() {
+      window.clearTimeout(timer);
+      if (needsReadback && !document.hidden && !controller.signal.aborted) {
+        timer = window.setTimeout(() => void load(), 5000);
+      }
+    }
+    async function load() {
+      if (reading || flight.current) return;
+      reading = true;
+      const generation = ++revision.current;
+      let storageRead = false;
+      try {
+        const current = readTaskAttempt(storageKey);
+        storageRead = true;
+        needsReadback = Boolean(current);
+        attemptRef.current = current;
+        setRetained({attempt: current, unreadable: false});
+        const result = await fetchManagedTaskEntry(target, {operationId: current?.operationId, todoId: current?.todoId,
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(8000)])});
+        if (controller.signal.aborted || generation !== revision.current) return;
+        const creation = result.task.creation_request;
+        const original = current ?? (creation ? {operationId: creation.operation_id, todoId: creation.todo_id} : null);
+        if (!current && original) retain(original);
+        const turn = observedTaskTurn(result, original);
+        if (original?.turnId && turn?.turn_id !== original.turnId) throw new Error("The original Task Turn is unavailable");
+        needsReadback = Boolean(original && (!turn || !terminalTaskTurn(turn.status)));
+        setRead(result); setError("");
+        if (turn) await accept(turn);
+      } catch {
+        if (!controller.signal.aborted && generation === revision.current) {
+          if (!storageRead) {needsReadback = false; setRetained(previous => ({...previous, unreadable: true}));}
+          setRead(null); setError(zh ? "当前任务或原请求暂时无法读取。重新读取不会启动任务。" : "The Task or original request could not be read. Refreshing does not launch it.");
+        }
+      } finally {reading = false; scheduleReadback();}
+    }
+    void load();
+    const visibility = () => {if (document.hidden) window.clearTimeout(timer); else if (needsReadback) void load();};
+    document.addEventListener("visibilitychange", visibility);
+    return () => {live.current = false; revision.current++; controller.abort(); window.clearTimeout(timer); document.removeEventListener("visibilitychange", visibility);};
+  }, [storageKey, refresh]);
+
+  const ready = read?.available === true && read.task.state === "ready" && read.task.canonical_done === false
+    && read.task.observation.check_count > 0 && !retained.unreadable;
+  const creation = read?.task.creation_request;
+  const originalCreation = creation && creation.operation_id === attempt?.operationId ? creation : undefined;
+  const turn = observedTaskTurn(read, attempt);
+  const creationPending = Boolean(originalCreation && !turn);
+  const waiting = creationPending || Boolean(turn && !terminalTaskTurn(turn.status));
+  const running = turn?.status === "running";
+  async function start() {
+    if (flight.current || !ready || waiting || retained.unreadable) return;
+    flight.current = true; revision.current++; setBusy(true); setError("");
+    try {
+      let prior: TaskAttempt | null;
+      try {prior = readTaskAttempt(storageKey);} catch {
+        setRetained(previous => ({...previous, unreadable: true}));
+        throw new Error("The original Task request is unreadable");
+      }
+      attemptRef.current = prior;
+      const current = await fetchManagedTaskEntry(target, {operationId: prior?.operationId,
+        todoId: prior?.todoId, signal: AbortSignal.timeout(8000)});
+      if (!live.current) return;
+      setRead(current);
+      const creation = current.task.creation_request;
+      if (!prior && creation) {
+        retain({operationId: creation.operation_id, todoId: creation.todo_id});
+        if (current.task.creation_turn) await accept(current.task.creation_turn);
+        return;
+      }
+      const turn = observedTaskTurn(current, prior);
+      if (prior?.turnId && turn?.turn_id !== prior.turnId) throw new Error("The original Task Turn is unavailable");
+      if (creation && creation.operation_id === prior?.operationId && !turn) return;
+      if (turn && !terminalTaskTurn(turn.status)) {await accept(turn); return;}
+      if (!current.available || current.task.state !== "ready" || current.task.canonical_done || current.task.observation.check_count < 1
+        || prior && current.task.todo_id !== prior.todoId) throw new Error("Original Task source changed");
+      const next = prior && !turn ? prior : {operationId: `task.${crypto.randomUUID()}`, todoId: current.task.todo_id};
+      retain(next);
+      const accepted = await startManagedTaskTurn(target, next.todoId, next.operationId, AbortSignal.timeout(15000));
+      if (live.current) await accept(accepted.turn);
+    } catch {
+      if (live.current) {setRead(null); setError(zh ? "执行结果尚未确认。先读取原请求，不会自动重发。" : "Launch is unconfirmed. Read the original request first; it will not be resent automatically.");}
+    } finally {
+      flight.current = false;
+      if (live.current) {setBusy(false); setRefresh(value => value + 1);}
+    }
+  }
+  const confirmed = read?.task.state === "ready" && read.task.observation.check_count > 0;
+  if (confirmed || retained.unreadable || attempt || read?.task.creation_request || error) shown.current = true;
+  if (!shown.current) return null;
+  return <section className="goal-loopx-mode" aria-label={zh ? "当前任务" : "Current Task"}>
+    <div className="goal-loopx-mode-bar">
+      <span className="goal-loopx-mode-status" data-active={running || undefined} role="status"><i aria-hidden/>
+        {running ? (zh ? "正在推进当前任务" : "Working on the current Task")
+          : creationPending && read?.task.state === "unbound" ? (zh ? "已提交，等待检查就绪" : "Submitted; waiting for checks")
+          : waiting ? (zh ? "已提交，等待执行" : "Submitted; waiting to run") : read?.task.state === "ready" && read.task.canonical_done
+          ? (zh ? "当前任务已完成" : "Current Task completed") : (zh ? "当前任务" : "Current Task")}
+      </span>
+      <div className="goal-loopx-mode-actions">
+        <ContextHelp label={zh ? "当前任务与检查" : "Current Task and checks"}>
+          <p>{zh ? "在原会话推进当前任务，使用已确认的检查和现有额度。" : "Advance the current Task in its original conversation using its confirmed checks and existing allowance."}</p>
+          {read?.task.state === "ready" ? <p>{zh ? `${read.task.observation.check_count} 项检查 · ${read.task.observation.pinned_file_count} 个固定来源文件` : `${read.task.observation.check_count} checks · ${read.task.observation.pinned_file_count} pinned source files`}</p> : null}
+        </ContextHelp>
+        <button type="button" className="goal-loopx-primary" disabled={busy || waiting || !ready && !error}
+          onClick={() => error ? setRefresh(value => value + 1) : void start()}>
+          <Play size={14}/>{error ? (zh ? "重新读取" : "Refresh") : busy ? (zh ? "正在提交…" : "Submitting…")
+            : running ? (zh ? "正在推进" : "Working") : waiting ? (zh ? "等待" : "Waiting")
+            : attempt ? (zh ? "继续当前任务" : "Continue Task") : (zh ? "开始当前任务" : "Start Task")}
+        </button>
+      </div>
+    </div>
+    {error ? <p className="personal-composer-error" role="alert">{error}</p> : null}
+    {read && !ready && (!waiting || creationPending && read.task.state === "ready") && !read.task.canonical_done
+      ? <p role="status">{read.task.reason || read.reason || (zh ? "当前任务暂不能执行，请读取检查或原会话状态。" : "The Task cannot run yet. Read its checks or original conversation state.")}</p> : null}
+  </section>;
+}
+
+function CoordinatorMode({sessionId, onPrepare, onExecute, onChange}: GoalLoopXModeProps) {
   const {locale} = useWorkspaceI18n();
   const zh = locale === "zh-CN";
   const [snapshot, setSnapshot] = useState<LoopXModeSnapshot | null>(null);
@@ -103,7 +286,7 @@ export function GoalLoopXMode({sessionId, onPrepare, onExecute, onChange}: {
     <dialog className="goal-loopx-dialog" ref={dialog} aria-labelledby="goal-loopx-dialog-title" onClose={() => setPanel(null)} onClick={event => {if (event.target === event.currentTarget) setPanel(null);}}>
       {panel ? <div className="goal-loopx-dialog-content">
         <header><h2 id="goal-loopx-dialog-title">{panel === "team" ? (zh ? "团队执行情况" : "Team execution") : (zh ? "Agent Loop 运行设置" : "Agent Loop settings")}</h2><button type="button" autoFocus aria-label={zh ? "关闭" : "Close"} onClick={() => setPanel(null)}><X size={18}/></button></header>
-        {panel === "settings" ? <p>{zh ? "对话执行器、当前模型和推理强度见页面上方。这里管理持续推进 Goal 的协调身份、额度和成员绑定；保存设置不会自动开启 Agent Loop。" : "The conversation executor, current model and reasoning effort appear above. These settings manage the Goal coordinator, allowance and member bindings; saving does not start the Agent Loop."}</p> : null}
+        {panel === "settings" ? <ContextHelp label={zh ? "持续推进设置" : "Continuation settings"}><p>{zh ? "对话执行器、当前模型和推理强度见页面上方。这里管理持续推进 Goal 的协调身份、额度和成员绑定；保存设置不会自动开启 Agent Loop。" : "The conversation executor, current model and reasoning effort appear above. These settings manage the Goal coordinator, allowance and member bindings; saving does not start the Agent Loop."}</p></ContextHelp> : null}
         {error || readError ? <p className="personal-composer-error" role="alert">{error || readError}</p> : null}
         {panel === "team" && sessionId && !readError ? <GoalTeamWork key={`${sessionId}:${snapshot?.settings.agent_id}:${snapshot?.settings.execution_config}`} sessionId={sessionId} members={snapshot?.members ?? []} zh={zh} canMessage={active && !snapshot?.paused && !readError} ingress={snapshot?.ingress ?? []}/> : null}
         {panel === "team" ? <div className="goal-team-control">
@@ -114,7 +297,7 @@ export function GoalLoopXMode({sessionId, onPrepare, onExecute, onChange}: {
     {editing ? <div className="goal-loopx-mode-settings"><label>{zh ? "已注册的协调身份" : "Registered coordinator"}<select value={settings.agent_id} onChange={event => setSettings({...settings, agent_id: event.target.value})}><option value="">{zh ? "选择已授权身份" : "Select authorized identity"}</option>{snapshot?.registered_agents.map(id => <option key={id} value={id}>{id}</option>)}</select></label>
       <label>{zh ? "协调员总 token 额度" : "Coordinator total token allowance"}<input type="number" min={1} max={2147483647} value={settings.token_budget || ""} onChange={event => setSettings({...settings, token_budget: Number(event.target.value)})}/></label>
       <label>{zh ? "成员执行绑定文件（Goal 配置）" : "Member execution bindings (Goal configuration)"}<input readOnly value={snapshot?.settings.execution_config ?? (zh ? "未配置" : "Not configured")}/></label>
-      <p>{zh ? "绑定文件由 Goal 子代理设置统一管理；额度包含协调员历史用量，成员授权不会因开启模式而扩大。" : "Manage the binding file in Goal sub-agent settings. The allowance includes coordinator history; enabling this mode does not expand member grants."}</p>
+      <ContextHelp label={zh ? "协调身份与额度" : "Coordinator and allowance"}><p>{zh ? "绑定文件由 Goal 子代理设置统一管理；额度包含协调员历史用量，成员授权不会因开启模式而扩大。" : "Manage the binding file in Goal sub-agent settings. The allowance includes coordinator history; enabling this mode does not expand member grants."}</p></ContextHelp>
       <button type="button" disabled={busy || !settings.agent_id || settings.token_budget < 1 || !snapshot?.settings.execution_config} onClick={() => void mutate("configure")}>{zh ? "保存设置" : "Save settings"}</button></div> : null}
     {panel === "settings" && snapshot?.enabled && snapshot.native.tokensUsed !== undefined ? <p className="goal-loopx-mode-usage">{zh ? "协调员累计用量" : "Coordinator usage"} {snapshot.native.tokensUsed.toLocaleString()} / {snapshot.native.tokenBudget?.toLocaleString() ?? "—"} tokens</p> : null}
         {panel === "settings" ? <>

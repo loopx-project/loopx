@@ -136,7 +136,7 @@ def _normalize_value(value: Any, *, field: str, kind: str) -> Any:
 
 
 def _normalize_record(
-    value: Mapping[str, Any],
+    value: object,
     *,
     field: str,
     spec: Mapping[str, str],
@@ -274,9 +274,9 @@ _PROVIDER_HEALTH_SPEC = {
 
 def build_decision_evidence_packet(
     *,
-    goal_id: str,
-    decision_id: str,
-    observed_at: str,
+    goal_id: object,
+    decision_id: object,
+    observed_at: object,
     changed_facts: Sequence[Mapping[str, Any]] | None = None,
     recalled_claims: Sequence[Mapping[str, Any]] | None = None,
     stale_or_rejected_claims: Sequence[Mapping[str, Any]] | None = None,
@@ -468,14 +468,14 @@ def build_decision_proposal(
 
 def build_decision_review_receipt(
     *,
-    goal_id: str,
-    decision_id: str,
-    evidence_packet_ref: str,
-    recorded_at: str,
-    disposition: str,
-    actor_ref: str,
-    reason_code: str,
-    summary: str,
+    goal_id: object,
+    decision_id: object,
+    evidence_packet_ref: object,
+    recorded_at: object,
+    disposition: object,
+    actor_ref: object,
+    reason_code: object,
+    summary: object,
     proposal_packet_ref: str | None = None,
     gate_todo_id: str | None = None,
     source_event_id: str | None = None,
@@ -586,16 +586,16 @@ _INVALIDATED_ASSUMPTION_SPEC = {
 
 def build_decision_outcome_receipt(
     *,
-    goal_id: str,
-    decision_id: str,
-    proposal_packet_ref: str,
-    recorded_at: str,
-    verification_status: str,
-    accepted_decision: Mapping[str, Any],
+    goal_id: object,
+    decision_id: object,
+    proposal_packet_ref: object,
+    recorded_at: object,
+    verification_status: object,
+    accepted_decision: object,
     resulting_transitions: Sequence[Mapping[str, Any]] | None = None,
     observed_outcomes: Sequence[Mapping[str, Any]] | None = None,
     invalidated_assumptions: Sequence[Mapping[str, Any]] | None = None,
-    review_at: str,
+    review_at: object,
 ) -> dict[str, Any]:
     """Build an append-only receipt suitable for existing event/run history."""
 

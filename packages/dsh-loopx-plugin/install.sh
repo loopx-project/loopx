@@ -48,10 +48,11 @@ need node
 need pnpm
 
 node -e '
-  const [major, minor] = process.versions.node.split(".").map(Number)
-  if (!((major === 22 && minor >= 19) || major >= 24)) process.exit(1)
+  if (!/^\d+\.\d+\.\d+$/.test(process.versions.node)) process.exit(1)
+  const [major, minor, patch] = process.versions.node.split(".").map(Number)
+  if (!((major === 22 && (minor > 22 || (minor === 22 && patch >= 3))) || major >= 24)) process.exit(1)
 ' || {
-  echo "install: Node.js 22.19+ (excluding Node.js 23) is required" >&2
+  echo "install: Node.js 22.22.3+ (excluding Node.js 23 and prereleases) is required" >&2
   exit 2
 }
 pnpm_version="$(pnpm --version)"
@@ -138,12 +139,7 @@ printf '%s' "$profile_dump" | node -e '
   exit 1
 }
 
-"$dsh_bin" plugin --profile "$PROFILE_NAME" exec node -e '
-  const manifest = require("dsh-loopx-plugin/package.json")
-  if (manifest.name !== "dsh-loopx-plugin" || manifest.version !== process.argv[1]) {
-    throw new Error(`installed plugin version does not match ${process.argv[1]}`)
-  }
-' "$PACKAGE_VERSION" || {
+"$dsh_bin" plugin --profile "$PROFILE_NAME" exec node -e 'const manifest = require("dsh-loopx-plugin/package.json"); if (manifest.name !== "dsh-loopx-plugin" || manifest.version !== process.argv[1]) { throw new Error(`installed plugin version does not match ${process.argv[1]}`); }' "$PACKAGE_VERSION" || {
   echo 'install: DSH installed package did not match the built version' >&2
   exit 1
 }

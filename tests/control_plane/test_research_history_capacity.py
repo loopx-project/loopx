@@ -40,9 +40,11 @@ def observation(node: str) -> dict:
 
 
 def todo(todo_id: str, index: int, **fields) -> dict:
+    # Seed the same lossless priority display that native Todo authoring produces.
+    priority = fields.get("priority", "P2")
     return {"schema_version": "todo_item_v0", "todo_id": todo_id, "index": index, "role": "agent",
-            "status": "open", "done": False, "text": f"Synthetic {todo_id}.", "archive_state": "active",
-            "source_section": "Agent Todo", "priority": "P2", "claimed_by": AGENT,
+            "status": "open", "done": False, "text": f"[{priority}] Synthetic {todo_id}.", "archive_state": "active",
+            "source_section": "Agent Todo", "priority": priority, "claimed_by": AGENT,
             "task_class": "advancement_task", **fields}
 
 
@@ -86,9 +88,12 @@ def complete(registry: Path, runtime: Path, todo_id: str, key: str, **fields) ->
     lease = acquire_task_lease(registry_path=registry, runtime_root=runtime, goal_id=GOAL, todo_id=todo_id,
                                owner=AGENT, idempotency_key=key, ttl_seconds=300)
     assert lease["ok"], lease
-    return complete_goal_todo(registry_path=registry, goal_id=GOAL, todo_id=todo_id, agent_id=AGENT,
+    result = complete_goal_todo(registry_path=registry, goal_id=GOAL, todo_id=todo_id, agent_id=AGENT,
         claimed_by=AGENT, no_followup=True, evidence="Synthetic closeout.", task_lease_idempotency_key=key,
         task_lease_expected_version=lease["lease"]["version"], **fields)
+    assert result["projection_delivery"] == "delivered", result.get("projection_outbox")
+    assert result["projection_outbox"]["parse_render_parity"] is True
+    return result
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -141,10 +146,14 @@ def test_retained_history_does_not_block_research_or_ordinary_closeout(
 
         accepted = close_joint("Typed synthetic result.")
         assert accepted["completed"]
+        assert accepted["projection_delivery"] == "delivered", accepted.get("projection_outbox")
+        assert accepted["projection_outbox"]["parse_render_parity"] is True
+        assert accepted["projection_outbox"]["todo_count"] == HISTORY + 2
         assert accepted["capability_completion_evidence"]["experiment_node_id"] == "joint"
         revision = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL)["provider_revision"]
         replay = close_joint("Same identity retry.")
         assert replay["provider_status"] == "replayed"
+        assert replay["projection_delivery"] == "current", replay.get("projection_outbox")
         assert replay["capability_completion_evidence"] == accepted["capability_completion_evidence"]
         assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL)["provider_revision"] == revision
     finally:
@@ -213,9 +222,23 @@ def test_bounded_lineage_transport_preserves_the_typed_join(tmp_path: Path, monk
         restart_effect_runtime()
 
 
-def test_oversized_active_lineage_is_a_capacity_error_not_an_invalid_graph(
+def test_original_client_capacity_refusal_is_not_an_invalid_graph(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from loopx.capabilities.explore import research_evidence
+    from loopx.control_plane import effect_runtime
+
+    original = research_evidence.effect_runtime_result
+
+    def original_request_budget(method, params):
+        # Freeze this regression's original 2 MiB client refusal. Enlarging the
+        # default wire must not relabel capacity errors as invalid graph data.
+        # Canonical reads outside this research call retain their real budget.
+        with monkeypatch.context() as budget:
+            budget.setattr(effect_runtime, "MAX_REQUEST_BYTES", 2 * 1024 * 1024)
+            return original(method, params)
+
+    monkeypatch.setattr(research_evidence, "effect_runtime_result", original_request_budget)
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     try:
         state, runtime, registry = goal_fixture(tmp_path, HARNESS)

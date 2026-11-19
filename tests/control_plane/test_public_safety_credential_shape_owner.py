@@ -55,11 +55,18 @@ CREDENTIAL_SHAPES = {
     "password assignment": "pass" + "word=hunter2hunter2",
     "api key colon": "api_key: qwertyuiopasdfghjkl",
     "secret assignment": "secret=abcdefghijklmn",
+    "aws secret access key assignment": "AWS_SECRET_ACCESS_KEY=" + "a1B2" * 10,
+    "database URI userinfo": "postgres://operator:" + "a1B2" * 10 + "@db.example/app",
     "token assignment": "tok" + "en=abcdefghijklmn",
     "access token assignment": "access_token=abcdefghijklmn",
     "bearer value": "Bearer " + "z" * 20,
     "signed key pair": "sk-" + "a" * 30,
     "private key material": "-----BEGIN RSA PRIVATE KEY-----",
+    "complete private key block": (
+        "-----BEGIN RSA PRIVATE KEY-----\n"
+        + "MIIE" + "syntheticPrivateKeyBody" * 4 + "\n"
+        "-----END RSA PRIVATE KEY-----"
+    ),
     "openssh key material": "---- BEGIN OPENSSH PRIVATE KEY ----",
     "fine-grained pat": "github_pat_" + "a1B2" * 8,
     "aws access id": "AKIA" + "A1B2C3D4E5F6G7H8",
@@ -121,6 +128,7 @@ def test_benign_text_still_passes_the_owner() -> None:
         "weekly cadence digest rendered for goal_42",
         "token budget left for this stage: 1200",
         "the operator rotated the deploy credentials yesterday",
+        "read GITHUB_TOKEN from the environment before starting the worker",
     ):
         assert not SECRET_LIKE_SURFACE_PATTERN.search(text), text
 

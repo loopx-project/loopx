@@ -1,5 +1,6 @@
 """Worker returns use the original Core-bound private App, including recovery."""
 import json
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +12,7 @@ from loopx.extensions.lark.manager_returns import LarkManagerReturnTransport
 from loopx.chat_store import ChatSessionStore
 from loopx.capabilities.manager_context import acknowledge
 from loopx.capabilities.manager_context.roundtrip import drain, report, reply_status
+from loopx.control_plane.collaboration.turn_context_observation import read_delegation_turn_context
 
 
 @pytest.fixture(params=["shared", "separate"])
@@ -82,7 +84,7 @@ def private_return(steward, request, return_root, monkeypatch):  # noqa: F811
                 _write(_root(return_root) / "policy.json", {"schema_version": POLICY_SCHEMA, "sources": {}})
         else:
             replies.append(list(args))
-            ref = "om_out_worker"
+            ref = f"om_out_worker_{len(replies)}"
             provider.messages[ref] = {"message_id": ref, "msg_type": "post", "body": {"content": content}}
             data = {"data": {"message_id": ref}}
         return {"returncode": 0, "stdout": json.dumps(data)}
@@ -192,7 +194,6 @@ def test_production_pump_returns_to_original_private_source_after_restart(privat
     assert reply_status(sender.root, route)[0]["status"] == "verification_required"
     provider.verify_replies = True
     # Reload the actual Chat store; the persisted attempt drives read-only recovery.
-    from datetime import datetime, timedelta, timezone
     recovered = ChatSessionStore(store.root.parent)
     drain(sender.root, controller.registry_path, recovered, sender, now=datetime.now(timezone.utc) + timedelta(minutes=10))
     assert reply_status(sender.root, route)[0]["status"] == "delivered"
@@ -208,3 +209,358 @@ def test_production_pump_returns_to_original_private_source_after_restart(privat
     assert "Receiver independently" not in returned[0]["text"]
     assert sorted((store.root / "sessions" / session["session_id"] / "turns").glob("*.json")) == before_turns
     assert capture.read_bytes() == before_host_calls
+
+
+@pytest.mark.parametrize("revoke_before_recovery", [False, True])
+def test_partial_return_survives_saved_attempt_recovery_until_final_delivery(private_return, revoke_before_recovery):
+    sender, session, turn, route, _, provider, transport, replies = private_return
+    controller = transport.core.controller
+    store = controller.store
+    capture = store.root.parent.parent / "requests.jsonl"
+    before_host_calls = capture.read_bytes()
+    original_turn = store._turn_path(session["session_id"], turn["turn_id"]).read_bytes()
+    turns = sorted((store.root / "sessions" / session["session_id"] / "turns").glob("*.json"))
+    remainder = {"summary": "Validate the installed repair", "resume_when": "The isolated package is available"}
+    rid = route["request_id"]
+    acknowledge(sender.root, route["goal_id"], route["agent_id"], rid, "adopt", "Repair and validate")
+    report(sender.root, route["goal_id"], route["agent_id"], rid, "conclusion",
+           "The source repair is ready.", remaining_work=remainder)
+    partial = _root(sender.root) / "replies" / rid / "conclusion.json"
+    original_result = partial.read_bytes()
+    provider.verify_replies = False
+    drain(sender.root, controller.registry_path, store, sender)
+    assert len(replies) == 1
+    assert reply_status(sender.root, route)[0]["status"] == "verification_required"
+    partial_content = replies[0][replies[0].index("--content") + 1]
+    assert all(value in partial_content for value in remainder.values())
+
+    # Reload the saved attempt. Revocation still wins over that historical proof.
+    recovered = ChatSessionStore(store.root.parent)
+    resumed_sender = LarkManagerReturnTransport(sender.server, sender.root)
+    provider.verify_replies = True
+    clock = datetime.now(timezone.utc) + timedelta(minutes=10)
+    if revoke_before_recovery:
+        policy_path = _root(sender.root) / "policy.json"
+        policy = policy_path.read_bytes()
+        _write(policy_path, {"schema_version": POLICY_SCHEMA, "sources": {}})
+        drain(sender.root, controller.registry_path, recovered, resumed_sender, now=clock)
+        status = reply_status(sender.root, route)[0]
+        assert (status["status"], status["error"]) == ("explicit_unverified", "return_authorization_unavailable")
+        assert len(replies) == 1
+        policy_path.write_bytes(policy)
+        # Restoring access does not automatically resume a stopped publication.
+        clock += timedelta(minutes=10)
+    drain(sender.root, controller.registry_path, recovered, resumed_sender, now=clock)
+    partial_status = "explicit_unverified" if revoke_before_recovery else "delivered"
+    assert reply_status(sender.root, route)[0]["status"] == partial_status
+    assert len(replies) == 1
+    agenda = read_delegation_turn_context(sender.root, controller.registry_path,
+                                          route["goal_id"], route["agent_id"])["unfinished_delegations"]
+    assert [(item["request_id"], item["step"], item.get("remaining_work")) for item in agenda["items"]] == [
+        (rid, "review_request_work", remainder)]
+
+    report(sender.root, route["goal_id"], route["agent_id"], rid, "conclusion",
+           "The isolated repair passed the agreed validation.", update_id="qualified-result")
+    drain(sender.root, controller.registry_path, recovered, resumed_sender, now=clock + timedelta(minutes=20))
+    drain(sender.root, controller.registry_path, ChatSessionStore(store.root.parent), resumed_sender,
+          now=clock + timedelta(minutes=30))
+    statuses = [item["status"] for item in reply_status(sender.root, route)]
+    agenda = read_delegation_turn_context(sender.root, controller.registry_path,
+        route["goal_id"], route["agent_id"])["unfinished_delegations"]["items"]
+    returned = [item for item in recovered.messages(session["session_id"])
+                if item.get("origin") == "manager_followup"]
+    if revoke_before_recovery:
+        # A newer result cannot overtake an uncertain predecessor, even after
+        # access returns. Preserve the exact failure instead of resending it.
+        assert len(replies) == 1 and statuses == ["explicit_unverified", "queued"]
+        assert [(item["request_id"], item["step"], item["pending_return_count"]) for item in agenda] == [
+            (rid, "await_return_delivery", 2)]
+        assert len(returned) == 1
+    else:
+        assert len(replies) == 2 and statuses == ["delivered", "delivered"]
+        assert agenda == []
+        assert len(returned) == 2
+        final_content = replies[1][replies[1].index("--content") + 1]
+        assert "The isolated repair passed" in final_content
+        assert "The isolated repair passed" in returned[1]["text"]
+        assert remainder["summary"] not in returned[1]["text"]
+    assert all(item["turn_id"] == turn["turn_id"] for item in returned)
+    assert all(value in returned[0]["text"] for value in remainder.values())
+    assert partial.read_bytes() == original_result
+    assert store._turn_path(session["session_id"], turn["turn_id"]).read_bytes() == original_turn
+    assert sorted((store.root / "sessions" / session["session_id"] / "turns").glob("*.json")) == turns
+    assert capture.read_bytes() == before_host_calls
+
+
+@pytest.fixture
+def web_return(private_return):
+    """Use the shipped HTTP input, File store, return pump and Lark outbox."""
+    import http.client
+    import threading
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from loopx.extensions.lark.conversation_identity import identity_ref
+    from test_lark_private_conversations import _drain_app_projection
+
+    sender, session, _, original_route, _, provider, transport, _ = private_return
+    runtime, store = transport.core.controller, transport.core.controller.store
+    transport.runner = provider
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.runtime_controller = store, runtime
+    server.runtime_root, server.registry_path = transport.runtime_root, runtime.registry_path
+    server.selected_goal_id, server.verbose = None, False
+    server.lark_private_conversations = transport
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def request(path, body=None):
+        connection = http.client.HTTPConnection(*server.server_address, timeout=15)
+        try:
+            connection.request("GET" if body is None else "POST", path,
+                None if body is None else json.dumps(body), headers={"Content-Type": "application/json"})
+            result = connection.getresponse()
+            return result.status, json.loads(result.read())
+        finally:
+            connection.close()
+
+    try:
+        path = f"/api/chat/sessions/{session['session_id']}"
+        status, accepted = request(path + "/turns", {
+            "message": "Ask the same worker from the App",
+            "client_turn_id": "d9bf2f43-4c6c-48d0-a8c1-baf000000001"})
+        assert status == 202
+        turn = finish(runtime, {"session_id": session["session_id"], "turn_id": accepted["turn_id"]})
+        assert turn["status"] == "completed" and turn["origin"] == "web"
+        session = store.load_session(session["session_id"])
+        target = {key: original_route[key] for key in ("goal_id", "agent_id")}
+        result = deliver(sender.root, runtime.registry_path, session=session, turn=turn,
+                         request=target, source_store=store)
+        route = _read_json(_root(sender.root) / "roundtrips" / (result["request_id"] + ".json"))
+        assert route["source_id"].startswith("web:")
+        acknowledge(sender.root, target["goal_id"], target["agent_id"], route["request_id"], "adopt", "Inspect this request")
+        mirror = transport.root / "web-projections" / (
+            identity_ref(session["steward_context"]["binding_id"], session["session_id"]) + ".json")
+
+        def flush(message_id=None):
+            transport._web_projection_scan_at = 0
+            ids = [message_id] if message_id else [item["message_id"] for item in store.messages(session["session_id"])
+                                                   if item["turn_id"] == turn["turn_id"]]
+            _drain_app_projection(transport, lambda: mirror.exists() and all(
+                _read_json(mirror)["deliveries"].get("web." + ref, {}).get("verified") for ref in ids))
+
+        flush()
+        yield sender, session, turn, route, provider, transport, mirror, flush, request
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+@pytest.mark.parametrize("long_result", [False, True])
+@pytest.mark.parametrize("legacy_result", [False, True])
+def test_web_result_adopts_original_mirror_and_recovers_readback_without_send(
+        web_return, monkeypatch, long_result, legacy_result):
+    import threading
+    import time
+    from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
+
+    sender, session, turn, route, provider, transport, mirror, flush, request = web_return
+    runtime, store = transport.core.controller, transport.core.controller.store
+    capture = store.root.parent.parent / "requests.jsonl"
+    starts = capture.read_bytes()
+    frozen_turn = store._turn_path(session["session_id"], turn["turn_id"]).read_bytes()
+    remainder = {"summary": "Validate installation", "resume_when": "The same worker has the original installation proof"}
+    body = ("完整结果与独立证据。\n" * 1200 if long_result else "Concrete original result.") + "UNIQUE_RESULT_END"
+    report(sender.root, route["goal_id"], route["agent_id"], route["request_id"], "conclusion", body,
+           remaining_work=remainder)
+    result_path = _root(sender.root) / "replies" / route["request_id"] / "conclusion.json"
+    published = _read_json(result_path)
+    assert published["return_format_version"] == 2
+    if legacy_result:
+        # Characterize an existing publication, never migrate a frozen receipt.
+        published.pop("return_format_version")
+        _atomic_write_json(result_path, published)
+    frozen_result = result_path.read_bytes()
+    provenance = f"协作回复 · {route['agent_id']} · 委托 {route['request_id'][:8]}"
+    if legacy_result:
+        expected = (f"{provenance}\n\n{body}\n\n仍需完成 / Remaining work: {remainder['summary']}"
+                    f"\n继续条件 / Continue when: {remainder['resume_when']}")
+    else:
+        expected = f"{body}\n\n{remainder['summary']}\n\n{remainder['resume_when']}\n\n{provenance}"
+    writes = list(provider.writes)
+    drain(sender.root, runtime.registry_path, store, sender)
+    assert provider.writes == writes
+    assert reply_status(sender.root, route)[0]["error"] == "initial_delivery_receipt_unavailable"
+    message = next(item for item in store.messages(session["session_id"])
+                   if item.get("origin") == "manager_followup" and item["turn_id"] == turn["turn_id"])
+    assert message["text"] == expected
+    # Run the actual bounded body worker, including current-body discovery and
+    # prioritization, rather than manually flushing this message's outbox.
+    service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=transport.runtime_root,
+        runtime_controller=runtime, private_conversations=transport)
+    worker = threading.Thread(target=service._reconcile_private, daemon=True)
+    transport._web_projection_scan_at = 0
+    worker.start()
+    try:
+        deadline = time.monotonic() + 20
+        while not _read_json(mirror)["deliveries"].get("web." + message["message_id"], {}).get("verified"):
+            assert time.monotonic() < deadline, "Original result remained undelivered by the body worker"
+            time.sleep(.02)
+    finally:
+        service.close()
+        worker.join(10)
+    assert not worker.is_alive()
+    sent = provider.writes[len(writes):]
+    assert sent and all(profile == "steward-app" for profile, _ in sent)
+    # Compare all provider-visible parts, so a retained tail marker cannot hide
+    # a missing opening, reordered remainder or duplicate part.
+    parts = [text for _, text in sent]
+    if len(parts) > 1:
+        for index, text in enumerate(parts, 1):
+            marker = f"（{index}/{len(parts)}）\n\n"
+            assert text.startswith(marker)
+            parts[index - 1] = text[len(marker):]
+    remaining = f"**LoopX（App）**\n\n{expected}"
+    for index, text in enumerate(parts):
+        assert remaining.startswith(text)
+        remaining = remaining[len(text):]
+        if index < len(parts) - 1:
+            # Separate provider messages supply the paragraph boundary; the
+            # rich-post serializer removes trailing newlines from each part.
+            remaining = remaining.lstrip("\n")
+    assert remaining == ""
+    original_mirror = mirror.read_bytes()
+    phase = _read_json(mirror)["deliveries"]["web." + message["message_id"]]
+    writes = list(provider.writes)
+    runner = transport.runner
+
+    def unavailable(args, cwd=None, timeout=None):
+        if "+messages-mget" in args and args[args.index("--message-ids") + 1].startswith("om_out_"):
+            return {"returncode": 1, "stdout": ""}
+        return runner(args, cwd, timeout)
+
+    monkeypatch.setattr(transport, "runner", unavailable)
+    clock = datetime.now(timezone.utc) + timedelta(minutes=10)
+    drain(sender.root, runtime.registry_path, store, sender, now=clock)
+    state = _read_json(_root(sender.root) / "replies" / route["request_id"] / "conclusion.delivery.json")
+    assert state["status"] == "verification_required" and state["attempt"] == phase["attempt"]
+    assert provider.writes == writes
+    monkeypatch.setattr(transport, "runner", runner)
+    recovered = ChatSessionStore(store.root.parent)
+    restarted = LarkManagerReturnTransport(sender.server, sender.root)
+    drain(sender.root, runtime.registry_path, recovered, restarted, now=clock + timedelta(minutes=10))
+    drain(sender.root, runtime.registry_path, recovered, restarted, now=clock + timedelta(minutes=20))
+    status = reply_status(sender.root, route)[0]
+    assert status["status"] == "delivered"
+    assert provider.writes == writes and mirror.read_bytes() == original_mirror
+    assert result_path.read_bytes() == frozen_result
+    assert capture.read_bytes() == starts
+    assert store._turn_path(session["session_id"], turn["turn_id"]).read_bytes() == frozen_turn
+    returned = [item for item in recovered.messages(session["session_id"])
+                if item.get("origin") == "manager_followup" and item["turn_id"] == turn["turn_id"]]
+    assert len(returned) == 1 and all(value in returned[0]["text"] for value in remainder.values())
+    agenda = read_delegation_turn_context(sender.root, runtime.registry_path,
+        route["goal_id"], route["agent_id"])["unfinished_delegations"]["items"]
+    assert next(item for item in agenda if item["request_id"] == route["request_id"])["remaining_work"] == remainder
+    code, snapshot = request(f"/api/chat/sessions/{session['session_id']}")
+    assert code == 200
+    actual = next(item for item in snapshot["messages"] if item["message_id"] == message["message_id"])
+    assert actual["text"] == returned[0]["text"] and actual["return_delivery"]["status"] == "delivered"
+
+
+@pytest.mark.parametrize("fault", ["unknown", "revoked", "revoked-after-read", "scope", "scope-after-read", "audience", "body", "receipt"])
+def test_web_result_keeps_unknown_or_revoked_mirror_without_duplicate_delivery(web_return, monkeypatch, fault):
+    sender, session, turn, route, provider, transport, mirror, flush, _ = web_return
+    store, registry = transport.core.controller.store, transport.core.controller.registry_path
+    report(sender.root, route["goal_id"], route["agent_id"], route["request_id"], "conclusion", "Frozen worker result")
+    drain(sender.root, registry, store, sender)
+    message = next(item for item in store.messages(session["session_id"])
+                   if item.get("origin") == "manager_followup" and item["turn_id"] == turn["turn_id"])
+    if fault == "unknown":
+        provider.lose_next_reply = True
+        transport._web_projection_scan_at = 0
+        transport.reconcile()
+        phase = _read_json(mirror)["deliveries"]["web." + message["message_id"]]
+        assert phase["started"] and not phase.get("attempt")
+    else:
+        flush(message["message_id"])
+        phase = _read_json(mirror)["deliveries"]["web." + message["message_id"]]
+
+        def narrow_scope():
+            value = transport.bindings.read()
+            binding = next(item for item in value["bindings"] if item["binding_id"] == session["steward_context"]["binding_id"])
+            binding.update(goal_scope="selected", goal_ids=[])
+            _atomic_write_json(transport.bindings.path, value)
+
+        if fault == "revoked":
+            transport.bindings.disconnect(session["steward_context"]["binding_id"],
+                expected_revision=transport.bindings.read()["revision"])
+        elif fault == "scope":
+            narrow_scope()
+        elif fault in {"revoked-after-read", "scope-after-read"}:
+            runner = transport.runner
+
+            def revoked_after_read(args, cwd=None, timeout=None):
+                result = runner(args, cwd, timeout)
+                if "+messages-mget" in args and args[args.index("--message-ids") + 1] == phase["attempt"]["message_ref"]:
+                    if fault == "scope-after-read":
+                        narrow_scope()
+                    else:
+                        transport.bindings.disconnect(session["steward_context"]["binding_id"],
+                            expected_revision=transport.bindings.read()["revision"])
+                return result
+
+            monkeypatch.setattr(transport, "runner", revoked_after_read)
+        elif fault == "receipt":
+            row = _read_json(mirror)
+            row["deliveries"]["web." + message["message_id"]]["attempt"] = next(
+                item["attempt"] for key, item in row["deliveries"].items()
+                if key != "web." + message["message_id"] and item.get("verified"))
+            _atomic_write_json(mirror, row)
+        else:
+            target = provider.messages[phase["attempt"]["message_ref"]]
+            if fault == "audience":
+                target["chat_id"] = "oc_another_audience"
+            else:
+                target["body"] = {"content": json.dumps({"zh_cn": {"title": "", "content": [[{"tag": "text", "text": "Different result"}]]}})}
+    writes = list(provider.writes)
+    for minutes in [10, 20]:
+        transport.reconcile()
+        drain(sender.root, registry, ChatSessionStore(store.root.parent),
+              LarkManagerReturnTransport(sender.server, sender.root),
+              now=datetime.now(timezone.utc) + timedelta(minutes=minutes))
+    assert provider.writes == writes
+    assert reply_status(sender.root, route)[0]["status"] != "delivered"
+    assert len([item for item in store.messages(session["session_id"])
+                if item.get("origin") == "manager_followup" and item["turn_id"] == turn["turn_id"]]) == 1
+
+
+def test_web_result_identical_updates_keep_distinct_mirrors_and_final_scope(web_return):
+    sender, session, turn, route, provider, transport, mirror, flush, _ = web_return
+    runtime, store = transport.core.controller, transport.core.controller.store
+    capture = store.root.parent.parent / "requests.jsonl"
+    starts = capture.read_bytes()
+    remainder = {"summary": "Installation remains", "resume_when": "Original installation evidence is available"}
+    ids, attempts = [], []
+    for index, update in enumerate([None, "same-observation", "qualified-final"]):
+        body = "Repeated original observation" if index < 2 else "Original installation independently verified"
+        report(sender.root, route["goal_id"], route["agent_id"], route["request_id"], "conclusion", body,
+               remaining_work=remainder if index < 2 else None, update_id=update)
+        clock = datetime.now(timezone.utc) + timedelta(minutes=10 * (index + 1))
+        drain(sender.root, runtime.registry_path, store, sender, now=clock)
+        returned = [item for item in store.messages(session["session_id"])
+                    if item.get("origin") == "manager_followup" and item["turn_id"] == turn["turn_id"]]
+        assert len(returned) == index + 1
+        message = returned[-1]
+        ids.append(message["message_id"])
+        flush(message["message_id"])
+        writes = list(provider.writes)
+        drain(sender.root, runtime.registry_path, store, sender, now=clock + timedelta(minutes=5))
+        assert all(item["status"] == "delivered" for item in reply_status(sender.root, route))
+        assert provider.writes == writes
+        attempts.append(_read_json(mirror)["deliveries"]["web." + message["message_id"]]["attempt"]["provider_receipt"])
+    assert len(set(ids)) == len(set(attempts)) == 3
+    assert len([body for _, body in provider.writes if "Repeated original observation" in body]) == 2
+    agenda = read_delegation_turn_context(sender.root, runtime.registry_path,
+        route["goal_id"], route["agent_id"])["unfinished_delegations"]["items"]
+    assert not any(item["request_id"] == route["request_id"] for item in agenda)
+    assert capture.read_bytes() == starts

@@ -162,6 +162,15 @@ CCPO studies cost-aware orchestration under reliability constraints; DOLORES con
 
 **LoopX experiment:** Record predictions before actions, then bind outcomes. Compare a shadow policy with existing rules and inexpensive thresholds; use prospective controlled trials for action effects. Passive logs alone do not establish counterfactual policy value.
 
+The concrete near-term route is [budgeted joint decisions](target-yardstick-stride-decisions-v0.md#budgeted-planning)
+and the [EdgeBench pilot](long-horizon-harness-benchmark-research-program-v0.md#edgebench-budgeted-planning):
+first test a current-model policy on the existing Stride/Yardstick path, then
+compare full-budget native outcomes. M1-C retains prediction/cost qualification;
+calibrated forecasts and learned allocation follow evidence, behind the same
+owner. Neither a new controller runtime nor learned counterfactual values are
+prerequisites. [Selecting Computations](https://aima.cs.berkeley.edu/~russell/papers/uai12-meta.pdf)
+provides the metareasoning basis, not a guarantee for candidate-generating search.
+
 **Acceptance and stop boundary:** Count controller tokens and latency. Measure accepted outcome cost, false stopping, wasted verification and human attention. Stop if controller overhead consumes the benefit. A wider stride never grants wider authority.
 
 ### T04. Causal memory utility and transfer conditions

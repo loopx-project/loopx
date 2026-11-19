@@ -9,12 +9,11 @@ from pathlib import Path
 
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import initialize_canonical_source_fixture, isolate_sqlite_runtime
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, DUE_MONITOR_TODO_ID, GOAL_ID, TODO_ID,
     _append_newly_due_monitor, _run_cli, _spend_run_count, _write_fixture,
 )
-from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.todos import add_goal_todo, list_goal_todos, update_goal_todo
 
 
@@ -22,16 +21,9 @@ def _scoped_fixture(tmp_path, monkeypatch, provider, route="source", *, with_gat
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, source = _write_fixture(tmp_path)
     _append_newly_due_monitor(project, priority="P1", watch_only=True)
-    todos = list_goal_todos(registry_path=source, goal_id=GOAL_ID)["todos"]
-    projection = build_todo_runtime_shadow_projection(
-        goal_id=GOAL_ID,
-        todos=todos,
-        handoff_mode="soft_claim",
-    )
-    initialize_canonical_authority(
+    initialize_canonical_source_fixture(
         runtime,
         GOAL_ID,
-        projection,
         state_path=project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md",
         provider=provider,
     )
@@ -67,7 +59,7 @@ def test_emitted_auxiliary_command_honors_an_unrelated_gate(tmp_path, monkeypatc
     guard_args = ["quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--turn-instance-id", turn,
         "--available-capability", "network", "--available-capability", "external_evidence_poll",
-        "--scan-path", str(project)]
+        ]
     rc, guard = _run_cli(registry, runtime, *guard_args)
     assert rc == 0, json.dumps(guard, ensure_ascii=False)
     assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
@@ -77,9 +69,9 @@ def test_emitted_auxiliary_command_honors_an_unrelated_gate(tmp_path, monkeypatc
     args = shlex.split(projection["command"])[1:]
     assert args[args.index("--registry") + 1] == str(registry)
     assert args[args.index("--target-key") + 1] == "due-monitor-fixture"
-    args = tuple("observed-target" if x == "${LOOPX_MONITOR_RESULT_HASH:?}" else x for x in args)
+    args[args.index("--result-hash") + 1] = "observed-target"
     def emitted():
-        result = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json", *args, "--scan-path", str(project)],
+        result = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json", *args, ],
             cwd=Path(__file__).resolve().parents[2], text=True, capture_output=True)
         return result.returncode, json.loads(result.stdout)
     if gate_change != "none":
@@ -98,7 +90,14 @@ def test_emitted_auxiliary_command_honors_an_unrelated_gate(tmp_path, monkeypatc
                 blocks_agent=AGENT_ID, agent_id=AGENT_ID)
         rc, current = _run_cli(registry, runtime, *guard_args)
         if gate_change == "primary_blocked":
-            assert rc == 1 and current["error_code"] == "heartbeat_receipt_identity_conflict", current
+            # A blocked primary still owes its original Turn a no-spend
+            # closeout. Recovery is not renewed delivery or monitor admission.
+            assert rc == 0, current
+            assert current["effective_action"] == "unsettled_host_turn_recovery"
+            assert current["heartbeat_receipt"]["settlement_identity"] == guard["heartbeat_receipt"]["settlement_identity"]
+            assert current["execution_obligation"]["delivery_allowed"] is False
+            assert current["execution_obligation"]["contract_obligation"] == "close_bound_wait_without_spend"
+            assert "auxiliary_monitor_poll" not in current["interaction_contract"]["cli_channel"]
         else:
             assert rc == 0, current
             offered = current["interaction_contract"]["cli_channel"].get("auxiliary_monitor_poll", {})
@@ -111,6 +110,24 @@ def test_emitted_auxiliary_command_honors_an_unrelated_gate(tmp_path, monkeypatc
         assert _spend_run_count(runtime) == 0
         row = list_goal_todos(registry_path=source, goal_id=GOAL_ID, todo_id=DUE_MONITOR_TODO_ID)["todo"]
         assert row.get("result_hash") is None
+        if gate_change == "primary_blocked":
+            refresh_args = ("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                "--todo-id", TODO_ID, "--turn-instance-id", turn,
+                "--classification", "blocked_primary_observation_denied",
+                "--delivery-batch-scale", "single_surface", "--delivery-outcome", "outcome_gap",
+                "--progress-result-class", "blocked", "--progress-blocker-id", "blocker:primary-unavailable",
+                "--progress-evidence-id", "evidence:auxiliary-observation-denied",
+                "--no-global-sync", "--suppress-external-sinks")
+            for replay in (False, True):
+                rc, closed = _run_cli(registry, runtime, *refresh_args, cwd=project)
+                assert rc == 0, closed
+                assert closed["settlement_progress"]["state"] == "settled"
+                assert closed["settlement_progress"]["closeout_kind"] == "typed_blocked_writeback_no_spend"
+                if replay:
+                    assert closed["idempotent_replay"] is True
+            assert _spend_run_count(runtime) == 0
+            primary = list_goal_todos(registry_path=source, goal_id=GOAL_ID, todo_id=TODO_ID)["todo"]
+            assert primary["status"] == "blocked"
         return
     rc, observed = emitted()
     assert rc == 0, observed
@@ -135,10 +152,10 @@ def test_gate_changed_after_preflight_cannot_commit_observation(tmp_path, monkey
     rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn,
         "--available-capability", "network", "--available-capability", "external_evidence_poll",
-        "--scan-path", str(project))
+        )
     assert rc == 0 and guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID, guard
     status = collect_status(registry_path=registry, runtime_root_override=str(runtime),
-        scan_roots=[project], limit=20, goal_id=GOAL_ID, include_public_boundary_scan=False)
+        limit=20, goal_id=GOAL_ID)
     original = monitor_poll._provider_writeback
     def interleaved(plan, **kwargs):
         update_goal_todo(registry_path=source, goal_id=GOAL_ID, todo_id=gate["todo_id"],
@@ -184,10 +201,10 @@ def test_old_pending_plan_preserves_identity_but_not_new_write_authority(tmp_pat
     turn = "historical-auxiliary-plan-turn"
     rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--turn-instance-id", turn, "--available-capability", "network",
-        "--available-capability", "external_evidence_poll", "--scan-path", str(project))
+        "--available-capability", "external_evidence_poll", )
     assert rc == 0 and guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID, guard
     status = collect_status(registry_path=registry, runtime_root_override=str(runtime),
-        scan_roots=[project], limit=20, goal_id=GOAL_ID, include_public_boundary_scan=False)
+        limit=20, goal_id=GOAL_ID)
     original = monitor_poll._provider_writeback
     def interrupted(plan, **kwargs):
         if business_committed:
@@ -230,15 +247,15 @@ def test_no_gate_auxiliary_command_retains_commit_and_replay_parity(tmp_path, mo
     turn = "auxiliary-no-gate-parity"
     rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--turn-instance-id", turn, "--available-capability", "network",
-        "--available-capability", "external_evidence_poll", "--scan-path", str(project))
+        "--available-capability", "external_evidence_poll", )
     assert rc == 0 and guard["requires_user_action"] is False, guard
     projection = guard["interaction_contract"]["cli_channel"]["auxiliary_monitor_poll"]
     assert projection["availability"] == "ready"
     args = shlex.split(projection["command"])[1:]
-    args = ["no-gate-observation" if part == "${LOOPX_MONITOR_RESULT_HASH:?}" else part for part in args]
+    args[args.index("--result-hash") + 1] = "no-gate-observation"
     for expected_replay in [False, True]:
         result = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json", *args,
-            "--scan-path", str(project)], text=True, capture_output=True)
+            ], text=True, capture_output=True)
         payload = json.loads(result.stdout)
         assert result.returncode == 0 and payload["ok"] is True, payload
         assert payload.get("replayed", False) is expected_replay

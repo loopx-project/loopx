@@ -47,6 +47,22 @@ LEGACY_PATTERN = re.compile(
 LEGACY_STABLE_IDENTIFIERS = ("showcase-side-agent-self-iteration",)
 
 
+def hierarchy_scan_line(path: Path, line: str) -> str:
+    # The source decoder diagnoses these retired values; it never admits them.
+    if (path == REPO_ROOT / "loopx/control_plane/todos/read_codec.ts"
+            and line.strip() == '["removed_continuation_policy", ["primary_review", "review_handoff"]]] as const) {'):
+        return line.replace('"primary_review"', '').replace('"review_handoff"', '')
+    # This accepted RFC names native session roles, not Agent hierarchy.
+    if (path == REPO_ROOT / "docs/architecture/rfcs/controller-executor-unified-contract-v0.md"
+            and line.strip() == 'the current single Agent-scoped slot. One controller owns control dialogue;'):
+        return line.replace("controller owns", "native session role owns")
+    # Benchmark recovery assigns retries to the experiment provider or controller.
+    if (path == REPO_ROOT / "loopx/capabilities/benchmark_toolkit/README.md"
+            and line.strip() == "grading alive until it drains. The provider/controller owns bounded retry after"):
+        return line.replace("provider/controller owns", "benchmark provider or controller handles")
+    return line
+
+
 def candidate_files() -> list[Path]:
     files = list(SCAN_FILES)
     for root in SCAN_ROOTS:
@@ -67,10 +83,16 @@ def main() -> int:
         "handoff_agent",
         "agent_profile_v0",
         "primary_checkout",
+        "controller owns",
     ):
         assert LEGACY_PATTERN.search(token), token
     for domain_term in ("primary_reviewers", "primary_review_score"):
         assert not LEGACY_PATTERN.search(domain_term), domain_term
+
+    decoder = REPO_ROOT / "loopx/control_plane/todos/read_codec.ts"
+    assert LEGACY_PATTERN.search(hierarchy_scan_line(decoder, 'const policy = "primary_review";'))
+    assert LEGACY_PATTERN.search(hierarchy_scan_line(REPO_ROOT / "other.ts",
+        '["removed_continuation_policy", ["primary_review", "review_handoff"]]] as const) {'))
 
     violations: list[str] = []
     for path in candidate_files():
@@ -78,7 +100,7 @@ def main() -> int:
             continue
         text = path.read_text(encoding="utf-8")
         for line_number, line in enumerate(text.splitlines(), start=1):
-            scan_line = line
+            scan_line = hierarchy_scan_line(path, line)
             for identifier in LEGACY_STABLE_IDENTIFIERS:
                 scan_line = scan_line.replace(identifier, "")
             if LEGACY_PATTERN.search(scan_line):

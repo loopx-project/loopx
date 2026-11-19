@@ -6,6 +6,7 @@ research-point qualification. Typed quota/artifact owners retain those rules.
 from __future__ import annotations
 
 import hashlib
+import os
 import select
 import socket
 import subprocess
@@ -17,6 +18,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from loopx.control_plane.effect_runtime import effect_runtime_result
+from loopx.control_plane.turn_driver.decision_capture import bind_handoff_capture_root
 from .checkpoint import _mark_replan_attempt, _participant_id, held_quota_decision, read_checkpoint_request
 from .checkpoint_handoff import CHECKPOINT_CAPTURE_SECONDS
 
@@ -54,6 +56,7 @@ class CheckpointWake:
             self.listener = self.stack.enter_context(socket.socket(socket.AF_UNIX, socket.SOCK_STREAM))
             self.listener.bind(self.socket_path)
             self.listener.listen(1)
+            bind_handoff_capture_root(self.socket_path, self.capture_root)
             return self
         except BaseException:
             self.stack.close()
@@ -124,8 +127,8 @@ class CheckpointWake:
             if self.request.get("native_session"):
                 from loopx.hosts.codex_checkpoint import native_checkpoint_reader, native_session_checkpoint
                 from .checkpoint_continuation import restored_capture_history
-                from .checkpoint import native_binding_participant
-                components, source_wake = native_binding_participant(self.env, components, metadata)
+                from .checkpoint import native_binding_participant, verify_native_binding_participant
+                components, source_wake, registry_bytes = native_binding_participant(self.env, components, metadata)
                 native_options = restored_capture_history(self.env, self.receipt.get("checkpoint_restore"),
                     session_id=self.receipt["session"]["session_id"])
                 guard = {"cli": self.env["LOOPX_CLI"], "workspace": self.env["LOOPX_PROJECT"],
@@ -133,8 +136,12 @@ class CheckpointWake:
                          "goal_id": self.env["LOOPX_GOAL_ID"], "agent_id": self.env["LOOPX_AGENT_ID"],
                          "turn_instance_id": held["quota"]["heartbeat_receipt"]["turn_instance_id"],
                          "turn_envelope": self.receipt.get("turn_envelope", False),
+                         "complete_turn": self.receipt.get("complete_turn", False),
                          "capture_root": str(self.capture_root), "socket_path": self.socket_path,
                          "decision_sha256": held["sha256"]}
+                if self.env.get("LOOPX_CODEX_CONTEXT_DIR"):
+                    guard["codex_context_dir"] = self.env["LOOPX_CODEX_CONTEXT_DIR"]
+                    guard["context_delivery"] = self.env.get("LOOPX_CONTEXT_DELIVERY", "off")
                 reader = readers.enter_context(native_checkpoint_reader(self.env, timeout=max(.1, window - time.time())))
                 native = native_session_checkpoint(self.env, self.receipt["session"]["session_id"],
                     timeout=max(.1, window - time.time()), interrupted_guard=guard, transport=reader,
@@ -159,13 +166,7 @@ class CheckpointWake:
                 confirmed = native_session_checkpoint(self.env, self.receipt["session"]["session_id"],
                     timeout=max(.1, window - time.time()), interrupted_guard=guard, transport=reader,
                     **native_options)
-                from .sessions import BenchmarkSessionWake
-                from .codex import Execution
-                confirmed_wake = BenchmarkSessionWake(self.env, Execution(context="resume",
-                    sandbox=self.env.get("LOOPX_CODEX_SANDBOX", "danger-full-access")), {})
-                if ((confirmed_wake.session_id, confirmed_wake.goal_ref, confirmed_wake.digest) !=
-                        (source_wake.session_id, source_wake.goal_ref, source_wake.digest)):
-                    raise ValueError("interrupted source session binding moved before sealing")
+                verify_native_binding_participant(self.env, source_wake, registry_bytes)
                 if confirmed != native:
                     raise ValueError("interrupted native cursor moved before sealing")
             if self.request.get("loopx_state"):
@@ -183,23 +184,60 @@ class CheckpointWake:
                 "deadline_epoch_ms": window * 1000,
             }, timeout=max(.1, window - time.time()), retry_safe=False, large_local_snapshot=True)
 
-    def run(self, execution, body, wake, session_wake, stdout, stderr, timeout):
-        from .worker import child_process, native_command
+    def _write_input(self, process, body, command, deadline, timeout, *, phase_limited):
+        # A Host can stop draining stdin during startup. Keep pipe backpressure
+        # inside the same wake deadline, before entering the listener loop.
+        stream = process.stdin
+        pending = memoryview(body.encode(stream.encoding, stream.errors))
+        descriptor = stream.fileno()
+        os.set_blocking(descriptor, False)
+        try:
+            while pending:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    if phase_limited:
+                        self.receipt["budget_exhausted"] = True
+                    raise subprocess.TimeoutExpired(command, timeout)
+                if not select.select([], [descriptor], [], min(.1, remaining))[1]:
+                    continue
+                try:
+                    written = os.write(descriptor, pending[:65536])
+                except BlockingIOError:
+                    continue
+                except BrokenPipeError:
+                    # Match communicate(): retain the Host's output/exit so an
+                    # early auth or provider failure keeps its real cause.
+                    break
+                pending = pending[written:]
+        finally:
+            stream.close()  # No buffered writes: all input used the raw pipe.
+
+    def run(self, execution, body, wake, session_wake, stdout, stderr, timeout, *, phase_limited=False):
+        from .worker import native_child_process, native_command
         from .sessions import BenchmarkSessionWake
 
         deadline = time.monotonic() + timeout if timeout is not None else float("inf")
+        launch_env, original_quota = self.env, None
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                if phase_limited:
+                    self.receipt["budget_exhausted"] = True
                 raise subprocess.TimeoutExpired("checkpoint source wake", timeout)
-            command = native_command(self.env, execution, "execute", wake, session_wake)
+            command = native_command(launch_env, execution, "execute", wake, session_wake)
             continuation = None
-            with child_process(command, env=self.env, stdout=stdout, stderr=stderr) as process:
-                process.stdin.write(body)
-                process.stdin.close()
+            with native_child_process(command, env=launch_env, stdout=stdout, stderr=stderr,
+                    session_wake=session_wake, receipt=self.receipt, wake=wake,
+                    timeout=remaining if timeout is not None else None,
+                    original_quota=original_quota) as process:
+                self.receipt["host_invoked"] = True
+                self._write_input(process, body, command, deadline, timeout,
+                                  phase_limited=phase_limited)
                 while process.poll() is None:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
+                        if phase_limited:
+                            self.receipt["budget_exhausted"] = True
                         raise subprocess.TimeoutExpired(command, timeout)
                     if not select.select([self.listener], [], [], min(.1, remaining))[0]:
                         continue
@@ -252,4 +290,9 @@ class CheckpointWake:
             session_wake = BenchmarkSessionWake(self.env, execution, self.receipt)
             if not source_session_id or session_wake.session_id != source_session_id:
                 raise ValueError("checkpoint source continuation lost its native session")
+            # The held CLI guard can belong to another Turn inside this wake.
+            # Retain its typed packet, never recover identity from prompt text
+            # or reuse the enclosing wake's ID for its remaining settlement.
+            original_quota = held["quota"]
+            launch_env = {**self.env, "LOOPX_TURN": original_quota["heartbeat_receipt"]["turn_instance_id"]}
             body = continuation

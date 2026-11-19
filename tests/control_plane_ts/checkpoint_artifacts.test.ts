@@ -7,7 +7,7 @@ import {chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, w
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {checkpointArtifacts} from "../../loopx/control_plane/runtime/checkpoint_artifacts.ts";
-import {EffectRuntimeRequestError} from "../../loopx/control_plane/effect_runtime_errors.ts";
+import {EffectRuntimeConflictError, EffectRuntimeRequestError} from "../../loopx/control_plane/effect_runtime_errors.ts";
 import {sqliteAuthorityRuntime} from "../../loopx/control_plane/coordination/sqlite_runtime.ts";
 
 async function fixture(t: test.TestContext) {
@@ -40,7 +40,9 @@ test("capture, verify and inert materialization preserve executable code and emp
   assert.deepEqual(await readdir(join(root, "restored/components/code/empty")), []);
   assert.deepEqual(await readFile(join(root, "restored/checkpoint.json")), await readFile(join(root, "captured/checkpoint.json")));
   await assert.rejects(checkpointArtifacts({action: "materialize", root: request.destination,
-    expected_sha256: captured.sha256, destination: join(root, "restored")}), /already exists/);
+    expected_sha256: captured.sha256, destination: join(root, "restored")}), {
+    name: "EffectRuntimeConflictError", code: "state_conflict", message: "checkpoint destination already exists",
+  });
 });
 
 test("a read-only participant's copied mode survives the durability flush and materialization", async t => {
@@ -179,7 +181,9 @@ test("concurrent capture reserves one destination and cannot replace an existing
   const {root, request} = await fixture(t);
   const results = await Promise.allSettled([checkpointArtifacts(request), checkpointArtifacts(request)]);
   assert.equal(results.filter(r => r.status === "fulfilled").length, 1);
-  assert.equal(results.filter(r => r.status === "rejected").length, 1);
+  const rejected = results.find(result => result.status === "rejected");
+  assert.ok(rejected?.reason instanceof EffectRuntimeConflictError, rejected?.reason);
+  assert.equal(rejected.reason.code, "state_conflict");
   assert.deepEqual((await readdir(root)).sort(), ["captured", "code", "conversation"]);
   const bytes = await readFile(join(root, "captured/checkpoint.json"));
   await assert.rejects(checkpointArtifacts(request), /already exists/);
@@ -349,9 +353,9 @@ test("receipt-owned replan settlement returns to its original writer without adm
     ...quota.replan_action_packet, decision: "replan_required", settlement_only: false}}})).capture, true);
 });
 
-test("the selection hop that binds a Todo is released as pending closeout, not an identity failure", async () => {
-  // Real-CLI shape: the agent selects a Todo on the Turn whose original guard
-  // owns the replan. The receipt view is "upgraded" with the new binding.
+test("a bound selection with explicit closeout is released; binding alone preserves the replan", async () => {
+  // "upgraded" records the binding, not work completion. Only the explicit
+  // closeout fact makes this a pending closeout instead of the original replan.
   const id = "replan-0123456789abcdef", turn = "fixture-turn";
   const identity = {goal_id: "fixture-goal", agent_id: "fixture-agent", turn_instance_id: turn,
     todo_id: "todo_selected", effect_id: `fixture-goal:fixture-agent:todo_selected:${turn}`};
@@ -362,6 +366,12 @@ test("the selection hop that binds a Todo is released as pending closeout, not a
   const request = {action: "select_replan", quota, goal_id: "fixture-goal", agent_id: "fixture-agent", turn_instance_id: turn};
   assert.deepEqual(await checkpointArtifacts(request), {
     capture: false, reason: "turn_closeout_pending", execution_authority_granted: false,
+  });
+  const {closeout_required: _closeout, ...boundReceipt} = quota.heartbeat_receipt;
+  assert.deepEqual(await checkpointArtifacts({...request, quota: {...quota,
+    heartbeat_receipt: boundReceipt}}), {
+    capture: true, obligation_id: id, settlement_effect_id: identity.effect_id,
+    execution_authority_granted: false,
   });
   // Statuses outside the durable receipt views stay refused, now as a typed
   // request rejection whose reason survives the runtime boundary.

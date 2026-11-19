@@ -101,6 +101,22 @@ export function scopedStatusUrl(
   return url.toString();
 }
 
+/** Keep prepared source identity on every Goal read, including paged history. */
+export function sourceReadApiUrl(statusUrl: string | undefined, path: string, baseHref?: string): string {
+  if (!statusUrl) return path;
+  const source = new URL(statusUrl, baseHref ?? window.location.href);
+  const target = new URL(path, source);
+  if (!/^https?:$/.test(source.protocol) || !isLoopbackHostname(source.hostname) || target.origin !== source.origin) {
+    throw new Error("Goal reads must stay on the selected source");
+  }
+  const namespaces = source.searchParams.getAll("source_namespace");
+  if (namespaces.length > 1 || (namespaces.length === 1 && !/^[0-9a-f]{64}$/.test(namespaces[0]))) {
+    throw new Error("Invalid Goal source identity");
+  }
+  if (namespaces.length) target.searchParams.set("source_namespace", namespaces[0]);
+  return target.toString();
+}
+
 export function statusContractFreshnessIssue(
   payload: StatusPayload,
   source: ResolvedFrontstageStatusUrl,

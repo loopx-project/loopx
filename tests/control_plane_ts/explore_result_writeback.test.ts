@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {normalizeExploreExecutionObservation} from "../../loopx/control_plane/capabilities/explore_execution_observation.ts";
+import {exploreResultWritebackAffordance} from "../../loopx/control_plane/capabilities/explore_context_delivery.ts";
 import {normalizeExploreResultAttachment, planExploreQuestionEvolution} from "../../loopx/control_plane/capabilities/explore_result_writeback.ts";
 
 const attachment = {
@@ -10,6 +12,105 @@ const attachment = {
   interpretation: "Require a uniform estimate.", status: "refuted",
   evidence_refs: ["validation:prefix", "validation:tail"],
 };
+
+const execution = {schema_version: "explore_execution_observation_v0",
+  candidate_sha256: "a".repeat(64), input_revision: attachment.input_revision,
+  planned_method_id: "scheduler", executed_method_id: "mask-selection",
+  change_reason: "The control identified mask selection as the first discriminating change.",
+  elapsed_seconds: 0.2, limit_seconds: 30, search_iterations: 2,
+  stop_reason: "process_exit:0; solver_report:search_cap", evidence_refs: attachment.evidence_refs};
+
+test("execution observations bind resources and changed methods without implying adoption", () => {
+  const normalized = normalizeExploreResultAttachment({attachment: {...attachment, execution_observation: execution}});
+  assert.deepEqual(normalized.execution_observation, execution);
+  assert.deepEqual(normalizeExploreResultAttachment({attachment}), attachment);
+  const unknown = {...execution, elapsed_seconds: null, search_iterations: null, limit_seconds: null, stop_reason: null};
+  assert.deepEqual(normalizeExploreResultAttachment({attachment: {...attachment, execution_observation: unknown}}).execution_observation, unknown);
+  for (const mutation of [{change_reason: null}, {input_revision: "foreign-input"},
+    {search_iterations: -1}, {search_iterations: 1.1}, {elapsed_seconds: NaN}, {limit_seconds: 0},
+    {evidence_refs: ["foreign:probe"]}, {candidate_sha256: "finding-digest-is-not-code"},
+    {result_ref: attachment.evidence_refs[0]},
+    {result_ref: attachment.evidence_refs[0], result_candidate_sha256: "b".repeat(64)}]) {
+    assert.throws(() => normalizeExploreResultAttachment({attachment: {...attachment,
+      execution_observation: {...execution, ...mutation}}}));
+  }
+  const result = {...execution, result_ref: attachment.evidence_refs[0], result_candidate_sha256: execution.candidate_sha256};
+  assert.deepEqual(normalizeExploreResultAttachment({attachment: {...attachment, execution_observation: result}}).execution_observation, result);
+});
+
+test("execution observations reuse the finding's existing evidence references", () => {
+  const refs = ["validation:run/1", "result:released/1"];
+  const ordinary = {...attachment, evidence_refs: refs};
+  const observed = {...execution, evidence_refs: refs, result_ref: refs[1],
+    result_candidate_sha256: execution.candidate_sha256};
+  assert.deepEqual(normalizeExploreResultAttachment({attachment: ordinary}), ordinary);
+  assert.deepEqual(normalizeExploreResultAttachment({attachment: {...ordinary, execution_observation: observed}}),
+    {...ordinary, execution_observation: {...observed, evidence_refs: [...refs].sort()}});
+});
+
+test("explicit finding bindings expand to the existing complete execution record", () => {
+  const {input_revision: _revision, ...facts} = execution;
+  const authoring = {...facts, schema_version: "explore_execution_from_finding_v0", evidence_refs: "finding"};
+  const normalize = (observation: Record<string, unknown>) =>
+    normalizeExploreResultAttachment({attachment: {...attachment, execution_observation: observation}});
+  const complete = {...attachment, execution_observation: execution};
+  assert.deepEqual(normalize(authoring), complete);
+  assert.deepEqual(normalizeExploreResultAttachment({
+    attachment: {...attachment, execution_observation: authoring}, other_attachment: complete,
+  }), complete);
+  const subset = [attachment.evidence_refs[1]];
+  assert.deepEqual(normalize({...authoring, evidence_refs: subset}).execution_observation,
+    {...execution, evidence_refs: subset});
+
+  const {evidence_refs: _selection, ...unbound} = authoring;
+  assert.throws(() => normalize(unbound), /one to eight evidence references/);
+  for (const refs of [null, [], ["foreign:execution"], ["/absolute/file"]]) {
+    assert.throws(() => normalize({...authoring, evidence_refs: refs}));
+  }
+  for (const revision of [null, execution.input_revision, "different-revision"]) {
+    assert.throws(() => normalize({...authoring, input_revision: revision}), /cannot override/);
+  }
+  assert.throws(() => normalize({...authoring, result_ref: attachment.evidence_refs[0],
+    result_candidate_sha256: "b".repeat(64)}), /this executed candidate/);
+  assert.throws(() => normalize({...authoring, result_ref: attachment.evidence_refs[0],
+    result_candidate_sha256: execution.candidate_sha256, evidence_refs: subset}), /included evidence reference/);
+  assert.throws(() => normalize(facts), /fields are missing or unsupported/);
+  assert.throws(() => normalizeExploreExecutionObservation({observation: authoring}), /fields are missing or unsupported/);
+
+  const affordance = exploreResultWritebackAffordance();
+  const example = affordance.optional_execution_observation_example as Record<string, unknown>;
+  const expanded = normalize(example.execution_observation as Record<string, unknown>).execution_observation;
+  assert.deepEqual(expanded, {...example.execution_observation as Record<string, unknown>,
+    schema_version: execution.schema_version, input_revision: attachment.input_revision,
+    evidence_refs: attachment.evidence_refs});
+});
+
+test("execution reference compatibility preserves attribution, text bounds and method identifiers", () => {
+  const refs = ["validation:run/1", "result:released/1"];
+  const ordinary = {...attachment, evidence_refs: refs};
+  const observed = {...execution, evidence_refs: refs};
+  const normalize = (mutation: Record<string, unknown>) => normalizeExploreResultAttachment({
+    attachment: {...ordinary, execution_observation: {...observed, ...mutation}}});
+  assert.throws(() => normalize({evidence_refs: ["validation:foreign/1"]}), /finding's input revision and evidence references/);
+  for (const mutation of [
+    {result_ref: "result:foreign/1", result_candidate_sha256: execution.candidate_sha256},
+    {result_ref: refs[1], result_candidate_sha256: "b".repeat(64)},
+  ]) assert.throws(() => normalize(mutation), /this executed candidate and an included evidence reference/);
+  for (const field of ["planned_method_id", "executed_method_id"]) {
+    assert.throws(() => normalize({[field]: "method/implementation"}), /opaque identifier/);
+  }
+  for (const invalid of ["validation:run/1\t", "v".repeat(129)]) {
+    assert.throws(() => normalize({evidence_refs: [invalid]}), /bounded single-line text/);
+    assert.throws(() => normalize({result_ref: invalid,
+      result_candidate_sha256: execution.candidate_sha256}), /bounded single-line text/);
+  }
+  assert.throws(() => normalize({evidence_refs: ["/absolute/probe"]}), /opaque identifier/);
+  const bounded = "v".repeat(128);
+  const maximum = {...execution, evidence_refs: [bounded], result_ref: bounded,
+    result_candidate_sha256: execution.candidate_sha256};
+  assert.deepEqual(normalizeExploreResultAttachment({attachment: {...attachment,
+    evidence_refs: [bounded], execution_observation: maximum}}).execution_observation, maximum);
+});
 
 test("question lifecycle is explicit, independent of finding status, and available on path capture", () => {
   const update = {status: "resolved"};
@@ -229,4 +330,25 @@ test("scope reuse rejects unknown, unlinked, non-question and incomplete scopes"
     vision_packet: {path_delta: delta}, linked_scope: linkedScope}), /question/);
   assert.deepEqual(normalizeExploreResultAttachment({attachment: scope,
     vision_packet: {path_delta: delta}}), resolved);
+});
+
+// Filling factual fields must not silently choose an epistemic judgment.
+test("writeback templates require a deliberate finding status independently of question closure", () => {
+  const affordance = exploreResultWritebackAffordance();
+  for (const key of ["attachment_template", "path_delta_attachment_template", "linked_question_attachment_template"]) {
+    const template = affordance[key] as Record<string, unknown>;
+    const path = key !== "attachment_template";
+    const input = path ? {...scope, status: template.status} : {...attachment, status: template.status};
+    const normalize = (row: Record<string, unknown>) => normalizeExploreResultAttachment({
+      attachment: row, ...(path ? {vision_packet: {path_delta: delta}} : {}),
+    });
+    assert.throws(() => normalize(input), /finding status/);
+    for (const status of ["tentative", "confirmed", "refuted"]) {
+      const chosen = normalize({...input, status});
+      assert.equal(chosen.status, status);
+      assert.equal(Object.hasOwn(chosen, "question_update"), false);
+      assert.deepEqual(normalize({...input, status, question_update: {status: "resolved"}}).question_update,
+        {status: "resolved"});
+    }
+  }
 });

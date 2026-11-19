@@ -131,6 +131,56 @@ def test_missing_or_unreadable_nested_attribution_cannot_release_a_lease(service
     assert record.read_bytes() == evidence
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group attribution")
+@pytest.mark.parametrize(
+    ("phase", "bridge_pid", "process_group"),
+    [
+        ("spawned", 10**30, None),
+        ("finished", None, 10**30),
+    ],
+)
+def test_unrepresentable_host_process_ids_keep_delegation_stop_open(
+    service,
+    monkeypatch,
+    phase,
+    bridge_pid,
+    process_group,
+):
+    """Damaged process ids cannot erase a hard lease or crash its stop readback."""
+    import json
+
+    from loopx.control_plane.turn_driver.host_process_transport import (
+        HOST_PROCESS_RECORD_SCHEMA_VERSION,
+    )
+    from loopx.file_lock import lock_holder_host_label
+
+    root, runner = service
+    operation = f"unrepresentable-host-{phase}"
+    prepare_lease(root, runner, monkeypatch, ttl=None, operation_id=operation)
+    record = runner._host_process_record(runner.path(operation))
+    record.write_text(
+        json.dumps(
+            {
+                "schema_version": HOST_PROCESS_RECORD_SCHEMA_VERSION,
+                "host": lock_holder_host_label(),
+                "supervises": "host",
+                "supervision": "direct",
+                "phase": phase,
+                "bridge_pid": bridge_pid,
+                "process_group": process_group,
+            }
+        )
+    )
+    evidence = record.read_bytes()
+
+    stopped = runner.stop(operation, execute=True)
+
+    assert stopped["phase"] == "acknowledged"
+    assert stopped["reason"] == "host_process_drain_unproven"
+    assert inspect(runner)["active"]
+    assert record.read_bytes() == evidence
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX owned fixture")
 @pytest.mark.parametrize("missing_records", ["outer", "both"])
 def test_missing_outer_record_does_not_settle_live_leased_cli(service, monkeypatch, missing_records):

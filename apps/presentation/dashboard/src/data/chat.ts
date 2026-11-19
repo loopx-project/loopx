@@ -1,8 +1,11 @@
+import {normalizeWorkYardstickCapture} from "../../../../../loopx/control_plane/work_items/yardstick_decision.js";
+import {sourceReadApiUrl} from "./local-status-query";
 import type {OracleEvidence} from "./goal-acceptance-observation";
 import { HANDOFF_MODES, EXECUTION_HANDOFF_MODES, type ExecutionHandoffMode } from "../../../../../loopx/control_plane/coordination/handoff_mode_vocabulary.js";
 import { normalizeGoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { parseTurnStep, type TurnStep } from "./turn-steps.js";
 import { z } from "zod";
+import {normalizeExploreMeasurements} from "../../../../../loopx/control_plane/capabilities/explore_measurements.js";
 import { actionSourceBasisSchema, todoUpdateSourceBasisSchema } from "./action-source-basis.js";
 
 import {
@@ -13,7 +16,6 @@ import {
   type CollaborationReadback,
   type LoopXModeSettings,
   type TodoApplyResult,
-  type TodoPreview,
 } from "./chat-model.js";
 import type {DelegationPreflight} from "./delegation-preflight.js";
 
@@ -646,14 +648,20 @@ export async function requestJson<T>(url: string, init?: RequestInit): Promise<T
   return parsedPayload as T;
 }
 
-export async function readTodoRequest(goalId: string, todoId: string, signal: AbortSignal) {
+export async function readTodoRequest(goalId: string, todoId: string, signal: AbortSignal, sourceNamespace?: string, readSourceUrl?: string) {
   const query = new URLSearchParams({goal_id: goalId, todo_id: todoId});
+  if (sourceNamespace) query.set("source_namespace", sourceNamespace);
+  const url = sourceReadApiUrl(readSourceUrl, `/api/chat/todo/detail?${query}`);
+  const expectedNamespace = readSourceUrl ? new URL(url).searchParams.get("source_namespace") : sourceNamespace;
   const result = z.object({
     ok: z.literal(true), goal_id: z.string(), todo_id: z.string(), text: z.string(),
     status: z.string(), archive_state: z.string(), updated_at: z.string().nullable(),
+    evidence: z.string().nullable().optional(), note: z.string().nullable().optional(),
     review_basis: todoUpdateSourceBasisSchema.optional(),
-  }).parse(await requestJson<unknown>(`/api/chat/todo/detail?${query}`, {signal}));
+    source_access: z.object({namespace: z.string()}).optional(),
+  }).parse(await requestJson<unknown>(url, {signal}));
   if (result.goal_id !== goalId || result.todo_id !== todoId) throw new Error("Task source changed");
+  if (expectedNamespace && result.source_access?.namespace !== expectedNamespace) throw new Error("Task source changed");
   return result;
 }
 
@@ -692,18 +700,39 @@ export async function recordProjectionExchange(options: {
 export type ConversationContext =
   | { kind: "manager" }
   | { kind: "goal"; goalId: string }
-  | { kind: "project"; projectRef: string };
+  | { kind: "project"; projectRef: string }
+  | ({ kind: "managed" } & ManagedConversationTarget)
+  // A UI address for an existing source-owned Session, never a new Core channel.
+  | ({ kind: "bound" } & BoundConversationTarget);
+
+export type BoundConversationTarget = { bindingId: string; sessionId: string };
+export type ManagedConversationTarget = {goalId: string; agentId: string; sessionId: string};
+
+/** Goal projections cannot answer a source-owned or ordinary workspace Chat. */
+export function conversationSupportsStatusProjection(context: ConversationContext) {
+  return context.kind === "manager" || context.kind === "goal";
+}
 
 // Goal ids are single path segments, so a key containing "/" never names a Goal.
 const PROJECT_CONVERSATION_KEY_PREFIX = "project/";
 
 export function conversationContextKey(context: ConversationContext): string {
   if (context.kind === "manager") return "manager";
+  if (context.kind === "managed") return `managed/${encodeURIComponent(context.goalId)}/${encodeURIComponent(context.agentId)}/${encodeURIComponent(context.sessionId)}`;
+  if (context.kind === "bound") return `bound/${encodeURIComponent(context.bindingId)}/${encodeURIComponent(context.sessionId)}`;
   return context.kind === "goal" ? context.goalId : `${PROJECT_CONVERSATION_KEY_PREFIX}${context.projectRef}`;
 }
 
 export function conversationContextOfKey(key: string): ConversationContext {
   if (key === "manager") return { kind: "manager" };
+  if (key.startsWith("managed/")) {
+    const [, goalId = "", agentId = "", sessionId = ""] = key.split("/");
+    return {kind: "managed", goalId: decodeURIComponent(goalId), agentId: decodeURIComponent(agentId), sessionId: decodeURIComponent(sessionId)};
+  }
+  if (key.startsWith("bound/")) {
+    const [, bindingId = "", sessionId = ""] = key.split("/");
+    return { kind: "bound", bindingId: decodeURIComponent(bindingId), sessionId: decodeURIComponent(sessionId) };
+  }
   if (key.startsWith(PROJECT_CONVERSATION_KEY_PREFIX)) {
     return { kind: "project", projectRef: key.slice(PROJECT_CONVERSATION_KEY_PREFIX.length) };
   }
@@ -712,6 +741,8 @@ export function conversationContextOfKey(key: string): ConversationContext {
 
 export function conversationChannelId(context: ConversationContext): string {
   if (context.kind === "manager") return "manager";
+  if (context.kind === "managed") return `agent.${context.agentId}`;
+  if (context.kind === "bound") return conversationContextKey(context);
   return context.kind === "goal" ? `goal.${context.goalId}` : `project.${context.projectRef}`;
 }
 
@@ -723,6 +754,25 @@ export async function createChatSession(
   agentModelId?: string,
   agentReasoningEffort?: string,
 ) {
+  if (context.kind === "managed") {
+    if (mode !== "resume_latest" || agentModelId || agentReasoningEffort) {
+      throw new Error("An original Agent Session cannot be replaced or reconfigured here.");
+    }
+    const session = await resolveManagedChatSession(context, signal);
+    if (!session.resumable || (agentId && agentId !== session.agent_id)) throw new Error("The original managed Session is unavailable.");
+    return {ok: true as const, resumed: true, session_id: session.session_id, agent_id: session.agent_id, goal_id: session.goal_id, session};
+  }
+  if (context.kind === "bound") {
+    if (mode !== "resume_latest" || agentModelId || agentReasoningEffort) {
+      throw new Error("An original conversation cannot be replaced or reconfigured here.");
+    }
+    const session = await resolveBoundChatSession(context, signal);
+    if (!session.resumable || (agentId && agentId !== session.agent_id)) {
+      throw new Error("The original conversation is unavailable on its executor.");
+    }
+    return { ok: true as const, resumed: true, session_id: session.session_id,
+      agent_id: session.agent_id, goal_id: session.goal_id, session };
+  }
   return requestJson<{
     agent_id: string;
     goal_id: string | null;
@@ -743,6 +793,11 @@ export async function createChatSession(
 }
 
 export type AgentModelOption = { value: string; label: string; reasoning_efforts?: string[] };
+export function configureChatSessionModel(sessionId: string, model: string, effort?: string) {
+  return requestJson<{ok: true; session: ChatSessionSummary}>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/model-settings`, {
+    method: "POST", body: JSON.stringify({agent_model_id: model, ...(effort ? {agent_reasoning_effort: effort} : {})}),
+  });
+}
 export type AgentModelDiscovery = {
   ok: true;
   schema_version: "loopx_chat_agent_model_options_v1";
@@ -771,9 +826,14 @@ export type ChatSessionSummary = {
   goal_id: string | null;
   project_ref?: string | null;
   agent_id: string;
+  managed_agent_id?: string;
+  goal_instance_id?: string | null;
   agent_model_id?: string | null;
   agent_reasoning_effort?: string | null;
   agent_service_tier?: string | null;
+  requested_agent_model_id?: string | null;
+  requested_agent_reasoning_effort?: string | null;
+  model_settings_supported?: boolean;
   adapter_kind: string;
   channel_id?: string;
   status: string;
@@ -792,8 +852,19 @@ export type ChatSessionSummary = {
 
 export type { ChatProject };
 
+const chatProjectsSchema = z.object({
+  ok: z.literal(true),
+  projects: z.array(z.object({
+    project_ref: z.string().min(1), title: z.string(),
+    grant: z.enum(["workspace_read", "workspace_write"]),
+    goal_workspace_ref: z.string().optional(),
+  })),
+});
+
 export async function fetchChatProjects(signal?: AbortSignal) {
-  return requestJson<{ok: true; projects: ChatProject[]}>("/api/chat/projects", {signal});
+  const parsed = chatProjectsSchema.safeParse(await requestJson<unknown>("/api/chat/projects", {signal}));
+  if (!parsed.success) throw new Error("The workspace list could not be read. Refresh to retry.");
+  return parsed.data;
 }
 
 /** ``chat_store`` Session modes; an omitted mode is a managed runtime Session. */
@@ -825,12 +896,17 @@ export type ManagerRuntimeSessionReadback = {
 };
 
 export type ChatVisibleMessage = {
+  queue_input_revision?: number;
+  queue_input_cancelled?: true;
   goal_draft?: ReturnType<typeof normalizeGoalDraft>;
   /** Client-side lineage added when messages from several Sessions are merged. */
   session_id?: string;
   collaboration?: CollaborationReadback;
+  collaborations?: CollaborationReadback[];
   origin?: string;
   attachments?: ChatImageAttachment[];
+  /** Read-only original-source view; text remains the canonical model input. */
+  reply_context?: ChatReplyContext;
   message_id: string;
   turn_id: string | null;
   role: string;
@@ -848,6 +924,18 @@ export type ChatVisibleMessage = {
   };
 };
 
+export type ChatReplyContext = {
+  source_text: string;
+  parent: {message_id: string; content: string; complete: boolean};
+  thread?: {
+    root_message_id: string; thread_id: string; before_message_id: string;
+    omitted_message_count: number; complete: false;
+    messages: Array<{message_id: string; content: string; content_truncated: boolean;
+      position: number; sender?: {id: string; kind: string}; created_at?: string}>;
+  };
+};
+
+// Existing attachment wire shape; MIME distinguishes images and UTF-8 documents.
 export type ChatImageAttachment = {
   data_url: string;
   id: string;
@@ -870,27 +958,373 @@ export type ChatSessionSnapshot = {
   session: ChatSessionSummary;
   messages: ChatVisibleMessage[];
   active_turn: Record<string, unknown> | null;
+  selected_turn?: {turn_id: string; status: string; terminal: boolean; error?: string};
+  // Derived from one complete, verified read. Never persisted or an authority grant.
+  verifiedHistoryBasis?: string;
+  message_page?: {
+    schema_version: "loopx_chat_message_page_v1";
+    offset: number; total: number; snapshot_sha256: string; next_cursor: string | null;
+  };
 };
 
 export async function fetchChatSession(sessionId: string, signal?: AbortSignal) {
-  return requestJson<ChatSessionSnapshot>(`/api/chat/sessions/${sessionId}`, { signal });
+  return requestJson<ChatSessionSnapshot>(`/api/chat/sessions/${encodeURIComponent(sessionId)}`, { signal });
+}
+
+export async function fetchSavedChatAnswer(sessionId: string, messageId: string, signal: AbortSignal, turnId?: string) {
+  const query = new URLSearchParams({report_message_id: messageId});
+  if (turnId !== undefined) query.set("turn_id", turnId);
+  const path = `/api/chat/sessions/${encodeURIComponent(sessionId)}?${query}`;
+  try {
+    const snapshot = await requestJson<ChatSessionSnapshot & {report_message_id?: string}>(path, {signal});
+    // A legacy service can ignore the selector and return its complete v1
+    // snapshot. A conflicting marker or a partial history remains invalid.
+    if (Object.hasOwn(snapshot, "report_message_id")) {
+      if (snapshot.report_message_id !== messageId) throw new Error("The saved answer selection changed during read.");
+    } else if ("message_page" in snapshot || "history_resume" in snapshot) {
+      throw new Error("The saved answer history is incomplete.");
+    }
+    return snapshot;
+  } catch (error) {
+    // Older Chat builds reject unknown history selectors before reading the
+    // Session. Only that response enables the earlier history read paths.
+    if (!(error instanceof ChatApiError) || error.payload.http_status !== 400
+      || error.message !== "invalid history page arguments") throw error;
+    signal.throwIfAborted();
+    return turnId === undefined
+      ? fetchChatSession(sessionId, signal)
+      : fetchChatSessionHistory(sessionId, signal, turnId);
+  }
+}
+
+export const chatQueueInputRequestSchema = z.discriminatedUnion("action", [
+  z.object({action: z.literal("edit"), operation_id: z.string().min(1).max(160),
+    expected_revision: z.number().int().nonnegative(), message: z.string().min(1).max(24000)}).strict(),
+  z.object({action: z.literal("cancel"), operation_id: z.string().min(1).max(160),
+    expected_revision: z.number().int().nonnegative()}).strict(),
+]);
+export type ChatQueueInputRequest = z.infer<typeof chatQueueInputRequestSchema>;
+const chatQueuedInputSchema = z.object({input_revision: z.number().int().nonnegative(), message: z.string(),
+  attachments: z.array(z.object({id: z.string(), name: z.string(), size: z.number(),
+    mime_type: z.string(), data_url: z.string()})),
+});
+export type ChatQueuedInput = z.infer<typeof chatQueuedInputSchema> & Pick<ChatVisibleMessage, "reply_context">;
+export async function fetchQueuedChatInput(sessionId: string, turnId: string, signal?: AbortSignal) {
+  // Keep original-source audience projection and complete paging. The visible
+  // input and its revision come from one canonical user row, never raw model context.
+  const history = await fetchChatSessionHistory(sessionId, signal, turnId);
+  const original = history.messages.find(row => row.role === "user" && row.turn_id === turnId);
+  if (!original) throw new Error("Original queued input is unavailable");
+  return {...chatQueuedInputSchema.parse({input_revision: original.queue_input_revision ?? 0,
+    message: original.reply_context?.source_text ?? original.text, attachments: original.attachments ?? []}),
+    reply_context: original.reply_context};
+}
+const chatQueueSchema = z.object({
+  ok: z.literal(true), schema_version: z.literal("loopx_chat_store_v1"), session_id: z.string().min(1),
+  active_turn_id: z.string().min(1).nullable(),
+  turns: z.array(z.object({
+    turn_id: z.string().min(1), created_at: z.string(), origin: z.string().nullable(),
+    preview: z.string(), character_count: z.number().int().nonnegative(),
+    attachment_count: z.number().int().nonnegative(),
+    input_revision: z.number().int().nonnegative().default(0),
+    mutation: z.object({action: z.enum(["edit", "cancel"]), operation_id: z.string().min(1),
+      expected_revision: z.number().int().nonnegative(), input_revision: z.number().int().positive(),
+      message: z.string().optional()}).nullable().optional().default(null),
+    steering: z.object({
+      schema_version: z.literal("loopx_chat_queue_steering_v1"),
+      client_ingress_id: z.string().min(1), operation_id: z.string().min(1),
+      target_turn_id: z.string().min(1), status: z.enum(["pending", "delivered", "failed"]),
+      error_code: z.string().optional(),
+    }).nullable(),
+  })),
+});
+export type ChatQueuedTurn = z.infer<typeof chatQueueSchema>["turns"][number];
+
+/** Bounded metadata from the existing persistent queue, never a local queue. */
+export async function fetchChatQueue(sessionId: string, signal?: AbortSignal) {
+  const read = () => requestJson<unknown>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/queue`, {signal});
+  let payload: unknown;
+  try {
+    payload = await read();
+  } catch (error) {
+    if (signal?.aborted || !(error instanceof ChatApiError)) throw error;
+    const {error_code: code, http_status: status} = error.payload;
+    const connectionInterrupted = code === "chat_api_unavailable" && (status === undefined || status === 200);
+    if (status !== 503 && !connectionInterrupted) throw error;
+    // Reuse the original Session and caller signal for one read-only retry.
+    payload = await read();
+  }
+  const result = chatQueueSchema.safeParse(payload);
+  if (!result.success || result.data.session_id !== sessionId
+    || new Set(result.data.turns.map(row => row.turn_id)).size !== result.data.turns.length) {
+    throw new Error("The original Session queue could not be verified.");
+  }
+  return result.data;
+}
+
+export async function steerQueuedChatTurn(sessionId: string, queuedId: string, targetId: string, ingressId: string) {
+  const value = await requestJson<Record<string, unknown>>(
+    `/api/chat/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(queuedId)}/steer`,
+    {method: "POST", body: JSON.stringify({target_turn_id: targetId, client_ingress_id: ingressId}),
+      signal: AbortSignal.timeout(15_000)});
+  if (value.ok !== true || value.session_id !== sessionId || value.queued_turn_id !== queuedId
+    || value.turn_id !== targetId || value.client_ingress_id !== ingressId || value.status !== "delivered") {
+    throw new Error("Queue steering acknowledgement does not match the original request");
+  }
+}
+
+export async function mutateQueuedChatTurn(sessionId: string, queuedId: string, request: ChatQueueInputRequest) {
+  const value = await requestJson<Record<string, unknown>>(
+    `/api/chat/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(queuedId)}/input`,
+    {method: "POST", body: JSON.stringify(request), signal: AbortSignal.timeout(15_000)});
+  if (value.ok !== true || value.session_id !== sessionId || value.queued_turn_id !== queuedId ||
+      value.operation_id !== request.operation_id || value.action !== request.action ||
+      value.input_revision !== request.expected_revision + 1 || value.status !== "applied") {
+    throw new Error("Queue input acknowledgement does not match the original request");
+  }
+}
+
+const chatMessagePageSchema = z.object({
+  schema_version: z.literal("loopx_chat_message_page_v1"),
+  offset: z.number().int().nonnegative(), total: z.number().int().nonnegative(),
+  snapshot_sha256: z.string().regex(/^[a-f0-9]{64}$/), next_cursor: z.string().min(1).max(1024).nullable(),
+  turn_id: z.string().min(1).optional(),
+  visible_page_sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+});
+
+// A long original transcript can outlive the interactive request budget even
+// when each verified page succeeds. Apply the same bounded read deadline to
+// its pages and fresh source checks; caller cancellation still takes priority.
+const CHAT_HISTORY_READ_TIMEOUT_MS = 30_000;
+
+type ChatHistoryReadProgress = {
+  first: ChatSessionSnapshot;
+  messages: ChatVisibleMessage[];
+  cursors: Set<string>;
+  cursor: string;
+  total: number;
+  digest: string;
+  visibleProof: string | undefined;
+};
+
+function sameHistorySource(actual: ChatSessionSummary, expected: ChatSessionSummary) {
+  return actual.session_id === expected.session_id &&
+    (["agent_id", "goal_id", "channel_id", "managed_agent_id", "goal_instance_id", "project_ref"] as const)
+      .every(key => (actual[key] ?? null) === (expected[key] ?? null)) &&
+    (actual.session_mode ?? "managed_runtime") === (expected.session_mode ?? "managed_runtime");
+}
+
+/** Hydrate one complete original prefix; partial pages never become a snapshot. */
+export async function fetchChatSessionHistory(session: ChatSessionSummary | string, signal?: AbortSignal, turnId?: string): Promise<ChatSessionSnapshot> {
+  return readChatSessionHistory(session, signal, turnId);
+}
+
+export async function fetchConfirmedTaskTurn(
+  {goalId, todoId, sessionId, turnId}: {goalId: string; todoId: string; sessionId: string; turnId: string},
+  signal: AbortSignal,
+) {
+  const history = await readChatSessionHistory(sessionId, signal, turnId, undefined, undefined, {taskScope: {goalId, todoId}});
+  const turn = history.selected_turn;
+  if (history.session.goal_id !== goalId || history.session.channel_id !== `task.${todoId}`
+    || turn?.turn_id !== turnId || typeof turn.status !== "string" || !turn.status
+    || typeof turn.terminal !== "boolean" || (turn.error !== undefined && typeof turn.error !== "string")) {
+    throw new Error("The original Task Turn could not be verified.");
+  }
+  return {turn, messages: history.messages};
+}
+
+async function readChatSessionHistory(session: ChatSessionSummary | string, signal?: AbortSignal, turnId?: string,
+  progress?: ChatHistoryReadProgress, checkpoint?: (progress: ChatHistoryReadProgress) => void,
+  {linkImages = false, taskScope}: {linkImages?: boolean; taskScope?: {goalId: string; todoId: string}} = {},
+): Promise<ChatSessionSnapshot> {
+  const sessionId = typeof session === "string" ? session : session.session_id;
+  // A delegation has the original Session ID; pin its first verified page's
+  // scope. History discovery callers keep validating against their own source.
+  let expectedSession = typeof session === "string" ? undefined : session;
+  // Recovery is derived browser memory, scoped again by current discovery. It
+  // grants no source authority and never exposes an incomplete transcript.
+  if (progress && expectedSession && !sameHistorySource(progress.first.session, expectedSession)) progress = undefined;
+  let first = progress?.first, cursor: string | null = progress?.cursor ?? null;
+  let total = progress?.total, digest = progress?.digest;
+  let visibleProof = progress ? progress.visibleProof : "";
+  const messages = [...(progress?.messages ?? [])], cursors = new Set(progress?.cursors),
+    ids = new Set(messages.map(message => message.message_id));
+  do {
+    signal?.throwIfAborted();
+    const query = new URLSearchParams({message_limit: "200"});
+    if (turnId !== undefined) query.set("turn_id", turnId);
+    if (taskScope) {
+      query.set("task_goal_id", taskScope.goalId);
+      query.set("task_todo_id", taskScope.todoId);
+    }
+    if (cursor !== null) query.set("message_cursor", cursor);
+    const snapshot = await requestJson<ChatSessionSnapshot>(
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}?${query}`,
+      {signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS)]) : AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS),
+        headers: historyImageHeaders(linkImages)});
+    signal?.throwIfAborted();
+    const expected = expectedSession;
+    const sameSource = snapshot.session?.session_id === sessionId && (!expected || sameHistorySource(snapshot.session, expected));
+    if (snapshot.ok !== true || snapshot.schema_version !== "loopx_chat_store_v1" || !sameSource || !Array.isArray(snapshot.messages)) {
+      throw new Error("The original Session scope changed during history read.");
+    }
+    expectedSession ??= snapshot.session;
+    // Older services return their complete v1 snapshot for this read. A later
+    // page cannot silently lose the cursor contract and masquerade as complete.
+    if (!Object.hasOwn(snapshot, "message_page")) {
+      if (cursor !== null) throw new Error("The history page contract changed during read.");
+      return {...snapshot, verifiedHistoryBasis: undefined,
+        messages: turnId === undefined ? snapshot.messages : snapshot.messages.filter(row => row.turn_id === turnId)};
+    }
+    const parsed = chatMessagePageSchema.safeParse(snapshot.message_page);
+    if (!parsed.success) throw new Error("The original history page could not be verified.");
+    const page = parsed.data, end = messages.length + snapshot.messages.length;
+    if (page.turn_id !== turnId || (turnId !== undefined && snapshot.messages.some(row => row.turn_id !== turnId))
+      || page.offset !== messages.length || snapshot.messages.length > 200 || end > page.total
+      || (total !== undefined && total !== page.total) || (digest !== undefined && digest !== page.snapshot_sha256)
+      || (page.next_cursor !== null) !== (end < page.total)
+      || (page.next_cursor !== null && (!snapshot.messages.length || cursors.has(page.next_cursor)))) {
+      throw new Error("The original history cursor did not advance consistently.");
+    }
+    for (const message of snapshot.messages) {
+      if (typeof message.message_id !== "string" || !message.message_id || ids.has(message.message_id)) {
+        throw new Error("The original history contains conflicting message identities.");
+      }
+      ids.add(message.message_id); messages.push(message);
+    }
+    first ??= snapshot;
+    visibleProof = visibleProof !== undefined && page.visible_page_sha256 &&
+      snapshot.messages.length === Math.min(200, page.total - page.offset)
+      ? visibleProof + page.visible_page_sha256 : undefined;
+    total = page.total; digest = page.snapshot_sha256; cursor = page.next_cursor;
+    if (cursor !== null) {
+      cursors.add(cursor);
+      checkpoint?.({first, messages: [...messages], cursors: new Set(cursors), cursor, total, digest, visibleProof});
+    }
+  } while (cursor !== null);
+  // Keep the first read's execution/revision hint. An append between pages is
+  // intentionally outside this prefix and will trigger the normal next refresh.
+  const basis = visibleProof === undefined ? undefined : total + ":" + visibleProof;
+  return {...first!, messages, message_page: undefined,
+    verifiedHistoryBasis: turnId === undefined && basis && historyBasisMatches(basis, messages.length) ? basis : undefined};
+}
+
+function historyBasisMatches(basis: string, count: number) {
+  const match = /^([1-9][0-9]{0,3}):([a-f0-9]+)$/.exec(basis);
+  return match !== null && count >= 1 && count <= 5000 && Number(match[1]) === count
+    && match[2].length === Math.ceil(count / 200) * 64;
+}
+
+function historyImageHeaders(linkImages: boolean): HeadersInit | undefined {
+  // The linked bytes are same-origin resources. A separately configured Chat
+  // server still uses the compatible inline representation.
+  return linkImages && !configuredChatOrigin ? {"X-LoopX-History-Images": "linked"} : undefined;
+}
+
+async function tryResumeChatSessionHistory(session: ChatSessionSummary, saved: ChatSessionSnapshot, linkImages: boolean) {
+  const basis = saved.verifiedHistoryBasis;
+  if (!basis || !sameHistorySource(saved.session, session) || !historyBasisMatches(basis, saved.messages.length)) return null;
+  const query = new URLSearchParams({message_limit: "200", known_history: basis});
+  let snapshot: ChatSessionSnapshot & {history_resume?: unknown};
+  try {
+    snapshot = await requestJson<typeof snapshot>(
+      "/api/chat/sessions/" + encodeURIComponent(session.session_id) + "?" + query,
+      {signal: AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS), headers: historyImageHeaders(linkImages)});
+  } catch (error) {
+    // A service rollback may no longer accept this optional argument.
+    if (error instanceof ChatApiError && error.payload.http_status === 400) return null;
+    throw error;
+  }
+  if (!snapshot || snapshot.history_resume === undefined) return null; // Restart or older service.
+  const proof = z.object({schema_version: z.literal("loopx_chat_history_resume_v1"),
+    base: z.literal(basis), next: z.string().max(1605)}).safeParse(snapshot.history_resume);
+  if (!proof.success || snapshot.ok !== true || snapshot.schema_version !== "loopx_chat_store_v1"
+    || !snapshot.session || !sameHistorySource(snapshot.session, session) || Object.hasOwn(snapshot, "message_page")
+    || !Array.isArray(snapshot.messages) || snapshot.messages.length > 200
+    || !historyBasisMatches(proof.data.next, saved.messages.length + snapshot.messages.length)) {
+    throw new Error("The original history suffix could not be verified.");
+  }
+  const ids = new Set(saved.messages.map(message => message.message_id));
+  for (const message of snapshot.messages) {
+    if (!message || typeof message.message_id !== "string" || !message.message_id || ids.has(message.message_id)) {
+      throw new Error("The original history contains conflicting message identities.");
+    }
+    ids.add(message.message_id);
+  }
+  const {history_resume: _, ...updated} = snapshot;
+  return {...updated, messages: [...saved.messages, ...snapshot.messages], verifiedHistoryBasis: proof.data.next};
+}
+
+/** Read-only discovery through the existing Core Goal/Agent/Session identity. */
+export async function fetchManagedAgentSessions(goalId: string, agentId: string, signal?: AbortSignal) {
+  if (!/^[A-Za-z0-9._-]{1,160}$/.test(goalId) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(agentId)) throw new Error("Invalid registered Agent address.");
+  const listed = await requestJson<{ok: true; schema_version: "loopx_chat_session_list_v1"; goal_id: string; managed_agent_id: string; goal_instance_id: string | null; sessions: ChatSessionSummary[]}>(
+    `/api/chat/sessions?${new URLSearchParams({goal_id: goalId, managed_agent_id: agentId})}`, {signal});
+  if (listed.ok !== true || listed.schema_version !== "loopx_chat_session_list_v1" || listed.goal_id !== goalId || listed.managed_agent_id !== agentId || !Array.isArray(listed.sessions)
+    || !Object.hasOwn(listed, "goal_instance_id") || listed.sessions.some(row => row.goal_id !== goalId || row.managed_agent_id !== agentId
+      || row.goal_instance_id !== listed.goal_instance_id || row.channel_id !== `agent.${agentId}` || row.session_mode !== "managed_runtime")) {
+    throw new Error("This service cannot verify the registered Agent's original Sessions. Update LoopX and retry.");
+  }
+  return listed;
+}
+
+export async function resolveManagedChatSession(target: ManagedConversationTarget, signal?: AbortSignal) {
+  const listed = await fetchManagedAgentSessions(target.goalId, target.agentId, signal);
+  const sessions = listed.sessions.filter(row => row.session_id === target.sessionId);
+  if (sessions.length !== 1) throw new Error("The original managed Session is no longer available from this Agent.");
+  return sessions[0];
 }
 
 export async function fetchChatSessions(options: {
   agentId?: string;
   channelId?: string;
   goalId?: string;
+  bound?: BoundConversationTarget;
   signal?: AbortSignal;
 }) {
   const query = new URLSearchParams();
-  if (options.agentId) query.set("agent_id", options.agentId);
-  if (options.channelId) query.set("channel_id", options.channelId);
-  if (options.goalId) query.set("goal_id", options.goalId);
-  return requestJson<{
+  if (options.bound) {
+    if (!/^[a-f0-9]{24}$/.test(options.bound.bindingId)
+      || !/^[A-Za-z0-9._-]{1,160}$/.test(options.bound.sessionId)) {
+      throw new Error("Invalid original conversation address.");
+    }
+    query.set("conversation_binding_id", options.bound.bindingId);
+  } else {
+    if (options.agentId) query.set("agent_id", options.agentId);
+    if (options.channelId) query.set("channel_id", options.channelId);
+    if (options.goalId) query.set("goal_id", options.goalId);
+  }
+  const listed = await requestJson<{
     ok: true;
     schema_version: "loopx_chat_session_list_v1";
+    conversation_binding_id?: string;
+    conversation_source?: unknown;
     sessions: ChatSessionSummary[];
   }>(`/api/chat/sessions?${query.toString()}`, { signal: options.signal });
+  if (!options.bound) return listed;
+  // An older service may ignore the selector and return unrelated ordinary
+  // history. The owner's echo is mandatory before any transcript is read.
+  if (listed.conversation_binding_id !== options.bound.bindingId) {
+    throw new Error("This service cannot verify the original conversation. Update LoopX and retry.");
+  }
+  const sessions = listed.sessions.filter(row => row.session_id === options.bound!.sessionId);
+  if (sessions.length !== 1) throw new Error("The original conversation is no longer available from this connection.");
+  return { ...listed, sessions };
+}
+
+export async function resolveBoundChatSession(target: BoundConversationTarget, signal?: AbortSignal) {
+  return (await fetchChatSessions({ bound: target, signal })).sessions[0];
+}
+
+/** Discovery chooses once; subsequent navigation freezes the exact Session. */
+export async function discoverBoundChatSession(bindingId: string, signal?: AbortSignal) {
+  if (!/^[a-f0-9]{24}$/.test(bindingId)) throw new Error("Invalid conversation connection.");
+  const listed = await requestJson<{ conversation_binding_id?: string; sessions: ChatSessionSummary[] }>(
+    `/api/chat/sessions?conversation_binding_id=${bindingId}`, { signal });
+  if (listed.conversation_binding_id !== bindingId) throw new Error("This service cannot verify the original conversation. Update LoopX and retry.");
+  const session = [...listed.sessions].sort((a, b) => b.last_activity_at.localeCompare(a.last_activity_at))[0];
+  if (!session || !/^[A-Za-z0-9._-]{1,160}$/.test(session.session_id)) throw new Error("No original conversation is available yet. Start it in Lark first.");
+  return session;
 }
 
 export function mergeChatSessionMessages(snapshots: ChatSessionSnapshot[]) {
@@ -900,10 +1334,42 @@ export function mergeChatSessionMessages(snapshots: ChatSessionSnapshot[]) {
       messages.set(`${snapshot.session.session_id}:${message.message_id}`, { ...message, session_id: snapshot.session.session_id });
     }
   }
+  // Store rows are append-ordered; opaque IDs cannot break timestamp ties.
+  // Stable sort retains that order within a Session, with a deterministic tie
+  // across Sessions even when their snapshots finish in a different order.
   return [...messages.values()].sort((left, right) =>
     left.created_at.localeCompare(right.created_at)
-      || left.message_id.localeCompare(right.message_id)
+      || (left.session_id ?? "").localeCompare(right.session_id ?? "")
   );
+}
+
+function sameHistoryRevision(current: ChatSessionSummary, read: ChatSessionSummary) {
+  return sameHistorySource(current, read) && Boolean(current.transcript_revision)
+    && current.transcript_revision === read.transcript_revision
+    && current.updated_at === read.updated_at && current.active_turn_id === read.active_turn_id
+    && current.status === read.status;
+}
+
+function hasPendingReturnDelivery(snapshot: ChatSessionSnapshot) {
+  // The owner also projects explicit_unverified when its receipt cannot be
+  // read. That projection can recover; a recorded terminal failure does not.
+  const pending = ({status, error}: {status: string; error?: string | null}) =>
+    status !== "delivered" && status !== "superseded"
+      && (status !== "explicit_unverified" || error === "delivery_state_unreadable");
+  return snapshot.messages.some(message =>
+    (message.return_delivery && pending(message.return_delivery))
+    || (message.collaborations ?? (message.collaboration ? [message.collaboration] : []))
+      .some(request => request.returns.some(pending))
+  );
+}
+
+function historyTransportUnavailable(error: unknown, allowPlain503 = false) {
+  if (!(error instanceof ChatApiError) || error.payload.session_invalidated === true) return false;
+  const {error_code: code, http_status: status} = error.payload;
+  // Bound private history can be confirmed separately when its store returns a plain 503.
+  if (allowPlain503 && status === 503 && code === undefined) return true;
+  // A response body can be interrupted after successful history headers.
+  return code === "chat_api_unavailable" && (status === undefined || status === 200 || Number(status) >= 500);
 }
 
 export type ChatHistory = {
@@ -911,6 +1377,10 @@ export type ChatHistory = {
   sessions: ChatSessionSummary[];
   snapshots: ChatSessionSnapshot[];
   unavailableSessionIds: string[];
+  pendingReads?: Map<string, ChatHistoryReadProgress>;
+  // Read and verified, but excluded from all displayed history until its
+  // original binding is checked after the transcript was read.
+  pendingBoundSnapshot?: {bindingId: string; snapshot: ChatSessionSnapshot};
 };
 
 export async function fetchChatHistory(options: {
@@ -920,22 +1390,119 @@ export async function fetchChatHistory(options: {
   agentId?: string;
   channelId: string;
   goalId?: string;
+  bound?: BoundConversationTarget;
+  managed?: ManagedConversationTarget;
 }, previous?: ChatHistory): Promise<ChatHistory> {
-  const listed = previous ?? await fetchChatSessions({ ...options, signal: AbortSignal.timeout(5000) });
-  const known = new Map(previous?.snapshots.map((snapshot) => [snapshot.session.session_id, snapshot]));
+  // Source authorization must be re-read even when recovering an older snapshot.
+  const exact = Boolean(options.bound || options.managed);
+  const listed = options.managed ? {sessions: [await resolveManagedChatSession(options.managed, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS))]}
+    : (!options.bound ? previous : undefined) ?? await fetchChatSessions({ ...options, signal: AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS) });
+  const priorSnapshots = new Map(previous?.snapshots.map((snapshot) => [snapshot.session.session_id, snapshot]));
+  const known = new Map(priorSnapshots);
+  const pending = previous?.pendingBoundSnapshot;
+  const current = listed.sessions[0];
+  const retained = !options.managed && pending && options.bound?.bindingId === pending.bindingId && current
+    && sameHistorySource(current, pending.snapshot.session) ? pending.snapshot : undefined;
+  const pendingReturnBasis = retained && hasPendingReturnDelivery(retained) ? retained : undefined;
+  // This discovery happened after the retained read. An unchanged exact
+  // source and revision can qualify a retained read with no outstanding returns.
+  if (current && retained && !pendingReturnBasis && sameHistoryRevision(current, retained.session)) {
+    known.set(current.session_id, retained);
+  }
+  const pendingReads = new Map(previous?.pendingReads);
+  for (const id of pendingReads.keys()) if (!listed.sessions.some(session => session.session_id === id)) pendingReads.delete(id);
   // A failed historical read is not an empty transcript. Retrying only the
   // missing snapshots keeps this recovery read-only and bounds repeated work.
-  const missing = listed.sessions.filter((session) => !known.has(session.session_id));
-  const results = await Promise.allSettled(missing.map((session) => fetchChatSession(session.session_id, AbortSignal.timeout(5000))));
+  const missing = listed.sessions.filter((session) => {
+    const saved = known.get(session.session_id);
+    // Return receipts can be written after the answer text. The bound suffix
+    // proof checks the displayed prefix, including delivery state.
+    return !saved || (exact && !sameHistoryRevision(session, saved.session))
+      || (Boolean(options.bound) && (hasPendingReturnDelivery(saved)
+        || (priorSnapshots.has(session.session_id) && previous?.unavailableSessionIds.includes(session.session_id))));
+  });
+  if (exact) for (const session of missing) known.delete(session.session_id);
+  const results = await Promise.allSettled(missing.map(async (session) => {
+    const savedProgress = pendingReads.get(session.session_id);
+    if (savedProgress && !sameHistorySource(savedProgress.first.session, session)) pendingReads.delete(session.session_id);
+    const progress = pendingReads.get(session.session_id);
+    // A retained read with pending returns is still private. Use it only as
+    // the basis for a fresh proof of the visible prefix through the same source.
+    const saved = options.bound && !progress && (pendingReturnBasis?.session.session_id === session.session_id
+      ? pendingReturnBasis : priorSnapshots.get(session.session_id));
+    let snapshot: ChatSessionSnapshot;
+    try {
+      const linkImages = Boolean(options.bound);
+      snapshot = (saved ? await tryResumeChatSessionHistory(session, saved, linkImages) : null)
+        ?? await readChatSessionHistory(session, undefined, undefined, progress,
+          checkpoint => pendingReads.set(session.session_id, checkpoint), {linkImages});
+    } catch (error) {
+      // Reuse the hook's existing retry schedule only for a lost transport.
+      // Revoked sources, invalid pages and stale cursors must start a fresh read.
+      if (!historyTransportUnavailable(error, Boolean(options.bound && !options.managed))) {
+        pendingReads.delete(session.session_id);
+      }
+      throw error;
+    }
+    pendingReads.delete(session.session_id);
+    if (snapshot.session.session_id !== session.session_id || snapshot.session.agent_id !== session.agent_id) {
+      throw new Error("The original Session identity changed during history read.");
+    }
+    if (options.managed && (snapshot.ok !== true || snapshot.schema_version !== "loopx_chat_store_v1" || snapshot.session.goal_id !== session.goal_id || snapshot.session.managed_agent_id !== session.managed_agent_id
+      || snapshot.session.goal_instance_id !== session.goal_instance_id || snapshot.session.channel_id !== session.channel_id
+      || snapshot.session.session_mode !== "managed_runtime")) throw new Error("The original managed Session scope changed during history read.");
+    return snapshot;
+  }));
+  // A long page sequence must not publish against a connection/Goal removed
+  // while it was in flight. Reuse the original source owner, never a fallback.
+  if (missing.length && results.some(result => result.status === "fulfilled")) {
+    if (options.bound) {
+      const read = results[0];
+      try {
+        const confirmed = await resolveBoundChatSession(options.bound, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS));
+        if (read?.status === "fulfilled" && !sameHistorySource(confirmed, read.value.session)) {
+          throw new Error("The original Session scope changed during history read.");
+        }
+      } catch (error) {
+        if (options.managed || read?.status !== "fulfilled" || !historyTransportUnavailable(error, true)) throw error;
+        return {
+          messages: [],
+          sessions: listed.sessions,
+          snapshots: [],
+          unavailableSessionIds: listed.sessions.map(session => session.session_id),
+          pendingReads,
+          pendingBoundSnapshot: {bindingId: options.bound.bindingId, snapshot: read.value},
+        };
+      }
+    }
+    if (options.managed) await resolveManagedChatSession(options.managed, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS));
+  }
   for (const result of results) {
     if (result.status === "fulfilled") known.set(result.value.session.session_id, result.value);
   }
-  const snapshots = listed.sessions.flatMap((session) => known.has(session.session_id) ? [known.get(session.session_id)!] : []);
+  let sessions = listed.sessions;
+  let usingStaleBoundHistory = false;
+  const failed = results[0];
+  const saved = current && priorSnapshots.get(current.session_id);
+  if (options.bound && !options.managed && failed?.status === "rejected" && historyTransportUnavailable(failed.reason, true)
+    && current && saved && sameHistorySource(current, saved.session)) {
+    // Keep only an already proven transcript. If the binding changed while the
+    // failed read was in flight, rechecking it here keeps this path fail-closed.
+    const confirmed = await resolveBoundChatSession(options.bound, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS));
+    if (!sameHistorySource(confirmed, saved.session)) {
+      throw new Error("The original Session scope changed during history read.");
+    }
+    sessions = [confirmed];
+    known.set(confirmed.session_id, saved);
+    usingStaleBoundHistory = true;
+  }
+  const snapshots = sessions.flatMap((session) => known.has(session.session_id) ? [known.get(session.session_id)!] : []);
   return {
     messages: mergeChatSessionMessages(snapshots),
-    sessions: listed.sessions,
+    sessions,
     snapshots,
-    unavailableSessionIds: listed.sessions.filter((session) => !known.has(session.session_id)).map((session) => session.session_id),
+    unavailableSessionIds: sessions.filter(session => usingStaleBoundHistory || !known.has(session.session_id)).map(session => session.session_id),
+    pendingReads,
   };
 }
 
@@ -1156,13 +1723,84 @@ export async function steerChatTurn(sessionId: string, turnId: string, message: 
   return receipt;
 }
 
+const managedTaskTurnSchema = z.object({
+  session_id: z.string().min(1), turn_id: z.string().min(1), client_turn_id: z.string().min(1), status: z.string().min(1),
+  origin: z.literal("native_loopx"), loopx_execution: z.literal(true),
+  loopx_request: z.object({operation: z.literal("native_turn"), todo_id: z.string().min(1),
+    actor: z.object({goal_id: z.string().min(1), agent_id: z.string().min(1), session_id: z.string().min(1)})}),
+}).passthrough();
+const managedTaskCreationRequestSchema = z.object({
+  creation_operation_id: z.string().min(1), operation_id: z.string().min(1),
+  goal_id: z.string().min(1), goal_instance_id: z.string().min(1).nullable(), agent_id: z.string().min(1),
+  session_id: z.string().min(1), todo_id: z.string().min(1),
+  permission: z.enum(["read_only", "workspace_write_on_confirmation"]), write_scope: z.array(z.string().min(1)),
+});
+const taskCreationReadback = {creation_request: managedTaskCreationRequestSchema.optional(),
+  creation_turn: managedTaskTurnSchema.nullable().optional()};
+const managedTaskEntrySchema = z.object({ok: z.literal(true), session_id: z.string().min(1),
+  managed_agent_id: z.string().nullable(), registered_agents: z.array(z.string()), available: z.boolean(), reason: z.string().optional(),
+  task: z.discriminatedUnion("state", [
+    z.object({todo_id: z.string().min(1), state: z.literal("ready"), source: z.string().min(1), canonical_done: z.boolean(),
+      observation: z.object({check_count: z.number().int().nonnegative(), pinned_file_count: z.number().int().nonnegative(),
+        basis_sha256: z.string().min(1)}), reason: z.string().optional(), ...taskCreationReadback}),
+    z.object({todo_id: z.string().nullable(), state: z.literal("unbound"), source: z.null(), canonical_done: z.literal(false),
+      reason: z.string().optional(), ...taskCreationReadback}),
+  ]), turn: managedTaskTurnSchema.nullable(),
+});
+export type ManagedTaskEntry = z.infer<typeof managedTaskEntrySchema>;
+export type ManagedTaskTurn = z.infer<typeof managedTaskTurnSchema>;
+
+function verifyManagedTaskTurn(turn: ManagedTaskTurn, target: ManagedConversationTarget, operationId: string, todoId?: string) {
+  const actor = turn.loopx_request.actor;
+  if (turn.session_id !== target.sessionId || turn.client_turn_id !== `managed.${operationId}`
+    || actor.session_id !== target.sessionId || actor.goal_id !== target.goalId || actor.agent_id !== target.agentId
+    || todoId !== undefined && turn.loopx_request.todo_id !== todoId) throw new Error("The original Task Turn identity changed.");
+}
+
+/** Read the Core-selected original Task; preparation and check adoption grant no launch. */
+export async function fetchManagedTaskEntry(target: ManagedConversationTarget, options: {operationId?: string; todoId?: string; signal?: AbortSignal} = {}) {
+  const session = await resolveManagedChatSession(target, options.signal);
+  const query = new URLSearchParams({original_task: "true", agent_id: target.agentId});
+  if (options.operationId !== undefined) query.set("operation_id", options.operationId);
+  const result = managedTaskEntrySchema.parse(await requestJson<unknown>(
+    `/api/chat/sessions/${encodeURIComponent(target.sessionId)}/native-turn?${query}`, {signal: options.signal}));
+  if (result.session_id !== target.sessionId || result.managed_agent_id !== target.agentId || !result.registered_agents.includes(target.agentId)) {
+    throw new Error("The original Task entry is unavailable from this Agent.");
+  }
+  if (result.turn) {
+    if (!options.operationId) throw new Error("The Task read returned an unrelated operation.");
+    verifyManagedTaskTurn(result.turn, target, options.operationId, options.todoId);
+  }
+  const creation = result.task.creation_request;
+  if (creation) {
+    if (creation.operation_id !== `goal-create-${creation.creation_operation_id}`
+      || creation.goal_id !== target.goalId || creation.goal_instance_id !== session.goal_instance_id
+      || creation.agent_id !== target.agentId || creation.session_id !== target.sessionId
+      || result.task.todo_id !== null && creation.todo_id !== result.task.todo_id
+      || result.task.creation_turn === undefined) throw new Error("The original creation request identity changed.");
+    if (result.task.creation_turn) verifyManagedTaskTurn(result.task.creation_turn, target, creation.operation_id, creation.todo_id);
+  } else if (result.task.creation_turn) throw new Error("The creation Turn has no original request.");
+  return result;
+}
+
+/** Only an explicit owner operation calls the existing native Task admission. */
+export async function startManagedTaskTurn(target: ManagedConversationTarget, todoId: string, operationId: string, signal?: AbortSignal) {
+  await resolveManagedChatSession(target, signal);
+  const result = z.object({ok: z.literal(true), session_id: z.string(), turn: managedTaskTurnSchema, created: z.boolean()}).parse(
+    await requestJson<unknown>(`/api/chat/sessions/${encodeURIComponent(target.sessionId)}/native-turn`, {method: "POST", signal,
+      body: JSON.stringify({agent_id: target.agentId, operation_id: operationId, todo_id: todoId})}));
+  if (result.session_id !== target.sessionId) throw new Error("The original Task Session changed during launch.");
+  verifyManagedTaskTurn(result.turn, target, operationId, todoId);
+  return result;
+}
+
 export type LoopXModeSnapshot = {
   ok: true; session_id: string; enabled: boolean; active_turn_id: string | null; conversation_busy: boolean;
   settings: Partial<LoopXModeSettings> & { execution_config?: string };
   native: { status: string; tokenBudget?: number; tokensUsed?: number };
   registered_agents: string[]; paused: boolean; recovery_required: boolean;
-  members: Array<{id: string; agent_id: string; todo_id: string}>;
-  deliveries: Array<{operation_id: string; agent_id: string; todo_id: string; status: string}>;
+  members: Array<{id: string; agent_id: string; todo_id: string | null}>;
+  deliveries: Array<{operation_id: string; agent_id: string; todo_id: string | null; status: string}>;
   ingress: Array<{client_ingress_id: string; mode: string; status: string}>;
   turn_id?: string;
 };
@@ -1170,7 +1808,7 @@ export function fetchLoopXMode(sessionId: string) {
   return requestJson<LoopXModeSnapshot>(`/api/chat/sessions/${sessionId}/loopx`);
 }
 export type DelegationInventory = {
-  items: Array<{record_id: string; operation_id: string | null; agent_id?: string; todo_id?: string;
+  items: Array<{record_id: string; operation_id: string | null; agent_id?: string; todo_id?: string | null;
     status: string; worker_active?: boolean; recovery_required: boolean | null;
     artifacts?: Array<{ref: string; sha256: string}>; current_use?: DelegationReadback["current_use"]}>;
   has_more: boolean; next_cursor: string | null; page_readback_complete: boolean;
@@ -1182,15 +1820,15 @@ export type DelegationDependency = {
 };
 export type DelegationAdoption = {
   requester_agent_id: string; consumer_operation_id: string; consumer_request_id: string;
-  consumer_agent_id: string; consumer_todo_id: string; state: "current" | "unavailable";
+  consumer_agent_id: string; consumer_todo_id: string | null; state: "current" | "unavailable";
   source_artifacts: Array<{ref: string; sha256: string}>;
   consumer_artifacts: Array<{ref: string; sha256: string}>;
 };
 export type DelegationReadback = {
-  operation_id: string; request_id: string; agent_id: string; todo_id: string;
+  operation_id: string; request_id: string; agent_id: string; todo_id: string | null;
   status: string; worker_active: boolean; recovery_required: boolean;
   artifacts?: Array<{ref: string; sha256: string; text: string}>; error?: string;
-  validation?: {source: "goal_acceptance" | "todo_validation"; basis_sha256: string;
+  validation?: {source: "goal_acceptance" | "todo_validation" | "request_validation"; basis_sha256: string;
     check_count: number; pinned_file_count: number; checked_at?: string;
     output_versions?: Array<{ref: string; sha256: string}>; oracle_checks?: Array<OracleEvidence & {criterion_id: string}>};
   task_failure?: {stage: "task_postcondition"; status: "failed" | "inconclusive" | "unavailable";
@@ -1314,7 +1952,7 @@ export async function sendChatTurnStreaming(
     options.attachments,
     options.signal,
   );
-  options.onPhase?.("turn.accepted", accepted.turn_id);
+  options.onPhase?.(accepted.status === "queued" ? "turn.queued" : "turn.accepted", accepted.turn_id);
   return receiveChatTurnStreaming(
     sessionId,
     accepted.turn_id,
@@ -1335,6 +1973,7 @@ async function receiveChatTurnStreaming(
   } = {},
 ) {
   let finalResponse: unknown = null;
+  let steeredIntoTurnId: string | undefined;
   const outcome: {
     failure: Record<string, unknown> | null;
     interrupted: Record<string, unknown> | null;
@@ -1352,6 +1991,9 @@ async function receiveChatTurnStreaming(
           if (label) options.onActivity?.(label, parseTurnStep(event.payload.step));
         }
         if (event.kind === "turn.completed") {
+          if (typeof event.payload.steered_into_turn_id === "string" && event.payload.steered_into_turn_id) {
+            steeredIntoTurnId = event.payload.steered_into_turn_id;
+          }
           finalResponse = event.payload.response;
         }
         if (event.kind === "turn.failed") {
@@ -1393,6 +2035,7 @@ async function receiveChatTurnStreaming(
     response: agentResponseSchema.parse(finalResponse),
     sessionId,
     turnId,
+    steeredIntoTurnId,
   };
 }
 
@@ -1403,7 +2046,7 @@ async function receiveChatTurnStreaming(
 export async function readCompletedChatTurn(sessionId: string, turnId: string, signal: AbortSignal): Promise<AgentResponse | null> {
   let completed: AgentResponse | null = null;
   await streamChatTurn(`/api/chat/sessions/${sessionId}/turns/${turnId}/events`, (event) => {
-    if (event.kind === "turn.completed") completed = agentResponseSchema.parse(event.payload.response);
+    if (event.kind === "turn.completed" && !event.payload.steered_into_turn_id) completed = agentResponseSchema.parse(event.payload.response);
   }, signal);
   return completed;
 }
@@ -1660,6 +2303,7 @@ export const periodicReportScheduleSchema = z.object({
   schedule_id: z.string(),
   rrule: z.string(),
   timezone: z.string(),
+  start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
 export const periodicReportMachineConfigurationSchema = z.object({
@@ -2217,9 +2861,10 @@ const larkAppsSchema = z.object({
   })),
 });
 
-export async function fetchLarkApps() {
+export async function fetchLarkApps(options?: {verify: boolean; appRef?: string; signal?: AbortSignal}) {
+  const query = options ? new URLSearchParams({verify: String(options.verify), ...(options.appRef ? {app_ref: options.appRef} : {})}) : null;
   return larkAppsSchema.parse(
-    await requestJson<unknown>("/api/chat/lark/apps"),
+    await requestJson<unknown>(`/api/chat/lark/apps${query ? `?${query}` : ""}`, {signal: options?.signal}),
   ).apps;
 }
 
@@ -2378,9 +3023,9 @@ const larkConnectionsSchema = z.object({
   })),
 });
 
-export async function fetchLarkConnections() {
+export async function fetchLarkConnections(signal?: AbortSignal) {
   return larkConnectionsSchema.parse(
-    await requestJson<unknown>("/api/chat/lark/connections"),
+    await requestJson<unknown>("/api/chat/lark/connections", {signal}),
   ).connections;
 }
 
@@ -2512,12 +3157,16 @@ export async function updateGoalOwnership(body: { goal_id: string; mode: Executi
 
 const privateAgentSessionSchema = z.object({session_id: z.string(), goal_id: z.string(), agent_id: z.string(), executor_endpoint_id: z.string()});
 const privateAgentTargetSchema = privateAgentSessionSchema.extend({target_ref: z.string(), host_ref: z.string(), goal_instance_id: z.string().nullable()});
-const privateConversationSchema = z.object({
+const privateConversationSettingsRowSchema = z.object({
   binding_id: z.string(), app_ref: z.string(), context_kind: z.enum(["project", "steward"]),
   project_ref: z.string(), project_title: z.string(), context_available: z.boolean(), executor_endpoint_id: z.string(),
-  grant: z.enum(["workspace_read", "workspace_write", "portfolio_read"]), goal_count: z.number().int().default(0), listener_status: z.string(),
+  grant: z.enum(["workspace_read", "workspace_write", "portfolio_read"]), goal_count: z.number().int().default(0),
   goal_scope: z.enum(["all_registered", "selected"]).nullable().optional(),
   audience: z.enum(["owner", "group"]).default("owner"), group_count: z.number().int().default(0),
+  agent_targets: z.array(privateAgentTargetSchema).default([]),
+});
+const privateConversationDiagnosticsRowSchema = z.object({
+  binding_id: z.string(), listener_status: z.string(),
   pending_count: z.number().int(), recovery_count: z.number().int(),
   ingress: z.object({status: z.enum(["unobserved", "verified", "gap", "unavailable"]),
     last_checked_at: z.number().nullable(), last_complete_at: z.number().nullable(),
@@ -2525,22 +3174,103 @@ const privateConversationSchema = z.object({
   owner_attention: z.discriminatedUnion("available", [
     z.object({available: z.literal(true), enabled: z.boolean(), revision: z.number().int(),
       last_checked_at: z.number().nullable(), error_code: z.string().nullable(),
+      source_coverage: z.object({goal_count: z.number().int().nonnegative(),
+        read_goal_count: z.number().int().nonnegative(), unavailable_goal_count: z.number().int().nonnegative()}).nullable().optional(),
+      source_failures: z.array(z.object({goal_id: z.string(),
+        error_code: z.enum(["canonical_authority_required", "source_unavailable"])})).optional(),
       pending_count: z.number().int(), unconfirmed_count: z.number().int(), failed_count: z.number().int()}),
     z.object({available: z.literal(false), error_code: z.string()}),
   ]).optional(),
-  agent_candidates: z.array(privateAgentSessionSchema).default([]), agent_targets: z.array(privateAgentTargetSchema).default([]),
+  managed_steward: z.discriminatedUnion("available", [
+    z.object({available: z.literal(true), prepared: z.boolean(), scheduling_enabled: z.boolean(),
+      execution_available: z.boolean().optional(), execution_error_code: z.string().optional(),
+      goal_active: z.boolean().optional(), monitor: z.object({todo_id: z.string(), status: z.string(),
+        cadence_minutes: z.number().int().nullable(), next_due_at: z.string().nullable(),
+        last_checked_at: z.string().nullable()}).nullable().optional(),
+      report: z.discriminatedUnion("available", [
+        z.object({available: z.literal(true), enabled: z.boolean(), configured: z.boolean(),
+          schedule: z.record(z.string(), z.unknown()).nullable().optional(), next_due_at: z.string().nullable().optional(),
+          retained_window_due_at: z.string().nullable().optional(), generation_id: z.string().nullable().optional(),
+          delivery_status: z.string().optional(), execution_failed: z.boolean().optional(), publication_verified: z.boolean().optional(),
+          destination: z.string().optional()}),
+        z.object({available: z.literal(false), error_code: z.string()}),
+      ]).optional(),
+      goal_id: z.string().optional(), agent_id: z.string().optional(), session_id: z.string().optional()}),
+    z.object({available: z.literal(false), error_code: z.string(),
+      execution_available: z.boolean().optional(), execution_error_code: z.string().optional()}),
+  ]).optional(),
+  agent_candidates: z.array(privateAgentSessionSchema).default([]),
 });
+const privateConversationSchema = privateConversationSettingsRowSchema.extend(privateConversationDiagnosticsRowSchema.shape);
 const privateConversationStopRecoverySchema = z.object({binding_id: z.string(), project_ref: z.string(),
   project_title: z.string(), pending_count: z.number().int().positive()});
 export type PrivateConversationStopRecovery = z.infer<typeof privateConversationStopRecoverySchema>;
-const privateConversationsSchema = z.object({ok: z.literal(true), revision: z.number().int(),
+const privateConversationSettingsSchema = z.object({ok: z.literal(true), revision: z.number().int(),
+  app_steward_binding_id: z.string().regex(/^[a-f0-9]{24}$/).nullable().default(null),
+  connections: z.array(privateConversationSettingsRowSchema)});
+const privateConversationDiagnosticsSchema = z.object({ok: z.literal(true), revision: z.number().int(),
+  connections: z.array(privateConversationDiagnosticsRowSchema), stop_recoveries: z.array(privateConversationStopRecoverySchema)});
+const privateConversationsSchema = privateConversationSettingsSchema.extend({
   connections: z.array(privateConversationSchema), stop_recoveries: z.array(privateConversationStopRecoverySchema).default([])});
+export type PrivateConversationSettings = z.infer<typeof privateConversationSettingsSchema>;
+export type PrivateConversationDiagnostics = z.infer<typeof privateConversationDiagnosticsSchema>;
 export type PrivateConversation = z.infer<typeof privateConversationSchema>;
-export async function fetchPrivateConversations() {
-  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations"));
+const boundConversationSourceSchema = privateConversationSchema.pick({
+  binding_id: true, app_ref: true, context_kind: true, project_title: true, executor_endpoint_id: true,
+}).extend({audience: z.literal("owner"), context_available: z.literal(true)});
+export type BoundConversationSource = z.infer<typeof boundConversationSourceSchema>;
+
+/** Session and display source come from one fresh Core-verified read. */
+export async function resolveBoundConversation(target: BoundConversationTarget, signal?: AbortSignal) {
+  const listed = await fetchChatSessions({bound: target, signal});
+  const parsed = boundConversationSourceSchema.safeParse(listed.conversation_source);
+  if (!parsed.success || parsed.data.binding_id !== target.bindingId) {
+    throw new Error("This service cannot verify the original conversation. Update LoopX and retry.");
+  }
+  const session = listed.sessions[0], source = parsed.data;
+  // Core qualifies this exact Session, including its original quota fallback.
+  // The connection's configured preference need not be its active executor.
+  return {session, source};
+}
+
+export async function fetchPrivateConversations(signal?: AbortSignal) {
+  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations", { signal }));
+}
+
+export async function fetchPrivateConversationSettings(signal: AbortSignal) {
+  return privateConversationSettingsSchema.parse(
+    await requestJson<unknown>("/api/chat/lark/private-conversations?view=settings", {signal}));
+}
+
+export async function fetchPrivateConversationDiagnostics(settings: PrivateConversationSettings, signal: AbortSignal) {
+  const diagnostics = privateConversationDiagnosticsSchema.parse(await requestJson<unknown>(
+    `/api/chat/lark/private-conversations?view=diagnostics&revision=${settings.revision}`, {signal}));
+  const observedBindingIds = new Set(diagnostics.connections.map(row => row.binding_id));
+  if (diagnostics.revision !== settings.revision || diagnostics.connections.length !== settings.connections.length
+    || observedBindingIds.size !== diagnostics.connections.length
+    || !settings.connections.every(row => observedBindingIds.has(row.binding_id))) {
+    throw new Error("Conversation bindings changed during the read");
+  }
+  return diagnostics;
+}
+const appStewardTargetSchema = z.union([
+  z.object({ok: z.literal(true), binding_id: z.null(), session_id: z.null()}),
+  z.object({ok: z.literal(true), binding_id: z.string().regex(/^[a-f0-9]{24}$/),
+    session_id: z.string().regex(/^[A-Za-z0-9._-]{1,160}$/)}),
+]);
+export async function fetchAppStewardTarget(signal?: AbortSignal): Promise<BoundConversationTarget | null> {
+  const target = appStewardTargetSchema.parse(await requestJson<unknown>("/api/chat/app-steward", {signal}));
+  return target.binding_id === null ? null : {bindingId: target.binding_id, sessionId: target.session_id};
+}
+export async function selectAppSteward(bindingId: string | null, revision: number) {
+  const result = privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/app-steward", {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({binding_id: bindingId, revision}),
+  }));
+  if (typeof window !== "undefined") window.dispatchEvent(new Event("loopx:app-steward-changed"));
+  return result;
 }
 export async function connectPrivateConversation(appRef: string, projectRef: string, executor: string, contextKind: "project" | "steward" = "project", projectGrant: "workspace_read" | "workspace_write" = "workspace_write", groupIds?: string[]) {
-  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations", {
+  return z.object({ok: z.literal(true)}).parse(await requestJson<unknown>("/api/chat/lark/private-conversations?response=minimal", {
     method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify({app_ref: appRef, project_ref: projectRef, executor_endpoint_id: executor, context_kind: contextKind, project_grant: projectGrant,
       ...(contextKind === "steward" ? {goal_scope: "all_registered"} : {}),
@@ -2548,15 +3278,61 @@ export async function connectPrivateConversation(appRef: string, projectRef: str
   }));
 }
 export async function disconnectPrivateConversation(bindingId: string, revision: number) {
-  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations", {
+  return z.object({ok: z.literal(true)}).parse(await requestJson<unknown>("/api/chat/lark/private-conversations?response=minimal", {
     method: "DELETE", headers: {"Content-Type": "application/json"}, body: JSON.stringify({binding_id: bindingId, revision}),
   }));
+}
+
+const stewardPreparationSchema = z.object({ok: z.literal(true), applied: z.boolean(), plan: z.object({
+  schema_version: z.literal("loopx_steward_managed_mode_plan_v0"), plan_id: z.string().regex(/^[a-f0-9]{64}$/),
+  session_id: z.string(), goal_id: z.string(), already_prepared: z.boolean(),
+  scheduling_enabled: z.literal(false), model_invoked: z.literal(false),
+})});
+export async function prepareManagedSteward(bindingId: string) {
+  const path = "/api/chat/lark/private-conversations/managed-steward";
+  const send = (body: unknown) => requestJson<unknown>(path, {method: "POST",
+    headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const preview = stewardPreparationSchema.parse(await send({binding_id: bindingId, execute: false}));
+  if (preview.plan.already_prepared) return preview;
+  const applied = stewardPreparationSchema.parse(await send({binding_id: bindingId, execute: true,
+    session_id: preview.plan.session_id, plan_id: preview.plan.plan_id}));
+  if (!applied.applied) throw new Error("The original steward identity has not been prepared.");
+  return applied;
+}
+
+const stewardMonitorPlanSchema = z.object({ok: z.literal(true), applied: z.boolean(), plan: z.object({
+  schema_version: z.literal("loopx_steward_monitor_plan_v0"), plan_id: z.string().regex(/^[a-f0-9]{64}$/),
+})});
+export async function configureStewardMonitor(bindingId: string, operation: "enable" | "pause", cadenceMinutes: number) {
+  const path = "/api/chat/lark/private-conversations/managed-steward/monitor";
+  const send = (body: unknown) => requestJson<unknown>(path, {method: "POST",
+    headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const request = {binding_id: bindingId, operation, cadence_minutes: cadenceMinutes};
+  const preview = stewardMonitorPlanSchema.parse(await send({...request, execute: false}));
+  const applied = stewardMonitorPlanSchema.parse(await send({...request, execute: true, plan_id: preview.plan.plan_id}));
+  if (!applied.applied) throw new Error("The original native monitor setting was not applied.");
+  return applied;
 }
 
 export async function changePrivateAgentTarget(bindingId: string, revision: number, target: {session_id: string} | {target_ref: string}) {
   return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations/agent-targets", {
     method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({binding_id: bindingId, revision, ...target}),
   }));
+}
+
+const stewardReportPlanSchema = z.object({ok: z.literal(true), applied: z.boolean(), stop_status: z.string().optional(), plan: z.object({
+  schema_version: z.literal("loopx_steward_report_plan_v0"), plan_id: z.string().regex(/^[a-f0-9]{64}$/),
+})});
+export async function configureStewardReport(bindingId: string, operation: "enable" | "pause" | "cancel", schedule?: Record<string, unknown>) {
+  const path = "/api/chat/lark/private-conversations/managed-steward/report";
+  const send = (body: unknown) => requestJson<unknown>(path, {method: "POST",
+    headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const request = {binding_id: bindingId, operation, ...(operation === "enable" ? {schedule} : {})};
+  const preview = stewardReportPlanSchema.parse(await send({...request, execute: false}));
+  const applied = stewardReportPlanSchema.parse(await send({...request, execute: true, plan_id: preview.plan.plan_id}));
+  if (!applied.applied) throw new Error("The original report setting was not applied.");
+  if (applied.stop_status === "unconfirmed") throw new Error("汇报计划已取消；正在生成的任务是否停止尚未确认。Report cancelled; the active task's stop is unconfirmed.");
+  return applied;
 }
 
 export async function changeOwnerNotifications(bindingId: string, bindingRevision: number, revision: number, enabled: boolean) {
@@ -2575,15 +3351,49 @@ const exploreResultPageSchema = z.object({
     finding_id: z.string(), finding: z.string(), summary: z.string(), status: z.string(),
     node_id: z.string(), question: z.string(), scope: z.string(), agent_id: z.string(),
     evidence_refs: z.array(z.string()), last_updated_at: z.string(),
+    measurements: z.unknown().transform(value => normalizeExploreMeasurements(value)).optional(),
+    measurement_error: z.string().optional(),
+    work_yardstick: z.unknown().transform(capture => normalizeWorkYardstickCapture({capture})).optional(),
+    linked_todos_available: z.boolean().optional(),
     linked_todos: z.array(z.object({
       todo_id: z.string(), text: z.string(), status: z.string(), claimed_by: z.string(),
     })),
   })),
 });
 export type ExploreResultPage = z.infer<typeof exploreResultPageSchema>;
-export async function fetchExploreResults(goalId: string, cursor?: string) {
-  const query = new URLSearchParams({goal_id: goalId, ...(cursor ? {cursor} : {})});
-  const page = exploreResultPageSchema.parse(await requestJson<unknown>(`/api/chat/explore-results?${query}`));
-  if (page.goal_id !== goalId) throw new Error("Explore result Goal mismatch");
+export async function fetchExploreResults(goalId: string, cursor?: string, readSourceUrl?: string, originalGoalId = goalId) {
+  const query = new URLSearchParams({goal_id: goalId, view: "findings", ...(cursor ? {cursor} : {})});
+  const page = exploreResultPageSchema.parse(await requestJson<unknown>(sourceReadApiUrl(readSourceUrl, `/api/chat/explore-results?${query}`)));
+  if (page.goal_id !== originalGoalId) throw new Error("Explore result Goal mismatch");
+  for (const item of page.items) if (item.work_yardstick) normalizeWorkYardstickCapture({
+    capture: item.work_yardstick, goal_id: originalGoalId, agent_id: item.agent_id, evidence_refs: item.evidence_refs,
+  });
   return page;
+}
+
+const researchHistoryTimingSchema = z.object({
+  ok: z.literal(true),
+  goal_id: z.string(),
+  source_namespace: z.string().nullable(),
+  first_recorded_at: z.iso.datetime().nullable(),
+  last_recorded_at: z.iso.datetime().nullable(),
+  untimed_record_count: z.number().int().nonnegative(),
+  strategy_recorded_at: z.iso.datetime().nullable(),
+}).refine(value => value.first_recorded_at === null
+  ? value.last_recorded_at === null
+  : value.last_recorded_at !== null && Date.parse(value.first_recorded_at) <= Date.parse(value.last_recorded_at));
+export type ResearchHistoryTiming = z.infer<typeof researchHistoryTimingSchema>;
+
+export async function fetchResearchHistoryTiming(
+  goalId: string, originalGoalId: string, namespace: string | null, directoryUrl: string | undefined, signal: AbortSignal,
+): Promise<ResearchHistoryTiming> {
+  const statusUrl = namespace ? `/status.json?source_namespace=${namespace}` : directoryUrl;
+  const query = new URLSearchParams({goal_id: goalId, view: "history-timing"});
+  const timing = researchHistoryTimingSchema.parse(await requestJson<unknown>(
+    sourceReadApiUrl(statusUrl, `/api/chat/explore-results?${query}`), {signal},
+  ));
+  if (timing.goal_id !== originalGoalId || timing.source_namespace !== namespace) {
+    throw new Error("Research timing source mismatch");
+  }
+  return timing;
 }

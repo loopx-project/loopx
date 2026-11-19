@@ -14,9 +14,10 @@ from .result_log import (
     EVENT_KIND_FINDING,
     EVENT_KIND_NODE,
     PUBLIC_BOUNDARY,
-    append_explore_result_events,
+    _append_validated_explore_result_events,
     build_explore_result_projection,
     load_explore_result_events_strict,
+    validate_explore_result_event_attribution,
 )
 
 
@@ -113,6 +114,9 @@ def reconcile_explore_source_history(
     source is eligible. Its direct projection key must already exist in the
     registered sink baseline. Derived rows that remain absent are classified,
     never synthesized or deleted by this non-destructive command.
+    This selected subset is an ordinary append, not an archival prefix replay:
+    contradictory latest findings remain in the candidate source and are
+    reported as blocked, while eligible results can still be recovered.
     """
 
     canonical_events = load_explore_result_events_strict(canonical_log_path, goal_id=goal_id)
@@ -133,17 +137,34 @@ def reconcile_explore_source_history(
 
     canonical_result_ids = {str(event.get("result_id") or "") for event in canonical_events}
     candidate_latest = _latest_by_result_id(candidate_events)
-    selected_events = [
+    missing_events = [
         event
         for result_id, event in candidate_latest.items()
         if result_id not in canonical_result_ids and _direct_projection_key(event, goal_id=goal_id) in missing_before
     ]
-    selected_events.sort(
+    missing_events.sort(
         key=lambda event: (
             str(event.get("recorded_at") or ""),
             str(event.get("event_id") or ""),
         )
     )
+
+    selected_events = []
+    blocked_event_ids: set[str] = set()
+    blocked_keys: set[str] = set()
+    blocked_reasons: Counter[str] = Counter()
+    for event in missing_events:
+        try:
+            validate_explore_result_event_attribution(event)
+        except ValueError as error:
+            # Both complete sources already passed structural validation.
+            # Reuse the writer's stricter eligibility check for this subset;
+            # runtime failures must propagate rather than look like bad data.
+            blocked_event_ids.add(str(event["event_id"]))
+            blocked_keys.add(_direct_projection_key(event, goal_id=goal_id))
+            blocked_reasons[str(error)] += 1
+        else:
+            selected_events.append(event)
 
     planned_events = [*canonical_events, *selected_events]
     planned_projection = _projection(planned_events, goal_id=goal_id)
@@ -156,7 +177,7 @@ def reconcile_explore_source_history(
     recovered = missing_before & planned_keys
     remaining = registered - planned_keys
     stale_parent_edges = remaining & _materialized_parent_edge_keys(candidate_projection, goal_id=goal_id)
-    unresolved_orphans = remaining - stale_parent_edges
+    unresolved_orphans = remaining - stale_parent_edges - blocked_keys
     selected_event_ids = {str(event.get("event_id") or "") for event in selected_events}
 
     writeback = {
@@ -168,10 +189,14 @@ def reconcile_explore_source_history(
     }
     post_keys = canonical_keys
     if execute and selected_events:
-        append_receipt = append_explore_result_events(
+        # The registered missing subset passed structural and attribution
+        # preflight; it is not an archival prefix. Bind this plan to the
+        # canonical snapshot under lock.
+        append_receipt = _append_validated_explore_result_events(
             canonical_log_path,
             selected_events,
             expected_goal_id=goal_id,
+            expected_event_ids=[str(event["event_id"]) for event in canonical_events],
         )
         post_events = load_explore_result_events_strict(canonical_log_path, goal_id=goal_id)
         post_event_ids = {str(event.get("event_id") or "") for event in post_events}
@@ -197,10 +222,21 @@ def reconcile_explore_source_history(
     effective_remaining = registered - effective_keys
     if selected_events:
         status = "reconciled" if execute else "would_reconcile"
+        if blocked_event_ids:
+            status += "_with_blocked_history"
+    elif blocked_event_ids:
+        status = "blocked"
     else:
         status = "already_reconciled"
-    if effective_remaining:
+    if effective_remaining - blocked_keys:
         status += "_with_remote_orphans"
+
+    warnings = [
+        f"Recovery excludes {count} historical result(s): {reason}"
+        for reason, count in sorted(blocked_reasons.items())
+    ]
+    if warnings:
+        warnings.append("Append a corrected latest record to the candidate history, then preview recovery again.")
 
     return {
         "ok": True,
@@ -221,6 +257,9 @@ def reconcile_explore_source_history(
         "plan": {
             "selected_event_count": len(selected_events),
             "selected_event_ids_sha256_16": _digest(selected_event_ids),
+            "blocked_event_count": len(blocked_event_ids),
+            "blocked_event_ids_sha256_16": _digest(blocked_event_ids),
+            "blocked_reasons": dict(sorted(blocked_reasons.items())),
             "latest_event_per_missing_result": True,
             "raw_history_copied": False,
         },
@@ -240,12 +279,14 @@ def reconcile_explore_source_history(
         },
         "classification": {
             "lost_history_recovered_count": len(recovered),
+            "blocked_history_count": len(blocked_keys),
             "stale_materialized_parent_edge_count": len(stale_parent_edges),
             "unresolved_orphan_count": len(unresolved_orphans),
-            "remote_deletion_required": bool(effective_remaining),
+            "remote_deletion_required": bool(effective_remaining - blocked_keys),
             "remote_deletion_performed": False,
         },
         "writeback": writeback,
+        **({"warnings": warnings} if warnings else {}),
         "boundary": {
             **PUBLIC_BOUNDARY,
             "candidate_events_strictly_validated": True,

@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Mapping
 
-from ..actor_identity import normalize_owner_controller_actor
+from ..actor_identity import OwnerControllerActorKind, normalize_owner_controller_actor
 
 
 GOAL_ACTIVATION_SCHEMA_VERSION = "loopx_goal_activation_v1"
@@ -24,14 +24,29 @@ def normalize_goal_activation_state(value: Any) -> GoalActivationState:
         raise ValueError("goal activation state must be active or stopped") from exc
 
 
+def require_current_registry_goal_activation(goal: Mapping[str, Any]) -> None:
+    """Reject retired storage fields, without interpreting them as live authority."""
+    if "activation_state" in goal or goal.get("status") in ("paused", "stopped"):
+        raise ValueError(
+            "Goal activation metadata requires upgrade; run "
+            "loopx authority-archive upgrade --all-known --execute "
+            "to back up and migrate the registry before activation"
+        )
+
+
 def goal_activation_state(goal: Mapping[str, Any] | None) -> GoalActivationState:
-    """Return the typed Goal activation state; older registries default active."""
+    """Read canonical activation or its derived read-model projection.
+
+    Registry IO rejects stored activation_state aliases and retired pause values;
+    only the explicit upgrade decoder may consume them. Omitted activation is active.
+    """
 
     if not isinstance(goal, Mapping):
         return GoalActivationState.ACTIVE
     projected = goal.get("activation_state")
     if projected is not None:
         return normalize_goal_activation_state(projected)
+    require_current_registry_goal_activation(goal)
     activation = goal.get("activation")
     if activation is None:
         return GoalActivationState.ACTIVE
@@ -67,6 +82,26 @@ def build_goal_activation(
     if actor is not None:
         activation["actor_kind"] = actor.value
     return activation
+
+
+def goal_owner_resume_id(goal: Mapping[str, Any] | None) -> str | None:
+    """Read the last owner resume from the canonical activation record."""
+    activation = goal.get("activation") if goal is not None else None
+    if not isinstance(activation, Mapping):
+        return None
+    resume_id = activation.get("owner_resume_id")
+    if isinstance(resume_id, str) and resume_id.strip():
+        return resume_id.strip()
+    # Older records can prove an owner resume only when it is still the
+    # recorded transition. A controller transition carries no such proof.
+    if (
+        activation.get("state") == GoalActivationState.ACTIVE.value
+        and activation.get("actor_kind") == OwnerControllerActorKind.OWNER.value
+    ):
+        updated_at = activation.get("updated_at")
+        if isinstance(updated_at, str):
+            return updated_at.strip() or None
+    return None
 
 
 def goal_is_stopped(goal: Mapping[str, Any] | None) -> bool:

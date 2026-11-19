@@ -1,9 +1,13 @@
+import {canonicalWriteScope, compactScopeInput as compact, normalizeWriteScopes, writeScopeCandidates} from "./write_scope_codec.ts";
+export {normalizeWriteScopes} from "./write_scope_codec.ts";
 import {HANDOFF_MODES, type HandoffMode} from "../coordination/handoff_mode_vocabulary.ts";
 import {LeaseWorktreeObservationError, observeLeaseWorktree, type LeaseWorkspace} from "./task_lease_workspace.ts";
 import {isCanonicalTodoId} from "../todos/identity.ts";
 import {executeCanonicalTaskLeaseAcquire} from "../coordination/task_lease_acquire.ts";
 import {withCanonicalTaskLeaseAuthority} from "./canonical_task_lease_lifecycle.ts";
-import {evaluateTaskLeaseWriteScopesOverlap} from "./task_lease_acquire_decision.ts";
+import {
+  evaluateTaskLeaseWriteScopesOverlap,
+} from "./task_lease_acquire_decision.ts";
 import { ShadowManagementError } from "../coordination/shadow_management.ts";
 import { parseIsoTimestamp } from "../runtime_timestamp.ts";
 import { createHash } from "node:crypto";
@@ -14,9 +18,6 @@ import {
   EffectRuntimeLockTimeoutError,
   EffectRuntimeRequestError,
 } from "../effect_runtime_errors.ts";
-import {
-  taskLeaseLockPath,
-} from "../coordination/legacy_writer_lock_paths.ts";
 import {
   settlementIdentity,
   type JsonObject,
@@ -35,8 +36,6 @@ export const TASK_LEASE_SCHEMA_VERSION = "task_lease_v0";
 
 const DEFAULT_TTL_SECONDS = 45 * 60;
 const MAX_TTL_SECONDS = 24 * 60 * 60;
-const TODO_WRITE_SCOPE_MAX_CHARS = 160;
-
 type FileState = "file" | "missing";
 export type TodoFactField =
   | "status"
@@ -157,29 +156,6 @@ function optionalInteger(value: unknown, label: string): number | null {
   return value;
 }
 
-function compactString(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  switch (typeof value) {
-    case "string":
-      return value;
-    case "number":
-    case "bigint":
-    case "symbol":
-      return value.toString();
-    case "boolean":
-      return value ? "true" : "false";
-    case "function":
-      return Function.prototype.toString.call(value);
-    case "object":
-      return Array.isArray(value) ? value.join(",") : Object.prototype.toString.call(value);
-  }
-  return "";
-}
-
-function compact(value: unknown): string {
-  return compactString(value).trim().split(/\s+/u).filter(Boolean).join(" ");
-}
-
 export function normalizeAgent(value: unknown): string | null {
   const candidate = compact(value).toLowerCase().replaceAll(" ", "-");
   return /^[a-z][a-z0-9_.:@-]{0,79}$/u.test(candidate) ? candidate : null;
@@ -232,31 +208,15 @@ export function normalizeIdempotencyKey(value: unknown): string {
   return key;
 }
 
-export function normalizeWriteScopes(value: unknown): string[] {
-  let raw: unknown[];
-  if (Array.isArray(value)) {
-    raw = value;
-  } else if (typeof value === "string") {
-    raw = value.split(/[,;|]/u);
-  } else {
-    raw = [value];
+export function requireWriteScopes(value: unknown): string[] {
+  const raw = writeScopeCandidates(value);
+  if (raw.some(item => canonicalWriteScope(compact(item)) === null)) {
+    throw new TaskLeaseAcquireError(
+      "write_scopes must contain valid repository-relative scope tokens",
+      "invalid_write_scopes",
+    );
   }
-  const scopes: string[] = [];
-  const seen = new Set<string>();
-  for (const item of raw) {
-    const scope = compact(item);
-    if (
-      scope.length === 0 || scope.length > TODO_WRITE_SCOPE_MAX_CHARS ||
-      scope.startsWith("/") || scope.startsWith("~") ||
-      scope.split("/").includes("..") || /[\s<>]/u.test(scope) ||
-      seen.has(scope)
-    ) {
-      continue;
-    }
-    seen.add(scope);
-    scopes.push(scope);
-  }
-  return scopes;
+  return normalizeWriteScopes(raw);
 }
 
 export function normalizeTtl(value: unknown): number {
@@ -424,7 +384,7 @@ function decodeRequest(value: unknown): AcquireRequest {
     owner: normalizeOwner(request.owner),
     todo_id: normalizeTodoId(request.todo_id),
     idempotency_key: normalizeIdempotencyKey(request.idempotency_key),
-    write_scopes: normalizeWriteScopes(request.write_scopes),
+    write_scopes: requireWriteScopes(request.write_scopes),
     ttl_seconds: normalizeTtl(request.ttl_seconds),
     expected_version: optionalInteger(request.expected_version, "expected_version"),
     authority,
@@ -615,7 +575,7 @@ export async function revalidateAuthoritySources(receipts: readonly SourceReceip
 }
 
 function successEnvelope(
-  request: AcquireRequest,
+  _request: AcquireRequest,
   lease: LeaseRecord,
   leasePath: string,
   effectId: string,

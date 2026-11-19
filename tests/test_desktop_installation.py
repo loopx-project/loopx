@@ -99,3 +99,45 @@ def test_cli_only_host_does_not_require_desktop_installation(tmp_path):
     assert result["status"] == "not_detected"
     assert result["recommended_action"] is None
     assert result["apps"] == []
+
+
+@pytest.mark.parametrize("plist_bytes", [
+    b'<?xml version="1.0"?><plist><dict>',
+    b'<?xml version="1.0"?><plist><dict></plist>',
+])
+def test_malformed_app_plist_keeps_doctor_identity_unknown(tmp_path, monkeypatch, plist_bytes):
+    app = tmp_path / "LoopX.app"
+    runtime = app / "Contents/Resources/runtime"
+    runtime.mkdir(parents=True)
+    plist = app / "Contents/Info.plist"
+    plist.write_bytes(plist_bytes)
+    identity = runtime / "identity.json"
+    identity.write_text(json.dumps({
+        "schema_version": "desktop_runtime_bundle_v1", "source_revision": "a" * 40,
+    }), encoding="utf-8")
+    before = identity.read_bytes()
+
+    result = desktop_installation_status("a" * 40, applications=(app,))
+
+    assert result["status"] == "unknown"
+    assert result["apps"] == [{
+        "app_version": None, "bundled_source_revision": None, "pairing": "unknown",
+    }]
+    assert "compatibility is unknown" in result["recommended_action"]
+    assert result["running_app_verified"] is False
+    assert plist.read_bytes() == plist_bytes
+    assert identity.read_bytes() == before
+    assert str(tmp_path) not in json.dumps(result)
+
+    from loopx import desktop_installation
+    from loopx.doctor import collect_doctor
+
+    # Supply the disposable bundle through the existing doctor consumer, without
+    # pretending this host is macOS or replacing the parser/identity decision.
+    monkeypatch.setattr(
+        desktop_installation, "desktop_installation_status",
+        lambda revision: desktop_installation_status(revision, applications=(app,)),
+    )
+    payload = collect_doctor()
+    assert payload["desktop_installation"]["status"] == "unknown"
+    assert payload["desktop_installation"]["running_app_verified"] is False

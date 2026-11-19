@@ -215,12 +215,10 @@ def test_text_fields_are_bounded() -> None:
         "next_action": "z" * 5000,
     }
     result = adapter.build_result(request, candidate)
-    _assert(
-        len(result["classification"]) <= 120,
-        "classification must respect its limit",
-    )
-    _assert(len(result["summary"]) <= 400, "summary must respect its limit")
-    _assert(len(result["next_action"]) <= 1_200, "next_action must respect its limit")
+    for field in ("classification", "summary", "next_action"):
+        _assert(result[field] == candidate[field], "adapter must preserve " + field)
+    verdict = validate_loopx_turn_host_result(_plan(request), result)
+    _assert(not verdict["ok"], "the executor must reject oversized candidate text")
 
 
 def test_subprocess_adapter_roundtrip_with_fake_host() -> None:

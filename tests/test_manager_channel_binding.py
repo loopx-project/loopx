@@ -120,7 +120,7 @@ def test_the_shipped_default_is_the_cli_endpoint_on_every_machine():
     assert binding.get("output_token_budget") is None
     assert binding["available"] is None
     assert binding["unavailable_reason"] is None
-    assert binding["model"] == "gpt-6-astra"
+    assert binding["model"] == "gpt-6.1-sol"
     assert binding["model_source"] == MANAGER_MODEL_SOURCE_VENDOR_DEFAULT
 
 
@@ -151,7 +151,7 @@ def test_the_operator_credential_authenticates_without_selecting_the_executor():
     # The model follows the executor the channel runs, so a configured
     # credential cannot leave a managed model pointed at an individual CLI.
     assert with_credential["executor_kind"] == "individual"
-    assert with_credential["model"] == "gpt-6-astra"
+    assert with_credential["model"] == "gpt-6.1-sol"
     assert with_credential["model_source"] == MANAGER_MODEL_SOURCE_VENDOR_DEFAULT
     assert with_credential["execution_profile"] is None
     assert with_credential.get("output_token_budget") is None
@@ -200,7 +200,7 @@ def test_an_explicit_endpoint_selection_reports_no_default_reason():
     assert binding["executor_endpoint"] == "codex"
     assert binding["executor_endpoint_source"] == MANAGER_ENDPOINT_SOURCE_EXPLICIT_CONFIG
     assert binding["executor_endpoint_default_reason"] == ""
-    assert binding["model"] == "gpt-6-astra"
+    assert binding["model"] == "gpt-6.1-sol"
     assert binding["execution_profile"] is None
 
 
@@ -294,7 +294,7 @@ def test_a_machine_that_selects_only_an_executor_keeps_the_lower_layers(monkeypa
             "executor_model": None,
             "executor_reasoning_effort": None,
         },
-    ) == {"model": "gpt-6-astra", "reasoning_effort": "low"}
+    ) == {"model": "gpt-6.1-sol", "reasoning_effort": "low"}
     # An unconfigured machine keeps resolving exactly as it did before the
     # namespace existed, and an unread machine is named as such.
     assert manager_channel_binding({"DEEPSEEK_API_KEY": "fixture"})[
@@ -362,7 +362,7 @@ def test_an_unknown_explicit_endpoint_makes_no_availability_claim():
 
     assert binding["executor_kind"] == ""
     assert binding["available"] is None
-    assert binding["model"] == "gpt-6-astra"
+    assert binding["model"] == "gpt-6.1-sol"
 
 
 def test_explicit_model_override_wins_on_either_endpoint():
@@ -374,9 +374,9 @@ def test_explicit_model_override_wins_on_either_endpoint():
 
     assert manager_model_config(
         {"DEEPSEEK_API_KEY": "fixture", "LOOPX_MANAGER_MODEL": "fixture-model"}
-    ) == {"model": "fixture-model", "reasoning_effort": "high"}
+    ) == {"model": "fixture-model", "reasoning_effort": "xhigh"}
     assert manager_model_config({"LOOPX_MANAGER_REASONING_EFFORT": "low"}) == {
-        "model": "gpt-6-astra",
+        "model": "gpt-6.1-sol",
         "reasoning_effort": "low",
     }
     # The managed effort is the same field the governed Turn surface resolves,
@@ -392,14 +392,14 @@ def test_explicit_model_override_wins_on_either_endpoint():
     # the interactive endpoint on its own vendor model and effort.
     assert manager_model_config(
         {"DEEPSEEK_API_KEY": "fixture", "LOOPX_TURN_REASONING_EFFORT": "max"}
-    ) == {"model": "gpt-6-astra", "reasoning_effort": "high"}
+    ) == {"model": "gpt-6.1-sol", "reasoning_effort": "xhigh"}
 
 
 def test_manager_model_config_reads_the_process_environment(monkeypatch):
     monkeypatch.delenv("LOOPX_MANAGER_MODEL", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
 
-    assert manager_model_config()["model"] == "gpt-6-astra"
+    assert manager_model_config()["model"] == "gpt-6.1-sol"
 
 
 def test_open_manager_session_resolves_the_endpoint_only_when_unset(tmp_path):
@@ -489,8 +489,8 @@ def test_flexible_steward_falls_back_only_inside_the_authorized_pool(tmp_path):
     allocation = calls[-1]["manager_executor_allocation"]
     assert allocation["allocation_reason"] == "flexible_availability_fallback"
     assert allocation["eligible_endpoints"] == ["dsh", "codex"]
-    assert allocation["model"] == "gpt-6-astra"
-    assert allocation["reasoning_effort"] == "high"
+    assert allocation["model"] == "gpt-6.1-sol"
+    assert allocation["reasoning_effort"] == "xhigh"
 
     with pytest.raises(CodexChatAgentError) as raised:
         open_manager_session(

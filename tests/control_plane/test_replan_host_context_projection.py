@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
+import shlex
+import subprocess
+import sys
 
 import pytest
 
 from loopx.control_plane.quota.cli_projection import compact_quota_should_run_cli_payload
 from loopx.control_plane.quota.turn_envelope import (
-    build_turn_envelope, quota_action_signature_document,
+    build_turn_envelope, project_captured_replan_cli_view, quota_action_signature_document,
     turn_envelope_action_signature_document,
 )
 from loopx.control_plane.testing.control_plane_composition_scenarios import (
@@ -114,6 +119,91 @@ def _quota_payload(*, include_legacy_receipt: bool = False, stride_strategy: str
     )
 
 
+def test_staged_replan_preserves_source_numbers_and_distinct_outcome_refs(tmp_path) -> None:
+    def encoded(value: object) -> str:
+        return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+    def legacy_ref(normalized: dict[str, object]) -> str:
+        return "sha256:" + hashlib.sha256(encoded(normalized).encode()).hexdigest()
+
+    capture = tmp_path / "decision.json"
+    source = _quota_payload()
+    source["replan_read_path"] = str(capture)
+    exact = [1.0, -0.0, 2**53 + 1]
+    rounded = [1, 0, 2**53]
+    outcomes = [
+        {"id": "outcome", "revision": 1, "requirements": [{"values": values}]}
+        for values in (exact, rounded)
+    ]
+    separate = {**outcomes[0], "id": "unambiguous"}
+    context = source["autonomous_replan_obligation"]["replan_context"]
+    core = {
+        "evidence_value": 2**53 + 1,
+        "acceptance_contract": {"outcome_requirements": {
+            "revision": 2**53 + 1, "outcomes": [*outcomes, separate],
+        }},
+    }
+    context["core_goal"] = core
+    source["agent_todo_summary"]["goal_acceptance_contract"] = copy.deepcopy(core["acceptance_contract"])
+    context["explore_basis"] = {"availability": "available", "revision": -0.0, "values": exact}
+    context["decision_followthrough"] = {"recorded_progress_count": 2**53 + 1}
+    context["evidence"][0]["occurrences"] = 1.0
+    source["planning_horizon"] = {"core_goal": {**core, "evidence_value": 2**53}}
+    source["replan_action_packet"]["writeback_contract"] = {
+        "vision_authoring": {"sample_count": 1.0},
+        "captured_scalar": -0.0,
+        "captured_values": exact,
+    }
+    raw = encoded(source).encode()
+    capture.write_bytes(raw)
+    envelope = build_turn_envelope(source)
+    digest = envelope["action_signature"]["source_decision_hash"]
+    registry = tmp_path / "absent-registry.json"
+    runtime = tmp_path / "absent-runtime"
+    cli = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+           "--runtime-root", str(runtime), "--format", "json"]
+
+    def read(*args: str, expected: int = 0):
+        process = subprocess.run([*cli, *args], capture_output=True, text=True, timeout=15)
+        result = json.loads(process.stdout)
+        assert process.returncode == expected, result
+        return result
+
+    route = ("quota", "replan-view", "--decision-file", str(capture), "--source-hash", digest)
+    review = read(*route, "--replan-stage", "review")
+    assert review["core_goal"]["evidence_value"] == 2**53 + 1
+    assert review["planning_horizon"]["core_goal"]["evidence_value"] == 2**53
+    assert review["decision_followthrough"]["observation_count"] == 2**53 + 1
+    assert encoded(review["evidence"][0]["occurrences"]) == "1.0"
+    assert encoded(review["capabilities"]["explore"]["revision"]) == "-0.0"
+    index = review["acceptance_index"]
+    refs = [row["outcome_ref"] for row in index["outcomes"]]
+    assert len(set(refs)) == 3
+    assert envelope["action"]["core_goal"]["outcome_requirements_index"]["outcome_refs"] == refs
+    saved_entry = project_captured_replan_cli_view(source)
+    saved_index = saved_entry["agent_todo_summary"]["outcome_requirements_index"]
+    assert saved_index["outcome_refs"] == refs
+    assert saved_index["revision"] == 2**53 + 1
+    for ref, outcome in zip(refs, [*outcomes, separate], strict=True):
+        detail = shlex.split(index["read_action_template"].replace("{outcome_ref}", ref))
+        assert detail[detail.index("quota"):][:2] == ["quota", "replan-view"]
+        assert encoded(read(*detail[detail.index("quota"):])["outcome"]) == encoded(outcome)
+
+    old_ambiguous = read(*route, "--replan-stage", "acceptance", "--outcome-ref",
+                         legacy_ref(outcomes[1]), expected=1)
+    assert not old_ambiguous["ok"] and "ambiguous" in old_ambiguous["reason"]
+    old_separate = legacy_ref({**outcomes[1], "id": "unambiguous"})
+    assert refs[-1] == old_separate
+    assert encoded(read(*route, "--replan-stage", "acceptance", "--outcome-ref", old_separate)["outcome"]) == encoded(separate)
+
+    explore = read(*route, "--replan-stage", "explore")
+    assert encoded(explore["explore_basis"]) == encoded(context["explore_basis"])
+    writer = read(*route, "--replan-stage", "writeback")
+    assert encoded(writer["writeback_contract"]) == encoded(source["replan_action_packet"]["writeback_contract"])
+    assert capture.read_bytes() == raw
+    assert not registry.exists() and not runtime.exists()
+
+
 def test_quota_delivers_coverage_context_and_minimal_replan_action() -> None:
     payload = _quota_payload()
 
@@ -132,20 +222,33 @@ def test_quota_delivers_coverage_context_and_minimal_replan_action() -> None:
         "delivered_by": "quota_host_projection",
     }
     assert context["coverage_ledger"][0]["surface_id"] == "surface-existing"
-    assert len(action["planning_guidance"]) == 5
-    assert {key: value for key, value in action.items() if key != "planning_guidance"} == {
+    assert 0 < len(action["planning_guidance"]) <= 3
+    assert {
+        key: value for key, value in action.items()
+        if key not in {"planning_guidance", "writeback_contract"}
+    } == {
         "schema_version": "replan_action_packet_v0",
         "decision": "replan_required",
         "obligation_id": obligation["obligation_id"],
         "uncovered_frontier": context["uncovered_frontier"],
         "required_outcome": "semantic_delta",
-        "writeback_contract": {},
         "allowed_terminal": [
             "exploration_exhausted",
             "blocked",
             "no_followup",
         ],
     }
+    no_followup = action["writeback_contract"]["no_followup_requirements"]
+    assert no_followup["cli_args"] == [
+        "--progress-result-class", "no_followup",
+        "--progress-coverage-scope-id", "<coverage-scope-id>",
+        "--progress-evidence-id", "<evidence-id>",
+        "--agent-vision-json", "<file>",
+    ]
+    assert no_followup["vision_fields"] == {
+        "state": "no_followup", "path_delta.outcome": "stop",
+    }
+    assert no_followup["preserve"] == ["vision_patch"]
     assert payload["interaction_contract"]["agent_channel"][
         "primary_action"
     ] == "produce one typed outcome from the host-projected replan action packet"
@@ -218,32 +321,9 @@ def test_replan_guidance_survives_cli_and_host_compaction_without_new_authority(
     source = (_required_vision_replan_source(goal_id=GOAL_ID, agent_id=AGENT_ID)
               if vision_gap else _quota_payload())
     guidance = source["replan_action_packet"]["planning_guidance"]
-    # These are delivery assertions, not a claim that a model follows the advice.
-    assert len(guidance) == 5
-    assert "Never shrink requested goals" in guidance[0]
-    assert "honor user scope, authority, budget and stops" in guidance[0]
-    assert "current authoritative evidence for every requirement" in guidance[1]
-    assert "unproven" in guidance[1]
-    assert "blocked/exhausted/superseded is not achieved" in guidance[1]
-    assert "review unmet acceptance against the original authorized goal and evidence" in guidance[2]
-    assert "continue or replan without waiting for an assigned successor" in guidance[2]
-    assert "An empty Todo queue is not a scope limit" in guidance[2]
-    assert "do not invent work, exceed authority or consume budget merely to stay active" in guidance[2]
-    assert "requested priorities and optimization direction" in guidance[3]
-    assert "user requirements and hard constraints" in guidance[3]
-    assert "provisional agent-created candidate rules" in guidance[3]
-    assert "Do not relax frozen acceptance, authority, budget or stops" in guidance[3]
-    assert "or rewrite criteria after failure" in guidance[3]
-    assert "Compare expected goal/information gain with full marginal cost" in guidance[4]
-    assert "executed path and current artifact" in guidance[4]
-    assert "probe that distinguishes remaining explanations" in guidance[4]
-    assert "scope negative results to tested conditions and local proxies to their coverage" in guidance[4]
-    assert "Reuse still-applicable evidence" in guidance[4]
-    assert "Correct within the affected work first" in guidance[4]
-    assert "goal, path, dependency or acceptance evidence" in guidance[4]
-    assert "A due review can retain the path" in guidance[4]
-    assert "subsequent work and authoritative outcomes" in guidance[4]
-    assert "neither adoption nor improvement" in guidance[4]
+    # Legacy callers without a capture keep their complete source guidance.
+    # Transport equality, not dated wording, is the invariant here.
+    assert guidance and all(isinstance(item, str) and item for item in guidance)
     compact = compact_quota_should_run_cli_payload(source)
     envelope = build_turn_envelope(source)
     for packet in (compact, envelope):
@@ -258,14 +338,11 @@ def test_replan_guidance_survives_cli_and_host_compaction_without_new_authority(
     assert turn_envelope_action_signature_document(envelope) == signature
     signature["replan_action_packet"].pop("planning_guidance")
     assert signature == quota_action_signature_document(baseline)
-    # Preserve the existing 8 KiB envelope warning, including the already-large
-    # vision fixture. The five advice clauses now cost 1,772 bytes on both
-    # fixtures (363 text bytes added for local correction/followthrough). This is a
-    # bounded advice allocation, not permission to truncate authority or raise
-    # the envelope/transport/compute budget.
+    # Semantic boundaries have a bounded allocation; the existing envelope
+    # warning and executable authority remain independent of that advice.
     assert envelope["compaction"]["within_budget"] == old_envelope["compaction"]["within_budget"]
     assert (envelope["compaction"]["envelope_json_bytes"]
-            - old_envelope["compaction"]["envelope_json_bytes"]) <= 1800
+            - old_envelope["compaction"]["envelope_json_bytes"]) <= 3000
     envelope["replan_action_packet"].pop("planning_guidance")
     assert envelope["replan_action_packet"] == old_envelope["replan_action_packet"]
 

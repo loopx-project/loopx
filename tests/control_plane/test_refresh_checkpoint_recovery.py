@@ -130,7 +130,7 @@ def test_recovery_markdown_preserves_routing_and_error_precedence(decision):
 
 @pytest.mark.parametrize("decision", ["unchanged", "patch"])
 def test_same_turn_checkpoint_supplement_with_read_context_is_idempotent(tmp_path: Path, decision: str):
-    project, runtime, registry = _write_fixture(tmp_path)
+    project, runtime, registry = _write_fixture(tmp_path, provider="sqlite")
     rc, initial = _run_cli(
         registry,
         runtime,
@@ -165,8 +165,6 @@ def test_same_turn_checkpoint_supplement_with_read_context_is_idempotent(tmp_pat
         "--goal-id",
         GOAL_ID,
         *binding,
-        "--scan-path",
-        str(project),
         cwd=project,
     )
     assert rc == 0, guard
@@ -291,8 +289,6 @@ def test_same_turn_checkpoint_supplement_with_read_context_is_idempotent(tmp_pat
         "--slots",
         "1",
         "--execute",
-        "--scan-path",
-        str(project),
     )
     for _ in range(2):
         rc, result = _run_cli(registry, runtime, *spend, cwd=project)
@@ -303,7 +299,7 @@ def test_same_turn_checkpoint_supplement_with_read_context_is_idempotent(tmp_pat
 def test_checkpoint_only_recovery_bypasses_open_todo_completion_validation(
     tmp_path: Path,
 ) -> None:
-    project, runtime, registry = _write_fixture(tmp_path)
+    project, runtime, registry = _write_fixture(tmp_path, provider="sqlite")
     _initialize_git_checkout(project)
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state_text = state_path.read_text(encoding="utf-8")
@@ -331,8 +327,6 @@ def test_checkpoint_only_recovery_bypasses_open_todo_completion_validation(
         "--goal-id",
         GOAL_ID,
         *binding,
-        "--scan-path",
-        str(project),
         cwd=project,
     )
     assert rc == 0, guard
@@ -384,14 +378,15 @@ def test_checkpoint_only_recovery_bypasses_open_todo_completion_validation(
 
     # A controller may install completion validation before checkpoint repair.
     # The supplement repairs the existing receipt while the Todo remains open.
-    state_path.write_text(
-        state_path.read_text(encoding="utf-8").replace(
-            selected_marker,
-            selected_marker.replace(" -->", " validation_command=pytest -->"),
-            1,
-        ),
-        encoding="utf-8",
-    )
+    rc, current = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID,
+        "--todo-id", TODO_ID, cwd=project)
+    assert rc == 0, current
+    rc, updated = _run_cli(registry, runtime, "todo", "update", "--goal-id", GOAL_ID,
+        "--todo-id", TODO_ID, "--agent-id", AGENT_ID, "--validation-command", "pytest",
+        "--update-operation-id", "fixture-checkpoint-validation",
+        "--update-expected-provider-revision", str(current["authority_read"]["provider_revision"]),
+        "--execute", cwd=project)
+    assert rc == 0 and updated["ok"], updated
 
     vision = (
         "--vision-summary",
@@ -443,8 +438,74 @@ def test_checkpoint_only_recovery_bypasses_open_todo_completion_validation(
     assert _spend_run_count(runtime) == 0
 
 
+def test_invalid_material_path_decision_uses_checkpoint_supplement(tmp_path: Path) -> None:
+    project, runtime, registry = _write_fixture(tmp_path, provider="sqlite")
+    binding = (
+        "--agent-id", AGENT_ID,
+        "--todo-id", TODO_ID,
+        "--turn-instance-id", "turn-invalid-material-path",
+    )
+    rc, guard = _run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, *binding, cwd=project,
+    )
+    assert rc == 0 and guard["decision"] == "run", guard
+
+    def vision(outcome: str, name: str) -> Path:
+        path = tmp_path / name
+        path.write_text(json.dumps({
+            "schema_version": "goal_vision_replan_contract_v0",
+            "state": "vision_patch_proposed",
+            "vision_patch": {
+                "acceptance_summary": "The observed result and remaining route are verified.",
+            },
+            "path_delta": {
+                "schema_version": "goal_path_delta_v0",
+                "outcome": outcome,
+                "prior_assumption": "The active work required an immediate decision.",
+                "observed_reality": "The external condition has not changed yet.",
+                "retained": ["Preserve the verified route and evidence."],
+                "evidence_refs": ["evidence:material-path"],
+            },
+        }), encoding="utf-8")
+        return path
+
+    wait_packet = vision("wait", "wait.json")
+    delivery = (
+        "refresh-state", "--goal-id", GOAL_ID, *binding,
+        "--classification", "verified_wait",
+        "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress",
+        "--agent-vision-json", str(wait_packet),
+        "--no-global-sync", "--suppress-external-sinks",
+    )
+    rc, first = _run_cli(registry, runtime, *delivery, cwd=project)
+    assert rc == 0 and first["appended"] is True, first
+    assert first["vision_checkpoint"]["decision"] == "missing_required"
+    assert first["vision_checkpoint"]["satisfied"] is False
+    assert first["vision_checkpoint"]["unqualified_components"] == [
+        "path_outcome_valid"
+    ]
+
+    rc, context = _run_cli(
+        registry, runtime, "checkpoint-context", "--goal-id", GOAL_ID,
+        *binding, cwd=project,
+    )
+    assert rc == 0, context
+    corrected = list(delivery)
+    corrected[corrected.index(str(wait_packet))] = str(vision("no_change", "corrected.json"))
+    corrected += ["--checkpoint-read-context", context["read_context_id"]]
+    rc, repaired = _run_cli(registry, runtime, *corrected, cwd=project)
+    assert rc == 0 and repaired["appended"] is True, repaired
+    assert repaired["refresh_recovery"]["decision"] == "supplement_checkpoint"
+    assert repaired["vision_checkpoint"]["decision"] == "patched"
+    assert repaired["vision_checkpoint"]["satisfied"] is True
+    assert repaired["settlement_identity"] == first["settlement_identity"]
+    assert _spend_run_count(runtime) == 0
+
+
 def test_invalid_supplement_leaves_original_writeback_intact(tmp_path: Path):
-    project, runtime, registry = _write_fixture(tmp_path)
+    project, runtime, registry = _write_fixture(tmp_path, provider="sqlite")
     binding = (
         "--agent-id",
         AGENT_ID,
@@ -462,8 +523,6 @@ def test_invalid_supplement_leaves_original_writeback_intact(tmp_path: Path):
         "--goal-id",
         GOAL_ID,
         *binding,
-        "--scan-path",
-        str(project),
         cwd=project,
     )
     assert rc == 0, guard

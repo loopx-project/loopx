@@ -124,6 +124,22 @@ falls back to a shared corpus; provider degradation stays visible while base
 Goal work continues. Each host must report its actual coverage rather than
 generalizing from a direct CLI or helper test.
 
+The native context and settlement registrations live in `turn_hooks.py` and are
+composed outside the kernel in `loopx.capabilities.turn_context`. The existing
+experiment, recall, independent-reflection validation, outcome-ingest and sidecar
+owners retain their permissions and recovery rules. Context contributions are
+private advisory input; the generic host transport cannot replace governing
+fields. The real `PostSettlement` dispatcher runs effect adapters after
+accountable settlement; `post_writeback` observers remain effect-free. Source
+wiring for Codex/DSH/generic CLI and full/thin heartbeat readback is distinct
+from installed App/Lark adoption or model benefit.
+
+The memory contribution carries recall context once and keeps its verified
+participation readback separate. If optional recall text exceeds the existing
+64 KiB contribution budget, that Turn omits recall guidance but preserves the
+enabled reflection schema and post-settlement ingest. The budget remains
+unchanged; degraded recall never grants authority or implies a provider write.
+
 Config v1 declares one `project_provider_binding`, its exact per-corpus scope
 references, the project corpus set, module-owned surfaces, and an automation
 policy. A surface explicitly lists its compatible `corpus_ids`, selects one
@@ -172,8 +188,7 @@ existing record contracts. These `true` values show the new-enable default;
 an explicit `false` remains the supported per-hook opt-out. `configure-goal`
 preview now calls the provider
 preflight and reports `preflight_ready`, `preflight_incomplete`, or
-`unavailable`; it never reports a provider write as merely `planned`. Preview
-does not prove writability. Apply must complete the fresh canary write and
+`unavailable`; it never reports a provider write as merely `planned`. Apply must complete the fresh canary write and
 exact readback before it commits the registry binding. `experiment-status`
 reports the v1 config schema,
 corpus/surface counts, recall-profile ids, and the effective automatic policy
@@ -267,12 +282,23 @@ The production Codex CLI Turn performs recall after quota/Todo admission and
 accepts outcome ingestion only after independent validation, durable writeback,
 and quota settlement. A reflection must use `turn_reward_memory_reflection_v1`
 and include an exact configured surface, a distinct research/simulation/real/
-engineering source kind, and opaque evidence refs; an ordinary Turn summary is
-not evidence. It also carries `procedural_experience_contract_v0` with
+engineering source kind, and opaque evidence refs; It also carries `procedural_experience_contract_v0` with
 applicability, observed outcome, attribution, complete future behavior,
 limitations, and the same evidence refs. Legacy v0 reflections remain
-audit-only and cannot become durable memory. Ambiguous provider commits and
-unverified readbacks remain in a
+audit-only and cannot become durable memory. When the same Turn delivers recall
+guidance and enables ingest, reflection instructions ask the agent to compare new independent evidence with
+comparable procedural experience guidance. Without a comparable experience, the
+ordinary eligibility rule remains in force. Mere confirmation leaves the
+reflection empty; a candidate is
+produced only for distinct reusable applicability or a material change to its
+trigger, action, validation, stop condition, or limitations. Distinct
+applicability remains separate rather than being blended. Reflection never
+merges, updates, retires, or supersedes a provider record; configured lifecycle
+owners retain those decisions. This qualifies instruction delivery, not model
+compliance or a measured deduplication rate. The joint instructions fit the
+existing 64 KiB turn-context envelope; recall-only and ingest-only keep their
+ordinary instructions. Ambiguous
+provider commits and unverified readbacks remain in a
 mode-0600 Goal+Agent+event sidecar. The next executing Turn retries the same
 deterministic event before recall, so the provider can deduplicate it and LoopX
 can require exact readback. Explicit disable suppresses reconciliation and all
@@ -290,8 +316,7 @@ exit is insufficient. The later matching `quota spend-slot --execute` finalizes
 ingestion only after exact refresh/writeback and spend readback. A missing,
 failed, or non-attesting validation remains `awaiting_evidence_validation` and
 makes zero provider calls. The App does not need a separate manual
-`reward-memory ingest-event` command for this lifecycle. DSH currently carries
-recall context but does not claim this post-settlement ingest boundary.
+`reward-memory ingest-event` command for this lifecycle.
 
 App candidates have a stable key for the exact Goal, Agent, Todo, Turn and
 settlement effect. If the first refresh omitted a reflection or its stage
@@ -460,8 +485,7 @@ chat, transcripts, tool logs, credentials, and local paths are not
 reward-memory records.
 
 `loopx reward-memory route-check` is a deterministic regression fixture for
-obvious safety/escalation conditions such as PR #3237. It is not the live Issue
-Fix decision engine and does not replace model reasoning.
+obvious safety/escalation conditions such as PR #3237.
 
 ## Architecture layers and reuse
 
@@ -553,8 +577,7 @@ memory product layer. The configured experiment explicitly selects an adapter.
 `scoped_feedback` accepts a generic `scoped_feedback_reward_memory_event_v0`
 for any module-qualified surface. Both adapters only map strict compact fields
 into the same `reward_memory_candidate_v0`; neither owns a second lifecycle,
-store, scheduler, recall path, or semantic router. LoopX neither retains raw
-feedback bodies nor uses keywords to decide which feedback deserves memory.
+store, scheduler, recall path, or semantic router.
 The model or calling module first distils an event containing only a source
 reference, verified actor/role, exact workspace/project/surface/revision,
 compact summary, reasoning, and current-artifact evidence.
@@ -631,8 +654,7 @@ against OpenViking's current public architecture and code:
   authority scope are independently verified. The content may be inferred; the
   authority may not.
 - Account, user, peer, session, and repository-revision boundaries remain part
-  of scope and privacy. A peer label does not grant cross-user or cross-agent
-  authority.
+  of scope and privacy.
 
 Provider health is intentionally decomposed into `corpus_present`,
 `index_present`, `retrieval_query_succeeded`, `result_readback_verified`, and
@@ -764,7 +786,7 @@ and current-artifact verification, never raw provider content.
 For `revision_bound` corpora, each returned envelope must also carry a
 `scope.revision_ref` equal to the corpus's `freshness.source_revision`, matching
 the existing activation and request guards. Missing or mismatched record
-versions count as `scope_filtered`; recall neither rewrites nor retires them.
+versions count as `scope_filtered`.
 This check does not apply to other freshness modes or historical experience
 evidence refs. `source_truth_bound` experience remains eligible across artifact
 versions, subject to its existing source, quality and application checks. A
@@ -795,8 +817,7 @@ never infers an actor identity from an arbitrary target URI.
 
 The PR-review caller also consumes [Git-owned review experiences](../pr_review_queue/experiences/README.md)
 through a read-only native source adapter. Qualified Agent enablement, automatic
-recall and an explicit `pull_request_review.review` surface are required; another
-module's route does not enable it. Existing corpus/experience qualification and
+recall and an explicit `pull_request_review.review` surface are required; Existing corpus/experience qualification and
 the TypeScript decision owner bind context delivery to the current exact head.
 This adds advisory repository context for that opted-in caller, with no provider
 write, new setting, semantic-adoption claim or utility score. The public #5944

@@ -13,6 +13,7 @@ from ..control_plane.runtime.status_projection_cache import (
     cached_goal_run_index_is_current,
     load_status_projection_cache,
     resolve_status_projection_cache_runtime_root,
+    status_projection_cache_metadata,
     write_status_projection_cache,
 )
 from ..control_plane.scheduler.execution_context import (
@@ -54,7 +55,6 @@ QUOTA_SCHEDULER_FOLLOWUP_COMMANDS = frozenset(
 @dataclass(frozen=True, slots=True)
 class QuotaCommandContext:
     runtime_root: Path
-    scan_roots: list[Path]
     status_limit: int
     status_goal_id: str | None
     status_payload: dict[str, object]
@@ -75,10 +75,11 @@ def _scheduler_execution_context_from_args(
     )
     codex_app = bool(getattr(args, "codex_app", False))
     trae_app = bool(getattr(args, "trae_app", False))
-    app_alias_count = int(codex_app) + int(trae_app)
+    antigravity_app = bool(getattr(args, "antigravity_app", False))
+    app_alias_count = int(codex_app) + int(trae_app) + int(antigravity_app)
     if app_alias_count > 1:
         raise QuotaCommandValidationError(
-            "--codex-app and --trae_app are mutually exclusive"
+            "--codex-app, --trae_app, and --antigravity_app are mutually exclusive"
         )
     if app_alias_count and (args.runtime_profile or any(explicit_scheduler_fields)):
         raise QuotaCommandValidationError(
@@ -95,6 +96,8 @@ def _scheduler_execution_context_from_args(
         if codex_app
         else SchedulerRuntimeProfile.TRAE_APP.value
         if trae_app
+        else SchedulerRuntimeProfile.ANTIGRAVITY_APP.value
+        if antigravity_app
         else args.runtime_profile
     )
     if runtime_profile:
@@ -201,10 +204,16 @@ def validate_quota_command_context_request(
         legacy_codex_rrule
         and resolved_scheduler_context.ok
         and resolved_scheduler_context.context is not None
-        and resolved_scheduler_context.context.host_surface is HostSurface.TRAE_APP
+        and resolved_scheduler_context.context.host_surface
+        in {HostSurface.TRAE_APP, HostSurface.ANTIGRAVITY_APP}
     ):
+        app_label = (
+            "Trae App"
+            if resolved_scheduler_context.context.host_surface is HostSurface.TRAE_APP
+            else "Antigravity App"
+        )
         raise QuotaCommandValidationError(
-            "Trae App uses --app-automation-current-rrule, not the Codex compatibility alias"
+            f"{app_label} uses --app-automation-current-rrule, not the Codex compatibility alias"
         )
     args.app_automation_current_rrule = neutral_rrule or legacy_codex_rrule or None
     if command in QUOTA_SCHEDULER_FOLLOWUP_COMMANDS:
@@ -226,16 +235,23 @@ def validate_quota_command_context_request(
         ).strip()
         default_state_key = (
             APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
-            if selected_surface == HostSurface.TRAE_APP.value
+            if selected_surface
+            in {HostSurface.TRAE_APP.value, HostSurface.ANTIGRAVITY_APP.value}
             else None
         )
         if (
-            selected_surface == HostSurface.TRAE_APP.value
+            selected_surface
+            in {HostSurface.TRAE_APP.value, HostSurface.ANTIGRAVITY_APP.value}
             and supplied_state_key
             and supplied_state_key != APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
         ):
+            app_label = (
+                "Trae App"
+                if selected_surface == HostSurface.TRAE_APP.value
+                else "Antigravity App"
+            )
             raise QuotaCommandValidationError(
-                "Trae App scheduler follow-up requires the app_automation state key"
+                f"{app_label} scheduler follow-up requires the app_automation state key"
             )
         args.state_key = supplied_state_key or default_state_key
     validate_quota_command_request(args)
@@ -276,9 +292,6 @@ def prepare_quota_command_context(
     if begin_turn:
         heartbeat_turn_id = mint_turn_instance_id(prefix="guided-start")
 
-    scan_roots = [Path(item).expanduser() for item in args.scan_path]
-    if not scan_roots:
-        scan_roots = [Path(args.scan_root).expanduser()]
     try:
         requested_limit = int(getattr(args, "limit", 0))
     except (TypeError, ValueError):
@@ -312,13 +325,13 @@ def prepare_quota_command_context(
         status_payload, cache_metadata = load_status_projection_cache(
             registry_path=registry_path,
             runtime_root=runtime_root,
-            scan_roots=scan_roots,
             limit=status_limit,
             include_task_graph=False,
             goal_id=status_goal_id,
             max_age_seconds=projection_cache_ttl_seconds,
             available_capabilities=args.available_capabilities,
             agent_lane_id=args.agent_id,
+            include_presentation_projections=False,
         )
         if (
             status_payload is not None
@@ -345,31 +358,59 @@ def prepare_quota_command_context(
         status_payload = collector(
             registry_path=registry_path,
             runtime_root_override=runtime_root_arg,
-            scan_roots=scan_roots,
             limit=status_limit,
             goal_id=status_goal_id,
             available_capabilities=args.available_capabilities,
             agent_lane_id=args.agent_id,
+            include_presentation_projections=False,
+            # A scheduler ACK/failure return writes cadence, not settlement
+            # facts. One damaged audit row must not fail the whole status read
+            # before the tolerant native fence can answer it.
+            tolerate_malformed_settlement_history=(
+                command in QUOTA_SCHEDULER_FOLLOWUP_COMMANDS
+            ),
         )
-        if bool(getattr(args, "write_projection_cache", False)):
-            cache_metadata = write_status_projection_cache(
-                registry_path=registry_path,
-                runtime_root=runtime_root,
-                scan_roots=scan_roots,
-                limit=status_limit,
-                include_task_graph=False,
-                goal_id=status_goal_id,
-                payload=status_payload,
-                max_age_seconds=projection_cache_ttl_seconds,
-                available_capabilities=args.available_capabilities,
-                agent_lane_id=args.agent_id,
-            )
+        preview = command == "should-run" and getattr(args, "dry_run", False)
+        if not preview and bool(getattr(args, "write_projection_cache", False)):
+            if command in QUOTA_SCHEDULER_FOLLOWUP_COMMANDS:
+                # The follow-up collector tolerates malformed history so a
+                # valid scheduler return can still be recorded. That partial
+                # view must never become the cache consumed by strict status
+                # readers under the same key.
+                cache_metadata = status_projection_cache_metadata(
+                    registry_path=registry_path,
+                    runtime_root=runtime_root,
+                    limit=status_limit,
+                    include_task_graph=False,
+                    goal_id=status_goal_id,
+                    max_age_seconds=projection_cache_ttl_seconds,
+                    available_capabilities=args.available_capabilities,
+                    agent_lane_id=args.agent_id,
+                    include_presentation_projections=False,
+                )
+                cache_metadata.update({
+                    "hit": False,
+                    "written": False,
+                    "skipped_reason": "tolerant_scheduler_followup_view",
+                })
+            else:
+                cache_metadata = write_status_projection_cache(
+                    registry_path=registry_path,
+                    runtime_root=runtime_root,
+                    limit=status_limit,
+                    include_task_graph=False,
+                    goal_id=status_goal_id,
+                    payload=status_payload,
+                    max_age_seconds=projection_cache_ttl_seconds,
+                    available_capabilities=args.available_capabilities,
+                    agent_lane_id=args.agent_id,
+                    include_presentation_projections=False,
+                )
     elif isinstance(status_payload.get("projection_cache"), dict):
         cache_metadata = dict(status_payload["projection_cache"])
 
     return QuotaCommandContext(
         runtime_root=runtime_root,
-        scan_roots=scan_roots,
         status_limit=status_limit,
         status_goal_id=status_goal_id,
         status_payload=status_payload,

@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 from ...agent_registry import registered_agent_ids_from_registry
-from ...state_refresh import now_local
 from .contract import (
     TODO_STATUS_OPEN,
     normalize_todo_id,
@@ -123,12 +122,11 @@ def add_goal_todo(
         if excluded_agents is not None
         else None
     )
-    updated_at = now_local()
     authoring_scope = plan_todo_creation_scope(
         role=role, goal_id=goal_id, registered_agents=registered_agents,
         unblocks_todo_id=normalize_todo_id(unblocks_todo_id),
         unblocks_todo_id_declared=bool(unblocks_todo_id),
-        monitor_metadata=monitor_metadata, generated_at=updated_at,
+        monitor_metadata=monitor_metadata,
         intent={
             "task_class": task_class, "status": status, "actor_agent_id": agent_id,
             "claimed_by": claimed_by, "bound_agent": bound_agent, "goal_bound": goal_bound,
@@ -188,7 +186,6 @@ def add_goal_todo(
             "validation_timeout_seconds": validation_timeout_seconds,
             **normalized_monitor_metadata,
             "note": note,
-            "updated_at": updated_at,
         },
         project=project,
         state_file=state_file,
@@ -303,6 +300,7 @@ def update_goal_todo(
     clear_claim: bool = False,
     claim_only: bool = False,
     claim_operation_id: str | None = None,
+    manage_execution: bool = False,
     update_operation_id: str | None = None,
     update_expected_provider_revision: str | None = None,
     update_expected_registry_sha256: str | None = None,
@@ -337,9 +335,6 @@ def update_goal_todo(
         raise ValueError(
             "todo update accepts either resume_when or clear_resume_when, not both"
         )
-    if claim_operation_id is not None:
-        if not claim_only:
-            raise ValueError("claim_operation_id is supported only by todo claim")
     if task_lease_expected_version is not None and task_lease_idempotency_key is None:
         raise ValueError(
             "--task-lease-expected-version requires --task-lease-idempotency-key"
@@ -379,6 +374,7 @@ def update_goal_todo(
             actor_agent_id=agent_id,
             dry_run=dry_run,
             operation_id=claim_operation_id,
+            manage_execution=manage_execution,
             task_lease_idempotency_key=task_lease_idempotency_key,
             task_lease_expected_version=task_lease_expected_version,
             project=project,
@@ -423,6 +419,7 @@ def update_goal_todo(
             actor_agent_id=agent_id, role=role, text=text, note=note, dry_run=dry_run,
             project=project, state_file=state_file,
             operation_id=update_operation_id,
+            claim_operation_id=claim_operation_id,
             authority_reason=authority_reason,
             expected_provider_revision=update_expected_provider_revision,
             expected_registry_sha256=update_expected_registry_sha256,
@@ -449,10 +446,13 @@ def complete_goal_todo(
     completion_turn_key: str | None = None,
     completion_identity_source: str | None = None,
     terminal_review_basis: Mapping[str, Any] | None = None,
+    expected_todo_text_sha256: str | None = None,
+    require_captured_todo_text: bool = False,
     completion_delivery_workspace: Mapping[str, Any] | None = None,
     completion_validation_workspace_path: Path | None = None,
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
+    claim_operation_id: str | None = None,
     note: str | None = None,
     no_followup: bool = False,
     successor_todo_ids: list[str] | None = None,
@@ -500,6 +500,7 @@ def supersede_goal_todo(
     authority_reason: str | None = None,
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
+    claim_operation_id: str | None = None,
     project: Path | None = None,
     state_file: Path | None = None,
     dry_run: bool = False,

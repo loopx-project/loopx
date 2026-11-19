@@ -56,6 +56,9 @@ def test_host_materialization_installs_generated_loopx_entry_skill(
     assert "The CLI, not the model, owns parsing" in skill_text
     assert "Never split or recompose" in skill_text
     assert "never infer a route from issue/PR wording or URLs" in skill_text
+    assert "[--new-peer]" in skill_text
+    assert "explicitly asks for a fresh, new" in skill_text
+    assert "Do not infer a fresh identity" in skill_text
     assert "verified active LoopX Goal/Agent binding" in skill_text
     assert "Do not call `start-goal` for an ordinary phase" in skill_text
     assert "typed Todo/writeback path for the bound agent" in skill_text
@@ -1363,3 +1366,25 @@ def test_marker_retires_after_user_edits_the_entry_and_dry_run_writes_nothing(
     )
     assert _row(payload, "cursor_mcp_server")["status"] == "skipped_user_owned_mcp_entry"
     assert json.loads(config.read_text(encoding="utf-8"))["mcpServers"]["loopx"] == entry
+
+
+def test_antigravity_resident_guidance_is_isolated_to_antigravity_surfaces(tmp_path: Path) -> None:
+    ark_skills = tmp_path / "ark-skills"
+    materialize_loopx_entry_skill(
+        skills_dir=ark_skills,
+        execute=True,
+        host_surface="ark-managed-agent",
+    )
+    ark_text = (ark_skills / "loopx" / "SKILL.md").read_text(encoding="utf-8")
+    assert "Antigravity App fixed resident session" not in ark_text
+    assert "--with-agy-hooks" not in ark_text
+
+    codex_home = tmp_path / "codex"
+    install_slash_commands(
+        execute=True,
+        surfaces=["codex"],
+        codex_home=str(codex_home),
+    )
+    codex_text = (codex_home / "skills" / "loopx" / "SKILL.md").read_text(encoding="utf-8")
+    assert "Antigravity App fixed resident session" not in codex_text
+    assert "--with-agy-hooks" not in codex_text

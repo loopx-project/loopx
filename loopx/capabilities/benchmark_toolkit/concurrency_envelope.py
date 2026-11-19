@@ -640,6 +640,45 @@ def admit_benchmark_case(
         return result
 
 
+def _release_preview(
+    current: Mapping[str, Any] | None, *, compact_run_id: str, timestamp: str,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    if current is None:
+        return (
+            {
+                "ok": True,
+                "released": False,
+                "idempotent": True,
+                "write_performed": False,
+                "reason_codes": ["concurrency_envelope_not_configured"],
+                "run_id": compact_run_id,
+            },
+            None,
+        )
+    normalized = normalize_benchmark_concurrency_envelope(current)
+    remaining = [
+        item
+        for item in normalized["active_runs"]
+        if item["run_id"] != compact_run_id
+    ]
+    released = len(remaining) != len(normalized["active_runs"])
+    envelope = normalize_benchmark_concurrency_envelope(
+        {**normalized, "updated_at": timestamp, "active_runs": remaining}
+    )
+    return (
+        {
+            "ok": True,
+            "released": released,
+            "idempotent": not released,
+            "write_performed": False,
+            "reason_codes": [] if released else ["run_not_active"],
+            "run_id": compact_run_id,
+            "status": build_benchmark_concurrency_status(envelope),
+        },
+        envelope if released else None,
+    )
+
+
 def release_benchmark_case(
     path: str | Path,
     *,
@@ -652,52 +691,20 @@ def release_benchmark_case(
     compact_run_id = _token(run_id, field="run_id")
     timestamp = _timestamp(released_at or _now_iso(), field="released_at")
 
-    def build(
-        current: Mapping[str, Any] | None,
-    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
-        if current is None:
-            return (
-                {
-                    "ok": True,
-                    "released": False,
-                    "idempotent": True,
-                    "write_performed": False,
-                    "reason_codes": ["concurrency_envelope_not_configured"],
-                    "run_id": compact_run_id,
-                },
-                None,
-            )
-        normalized = normalize_benchmark_concurrency_envelope(current)
-        remaining = [
-            item
-            for item in normalized["active_runs"]
-            if item["run_id"] != compact_run_id
-        ]
-        released = len(remaining) != len(normalized["active_runs"])
-        envelope = normalize_benchmark_concurrency_envelope(
-            {**normalized, "updated_at": timestamp, "active_runs": remaining}
-        )
-        return (
-            {
-                "ok": True,
-                "released": released,
-                "idempotent": not released,
-                "write_performed": False,
-                "reason_codes": [] if released else ["run_not_active"],
-                "run_id": compact_run_id,
-                "status": build_benchmark_concurrency_status(envelope),
-            },
-            envelope if released else None,
-        )
-
     if not execute:
-        result, _ = build(read_benchmark_concurrency_envelope(target))
+        result, _ = _release_preview(
+            read_benchmark_concurrency_envelope(target),
+            compact_run_id=compact_run_id, timestamp=timestamp,
+        )
         result["dry_run"] = True
         return result
     with exclusive_file_lock(
         target, agent_id=agent_id, operation="benchmark_concurrency_release"
     ):
-        result, envelope = build(read_benchmark_concurrency_envelope(target))
+        result, envelope = _release_preview(
+            read_benchmark_concurrency_envelope(target),
+            compact_run_id=compact_run_id, timestamp=timestamp,
+        )
         result["dry_run"] = False
         if envelope is not None:
             atomic_write_json(target, envelope)

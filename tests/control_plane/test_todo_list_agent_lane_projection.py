@@ -32,7 +32,7 @@ def _todo_line(
     ]
 
 
-def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
+def _write_fixture(tmp_path: Path, *, initialize: bool = True) -> tuple[Path, Path]:
     project = tmp_path / "project"
     runtime = tmp_path / "runtime"
     state_relative = Path(".local/goals") / GOAL_ID / "ACTIVE_GOAL_STATE.md"
@@ -195,6 +195,9 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
         + "\n",
         encoding="utf-8",
     )
+    from canonical_authority_fixture import initialize_canonical_source_fixture
+    if initialize:
+        initialize_canonical_source_fixture(runtime, GOAL_ID, state_path=state_file, provider="sqlite")
     return registry_path, state_file
 
 
@@ -264,6 +267,12 @@ def test_agent_lane_retains_bounded_blocked_advancement_reason(
     with state_file.open("a", encoding="utf-8") as stream:
         stream.write("\n".join(blocked) + "\n")
 
+    from canonical_authority_fixture import advance_canonical_fixture_authority, read_fixture_todos
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    runtime = Path(json.loads(registry_path.read_text(encoding="utf-8"))["common_runtime_root"])
+    advance_canonical_fixture_authority(runtime, GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=read_fixture_todos(state_file),
+            handoff_mode="soft_claim"), operation_id="fixture-blocked-lane-added")
     payload = list_goal_todos(
         registry_path=registry_path,
         goal_id=GOAL_ID,

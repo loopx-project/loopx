@@ -24,6 +24,7 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 from loopx.control_plane.effect_runtime import effect_runtime_result
+from benchmark.runtime.scheduler import read_phase_deadline
 from benchmark.runtime.worker import PHASE_WORK_RESERVE_SECONDS
 
 
@@ -90,7 +91,7 @@ def _bound_bank(folder: Path, reference: dict) -> dict:
     witnessed = _physical(folder / "manifest.sha256").read_text()
     packet = json.loads(raw)
     if (digest != reference["manifest_sha256"] or witnessed != digest or
-            packet.get("schema_version") != "sforge_judge_checkpoint_v1" or
+            packet.get("schema_version") not in {"sforge_judge_checkpoint_v1", "sforge_judge_checkpoint_v2"} or
             any(packet.get(key) != reference[key] for key in (
                 "task_id", "source_run_id", "opportunity", "incumbent"))):
         raise ValueError("Native bank bytes differ from the captured reference")
@@ -108,17 +109,14 @@ def _bound_bank(folder: Path, reference: dict) -> dict:
 
 
 def _phase_budget(raw: bytes, native: dict) -> dict:
-    """Adapt the existing SForge integer phase clock, not quota authority.
+    """Preserve the admitted Host phase clock without granting new authority.
 
     Native capture owns this time. The declared physical Host file owns its
     deadline. Neither fact qualifies complete Host/research-state capture.
     """
-    if len(raw) > 64 or not re.fullmatch(rb"[0-9]+\n?", raw):
-        raise ValueError("Host phase deadline must be an integer epoch file")
-    epoch = int(raw)
+    epoch = read_phase_deadline(raw)
     captured = native.get("captured_at_epoch")
-    if (not 0 < epoch < 2 ** 53 or type(captured) not in (int, float) or
-            not math.isfinite(captured) or captured <= 0):
+    if type(captured) not in (int, float) or not math.isfinite(captured) or captured <= 0:
         raise ValueError("Host/native phase clocks cannot be represented exactly")
     return {"component_id": "host_phase_deadline", "source_deadline_epoch": epoch,
             "captured_at_epoch": captured, "remaining_seconds": max(0, epoch - captured)}
@@ -174,7 +172,13 @@ def _activation_epoch(path: Path, binding: dict, remaining: float, recover: bool
 
 
 def _activation_result(result: dict, body: dict) -> None:
-    if (set(result) != {*body, "token"} or any(result.get(k) != v for k, v in body.items())
+    relay = result.get("feedback_relay_id")
+    expected = {*body, "token"}
+    if "feedback_relay_id" in result:
+        expected.add("feedback_relay_id")
+        if not isinstance(relay, str) or not relay:
+            raise ValueError("Native activation feedback relay is invalid")
+    if (set(result) != expected or any(result.get(k) != v for k, v in body.items())
             or not isinstance(result.get("token"), str) or not result["token"]):
         raise ValueError("Native activation result differs from the original request")
 
@@ -272,24 +276,27 @@ def _bank_import_lock(target: Path, timeout: float):
 
 def restore(controller_file: Path, *, root: Path, expected_sha256: str, run_id: str,
             timeout: float = 30, phase_deadline_file: Path | None = None, recover: bool = False,
-            phase_extension_seconds: int = 0) -> dict:
+            phase_extension_seconds: int = 0, phase_remaining_cap_seconds: int | None = None) -> dict:
     from loopx.hosts.checkpoint_retention import checkpoint_bank_use
     started = monotonic()
     with checkpoint_bank_use(root):
         return _restore(controller_file, root=root, expected_sha256=expected_sha256, run_id=run_id,
                         timeout=timeout - (monotonic() - started), phase_deadline_file=phase_deadline_file,
-                        recover=recover, phase_extension_seconds=phase_extension_seconds)
+                        recover=recover, phase_extension_seconds=phase_extension_seconds,
+                        phase_remaining_cap_seconds=phase_remaining_cap_seconds)
 
 
 def _restore(controller_file: Path, *, root: Path, expected_sha256: str, run_id: str,
              timeout: float, phase_deadline_file: Path | None, recover: bool,
-             phase_extension_seconds: int) -> dict:
+             phase_extension_seconds: int, phase_remaining_cap_seconds: int | None) -> dict:
     """Import verified inert bytes, then ask fresh native authority to admit them.
 
     An explicitly captured Host clock preserves its remaining phase duration.
     An operator can explicitly grant additional continuation time for a new
     study. The grant is bound to the first activation, never to recovery time;
     it changes no native cooldown, round limit, history or scoring rule.
+    An explicit remaining cap can only shorten that allowance; it does not
+    establish that an older checkpoint contains the latest research state.
     Does not restore a model, LoopX Goal or effect authority.
     An uncertain response is not replayed under a different run or capture id.
     """
@@ -297,6 +304,11 @@ def _restore(controller_file: Path, *, root: Path, expected_sha256: str, run_id:
         raise ValueError("Continuation phase extension must be a non-negative integer number of seconds")
     if phase_extension_seconds and phase_deadline_file is None:
         raise ValueError("Continuation phase extension requires the captured Host phase clock")
+    if phase_remaining_cap_seconds is not None:
+        if type(phase_remaining_cap_seconds) is not int or not 0 <= phase_remaining_cap_seconds < 2 ** 53:
+            raise ValueError("Continuation phase cap must be a non-negative integer number of seconds")
+        if phase_deadline_file is None:
+            raise ValueError("Continuation phase cap requires the captured Host phase clock")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", run_id):
         raise ValueError("Continuation requires one explicit native run component")
     controller = _controller(controller_file)
@@ -321,7 +333,10 @@ def _restore(controller_file: Path, *, root: Path, expected_sha256: str, run_id:
         phase = _phase_budget((root / "components/host_phase_deadline").read_bytes(), native)
         if manifest["point_metadata"].get("host_phase_budget") != phase:
             raise ValueError("Host phase metadata differs from sealed deadline/native clock")
-        if phase["remaining_seconds"] + phase_extension_seconds <= PHASE_WORK_RESERVE_SECONDS:
+        remaining = phase["remaining_seconds"] + phase_extension_seconds
+        if phase_remaining_cap_seconds is not None:
+            remaining = min(remaining, phase_remaining_cap_seconds)
+        if remaining <= PHASE_WORK_RESERVE_SECONDS:
             raise ValueError("Captured Host phase has no work allowance beyond its existing reserve")
         phase_path = _phase_destination(phase_deadline_file, root=root, bank=bank, recover=recover)
     target = bank / reference["checkpoint_id"]
@@ -376,7 +391,9 @@ def _restore(controller_file: Path, *, root: Path, expected_sha256: str, run_id:
                 "bank_root": str(bank), "phase_path": str(phase_path),
                 # Keep pre-existing zero-extension receipt bytes recoverable.
                 **({"phase_extension_seconds": phase_extension_seconds} if phase_extension_seconds else {}),
-            }, phase["remaining_seconds"] + phase_extension_seconds, recover)
+                **({"phase_remaining_cap_seconds": phase_remaining_cap_seconds}
+                   if phase_remaining_cap_seconds is not None else {}),
+            }, remaining, recover)
             if original_phase not in (b"", f"{phase_epoch}\n".encode()):
                 raise ValueError("Host phase bytes differ from original activation")
         native_attempted = True
@@ -438,6 +455,8 @@ def main(argv=None) -> None:
                                 help="Read the exact original native result and retain its original Host deadline")
     restore_parser.add_argument("--phase-extension-seconds", type=int, default=0,
                                 help="Explicit operator-authorized extra time for a new continuation study; recovery never refills it")
+    restore_parser.add_argument("--phase-remaining-cap-seconds", type=int,
+                                help="Only reduce the captured/extended remaining allowance; bound to the first activation")
     args = parser.parse_args(argv)
     if args.command in {"capture", "capture-worker"}:
         source_token = _physical(args.token_file).read_text().strip()
@@ -468,7 +487,8 @@ def main(argv=None) -> None:
             result = restore(args.controller_file, root=args.root,
                 expected_sha256=args.expected_sha256, run_id=args.run_id,
                 phase_deadline_file=args.phase_deadline_file, recover=args.recover,
-                phase_extension_seconds=args.phase_extension_seconds)
+                phase_extension_seconds=args.phase_extension_seconds,
+                phase_remaining_cap_seconds=args.phase_remaining_cap_seconds)
             if prior_result is not None and prior_result != result:
                 raise ValueError("Existing private result differs from original native activation")
             result_file.seek(0)

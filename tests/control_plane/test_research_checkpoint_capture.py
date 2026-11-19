@@ -7,7 +7,10 @@ import pytest
 import time
 
 import test_quota_settlement_cli as cli
-from canonical_authority_fixture import isolate_sqlite_runtime
+from canonical_authority_fixture import (
+    advance_canonical_fixture_authority, isolate_sqlite_runtime, read_fixture_todos,
+)
+from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 
 from benchmark.runtime.checkpoint import capture_after_wake, capture_before_replan
 from loopx.control_plane.effect_runtime import effect_runtime_result
@@ -26,6 +29,165 @@ def test_feature_off_and_failed_wakes_do_not_read_request_or_settlement(monkeypa
     capture_after_wake({"LOOPX_CHECKPOINT_REQUEST": "not-readable"}, failed)
     assert failed["ok"] is False
     assert failed["checkpoint"]["captured"] is False
+
+
+@pytest.mark.skipif(os.name != "posix", reason="native benchmark uses the POSIX source launcher")
+@pytest.mark.parametrize(("changed_reference", "replan"), [(False, False), (True, False), (False, True)])
+def test_native_preflight_uses_the_committed_capture(tmp_path, monkeypatch, changed_reference, replan):
+    import shlex
+    import subprocess
+    import sys
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = cli._write_fixture(tmp_path)
+    if replan:
+        cli._configure_autonomous_replan_fixture(project, runtime, registry)
+    cli._initialize_fixture_authority(project, runtime, provider="sqlite")
+    cli_path = Path(__file__).resolve().parents[2] / "scripts/loopx"
+    turn = "wake-prepared-native-context"
+    logs = tmp_path / "logs"
+    wakes = logs / "wakes"
+    wake = wakes / turn
+    wake.mkdir(parents=True)
+    context = tmp_path / "context"
+    context.mkdir(mode=0o700)
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps({"trigger": "fresh_replan", "destination": str(logs / "checkpoints"),
+        "components": [{"id": "fixture", "source_path": str(project)}], "point_metadata": {}}))
+    env = {**os.environ, "LOOPX_PROJECT": str(project), "LOOPX_CLI": str(cli_path),
+        "LOOPX_PYTHON": sys.executable, "LOOPX_REGISTRY": str(registry), "LOOPX_RUNTIME_ROOT": str(runtime),
+        "LOOPX_GOAL_ID": cli.GOAL_ID, "LOOPX_AGENT_ID": cli.AGENT_ID, "LOOPX_WAKE_LOG_DIR": str(wakes),
+        "LOOPX_CHECKPOINT_REQUEST": str(request), "LOOPX_CONTEXT_DELIVERY": "on",
+        "LOOPX_CODEX_CONTEXT_DIR": str(context), "LOOPX_EXECUTION_MODE": "heartbeat"}
+    observed = []
+    actual_run = subprocess.run
+
+    def observe_guard(argv, **kwargs):
+        result = actual_run(argv, **kwargs)
+        if "should-run" in argv:
+            assert "--prepared-capture-reference" in argv and "--defer-context-presentation" in argv
+            response = json.loads(result.stdout)
+            observed.append(response)
+            if changed_reference:
+                return subprocess.CompletedProcess(argv, result.returncode,
+                    json.dumps({**response, "capture_sha256": "0" * 64}), result.stderr)
+        return result
+
+    monkeypatch.setattr("benchmark.runtime.checkpoint.subprocess.run", observe_guard)
+    receipt = {"turn_id": turn, "mode": "heartbeat", "stage": "execute"}
+    if changed_reference:
+        with pytest.raises(ValueError, match="prepared capture differs"):
+            capture_before_replan(env, receipt, "original work instructions")
+        assert not (wake / "checkpoint-start-guard.json").exists()
+    else:
+        body = capture_before_replan(env, receipt, "original work instructions")
+        command = shlex.split(next(line for line in body.splitlines() if " quota context-project " in line))
+        source = Path(command[command.index("--capture-file") + 1])
+        digest = command[command.index("--capture-sha256") + 1]
+        assert hashlib.sha256(source.read_bytes()).hexdigest() == digest
+        assert json.loads(source.read_bytes())["heartbeat_receipt"]["turn_instance_id"] == turn
+        assert source.name == "decision.json"
+        assert digest == observed[0]["capture_sha256"]
+        assert not list(wake.glob("checkpoint-start-*/checkpoint-start-view.json"))
+        if replan:
+            from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+
+            session = "checkpoint-native-session"
+            codex_context_hook(str(context), dict(session_id=session, cwd=str(project),
+                hook_event_name="SessionStart", source="startup"))
+            env["CODEX_THREAD_ID"] = session
+            selected = actual_run(command, cwd=project, env=env, capture_output=True, text=True, check=True)
+            page = json.loads(selected.stdout)
+            assert page["ok"] and page["eof"], page
+            actions = {row["pointer"]: row["value"] for row in json.loads(page["content"])["selections"]}
+            review = actual_run(shlex.split(actions["/replan_action_packet/review"]),
+                                cwd=project, env=env, capture_output=True, text=True, check=True)
+            review_packet = json.loads(review.stdout)
+            original_packet = json.loads(source.read_bytes())
+            assert review_packet["obligation_id"] == original_packet["replan_action_packet"]["obligation_id"]
+            assert hashlib.sha256(source.read_bytes()).hexdigest() == digest
+        assert body.endswith("original work instructions")
+    assert len(observed) == 1 and "interaction_contract" not in observed[0]
+    assert cli._heartbeat_receipt_count(runtime, turn) == 1
+
+
+@pytest.mark.skipif(os.name != "posix", reason="benchmark uses the POSIX source launcher")
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("complete", [False, True])
+def test_off_preflight_pages_the_complete_saved_view(tmp_path, monkeypatch, provider, complete):
+    import shlex
+    import subprocess
+    import sys
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = cli._write_fixture(tmp_path)
+    state = project / f".codex/goals/{cli.GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    cli._initialize_fixture_authority(project, runtime, provider=provider)
+    cli_path = Path(__file__).resolve().parents[2] / "scripts/loopx"
+    turn = "wake-bounded-off-context"
+    wake = tmp_path / "wakes" / turn
+    wake.mkdir(parents=True)
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps({"trigger": "fresh_replan", "destination": str(tmp_path / "checkpoints"),
+        "components": [{"id": "fixture", "source_path": str(state)}], "point_metadata": {}}))
+    env = {**os.environ, "LOOPX_PROJECT": str(project), "LOOPX_CLI": str(cli_path),
+        "LOOPX_PYTHON": sys.executable, "LOOPX_REGISTRY": str(registry), "LOOPX_RUNTIME_ROOT": str(runtime),
+        "LOOPX_GOAL_ID": cli.GOAL_ID, "LOOPX_AGENT_ID": cli.AGENT_ID, "LOOPX_WAKE_LOG_DIR": str(wake.parent),
+        "LOOPX_CHECKPOINT_REQUEST": str(request), "LOOPX_CONTEXT_DELIVERY": "off",
+        "LOOPX_COMPLETE_TURN": str(int(complete))}
+
+    receipt = {"turn_id": turn, "mode": "heartbeat", "stage": "execute"}
+    def start_read():
+        body = capture_before_replan(env, receipt, "original work")
+        return next(line for line in body.splitlines() if " quota context-read " in line)
+
+    def capture_file(command):
+        argv = shlex.split(command)
+        assert argv[:3] == [str(cli_path), "--cli-bin", str(cli_path)]
+        assert "should-run" not in argv and "context-project" not in argv
+        return Path(argv[argv.index("--capture-file") + 1])
+
+    def read_page(command):
+        result = subprocess.run(shlex.split(command), cwd=project, env=env, capture_output=True, timeout=30)
+        assert len(result.stdout) <= 8000
+        assert result.returncode == 0, result.stdout
+        return json.loads(result.stdout)
+
+    def read_all(page, expected):
+        digest = hashlib.sha256(expected).hexdigest()
+        received = bytearray()
+        pages = 0
+        while True:
+            assert page["ok"] and page["offset"] == len(received) and page["sha256"] == digest
+            received.extend(page["content"].encode("utf-8"))
+            pages += 1
+            assert len(received) == (page["total_bytes"] if page["eof"] else page["next_offset"])
+            if page["eof"]:
+                break
+            page = read_page(page["next_command"])
+        assert pages > 1 and received == expected
+        assert json.loads(received)["heartbeat_receipt"]["turn_instance_id"] == turn
+
+    initial = start_read()
+    original_view = capture_file(initial)
+    original_bytes = original_view.read_bytes()
+    first_page = read_page(initial)
+    assert first_page["next_command"]
+    with state.open("a", encoding="utf-8") as state_file:
+        state_file.write("\n## New checkpoint context\nRead the later source independently.\n")
+    resumed = start_read()
+    resumed_view = capture_file(resumed)
+    resumed_bytes = resumed_view.read_bytes()
+    assert resumed_bytes != original_bytes
+    read_all(first_page, original_bytes)
+    assert original_view != resumed_view and original_view.read_bytes() == original_bytes
+    assert original_view.is_relative_to(wake) and resumed_view.is_relative_to(wake)
+    read_all(read_page(resumed), resumed_bytes)
+    resumed_view.write_bytes(resumed_bytes + b" ")
+    invalid = subprocess.run(shlex.split(resumed), cwd=project, env=env, capture_output=True, timeout=30)
+    assert invalid.returncode != 0 and not json.loads(invalid.stdout)["ok"]
+    assert cli._heartbeat_receipt_count(runtime, turn) == 1
+    assert cli._spend_run_count(runtime) == 0
 
 
 def test_closed_budget_never_reads_the_request_or_replays_work(monkeypatch):
@@ -57,6 +219,7 @@ def test_worker_keeps_work_running_when_staged_capture_declaration_fails(
     project, runtime, registry = cli._write_fixture(tmp_path)
     if trigger:
         cli._configure_autonomous_replan_fixture(project, runtime, registry)
+    cli._initialize_fixture_authority(project, runtime, provider="sqlite")
     skills = tmp_path / "skills"
     skills.mkdir()
     binary = tmp_path / "codex"
@@ -80,7 +243,15 @@ def test_worker_keeps_work_running_when_staged_capture_declaration_fails(
         "MODEL_NAME": "fixture", "REASONING_EFFORT": "high", "OPENAI_BASE_URL": "http://localhost:8123/v1",
         "OPENAI_API_KEY": "fixture-key", "LOOPX_RUNTIME_ROOT": str(runtime),
         "LOOPX_REGISTRY": str(registry), "LOOPX_GOAL_ID": cli.GOAL_ID, "LOOPX_AGENT_ID": cli.AGENT_ID}
-    monkeypatch.setattr("benchmark.runtime.worker.heartbeat_body", lambda *a, **kw: "original work contract")
+    from benchmark.runtime import worker
+    real_heartbeat_body = worker.heartbeat_body
+
+    def checked_heartbeat_body(*args, **kwargs):
+        # Keep the real admission owner; only the synthetic model text is fixed.
+        real_heartbeat_body(*args, **kwargs)
+        return "original work contract"
+
+    monkeypatch.setattr(worker, "heartbeat_body", checked_heartbeat_body)
     off = run_once(env)
     assert off["ok"] and "checkpoint" not in off
     (project / "host-input.txt").unlink()
@@ -130,11 +301,12 @@ def test_worker_keeps_work_running_when_staged_capture_declaration_fails(
 @pytest.mark.parametrize("opportunity,corrupt,collisions", [
     (False, False, False), (True, False, False), (True, True, False),
     (True, False, True), (True, True, True), ("empty", False, True),
+    ("nonfinite", False, False),
 ])
 def test_real_cli_settlement_capture_verification_and_inert_materialization(
         tmp_path, monkeypatch, opportunity, corrupt, collisions):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry = cli._write_fixture(tmp_path)
+    project, runtime, registry = cli._write_fixture(tmp_path, provider="sqlite")
     binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID, "--turn-instance-id", cli.TURN_ID)
     def run(*args):
         code, result = cli._run_cli(registry, runtime, *args)
@@ -151,6 +323,9 @@ def test_real_cli_settlement_capture_verification_and_inert_materialization(
         "round": "agent-1", "archive_sha256": hashlib.sha256(incumbent_bytes).hexdigest(), "archive_bytes": len(incumbent_bytes)}}
     if opportunity == "empty":
         opportunity_packet["native_incumbent"] = None
+    if opportunity == "nonfinite":
+        opportunity_packet["released_results"] = {"synthetic": {"report": {
+            "score": float("inf"), "metrics": {"nested": [float("nan"), float("-inf")]}}}}
     def export(env, *, timeout, incumbent_path):
         assert 0 < timeout <= 30
         observed.append(True)
@@ -210,7 +385,19 @@ def test_real_cli_settlement_capture_verification_and_inert_materialization(
     assert goal_state.read_bytes() == retained_goal
     if opportunity:
         mapping = json.loads((target / "checkpoint.json").read_text())["point_metadata"]["evaluation_opportunity"]
-        assert json.loads((target / "components" / mapping["component_id"]).read_text()) == opportunity_packet
+        retained_opportunity = (target / "components" / mapping["component_id"]).read_text()
+        if opportunity == "nonfinite":
+            import math
+            from benchmark.runtime import sforge_json
+            restored_opportunity = sforge_json.loads(retained_opportunity)
+            report = restored_opportunity["released_results"]["synthetic"]["report"]
+            assert report["score"] == float("inf")
+            assert math.isnan(report["metrics"]["nested"][0])
+            assert report["metrics"]["nested"][1] == float("-inf")
+            assert restored_opportunity["native_incumbent"] == opportunity_packet["native_incumbent"]
+            assert json.loads(retained_opportunity)["sforge_nonfinite_json"] == 1
+        else:
+            assert json.loads(retained_opportunity) == opportunity_packet
         if opportunity == "empty":
             assert mapping["incumbent_component_id"] is None
             assert not (wake / cli.TURN_ID / "checkpoint-incumbent.tar.gz").exists()
@@ -225,6 +412,7 @@ def test_real_cli_settlement_capture_verification_and_inert_materialization(
     assert restored["activation_performed"] is False
     assert (tmp_path / "inert/components/code").read_text() == "retained_candidate = 7\n"
     if opportunity:
+        assert (tmp_path / "inert/components" / mapping["component_id"]).read_text() == retained_opportunity
         if opportunity != "empty":
             assert (tmp_path / "inert/components" / mapping["incumbent_component_id"]).read_bytes() == incumbent_bytes
         for member in caller_components:
@@ -250,7 +438,7 @@ def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch,
     from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry = cli._write_fixture(tmp_path)
+    project, runtime, registry = cli._write_fixture(tmp_path, provider="sqlite")
     binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID, "--turn-instance-id", cli.TURN_ID)
     def run(*args):
         code, result = cli._run_cli(registry, runtime, *args, cwd=project)
@@ -318,9 +506,10 @@ def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch,
         if source_moves:
             assert not receipt["checkpoint"]["captured"], receipt
             assert not destination.exists()
-            expected_error = ("checkpoint source moved" if mutation_stage == "capture" else
-                              "profile changed" if source_moves == "binding" else "native")
-            assert expected_error in receipt["checkpoint"]["error"]
+            expected_clauses = (("checkpoint source moved",) if mutation_stage == "capture" else
+                                ("source session", "binding or profile moved", "before sealing")
+                                if source_moves == "binding" else ("native",))
+            assert all(clause in receipt["checkpoint"]["error"] for clause in expected_clauses)
         else:
             assert receipt["checkpoint"]["captured"], receipt
             manifest = json.loads((destination / "checkpoint.json").read_text())
@@ -401,8 +590,9 @@ def test_real_pre_replan_capture_is_before_decision_and_same_node_is_not_recaptu
     import sys
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry = cli._write_fixture(tmp_path)
-    binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID, "--turn-instance-id", cli.TURN_ID)
+    project, runtime, registry = cli._write_fixture(tmp_path, provider="sqlite")
+    source_turn_id = "wake-100-prior"
+    binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID, "--turn-instance-id", source_turn_id)
 
     def run(*args):
         code, result = cli._run_cli(registry, runtime, *args)
@@ -432,12 +622,19 @@ def test_real_pre_replan_capture_is_before_decision_and_same_node_is_not_recaptu
             f"  <!-- loopx:todo todo_id={cli.TODO_ID} status=open claimed_by={cli.AGENT_ID} -->\n"))
     # This helper supplies synthetic repeated observations; retain the real
     # source settlement history instead of replacing its authoritative readback.
+    advance_canonical_fixture_authority(
+        runtime, cli.GOAL_ID, build_todo_runtime_shadow_projection(
+            goal_id=cli.GOAL_ID, todos=read_fixture_todos(
+                project / f".codex/goals/{cli.GOAL_ID}/ACTIVE_GOAL_STATE.md"),
+            handoff_mode="soft_claim", leases=[],
+        ), operation_id="fixture-replan-source",
+    )
     index.write_bytes(original_settlement + index.read_bytes())
     logs = tmp_path / "logs"
     wakes = logs / "wakes"
-    prior = wakes / "wake-100-prior"
+    prior = wakes / source_turn_id
     prior.mkdir(parents=True)
-    prior_receipt = {"turn_id": cli.TURN_ID, "mode": "heartbeat", "stage": "execute", "ok": True}
+    prior_receipt = {"turn_id": source_turn_id, "mode": "heartbeat", "stage": "execute", "ok": True}
     (prior / "receipt.json").write_text(json.dumps(prior_receipt))
     solution = project / "solution.py"
     solution.write_text("retained_candidate = 7\n")
@@ -524,10 +721,9 @@ def test_controller_participant_keeps_canonical_state_and_journals_inert(tmp_pat
     project, runtime, registry = cli._write_fixture(tmp_path)
     source_ref = capture_first_party_host_goal_ref(registry_path=registry, goal_id=cli.GOAL_ID)
     state = project / f'.codex/goals/{cli.GOAL_ID}/ACTIVE_GOAL_STATE.md'
-    code, listed = cli._run_cli(registry, runtime, 'todo', 'list', '--goal-id', cli.GOAL_ID)
-    assert code == 0, listed
+    source_todos = read_fixture_todos(state)
     initialize_canonical_authority(runtime, cli.GOAL_ID,
-        build_todo_runtime_shadow_projection(goal_id=cli.GOAL_ID, todos=listed['todos'],
+        build_todo_runtime_shadow_projection(goal_id=cli.GOAL_ID, todos=source_todos,
                                             handoff_mode='hard_lease', leases=[]),
         state_path=state, provider=provider)
     def run(*args):
@@ -707,7 +903,7 @@ def test_failed_replan_index_cannot_relabel_later_work_after_permissions_recover
     if os.geteuid() == 0:
         pytest.skip("Real POSIX permission denial requires an unprivileged test user")
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry = cli._write_fixture(tmp_path)
+    project, runtime, registry = cli._write_fixture(tmp_path, provider="sqlite")
     skills = tmp_path / "skills"
     skills.mkdir()
     binary = tmp_path / "codex"
@@ -747,6 +943,13 @@ def test_failed_replan_index_cannot_relabel_later_work_after_permissions_recover
     index = runtime / "goals" / cli.GOAL_ID / "runs/index.jsonl"
     original = index.read_bytes()
     cli._configure_autonomous_replan_fixture(project, runtime, registry)
+    advance_canonical_fixture_authority(
+        runtime, cli.GOAL_ID, build_todo_runtime_shadow_projection(
+            goal_id=cli.GOAL_ID, todos=read_fixture_todos(
+                project / f".codex/goals/{cli.GOAL_ID}/ACTIVE_GOAL_STATE.md"),
+            handoff_mode="soft_claim", leases=[],
+        ), operation_id="fixture-later-replan-0",
+    )
     index.write_bytes(original + index.read_bytes())
     solution = project / "solution.py"
     solution.write_text("retained_candidate = 7\n")
@@ -795,6 +998,23 @@ def test_failed_replan_index_cannot_relabel_later_work_after_permissions_recover
     data["vision_patch"]["acceptance_summary"] = "The missed original point stays missed; later research boundaries still qualify separately."
     data["path_delta"]["observed_reality"] = "Real permission recovery did not recapture later code as the original research point."
     data["path_delta"].update(schema_version="goal_path_delta_v0", outcome="replan")
+    control = guard["replan_action_packet"].get("stride_control", {})
+    if "minimal_example" in control:
+        # The permission invariant must also settle under the current enabled
+        # stride contract; capture failure does not waive that original review.
+        decision = json.loads(json.dumps(control["minimal_example"]))
+        decision.update(action="verify", axes={
+            "work_slice": {"plan": "Qualify one separately declared later capture boundary.",
+                           "reason": "The original missed point must remain missed."},
+            "route_distance": {"plan": "Retain the source capture method.",
+                               "reason": "This fixture tests permission recovery, not strategy quality."},
+            "validation_scope": {"plan": "Check a new obligation captures the later candidate exactly once.",
+                                 "reason": "Successful old-point refusal alone does not qualify a later point."}},
+            next_probe={"scope": "One new synthetic replan boundary.", "prediction": "Only the new point captures.",
+                "adoption_criterion": "The original stays absent and the new candidate matches.",
+                "cost_bound": "One original admitted wake and local validation.",
+                "minimum_evidence": "Original guard, new obligation and sealed candidate."})
+        data["stride_decision"] = decision
     vision.write_text(json.dumps(data))
     run("refresh-state", "--goal-id", cli.GOAL_ID, *replan_binding,
         "--classification", "missed_original_point_preserved", "--delivery-batch-scale", "multi_surface",
@@ -807,6 +1027,13 @@ def test_failed_replan_index_cannot_relabel_later_work_after_permissions_recover
     from datetime import datetime, timedelta, timezone
     source_history = index.read_bytes()
     cli._configure_autonomous_replan_fixture(project, runtime, registry)
+    advance_canonical_fixture_authority(
+        runtime, cli.GOAL_ID, build_todo_runtime_shadow_projection(
+            goal_id=cli.GOAL_ID, todos=read_fixture_todos(
+                project / f".codex/goals/{cli.GOAL_ID}/ACTIVE_GOAL_STATE.md"),
+            handoff_mode="soft_claim", leases=[],
+        ), operation_id="fixture-later-replan-1",
+    )
     observations = [json.loads(line) for line in index.read_text().splitlines()]
     observed_at = datetime.now(timezone.utc)
     for number, row in enumerate(observations):

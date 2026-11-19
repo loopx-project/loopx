@@ -66,8 +66,7 @@ contributors by anchored rows.
 
 For first-review contacts, accepted subsystem owners and voluntary scope
 confirmation, use the [governance review roster](../../.github/GOVERNANCE.md#first-review-responsibilities).
-Request the closest contact before escalating to the lead maintainer. A
-preferred review contact is not an exclusive task claim or new merge authority.
+Request the closest contact before escalating to the lead maintainer.
 
 1. Prefer a linked GitHub issue. If there is no issue yet, open one with the
    contributor task template; it asks for the anchor and the gap.
@@ -81,8 +80,7 @@ preferred review contact is not an exclusive task claim or new merge authority.
    there is a public helper slice instead.
 
 Before claiming a row, reconcile its anchor with latest main, related PRs and
-the roadmap. Historical rows are not proof that a missing feature remains
-unimplemented or a proposed slice is still useful. The
+the roadmap. The
 [Technical Directions map](../project/technical-directions.md) owns contributor
 routing and current maturity; this board does not keep a second copy.
 
@@ -105,7 +103,6 @@ issue.
 | GH-A02 | S4/S10 · [#3927](https://github.com/loopx-project/loopx/issues/3927) | A Codex App automation that silently stops delivering scheduled prompts is indistinguishable from a healthy quiet goal; the owner learns days later. Exit: `loopx doctor` or the heartbeat readback reports a missed-delivery window as a typed diagnosis with the last observed tick. | `python3 -m pytest -q tests/test_doctor_installation_scope.py` plus a missed-window fixture; `loopx doctor --deep` readback | Needs design |
 | GH-A03 | S3 · [#4336](https://github.com/loopx-project/loopx/issues/4336) | Issue #4336 was closed, while [#4397](https://github.com/loopx-project/loopx/pull/4397) remains open with requested changes and [#5162](https://github.com/loopx-project/loopx/pull/5162) closed without merge. Typed progress already owns the runtime rule. Exit: reconcile the closed issue with the current PR review before claiming another regression is required; retain one canonical negative case and upgrade guidance only if that review confirms the gap. | Current `quota should-run` typed/prose regression and the existing PR's focused tests; exact-head review readback | Blocked: closed issue and PR review reconciliation |
 | GH-A04 | S5 · [#4381](https://github.com/loopx-project/loopx/issues/4381) | Users have to open the dashboard to learn why a task is blocked and what unblocks it; the projection already knows. Exit: the existing blocker projection is delivered through the goal channel / status readback with the recovery action, without a second notifier. | `python3 examples/issue-fix-outcome-projection-smoke.py`, focused status readback smoke | Needs design |
-| GH-A05 | S12 · [#4800](https://github.com/loopx-project/loopx/issues/4800) | The explicit `.loopx` migration PR [#4915](https://github.com/loopx-project/loopx/pull/4915) remains open with green CI, requested changes on its exact head, and a conflict with main. Exit: repair the reviewed real-CLI explicit-route regression and merge conflict, revalidate the default/legacy/conflict, migration and rollback contract, then obtain maintainer review and complete issue closeout; ordinary reads must not move existing state. | The existing PR's migration/SSH/registry tests, native Windows junction checks and clean-profile install/update smokes | Claimed |
 
 Closed defects that show the lane's shape: #4155 and #4997 (Windows), #4012
 (macOS 26.5 app), #3796 / #3867 / #4195 (DSH plugin install), #4051

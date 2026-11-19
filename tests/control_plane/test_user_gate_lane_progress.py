@@ -59,6 +59,24 @@ def test_user_gate_fallback_preserves_repair_and_replan_precedence():
     ) is original
 
 
+def test_independent_fallback_keeps_workspace_repair_obligation_without_write_grant():
+    original = {
+        "decision": "workspace_guard", "should_run": True,
+        "effective_action": "agent_workspace_repair",
+        "normal_delivery_allowed": False, "workspace_repair_allowed": True,
+        "execution_obligation": {
+            "kind": "agent_workspace_repair", "must_attempt_work": True,
+            "delivery_allowed": False, "minimum": "move_to_independent_worktree",
+        },
+    }
+    fallback = {"selected_executable": {"todo_id": "todo_independent"}}
+    result = apply_scoped_user_gate_fallback_projection(
+        original, fallback=fallback, replan_decision_allowed=False,
+    )
+    assert result == {**original, "scoped_user_gate_fallback": fallback}
+    assert "scoped_user_gate_fallback" not in original
+
+
 def _status_payload(
     *,
     gate_action_kind: str,
@@ -167,6 +185,7 @@ def test_unrelated_user_gate_allows_ready_deferred_successor_replan() -> None:
     assert selected["fallback_kind"] == "deferred_successor_replan"
     assert payload["decision"] == "successor_replan_required"
     assert payload["effective_action"] == "successor_replan_required"
+    assert payload["should_run"] is True
     assert payload["selected_todo"]["todo_id"] == "todo_ready_deferred"
     assert payload["interaction_contract"]["mode"] == "scoped_user_gate_fallback"
     assert payload["interaction_contract"]["agent_channel"]["must_attempt"] is True
@@ -296,6 +315,8 @@ def test_blocking_user_gate_backs_off_instead_of_polling_as_active_work() -> Non
     )
 
     assert "scoped_user_gate_fallback" not in payload
+    assert payload["should_run"] is False
+    assert payload["effective_action"] == "operator_gate_notify"
     assert payload["interaction_contract"]["mode"] == "user_gate"
     assert payload["interaction_contract"]["agent_channel"]["must_attempt"] is False
     expected_response_plan = {
@@ -313,7 +334,7 @@ def test_blocking_user_gate_backs_off_instead_of_polling_as_active_work() -> Non
         "turn_envelope_action_dimensions_v1"
     )
     assert payload["scheduler_hint"]["cadence_class"] == "human_gate"
-    assert payload["scheduler_hint"]["codex_app"]["recommended_interval_minutes"] == 30
+    assert payload["scheduler_hint"]["app_automation"]["recommended_interval_minutes"] == 30
     assert payload["long_task_cadence_hint"] == {
         "schema_version": "cadence_hint_v0",
         "signal": "blocked",
@@ -324,7 +345,7 @@ def test_blocking_user_gate_backs_off_instead_of_polling_as_active_work() -> Non
         ],
     }
 
-    initial_backoff = payload["scheduler_hint"]["codex_app"]["stateful_backoff"]
+    initial_backoff = payload["scheduler_hint"]["app_automation"]["stateful_backoff"]
     next_hint = build_scheduler_hint(
         payload,
         user_action_required=True,
@@ -339,10 +360,10 @@ def test_blocking_user_gate_backs_off_instead_of_polling_as_active_work() -> Non
     )
 
     assert next_hint["cadence_class"] == "human_gate"
-    assert next_hint["codex_app"]["recommended_interval_minutes"] == 60
-    assert next_hint["codex_app"]["stateful_backoff"]["progression_index"] == 1
-    assert next_hint["codex_app"]["stateful_backoff"]["apply_needed"] is True
-    assert next_hint["codex_app"]["recommended_rrule"] == "FREQ=MINUTELY;INTERVAL=60"
+    assert next_hint["app_automation"]["recommended_interval_minutes"] == 60
+    assert next_hint["app_automation"]["stateful_backoff"]["progression_index"] == 1
+    assert next_hint["app_automation"]["stateful_backoff"]["apply_needed"] is True
+    assert next_hint["app_automation"]["recommended_rrule"] == "FREQ=MINUTELY;INTERVAL=60"
 
 
 def _runtime_recovery_gate_status(
@@ -494,7 +515,7 @@ def test_acked_human_gate_advances_despite_unrelated_historical_host_failure(
         agent_id=AGENT_ID,
         scheduler_execution_context=APP_CONTEXT,
     )
-    first_rrule = payload["scheduler_hint"]["codex_app"]["stateful_backoff"][
+    first_rrule = payload["scheduler_hint"]["app_automation"]["stateful_backoff"][
         "current_rrule"
     ]
     historical_failure = {
@@ -521,7 +542,7 @@ def test_acked_human_gate_advances_despite_unrelated_historical_host_failure(
         codex_app_current_rrule=first_rrule,
         scheduler_execution_context=APP_CONTEXT,
     )
-    matched_app = host_matched["codex_app"]
+    matched_app = host_matched["app_automation"]
     assert matched_app["stateful_backoff"]["apply_needed"] is False
     assert matched_app["stateful_backoff"]["ack_needed"] is True
     assert matched_app["ack_hint"]["after"] == "matching_host_rrule_observed"
@@ -554,7 +575,7 @@ def test_acked_human_gate_advances_despite_unrelated_historical_host_failure(
         scheduler_execution_context=APP_CONTEXT,
     )
 
-    next_app = next_hint["codex_app"]
+    next_app = next_hint["app_automation"]
     assert next_app["stateful_backoff"]["progression_index"] == 1
     assert next_app["recommended_rrule"] == "FREQ=MINUTELY;INTERVAL=60"
     assert next_app["stateful_backoff"]["apply_needed"] is True

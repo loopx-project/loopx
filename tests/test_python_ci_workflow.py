@@ -17,6 +17,33 @@ WORKFLOW_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = (WORKFLOW_ROOT / ".github/workflows/python-tests.yml").read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("provider", ["loopx-ark-turn", "loopx-memt-turn"])
+def test_core_collection_keeps_optional_provider_tests_explicit(tmp_path: Path, provider: str) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        (WORKFLOW_ROOT / "pyproject.toml").read_text(encoding="utf-8"), encoding="utf-8",
+    )
+    (tmp_path / "test_core.py").write_text("def test_core_contract(): pass\n", encoding="utf-8")
+    optional = tmp_path / "packages" / provider / "tests"
+    optional.mkdir(parents=True)
+    (optional / "test_provider.py").write_text("def test_optional_contract(): pass\n", encoding="utf-8")
+    (optional / "conftest.py").write_text(
+        "from pathlib import Path\nPath(__file__).with_name('dependency-imported').touch()\n", encoding="utf-8",
+    )
+    args = [sys.executable, "-m", "pytest", "--collect-only", "-q"]
+    options = {"cwd": tmp_path, "env": {**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+               "capture_output": True, "text": True, "timeout": 15, "check": False}
+    core = subprocess.run(args, **options)
+    assert core.returncode == 0, core.stdout + core.stderr
+    assert "test_core_contract" in core.stdout
+    assert "test_optional_contract" not in core.stdout, "Core discovery must not import optional provider dependencies"
+    assert not (optional / "dependency-imported").exists()
+    explicit = subprocess.run([*args, str(optional.relative_to(tmp_path))], **options)
+    assert explicit.returncode == 0, explicit.stdout + explicit.stderr
+    assert "test_optional_contract" in explicit.stdout, "The dedicated provider workflow must still collect its suite"
+    assert (optional / "dependency-imported").exists()
+    assert "test_core_contract" not in explicit.stdout
+
+
 def test_dashboard_acceptance_and_kernel_checks_run_independently() -> None:
     kernel = WORKFLOW.split("  kernel-static-checks:\n", 1)[1].split(
         "  dashboard-browser:\n", 1,
@@ -54,7 +81,7 @@ def test_dashboard_acceptance_and_kernel_checks_run_independently() -> None:
     assert "NEEDS_JSON: ${{ toJSON(needs) }}" in aggregate
     assert "scripts/ci/review_gate.py verify-core" in aggregate
     assert (
-        "needs: [changes, kernel-static-checks, typescript-coverage, "
+        "needs: [changes, kernel-static-checks, kernel-contracts, typescript-coverage, "
         "dashboard-acceptance, chat-bundle-browser]"
     ) in aggregate
 
@@ -79,6 +106,7 @@ def test_checks_aggregate_requires_every_planned_parallel_lane(
             "stage2c_tests": str(backend).lower(), "presentation_tests": str(not backend).lower(),
         }},
         "kernel-static-checks": {"result": kernel},
+        "kernel-contracts": {"result": kernel},
         "typescript-coverage": {"result": typescript},
         "dashboard-acceptance": {"result": dashboard},
         "chat-bundle-browser": {"result": browser},
@@ -233,12 +261,12 @@ def test_merge_gate_runs_on_all_prs_and_checks_every_core_aggregate() -> None:
         job = WORKFLOW.split(f"  {name}:\n", 1)[1].split("    steps:", 1)[0]
         if name == "checks":
             assert (
-                "needs: [changes, kernel-static-checks, typescript-coverage, "
+                "needs: [changes, kernel-static-checks, kernel-contracts, typescript-coverage, "
                 "dashboard-acceptance, chat-bundle-browser]"
             ) in job
             assert "if: always() && needs.changes.outputs.core_tests == 'true'" in job
         elif name == "test-shard":
-            assert "needs: [changes, chat-bundle, checks]" in job
+            assert "needs: [changes, chat-bundle]" in job
             assert f"needs.changes.outputs.{output} == 'true'" in job
         else:
             assert "needs: [changes, chat-bundle]" in job
@@ -265,7 +293,7 @@ def test_presentation_exemption_retains_real_frontend_checks_and_force_full() ->
         < browser.index("npm run smoke:chat-upgrade")
     )
     assert "continue-on-error" not in browser
-    for name in ("kernel-static-checks", "typescript-core", "typescript-coverage", "node-minimum-compatibility"):
+    for name in ("kernel-static-checks", "kernel-contracts", "typescript-core", "typescript-coverage", "node-minimum-compatibility"):
         header = WORKFLOW.split(f"  {name}:\n", 1)[1].split("    steps:", 1)[0]
         assert "if: needs.changes.outputs.backend_tests == 'true'" in header
     dashboard = WORKFLOW.split("  dashboard-acceptance:\n", 1)[1].split("    steps:", 1)[0]
@@ -311,6 +339,59 @@ def test_windows_lifecycle_suite_references_existing_tests() -> None:
     assert [
         path for path in test_paths if not (WORKFLOW_ROOT / path).is_file()
     ] == []
+    fixture_step = next(
+        step for step in yaml.safe_load(WORKFLOW)["jobs"]["windows-powershell"]["steps"]
+        if step.get("name") == "Qualify native CLI output fixture and diagnostic boundaries"
+    )
+    args = shlex.split(fixture_step["run"])
+    assert args[args.index("--basetemp") + 1] == (
+        "${{ runner.temp }}/lxb-${{ github.run_id }}-${{ github.run_attempt }}"
+    )
+    assert "tests/control_plane/test_cli_output_budget.py" in args
+    assert "tests/control_plane/test_cli_output_differential.py" in args
+    assert set(args[args.index("-k") + 1].split(" or ")) == {
+        "stable_budget_fixture", "long_path_budget",
+        "probe_process_failure_preserves_utf8_diagnostics", "pinned_reader_follows",
+    }
+
+
+# The settlement plan renders the Turn reference for the shell that runs it,
+# so only a native Windows host can observe that the generated command
+# forwards $LOOPX_TURN instead of the POSIX-only ${LOOPX_TURN:?}. The case is
+# guarded by ``skipif(os.name != "nt")``, so a lane that does not run the file
+# reports green while the Windows-only rendering stays unqualified.
+SETTLEMENT_TURN_SUITE = "tests/control_plane/test_quota_settlement.py"
+SETTLEMENT_TURN_NODE_ID = (
+    SETTLEMENT_TURN_SUITE
+    + "::test_codex_app_windows_settlement_command_substitutes_powershell_turn"
+)
+
+
+def test_windows_lane_qualifies_the_host_native_settlement_turn_rendering() -> None:
+    suite = WORKFLOW_ROOT / SETTLEMENT_TURN_SUITE
+    assert suite.is_file(), f"{SETTLEMENT_TURN_SUITE} is not a suite in this checkout"
+    assert 'skipif(os.name != "nt"' in suite.read_text(encoding="utf-8"), (
+        "the settlement Turn rendering case must stay native Windows only"
+    )
+
+    steps = yaml.safe_load(WORKFLOW)["jobs"]["windows-powershell"]["steps"]
+    step = next(
+        (
+            candidate
+            for candidate in steps
+            if candidate.get("name") == "Qualify native Windows quota settlement Turn rendering"
+        ),
+        None,
+    )
+    assert step is not None, "the native Windows settlement step is missing"
+    assert "if" not in step, "the native Windows settlement step must not be skipped"
+    assert "continue-on-error" not in step, (
+        "the native Windows settlement step must block the lane"
+    )
+    arguments = shlex.split(step["run"])
+    assert SETTLEMENT_TURN_NODE_ID in arguments, (
+        "the native Windows lane must run the exact settlement rendering case"
+    )
 
 
 def test_six_shards_execute_each_test_once_and_merge_portable_coverage(
@@ -467,10 +548,9 @@ def test_backend_and_mixed_prs_require_the_browser_qualified_artifact() -> None:
     assert "needs.changes.outputs.core_tests == 'true'" in producer
     aggregate = WORKFLOW.split("  checks:\n", 1)[1].split("    steps:", 1)[0]
     assert "chat-bundle-browser" in aggregate
-    for name in ("chat-bundle-browser", "kernel-static-checks", "typescript-core", "dashboard-browser", "test-shard", "stage2c-suite", "windows-powershell", "presentation"):
+    for name in ("chat-bundle-browser", "kernel-contracts", "typescript-core", "dashboard-browser", "test-shard", "stage2c-suite", "windows-powershell", "presentation"):
         job = WORKFLOW.split(f"  {name}:\n", 1)[1].split("      - uses: actions/setup-", 1)[0]
-        dependencies = "[changes, chat-bundle, checks]" if name == "test-shard" else "[changes, chat-bundle]"
-        assert f"needs: {dependencies}" in job
+        assert "needs: [changes, chat-bundle]" in job
         assert "name: chat-bundle-${{ github.sha }}" in job
 
 

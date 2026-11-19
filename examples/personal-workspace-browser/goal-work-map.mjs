@@ -4,14 +4,14 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createInterface } from "node:readline";
-import { resolveTestPython } from "../../scripts/test-python.mjs";
+import { testPythonCommand } from "../../scripts/test-python.mjs";
 import { outputDir, repoRoot } from "./fixture.mjs";
 import { deliveryReadFixture } from "./showcase-workspace.mjs";
 import { fetchWorkspaceBackend, openWorkspacePage } from "./scenario-context.mjs";
 
 async function requestAuthority(text) {
   const root = await mkdtemp(resolve(tmpdir(), "loopx-map-request-"));
-  const child = spawn(resolveTestPython(), ["-u", "-c", `
+  const python = testPythonCommand(`
 from pathlib import Path
 import json, os, signal, sys, tempfile
 root = Path(sys.argv[1]); tempfile.tempdir = str(root)
@@ -41,7 +41,8 @@ finally:
     server.server_close()
     assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="product-release") == before
     restart_effect_runtime()
-`, root, text], { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] });
+`);
+  const child = spawn(python.command, [...python.args, root, text], { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] });
   const lines = createInterface({ input: child.stdout });
   let diagnostic = "";
   child.stderr.on("data", chunk => { diagnostic = (diagnostic + chunk).slice(-3000); });
@@ -180,6 +181,14 @@ export const goalWorkMapScenario = {
       assert.equal(await canvas.locator('.work-map-node[aria-pressed="true"]').count(), 0,
         "Closing details clears the shared task selection");
       assert.equal(new URL(page.url()).searchParams.get("todo"), null, "Closing details clears the task route");
+      await page.goBack({waitUntil: "domcontentloaded"});
+      await drawer.getByText(finalRequirement, {exact: true}).waitFor();
+      assert.equal(new URL(page.url()).searchParams.get("todo"), "todo_map_reserve");
+      assert.deepEqual(await drawer.locator(".personal-task-request .personal-md > p").allTextContents(), requestParagraphs,
+        "Back restores the same complete request through its native owner");
+      await page.goForward({waitUntil: "domcontentloaded"});
+      await drawer.waitFor({state: "hidden"});
+      assert.equal(new URL(page.url()).searchParams.get("todo"), null);
 
       const hiddenRegistry = `${authority.registry}.hidden`;
       const errorsBeforeLoss = desktop.errors.length;
@@ -195,10 +204,23 @@ export const goalWorkMapScenario = {
       await rename(hiddenRegistry, authority.registry);
       await drawer.getByRole("button", { name: "重试读取完整要求", exact: true }).click();
       await drawer.getByText(finalRequirement, { exact: true }).waitFor();
-      await page.getByRole("button", { name: /关闭详情/ }).click();
+      await page.getByRole("button", { name: /关闭详情/ }).evaluate(button => {
+        button.click();
+        document.querySelector(".goal-overview-evidence > summary")?.focus();
+      });
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+      assert.equal(await page.locator(".goal-overview-evidence > summary").evaluate(
+        summary => document.activeElement === summary), true,
+      "Closing Task details must preserve focus explicitly moved to another control");
+      await page.screenshot({ path: resolve(outputDir, "goal-map-focus-return-desktop.png"), animations: "disabled" });
 
       limits = { omitted_node_count: 3, topology_complete: false };
-      await page.getByRole("button", { name: "刷新快照", exact: true }).click();
+      const evidence = page.locator(".goal-overview-evidence");
+      if (await evidence.getAttribute("open") === null) {
+        await evidence.locator(":scope > summary").focus();
+        await page.keyboard.press("Enter");
+      }
+      await evidence.getByRole("button", { name: "刷新快照", exact: true }).click();
       await map.getByText("部分工作未出现在此地图中。").waitFor();
       assert.equal(await page.locator("[role=alert]", { hasText: "工作区状态已在此快照之后变化" }).count(), 0);
       assert.ok(reads.length <= 4, `Delivery review re-read ${reads.length} times`);

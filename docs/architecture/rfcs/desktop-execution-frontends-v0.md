@@ -111,7 +111,7 @@ editor or storage path happens to exist.
 | `todo_replan_cadence` | Device default + Goal override | Reuse review frequency while allowing a Goal's work rhythm. This is completed-work review cadence, not the automation timer. |
 | `multi_subagent` | Goal only | Child model, capacity, responsibility domains and delegation bindings apply to one Goal's team and resource boundary. |
 | `peer_task_coordination` | Goal only | Coordinator identity must refer to a member of this Goal, not an inherited unrelated Agent. |
-| `explore_harness`, `explore_graph` | Goal only | Exploration strategy and opt-in affect this Goal's planning and evidence graph. |
+| `explore_harness` | Device mode default + Goal override | Existing and new Goals inherit off/evidence/planning live. Explicit legacy enabled flags or Goal mode override it; profiles, composition scopes and external delivery authority stay Goal-local. |
 | `progress_review` | Goal only | Drift mode and threshold belong with this Goal's pinned acceptance contract revision. |
 | `reward_memory` | Goal only | Private provider binding and enabled Agents are Goal-local; a global preference cannot spread that data binding. |
 | `lark_kanban_heartbeat_sync` | Goal only | The target board and synchronization follow this Goal's binding and audience. |

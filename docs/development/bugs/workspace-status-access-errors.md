@@ -12,7 +12,7 @@
 → `collect_status` → 状态依赖读取或 Effect runtime → 错误响应 → 逐 Goal 提示。
 
 归属仍是现有 Dashboard 状态读取与展示边界：
-[chat_status_api.py](../../../loopx/chat_status_api.py)、
+[chat/status_api.py](../../../loopx/chat/status_api.py)、
 [workspace-progressive-status.ts](../../../apps/presentation/dashboard/src/data/workspace-progressive-status.ts)
 和 [i18n.tsx](../../../apps/presentation/dashboard/src/features/personal-workspace/i18n.tsx)。
 复用 [Effect runtime](../../../loopx/control_plane/effect_runtime.py) 的类型及诊断码；
@@ -39,7 +39,7 @@ HTTP 仍为 **500**；固定公开错误文案不变，仅增加：
 - 异常链最多检查 8 个节点，按对象身份去环；显式 `__cause__` 优先。
   仅 `EffectRuntimeStartupError` 的 `runtime_launch_failed` /
   `runtime_request_failed` 允许沿未抑制的隐式 `__context__` 查找权限原因。
-  普通历史 context、`raise ... from None` 不构成权限证据。
+  普通历史 context 分支停止分类；`raise ... from None` 抑制的隐式 context 也在此停止。
 
 前端只在 HTTP >= 500 时识别该结构化错误码。错误体按实际字节最多读取 16 KiB，
 不信任 Content-Length；复用单次请求的 30 秒超时。读完、超限或取消后释放读取器。
@@ -64,7 +64,7 @@ Chat 操作、审批、状态机、Goal 注册信息和文件权限均不改动�
 ## 仍未细分的故障
 
 `service` 仍可包含注册数据解析、依赖/安装、运行时启动、通信/协议、非权限结构化
-I/O、未知投影异常及上游 5xx。这不是封闭的运行时枚举，也不是每项均实机复现。
+I/O、未知投影异常及上游 5xx。
 依据见 [registry.py](../../../loopx/registry.py) 与
 [collection.py](../../../loopx/control_plane/status/collection.py)。
 仅当异常最终形成逐 Goal 请求的 5xx 才进入此提示；内部已处理的健康诊断不在本范围。

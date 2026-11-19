@@ -15,15 +15,10 @@ from examples.control_plane.quota_plan_fixtures import (
     write_codex_heartbeat_fixture,
 )
 from loopx.control_plane.testing.canary_harness import run_json_cli_result
-from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-from loopx.control_plane.coordination.coordination_state_contract import (
-    TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION,
-    TODO_DOMAIN_RECORD_FIELDS,
-)
 from tests.control_plane.canonical_authority_fixture import (
-    initialize_canonical_authority,
     isolate_sqlite_runtime,
 )
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -144,6 +139,7 @@ def test_receipt_bound_trae_hint_executes_native_without_python(
         cwd=project,
     )
     assert returncode == 0, guard
+    guard = read_cli_policy_payload(json.dumps(guard), returncode=returncode)
     hint = guard["scheduler_hint"]["app_automation"]["ack_hint"]
     assert "--scheduler-host-facts-chunk" in hint["cli_args"]
     assert hint["args"]["turn_instance_id"] == turn_id
@@ -211,7 +207,8 @@ def test_receipt_bound_failure_hint_executes_native_without_python(
         cwd=project,
     )
     assert returncode == 0, guard
-    hint = guard["scheduler_hint"]["codex_app"]["failure_hint"]
+    guard = read_cli_policy_payload(json.dumps(guard), returncode=returncode)
+    hint = guard["scheduler_hint"]["app_automation"]["failure_hint"]
     assert "--scheduler-host-facts-chunk" in hint["cli_args"]
 
     entry, env = _launcher(tmp_path, launcher, python=str(tmp_path / "python-must-not-run"))
@@ -272,29 +269,23 @@ def test_launcher_binds_ack_to_current_host_readback(
     tmp_path: Path, monkeypatch, provider: str, host: str, launcher: str,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, runtime, project = write_cli_fixture(tmp_path / "fixture", scoped_agents=True)
+    # Select the provider at creation, never reinitialize the authority already
+    # created by write_cli_fixture under the same operation id.
+    registry, runtime, project = write_cli_fixture(tmp_path / "fixture", scoped_agents=True, provider=provider)
     goal = "needs-operator"
-    state = project / f".codex/goals/{goal}/ACTIVE_GOAL_STATE.md"
-    projection = build_todo_runtime_shadow_projection(
-        goal_id=goal, todos=[], handoff_mode="soft_claim",
-    )
-    projection["todo_read_model"] = {
-        **projection["todo_read_model"],
-        "schema_version": TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION,
-        "contract_fields": list(TODO_DOMAIN_RECORD_FIELDS),
-    }
-    initialize_canonical_authority(runtime, goal, projection, state_path=state, provider=provider)
     codex_home = tmp_path / "codex-home"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setenv("CODEX_THREAD_ID", "scheduler-fixture")
     write_codex_heartbeat_fixture(
         codex_home, goal_id=goal, agent_id=SCOPED_AGENT_ID, rrule="FREQ=MINUTELY;INTERVAL=3",
     )
-    _, guard = run_json_cli_result(
+    returncode, guard = run_json_cli_result(
         "quota", "should-run", "--goal-id", goal, "--agent-id", SCOPED_AGENT_ID,
         "--codex-app", "--turn-instance-id", "current-host-launcher",
         registry_path=registry, runtime_root=runtime, cwd=project,
     )
+    assert returncode == 0, guard
+    guard = read_cli_policy_payload(json.dumps(guard), returncode=returncode)
     app = guard["scheduler_hint"]["app_automation"]
     assert app["recommended_rrule"] == "FREQ=MINUTELY;INTERVAL=30"
     manifest = codex_home / "automations/scheduler-fixture/automation.toml"
@@ -328,11 +319,13 @@ def test_launcher_binds_ack_to_current_host_readback(
     replay = subprocess.run(command, cwd=project, env=env, text=True, capture_output=True, timeout=45)
     assert replay.returncode == 0, replay.stdout + replay.stderr
     assert json.loads(replay.stdout)["scheduler_commit"]["status"] == "replayed"
-    _, stable = run_json_cli_result(
+    returncode, stable = run_json_cli_result(
         "quota", "should-run", "--goal-id", goal, "--agent-id", SCOPED_AGENT_ID,
         "--codex-app", "--turn-instance-id", "current-host-launcher-stable",
         registry_path=registry, runtime_root=runtime, cwd=project,
     )
+    assert returncode == 0, stable
+    stable = read_cli_policy_payload(json.dumps(stable), returncode=returncode)
     assert stable["quota"]["spent_slots"] == 0
     backoff = stable["scheduler_hint"]["app_automation"]["stateful_backoff"]
     assert backoff["apply_needed"] is False
@@ -361,7 +354,8 @@ def test_launcher_preserves_outer_controller_write_guard(
         timeout=45,
     )
     assert guard_result.returncode == 0, guard_result.stdout + guard_result.stderr
-    app = json.loads(guard_result.stdout)["scheduler_hint"]["app_automation"]
+    guard = read_cli_policy_payload(guard_result.stdout, returncode=guard_result.returncode)
+    app = guard["scheduler_hint"]["app_automation"]
     hint = app["ack_hint" if command == "scheduler-ack-current" else "failure_hint"]
     arguments = ["--format", "json", *hint["cli_args"]]
     if command == "scheduler-ack-current":

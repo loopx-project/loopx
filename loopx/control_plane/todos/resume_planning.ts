@@ -8,20 +8,62 @@ import {
 import {
   diagnoseTodoResumeCondition, type ResumeConditionDiagnosis,
   evaluateTodoResumeConditions, TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
+  resumeConditionHasKnownPendingTarget,
 } from "./resume_condition.ts";
 
+import { automaticResumeFields, selectPendingResume } from "./automatic_resume.ts";
+import {id, object, pythonFieldText, pythonFieldInteger, pythonFieldIsList, copyTodoPythonValues, readAgent, readExcludedAgents, readResume,
+  readScopes, readScope, writeScopes, taskClass} from "./read_codec.ts";
+import {readTodoPriority, todoPriorityRank} from "./priority.ts";
+import {stripPythonWhitespace} from "../coordination/todo_agents.ts";
+
 export const RESUME_PLANNING_REQUEST = "todo_resume_planning_request_v0";
+export const REFERENCED_RESUME_PLANNING_REQUEST = "todo_resume_planning_request_v1";
 export const RESUME_PLANNING_RESULT = "todo_resume_planning_v0";
 const DEFERRED_POLICY = "quota may wake the current peer only for ready deferred todos " +
   "claimed by that agent or unclaimed; other-agent deferred todos remain " +
   "diagnostic visibility and executor-excluded todos remain visible but non-selectable";
 const MONITOR_POLICY = "open advancement todos gated by todo_done:<continuous_monitor> must " +
   "project as successor replan/state repair instead of quiet monitor wait";
-const SOURCE_KEYS = ["items", "backlog_items", "first_open_items", "deferred_items",
+export const SOURCE_KEYS = ["items", "backlog_items", "first_open_items", "deferred_items",
   "deferred_resume_candidates", "resume_blocked_items", "monitor_open_items",
   "current_agent_claimed_monitor_items", "claimed_monitor_open_items"] as const;
 type SourceKey = typeof SOURCE_KEYS[number];
 type ClaimLane = "current_agent" | "unclaimed" | "other_agent" | "executor_excluded_self";
+
+/** Native input materialization for this existing resume owner. The explicit
+ * field set is the shipped compatibility presentation, not a source filter. */
+export function materializeResumePlanningRequest(source: JsonObject, options: JsonObject): JsonObject {
+  const truth = (v: unknown): boolean => Array.isArray(v) ? !!v.length : v !== null && typeof v === "object" ? !!Object.keys(v).length : !!v;
+  const compactFields = ["schema_version", "todo_id", "role", "status", "priority", "title", "archive_state", "source_section", "task_class", "action_kind", "task_domain", "task_repository", "continuation_policy", "required_write_scopes", "required_capabilities", "target_capabilities", "decision_scope", "required_decision_scopes", "claimed_by", "blocks_agent", "excluded_agents", "unblocks_todo_id", "resume_when", "resume_monitor_generation", "resume_condition", "resume_ready", "no_followup", "successor_todo_ids", "target_key", "cadence", "next_due_at", "expires_at", "last_checked_at", "result_hash", "consecutive_no_change", "material_change", "material_change_generation", "max_no_change_before_replan", "route_continuation_replan_required", "route_continuation_reason", "route_id", "route_key", "completed_at", "updated_at", "superseded_by", "content_revision", "blocked_retry"];
+  const encode = (value: unknown): JsonObject => {
+    const row = object(value), text = stripPythonWhitespace(pythonFieldText(row, "text"));
+    const payload: JsonObject = {index: row.index ?? null, text,
+      ...Object.fromEntries(compactFields.filter(key => row[key] != null).map(key => [key, row[key]]))};
+    copyTodoPythonValues(row, payload);
+    for (const [key, normalized] of [["required_write_scopes", writeScopes(payload.required_write_scopes)],
+      ["decision_scope", readScope(payload.decision_scope)], ["required_decision_scopes", readScopes(payload.required_decision_scopes)]] as const) {
+      if (normalized !== null && (!Array.isArray(normalized) || normalized.length)) payload[key] = normalized;
+      else delete payload[key];
+    }
+    payload.task_class = taskClass({...payload, text: ["title", "text"].map(key => pythonFieldText(payload, key)).filter(text => text.trim()).join(" ")});
+    const condition = object(row.resume_condition);
+    const index = pythonFieldInteger(payload, "index");
+    const status = (value: unknown) => typeof value === "string" && ["open", "done", "blocked", "deferred"].includes(value.trim().toLowerCase()) ? value.trim().toLowerCase() : null;
+    return {payload, id: id(row.todo_id), status: status(row.status), claim: readAgent(row.claimed_by),
+      excluded: readExcludedAgents(row.excluded_agents), resume: readResume(row.resume_when), done: row.done === true,
+      ready: typeof row.resume_ready === "boolean" ? row.resume_ready : null, ready_truthy: truth(row.resume_ready),
+      priority: todoPriorityRank(readTodoPriority(payload)), index,
+      target_id: id(condition.target_todo_id || condition.target), target_status: status(condition.target_status),
+      target_class: taskClass({task_class: condition.target_task_class})};
+  };
+  return {schema_version: RESUME_PLANNING_REQUEST,
+    sources: Object.fromEntries(SOURCE_KEYS.map(key => [key, pythonFieldIsList(source, key) ? (source[key] as unknown[]).map(encode) : []])),
+    agent_id: options.agent_id ?? null, item_limit: options.item_limit ?? 5,
+    has_deferred_count: Object.hasOwn(source, "deferred_count"), has_visible_deferred_count: truth(source.deferred_count),
+    deferred_count: source.deferred_count ?? null, deferred_work_counts: source.deferred_work_counts ?? null,
+    available_capabilities: options.available_capabilities ?? null};
+}
 
 /** Codec facts are separate from policy. Payload fields remain lossless while
  * comparisons use the existing reader's normalized values and stable order. */
@@ -135,10 +177,12 @@ function successorWaits(resumeBlocked: readonly Item[], deferredItems: readonly 
   return ordered(unique([...resumeBlocked, ...deferredItems.filter((entry) => entry.payload.resume_ready === false)])
     .filter((entry) => {
       const lane = claimLane(entry, agent);
+      const condition = jsonObject(entry.payload.resume_condition);
       return entry.payload.task_class === "advancement_task" &&
         (lane === "current_agent" || lane === "unclaimed") && entry.resume !== null &&
-        jsonObject(entry.payload.resume_condition)?.satisfied === false &&
-        entry.diagnosis?.state === "pending" && entry.diagnosis.kind !== "monitor_changed";
+        condition?.satisfied === false && entry.diagnosis?.state === "pending" &&
+        (entry.diagnosis.kind !== "monitor_changed" ||
+          resumeConditionHasKnownPendingTarget(condition, entry.payload));
     }).map((entry) => ({ ...entry, payload: {
       ...entry.payload, resume_when: entry.resume, resume_ready: false,
     } }))).sort((a, b) => Number(b.claim === agent) - Number(a.claim === agent));
@@ -183,12 +227,18 @@ function resolveCapacity(items: readonly Item[], source: readonly Item[], capabi
   });
 }
 
-function decodeSources(value: unknown): Record<SourceKey, Item[]> {
+function decodeSources(value: unknown, records: Item[] | null = null): Record<SourceKey, Item[]> {
   const rawSources = requireJsonObject(value, "sources");
   const sources = {} as Record<SourceKey, Item[]>;
   for (const key of SOURCE_KEYS) {
     if (!Array.isArray(rawSources[key])) throw new EffectRuntimeRequestError(`${key} must be an array`);
-    sources[key] = rawSources[key].map(item);
+    sources[key] = records === null ? rawSources[key].map(item) : rawSources[key].map((value) => {
+      const reference = requireInteger(value, `${key} record reference`);
+      if (reference < 0 || reference >= records.length) {
+        throw new EffectRuntimeRequestError(`${key} record reference is out of range`);
+      }
+      return records[reference];
+    });
   }
   return sources;
 }
@@ -292,10 +342,19 @@ function blockedVisibility(resumeBlocked: Item[], monitorItems: Item[], options:
  * No mutation, claim, lease grant, monitor poll, or recovery effect is emitted. */
 export function projectTodoResumePlanning(value: unknown): JsonObject {
   const request = requireJsonObject(value, "resume planning request");
-  if (request.schema_version !== RESUME_PLANNING_REQUEST) {
+  if (request.schema_version !== RESUME_PLANNING_REQUEST &&
+      request.schema_version !== REFERENCED_RESUME_PLANNING_REQUEST) {
     throw new EffectRuntimeRequestError("resume planning schema mismatch");
   }
-  const sources = decodeSources(request.sources);
+  const records = request.schema_version === REFERENCED_RESUME_PLANNING_REQUEST
+    ? (() => {
+      if (!Array.isArray(request.records)) {
+        throw new EffectRuntimeRequestError("resume planning records must be an array");
+      }
+      return request.records.map(item);
+    })()
+    : null;
+  const sources = decodeSources(request.sources, records);
   diagnoseSources(sources);
   const display: DisplayOptions = {
     agent: optionalNonEmptyString(request.agent_id, "agent_id"),
@@ -329,14 +388,27 @@ export function projectTodoResumePlanning(value: unknown): JsonObject {
       request.has_deferred_count === true ? request.deferred_count : null);
   const resumeBlocked = blocked(sources.resume_blocked_items.length ? sources.resume_blocked_items
     : [...sources.items, ...sources.backlog_items, ...sources.first_open_items]);
+  const blockedWaitItems = display.agent ? ordered(unique([
+    ...sources.items, ...sources.backlog_items, ...sources.first_open_items,
+  ])).filter(entry => {
+    const lane = claimLane(entry, display.agent!);
+    return entry.status === "blocked" && !entry.done && entry.ready !== true &&
+      ["blocker", "advancement_task"].includes(String(entry.payload.task_class)) &&
+      (lane === "current_agent" || lane === "unclaimed");
+  }) : [];
   const monitorItems = monitorBlocked(resumeBlocked);
+  const waits = payloads(successorWaits(resumeBlocked, deferredItems, display.agent));
+  const pending = selectPendingResume(waits, display.agent).todo;
   return {
     schema_version: RESUME_PLANNING_RESULT,
     deferred_lanes: {...deferredVisibility(deferredItems, candidates, display), deferred_work_counts: counts},
     resume_blocked_lanes: blockedVisibility(resumeBlocked, monitorItems, display),
     capacity_fields: capacityFields,
     deferred_items: payloads(deferredItems), monitor_blocked_items: payloads(monitorItems),
-    blocked_successor_items: payloads(successorWaits(resumeBlocked, deferredItems, display.agent)),
+    blocked_successor_items: waits,
+    blocked_wait_items: payloads(blockedWaitItems),
+    ...(pending ? {automatic_resume_todo: {todo_id: pending.todo_id, status: pending.status,
+      claimed_by: pending.claimed_by ?? null, ...automaticResumeFields(pending)}} : {}),
     dependency_cycle_replan: dependencyCycleReplan([...resumeBlocked, ...deferredItems], display.agent),
   };
 }

@@ -169,7 +169,24 @@ def check_todo_lifecycle(provider: str) -> None:
         )
         archived = state_file.read_text(encoding="utf-8")
         assert "Completed Work Archive" in archived, archived
-        assert "explore_result_node_refs=node_live%2Cnode_dead" in archived, archived
+        if provider == "sqlite":
+            # The sqlite_v0 archive projection caps inline rows and leaves a
+            # pointer naming the readback, so the archived linkage is guaranteed
+            # by that pointer plus the record read back below, not by repetition.
+            pointer = [
+                line
+                for line in archived.splitlines()
+                if "loopx:todo-archive-pointer" in line
+                and f"goal_id={GOAL_ID}" in line
+            ]
+            assert len(pointer) == 1, archived
+            assert "archived_count=1" in pointer[0], pointer[0]
+            assert (
+                f'query="loopx todo list --goal-id {GOAL_ID} --include-archived"'
+                in pointer[0]
+            ), pointer[0]
+        else:
+            assert "explore_result_node_refs=node_live%2Cnode_dead" in archived, archived
 
         archived_item = run_loopx(registry, "todo", "list", "--goal-id", GOAL_ID,
                                   "--todo-id", todo_id)["todo"]

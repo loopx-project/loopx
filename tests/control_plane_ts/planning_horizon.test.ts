@@ -77,10 +77,31 @@ test("one local task still carries the original Goal and separately scoped accep
   });
   assert.equal(result?.selected_todo_id, "todo_regression_gate");
   assert.equal((result?.selection_contract as Record<string, unknown>).horizon_changes_selection, false);
+  assert.equal((result?.work_items as unknown[]).length, 1);
   assert.throws(() => projectQuotaPlanningHorizon(request({goal_facts: {active_state_objective: 42}})));
   assert.deepEqual(projectQuotaPlanningHorizon(request({goal_facts: {}}))?.core_goal, {
     objective: null, objective_source: null, objective_missing: true, acceptance_contract: null,
   });
+});
+
+test("Goal context exposes a bounded flat backlog without requiring declared dependencies", () => {
+  const selected = todo("todo_selected001", 1, "P0");
+  const alternatives = Array.from({length: 8}, (_, i) => todo(`todo_alternative${i}`, i + 2, "P1"));
+  const inputs = {selected_todo: selected, candidates: [selected, ...alternatives],
+    runnable_todo_ids: [selected.todo_id, ...alternatives.map(item => item.todo_id)],
+    source_context_todo_count: 9};
+  assert.equal(projectQuotaPlanningHorizon(request(inputs)), null);
+  const result = projectQuotaPlanningHorizon(request({...inputs,
+    goal_facts: {active_state_objective: "Complete the accepted outcome."}}));
+  assert.equal((result?.core_goal as Record<string, unknown>).objective, "Complete the accepted outcome.");
+  const items = result?.work_items as Array<Record<string, unknown>>;
+  assert.equal(items.length, 5);
+  assert.equal(items[0].todo_id, selected.todo_id);
+  assert.equal(items[4].todo_id, alternatives[3].todo_id);
+  const completeness = result?.completeness as Record<string, unknown>;
+  assert.equal(completeness.omitted_candidate_todo_count, 4);
+  assert.equal(completeness.complete, false);
+  assert.ok((result?.detail_refs as Record<string, unknown>).full_todo_list);
 });
 
 test("planning horizon preserves the typed strategic chain around local selected work", () => {

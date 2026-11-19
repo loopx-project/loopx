@@ -51,6 +51,7 @@ const packedStaticEntries = new Set([
   'package/lib/observer.js',
   'package/lib/types/cli.d.ts',
   'package/lib/types/client/LoopXGoalBar.d.ts',
+  'package/lib/types/client/dashboard.d.ts',
   'package/lib/types/client/index.d.ts',
   'package/lib/types/client/locale.d.ts',
   'package/lib/types/client/rpc.d.ts',
@@ -169,6 +170,7 @@ function activationPayload(state) {
     execute: false,
     goal_id: goalId,
     before_state: state,
+    observed_state_fingerprint: 'a'.repeat(64),
     after_state: 'stopped',
     changed: active,
     written: false,
@@ -250,7 +252,17 @@ function coordinatorHarness() {
   let activateCalls = 0
   let cancelCalls = 0
   let abortedWaits = 0
+  let admission = { state: 'clear' }
   return {
+    setAdmission(change) {
+      admission = change.value
+      for (const waiter of [...waiters]) {
+        if (waiter.session !== change.session) continue
+        waiter.finish(waiter.options.isSessionCurrent()
+          ? { kind: 'admission_changed', sessionId: String(change.session.id) }
+          : { kind: 'session_unavailable' })
+      }
+    },
     openWatchService() {
       let disposed = false
       return {
@@ -337,6 +349,9 @@ function coordinatorHarness() {
     async cancelQueued() {
       cancelCalls += 1
       return { kind: 'applied' }
+    },
+    readContinuationAdmission() {
+      return admission
     },
     counts: () => ({ activateCalls, cancelCalls, waiters: waiters.size }),
     abortedWaits: () => abortedWaits,
@@ -562,6 +577,50 @@ async function exercisePackedService(installed) {
   const current = await read()
   assert.deepEqual(current.snapshot.progress, progress)
 
+  // A driver admission failure is projected into the snapshot with a safe
+  // category, wakes an exact-Session watcher without new events, and is
+  // cleared by the next admitted evaluation.
+  assert.deepEqual(
+    current.snapshot.continuationAdmission,
+    { state: 'clear' },
+    'clean admission state crossed the wire',
+  )
+  const admissionWatch = call('goalbar/watch', {
+    v: requestVersion,
+    op: 'watch',
+    sessionId,
+    afterSessionEventSeq: current.baseSessionEventSeq,
+    sourceRevision: current.sourceRevision,
+    expected: { goalId, loopxAgentId },
+    agentStatus: 'running',
+  })
+  await waitUntil(
+    () => coordinator.counts().waiters === 1,
+    'admission watch never became pending',
+  )
+  coordinator.setAdmission({
+    session,
+    value: { state: 'failed', category: 'invalid_response' },
+  })
+  assert.deepEqual((await admissionWatch).value.result, {
+    kind: 'source_changed', sessionEventSeq: current.baseSessionEventSeq,
+  })
+  const failed = await read()
+  assert.equal(failed.kind, 'present')
+  assert.deepEqual(
+    failed.snapshot.continuationAdmission,
+    { state: 'failed', category: 'invalid_response' },
+  )
+  const failedWire = JSON.stringify(failed)
+  assert(!failedWire.includes('transient diagnostic'))
+  assert(!failedWire.includes(installed))
+  coordinator.setAdmission({ session, value: { state: 'clear' } })
+  assert.deepEqual(
+    (await read()).snapshot.continuationAdmission,
+    { state: 'clear' },
+    'admitted evaluation cleared the projected failure',
+  )
+
   const abortedBefore = coordinator.abortedWaits()
   const cancelledWatch = disconnectableRpc(
     connection.baseUrl,
@@ -748,14 +807,19 @@ async function materializeServedClient(source) {
       locale: { register: () => () => undefined },
       slots: {
         inject(name, install) {
-          assert.equal(name, 'conversation.input.dock')
+          assert(
+            ['sidebar.panellist', 'main', 'conversation.input.dock'].includes(name),
+            `unexpected slot injection ${name}`,
+          )
           const dispose = install()
           if (typeof dispose === 'function') effects.push(dispose)
         },
         register(config, component) {
           assert.equal(typeof component, 'function')
-          slots.set(config.id, config)
-          return () => slots.delete(config.id)
+          const key = config.id ?? `main:${config.key}`
+          assert.equal(slots.has(key), false, `duplicate slot ${key}`)
+          slots.set(key, config)
+          return () => slots.delete(key)
         },
       },
       on: () => () => undefined,
@@ -763,9 +827,14 @@ async function materializeServedClient(source) {
     client.apply(ctx)
     const config = slots.get('loopx-goal')
     assert.equal(config.order, 15)
-    assert.deepEqual([...slots].sort((a, b) => a[1].order - b[1].order).map(([id]) => id), [
-      'goal', 'loopx-goal', 'queue',
-    ])
+    const sidebar = slots.get('loopx-dashboard')
+    assert.equal(sidebar.order, 7)
+    assert.equal(slots.get('main:loopx-dashboard').key, 'loopx-dashboard')
+    const dockOrder = [...slots.entries()]
+      .filter(([id]) => ['goal', 'loopx-goal', 'queue'].includes(id))
+      .sort((a, b) => a[1].order - b[1].order)
+      .map(([id]) => id)
+    assert.deepEqual(dockOrder, ['goal', 'loopx-goal', 'queue'])
     assert.equal(config.inject('session-one').rpcSessionId, 'session-one')
     assert.equal(config.inject('session-two').rpcSessionId, 'session-two')
     return {
@@ -1099,7 +1168,7 @@ set -eu
 printf '%s\n' "$*" >> "${cliLog}"
 case " $* " in
   *" --version "*)
-    printf '%s\n' 'loopx 1.2.4'
+    printf '%s\n' 'loopx 2.4.0'
     exit 0
     ;;
 esac
@@ -1161,7 +1230,10 @@ export function apply(ctx) {
       response.setHeader('content-type', 'application/json')
       response.end(JSON.stringify({
         bootstrapRemoved: ctx.get('loopxBootstrap') === undefined,
-        webAlive: ctx.get('webServer') !== undefined && ctx.get('webRuntime') !== undefined,
+        // DSH 0.2.1 renamed the Web runtime service from webRuntime to webApp.
+        // The listener plus either owning runtime service proves Web stayed up.
+        webAlive: ctx.get('webServer') !== undefined
+          && (ctx.get('webApp') !== undefined || ctx.get('webRuntime') !== undefined),
       }))
     },
   }))

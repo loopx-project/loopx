@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from typing import Any, TYPE_CHECKING, cast
+
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import shlex
-from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .control_plane.goals.goal_frontier.fallback_source import FallbackTodoSource
@@ -35,7 +36,6 @@ from .control_plane.quota.policy_constants import (
     MONITOR_DUE_ITEM_LIMIT,  # noqa: F401
 )
 from .control_plane.quota.monitor_poll import (
-    QUOTA_MONITOR_POLL_CLASSIFICATION as QUOTA_MONITOR_POLL_CLASSIFICATION,
     build_quota_monitor_poll_event as build_quota_monitor_poll_event,
     record_quota_monitor_poll_for_decision,
     resolve_monitor_poll_target,
@@ -59,13 +59,17 @@ from .control_plane.quota.scheduler_ack import (
 )
 from .control_plane.quota.settlement import (
     read_heartbeat_settlement,
+    read_quota_spend_precheck,
     settlement_result_payload,
 )
 from .control_plane.quota.ledger_readback import (
+    QUOTA_EVENT_UNREADABLE_EVENT_INVALID,
+    QUOTA_EVENT_UNREADABLE_REASONS,
     QUOTA_SLOT_SPENT_CLASSIFICATION,
     QUOTA_SLOT_VOIDED_CLASSIFICATION,
     net_quota_slot_spend,
-    quota_slot_contribution,
+    quota_slot_contribution,  # noqa: F401
+    quota_slot_observation,
 )
 from .control_plane.quota.spend_sources import (
     DEFAULT_SLOT_SPEND_SOURCE,
@@ -108,11 +112,11 @@ from .control_plane.todos.todo_semantics import (
 _PUBLIC_COMPAT_REEXPORTS = {
     "AUTONOMOUS_CANDIDATE_CONTEXT_FIELDS": "loopx.control_plane.quota.policy_constants",
     "MONITOR_DUE_ITEM_LIMIT": "loopx.control_plane.quota.policy_constants",
-    "QUOTA_MONITOR_POLL_CLASSIFICATION": "loopx.control_plane.quota.monitor_poll",
     "build_quota_monitor_poll_event": "loopx.control_plane.quota.monitor_poll",
     "render_quota_markdown": "loopx.presentation.renderers.quota_markdown",
     "render_quota_scheduler_ack_markdown": "loopx.presentation.renderers.quota_markdown",
     "render_quota_should_run_markdown": "loopx.presentation.renderers.quota_markdown",
+    "quota_slot_contribution": "loopx.control_plane.quota.ledger_readback",
     "build_quota_slot_void_event": "loopx.control_plane.quota.void_commit",
     "record_quota_slot_void_from_preview": "loopx.control_plane.quota.void_commit",
     "render_quota_slot_preview_markdown": "loopx.presentation.renderers.quota_event_markdown",
@@ -253,7 +257,7 @@ def quota_with_handoff_outcome_floor(
     if not isinstance(handoff_readiness, dict) or not handoff_readiness:
         return quota
     profile = (
-        project_asset.get("execution_profile")
+        cast(dict[str, Any], project_asset.get("execution_profile"))
         if isinstance(project_asset, dict)
         and isinstance(project_asset.get("execution_profile"), dict)
         else None
@@ -279,7 +283,7 @@ def quota_with_handoff_outcome_floor(
     must_advance = [
         str(value).strip()
         for value in (
-            floor.get("must_advance")
+            cast(list[Any], floor.get("must_advance"))
             if isinstance(floor.get("must_advance"), list)
             else []
         )
@@ -288,7 +292,7 @@ def quota_with_handoff_outcome_floor(
     avoid = [
         str(value).strip()
         for value in (
-            floor.get("avoid") if isinstance(floor.get("avoid"), list) else []
+            cast(list[Any], floor.get("avoid")) if isinstance(floor.get("avoid"), list) else []
         )
         if str(value).strip()
     ]
@@ -342,7 +346,7 @@ def _quota_with_focus_wait_override(
 
 
 def goal_quota_config(goal: dict[str, Any] | None) -> dict[str, Any]:
-    raw = goal.get("quota") if goal and isinstance(goal.get("quota"), dict) else {}
+    raw = cast(dict[str, Any], goal.get("quota")) if goal and isinstance(goal.get("quota"), dict) else {}
     if goal and "compute_quota" in goal and "compute" not in raw:
         raw = {**raw, "compute": goal.get("compute_quota")}
     compute = _clamp_compute(_number(raw.get("compute"), default=DEFAULT_COMPUTE_QUOTA))
@@ -366,6 +370,20 @@ def goal_quota_config(goal: dict[str, Any] | None) -> dict[str, Any]:
     }
     if raw.get("next_eligible_at"):
         payload["next_eligible_at"] = str(raw.get("next_eligible_at"))
+    # An unreadable quota event is a ledger integrity failure, not a spend of
+    # zero: the projection that read it reports the count, and every consumer
+    # of that projection has to fail closed instead of treating the spend as
+    # absent.
+    unreadable_event_count = _int_number(raw.get("unreadable_event_count"), default=0)
+    if unreadable_event_count > 0:
+        payload["unreadable_event_count"] = unreadable_event_count
+        # The count says how many events broke; the reasons say why, so the
+        # read-back can tell an operator which artifact to repair.
+        reasons = raw.get("unreadable_event_reasons")
+        if isinstance(reasons, list):
+            validated = sorted({str(reason) for reason in reasons if str(reason)})
+            if validated:
+                payload["unreadable_event_reasons"] = validated
     return payload
 
 
@@ -380,10 +398,22 @@ def goal_quota_with_spend_ledger(
     current_time = now or datetime.now(timezone.utc).astimezone()
     if current_time.tzinfo is None:
         current_time = current_time.replace(tzinfo=timezone.utc)
-    window_start = current_time - timedelta(hours=int(payload["window_hours"]))
+    try:
+        # Ledger timestamps are UTC, so the cutoff is computed in UTC: doing the
+        # subtraction in the host's offset can underflow (or not) at a different
+        # instant and make the same ledger count differently per host timezone.
+        window_start = current_time.astimezone(timezone.utc) - timedelta(
+            hours=int(payload["window_hours"])
+        )
+    except OverflowError:
+        # A window longer than datetime can represent still covers every
+        # representable event. It must not crash the Goal-wide history read.
+        window_start = datetime.min.replace(tzinfo=timezone.utc)
     contributions: list[tuple[str, str, int]] = []
     spend_event_count = 0
     void_event_count = 0
+    unreadable_event_count = 0
+    unreadable_reasons: set[str] = set()
 
     for run in runs:
         if not isinstance(run, dict):
@@ -396,7 +426,7 @@ def goal_quota_with_spend_ledger(
             else ""
         )
         run_goal_ref = (
-            run.get("goal_ref")
+            cast(Mapping[str, Any], run.get("goal_ref"))
             if isinstance(run.get("goal_ref"), Mapping)
             else None
         )
@@ -416,7 +446,14 @@ def goal_quota_with_spend_ledger(
             or generated_at > current_time
         ):
             continue
-        contribution = quota_slot_contribution(run)
+        contribution, unreadable_reason = quota_slot_observation(run)
+        if unreadable_reason is not None:
+            # The index row claims a spend or a void that cannot be read back.
+            # Counting it as no spend would silently hand the Goal fresh quota,
+            # so the event is reported as an integrity failure instead.
+            unreadable_event_count += 1
+            unreadable_reasons.add(unreadable_reason)
+            continue
         if contribution is None:
             continue
         kind, run_key, slots = contribution
@@ -429,9 +466,32 @@ def goal_quota_with_spend_ledger(
     payload["spent_slots"] = sum(net_quota_slot_spend(contributions).values())
     payload["spend_source"] = "runtime_events"
     payload["spend_event_count"] = spend_event_count
+    if unreadable_event_count:
+        payload["unreadable_event_count"] = unreadable_event_count
+        payload["unreadable_event_reasons"] = sorted(unreadable_reasons)
     if void_event_count:
         payload["void_event_count"] = void_event_count
     return payload
+
+
+def quota_with_unreadable_index_rows(quota: dict[str, Any], count: int) -> dict[str, Any]:
+    """Report run-index rows that could not be read as unreadable quota events.
+
+    A row that is not text cannot be classified, so it may hold a spend or a
+    void. The remaining quota is then unknown, which ``quota_status`` already
+    treats as a ledger integrity failure rather than a zero spend.
+    """
+
+    if count <= 0:
+        return quota
+    reasons = quota.get("unreadable_event_reasons")
+    return {
+        **quota,
+        "unreadable_event_count": _int_number(quota.get("unreadable_event_count"), default=0) + count,
+        "unreadable_event_reasons": sorted(
+            {*(reasons if isinstance(reasons, list) else []), QUOTA_EVENT_UNREADABLE_EVENT_INVALID}
+        ),
+    }
 
 
 def quota_status(
@@ -451,7 +511,7 @@ def quota_status(
     if goal_is_stopped(goal):
         state = "paused"
         reason = "goal is stopped by owner; automatic agent turns are paused"
-        # Stopping is an owner lifecycle decision, not a destructive quota edit.
+        # Stopping is an owner lifecycle decision.
         # Project zero *effective* allocation while retaining the configured
         # values so an explicit Goal resume restores the prior quota policy.
         payload["configured_compute"] = compute
@@ -468,6 +528,20 @@ def quota_status(
     elif severity == "high":
         state = "blocked_health"
         reason = "health or contract blocker must clear before compute is spent"
+    elif int(payload.get("unreadable_event_count") or 0) > 0:
+        # The spend ledger cannot read back an indexed quota event, so the
+        # remaining quota is unknown. Failing open here would hand the Goal
+        # back the spend it already used, so the Goal blocks until the
+        # artifact is readable again.
+        state = "blocked_health"
+        reason = (
+            f"{int(payload['unreadable_event_count'])} quota ledger event(s) could not "
+            "be read back; the remaining quota is unknown and cannot be spent"
+        )
+        payload["blocked_action_scope"] = "automatic_agent_turns"
+        reasons = payload.get("unreadable_event_reasons")
+        if isinstance(reasons, list) and reasons:
+            payload["unreadable_event_reasons"] = list(reasons)
     elif waiting_on in {"user_or_controller", "controller"}:
         state = "operator_gate"
         reason = (
@@ -509,7 +583,7 @@ def quota_status(
 
 
 def _quota_sort_key(item: dict[str, Any]) -> tuple[int, float, int, str]:
-    quota = item.get("quota") if isinstance(item.get("quota"), dict) else {}
+    quota = cast(dict[str, Any], item.get("quota")) if isinstance(item.get("quota"), dict) else {}
     state = str(quota.get("state") or "waiting")
     state_index = (
         QUOTA_STATE_ORDER.index(state)
@@ -546,7 +620,7 @@ def _compact_handoff_readiness(value: Any) -> dict[str, Any] | None:
         if field in value
     }
     latest_run = (
-        value.get("post_handoff_latest_run")
+        cast(dict[str, Any], value.get("post_handoff_latest_run"))
         if isinstance(value.get("post_handoff_latest_run"), dict)
         else {}
     )
@@ -557,7 +631,7 @@ def _compact_handoff_readiness(value: Any) -> dict[str, Any] | None:
             if field in latest_run
         }
     recent_runs = (
-        value.get("post_handoff_recent_runs")
+        cast(list[Any], value.get("post_handoff_recent_runs"))
         if isinstance(value.get("post_handoff_recent_runs"), list)
         else []
     )
@@ -609,6 +683,76 @@ def _todo_summary_claim_scope_agent_id(summary: dict[str, Any]) -> str | None:
     return projection_todo_summary_claim_scope_agent_id(summary)
 
 
+def _unreadable_event_reasons(
+    quota: dict[str, Any],
+    ledger_quota: dict[str, Any] | None,
+) -> list[str]:
+    """Collect the validated reasons of the unreadable quota events.
+
+    The projection that read the ledger owns the reasons; a projection that
+    was built before the artifact broke may only have the count, so the ledger
+    payload is the fallback. The result is validated against the known reason
+    vocabulary so an unreadable reason cannot become free-form text in the
+    public projection.
+    """
+
+    reasons: set[str] = set()
+    for source in (quota, ledger_quota):
+        if not isinstance(source, dict):
+            continue
+        raw = source.get("unreadable_event_reasons")
+        if not isinstance(raw, list):
+            continue
+        for reason in raw:
+            text = str(reason or "").strip()
+            if text in QUOTA_EVENT_UNREADABLE_REASONS:
+                reasons.add(text)
+    return sorted(reasons)
+
+
+def _apply_unreadable_ledger_fail_closed(
+    quota: dict[str, Any],
+    *,
+    ledger_quota: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Keep an unreadable ledger event from reading as a spendable quota.
+
+    The plan layer can reuse a quota projection that was built before the
+    ledger event became unreadable, or reuse the raw ledger payload without
+    re-deriving its state. Either way the unreadable count is the authority:
+    the remaining quota is unknown, so the Goal must not look eligible.
+    """
+
+    unreadable_event_count = _int_number(quota.get("unreadable_event_count"), default=0)
+    if unreadable_event_count <= 0 and isinstance(ledger_quota, dict):
+        unreadable_event_count = _int_number(
+            ledger_quota.get("unreadable_event_count"), default=0
+        )
+    if unreadable_event_count <= 0:
+        return quota
+    reasons = _unreadable_event_reasons(quota, ledger_quota)
+    if str(quota.get("state") or "") == "blocked_health":
+        # The Goal is already blocked, but the reasons still have to reach the
+        # public projection: the count alone cannot say what to repair.
+        if not reasons:
+            return quota
+        blocked = dict(quota)
+        blocked["unreadable_event_count"] = unreadable_event_count
+        blocked["unreadable_event_reasons"] = reasons
+        return blocked
+    blocked = dict(quota)
+    blocked["state"] = "blocked_health"
+    blocked["reason"] = (
+        f"{unreadable_event_count} quota ledger event(s) could not "
+        "be read back; the remaining quota is unknown and cannot be spent"
+    )
+    blocked["blocked_action_scope"] = "automatic_agent_turns"
+    blocked["unreadable_event_count"] = unreadable_event_count
+    if reasons:
+        blocked["unreadable_event_reasons"] = reasons
+    return blocked
+
+
 def _quota_plan_goal_quota(
     *,
     attention: dict[str, Any],
@@ -620,12 +764,12 @@ def _quota_plan_goal_quota(
     status: Any,
 ) -> dict[str, Any]:
     project_asset_quota = (
-        project_asset.get("quota")
+        cast(dict[str, Any], project_asset.get("quota"))
         if isinstance(project_asset.get("quota"), dict)
         else {}
     )
     raw_quota = (
-        attention.get("quota")
+        cast(dict[str, Any], attention.get("quota"))
         if isinstance(attention.get("quota"), dict)
         else goal.get("quota")
     )
@@ -661,25 +805,27 @@ def _quota_plan_goal_quota(
             lifecycle_flags=lifecycle_flags,
             status=status,
         )
-    return quota_with_handoff_outcome_floor(
+    quota = quota_with_handoff_outcome_floor(
         quota,
         waiting_on=waiting_on,
         project_asset=project_asset,
-        handoff_readiness=attention.get("handoff_readiness")
+        handoff_readiness=cast(dict[str, Any], attention.get("handoff_readiness"))
         if isinstance(attention.get("handoff_readiness"), dict)
         else None,
     )
+    ledger_quota = cast(dict[str, Any], goal.get("quota")) if isinstance(goal.get("quota"), dict) else None
+    return _apply_unreadable_ledger_fail_closed(quota, ledger_quota=ledger_quota)
 
 
 def build_quota_plan(
     status_payload: dict[str, Any], *, mode: str = "status"
 ) -> dict[str, Any]:
     queue = (
-        status_payload.get("attention_queue")
+        cast(dict[str, Any], status_payload.get("attention_queue"))
         if isinstance(status_payload.get("attention_queue"), dict)
         else {}
     )
-    queue_items = queue.get("items") if isinstance(queue.get("items"), list) else []
+    queue_items = cast(list[Any], queue.get("items")) if isinstance(queue.get("items"), list) else []
     queue_by_goal = {
         str(item.get("goal_id")): item
         for item in queue_items
@@ -692,15 +838,15 @@ def build_quota_plan(
     ]
 
     run_history = (
-        status_payload.get("run_history")
+        cast(dict[str, Any], status_payload.get("run_history"))
         if isinstance(status_payload.get("run_history"), dict)
         else {}
     )
     run_goals = (
-        run_history.get("goals") if isinstance(run_history.get("goals"), list) else []
+        cast(list[Any], run_history.get("goals")) if isinstance(run_history.get("goals"), list) else []
     )
     status_goals = (
-        status_payload.get("goals")
+        cast(list[Any], status_payload.get("goals"))
         if isinstance(status_payload.get("goals"), list)
         else []
     )
@@ -722,7 +868,7 @@ def build_quota_plan(
         )
         attention = queue_by_goal.get(goal_id, {})
         project_asset = (
-            attention.get("project_asset")
+            cast(dict[str, Any], attention.get("project_asset"))
             if isinstance(attention.get("project_asset"), dict)
             else {}
         )
@@ -771,16 +917,16 @@ def build_quota_plan(
                 or status_goal.get("project")
                 or status_goal.get("root")
             ),
-            "coordination": goal.get("coordination")
+            "coordination": cast(dict[str, Any], goal.get("coordination"))
             if isinstance(goal.get("coordination"), dict)
             else None,
-            "explore_graph": goal.get("explore_graph")
+            "explore_graph": cast(dict[str, Any], goal.get("explore_graph"))
             if isinstance(goal.get("explore_graph"), dict)
             else None,
-            "spawn_policy": goal.get("spawn_policy")
+            "spawn_policy": cast(dict[str, Any], goal.get("spawn_policy"))
             if isinstance(goal.get("spawn_policy"), dict)
             else None,
-            "guards": goal.get("guards")
+            "guards": cast(list[Any], goal.get("guards"))
             if isinstance(goal.get("guards"), list)
             else [],
             "next_probe": goal.get("next_probe"),
@@ -788,9 +934,9 @@ def build_quota_plan(
             "quota": quota,
         }
         workspace_guard_policy = (
-            goal.get("workspace_guard_policy")
+            cast(dict[str, Any], goal.get("workspace_guard_policy"))
             if isinstance(goal.get("workspace_guard_policy"), dict)
-            else status_goal.get("workspace_guard_policy")
+            else cast(dict[str, Any], status_goal.get("workspace_guard_policy"))
             if isinstance(status_goal.get("workspace_guard_policy"), dict)
             else None
         )
@@ -810,6 +956,7 @@ def build_quota_plan(
             "missing_gates",
             "next_handoff_condition",
             "handoff_readiness",
+            "handoff_mode",
             "user_todos",
             "agent_todos",
             "active_state_next_action",
@@ -840,8 +987,8 @@ def build_quota_plan(
     ordered_items = [
         item for state in QUOTA_STATE_ORDER for item in groups.get(state, [])
     ] + groups.get("unknown", [])
-    next_automatic_turn = (groups.get("eligible") or [None])[0]
-    summary = {
+    next_automatic_turn = (cast(list[dict[str, Any] | None], groups.get("eligible")) or [None])[0]
+    summary: dict[str, Any] = {
         "registered_goals": len(ordered_items),
         "health_blockers": len(health_items),
         "next_automatic_turn": next_automatic_turn.get("goal_id")
@@ -923,27 +1070,39 @@ def build_quota_should_run(
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]] | None = None,
     receipt_bound_todo_id: str | None = None,
     requested_action_todo_id: str | None = None,
+    retained_action_selection_todo_id: str | None = None,
     receipt_bound_monitor_phase: ReceiptBoundMonitorPhase | None = None,
     receipt_bound_replay_phase: ReceiptBoundReplayPhase | None = None,
     receipt_bound_terminal_phase: ReceiptBoundTerminalPhase | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
     receipt_bound_replan_guard_scoped: bool = False,
+    receipt_bound_replan_execution_pending: bool = False,
     receipt_bound_successor_replan: bool = False,
     receipt_bound_guard_recorded_at: str | None = None,
+    receipt_bound_guard_turn_instance_id: str | None = None,
+    receipt_bound_replan_review: Mapping[str, Any] | None = None,
     turn_instance_id: str | None = None,
     runtime_root: str | Path | None = None,
     workspace_path: Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
     authoritative_fallback_todo_items: FallbackTodoSource = None,
+    app_scheduler_state_observer: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     from .control_plane.quota.should_run import (
         build_quota_should_run as _build_quota_should_run,
     )
 
-    def read_explore_context(read_goal_id: str, read_agent_id: str | None):
+    # Inline reentry can retain an explicit choice before creating a receipt.
+    # This only orders the agent's eligible cards within the existing read cap.
+    preferred_yardstick_todo_id = receipt_bound_todo_id or requested_action_todo_id or retained_action_selection_todo_id
+
+    def read_explore_context(read_goal_id: str, read_agent_id: str | None) -> dict[str, Any] | None:
         from .capabilities.explore.turn_context import read_replan_explore_context
 
-        return read_replan_explore_context(source_status=status_payload, goal_id=read_goal_id, agent_id=read_agent_id)
+        return read_replan_explore_context(
+            source_status=status_payload, goal_id=read_goal_id, agent_id=read_agent_id,
+            preferred_yardstick_todo_id=preferred_yardstick_todo_id,
+        )
 
     return _build_quota_should_run(
         status_payload,
@@ -963,14 +1122,18 @@ def build_quota_should_run(
         receipt_bound_terminal_phase=receipt_bound_terminal_phase,
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
         receipt_bound_replan_guard_scoped=receipt_bound_replan_guard_scoped,
+        receipt_bound_replan_execution_pending=receipt_bound_replan_execution_pending,
         receipt_bound_successor_replan=receipt_bound_successor_replan,
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
+        receipt_bound_guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
+        receipt_bound_replan_review=receipt_bound_replan_review,
         turn_instance_id=turn_instance_id,
         runtime_root=runtime_root,
         workspace_path=workspace_path,
         goal_ref=goal_ref,
         authoritative_fallback_todo_items=authoritative_fallback_todo_items,
         replan_explore_reader=read_explore_context,
+        app_scheduler_state_observer=app_scheduler_state_observer,
     )
 
 
@@ -1083,6 +1246,9 @@ def record_quota_scheduler_ack(
     | None = None,
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]] | None = None,
     before_decision: Mapping[str, Any] | None = None,
+    turn_instance_id: str | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
+    registry_path: Path | None = None,
 ) -> dict[str, Any]:
     safe_goal_id = _validate_goal_id_path_segment(str(goal_id or ""))
     safe_agent_id = normalize_todo_claimed_by(agent_id)
@@ -1117,6 +1283,9 @@ def record_quota_scheduler_ack(
         reason_summary=reason_summary,
         use_current_hint=use_current_hint,
         host_match_observed=host_match_observed,
+        turn_instance_id=turn_instance_id,
+        goal_ref=goal_ref,
+        registry_path=registry_path,
     )
 
 
@@ -1150,6 +1319,7 @@ def record_quota_monitor_poll(
     target_key: str | None = None,
     result_hash: str | None = None,
     material_change: bool = False,
+    material_change_scope: str | None = None,
     cadence: str | None = None,
     next_due_at: str | None = None,
     next_agent_todo: str | None = None,
@@ -1270,6 +1440,7 @@ def record_quota_monitor_poll(
         target_key=target_key,
         result_hash=result_hash,
         material_change=material_change,
+        material_change_scope=material_change_scope,
         cadence=cadence,
         next_due_at=next_due_at,
         next_agent_todo=next_agent_todo,
@@ -1291,9 +1462,10 @@ def record_quota_monitor_poll(
         goal_ref=goal_ref,
         recovery_effect_id=recovery_effect_id,
     )
-    continuation = result.get("turn_continuation") or {}
+    continuation = result.get("turn_continuation")
     if (
         result.get("ok") is True
+        and isinstance(continuation, Mapping)
         and continuation.get("settlement_binding_matches_observation") is False
     ):
         # The open-work readback may now select another Todo. Render the
@@ -1308,7 +1480,7 @@ def record_quota_monitor_poll(
         )
 
         readback = read_heartbeat_settlement(
-            runtime_root,
+            cast(Path, runtime_root),
             goal_id=safe_goal_id,
             agent_id=agent_id,
             todo_id=normalized_receipt_todo_id,
@@ -1344,7 +1516,7 @@ def record_quota_monitor_poll(
             command_prefix=prefix,
             scoped_cli_args=scoped_args,
             lifecycle_actor_args="",
-            quota_spend_source=readback.progress["quota_spend_source"],
+            quota_spend_source=cast(dict[str, Any], readback.progress)["quota_spend_source"],
             goal_ref=goal_ref,
         )
         result["settlement_resume"] = {
@@ -1354,7 +1526,7 @@ def record_quota_monitor_poll(
             "next_step": next(
                 (
                     step for step in plan.as_dict()["ordered_steps"]
-                    if step["kind"] == readback.progress["next_step"]
+                    if step["kind"] == cast(dict[str, Any], readback.progress)["next_step"]
                 ),
                 None,
             ),
@@ -1362,12 +1534,13 @@ def record_quota_monitor_poll(
         }
         # A later discovery projection is not a second settlement plan. The
         # top-level resume/readback above owns this original Turn's closeout.
-        after = result.get("after") or {}
-        cli = (after.get("interaction_contract") or {}).get("cli_channel")
-        if (
-            isinstance(cli, dict)
-            and (after.get("selected_todo") or {}).get("todo_id") != identity.todo_id
-        ):
+        raw_after = result.get("after")
+        after = raw_after if isinstance(raw_after, Mapping) else {}
+        contract = after.get("interaction_contract")
+        cli = contract.get("cli_channel") if isinstance(contract, Mapping) else None
+        selected = after.get("selected_todo")
+        selected_id = selected.get("todo_id") if isinstance(selected, Mapping) else None
+        if isinstance(cli, dict) and selected_id != identity.todo_id:
             cli.pop("settlement_plan", None)
             cli.pop("next_cli_actions", None)
             cli.update(
@@ -1479,7 +1652,7 @@ def spend_quota_slot(
             "goal_id": safe_goal_id,
             "reason": "effect_ref must be a non-empty string when provided",
         }
-    if normalized_effect_ref:
+    if normalized_effect_ref and not turn_instance_id:
         if not raw_runtime_root:
             return {
                 "ok": False,
@@ -1546,6 +1719,7 @@ def spend_quota_slot(
         and not replan_obligation_id
     )
     settlement_readback = None
+    spend_request = {"slots": slots, "source": source}
     if (
         not turn_instance_id
         and raw_runtime_root
@@ -1554,7 +1728,7 @@ def spend_quota_slot(
             or recover_unbound_visible_goal
         )
     ):
-        settlement_readback = read_heartbeat_settlement(
+        settlement_readback = read_quota_spend_precheck(
             Path(str(raw_runtime_root)).expanduser(),
             goal_id=safe_goal_id,
             agent_id=agent_id,
@@ -1564,6 +1738,7 @@ def spend_quota_slot(
             allow_unbound_binding=recover_unbound_visible_goal,
             registry_path=registry_path,
             goal_ref=goal_ref,
+            spend_request=spend_request,
         )
         inferred_result = (
             settlement_readback.identity
@@ -1593,7 +1768,7 @@ def spend_quota_slot(
     if turn_instance_id and raw_runtime_root:
         runtime_root = Path(str(raw_runtime_root)).expanduser()
         if settlement_readback is None:
-            settlement_readback = read_heartbeat_settlement(
+            settlement_readback = read_quota_spend_precheck(
                 runtime_root,
                 goal_id=safe_goal_id,
                 agent_id=agent_id,
@@ -1602,6 +1777,7 @@ def spend_quota_slot(
                 replan_obligation_id=replan_obligation_id,
                 registry_path=registry_path,
                 goal_ref=goal_ref,
+                spend_request=spend_request,
             )
         if settlement_readback is None:
             raise RuntimeError("exact settlement readback unexpectedly returned not-found")
@@ -1621,6 +1797,18 @@ def spend_quota_slot(
                 "settlement_result": settlement_result_payload(guard_result),
             }
         identity = guard_result.value
+        refusal = settlement_readback.spend_request_rejection
+        if refusal is not None:
+            return {
+                "ok": False,
+                "mode": "spend-slot",
+                "dry_run": not execute,
+                "appended": False,
+                "goal_id": safe_goal_id,
+                "settlement_identity": identity.as_dict(),
+                "settlement_result": settlement_result_payload(refusal),
+                "reason": refusal.failure.reason if refusal.failure else "invalid original Turn spend",
+            }
         spent_result = settlement_readback.settlement
         if spent_result.failure is None:
             return {
@@ -1638,12 +1826,12 @@ def spend_quota_slot(
                 "settlement_result": settlement_result_payload(spent_result),
                 **(
                     {"settlement_progress": settlement_readback.progress}
-                    if settlement_readback.progress.get("closeout_kind") == "capability_duty_retired_no_spend"
+                    if cast(dict[str, Any], settlement_readback.progress).get("closeout_kind") == "capability_duty_retired_no_spend"
                     else {}
                 ),
                 "reason": (
                     "exact Turn closeout replayed without a quota debit"
-                    if settlement_readback.progress.get("closeout_kind") == "capability_duty_retired_no_spend"
+                    if cast(dict[str, Any], settlement_readback.progress).get("closeout_kind") == "capability_duty_retired_no_spend"
                     else "quota spend receipt replayed for the same settlement identity"
                 ),
                 **(
@@ -1652,14 +1840,16 @@ def spend_quota_slot(
                     else {}
                 ),
             }
-        prior_spend_run = settlement_readback.spend_run
-        if prior_spend_run is not None:
+        if settlement_readback.spend_run_present:
+            # The precheck verified these terms against the retained debit.
+            # Carry them to the existing receipt writer without charging again.
             return {
                 "ok": True,
                 "mode": "spend-slot",
                 "dry_run": not execute,
                 "appended": False,
                 "receipt_repair_required": bool(execute),
+                **spend_request,
                 "goal_id": safe_goal_id,
                 "agent_id": identity.agent_id,
                 "todo_id": identity.todo_id,

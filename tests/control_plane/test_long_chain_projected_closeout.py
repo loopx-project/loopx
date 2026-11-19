@@ -47,11 +47,12 @@ def test_managed_turn_counts_advancement_without_monitor_backlog(
 
     # The public managed-Turn entrypoint must keep both the first read and replay
     # free of a long-chain duty introduced solely by independent monitors.
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
     for _ in range(2):
         rc, result = _run_cli(
             registry, runtime, "quota", "should-run", "--codex-app",
             "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-            "--turn-instance-id", TURN_ID, "--scan-path", str(project), cwd=project,
+            "--turn-instance-id", TURN_ID,  cwd=project,
         )
         assert rc == 0, result
         frontier = result["goal_frontier_projection"]
@@ -128,7 +129,7 @@ def test_projected_vision_replan_settles_without_a_meta_successor(
     def guard(turn):
         return call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
                     "--agent-id", AGENT_ID, "--turn-instance-id", turn,
-                    "--scan-path", str(project))
+                    )
 
     call("configure-goal", "--goal-id", GOAL_ID,
          "--execution-replan-after-turns", "6",

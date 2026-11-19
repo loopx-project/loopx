@@ -7,11 +7,13 @@ from pathlib import Path
 
 import pytest
 from canonical_authority_fixture import (
+    advance_canonical_fixture_authority,
     initialize_canonical_authority,
     isolate_sqlite_runtime,
 )
 
 from loopx.control_plane.coordination import local_authority
+from loopx.control_plane import effect_runtime
 from loopx.control_plane.coordination.local_authority import (
     LocalCoordinationAuthorityUnavailable,
 )
@@ -62,7 +64,7 @@ def wide_goal(tmp_path, monkeypatch, request):
             "status": "open",
             "done": False,
             "text": f"Retained work {index}",
-            "note": "完整🙂" * 1600,
+            "note": "完整🙂" * 6000,
             "archive_state": "active",
             "source_section": "Agent Todo",
             "index": index + 1,
@@ -84,6 +86,50 @@ def native_read(runtime):
     return local_authority.read_canonical_todos_if_promoted(
         runtime_root=runtime, goal_id="goal-a", include_leases=True
     )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"include_leases": False},
+        {"include_leases": True, "include_summary": True},
+        {"include_leases": True, "projection_readback": {"operation": "confirmation"}},
+    ],
+)
+def test_lease_selection_rejects_todo_summary_and_projection_readback(tmp_path, kwargs):
+    with pytest.raises(ValueError, match="lease selection requires"):
+        local_authority.read_canonical_todos_if_promoted(
+            runtime_root=tmp_path,
+            goal_id="goal-a",
+            lease_todo_ids={"todo_000"},
+            **kwargs,
+        )
+
+
+def test_cli_preserves_projection_failure_and_original_reason(wide_goal):
+    runtime, _state, registry, projection = wide_goal
+    projection["todo_read_model"]["contract_fields"].append("future_field")
+    advance_canonical_fixture_authority(
+        runtime, "goal-a", projection, operation_id="unsupported-manifest"
+    )
+    for selection in (None, {"todo_000"}):
+        with pytest.raises(LocalCoordinationAuthorityUnavailable) as failure:
+            local_authority.read_canonical_todos_if_promoted(
+                runtime_root=runtime, goal_id="goal-a", include_leases=True, lease_todo_ids=selection
+            )
+        assert failure.value.code == "canonical_snapshot_projection_invalid"
+        assert "field contract mismatch" in str(failure.value)
+    process = subprocess.run(
+        [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+         "--format", "json", "todo", "list", "--goal-id", "goal-a"],
+        cwd=REPO, text=True, capture_output=True, timeout=60, check=False,
+    )
+    assert process.returncode != 0
+    result = json.loads(process.stdout)
+    assert result["ok"] is False
+    assert result["error_code"] == "canonical_snapshot_projection_invalid"
+    assert "field contract mismatch" in result["error"]
+    assert "todos" not in result
 
 
 def test_historical_source_uses_private_snapshot_above_inline_budget(wide_goal):
@@ -154,8 +200,16 @@ def test_real_rpc_keeps_budget_and_cli_recovers_complete_display(
     # caller cannot classify that lost response as a safe rejection or retry.
     assert oversized.value.diagnostic_code == "runtime_response_ambiguous"
     measured = []
+    private_sizes = []
+    read_private = effect_runtime._read_local_snapshot_response
+
+    def capture_private(envelope, *args, **kwargs):
+        private_sizes.append(envelope["result_ref"]["byte_count"])
+        return read_private(envelope, *args, **kwargs)
 
     def capture(method, payload, **kwargs):
+        assert method == "coordination.local_authority.todo_snapshot"
+        assert kwargs["large_local_snapshot"] is True
         result = effect_runtime_result(method, payload, **kwargs)
         measured.append(
             len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode())
@@ -164,9 +218,28 @@ def test_real_rpc_keeps_budget_and_cli_recovers_complete_display(
 
     with monkeypatch.context() as patch:
         patch.setattr(local_authority, "effect_runtime_result", capture)
+        patch.setattr(effect_runtime, "_read_local_snapshot_response", capture_private)
         result = native_read(runtime)
-    assert len(measured) > 1 and max(measured) <= 1792 * 1024
+    assert len(measured) == 1 and measured[0] > MAX_RESPONSE_BYTES
+    assert len(private_sizes) == 1
+    assert MAX_RESPONSE_BYTES < private_sizes[0] <= effect_runtime.MAX_LOCAL_SNAPSHOT_BYTES
     assert result["todos"] == projection["todos"]
+    # The original wire-only endpoint keeps its exact bounds and complete
+    # assembly contract. Both paths return the same immutable canonical facts.
+    measured.clear()
+
+    def paged(_method, payload, **kwargs):
+        page = effect_runtime_result(
+            "coordination.local_authority.todo_snapshot_page", payload,
+            timeout=kwargs["timeout"],
+        )
+        measured.append(len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()))
+        return page
+
+    with monkeypatch.context() as patch:
+        patch.setattr(local_authority, "effect_runtime_result", paged)
+        assert native_read(runtime) == result
+    assert len(measured) > 1 and max(measured) <= 1792 * 1024
     # A rejected oversized read may close a socket with buffered response bytes.
     # It must not take down the shared runtime used by the paged successor.
     assert effect_runtime_result("runtime.ping", {})["pid"] == runtime_pid
@@ -205,7 +278,13 @@ def test_real_overlapping_commit_has_no_partial_or_legacy_success(
     calls = []
 
     def overlap(method, payload, **kwargs):
-        result = effect_runtime_result(method, payload, **kwargs)
+        assert method == "coordination.local_authority.todo_snapshot"
+        # Force the real bounded owner to exercise its continuation recovery,
+        # rather than a complete result which needs no second provider read.
+        result = effect_runtime_result(
+            "coordination.local_authority.todo_snapshot_page", payload,
+            timeout=kwargs["timeout"],
+        )
         calls.append(result)
         if len(calls) == 1:
             # A real writer wins between pages, with unchanged Todo data. Revision still matters.

@@ -35,6 +35,31 @@ def _run_alignment_cli(
     return exit_code, payload, captured.out
 
 
+@pytest.mark.parametrize("command", ["shared-goal-alignment", "goal-alignment"])
+def test_unmigrated_alignment_preserves_typed_recovery_without_writes(tmp_path, capsys, command):
+    project = tmp_path / "project"
+    project.mkdir()
+    state = project / "STATE.md"
+    state.write_text("# Goal\n\n## Agent Todo\n\n", encoding="utf-8")
+    runtime = tmp_path / "runtime"
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
+        "id": GOAL_ID, "repo": str(project), "state_file": str(state),
+        "coordination": {"registered_agents": ["agent-a"]},
+    }]}), encoding="utf-8")
+    before = state.read_bytes(), registry.read_bytes()
+    code, payload, _ = _run_alignment_cli(capsys, registry, command,
+        "--goal-id", GOAL_ID, "--agent-id", "agent-a", "--format", "json")
+    assert code == 1 and payload["ok"] is False
+    assert payload["error_code"] == "canonical_authority_required"
+    assert payload["write_admitted"] is False
+    assert payload["legacy_fallback_used"] is False
+    assert payload["decision_read_from_provider"] is False
+    assert payload["recovery"] == {"action": "migrate_goal_authority", "backup_required": True}
+    assert (state.read_bytes(), registry.read_bytes()) == before
+    assert not (runtime / "authority").exists()
+
+
 def test_cli_projects_shared_goal_alignment_json(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -185,7 +210,7 @@ def test_cli_missing_goal_fails_closed(
     assert "nonexistent-goal" in payload["error"]
 
 
-def test_cli_missing_state_file_fails_closed(
+def test_cli_missing_display_keeps_canonical_read_only_basis(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -209,9 +234,11 @@ def test_cli_missing_state_file_fails_closed(
         "json",
     )
 
-    assert exit_code == 1
-    assert payload["ok"] is False
-    assert "missing" in payload["error"]
+    assert exit_code == 0 and payload["ok"] is True
+    assert payload["read_only"] is True
+    assert payload["source_basis"]["revision_basis"] == "canonical_todo_snapshot"
+    assert payload["frontier_counts"]["current_agent_claimed_advancement_count"] == 1
+    assert not paths["state_file"].exists()
 
 
 def test_cli_does_not_use_current_directory_when_registered_state_is_missing(
@@ -232,6 +259,9 @@ def test_cli_does_not_use_current_directory_when_registered_state_is_missing(
         paths["state_file"].read_text(encoding="utf-8"),
         encoding="utf-8",
     )
+    foreign_state.write_text(foreign_state.read_text(encoding="utf-8")
+        + "\n- [ ] Foreign-only work\n  <!-- loopx:todo todo_id=todo_foreign_only status=open -->\n", encoding="utf-8")
+    foreign_before = foreign_state.read_bytes()
     monkeypatch.chdir(foreign_project)
 
     exit_code, payload, _ = _run_alignment_cli(
@@ -246,9 +276,12 @@ def test_cli_does_not_use_current_directory_when_registered_state_is_missing(
         "json",
     )
 
-    assert exit_code == 1
-    assert payload["ok"] is False
-    assert "goal state file is missing" in payload["error"]
+    assert exit_code == 0 and payload["ok"] is True
+    assert payload["read_only"] is True
+    assert payload["source_basis"]["revision_basis"] == "canonical_todo_snapshot"
+    assert payload["frontier_counts"]["current_agent_claimed_advancement_count"] == 1
+    assert "todo_foreign_only" not in json.dumps(payload)
+    assert foreign_state.read_bytes() == foreign_before
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

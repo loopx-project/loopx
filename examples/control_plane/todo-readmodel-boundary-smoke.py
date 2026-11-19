@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import json
 from copy import deepcopy
 from pathlib import Path
 import sys
@@ -294,6 +295,10 @@ def assert_attention_item_parity() -> None:
 
 
 def assert_active_state_todo_fields_redacts_review_material_paths() -> None:
+    sys.path.insert(0, str(ROOT / "tests" / "control_plane"))
+    from canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+
     with tempfile.TemporaryDirectory(prefix="loopx-todo-redaction-") as tmp:
         project = Path(tmp)
         material = project / "docs" / "notes.md"
@@ -323,12 +328,27 @@ def assert_active_state_todo_fields_redacts_review_material_paths() -> None:
         )
         raw_material = raw_fields["agent_todos"]["items"][0]["review_materials"][0]
         assert raw_material["resolved_path"] == str(material.resolve()), raw_material
-
-        fields = status_module.active_state_todo_fields(goal)
-        material_projection = fields["agent_todos"]["items"][0]["review_materials"][0]
+        # Parsed display-material metadata still uses the public redactor;
+        # canonical Todo records deliberately do not persist these paths.
+        from loopx.control_plane.todos.active_state_todos import redacted_status_todo_fields
+        redacted = redacted_status_todo_fields(raw_fields)
+        material_projection = redacted["agent_todos"]["items"][0]["review_materials"][0]
         assert material_projection["path"] == "docs/notes.md", material_projection
         assert material_projection["exists"] is True, material_projection
         assert "resolved_path" not in material_projection, material_projection
+        assert raw_material["resolved_path"] == str(material.resolve()), "Redaction must not mutate its source"
+
+        # Status reads canonical authority, not the legacy display file. Seed
+        # the same parsed record so this remains a real read/redaction check.
+        runtime = project / "runtime"
+        records = [todo_read_model.canonical_todo_read_record(item)
+            for item in raw_fields["agent_todos"]["items"]]
+        initialize_canonical_authority(runtime, goal["id"], build_todo_runtime_shadow_projection(
+            goal_id=goal["id"], todos=records, handoff_mode="soft_claim"),
+            state_path=state_path, provider="sqlite")
+        fields = status_module.active_state_todo_fields(goal, runtime_root=runtime)
+        assert fields["agent_todos"]["items"][0]["text"] == "[P1] Review [notes](docs/notes.md)"
+        assert str(material.resolve()) not in json.dumps(fields["agent_todos"])
 
 
 def assert_control_plane_has_no_status_reverse_imports() -> None:

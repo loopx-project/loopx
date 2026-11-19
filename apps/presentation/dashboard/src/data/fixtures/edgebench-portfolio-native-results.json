@@ -1,0 +1,1217 @@
+{
+  "goal_id": "edgebench-official-portfolio-analysis-20261011-04",
+  "display_name": "Portfolio · captured native results",
+  "events": [],
+  "provenance": {
+    "kind": "captured_read_only_analysis_api",
+    "captured_at": "2026-11-04T08:46:21.828152+00:00",
+    "source_run_id": "portfolio-official-native3600-integration-20261011-04",
+    "limitations": [
+      "Historical 11–12 October native run from an existing formally registered read-only analysis Goal; not the recent history fixture or a new solver run.",
+      "The original, Chinese and English analysis API responses and native citation responses are unchanged.",
+      "Six registered episodes have no saved analysis job or result. No model judgment or analysis usage is synthesized.",
+      "Initial, best and final native results are measured; retained result and adopted improvement remain unknown.",
+      "The selected analysis Goal has no Explore records. No solver history or relationship is reconstructed.",
+      "No authority store, execution state, raw session transcript, model process or solver is restored by this display fixture."
+    ]
+  },
+  "analysis_readbacks": {
+    "original": {
+      "request_path": "/api/chat/research-analysis?goal_id=edgebench-official-portfolio-analysis-20261011-04&pack_id=43d7256976866d8d31487f9fd5e5b704ea6f641711f84d18c745e783b9d1f1fc",
+      "response_sha256": "b33ebfcc7c233f8cf87b70e23b3bc76e34d5b91b8fcf11393e532afa9597b717",
+      "response": {
+        "ok": true,
+        "catalog": {
+          "ok": true,
+          "availability": "available",
+          "reason_code": null,
+          "default_pack_id": "43d7256976866d8d31487f9fd5e5b704ea6f641711f84d18c745e783b9d1f1fc",
+          "packs": [
+            {
+              "pack_id": "43d7256976866d8d31487f9fd5e5b704ea6f641711f84d18c745e783b9d1f1fc",
+              "title": "Portfolio Official · 12h · 原生反馈片段",
+              "scope": {
+                "goal_id": "edgebench-official-portfolio-analysis-20261011-04",
+                "case_id": "portfolio_risk_calibration",
+                "run_id": "portfolio-official-native3600-integration-20261011-04",
+                "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:2a03d0a6e100f61a69aca900bfd2820a89dd5431a819c152b306a6bca33749ca",
+                "window": "Original captured native session 2026-10-11T12:28:46.720Z to 2026-10-12T00:28:14.011Z; declared solver budget 12.00h. Analysis lifecycle created later."
+              },
+              "selection": {
+                "rule": "Deterministic six equal submission-order strata among native results with exact captured feedback observation; two preceding and up to two following bounded assistant narrative messages. Purposive native-feedback episodes, not an exhaustive research population. Full released report inventory supplied separately; temporal adjacency alone is not evidence adoption.",
+                "population_episodes": null,
+                "exhaustive": false
+              },
+              "episode_count": 6,
+              "source_count": 40,
+              "analysis_key": "e61bcb63c26f1f76e641c667cf52aa87654babb3ce661f4ca741697e0ce17ebf",
+              "method_version": "research-episodes-v2",
+              "config": {
+                "model": "gpt-6.1-sol",
+                "effort": "max",
+                "service_tier": "fast"
+              },
+              "availability": "available",
+              "reason_code": null,
+              "native_outcomes": {
+                "artifact": "product-goal-sources/official/portfolio/native-outcomes.json",
+                "artifact_sha256": "55c1c3489b17ea3e4b63e5d0b85fcab39ab25d64fe23e00b978cf4e8fc94c933",
+                "projection": {
+                  "method": "source_bound_native_outcomes_v1",
+                  "scope": {
+                    "goal_id": "edgebench-official-portfolio-analysis-20261011-04",
+                    "case_id": "portfolio_risk_calibration",
+                    "run_id": "portfolio-official-native3600-integration-20261011-04",
+                    "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:2a03d0a6e100f61a69aca900bfd2820a89dd5431a819c152b306a6bca33749ca",
+                    "window": "Original captured native session 2026-10-11T12:28:46.720Z to 2026-10-12T00:28:14.011Z; declared solver budget 12.00h. Analysis lifecycle created later."
+                  },
+                  "start": "2026-10-11T12:28:46.720Z",
+                  "end": "2026-10-12T00:28:14.011Z",
+                  "complete": true,
+                  "metric": {
+                    "name": "Native task score",
+                    "unit": "raw",
+                    "higher_is_better": true
+                  },
+                  "sample_count": 12,
+                  "valid_count": 12,
+                  "initial": {
+                    "submission_index": 1,
+                    "result_id": "c38948e32bda",
+                    "candidate_ref": "agent-1",
+                    "submitted_at": "2026-10-11T12:41:35.201Z",
+                    "observed_at": "2026-10-11T12:41:56.877Z",
+                    "value": 0,
+                    "citation": {
+                      "source_id": "released-native-inventory",
+                      "first_line": 1,
+                      "last_line": 1
+                    }
+                  },
+                  "best_valid": {
+                    "submission_index": 7,
+                    "result_id": "4309ac4b9da9",
+                    "candidate_ref": "agent-7",
+                    "submitted_at": "2026-10-11T18:49:30.402Z",
+                    "observed_at": "2026-10-11T18:49:52.611Z",
+                    "value": 10.86,
+                    "citation": {
+                      "source_id": "released-native-inventory",
+                      "first_line": 7,
+                      "last_line": 7
+                    }
+                  },
+                  "retained": null,
+                  "final_valid": {
+                    "submission_index": 12,
+                    "result_id": "da425c4f9ced",
+                    "candidate_ref": "agent-12",
+                    "submitted_at": "2026-10-12T00:08:10.729Z",
+                    "observed_at": "2026-10-12T00:08:33.391Z",
+                    "value": 10.86,
+                    "citation": {
+                      "source_id": "released-native-inventory",
+                      "first_line": 12,
+                      "last_line": 12
+                    }
+                  },
+                  "limitations": [
+                    "Provider-recorded measurements in the declared capture; not study countability or a causal effect.",
+                    "Validity and retained selection belong to the native provider, not model judgments or Todo status.",
+                    "Initial requires a complete prefix and a valid first submission; invalid or missing results are not zero.",
+                    "Submission order determines initial/final; delayed feedback does not make an older candidate current.",
+                    "Costs retain their own measured windows; no monetary, whole-study or per-result cost is inferred."
+                  ]
+                },
+                "applicability": "current",
+                "reason_code": null
+              }
+            }
+          ]
+        },
+        "pack": {
+          "ok": true,
+          "pack_id": "43d7256976866d8d31487f9fd5e5b704ea6f641711f84d18c745e783b9d1f1fc",
+          "title": "Portfolio Official · 12h · 原生反馈片段",
+          "scope": {
+            "goal_id": "edgebench-official-portfolio-analysis-20261011-04",
+            "case_id": "portfolio_risk_calibration",
+            "run_id": "portfolio-official-native3600-integration-20261011-04",
+            "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:2a03d0a6e100f61a69aca900bfd2820a89dd5431a819c152b306a6bca33749ca",
+            "window": "Original captured native session 2026-10-11T12:28:46.720Z to 2026-10-12T00:28:14.011Z; declared solver budget 12.00h. Analysis lifecycle created later."
+          },
+          "selection": {
+            "rule": "Deterministic six equal submission-order strata among native results with exact captured feedback observation; two preceding and up to two following bounded assistant narrative messages. Purposive native-feedback episodes, not an exhaustive research population. Full released report inventory supplied separately; temporal adjacency alone is not evidence adoption.",
+            "population_episodes": null,
+            "exhaustive": false
+          },
+          "episode_count": 6,
+          "source_count": 40,
+          "analysis_key": "e61bcb63c26f1f76e641c667cf52aa87654babb3ce661f4ca741697e0ce17ebf",
+          "method_version": "research-episodes-v2",
+          "config": {
+            "model": "gpt-6.1-sol",
+            "effort": "max",
+            "service_tier": "fast"
+          },
+          "availability": "available",
+          "reason_code": null,
+          "native_outcomes": {
+            "artifact": "product-goal-sources/official/portfolio/native-outcomes.json",
+            "artifact_sha256": "55c1c3489b17ea3e4b63e5d0b85fcab39ab25d64fe23e00b978cf4e8fc94c933",
+            "projection": {
+              "method": "source_bound_native_outcomes_v1",
+              "scope": {
+                "goal_id": "edgebench-official-portfolio-analysis-20261011-04",
+                "case_id": "portfolio_risk_calibration",
+                "run_id": "portfolio-official-native3600-integration-20261011-04",
+                "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:2a03d0a6e100f61a69aca900bfd2820a89dd5431a819c152b306a6bca33749ca",
+                "window": "Original captured native session 2026-10-11T12:28:46.720Z to 2026-10-12T00:28:14.011Z; declared solver budget 12.00h. Analysis lifecycle created later."
+              },
+              "start": "2026-10-11T12:28:46.720Z",
+              "end": "2026-10-12T00:28:14.011Z",
+              "complete": true,
+              "metric": {
+                "name": "Native task score",
+                "unit": "raw",
+                "higher_is_better": true
+              },
+              "sample_count": 12,
+              "valid_count": 12,
+              "initial": {
+                "submission_index": 1,
+                "result_id": "c38948e32bda",
+                "candidate_ref": "agent-1",
+                "submitted_at": "2026-10-11T12:41:35.201Z",
+                "observed_at": "2026-10-11T12:41:56.877Z",
+                "value": 0,
+                "citation": {
+                  "source_id": "released-native-inventory",
+                  "first_line": 1,
+                  "last_line": 1
+                }
+              },
+              "best_valid": {
+                "submission_index": 7,
+                "result_id": "4309ac4b9da9",
+                "candidate_ref": "agent-7",
+                "submitted_at": "2026-10-11T18:49:30.402Z",
+                "observed_at": "2026-10-11T18:49:52.611Z",
+                "value": 10.86,
+                "citation": {
+                  "source_id": "released-native-inventory",
+                  "first_line": 7,
+                  "last_line": 7
+                }
+              },
+              "retained": null,
+              "final_valid": {
+                "submission_index": 12,
+                "result_id": "da425c4f9ced",
+                "candidate_ref": "agent-12",
+                "submitted_at": "2026-10-12T00:08:10.729Z",
+                "observed_at": "2026-10-12T00:08:33.391Z",
+                "value": 10.86,
+                "citation": {
+                  "source_id": "released-native-inventory",
+                  "first_line": 12,
+                  "last_line": 12
+                }
+              },
+              "limitations": [
+                "Provider-recorded measurements in the declared capture; not study countability or a causal effect.",
+                "Validity and retained selection belong to the native provider, not model judgments or Todo status.",
+                "Initial requires a complete prefix and a valid first submission; invalid or missing results are not zero.",
+                "Submission order determines initial/final; delayed feedback does not make an older candidate current.",
+                "Costs retain their own measured windows; no monetary, whole-study or per-result cost is inferred."
+              ]
+            },
+            "applicability": "current",
+            "reason_code": null
+          },
+          "objective": "分析原生 Official 研究如何推进原任务，区分事实、模型解释和独立验证。原始任务见 original-objective。此 Goal 是对真实原生轨迹的新分析生命周期；历史 Official 没有 LoopX 执行 Goal。保留历史 score_countable=false，只作诊断参考，不能和新恢复组作因果效果比较。原生结果及时间由原文件提供；未验证最终保留候选、贡献归因或货币成本，不可用 best 代替 retained。数值过程指标仅对声明样本适用。",
+          "episodes": [
+            {
+              "id": "native-feedback-1",
+              "question": "原生提交 agent-1 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-1",
+                "original-feedback-1",
+                "original-message-143",
+                "original-message-191",
+                "original-message-223",
+                "original-message-275"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-3",
+              "question": "原生提交 agent-3 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-3",
+                "original-feedback-3",
+                "original-message-1108",
+                "original-message-1117",
+                "original-message-1144",
+                "original-message-1191"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-5",
+              "question": "原生提交 agent-5 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-5",
+                "original-feedback-5",
+                "original-message-2013",
+                "original-message-2041",
+                "original-message-2067",
+                "original-message-2108"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-8",
+              "question": "原生提交 agent-8 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-8",
+                "original-feedback-8",
+                "original-message-3665",
+                "original-message-3758",
+                "original-message-3802",
+                "original-message-3863"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-10",
+              "question": "原生提交 agent-10 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-10",
+                "original-feedback-10",
+                "original-message-4920",
+                "original-message-4944",
+                "original-message-4975",
+                "original-message-5007"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-12",
+              "question": "原生提交 agent-12 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-12",
+                "original-feedback-12",
+                "original-message-6390",
+                "original-message-6425",
+                "original-message-6463",
+                "original-message-6500"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            }
+          ],
+          "job": null,
+          "result": null,
+          "applicability": "current"
+        },
+        "execution_enabled": false
+      }
+    },
+    "zh": {
+      "request_path": "/api/chat/research-analysis?goal_id=edgebench-official-portfolio-analysis-20261011-04&pack_id=43d7256976866d8d31487f9fd5e5b704ea6f641711f84d18c745e783b9d1f1fc&output_language=zh",
+      "response_sha256": "cf7eb84be2cc7b349c3118c278a6957e84796033f7bedd207a2d5802206a45d5",
+      "response": {
+        "ok": true,
+        "catalog": {
+          "ok": true,
+          "availability": "available",
+          "reason_code": null,
+          "default_pack_id": "43d7256976866d8d31487f9fd5e5b704ea6f641711f84d18c745e783b9d1f1fc",
+          "packs": [
+            {
+              "pack_id": "43d7256976866d8d31487f9fd5e5b704ea6f641711f84d18c745e783b9d1f1fc",
+              "title": "Portfolio Official · 12h · 原生反馈片段",
+              "scope": {
+                "goal_id": "edgebench-official-portfolio-analysis-20261011-04",
+                "case_id": "portfolio_risk_calibration",
+                "run_id": "portfolio-official-native3600-integration-20261011-04",
+                "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:2a03d0a6e100f61a69aca900bfd2820a89dd5431a819c152b306a6bca33749ca",
+                "window": "Original captured native session 2026-10-11T12:28:46.720Z to 2026-10-12T00:28:14.011Z; declared solver budget 12.00h. Analysis lifecycle created later."
+              },
+              "selection": {
+                "rule": "Deterministic six equal submission-order strata among native results with exact captured feedback observation; two preceding and up to two following bounded assistant narrative messages. Purposive native-feedback episodes, not an exhaustive research population. Full released report inventory supplied separately; temporal adjacency alone is not evidence adoption.",
+                "population_episodes": null,
+                "exhaustive": false
+              },
+              "episode_count": 6,
+              "source_count": 40,
+              "analysis_key": "13053fe75418e586dbc1f36c8ec94aa13a691eda84f0184e11c5071a59086982",
+              "method_version": "research-episodes-v2",
+              "config": {
+                "model": "gpt-6.1-sol",
+                "effort": "max",
+                "service_tier": "fast",
+                "output_language": "zh"
+              },
+              "availability": "available",
+              "reason_code": null,
+              "native_outcomes": {
+                "artifact": "product-goal-sources/official/portfolio/native-outcomes.json",
+                "artifact_sha256": "55c1c3489b17ea3e4b63e5d0b85fcab39ab25d64fe23e00b978cf4e8fc94c933",
+                "projection": {
+                  "method": "source_bound_native_outcomes_v1",
+                  "scope": {
+                    "goal_id": "edgebench-official-portfolio-analysis-20261011-04",
+                    "case_id": "portfolio_risk_calibration",
+                    "run_id": "portfolio-official-native3600-integration-20261011-04",
+                    "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:2a03d0a6e100f61a69aca900bfd2820a89dd5431a819c152b306a6bca33749ca",
+                    "window": "Original captured native session 2026-10-11T12:28:46.720Z to 2026-10-12T00:28:14.011Z; declared solver budget 12.00h. Analysis lifecycle created later."
+                  },
+                  "start": "2026-10-11T12:28:46.720Z",
+                  "end": "2026-10-12T00:28:14.011Z",
+                  "complete": true,
+                  "metric": {
+                    "name": "Native task score",
+                    "unit": "raw",
+                    "higher_is_better": true
+                  },
+                  "sample_count": 12,
+                  "valid_count": 12,
+                  "initial": {
+                    "submission_index": 1,
+                    "result_id": "c38948e32bda",
+                    "candidate_ref": "agent-1",
+                    "submitted_at": "2026-10-11T12:41:35.201Z",
+                    "observed_at": "2026-10-11T12:41:56.877Z",
+                    "value": 0,
+                    "citation": {
+                      "source_id": "released-native-inventory",
+                      "first_line": 1,
+                      "last_line": 1
+                    }
+                  },
+                  "best_valid": {
+                    "submission_index": 7,
+                    "result_id": "4309ac4b9da9",
+                    "candidate_ref": "agent-7",
+                    "submitted_at": "2026-10-11T18:49:30.402Z",
+                    "observed_at": "2026-10-11T18:49:52.611Z",
+                    "value": 10.86,
+                    "citation": {
+                      "source_id": "released-native-inventory",
+                      "first_line": 7,
+                      "last_line": 7
+                    }
+                  },
+                  "retained": null,
+                  "final_valid": {
+                    "submission_index": 12,
+                    "result_id": "da425c4f9ced",
+                    "candidate_ref": "agent-12",
+                    "submitted_at": "2026-10-12T00:08:10.729Z",
+                    "observed_at": "2026-10-12T00:08:33.391Z",
+                    "value": 10.86,
+                    "citation": {
+                      "source_id": "released-native-inventory",
+                      "first_line": 12,
+                      "last_line": 12
+                    }
+                  },
+                  "limitations": [
+                    "Provider-recorded measurements in the declared capture; not study countability or a causal effect.",
+                    "Validity and retained selection belong to the native provider, not model judgments or Todo status.",
+                    "Initial requires a complete prefix and a valid first submission; invalid or missing results are not zero.",
+                    "Submission order determines initial/final; delayed feedback does not make an older candidate current.",
+                    "Costs retain their own measured windows; no monetary, whole-study or per-result cost is inferred."
+                  ]
+                },
+                "applicability": "current",
+                "reason_code": null
+              }
+            }
+          ]
+        },
+        "pack": {
+          "ok": true,
+          "pack_id": "43d7256976866d8d31487f9fd5e5b704ea6f641711f84d18c745e783b9d1f1fc",
+          "title": "Portfolio Official · 12h · 原生反馈片段",
+          "scope": {
+            "goal_id": "edgebench-official-portfolio-analysis-20261011-04",
+            "case_id": "portfolio_risk_calibration",
+            "run_id": "portfolio-official-native3600-integration-20261011-04",
+            "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:2a03d0a6e100f61a69aca900bfd2820a89dd5431a819c152b306a6bca33749ca",
+            "window": "Original captured native session 2026-10-11T12:28:46.720Z to 2026-10-12T00:28:14.011Z; declared solver budget 12.00h. Analysis lifecycle created later."
+          },
+          "selection": {
+            "rule": "Deterministic six equal submission-order strata among native results with exact captured feedback observation; two preceding and up to two following bounded assistant narrative messages. Purposive native-feedback episodes, not an exhaustive research population. Full released report inventory supplied separately; temporal adjacency alone is not evidence adoption.",
+            "population_episodes": null,
+            "exhaustive": false
+          },
+          "episode_count": 6,
+          "source_count": 40,
+          "analysis_key": "13053fe75418e586dbc1f36c8ec94aa13a691eda84f0184e11c5071a59086982",
+          "method_version": "research-episodes-v2",
+          "config": {
+            "model": "gpt-6.1-sol",
+            "effort": "max",
+            "service_tier": "fast",
+            "output_language": "zh"
+          },
+          "availability": "available",
+          "reason_code": null,
+          "native_outcomes": {
+            "artifact": "product-goal-sources/official/portfolio/native-outcomes.json",
+            "artifact_sha256": "55c1c3489b17ea3e4b63e5d0b85fcab39ab25d64fe23e00b978cf4e8fc94c933",
+            "projection": {
+              "method": "source_bound_native_outcomes_v1",
+              "scope": {
+                "goal_id": "edgebench-official-portfolio-analysis-20261011-04",
+                "case_id": "portfolio_risk_calibration",
+                "run_id": "portfolio-official-native3600-integration-20261011-04",
+                "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:2a03d0a6e100f61a69aca900bfd2820a89dd5431a819c152b306a6bca33749ca",
+                "window": "Original captured native session 2026-10-11T12:28:46.720Z to 2026-10-12T00:28:14.011Z; declared solver budget 12.00h. Analysis lifecycle created later."
+              },
+              "start": "2026-10-11T12:28:46.720Z",
+              "end": "2026-10-12T00:28:14.011Z",
+              "complete": true,
+              "metric": {
+                "name": "Native task score",
+                "unit": "raw",
+                "higher_is_better": true
+              },
+              "sample_count": 12,
+              "valid_count": 12,
+              "initial": {
+                "submission_index": 1,
+                "result_id": "c38948e32bda",
+                "candidate_ref": "agent-1",
+                "submitted_at": "2026-10-11T12:41:35.201Z",
+                "observed_at": "2026-10-11T12:41:56.877Z",
+                "value": 0,
+                "citation": {
+                  "source_id": "released-native-inventory",
+                  "first_line": 1,
+                  "last_line": 1
+                }
+              },
+              "best_valid": {
+                "submission_index": 7,
+                "result_id": "4309ac4b9da9",
+                "candidate_ref": "agent-7",
+                "submitted_at": "2026-10-11T18:49:30.402Z",
+                "observed_at": "2026-10-11T18:49:52.611Z",
+                "value": 10.86,
+                "citation": {
+                  "source_id": "released-native-inventory",
+                  "first_line": 7,
+                  "last_line": 7
+                }
+              },
+              "retained": null,
+              "final_valid": {
+                "submission_index": 12,
+                "result_id": "da425c4f9ced",
+                "candidate_ref": "agent-12",
+                "submitted_at": "2026-10-12T00:08:10.729Z",
+                "observed_at": "2026-10-12T00:08:33.391Z",
+                "value": 10.86,
+                "citation": {
+                  "source_id": "released-native-inventory",
+                  "first_line": 12,
+                  "last_line": 12
+                }
+              },
+              "limitations": [
+                "Provider-recorded measurements in the declared capture; not study countability or a causal effect.",
+                "Validity and retained selection belong to the native provider, not model judgments or Todo status.",
+                "Initial requires a complete prefix and a valid first submission; invalid or missing results are not zero.",
+                "Submission order determines initial/final; delayed feedback does not make an older candidate current.",
+                "Costs retain their own measured windows; no monetary, whole-study or per-result cost is inferred."
+              ]
+            },
+            "applicability": "current",
+            "reason_code": null
+          },
+          "objective": "分析原生 Official 研究如何推进原任务，区分事实、模型解释和独立验证。原始任务见 original-objective。此 Goal 是对真实原生轨迹的新分析生命周期；历史 Official 没有 LoopX 执行 Goal。保留历史 score_countable=false，只作诊断参考，不能和新恢复组作因果效果比较。原生结果及时间由原文件提供；未验证最终保留候选、贡献归因或货币成本，不可用 best 代替 retained。数值过程指标仅对声明样本适用。",
+          "episodes": [
+            {
+              "id": "native-feedback-1",
+              "question": "原生提交 agent-1 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-1",
+                "original-feedback-1",
+                "original-message-143",
+                "original-message-191",
+                "original-message-223",
+                "original-message-275"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-3",
+              "question": "原生提交 agent-3 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-3",
+                "original-feedback-3",
+                "original-message-1108",
+                "original-message-1117",
+                "original-message-1144",
+                "original-message-1191"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-5",
+              "question": "原生提交 agent-5 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-5",
+                "original-feedback-5",
+                "original-message-2013",
+                "original-message-2041",
+                "original-message-2067",
+                "original-message-2108"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-8",
+              "question": "原生提交 agent-8 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-8",
+                "original-feedback-8",
+                "original-message-3665",
+                "original-message-3758",
+                "original-message-3802",
+                "original-message-3863"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-10",
+              "question": "原生提交 agent-10 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-10",
+                "original-feedback-10",
+                "original-message-4920",
+                "original-message-4944",
+                "original-message-4975",
+                "original-message-5007"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-12",
+              "question": "原生提交 agent-12 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-12",
+                "original-feedback-12",
+                "original-message-6390",
+                "original-message-6425",
+                "original-message-6463",
+                "original-message-6500"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            }
+          ],
+          "job": null,
+          "result": null,
+          "applicability": "current"
+        },
+        "execution_enabled": false
+      }
+    },
+    "en": {
+      "request_path": "/api/chat/research-analysis?goal_id=edgebench-official-portfolio-analysis-20261011-04&pack_id=43d7256976866d8d31487f9fd5e5b704ea6f641711f84d18c745e783b9d1f1fc&output_language=en",
+      "response_sha256": "ef0f5b90e9204839bccde669f8cbf321795c8e285d12ea87ecdd71cc9b02ba5a",
+      "response": {
+        "ok": true,
+        "catalog": {
+          "ok": true,
+          "availability": "available",
+          "reason_code": null,
+          "default_pack_id": "43d7256976866d8d31487f9fd5e5b704ea6f641711f84d18c745e783b9d1f1fc",
+          "packs": [
+            {
+              "pack_id": "43d7256976866d8d31487f9fd5e5b704ea6f641711f84d18c745e783b9d1f1fc",
+              "title": "Portfolio Official · 12h · 原生反馈片段",
+              "scope": {
+                "goal_id": "edgebench-official-portfolio-analysis-20261011-04",
+                "case_id": "portfolio_risk_calibration",
+                "run_id": "portfolio-official-native3600-integration-20261011-04",
+                "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:2a03d0a6e100f61a69aca900bfd2820a89dd5431a819c152b306a6bca33749ca",
+                "window": "Original captured native session 2026-10-11T12:28:46.720Z to 2026-10-12T00:28:14.011Z; declared solver budget 12.00h. Analysis lifecycle created later."
+              },
+              "selection": {
+                "rule": "Deterministic six equal submission-order strata among native results with exact captured feedback observation; two preceding and up to two following bounded assistant narrative messages. Purposive native-feedback episodes, not an exhaustive research population. Full released report inventory supplied separately; temporal adjacency alone is not evidence adoption.",
+                "population_episodes": null,
+                "exhaustive": false
+              },
+              "episode_count": 6,
+              "source_count": 40,
+              "analysis_key": "2f0347d340b9258128556de94689fd69f8ebb19f4bf066674f0c1b63ee65c056",
+              "method_version": "research-episodes-v2",
+              "config": {
+                "model": "gpt-6.1-sol",
+                "effort": "max",
+                "service_tier": "fast",
+                "output_language": "en"
+              },
+              "availability": "available",
+              "reason_code": null,
+              "native_outcomes": {
+                "artifact": "product-goal-sources/official/portfolio/native-outcomes.json",
+                "artifact_sha256": "55c1c3489b17ea3e4b63e5d0b85fcab39ab25d64fe23e00b978cf4e8fc94c933",
+                "projection": {
+                  "method": "source_bound_native_outcomes_v1",
+                  "scope": {
+                    "goal_id": "edgebench-official-portfolio-analysis-20261011-04",
+                    "case_id": "portfolio_risk_calibration",
+                    "run_id": "portfolio-official-native3600-integration-20261011-04",
+                    "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:2a03d0a6e100f61a69aca900bfd2820a89dd5431a819c152b306a6bca33749ca",
+                    "window": "Original captured native session 2026-10-11T12:28:46.720Z to 2026-10-12T00:28:14.011Z; declared solver budget 12.00h. Analysis lifecycle created later."
+                  },
+                  "start": "2026-10-11T12:28:46.720Z",
+                  "end": "2026-10-12T00:28:14.011Z",
+                  "complete": true,
+                  "metric": {
+                    "name": "Native task score",
+                    "unit": "raw",
+                    "higher_is_better": true
+                  },
+                  "sample_count": 12,
+                  "valid_count": 12,
+                  "initial": {
+                    "submission_index": 1,
+                    "result_id": "c38948e32bda",
+                    "candidate_ref": "agent-1",
+                    "submitted_at": "2026-10-11T12:41:35.201Z",
+                    "observed_at": "2026-10-11T12:41:56.877Z",
+                    "value": 0,
+                    "citation": {
+                      "source_id": "released-native-inventory",
+                      "first_line": 1,
+                      "last_line": 1
+                    }
+                  },
+                  "best_valid": {
+                    "submission_index": 7,
+                    "result_id": "4309ac4b9da9",
+                    "candidate_ref": "agent-7",
+                    "submitted_at": "2026-10-11T18:49:30.402Z",
+                    "observed_at": "2026-10-11T18:49:52.611Z",
+                    "value": 10.86,
+                    "citation": {
+                      "source_id": "released-native-inventory",
+                      "first_line": 7,
+                      "last_line": 7
+                    }
+                  },
+                  "retained": null,
+                  "final_valid": {
+                    "submission_index": 12,
+                    "result_id": "da425c4f9ced",
+                    "candidate_ref": "agent-12",
+                    "submitted_at": "2026-10-12T00:08:10.729Z",
+                    "observed_at": "2026-10-12T00:08:33.391Z",
+                    "value": 10.86,
+                    "citation": {
+                      "source_id": "released-native-inventory",
+                      "first_line": 12,
+                      "last_line": 12
+                    }
+                  },
+                  "limitations": [
+                    "Provider-recorded measurements in the declared capture; not study countability or a causal effect.",
+                    "Validity and retained selection belong to the native provider, not model judgments or Todo status.",
+                    "Initial requires a complete prefix and a valid first submission; invalid or missing results are not zero.",
+                    "Submission order determines initial/final; delayed feedback does not make an older candidate current.",
+                    "Costs retain their own measured windows; no monetary, whole-study or per-result cost is inferred."
+                  ]
+                },
+                "applicability": "current",
+                "reason_code": null
+              }
+            }
+          ]
+        },
+        "pack": {
+          "ok": true,
+          "pack_id": "43d7256976866d8d31487f9fd5e5b704ea6f641711f84d18c745e783b9d1f1fc",
+          "title": "Portfolio Official · 12h · 原生反馈片段",
+          "scope": {
+            "goal_id": "edgebench-official-portfolio-analysis-20261011-04",
+            "case_id": "portfolio_risk_calibration",
+            "run_id": "portfolio-official-native3600-integration-20261011-04",
+            "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:2a03d0a6e100f61a69aca900bfd2820a89dd5431a819c152b306a6bca33749ca",
+            "window": "Original captured native session 2026-10-11T12:28:46.720Z to 2026-10-12T00:28:14.011Z; declared solver budget 12.00h. Analysis lifecycle created later."
+          },
+          "selection": {
+            "rule": "Deterministic six equal submission-order strata among native results with exact captured feedback observation; two preceding and up to two following bounded assistant narrative messages. Purposive native-feedback episodes, not an exhaustive research population. Full released report inventory supplied separately; temporal adjacency alone is not evidence adoption.",
+            "population_episodes": null,
+            "exhaustive": false
+          },
+          "episode_count": 6,
+          "source_count": 40,
+          "analysis_key": "2f0347d340b9258128556de94689fd69f8ebb19f4bf066674f0c1b63ee65c056",
+          "method_version": "research-episodes-v2",
+          "config": {
+            "model": "gpt-6.1-sol",
+            "effort": "max",
+            "service_tier": "fast",
+            "output_language": "en"
+          },
+          "availability": "available",
+          "reason_code": null,
+          "native_outcomes": {
+            "artifact": "product-goal-sources/official/portfolio/native-outcomes.json",
+            "artifact_sha256": "55c1c3489b17ea3e4b63e5d0b85fcab39ab25d64fe23e00b978cf4e8fc94c933",
+            "projection": {
+              "method": "source_bound_native_outcomes_v1",
+              "scope": {
+                "goal_id": "edgebench-official-portfolio-analysis-20261011-04",
+                "case_id": "portfolio_risk_calibration",
+                "run_id": "portfolio-official-native3600-integration-20261011-04",
+                "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:2a03d0a6e100f61a69aca900bfd2820a89dd5431a819c152b306a6bca33749ca",
+                "window": "Original captured native session 2026-10-11T12:28:46.720Z to 2026-10-12T00:28:14.011Z; declared solver budget 12.00h. Analysis lifecycle created later."
+              },
+              "start": "2026-10-11T12:28:46.720Z",
+              "end": "2026-10-12T00:28:14.011Z",
+              "complete": true,
+              "metric": {
+                "name": "Native task score",
+                "unit": "raw",
+                "higher_is_better": true
+              },
+              "sample_count": 12,
+              "valid_count": 12,
+              "initial": {
+                "submission_index": 1,
+                "result_id": "c38948e32bda",
+                "candidate_ref": "agent-1",
+                "submitted_at": "2026-10-11T12:41:35.201Z",
+                "observed_at": "2026-10-11T12:41:56.877Z",
+                "value": 0,
+                "citation": {
+                  "source_id": "released-native-inventory",
+                  "first_line": 1,
+                  "last_line": 1
+                }
+              },
+              "best_valid": {
+                "submission_index": 7,
+                "result_id": "4309ac4b9da9",
+                "candidate_ref": "agent-7",
+                "submitted_at": "2026-10-11T18:49:30.402Z",
+                "observed_at": "2026-10-11T18:49:52.611Z",
+                "value": 10.86,
+                "citation": {
+                  "source_id": "released-native-inventory",
+                  "first_line": 7,
+                  "last_line": 7
+                }
+              },
+              "retained": null,
+              "final_valid": {
+                "submission_index": 12,
+                "result_id": "da425c4f9ced",
+                "candidate_ref": "agent-12",
+                "submitted_at": "2026-10-12T00:08:10.729Z",
+                "observed_at": "2026-10-12T00:08:33.391Z",
+                "value": 10.86,
+                "citation": {
+                  "source_id": "released-native-inventory",
+                  "first_line": 12,
+                  "last_line": 12
+                }
+              },
+              "limitations": [
+                "Provider-recorded measurements in the declared capture; not study countability or a causal effect.",
+                "Validity and retained selection belong to the native provider, not model judgments or Todo status.",
+                "Initial requires a complete prefix and a valid first submission; invalid or missing results are not zero.",
+                "Submission order determines initial/final; delayed feedback does not make an older candidate current.",
+                "Costs retain their own measured windows; no monetary, whole-study or per-result cost is inferred."
+              ]
+            },
+            "applicability": "current",
+            "reason_code": null
+          },
+          "objective": "分析原生 Official 研究如何推进原任务，区分事实、模型解释和独立验证。原始任务见 original-objective。此 Goal 是对真实原生轨迹的新分析生命周期；历史 Official 没有 LoopX 执行 Goal。保留历史 score_countable=false，只作诊断参考，不能和新恢复组作因果效果比较。原生结果及时间由原文件提供；未验证最终保留候选、贡献归因或货币成本，不可用 best 代替 retained。数值过程指标仅对声明样本适用。",
+          "episodes": [
+            {
+              "id": "native-feedback-1",
+              "question": "原生提交 agent-1 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-1",
+                "original-feedback-1",
+                "original-message-143",
+                "original-message-191",
+                "original-message-223",
+                "original-message-275"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-3",
+              "question": "原生提交 agent-3 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-3",
+                "original-feedback-3",
+                "original-message-1108",
+                "original-message-1117",
+                "original-message-1144",
+                "original-message-1191"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-5",
+              "question": "原生提交 agent-5 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-5",
+                "original-feedback-5",
+                "original-message-2013",
+                "original-message-2041",
+                "original-message-2067",
+                "original-message-2108"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-8",
+              "question": "原生提交 agent-8 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-8",
+                "original-feedback-8",
+                "original-message-3665",
+                "original-message-3758",
+                "original-message-3802",
+                "original-message-3863"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-10",
+              "question": "原生提交 agent-10 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-10",
+                "original-feedback-10",
+                "original-message-4920",
+                "original-message-4944",
+                "original-message-4975",
+                "original-message-5007"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-12",
+              "question": "原生提交 agent-12 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-12",
+                "original-feedback-12",
+                "original-message-6390",
+                "original-message-6425",
+                "original-message-6463",
+                "original-message-6500"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            }
+          ],
+          "job": null,
+          "result": null,
+          "applicability": "current"
+        },
+        "execution_enabled": false
+      }
+    }
+  },
+  "analysis_citations": [
+    {
+      "request_path": "/api/chat/research-analysis/citation?goal_id=edgebench-official-portfolio-analysis-20261011-04&pack_id=43d7256976866d8d31487f9fd5e5b704ea6f641711f84d18c745e783b9d1f1fc&analysis_key=e61bcb63c26f1f76e641c667cf52aa87654babb3ce661f4ca741697e0ce17ebf&source_id=released-native-inventory&first_line=1&last_line=1",
+      "response_sha256": "b71a5f6353312e9ab4eab1176beb21e8f26590d1e4dbfcb52d21f3e9b7401ef3",
+      "response": {
+        "source_id": "released-native-inventory",
+        "artifact": "product-goal-sources/official/portfolio/native-observations.jsonl",
+        "first_line": 1,
+        "last_line": 1,
+        "text": "{\"submission_index\":1,\"result_id\":\"c38948e32bda\",\"candidate_ref\":\"agent-1\",\"valid\":true,\"value\":0.0,\"submitted_at\":\"2026-10-11T12:41:35.201Z\",\"observed_at\":\"2026-10-11T12:41:56.877Z\",\"observed_at_meaning\":\"first captured completed native-submit command containing this exact submission id and score; not inferred feedback-release time\",\"report_artifact\":\"native-runs/runs/portfolio-official-native3600-integration-20261011-04/portfolio_risk_calibration/submissions/agent-1/report.json\",\"report_sha256\":\"f95bbb33203af509c4eebe9e7dcf214b269f8d7d6258526fdb57fe731df5be63\",\"observation_artifact\":\"native-runs/runs/portfolio-official-native3600-integration-20261011-04/portfolio_risk_calibration/collected/native-sessions/sessions/2026/10/11/rollout-2026-10-11T12-28-41-01a12aef-b2e3-7151-abf6-dd1590ccc65e.jsonl\",\"observation_artifact_sha256\":\"2a03d0a6e100f61a69aca900bfd2820a89dd5431a819c152b306a6bca33749ca\",\"observation_line\":209}",
+        "applicability": "current"
+      }
+    },
+    {
+      "request_path": "/api/chat/research-analysis/citation?goal_id=edgebench-official-portfolio-analysis-20261011-04&pack_id=43d7256976866d8d31487f9fd5e5b704ea6f641711f84d18c745e783b9d1f1fc&analysis_key=e61bcb63c26f1f76e641c667cf52aa87654babb3ce661f4ca741697e0ce17ebf&source_id=released-native-inventory&first_line=7&last_line=7",
+      "response_sha256": "a9eebe1d0f3b0e18c499a14df7646ed59a1b3a6b3def1a37a806d4374c79449f",
+      "response": {
+        "source_id": "released-native-inventory",
+        "artifact": "product-goal-sources/official/portfolio/native-observations.jsonl",
+        "first_line": 7,
+        "last_line": 7,
+        "text": "{\"submission_index\":7,\"result_id\":\"4309ac4b9da9\",\"candidate_ref\":\"agent-7\",\"valid\":true,\"value\":10.86,\"submitted_at\":\"2026-10-11T18:49:30.402Z\",\"observed_at\":\"2026-10-11T18:49:52.611Z\",\"observed_at_meaning\":\"first captured completed native-submit command containing this exact submission id and score; not inferred feedback-release time\",\"report_artifact\":\"native-runs/runs/portfolio-official-native3600-integration-20261011-04/portfolio_risk_calibration/submissions/agent-7/report.json\",\"report_sha256\":\"9c5fe89d3fad64db0ec4b993961f88248b0cacf49f52b37feec7e148e99b2924\",\"observation_artifact\":\"native-runs/runs/portfolio-official-native3600-integration-20261011-04/portfolio_risk_calibration/collected/native-sessions/sessions/2026/10/11/rollout-2026-10-11T12-28-41-01a12aef-b2e3-7151-abf6-dd1590ccc65e.jsonl\",\"observation_artifact_sha256\":\"2a03d0a6e100f61a69aca900bfd2820a89dd5431a819c152b306a6bca33749ca\",\"observation_line\":3197}",
+        "applicability": "current"
+      }
+    },
+    {
+      "request_path": "/api/chat/research-analysis/citation?goal_id=edgebench-official-portfolio-analysis-20261011-04&pack_id=43d7256976866d8d31487f9fd5e5b704ea6f641711f84d18c745e783b9d1f1fc&analysis_key=e61bcb63c26f1f76e641c667cf52aa87654babb3ce661f4ca741697e0ce17ebf&source_id=released-native-inventory&first_line=12&last_line=12",
+      "response_sha256": "0eebf43739b07ee7cc15fb17cf1c297f6100bddb83b358462502a9fc9c9e367a",
+      "response": {
+        "source_id": "released-native-inventory",
+        "artifact": "product-goal-sources/official/portfolio/native-observations.jsonl",
+        "first_line": 12,
+        "last_line": 12,
+        "text": "{\"submission_index\":12,\"result_id\":\"da425c4f9ced\",\"candidate_ref\":\"agent-12\",\"valid\":true,\"value\":10.86,\"submitted_at\":\"2026-10-12T00:08:10.729Z\",\"observed_at\":\"2026-10-12T00:08:33.391Z\",\"observed_at_meaning\":\"first captured completed native-submit command containing this exact submission id and score; not inferred feedback-release time\",\"report_artifact\":\"native-runs/runs/portfolio-official-native3600-integration-20261011-04/portfolio_risk_calibration/submissions/agent-12/report.json\",\"report_sha256\":\"20190047d95816bc8b2cc460b10f95541e64eb8d9f8844e0fdf955b228c60508\",\"observation_artifact\":\"native-runs/runs/portfolio-official-native3600-integration-20261011-04/portfolio_risk_calibration/collected/native-sessions/sessions/2026/10/11/rollout-2026-10-11T12-28-41-01a12aef-b2e3-7151-abf6-dd1590ccc65e.jsonl\",\"observation_artifact_sha256\":\"2a03d0a6e100f61a69aca900bfd2820a89dd5431a819c152b306a6bca33749ca\",\"observation_line\":6432}",
+        "applicability": "current"
+      }
+    },
+    {
+      "request_path": "/api/chat/research-analysis/citation?goal_id=edgebench-official-portfolio-analysis-20261011-04&pack_id=43d7256976866d8d31487f9fd5e5b704ea6f641711f84d18c745e783b9d1f1fc&analysis_key=13053fe75418e586dbc1f36c8ec94aa13a691eda84f0184e11c5071a59086982&source_id=released-native-inventory&first_line=1&last_line=1&output_language=zh",
+      "response_sha256": "b71a5f6353312e9ab4eab1176beb21e8f26590d1e4dbfcb52d21f3e9b7401ef3",
+      "response": {
+        "source_id": "released-native-inventory",
+        "artifact": "product-goal-sources/official/portfolio/native-observations.jsonl",
+        "first_line": 1,
+        "last_line": 1,
+        "text": "{\"submission_index\":1,\"result_id\":\"c38948e32bda\",\"candidate_ref\":\"agent-1\",\"valid\":true,\"value\":0.0,\"submitted_at\":\"2026-10-11T12:41:35.201Z\",\"observed_at\":\"2026-10-11T12:41:56.877Z\",\"observed_at_meaning\":\"first captured completed native-submit command containing this exact submission id and score; not inferred feedback-release time\",\"report_artifact\":\"native-runs/runs/portfolio-official-native3600-integration-20261011-04/portfolio_risk_calibration/submissions/agent-1/report.json\",\"report_sha256\":\"f95bbb33203af509c4eebe9e7dcf214b269f8d7d6258526fdb57fe731df5be63\",\"observation_artifact\":\"native-runs/runs/portfolio-official-native3600-integration-20261011-04/portfolio_risk_calibration/collected/native-sessions/sessions/2026/10/11/rollout-2026-10-11T12-28-41-01a12aef-b2e3-7151-abf6-dd1590ccc65e.jsonl\",\"observation_artifact_sha256\":\"2a03d0a6e100f61a69aca900bfd2820a89dd5431a819c152b306a6bca33749ca\",\"observation_line\":209}",
+        "applicability": "current"
+      }
+    },
+    {
+      "request_path": "/api/chat/research-analysis/citation?goal_id=edgebench-official-portfolio-analysis-20261011-04&pack_id=43d7256976866d8d31487f9fd5e5b704ea6f641711f84d18c745e783b9d1f1fc&analysis_key=13053fe75418e586dbc1f36c8ec94aa13a691eda84f0184e11c5071a59086982&source_id=released-native-inventory&first_line=7&last_line=7&output_language=zh",
+      "response_sha256": "a9eebe1d0f3b0e18c499a14df7646ed59a1b3a6b3def1a37a806d4374c79449f",
+      "response": {
+        "source_id": "released-native-inventory",
+        "artifact": "product-goal-sources/official/portfolio/native-observations.jsonl",
+        "first_line": 7,
+        "last_line": 7,
+        "text": "{\"submission_index\":7,\"result_id\":\"4309ac4b9da9\",\"candidate_ref\":\"agent-7\",\"valid\":true,\"value\":10.86,\"submitted_at\":\"2026-10-11T18:49:30.402Z\",\"observed_at\":\"2026-10-11T18:49:52.611Z\",\"observed_at_meaning\":\"first captured completed native-submit command containing this exact submission id and score; not inferred feedback-release time\",\"report_artifact\":\"native-runs/runs/portfolio-official-native3600-integration-20261011-04/portfolio_risk_calibration/submissions/agent-7/report.json\",\"report_sha256\":\"9c5fe89d3fad64db0ec4b993961f88248b0cacf49f52b37feec7e148e99b2924\",\"observation_artifact\":\"native-runs/runs/portfolio-official-native3600-integration-20261011-04/portfolio_risk_calibration/collected/native-sessions/sessions/2026/10/11/rollout-2026-10-11T12-28-41-01a12aef-b2e3-7151-abf6-dd1590ccc65e.jsonl\",\"observation_artifact_sha256\":\"2a03d0a6e100f61a69aca900bfd2820a89dd5431a819c152b306a6bca33749ca\",\"observation_line\":3197}",
+        "applicability": "current"
+      }
+    },
+    {
+      "request_path": "/api/chat/research-analysis/citation?goal_id=edgebench-official-portfolio-analysis-20261011-04&pack_id=43d7256976866d8d31487f9fd5e5b704ea6f641711f84d18c745e783b9d1f1fc&analysis_key=13053fe75418e586dbc1f36c8ec94aa13a691eda84f0184e11c5071a59086982&source_id=released-native-inventory&first_line=12&last_line=12&output_language=zh",
+      "response_sha256": "0eebf43739b07ee7cc15fb17cf1c297f6100bddb83b358462502a9fc9c9e367a",
+      "response": {
+        "source_id": "released-native-inventory",
+        "artifact": "product-goal-sources/official/portfolio/native-observations.jsonl",
+        "first_line": 12,
+        "last_line": 12,
+        "text": "{\"submission_index\":12,\"result_id\":\"da425c4f9ced\",\"candidate_ref\":\"agent-12\",\"valid\":true,\"value\":10.86,\"submitted_at\":\"2026-10-12T00:08:10.729Z\",\"observed_at\":\"2026-10-12T00:08:33.391Z\",\"observed_at_meaning\":\"first captured completed native-submit command containing this exact submission id and score; not inferred feedback-release time\",\"report_artifact\":\"native-runs/runs/portfolio-official-native3600-integration-20261011-04/portfolio_risk_calibration/submissions/agent-12/report.json\",\"report_sha256\":\"20190047d95816bc8b2cc460b10f95541e64eb8d9f8844e0fdf955b228c60508\",\"observation_artifact\":\"native-runs/runs/portfolio-official-native3600-integration-20261011-04/portfolio_risk_calibration/collected/native-sessions/sessions/2026/10/11/rollout-2026-10-11T12-28-41-01a12aef-b2e3-7151-abf6-dd1590ccc65e.jsonl\",\"observation_artifact_sha256\":\"2a03d0a6e100f61a69aca900bfd2820a89dd5431a819c152b306a6bca33749ca\",\"observation_line\":6432}",
+        "applicability": "current"
+      }
+    },
+    {
+      "request_path": "/api/chat/research-analysis/citation?goal_id=edgebench-official-portfolio-analysis-20261011-04&pack_id=43d7256976866d8d31487f9fd5e5b704ea6f641711f84d18c745e783b9d1f1fc&analysis_key=2f0347d340b9258128556de94689fd69f8ebb19f4bf066674f0c1b63ee65c056&source_id=released-native-inventory&first_line=1&last_line=1&output_language=en",
+      "response_sha256": "b71a5f6353312e9ab4eab1176beb21e8f26590d1e4dbfcb52d21f3e9b7401ef3",
+      "response": {
+        "source_id": "released-native-inventory",
+        "artifact": "product-goal-sources/official/portfolio/native-observations.jsonl",
+        "first_line": 1,
+        "last_line": 1,
+        "text": "{\"submission_index\":1,\"result_id\":\"c38948e32bda\",\"candidate_ref\":\"agent-1\",\"valid\":true,\"value\":0.0,\"submitted_at\":\"2026-10-11T12:41:35.201Z\",\"observed_at\":\"2026-10-11T12:41:56.877Z\",\"observed_at_meaning\":\"first captured completed native-submit command containing this exact submission id and score; not inferred feedback-release time\",\"report_artifact\":\"native-runs/runs/portfolio-official-native3600-integration-20261011-04/portfolio_risk_calibration/submissions/agent-1/report.json\",\"report_sha256\":\"f95bbb33203af509c4eebe9e7dcf214b269f8d7d6258526fdb57fe731df5be63\",\"observation_artifact\":\"native-runs/runs/portfolio-official-native3600-integration-20261011-04/portfolio_risk_calibration/collected/native-sessions/sessions/2026/10/11/rollout-2026-10-11T12-28-41-01a12aef-b2e3-7151-abf6-dd1590ccc65e.jsonl\",\"observation_artifact_sha256\":\"2a03d0a6e100f61a69aca900bfd2820a89dd5431a819c152b306a6bca33749ca\",\"observation_line\":209}",
+        "applicability": "current"
+      }
+    },
+    {
+      "request_path": "/api/chat/research-analysis/citation?goal_id=edgebench-official-portfolio-analysis-20261011-04&pack_id=43d7256976866d8d31487f9fd5e5b704ea6f641711f84d18c745e783b9d1f1fc&analysis_key=2f0347d340b9258128556de94689fd69f8ebb19f4bf066674f0c1b63ee65c056&source_id=released-native-inventory&first_line=7&last_line=7&output_language=en",
+      "response_sha256": "a9eebe1d0f3b0e18c499a14df7646ed59a1b3a6b3def1a37a806d4374c79449f",
+      "response": {
+        "source_id": "released-native-inventory",
+        "artifact": "product-goal-sources/official/portfolio/native-observations.jsonl",
+        "first_line": 7,
+        "last_line": 7,
+        "text": "{\"submission_index\":7,\"result_id\":\"4309ac4b9da9\",\"candidate_ref\":\"agent-7\",\"valid\":true,\"value\":10.86,\"submitted_at\":\"2026-10-11T18:49:30.402Z\",\"observed_at\":\"2026-10-11T18:49:52.611Z\",\"observed_at_meaning\":\"first captured completed native-submit command containing this exact submission id and score; not inferred feedback-release time\",\"report_artifact\":\"native-runs/runs/portfolio-official-native3600-integration-20261011-04/portfolio_risk_calibration/submissions/agent-7/report.json\",\"report_sha256\":\"9c5fe89d3fad64db0ec4b993961f88248b0cacf49f52b37feec7e148e99b2924\",\"observation_artifact\":\"native-runs/runs/portfolio-official-native3600-integration-20261011-04/portfolio_risk_calibration/collected/native-sessions/sessions/2026/10/11/rollout-2026-10-11T12-28-41-01a12aef-b2e3-7151-abf6-dd1590ccc65e.jsonl\",\"observation_artifact_sha256\":\"2a03d0a6e100f61a69aca900bfd2820a89dd5431a819c152b306a6bca33749ca\",\"observation_line\":3197}",
+        "applicability": "current"
+      }
+    },
+    {
+      "request_path": "/api/chat/research-analysis/citation?goal_id=edgebench-official-portfolio-analysis-20261011-04&pack_id=43d7256976866d8d31487f9fd5e5b704ea6f641711f84d18c745e783b9d1f1fc&analysis_key=2f0347d340b9258128556de94689fd69f8ebb19f4bf066674f0c1b63ee65c056&source_id=released-native-inventory&first_line=12&last_line=12&output_language=en",
+      "response_sha256": "0eebf43739b07ee7cc15fb17cf1c297f6100bddb83b358462502a9fc9c9e367a",
+      "response": {
+        "source_id": "released-native-inventory",
+        "artifact": "product-goal-sources/official/portfolio/native-observations.jsonl",
+        "first_line": 12,
+        "last_line": 12,
+        "text": "{\"submission_index\":12,\"result_id\":\"da425c4f9ced\",\"candidate_ref\":\"agent-12\",\"valid\":true,\"value\":10.86,\"submitted_at\":\"2026-10-12T00:08:10.729Z\",\"observed_at\":\"2026-10-12T00:08:33.391Z\",\"observed_at_meaning\":\"first captured completed native-submit command containing this exact submission id and score; not inferred feedback-release time\",\"report_artifact\":\"native-runs/runs/portfolio-official-native3600-integration-20261011-04/portfolio_risk_calibration/submissions/agent-12/report.json\",\"report_sha256\":\"20190047d95816bc8b2cc460b10f95541e64eb8d9f8844e0fdf955b228c60508\",\"observation_artifact\":\"native-runs/runs/portfolio-official-native3600-integration-20261011-04/portfolio_risk_calibration/collected/native-sessions/sessions/2026/10/11/rollout-2026-10-11T12-28-41-01a12aef-b2e3-7151-abf6-dd1590ccc65e.jsonl\",\"observation_artifact_sha256\":\"2a03d0a6e100f61a69aca900bfd2820a89dd5431a819c152b306a6bca33749ca\",\"observation_line\":6432}",
+        "applicability": "current"
+      }
+    }
+  ]
+}

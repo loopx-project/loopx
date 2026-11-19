@@ -1,0 +1,391 @@
+{
+  "description": "Fully synthetic saved research synthesis through production qualification, process, citation and HTTP readback; no scientific quality claim.",
+  "goal_id": "synthetic-research-readback",
+  "display_name": "研究结果示例 · Synthetic research",
+  "events": [
+    {
+      "schema_version": "loopx_explore_result_event_v0",
+      "goal_id": "synthetic-research-readback",
+      "event_kind": "node",
+      "recorded_at": "2026-01-01T00:05:00Z",
+      "title": "继续搜索是否改善了任务结果？",
+      "boundary": {
+        "raw_task_text_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_trajectory_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "credential_values_recorded": false,
+        "absolute_paths_recorded": false
+      },
+      "agent_id": "researcher",
+      "result_id": "search-question",
+      "node_kind": "question",
+      "status": "open",
+      "event_id": "0ca879d4626cf3ff",
+      "summary": "保留失败与未完成工作，按同一指标阅读实际反馈。"
+    },
+    {
+      "schema_version": "loopx_explore_result_event_v0",
+      "goal_id": "synthetic-research-readback",
+      "event_kind": "finding",
+      "recorded_at": "2026-01-01T00:05:00Z",
+      "title": "后续候选的测量改善，实际保留未知",
+      "boundary": {
+        "raw_task_text_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_trajectory_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "credential_values_recorded": false,
+        "absolute_paths_recorded": false
+      },
+      "agent_id": "researcher",
+      "evidence_refs": [
+        "artifact:synthetic-native-facts"
+      ],
+      "result_id": "search-finding",
+      "node_id": "search-question",
+      "status": "tentative",
+      "event_id": "16223912d13b5d74",
+      "summary": "合成测量从 7 降至 3，另有一次无效提交。没有保留记录，不把最佳数值视为最终采用。"
+    }
+  ],
+  "analyses": [
+    {
+      "title": "固定窗口 · 研究收获与待验证解释",
+      "artifacts": {
+        "facts.txt": "Synthetic baseline: candidate-one measured error 7 points.\nSynthetic invalid candidate: candidate-two has no score.\nSynthetic later result: candidate-three measured error 3 points.\nActual retention was not captured; no causal treatment claim is made.\n",
+        "native.json": "{\"schema_version\": \"trajectory_native_outcomes_v1\", \"scope\": {\"goal_id\": \"synthetic-research-readback\", \"case_id\": \"synthetic-search\", \"run_id\": \"synthetic-run\", \"revision\": \"fixed-synthetic-evidence\", \"window\": \"2026-01-01T00:00:00Z/2026-01-01T00:10:00Z\"}, \"start\": \"2026-01-01T00:00:00Z\", \"end\": \"2026-01-01T00:10:00Z\", \"complete\": true, \"metric\": {\"name\": \"error\", \"unit\": \"points\", \"higher_is_better\": false}, \"retained_result_id\": null, \"samples\": [{\"submission_index\": 1, \"result_id\": \"result-1\", \"candidate_ref\": \"candidate-1\", \"submitted_at\": null, \"observed_at\": \"2026-01-01T00:01:00Z\", \"valid\": true, \"value\": 7, \"citation\": {\"source_id\": \"facts\", \"first_line\": 1, \"last_line\": 1}}, {\"submission_index\": 2, \"result_id\": \"result-2\", \"candidate_ref\": \"candidate-2\", \"submitted_at\": null, \"observed_at\": \"2026-01-01T00:02:00Z\", \"valid\": false, \"value\": null, \"citation\": {\"source_id\": \"facts\", \"first_line\": 2, \"last_line\": 2}}, {\"submission_index\": 3, \"result_id\": \"result-3\", \"candidate_ref\": \"candidate-3\", \"submitted_at\": null, \"observed_at\": \"2026-01-01T00:03:00Z\", \"valid\": true, \"value\": 3, \"citation\": {\"source_id\": \"facts\", \"first_line\": 3, \"last_line\": 3}}]}"
+      },
+      "native_outcomes_json": "native.json",
+      "input": {
+        "schema_version": "trajectory_assessment_input_v1",
+        "scope": {
+          "goal_id": "synthetic-research-readback",
+          "case_id": "synthetic-search",
+          "run_id": "synthetic-run",
+          "revision": "fixed-synthetic-evidence",
+          "window": "2026-01-01T00:00:00Z/2026-01-01T00:10:00Z"
+        },
+        "objective": "Reduce error while preserving validity; distinguish observations from model judgments.",
+        "selection": {
+          "rule": "One fixed synthetic reading episode, not a study population.",
+          "population_episodes": null,
+          "exhaustive": false
+        },
+        "sources": [
+          {
+            "id": "facts",
+            "artifact": "facts.txt",
+            "artifact_sha256": "ed821a74d173951332e04af2884601fd3bdeb8956b2bb0b811a0f50b91b732a7",
+            "first_line": 1,
+            "text": "Synthetic baseline: candidate-one measured error 7 points.\nSynthetic invalid candidate: candidate-two has no score.\nSynthetic later result: candidate-three measured error 3 points.\nActual retention was not captured; no causal treatment claim is made.\n"
+          }
+        ],
+        "episodes": [
+          {
+            "id": "search-episode",
+            "question": "Did the later search test useful task progress?",
+            "source_ids": [
+              "facts"
+            ],
+            "eligible_metrics": [
+              "benefit_test"
+            ]
+          },
+          {
+            "id": "control-episode",
+            "question": "Does a matched control distinguish the proposed mechanism from variation?",
+            "source_ids": [
+              "facts"
+            ],
+            "eligible_metrics": [
+              "discrimination"
+            ]
+          },
+          {
+            "id": "retention-episode",
+            "question": "Is the later candidate recorded as actually retained?",
+            "source_ids": [
+              "facts"
+            ],
+            "eligible_metrics": [
+              "evidence_adoption"
+            ]
+          }
+        ]
+      },
+      "outputs": {
+        "zh": {
+          "assessments": [
+            {
+              "episode_id": "search-episode",
+              "metric": "benefit_test",
+              "verdict": "yes",
+              "reason": "合成原生测量完成了收益检验；这不表示最终采用或因果收益。",
+              "citations": [
+                {
+                  "source_id": "facts",
+                  "first_line": 1,
+                  "last_line": 3
+                }
+              ]
+            },
+            {
+              "episode_id": "control-episode",
+              "metric": "discrimination",
+              "verdict": "unknown",
+              "reason": "没有记录匹配对照；改动效应与随机波动尚不能区分。",
+              "citations": [
+                {
+                  "source_id": "facts",
+                  "first_line": 1,
+                  "last_line": 3
+                }
+              ]
+            },
+            {
+              "episode_id": "retention-episode",
+              "metric": "evidence_adoption",
+              "verdict": "unknown",
+              "reason": "原始记录没有保留信息；最佳值不能替代实际采用记录。",
+              "citations": [
+                {
+                  "source_id": "facts",
+                  "first_line": 4,
+                  "last_line": 4
+                }
+              ]
+            }
+          ],
+          "limitations": [
+            "合成展示数据，不是科学验证；完整成本未测。"
+          ],
+          "episode_questions": [
+            {
+              "episode_id": "search-episode",
+              "question": "后续搜索是否检验了实际任务进展？"
+            },
+            {
+              "episode_id": "control-episode",
+              "question": "匹配对照是否区分了改动机制与随机波动？"
+            },
+            {
+              "episode_id": "retention-episode",
+              "question": "后续候选是否记录为实际保留？"
+            }
+          ],
+          "synthesis": {
+            "summary": {
+              "text": "后续搜索把误差从 7 降到 3，是积极信号；一次候选无效，最终保留与改善机制仍未知。",
+              "episode_ids": [
+                "search-episode"
+              ],
+              "citations": [
+                {
+                  "source_id": "facts",
+                  "first_line": 1,
+                  "last_line": 4
+                }
+              ]
+            },
+            "findings": [
+              {
+                "title": "后段仍有改善，值得继续研究",
+                "observation": "第三次候选误差为 3，优于首次的 7；第二次候选无效。",
+                "interpretation": "观察到后续改善，但未采集具体改动与配对重复，尚不能定位机制。",
+                "alternative_explanations": [
+                  "随机波动可能解释部分差值；当前材料无法排除。"
+                ],
+                "episode_ids": [
+                  "control-episode",
+                  "search-episode"
+                ],
+                "citations": [
+                  {
+                    "source_id": "facts",
+                    "first_line": 1,
+                    "last_line": 3
+                  }
+                ]
+              },
+              {
+                "title": "最佳结果与实际采用分别判断",
+                "observation": "原始记录没有保留信息，最佳数值不能补成最终采用。",
+                "interpretation": "保留结果未知；这不抹去已观测的改善。",
+                "alternative_explanations": [],
+                "episode_ids": [
+                  "retention-episode"
+                ],
+                "citations": [
+                  {
+                    "source_id": "facts",
+                    "first_line": 4,
+                    "last_line": 4
+                  }
+                ]
+              }
+            ],
+            "next_experiments": [
+              {
+                "question": "改善来自改动，还是随机波动？",
+                "why_priority": "先区分这两个解释，再决定继续投入哪条路线。",
+                "intervention": "从同一基线分别启用与关闭待验证的单项改动。",
+                "controls": "固定输入、检查点、随机序列和总计算预算，做配对重复。",
+                "prediction": "若改动有效，配对差值应持续改善，而非只出现单次最好值。",
+                "disconfirming_result": "若配对重复后差值消失或反向，应放弃该机制解释。",
+                "episode_ids": [
+                  "control-episode"
+                ],
+                "citations": [
+                  {
+                    "source_id": "facts",
+                    "first_line": 1,
+                    "last_line": 3
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "en": {
+          "assessments": [
+            {
+              "episode_id": "search-episode",
+              "metric": "benefit_test",
+              "verdict": "yes",
+              "reason": "Synthetic native measurements tested utility, not retention or causal benefit.",
+              "citations": [
+                {
+                  "source_id": "facts",
+                  "first_line": 1,
+                  "last_line": 3
+                }
+              ]
+            },
+            {
+              "episode_id": "control-episode",
+              "metric": "discrimination",
+              "verdict": "unknown",
+              "reason": "No matched control is recorded; the intervention and random variation remain unresolved.",
+              "citations": [
+                {
+                  "source_id": "facts",
+                  "first_line": 1,
+                  "last_line": 3
+                }
+              ]
+            },
+            {
+              "episode_id": "retention-episode",
+              "metric": "evidence_adoption",
+              "verdict": "unknown",
+              "reason": "The source records no retention; the best value cannot establish actual adoption.",
+              "citations": [
+                {
+                  "source_id": "facts",
+                  "first_line": 4,
+                  "last_line": 4
+                }
+              ]
+            }
+          ],
+          "limitations": [
+            "Synthetic presentation data, not scientific validation; complete cost unmeasured."
+          ],
+          "episode_questions": [
+            {
+              "episode_id": "search-episode",
+              "question": "Did later search test useful task progress?"
+            },
+            {
+              "episode_id": "control-episode",
+              "question": "Did a matched control distinguish the intervention from variation?"
+            },
+            {
+              "episode_id": "retention-episode",
+              "question": "Was the later candidate recorded as actually retained?"
+            }
+          ],
+          "synthesis": {
+            "summary": {
+              "text": "Later search reduced error from 7 to 3, a positive signal. One candidate was invalid; retention and the mechanism remain unknown.",
+              "episode_ids": [
+                "search-episode"
+              ],
+              "citations": [
+                {
+                  "source_id": "facts",
+                  "first_line": 1,
+                  "last_line": 4
+                }
+              ]
+            },
+            "findings": [
+              {
+                "title": "Later improvement merits further investigation",
+                "observation": "Candidate three measured 3 versus the initial 7; candidate two was invalid.",
+                "interpretation": "Later improvement is observed, but changes and paired replications were not captured. The mechanism remains unresolved.",
+                "alternative_explanations": [
+                  "Random variation could explain some of the difference; these records cannot exclude it."
+                ],
+                "episode_ids": [
+                  "control-episode",
+                  "search-episode"
+                ],
+                "citations": [
+                  {
+                    "source_id": "facts",
+                    "first_line": 1,
+                    "last_line": 3
+                  }
+                ]
+              },
+              {
+                "title": "Best observed and actually retained are separate",
+                "observation": "The source records no retention evidence.",
+                "interpretation": "Retention is unknown without erasing observed improvement.",
+                "alternative_explanations": [],
+                "episode_ids": [
+                  "retention-episode"
+                ],
+                "citations": [
+                  {
+                    "source_id": "facts",
+                    "first_line": 4,
+                    "last_line": 4
+                  }
+                ]
+              }
+            ],
+            "next_experiments": [
+              {
+                "question": "Does the change help beyond random variation?",
+                "why_priority": "Distinguish these explanations before choosing further investment.",
+                "intervention": "Enable or disable one candidate change from the same baseline.",
+                "controls": "Fix inputs, checkpoint, random sequence and total compute budget; use paired replications.",
+                "prediction": "An effective change produces consistent paired gains rather than a single best value.",
+                "disconfirming_result": "Disappearing or reversed paired differences would disconfirm the mechanism.",
+                "episode_ids": [
+                  "control-episode"
+                ],
+                "citations": [
+                  {
+                    "source_id": "facts",
+                    "first_line": 1,
+                    "last_line": 3
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "config": {
+        "model": "synthetic-provider",
+        "effort": "max",
+        "service_tier": "unknown",
+        "research_synthesis": true
+      }
+    }
+  ]
+}

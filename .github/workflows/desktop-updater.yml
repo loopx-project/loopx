@@ -38,6 +38,31 @@ jobs:
       - run: python3 -m unittest discover -s tests/desktop -p 'test_*.py'
       - run: cargo test --locked && cargo clippy --all-targets --locked -- -D warnings
         working-directory: apps/desktop/loopx-control-plane/src-tauri
+  windows-desktop-tests:
+    # The lifecycle and update regressions behind the signed Windows updater
+    # are Windows-native (service job objects, `ShellExecuteW`, real child
+    # processes) and cannot execute on the macOS `validate` leg. Compile the
+    # whole test target natively and run those regressions here.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      # The signed runtime bundle the crate's build script embeds has to exist
+      # before the test target can compile, exactly as on the macOS leg.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - run: python scripts/desktop_runtime_bundle.py
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/loopx-control-plane/src-tauri -> target
+          key: desktop-update-windows-tests
+      - run: cargo test --locked --lib -- service_lifecycle
+        working-directory: apps/desktop/loopx-control-plane/src-tauri
   identity:
     if: github.repository == 'loopx-project/loopx' && ((github.event_name == 'release' && !github.event.release.prerelease && startsWith(github.event.release.tag_name, 'v')) || (github.event_name != 'release' && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-latest
@@ -67,16 +92,10 @@ jobs:
             echo "version=0.0.0-main.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
             echo "tag=desktop-main-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
           fi
-  build:
+  build-macos:
     needs: identity
     if: needs.identity.outputs.channel == 'stable' || needs.identity.outputs.channel == 'main'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15
-            bundle: app
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-15
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
@@ -94,33 +113,118 @@ jobs:
           workspaces: apps/desktop/loopx-control-plane/src-tauri -> target
       - run: npm ci
         working-directory: apps/desktop/loopx-control-plane
-      - name: Build signed App and exact bundled runtime
+      - name: Build signed macOS App and exact bundled runtime
+        if: runner.os == 'macOS'
         working-directory: apps/desktop/loopx-control-plane
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
           VERSION: ${{ needs.identity.outputs.version }}
-          BUNDLE: ${{ matrix.bundle }}
+          BUNDLE: app
         run: |
           set -euo pipefail
           test -n "$TAURI_SIGNING_PRIVATE_KEY"
           npm run build -- --bundles "$BUNDLE" --config "{\"version\":\"$VERSION\",\"bundle\":{\"createUpdaterArtifacts\":true,\"macOS\":{\"signingIdentity\":\"-\"}}}"
       - name: Collect native updater artifacts
         shell: bash
+        env:
+          VERSION: ${{ needs.identity.outputs.version }}
         run: |
           mkdir -p dist/updater
           find apps/desktop/loopx-control-plane/src-tauri/target/release/bundle -type f \( -name '*.app.tar.gz' -o -name '*.app.tar.gz.sig' -o -name '*-setup.exe' -o -name '*-setup.exe.sig' \) -exec cp {} dist/updater/ \;
           for artifact in dist/updater/*-setup.exe*; do
-            if [ -f "$artifact" ]; then mv "$artifact" "${artifact/-setup.exe/-updater-setup.exe}"; fi
+            if [ -f "$artifact" ]; then
+              case "$artifact" in
+                *-updater-setup.exe*) continue ;;
+              esac
+              mv "$artifact" "${artifact/-setup.exe/-updater-setup.exe}"
+            fi
           done
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # The feed advertises this run's version. An installer whose name
+            # does not embed it would be published under a version it does not
+            # carry, and clients would never update again.
+            ls dist/updater/*"$VERSION"*-updater-setup.exe >/dev/null
+          fi
       - uses: actions/upload-artifact@v7
         with:
-          name: signed-updater-${{ matrix.runner }}
+          name: signed-updater-macos-15
+          path: dist/updater/*
+          if-no-files-found: error
+  build-windows:
+    needs: identity
+    # Windows NSIS ships on the main channel only. Keeping this leg out of the
+    # stable dependency graph means a Windows failure cannot withhold the
+    # Darwin-only stable feed; main still requires it.
+    if: needs.identity.outputs.channel == 'main'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.identity.outputs.ref }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/loopx-control-plane/src-tauri -> target
+      - run: npm ci
+        working-directory: apps/desktop/loopx-control-plane
+      - name: Build signed Windows NSIS updater installer
+        if: runner.os == 'Windows'
+        working-directory: apps/desktop/loopx-control-plane
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          VERSION: ${{ needs.identity.outputs.version }}
+          BUNDLE: nsis
+        run: |
+          set -euo pipefail
+          test -n "$TAURI_SIGNING_PRIVATE_KEY"
+          npm run build -- --bundles "$BUNDLE" --config "{\"version\":\"$VERSION\",\"bundle\":{\"createUpdaterArtifacts\":true}}"
+      - name: Collect native updater artifacts
+        shell: bash
+        env:
+          VERSION: ${{ needs.identity.outputs.version }}
+        run: |
+          mkdir -p dist/updater
+          find apps/desktop/loopx-control-plane/src-tauri/target/release/bundle -type f \( -name '*.app.tar.gz' -o -name '*.app.tar.gz.sig' -o -name '*-setup.exe' -o -name '*-setup.exe.sig' \) -exec cp {} dist/updater/ \;
+          for artifact in dist/updater/*-setup.exe*; do
+            if [ -f "$artifact" ]; then
+              case "$artifact" in
+                *-updater-setup.exe*) continue ;;
+              esac
+              mv "$artifact" "${artifact/-setup.exe/-updater-setup.exe}"
+            fi
+          done
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # The feed advertises this run's version. An installer whose name
+            # does not embed it would be published under a version it does not
+            # carry, and clients would never update again.
+            ls dist/updater/*"$VERSION"*-updater-setup.exe >/dev/null
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: signed-updater-windows-latest
           path: dist/updater/*
           if-no-files-found: error
   publish:
-    needs: [identity, build, validate]
+    needs: [identity, build-macos, build-windows, validate]
+    # A skipped Windows build is valid only on stable, where the feed is
+    # Darwin-only. A main release must have its Windows artifact.
+    if: >-
+      always()
+      && needs.identity.result == 'success'
+      && needs.build-macos.result == 'success'
+      && needs.validate.result == 'success'
+      && (needs.identity.outputs.channel != 'main' || needs.build-windows.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -137,7 +241,8 @@ jobs:
         env:
           VERSION: ${{ needs.identity.outputs.version }}
           RELEASE_TAG: ${{ needs.identity.outputs.tag }}
-        run: python scripts/desktop_update_feed.py --directory dist/updater --version "$VERSION" --tag "$RELEASE_TAG"
+          CHANNEL: ${{ needs.identity.outputs.channel }}
+        run: python scripts/desktop_update_feed.py --directory dist/updater --version "$VERSION" --tag "$RELEASE_TAG" --channel "$CHANNEL"
       - name: Upload immutable artifacts, publish channel pointer last
         env:
           GH_TOKEN: ${{ github.token }}
@@ -147,10 +252,14 @@ jobs:
           CHANNEL: ${{ needs.identity.outputs.channel }}
         run: |
           set -euo pipefail
+          # Stable builds intentionally have no Windows artifact. Without
+          # nullglob, Bash passes the unmatched pattern to `gh`, which exits
+          # before the feed and channel pointer are published.
+          shopt -s nullglob
           if [ "$EVENT_NAME" != release ]; then
             gh release create "$RELEASE_TAG" --prerelease --target "$SOURCE_REF" --title "Desktop main $SOURCE_REF" --notes "Signed App and matching runtime preview."
           fi
-          for artifact in dist/updater/*.gz dist/updater/*.sig; do
+          for artifact in dist/updater/*.gz dist/updater/*.sig dist/updater/*.exe; do
             gh release upload "$RELEASE_TAG" "$artifact"
           done
           gh release upload "$RELEASE_TAG" dist/updater/desktop-updater.json --clobber

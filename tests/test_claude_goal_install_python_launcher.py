@@ -156,6 +156,42 @@ def test_launches_python_accepts_a_clean_run(monkeypatch: pytest.MonkeyPatch) ->
     assert claude_install._launches_python("python3") is True
 
 
+@pytest.mark.parametrize(
+    ("version", "supported"),
+    [((3, 8), False), ((3, 10), False), ((3, 11), True), ((3, 12), True)],
+)
+def test_interpreter_probe_requires_the_supported_python_floor(
+    monkeypatch: pytest.MonkeyPatch, version: tuple[int, int], supported: bool,
+) -> None:
+    real_run = subprocess.run
+
+    def probe(command, **kwargs):
+        # Execute the actual probe with a controlled reported version; no
+        # obsolete Python installation or host configuration is required.
+        return real_run(
+            [sys.executable, "-c", f"import sys; sys.version_info = {version!r}; " + command[2]],
+            **kwargs,
+        )
+
+    monkeypatch.setattr(claude_install.subprocess, "run", probe)
+    assert claude_install._launches_python("candidate-python") is supported
+
+
+def test_python_cmd_skips_a_runnable_but_unsupported_python3(monkeypatch: pytest.MonkeyPatch) -> None:
+    real_run = subprocess.run
+    monkeypatch.setattr(claude_install.shutil, "which", lambda name: name)
+
+    def probe(command, **kwargs):
+        version = (3, 10) if command[0] == "python3" else (3, 11)
+        return real_run(
+            [sys.executable, "-c", f"import sys; sys.version_info = {version!r}; " + command[2]],
+            **kwargs,
+        )
+
+    monkeypatch.setattr(claude_install.subprocess, "run", probe)
+    assert claude_install._python_cmd() == "python"
+
+
 def _literal_interpreter(tmp_path: Path, dirname: str, request: pytest.FixtureRequest) -> Path:
     """A real launcher for `sys.executable` under `tmp_path / dirname`.
 

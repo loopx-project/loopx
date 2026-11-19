@@ -11,17 +11,17 @@ A repair can span code edits, tests, CI waiting, review, handoff and delivery. E
 | How do executors collaborate? | Assignment, scope and current execution proof | Claims, leases, fences and commit checks |
 | How does no-change work consume less? | Budget, wait target, observations and actual execution conditions | Quota, Monitors, scheduler/backoff and Host |
 
-Long-running work needs neither an immortal process nor a delivery on every wake. Legitimate waiting and honest stopping also need representation.
+Legitimate waiting and honest stopping also need representation.
 
 ## Demand one: state outlives the current context
 
-A recipient needs the exact PR, commit, validated behavior and outstanding decisions, not merely “I fixed it.” Chat may persist and explain history, but persistence alone supplies neither structure, freshness nor current permission.
+A recipient needs the exact PR, commit, validated behavior and outstanding decisions, not merely “I fixed it.”
 
 Consequential facts need an addressable source, applicable revision and read entrypoint. Maintaining records has a cost; the benefit is reassessing conditions after session change rather than filling gaps from memory. In the [state chapter](state-substrate.md), distinguish source from display under the selected mode.
 
 ## Demand two: retain known facts and uncertainty
 
-An external operation can succeed while its local response is lost. A missing local record proves neither remote absence nor completion.
+An external operation can succeed while its local response is lost.
 
 Governed Turns represent confirmed progress through phases and receipts and read unresolved effects under original identity. Legal prefixes constrain records, not the crash window between external commit and checkpoint. The original owner resolves uncertainty; a new key must not bypass it. Only supported outcomes and current permission allow reuse or outstanding execution.
 
@@ -31,7 +31,7 @@ Historical recovery and admission for a new execution answer different questions
 
 Agents can handle different work or both believe the same item belongs to them. Claims express responsibility; applicable leases/fences constrain the current instance. Neither replaces Goal boundaries, Gate scope, capability or workspace conditions.
 
-Default legacy, soft-claim and hard-lease paths have distinct enforcement boundaries. One mode does not establish universal exclusion, and multiple peers do not imply one executor for the entire Goal. Tie takeover and parallelism to a concrete writer and current inputs; see [authority layers](work-graph-and-authority.md#authority-layers).
+Default legacy, soft-claim and hard-lease paths have distinct enforcement boundaries. Tie takeover and parallelism to a concrete writer and current inputs; see [authority layers](work-graph-and-authority.md#authority-layers).
 
 ## Demand four: budget and observation constrain repetition
 

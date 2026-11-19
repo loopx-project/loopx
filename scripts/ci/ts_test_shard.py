@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
     if not files:
         parser.error(f"no TypeScript tests under {TEST_ROOT}")
     for name in select(files, args.shards, args.shard):
-        print(TEST_ROOT / name)
+        print((TEST_ROOT / name).as_posix())
     return 0
 
 

@@ -30,16 +30,30 @@ def resolve_heartbeat_capture_root(
     native_goal_host: bool,
     turn_instance_id: str | None,
     decision_handoff_socket: str | None = None,
+    codex_context_dir: str | None = None,
+    codex_context_root: str | None = None,
+    context_delivery: str = "off",
     turn_envelope: bool = False,
+    complete_turn: bool = False,
 ) -> Path | None:
     """Validate capture transport for an already resolved host-owned Turn."""
+    if complete_turn and (turn_envelope or native_goal_host or not thin):
+        raise ValueError("--complete-turn requires a thin host-owned heartbeat without --turn-envelope")
+    enabled = context_delivery == "on"
+    if enabled and not (codex_context_dir or codex_context_root):
+        raise ValueError("context-delivery requires a native context location")
+    if codex_context_dir is not None and codex_context_root is not None:
+        raise ValueError("choose codex-context-dir or codex-context-root")
+    if (codex_context_dir is not None or codex_context_root is not None) and root is None:
+        raise ValueError("native context delivery requires a capture root")
     if root is None:
         if decision_handoff_socket is not None:
             raise ValueError("decision handoff requires an explicit decision capture root")
         if turn_envelope:
             raise ValueError("TurnEnvelope requires an explicit decision capture root")
         return None
-    if not thin or full or compact or brief or native_goal_host or not turn_instance_id:
+    if (not thin or full or compact or brief or (native_goal_host and not enabled)
+            or (not turn_instance_id and codex_context_root is None)):
         raise ValueError("--decision-output-root requires thin mode and an explicit host-owned Turn ID")
     directory = Path(root).expanduser().absolute()
     if directory.is_symlink() or not directory.is_dir():
@@ -47,7 +61,7 @@ def resolve_heartbeat_capture_root(
     if decision_handoff_socket is not None:
         from ..turn_driver.decision_capture import validate_handoff_socket
 
-        validate_handoff_socket(decision_handoff_socket)
+        validate_handoff_socket(decision_handoff_socket, capture_root=directory)
     return directory
 
 
@@ -126,6 +140,7 @@ def resolve_exact_heartbeat_turn_identity(
         SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
         SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT,
         SchedulerRuntimeProfile.TRAE_APP,
+        SchedulerRuntimeProfile.ANTIGRAVITY_APP,
     }:
         raise ValueError(
             "--turn-instance-id requires runtime-profile generic_cli or "

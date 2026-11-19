@@ -2,9 +2,20 @@
 import {once} from "node:events";
 import {decodeHostProcessRequest, runHostProcess} from "./host_process.ts";
 const owner = new AbortController();
-process.stdin.on("end", () => owner.abort());
-process.on("SIGTERM", () => owner.abort());
-process.on("SIGINT", () => owner.abort());
+// Private transport observations; none grants Goal or execution authority.
+type LaunchObservation = {kind: "ready"} | {kind: "not_launched"};
+const launchDeadline = process.argv[2] === "--guarded-launch" ? Number(process.argv[3]) : null;
+if (launchDeadline !== null && (!Number.isFinite(launchDeadline) || launchDeadline <= 0))
+  throw new TypeError("invalid guarded Host bridge deadline");
+const abort = () => {
+  owner.abort();
+  if (!accepted) {
+    void emit({kind: "not_launched"} satisfies LaunchObservation).finally(() => process.stdin.destroy());
+  }
+};
+process.stdin.on("end", abort);
+process.on("SIGTERM", abort);
+process.on("SIGINT", abort);
 process.stdout.on("error", () => owner.abort());
 let pending = Buffer.alloc(0), accepted = false;
 const emit = async (item: unknown) => {
@@ -22,6 +33,14 @@ process.stdin.on("data", (chunk: Buffer) => {
   void (async () => {
     try {
       const raw = JSON.parse(line);
+      if (launchDeadline !== null) {
+        const remaining = launchDeadline - Date.now();
+        if (remaining <= 0 || owner.signal.aborted) {
+          await emit({kind: "not_launched"} satisfies LaunchObservation);
+          return;
+        }
+        if (raw.timeout_ms !== null) raw.timeout_ms = Math.min(raw.timeout_ms, remaining);
+      }
       const lease = raw.delegated_lease;
       delete raw.delegated_lease;
       const request = decodeHostProcessRequest(raw);
@@ -37,3 +56,4 @@ process.stdin.on("data", (chunk: Buffer) => {
     finally { process.stdin.destroy(); }
   })();
 });
+if (launchDeadline !== null) await emit({kind: "ready"} satisfies LaunchObservation);

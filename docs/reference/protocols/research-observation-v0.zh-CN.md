@@ -93,6 +93,20 @@ Shadow 状态为 `pending`、`ineligible`、`observed`。活跃实验身份会�
 均不能关闭 gap。通过 `explore node` 更新输入使当前 observation 失效，须录入新
 证据才能重新获得资格；历史 explicit claim 保留为 ineligible candidate。
 
+当前输入资格沿明确声明的 observation lineage 检查到底。对于 `A+B -> AB`、
+`AB+C -> ABC`，重新打开 A 或改变其 observation，也会使 AB 失去作为 ABC 当前
+输入的资格，即使保存的 AB fingerprint 没变。每一级组合仍须匹配当前二元依赖和
+精确输入指纹；缺失输入或循环 lineage 不能提供当前 coverage。普通关系、父节点
+分组、标签和无关研究分支不会隐式成为证据依赖；有完整 coverage 的负面结果仍然
+具有资格。
+
+这项检查判断当前使用资格，不判定科学结论为假。它不删除 observation、不重新打开
+已完成 Todo，也不改写历史完成回执。新的执行 attribution、完成和 writeback 使用
+同一派生资格；历史回放保持只读。重新核验通过既有 writer 记录有依据的新 observation，
+可以复用经确认仍适用的数据；projection 不会统一安排重跑实验。既有整份 observation
+的指纹规则不变：修改 composition candidate 也会改变该 observation 的 fingerprint，
+系统不会自行推断语义等价并豁免检查。
+
 精确 observation 回放返回 `replayed=true`、`written=false`，即使输入已经变化也不
 重新绑定或追加 revision。新写入在既有日志锁内校验 attribution 并追加；现有 node
 writer 和 batch writer 同样校验 typed envelope 的 attribution。

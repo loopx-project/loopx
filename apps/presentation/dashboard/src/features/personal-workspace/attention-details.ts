@@ -1,5 +1,6 @@
 import type { WorkspaceAttention } from "./personal-workspace-model";
 import { todoRequestContent } from "../../../../../../loopx/control_plane/presentation/todo_request_content.js";
+import {reportReviewDigest} from "../../../../../../loopx/control_plane/presentation/report_review_binding.js";
 
 /** A display of existing Todo facts, never a gate or dependency evaluator. */
 export type AttentionDetails = {
@@ -18,6 +19,8 @@ export type AttentionDetails = {
   unblocksTodoId: string | null;
   decisionScope: { kind: string; granularity: string; scopeKey: string } | null;
   supersededBy: string | null;
+  reportReview?: boolean;
+  reportSessionId?: string;
 };
 
 const text = (value: unknown): string | null => typeof value === "string" && value.trim() ? value.trim() : null;
@@ -47,6 +50,7 @@ export function attentionDetails(todo: Record<string, unknown>): AttentionDetail
     unblocksTodoId: text(todo.unblocks_todo_id),
     decisionScope: kind && granularity && scopeKey ? { kind, granularity, scopeKey } : null,
     supersededBy,
+    ...(reportReviewDigest(todo) ? {reportReview: true} : {}),
   };
 }
 

@@ -5,10 +5,12 @@ import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+from collections.abc import Callable
 
 
 def run_archive_installer(
-    url: str, *, env: dict[str, str], timeout_seconds: int
+    url: str, *, env: dict[str, str], timeout_seconds: int,
+    progress: Callable[[str], None] = lambda _stage: None,
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
     deadline = time.monotonic() + timeout_seconds
     download_deadline = min(deadline, time.monotonic() + 60)
@@ -20,6 +22,7 @@ def run_archive_installer(
         script.touch(mode=0o600)
         code = 28
         for attempt in range(1, 4):
+            progress(f"Downloading installer (attempt {attempt}/3)")
             remaining = download_deadline - time.monotonic()
             if remaining <= 0:
                 break
@@ -67,19 +70,19 @@ def run_archive_installer(
                     code = 28
                     break
                 observation["stage"] = "installer_execution"
+                progress("Waiting for source download, CLI install and workspace build")
                 installer_env = dict(env)
                 installer_env["LOOPX_INSTALLER_TIMEOUT_SECONDS"] = str(
                     max(1, int(remaining))
                 )
                 try:
-                    return subprocess.run(
-                        ["bash", str(script)],
-                        check=False,
-                        text=True, encoding="utf-8", errors="replace",
-                        capture_output=True,
-                        env=installer_env,
-                        timeout=remaining,
-                    ), observation
+                    if installer_env.get("LOOPX_UPDATE_EVENTS") == "1":
+                        from .cli_commands.update_artifact import run_installer
+                        return run_installer(["bash", str(script)], env=installer_env,
+                            timeout=remaining, progress=progress), observation
+                    return subprocess.run(["bash", str(script)], check=False, text=True,
+                        encoding="utf-8", errors="replace", capture_output=True,
+                        env=installer_env, timeout=remaining), observation
                 except subprocess.TimeoutExpired:
                     return subprocess.CompletedProcess(
                         [],

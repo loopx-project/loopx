@@ -37,7 +37,10 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/python-tests.yml"
-ACTIVATION = "needs.changes.outputs.python_tests == 'true'"
+ACTIVATION = (
+    "needs.changes.outputs.python_tests == 'true' && !cancelled() "
+    "&& needs.chat-bundle.result == 'success'"
+)
 NODE_OPTION_DENIAL = "NODE_OPTIONS could turn the suite command into a no-op"
 QUALIFY_COMMAND = (
     "node",
@@ -60,6 +63,13 @@ WINDOWS_QUALIFIED_SUITES = (
     "tests/control_plane_ts/quota_void_commit.test.ts",  # #6356
     "tests/control_plane_ts/shadow_entry_delivery.test.ts",  # #6356
     "tests/control_plane_ts/sqlite_backup.test.ts",  # #6258
+    "tests/control_plane_ts/task_lease_workspace.test.ts",  # #7805
+)
+
+SETTLEMENT_RECOVERY_TESTS = (
+    "tests/control_plane/test_refresh_settle_turn.py::test_wrong_or_missing_child_workspace_retains_owed_command_for_exact_recovery",
+    "tests/control_plane/test_refresh_settle_turn.py::test_legacy_posix_quoted_powershell_launcher_fails_before_settlement",
+    "tests/control_plane/test_refresh_settle_turn.py::test_pinned_powershell_launcher_settles_original_turn_once",
 )
 
 
@@ -106,6 +116,32 @@ class WindowsLaneCoverageTests(unittest.TestCase):
                 self.assertNotIn("continue-on-error", step, "the host-qualified suites must block the lane")
                 self.assertNotIn("<<", step, "the host-qualified suites step must not use YAML merge keys")
                 self.assertNotIn("NODE_OPTIONS", step.get("env") or {}, NODE_OPTION_DENIAL)
+
+    def test_native_settlement_recovery_runs_on_qualified_sqlite_then_restores_node(self):
+        steps = windows_lane()["steps"]
+        by_name = {step.get("name"): (index, step) for index, step in enumerate(steps)}
+        setup_index, setup = by_name["Set up the qualified SQLite runtime for settlement recovery"]
+        test_index, recovery = by_name[
+            "Qualify native PowerShell settlement recovery and its immutable baseline"
+        ]
+        restore_index, restore = by_name["Restore the primary Windows Node runtime"]
+        self.assertLess(setup_index, test_index)
+        self.assertLess(test_index, restore_index)
+        self.assertEqual(setup["uses"], "actions/setup-node@v6")
+        self.assertEqual(setup["with"]["node-version"], "22.22.3")
+        self.assertEqual(restore["uses"], "actions/setup-node@v6")
+        self.assertEqual(restore["with"]["node-version"], "24")
+        self.assertIn("--basetemp", recovery["run"])
+        for test in SETTLEMENT_RECOVERY_TESTS:
+            with self.subTest(test=test):
+                self.assertIn(test, recovery["run"])
+        for step in (setup, recovery, restore):
+            with self.subTest(step=step.get("name")):
+                self.assertNotIn("if", step, "settlement recovery qualification must not be skipped")
+                self.assertNotIn(
+                    "continue-on-error", step,
+                    "settlement recovery qualification must block the Windows lane",
+                )
 
 
 if __name__ == "__main__":

@@ -6,6 +6,8 @@ turns a file's existence into evidence of completion or acceptance.
 
 from __future__ import annotations
 
+from ..goals.acceptance_readback import configured_checks
+
 import hashlib
 import json
 import os
@@ -107,7 +109,7 @@ def read_completion_result(*, registry_path: Path, runtime_root: Path,
     if todos.get("authority_read", {}).get("provider_revision") != basis.get("provider_revision"):
         raise ValueError("completion result canonical snapshot changed; retry readback")
     contract = basis.get("goal_acceptance_contract")
-    if (not isinstance(contract, dict) or contract.get("enabled") is not True or
+    if (not isinstance(contract, dict) or configured_checks(contract) is None or
             contract.get("digest") != binding.get("acceptance_contract_digest") or
             contract.get("revision") != binding.get("acceptance_contract_revision")):
         raise ValueError("completion result acceptance basis is stale")

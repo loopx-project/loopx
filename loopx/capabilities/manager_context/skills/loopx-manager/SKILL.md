@@ -3,7 +3,7 @@ name: loopx-manager
 description: Inspect authorized LoopX Goals, Todos and deliveries to explain progress, identify owner decisions and delegate intent to the right worker.
 ---
 
-<!-- loopx-managed-manager-skill:v4 -->
+<!-- loopx-managed-manager-skill:v6 -->
 
 # LoopX manager
 
@@ -32,8 +32,7 @@ Use authorized current evidence for facts that could change that decision;
 distinguish authoritative observations, historical records, claims and inference.
 If the requested outcome is already satisfied, return the verified result and
 source without creating work, delegating, proposing another action or repeating
-an effect. For example, a merged PR needs a factual answer; a closed but unmerged
-PR does not establish the same outcome. This rule also applies to completed
+an effect. This rule also applies to completed
 deliveries and resolved incidents, not only repository operations.
 
 Explanation, comparison, fact checking and judgment normally need your own
@@ -48,9 +47,18 @@ qualified responsible Agent; keep new constraints and corrections attached to
 that work. A matching Todo or historical owner is not required: use the authorized
 directory's responsibilities and context to choose a qualified recipient, and
 describe that as a new selection rather than proven historical ownership.
-Resolve shorthand from the known conversation and project, stating a material
-assumption. Ask only when competing interpretations would change the action;
-do not require a link or Agent id you or an authorized recipient can resolve.
+Resolve shorthand against the requested subject, project, purpose and destination.
+Local and authorized remote sources are peers: use source-neutral discovery
+when the subject is unresolved, without waiting for the owner to mention SSH.
+Agent search covers registrations, not task text; a zero match calls for browsing
+responsibilities and reading relevant source-qualified Todos, not guessing.
+Compare plausible recipients using the permitted directory and relevant current
+work; when the user means recent research, inspect relevant recent deliveries
+as well. Directory order, a generic profile, a delivery target or an available
+host binding cannot establish topic ownership. An explicit Goal/Agent pair or
+owner correction takes precedence. State a material assumption; clarify only
+competing interpretations that still change the action. Do not require a link
+or Agent id you or an authorized recipient can resolve.
 Do not turn every sentence into a fresh assignment. Missing facts
 require a relevant permitted read or bounded verification by a qualified peer,
 not an assumption of completion or a demand for owner intervention. Restricted
@@ -67,6 +75,22 @@ path, finish that response before separate repair and report the repair as
 unfinished. Do not promise an unsupported background continuation. Distinguish
 submission, delivery, receiver decision and actual completion throughout.
 
+When feedback challenges the recipient or corrects the subject, verify that
+route before preserving an alleged established owner. Do not turn an earlier
+routing mistake into an ownership commitment. Keep the complete original
+request, accepted corrections, purpose, destination and original return audience
+in the existing collaboration brief.
+
+Check the original
+and correction receipts. Reuse a correction already delivered to the right
+recipient; absent read/adoption records do not justify another send. If the old
+recipient still has uncorrected intent, carry a bounded ownership correction
+through that existing collaboration path, referring to the original request.
+Do not repeat an already delivered ownership correction, claim cancellation,
+erase effects/history or interrupt unrelated work. Corrected delivery, adoption
+and the actual artifact remain separately verified phases. This repair grants
+no new delivery audience, task edit, execution or cancellation authority.
+
 ## Answer shape
 
 Follow the task's depth. A short factual question needs a direct answer and its
@@ -80,11 +104,31 @@ do not reduce a substantive result to an inventory of IDs. Keep model output
 to ordinary Markdown text; never offer executable HTML as answer content.
 
 Choose reads according to the user's question. The initial Goal directory is
-an index, not a completed investigation. In Chat, use `loopx_manager_read`:
+an index, not a completed investigation. For prioritization, planning or a
+cross-project tradeoff, actively read the relevant Goals' current work and
+accepted requirements, plus recent deliveries when they could change the
+decision. Do not wait for the owner to request these reads explicitly. A fresh
+read of old recorded progress is still historical evidence; distinguish its
+date from the read time. Unrelated factual questions need no full portfolio scan.
+In Chat, use `loopx_manager_read`; omit optional pagination parameters unless
+needed, respect the tool's declared limits and follow returned `next_offset`.
+Recover an indicated exact Todo or delivery when its excerpt is insufficient.
+
+For prioritizing several PRs/MRs against a requirement or deciding how to unblock
+their checks, use `loopx-pr-program`. Resolve the requirement from relevant
+authorized Goal/work and owner-source evidence before ranking candidates.
+Separate product priority, dependency order and current review/check readiness;
+green checks alone establish none of the first two. Return a useful ordered
+decision with evidence, next action and missing work, rather than only PR rows.
+An assessment is not permission to create issues, start workers, rerun checks
+or merge. Use the existing authorization for separately requested follow-through.
+
+Available views:
 
 - `sources`: discover configured and audience-authorized evidence sources.
-  For a remote/SSH question, select the matching `source_id` (for example
-  `ssh:research-host`) for portfolio, Todo and delivery reads. Never substitute
+  `agents` without `source_id` discovers across these sources by default;
+  follow its `next_reads` for omitted pages or sources. Preserve the selected
+  row's `source_id` for portfolio, Todo and delivery reads. Never substitute
   local tasks mentioning SSH for a report from the remote registry. An empty
   declared `host_id` is not a reason to skip an available SSH source: the read
   supplies `source_host` and source-qualified Goal identity. Report each source's
@@ -96,7 +140,9 @@ an index, not a completed investigation. In Chat, use `loopx_manager_read`:
   Goals are excluded by default. Use `include_stopped: true` only for an
   explicit historical/stopped-Goal question; a specific Goal ID can then be read.
 - `todos` with a Goal ID: read current task titles, declared priorities,
-  dependencies and owner decisions. Follow `next_offset` where relevant.
+  dependencies and owner decisions. `query` searches permitted full task text
+  before paging; exact-read matching records when excerpts are insufficient.
+  If a source lacks search support, browse its scoped pages. Follow `next_offset`.
 - `deliveries` with a Goal ID: inspect recorded findings, evidence references
   and validation for the recent reporting window. Join the supplied titles;
   distinguish recorded claims from independently verified artifacts.
@@ -141,18 +187,31 @@ When a user names an existing peer for review or other work, keep that Agent
 identity. The directory's `peer_route` is a candidate list, not a selected or
 verified host task. In App/Goal conversations use the existing read tool with
 `view=agent_route`, exact `goal_id` and `agent_id` after discovery. This reuses
-the shared local route observation and audience scope; it is not executor
-readiness or a message submission. Remote sources remain explicitly unsupported
-by this read view. On a trusted host with CLI access, use `resolve-peer-route`
+the shared route observation and audience scope; it is not executor
+readiness or a message submission. For an authorized SSH source, pass its
+`source_id` so observation runs on that source host. Use `host_surface` only
+to narrow a known binding, never to choose a machine or infer authority.
+On a trusted host with CLI access, use `resolve-peer-route`
 for the exact Goal and Agent. It may select one readable task when every other
 binding is explicitly archived. If it still reports ambiguity, use the user's
 exact task link or report the gap; never treat unknown as archived. If a host message tool is
 authorized, verify the selected task through that host, record the stable
 `manager-inbox request --require-host-route`, then send its content-free
 `host_delivery.message` to the selected task. Treat its `not_attempted` state
-as unsent until the host returns a submission receipt. An unavailable route
-does not authorize replacing the named peer with a temporary child. Receiver
+as unsent until the host returns a submission receipt. Receiver
 read, adoption and result return still need their own evidence.
+
+`manager-inbox request` is only for Agents registered to the same Goal. When an
+exact task link resolves to another Goal, do not cross-register either Agent
+merely to send a message. Shared Agent names do not select a Goal; use the exact
+registered binding, and do not infer another Goal from an unknown or mismatched
+link. Use an authorized host task-message tool for that
+exact task and require its submission receipt. Delivery may become visible when
+the receiving task starts its next Turn; same-Turn injection is not required.
+The message is advisory coordination and grants no Goal authority, priority,
+lease or write scope. A tool call without a submission receipt is not delivery;
+if the host route is unavailable, report that gap instead of claiming the peer
+was notified.
 
 For an all-Goal report, inspect relevant Goals and dates, then synthesize their
 concrete results. For "what needs me", read current owner tasks and explain
@@ -182,7 +241,15 @@ resolve relevant sources within the current request and standing grants. Record
 the actual revision or an explicit read failure, and never let source content
 expand OS, provider, audience or work-state authority.
 
-Use existing `context_handoff` for an explicit authorized delegation. Preserve
+Use existing `context_handoff` for an explicit authorized delegation. One user
+request may address several independently resolved authorized Agents: use an
+array of at most 32 exact Goal/Agent/brief entries, each with its own complete
+recipient-specific brief. Do not make one recipient relay for the others solely
+because of the old single-object transport. Keep audience grants separate;
+never forward another recipient's private reply without authorization. Read
+per-recipient receipts and distinguish partial delivery, adoption and remaining
+conclusions. Retry only outstanding work or new corrections, preserving delivered
+requests. Single-object handoffs remain compatible. Preserve
 the user's original objective and constraints; the receiving Agent decides
 how to replan. Do not convert ordinary delegation into a preview/confirmation
 flow or silently overwrite priorities. Report delivery only from its receipt.

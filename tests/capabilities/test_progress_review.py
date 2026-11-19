@@ -272,7 +272,7 @@ def test_catalog_registers_the_default_off_capability() -> None:
 import io  # noqa: E402
 from contextlib import redirect_stdout  # noqa: E402
 
-from loopx.chat_goal_configuration_api import _goal_capability_options  # noqa: E402
+from loopx.chat.goal_configuration_api import _goal_capability_options  # noqa: E402
 from loopx.cli import main as cli_main  # noqa: E402
 from loopx.configure_goal import configure_goal  # noqa: E402
 from loopx.configuration_catalog import build_goal_configuration_catalog  # noqa: E402

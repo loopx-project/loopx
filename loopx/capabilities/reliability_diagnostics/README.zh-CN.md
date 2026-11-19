@@ -8,9 +8,7 @@
 实跑，以及明确的开销报告。
 
 L1 observer 观察一个长时运行的 Agent 会话，并写下独立的诊断记录；它**永远不能**
-影响该会话。本能力把这条承诺做成机器合约而不是口头规范：envelope schema 无法表达
-命令，receipt 记录 outbound endpoint 为空集，observer 故障被计数并让证据进入
-quarantined，projection 携带 `mode: read_only` 与 `authority: none`。
+影响该会话。
 
 ```mermaid
 flowchart LR
@@ -145,15 +143,14 @@ loopx reliability-diagnostics ingest  --goal-id <goal-id> --input observer.ndjso
 ```
 
 实时年龄／stall 评估应像上述 POSIX shell 示例一样，向 `--as-of` 传入带时区的当前时间。
-省略时按最后事件时间进行历史重放，最后事件年龄为零，不能证明当前仍存活。
+省略时按最后事件时间进行历史重放，最后事件年龄为零。
 
 显式 `--as-of` 必须是含 `Z` 或 UTC 偏移的 ISO-8601 时间戳。空字符串、格式错误或
 无时区的值均返回退出码 2，即使 ledger 缺失、为空或损坏；是否开启 `--with-receipt`
 不影响此校验。
 
 `status --with-receipt` 从同一次 ledger 读取返回两个现有合同；省略该选项保留原来的
-projection-only 输出，不授予控制权限，也不激活 observer。并发追加不是原子快照，
-末尾半行仍会导致 integrity 失败。接入轮询前应阅读
+projection-only 输出，不授予控制权限，也不激活 observer。接入轮询前应阅读
 [DSH/Pi 评估](../../../docs/architecture/rfcs/harness-selection-dsh-pi-v0.zh-CN.md)
 中的全量读取与身份边界。
 
@@ -172,10 +169,31 @@ parity）。启用后，`observer.ts` 只观察 `session/created`、`session/eve
 
 人工离线导出／删除／恢复演练使用
 [本地 retention 参考方案（v0）](docs/local-retention-v0.md#中文)。它保留完整 ledger 字节与
-负面完整性证据，要求冻结 writer 并由 owner 选择有限保留期限；没有实现自动 TTL，也不构成
-live 部署验收。操作 regular file 前会验证 provider 目录与 CLI 的 canonical runtime 布局一致。
+负面完整性证据，要求冻结 writer 并由 owner 选择有限保留期限；没有实现自动 TTL。操作 regular file 前会验证 provider 目录与 CLI 的 canonical runtime 布局一致。
 旧文件仍可只读回查，但必须离线核对后才能恢复追加；方案说明了升级和回退步骤，
 归属不明确时须暂停删除。冻结 writer 后一起升级 CLI 与插件。
+
+## 测量 observer 开销
+
+`packages/dsh-loopx-plugin/bench/observer-overhead.ts` 在确定性的 synthetic DSH 事件流上
+测量 observer 组件开销：observer 关闭/开启两臂、CPU（user+system）、RSS、经 shipped writer
+的 ledger append 延迟、每条 envelope 的 ledger 字节与每次 flush 的 stats 字节、逐试验的
+event loss 与 buffer 峰值，以及 clock source 构成和完整分母；并校验计划记录与 envelope kind
+构成是否被完整消费。丢弃或拒绝事件、append 失败、persisted 少于 accepted、或未覆盖计划记录构成
+的试验会从计时汇总中排除；报告标记为不可用并列出警告，因此有丢失或未完整消费的运行不会被读成
+干净结果。输出 public-safe 的 JSON + Markdown 报告，并声明限制；不测量真实
+DSH host、模型、网络或 Cordis dispatch，也不构成 C1 资格。见
+[bench README](../../../packages/dsh-loopx-plugin/bench/README.md)。
+
+在 `packages/dsh-loopx-plugin` 下运行：
+
+```bash
+node --experimental-strip-types bench/observer-overhead.ts --events 10000
+```
+
+`--events` 会向下归一化为 6 事件 turn cycle 的整数倍（5,000 → 4,998；10,000 → 9,996），
+报告同时给出请求值与归一化值。bench 对 synthetic 突发使用 4,096 buffer bound；传
+`--buffer-bound 256` 可对齐 observer 的产品默认值。
 
 ## 验证
 
@@ -195,5 +213,20 @@ projection 报告 `read` 上的重复、一次已恢复的错误、无 stall。
 
 不做 dashboard、不做 L2 建议、不做自动恢复、不回写 goal / todo / gate / session runtime、
 不改 `loopx status` 首屏。适配器要求外部固定 goal/session/run identity；不会通过 Driver
-或 LoopX CLI 发现绑定。本原型也不提供 matched native/L1 执行、observer CPU/I/O/延迟/
-存储开销测量，或一次合格 C1 实跑。
+或 LoopX CLI 发现绑定。本原型也不提供 matched native/L1 执行、真实 DSH host 测量，或一次合格 C1 实跑。
+bench 工具只在 synthetic 事件流上测量 observer 组件开销。
+
+### 精确绑定与新鲜度
+
+手动读取当前会话时，向 `status` 传入 `--expected-binding '<JSON>'`、显式
+`--as-of <当前时间>` 和 `--max-observation-age-ms <非负整数>`。JSON 恰好包含
+`provider_id`、`observer_id`、`session_id` 与 `run_identity`；后者复用 observer
+stats 已有的八个 treatment 字段。非法参数以退出码 2 拒绝；不传绑定时保留历史输出。
+
+新增的 `binding` 包含 `expected`、`eligible`、`reason_codes` 和年龄上限。
+空账本、任一会话／provider／observer 或运行 treatment 不匹配、非 valid 完整性、
+未来观测或最新观测超龄都会拒绝，并把 `stage` 设为 `unknown`；计数与信号仍是历史
+账本证据。原因码为本地读取合同的 `no_observations`、`session_identity_mismatch`、
+`run_identity_mismatch`、`integrity_not_valid`、`observation_in_future`、
+`observation_stale`。匹配只证明观测可采纳。读取不会过滤冲突运行、
+写状态、调用 provider 或启用轮询。

@@ -79,6 +79,7 @@ def write_monitor_poll_todo_state(
     target_key: str | None = None,
     result_hash: str | None = None,
     material_change: bool = False,
+    material_change_scope: str | None = None,
     cadence: str | None = None,
     next_due_at: str | None = None,
     reason_summary: str | None = None,
@@ -97,6 +98,8 @@ def write_monitor_poll_todo_state(
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
     gate_scope_guard: bool = False,
+    available_capabilities: list[str] | None = None,
+    admitted_resume_when: str | None = None,
     legacy_batch_version: int | None = None,
 ) -> dict[str, Any] | None:
     """Route one typed Monitor transaction to its owning storage adapter."""
@@ -113,6 +116,8 @@ def write_monitor_poll_todo_state(
         "result_hash": result_hash, "material_change": material_change,
         "generated_at": generated_at, "cadence": cadence,
         "next_due_at": next_due_at, "reason_summary": reason_summary}
+    if material_change_scope is not None:
+        observation["material_change_scope"] = material_change_scope
     intent = {"next_agent_todo": next_agent_todo, "next_action_kind": next_action_kind,
         "next_task_repository": next_task_repository,
         "next_required_capabilities": next_required_capabilities or [],
@@ -136,10 +141,22 @@ def write_monitor_poll_todo_state(
     # A selected provider must be readable before any historical fallback.
     # An unmigrated source may still replay its exact business receipt; that
     # typed readback does not admit a fresh Monitor write or drain old captures.
-    authority = read_canonical_todos_if_promoted(
-        runtime_root=runtime_root,
-        goal_id=goal_id,
-    )
+    from ..coordination.local_authority import CanonicalAuthorityRequired
+
+    try:
+        authority = read_canonical_todos_if_promoted(
+            runtime_root=runtime_root,
+            goal_id=goal_id,
+        )
+    except CanonicalAuthorityRequired as error:
+        if not execute or not monitor_effect_id or lease_proof is not None:
+            raise CanonicalAuthorityRequired(
+                goal_id=goal_id, operation="monitor_poll", payload=error.payload,
+            ) from error
+        # This explicit original-operation read can only return an immutable
+        # business receipt. Its existing typed owner validates exact intent;
+        # no receipt still refuses below, without reopening the retired writer.
+        authority = None
     source_error: OSError | ValueError | None = None
     if monitor_effect_id and lease_proof is None:
         # Legacy receipts are historical facts even after authority promotion.
@@ -163,6 +180,7 @@ def write_monitor_poll_todo_state(
             execute=execute, monitor_effect_id=monitor_effect_id, agent_id=agent_id,
             lease_proof=lease_proof, gate_scope_guard=gate_scope_guard,
             receipt_only=source_error is not None,
+            available_capabilities=available_capabilities, admitted_resume_when=admitted_resume_when,
             observation=observation, intent=intent,
         )
     except LocalCoordinationAuthorityRejection as error:

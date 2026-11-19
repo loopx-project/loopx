@@ -5,7 +5,7 @@ import json
 from collections import Counter, deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
+from typing import Any, BinaryIO, Callable, Iterable, Iterator, Mapping, Sequence
 
 from .file_lock import exclusive_cross_runtime_file_lock
 
@@ -211,6 +211,7 @@ def _iter_rollout_event_lines(
     log_path: Path,
     *,
     strict: bool = False,
+    committed_only: bool = False,
 ) -> Iterator[tuple[int, str]]:
     try:
         handle = log_path.open("rb")
@@ -218,6 +219,11 @@ def _iter_rollout_event_lines(
         return
     with handle:
         for line_number, encoded_line in enumerate(handle, start=1):
+            # A row is committed only after its writer terminated it.  Bytes
+            # after the last newline are abandoned by the next append, so
+            # deduplication must not treat them as an existing record.
+            if committed_only and not encoded_line.endswith(b"\n"):
+                continue
             try:
                 line = encoded_line.decode("utf-8")
             except UnicodeDecodeError:
@@ -233,26 +239,55 @@ def _append_rollout_event_line(
     log_path: Path,
     payload: Mapping[str, Any],
 ) -> None:
-    """Append one readable JSONL row after any torn final record."""
+    """Append one readable JSONL row after any torn final record.
+
+    A row is committed because the writer that appended it also wrote its
+    terminating newline.  Bytes a writer left behind before that newline were
+    never committed and are not readable as a row, so this append drops them
+    instead of finishing them: giving them a newline would claim a commit their
+    writer never made, and marking them would introduce a format every older
+    reader has to learn.  Callers hold the cross-runtime append lock for this
+    log, so an unterminated tail here is abandoned bytes, never a write still
+    in progress.
+    """
 
     encoded = (
         json.dumps(dict(payload), sort_keys=True, ensure_ascii=False).encode("utf-8")
         + b"\n"
     )
     with log_path.open("a+b") as handle:
-        handle.seek(0, 2)
-        if handle.tell() > 0:
-            handle.seek(-1, 2)
-            if handle.read(1) != b"\n":
-                handle.write(b"\n")
+        _drop_unterminated_tail(handle)
         handle.write(encoded)
+
+
+def _drop_unterminated_tail(handle: BinaryIO) -> None:
+    """Discard bytes after the last newline; they were never committed."""
+
+    end = handle.seek(0, 2)
+    if end == 0:
+        return
+    handle.seek(-1, 2)
+    if handle.read(1) == b"\n":
+        return
+    cut = 0
+    position = end
+    while position > 0:
+        start = max(0, position - 65536)
+        handle.seek(start)
+        chunk = handle.read(position - start)
+        index = chunk.rfind(b"\n")
+        if index >= 0:
+            cut = start + index + 1
+            break
+        position = start
+    handle.truncate(cut)
 
 
 def rollout_event_log_path(runtime_root: Path, goal_id: str) -> Path:
     # Goal ids are used as directory names throughout the control plane. Keep
     # this shared path helper fail-closed so every reader and writer inherits
     # the same single-segment boundary.
-    from .history import validate_goal_id_path_segment
+    from .paths import validate_goal_id_path_segment
 
     safe_goal_id = validate_goal_id_path_segment(goal_id)
     return (
@@ -447,7 +482,7 @@ def append_rollout_event(log_path: Path, event: Mapping[str, Any]) -> dict[str, 
     with exclusive_cross_runtime_file_lock(
         log_path, operation="append_rollout_event"
     ):
-        for _, line in _iter_rollout_event_lines(log_path):
+        for _, line in _iter_rollout_event_lines(log_path, committed_only=True):
             if event_id not in line:
                 continue
             try:
@@ -461,6 +496,10 @@ def append_rollout_event(log_path: Path, event: Mapping[str, Any]) -> dict[str, 
             raise ValueError(f"conflicting rollout event_id: {event_id}")
         _append_rollout_event_line(log_path, payload)
     return payload
+
+
+class RolloutAppendPreconditionChanged(RuntimeError):
+    """The proposed transition needs to be recomputed before append."""
 
 
 def append_rollout_event_once(
@@ -494,7 +533,7 @@ def append_rollout_event_once(
     with exclusive_cross_runtime_file_lock(
         log_path, operation="append_rollout_event_once"
     ):
-        for _, line in _iter_rollout_event_lines(log_path):
+        for _, line in _iter_rollout_event_lines(log_path, committed_only=True):
             try:
                 existing = json.loads(line)
             except json.JSONDecodeError:
@@ -513,43 +552,98 @@ def append_rollout_event_once(
     return payload, True
 
 
+def _parse_rollout_event_line(
+    line: str, *, line_number: int = 0, strict: bool = False,
+) -> dict[str, Any] | None:
+    if not line.strip():
+        return None
+    try:
+        parsed = json.loads(line)
+    except json.JSONDecodeError:
+        if strict:
+            raise ValueError(
+                f"rollout event log line {line_number} must contain valid JSON"
+            ) from None
+        return None
+    if not isinstance(parsed, dict):
+        if strict:
+            raise ValueError(
+                f"rollout event log line {line_number} must contain an object"
+            )
+        return None
+    if parsed.get("schema_version") != ROLLOUT_EVENT_SCHEMA_VERSION:
+        if strict:
+            raise ValueError(
+                f"rollout event log line {line_number} must use "
+                f"{ROLLOUT_EVENT_SCHEMA_VERSION}"
+            )
+        return None
+    return parsed
+
+
 def iter_rollout_events(
     log_path: Path,
     *,
     strict: bool = False,
 ) -> Iterator[dict[str, Any]]:
     for line_number, line in _iter_rollout_event_lines(log_path, strict=strict):
-        if not line.strip():
+        event = _parse_rollout_event_line(line, line_number=line_number, strict=strict)
+        if event is not None:
+            yield event
+
+
+def _reverse_rollout_lines(handle: BinaryIO) -> Iterator[bytes]:
+    """Read from the opened EOF, assembling complete UTF-8 rows before decoding."""
+    position = handle.seek(0, 2)
+    fragments: list[bytes] = []
+    while position:
+        size = min(position, 64 * 1024)
+        position -= size
+        handle.seek(position)
+        parts = handle.read(size).split(b"\n")
+        if len(parts) == 1:
+            fragments.append(parts[0])
             continue
-        try:
-            parsed = json.loads(line)
-        except json.JSONDecodeError:
-            if strict:
-                raise ValueError(
-                    f"rollout event log line {line_number} must contain valid JSON"
-                ) from None
-            continue
-        if not isinstance(parsed, dict):
-            if strict:
-                raise ValueError(
-                    f"rollout event log line {line_number} must contain an object"
-                )
-            continue
-        if parsed.get("schema_version") != ROLLOUT_EVENT_SCHEMA_VERSION:
-            if strict:
-                raise ValueError(
-                    f"rollout event log line {line_number} must use "
-                    f"{ROLLOUT_EVENT_SCHEMA_VERSION}"
-                )
-            continue
-        yield parsed
+        yield b"".join([parts.pop(), *reversed(fragments)])
+        fragments.clear()
+        yield from reversed(parts[1:])
+        fragments.append(parts[0])
+    if fragments:
+        yield b"".join(reversed(fragments))
+
+
+def _recent_rollout_events(log_path: Path, *, limit: int) -> list[dict[str, Any]]:
+    events: deque[dict[str, Any]] = deque(maxlen=limit)
+    try:
+        handle = log_path.open("rb")
+    except OSError:
+        return []
+
+    def parsed_lines(lines: Iterable[bytes]) -> Iterator[dict[str, Any]]:
+        for encoded in lines:
+            try:
+                line = encoded.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            event = _parse_rollout_event_line(line)
+            if event is not None:
+                yield event
+
+    with handle:
+        if not handle.seekable():
+            events.extend(parsed_lines(handle))
+        else:
+            for event in parsed_lines(_reverse_rollout_lines(handle)):
+                events.appendleft(event)
+                if len(events) == events.maxlen:
+                    break
+    return list(events)
 
 
 def load_rollout_events(log_path: Path, *, limit: int | None = None) -> list[dict[str, Any]]:
-    events = iter_rollout_events(log_path)
     if limit is None or limit <= 0:
-        return list(events)
-    return list(deque(events, maxlen=limit))
+        return list(iter_rollout_events(log_path))
+    return _recent_rollout_events(log_path, limit=limit)
 
 
 class RolloutEventSnapshot:

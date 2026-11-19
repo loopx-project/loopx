@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -87,6 +89,66 @@ def test_renew_repair_preserves_identity_and_exact_version(lease_cli):
     assert run(action("inspect"))["lease"] == renewed["lease"]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Exercises a POSIX console alias and PATH")
+def test_explicit_runtime_survives_grammar_repair_and_refusal_inspection(
+    lease_cli, tmp_path, monkeypatch,
+):
+    run, action, _, _ = lease_cli
+    program = "candidate's cli"
+    bin_dir = tmp_path / "candidate bin"
+    bin_dir.mkdir()
+    console = Path(sys.executable).parent / "loopx"
+    assert console.is_file(), "Use the checkout's installed test environment"
+    (bin_dir / program).symlink_to(console)
+    marker = tmp_path / "wrong-runtime"
+    poison = bin_dir / "loopx"
+    poison.write_text(f"#!{sys.executable}\nfrom pathlib import Path\n"
+                      f"Path({str(marker)!r}).write_text('wrong runtime')\nraise SystemExit(97)\n")
+    poison.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ.get("PATH", ""))
+
+    def execute(argv):
+        result = subprocess.run(argv, cwd=ROOT, capture_output=True, text=True, timeout=90)
+        assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
+        assert not marker.exists(), "A generated command escaped to the global runtime"
+        return json.loads(result.stdout)
+
+    def markdown_command(arguments, label):
+        arguments = list(arguments)
+        arguments[arguments.index("--format") + 1] = "markdown"
+        result = subprocess.run([sys.executable, "-m", "loopx.cli", "--cli-bin", program, *arguments],
+                                cwd=ROOT, capture_output=True, text=True, timeout=90)
+        assert result.returncode == 1, result.stdout + result.stderr
+        line = next(line for line in result.stdout.splitlines() if line.startswith(f"- {label}: `"))
+        return shlex.split(line.split("`", 2)[1])
+
+    before = run(action("inspect"))["lease"]
+    malformed = action("inspect", "--owner", "peer-a")
+    # Execute the displayed repair unchanged; a hard-coded executable hits poison.
+    assert execute(markdown_command(malformed, "repair"))["lease"] == before
+    rejected = run(["--cli-bin", program, *action(
+        "renew", "--owner", "peer-a", "--idempotency-key", "original",
+        "--expected-version", "1", "--write-scope", "other/**")], code=1)
+    assert run(action("inspect"))["lease"] == before
+    repair = rejected["recovery"]
+    # cli_args remains option-only; its existing command supplies the executable.
+    repair_argv = [shlex.split(repair["command"])[0], *repair["cli_args"]]
+    renewed = execute(repair_argv)["lease"]
+    assert renewed["version"] == before["version"] + 1
+    assert renewed["owner"] == before["owner"] and renewed["write_scopes"] == before["write_scopes"]
+    assert execute(repair_argv)["lease"] == renewed
+    wrong_owner = action("release", "--owner", "peer-b", "--idempotency-key", "original",
+                         "--expected-version", str(renewed["version"]))
+    denied = run(["--cli-bin", program, *wrong_owner], code=1)
+    assert denied["ok"] is False
+    inspection = denied["inspection"]
+    assert inspection["execution_authority_granted"] is False
+    assert inspection["cli_args"][inspection["cli_args"].index("--cli-bin") + 1] == program
+    assert execute([program, *inspection["cli_args"]])["lease"] == renewed
+    assert execute(markdown_command(wrong_owner, "inspect current state"))["lease"] == renewed
+    assert run(action("inspect"))["lease"] == renewed
+
+
 def test_missing_inputs_are_combined_and_wrong_owner_is_not_repaired(lease_cli):
     run, action, _, _ = lease_cli
     before = run(action("inspect"))["lease"]
@@ -104,6 +166,32 @@ def test_missing_inputs_are_combined_and_wrong_owner_is_not_repaired(lease_cli):
     assert observed["lease"] == before
     assert denied["inspection"]["execution_authority_granted"] is False
     assert run(action("inspect"))["lease"] == before
+
+
+@pytest.mark.parametrize("operation", ["renew", "transfer", "release"])
+def test_wrong_execution_key_explains_matching_version_and_keeps_original_recovery(lease_cli, operation):
+    run, action, _, _ = lease_cli
+    before = run(action("inspect"))
+    version = str(before["lease"]["version"])
+    extra = ["--new-owner", "peer-a", "--new-idempotency-key", "receiver"] if operation == "transfer" else []
+    denied = run(action(operation, "--owner", "peer-a", "--idempotency-key", "new-operation",
+                        "--expected-version", version, *extra), code=1)
+    assert denied["error_code"] == "lease_cas_mismatch"
+    assert denied["expected_version"] == denied["actual_version"] == int(version)
+    assert "owner" in denied["error"] and "idempotency key" in denied["error"]
+    assert denied["inspection"]["execution_authority_granted"] is False
+    observed = run(denied["inspection"]["cli_args"])
+    assert observed["lease"] == before["lease"]
+    assert observed["provider_revision"] == before["provider_revision"]
+
+    original = action(operation, "--owner", "peer-a", "--idempotency-key", "original",
+                      "--expected-version", version, *extra)
+    applied = run(original)
+    assert applied["lease"]["version"] == int(version) + (operation != "release")
+    assert applied["lease"]["idempotency_key"] == ("receiver" if operation == "transfer" else "original")
+    replay = run(original)
+    assert replay["idempotent"] is True and replay["lease"] == applied["lease"]
+    assert run(action("inspect"))["lease"] == applied["lease"]
 
 
 def test_recovery_round_trips_leading_hyphen_execution_keys(lease_cli):

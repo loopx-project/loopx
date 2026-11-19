@@ -13,6 +13,7 @@ from loopx.dash_server import (
     DEFAULT_DASH_REFRESH_SECONDS,
 )
 from loopx.entrypoint import main as entrypoint_main
+from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
 
 
 @pytest.mark.parametrize(
@@ -133,6 +134,11 @@ def test_generate_filters_real_registry(
     registry.write_text(
         json.dumps({"schema_version": "0.1", "goals": goals}), encoding="utf-8"
     )
+    for goal in goals:
+        initialize_canonical_source_fixture(
+            tmp_path / "runtime", goal["id"],
+            state_path=Path(goal["repo"]) / goal["state_file"],
+        )
 
     result = entrypoint_main(
         [

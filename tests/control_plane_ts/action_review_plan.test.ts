@@ -27,6 +27,51 @@ test("interrupted Goal bootstrap retries its original identity before downstream
   }
 });
 
+test("an interrupted Task start retries only its original saved Task", () => {
+  const canonicalReceipt = {todo_id: "todo-original", goal_id: "report", preview_id: "reviewed", status: "applied"};
+  const created = {todo_id: "todo-original", canonical_receipt: canonicalReceipt};
+  const proposal = {proposal_id: "start-task", expected_state_fingerprint: "reviewed", action_kind: "todo.create",
+    permission_classification: "durable_write", status: "failed", failure: {retry_safe: true},
+    normalized_parameters: {goal_id: "report", start_execution: true},
+    checkpoint: {steps: {todo_created: created}}};
+  const plan = compileActionReviewPlan(proposal);
+  assert.equal(plan.reason, "task_start_retry");
+  assert.equal(plan.retryOriginal, true);
+  assert.equal(plan.canApply, true);
+  for (const change of [{checkpoint: null}, {status: "gated"}, {failure: {retry_safe: false}},
+    {normalized_parameters: {goal_id: "report", start_execution: false}},
+    {checkpoint: {steps: {todo_created: {...created, todo_id: "todo-other"}}}},
+    {expected_state_fingerprint: "another-review"}, {normalized_parameters: {goal_id: "other", start_execution: true}}]) {
+    assert.equal(compileActionReviewPlan({...proposal, ...change}).retryOriginal, undefined);
+  }
+});
+
+test("confirmed Task dispatch resolves only to the receipt's own execution Turn", () => {
+  const resources = {goal_id: "repair", todo_id: "todo-first", session_id: "session-first", turn_id: "turn-first"};
+  const canonical = {goal_id: "repair", todo_id: "todo-first", preview_id: "reviewed", status: "applied"};
+  const receipt = {projection_verified: true, outcome: "task_execution_started", resource_ids: resources, canonical_receipt: canonical};
+  const proposal = {proposal_id: "start-task", expected_state_fingerprint: "reviewed", action_kind: "todo.create",
+    status: "applied", normalized_parameters: {goal_id: "repair", start_execution: true}, receipt};
+  const result = compileActionReviewPlan(proposal);
+  assert.equal(result.canApply, false);
+  assert.deepEqual(result.taskExecution, {goalId: "repair", todoId: "todo-first", sessionId: "session-first", turnId: "turn-first"});
+  for (const change of [
+    {status: "applying"},
+    {normalized_parameters: {goal_id: "repair", start_execution: false}},
+    {receipt: {...receipt, projection_verified: false}},
+    {receipt: {...receipt, resource_ids: {...resources, goal_id: "other"}}},
+    {receipt: {...receipt, resource_ids: {...resources, turn_id: ""}}},
+    {receipt: {...receipt, canonical_receipt: {...canonical, todo_id: "todo-other"}}},
+    {receipt: {...receipt, canonical_receipt: {...canonical, preview_id: "another-review"}}},
+  ]) {
+    assert.equal(compileActionReviewPlan({...proposal, ...change}).taskExecution, undefined);
+  }
+  // Older saved actions can still report creation while the Session is unknown.
+  const legacy = compileActionReviewPlan({...proposal, receipt: {projection_verified: true, outcome: "todo_added"}});
+  assert.equal(legacy.interaction, "completed");
+  assert.equal(legacy.taskExecution, undefined);
+});
+
 test("post-commit creation projects its effects without certifying Goal completion", () => {
   const steps = {workspace_validated: {outcome: "workspace_validated", workspace_digest: "a".repeat(64)},
     goal_bootstrapped: {outcome: "goal_bootstrapped", goal_id: "new-goal"},
@@ -82,6 +127,37 @@ test("creation rejects terminal first-Turn readback without a Host start", () =>
   }
   assert.equal(compileActionReviewPlan({...proposal, first_turn_readback: {status: "queued"}}).reason,
     "readback_verified");
+});
+
+test("creation completion keeps the original write basis and leaves dispatched legacy Goals alone", () => {
+  const steps = {workspace_validated: {outcome: "workspace_validated", workspace_digest: "a".repeat(64)},
+    goal_bootstrapped: {outcome: "goal_bootstrapped", goal_id: "report"},
+    agent_bound: {outcome: "agent_bound", goal_id: "report", agent_id: "codex"},
+    todos_created: {outcome: "todos_created", todo_ids: ["intro"]}};
+  const proposal = {proposal_id: "creation", expected_state_fingerprint: "registry",
+    action_kind: "goal.create", permission_classification: "durable_write", status: "failed",
+    normalized_parameters: {goal_id: "report", title: "Report", agent_id: "codex",
+      completion_criteria: "Retain the appendix", initial_todos: ["Write the introduction"]}, checkpoint: {steps}};
+  const declaration = compileActionReviewPlan(proposal).creationOutcome!;
+  assert.equal(declaration.refinement.requirements[0].description, "Retain the appendix");
+  assert.deepEqual(declaration.refinement.todo_ids, ["intro"]);
+  const prepared = {...steps, goal_completion_prepared: {outcome: "goal_completion_prepared", goal_id: "report",
+    operation_id: declaration.operationId, provider_revision: "original-revision"}};
+  assert.deepEqual(compileActionReviewPlan({...proposal, checkpoint: {steps: prepared}}).creationProgress?.completionBasis,
+    {operationId: declaration.operationId, providerRevision: "original-revision"});
+  const session = {outcome: "first_session_opened", session_id: "original-session"};
+  const legacy = compileActionReviewPlan({...proposal, checkpoint: {steps: {...steps, first_session_opened: session}}});
+  assert.equal(legacy.creationOutcome, undefined);
+  assert.equal(legacy.creationProgress?.sessionId, "original-session");
+  for (const invalid of [
+    {...prepared, goal_completion_prepared: {...prepared.goal_completion_prepared, goal_id: "foreign"}},
+    {...prepared, goal_completion_prepared: {...prepared.goal_completion_prepared, operation_id: "other"}},
+    {...steps, goal_completion_recorded: {outcome: "goal_completion_recorded", goal_id: "report",
+      operation_id: declaration.operationId, provider_revision: "new"}},
+    {...prepared, first_session_opened: session},
+  ]) {
+    assert.equal(compileActionReviewPlan({...proposal, checkpoint: {steps: invalid}}).creationProgress, undefined);
+  }
 });
 
 test("canonical update recovery includes User completion without changing generic action authority", () => {
@@ -233,6 +309,21 @@ test("operation frame projects pending and verified result states", () => {
   assert.equal(completed.operationFrame.resultKind, "simulation_completed");
   assert.equal(completed.operationFrame.resultDeliveryVerified, true);
   assert.equal(completed.operationFrame.summary, "Simulation completed.");
+});
+
+test("an applied operation stays unverified until its current result delivery is verified", () => {
+  const proposal: Record<string, any> = operationProposal("outcome_observed");
+  proposal.status = "applied";
+  proposal.receipt = {projection_verified: true};
+  const verified = compileActionReviewPlan(proposal);
+  assert.equal(verified.interaction, "completed");
+  assert.equal(verified.reason, "readback_verified");
+  const {result_delivery, ...withoutDelivery} = proposal.operation;
+  assert.ok(result_delivery);
+  const pending = compileActionReviewPlan({...proposal, operation: withoutDelivery});
+  assert.equal(pending.interaction, "repair");
+  assert.equal(pending.reason, "readback_unverified");
+  assert.equal(pending.canApply, false);
 });
 
 test("operation frame rejects identity drift and malformed projection fields", () => {

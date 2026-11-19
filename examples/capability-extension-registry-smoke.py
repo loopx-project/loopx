@@ -84,6 +84,7 @@ next_real_step = "Keep explicit enablement bounded."
         "reliability-diagnostics",
         "progress-review-sentinel",
         "goal-capability-organization",
+        "anti-entropy-governance",
     ]
     assert all(item["provider_id"] == "loopx-core" for item in builtin_capabilities)
     value_summary = next(

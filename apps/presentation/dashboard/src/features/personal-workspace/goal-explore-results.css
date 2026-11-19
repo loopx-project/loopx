@@ -1,0 +1,48 @@
+.goal-research-workbench { width: min(1280px, 100%); margin: 0 auto; }
+.research-saved-evidence { margin: 20px 0; padding-inline: 16px; border: 1px solid var(--pw-line); border-radius: 10px; background: var(--pw-bg); }
+.research-saved-evidence > summary { min-height: 52px; align-content: center; padding: 12px 0; color: var(--pw-text); font-size: var(--text-body); font-weight: 500; cursor: pointer; }
+.goal-explore-results { width: 100%; padding: 24px 0; border: 0; border-radius: 0; }
+.goal-explore-results > p { font-size: var(--text-lead); line-height: var(--leading-prose); }
+.explore-reader-heading { display: flex; align-items: center; gap: 8px; }
+.goal-explore-results .goal-team-results-layout { grid-template-columns: minmax(200px, 280px) minmax(0, 1fr); }
+.explore-finding-navigation { min-width: 0; align-self: start; }
+.explore-finding-picker { display: none; }
+.explore-finding-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 2px; font-size: var(--text-caption); color: var(--pw-muted); }
+.explore-finding-pagination > div { display: flex; gap: 8px; }
+.explore-finding-pagination button { min-height: 44px; padding: 8px; color: var(--pw-text); }
+.goal-explore-results .goal-team-result-list { max-height: 680px; overflow-y: auto; padding: 2px; align-self: start; }
+.goal-explore-results .goal-team-result-list button { flex-shrink: 0; }
+.goal-explore-results .goal-team-result-list strong { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.goal-explore-results .goal-team-result-list small { font-family: inherit; }
+.goal-explore-results .goal-team-result-reader { overflow-wrap: anywhere; }
+.goal-explore-results .goal-team-result-reader > h4 { font-size: var(--text-lead); line-height: var(--leading-lead); font-weight: 600; margin: 0 0 12px; }
+.explore-reader-status { color: var(--pw-muted); font-size: var(--text-caption); }
+.explore-measurement-warning { margin-block: 16px; font-size: var(--text-body); line-height: var(--leading-body); }
+.goal-explore-results .goal-team-result-reader p, .goal-explore-results .goal-team-result-reader li { font-size: var(--text-lead); line-height: var(--leading-prose); color: var(--pw-text); }
+.explore-finding-prose, .explore-finding-raw { max-width: 72ch; }
+.explore-finding-prose section { margin: 24px 0; }
+.explore-finding-prose h5, .explore-finding-prose h6 { font: inherit; font-weight: 600; margin: 0 0 8px; }
+.explore-finding-prose p, .explore-finding-raw { white-space: pre-wrap; }
+.explore-finding-prose ul, .explore-reader-details ul { padding-inline-start: 20px; list-style: disc; }
+.explore-reader-details { border-top: 1px solid var(--pw-line); margin-top: 16px; }
+.goal-explore-results .explore-reader-details > summary { font-size: var(--text-body); }
+.explore-reader-details dl { display: grid; gap: 8px; }
+.explore-reader-details dt { color: var(--pw-muted); font-size: var(--text-caption); }
+.explore-reader-details dd { margin-bottom: 12px; }
+.goal-explore-results .explore-linked-tasks { padding: 0; list-style: none; }
+.explore-linked-tasks > li { border-bottom: 1px solid var(--pw-line); }
+.goal-explore-results .explore-linked-tasks summary { display: flex; align-items: flex-start; gap: 8px; font-size: var(--text-body); line-height: var(--leading-body); }
+.explore-linked-tasks summary::-webkit-details-marker { display: none; }
+.explore-linked-tasks summary > svg { flex-shrink: 0; margin-top: 2px; }
+.explore-linked-tasks details[open] > summary > svg { transform: rotate(90deg); }
+.explore-linked-tasks summary > span { min-width: 0; }
+.explore-linked-tasks summary strong { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-weight: 500; }
+.explore-linked-tasks summary small { display: block; margin-top: 8px; color: var(--pw-muted); }
+.explore-linked-tasks button { min-height: 44px; padding: 8px; }
+@media (max-width: 640px) {
+  .goal-explore-results .goal-team-results-layout { grid-template-columns: minmax(0, 1fr); }
+  .goal-explore-results .goal-team-result-list { display: none; }
+  .explore-finding-picker { display: grid; gap: 8px; font-size: var(--text-body); }
+  .explore-finding-picker select { width: 100%; min-width: 0; min-height: 44px; padding: 10px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-surface, #fff); color: var(--pw-text); font: inherit; }
+  .explore-finding-pagination { padding-bottom: 0; }
+}

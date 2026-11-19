@@ -43,7 +43,7 @@ function assertExists(path) {
 // exported page directory or a shipped static asset. Page references must own
 // an index.html; asset references must resolve to the asset file itself.
 const relativeAssetReferencePattern =
-  /\.(?:avif|css|csv|gif|ico|jpe?g|js|json|mjs|mp4|pdf|png|svg|txt|webm|webp|woff2?|xml|zip)$/i;
+  /\.(?:avif|css|csv|gif|ico|jpe?g|js|json|mjs|mp4|pdf|png|py|svg|txt|webm|webp|woff2?|xml|zip)$/i;
 const nonBundleReferencePattern = /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i;
 
 function assertRelativeReferenceExists(pagePath, target) {
@@ -84,6 +84,19 @@ try {
   const probePath = resolve(boundaryProbeDir, "index.html");
   await writeFile(probePath, publicCitation);
   await scanPublicBoundary(boundaryProbeDir);
+  const scriptPath = resolve(boundaryProbeDir, "credential-form.js");
+  await writeFile(scriptPath, "submit({api_key:draft,auth_token:state.value})");
+  await scanPublicBoundary(boundaryProbeDir);
+  for (const unsafeScript of [
+    'submit({api_key:"fixture-private-value"})',
+    'submit({auth_token:`fixture-private-value`})',
+    'submit({api_key:draft,access_token:"fixture-private-value"})',
+    'submit({api_key:draft || "fixture-private-value"})',
+  ]) {
+    await writeFile(scriptPath, unsafeScript);
+    await assert.rejects(scanPublicBoundary(boundaryProbeDir), /Public boundary scan failed/);
+  }
+  await rm(scriptPath);
   for (const unsafe of [
     "byte" + "dance internal workspace",
     '<a href="https://github.com/ByteDance-Seed/private-work">unverified source</a>',
@@ -213,7 +226,7 @@ run(process.execPath, [resolve(repoRoot, "examples/export-frontstage-share-bundl
 if (await readFile(resolve(siteDir, "index.html"), "utf8") !== originalHomepage) throw new Error("case restore replaced the homepage");
 assertExists(resolve(siteDir, "docs/showcases/showcase-catalog.json"));
 const restoredCase = await readFile(resolve(siteDir, "docs/showcases/cases/0619-loopx-self-iteration.en.html"), "utf8");
-if (!restoredCase.includes("https://github.com/huangruiteng/loopx/blob/main/docs/showcases/cases/0619-loopx-self-iteration.md")) {
+if (!restoredCase.includes("https://github.com/loopx-project/loopx/blob/main/docs/showcases/cases/0619-loopx-self-iteration.md")) {
   throw new Error("case narrative source must not point to an unshipped Markdown URL");
 }
 
@@ -320,13 +333,14 @@ for (const promptContract of [
   "no-clone installer",
   "loopx doctor",
   "loopx connect/bootstrap",
-  "project connection status, current user gate, top agent todo",
-  "next safe action, and available commands",
-  "/loopx <complex task>",
+  "one natural-language goal",
   "/loopx <goal text>",
   "concise ordered plan",
-  "P0/P1/P2 todos",
+  "save that plan as ordered LoopX Todos",
+  "read back the current work, any decision that needs me, and the next safe action",
+  "Keep LoopX internal terms behind advanced or debugging explanations",
   "把当前项目接入 LoopX",
+  "把计划按顺序保存为 LoopX 待办",
   "下一步安全动作是什么",
 ]) {
   if (!homepageSource.includes(promptContract)) {

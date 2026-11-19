@@ -13,13 +13,21 @@ reads the written active state, and checks the gate that the caller sees next.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# These source-owned oracles must use the same checkout as the CLI below.
+sys.path.insert(0, str(REPO_ROOT))
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload  # noqa: E402
+from tests.managed_effect_runtime_fixture import stop_disposable_effect_runtimes  # noqa: E402
+
 GENERIC_GOAL_ID = "fresh-generic-connect"
 DOMAIN_GOAL_ID = "fresh-domain-connect"
 FIRST_TODO_ID = "fresh-first-delivery"
@@ -50,7 +58,31 @@ def run_cli(registry: Path, runtime: Path, *args: str) -> dict:
         text=True,
         capture_output=True,
     )
-    return json.loads(result.stdout)
+    # Native navigation names the current capture; it is not the policy. This
+    # test oracle verifies the complete recovery without claiming model reads.
+    return read_cli_policy_payload(result.stdout, returncode=result.returncode)
+
+
+@contextmanager
+def _isolated_runtime(root: Path) -> Iterator[None]:
+    """Keep every CLI child's temporary runtime inside this smoke's owner."""
+    settings = {"TMPDIR": str(root), "TEMP": str(root), "TMP": str(root), "LOOPX_USAGE_PING": "0"}
+    previous = {key: os.environ.get(key) for key in settings}
+    previous_tempdir = tempfile.tempdir
+    try:
+        os.environ.update(settings)
+        tempfile.tempdir = str(root)
+        yield
+    finally:
+        try:
+            stop_disposable_effect_runtimes(root)
+        finally:
+            tempfile.tempdir = previous_tempdir
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
 
 def initialize_project(root: Path, name: str) -> tuple[Path, Path]:
@@ -121,7 +153,10 @@ def connect_generic(root: Path, runtime: Path) -> tuple[Path, Path, str]:
 
 
 def main() -> int:
-    with tempfile.TemporaryDirectory(prefix="loopx-first-connect-") as tmp:
+    with (
+        tempfile.TemporaryDirectory(prefix="loopx-first-connect-") as tmp,
+        _isolated_runtime(Path(tmp)),
+    ):
         root = Path(tmp)
         runtime = root / "runtime"
         project, registry, state_text = connect_generic(root, runtime)

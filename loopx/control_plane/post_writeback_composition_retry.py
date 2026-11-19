@@ -188,8 +188,12 @@ def _iter_composition_retry_rows(
 
     try:
         lines = log_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except FileNotFoundError:
         return []
+    except OSError as error:
+        raise RuntimeError(
+            "composition retry receipt journal is unreadable"
+        ) from error
     selected = lines if row_limit is None else lines[-max(0, row_limit) :]
     rows: list[dict[str, Any]] = []
     for line in selected:
@@ -456,8 +460,6 @@ def collect_pending_composition_retry_projection(
     pending: list[dict[str, Any]] = []
     total_matching = 0
     for journal_path in journal_paths:
-        if not journal_path.is_file():
-            continue
         for row in pending_composition_retry_receipts_for_path(journal_path):
             if (
                 selector_agent_id

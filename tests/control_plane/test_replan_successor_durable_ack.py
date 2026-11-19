@@ -9,6 +9,7 @@ from urllib.parse import quote
 import pytest
 
 from loopx.cli import main as cli_main
+from loopx.control_plane.effect_runtime import EffectRuntimeRejected
 from loopx.control_plane.status.autonomous_replan_projection import (
     AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD,
     autonomous_replan_obligation_from_runs,
@@ -107,10 +108,18 @@ def test_cli_completed_todo_successor_refresh_resets_periodic_window(tmp_path: P
 def test_transition_cannot_settle_a_different_turn_guard(guard) -> None:
     runs = history()
     obligation = autonomous_replan_obligation_from_runs(runs, agent_todos={}, agent_id=AGENT)
-    assert enforce_open_replan_writeback(newest_first_runs=runs,
+    kwargs = dict(newest_first_runs=runs,
         state_text=successor_state(obligation["obligation_id"]), agent_id=AGENT,
         goal_id=GOAL, guard_scoped=True,
-        guard_semantic_replan_obligation_id=guard) is None
+        guard_semantic_replan_obligation_id=guard)
+    if guard is None:
+        assert enforce_open_replan_writeback(**kwargs) is None
+    else:
+        # An explicitly selected identity must reconstruct its receipt-bound
+        # source; it cannot silently fall through to an unselected obligation.
+        with pytest.raises(EffectRuntimeRejected) as rejected:
+            enforce_open_replan_writeback(**kwargs)
+        assert rejected.value.diagnostic_code == "heartbeat_receipt_identity_conflict"
 
 
 def test_transition_settles_only_exact_guard_and_owner() -> None:
@@ -205,6 +214,8 @@ def test_canonical_periodic_successor_settles_original_open_validation_todo(
     ), state_path=state, provider=provider)
 
     def call(*args: str, expected_error: str | None = None) -> dict:
+        if args[:2] == ("quota", "should-run"):
+            args = (*args, "--context-delivery", "off")
         result = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
             "--runtime-root", str(runtime), "--format", "json", *args], cwd=project,
             capture_output=True, text=True, timeout=60)
@@ -337,7 +348,7 @@ def test_long_chain_ack_survives_real_cli_history_and_peer_claim(tmp_path: Path,
 
     def guard():
         result = call("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
-            "--runtime-profile", "generic_cli")
+            "--runtime-profile", "generic_cli", "--context-delivery", "off")
         return result.get("autonomous_replan_obligation")
 
     original = guard()

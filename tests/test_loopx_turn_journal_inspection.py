@@ -151,13 +151,12 @@ def test_existing_run_once_markdown_renderer_remains_intact() -> None:
     assert "- failure_reason: dsh_output_budget_exhausted_no_final" in rendered
 
 
-def test_non_budget_failure_keeps_the_existing_compact_rendering() -> None:
+def test_execution_without_host_failure_keeps_the_existing_compact_rendering() -> None:
     from loopx.cli_commands.turn_rendering import render_loopx_turn_execution_markdown
 
     rendered = render_loopx_turn_execution_markdown({
         "status": "failed", "result_kind": "host_failure",
         "reason": "provider_failed",
-        "host_failure": {"kind": "auth_failed", "retryable": False},
     })
     assert rendered == "\n".join([
         "# LoopX Turn Run Once", "- status: failed", "- result_kind: host_failure",
@@ -595,10 +594,7 @@ def test_inspect_journal_cli_branches_before_live_or_write_paths(
     def unexpected_call(*args: object, **kwargs: object) -> None:
         raise AssertionError("inspect-journal reached a live or write path")
 
-    for name in (
-        "build_loopx_turn_plan",
-        "build_turn_envelope",
-    ):
+    for name in ("build_loopx_turn_plan",):
         monkeypatch.setattr(turn_command, name, unexpected_call)
     monkeypatch.setattr(turn_run_once, "execute_turn_run_once", unexpected_call)
     # The shared decision owner now performs the live reads this command used to
@@ -612,8 +608,9 @@ def test_inspect_journal_cli_branches_before_live_or_write_paths(
         "scheduler_execution_context_for_turn",
     ):
         monkeypatch.setattr(turn_decision, name, unexpected_call)
-    for name in ("complete_goal_todo", "update_goal_todo"):
-        monkeypatch.setattr(turn_todo_writeback, name, unexpected_call)
+    # Patch the actual Turn write adapter; the retired update_goal_todo alias
+    # no longer exists here and cannot act as an inspection safety oracle.
+    monkeypatch.setattr(turn_todo_writeback, "complete_goal_todo", unexpected_call)
     monkeypatch.setattr(executor, "execute_turn_driver_settlement", unexpected_call)
     monkeypatch.setattr(executor, "_write_journal", unexpected_call)
 

@@ -35,7 +35,7 @@ def test_cli_preserves_query_failure_and_existing_receipt(
         "--agent-id", agent, "--turn-instance-id", turn,
     ] + (["--turn-envelope"] if turn_envelope else []))
     context = QuotaCommandContext(
-        runtime_root=tmp_path, scan_roots=[], status_limit=1, status_goal_id=goal,
+        runtime_root=tmp_path, status_limit=1, status_goal_id=goal,
         status_payload={}, cache_metadata=None, scheduler_context=None,
         operator_inbox_urgency_projector=lambda **kwargs: {},
         detail_sections=frozenset(), heartbeat_turn_id=turn,

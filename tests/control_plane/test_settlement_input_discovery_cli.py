@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
+import subprocess
 from copy import deepcopy
 from pathlib import Path
 
@@ -88,7 +89,7 @@ def test_projected_inputs_support_real_readback_writeback_and_one_debit(tmp_path
 
     binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
                "--turn-instance-id", TURN_ID)
-    rc, guard = run("quota", "should-run", "--codex-app", *binding, "--scan-path", str(project))
+    rc, guard = run("quota", "should-run", "--codex-app", *binding, )
     assert rc == 0 and guard["interaction_contract"]["agent_channel"]["delivery_allowed"], guard
     plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
     authoring = plan["ordered_steps"][1]["vision_authoring"]
@@ -149,7 +150,7 @@ def test_todoless_periodic_review_uses_default_authoring_and_settles_once(tmp_pa
     assert rc == 0, configured
     binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID)
-    rc, guard = run("quota", "should-run", "--codex-app", *binding, "--scan-path", str(project))
+    rc, guard = run("quota", "should-run", "--codex-app", *binding, )
     assert rc == 0, guard
     rc, written = run("refresh-state", *binding, "--classification", "validated_progress",
                       "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
@@ -171,7 +172,7 @@ def test_todoless_periodic_review_uses_default_authoring_and_settles_once(tmp_pa
     )
 
     current = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-               "--turn-instance-id", "periodic-without-todo", "--scan-path", str(project))
+               "--turn-instance-id", "periodic-without-todo", )
     rc, guard = run("quota", "should-run", "--codex-app", *current)
     assert rc == 0 and guard["selected_todo"] is None, guard
     identity = guard["heartbeat_receipt"]["settlement_identity"]
@@ -224,25 +225,33 @@ def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeyp
         return _run_cli(registry, runtime, *args, cwd=project)
 
     rc, configured = run("configure-goal", "--goal-id", GOAL_ID,
-                         "--execution-replan-after-turns", "1", "--execute")
+                         "--execution-replan-after-turns", "1",
+                         "--execution-stride-strategy", "off", "--execute")
     assert rc == 0, configured
     for stage in ("initial", "review", "subsequent"):
         binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                    "--todo-id", TODO_ID, "--turn-instance-id", f"link-example-{stage}")
         rc, guard = run("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
                         "--agent-id", AGENT_ID, "--turn-instance-id", f"link-example-{stage}",
-                        "--scan-path", str(project))
+                        )
         if rc == 0 and guard["interaction_contract"]["cli_channel"].get("selection_required"):
             selection = guard["interaction_contract"]["cli_channel"]["selection_command"]
             command = selection["route_prefix"] + " " + selection["command_args_template"].format(todo_id=TODO_ID)
             rc, guard = _run_generated_cli(command, registry_path=registry)
-        assert rc == 0 and guard["interaction_contract"]["agent_channel"]["delivery_allowed"], (
-            stage, guard.get("error"), guard.get("reason"))
-        args = ["refresh-state", *binding, "--classification", "validated_progress",
-                "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
-                "--no-global-sync", "--suppress-external-sinks"]
+        assert rc == 0, (stage, guard.get("error"), guard.get("reason"))
         if stage == "review":
-            authoring = guard["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]["vision_authoring"]
+            channel = guard["interaction_contract"]["agent_channel"]
+            assert channel["must_attempt"] and not channel["delivery_allowed"]
+            read_command = guard["replan_action_packet"]["writeback"]
+            result = subprocess.run(
+                shlex.split(read_command), cwd=project, capture_output=True, text=True, check=True, timeout=60,
+            )
+            staged = json.loads(result.stdout)
+            assert staged["obligation_id"] == guard["replan_action_packet"]["obligation_id"], staged
+            writeback = staged["writeback"]
+            assert writeback["settlement_plan"]["identity"] == guard["heartbeat_receipt"]["settlement_identity"]
+            steps = writeback["settlement_plan"]["ordered_steps"]
+            authoring = next(step["vision_authoring"] for step in steps if step["kind"] == "durable_writeback")
             example = re.search(r"retain:todo_<id>", authoring["authoring_hint"])
             assert example, "The authoring contract must offer an executable retention example."
             vision = deepcopy(authoring["minimal_example"])
@@ -252,10 +261,17 @@ def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeyp
                 retained=["Original requirements"], evidence_refs=["validation:work-link"])
             path = tmp_path / "linked-vision.json"
             path.write_text(json.dumps(vision))
-            args += ["--agent-vision-json", str(path), "--autonomous-replan-recorded",
-                     "--repair-delta-kind", "goal_vision_patch"]
+            # Consume the replan-only binding, rather than inventing a Todo
+            # delivery admission for a periodic review.
+            args = shlex.split(writeback["next_cli_actions"][0])
+            args = args[args.index("refresh-state"):]
+            args[args.index("--agent-vision-json") + 1] = str(path)
         else:
-            args += ["--delivery-boundary", "in_flight_continuation"]
+            assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"]
+            args = ["refresh-state", *binding, "--classification", "validated_progress",
+                    "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+                    "--delivery-boundary", "in_flight_continuation"]
+        args += ["--no-global-sync", "--suppress-external-sinks"]
         rc, written = run(*args)
         assert rc == 0, written
         rc, spent = _run_generated_cli(written["settlement_owed"]["command"], registry_path=registry)
@@ -276,7 +292,9 @@ def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeyp
     # Reading this view neither enables stride nor settles another Turn.
     ordinary = project_replan_context(
         goal_id=GOAL_ID, agent_id=AGENT_ID, runs=(), source_status=status, stride_strategy="off")
-    assert "decision_followthrough" not in ordinary
+    assert ordinary["decision_followthrough"] == follow
+    assert "stride_strategy" not in ordinary
+    assert "explore_basis" not in ordinary
     assert _spend_run_count(runtime) == 3
 
     # Preserve compatibility without turning a descriptive or unsupported

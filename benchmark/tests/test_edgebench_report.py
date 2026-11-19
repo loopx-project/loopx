@@ -7,10 +7,12 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from benchmark.edgebench.export_report import digest, export, verify, write
+from benchmark.edgebench.result_publication import write_native_result
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -171,6 +173,34 @@ def test_terminal_report_retains_unqualified_status_and_unknowns(trial):
     assert verify(out)["runs"] == 1
     with pytest.raises(ValueError, match="immutable"):
         build(trial)
+
+
+@pytest.mark.parametrize("grading_status", ["pending", "unknown", None, "future-status"])
+def test_report_rejects_explicit_incomplete_grading_before_publication(trial, grading_status):
+    final_path = trial[3] / "final_result.json"
+    final = json.loads(final_path.read_text())
+    final.update(grading_status=grading_status, grading_reason="synthetic_unfinished_grading")
+    write(final_path, final)
+    with pytest.raises(ValueError, match="grading is not complete"):
+        build(trial)
+    assert not trial[2].exists()
+    assert json.loads(final_path.read_text()) == final
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_report_accepts_published_complete_or_legacy_native_grading(trial, legacy):
+    final_path = trial[3] / "final_result.json"
+    payload = json.loads(final_path.read_text())
+    for key in ("run_id", "task", "model"):
+        payload.pop(key)
+    if not legacy:
+        payload.update(grading_status="complete", grading_reason="all_submissions_terminal")
+    final_path.unlink()
+    result = SimpleNamespace(runtime_seconds=payload["runtime_seconds"],
+                             to_dict=lambda: dict(payload))
+    write_native_result(trial[3], result, status="terminal", agent="codex", task="case",
+                        run_id="run", model="model", effort="xhigh")
+    assert verify(build(trial))["runs"] == 1
 
 
 @pytest.mark.parametrize("fault", [None, "profile", "mode", "unknown"])
@@ -654,3 +684,23 @@ def test_report_rejects_unbound_horizon_setting(trial, receipt, profile):
         write(path, value)
     with pytest.raises(ValueError, match="planning_horizon_goal"):
         export(runs, selection, output, observed_at="2026-01-02T00:00:00+00:00")
+
+
+@pytest.mark.parametrize("profile_digest", ["valid", "different", "missing"])
+def test_turn_report_requires_the_same_validator_argv(trial, profile_digest):
+    runs, selection, output, _ = trial
+    task = runs / "run" / "case"
+    for name, key in (("runtime-receipt", "worker"), ("worker-profile", "profile")):
+        path = task / (name + ".json")
+        record = json.loads(path.read_text())
+        record[key] = "turn-resume"
+        if name == "runtime-receipt" or profile_digest != "missing":
+            record["validation_argv_sha256"] = ("b" if name == "worker-profile" and profile_digest == "different" else "a") * 64
+        write(path, record)
+    if profile_digest == "valid":
+        export(runs, selection, output, observed_at="2026-01-02T00:00:00+00:00")
+        config = json.loads((output / "settings/run.json").read_text())
+        assert config["runner"]["validation_argv_sha256"] == config["worker_profile"]["validation_argv_sha256"] == "a" * 64
+    else:
+        with pytest.raises(ValueError, match="validator argv"):
+            export(runs, selection, output, observed_at="2026-01-02T00:00:00+00:00")

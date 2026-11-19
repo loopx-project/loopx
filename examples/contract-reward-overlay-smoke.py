@@ -120,17 +120,17 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
     duplicate_state_file.parent.mkdir(parents=True)
     artifact_collision_state_file.parent.mkdir(parents=True)
     reward_state_file.write_text(
-        "---\nupdated_at: 2026-01-01T00:00:00+00:00\n---\n", encoding="utf-8"
+        "---\nupdated_at: 2026-01-01T00:00:00+00:00\n---\n\n## Agent Todo\n", encoding="utf-8"
     )
     projected_reward_state_file.write_text(
-        "---\nupdated_at: 2026-01-01T00:00:00+00:00\n---\n",
+        "---\nupdated_at: 2026-01-01T00:00:00+00:00\n---\n\n## Agent Todo\n",
         encoding="utf-8",
     )
     duplicate_state_file.write_text(
-        "---\nupdated_at: 2026-01-01T00:00:00+00:00\n---\n", encoding="utf-8"
+        "---\nupdated_at: 2026-01-01T00:00:00+00:00\n---\n\n## Agent Todo\n", encoding="utf-8"
     )
     artifact_collision_state_file.write_text(
-        "---\nupdated_at: 2026-01-01T00:00:00+00:00\n---\n", encoding="utf-8"
+        "---\nupdated_at: 2026-01-01T00:00:00+00:00\n---\n\n## Agent Todo\n", encoding="utf-8"
     )
     local_private_doc = project / ".local" / "managed_doc" / "PRIVATE_DRAFT.md"
     local_private_doc.parent.mkdir(parents=True)
@@ -164,7 +164,7 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
     registry.write_text(
         json.dumps(
             {
-                "runtime_root": str(runtime_root),
+                "common_runtime_root": str(runtime_root),
                 "goals": [
                     {
                         "id": "reward-overlay-goal",
@@ -206,6 +206,10 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
         + "\n",
         encoding="utf-8",
     )
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+
+    for record in json.loads(registry.read_text())["goals"]:
+        import_fixture_authority(registry, record["id"], provider="sqlite")
     return registry, runtime_root, project
 
 

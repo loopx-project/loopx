@@ -19,8 +19,6 @@ from ..dash_server import (
     DEFAULT_DASH_REFRESH_SECONDS,
     serve_dash,
 )
-from ..history import load_registry
-from ..paths import resolve_runtime_root
 from ..presentation.projections.session_dash import (
     build_session_dash_projection,
 )
@@ -154,18 +152,10 @@ def _handle_serve(
     print_payload: PrintPayload,
     output_format: FormatSelector,
 ) -> int:
-    registry = load_registry(registry_path)
-    runtime_root = resolve_runtime_root(
-        registry,
-        runtime_root_arg,
-        registry_path=registry_path,
-    )
-    scan_roots = [runtime_root]
     try:
         serve_dash(
             registry_path=registry_path,
             runtime_root_override=runtime_root_arg,
-            scan_roots=scan_roots,
             host=args.host,
             port=args.port,
             goal_id=args.goal_id,
@@ -194,16 +184,9 @@ def _handle_generate(
     print_payload: PrintPayload,
     output_format: FormatSelector,
 ) -> int:
-    registry = load_registry(registry_path)
-    runtime_root = resolve_runtime_root(
-        registry,
-        runtime_root_arg,
-        registry_path=registry_path,
-    )
     status_payload = collect_status(
         registry_path=registry_path,
         runtime_root_override=runtime_root_arg,
-        scan_roots=[runtime_root],
         limit=20,
         goal_id=args.goal_id,
     )

@@ -5,6 +5,15 @@ files remain flat in this migration to preserve established links; this index
 groups them by responsibility so callers can find the right contract without
 scanning a chronological list.
 
+The [unified work contract and controller/executor RFC](../../architecture/rfcs/controller-executor-unified-contract-v0.md)
+defines the proposed convergence of quota, Turn and host consumers. It is a
+design target, not an additional shipped protocol or a replacement wire format
+that callers can select today. Current versioned contracts below remain valid
+until their documented migration is qualified.
+
+中文：[统一工作契约与 controller/executor 提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
+规定 quota、Turn 与 Host 消费者的收敛方向；当前尚未交付新协议，现有版本契约在迁移验收前继续有效。
+
 ## Control Plane And State
 
 - [`active_state_structured_projection_v0`](active-state-structured-projection-v0.md): Active state structured projection v0
@@ -38,8 +47,6 @@ scanning a chronological list.
 - [`long_horizon_agent_state_protocol_v0`](long-horizon-agent-state-protocol-v0.md): Long-horizon agent state protocol v0
 - [`material_lifecycle_architecture_v0`](material-lifecycle-architecture-v0.md): Material lifecycle architecture v0
 - [`material_lifecycle_architecture_v0`](material-lifecycle-architecture-v0.zh-CN.md): Material lifecycle architecture v0 (中文)
-- [`multi_agent_three_layer_minimality_contract_v0`](multi-agent-three-layer-minimality-v0.md): Multi-agent three-layer minimality v0
-- [`multi_agent_visible_launcher_v0`](multi-agent-visible-launcher-v0.md): Multi-agent visible launcher v0
 - [`peer_agent_directory_v0`](peer-agent-directory-and-observation-v0.md): Peer agent directory, bounded observation and delivery v0
 - [`peer_agent_runtime_v1`](peer-agent-runtime-v1.md): Peer agent runtime v1
 - [`peer_supervisor_v0`](peer-supervisor-v0.md): Peer supervisor v0
@@ -61,21 +68,18 @@ scanning a chronological list.
 - [`computer_use_runtime_v0`](computer-use-runtime-v0.md): Computer-use runtime v0
 - [`host_integration_plugin_plan_v0`](host-integration-plugin-plan-v0.md): Host integration plugin plan v0
 - [`host_integration_surface_v0`](host-integration-surface-v0.md): Host integration surface v0
+- [Host CLI source activation v0](host-cli-source-activation-v0.md): explicit paused Docker adapter for a qualified versioned CLI, with exact-intent recovery
 - [`host_mode_plan_v0`](host-mode-plan-v0.md): Host mode plan v0
 - [`local_agent_launch_plan_v1`](local-agent-launch-plan-v1.md): Local agent launch plan v1
 - [`openviking_session_memory_adapter_v0`](openviking-session-memory-adapter-v0.md): OpenViking session memory adapter v0
-- [`protocol_action_packet_codex_cli_wrapper_v0`](protocol-action-packet-codex-cli-wrapper-v0.md): Protocol action packet Codex CLI wrapper v0
-- [`protocol_action_packet_decision_v0`](protocol-action-packet-decision-v0.md): Protocol action packet decision v0
-- [`protocol_action_packet_router_comparison_v0`](protocol-action-packet-router-comparison-v0.md): Protocol action packet router comparison v0
+- [`protocol_action_packet_codex_cli_wrapper_v0`](protocol-action-packet-codex-cli-wrapper-v0.md): Historical synthetic Codex CLI wrapper
+- [`protocol_action_packet_decision_v0`](protocol-action-packet-decision-v0.md): Retired packet input format and recovery
+- [`protocol_action_packet_router_comparison_v0`](protocol-action-packet-router-comparison-v0.md): Historical synthetic router comparison
 - [`session_runtime_controlled_writeback_v0`](session-runtime-controlled-writeback-v0.md): Session runtime controlled writeback v0
 - [`session_runtime_loopx_projection_v0`](session-runtime-loopx-projection-v0.md): Session runtime to LoopX projection v0
 
 ## Domain Capabilities
 
-- [`auto_research_lane_contract_v1`](auto-research-lane-contract-v1.md): Auto-research lane contract v1
-- [`auto_research_role_profile_v0`](auto-research-role-profile-v0.md): Auto-research role profile v0
-- [`auto_research_role_state_machine_v0`](auto-research-role-state-machine-v0.md): Auto-research role state machine v0
-- [`decentralized_auto_research_state_v0`](decentralized-auto-research-state-v0.md): Decentralized auto-research state v0
 - [`content_ops_surface_v0`](content-ops-surface-v0.md): Content operations surface v0
 - [`cs_notes_explore_capability_map_v0`](cs-notes-explore-capability-map-v0.md): CS notes Explore capability map v0
 - [`issue_fix_acceptance_loop_v0`](issue-fix-acceptance-loop-v0.md): Issue-fix acceptance loop v0
@@ -84,6 +88,7 @@ scanning a chronological list.
 - [`content_ops_item_v0`](content-ops-item-lifecycle-v0.md): provider-neutral content item lifecycle v0
 - [`content_ops_queue_projection_v0`](content-ops-queue-v0.md): read-only managed content queue projection v0
 - [`content_ops_layout_plan_v0`](content-ops-layout-v0.md): typed content layout plan, template library, and acceptance check v0
+- [`content_ops_media_plan_v0`](content-ops-media-v0.md): private source-bound composition, optional rendering and packaged result readback
 
 ## Quality, Review, And Release
 

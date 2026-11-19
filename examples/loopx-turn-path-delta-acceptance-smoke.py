@@ -17,7 +17,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from loopx.cli import main as cli_main  # noqa: E402
 from loopx.control_plane.coordination.local_authority import (  # noqa: E402
-    read_canonical_todos_if_promoted,
+    read_canonical_todos_if_promoted, CanonicalAuthorityRequired,
 )
 from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
 
@@ -187,7 +187,6 @@ def _run_turn(
     workspace: Path,
     host: Path,
     mode: str,
-    expect_canonical_refusal: bool = False,
     resume_turn_key: str | None = None,
 ) -> dict[str, Any]:
     output = io.StringIO()
@@ -214,25 +213,16 @@ def _run_turn(
                 ),
                 "--project",
                 str(workspace),
+                "--host-adapter-request-schema", "loopx_turn_host_request_v1",
                 "--host-adapter-command-json",
                 json.dumps(_host_command(host, mode)),
                 "--validation-command-json",
                 json.dumps(_validator_command(mode)),
-                "--scan-root",
-                str(project),
                 "--no-global-sync",
                 "--execute",
             ]
         )
     payload = json.loads(output.getvalue())
-    if expect_canonical_refusal:
-        assert exit_code != 0, payload
-        assert payload["reason_code"] == "canonical_authority_required", payload
-        assert payload["write_admitted"] is False, payload
-        assert payload["journal_observation"]["recorded_effects"]["host_invoked"] is True, payload
-        assert payload["journal_observation"]["recorded_effects"]["quota_spent"] is False, payload
-        assert payload["journal_observation"]["recovery_decision"]["reinvoke_host"] is False, payload
-        return payload
     assert exit_code == 0, payload
     assert payload["status"] == "committed", payload
     assert payload["validation"]["status"] == "passed", payload
@@ -244,33 +234,52 @@ def _run_records(runtime: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in index.read_text(encoding="utf-8").splitlines()]
 
 
+def assert_unpromoted_replan_preserves_todo_authority() -> None:
+    with tempfile.TemporaryDirectory(prefix="loopx-turn-unpromoted-replan-") as directory:
+        root = Path(directory)
+        project, runtime, workspace, registry = _write_fixture(root)
+        state = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
+        original_state = state.read_bytes()
+        try:
+            read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
+        except CanonicalAuthorityRequired as error:
+            assert error.payload["write_admitted"] is False
+            assert error.payload["legacy_fallback_used"] is False
+        else:
+            raise AssertionError("Unmigrated authority must refuse ordinary reads")
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            code = cli_main(["--registry", str(registry), "--runtime-root", str(runtime),
+                "--format", "json", "quota", "should-run", "--goal-id", GOAL_ID,
+                "--agent-id", AGENT_ID])
+        refusal = json.loads(output.getvalue())
+        assert code == 1 and refusal["error_code"] == "canonical_authority_required", refusal
+        assert refusal["write_admitted"] is False and refusal["legacy_fallback_used"] is False
+        assert state.read_bytes() == original_state
+        assert not (project / MARKER).with_suffix(".calls").exists()
+
+
 def assert_canonical_turn_path_delta(provider: str) -> None:
     with tempfile.TemporaryDirectory(prefix=f"loopx-turn-path-delta-{provider}-") as directory:
         root = Path(directory)
         project, runtime, workspace, registry = _write_fixture(root)
         host = _write_host(root)
-        state = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
-        source_bytes = state.read_bytes()
-        refused = _run_turn(
+        # Select the provider explicitly to test canonical Todo preservation.
+        # The separate unmigrated case proves explicit refusal without effects.
+        calls = (project / MARKER).with_suffix(".calls")
+        assert not calls.exists()
+        import_fixture_authority(registry, GOAL_ID, provider=provider)
+        original = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
+        assert original is not None
+        assert original["source_authority"] == f"{provider}_v0", original
+        assert {item["todo_id"] for item in original["todos"]} == {TODO_ID}, original
+        committed = _run_turn(
             registry=registry,
             runtime=runtime,
             project=project,
             workspace=workspace,
             host=host,
             mode="material",
-            expect_canonical_refusal=True,
         )
-        # The Host has returned, but no Todo write/spend is admitted. Import
-        # the complete stopped fixture and recover that original Turn.
-        assert state.read_bytes() == source_bytes
-        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID) is None
-        calls = (project / MARKER).with_suffix(".calls")
-        assert calls.read_text(encoding="utf-8").splitlines() == ["material"]
-        import_fixture_authority(registry, GOAL_ID, provider=provider)
-        original = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
-        assert original is not None
-        assert original["source_authority"] == f"{provider}_v0", original
-        assert {item["todo_id"] for item in original["todos"]} == {TODO_ID}, original
         recovered = _run_turn(
             registry=registry,
             runtime=runtime,
@@ -278,9 +287,9 @@ def assert_canonical_turn_path_delta(provider: str) -> None:
             workspace=workspace,
             host=host,
             mode="material",
-            resume_turn_key=refused["resume_turn_key"],
+            resume_turn_key=committed["resume_turn_key"],
         )
-        assert recovered["resume_turn_key"] == refused["resume_turn_key"], recovered
+        assert recovered["resume_turn_key"] == committed["resume_turn_key"], recovered
         assert calls.read_text(encoding="utf-8").splitlines() == ["material"]
         _run_turn(
             registry=registry,
@@ -324,6 +333,7 @@ def assert_canonical_turn_path_delta(provider: str) -> None:
 
 
 def main() -> int:
+    assert_unpromoted_replan_preserves_todo_authority()
     for provider in ("file", "sqlite"):
         assert_canonical_turn_path_delta(provider)
     print("loopx-turn-path-delta-acceptance-smoke ok")

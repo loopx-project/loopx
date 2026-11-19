@@ -1,0 +1,412 @@
+# Private content composition v0
+
+The existing `content-ops` capability owns video preparation, render attempts
+and result readback. The TypeScript owner is
+`loopx/control_plane/capabilities/content_media.ts`. Python handles private
+files and transport; the optional `loopx-media` extension performs specialized
+image, audio and video computation. This is a local composition slice, not a
+new generic capability or a replacement publication lifecycle.
+
+The active callers are the Agent-facing CLI and the Goal's packaged **Content
+production** workbench. A prepared brief is shared between them. The Agent
+absorbs source discovery, identifiers, hashes and timing. The owner selects a
+prepared composition, starts/cancels its render and reads the result in place;
+there is no browser source-directory or JSON-entry step. Lark can convey the
+request to an Agent but does not gain an independent renderer or upload action.
+
+## Plan and source scope
+
+`content_ops_media_plan_v0` contains:
+
+| Field | Meaning |
+| --- | --- |
+| `title`, `width`, `height`, `fps` | Name and bounded output geometry/clock; dimensions must be even. |
+| `layout_template_id` | Existing content-ops layout template, default `monochrome-editorial`; style tokens enter the digest. |
+| `shots` | Ordered distinct `id`, `kind`, frame-aligned `seconds`, `title`, optional `body`, `source_ref`, explicit `boundary`. |
+| `assets` | Distinct id, relative `path`, exact `sha256`, `image`/`video`/`audio`, `source_ref` and `local_private`/`public_safe` source classification. |
+| `captions` | Ordered nonoverlapping `start`, `end`, `text`, `language` cues inside the composition. One sequential caption track is emitted. |
+| `narration` | Explicit `silent`, `supplied` with audio `asset_id`, or `system_speech` with installed `voice` and optional words-per-minute. |
+
+Caption text is plain text. Single line breaks are supported; an internal
+blank line is refused before preparation because it terminates a subtitle
+cue. Use single line breaks or separate timed cues instead. Angle brackets
+and entity syntax (such as `&lt;` or `&#60;`) are also refused: literal markup
+and entity preservation is not qualified for this SubRip export. Write spoken plain text instead. The
+renderer repeats these format checks, escapes ordinary ampersands in VTT,
+and preserves plain text in SRT and the transcript. This bounded subset is
+qualified with the native browser track and real FFmpeg subtitle decoding.
+
+Shots are `title`, `diagram` (two to five `nodes`), `excerpt` (image/video
+`asset_id` and optional `start_seconds`) or `blender` (declarative `scene`
+geometry). These are composition-local rendering choices. They do not extend
+Goal/Todo state. Likewise prepared/rendering/ready/failed/cancelled/interrupted
+describe private render attempts, never published content or Agent liveness. An
+old saved running attempt is shown as interrupted after its bounded execution
+window; a read does not restart it.
+
+Preparation takes an explicit local source directory. Absolute paths,
+traversal, symlinks and wrong source digests are refused. The prepared record
+contains immutable private source copies; editing the original afterward does
+not change an admitted composition. No URL is fetched. A `source_ref` records
+provenance supplied by the caller; a `public_safe` label does not prove rights,
+truth, current product behavior or public publication permission.
+
+The canonical digest binds story, sources, source boundaries, layout tokens,
+geometry, timing, captions and narration. Canonical plans can be revalidated
+without changing that digest. A changed plan requires the expected revision
+and invalidates old content approval. Existing layout tokens are reused;
+static page-density rules do not certify a timed movie or its learning effect.
+
+`body` is supported for title and diagram shots. Excerpt and Blender layouts
+show a title and source boundary, and reject nonempty body text at admission
+and rendering. A qualifier must be retained in a supported visible field,
+separate title scene or timed caption; it must not silently disappear. Existing
+prepared spatial plans with nonempty body now fail explicitly and need a new
+revision that preserves that meaning in a supported field.
+
+## Execution and readback
+
+```sh
+loopx content-ops media prepare --goal-id example-goal \
+  --plan-json examples/content-ops-media-brief.json --source-directory . \
+  --format json
+loopx content-ops media render --goal-id example-goal \
+  --composition-id COMPOSITION_FROM_PREPARE --expected-revision 1 --format json
+loopx content-ops media inspect --goal-id example-goal \
+  --composition-id COMPOSITION_FROM_PREPARE --format json
+```
+
+`list` discovers the latest 100 private compositions; `cancel` requires the
+current composition and revision. An already running render is returned without
+a second effect. Cancel is a request until the worker settles. After a failed,
+cancelled, interrupted or damaged attempt, explicit render can retry. Intact
+completed bytes are reused. A changed story uses `prepare --composition-id …
+--expected-revision …` first. The render lock spans the actual effect, in
+addition to revision-bound record writes.
+
+The existing extension lifecycle owns installation, enablement, doctor,
+entrypoint identity and the `content_media_write` permission. Loading the page
+or preparing a plan never installs a provider. Disabled/unavailable extensions
+block new effects while preserving prepared sources and verified downloads.
+See [installation, dependency and disable instructions](../../../packages/loopx-media/README.md).
+
+The private `content_ops_media_renderer_v0` envelope carries the validated plan,
+layout tokens, digest, frame count, immutable snapshots, exclusive attempt
+directory and attempt-scoped cancel flag. Only a verified installed extension
+receives those paths. The result projection accepts fixed output names and
+exact SHA256/byte counts; paths and undeclared provider fields are discarded.
+The core reads every actual file before committing `ready`. Required outputs
+are `video.mp4`, `poster.png`, `captions.vtt`, `captions.srt` and `transcript.txt`,
+plus `narration.wav` for audible modes. Full decode must match the admitted
+timeline, geometry and narration mode. Audio checks report peak and clipped
+PCM samples; subjective listening remains untested.
+
+Both plan and output bytes bind the existing `content_ops_item_v0`. Producing
+or re-encoding a movie revises its content digest and clears any approval and
+delivery intent. This renderer neither approves nor posts. Publication and
+its account/channel/timing/readback remain with the
+[existing item lifecycle](content-ops-item-lifecycle-v0.md).
+
+## HTTP boundary and failure behavior
+
+The loopback Chat server exposes `POST /api/chat/content-media` for list,
+inspect, render and cancel. Render/cancel use the current revision; the server
+binds the registered Goal/source route and rejects a different selected Goal,
+foreign origin or filesystem fields. Rendering runs in a bounded background
+worker so the page remains responsive. The packaged production path is **Goal →
+Files → Content artifacts**, reached from the existing Goal conversation. Capability
+settings do not host production or reference workbenches. Returning to the
+conversation retains its Goal and does not send a message. Delivery requirements
+and checks reuse the existing Goal acceptance owner used by non-media artifacts;
+this media transport owns neither generic acceptance nor a second approval store.
+This route remains Goal-scoped; ordinary project conversations without a Goal
+are not silently assigned one.
+
+Reading saved work does not start polling. An explicit render observes its own
+pending operation until terminal readback, a failed read or leaving the view;
+opening a previously pending record only reads saved state. Stopping observation
+does not cancel the renderer or a cloud operation.
+
+`GET /api/chat/content-media/file` serves only fixed verified files from that
+composition, with byte ranges for playback, no-store and same-origin resource
+policy. It refuses escaping filenames, non-ready and damaged artifacts; it
+does not serve the private manifest or source files. Browser error projections
+do not include provider stderr or private paths.
+
+New preview/download links include both `revision` and the exact file `sha256`.
+The transport validates the current record revision and hashes the opened file
+descriptor before serving a full or ranged response. Missing, duplicated or
+invalid version fields, a changed composition revision and different bytes are
+unavailable; a prior link cannot silently return a replacement. Immutable image
+and footage records retain their separate original identities. Both version
+fields are optional together for compatibility with existing verified current-file
+links. Neither form certifies creative quality, independent review or acceptance.
+
+中文：制作与预览从当前 Goal 的“成果 → 内容作品”进入，设置页仅保留配置。
+“返回当前对话”不发送消息；交付检查复用已有 Goal 验收，不增加媒体私有审批。
+此入口尚不支持无 Goal 的普通项目对话，也不会自动创建 Goal。预览与下载绑定修订和
+文件摘要；旧修订或不同字节不会被静默替换。浏览保存状态不启动制作、生成或轮询。
+
+Missing provider, changed source, stale revision, text/glyph overflow, short
+footage, invalid narration timing, cancellation, stopped host and damaged bytes
+remain distinguishable from success. Repair the source/brief as a new revision
+or repair the existing extension and retry. No failure creates publication
+authority, fills missing footage, infers a creative pass or changes a Goal.
+
+Mechanical rendering, creative quality, audience understanding and operations
+impact have separate evidence. The optional generated-footage path below
+shares this owner; interactive learning and other providers are not silently
+activated by this protocol.
+
+impact have separate evidence. Generated image/video assets and footage from
+authored HTML, game or mini-world works can reuse this source-bound composition
+path. Choose their authoring tools for the requested work; a new form does not
+require another core workbench or activate an unconfigured provider.
+
+## Blender shot and project readback
+
+The optional `loopx-media` provider can compute a `blender` shot inside the same
+composition. `scene` is a bounded declarative object: an orthographic camera
+with start/end position and target, box/sphere objects with material values
+and optional position keyframes, area lights and connections between object
+IDs. The shared `content_media` TypeScript owner validates it; provider Python
+does not choose the work, sources, publication state or execution authority.
+See the runnable [synthetic example](../../../packages/loopx-media/examples/blender-handoff.json)
+and [activation/recovery guide](../../../packages/loopx-media/README.md#optional-blender-scenes).
+
+Scene IDs and geometry are bound to the plan digest. Position keys must start
+at frame 1, end at the scene's final frame and increase strictly; the first
+position must match the object's declared initial position. A scene supports
+at most 16 primitives, 3 lights, 24 connections and 120 frames. At most 3 Blender
+scenes fit inside a composition. Existing dimension/timeline/output/process
+bounds apply unchanged. Arbitrary scripts, uploaded blend files and external
+asset references are rejected. Ordinary scene-free plans retain their existing
+normalized structure and digest.
+
+Blender 4.5 LTS/Cycles/CPU produces actual RGBA and depth PNG sequences; depth is
+16-bit Z distance normalized over 0–50, with farther values clamped. A fresh
+process opens the saved blend with scripts disabled and checks its geometry,
+animation, camera and timeline. Ready results additionally require the exact
+admitted scene IDs/frame counts, both complete passes, reopen checks and the
+fixed `blender-project.zip` artifact. The archive contains relative-path blend
+projects, exact scene inputs, the replay builder and frames. It is subject to
+the same digest/readback/download scope as the movie; it cannot be attached
+to a scene-free result to bypass admission.
+
+The existing workbench renders/cancels/retries the composition and exposes the
+verified project download. Installation of the Blender extra is explicit;
+missing bpy does not disable ordinary 2D work. A failed 3D attempt retains its
+prepared input and supports retry after dependency repair. No fallback replaces
+3D with a code projection. Mechanical readiness still does not establish
+creative quality, audience understanding or publication approval.
+
+## Optional cloud-footage intents
+
+`content-ops generation prepare/submit/check/collect/inspect/list/cancel` uses
+the existing Goal-scoped media workspace and optional `loopx-media` provider.
+The shared `content_media_generation` TypeScript owner validates immutable
+`content_ops_generation_plan_v0` drafts, quote freshness/nominal bounds,
+reference roles and source scope, task identity, observations and collection.
+Python adapts file snapshots and one provider effect; it does not choose work,
+infer publication approval or start a scheduling loop.
+
+The existing runtime protocol accepts additive `generation.*` operations only
+through the separately declared `content_media_generate` permission. A normal
+render request is unchanged and has no network/account effects. The bounded
+video provider supports Seedance 2.5; the separate single-image path is described below.
+Other models and unopened account access remain unavailable. Setup, process-local credentials,
+supported frames, prices and recovery are in the
+[provider guide](../../../packages/loopx-media/README.md#optional-generated-footage).
+
+The parent commits `submitting` before POST. A successful response is only
+`submitted`, not an observed queued/running worker. A provider-side fsynced
+journal binds the returned task id to the plan digest before stdout returns.
+An explicit `check` can recover that id after a stopped parent. If the response
+was lost before an id could be saved, the intent stays `submission_unknown`;
+neither reload nor repeated submit creates a new paid task. Reconciliation of
+an unknown external effect precedes any new generation decision.
+
+Cloud `succeeded` means collection is possible, not local artifact readiness.
+Collection obtains a current expiring URL, downloads within origin/time/byte
+bounds, fully decodes the movie, measures duration and hashes the fixed
+`generated.mp4`, `poster.png` and optional `last-frame.jpg` outputs. The core
+checks those bytes before projecting `ready`. Download URLs, API credentials,
+private paths and raw provider responses never enter browser projections.
+Reference alpha preprocessing retains original and transmitted hashes. The
+returned token count, caller-supplied rate estimate and unknown invoice remain
+distinct; the nominal estimate bound is not a guaranteed maximum bill.
+
+The existing `/api/chat/content-media` accepts `generation_list` and
+revision-bound `generation_submit/check/collect/cancel` actions. Its file route
+accepts exactly one generation or composition id, serves only verified fixed
+artifacts and retains selected-Goal, origin, byte-range and no-store rules.
+The shipped workbench shows draft/consequence, submission, bounded optional
+status checking, errors and saved files through this backend. Pure list/inspect
+reads never call the cloud. Automatic browser checks stop after five minutes,
+on a terminal observation or when the owner stops them; they never POST a job.
+The five-minute window uses elapsed monotonic time across status changes and
+in-flight reads. A failed read, Goal change or unmount stops further checks.
+Stopping observation leaves any already-sent request and cloud task intact.
+
+Both providers share the package's atomic journal writer. It retains file
+flush/fsync and same-directory replacement on supported platforms, and syncs
+the directory on POSIX only; Windows never attempts a CRT directory open.
+POSIX directory-sync failures remain visible rather than being ignored.
+
+Ark DELETE has no documented atomic queued-only precondition and can erase a
+task that finishes between GET and DELETE. `cancel` therefore reads the
+original task and reports `atomic_cancellation_unavailable`, without deleting
+it or claiming that local observation stopped remote usage. The same limitation
+is visible in the workbench. Failed/expired/cancelled states, unavailable
+observation, unknown submission and damaged local artifacts remain separate.
+Creative quality, continuity, visible watermark, audience comprehension and
+actual billed cost require their own evidence; no generated clip changes
+content publication state.
+
+## Optional single-image intents
+
+`content-ops image prepare/submit/collect/inspect/list` shares this capability,
+Goal-local workspace and optional provider. The `content_media_image` TypeScript
+owner validates `content_ops_image_plan_v0`, its immutable digest, a dated
+per-image nominal quote and local transitions. Provider-specific account access
+is checked separately. This is a synchronous image request, not a video job:
+there is no task ID, cloud status polling or remote cancellation contract.
+
+The plan contains `title`, pinned `model`, `prompt`, explicit `width`/`height`,
+`watermark`, zero or one `references` entries and `quote`. A reference binds its
+relative `path`, exact `sha256`, opaque `source_ref` and explicit `public_safe`
+classification. Quote fields are `cny_per_image`, timezone-aware `checked_at`,
+official `source_url` and `max_estimated_cny`. The quote must be current within
+24 hours and fit the declared nominal bound; it is neither authorization nor
+a guaranteed maximum bill. Supported model, dimensional/upload limits,
+separate image credential and lifecycle setup are in the
+[provider guide](../../../packages/loopx-media/README.md#optional-generated-images).
+
+The parent persists `submitting` before the optional provider effect. The
+provider journals the intent before POST, then fsyncs a private response cache
+before returning. Exact received HTTP bytes, digest and request-ID observations
+are private, bounded recovery evidence; interpretation failure can be retried
+locally from that saved response. Loss before response persistence cannot be
+recovered by issuing another POST. Missing provider/key keeps `prepared`; confirmed provider
+rejection remains `rejected`; an unconfirmed effect remains
+`submission_unknown`. None of these states permits automatic paid retries.
+`collect` recovers only cached bytes, without network activity. An intact ready
+result is reused; damage can be repaired from the original response, with the
+original accepted SHA preserved. Unknown external effects without cached bytes
+require reconciliation before choosing any new intent.
+
+The result binds exactly one generated image to the request model and digest,
+full PNG decode and requested geometry. The core verifies `original.png` and
+normalized `generated.png` bytes/hashes before readiness or download. Reported
+generated-image/token counts, caller's nominal estimate and unknown invoice
+remain distinct. Watermark request, visual watermark inspection and creative
+acceptance are separate. Source metadata and returned paths are not exposed.
+
+The existing HTTP route adds `image_list` and revision-bound
+`image_submit/collect`. The fixed-file route accepts exactly one composition,
+generation or image ID and preserves selected-Goal, origin, byte-range and
+no-store boundaries. The packaged workbench can generate an Agent-prepared
+intent, display unavailable/unconfirmed states, recover saved bytes and show
+verified image/downloads. It never requests arbitrary local paths or a key.
+Reuse a resulting image as an ordinary hash-bound composition asset, retaining
+its illustration boundary and adding precise text through local rendering.
+This path does not approve or publish content, qualify learning effects or
+change long-horizon Goal state.
+
+## Per-shot picture framing
+
+An `excerpt` or `blender` shot can opt into `framing: "full_frame"` with
+`loopx-media` 0.3.0. The source fits the available width/height without cropping
+or changing its aspect ratio; a small image may be enlarged. Its complete
+`boundary` is wrapped in a separate measured strip below the picture. Neither
+that strip nor the optional player captions are baked over source pixels.
+The shot title remains timeline/source metadata; put a title that the viewer
+must see in the source artwork, a title shot or timed captions. The fixed studio
+header, drawn shot title and progress bar are omitted for this shot. The
+selected layout's background/text tokens still apply. This is a rendering
+choice, not an audience-understanding or creative-quality judgment.
+
+Omitted framing and explicit `"editorial"` normalize to the original plan
+structure and retain the existing digest/layout. Other values and framing on
+non-spatial shot kinds are refused. Nonempty spatial `body` remains refused.
+Full-frame framing changes the source-bound digest and needs a new revision;
+it cannot inherit earlier content approval. The result additionally requires
+`qa.full_frame_shots` to match the admitted ordered shot IDs. An older provider
+that ignores the field cannot produce a ready result; explicitly upgrade the
+optional package/manifest and retry after doctor. Default framing remains
+compatible with the older provider. No core setting or global installation is
+changed by preparing a full-frame plan.
+
+The Agent prepares this choice in the same brief; the packaged workbench shows
+“Full frame” beside its timeline/source entry and renders, cancels, retries and
+reads back the same composition. Users do not enter source paths or JSON again.
+Disabling the existing extension blocks new renders and keeps verified movies
+readable. To return to editorial framing, prepare a revision without the field
+and render it; an older LoopX core will refuse a plan containing the new field.
+
+中文：`excerpt` 与 `blender` 镜头可选 `framing: "full_frame"`。素材按原比例
+完整放入较大的画面区，必要时放大；来源说明在独立底栏完整换行，工作室页眉、
+片内标题和进度条不再绘制。标题仍在分镜与来源信息中，需要观众看到的标题由素材、
+标题镜头或字幕承载。省略该字段或显式选择 `editorial` 保留原计划摘要与构图。
+此选项需要显式升级 `loopx-media` 0.3.0、注册新 manifest 并运行 doctor；旧渲染器
+若忽略新字段，结果会被拒绝就绪。修改构图需新修订，仍会撤销旧内容批准。
+工作台沿现有入口显示“大画面”并制作、取消、重试和查看；停用扩展阻止新制作但
+保留已校验影片。回到旧构图时，移除字段后保存新修订再制作；旧版核心不会接受
+含新字段的计划。该选项不改变来源可见性、发布权限或全局配置。
+
+## Authoring and comparison practice
+
+The existing brief, revision and verified-file operations support this practical
+author workflow. These are creative decisions; `ready` retains the mechanical
+contract above.
+
+Start with the audience, message and factual source revision. Give each scene
+a communication job, then choose the form that serves it: readable 2D for exact
+guidance, actual interface states for product evidence, or authored spatial and
+interactive scenes when their relationships or actions help. A film need not
+contain every available technique. Keep edited, synthetic and illustrative
+material identified; an association, screenshot or source label does not prove
+an outcome. Preserve missing links and other qualifiers when reframing a source.
+
+Inspect the result at its intended viewing size. A source that fits its frame
+can still have unreadable text. For supplied artwork, resolve transparency on
+the intended background and inspect any crop before encoding. Titles that must
+be seen belong in supported visible content. Player captions, exported subtitle
+files and words drawn into source pixels are different deliverables. Check the
+actual speech and caption windows too: a system speech rate parameter does not
+establish the resulting phrase duration, naturalness or comprehension.
+
+Revise the work in response to an observed problem, keeping the earlier version
+and the reason for the change. Controlled excerpts answer a narrow question
+only when the compared script, sources, timing and other relevant conditions
+are recorded. Fully developed films may deliberately change those conditions
+to serve the same brief. Review each complete film for message, picture, sound,
+pacing, readability, possible misreadings and task fit; do not align different
+scripts at the same timestamp or infer a universal medium ranking. Record
+author judgment separately from independent audience observations. No audience
+evidence means no audience conclusion.
+
+Keep research, setup, paid calls, failed attempts, rework, rendering and review
+in the cost account. A timed render is one stage; missing costs stay unknown.
+Retain an editable project and its sources beside the verified outputs. A
+portable handoff benefits from an actual download, extraction and revised
+export, including playback seeking when comparison depends on it. Reusing a
+technique in the next requested work tests that specific reuse; it does not
+by itself establish audience benefit or lower total cost. Publication remains
+with the existing content-item lifecycle.
+
+中文：以下为创作建议，`ready` 仍代表上述机械合同。先明确读者、表达目的和事实版本，
+再给镜头分配叙事作用，按作用选二维、
+实际界面、空间或交互场景，不必把所有形式塞进一部片。重构图时保留缺口与限定，
+不把截图、关联或来源标签当结果证明。在实际观看尺寸检查文字、透明背景、裁切、
+可见标题及声音/字幕时序；播放器字幕、导出的字幕文件和素材内文字分别核对。
+系统语速参数不等于实际句长、自然度或理解效果。
+
+按观察到的问题实质改稿，保留旧版与修改原因。同条件片段用于回答具体问题，
+充分发展的整片允许按同一 brief 重写，但要记录脚本、来源、时序等混杂，不能
+将异稿按同秒伪装对照。分别审阅表达、画面、声音、节奏、可读性、误读与任务适用性，
+区分作者判断和独立观众证据；没有观众证据就保留未知。成本包含调研、搭建、
+付费调用和失败、返工、渲染、审核，不把局部计时当总成本。保留可修改工程及来源，
+可通过实际下载、解压、改稿导出和所需的播放寻址核对交付。下一作品的真实复用只证明
+该次复用，
+不自动证明理解收益或提效；原生就绪和发布权限的含义保持。

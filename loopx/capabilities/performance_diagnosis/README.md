@@ -82,7 +82,7 @@ Input files are limited to 16 MiB; shorten captures beyond that limit. Repeated
 profile names and hotspot labels share a 1 Mi-character display-text budget;
 oversized summaries are rejected explicitly, never silently truncated. Larger
 recordings reuse Effect's private local snapshot transport without raising the
-ordinary 2 MiB message limit or returning the raw profile in the summary.
+ordinary [8 MiB message limit](../../../docs/reference/canonical-snapshot-pagination.md#shared-rpc-byte-budget) or returning the raw profile in the summary.
 Unknown source locations exported as `file: null` or `line: null` are omitted;
 incorrect non-null types remain errors. Repeated V8 leaves are aggregated before
 ancestor traversal, preserving sample counts and self/inclusive weights. One

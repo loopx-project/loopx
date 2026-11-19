@@ -2,7 +2,7 @@
 
 上一章说明一轮怎样留下可接受的结果。本章把时间拉长：会话更换、代码更新、权限撤销、外部请求超时以后，哪些工作可以沿用，哪些判断必须重做，什么时候应改路或停止。
 
-恢复不是加载一段旧思维，而是重建**当前行动条件**。历史 transcript 可以按 Host 的规则保存并用于理解背景；它不是当前授权、有效验收或外部状态的替代品。恢复历史事实与批准下一次行动，始终是两个问题。
+恢复是重建**当前行动条件**。历史 transcript 可以按 Host 的规则保存并用于理解背景。恢复历史事实与批准下一次行动，始终是两个问题。
 
 ## 同一任务：响应丢失之后恢复哪一项 {#receipt-recovery}
 
@@ -28,7 +28,7 @@ sequenceDiagram
     end
 ```
 
-图的第一条分支有“R1 确实存在且有效”的前提。只有错误输出而没有 provider 读回时，不能猜自己位于哪条分支。已确认 absent 后是否可以执行，仍取决于当前恢复合同、身份和授权，不是从缺失记录直接得到许可。
+图的第一条分支有“R1 确实存在且有效”的前提。只有错误输出而没有 provider 读回时，不能猜自己位于哪条分支。已确认 absent 后是否可以执行，仍取决于当前恢复合同、身份和授权。
 
 R1 恢复后，继续读取 T3 的当前条件。C1 的提交成功不能验收 C2；T1 的结算也不能替代 G1 对发布的决定。
 
@@ -74,7 +74,7 @@ G1 是否仍覆盖 C2，取决于原决定绑定的对象和条件；不是所�
 
 **Retry / reconcile**：原意图仍成立，但需要确认或完成原操作。只对具有已核对幂等和恢复边界的操作重试；外部结果未知时，优先 reconcile / readback。`unknown` 不是失败的另一种拼写。
 
-**Replan**：工作含义需要改变，例如新证据推翻方案、验收改变、工作候选耗尽但目标未满足。它应产生当前协议接受的 Todo、Vision、successor、acceptance 关系变化或有据的终止结果，不是再写一遍计划。
+**Replan**：工作含义需要改变，例如新证据推翻方案、验收改变、工作候选耗尽但目标未满足。它应产生当前协议接受的 Todo、Vision、successor、acceptance 关系变化或有据的终止结果。
 
 **Self-Repair**：目标工作可能仍然正确，但来源、投影、路由或回执链存在缺口。先定位 owner，再修具体缺口；不能把删 Gate、降低 validator 或清空历史当成修复。
 
@@ -82,28 +82,28 @@ Dreaming 产生候选方向或假设，不直接获得执行权。只有被当�
 
 ## Material Evidence Delta：有活动不等于有进展
 
-设想一个教学案例：一天里不断改笔记、补无关测试、重排目录，却没有降低目标的任何验收缺口。每项产物可能真实存在，但这不足以说明整体收敛；这也不是声称当前规则会无条件允许无限次同类工作。
+设想一个教学案例：一天里不断改笔记、补无关测试、重排目录，却没有降低目标的任何验收缺口。每项产物可能真实存在，但这不足以说明整体收敛。
 
-Material Evidence Delta 关注新增的、能改变下一步判断的证据或状态，而不是只数 Turn、文件或字符。负面结果也可能有价值：排除一个假设、确认一个真实 blocker、缩小未知范围，都能改变后续路线。
+Material Evidence Delta 关注新增的、能改变下一步判断的证据或状态。负面结果也可能有价值：排除一个假设、确认一个真实 blocker、缩小未知范围，都能改变后续路线。
 
 Delivery Batch Scale 描述改动范围；Delivery Outcome 描述成果与目标的关系。`multi_surface` 或 `implementation` 不自动意味着完成 Goal。`surface_only`、`outcome_gap`、`outcome_progress`、`primary_goal_outcome` 要按对应合同解释；执行者选择一个好看的标签不能替代证据。
 
 ### Vision checkpoint 与 baseline
 
-Vision 是 per-Agent 的执行路线，不是随手笔记。适用的 material refresh 需要说明路线被 patch、保持不变的依据、retired/superseded 的关系，或该角色为何不需要 Vision。
+Vision 是 per-Agent 的执行路线。适用的 material refresh 需要说明路线被 patch、保持不变的依据、retired/superseded 的关系，或该角色为何不需要 Vision。
 
-“保持不变”需要可比较的 baseline。没有 baseline 时先建立当前路线；不能把从未检查过写成没有变化。出现 `vision_checkpoint_missing` 等 gap 时，回到负责的 checkpoint 入口，补实际关系，而不是增加愿景 prose。不同 replan/repair 的优先级仍由当前 owner 决定，不把这段教学说明变成所有 Host 的全局规则表。
+“保持不变”需要可比较的 baseline。没有 baseline 时先建立当前路线；不能把从未检查过写成没有变化。出现 `vision_checkpoint_missing` 等 gap 时，回到负责的 checkpoint 入口，补实际关系。不同 replan/repair 的优先级仍由当前 owner 决定，不把这段教学说明变成所有 Host 的全局规则表。
 
 ### 六条收敛不变量
 
 这六个问题用于检查完整性，不新增公共字段或一条自动通过算法：
 
 1. **方向**：当前工作如何关联 Goal / Acceptance 与适用的 Vision？
-2. **权限**：正确主体是否在正确对象和 scope 上具有当前资格？能力存在不等于得到授权。
+2. **权限**：正确主体是否在正确对象和 scope 上具有当前资格？
 3. **证据**：观察、验证与决定是否绑定正确输入和来源，仍满足新鲜度要求？
 4. **Delta**：新增了什么可重读事实，或确认了哪项合法等待？
 5. **活性**：未完成目标还有工作、可执行观察、决定、修复或明确停止责任吗？
-6. **终局**：后继、等待、回执与验收缺口是否按适用合同全部处理，而不是只看列表为空？
+6. **终局**：后继、等待、回执与验收缺口是否按适用合同全部处理？
 
 安全避免错误推进，活性避免在缺少下一入口时永久卡住；二者都不保证任意目标必然成功。更多案例见[长程收敛专题](/loopx/docs/development/control-plane-course/topic-long-horizon-convergence/)和[证据与修复课程](/loopx/docs/development/control-plane-course/08-evidence-refresh-and-self-repair/)。
 
@@ -118,9 +118,9 @@ Vision 是 per-Agent 的执行路线，不是随手笔记。适用的 material r
   → 读回并重新判断依赖该结果的工作
 ```
 
-Legacy Markdown 可能仍是源；已选 canonical provider 的 Todo 不能从旧 Markdown 兜底。若源已提交但显示旧，修投影；若源本身错误，通过原 lifecycle 修正；若读取不可用，保留未知。让几个页面手工显示相同内容，不等于恢复了正确状态。
+Legacy Markdown 可能仍是源；已选 canonical provider 的 Todo 不能从旧 Markdown 兜底。若源已提交但显示旧，修投影；若源本身错误，通过原 lifecycle 修正；若读取不可用，保留未知。
 
-`refresh-state` 是受控写回，不是所有故障的通用查询。纯查看入口与 mutation 分开，参见[现场查阅](appendix-reference.md#read-before-change)。Workspace 操作回执与页面状态的具体比较见[暂停案例](workspace-v1.md#pause-readback)。
+`refresh-state` 是受控写回。纯查看入口与 mutation 分开，参见[现场查阅](appendix-reference.md#read-before-change)。Workspace 操作回执与页面状态的具体比较见[暂停案例](workspace-v1.md#pause-readback)。
 
 ## 停止、闭环与补偿
 
@@ -128,13 +128,13 @@ Goal 被 owner 停止、quota 暂停或 Host 退出，不能反证目标已完�
 
 若当前要求确实满足，按已有终局入口留下依据；若仍需工作，保留后继；若结果未知，保留观察或 blocker。被验证的负向结果和有覆盖依据的 no-follow-up 可以诚实结束一条路径，不需要伪造成功。
 
-已经生效的错误操作需要补偿，不是删除历史。[Rollback packet 协议](/loopx/docs/reference/protocols/rollback-packet-v0/)帮助表达影响对象、来源、恢复选择、批准与验证，但 packet 不是执行许可。Revert、fix-forward、外部清理和支持请求有不同前提；回滚安装也不必然逆转状态格式或远端效果。
+已经生效的错误操作需要补偿，不是删除历史。[Rollback packet 协议](/loopx/docs/reference/protocols/rollback-packet-v0/)帮助表达影响对象、来源、恢复选择、批准与验证。Revert、fix-forward、外部清理和支持请求有不同前提；回滚安装也不必然逆转状态格式或远端效果。
 
 补偿完成后重新检查真实后置条件，并明确哪些结果仍需接受者确认。内部记录收口、收件人收到产物和整体验收是分开的，参见[第一份交付](05-connect-existing-project.md#first-delivery)。
 
 ## 恢复的代价与公开边界
 
-恢复依赖可读的原记录、可用的 provider 读回与当前权限。缺少它们时可能需要人工或外部支持，不能靠换身份推断问题消失。反复修投影的成本也应成为工程问题，而不是把“系统能自修复”当成持续故障的理由。
+恢复依赖可读的原记录、可用的 provider 读回与当前权限。缺少它们时可能需要人工或外部支持，不能靠换身份推断问题消失。反复修投影的成本也应成为工程问题。
 
 证据采集消耗时间与资源，应与风险匹配；检查太少会漏掉变化，过度重复又可能吞噬交付。正文讨论的是如何保存最小充分证据，不要求把每段思考永久记录下来。
 
@@ -149,8 +149,7 @@ Goal 被 owner 停止、quota 暂停或 Host 退出，不能反证目标已完�
 - 写回时用 `--vision-unchanged-reason` 给出“不变”理由；LoopX 会自动把已有 vision 绑定为 baseline，
   不需要另外传入 revision。
 
-如果 baseline 缺失但 agent 仍声称 unchanged，quota 会产生 `vision_checkpoint_missing` gap。这不是
-为了惩罚，而是为了防止 agent 在 never-checked 状态上积累错误假设。完整失败回放见
+如果 baseline 缺失但 agent 仍声称 unchanged，quota 会产生 `vision_checkpoint_missing` gap。为了防止 agent 在 never-checked 状态上积累错误假设。完整失败回放见
 [Control-Plane Course 第 8 讲](/loopx/docs/development/control-plane-course/08-evidence-refresh-and-self-repair/)。
 
 ## Terminal Closure
@@ -182,7 +181,7 @@ required external readbacks are fresh
 | Capability | 定义 caller outcome，规范 Provider 输出，应用 domain policy |
 | LoopX Kernel | 接受或拒绝 proposal，拥有通用 Goal/Todo/Gate/Quota/Recovery state |
 
-正常流向不是“Agent 调工具后直接写完成”：
+正常流向：
 
 ```text
 Agent -> Capability -> Provider -> external system
@@ -296,5 +295,5 @@ LoopX 不替代：
    Capability/Domain State、Provider、Host/Runner、Projection/Dashboard、Docs/fixtures 或
    Extension。
 
-Extension 是开发者贡献中的独立 packaging/lifecycle 路径，不是所有贡献的统一抽象。两条主线共享
+Extension 是开发者贡献中的独立 packaging/lifecycle 路径。两条主线共享
 同一控制面模型，但不互相要求。下一部分先从最常见的项目接入开始。

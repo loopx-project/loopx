@@ -11,6 +11,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
+from ..control_plane.coordination.local_authority import CanonicalAuthorityRequired
 from ..control_plane.todos.provider_handoff_mode import (
     migrate_registered_handoff_mode,
     read_canonical_handoff_mode,
@@ -32,9 +33,14 @@ class GoalOwnershipRequestMixin:
 
     def _ownership_readback(self, goal_id: str) -> dict[str, Any]:
         self._registry_and_goal(goal_id)
-        current = read_canonical_handoff_mode(
-            runtime_root=self.server.runtime_root, goal_id=goal_id
-        )
+        try:
+            current: dict[str, Any] | None = read_canonical_handoff_mode(
+                runtime_root=self.server.runtime_root, goal_id=goal_id
+            )
+        except CanonicalAuthorityRequired:
+            # A registered pre-migration Goal is a valid read target. Expose the
+            # existing unpromoted state without reading legacy policy or writing.
+            current = None
         return {
             "ok": True,
             "goal_id": goal_id,
@@ -90,7 +96,7 @@ class GoalOwnershipRequestMixin:
                 plan_sha256=digest,
                 execute=execute,
             )
-            # Project facts, not a second decision rule; the CLI and App use the
+            # Project facts; the CLI and App use the
             # same plan, backup, source witness, CAS and original receipt owner.
             payload = {
                 key: result[key]

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  governedCapabilitySettlementStatus,
   validateGovernedCapabilityAdmission,
   validateGovernedCapabilityResult,
   validateGovernedCapabilitySettlementCallback,
@@ -433,14 +432,6 @@ test("writeback proves the effect receipt before settlement can spend", () => {
     },
   });
   assert.equal(committed.ok, true);
-});
-
-test("settlement terminal state is TS-owned", () => {
-  assert.equal(governedCapabilitySettlementStatus(null), "committed");
-  assert.equal(
-    governedCapabilitySettlementStatus({ kind: "quota_spend_rejected" }),
-    "settlement_failed",
-  );
 });
 
 test("one lifecycle packet validates an observed provider result and projects its receipt", () => {

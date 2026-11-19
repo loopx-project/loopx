@@ -32,7 +32,7 @@ export async function withCheckpointAuthority(
     return save({...facts,
       todos: projection.todo_ids.map(id => projection.todos.get(id)!),
       acceptance: {revision: acceptance?.revision ?? null, contract_digest: acceptance?.digest ?? null,
-        contract: acceptance?.enabled ? acceptance.document : null},
+        contract: acceptance?.document ?? null},
       provider_revision: head.provider_revision,
       source: {...source, authority: authorityStoreSourceAuthority(store), store_identity: identity},
     });

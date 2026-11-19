@@ -13,8 +13,8 @@ import {type AuthoritySourceCheck, uncheckedAuthoritySource} from "../coordinati
 import {legacyCoordinationTodoLockPath} from "../coordination/legacy_writer_lock_paths.ts";
 import {requireShadowPrimaryWriteAllowed, shadowMaintenanceLockPath} from "../coordination/shadow_management.ts";
 import {
-  canonicalWriteRouteFailure,
-  requireCanonicalBusinessWrite,
+  canonicalAuthorityRouteFailure,
+  requireCanonicalAuthority,
 } from "../coordination/local_authority_write.ts";
 import {claimFileMutationLock, mutationLockOwner, releaseFileMutationLock,
   releaseFileMutationLockClaim, type FileMutationLockClaim} from "../effect_runtime_io.ts";
@@ -91,7 +91,7 @@ export async function commitLocalTeamPlan(value: unknown): Promise<JsonObject> {
       if (i === witnesses.length - 1) adopted = true;
     }
     await requireShadowPrimaryWriteAllowed(root, goal);
-    await requireCanonicalBusinessWrite(root, goal, "team_plan");
+    await requireCanonicalAuthority(root, goal, "team_plan");
     const store = await openLocalAuthorityStore(root, goal);
     const result = await commitTeamPlan(store, request, async () => {
       // Exact committed receipts replay before these admission checks. An
@@ -108,7 +108,7 @@ export async function commitLocalTeamPlan(value: unknown): Promise<JsonObject> {
   } catch (error) {
     return {status: "failed", reason_code: error instanceof EffectRuntimeRequestError ? error.code : "team_plan_commit_failed",
       reason: error instanceof Error ? error.message : String(error),
-      ...localAuthorityOpenFailure(error), ...canonicalWriteRouteFailure(error)};
+      ...localAuthorityOpenFailure(error), ...canonicalAuthorityRouteFailure(error)};
   } finally {
     // Claims keep the source markers alive even after a requesting Python
     // process exits. The native effect releases the handed-off critical section.

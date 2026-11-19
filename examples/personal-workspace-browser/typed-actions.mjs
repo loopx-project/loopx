@@ -36,6 +36,23 @@ async function waitForSelectorCount(page, selector, expected, timeoutMs = 10_000
   );
 }
 
+async function openEmptyFiles(page, navigation) {
+  const goalId = new URL(page.url()).searchParams.get("goalId");
+  assert.ok(goalId, "Files must belong to the selected Goal");
+  const inventoryRead = page.waitForResponse(response => {
+    const request = new URL(response.url());
+    return request.pathname === "/api/chat/goal-results" && request.searchParams.get("goal_id") === goalId;
+  });
+  await navigation.getByRole("button", {name: /^(Files|成果)$/, exact: true}).click();
+  const response = await inventoryRead;
+  assert.equal(response.status(), 200);
+  assert.deepEqual(await response.json(), {
+    ok: true, items: [], total: 0, next_cursor: null, unavailable_count: 0, unavailable_todo_ids: [],
+  }, "Files must read the actual empty report inventory before omitting its extra section");
+  await page.getByRole("region", {name: /^(Content artifacts|内容作品)$/, exact: true}).waitFor({state: "visible"});
+  await page.waitForFunction(() => !document.querySelector('[data-goal-panel="files"] .goal-managed-results'));
+}
+
 function operationProposal({ id, title, lifecycleState, status, resultDelivery = null }) {
   const outcomeObserved = lifecycleState === "outcome_observed";
   return {
@@ -308,13 +325,17 @@ export const typedActionsScenario = {
       }
       const writesBeforeSelection = api.durableWriteCount;
       await drawer.getByRole("button", { name: /Workspace 1/ }).click();
-      await page.getByRole("button", { name: "创建 Goal 并开始首轮", exact: true }).waitFor({ state: "visible" });
+      const create = drawer.getByRole("button", { name: "创建 Goal", exact: true });
+      await create.waitFor({ state: "visible" });
       const regenerated = api.actionPreviews.at(-1);
       if (regenerated?.normalized_parameters.workspace_ref !== "workspace-fixture") {
         throw new Error(`Stored workspace selection did not regenerate the Goal preview: ${JSON.stringify(regenerated)}`);
       }
+      if (regenerated.normalized_parameters.start_execution !== storedWorkspaceGate.normalized_parameters.start_execution) {
+        throw new Error("Workspace selection changed the saved execution intent");
+      }
       if (api.durableWriteCount !== writesBeforeSelection) throw new Error("Selecting a workspace applied without confirmation");
-      await page.getByRole("button", { name: "创建 Goal 并开始首轮", exact: true }).click();
+      await create.click();
       await page.getByText("已应用，LoopX 状态将刷新。", { exact: true }).waitFor({ state: "visible" });
       if (!api.actionApplies.includes(regenerated.proposalId)) throw new Error("Confirmation did not apply the regenerated preview");
       if (api.durableWriteCount !== writesBeforeSelection + 1) throw new Error("Confirmation did not write exactly one Goal");
@@ -404,6 +425,7 @@ export const typedActionsScenario = {
 
     const context = await openWorkspacePage(browser, url, { collectCoverage });
     const { api, checkpointCoverage, errors: pageErrors, page } = context;
+    const interruptedCorrectionStream = Promise.withResolvers();
     const failures = [];
     const notes = [];
     const pass = (criterion, note) => notes.push(`${criterion}: ${note}`);
@@ -499,6 +521,7 @@ export const typedActionsScenario = {
         return {
           closeHeight: close?.height ?? 0,
           closeTopInset: close ? close.top - header.top : 0,
+          closeBottomInset: close ? header.bottom - close.bottom : 0,
           closeWidth: close?.width ?? 0,
           headerHeight: header.height,
           paddingTop: Number.parseFloat(style.paddingTop),
@@ -507,8 +530,11 @@ export const typedActionsScenario = {
       if (drawerHeaderVisual.closeHeight < 44 || drawerHeaderVisual.closeWidth < 44) {
         throw new Error(`Goal drawer close control is below the 44px target: ${JSON.stringify(drawerHeaderVisual)}`);
       }
-      if (drawerHeaderVisual.headerHeight < 84 || drawerHeaderVisual.paddingTop < 18 || drawerHeaderVisual.closeTopInset < 18) {
-        throw new Error(`Goal drawer header is still pinned too close to the top edge: ${JSON.stringify(drawerHeaderVisual)}`);
+      // Goal details use the compact header adopted with the readable Goal
+      // inspector. Preserve its 44px target and breathing room on both edges.
+      if (drawerHeaderVisual.headerHeight < 68 || drawerHeaderVisual.paddingTop < 12
+        || drawerHeaderVisual.closeTopInset < 12 || drawerHeaderVisual.closeBottomInset < 12) {
+        throw new Error(`Goal drawer header clips or crowds its close control: ${JSON.stringify(drawerHeaderVisual)}`);
       }
       const goalDrawerOrder = await page.locator(".personal-drawer-body").evaluate((element) => {
         const lark = element.querySelector(".personal-goal-notification");
@@ -695,9 +721,8 @@ export const typedActionsScenario = {
       const englishGoalNavigation = page.getByRole("navigation", { name: "Goal view" });
       await englishGoalNavigation.getByRole("button", { name: /^(Chat|对话)$/, exact: true }).click();
       await page.locator('[data-goal-panel="chat"]').getByText("Agent is waiting for your decision", { exact: true }).first().waitFor({ state: "visible" });
-      await englishGoalNavigation.getByRole("button", { name: /^(Files|成果)$/, exact: true }).click();
+      await openEmptyFiles(page, englishGoalNavigation);
       if (await page.locator('[data-output-kind="evidence"]').count() !== 0) throw new Error("Run status appeared as a delivered file");
-      await page.getByRole("region", { name: "Accepted team reports" }).getByText("No verifiable team reports yet.", { exact: true }).waitFor({ state: "visible" });
       const englishProjectionText = await page.locator(".personal-workspace-main").innerText();
       for (const forbidden of ["最近运行", "最近验证", "Agent 正在整理下一步", "Agent 正在推进当前 Goal", "Agent 等待你的决定"]) {
         if (englishProjectionText.includes(forbidden)) throw new Error(`English projection exposed Chinese UI copy ${forbidden}: ${englishProjectionText}`);
@@ -736,6 +761,7 @@ export const typedActionsScenario = {
       if (englishMonitorShortcut?.normalized_parameters.target !== "Check the current Goal for blockers, progress, and new outputs") throw new Error(`English scheduled-check shortcut did not fall back to the localized default check target: ${JSON.stringify(englishMonitorShortcut?.normalized_parameters)}`);
       if (api.durableWriteCount !== writesBeforeEnglishMonitorShortcut) throw new Error("English scheduled-check shortcut wrote durable state before confirmation");
       await page.getByRole("button", { name: "Close", exact: true }).click();
+      await page.locator(".personal-composer-tools > summary").click();
       await page.getByRole("button", { name: "Configure scheduled check" }).click();
       const englishScheduleForm = page.getByRole("dialog", { name: "Configure scheduled check", exact: true });
       const previewsBeforeEnglishCalendarSchedule = api.actionPreviews.length;
@@ -845,10 +871,9 @@ export const typedActionsScenario = {
       const tasksTab = goalNavigation.getByRole("button", { name: /^(Tasks|任务)$/ });
       await tasksTab.click();
       await page.screenshot({ path: resolve(outputDir, "goal-tasks-loopx-theme.png"), fullPage: false, animations: "disabled" });
-      await goalNavigation.getByRole("button", { name: /^(Files|成果)$/ }).click();
+      await openEmptyFiles(page, goalNavigation);
       const publicFiles = page.locator(".personal-files-list > button");
       if (await publicFiles.count() !== 0) throw new Error("A status or run observation appeared as a delivered file");
-      await page.getByRole("region", { name: "已验收的团队报告" }).getByText("暂无可核验的团队报告。", { exact: true }).waitFor({ state: "visible" });
       await page.screenshot({ path: resolve(outputDir, "goal-files-loopx-theme.png"), fullPage: false, animations: "disabled" });
       await goalNavigation.getByRole("button", { name: /^(Chat|对话)$/ }).click();
       await page.locator(".personal-channel-timeline").waitFor({ state: "visible" });
@@ -978,7 +1003,10 @@ export const typedActionsScenario = {
       await page.getByRole('button', { name: '列表', exact: true }).click();
       await assertDeferredTask();
       const listHistory = page.locator('[data-goal-panel="tasks"]').getByTestId('completed-task-lane');
-      await listHistory.getByRole('button', { name: '已完成', exact: false }).click();
+      // Selecting a completed task opens its history. Switching to the list
+      // preserves that expansion instead of requiring another toggle.
+      const completedToggle = listHistory.getByRole('button', { name: '已完成', exact: false });
+      assert.equal(await completedToggle.getAttribute('aria-expanded'), 'true');
       await listHistory.getByText('4087', { exact: true }).waitFor();
       await listHistory.getByText('Completed A', { exact: true }).waitFor();
       await listHistory.locator('.personal-task-lane-scroll').evaluate(element => { element.scrollTop = element.scrollHeight; });
@@ -1006,6 +1034,8 @@ export const typedActionsScenario = {
         throw new Error(`Work-Agent filter did not consistently filter task cards: ${filteredText}`);
       }
       const runtimeSelector = page.getByRole("combobox", { name: "选择聊天 Runtime" });
+      if (await runtimeSelector.count()) throw new Error("Tasks view exposed a Chat executor without its composer");
+      await page.getByRole("button", { name: "对话", exact: true }).click();
       if (!await runtimeSelector.count()) throw new Error("Chat runtime selector is not explicitly labelled independently from work-Agent lanes");
       await goalButton.click();
       await tasksTab.click();
@@ -1082,7 +1112,7 @@ export const typedActionsScenario = {
       const expectedGoalCapabilities = [
         "变更质量验证", "Goal 复盘与步幅", "探索图谱", "探索 Harness", "飞书事件收件箱",
         "飞书看板心跳同步", "已退役的 Authority 观测", "自适应子 Agent 容量",
-        "已注册 Peer 任务协调", "周期报告", "记忆与资料",
+        "已注册 Peer 任务协调", "周期报告", "记忆与资料", "内容制作",
       ];
       if (JSON.stringify([...goalCapabilityOrder].sort()) !== JSON.stringify(expectedGoalCapabilities.sort())) {
         throw new Error(`Goal capability workbench did not render the complete catalog: ${JSON.stringify(goalCapabilityOrder)}`);
@@ -1098,8 +1128,8 @@ export const typedActionsScenario = {
       await page.locator(".personal-capability-list").getByRole("button", {name:"记忆与资料",exact:true}).click();
       await page.getByRole("heading", {level:2,name:"记忆与资料",exact:true}).waitFor({state:"visible"});
       const memoryTabs = page.getByRole("tablist", {name:"记忆用途"});
-      if (JSON.stringify(await memoryTabs.getByRole("tab").allTextContents()) !== JSON.stringify(["资料召回", "经验学习", "素材与风格"])) {
-        throw new Error("Memory navigation must expose the registered purposes inside one entry");
+      if (JSON.stringify(await memoryTabs.getByRole("tab").allTextContents()) !== JSON.stringify(["资料召回", "经验学习"])) {
+        throw new Error("Memory navigation must retain evidence and experience purposes; reference styles belong to Content production");
       }
       await page.getByRole("tab", {name:"资料召回",exact:true}).focus();
       await page.keyboard.press("ArrowRight");
@@ -1136,6 +1166,7 @@ export const typedActionsScenario = {
       await page.getByRole("region", {name:"资料召回",exact:true}).waitFor({state:"visible"});
       await page.locator(".personal-capability-list").getByRole("button", { name: "已退役的 Authority 观测" }).click();
       const retiredDetail = page.locator(".personal-capability-detail");
+      await retiredDetail.getByRole("button", {name: "只读能力", exact: true}).click();
       await retiredDetail.getByText(/--clear-local-authority-shadow/).waitFor();
       if (await retiredDetail.getByRole("checkbox").count()
           || await retiredDetail.getByRole("button", { name: "预览变更", exact: true }).count()) {
@@ -1147,7 +1178,7 @@ export const typedActionsScenario = {
       await page.screenshot({ path: resolve(outputDir, "retired-observation-settings-mobile.png"), fullPage: false, animations: "disabled" });
       await page.setViewportSize(desktopViewport);
       await page.locator(".personal-capability-list").getByRole("button", { name: "周期报告" }).click();
-      for (const label of [/^启用$/u, /^报告 Profile/u, /^Goal Channel 路由/u, /^时区/u]) {
+      for (const label of [/^启用$/u, /^报告 Profile/u, /^报告接收会话/u, /^时区/u]) {
         await page.getByLabel(label).waitFor({ state: "visible" });
       }
       await page.screenshot({ path: resolve(outputDir, "goal-capability-zh-cn.png"), fullPage: false, animations: "disabled" });
@@ -1240,6 +1271,7 @@ export const typedActionsScenario = {
       await page.getByRole("button", { name: /关闭详情/ }).click();
 
       await page.locator('.personal-sidebar-utility[aria-label="设置"]').click();
+      await page.locator(".personal-settings-tabs").getByRole("button", {name: "Lark", exact: true}).click();
       await page.getByRole("heading", { name: "Lark", exact: true }).waitFor({ state: "visible" });
       if (await page.locator(".personal-workspace-shell:visible").count()) throw new Error("Workspace Settings did not replace the workspace shell");
       if (await page.locator(".personal-channel-composer:visible").count()) throw new Error("Workspace Settings left the chat composer visible");
@@ -1301,7 +1333,7 @@ export const typedActionsScenario = {
 
       api.failNextMachineInspection = true;
       await page.getByRole("button", { name: "能力中心", exact: true }).click();
-      await page.getByRole("radio", { name: "此设备默认", exact: true }).check();
+      await page.getByRole("radio", { name: "本机设置", exact: true }).check();
       await page.getByRole("heading", { level: 1, name: "能力中心", exact: true }).waitFor({ state: "visible" });
       const loadError = page.getByRole("alert").filter({ hasText: "无法读取机器配置" });
       await loadError.waitFor({ state: "visible" });
@@ -1419,16 +1451,18 @@ export const typedActionsScenario = {
       await page.getByText("Enabled means automatic delivery at validated stage boundaries", { exact: true }).waitFor({ state: "visible" });
       await page.screenshot({ path: resolve(outputDir, "machine-capability-en.png"), fullPage: false, animations: "disabled" });
       await page.getByRole("radio", { name: "One Goal", exact: true }).check();
+      await page.getByRole("combobox", {name: "Target Goal", exact: true}).selectOption("product-release");
       await page.getByRole("button", { name: /Adaptive child capacity/ }).click();
       await page.getByRole("heading", { level: 2, name: "Adaptive child capacity", exact: true }).waitFor({ state: "visible" });
       for (const label of [/^Enabled$/u, /^Child model/u, /^Child reasoning effort/u, /^Maximum children/u, /^Allowed responsibility domains/u]) {
         await page.getByLabel(label).waitFor({ state: "visible" });
       }
       await page.screenshot({ path: resolve(outputDir, "goal-subagent-capability-en.png"), fullPage: false, animations: "disabled" });
+      await page.getByRole("radio", {name: "This device", exact: true}).check();
       await page.getByRole("button", { name: /Language/ }).click();
       await page.getByRole("radio", { name: /Simplified Chinese/ }).click();
       await page.getByRole("button", { name: "能力中心", exact: true }).click();
-      await page.getByRole("radio", { name: "此设备默认", exact: true }).check();
+      await page.getByRole("radio", { name: "本机设置", exact: true }).check();
       await page.locator(".personal-settings-body").evaluate((element) => element.scrollTo({ top: 0 }));
       await page.screenshot({ path: resolve(outputDir, "machine-capability-zh-cn.png"), fullPage: false, animations: "disabled" });
       // Steward owns a first-level destination with just model/executor and
@@ -1508,7 +1542,7 @@ export const typedActionsScenario = {
       api.machineInspectionStatus = "invalid";
       api.invalidMachineNamespaces = ["periodic_report"];
       await page.getByRole("button", { name: "能力中心", exact: true }).click();
-      await page.getByRole("radio", { name: "此设备默认", exact: true }).check();
+      await page.getByRole("radio", { name: "本机设置", exact: true }).check();
       await invalidRepair.waitFor({ state: "visible" });
       await page.getByRole("heading", { level: 2, name: "周期报告", exact: true }).waitFor({ state: "visible" });
       await page.getByRole("button", { name: "预览变更", exact: true }).click();
@@ -1574,6 +1608,7 @@ export const typedActionsScenario = {
       await page.reload({ waitUntil: "networkidle" });
       await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
       await page.locator('.personal-sidebar-utility[aria-label="设置"]').click();
+      await page.locator(".personal-settings-tabs").getByRole("button", {name: "Lark", exact: true}).click();
       const routeMismatchRow = page.locator(".personal-lark-table-row", { hasText: "Product group" });
       try {
         await routeMismatchRow.getByText("消息未匹配当前 Goal Topic", { exact: false }).waitFor({ state: "visible" });
@@ -1610,6 +1645,7 @@ export const typedActionsScenario = {
       const legacyId = legacyConnection.connection_id;
       await page.getByRole("button", { name: "返回工作区", exact: true }).click();
       await page.locator('.personal-sidebar-utility[aria-label="设置"]').click();
+      await page.locator(".personal-settings-tabs").getByRole("button", {name: "Lark", exact: true}).click();
       const legacyRow = page.locator(".personal-lark-table-row", { hasText: "Original Bot" });
       await legacyRow.getByText("待升级", { exact: true }).waitFor({ state: "visible" });
       await legacyRow.getByRole("button", { name: /配置/ }).click();
@@ -1626,6 +1662,7 @@ export const typedActionsScenario = {
       removedConnection.agent_id = "removed-peer";
       await page.getByRole("button", { name: "返回工作区", exact: true }).click();
       await page.locator('.personal-sidebar-utility[aria-label="设置"]').click();
+      await page.locator(".personal-settings-tabs").getByRole("button", {name: "Lark", exact: true}).click();
       await page.locator(".personal-lark-table-row", { hasText: "removed-peer" }).getByRole("button", { name: /配置/ }).click();
       await editDialog.getByRole("alert").filter({ hasText: "不会自动替换" }).waitFor({ state: "visible" });
       if (!(await editDialog.getByRole("button", { name: "保存连接", exact: true }).isDisabled())) throw new Error("Removed recipient remained connectable");
@@ -1688,9 +1725,10 @@ export const typedActionsScenario = {
 
       const previewCountBeforeAnalysis = api.actionPreviews.length;
       const turnCountBeforeAnalysis = api.turnRequests.length;
-      await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Tasks|任务)$/ }).click();
       await composer.fill("做一次只读分析：判断刚刚新增的 Todo 是否与当前 Goal 一致，并在当前 Chat 返回两点理由。不要修改状态。");
       await page.getByRole("button", { name: "发送", exact: true }).click();
+      await page.locator(".personal-message-pending").waitFor({state: "hidden"});
+      await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Tasks|任务)$/ }).click();
       const taskConversationReceipt = page.getByRole("region", { name: "最近对话" });
       await taskConversationReceipt.getByText("对话有新回复", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
       await taskConversationReceipt.getByRole("button", { name: "转为任务草稿", exact: true }).waitFor({ state: "visible" });
@@ -1714,7 +1752,8 @@ export const typedActionsScenario = {
       const taskDraftForm = page.getByRole("dialog", {name: "创建任务", exact: true});
       if (!(await taskDraftForm.getByLabel("任务内容", {exact: true}).inputValue())) throw new Error("Task form lost the reply");
       await taskDraftForm.getByLabel("任务内容", {exact: true}).fill(`${"长".repeat(200)}\n\n${"文".repeat(201)}`);
-      await taskDraftForm.getByRole("status").waitFor();
+      await taskDraftForm.getByRole("status").filter({hasText: /任务内容 \d+\/400/}).waitFor();
+      assert.equal(await taskDraftForm.getByRole("status", {name: "合计保存字数", exact: true}).innerText(), "402 / 400");
       if (!(await taskDraftForm.getByRole("button", {name: "检查配置"}).isDisabled())) throw new Error("Over-limit task text reached preview");
       await taskDraftForm.getByRole("button", {name: "取消", exact: true}).click();
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
@@ -1923,9 +1962,11 @@ export const typedActionsScenario = {
         await page.getByRole("button", { name: "关闭", exact: true }).click();
       }
       api.nextActionPreviewDelayMs = 900;
+      await goalNavigation.getByRole("button", { name: /^(Chat|对话)$/ }).click();
       const conversationRuntime = page.getByRole("combobox", { name: "选择聊天 Runtime" });
       const conversationAgentId = await conversationRuntime.getAttribute("data-value");
       if (conversationAgentId !== "codex") throw new Error(`Quick Todo actor fixture requires the selected Codex Runtime, got ${conversationAgentId}`);
+      await goalNavigation.getByRole("button", { name: /^(Tasks|任务)$/ }).click();
       const claimedTask = taskCards.filter({ hasText: "Monitor ArcticDB #3179 LoopX comment" });
       const unassignedTask = taskCards.filter({ hasText: "todo todo_1596c3a678bb" });
       if (await claimedTask.count() !== 1 || await unassignedTask.count() !== 1) {
@@ -1991,9 +2032,9 @@ export const typedActionsScenario = {
       if (monitorShortcut?.normalized_parameters.target !== "检查当前 Goal 的阻塞、进度与新产出") throw new Error(`定时检查快捷方式未回落到本地化默认检查目标：${JSON.stringify(monitorShortcut?.normalized_parameters)}`);
       if (api.durableWriteCount !== writesBeforeMonitorShortcut) throw new Error("定时检查快捷方式在确认前写入了持久状态");
       await page.getByRole("button", { name: "关闭", exact: true }).click();
-      if (await page.locator(".personal-composer-tools").getAttribute("open") === null) {
-        throw new Error("Closing a configuration draft lost the open shortcut menu across composer folding");
-      }
+      // Selecting a shortcut dismisses the shared action menu. Reopen it for
+      // the next draft, as with the English configuration journey above.
+      await page.locator(".personal-composer-tools > summary").click();
       await page.getByRole("button", {name: "配置定时检查"}).click();
       const monitorForm = page.getByRole("dialog", {name: "配置定时检查", exact: true});
       const previewsBeforeUnsupportedSchedule = api.actionPreviews.length;
@@ -2069,9 +2110,41 @@ export const typedActionsScenario = {
       if (!await currentRuntimeRun.isVisible()) await page.locator(".personal-activity-summary > summary").click();
       await currentRuntimeRun.click();
       await page.getByRole("tab", { name: "详情与操作" }).click();
+      const interruptionQuestion = "保持运行，等我检查中断控制。";
+      let correctionStreamRequests = 0;
+      // This assertion needs a running correction, independent of how long
+      // drawer navigation takes. Hold only its exact Session/Turn stream;
+      // completion races remain covered by conversation-activity.
+      await page.route("**/api/chat/sessions/*/turns/*/events", async (route) => {
+        const path = new URL(route.request().url()).pathname.split("/");
+        const correction = api.turnRequests.find((turn) => turn.message === interruptionQuestion
+          && turn.sessionId === path[4] && turn.turnId === path[6]);
+        if (correction) {
+          // Terminal proposal readback uses this endpoint too; only a live
+          // Turn subscription can compete for its running row and controls.
+          if (page.__loopxRuntime.sessions.get(correction.sessionId)?.active_turn_id === correction.turnId) {
+            correctionStreamRequests += 1;
+          }
+          await interruptedCorrectionStream.promise;
+        }
+        return route.fallback();
+      });
       const runningCorrection = page.getByLabel("输入纠偏信息");
-      await runningCorrection.fill("保持运行，等我检查中断控制。 ");
-      await page.getByRole("button", { name: "发送纠偏" }).click();
+      await runningCorrection.fill(interruptionQuestion);
+      await Promise.all([
+        page.waitForRequest(request => {
+          const path = new URL(request.url()).pathname.split("/");
+          return path[7] === "events" && api.turnRequests.some(turn => turn.message === interruptionQuestion
+            && turn.sessionId === path[4] && turn.turnId === path[6]);
+        }, { timeout: 8_000 }),
+        page.getByRole("button", { name: "发送纠偏" }).click(),
+      ]);
+      await page.getByRole("button", { name: /关闭详情/ }).click();
+      await goalNavigation.getByRole("button", { name: /^(Overview|概览)$/ }).click();
+      await goalNavigation.getByRole("button", { name: /^(Chat|对话)$/ }).click();
+      if (!await currentRuntimeRun.isVisible()) await page.locator(".personal-activity-summary > summary").click();
+      await currentRuntimeRun.click();
+      await page.getByRole("tab", { name: "详情与操作" }).click();
       await page.getByText("更多运行操作").click();
       const interruptButton = page.getByRole("button", { name: "中断本次运行" });
       try {
@@ -2080,16 +2153,27 @@ export const typedActionsScenario = {
         await page.screenshot({ path: resolve(outputDir, "interrupt-state-failed.png"), fullPage: true, animations: "disabled" });
         throw new Error(`${error.message}; body=${(await page.locator("body").innerText()).slice(-4000)}`);
       }
-      await interruptButton.click();
       const secondCorrection = api.turnRequests.find((turn) => turn.message.includes("中断控制"));
       if (!secondCorrection || secondCorrection.sessionId === firstCorrection.sessionId) {
         throw new Error("Agent change reused the earlier Agent Session or failed to start the second correction");
       }
+      assert.equal(page.__loopxRuntime.sessions.get(secondCorrection.sessionId)?.active_turn_id,
+        secondCorrection.turnId, "The correction must still be running before interruption");
+      const interruptPath = `/api/chat/sessions/${secondCorrection.sessionId}/turns/${secondCorrection.turnId}/interrupt`;
+      // A click starts the async operation; it does not prove receipt delivery.
+      await Promise.all([
+        page.waitForResponse((response) =>
+          new URL(response.url()).pathname === interruptPath && response.request().method() === "POST"),
+        interruptButton.click(),
+      ]);
       if (!api.interrupts.some((turn) => turn.sessionId === secondCorrection.sessionId && turn.turnId === secondCorrection.turnId)) {
         throw new Error("Interrupt did not target the active Session and Turn");
       }
       await page.getByRole("button", { name: /关闭详情/ }).click();
       await page.locator('[data-goal-panel="chat"]').getByText("已中断。你可以在当前会话继续发送消息。", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+      assert.equal(correctionStreamRequests, 1, "Returning to a running correction reuses its original observer");
+      assert.equal(await page.locator('[data-goal-panel="chat"]').getByRole("button", { name: "中断本轮", exact: true }).count(),
+        0, "An interrupted correction leaves no pending duplicate in the conversation");
 
       if (!await currentRuntimeRun.isVisible()) await page.locator(".personal-activity-summary > summary").click();
       await currentRuntimeRun.click();
@@ -2147,6 +2231,7 @@ export const typedActionsScenario = {
 
       if (failures.length) throw new Error(failures.join(" | "));
     } finally {
+      interruptedCorrectionStream.resolve();
       await context.close();
     }
     return {

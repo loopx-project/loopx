@@ -1,4 +1,4 @@
-"""Shared publication/readback shape checks; length does not prove review quality."""
+"""Shared publication/readback shape checks."""
 
 from __future__ import annotations
 
@@ -6,9 +6,24 @@ import re
 from collections.abc import Iterator
 from typing import Any
 
-REQUIRED_FINAL_SECTIONS = ["动机", "改动思路", "具体改动", "对主干的风险", "我的整体评价"]
+# Presentation aliases share the existing canonical section ids. They do not
+# broaden evidence matching to arbitrary headings that contain a Chinese word.
+REVIEW_SECTION_TITLES = {
+    "动机": "动机 / Motivation",
+    "改动思路": "改动思路 / Approach",
+    "具体改动": "具体改动 / Changes",
+    "对主干的风险": "对主干的风险 / Risks",
+    "我的整体评价": "我的整体评价 / Verdict",
+}
+REQUIRED_FINAL_SECTIONS = list(REVIEW_SECTION_TITLES)
 FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 FENCE_CLOSE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")
+AUTHOR_OWNED_APPROVAL_FALLBACK_TITLE = (
+    "Approval conclusion (author-owned PR; GitHub blocks formal self-approval)"
+)
+AUTHOR_OWNED_REQUEST_CHANGES_FALLBACK_TITLE = (
+    "Request changes conclusion (author-owned PR; GitHub blocks formal self-review)"
+)
 
 
 def review_body_requirements(*, behavior_bearing: bool) -> dict[str, int]:
@@ -71,6 +86,15 @@ def visible_review_text(body: str) -> str:
     return "\n".join(_visible_lines(body))
 
 
+def author_owned_review_title_matches(body: str, verdict: str | None) -> bool:
+    """Use the same visible, literal conclusion at publication and readback."""
+    expected = {
+        "APPROVE": AUTHOR_OWNED_APPROVAL_FALLBACK_TITLE,
+        "REQUEST_CHANGES": AUTHOR_OWNED_REQUEST_CHANGES_FALLBACK_TITLE,
+    }.get(verdict or "")
+    return bool(expected and expected in visible_review_text(body))
+
+
 def reviewer_declaration_lines(body: str) -> list[str]:
     # Same visibility rule as the English verdict: a comment or fenced block
     # cannot carry the declaration a reader is meant to see.
@@ -107,11 +131,13 @@ def _review_sections(body: str) -> tuple[dict[str, list[str]], list[str]]:
         heading = re.match(r"^(#{1,6})\s+(.+?)\s*#*\s*$", stripped)
         if heading:
             level, label = len(heading[1]), heading[2]
-            if label in REQUIRED_FINAL_SECTIONS:
-                if label in sections:
-                    reasons.append(f"duplicate_section:{label}")
-                sections.setdefault(label, [])
-                current, section_level = label, level
+            canonical = next((section for section, title in REVIEW_SECTION_TITLES.items()
+                              if label in (section, title)), None)
+            if canonical is not None:
+                if canonical in sections:
+                    reasons.append(f"duplicate_section:{canonical}")
+                sections.setdefault(canonical, [])
+                current, section_level = canonical, level
             elif level <= section_level:
                 current = None
             continue

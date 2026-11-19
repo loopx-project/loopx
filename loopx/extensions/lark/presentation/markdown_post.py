@@ -20,7 +20,7 @@ from typing import Any
 def normalize_lark_markdown_emphasis(text: str) -> str:
     """Repair paired strong spans at provider punctuation boundaries only.
 
-    This deliberately is not a new Markdown parser. The provider still owns
+    The provider still owns
     Markdown rendering. Escapes, code, link destinations, unmatched markers and
     triple-star runs remain opaque, rather than guessing their meaning.
     """
@@ -129,17 +129,19 @@ def _normalize_strong_line(line: str) -> str:
     return "".join(chunks)
 
 
-def lark_markdown_post_content(text: str) -> str:
+def lark_markdown_post_content(text: str, *, image_keys: tuple[str, ...] = ()) -> str:
     """Render authored Markdown without CLI image fetching or link rewriting."""
     text = normalize_lark_markdown_emphasis(text)
     return json.dumps(
-        {"zh_cn": {"content": [[{"tag": "md", "text": text}]]}},
+        {"zh_cn": {"content": [[{"tag": "md", "text": text}],
+                              *[[{"tag": "img", "image_key": key}] for key in image_keys]]}},
         ensure_ascii=False,
         separators=(",", ":"),
     )
 
 
-def _single_markdown_post(value: Any, attachment_keys: tuple[str, ...] = ()) -> str | None:
+def _single_markdown_post(value: Any, attachment_keys: tuple[str, ...] = (),
+                          image_keys: tuple[str, ...] = ()) -> str | None:
     if isinstance(value, str):
         try:
             value = json.loads(value)
@@ -157,7 +159,9 @@ def _single_markdown_post(value: Any, attachment_keys: tuple[str, ...] = ()) -> 
     if locale.get("title", "") != "":
         return None
     rows = locale.get("content")
-    if not isinstance(rows, list) or len(rows) != 1:
+    if not isinstance(rows, list) or len(rows) != 1 + len(image_keys):
+        return None
+    if rows[1:] != [[{"tag": "img", "image_key": key}] for key in image_keys]:
         return None
     row = rows[0]
     if not isinstance(row, list) or len(row) != 1:
@@ -170,7 +174,8 @@ def _single_markdown_post(value: Any, attachment_keys: tuple[str, ...] = ()) -> 
     )
 
 
-def lark_markdown_preview_matches(*, text: str, payload: Mapping[str, Any], attachment_keys: tuple[str, ...] = ()) -> bool:
+def lark_markdown_preview_matches(*, text: str, payload: Mapping[str, Any],
+                                  attachment_keys: tuple[str, ...] = (), image_keys: tuple[str, ...] = ()) -> bool:
     data = payload.get("data")
     calls = payload.get("api")
     if calls is None and isinstance(data, Mapping):
@@ -182,13 +187,13 @@ def lark_markdown_preview_matches(*, text: str, payload: Mapping[str, Any], atta
     return (
         isinstance(body, Mapping)
         and body.get("msg_type") == "post"
-        and _single_markdown_post(body.get("content"), attachment_keys)
+        and _single_markdown_post(body.get("content"), attachment_keys, image_keys)
         == normalize_lark_markdown_emphasis(text)
     )
 
 
 def _readback_post(message: Mapping[str, Any], attachment_keys: tuple[str, ...],
-                   attachment_names: tuple[str, ...]) -> tuple[str, tuple[str, ...]] | None:
+                   attachment_names: tuple[str, ...], image_keys: tuple[str, ...]) -> tuple[str, tuple[str, ...]] | None:
     if message.get("msg_type", message.get("message_type")) != "post":
         return None
     if message.get("mentions") not in (None, []):
@@ -207,7 +212,7 @@ def _readback_post(message: Mapping[str, Any], attachment_keys: tuple[str, ...],
         if isinstance(actual, Mapping) and attachment_keys:
             files = actual.get("files")
         keys = tuple(file.get("key") for file in files if isinstance(file, Mapping)) if isinstance(files, list) else ()
-        actual = _single_markdown_post(actual, keys)
+        actual = _single_markdown_post(actual, keys, image_keys)
     else:
         if attachment_keys:
             # The CLI renders the post's attachment zone as trailing file tags.
@@ -220,6 +225,18 @@ def _readback_post(message: Mapping[str, Any], attachment_keys: tuple[str, ...],
                 return None
             files = [tag.attrib for tag in tags]
             actual = "\n".join(lines[:-len(attachment_keys)]).rstrip()
+        if image_keys:
+            # The CLI renders each inline image as its own Markdown line.
+            # Consume only the exact ordered resource keys, never a caption
+            # containing a similar image token or a missing/extra image.
+            lines = actual.rstrip().splitlines()
+            images = [re.fullmatch(r"!\[Image\]\((img_[A-Za-z0-9_-]{1,240})\)", line)
+                      for line in lines[-len(image_keys):]]
+            if len(images) != len(image_keys) or any(match is None for match in images):
+                return None
+            if tuple(match[1] for match in images) != image_keys:
+                return None
+            actual = "\n".join(lines[:-len(image_keys)]).rstrip()
     if not isinstance(actual, str) or not isinstance(files, list) or len(files) != len(attachment_keys):
         return None
     keys = []
@@ -242,9 +259,10 @@ def _readback_post(message: Mapping[str, Any], attachment_keys: tuple[str, ...],
 
 def lark_markdown_readback_attachment_keys(*, text: str, message: Mapping[str, Any],
                                          attachment_keys: tuple[str, ...] = (),
-                                         attachment_names: tuple[str, ...] = ()) -> tuple[str, ...] | None:
+                                         attachment_names: tuple[str, ...] = (),
+                                         image_keys: tuple[str, ...] = ()) -> tuple[str, ...] | None:
     """Resolve keys only from the exact post; this alone never verifies files."""
-    parsed = _readback_post(message, attachment_keys, attachment_names)
+    parsed = _readback_post(message, attachment_keys, attachment_names, image_keys)
     if parsed is None:
         return None
     actual, keys = parsed
@@ -255,7 +273,7 @@ def lark_markdown_readback_attachment_keys(*, text: str, message: Mapping[str, A
 
 def lark_markdown_readback_matches(*, text: str, message: Mapping[str, Any],
                                  attachment_keys: tuple[str, ...] = (),
-                                 attachment_names: tuple[str, ...] = ()) -> bool:
+                                 attachment_names: tuple[str, ...] = (), image_keys: tuple[str, ...] = ()) -> bool:
     """Accept the raw post or CLI's md text, never a plain-text lookalike."""
     return lark_markdown_readback_attachment_keys(text=text, message=message,
-        attachment_keys=attachment_keys, attachment_names=attachment_names) is not None
+        attachment_keys=attachment_keys, attachment_names=attachment_names, image_keys=image_keys) is not None

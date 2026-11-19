@@ -61,6 +61,24 @@ test("a Turn's recorded provider supersedes the opening provider", async t => {
   if (observed.status === "runtime_reported") assert.equal(observed.provider, "Anthropic");
 });
 
+test("completed Turn identity is reported with active_turn_verified=false only when allow_completed_turn is set", async t => {
+  const input = await fixture(t, [
+    record("session_meta", {id: "current", model_provider: "deepseek"}),
+    start("done"),
+    context("done", "deepseek-flash", "high"),
+    record("event_msg", {type: "task_complete", turn_id: "done"}),
+  ]);
+  assert.deepEqual(await readCodexExecutionIdentity(input), {status: "unavailable", reason: "no_active_turn"});
+  const observed = await readCodexExecutionIdentity({...input, allow_completed_turn: true});
+  assert.equal(observed.status, "runtime_reported");
+  if (observed.status === "runtime_reported") {
+    assert.equal(observed.model, "deepseek-flash");
+    assert.equal(observed.provider, "DeepSeek");
+    assert.equal(observed.reasoning_effort, "high");
+    assert.equal(observed.active_turn_verified, false);
+  }
+});
+
 test("missing effort remains null; source stays in its selected home", async t => {
   const input = await fixture(t, [meta(), start(), context("new", "example-model-2", null)]);
   const observed = await readCodexExecutionIdentity(input);

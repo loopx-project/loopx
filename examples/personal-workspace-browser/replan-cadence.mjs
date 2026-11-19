@@ -25,6 +25,8 @@ export const replanCadenceScenario = {
     let context;
     let heldReadback;
     let goalApplyCount = 0;
+    let goalReadCount = 0;
+    const goalPreviews = [];
     function holdGoalReadback() {
       let started, release;
       const readback = {
@@ -43,6 +45,8 @@ export const replanCadenceScenario = {
             await page.route(`**/api/chat/${endpoint}**`, async (route) => {
               const parsed = new URL(route.request().url());
               if (parsed.pathname.endsWith("/goal-configuration/apply")) goalApplyCount++;
+              if (parsed.pathname.endsWith("/goal-configuration/preview")) goalPreviews.push(route.request().postDataJSON());
+              if (parsed.pathname === "/api/chat/goal-configuration" && route.request().method() === "GET") goalReadCount++;
               const response = await fetchWorkspaceBackend(route, authority.url);
               if (heldReadback && parsed.pathname === "/api/chat/goal-configuration" && route.request().method() === "GET") {
                 const pending = heldReadback;
@@ -68,23 +72,32 @@ export const replanCadenceScenario = {
         if (!settled.ok()) throw new Error(await settled.text());
       }
 
-      async function openMachineCadence() {
-        await page.getByRole("button", { name: "设置", exact: true }).click();
+      async function selectMachineCadence() {
+        await page.getByRole("radio", { name: "本机设置", exact: true }).check();
         await page.locator(".personal-settings-tabs").getByRole("button", { name: "能力中心", exact: true }).click();
         await page.getByRole("navigation", { name: "机器能力目录" }).getByRole("button", { name: /Goal 复盘与步幅/ }).click();
       }
-      await openMachineCadence();
+      await page.getByRole("button", { name: "设置", exact: true }).click();
+      await selectMachineCadence();
       const unit = page.getByLabel(/^复核计数依据/);
       const count = page.getByLabel("两次复核间的数量", { exact: true });
       const strategy = page.getByLabel(/^步幅策略/);
       await waitForInputValue(count, "6");
-      if (await strategy.inputValue() !== "off") throw new Error("Stride must default off");
+      if (await strategy.inputValue() !== "evidence_conditioned_v1") throw new Error("Stride must default to evidence_conditioned_v1");
       if (await unit.inputValue() !== "effective_turns") throw new Error("Product default is not settled work Turns");
+      const yardstick = page.getByLabel(/^复核衡量标准/);
+      assert.equal(await yardstick.isChecked(), false, "Yardstick remains a separate explicit opt-in");
+      const horizonGoal = page.getByLabel(/^在规划视野中显示 Goal/);
+      const advanced = page.getByText("高级设置", {exact: true});
+      assert.equal(await horizonGoal.isVisible(), false, "ordinary configuration does not require a Goal-context opt-in");
+      await advanced.click();
+      assert.equal(await horizonGoal.isChecked(), true);
+      await advanced.click();
       await page.screenshot({ path: resolve(outputDir, "replan-cadence-product-default.png"), animations: "disabled" });
       const preview = await request(base + "/preview", legacy);
       await request(base + "/apply", { ...legacy, expected_plan_revision: preview.plan_revision });
       await page.reload({ waitUntil: "networkidle" });
-      await openMachineCadence();
+      await selectMachineCadence();
       await waitForInputValue(count, "2");
       if (await unit.inputValue() !== "completed_todos" || await count.inputValue() !== "2") throw new Error("Legacy cadence was reinterpreted");
       let stored = (await request(base)).machine_configuration.namespaces.todo_replan_cadence;
@@ -104,7 +117,7 @@ export const replanCadenceScenario = {
       if (stored.count_unit !== "effective_turns" || stored.count !== 3 || "completed_todos" in stored) throw new Error("Migration did not persist the selected unit");
       if (stored.stride_strategy !== "evidence_conditioned_v1" || stored.schema_version !== "todo_replan_cadence_machine_defaults_v2") throw new Error("Machine stride version not recorded");
       await page.screenshot({ path: resolve(outputDir, "replan-cadence-machine.png"), animations: "disabled" });
-      await page.getByRole("radio", { name: "单个 Goal", exact: true }).check();
+      await page.getByRole("radio", { name: "Goal 设置", exact: true }).check();
       await page.getByRole("combobox", { name: "目标 Goal", exact: true }).selectOption("multi-agent-projection");
       await page.getByRole("navigation", { name: "Goal 能力目录" }).getByRole("button", { name: /Goal 复盘与步幅/ }).click();
       await waitForInputValue(count, "3");
@@ -142,33 +155,40 @@ export const replanCadenceScenario = {
       }
       async function reopenGoalCadence() {
         await page.reload({ waitUntil: "networkidle" });
-        await page.getByRole("button", { name: "设置", exact: true }).click();
-        await page.locator(".personal-settings-tabs").getByRole("button", { name: "能力中心", exact: true }).click();
-        await page.getByRole("radio", { name: "单个 Goal", exact: true }).check();
-        await page.getByRole("combobox", { name: "目标 Goal", exact: true }).selectOption("multi-agent-projection");
-        await page.getByRole("navigation", { name: "Goal 能力目录" }).getByRole("button", { name: /Goal 复盘与步幅/ }).click();
+        const english = await page.locator("html").getAttribute("lang") === "en";
+        const settings = page.getByRole("region", { name: english ? "Settings" : "设置", exact: true });
+        await settings.waitFor();
+        if (!await settings.getByRole("radio", { name: english ? "One Goal" : "Goal 设置", exact: true }).isChecked()
+          || await settings.getByRole("combobox", { name: english ? "Target Goal" : "目标 Goal", exact: true }).inputValue() !== "multi-agent-projection") {
+          throw new Error("Reload did not restore the explicit Goal settings target");
+        }
+        await settings.getByRole("navigation", { name: english ? "Goal capability catalog" : "Goal 能力目录" })
+          .getByRole("button", { name: english ? /Goal review and stride/ : /Goal 复盘与步幅/ }).click();
       }
-      // The same real configuration owner supports the independent horizon
-      // switch without pinning cadence or changing stride. Unchecked remains off.
-      const horizonGoal = page.getByLabel(/^在规划视野中显示 Goal/);
-      assert.equal(await horizonGoal.isChecked(), false);
-      await horizonGoal.check();
-      await page.getByRole("button", { name: "预览变更", exact: true }).click();
-      await applyGoalPreview();
-      await reopenGoalCadence();
+      // Default context is visible to the Agent without an owner setup step.
+      // Advanced opt-out persists without pinning cadence or changing stride.
+      assert.equal(await horizonGoal.isVisible(), false);
+      await advanced.click();
       assert.equal(await horizonGoal.isChecked(), true);
-      let horizonReadback = await readGoalCadence();
-      assert.equal(horizonReadback.current.planning_horizon_goal, true);
-      assert.equal(horizonReadback.current.stride_strategy, "evidence_conditioned_v1");
-      assert.equal(horizonReadback.current.count, undefined);
-      await page.screenshot({ path: resolve(outputDir, "planning-horizon-goal-enabled.png"), animations: "disabled" });
       await horizonGoal.uncheck();
       await page.getByRole("button", { name: "预览变更", exact: true }).click();
       await applyGoalPreview();
       await reopenGoalCadence();
+      await advanced.click();
       assert.equal(await horizonGoal.isChecked(), false);
-      horizonReadback = await readGoalCadence();
+      let horizonReadback = await readGoalCadence();
       assert.equal(horizonReadback.current.planning_horizon_goal, false);
+      assert.equal(horizonReadback.current.stride_strategy, "evidence_conditioned_v1");
+      assert.equal(horizonReadback.current.count, undefined);
+      await page.screenshot({ path: resolve(outputDir, "planning-horizon-goal-disabled.png"), animations: "disabled" });
+      await horizonGoal.check();
+      await page.getByRole("button", { name: "预览变更", exact: true }).click();
+      await applyGoalPreview();
+      await reopenGoalCadence();
+      await advanced.click();
+      assert.equal(await horizonGoal.isChecked(), true);
+      horizonReadback = await readGoalCadence();
+      assert.equal(horizonReadback.current.planning_horizon_goal, true);
       // Restore the sparse pre-existing scenario before its cadence transitions.
       await page.getByRole("button", { name: "编辑 JSON", exact: true }).click();
       await page.locator("#goal-configuration-json").fill(JSON.stringify({stride_strategy: "evidence_conditioned_v1"}));
@@ -251,19 +271,19 @@ export const replanCadenceScenario = {
       await unit.focus();
       await page.keyboard.press("Tab");
       await page.keyboard.press("Tab");
-      assert.equal(await horizonGoal.evaluate((element) => element === document.activeElement), true, "Horizon switch is keyboard reachable");
-      await page.keyboard.press("Tab");
       if (!(await strategy.evaluate((element) => element === document.activeElement))) throw new Error("Strategy is not keyboard reachable");
+      await page.keyboard.press("Tab");
+      assert.equal(await yardstick.evaluate((element) => element === document.activeElement), true, "Measurement review is keyboard reachable");
+      await page.keyboard.press("Tab");
+      assert.equal(await advanced.evaluate((element) => element === document.activeElement), true, "Advanced settings is keyboard reachable");
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("Tab");
+      assert.equal(await horizonGoal.evaluate((element) => element === document.activeElement), true, "Advanced horizon opt-out is keyboard reachable");
       await page.screenshot({ path: resolve(outputDir, "replan-cadence-goal-mobile.png"), animations: "disabled" });
       if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)) throw new Error("Cadence editor overflowed");
       await page.setViewportSize({ width: 1512, height: 982 });
       await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "en"));
-      await page.reload({ waitUntil: "networkidle" });
-      await page.getByRole("button", { name: "Settings", exact: true }).click();
-      await page.locator(".personal-settings-tabs").getByRole("button", { name: "Capability Center", exact: true }).click();
-      await page.getByRole("radio", { name: "One Goal", exact: true }).check();
-      await page.getByRole("combobox", { name: "Target Goal", exact: true }).selectOption("multi-agent-projection");
-      await page.getByRole("navigation", { name: "Goal capability catalog" }).getByRole("button", { name: /Goal review and stride/ }).click();
+      await reopenGoalCadence();
       const englishUnit = page.getByLabel(/^Review after/);
       const englishCount = page.getByLabel("Number between reviews", { exact: true });
       const englishStrategy = page.getByLabel(/^Stride strategy/);
@@ -284,14 +304,9 @@ export const replanCadenceScenario = {
       await request(base + "/apply", { ...remove, expected_plan_revision: removalPreview.plan_revision });
       const inherited = (await readGoalCadence()).effective_configuration;
       if (inherited.source !== "capability_default" || inherited.configuration.count_unit !== "effective_turns" || inherited.configuration.count !== 6) throw new Error("Removing device policy did not restore product default");
-      await page.reload({ waitUntil: "networkidle" });
-      await page.getByRole("button", { name: "Settings", exact: true }).click();
-      await page.locator(".personal-settings-tabs").getByRole("button", { name: "Capability Center", exact: true }).click();
-      await page.getByRole("radio", { name: "One Goal", exact: true }).check();
-      await page.getByRole("combobox", { name: "Target Goal", exact: true }).selectOption("multi-agent-projection");
-      await page.getByRole("navigation", { name: "Goal capability catalog" }).getByRole("button", { name: /Goal review and stride/ }).click();
+      await reopenGoalCadence();
       await waitForInputValue(englishCount, "6");
-      if (await englishUnit.inputValue() !== "effective_turns" || await englishStrategy.inputValue() !== "off") throw new Error("Goal editor did not restore product defaults");
+      if (await englishUnit.inputValue() !== "effective_turns" || await englishStrategy.inputValue() !== "evidence_conditioned_v1") throw new Error("Goal editor did not restore product defaults");
       await englishCount.fill("5");
       await page.getByRole("button", { name: "Preview changes", exact: true }).click();
       const failedReadback = holdGoalReadback();
@@ -301,14 +316,88 @@ export const replanCadenceScenario = {
       const committedApplies = goalApplyCount;
       failedReadback.release(true);
       await page.getByRole("alert").filter({ hasText: "Configuration readback unavailable" }).waitFor();
-      assert.equal(await englishCount.count(), 0, "A failed readback must not expose a stale editor");
+      const recovery = page.locator(".personal-capability-recovery");
+      await recovery.getByText("Configuration written; readback unverified", {exact: true}).waitFor();
+      assert.equal(await englishCount.inputValue(), "5", "A failed readback preserves the submitted draft");
+      for (const control of [englishCount, englishUnit, englishStrategy,
+        page.getByRole("button", {name: "Edit JSON", exact: true}),
+        page.getByRole("button", {name: "Preview changes", exact: true}),
+        page.getByRole("button", {name: "Apply preview", exact: true})]) {
+        assert.equal(await control.isDisabled(), true, "Unverified readback cannot admit editing, preview or another apply");
+      }
+      assert.equal(await page.locator(".personal-capability-preview").count(), 0, "The committed preview is invalidated even when readback fails");
       assert.equal((await readGoalCadence()).current.count, 5, "Readback failure does not undo the committed write");
       await page.screenshot({ path: resolve(outputDir, "replan-cadence-readback-error.png"), animations: "disabled" });
-      await page.getByRole("button", { name: "Retry", exact: true }).click();
-      await page.getByRole("navigation", { name: "Goal capability catalog" }).getByRole("button", { name: /Goal review and stride/ }).click();
+      const readsBeforeRetry = goalReadCount;
+      const previewsBeforeRetry = goalPreviews.length;
+      await recovery.getByRole("button", {name: "Refresh source value", exact: true}).click();
+      await recovery.waitFor({state: "hidden"});
+      await page.getByRole("alert").filter({hasText: "Configuration readback unavailable"}).waitFor({state: "hidden"});
       await waitForInputValue(englishCount, "5");
+      assert.equal(await englishCount.isDisabled(), false, "The verified value reopens the same editor");
+      assert.equal(goalReadCount, readsBeforeRetry + 1, "Recovery rereads the current Goal configuration");
+      assert.equal(goalPreviews.length, previewsBeforeRetry, "Readback recovery must not prepare another mutation");
       assert.equal(goalApplyCount, committedApplies, "Readback recovery must not submit the mutation again");
-      return { coverageEntries: context.coverageEntries, note: "Packaged default six effective Turns, machine v0→v2 migration, strategy-only JSON/form inheritance across later machine changes, equal-value explicit pin and interval-only clear, default-off/versioned strategy, invalid preview, Goal override/clear, device removal, mobile keyboard and English labels through real handlers. Delayed post-apply readback keeps editing closed across capability changes; failed readback recovers the committed value without another mutation." };
+      await englishCount.fill("4");
+      assert.equal(await page.getByRole("button", {name: "Apply preview", exact: true}).isDisabled(), true,
+        "Editing after recovery still requires a fresh preview");
+      await page.getByRole("button", {name: "Preview changes", exact: true}).click();
+      await page.locator(".personal-capability-preview").waitFor();
+      assert.equal(goalPreviews.length, previewsBeforeRetry + 1);
+      assert.equal(goalPreviews.at(-1).configuration.count, 4, "The new preview uses the edited value");
+      assert.equal((await readGoalCadence()).current.count, 5, "Preview does not replace the recovered committed value");
+      await applyGoalPreview("Apply preview");
+      await page.waitForFunction(element => !element.disabled, await englishCount.elementHandle());
+      assert.equal(goalApplyCount, committedApplies + 1);
+      assert.equal((await readGoalCadence()).current.count, 4, "A fresh preview can be applied after readback recovery");
+      // A pinned interval does not suppress the independent live Yardstick
+      // preference. Editing that interval does not silently pin the switch.
+      const measurementPreference = {namespace: "todo_replan_cadence", namespace_configuration: {
+        schema_version: "todo_replan_cadence_machine_defaults_v2", count_unit: "effective_turns", count: 6,
+        stride_strategy: "evidence_conditioned_v1", yardstick_enabled: true,
+      }};
+      const measurementPreview = await request(base + "/preview", measurementPreference);
+      await request(base + "/apply", {...measurementPreference, expected_plan_revision: measurementPreview.plan_revision});
+      await reopenGoalCadence();
+      const englishYardstick = page.getByLabel(/^Review measurement criteria/);
+      await waitForInputValue(englishCount, "4");
+      assert.equal(await englishYardstick.isChecked(), true);
+      assert.equal((await readGoalCadence()).current.yardstick_enabled, undefined);
+      await englishCount.fill("3");
+      await page.getByRole("button", {name: "Preview changes", exact: true}).click();
+      await applyGoalPreview("Apply preview");
+      await reopenGoalCadence();
+      assert.equal((await readGoalCadence()).current.yardstick_enabled, undefined,
+        "saving a different option must preserve live measurement inheritance");
+      assert.equal(await englishYardstick.isChecked(), true);
+      await englishYardstick.uncheck();
+      await page.getByRole("button", {name: "Preview changes", exact: true}).click();
+      await applyGoalPreview("Apply preview");
+      await reopenGoalCadence();
+      assert.equal(await englishYardstick.isChecked(), false);
+      assert.equal((await readGoalCadence()).current.yardstick_enabled, false);
+      assert.equal((await request(base)).machine_configuration.namespaces.todo_replan_cadence.yardstick_enabled, true);
+      await page.screenshot({path: resolve(outputDir, "yardstick-goal-explicit-off-desktop.png"), animations: "disabled"});
+      await page.setViewportSize({width: 390, height: 844});
+      await englishYardstick.scrollIntoViewIfNeeded();
+      await page.screenshot({path: resolve(outputDir, "yardstick-goal-explicit-off-mobile.png"), animations: "disabled"});
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
+      await page.setViewportSize({width: 1512, height: 982});
+      await englishYardstick.check();
+      await page.getByRole("button", {name: "Preview changes", exact: true}).click();
+      await applyGoalPreview("Apply preview");
+      await reopenGoalCadence();
+      assert.equal((await readGoalCadence()).current.yardstick_enabled, true);
+      await page.getByRole("button", {name: "Edit JSON", exact: true}).click();
+      await page.locator("#goal-configuration-json").fill(JSON.stringify({count_unit: "effective_turns", count: 3, stride_strategy: "off"}));
+      await page.getByRole("button", {name: "Back to form", exact: true}).click();
+      await page.getByRole("button", {name: "Preview changes", exact: true}).click();
+      await applyGoalPreview("Apply preview");
+      await reopenGoalCadence();
+      assert.equal((await readGoalCadence()).current.yardstick_enabled, undefined);
+      assert.equal(await englishYardstick.isChecked(), true, "clearing only the switch restores independent device inheritance");
+      await page.screenshot({path: resolve(outputDir, "yardstick-goal-inherited-desktop.png"), animations: "disabled"});
+      return { coverageEntries: context.coverageEntries, note: "Packaged default six effective Turns, machine v0→v2 migration, strategy-only JSON/form inheritance across later machine changes, equal-value explicit pin and interval-only clear, default-off/versioned strategy, invalid preview, Goal override/clear, device removal, mobile keyboard and English labels through real handlers. Independent default-off Yardstick inheritance, explicit false/true and sparse JSON/form clear reuse the same revision-checked handler. Delayed post-apply readback keeps editing closed across capability changes; failed readback retains the disabled draft and invalidates its preview, recovers through GET only, then admits a new explicitly previewed change." };
     } catch (error) {
       if (context) {
         await context.page.screenshot({ path: resolve(outputDir, "replan-cadence-failure.png"), animations: "disabled" });

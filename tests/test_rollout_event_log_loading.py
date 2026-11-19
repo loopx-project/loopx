@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 from pathlib import Path
@@ -60,28 +61,162 @@ def test_limited_rollout_event_load_keeps_only_a_bounded_window(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    class TrackedEvent(dict[str, int]):
+    class TrackedEvent(dict[str, object]):
         alive = 0
         peak = 0
 
-        def __init__(self, index: int) -> None:
-            super().__init__(index=index)
+        def __init__(self, value: dict[str, object]) -> None:
+            super().__init__(value)
             type(self).alive += 1
             type(self).peak = max(type(self).peak, type(self).alive)
 
         def __del__(self) -> None:
             type(self).alive -= 1
 
-    monkeypatch.setattr(
-        rollout_event_log,
-        "iter_rollout_events",
-        lambda _path: (TrackedEvent(index) for index in range(100)),
-    )
+    log = tmp_path / "events.jsonl"
+    log.write_text("".join(json.dumps({
+        "schema_version": rollout_event_log.ROLLOUT_EVENT_SCHEMA_VERSION,
+        "index": index,
+    }) + "\n" for index in range(100)), encoding="utf-8")
+    original_loads = json.loads
 
-    events = rollout_event_log.load_rollout_events(tmp_path / "unused", limit=3)
+    def tracked_loads(value):
+        return TrackedEvent(original_loads(value))
+
+    monkeypatch.setattr(rollout_event_log.json, "loads", tracked_loads)
+
+    events = rollout_event_log.load_rollout_events(log, limit=3)
 
     assert [event["index"] for event in events] == [97, 98, 99]
     assert TrackedEvent.peak <= 4
+
+
+def test_recent_rollout_read_does_not_scan_unneeded_history(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    log = tmp_path / "events.jsonl"
+    records = [{"schema_version": rollout_event_log.ROLLOUT_EVENT_SCHEMA_VERSION,
+                "index": index, "summary": "retained history " * 32}
+               for index in range(3000)]
+    log.write_text("".join(json.dumps(row) + "\n" for row in records), encoding="utf-8")
+    original_open = Path.open
+    observed = {"bytes": 0}
+
+    class CountedRead:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return self.handle.__exit__(*args)
+
+        def __getattr__(self, name):
+            return getattr(self.handle, name)
+
+        def __iter__(self):
+            for line in self.handle:
+                observed["bytes"] += len(line)
+                yield line
+
+        def read(self, size=-1):
+            value = self.handle.read(size)
+            observed["bytes"] += len(value)
+            return value
+
+    def counted_open(path, mode="r", *args, **kwargs):
+        handle = original_open(path, mode, *args, **kwargs)
+        return CountedRead(handle) if path == log and mode == "rb" else handle
+
+    monkeypatch.setattr(Path, "open", counted_open)
+
+    assert load_rollout_events(log, limit=3) == records[-3:]
+    assert observed["bytes"] < log.stat().st_size // 4
+
+
+@pytest.mark.parametrize("limit", [1, 2, 7, 100])
+@pytest.mark.parametrize("final_newline", [False, True])
+def test_recent_rollout_read_counts_valid_records_and_preserves_complete_rows(
+    tmp_path: Path, limit: int, final_newline: bool,
+) -> None:
+    log = tmp_path / "events.jsonl"
+    records = [{"schema_version": rollout_event_log.ROLLOUT_EVENT_SCHEMA_VERSION,
+                "index": index, "summary": "雪🙂" * (25000 if index == 4 else 3)}
+               for index in range(8)]
+    invalid = b'\xff\n{"torn":\n[]\nnull\n{"schema_version":"other"}\n\n'
+    contents = b"".join(json.dumps(row, ensure_ascii=False).encode("utf-8")
+                        + b"\n" + invalid for row in records[:-1])
+    contents += json.dumps(records[-1], ensure_ascii=False).encode("utf-8")
+    contents += b"\n" if final_newline else b""
+    log.write_bytes(contents)
+
+    assert load_rollout_events(log, limit=limit) == records[-limit:]
+    assert log.read_bytes() == contents
+
+
+@pytest.mark.parametrize("limit", [None, 0, -1])
+def test_unlimited_rollout_read_retains_its_complete_history(
+    tmp_path: Path, limit: int | None,
+) -> None:
+    log = tmp_path / "events.jsonl"
+    records = [{"schema_version": rollout_event_log.ROLLOUT_EVENT_SCHEMA_VERSION,
+                "index": index} for index in range(5)]
+    log.write_text("\n".join(json.dumps(row) for row in records), encoding="utf-8")
+    assert load_rollout_events(log, limit=limit) == records
+
+
+def test_recent_rollout_read_reopens_the_current_file(tmp_path: Path) -> None:
+    log = tmp_path / "events.jsonl"
+    records = [{"schema_version": rollout_event_log.ROLLOUT_EVENT_SCHEMA_VERSION,
+                "index": index} for index in range(3)]
+    log.write_text(json.dumps(records[0]) + "\n", encoding="utf-8")
+    assert load_rollout_events(log, limit=2) == records[:1]
+    with log.open("a", encoding="utf-8") as handle:
+        handle.write("\n".join(json.dumps(row) for row in records[1:]))
+    assert load_rollout_events(log, limit=2) == records[1:]
+
+
+def test_recent_rollout_read_preserves_nonseekable_input(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    log = tmp_path / "events.jsonl"
+    records = [{"schema_version": rollout_event_log.ROLLOUT_EVENT_SCHEMA_VERSION,
+                "index": index} for index in range(4)]
+    contents = "\n".join(json.dumps(row) for row in records).encode()
+    original_open = Path.open
+
+    class NonseekableRead(io.BytesIO):
+        def seekable(self):
+            return False
+
+        def seek(self, *args):
+            raise io.UnsupportedOperation("not seekable")
+
+    def opened(path, mode="r", *args, **kwargs):
+        return NonseekableRead(contents) if path == log else original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", opened)
+    assert load_rollout_events(log, limit=2) == records[-2:]
+
+
+@pytest.mark.parametrize("limit", [None, 1])
+def test_rollout_read_keeps_missing_file_behavior(tmp_path: Path, limit: int | None) -> None:
+    assert load_rollout_events(tmp_path / "missing.jsonl", limit=limit) == []
+
+
+@pytest.mark.parametrize("row,message", [
+    ("{", "must contain valid JSON"),
+    ("[]", "must contain an object"),
+    ('{"schema_version":"other"}', "must use loopx_rollout_event_v0"),
+])
+def test_strict_rollout_read_still_reports_the_original_line(
+    tmp_path: Path, row: str, message: str,
+) -> None:
+    log = tmp_path / "events.jsonl"
+    log.write_text("\n" + row + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="rollout event log line 2 " + message):
+        list(iter_rollout_events(log, strict=True))
 
 
 @pytest.mark.parametrize("idempotent", [False, True])
@@ -131,8 +266,89 @@ def test_append_starts_a_new_row_after_a_torn_final_record(
     else:
         written = append_rollout_event(log_path, event)
 
-    assert torn_record + b"\n" in log_path.read_bytes()
+    assert torn_record not in log_path.read_bytes()
     assert load_rollout_events(log_path) == [existing, written]
+
+
+@pytest.mark.parametrize("idempotent", [False, True])
+def test_unterminated_json_row_is_not_an_existing_record(
+    tmp_path: Path,
+    idempotent: bool,
+) -> None:
+    """A row missing its committing newline is not a deduplication record."""
+    log_path = tmp_path / "rollout-event-log.jsonl"
+    event = build_rollout_event(
+        goal_id="goal-a",
+        event_kind="quota_should_run",
+        agent_id="agent-a",
+        run_id="turn-a",
+        status="run",
+        recorded_at="2026-09-23T00:00:00Z",
+    )
+    encoded = json.dumps(event, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    log_path.write_bytes(encoded)
+    # The diagnostic reader still sees the decodable tail row.
+    assert load_rollout_events(log_path) == [event]
+
+    if idempotent:
+        written, appended = append_rollout_event_once(
+            log_path,
+            event,
+            identity_fields=("goal_id", "event_kind", "agent_id", "run_id"),
+        )
+        assert appended is True
+    else:
+        written = append_rollout_event(log_path, event)
+
+    # The tail was dropped and the event committed exactly once.
+    assert log_path.read_bytes() == encoded + b"\n"
+    assert load_rollout_events(log_path) == [event]
+    assert written == event
+
+
+def test_a_torn_record_is_dropped_before_the_next_row(
+    tmp_path: Path,
+) -> None:
+    """Uncommitted torn bytes vanish; the log stays readable by every reader.
+
+    A torn write can hold a complete JSON object and still be missing its
+    committing newline.  The append owner drops those bytes instead of finishing
+    them, so no reader treats a row its writer never committed as an admission
+    and older strict readers still parse the history.
+    """
+
+    log_path = tmp_path / "rollout-event-log.jsonl"
+    committed = build_rollout_event(
+        goal_id="goal-a",
+        event_kind="quota_should_run",
+        agent_id="agent-a",
+        run_id="turn-before",
+        recorded_at="2026-09-22T00:00:00Z",
+    )
+    torn = (
+        b'{"agent_id":"agent-a","event_kind":"quota_should_run",'
+        b'"goal_id":"goal-a","run_id":"turn-lost",'
+        b'"schema_version":"loopx_rollout_event_v0"}'
+    )
+    log_path.write_bytes(
+        json.dumps(committed, sort_keys=True).encode("utf-8") + b"\n" + torn
+    )
+    appended = build_rollout_event(
+        goal_id="goal-a",
+        event_kind="todo_complete",
+        agent_id="agent-a",
+        recorded_at="2026-09-23T00:00:00Z",
+    )
+
+    append_rollout_event(log_path, appended)
+
+    assert torn not in log_path.read_bytes()
+    assert log_path.read_bytes() == (
+        json.dumps(committed, sort_keys=True).encode("utf-8") + b"\n"
+        + json.dumps(appended, sort_keys=True).encode("utf-8") + b"\n"
+    )
+    assert load_rollout_events(log_path) == [committed, appended]
+    assert list(iter_rollout_events(log_path, strict=True)) == [committed, appended]
 
 
 @pytest.mark.parametrize("idempotent", [False, True])

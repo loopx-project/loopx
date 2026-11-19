@@ -56,6 +56,17 @@ branch is no longer present. The command never refreshes remote refs
 implicitly; callers that need new remote evidence must fetch and reconcile it
 explicitly. It does not expose the local repo path, validation stdout or stderr,
 raw issue body/comment content, external remotes, or raw git output.
+Git pathnames that are valid UTF-8 are preserved literally. A pathname
+with invalid UTF-8 is shown only as a `git-bytes:<repr(bytes)>` diagnostic;
+the artifact records `changed_files_unrepresentable_count`, and
+`review_packet.ready` stays false because that diagnostic is not an
+openable repo-relative UTF-8 pathname. The list fields remain capped at 20
+display entries, while `changed_file_count` and the unrepresentable count are
+derived from every unique Git path across all change sources before that
+projection. Untracked directories are expanded to their files explicitly,
+rather than inheriting Git's directory-summary setting. Readiness therefore
+does not depend on diff order or untracked-file display configuration. Reviewers must
+inspect the local checkout before proceeding when the count is nonzero.
 Without `--execute`, the command is a dry-run plan and does not inspect or
 modify the local repository.
 

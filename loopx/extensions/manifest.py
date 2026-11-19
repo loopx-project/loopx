@@ -638,7 +638,7 @@ def _integration_profile(
                 f"{operation_context} request_schema and result_schema must be "
                 "versioned lower-snake tokens"
             )
-        normalized_operation = {
+        normalized_operation: dict[str, Any] = {
             "id": operation_id,
             "effect_class": effect_class,
             "required_permission": permission,

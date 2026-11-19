@@ -47,7 +47,7 @@ def _apply(runtime_root: Path, profile: str) -> None:
     )
 
 
-def test_manager_runtime_profile_is_explicit_and_fail_closed() -> None:
+def test_manager_runtime_default_uses_host_tools_and_invalid_choices_are_rejected() -> None:
     assert normalize_manager_runtime_profile(
         {
             "schema_version": "manager_runtime_profile_v0",
@@ -62,9 +62,10 @@ def test_manager_runtime_profile_is_explicit_and_fail_closed() -> None:
             }
         )
     default = effective_manager_runtime_profile(None)
-    assert default["runtime_profile"] == "restricted"
-    assert default["sandbox"] == "read-only"
-    assert default["standing_grant"] == "none"
+    assert default["runtime_profile"] == "trusted_owner"
+    assert default["sandbox"] == "danger-full-access"
+    assert default["standing_grant"] == "capability_default"
+    assert {"filesystem", "shell", "git", "web"} <= set(default["tool_classes"])
 
 
 def test_trusted_owner_profile_roundtrips_through_machine_configuration(
@@ -84,8 +85,10 @@ def test_trusted_owner_profile_roundtrips_through_machine_configuration(
     assert str(effective["configuration_revision"]).startswith("sha256:")
 
 
-def test_external_audience_does_not_inherit_owner_host_tools(tmp_path: Path) -> None:
-    _apply(tmp_path, "trusted_owner")
+@pytest.mark.parametrize("configured", [False, True])
+def test_external_audience_does_not_inherit_owner_host_tools(tmp_path: Path, configured) -> None:
+    if configured:
+        _apply(tmp_path, "trusted_owner")
 
     effective = load_effective_manager_runtime_profile(
         tmp_path,
@@ -101,13 +104,16 @@ def test_external_audience_does_not_inherit_owner_host_tools(tmp_path: Path) -> 
 
 
 @pytest.mark.parametrize("profile", [None, "restricted", "trusted_owner"])
-def test_owner_audience_proof_does_not_replace_the_machine_grant(tmp_path: Path, profile) -> None:
+def test_owner_audience_uses_default_but_respects_an_explicit_restriction(tmp_path: Path, profile) -> None:
     if profile is not None:
         _apply(tmp_path, profile)
     effective = load_effective_manager_runtime_profile(tmp_path,
         channel_id="manager.external.native.fixture", owner_manager_audience=True)
-    assert effective["runtime_profile"] == (profile or "restricted")
-    assert effective["standing_grant"] == ("machine_configuration" if profile == "trusted_owner" else "none")
+    assert effective["runtime_profile"] == (profile or "trusted_owner")
+    assert effective["standing_grant"] == (
+        "capability_default" if profile is None
+        else "machine_configuration" if profile == "trusted_owner" else "none"
+    )
 
 
 def test_unrelated_machine_configuration_does_not_change_manager_revision() -> None:
@@ -167,3 +173,16 @@ def test_invalid_stored_profile_falls_back_visibly_to_restricted(
     assert effective["sandbox"] == "read-only"
     assert effective["source"] == "invalid_configuration_fallback"
     assert effective["repair"].startswith("Open machine capability settings")
+
+
+def test_explicit_restricted_choice_keeps_the_read_only_boundary(tmp_path: Path) -> None:
+    _apply(tmp_path, "restricted")
+    for channel, owner in [("manager", False), ("manager.external.owner", True)]:
+        effective = load_effective_manager_runtime_profile(
+            tmp_path, channel_id=channel, owner_manager_audience=owner,
+        )
+        assert effective["runtime_profile"] == "restricted"
+        assert effective["sandbox"] == "read-only"
+        assert effective["standing_grant"] == "none"
+        assert effective["tool_classes"] == ["loopx_core"]
+        assert effective["source"] == "machine_configuration"

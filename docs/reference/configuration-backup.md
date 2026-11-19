@@ -477,9 +477,11 @@ compressed archive, 512 MiB expanded tar stream, 16 MiB external/embedded
 manifest, 20,000 entries, expansion ratio 2,000, 128 KiB per extended tar header
 and 16 MiB total extended metadata. Paths have at most 64 components, 1,024
 characters and 255 UTF-8 bytes per component; JSON nesting is bounded at 64.
-Owner inspection permits 128 Goals, 128 SQLite files and 20,000 committed
-transactions per Goal. Overflow refuses publication rather than truncating a
-required inventory. Internal symlinks and hard links to earlier regular members
+Owner inspection permits 128 Goals and 128 SQLite files. The verifier reads
+committed history in bounded pages up to the captured cursor and checks the final
+projection; it does not impose a separate per-Goal transaction count limit.
+Inventory overflow refuses publication rather than truncating the inventory.
+Internal symlinks and hard links to earlier regular members
 remain inert; escaping/cyclic links, other hard-link targets, sparse or special
 files and normalized name collisions reject.
 
@@ -489,7 +491,7 @@ SQLite gets a 64 MiB process-local [hard heap limit](https://www.sqlite.org/prag
 this is why that verifier is not dispatched in the shared Effect daemon. Views
 and virtual tables cannot masquerade as authority tables. WAL-mode copies and
 unsupported/service-owned providers remain unknown and need their existing
-owner; PostgreSQL is never contacted. The normal 2 MiB RPC wire is unchanged;
+owner; PostgreSQL is never contacted. The shared [8 MiB ordinary RPC wire](canonical-snapshot-pagination.md#shared-rpc-byte-budget) remains bounded;
 only the two complete-manifest checks opt into the existing 64 MiB private-file
 transport. These unchanged bounds are approved for local POSIX File/SQLite
 inert inspection by the [recorded maintainer decision](../architecture/rfcs/complete-state-recovery-v0.md#m1-capacity-default-decision).
@@ -590,16 +592,15 @@ development load, not latency targets or proof that all maxima combine.
 | 129 File Goals | Refused: Goal inventory capacity | 0.738 | 96.8 |
 | 129 SQLite databases | Refused: SQLite inventory capacity | 0.534 | 83.7 |
 
-All refusal cases left no destination or staging directory. The real SQLite
-history regression additionally proves that **20,000 committed transactions
-are fully read**, while **20,001 refuse publication**. An earlier implementation
-incorrectly turned that overflow into an unknown component and published the
-copy. The owner now checks the canonical cursor before scanning and propagates
-the capacity error instead of treating it as unreadable source state:
+All refusal cases left no destination or staging directory. A real SQLite
+regression runs backup and verification with 20,000 and 20,001 retained
+transactions. Both have to read back the full captured history and cursor
+before publishing the inert audit. Archive byte, inventory and verifier time
+limits still apply:
 
 ```bash
 uv run --extra test python -m pytest tests/test_state_recovery.py \
-  -k real_sqlite_history_limit -q
+  -k real_sqlite_history_above_20000 -q
 ```
 
 Keep an over-limit backup complete and use the owning storage recovery process;

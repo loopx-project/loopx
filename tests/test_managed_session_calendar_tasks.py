@@ -1,0 +1,1041 @@
+"""Real native File/SQLite calendar -> Task -> Turn -> original Core result.
+
+The model is a synthetic app-server that computes an independently checked
+artifact. These cases do not qualify live-model understanding or production
+deadlines, and do not enroll any user's existing conversation.
+"""
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+import http.client
+import json
+from pathlib import Path
+import subprocess
+import sys
+import threading
+from types import SimpleNamespace
+
+import pytest
+
+from test_native_steward_private import steward as steward_fixture, finish
+from test_native_steward_turn_host import managed_fixture, cli
+from loopx.capabilities.native_chat.steward_monitor import pump_steward_monitors
+from loopx.capabilities.native_chat.session_calendar_tasks import SessionCalendarTasks
+from loopx.capabilities.periodic_report.cadence_journal import read_cadence_journal
+from loopx.capabilities.periodic_report.goal_configuration import normalize_configuration
+from loopx.agent_registry import load_goal_from_registry
+
+steward = steward_fixture
+
+
+@contextmanager
+def settings_server(steward):
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    store, runtime, _, transport, *_ = steward
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.runtime_controller = store, runtime
+    server.runtime_root = runtime.coordination_runtime_root
+    server.registry_path, server.runtime_root_override = runtime.registry_path, store.root.parent
+    server.lark_private_conversations = transport
+    server.lark_goal_topic_runtime = SimpleNamespace(health_snapshot=lambda: {}, close=lambda: None)
+    server.verbose = False
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    def request(path, body, origin=None, *, method="POST"):
+        connection = http.client.HTTPConnection(*server.server_address, timeout=20)
+        try:
+            headers = {"Content-Type": "application/json"}
+            if origin:
+                headers["Origin"] = origin
+            connection.request(method, path, None if body is None else json.dumps(body), headers=headers)
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+    try:
+        yield request
+    finally:
+        server.shutdown()
+        # This fixture lends the existing runtime to HTTP; the outer steward
+        # fixture owns its lifetime and continues exercising the real pump.
+        del server.runtime_controller
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def apply_configuration(request, goal_id, config):
+    body = {"goal_id": goal_id, "capability_id": "periodic_report", "configuration": config}
+    status, preview = request("/api/chat/goal-configuration/preview", body)
+    assert status == 201, preview
+    status, applied = request("/api/chat/goal-configuration/apply",
+        {**body, "expected_plan_revision": preview["plan_revision"]})
+    assert status == 200, applied
+    return applied
+
+
+def setup_task(steward, tmp_path, monkeypatch, provider, *, decision_scopes=()):
+    _, session, actor, unrelated, _, capture = managed_fixture(steward, tmp_path, monkeypatch, provider)
+    _, runtime, *_ = steward
+    workspace = Path(load_goal_from_registry(runtime.registry_path, actor["goal_id"])["repo"])
+    (workspace / "numbers.json").write_text("[19, 23]")
+    script = tmp_path / "calendar-model.py"
+    script.write_text('''import json
+from pathlib import Path
+def respond():
+    values = json.loads(Path("numbers.json").read_text())
+    Path("total.json").write_text(json.dumps({"total": sum(values)}))
+    return json.dumps({"result_kind": "validated_completion", "classification": "implementation",
+        "summary": "The independently validated total is 42.", "next_action": "Keep future independent periods scheduled.",
+        "delivery_batch_scale": "implementation", "delivery_outcome": "outcome_progress",
+        "vision_unchanged_reason": "The original task and its scope remain active.",
+        "work_evidence": ["total.json computed from numbers.json"],
+        "validation_evidence": ["The original independent argv checks the computed artifact"]})
+''')
+    fake = Path(runtime.codex_bin)
+    # managed_fixture already installed its own synthetic result. Replace the
+    # complete string value without deriving the expected artifact from it.
+    source = fake.read_text()
+    import re
+    source, count = re.subn(r'"message": \'\{"result_kind".*?\}\'',
+        '"message": __import__("runpy").run_path(' + repr(str(script)) + ')["respond"]()', source)
+    assert count >= 1
+    fake.write_text(source)
+    runtime.adapters.pop(session["session_id"], None)
+    validator = [sys.executable, "-c", "import json; from pathlib import Path; assert json.loads(Path('total.json').read_text()) == {'total': 42}"]
+    for scope in decision_scopes:
+        gate = cli(runtime, "todo", "add", "--goal-id", actor["goal_id"], "--role", "user",
+            "--text", "Approve this synthetic task's recurring direction.", "--task-class", "user_gate",
+            "--blocks-agent", actor["agent_id"], "--decision-scope", scope, "--execute")
+        cli(runtime, "todo", "complete", "--goal-id", actor["goal_id"], "--role", "user",
+            "--todo-id", gate["todo_id"], "--agent-id", actor["agent_id"], "--decision-outcome", "approve",
+            "--evidence", "Synthetic owner standing approval for this exact task scope.")
+    source_task = cli(runtime, "todo", "add", "--goal-id", actor["goal_id"], "--role", "agent",
+        "--text", "Read numbers.json, compute its sum, and save total.json. Return the result here.",
+        "--claimed-by", actor["agent_id"], "--task-class", "advancement_task", "--action-kind", "calculate_total",
+        "--validation-command-json", json.dumps(validator),
+        *(value for scope in decision_scopes for value in ("--required-decision-scope", scope)), "--execute")
+    # The user is scheduling a repeat of an existing completed native task.
+    # Calendar configuration cannot create a new host validator or silently
+    # resume unrelated deferred/blocked work.
+    from loopx.capabilities.native_chat.steward_managed_mode import ManagedSessionTurn
+    first, created = ManagedSessionTurn(runtime).submit(session["session_id"], agent_id=actor["agent_id"],
+        operation_id="completed-source-task", todo_id=source_task["todo_id"])
+    assert created
+    completed = finish(runtime, first)
+    assert completed["status"] == "completed" and completed["response"]["native_loopx"]["status"] == "committed", completed
+    config = {"enabled": True, "profile_preset": "session-task",
+        "route_ref": "managed-session:" + session["session_id"], "timezone": "UTC",
+        "schedule": {"schema_version": "periodic_report_schedule_v0", "schedule_id": "ordinary-task",
+            "timezone": "UTC", "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0", "start_date": "2020-01-01"},
+        "task": {"source_todo_id": source_task["todo_id"]}}
+    return session, actor, unrelated, capture, workspace, config
+
+
+def fixed_clock(monkeypatch):
+    import loopx.capabilities.native_chat.session_calendar_tasks as module
+    point = [datetime(2020, 1, 1, 9, 0, 1, tzinfo=timezone.utc)]
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return point[0].astimezone(tz)
+    monkeypatch.setattr(module, "datetime", Clock)
+    return point
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_original_session_discovers_repeatable_tasks_without_enrolling_or_replaying(steward, tmp_path, monkeypatch, provider):
+    from loopx.capabilities.native_chat.steward_managed_mode import ManagedSessionTurn
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    session, actor, unrelated, capture, _, config = setup_task(steward, tmp_path, monkeypatch, provider)
+    store, runtime, bot, *_ = steward
+    sid = session["session_id"]
+    fixed_clock(monkeypatch)
+    calls, history, writes = capture.read_bytes(), store.messages(sid), list(bot.writes)
+    before = load_goal_from_registry(runtime.registry_path, actor["goal_id"])
+    with settings_server(steward) as request:
+        url = f"/api/chat/sessions/{sid}/native-turn"
+        status, plain = request(url, None, method="GET")
+        assert status == 200 and "calendar_task_sources" not in plain
+        status, view = request(url + "?calendar_task_sources=true", None, method="GET")
+        assert status == 200, view
+        options = view["calendar_task_sources"]
+        assert options["session_id"] == sid and options["goal_id"] == actor["goal_id"]
+        assert options["agent_id"] == actor["agent_id"] and options["read_only"]
+        assert options["authority_read"]["source_authority"] == ("file_v0" if provider == "file" else "sqlite_v0")
+        assert [row["source_todo_id"] for row in options["sources"]] == [config["task"]["source_todo_id"]]
+        chosen = options["sources"][0]
+        assert chosen["title"] and len(chosen["completion_validation_sha256"]) == 64
+        assert not chosen["archived"] and "validation_command_argv" not in json.dumps(options)
+        for selector in ("yes", "true&calendar_task_sources=false", f"true&agent_id={actor['agent_id']}-other",
+                f"true&agent_id={actor['agent_id']}&agent_id=other", "true&goal_id=other"):
+            status, rejected = request(url + "?calendar_task_sources=" + selector, None, method="GET")
+            assert status == 409 and rejected["ok"] is False
+        # Discovery is opt-in and has not changed the original Goal, Task,
+        # model calls, original messages, or private provider delivery.
+        assert load_goal_from_registry(runtime.registry_path, actor["goal_id"]) == before
+        assert capture.read_bytes() == calls and store.messages(sid) == history and bot.writes == writes
+        assert read_cadence_journal(runtime_root=runtime.coordination_runtime_root, goal_id=actor["goal_id"]) is None
+        apply_configuration(request, actor["goal_id"], {**config, "task": {"source_todo_id": chosen["source_todo_id"]}})
+        completed = finish(runtime, pump_steward_monitors(runtime)[0])
+        assert completed["response"]["native_loopx"]["status"] == "committed"
+        # A completed generated period cannot become another repeating source.
+        assert [row["source_todo_id"] for row in ManagedSessionTurn(runtime).inspect(
+            sid, include_calendar_task_sources=True)["calendar_task_sources"]["sources"]] == [chosen["source_todo_id"]]
+        cli(runtime, "todo", "archive-completed", "--goal-id", actor["goal_id"], "--role", "agent",
+            "--max-active-done", "0", "--execute")
+        calls = capture.read_bytes()
+        status, archived = request(url + "?calendar_task_sources=true", None, method="GET")
+        assert status == 200, archived
+        assert archived["calendar_task_sources"]["sources"] == [{**chosen, "archived": True}]
+        assert archived["scheduled_task"]["completion_verified"] and capture.read_bytes() == calls
+        assert next(row for row in StewardMonitor(runtime).todos(actor) if row["todo_id"] == unrelated)["status"] == "open"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("fault", ["malformed", "directory"])
+def test_calendar_task_discovery_retains_unreadable_validator_and_recovers_without_work(steward, tmp_path, monkeypatch, provider, fault):
+    from loopx.control_plane.todos.completion_validation_store import completion_validation_declaration_path
+    session, actor, _, capture, _, config = setup_task(steward, tmp_path, monkeypatch, provider)
+    store, runtime, bot, *_ = steward
+    service = SessionCalendarTasks(runtime)
+    options = service.source_options(session["session_id"])
+    source = options["sources"][0]
+    path = completion_validation_declaration_path(runtime_root=runtime.coordination_runtime_root,
+        goal_id=actor["goal_id"], todo_id=source["source_todo_id"]).parent / "blobs" / (source["completion_validation_sha256"] + ".json")
+    original = path.read_bytes()
+    calls, history, writes = capture.read_bytes(), store.messages(session["session_id"]), list(bot.writes)
+    path.unlink()
+    if fault == "directory":
+        path.mkdir()
+    else:
+        path.write_text("{}")
+    try:
+        with settings_server(steward) as request:
+            url = f"/api/chat/sessions/{session['session_id']}/native-turn?calendar_task_sources=true"
+            status, failed = request(url, None, method="GET")
+            assert status == 409 and failed["error_code"] == "managed_turn_unavailable", failed
+            assert "calendar_task_sources" not in failed
+            with pytest.raises(OSError if fault == "directory" else ValueError):
+                service.source_task(actor, config["task"])
+            if path.is_dir():
+                path.rmdir()
+            path.write_bytes(original)
+            status, recovered = request(url, None, method="GET")
+            assert status == 200 and recovered["calendar_task_sources"]["sources"] == options["sources"]
+    finally:
+        if path.is_dir():
+            path.rmdir()
+        path.write_bytes(original)
+    assert capture.read_bytes() == calls and store.messages(session["session_id"]) == history and bot.writes == writes
+    assert read_cadence_journal(runtime_root=runtime.coordination_runtime_root, goal_id=actor["goal_id"]) is None
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_calendar_preserves_canonical_decision_scopes_through_original_return(steward, tmp_path, monkeypatch, provider):
+    from loopx.control_plane.todos.contract import normalize_todo_required_decision_scopes
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    from loopx.capabilities.periodic_report.private_generation import attempt_directory
+
+    scopes = ("direction:goal:repeat_task", "other:goal:review_total")
+    expected = normalize_todo_required_decision_scopes(scopes)
+    session, actor, unrelated, capture, _, config = setup_task(
+        steward, tmp_path, monkeypatch, provider, decision_scopes=scopes)
+    store, runtime, *_ = steward
+    sid = session["session_id"]
+    service = SessionCalendarTasks(runtime)
+    source, _ = service.source_task(actor, config["task"])
+    assert source["status"] == "done" and source["required_decision_scopes"] == expected
+    history = store.messages(sid)
+    fixed_clock(monkeypatch)
+    with settings_server(steward) as request:
+        apply_configuration(request, actor["goal_id"], config)
+        turns = pump_steward_monitors(runtime)
+        assert len(turns) == 1, service.health(sid)
+        completed = finish(runtime, turns[0])
+        assert completed["status"] == "completed", completed
+        assert completed["response"]["native_loopx"]["status"] == "committed", completed
+        rows = StewardMonitor(runtime).todos(completed["loopx_request"]["actor"])
+        child = next(row for row in rows if row["todo_id"] == completed["loopx_request"]["todo_id"])
+        assert child["status"] == "done" and child["required_decision_scopes"] == expected
+        assert next(row for row in rows if row["todo_id"] == unrelated)["status"] == "open"
+        returned = [row for row in store.messages(sid) if row.get("turn_id") == completed["turn_id"] and row["role"] == "agent"]
+        assert len(returned) == 1 and returned[0]["text"] == completed["response"]["message"]
+        assert "42" in returned[0]["text"] and store.messages(sid)[:len(history)] == history
+        after = capture.read_bytes()
+        runtime._steward_monitor_next_check.clear()
+        assert not pump_steward_monitors(runtime)
+        assert capture.read_bytes() == after
+        journal = read_cadence_journal(runtime_root=runtime.coordination_runtime_root, goal_id=actor["goal_id"])
+        assert journal["task_completion"]["message_id"] == returned[0]["message_id"]
+        frozen = json.loads((attempt_directory(runtime.coordination_runtime_root, journal["window"]) / "task.json").read_text())
+        assert frozen["source_task"]["required_decision_scopes"] == expected
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_calendar_executes_ordinary_task_and_returns_original_result(steward, tmp_path, monkeypatch, provider):
+    import loopx.capabilities.native_chat.session_calendar_tasks as module
+    from loopx.capabilities.native_chat.steward_managed_mode import ManagedSessionTurn
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    session, actor, unrelated, capture, workspace, config = setup_task(steward, tmp_path, monkeypatch, provider)
+    store, runtime, bot, *_ = steward
+    sid = session["session_id"]
+    point = datetime(2020, 1, 1, 8, 59, 59, tzinfo=timezone.utc)
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return point.astimezone(tz)
+    monkeypatch.setattr(module, "datetime", Clock)
+    original_frontier = module.SessionCalendarTasks.frontier
+    def checked_frontier(service, session_id):
+        try:
+            return original_frontier(service, session_id)
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+            pytest.fail(f"The real calendar producer rejected its fixture: {exc}")
+    monkeypatch.setattr(module.SessionCalendarTasks, "frontier", checked_frontier)
+    history, calls, writes = store.messages(sid), capture.read_bytes(), list(bot.writes)
+    assert "scheduled_task" not in ManagedSessionTurn(runtime).inspect(sid)
+    with settings_server(steward) as request:
+        apply_configuration(request, actor["goal_id"], config)
+        assert ManagedSessionTurn(runtime).inspect(sid)["scheduled_task"]["configured"]
+        assert capture.read_bytes() == calls
+        assert not pump_steward_monitors(runtime)
+        assert read_cadence_journal(runtime_root=runtime.coordination_runtime_root, goal_id=actor["goal_id"]) is None
+        point += timedelta(seconds=2)
+        runtime._steward_monitor_next_check.clear()
+        turns = pump_steward_monitors(runtime)
+        assert len(turns) == 1
+        completed = finish(runtime, turns[0])
+        assert completed["status"] == "completed", completed
+        assert completed["response"]["native_loopx"]["status"] == "committed", completed
+        assert completed["response"]["native_loopx"]["effects"]["quota_spent"]
+        assert json.loads((workspace / "total.json").read_text()) == {"total": 42}
+        assert store.messages(sid)[:len(history)] == history
+        returned = [row for row in store.messages(sid) if row.get("turn_id") == completed["turn_id"] and row["role"] == "agent"]
+        assert len(returned) == 1 and "42" in returned[0]["text"]
+        rows = StewardMonitor(runtime).todos(completed["loopx_request"]["actor"])
+        assert next(row for row in rows if row["todo_id"] == completed["loopx_request"]["todo_id"])["status"] == "done"
+        assert next(row for row in rows if row["todo_id"] == unrelated)["status"] == "open"
+        recursive = {**config, "task": {"source_todo_id": completed["loopx_request"]["todo_id"]}}
+        assert request("/api/chat/goal-configuration/preview", {"goal_id": actor["goal_id"],
+            "capability_id": "periodic_report", "configuration": recursive})[0] == 400
+        after = capture.read_bytes()
+        runtime._steward_monitor_next_check.clear()
+        assert not pump_steward_monitors(runtime)
+        journal = read_cadence_journal(runtime_root=runtime.coordination_runtime_root, goal_id=actor["goal_id"])
+        assert journal["task_completion"]["message_id"] == returned[0]["message_id"]
+        assert journal["publication"] is None
+        assert capture.read_bytes() == after and bot.writes == writes
+        point += timedelta(days=1)
+        runtime._steward_monitor_next_check.clear()
+        second = pump_steward_monitors(runtime)
+        assert len(second) == 1 and second[0]["turn_id"] != completed["turn_id"]
+        assert finish(runtime, second[0])["response"]["native_loopx"]["status"] == "committed"
+
+
+@pytest.mark.parametrize("fault", ["wrong-route", "missing-template", "report-profile", "injected-command", "no-calendar"])
+def test_task_declarations_never_enroll_other_routes_or_implicit_commands(fault):
+    config = {"enabled": True, "profile_preset": "session-task", "route_ref": "managed-session:" + "a" * 32,
+        "timezone": "UTC", "task": {"source_todo_id": "todo_original"},
+        "schedule": {"schema_version": "periodic_report_schedule_v0", "schedule_id": "ordinary-task",
+            "timezone": "UTC", "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0", "start_date": "2020-01-01"}}
+    if fault == "wrong-route":
+        config["route_ref"] = "external-channel"
+    elif fault == "missing-template":
+        config["task"].pop("source_todo_id")
+    elif fault == "report-profile":
+        config["profile_preset"] = "weekly-progress"
+    elif fault == "injected-command":
+        config["task"]["validation_command"] = ["untrusted-command"]
+    else:
+        config.pop("schedule")
+    with pytest.raises((ValueError, TypeError)):
+        normalize_configuration(config)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("fault", ["missing-task", "empty-task", "array-task", "injected-command"])
+def test_settings_reject_invalid_task_input_without_execution_or_config_write(steward, tmp_path, monkeypatch, provider, fault):
+    session, actor, _, capture, _, config = setup_task(steward, tmp_path, monkeypatch, provider)
+    store, runtime, bot, *_ = steward
+    if fault == "missing-task":
+        config.pop("task")
+    elif fault == "empty-task":
+        config["task"] = {}
+    elif fault == "array-task":
+        config["task"] = []
+    else:
+        config["task"]["validation_command"] = ["untrusted-command"]
+    before = runtime.registry_path.read_bytes(), capture.read_bytes(), store.messages(session["session_id"]), list(bot.writes)
+    with settings_server(steward) as request:
+        body = {"goal_id": actor["goal_id"], "capability_id": "periodic_report", "configuration": config}
+        for path, payload in (("preview", body), ("apply", {**body, "expected_plan_revision": "not-a-plan"})):
+            status, rejected = request("/api/chat/goal-configuration/" + path, payload)
+            assert status == 400, rejected
+            assert rejected["error_code"] == "invalid_goal_configuration"
+            assert "session task requires one existing source_todo_id" in rejected["error"]
+    assert (runtime.registry_path.read_bytes(), capture.read_bytes(), store.messages(session["session_id"]), list(bot.writes)) == before
+    assert read_cadence_journal(runtime_root=runtime.coordination_runtime_root, goal_id=actor["goal_id"]) is None
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_known_failed_repeat_is_retained_without_replay_then_explicitly_cancelled(steward, tmp_path, monkeypatch, provider):
+    session, actor, _, capture, workspace, config = setup_task(steward, tmp_path, monkeypatch, provider)
+    point = fixed_clock(monkeypatch)
+    store, runtime, bot, *_ = steward
+    sid = session["session_id"]
+    # The synthetic model claims success; its actual artifact is wrong. The
+    # independent native validator must hold completion and keep that failure.
+    (workspace / "numbers.json").write_text("[1, 2]")
+    with settings_server(steward) as request:
+        apply_configuration(request, actor["goal_id"], config)
+        failed = finish(runtime, pump_steward_monitors(runtime)[0])
+        assert failed["status"] == "completed" and failed["response"]["native_loopx"]["status"] == "failed", failed
+        assert json.loads((workspace / "total.json").read_text()) == {"total": 3}
+        calls, writes, messages = capture.read_bytes(), list(bot.writes), store.messages(sid)
+        for _ in range(2):
+            runtime._steward_monitor_next_check.clear()
+            assert not pump_steward_monitors(runtime)
+        assert capture.read_bytes() == calls and bot.writes == writes and store.messages(sid) == messages
+        apply_configuration(request, actor["goal_id"], None)
+        journal = read_cadence_journal(runtime_root=runtime.coordination_runtime_root, goal_id=actor["goal_id"])
+        assert journal["retirement"]["reason"] == "owner_cancelled_failed_task" and journal["publication"] is None
+        apply_configuration(request, actor["goal_id"], config)
+        runtime._steward_monitor_next_check.clear()
+        assert not pump_steward_monitors(runtime)  # Re-enable cannot replay this failed period.
+        (workspace / "numbers.json").write_text("[19, 23]")
+        point[0] += timedelta(days=1)
+        runtime._steward_monitor_next_check.clear()
+        completed = finish(runtime, pump_steward_monitors(runtime)[0])
+        assert completed["turn_id"] != failed["turn_id"]
+        assert completed["response"]["native_loopx"]["status"] == "committed", completed
+        assert store.load_turn(sid, failed["turn_id"]) == failed
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_real_settings_only_select_existing_completed_source_and_current_preview(steward, tmp_path, monkeypatch, provider):
+    session, actor, incomplete, capture, _, config = setup_task(steward, tmp_path, monkeypatch, provider)
+    _, runtime, bot, *_ = steward
+    calls, writes = capture.read_bytes(), list(bot.writes)
+    with settings_server(steward) as request:
+        body = {"goal_id": actor["goal_id"], "capability_id": "periodic_report", "configuration": config}
+        injected = {**config, "task": {**config["task"], "validation_command": ["untrusted-command"]}}
+        assert request("/api/chat/goal-configuration/preview", {**body, "configuration": injected})[0] in (400, 409)
+        for source in [incomplete, "todo_missing"]:
+            denied = {**config, "task": {"source_todo_id": source}}
+            assert request("/api/chat/goal-configuration/preview", {**body, "configuration": denied})[0] == 400
+        assert request("/api/chat/goal-configuration/preview", body, "https://foreign.example")[0] == 403
+        status, preview = request("/api/chat/goal-configuration/preview", body)
+        assert status == 201
+        assert request("/api/chat/goal-configuration/apply", {**body,
+            "configuration": {**config, "enabled": False}, "expected_plan_revision": preview["plan_revision"]})[0] == 409
+    assert capture.read_bytes() == calls and bot.writes == writes
+    assert not SessionCalendarTasks(runtime).health(session["session_id"])["configured"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("change", ["pause", "reschedule", "clear"])
+@pytest.mark.parametrize("readback_fault", ["unavailable", "mismatch"])
+def test_calendar_settings_report_persisted_changes_when_readback_is_unverified(
+        steward, tmp_path, monkeypatch, provider, change, readback_fault):
+    from loopx.chat_server import ChatRequestHandler
+    from loopx.capabilities.periodic_report.goal_configuration import configuration_summary
+
+    session, actor, _, capture, _, config = setup_task(steward, tmp_path, monkeypatch, provider)
+    store, runtime, bot, *_ = steward
+    sid, goal_id = session["session_id"], actor["goal_id"]
+    target = ({**config, "enabled": False} if change == "pause" else
+        {**config, "schedule": {**config["schedule"], "rrule": "FREQ=DAILY;BYHOUR=10;BYMINUTE=0"}}
+        if change == "reschedule" else None)
+    calls, writes, messages = capture.read_bytes(), list(bot.writes), store.messages(sid)
+    with settings_server(steward) as request:
+        apply_configuration(request, goal_id, config)
+        body = {"goal_id": goal_id, "capability_id": "periodic_report", "configuration": target}
+        status, preview = request("/api/chat/goal-configuration/preview", body)
+        assert status == 201, preview
+        original_read = ChatRequestHandler._read_public_goal_configuration
+
+        def unavailable_after_source_write(handler, requested_goal, *args, **kwargs):
+            current = configuration_summary(load_goal_from_registry(runtime.registry_path, goal_id))
+            if requested_goal == goal_id and current == (normalize_configuration(target) if target else None):
+                if readback_fault == "unavailable":
+                    raise OSError("synthetic private readback diagnostic must stay server-side")
+                value = original_read(handler, requested_goal, *args, **kwargs)
+                entry = next(item for item in value["capability_catalog"]["capabilities"]
+                    if item["capability_id"] == "periodic_report")
+                entry["current"] = {"enabled": True}
+                return value
+            return original_read(handler, requested_goal, *args, **kwargs)
+
+        with monkeypatch.context() as fault:
+            fault.setattr(ChatRequestHandler, "_read_public_goal_configuration", unavailable_after_source_write)
+            status, receipt = request("/api/chat/goal-configuration/apply",
+                {**body, "expected_plan_revision": preview["plan_revision"]})
+        # Read the actual source independently of the failed response path.
+        assert configuration_summary(load_goal_from_registry(runtime.registry_path, goal_id)) == (
+            normalize_configuration(target) if target else None)
+        assert status == 207, receipt
+        assert receipt["status"] == "partial_write" and receipt["source_written"] is True
+        assert receipt["readback_verified"] is False and receipt["applied_revision"] is None
+        assert receipt["goal_configuration"] == (None if readback_fault == "unavailable" else {"enabled": True})
+        assert receipt["capability_id"] == "periodic_report" and receipt["goal_id"] == goal_id
+        assert "prior state was preserved" not in receipt["error"]
+        assert "synthetic private" not in json.dumps(receipt)
+        assert "Reload" in receipt["recommended_action"]
+        # A normal read/re-preview settles the uncertainty without replaying a
+        # write, a model turn, a scheduled period or an external delivery.
+        status, loaded = request("/api/chat/goal-configuration?goal_id=" + goal_id, None, method="GET")
+        assert status == 200, loaded
+        status, refreshed = request("/api/chat/goal-configuration/preview", body)
+        assert status == 201 and refreshed["writes_required"] == 0, refreshed
+    assert capture.read_bytes() == calls and bot.writes == writes and store.messages(sid) == messages
+    assert read_cadence_journal(runtime_root=runtime.coordination_runtime_root, goal_id=goal_id) is None
+
+
+@pytest.mark.parametrize("fault", ["queued", "busy", "paused", "unregistered", "stopped"])
+def test_original_user_work_and_withdrawn_authority_win_without_model(steward, tmp_path, monkeypatch, fault):
+    session, actor, _, capture, _, config = setup_task(steward, tmp_path, monkeypatch, "sqlite")
+    fixed_clock(monkeypatch)
+    store, runtime, bot, *_ = steward
+    with settings_server(steward) as request:
+        apply_configuration(request, actor["goal_id"], {**config, "enabled": fault != "paused"})
+    if fault == "queued":
+        store.create_queued_turn(session["session_id"], client_turn_id="owner-first", message="Retain this user work first", origin="web")
+    elif fault == "busy":
+        store.accept_managed_turn(session["session_id"], client_turn_id="owner-active", message="Original accepted user work", origin="web")
+    elif fault in {"unregistered", "stopped"}:
+        registry = json.loads(runtime.registry_path.read_text())
+        goal = next(row for row in registry["goals"] if row["id"] == actor["goal_id"])
+        if fault == "stopped":
+            goal["status"] = "stopped"
+        else:
+            goal["coordination"]["registered_agents"] = ["peer"]
+        runtime.registry_path.write_text(json.dumps(registry))
+    calls, writes, messages = capture.read_bytes(), list(bot.writes), store.messages(session["session_id"])
+    assert not runtime.closed.is_set()
+    assert not pump_steward_monitors(runtime)
+    assert capture.read_bytes() == calls and bot.writes == writes and store.messages(session["session_id"]) == messages
+    assert read_cadence_journal(runtime_root=runtime.coordination_runtime_root, goal_id=actor["goal_id"]) is None
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_completed_task_and_original_body_reconcile_after_runtime_restart(steward, tmp_path, monkeypatch, provider):
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+    import loopx.capabilities.native_chat.session_calendar_tasks as module
+    session, actor, _, capture, _, config = setup_task(steward, tmp_path, monkeypatch, provider)
+    fixed_clock(monkeypatch)
+    store, runtime, bot, *_ = steward
+    with settings_server(steward) as request:
+        apply_configuration(request, actor["goal_id"], config)
+    completed = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert completed["response"]["native_loopx"]["status"] == "committed"
+    original = module.record_cadence_task_completion
+    def lost_response(**kwargs):
+        original(**kwargs)
+        raise OSError("synthetic lost completion acknowledgement")
+    monkeypatch.setattr(module, "record_cadence_task_completion", lost_response)
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+    monkeypatch.setattr(module, "record_cadence_task_completion", original)
+    runtime.close()
+    before = capture.read_bytes(), store.messages(session["session_id"]), list(bot.writes)
+    recovered = ChatRuntimeController(store=ChatSessionStore(store.root.parent), codex_bin=runtime.codex_bin,
+        project_contexts=runtime.project_contexts, registry_path=runtime.registry_path)
+    try:
+        assert SessionCalendarTasks(recovered).frontier(session["session_id"]) == (None, False)
+        assert SessionCalendarTasks(recovered).health(session["session_id"])["completion_verified"]
+        assert (capture.read_bytes(), recovered.store.messages(session["session_id"]), list(bot.writes)) == before
+    finally:
+        recovered.close()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_same_calendar_task_lifecycle_retains_results_and_rejects_late_dispatch(
+        steward, tmp_path, monkeypatch, provider):
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+    from loopx.capabilities.native_chat.steward_managed_mode import ManagedSessionTurn
+    from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+
+    session, actor, _, capture, workspace, config = setup_task(steward, tmp_path, monkeypatch, provider)
+    store, runtime, bot, _, binding, _, original_workspace = steward
+    sid, goal_id = session["session_id"], actor["goal_id"]
+    actor = SessionCalendarTasks(runtime).selected(sid)["actor"]
+    point = fixed_clock(monkeypatch)
+    point[0] = datetime(2020, 1, 1, 8, 59, 59, tzinfo=timezone.utc)
+    initial = capture.read_bytes(), store.messages(sid), list(bot.writes)
+    later = {**config, "schedule": {**config["schedule"], "rrule": "FREQ=DAILY;BYHOUR=10;BYMINUTE=0"}}
+    with settings_server(steward) as request:
+        for proposed in (config, later, {**later, "enabled": False}, None, config):
+            apply_configuration(request, goal_id, proposed)
+            getattr(runtime, "_steward_monitor_next_check", {}).clear()
+            assert not pump_steward_monitors(runtime)
+        assert read_cadence_journal(runtime_root=runtime.coordination_runtime_root, goal_id=goal_id) is None
+        assert (capture.read_bytes(), store.messages(sid), list(bot.writes)) == initial
+        point[0] += timedelta(seconds=2)
+        runtime._steward_monitor_next_check.clear()
+        first = finish(runtime, pump_steward_monitors(runtime)[0])
+        assert first["response"]["native_loopx"]["status"] == "committed", first
+        runtime._steward_monitor_next_check.clear()
+        assert not pump_steward_monitors(runtime)
+        original_result = store.load_turn(sid, first["turn_id"])
+        completion = SessionCalendarTasks(runtime).health(sid)["completion"]
+        apply_configuration(request, goal_id, {**config, "enabled": False})
+
+    # A new runtime reads the same physical store, actor, paused plan and body.
+    runtime.close()
+    recovered = ChatRuntimeController(store=ChatSessionStore(store.root.parent), codex_bin=runtime.codex_bin,
+        project_contexts=runtime.project_contexts, registry_path=runtime.registry_path)
+    transport = LarkPrivateConversations(controller=recovered, runtime_root=store.root.parent,
+        runner=bot, cli_bin="lark-cli")
+    resumed = (recovered.store, recovered, bot, transport, binding, capture, original_workspace)
+    try:
+        service = SessionCalendarTasks(recovered)
+        assert service.selected(sid)["actor"] == actor
+        assert service.health(sid)["completion"] == completion and not service.health(sid)["enabled"]
+        paused = capture.read_bytes(), recovered.store.messages(sid), list(bot.writes)
+        point[0] += timedelta(days=1)
+        assert not pump_steward_monitors(recovered)
+        assert (capture.read_bytes(), recovered.store.messages(sid), list(bot.writes)) == paused
+        with settings_server(resumed) as request:
+            apply_configuration(request, goal_id, config)
+            recovered._steward_monitor_next_check.clear()
+            second = finish(recovered, pump_steward_monitors(recovered)[0])
+            assert second["response"]["native_loopx"]["status"] == "committed", second
+            assert second["turn_id"] != first["turn_id"]
+            assert recovered.store.load_turn(sid, first["turn_id"]) == original_result
+            recovered._steward_monitor_next_check.clear()
+            assert not pump_steward_monitors(recovered)
+            apply_configuration(request, goal_id, later)
+            point[0] = datetime(2020, 1, 2, 10, 0, 1, tzinfo=timezone.utc)
+            # Freeze through the real calendar owner, before any model dispatch.
+            with monkeypatch.context() as waiting:
+                waiting.setattr(ManagedSessionTurn, "submit", lambda *_a, **_kw: (None, False))
+                assert service.frontier(sid) == (None, False)
+            window = read_cadence_journal(runtime_root=recovered.coordination_runtime_root, goal_id=goal_id)["window"]
+            pending = service._todo(actor, window)
+            before = capture.read_bytes(), recovered.store.messages(sid), list(bot.writes)
+            registry_bytes = recovered.registry_path.read_bytes()
+            registry = json.loads(registry_bytes)
+            goal = next(row for row in registry["goals"] if row["id"] == goal_id)
+            goal["coordination"]["registered_agents"] = ["peer"]
+            recovered.registry_path.write_text(json.dumps(registry))
+            try:
+                assert not pump_steward_monitors(recovered)
+                with pytest.raises(ValueError):
+                    ManagedSessionTurn(recovered).submit(sid, agent_id=actor["agent_id"],
+                        operation_id="task." + window["window_id"], todo_id=pending["todo_id"], scheduled_window=window)
+            finally:
+                # Restore only this disposable counterfactual, never live grants.
+                recovered.registry_path.write_bytes(registry_bytes)
+            apply_configuration(request, goal_id, {**later, "enabled": False})
+            with pytest.raises(ValueError, match="subscription changed"):
+                ManagedSessionTurn(recovered).submit(sid, agent_id=actor["agent_id"],
+                    operation_id="task." + window["window_id"], todo_id=pending["todo_id"], scheduled_window=window)
+            assert (capture.read_bytes(), recovered.store.messages(sid), list(bot.writes)) == before
+            apply_configuration(request, goal_id, later)
+            recovered._steward_monitor_next_check.clear()
+            third = finish(recovered, pump_steward_monitors(recovered)[0])
+            assert third["response"]["native_loopx"]["status"] == "committed", third
+            assert third["loopx_request"]["todo_id"] == pending["todo_id"]
+            assert len({row["loopx_request"]["schedule_window_id"] for row in (first, second, third)}) == 3
+            assert json.loads((workspace / "total.json").read_text()) == {"total": 42}
+            final = capture.read_bytes(), recovered.store.messages(sid), list(bot.writes)
+            apply_configuration(request, goal_id, None)
+            point[0] += timedelta(days=1)
+            recovered._steward_monitor_next_check.clear()
+            assert not pump_steward_monitors(recovered)
+            assert (capture.read_bytes(), recovered.store.messages(sid), list(bot.writes)) == final
+            assert recovered.store.load_turn(sid, first["turn_id"]) == original_result
+            calls = [json.loads(line) for line in capture.read_bytes()[len(initial[0]):].splitlines()]
+            assert sum(row.get("method") == "turn/start" for row in calls) == 3
+            messages = recovered.store.messages(sid)
+            assert messages[:len(initial[1])] == initial[1]
+            for turn in (first, second, third):
+                replies = [row for row in messages if row["role"] == "agent" and row.get("turn_id") == turn["turn_id"]]
+                assert len(replies) == 1 and replies[0]["text"] == turn["response"]["message"]
+            assert bot.writes == initial[2]
+    finally:
+        recovered.close()
+
+
+def _resume_calendar_process(request):
+    """A fresh OS process opens only the supplied disposable physical store."""
+    import os
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+    import loopx.capabilities.native_chat.session_calendar_tasks as calendar
+
+    point = datetime(2020, 1, request["day"], 9, 0, 1, tzinfo=timezone.utc)
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return point.astimezone(tz)
+    calendar.datetime = Clock
+    runtime = ChatRuntimeController(store=ChatSessionStore(Path(request["runtime_root"])),
+        codex_bin=request["codex_bin"], registry_path=Path(request["registry_path"]),
+        project_contexts=ChatProjectContexts([Path(request["workspace"])]))
+    sid, actor = request["session_id"], request["actor"]
+    capture = Path(request["capture"])
+    try:
+        service = SessionCalendarTasks(runtime)
+        assert service.selected(sid)["actor"] == actor
+        before = capture.read_bytes(), runtime.store.messages(sid)
+        # Neither a persisted pause nor cancellation can dispatch on startup.
+        assert not pump_steward_monitors(runtime)
+        assert (capture.read_bytes(), runtime.store.messages(sid)) == before
+        result = {"pid": os.getpid(), "session_id": sid, "actor": actor}
+        if request["continue"]:
+            # This local Session has no Lark transport or external recipient.
+            data = (runtime.store, runtime, None, None)
+            with settings_server(data) as call:
+                apply_configuration(call, actor["goal_id"], request["configuration"])
+                getattr(runtime, "_steward_monitor_next_check", {}).clear()
+                turns = pump_steward_monitors(runtime)
+                assert len(turns) == 1
+                completed = finish(runtime, turns[0])
+                assert completed["response"]["native_loopx"]["status"] == "committed", completed
+                runtime._steward_monitor_next_check.clear()
+                assert not pump_steward_monitors(runtime)
+                assert service.health(sid)["completion_verified"]
+                result["turn_id"] = completed["turn_id"]
+                apply_configuration(call, actor["goal_id"], None)
+        else:
+            assert not service.health(sid).get("enabled")
+        print(json.dumps(result))
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_calendar_physical_state_survives_independent_processes(steward, tmp_path, monkeypatch, provider):
+    import os
+
+    session, actor, _, capture, _, config = setup_task(steward, tmp_path, monkeypatch, provider)
+    store, runtime, bot, _, _, _, original_workspace = steward
+    sid = session["session_id"]
+    actor = SessionCalendarTasks(runtime).selected(sid)["actor"]
+    fixed_clock(monkeypatch)
+    with settings_server(steward) as call:
+        apply_configuration(call, actor["goal_id"], config)
+        first = finish(runtime, pump_steward_monitors(runtime)[0])
+        assert first["response"]["native_loopx"]["status"] == "committed", first
+        runtime._steward_monitor_next_check.clear()
+        assert not pump_steward_monitors(runtime)
+        apply_configuration(call, actor["goal_id"], {**config, "enabled": False})
+    first_bytes = store._turn_path(sid, first["turn_id"]).read_bytes()
+    history, calls, writes = store.messages(sid), capture.read_bytes(), list(bot.writes)
+    runtime.close()
+    assert runtime.closed.is_set()
+
+    request = {"runtime_root": str(store.root.parent), "codex_bin": runtime.codex_bin,
+        "registry_path": str(runtime.registry_path), "workspace": str(original_workspace),
+        "session_id": sid, "actor": actor, "capture": str(capture), "configuration": config}
+    command = [sys.executable, "-c",
+        "import json,sys;sys.path.insert(0,'tests');"
+        "from test_managed_session_calendar_tasks import _resume_calendar_process;"
+        "_resume_calendar_process(json.load(sys.stdin))"]
+    def restart(*, continue_task, day=2):
+        completed = subprocess.run(command, input=json.dumps({**request, "continue": continue_task, "day": day}),
+            cwd=Path(__file__).resolve().parents[1], text=True, capture_output=True, timeout=90)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        result = json.loads(completed.stdout)
+        assert result["pid"] != os.getpid() and result["session_id"] == sid and result["actor"] == actor
+        assert store._turn_path(sid, first["turn_id"]).read_bytes() == first_bytes
+        assert store.messages(sid)[:len(history)] == history and bot.writes == writes
+        return result
+
+    restart(continue_task=False)
+    assert capture.read_bytes() == calls and store.messages(sid) == history
+    resumed = restart(continue_task=True)
+    second = store.load_turn(sid, resumed["turn_id"])
+    assert second["turn_id"] != first["turn_id"]
+    assert second["loopx_request"]["schedule_window_id"] != first["loopx_request"]["schedule_window_id"]
+    requests = [json.loads(line) for line in capture.read_bytes()[len(calls):].splitlines()]
+    assert sum(row.get("method") == "turn/start" for row in requests) == 1
+    for turn in (first, second):
+        replies = [row for row in store.messages(sid) if row["role"] == "agent" and row.get("turn_id") == turn["turn_id"]]
+        assert len(replies) == 1 and replies[0]["text"] == turn["response"]["message"]
+    final = capture.read_bytes(), store.messages(sid)
+    # A later due window would execute if cancellation were lost on restart.
+    restart(continue_task=False, day=3)
+    assert (capture.read_bytes(), store.messages(sid)) == final
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("fault", ["malformed-message", "non-object-message", "conflicting-result", "duplicate-result", "none"])
+def test_calendar_completion_requires_complete_unambiguous_original_return(
+        steward, tmp_path, monkeypatch, provider, fault):
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+
+    session, actor, _, capture, workspace, config = setup_task(steward, tmp_path, monkeypatch, provider)
+    point = fixed_clock(monkeypatch)
+    store, runtime, bot, *_ = steward
+    sid = session["session_id"]
+    with settings_server(steward) as request:
+        apply_configuration(request, actor["goal_id"], config)
+        completed = finish(runtime, pump_steward_monitors(runtime)[0])
+        assert completed["response"]["native_loopx"]["status"] == "committed"
+        before = read_cadence_journal(runtime_root=runtime.coordination_runtime_root, goal_id=actor["goal_id"])
+        assert not before.get("task_completion")
+        messages = store._session_dir(sid) / "messages.jsonl"
+        events = store._event_path(sid, completed["turn_id"])
+        originals = {path: path.read_bytes() for path in (messages, events)}
+        if fault.endswith("message"):
+            # The existing body remains readable, but a partial/corrupt journal
+            # cannot establish that it is the complete, unique original reply.
+            messages.write_bytes(originals[messages] + (
+                b'{"message_id":' if fault == "malformed-message" else b'[]\n'))
+        elif fault in {"conflicting-result", "duplicate-result"}:
+            payload = dict(completed["response"]["native_loopx"])
+            if fault == "conflicting-result":
+                payload["summary"] = "A conflicting native result, still labelled committed."
+            store.append_event(sid, completed["turn_id"], kind="native_loopx.result", payload=payload)
+        damaged = {path: path.read_bytes() for path in originals}
+        calls, writes = capture.read_bytes(), list(bot.writes)
+        service = SessionCalendarTasks(runtime)
+        health = service.health(sid)
+        if fault == "none":
+            assert health["completion_verified"]
+        else:
+            assert not health.get("completion_verified"), health
+            assert request("/api/chat/goal-configuration/preview", {
+                "goal_id": actor["goal_id"], "capability_id": "periodic_report", "configuration": None})[0] == 400
+            point[0] += timedelta(days=1)
+            runtime._steward_monitor_next_check.clear()
+            assert not pump_steward_monitors(runtime)
+            assert read_cadence_journal(runtime_root=runtime.coordination_runtime_root, goal_id=actor["goal_id"]) == before
+            assert load_goal_from_registry(runtime.registry_path, actor["goal_id"])["control_plane"]["periodic_report"] == config
+            assert {path: path.read_bytes() for path in originals} == damaged
+            point[0] -= timedelta(days=1)
+        assert capture.read_bytes() == calls and bot.writes == writes
+        assert store.load_turn(sid, completed["turn_id"]) == completed
+        # Restore only disposable fixture bytes, then restart the real adapter.
+        # Product code must neither repair these logs nor replay the old task.
+        for path, content in originals.items():
+            path.write_bytes(content)
+    runtime.close()
+    recovered = ChatRuntimeController(store=ChatSessionStore(store.root.parent), codex_bin=runtime.codex_bin,
+        project_contexts=runtime.project_contexts, registry_path=runtime.registry_path)
+    try:
+        service = SessionCalendarTasks(recovered)
+        assert service.frontier(sid) == (None, False)
+        receipt = read_cadence_journal(runtime_root=recovered.coordination_runtime_root,
+            goal_id=actor["goal_id"])["task_completion"]
+        assert receipt["message_id"] == "managed." + completed["turn_id"] + ".completed"
+        assert capture.read_bytes() == calls and bot.writes == writes
+        assert recovered.store.load_turn(sid, completed["turn_id"]) == completed
+        (workspace / "total.json").write_text('{"total": -1}')
+        point[0] += timedelta(days=1)
+        turn, created = service.frontier(sid)
+        assert created and turn["turn_id"] != completed["turn_id"]
+        assert finish(recovered, turn)["response"]["native_loopx"]["status"] == "committed"
+        assert json.loads((workspace / "total.json").read_text()) == {"total": 42}
+        assert bot.writes == writes
+    finally:
+        recovered.close()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_archived_source_and_completed_period_remain_usable_without_replay(steward, tmp_path, monkeypatch, provider):
+    session, actor, _, capture, _, config = setup_task(steward, tmp_path, monkeypatch, provider)
+    point = fixed_clock(monkeypatch)
+    _, runtime, *_ = steward
+    with settings_server(steward) as request:
+        apply_configuration(request, actor["goal_id"], config)
+    first = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert first["response"]["native_loopx"]["status"] == "committed"
+    cli(runtime, "todo", "archive-completed", "--goal-id", actor["goal_id"], "--role", "agent",
+        "--max-active-done", "0", "--execute")
+    calls = capture.read_bytes()
+    service = SessionCalendarTasks(runtime)
+    assert service.frontier(session["session_id"]) == (None, False)
+    assert service.health(session["session_id"])["completion_verified"] and capture.read_bytes() == calls
+    point[0] += timedelta(days=1)
+    turn, created = service.frontier(session["session_id"])
+    assert created and turn["turn_id"] != first["turn_id"]
+    assert finish(runtime, turn)["response"]["native_loopx"]["status"] == "committed"
+
+
+@pytest.mark.parametrize("fault", ["text", "scope", "paused", "ordinary-entry"])
+def test_frozen_task_cannot_change_work_or_scope_before_dispatch(steward, tmp_path, monkeypatch, fault):
+    from loopx.capabilities.native_chat.steward_managed_mode import ManagedSessionTurn
+    session, actor, _, capture, _, config = setup_task(steward, tmp_path, monkeypatch, "sqlite")
+    fixed_clock(monkeypatch)
+    _, runtime, bot, *_ = steward
+    with settings_server(steward) as request:
+        apply_configuration(request, actor["goal_id"], config)
+    service = SessionCalendarTasks(runtime)
+    with monkeypatch.context() as before_launch:
+        before_launch.setattr(ManagedSessionTurn, "submit", lambda *_a, **_kw: (None, False))
+        assert service.frontier(session["session_id"]) == (None, False)
+    window = read_cadence_journal(runtime_root=runtime.coordination_runtime_root, goal_id=actor["goal_id"])["window"]
+    todo = service._todo(service.selected(session["session_id"])["actor"], window)
+    if fault in {"text", "scope"}:
+        cli(runtime, "todo", "update", "--goal-id", actor["goal_id"], "--todo-id", todo["todo_id"],
+            "--agent-id", actor["agent_id"], "--update-operation-id", "change-frozen-task",
+            *(["--text", "Run a different task"] if fault == "text" else ["--required-capability", "filesystem"]))
+    else:
+        with settings_server(steward) as request:
+            apply_configuration(request, actor["goal_id"], {**config, "enabled": False})
+    calls, writes = capture.read_bytes(), list(bot.writes)
+    if fault == "ordinary-entry":
+        accepted, created = ManagedSessionTurn(runtime).submit(session["session_id"], agent_id=actor["agent_id"],
+            operation_id="ordinary-bypass", todo_id=todo["todo_id"])
+        assert created
+        rejected = finish(runtime, accepted)
+        assert rejected["response"]["native_loopx"]["status"] == "failed", rejected
+    else:
+        with pytest.raises(ValueError, match="subscription changed" if fault == "paused" else "scheduled work requires"):
+            ManagedSessionTurn(runtime).submit(session["session_id"], agent_id=actor["agent_id"],
+                operation_id="task." + window["window_id"], todo_id=todo["todo_id"], scheduled_window=window)
+    assert capture.read_bytes() == calls and bot.writes == writes
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_committed_calendar_result_survives_lost_event_ack_without_reexecution(steward, tmp_path, monkeypatch, provider):
+    session, actor, _, capture, workspace, config = setup_task(steward, tmp_path, monkeypatch, provider)
+    point = fixed_clock(monkeypatch)
+    store, runtime, bot, *_ = steward
+    sid = session["session_id"]
+    with settings_server(steward) as request:
+        apply_configuration(request, actor["goal_id"], config)
+        append, lost = store.append_event, []
+        before = capture.read_bytes()
+        def lose_ack_after_write(*args, **kwargs):
+            result = append(*args, **kwargs)
+            if kwargs.get("kind") == "native_loopx.result" and not lost:
+                lost.append(True)
+                raise OSError("synthetic lost acknowledgment after the committed result event persisted")
+            return result
+        with monkeypatch.context() as lost_ack:
+            lost_ack.setattr(store, "append_event", lose_ack_after_write)
+            completed = finish(runtime, pump_steward_monitors(runtime)[0])
+        assert lost and completed["status"] == "completed", completed
+        assert completed["response"]["native_loopx"]["status"] == "committed"
+        assert completed["response"]["native_loopx"]["effects"]["quota_spent"] is True
+        result_events = [row for row in store.events_after(sid, completed["turn_id"], None)
+            if row["kind"] == "native_loopx.result"]
+        assert len(result_events) == 1
+        assert result_events[0]["payload"] == completed["response"]["native_loopx"]
+        messages = [row for row in store.messages(sid)
+            if row.get("turn_id") == completed["turn_id"] and row["role"] == "agent"]
+        assert len(messages) == 1 and messages[0]["text"] == "The independently validated total is 42."
+        status, conversation = request("/api/chat/sessions/" + sid, None, method="GET")
+        assert status == 200 and conversation["active_turn"] is None
+        assert messages[0] in conversation["messages"]
+        calls = [json.loads(line) for line in capture.read_bytes()[len(before):].decode().splitlines()]
+        assert len([row for row in calls if row.get("method") == "turn/start"]) == 1
+        after = capture.read_bytes(), store.messages(sid), list(bot.writes)
+        for _ in range(2):
+            runtime._steward_monitor_next_check.clear()
+            assert not pump_steward_monitors(runtime)
+        journal = read_cadence_journal(runtime_root=runtime.coordination_runtime_root, goal_id=actor["goal_id"])
+        assert journal["task_completion"]["message_id"] == messages[0]["message_id"]
+        assert (capture.read_bytes(), store.messages(sid), list(bot.writes)) == after
+        (workspace / "total.json").write_text('{"total": -1}')
+        point[0] += timedelta(days=1)
+        runtime._steward_monitor_next_check.clear()
+        second = finish(runtime, pump_steward_monitors(runtime)[0])
+        assert second["turn_id"] != completed["turn_id"]
+        assert second["response"]["native_loopx"]["status"] == "committed"
+        assert json.loads((workspace / "total.json").read_text()) == {"total": 42}
+        calls = [json.loads(line) for line in capture.read_bytes()[len(before):].decode().splitlines()]
+        assert len([row for row in calls if row.get("method") == "turn/start"]) == 2
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_unknown_postcommit_return_never_becomes_cancelled_failure_or_model_replay(steward, tmp_path, monkeypatch, provider):
+    session, actor, _, capture, _, config = setup_task(steward, tmp_path, monkeypatch, provider)
+    fixed_clock(monkeypatch)
+    store, runtime, bot, *_ = steward
+    with settings_server(steward) as request:
+        apply_configuration(request, actor["goal_id"], config)
+        append = store.append_event
+        lost = []
+        def lose_native_return(*args, **kwargs):
+            if kwargs.get("kind") == "native_loopx.result" and not lost:
+                lost.append(True)
+                raise OSError("synthetic missing Chat result event after the original native commit")
+            return append(*args, **kwargs)
+        with monkeypatch.context() as lost_return:
+            lost_return.setattr(store, "append_event", lose_native_return)
+            failed = finish(runtime, pump_steward_monitors(runtime)[0])
+        assert failed["status"] == "failed" and lost
+        before = capture.read_bytes(), store.messages(session["session_id"]), list(bot.writes)
+        for _ in range(2):
+            runtime._steward_monitor_next_check.clear()
+            assert not pump_steward_monitors(runtime)
+        assert not SessionCalendarTasks(runtime).health(session["session_id"])["completion_verified"]
+        body = {"goal_id": actor["goal_id"], "capability_id": "periodic_report", "configuration": None}
+        assert request("/api/chat/goal-configuration/preview", body)[0] == 400
+        assert load_goal_from_registry(runtime.registry_path, actor["goal_id"])["control_plane"]["periodic_report"] == config
+        assert (capture.read_bytes(), store.messages(session["session_id"]), list(bot.writes)) == before
+        assert store.load_turn(session["session_id"], failed["turn_id"]) == failed
+
+
+@pytest.mark.parametrize("fault", ["conflicting", "duplicate", "unreadable", "uncommitted"])
+def test_lost_result_ack_requires_one_exact_readable_commit(steward, tmp_path, monkeypatch, fault):
+    session, actor, _, capture, _, config = setup_task(steward, tmp_path, monkeypatch, "sqlite")
+    fixed_clock(monkeypatch)
+    store, runtime, bot, *_ = steward
+    if fault == "uncommitted":
+        script = tmp_path / "calendar-model.py"
+        script.write_text(script.read_text().replace('"result_kind": "validated_completion"',
+            '"result_kind": "validated_progress"'))
+    with settings_server(steward) as request:
+        apply_configuration(request, actor["goal_id"], config)
+        append, read, lost = store.append_event, store.events_after, []
+        def lose_ack(*args, **kwargs):
+            if kwargs.get("kind") != "native_loopx.result" or lost:
+                return append(*args, **kwargs)
+            lost.append(args[1])
+            observed = {**kwargs, "payload": {**kwargs["payload"], "ok": False}} if fault == "conflicting" else kwargs
+            append(*args, **observed)
+            if fault == "duplicate":
+                append(*args, **kwargs)
+            raise OSError("synthetic result acknowledgment unavailable")
+        def unavailable_read(session_id, turn_id, event_id):
+            if fault == "unreadable" and turn_id in lost:
+                raise OSError("synthetic result readback unavailable")
+            return read(session_id, turn_id, event_id)
+        with monkeypatch.context() as lost_ack:
+            lost_ack.setattr(store, "append_event", lose_ack)
+            lost_ack.setattr(store, "events_after", unavailable_read)
+            failed = finish(runtime, pump_steward_monitors(runtime)[0])
+        assert lost and failed["status"] == "failed", failed
+        before = capture.read_bytes(), store.messages(session["session_id"]), list(bot.writes)
+        for _ in range(2):
+            runtime._steward_monitor_next_check.clear()
+            assert not pump_steward_monitors(runtime)
+        assert not SessionCalendarTasks(runtime).health(session["session_id"])["completion_verified"]
+        assert (capture.read_bytes(), store.messages(session["session_id"]), list(bot.writes)) == before
+        assert store.load_turn(session["session_id"], failed["turn_id"]) == failed
+
+
+def test_partial_progress_keeps_period_open_without_an_automatic_retry(steward, tmp_path, monkeypatch):
+    session, actor, _, capture, _, config = setup_task(steward, tmp_path, monkeypatch, "sqlite")
+    fixed_clock(monkeypatch)
+    _, runtime, *_ = steward
+    script = tmp_path / "calendar-model.py"
+    script.write_text(script.read_text().replace('"result_kind": "validated_completion"', '"result_kind": "validated_progress"'))
+    with settings_server(steward) as request:
+        apply_configuration(request, actor["goal_id"], config)
+        completed = finish(runtime, pump_steward_monitors(runtime)[0])
+        # This native Task requires declared completion before accountable
+        # writeback. Partial model work is retained at that gate, not treated
+        # as a completed calendar period or permission to invoke it again.
+        native = completed["response"]["native_loopx"]
+        assert native["ok"] is False and native.get("status") != "committed", completed
+        assert native["journal_observation"]["recorded_effects"]["quota_spent"] is False
+        service = SessionCalendarTasks(runtime)
+        assert not service.health(session["session_id"])["completion_verified"]
+        calls = capture.read_bytes()
+        runtime._steward_monitor_next_check.clear()
+        assert not pump_steward_monitors(runtime) and capture.read_bytes() == calls
+        journal = read_cadence_journal(runtime_root=runtime.coordination_runtime_root, goal_id=actor["goal_id"])
+        assert not journal.get("task_completion") and journal["publication"] is None
+        assert service._todo(service.selected(session["session_id"])["actor"], journal["window"])["status"] == "open"
+        assert request("/api/chat/goal-configuration/preview", {"goal_id": actor["goal_id"],
+            "capability_id": "periodic_report", "configuration": None})[0] == 400

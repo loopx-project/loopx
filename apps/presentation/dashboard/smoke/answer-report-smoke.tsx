@@ -21,6 +21,9 @@ for (const zh of [false, true]) {
     assert.equal(url.searchParams.get("statusUrl"), "/selected/status.json");
     assert.equal(url.searchParams.has("reportSessionId"), false);
     assert.equal(url.searchParams.has("reportMessageId"), false);
+    assert.equal(url.searchParams.get("messageSession"), ["manager", "goal.community"].includes(channel_id) ? "old" : null);
+    assert.equal(url.searchParams.get("message"), ["manager", "goal.community"].includes(channel_id) ? "answer" : null,
+      "Only a known original conversation receives a message focus");
   }
   for (const session of [null, {goal_id: "community"}, {goal_id: "loopx-manager", channel_id: "goal.loopx-manager"}]) {
     assert.equal(new URL(answerReportNavigation(session, current, "", zh).url).searchParams.get("goalId"), "");
@@ -49,4 +52,30 @@ for (const [status, verification, expected] of [
   assert.ok(html.includes(expected));
   assert.ok(html.includes("Progress update"));
 }
+const original = `${current}&conversationBinding=${"a".repeat(24)}&conversationSession=bound&workAgent=wrong&workSession=wrong&todo=wrong`;
+const bound = new URL(answerReportNavigation({session_id: "bound", goal_id: "loopx-manager", channel_id: "manager.external.synthetic"}, original, "/source/status.json", false).url);
+assert.equal(bound.searchParams.get("conversationBinding"), "a".repeat(24));
+assert.equal(bound.searchParams.get("conversationSession"), "bound");
+assert.equal(bound.searchParams.get("messageSession"), "bound");
+assert.equal(bound.searchParams.get("message"), "answer");
+assert.equal(bound.searchParams.get("todo"), null);
+assert.equal(bound.searchParams.get("workAgent"), null);
+const wrongBound = new URL(answerReportNavigation({session_id: "other", goal_id: "loopx-manager", channel_id: "manager.external.synthetic"}, original, "", false).url);
+assert.equal(wrongBound.searchParams.get("conversationBinding"), null, "An unrelated Session never inherits a bound source");
+assert.equal(wrongBound.searchParams.get("message"), null);
+const managed = new URL(answerReportNavigation({session_id: "work", goal_id: "community", channel_id: "agent.writer", managed_agent_id: "writer", session_mode: "managed_runtime"}, original, "", false).url);
+assert.equal(managed.searchParams.get("goalId"), "community");
+assert.equal(managed.searchParams.get("workAgent"), "writer");
+assert.equal(managed.searchParams.get("workSession"), "managed:work");
+assert.equal(managed.searchParams.get("messageSession"), "work");
+assert.equal(managed.searchParams.get("conversationBinding"), null);
+const projectRef = "b".repeat(24);
+const project = new URL(answerReportNavigation({session_id: "project", goal_id: null, project_ref: projectRef, channel_id: `project.${projectRef}`}, original, "", false).url);
+assert.equal(project.searchParams.get("workspace"), projectRef);
+assert.equal(project.searchParams.get("goalId"), "");
+assert.equal(project.searchParams.get("messageSession"), "project");
+assert.equal(project.searchParams.get("conversationBinding"), null);
+const externalProject = new URL(answerReportNavigation({session_id: "bound", goal_id: null, project_ref: projectRef, channel_id: `project.external.${"a".repeat(24)}.${"c".repeat(24)}`}, original, "", false).url);
+assert.equal(externalProject.searchParams.get("conversationBinding"), "a".repeat(24));
+assert.equal(externalProject.searchParams.get("workspace"), null, "An external project retains its original audience binding");
 console.log("answer-report: scope isolation, actual phase, delivery uncertainty and legacy answers passed");

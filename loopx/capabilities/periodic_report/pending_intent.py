@@ -18,7 +18,7 @@ from ...control_plane.capability_hooks import (
 from ...control_plane.effect_runtime import effect_runtime_result
 from ...control_plane.digest_envelope import sha256_envelope
 from ...history import load_registry
-from .todo_source import read_report_todo_source
+from .field_shapes import REPORT_IDENTITY_PATTERN
 from ...registry import (
     atomic_write_json,
     find_registry_goal,
@@ -36,11 +36,6 @@ from .request_action import (
     request_entry_for_intent,
     settle_periodic_report_request,
 )
-from .project_progress_snapshot import build_project_progress_snapshot
-from .incremental import (
-    build_periodic_report_publication_candidate,
-    write_periodic_report_publication_candidate,
-)
 from .machine_defaults import (
     build_periodic_report_delivery_authority,
     resolve_active_goal_periodic_report_subscription,
@@ -56,7 +51,6 @@ EDITORIAL_RESPONSE_SCHEMA = "periodic_report_editorial_response_v0"
 HOOK_ID = "periodic_report.pending_intent"
 CAPABILITY_ID = "periodic-report"
 _DISPATCH_RE = re.compile(r"^pwh_[0-9a-f]{64}\.json$")
-_IDENTITY_RE = re.compile(r"^[a-z][a-z0-9_.:-]{2,127}$")
 _CHINESE_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 _ANALYSIS_SECTION_CONTRACT = (
     ("overview", "全景判断"),
@@ -175,6 +169,8 @@ def _superseding_approval_revision(
     approval_scope = str(receipt.get("approval_scope") or "")
     if receipt.get("status") != "approval_pending" or not approval_scope:
         return None
+    from .todo_source import read_report_todo_source
+
     _, items = read_report_todo_source(
         registry_path=registry_path, goal_id=goal_id, runtime_root=runtime_root
     )
@@ -333,7 +329,7 @@ def pending_periodic_report_intents(
 ) -> list[dict[str, Any]]:
     """Read only exact, eligible, unconsumed intents for one Goal/Agent."""
 
-    if not _IDENTITY_RE.fullmatch(goal_id) or not _IDENTITY_RE.fullmatch(agent_id):
+    if not REPORT_IDENTITY_PATTERN.fullmatch(goal_id) or not REPORT_IDENTITY_PATTERN.fullmatch(agent_id):
         return []
     pending: list[dict[str, Any]] = []
     for intent in periodic_report_request_intents(
@@ -441,7 +437,13 @@ def periodic_report_pending_intent_interaction_hook(
             if normalized_agent_id and subscription is not None
             else []
         )
-        if not intents:
+        from .goal_configuration import managed_session_report_destination
+        if not intents or subscription.get("profile_preset") == "portfolio-progress" or managed_session_report_destination(subscription) is not None:
+            # This explicit source profile is consumed by the original Chat
+            # host's admitted native report Todo. Projecting the Goal Channel
+            # CLI action as well would preempt that controlled model Turn and
+            # substitute another source/destination. Calendar required reads
+            # remain visible; no other profile's precedence changes.
             return {
                 "schema_version": INTERACTION_PROJECTION_HOOK_RESULT_SCHEMA_VERSION,
                 "hook_id": HOOK_ID,
@@ -507,6 +509,8 @@ def _progress_facts(
     available_capabilities: Any = None,
     allow_empty: bool = False,
 ) -> list[dict[str, Any]]:
+    from .project_progress_snapshot import build_project_progress_snapshot
+
     from ...control_plane.todos.todo_index import (
         MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL,
     )
@@ -1080,6 +1084,13 @@ def _consume_pending_periodic_report_intent(
             "status": "subscription_disabled",
             "external_writes_performed": False,
         }
+    from .goal_configuration import managed_session_report_destination
+    if subscription.get("profile_preset") == "portfolio-progress" or managed_session_report_destination(subscription) is not None:
+        # A CLI caller cannot manufacture the original conversation's reader
+        # or private destination. Its host supplies those under the live grant.
+        return {"ok": True, "schema_version": CONSUMPTION_RECEIPT_SCHEMA,
+            "status": "original_conversation_required", "goal_id": goal_id,
+            "agent_id": agent_id, "external_writes_performed": False}
     intent = intents[0]
     trigger = evaluate_periodic_report_trigger_evaluation_intent(intent)
     payload = intent["payload"]
@@ -1303,6 +1314,11 @@ def _consume_pending_periodic_report_intent(
     }
     if not execute:
         return result
+
+    from .incremental import (
+        build_periodic_report_publication_candidate,
+        write_periodic_report_publication_candidate,
+    )
 
     receipt_path = _receipt_path(
         runtime_root,

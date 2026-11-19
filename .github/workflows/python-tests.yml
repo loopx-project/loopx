@@ -34,7 +34,10 @@ permissions:
 concurrency:
   # A merged PR's closed event uses main as github.ref; keep its original PR lane.
   group: python-tests-${{ github.event_name }}-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && format('pr-{0}', github.event.number) || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_target' || github.event_name == 'push' }}
+  # Let active main qualification finish; the default single pending slot keeps
+  # only its latest successor. PR updates still retire that PR's obsolete head.
+  queue: single
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_target' }}
 
 env:
   LOOPX_USAGE_PING: "0"
@@ -105,8 +108,20 @@ jobs:
           retention-days: 7
 
   chat-bundle:
-    needs: changes
-    if: needs.changes.outputs.core_tests == 'true' || needs.changes.outputs.python_tests == 'true' || needs.changes.outputs.presentation_tests == 'true'
+    needs: [changes, kernel-static-checks]
+    # This is the sole admission path to expensive qualification. A client-only
+    # exemption requires the static lane to be skipped; failed full candidates
+    # continue only in the existing scheduled/manual diagnostic runs.
+    if: >-
+      ${{ !cancelled() && needs.changes.result == 'success' &&
+          (needs.changes.outputs.core_tests == 'true' ||
+           needs.changes.outputs.python_tests == 'true' ||
+           needs.changes.outputs.presentation_tests == 'true') &&
+          ((needs.changes.outputs.backend_tests == 'false' && needs.kernel-static-checks.result == 'skipped') ||
+           (needs.changes.outputs.backend_tests == 'true' &&
+            (needs.kernel-static-checks.result == 'success' ||
+             ((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+              needs.kernel-static-checks.result == 'failure')))) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -132,7 +147,7 @@ jobs:
 
   chat-bundle-browser:
     needs: [changes, chat-bundle]
-    if: needs.changes.outputs.core_tests == 'true'
+    if: needs.changes.outputs.core_tests == 'true' && !cancelled() && needs.chat-bundle.result == 'success'
     runs-on: ubuntu-latest
     # The packaged scenario catalog outgrew one 15-minute runner, so the
     # catalog is partitioned like dashboard-browser and the companion smokes
@@ -175,10 +190,33 @@ jobs:
         run: |
           npm run smoke:chat-turn-acceptance-retry
           npm run smoke:chat-upgrade
+          npm run smoke:delegation-search
+          npm run smoke:task-inspector-route
+          npm run smoke:explore-timeline-scan
+          npm run smoke:conversation-find
       - name: Qualify packaged team evidence and feedback recovery
         if: matrix.shard == 2
         working-directory: apps/presentation/dashboard
         run: npm run smoke:personal-workspace-packaged:team
+      - name: Qualify original-task revalidation with the real worker
+        if: matrix.shard == 2
+        env:
+          LOOPX_PLAYWRIGHT_PACKAGE: ${{ github.workspace }}/apps/presentation/dashboard/node_modules/playwright
+          LOOPX_USAGE_PING: "0"
+        run: |
+          python -m pip install --disable-pip-version-check -e ".[test]"
+          node apps/presentation/dashboard/smoke/team-task-revalidation-smoke.mjs
+      - name: Preserve synthetic original-task recovery views
+        if: always() && matrix.shard == 2
+        uses: actions/upload-artifact@v7
+        with:
+          name: task-revalidation-${{ github.sha }}
+          path: |
+            output/playwright/personal-workspace/team-original-worker-finishing-mobile.png
+            output/playwright/personal-workspace/team-original-worker-finishing-desktop.png
+            output/playwright/personal-workspace/team-original-recovery-mobile.png
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Qualify the Goal workspace craft composition
         if: matrix.shard == 3
         working-directory: apps/presentation/dashboard
@@ -194,8 +232,42 @@ jobs:
           node examples/zcode-persistent-browser-smoke.mjs
 
   kernel-static-checks:
-    needs: [changes, chat-bundle]
+    # Reject cheap repository failures before any frontend build or test matrix.
+    needs: changes
     if: needs.changes.outputs.backend_tests == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check -e ".[test]"
+
+      - name: Check repository invariants before long tests
+        run: >-
+          python -m pytest -q --no-cov
+          tests/test_stage2c_dependency_lock.py
+          tests/architecture/test_top_level_module_budget.py
+
+      - name: Lint test suite
+        run: >-
+          python -m ruff check
+          tests
+          loopx/canary
+          loopx/control_plane
+          loopx/domain_packs
+          loopx/presentation
+
+  kernel-contracts:
+    needs: [changes, chat-bundle]
+    if: needs.changes.outputs.backend_tests == 'true' && !cancelled() && needs.chat-bundle.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -225,12 +297,6 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install --disable-pip-version-check -e ".[test]"
 
-      - name: Check repository invariants before long tests
-        run: >-
-          python -m pytest -q --no-cov
-          tests/test_stage2c_dependency_lock.py
-          tests/architecture/test_top_level_module_budget.py
-
       - name: Verify file authority on the core runtime
         run: >-
           node --no-warnings --experimental-strip-types --test
@@ -238,17 +304,17 @@ jobs:
           tests/control_plane_ts/local_authority_runtime.test.ts
           tests/control_plane_ts/sqlite_runtime_admission.test.ts
 
-      - name: Lint test suite
-        run: >-
-          python -m ruff check
-          tests
-          loopx/canary
-          loopx/control_plane
-          loopx/domain_packs
-          loopx/presentation
-
       - name: Type-check kernel contracts
         run: python -m mypy
+
+      # Preserve the kernel gate above, including its import traversal. This
+      # additive boundary checks the adapters strictly and analyzes legacy
+      # imports for types without claiming their implementations are qualified.
+      - name: Type-check Todo CLI adapters
+        run: >-
+          python -m mypy --no-incremental --follow-imports=silent
+          loopx/cli_commands/todo_event.py
+          loopx/control_plane/todos/markdown.py
 
       - name: Qualify agent-facing CLI output
         env:
@@ -261,7 +327,7 @@ jobs:
   typescript-core:
     name: typescript-core (${{ matrix.shard }}/3)
     needs: [changes, chat-bundle]
-    if: needs.changes.outputs.backend_tests == 'true'
+    if: needs.changes.outputs.backend_tests == 'true' && !cancelled() && needs.chat-bundle.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -317,7 +383,7 @@ jobs:
 
   typescript-coverage:
     needs: [changes, typescript-core]
-    if: needs.changes.outputs.backend_tests == 'true'
+    if: needs.changes.outputs.backend_tests == 'true' && !cancelled() && needs.typescript-core.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -356,7 +422,7 @@ jobs:
 
   dashboard-browser:
     needs: [changes, chat-bundle]
-    if: needs.changes.outputs.core_tests == 'true'
+    if: needs.changes.outputs.core_tests == 'true' && !cancelled() && needs.chat-bundle.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -402,9 +468,11 @@ jobs:
         run: node scripts/check-css-custom-properties.mjs dashboard
 
       # The coverage merger consumes the unit report from shard 1 only.
-      - name: Measure Dashboard unit coverage once
+      - name: Check Dashboard startup ownership and measure unit coverage once
         if: matrix.shard == 1
-        run: npm run test:dashboard:coverage
+        run: |
+          node --test examples/personal-workspace-browser/server-startup.test.mjs
+          npm run test:dashboard:coverage
 
       - name: Measure Dashboard browser interactions
         env:
@@ -412,7 +480,7 @@ jobs:
           LOOPX_DASHBOARD_COVERAGE: "1"
           LOOPX_PLAYWRIGHT_PACKAGE: ${{ github.workspace }}/apps/presentation/dashboard/node_modules/playwright
         run: |
-          node --test examples/personal-workspace-browser/shard.test.mjs
+          node --test examples/personal-workspace-browser/shard.test.mjs examples/personal-workspace-browser/goal-workspace-m2.test.mjs
           cd apps/presentation/dashboard
           npx playwright install --with-deps chromium --only-shell
           node ../../../examples/personal-workspace-browser-smoke.mjs
@@ -429,9 +497,18 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+      - name: Upload text document visual evidence
+        if: always() && hashFiles('output/playwright/personal-workspace/document-*.png') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: text-document-evidence-${{ matrix.shard }}
+          path: output/playwright/personal-workspace/document-*.png
+          if-no-files-found: error
+          retention-days: 14
+
   dashboard-acceptance:
     needs: [changes, dashboard-browser]
-    if: needs.changes.outputs.core_tests == 'true'
+    if: needs.changes.outputs.core_tests == 'true' && !cancelled() && needs.dashboard-browser.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -458,7 +535,7 @@ jobs:
     # Preserve the required check name while exposing independent failure lanes.
     # Cancelled main pushes must not retain runner-backed aggregate work.
     if: always() && needs.changes.outputs.core_tests == 'true' && (github.event_name != 'push' || !cancelled())
-    needs: [changes, kernel-static-checks, typescript-coverage, dashboard-acceptance, chat-bundle-browser]
+    needs: [changes, kernel-static-checks, kernel-contracts, typescript-coverage, dashboard-acceptance, chat-bundle-browser]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -472,8 +549,8 @@ jobs:
         run: python scripts/ci/review_gate.py verify-core
 
   node-minimum-compatibility:
-    needs: changes
-    if: needs.changes.outputs.backend_tests == 'true'
+    needs: [changes, chat-bundle]
+    if: needs.changes.outputs.backend_tests == 'true' && !cancelled() && needs.chat-bundle.result == 'success'
     runs-on: ubuntu-latest
     # The full suite runs under this exact Node version in typescript-core.
     timeout-minutes: 10
@@ -497,10 +574,10 @@ jobs:
             tests/control_plane_ts/deferred_hard_lease_lifecycle.test.ts
 
   node-forward-compatibility:
-    needs: changes
+    needs: [changes, chat-bundle]
     # Probe the future runtime once per night or on demand, outside the PR/main
     # critical path. The supported runtime still runs on every full candidate.
-    if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && needs.changes.outputs.backend_tests == 'true'
+    if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && needs.changes.outputs.backend_tests == 'true' && !cancelled() && needs.chat-bundle.result == 'success'
     continue-on-error: true
     runs-on: ubuntu-latest
     # This runs the full core conformance suite. Allow forward-runtime/runner
@@ -520,14 +597,14 @@ jobs:
           npm run test:control-plane
 
   test-shard:
-    # Keep known-red PRs out of the long-test queue. Non-PR runs still collect
-    # complete Python diagnostics after checks finish, even when checks fail.
-    needs: [changes, chat-bundle, checks]
+    # The bundle admits only statically qualified candidates or explicit
+    # diagnostics. Python can now overlap TS/browser qualification while its
+    # six repository-wide slots still bound long-test concurrency.
+    needs: [changes, chat-bundle]
     if: >-
       ${{ !cancelled() && needs.changes.result == 'success' &&
           needs.changes.outputs.python_tests == 'true' &&
-          needs.chat-bundle.result == 'success' &&
-          (github.event_name != 'pull_request' || needs.checks.result == 'success') }}
+          needs.chat-bundle.result == 'success' }}
     runs-on: ubuntu-latest
     # Share six long-test lanes across current PRs and other workflow runs.
     # Do not replace another candidate's pending shard or cancel its active head.
@@ -667,7 +744,7 @@ jobs:
 
   stage2c-suite:
     needs: [changes, chat-bundle]
-    if: needs.changes.outputs.stage2c_tests == 'true'
+    if: needs.changes.outputs.stage2c_tests == 'true' && !cancelled() && needs.chat-bundle.result == 'success'
     name: stage2c (${{ matrix.suite }} ${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -766,7 +843,7 @@ jobs:
 
   windows-powershell:
     needs: [changes, chat-bundle]
-    if: needs.changes.outputs.python_tests == 'true'
+    if: needs.changes.outputs.python_tests == 'true' && !cancelled() && needs.chat-bundle.result == 'success'
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -799,28 +876,130 @@ jobs:
       - name: Verify native Windows test Python discovery
         run: node --no-warnings --experimental-strip-types --test tests/control_plane_ts/test_python_runtime.test.ts
 
+      - name: Qualify named report timezones on Windows
+        run: >-
+          python -m pytest -q tests/capabilities/test_periodic_report_cadence.py
+          tests/capabilities/test_periodic_report_machine_defaults.py
+
+      - name: Qualify captured research fixture integrity on Windows
+        env:
+          PYTHONUTF8: "0"
+        run: python -m pytest -q tests/presentation/test_research_history_fixture.py
+
+      - name: Qualify local research HTTP lifecycle on Windows
+        env:
+          PYTHONUTF8: "0"
+        run: >-
+          python -m pytest -q tests/presentation/test_research_analysis_api.py
+          -k "not source_goal and not source_analysis and not source_execution"
+
+      - name: Qualify live pytest worker diagnostics on Windows
+        run: >-
+          python -m pytest -q tests/test_ci_pytest_timing.py
+          -k stall_snapshot_is_visible_before_the_blocked_test_returns
+
       - name: Qualify the canary plan's repository path rendering
         run: >-
           python -m pytest -q
           tests/canary/test_repository_root.py::test_plan_renders_repository_paths_in_canonical_posix_form
 
+      - name: Qualify native Windows quota settlement Turn rendering
+        # The settlement plan renders the Turn reference for the host shell, so
+        # only a native Windows host can check that the generated command
+        # forwards $LOOPX_TURN instead of the POSIX-only ${LOOPX_TURN:?}.
+        run: >-
+          python -m pytest -q
+          tests/control_plane/test_quota_settlement.py::test_codex_app_windows_settlement_command_substitutes_powershell_turn
+
+      - name: Set up the qualified SQLite runtime for settlement recovery
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22.22.3"
+
+      - name: Qualify native PowerShell settlement recovery and its immutable baseline
+        run: >-
+          python -m pytest -q --basetemp "${{ runner.temp }}/lxs-${{ github.run_id }}-${{ github.run_attempt }}"
+          tests/control_plane/test_refresh_settle_turn.py::test_wrong_or_missing_child_workspace_retains_owed_command_for_exact_recovery
+          tests/control_plane/test_refresh_settle_turn.py::test_legacy_posix_quoted_powershell_launcher_fails_before_settlement
+          tests/control_plane/test_refresh_settle_turn.py::test_pinned_powershell_launcher_settles_original_turn_once
+
+      - name: Restore the primary Windows Node runtime
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/presentation/dashboard/package-lock.json
+
+      - name: Qualify TypeScript shard paths on native Windows
+        run: python -m pytest -q tests/test_python_ci_workflow.py::test_typescript_shards_select_every_test_file_exactly_once
+
+      - name: Qualify read-only Codex rollout rotation on native Windows
+        run: >-
+          python -m pytest -q
+          tests/test_codex_rollout_file.py
+          tests/test_codex_rollout_cursor.py
+
       - name: Qualify the canary premerge contract smoke on native Windows
         run: python examples/canary/premerge-validation-gate-smoke.py
+
+      - name: Qualify original-task recovery and interactive input on Windows
+        # These are process/authority cases; dedicated long-path cases remain below.
+        run: >-
+          python -m pytest -q --basetemp .t
+          tests/test_delegation_task_revalidation.py
+          tests/control_plane/test_validation_process_cleanup.py
+          -k "active_rejected_worker or preserves_an_internal_lock_timeout or original_task_revalidation_repairs or validation_process_cleanup"
+
+      - name: Qualify native CLI output fixture and diagnostic boundaries
+        run: >-
+          python -m pytest -q
+          --basetemp "${{ runner.temp }}/lxb-${{ github.run_id }}-${{ github.run_attempt }}"
+          tests/control_plane/test_cli_output_budget.py
+          tests/control_plane/test_cli_output_differential.py
+          -k "stable_budget_fixture or long_path_budget or probe_process_failure_preserves_utf8_diagnostics or pinned_reader_follows"
+
+      - name: Qualify the native Windows CLI output differential
+        timeout-minutes: 12
+        run: python examples/control_plane/cli-output-budget-regression-smoke.py
 
       - name: Run native Windows lifecycle tests
         run: >-
           python -m pytest -q
+          tests/test_chat_manager_inspection.py
           tests/test_command_invocation.py
           tests/test_context_provider_service_ownership.py
           tests/test_doctor_git_encoding.py
           tests/test_doctor_install_freshness.py
           tests/test_file_lock.py
           tests/test_file_lock_cross_process.py
+          tests/test_host_thread_activity.py
           tests/control_plane/test_effect_runtime_integration.py
+          tests/control_plane/test_turn_instance_arg.py
           tests/control_plane/test_shadow_observation_retirement.py
+          tests/test_python_install_owner_platform.py
           tests/test_self_update_runtime_activation.py
+          tests/test_self_update_download.py
           tests/test_windows_atomic_writes.py
           tests/test_windows_install.py
+
+      - name: Qualify private IO on native Windows
+        run: >-
+          python -m pytest -q --basetemp .t-private-io
+          tests/control_plane/test_windows_snapshot_privacy.py
+          tests/test_file_lock_windows_atomic.py
+          tests/control_plane/test_document_io.py::test_ordinary_windows_long_path_publish_preserves_bytes_and_create_only
+          tests/control_plane/test_todo_completion_validation.py::test_private_validation_store_is_owner_only_and_detects_tampering
+
+      - name: Qualify portable file-flag probes on native Windows
+        # read_native_trace_file, the recovery readback and checkpoint retention
+        # used to reference os.O_NOFOLLOW, os.O_DIRECTORY and os.getuid
+        # directly, so a host that does not define one raised AttributeError
+        # before the reader could refuse. Only a native Windows host takes that
+        # branch for real; the simulated cases cover it on POSIX.
+        run: >-
+          python -m pytest -q
+          tests/architecture/test_posix_flag_portability.py
+          tests/control_plane/test_posix_flag_fallback.py
 
       - name: Check Windows collaboration lock sidecars
         run: python -m pytest -q --basetemp .t tests/test_collaboration_sidecar_scan.py
@@ -835,9 +1014,16 @@ jobs:
           tests/extensions/test_process_runtime.py
           tests/capabilities/test_issue_fix_temporary_workspace.py
 
+      - name: Qualify mocked GitHub metadata on native Windows
+        run: python examples/content-ops-issue-fix-metadata-preview-smoke.py
+
+      - name: Qualify mocked GitHub replies on native Windows
+        run: python examples/value-connectors-github-public-probe-smoke.py
+
       - name: Qualify native Windows peer reads and long-path inputs
         run: >-
           python -m pytest -q
+          tests/test_peer_collaboration.py::test_peer_cli_preserves_unicode_request_and_reply
           tests/test_peer_collaboration.py::test_peer_exchange_survives_long_private_store_paths
           tests/test_peer_collaboration.py::test_peer_binary_artifact_preserves_crlf_and_ctrl_z_digest
           tests/test_peer_collaboration.py::test_peer_read_qualifies_long_workspace_input
@@ -899,6 +1085,7 @@ jobs:
           tests/control_plane_ts/quota_void_commit.test.ts
           tests/control_plane_ts/shadow_entry_delivery.test.ts
           tests/control_plane_ts/sqlite_backup.test.ts
+          tests/control_plane_ts/task_lease_workspace.test.ts
 
       - name: Install the frontend dependencies for a source rebuild
         working-directory: apps/presentation/dashboard
@@ -923,7 +1110,7 @@ jobs:
 
   presentation:
     needs: [changes, chat-bundle]
-    if: needs.changes.outputs.presentation_tests == 'true'
+    if: needs.changes.outputs.presentation_tests == 'true' && !cancelled() && needs.chat-bundle.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

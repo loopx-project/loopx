@@ -187,7 +187,7 @@ Provider 边界、来源 freshness、license 与 credential Gate。
 
 ### 2. 现有 Capability 的 Provider
 
-如果调用者需要的结果已经由一个 Capability 定义，新实现应进入该合同，而不是创建同义 Capability。
+如果调用者需要的结果已经由一个 Capability 定义，新实现应进入该合同。
 
 Provider 可以是：
 
@@ -331,8 +331,7 @@ generic runner 要求 manifest 和 runtime 的权限都为空。发消息、写�
 
 ### "多个文件共用代码，所以抽成 Extension"
 
-共享代码只说明可能存在 helper，不说明需要独立安装和生命周期。抽象应该跟随 change reason，
-而不是文件数量。
+共享代码只说明可能存在 helper，不说明需要独立安装和生命周期。抽象应该跟随 change reason。
 
 ## 本书示例的决定
 
@@ -358,17 +357,17 @@ generic runner 要求 manifest 和 runtime 的权限都为空。发消息、写�
 如果你要设计的不只是 standalone package，而是 Explore、Domain State、Capability Pack、
 multi-agent preset、Provider 或 presentation 的组合，继续阅读
 [Control-Plane Course 第 11 讲](/loopx/docs/development/control-plane-course/11-extension-layer/)。
-它解释这些扩展面怎样复用 Kernel，而不是创建第二套 Goal、Todo、Quota 或 Scheduler。
+它解释这些扩展面怎样复用 Kernel。
 
 ## 不变式
 
 六句可以自己核对的话。
 
-1. **一个 capability 的存在理由是它的 caller outcome，不是它的目录名。** 找不到 caller、
+1. **一个 capability 的存在理由是它的 caller outcome。** 找不到 caller、
    resolver 和 domain policy，它就不该出现在 catalog 里。
 2. **capability 与 extension 是两个维度，一次改动可以只落在其中一个上。** 看到新 package
    就直接推断新 capability，是放置错误最常见的形式。
-3. **共享代码并不构成升级成 capability 的理由。** 判据是独立调用合同与生命周期，而非文件数量。
+3. 判据是独立调用合同与生命周期，而非文件数量。
 4. **manifest 可发现并不等于合同可调用。** `[[provides]]` 与 `[[implements]]` 只有在真实入口、
    resolver 和 validation 就位后才应写入。
 5. **Extension 的独立生命周期是用户可见的成本。** 声明它之前先确认这份成本换来了 caller

@@ -38,7 +38,10 @@ try {
   await page.getByRole("button", {name: "开启 LoopX 模式", exact: true}).click();
   await page.getByLabel("已注册的协调身份").selectOption("lead");
   await page.getByLabel("协调员总 token 额度").fill("100000");
+  const configurationAccepted = page.waitForResponse(response => response.request().method() === "POST"
+    && response.request().postDataJSON()?.operation === "configure");
   await page.getByRole("button", {name: "保存设置", exact: true}).click();
+  assert.equal((await configurationAccepted).status(), 200);
   const configured = api.loopxModeRequests.findLast(row => row.operation === "configure");
   const mode = page.__loopxRuntime.loopxModes.get(configured.sessionId);
   Object.assign(mode, {enabled: true, paused: false, active_turn_id: "fixture-loopx-turn",

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from pathlib import Path
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -27,6 +29,8 @@ from .resume_condition import (
     require_supported_todo_resume_when as require_supported_todo_resume_when,
 )
 
+
+_READ_LEGACY_CODEC = json.loads(Path(__file__).with_name("read_legacy_codec.json").read_text(encoding="utf-8"))
 
 TODO_TASK_PATTERN = re.compile(r"^\s*[-*]\s+\[([ xX-])\]\s+(.+?)\s*$")
 TODO_METADATA_PATTERN = re.compile(r"^\s*<!--\s*loopx:(?:todo\s+)?(?P<body>.*?)\s*-->\s*$")
@@ -56,6 +60,8 @@ TODO_MONITOR_METADATA_FIELDS = (
     "consecutive_no_change",
     "material_change",
     "material_change_generation",
+    "material_change_scope",
+    "material_change_scope_generations",
     "max_no_change_before_replan",
     "watch_only",
 )
@@ -138,32 +144,8 @@ TODO_STATUS_VALUES = {
 TODO_TERMINAL_STATUS_VALUES = {TODO_STATUS_DONE, TODO_STATUS_DEFERRED}
 TODO_LEGACY_TERMINAL_STATUS_VALUES = {"completed", "closed", "archived"}
 
-TODO_ACTION_KIND_ADVANCEMENT_VALUES = {
-    "advance",
-    "analyze",
-    "benchmark_run",
-    "codex_run",
-    "compact_blocker_writeback",
-    "compare",
-    "execute",
-    "fix",
-    "implement",
-    "rebuild",
-    "rebuild_score",
-    "repair",
-    "run",
-    "run_eval",
-    "test",
-    "validate",
-    "writeback",
-}
-TODO_ACTION_KIND_MONITOR_VALUES = {
-    "external_evidence",
-    "monitor",
-    "observe",
-    "poll",
-    "watch",
-}
+TODO_ACTION_KIND_ADVANCEMENT_VALUES = set(_READ_LEGACY_CODEC["advancement_actions"])
+TODO_ACTION_KIND_MONITOR_VALUES = set(_READ_LEGACY_CODEC["monitor_actions"])
 
 
 class TodoContinuationPolicy(str, Enum):
@@ -180,44 +162,12 @@ TODO_REMOVED_REVIEW_CONTINUATION_POLICY_VALUES = {
 }
 
 
-TODO_HARD_MONITOR_PATTERNS = (
-    re.compile(r"(?i)\bdo not\b.*\b(?:launch|run|execute|start)\b.*\buntil\b"),
-    re.compile(r"(?i)\b(?:only|just)\b.*\b(?:after|when|once)\b.*\b(?:owner|user|credential|approval|prerequisite|evidence)\b"),
-    re.compile(r"(?i)\b(?:credential|gcp|gcs|gcp_project|gcp_sa_key|gs://)\b.*\b(?:missing|required|provide|proof|prerequisite|gate|gated)\b"),
-    re.compile(r"(?i)\b(?:readiness|proof)\b.*\bbefore any formal\b.*\brun\b"),
-    re.compile(r"(?i)\bremaining formal\b.*\bpath\b"),
-    re.compile(r"(?i)\b(?:route|input)\b.*\babsent\b"),
-    re.compile(r"(?i)\b0\b.*\b(?:candidate|candidates)\b"),
-)
+TODO_HARD_MONITOR_PATTERNS = tuple(re.compile(pattern) for pattern in _READ_LEGACY_CODEC["TODO_HARD_MONITOR_PATTERNS"])
 
-TODO_ADVANCEMENT_OVERRIDE_PATTERNS = (
-    re.compile(
-        r"(?i)(?:^|[:：]\s*)(?:implement|add|make|fix|build|wire|define|compare|run|"
-        r"execute|test|validate|rebuild|repair|archive|publish|merge|write|attribute|"
-        r"collect|aggregate|generate|produce|materialize|rerun|repeat|eval|evaluate|score)\b"
-    ),
-    re.compile(
-        r"(?i)\b(?:implementation slice|validation-backed patch|smoke fixture|"
-        r"regression suite|readiness scan|source preflight|setup-readiness scan)\b"
-    ),
-)
-TODO_BLOCKED_MONITOR_PATTERNS = (
-    *TODO_HARD_MONITOR_PATTERNS,
-    re.compile(r"(?i)\b(?:blocked|gated|waiting)\b.*\b(?:owner|user|credential|substrate|proof|prerequisite|evidence)\b"),
-)
-TODO_MONITOR_PATTERNS = (
-    re.compile(r"(?i)\bdependency monitor\b"),
-    re.compile(r"(?i)\bobservation lane\b"),
-    re.compile(r"(?i)(?:^|[:：]\s*)observe\b"),
-    re.compile(r"(?i)(?:^|[:：]\s*)poll\b"),
-    re.compile(r"(?i)(?:^|[:：]\s*)watch\b"),
-    re.compile(r"(?i)\bmonitor-only\b"),
-    *TODO_BLOCKED_MONITOR_PATTERNS,
-)
-TODO_ADVANCEMENT_PATTERNS = (
-    *TODO_ADVANCEMENT_OVERRIDE_PATTERNS,
-    re.compile(r"(?i)\b(?:task|validation hypothesis|validation step|bounded step|learning run)\b"),
-)
+TODO_ADVANCEMENT_OVERRIDE_PATTERNS = tuple(re.compile(pattern) for pattern in _READ_LEGACY_CODEC["TODO_ADVANCEMENT_OVERRIDE_PATTERNS"])
+TODO_BLOCKED_MONITOR_PATTERNS = tuple(re.compile(pattern) for pattern in _READ_LEGACY_CODEC["TODO_BLOCKED_MONITOR_PATTERNS"])
+TODO_MONITOR_PATTERNS = tuple(re.compile(pattern) for pattern in _READ_LEGACY_CODEC["TODO_MONITOR_PATTERNS"])
+TODO_ADVANCEMENT_PATTERNS = tuple(re.compile(pattern) for pattern in _READ_LEGACY_CODEC["TODO_ADVANCEMENT_PATTERNS"])
 
 NEXT_ACTION_HARD_MONITOR_PATTERNS = (
     re.compile(r"(?i)\bdo not\b.*\b(?:launch|run|execute|start)\b.*\buntil\b"),
@@ -766,26 +716,14 @@ def todo_marker_for_status(status: Any) -> str:
     return " "
 
 
-def encode_metadata_value(value: Any) -> str:
-    compact = compact_todo_text(value)
-    return quote(compact, safe="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:-")
+def encode_metadata_value(value: Any, *, preserve_whitespace: bool = False) -> str:
+    text = str(value or "") if preserve_whitespace else compact_todo_text(value)
+    return quote(text, safe="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:-")
 
 
-def decode_metadata_value(value: Any) -> str:
-    return compact_todo_text(unquote(str(value or "")))
-
-
-def parse_todo_metadata_tokens(line: str) -> list[tuple[str, str]] | None:
-    match = TODO_METADATA_PATTERN.match(line)
-    if not match:
-        return None
-    return [
-        (
-            token.group("key"),
-            decode_metadata_value(token.group("value")),
-        )
-        for token in TODO_METADATA_TOKEN_PATTERN.finditer(match.group("body"))
-    ]
+def decode_metadata_value(value: Any, *, preserve_whitespace: bool = False) -> str:
+    text = unquote(str(value or ""))
+    return text if preserve_whitespace else compact_todo_text(text)
 
 
 MetadataValueNormalizer = Callable[[Any], Any]
@@ -800,6 +738,10 @@ def _truthy_value(value: Any) -> Any:
 def _nonempty_metadata_text(value: Any) -> str | None:
     text = compact_todo_text(value)
     return text or None
+
+
+def _nonblank_verbatim_metadata_text(value: str) -> str | None:
+    return value if value.strip() else None
 
 
 def _optional_output_bool(value: Any) -> bool | None:
@@ -835,6 +777,7 @@ class _TodoMetadataField:
     read_fallback_key: str | None = None
     read_fallback_normalizer: MetadataValueNormalizer | None = None
     block_field: bool = True
+    preserve_whitespace: bool = False
 
     def normalize_for_write(self, value: Any) -> Any:
         normalizer = self.write_normalizer or self.read_normalizer
@@ -1128,11 +1071,20 @@ _TODO_METADATA_FIELD_SCHEMA = (
             "updated_at",
             "completion_turn_key",
             "completion_receipt_id",
-            "validation_command",
-            "validation_command_argv",
-            "validation_label",
-            "validation_timeout_seconds",
         )
+    ),
+    # The declaration digest includes exact command arguments and label text.
+    # Percent encoding keeps these values within one Markdown comment line.
+    *(
+        _TodoMetadataField(key, _nonblank_verbatim_metadata_text,
+                           write_normalizer=_truthy_value, preserve_whitespace=True)
+        for key in ("validation_command", "validation_command_argv")
+    ),
+    _TodoMetadataField("validation_label", _truthy_value, preserve_whitespace=True),
+    _TodoMetadataField(
+        "validation_timeout_seconds",
+        _nonempty_metadata_text,
+        write_normalizer=_truthy_value,
     ),
     _TodoMetadataField(
         "superseded_by",
@@ -1147,6 +1099,22 @@ _TODO_METADATA_FIELD_SCHEMA = (
 _TODO_METADATA_FIELD_BY_TOKEN = {
     field.key: field for field in _TODO_METADATA_FIELD_SCHEMA
 }
+
+
+def parse_todo_metadata_tokens(line: str) -> list[tuple[str, str]] | None:
+    match = TODO_METADATA_PATTERN.match(line)
+    if not match:
+        return None
+    tokens = []
+    for token in TODO_METADATA_TOKEN_PATTERN.finditer(match.group("body")):
+        key = token.group("key")
+        field = _TODO_METADATA_FIELD_BY_TOKEN.get(key)
+        value = decode_metadata_value(
+            token.group("value"),
+            preserve_whitespace=field is not None and field.preserve_whitespace,
+        )
+        tokens.append((key, value))
+    return tokens
 
 
 def _todo_metadata_block_fields() -> tuple[str, ...]:
@@ -1221,11 +1189,14 @@ def normalize_todo_metadata_for_write(values: dict[str, Any]) -> dict[str, Any]:
 
 def _format_todo_metadata_values(values: dict[str, Any]) -> str | None:
     normalized = _normalize_todo_metadata_for_write(values)
-    fields = [
-        f"{field.key}={encode_metadata_value(field.encoder(normalized[field.key]))}"
-        for field in _TODO_METADATA_FIELD_SCHEMA
-        if field.key in normalized
-    ]
+    fields = []
+    for field in _TODO_METADATA_FIELD_SCHEMA:
+        if field.key in normalized:
+            value = encode_metadata_value(
+                field.encoder(normalized[field.key]),
+                preserve_whitespace=field.preserve_whitespace,
+            )
+            fields.append(f"{field.key}={value}")
     if not fields:
         return None
     return f"  <!-- loopx:todo {' '.join(fields)} -->"
@@ -1277,6 +1248,8 @@ def format_todo_metadata_line(
     consecutive_no_change: str | None = None,
     material_change: str | None = None,
     material_change_generation: int | str | None = None,
+    material_change_scope: str | None = None,
+    material_change_scope_generations: str | None = None,
     max_no_change_before_replan: str | None = None,
     watch_only: str | None = None,
     note: str | None = None,
@@ -1334,6 +1307,8 @@ def todo_block_metadata(block: dict[str, Any]) -> dict[str, Any]:
             normalized = normalize_todo_completion_recovery(value)
         elif key in {"global_gate", "goal_bound"}:
             normalized = normalize_todo_global_gate(value)
+        elif _TODO_METADATA_FIELD_BY_TOKEN[key].preserve_whitespace:
+            normalized = value
         else:
             normalized = str(value).strip()
         if normalized is not None and normalized != [] and normalized != "":
@@ -1442,6 +1417,8 @@ def metadata_line_for_todo_block(
                 metadata[key] = normalized_global_gate
             else:
                 metadata.pop(key, None)
+        elif _TODO_METADATA_FIELD_BY_TOKEN[key].preserve_whitespace:
+            metadata[key] = value
         elif str(value).strip():
             metadata[key] = str(value).strip()
     if "todo_id" not in metadata and block.get("todo_id"):

@@ -12,8 +12,17 @@ into a LoopX-governed visible goal loop.
   --host-surface pi` and delivers the returned packet directly to the agent as
   a follow-up user message (`sendUserMessage` with `triggerTurn`), so the
   guided transaction starts without a popup box or a manual Enter step.
+  Persistent sessions forward a stable, path-digested thread id. An existing
+  binding can resume its registered lane; an unbound session retains the native
+  identity-selection packet. A sole candidate is never automatic takeover
+  authorization. Sessions without a file retain explicit identity selection.
+  Inspection (`/loopx`, `/loopx status`, `/loopx history`, `/loopx list`) never
+  creates or changes session authority. Only explicit guided startup issues the
+  activation token and locks its Goal, Agent, registry and capabilities, so
+  inspecting a project first cannot constrain a later startup.
   `/loopx resume` re-arms auto-continuation after a user-driven pause or an
-  aborted run.
+  aborted run and immediately checks fresh quota admission when Pi is idle.
+  A busy Pi session waits for its next `agent_settled` event.
 - **`loopx_goal_activate`** — agent-callable tool. Binds the current session to
   the host-verified Pi startup/session packet using its one-time
   `activationToken`, plus the heartbeat `objective`/task_body, then starts the
@@ -39,15 +48,31 @@ into a LoopX-governed visible goal loop.
   and fences an in-flight quota probe. For persistent sessions, the loop stays
   paused across Pi restarts until `/loopx resume` or a fresh goal activation
   explicitly re-arms it.
-- **Pause reasons** — every pause records why it happened in the binding:
-  `pauseReason: "user_prompt"` when a `before_agent_start` prompt was not the
-  loop's own injected task body, `"aborted"` after Escape, and `""` again once
-  `/loopx resume` re-arms the loop. Both pause paths report the pause in the UI
-  and the recorded reason is diagnostic only: it never decides continuation, and
-  the canonical `autoResume` flag stays the single authority. Prompt origin is not
-  inferred from another event: Pi compacts before it emits `before_agent_start`
-  for a submitted prompt, so a preceding `session_compact` does not prove that
-  the next prompt came from the host.
+- **Input boundary** — observed Pi `input` events with source `interactive` or
+  `rpc` pause automatic continuation, including queued `steer` / `followUp`,
+  image-only input and text identical to the last injected task. Pi still
+  processes the input and can compact/recover within that run; LoopX stops
+  submitting subsequent tasks. Already-submitted messages and running tools
+  are not cancelled. Input arriving during a pending resume or activation
+  revokes dispatch immediately, then waits for already-started re-arm writes
+  before saving the pause, so restarting Pi cannot restore that older re-arm.
+  Use `/loopx resume` to re-arm with fresh quota admission.
+- **Pause reasons** — a saved input pause records `pauseReason: "user_prompt"`,
+  Escape records `"aborted"`, and explicit resume clears the reason. Input and
+  run-start events for the same pause notify once and preserve an existing pause
+  reason. The reason is diagnostic; durable `autoResume` and LoopX quota still
+  authorize continuation. While saving an input pause, a session-local fence
+  also denies dispatch. If saving fails, that instance stays stopped and reports
+  that the pause may not survive restart; restore storage before explicit resume.
+- **Origin limits** — `extension` does not identify which extension sent input.
+  Unknown-source user starts retain the injected-text fallback; custom starts
+  pause because LoopX only injects user messages. The fallback compares the
+  injected text before waiting for a pending re-arm and persists a non-own
+  start's pause after older writes; a later explicit resume still takes priority.
+  Earlier Pi input handlers can consume an event before this extension sees it.
+  This is not complete prompt
+  provenance: compaction never exempts a prompt or re-arms a pause, and its
+  occurrence does not establish the next prompt's producer.
 
 ## Install / uninstall
 
@@ -151,6 +176,42 @@ grant authority outside the active LoopX goal binding, bypass registration,
 change quota/scheduler/todo defaults, or copy Pi transcripts, credentials, or
 session paths into LoopX state.
 
+## Stable identity across launches
+
+By default, `piThreadId()` derives the LoopX host thread id from the Pi session
+file path. Pi creates a new session file for each launch
+(`<ISO timestamp>_<uuid>.jsonl`), so the derived thread id changes every time.
+This means an already-bound agent lane requires re-binding on every fresh Pi
+session.
+
+Two supported options keep the thread id stable:
+
+**Option 1 — environment variable (recommended).**
+Set `LOOPX_PI_THREAD_ID` to any stable, project-scoped identifier before
+starting Pi. The adapter uses that value verbatim and ignores the session file
+path:
+
+```bash
+export LOOPX_PI_THREAD_ID="my-project-loopx"
+pi
+```
+
+Pick a value unique to the project, such as a slug of the project directory
+name. Once a lane is bound under this id, every subsequent Pi session in the
+same project resolves that lane without a re-bind.
+
+**Option 2 — fixed session file path.**
+Start Pi with `pi --session <fixed-path>`. The session file path stays constant
+across restarts, so the path-digested thread id is also constant:
+
+```bash
+pi --session ~/.pi/agent/sessions/my-project/loopx-session.jsonl
+```
+
+Without either option, a first-time user must bind the lane once per Pi
+session. The identity-selection packet returned by `/loopx <goal text>` still
+works; the binding just does not survive a fresh launch.
+
 ## Boundary
 
 The extension reads only LoopX public-safe state and never copies raw
@@ -169,9 +230,12 @@ boundary.
 
 An explicit host abort or Core `stop_until_explicit_resume` disarms automatic
 continuation and cancels its timer. Idle events and ordinary prompts do not
-re-arm it. Resolve the Core Goal/quota stop, then use `/loopx resume`; the next
-idle evaluation must obtain fresh admission. Pause/resume advances the existing
-binding generation, so a late pre-pause result cannot send a task afterward.
+re-arm it. Resolve the Core Goal/quota stop, then use `/loopx resume`; an idle
+session immediately obtains fresh admission without another prompt or settle
+event. A dependency wait restores bounded checks, and a Core stop pauses again
+without sending a task. A pre-pause probe cannot delay or replace the fresh
+check. Pause/resume advances the existing binding generation, so a late
+pre-pause result cannot send a task afterward.
 Use `/loopx status` and `loopx quota should-run --goal-id <goal_id> --agent-id
 <agent_id>` to distinguish host binding from Core permission. Validated
 no-follow-up stops; dependency waits retain bounded checks without model calls.

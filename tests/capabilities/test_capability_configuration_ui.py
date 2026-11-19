@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
+
 import pytest
 
 from loopx.capabilities.configuration_ui import (
@@ -10,10 +14,130 @@ from loopx.capabilities.configuration_ui import (
 from loopx.capabilities.machine_configuration.builtins import (
     build_builtin_machine_configuration_registry,
 )
+from loopx.capabilities.steward_executor.machine_defaults import (
+    steward_executor_endpoints,
+)
 from loopx.configuration_catalog import (
     build_configuration_capability_descriptors,
     build_goal_configuration_catalog,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolated_native_profile_discovery(tmp_path, monkeypatch):
+    from loopx import codex_app_thread_activity
+
+    discover = codex_app_thread_activity.codex_homes
+    monkeypatch.setattr(
+        codex_app_thread_activity, "codex_homes",
+        lambda: discover(env={}, user_home=tmp_path),
+    )
+
+
+@pytest.mark.parametrize("capability_id", [
+    "context_delivery", "goal_capability_organization", "goal_storage",
+    "todo_replan_cadence", "periodic_report", "manager_runtime",
+    "steward_executor", "multi_subagent", "peer_task_coordination",
+    "explore_graph", "explore_harness", "change_quality_qualification",
+    "progress_review", "pull_request_review", "local_authority_shadow",
+    "coordination_runtime_shadow", "lark_kanban_heartbeat_sync", "reward_memory",
+    "lark_event_inbox", "unregistered-editor", "",
+])
+def test_editor_does_not_load_unselected_provider(capability_id, tmp_path):
+    source = '''import importlib.abc,json,sys
+capability=sys.argv[1]
+blocked=['loopx.capabilities.native_chat']
+if capability!='steward_executor':blocked.append('loopx.capabilities.steward_executor')
+class UnavailableProvider(importlib.abc.MetaPathFinder):
+ def find_spec(self,fullname,path=None,target=None):
+  if any(fullname==name or fullname.startswith(name+'.') for name in blocked):
+   raise ImportError('unselected provider unavailable')
+sys.meta_path.insert(0,UnavailableProvider())
+from loopx.capabilities.configuration_ui import capability_configuration_editor,resolve_capability_configuration
+editor=capability_configuration_editor(capability)
+assert editor['schema_version']=='capability_configuration_editor_v0'
+assert not any(any(name==root or name.startswith(root+'.') for root in blocked) for name in sys.modules)
+if capability=='periodic_report':
+ resolved=resolve_capability_configuration(capability,capability_default={'enabled':False,'timezone':'UTC'})
+ assert resolved['source']=='capability_default' and resolved['configuration']=={'enabled':False,'timezone':'UTC'}
+print(json.dumps(editor))
+'''
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", source, capability_id],
+        cwd=tmp_path, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    editor = json.loads(result.stdout)
+    if capability_id in ("unregistered-editor", ""):
+        assert editor == {
+            "schema_version": "capability_configuration_editor_v0",
+            "editable": False, "supported_scopes": [], "writable_scopes": [],
+            "fields": [],
+            "read_only_reason": "No Dashboard editor is registered for this capability.",
+        }
+
+
+def test_codex_editor_uses_existing_profile_owner_and_nullable_options(tmp_path):
+    from loopx.capabilities.steward_executor.machine_defaults import steward_reasoning_efforts
+
+    (tmp_path / ".codex").mkdir()
+    (tmp_path / ".codex-blue").mkdir()
+    (tmp_path / ".codex-red").mkdir()
+    (tmp_path / ".codex_bad").mkdir()
+    fields = {row["key"]: row for row in capability_configuration_editor("codex_chat")["fields"]}
+    assert fields["codex_profile"]["options"] == ["codex", "codex-blue", "codex-red"]
+    assert fields["codex_profile"]["nullable"] is True
+    assert fields["reasoning_effort"]["options"] == list(steward_reasoning_efforts())
+    assert fields["model"]["nullable"] is True
+    assert fields["service_tier"]["nullable"] is True
+
+
+@pytest.mark.parametrize("capability_id,expected", [
+    ("codex_chat", ["endpoints", "efforts", "profiles"]),
+    ("steward_executor", ["endpoints", "efforts"]),
+])
+def test_selected_editor_preserves_existing_owner_order(capability_id, expected, monkeypatch):
+    from loopx import codex_app_thread_activity
+    from loopx.capabilities.steward_executor import machine_defaults
+
+    calls = []
+
+    def observed(owner, name, label):
+        original = getattr(owner, name)
+
+        def call():
+            calls.append(label)
+            return original()
+
+        monkeypatch.setattr(owner, name, call)
+
+    observed(machine_defaults, "steward_executor_endpoints", "endpoints")
+    observed(machine_defaults, "steward_reasoning_efforts", "efforts")
+    observed(codex_app_thread_activity, "codex_homes", "profiles")
+    capability_configuration_editor(capability_id)
+    assert calls == expected
+
+
+@pytest.mark.parametrize("capability_id,provider", [
+    ("codex_chat", "native_chat"), ("steward_executor", "steward_executor"),
+])
+def test_editor_exposes_selected_provider_unavailability(capability_id, provider, tmp_path):
+    source = '''import importlib.abc,sys
+class UnavailableProvider(importlib.abc.MetaPathFinder):
+ def find_spec(self,fullname,path=None,target=None):
+  root='loopx.capabilities.'+sys.argv[2]
+  if fullname==root or fullname.startswith(root+'.'):raise ImportError('selected provider unavailable')
+sys.meta_path.insert(0,UnavailableProvider())
+from loopx.capabilities.configuration_ui import capability_configuration_editor
+try:capability_configuration_editor(sys.argv[1])
+except ImportError as error:assert str(error)=='selected provider unavailable'
+else:raise AssertionError('selected provider failure was hidden')
+'''
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", source, capability_id, provider],
+        cwd=tmp_path, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_machine_catalog_only_uses_dashboard_supported_editor_kinds() -> None:
@@ -55,6 +179,7 @@ def test_periodic_report_editor_is_shared_across_machine_and_goal_scopes() -> No
     assert editor["supported_scopes"] == ["machine", "goal"]
     assert [field["key"] for field in editor["fields"]] == [
         "enabled",
+        "review_required",
         "profile_preset",
         "route_ref",
         "timezone",
@@ -134,7 +259,7 @@ def test_steward_executor_editor_is_machine_only_and_typed() -> None:
     # The form offers exactly the choices the owning namespace accepts, so a
     # submission cannot name an executor the channel has no contract for.
     assert fields["executor_endpoint"]["input_kind"] == "select"
-    assert fields["executor_endpoint"]["options"] == ["codex", "dsh"]
+    assert fields["executor_endpoint"]["options"] == sorted(steward_executor_endpoints())
     assert fields["executor_endpoint"]["required"] is True
     assert fields["selection_policy"]["options"] == [
         "preferred",
@@ -373,8 +498,7 @@ def test_resolution_rejects_values_for_unsupported_scopes() -> None:
         ("todo_replan_cadence", ["machine", "goal"]),
         ("multi_subagent", ["goal"]),
         ("peer_task_coordination", ["goal"]),
-        ("explore_harness", ["goal"]),
-        ("explore_harness", ["goal"]),
+        ("explore_harness", ["machine", "goal"]),
         ("progress_review", ["goal"]),
         ("reward_memory", ["goal"]),
         ("lark_kanban_heartbeat_sync", ["goal"]),

@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from loopx.control_plane.testing.quota_fixtures import quota_status_payload
 from loopx.control_plane.quota.selected_todo_projection import (
     selected_todo_projection,
+)
+from loopx.control_plane.scheduler.execution_context import (
+    scheduler_execution_context_for_runtime_profile,
 )
 from loopx.control_plane.todos.summary_item import todo_text_content_revision
 from loopx.control_plane.work_items.work_lane import (
@@ -103,7 +108,13 @@ def test_unchanged_monitor_attempt_yields_to_advancement() -> None:
         next_action="Advance the bounded product slice.",
         latest_runs=[unchanged_poll],
     )
-    guard = build_quota_should_run(payload, goal_id=GOAL_ID)
+    guard = build_quota_should_run(
+        payload,
+        goal_id=GOAL_ID,
+        scheduler_execution_context=scheduler_execution_context_for_runtime_profile(
+            "codex_app_heartbeat"
+        ),
+    )
     lane = guard["work_lane_contract"]
 
     assert lane["lane"] == "advancement_task"
@@ -113,6 +124,45 @@ def test_unchanged_monitor_attempt_yields_to_advancement() -> None:
         "monitor_attempt_already_recorded",
     ]
     assert guard["recommended_action"] == "[P1] Advance the bounded product slice."
+    channel = guard["interaction_contract"]["agent_channel"]
+    assert channel["must_attempt"] is True
+    assert channel["delivery_allowed"] is True
+    assert channel["quiet_noop_allowed"] is False
+    assert "advance" in channel["primary_action"].lower()
+
+
+@pytest.mark.parametrize("priority", ["P1", "P2"])
+def test_future_monitor_cannot_hide_executable_advancement(priority: str) -> None:
+    items = _monitor_and_advancement()
+    items[0]["next_due_at"] = "2999-01-01T00:00:00+00:00"
+    items[1].update(
+        {
+            "todo_id": f"todo_advancement_{priority.lower()}",
+            "priority": priority,
+            "text": f"[{priority}] Advance the bounded product slice.",
+        }
+    )
+    payload = _status(
+        agent_todo_items=items,
+        next_action=f"[{priority}] Advance the bounded product slice.",
+    )
+
+    guard = build_quota_should_run(
+        payload,
+        goal_id=GOAL_ID,
+        scheduler_execution_context=scheduler_execution_context_for_runtime_profile(
+            "codex_app_heartbeat"
+        ),
+    )
+    lane = guard["work_lane_contract"]
+    channel = guard["interaction_contract"]["agent_channel"]
+
+    assert lane["lane"] == "advancement_task"
+    assert guard["recommended_action"] == f"[{priority}] Advance the bounded product slice."
+    assert channel["must_attempt"] is True
+    assert channel["delivery_allowed"] is True
+    assert channel["quiet_noop_allowed"] is False
+    assert guard["scheduler_hint"]["cadence_class"] == "active_work"
 
 
 def test_due_monitor_preempts_lower_priority_advancement() -> None:
@@ -196,9 +246,10 @@ def test_due_watch_only_monitor_is_an_auxiliary_no_spend_route() -> None:
     assert f"--turn-instance-id {turn_instance_id}" in auxiliary_cli["command"]
     assert "--todo-id todo_watch_due" in auxiliary_cli["command"]
     assert "--use-current-task-lease" in auxiliary_cli["command"]
-    assert '--result-hash "${LOOPX_MONITOR_RESULT_HASH:?}"' in auxiliary_cli[
-        "command"
-    ]
+    if os.name == "nt":
+        assert '--result-hash "$(if (-not $env:LOOPX_MONITOR_RESULT_HASH)' in auxiliary_cli["command"]
+    else:
+        assert '--result-hash "${LOOPX_MONITOR_RESULT_HASH:?}"' in auxiliary_cli["command"]
     assert auxiliary_cli["command"].endswith("--execute")
     assert "--material-change --execute" in auxiliary_cli[
         "material_change_command"

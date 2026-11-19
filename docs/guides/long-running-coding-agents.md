@@ -15,35 +15,65 @@ use. A host's native Goal can also be sufficient when continuation stays in
 one host. The [session, Codex Goal and LoopX comparison](../book/en/chapters/02-session-goal-loopx.md)
 explains when project-level state earns its additional setup.
 
+If this is your first LoopX task, run the [small bug-fixing exercise](first-bugfix-loop.md)
+before leaving a real project running. This guide takes the next step: define
+a bounded result, activate the host you use, then recover the same work after an interruption.
+
 ## Install and check the current project
 
-Run the [no-clone installer](installing-loopx.md), then open the project you
-want your agent to work on:
+If LoopX is already installed, keep that installation and start with
+`loopx doctor`. For a new installation, the normal release channel is PyPI.
+Use a Python environment whose console scripts are on `PATH`:
 
 ```bash
-curl -fsSL https://loopx-project.github.io/loopx/install.sh | bash
-export PATH="$HOME/.local/bin:$PATH"
-cd /path/to/your-project
+python3 -m pip install --upgrade loopx
+loopx workflow-skills --install
 loopx doctor
-loopx connect
+```
+
+You need Python 3.11+ and Node.js 22.22.3+ (24 LTS recommended). See
+[Installing LoopX](installing-loopx.md) for pipx, uv, the no-clone installer,
+and upgrades. Choose one installation owner rather than layering another copy
+over a working installation. Open or restart the agent host after registering
+its skills if it cannot see them yet.
+
+Then open the project the agent will work on:
+
+```bash
+cd /path/to/your-project
 loopx status
 ```
 
-`connect` should reuse an existing connection. If state is missing, follow the
-[guided first-goal path](newcomer-command-path.md#one-cli-quickstart); do not
-replace an existing goal just to restart a session. Keep runtime state out of
-version control as described in the installation guide.
+If the project already has a Goal, check its objective and current owner before
+continuing. If state is missing, give the task below to your host and follow the
+[guided first-goal path](newcomer-command-path.md#one-cli-quickstart).
+`loopx connect` creates or connects project state; it is not a read-only health
+check. Do not create a replacement Goal merely to restart a session. Keep
+runtime state out of version control as described in the installation guide.
 
 ## Codex: continue a task across sessions
 
 In Codex App, use the installed `loopx` skill through `$loopx` or `/skills`.
-A useful first task has a bounded result and a clear stopping rule:
+Before starting, decide what a successful result looks like. For a failing test,
+that might be a reproduced failure, a patch, passing relevant checks, and a PR
+ready for review. Name the module or repository the agent may change, the
+existing test command, your spending boundary, and the point where it must stop:
 
 ```text
 $loopx Fix the failing integration test, explain the cause, and prepare a
-reviewable PR. Preserve the existing project goal and record test evidence.
-Wait for my approval before merging.
+reviewable PR. Read repository instructions first; identify the failing test
+and its actual test command. Reuse the existing Goal and assigned owner when
+present; otherwise complete guided setup for this project and host.
+Reproduce the failure, repair its cause without weakening assertions, and
+run the relevant checks. Record the actual diff, test results and remaining
+failures. Follow the project's existing quota and spending boundary; stop
+and report if a necessary boundary is missing. Do not merge or release.
+Stop when the patch and validation are ready for review, or report a concrete blocker.
 ```
+
+Replace “the failing integration test” with the actual test or issue and its
+scope before sending. If another Agent already owns the work, continue through
+that assignment instead of starting a second implementation.
 
 For Codex CLI, start from the project root and use the generated bootstrap
 message:
@@ -58,6 +88,17 @@ contracts; they are not interchangeable. The [driver selection table](newcomer-c
 and [Codex App chapter](../book/en/chapters/06-codex-app.md) explain activation.
 Installing LoopX by itself does not keep a closed or unavailable host running.
 
+Check three different outcomes before leaving:
+
+| Checkpoint | Evidence to look for |
+| --- | --- |
+| Project connected | The intended Goal and Agent are identified; existing work is reused |
+| Host activated | The native Goal or App automation is actually active, not merely described in a setup packet |
+| Useful work started | The agent has reproduced the named failure or reports the exact reason it cannot |
+
+These checks establish setup and initial execution. Accept the finished patch
+only after reading its actual test results and diff.
+
 ## Claude Code: track work without losing review state
 
 The installer registers lightweight Claude Code skills. Use `/loopx` with the
@@ -67,8 +108,7 @@ is not available, and follow the [skill registration guide](getting-started.md#c
 If one agent implements while another reviews, retain separate ownership and
 return the review evidence to the shared task. The
 [Claude implementation / Codex review example](../product/use-cases/cross-runtime/cross-runtime-impl-review-demo.md)
-shows the roles and acceptance boundary. Switching the executor does not grant
-it another agent's identity or the user's merge authority.
+shows the roles and acceptance boundary.
 
 ## DeepSeek Harness: choose the native plugin or SDK connector
 
@@ -82,6 +122,49 @@ versions. Installing the plugin alone does not activate continued work.
 Use the [DeepSeek Harness SDK connector](../integrations/deepseek-harness-connector.md)
 when an outer supervisor needs bounded headless turns instead. It is a
 different integration from the native Web plugin.
+
+## Example: keep improving repository quality
+
+Continuous work can improve maintainability as well as fix bugs. Choose a
+repository or module you own, with a real maintenance problem and checks that
+can detect behavior changes. Use this task in Codex; Claude Code uses `/loopx`
+instead of `$loopx`:
+
+```text
+$loopx Continuously refactor <owned repository or module> to improve
+maintainability. Read repository instructions and reuse the existing Goal,
+work ownership and pending PRs. Establish the write scope, actual test commands,
+current quota and stopping rule. Use code and maintenance evidence to choose
+the next refactoring; explain the problem, expected benefit and tradeoffs.
+Prefer duplicated rules, mixed responsibilities or hard-to-test boundaries.
+Deliver one coherent, independently reviewable improvement at a time in the
+required branch or worktree. Preserve external behavior, public APIs, error
+semantics, configuration compatibility, and permission/privacy boundaries.
+If a contract must change, explain it and follow the existing change process
+rather than hiding it in a refactoring. Run relevant tests and boundary
+regressions. Show the before/after structure, actual diff and check results;
+prepare commits and PRs under repository rules. Address review feedback in its
+existing PR and retain adopted feedback, results and the next action in this Goal.
+Judge quality by the maintenance problem resolved, not renames, formatting,
+file counts or lines of code. Continue from new evidence within current
+authority and budget; wait under the existing scheduler when dependencies
+are unmet. Stop and report when no worthwhile improvement remains, the budget
+is exhausted or the stopping condition is reached. Do not merge or release.
+```
+
+For example, two import paths may duplicate field validation. A useful
+refactoring could consolidate the shared rules while retaining each entry's
+defaults, accepted input and error behavior. Compare where a rule change must
+be made before and after, and test both real entry points, including invalid
+input. Reject the abstraction if it makes the callers harder to understand.
+This is an illustrative target, not a finding about your repository.
+
+Keep each result in its original Goal and PR so review feedback can change the
+next decision.
+explain the structural benefit and its costs. If later work requires a pending
+review, use the existing wait rather than starting overlapping changes.
+The [Chinese walkthrough](first-bugfix-loop.zh-CN.md#continuous-refactoring)
+contains the same task in Chinese.
 
 ## Resume after an interruption
 
@@ -100,9 +183,14 @@ goal. Ask me to select the prior agent identity if a takeover is needed.
 Continue only the authorized task and verify the result before writing back.
 ```
 
-A transcript saying “done” is not a substitute for current tests, review or
-accepted evidence. See [long-task operations](../operations/long-task-cadence-policy.md)
+See [long-task operations](../operations/long-task-cadence-policy.md)
 for waiting, budgets and continuation.
+
+If work appears stuck, distinguish a host that is unavailable from a task that
+is correctly waiting for CI, review, quota or a recorded decision. Inspect that
+dependency before restarting anything. To pause, pause both the LoopX Goal and
+its host driver and read back their states; the [exercise's pause instructions](first-bugfix-loop.md#5-turn-the-workflow-into-a-recurring-bug-hunt)
+explain the two separate controls. Deleting state is not a pause mechanism.
 
 ## What to verify before leaving a task running
 
@@ -110,6 +198,19 @@ for waiting, budgets and continuation.
 - The chosen host has an active continuation mechanism and remains available.
 - The task has an acceptance check, spending boundary and stopping rule.
 - Merge, publication and other consequential operations retain explicit approval.
+
+## Setup effort and ongoing cost
+
+Initial setup adds CLI/skill installation, project connection and host
+activation. Keep the same installation owner for upgrades, then verify skill
+discovery and the host driver again. Reopening a project should reuse its
+existing Goal rather than repeat setup.
+
+Agent turns consume the host's model allowance and the project's test, build
+or external-service resources. Recurring checks add wakeup work even when no
+patch is produced. Cost depends on cadence, context size, retries and provider
+terms; Use existing
+quota and scheduled/event-driven waits.
 
 For examples rather than setup, explore the
 [public application scenarios](https://loopx-project.github.io/loopx/blog/application-scenarios/)

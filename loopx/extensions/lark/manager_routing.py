@@ -234,9 +234,21 @@ def _valid_manager_binding(goal_id, binding, routing) -> bool:
 
 
 def authorized_manager_goal_ids(
-    snapshot: Mapping[str, Any], session: Mapping[str, Any], *, runtime_root: Path | None = None, registry_path: Path | None = None
+    snapshot: Mapping[str, Any],
+    session: Mapping[str, Any],
+    *,
+    runtime_root: Path | None = None,
+    registry_path: Path | None = None,
+    executor_runtime_root: Path | None = None,
 ) -> list[str]:
-    """Resolve current external read authority; a session's old Goal is not a grant."""
+    """Resolve current external read authority.
+
+    Evidence policy and machine executor settings may live under different roots
+    when Chat storage is overridden, so callers can bind each authority explicitly.
+    """
+    executor_root = (
+        runtime_root if executor_runtime_root is None else executor_runtime_root
+    )
     candidates = []
     targets = snapshot.get("target_payload") or {}
     for goal_id, payload in (snapshot.get("binding_payloads") or {}).items():
@@ -270,7 +282,7 @@ def authorized_manager_goal_ids(
     goal_id, binding, routing = candidates[0]
     if (
         binding.get("session_id") != session.get("session_id")
-        or manager_connection_executor_endpoint(runtime_root)[0]
+        or manager_connection_executor_endpoint(executor_root)[0]
         != session.get("agent_id")
         or not _valid_manager_binding(goal_id, binding, routing)
     ):

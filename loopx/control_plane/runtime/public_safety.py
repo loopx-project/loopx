@@ -11,6 +11,7 @@ from typing import Any, Callable, Optional
 # --no-implicit-reexport), so the existing importers of these names from this
 # module are unchanged.
 from ...public_safe_text import (
+    IDENTITY_TOKEN_PATTERN as LOOPX_COMMAND_RECORD_GOAL_ID_PATTERN,
     LOCAL_PATH_SURFACE_PATTERN as LOCAL_PATH_SURFACE_PATTERN,
     PUBLIC_SAFE_LOCAL_PATH_PATTERNS as PUBLIC_SAFE_LOCAL_PATH_PATTERNS,
     REMOTE_LOCATION_SURFACE_PATTERN as REMOTE_LOCATION_SURFACE_PATTERN,
@@ -54,9 +55,6 @@ LOOPX_COMMAND_RECORD_ALLOWED_SUBCOMMANDS = {
     "diagnose",
 }
 LOOPX_COMMAND_RECORD_TODO_ID_PATTERN = re.compile(r"^todo_[A-Za-z0-9_-]{6,80}$")
-LOOPX_COMMAND_RECORD_GOAL_ID_PATTERN = re.compile(
-    r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,120}$"
-)
 
 
 def compact_text(text: str, *, limit: int) -> str:

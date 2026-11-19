@@ -1,0 +1,396 @@
+import assert from "node:assert/strict";
+import {execFileSync} from "node:child_process";
+import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
+import {tmpdir} from "node:os";
+import {resolve} from "node:path";
+import {resolveTestPython} from "../../scripts/test-python.mjs";
+import {outputDir, repoRoot} from "./fixture.mjs";
+import {analysisReadback, startHistoryOwner} from "./research-history.mjs";
+
+// Complete endpoint reading and a stable action row are independent of label
+// length, analysis lifecycle and model metadata. The history owner is real;
+// only the analysis readbacks are synthetic, with every write refused.
+export function writeRouteReadingFixture(path) {
+  execFileSync(resolveTestPython(), ["-c", `
+import json,sys
+from pathlib import Path
+from loopx.capabilities.explore.result_log import build_explore_node_event,build_explore_finding_event
+goal='synthetic-route-reading'
+events=[]
+for route in range(3):
+    first=f'route-{route}-start'
+    for endpoint in ('start','end'):
+        title=(('起始研究：如何在相同预算下比较质量、延迟与失败？ ' if endpoint=='start' else '末端研究：负结果、采用与未知成本还需要哪些证据？ ')*4
+            if route!=1 else ('Does the fixed candidate improve the original objective while retaining failures and unknown costs? '*4))
+        node=f'route-{route}-{endpoint}'
+        events.append(build_explore_node_event(goal_id=goal,node_id=node,title=title,
+            parent_id=first if endpoint=='end' else None,recorded_at=f'2026-01-0{route+1}T{0 if endpoint=="start" else 12:02}:00:00Z'))
+        events.append(build_explore_finding_event(goal_id=goal,node_id=node,finding_id=f'finding-{node}',title='固定合成记录',
+            summary='完整观测：局部质量下降，延迟改善；完整成本和独立验证仍未知。',status='refuted' if route==2 else 'tentative',
+            recorded_at=f'2026-01-0{route+1}T{1 if endpoint=="start" else 13:02}:00:00Z'))
+        if route==0 and endpoint=='end':
+            for index,status in enumerate(('confirmed','refuted')):
+                events.append(build_explore_finding_event(goal_id=goal,node_id=node,finding_id=f'finding-{node}-{index}',
+                    title='相同输入下的候选取舍与后续验证',summary='本地比较保留正结果和回退；独立收益及完整成本仍未知。',
+                    status=status,recorded_at=f'2026-01-01T13:00:0{index+1}Z'))
+for index in range(24):
+    node=f'group-question-{index}'
+    title=f'{index+1}. 相同预算下的候选比较：保留负结果、失败和未知成本；哪些证据能支持下一步？'
+    events.append(build_explore_node_event(goal_id=goal,node_id=node,title=title,node_kind='question',
+        recorded_at=f'2026-01-04T{23 if index==23 else 0:02}:00:{index:02}Z'))
+    for version,status in enumerate(('refuted','tentative')):
+        events.append(build_explore_finding_event(goal_id=goal,node_id=node,finding_id=f'group-finding-{index}-{version}',
+            title=f'候选 {index+1} · 记录 {version+1}',summary=f'原始观察 {index+1}/{version+1}：局部指标不同，完整收益和费用仍未知。',
+            status=status,recorded_at=f'2026-01-0{5 if index==23 else 4}T0{version+1}:00:{index:02}Z'))
+Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成研究 · 路线阅读','events':events},ensure_ascii=False))
+`, path], {cwd: repoRoot});
+}
+
+async function assertPrimaryRow(history, minimumHeight) {
+  const controls = history.locator(".research-history-controls");
+  const boxes = await controls.locator(".research-lens, .research-analysis-entry-actions > button, .research-analysis-entry-actions .context-help-trigger, :scope > button").evaluateAll(elements =>
+    elements.map(element => {const r = element.getBoundingClientRect(); return {name: element.textContent || element.getAttribute("aria-label"), top: r.top, bottom: r.bottom, height: r.height, left: r.left, right: r.right};}));
+  assert.equal(boxes.length, 5, "View, analysis, help, evidence search and refresh share the primary row");
+  const horizontal = [...boxes].sort((a, b) => a.left - b.left);
+  assert(horizontal.slice(1).every((box, index) => box.left >= horizontal[index].right - 1), "Primary controls do not overlap");
+  assert(Math.max(...boxes.map(b => b.top)) - Math.min(...boxes.map(b => b.top)) <= 1, JSON.stringify(boxes));
+  assert(Math.max(...boxes.map(b => b.bottom)) - Math.min(...boxes.map(b => b.bottom)) <= 1, JSON.stringify(boxes));
+  assert(boxes.every(b => b.height >= minimumHeight - .1), `All primary controls retain their usable target height: ${JSON.stringify(boxes)}`);
+  const metadata = controls.locator(".research-analysis-entry > small");
+  if (await metadata.count()) assert((await metadata.boundingBox()).y >= boxes[0].bottom, "Model and usage have their own row");
+  assert(await controls.evaluate(element => element.scrollWidth <= element.clientWidth + 1), "The action row fits without horizontal scrolling");
+}
+
+export const researchRouteReadingScenario = {
+  id: "research-route-reading",
+  async run({browser, collectCoverage}) {
+    const temporary = await mkdtemp(resolve(tmpdir(), "loopx-route-reading-"));
+    let owner, page;
+    try {
+      const fixture = resolve(temporary, "capture.json");
+      writeRouteReadingFixture(fixture);
+      const capture = JSON.parse(await readFile(fixture));
+      const findingEventId = resultId => {
+        const finding = capture.events.find(event => event.result_id === resultId && event.event_kind === "finding");
+        assert(finding?.event_id, `The fixture retains finding event identity for ${resultId}`);
+        return finding.event_id;
+      };
+      owner = await startHistoryOwner(fixture);
+      page = await browser.newPage({viewport: {width: 1440, height: 900}, hasTouch: true, timezoneId: "Asia/Shanghai"});
+      if (collectCoverage) await page.coverage.startJSCoverage({resetOnNavigation: false});
+      const url = new URL("/chat/?goalId=synthetic-route-reading&view=research&statusUrl=%2Fstatus.json", owner.base).href;
+      let state = "deep", analysisWrites = 0, releaseLoading;
+      let loadingRead = Promise.resolve();
+      await page.route("**/api/chat/research-analysis?*", async route => {
+        if (route.request().method() !== "GET") {analysisWrites++; return route.abort();}
+        if (state === "loading") await loadingRead;
+        const language = new URL(route.request().url()).searchParams.get("output_language");
+        const snapshot = analysisReadback();
+        snapshot.pack.config = {...snapshot.pack.config, output_language: language};
+        if (state === "continue") snapshot.pack.config.model = "synthetic-model-with-a-long-display-identifier";
+        if (state !== "view") snapshot.pack.result = null;
+        else snapshot.pack.result.output_language = language;
+        if (state !== "running") snapshot.pack.job = null;
+        else snapshot.pack.job = {...snapshot.pack.job, status: "running"};
+        if (["reuse", "continue"].includes(state)) snapshot.pack.continuation = {can_reuse: state === "reuse"};
+        if (state === "unavailable") {snapshot.pack.availability = "unavailable"; snapshot.pack.reason_code = "source_unavailable";}
+        return route.fulfill({json: snapshot});
+      });
+      const history = page.locator(".research-history");
+      const caption = history.locator(".research-route-caption");
+      const reader = history.locator(".research-history-detail");
+      for (const language of ["zh-CN", "en"]) for (const width of [1440, 768, 390]) {
+        await page.setViewportSize({width, height: 900});
+        await page.goto(url, {waitUntil: "domcontentloaded"});
+        await page.evaluate(locale => localStorage.setItem("loopx-pw-locale", locale), language);
+        for (state of ["loading", "deep", "view", "reuse", "continue", "running", "unavailable"]) {
+          // One release covers this read and its subsequent original fallback.
+          if (state === "loading") loadingRead = new Promise(resolve => {releaseLoading = resolve;});
+          await page.reload({waitUntil: "domcontentloaded"});
+          await caption.first().waitFor();
+          assert.equal(await page.locator("html").getAttribute("lang"), language);
+          await history.locator(`.research-analysis-entry-actions > button${state === "loading" ? ":disabled" : ":not(:disabled)"}`).waitFor();
+          await assertPrimaryRow(history, width <= 640 ? 44 : 36);
+          if (state === "loading") {releaseLoading(); await history.locator(".research-analysis-entry-actions > button:not(:disabled)").waitFor();}
+        }
+        state = "deep";
+        await page.reload({waitUntil: "domcontentloaded"});
+        await caption.first().waitFor();
+        assert.equal(await caption.count(), 3, "Every recorded route remains in the whole history");
+        const legend = history.locator(".research-phase-legend");
+        assert((await legend.innerText()).includes(language === "zh-CN" ? "暂定结论" : "Tentative"));
+        const findingHelp = history.getByRole("button", {name: language === "zh-CN" ? "时间线读法" : "Reading the timeline", exact: true});
+        await findingHelp.focus();
+        const explanation = page.locator(".context-help-popover:popover-open");
+        await explanation.waitFor();
+        assert((await explanation.innerText()).includes(language === "zh-CN" ? "不表示有检查任务排队" : "does not mean a check is queued"));
+        await page.keyboard.press("Escape");
+        assert.equal(await explanation.count(), 0);
+        assert(await findingHelp.evaluate(element => element === document.activeElement), "Closing state help retains keyboard context");
+        const titleLayout = await caption.first().locator("strong").first().evaluate(element => ({height: element.clientHeight, lineHeight: parseFloat(getComputedStyle(element).lineHeight), fontSize: parseFloat(getComputedStyle(element).fontSize)}));
+        assert(titleLayout.height >= titleLayout.lineHeight * 1.9 && titleLayout.fontSize >= 16, "Long captions wrap into readable list entries");
+        if (language === "zh-CN" && width !== 768) {
+          assert.equal(await page.getByRole("button", {name: "开启研究模式", exact: true}).count(), 0, "A read-only source does not expose research activation");
+          await page.locator(".personal-channel-scroll").evaluate(element => element.scrollTop = 0);
+          await page.screenshot({path: resolve(outputDir, `research-route-reading-first-${width}.png`), animations: "disabled"});
+        }
+        for (const endpoint of [0, 1]) {
+          const control = caption.first().locator("button").nth(endpoint);
+          await control.focus();
+          const returnKey = await control.getAttribute("data-research-return");
+          const fullTitle = capture.events.find(event => event.result_id === `route-0-${endpoint ? "end" : "start"}` && event.event_kind === "node").title;
+          await page.keyboard.press("Enter");
+          await reader.waitFor();
+          const question = reader.locator(".research-reader-content > .research-reader-question > summary > span");
+          assert.equal(await question.innerText(), fullTitle, "One route activation reveals the complete original question");
+          assert(await question.evaluate(element => element.scrollHeight <= element.clientHeight + 1 && element.scrollWidth <= element.clientWidth + 1), "Requested question text is not clipped");
+          await page.reload();
+          await question.waitFor();
+          assert.equal(await question.innerText(), fullTitle, "Reload preserves complete-question reading after the finding is pinned");
+          assert(await reader.locator('.research-reader-question').evaluate(element => element.open), "Reload must not substitute finding-only reading");
+          if (!endpoint) {
+            const summary = reader.locator(".research-reader-question > summary");
+            await summary.focus();
+            await page.keyboard.press("Enter");
+            await page.waitForFunction(() => document.activeElement?.classList.contains("research-history-detail"));
+            assert.equal(await reader.locator(".research-reader-question").count(), 0, "Closing the question preserves reader focus without a redundant title row");
+            await page.reload(); await reader.waitFor();
+            assert.equal(await reader.locator('.research-reader-question').count(), 0, "An explicit collapse stays collapsed on reload");
+            const context = reader.getByRole("button", {name: language === "zh-CN" ? "完整研究问题" : "Full research question", exact: true});
+            await context.tap();
+            assert.equal(await reader.locator(".research-question-text p").first().innerText(), fullTitle, "Touch can recover the complete question after collapse");
+            await page.keyboard.press("Escape");
+          }
+          if (endpoint) {
+            await reader.locator("select").selectOption(findingEventId("finding-route-0-end"));
+            const body = reader.getByText("完整观测：局部质量下降，延迟改善；完整成本和独立验证仍未知。", {exact: true}).first();
+            const box = await body.boundingBox();
+            const reading = await history.evaluate(element => {const bounds = element.closest(".personal-channel-scroll")?.getBoundingClientRect(); return {top: Math.max(0, bounds?.top ?? 0), bottom: Math.min(innerHeight, bounds?.bottom ?? innerHeight)};});
+            const lineHeight = await body.evaluate(element => parseFloat(getComputedStyle(element).lineHeight));
+            assert(box.y >= reading.top - 1 && box.y + Math.min(box.height, lineHeight * 2) <= reading.bottom + 1, "The selected finding begins with readable content inside the reading viewport");
+            assert(await body.evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 16), "Density retains readable finding text");
+            assert.match(await reader.locator(".research-finding-exceptions").innerText(), /1/);
+            assert.equal(await reader.locator(".research-reader-question").count(), 0, "Finding reading does not repeat the parent question in a collapsed title row");
+            await page.reload(); await reader.waitFor();
+            assert.equal(await reader.locator('.research-reader-question').count(), 0, "An explicit finding selection retains its reading intent on reload");
+            const context = reader.getByRole("button", {name: language === "zh-CN" ? "完整研究问题" : "Full research question", exact: true});
+            await context.focus();
+            const fullQuestion = reader.locator(".research-question-text p").first();
+            assert.equal(await fullQuestion.innerText(), fullTitle, "Full parent context remains available through keyboard focus");
+            assert(await fullQuestion.evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 16 && element.scrollWidth <= element.clientWidth + 1), "Original question remains readable without horizontal scrolling");
+            await page.keyboard.press("Escape");
+            assert(await context.evaluate(element => element === document.activeElement), "Dismissing question help keeps focus at its trigger");
+          }
+          if (endpoint && language === "zh-CN" && width !== 768) await page.screenshot({path: resolve(outputDir, `research-route-reading-detail-${width}.png`), animations: "disabled"});
+          await page.keyboard.press("Escape");
+          assert.equal(await reader.count(), 0);
+          await page.waitForFunction(key => document.activeElement?.getAttribute("data-research-return") === key, returnKey);
+        }
+        // Native WebKit button activation need not focus the opener. The
+        // reader must still return to the exact route caption after a click.
+        const activated = caption.last().locator("button").last();
+        const activatedKey = await activated.getAttribute("data-research-return");
+        await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
+        await activated.evaluate(element => element.click());
+        await reader.waitFor();
+        await reader.locator(".research-reader-back").click();
+        await page.waitForFunction(key => document.activeElement?.getAttribute("data-research-return") === key, activatedKey, {timeout: 2000});
+        if (language === "zh-CN" && width !== 768) {
+          await activated.scrollIntoViewIfNeeded();
+          await page.screenshot({path: resolve(outputDir, `research-route-reading-return-${width}.png`), animations: "disabled"});
+        }
+        if (language === "zh-CN" && width !== 768) {
+          await caption.first().evaluate(element => element.scrollIntoView({block: "center"}));
+          await page.screenshot({path: resolve(outputDir, `research-route-reading-routes-${width}.png`), animations: "disabled"});
+        }
+        await history.getByRole("button", {name: language === "zh-CN" ? "关系图" : "Graph", exact: true}).click();
+        const graphNode = history.locator(".research-history-node:not(.research-history-group)").first();
+        const graphKey = await graphNode.getAttribute("data-research-return");
+        assert(graphKey, "A graph node has a stable return address across document reloads");
+        const graphTitle = capture.events.find(event => event.result_id === graphKey.slice("graph:".length) && event.event_kind === "node").title;
+        await graphNode.focus();
+        await page.keyboard.press("Enter");
+        await reader.waitFor();
+        await page.reload();
+        await reader.waitFor();
+        assert.equal(await reader.locator(".research-reader-question > summary > span").innerText(), graphTitle, "Graph reading retains the complete question on reload");
+        await page.keyboard.press("Escape");
+        await page.waitForFunction(key => document.activeElement?.getAttribute("data-research-return") === key, graphKey);
+        // Native button clicks can leave focus elsewhere; return identity
+        // belongs to the activated node, independently of browser focus policy.
+        await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
+        await graphNode.evaluate(element => element.click());
+        await reader.waitFor();
+        await page.reload();
+        await reader.waitFor();
+        await reader.locator(".research-reader-back").click();
+        await page.waitForFunction(key => document.activeElement?.getAttribute("data-research-return") === key, graphKey);
+        await history.getByRole("button", {name: language === "zh-CN" ? "时间线" : "Timeline", exact: true}).click();
+      }
+      await caption.first().locator("button").last().tap();
+      await reader.waitFor();
+      await page.reload({waitUntil: "domcontentloaded"});
+      await reader.waitFor();
+      assert.match(new URL(page.url()).searchParams.get("research_node"), /route-0-end/);
+      await page.waitForFunction(() => new URLSearchParams(location.search).has("research_finding"));
+      const readingBeforeGraph = new URL(page.url());
+      await reader.getByRole("button", {name: "Whole graph", exact: true}).click();
+      await page.goBack();
+      await reader.waitFor();
+      // Back restores the expanded question itself, rather than its help trigger.
+      const restoredQuestion = reader.locator(".research-reader-question > summary > span");
+      await restoredQuestion.waitFor();
+      assert.equal(await restoredQuestion.innerText(), capture.events.find(event => event.result_id === "route-0-end" && event.event_kind === "node").title,
+        "Back restores the complete original question without another activation");
+      assert(await reader.locator(".research-reader-question").evaluate(element => element.open), "Back retains expanded-question reading intent");
+      const restoredReading = new URL(page.url());
+      for (const key of ["research_goal", "research_node", "research_finding", "research_question"]) {
+        assert.equal(restoredReading.searchParams.get(key), readingBeforeGraph.searchParams.get(key), `Back retains the original ${key}`);
+      }
+      await page.keyboard.press("Escape");
+      // A grouped reading context survives the document/URL boundary, rather
+      // than living only in an in-memory opener ref. Navigation is a read.
+      for (const locale of ["zh-CN", "en"]) for (const width of [1440, 390]) {
+        const zh = locale === "zh-CN";
+        await page.setViewportSize({width, height: 900});
+        await page.emulateMedia({reducedMotion: "reduce"});
+        await page.evaluate(value => localStorage.setItem("loopx-pw-locale", value), locale);
+        await page.goto(url);
+        const day = history.locator('[data-research-day="2026-01-04"]');
+        await day.waitFor();
+        const dayText = await day.innerText();
+        await history.locator(".research-history-canvas").focus();
+        // WebKit can activate the button while leaving focus on the canvas.
+        await day.evaluate(button => button.click());
+        await reader.locator(".research-question-index").waitFor();
+        await page.screenshot({path: resolve(outputDir, `research-day-group-${locale}-${width}.png`), animations: "disabled"});
+        assert.match(dayText, /2026-01-04 UTC/, "UTC grouping stays explicit beside the local record range");
+        assert.match(await reader.locator("h3").innerText(), /2026-01-04 UTC/, "Opening a date group preserves its time basis");
+        await reader.locator(".research-question-index button").nth(3).click();
+        await page.keyboard.press("Escape");
+        await reader.locator(".research-question-index").waitFor();
+        await page.keyboard.press("Escape");
+        await page.waitForFunction(() => document.activeElement?.getAttribute("data-research-day") === "2026-01-04");
+        await day.click();
+        assert.equal(await reader.locator(".research-question-index li").count(), 24);
+        await reader.locator(".research-question-index button").nth(3).click();
+        const questions = reader.getByRole("combobox", {name: zh ? "选择同组研究问题" : "Choose a question in this group"});
+        const findings = reader.getByRole("combobox", {name: zh ? "选择问题结论" : "Choose a question finding"});
+        const next = reader.getByRole("button", {name: zh ? "下一个问题" : "Next question", exact: true});
+        await questions.selectOption("group-question-4");
+        await findings.selectOption(findingEventId("group-finding-4-0"));
+        await reader.getByRole("button", {name: zh ? "完整研究问题" : "Full research question", exact: true}).focus();
+        const questionHelp = page.locator(".context-help-popover:popover-open");
+        await questionHelp.waitFor();
+        assert((await questionHelp.innerText()).includes(capture.events.find(event => event.result_id === "group-question-4").title));
+        assert(await questionHelp.locator("p").evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 16));
+        await page.keyboard.press("Escape");
+        assert.equal(await questions.inputValue(), "group-question-4", "Closing question help retains the reader");
+        assert.match(await reader.locator(".research-recorded-finding").innerText(), /原始观察 5\/1/);
+        await page.reload();
+        await questions.waitFor();
+        assert.equal(await questions.inputValue(), "group-question-4");
+        assert.equal(await findings.inputValue(), findingEventId("group-finding-4-0"), "Reload retains the precise finding, not just the question");
+        await next.click();
+        assert.equal(await questions.inputValue(), "group-question-5");
+        await page.goBack();
+        assert.equal(await questions.inputValue(), "group-question-4");
+        assert.equal(await findings.inputValue(), findingEventId("group-finding-4-0"));
+        await page.goForward();
+        assert.equal(await questions.inputValue(), "group-question-5");
+        await reader.locator(".research-reader-back").click();
+        await page.waitForFunction(() => document.activeElement?.closest("[data-research-node]")?.getAttribute("data-research-node") === "group-question-5");
+        await reader.locator(".research-question-index button").nth(3).click();
+        await questions.selectOption("group-question-0");
+        assert(await reader.getByRole("button", {name: zh ? "上一个问题" : "Previous question", exact: true}).isDisabled());
+        await questions.selectOption("group-question-23");
+        assert(await next.isDisabled());
+        await questions.selectOption("group-question-4");
+        await findings.selectOption(findingEventId("group-finding-4-0"));
+        await page.reload(); await questions.waitFor();
+        assert.equal(await reader.locator(".research-reader-back").innerText(), zh ? "返回问题列表" : "Back to questions");
+        const content = reader.locator(".research-recorded-finding > p");
+        assert(await content.evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 16));
+        assert(await reader.evaluate(element => element.scrollWidth <= element.clientWidth + 1));
+        await reader.evaluate(element => element.scrollIntoView({block: "start"}));
+        await page.screenshot({path: resolve(outputDir, `research-question-reading-${locale}-${width}.png`), animations: "disabled"});
+        await page.keyboard.press("Escape");
+        await page.waitForFunction(() => document.activeElement?.closest("[data-research-node]")?.getAttribute("data-research-node") === "group-question-4");
+        await page.reload(); await reader.locator(".research-question-index").waitFor();
+        assert.match(await reader.locator("h3").innerText(), /2026-01-04 UTC/, "Reload preserves the date group's UTC basis");
+        await page.keyboard.press("Escape");
+        await page.waitForFunction(() => document.activeElement?.getAttribute("data-research-day") === "2026-01-04");
+      }
+      await history.getByRole("button", {name: "Graph", exact: true}).click();
+      const graphDay = history.locator('[data-research-day="2026-01-04"]');
+      assert.match(await graphDay.innerText(), /2026-01-04 UTC/);
+      await graphDay.click();
+      assert.match(await reader.locator("h3").innerText(), /2026-01-04 UTC/);
+      assert.equal(await reader.locator(".research-question-index li").count(), 24,
+        "The late UTC record remains in its UTC group across local midnight");
+      await page.keyboard.press("Escape");
+      await history.getByRole("button", {name: "Timeline", exact: true}).click();
+      // A saved multi-node selection retains the same local collection. A
+      // forged parent cannot borrow unrelated questions for its navigation.
+      const clustered = new URL(url);
+      clustered.searchParams.set("research_goal", "synthetic-route-reading");
+      clustered.searchParams.set("research_node", JSON.stringify(["route-0-start", "route-0-end"]));
+      await page.goto(clustered.href);
+      await reader.locator(".research-question-index button").first().click();
+      await page.reload();
+      await reader.locator(".research-question-navigation").waitFor();
+      assert.equal(await reader.locator(".research-question-navigation select option").count(), 2);
+      await page.keyboard.press("Escape");
+      await reader.locator(".research-question-index").waitFor();
+      assert.equal(await reader.locator(".research-question-index li").count(), 2);
+      const unrelated = new URL(clustered.href);
+      unrelated.searchParams.set("research_node", "route-1-start");
+      unrelated.searchParams.set("research_parent_node", JSON.stringify(["route-0-start", "route-0-end"]));
+      await page.goto(unrelated.href); await reader.locator(".research-recorded-finding").waitFor();
+      assert.equal(await reader.locator(".research-question-navigation").count(), 0);
+      assert.equal(analysisWrites, 0, "Reading, language changes and every action state never dispatch a model");
+      const readback = await (await page.request.get(`${owner.base}/fixture/readback`)).json();
+      assert(readback.source_unchanged && readback.mutation_attempts === 0, "No source or execution state changes");
+      // A short capture has one reading group. It must use the available row
+      // and describe that group consistently to sighted and nonvisual readers.
+      await owner.close();
+      const shortFixture = resolve(temporary, "short-capture.json");
+      const shortCapture = structuredClone(capture);
+      shortCapture.events = capture.events.filter(event =>
+        ["route-0-start", "finding-route-0-start"].includes(event.result_id));
+      await writeFile(shortFixture, JSON.stringify(shortCapture));
+      owner = await startHistoryOwner(shortFixture);
+      state = "deep";
+      for (const language of ["zh-CN", "en"]) for (const width of [1440, 390]) {
+        await page.setViewportSize({width, height: 900});
+        await page.evaluate(locale => localStorage.setItem("loopx-pw-locale", locale), language);
+        await page.goto(new URL("/chat/?goalId=synthetic-route-reading&view=research&statusUrl=%2Fstatus.json", owner.base).href);
+        const group = history.locator(".research-phases");
+        const card = group.locator("button");
+        await card.waitFor();
+        assert.equal(await card.count(), 1, "Short history retains one complete reading group");
+        assert(Math.abs((await card.boundingBox()).width - (await group.boundingBox()).width) <= 1,
+          "One group uses the available row instead of leaving two empty columns");
+        assert.doesNotMatch(await group.getAttribute("aria-label"), /三等分|Equal thirds/);
+        const help = history.getByRole("button", {name: language === "zh-CN" ? "时间线读法" : "Reading the timeline", exact: true});
+        await help.tap();
+        const popover = page.locator(".context-help-popover:popover-open");
+        await popover.waitFor();
+        assert.match(await popover.innerText(), language === "zh-CN" ? /同一阅读分组/ : /one reading group/);
+        assert.match(await popover.innerText(), language === "zh-CN" ? /不表示有检查任务排队/ : /does not mean a check is queued/);
+        await page.keyboard.press("Escape");
+        assert(await help.evaluate(element => element === document.activeElement));
+        await card.tap();
+        await history.getByRole("button", {name: language === "zh-CN" ? "全部时段" : "Whole history", exact: true}).tap();
+        assert.equal(await card.getAttribute("aria-pressed"), "false");
+      }
+      const shortReadback = await (await page.request.get(`${owner.base}/fixture/readback`)).json();
+      assert(shortReadback.source_unchanged && shortReadback.mutation_attempts === 0, "Short-history reading remains read-only");
+      assert.equal(analysisWrites, 0);
+      return {coverageEntries: collectCoverage ? await page.coverage.stopJSCoverage() : [], note: "complete route endpoint reading, exact keyboard return, reload/Back, bilingual action states on desktop/narrow/390 with zero model effects"};
+    } catch (error) {
+      if (page && !page.isClosed()) await page.screenshot({path: resolve(outputDir, "research-route-reading-failed.png")});
+      throw error;
+    } finally {await page?.close(); await owner?.close(); await rm(temporary, {recursive: true, force: true});}
+  },
+};

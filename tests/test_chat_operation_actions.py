@@ -212,7 +212,7 @@ def test_non_managed_prepare_does_not_mount_managed_source_resolution(tmp_path: 
 
 
 def test_managed_prepare_selects_registered_return_audience_without_rebinding_executor(tmp_path: Path) -> None:
-    from loopx.control_plane.turn_driver.codex_operation_host import operation_tool_handler
+    from loopx.control_plane.turn_driver.managed_operation_host import operation_tool_handler
 
     service, store = _service(tmp_path)
     registry = json.loads(service.registry_path.read_text())
@@ -1293,6 +1293,15 @@ def test_operation_preview_arms_one_canonical_gate_and_local_apply_cannot_claim(
     with pytest.raises(ProtectedActionGate, match="local apply"):
         service.apply(str(proposal["proposal_id"]))
     assert store.load(str(proposal["proposal_id"]))["status"] == "gated"
+
+
+def test_operation_preview_rejects_cross_goal_context(tmp_path: Path) -> None:
+    service, _store = _service(tmp_path)
+    request = _request()
+    request["context"]["goal_id"] = "other-goal"
+
+    with pytest.raises(ValueError, match="context must match its Goal"):
+        service.preview(request)
 
 
 def test_operation_digest_change_cannot_reuse_idempotency_key(tmp_path: Path) -> None:

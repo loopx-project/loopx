@@ -8,11 +8,17 @@ import pytest
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from loopx.control_plane.testing.canary_harness import write_fixture_registry
 
 
-@pytest.fixture(params=["file", "sqlite"])
+@pytest.fixture(params=[
+    pytest.param((provider, module), id=f"{provider}-{module}")
+    for provider in ("file", "sqlite")
+    for module in ("loopx.entrypoint", "loopx.cli")
+])
 def canonical_mode(tmp_path, monkeypatch, request):
-    if request.param == "sqlite":
+    provider, module = request.param
+    if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
     state = tmp_path / "state.md"
     state.write_text("---\nhandoff_mode: hard_lease\n---\n\n## Agent Todo\n")
@@ -22,10 +28,10 @@ def canonical_mode(tmp_path, monkeypatch, request):
         {"id": "mode-goal", "repo": str(tmp_path), "state_file": state.name,
          "coordination": {"registered_agents": ["agent-a", "agent-b"]}}]}))
     projection = build_todo_runtime_shadow_projection(goal_id="mode-goal", handoff_mode="soft_claim", todos=[])
-    initialize_canonical_authority(runtime, "mode-goal", projection, state_path=state, provider=request.param)
-    def cli(*args):
-        result = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
-            "--format", "json", "handoff-mode", *args, "--goal-id", "mode-goal"],
+    initialize_canonical_authority(runtime, "mode-goal", projection, state_path=state, provider=provider)
+    def cli(*args, family="handoff-mode"):
+        result = subprocess.run([sys.executable, "-m", module, "--registry", str(registry),
+            "--format", "json", family, *args, "--goal-id", "mode-goal"],
             capture_output=True, text=True, timeout=90)
         if result.returncode:
             # Keep the complete native refusal in pytest's captured output;
@@ -35,6 +41,41 @@ def canonical_mode(tmp_path, monkeypatch, request):
         assert result.stdout, result.stderr
         return result.returncode, json.loads(result.stdout)
     return state, runtime, cli
+
+
+def test_handoff_prepare_adopt_and_replay_keep_the_original_todo(canonical_mode):
+    state, runtime, cli = canonical_mode
+    from loopx.todos import add_goal_todo
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+
+    created = add_goal_todo(
+        registry_path=state.parent / "registry.json", goal_id="mode-goal", role="agent",
+        text="[P1] Preserve the complete continuation requirement.", claimed_by="agent-a",
+        agent_id="agent-a", operation_id="handoff-source",
+    )
+    todo_id = created["todo_id"]
+    args = ["--todo-id", todo_id, "--agent-id", "agent-a", "--workspace", str(state.parent)]
+    code, initial = cli("inspect", *args, "--session-id", "source-session", family="handoff")
+    assert code == 0 and initial["note_state"] == "missing", initial
+    code, prepared = cli(
+        "prepare", *args, "--session-id", "source-session", "--operation-id", "prepare-source",
+        "--expected-revision", initial["provider_revision"], "--rationale", "Keep the accepted validation route.",
+        "--source-ref", "artifact:validation", family="handoff",
+    )
+    assert code == 0 and prepared["ok"] is True, prepared
+    code, inspected = cli("inspect", *args, "--session-id", "target-session", family="handoff")
+    assert code == 0 and inspected["can_adopt"] is True and inspected["todo_id"] == todo_id, inspected
+    adoption = ["adopt", *args, "--session-id", "target-session", "--operation-id", "adopt-source",
+                "--expected-revision", inspected["provider_revision"]]
+    code, adopted = cli(*adoption, family="handoff")
+    assert code == 0 and adopted["current_authority_verified"] is True, adopted
+    code, replayed = cli(*adoption, family="handoff")
+    assert code == 0 and replayed["current_authority_verified"] is True, replayed
+    current = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="mode-goal", include_leases=True)
+    assert [(todo["todo_id"], todo["text"], todo["claimed_by"]) for todo in current["todos"]] == [
+        (todo_id, "[P1] Preserve the complete continuation requirement.", "agent-a"),
+    ]
+    assert current["leases"] == []
 
 
 def test_canonical_show_ignores_stale_or_missing_display(canonical_mode):
@@ -248,6 +289,9 @@ def test_retired_policy_requires_release_and_reviewed_migration_before_execution
     from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 
     registry = runtime.parent / "registry.json"
+    write_fixture_registry(project=registry.parent, runtime_root=runtime, registry_path=registry,
+        goal_id="mode-goal", domain="software", adapter_kind="generic_project_goal_v0",
+        state_file=str(state), registered_agents=["agent-a", "agent-b"], quota_allowed_slots=None)
     todo = add_goal_todo(registry_path=registry, goal_id="mode-goal", role="agent",
                          text="Preserve imported ownership", claimed_by="agent-a",
                          task_class="advancement_task", note="Retain original metadata")
@@ -288,6 +332,14 @@ def test_retired_policy_requires_release_and_reviewed_migration_before_execution
     assert inspected["active"] is False
     assert inspected["executor_constraint"]["reason"] == "handoff_mode_retired"
     assert inspected["lease"] == lease
+    code, guard = cli("should-run", "--agent-id", "agent-a", "--runtime-profile", "generic_cli",
+                      "--context-delivery", "off", family="quota")
+    assert code == 0 and guard["status_health_ok"] is True, guard
+    assert guard["should_run"] is False and guard["normal_delivery_allowed"] is False
+    preparation = guard["execution_preparation"]
+    assert preparation["reason_code"] == "handoff_mode_retired"
+    assert preparation["handoff_mode"] == "legacy" and "claim" not in preparation
+    assert read() == before
     for args in [
         ("todo", "claim", "--agent-id", "agent-a", "--claimed-by", "agent-a"),
         ("todo", "update", "--agent-id", "agent-a", "--note", "Unreviewed work"),

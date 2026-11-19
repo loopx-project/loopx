@@ -19,7 +19,7 @@ export function acceptanceRestoration(
   input: CoordinationTodoUpdateInput,
 ): AcceptanceRestoration | null {
   const state = readGoalAcceptance(head, input.goal_id);
-  if (!state?.enabled || acceptanceTask(input.todo_id, todo, state).state !== "stale") return null;
+  if (!state || acceptanceTask(input.todo_id, todo, state).state !== "stale") return null;
   const unavailable = (reason: string): AcceptanceRestoration => ({kind: "unavailable", reason});
   if (todo.role !== "agent" || !input.actor_agent_id || todo.claimed_by !== input.actor_agent_id) {
     return unavailable("Only the same claimed Agent may restore this declaration; ask the owner to review and rebind the Todo");

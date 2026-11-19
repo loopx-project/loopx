@@ -344,15 +344,11 @@ does not fetch or persist the raw page. The output keeps the URL beside each
 candidate so a maintainer can audit why that person was selected.
 
 `CODEOWNERS` remains the strongest repository-native signal. Commit volume is
-only evidence of familiarity; it is not proof of maintainership, availability,
-or review authority. See the [reviewer recommendation
-contract](protocols/issue-fix-reviewer-recommendation-v0.md) for scoring,
-identity, and future-signal details, and the [reviewer request
-contract](protocols/issue-fix-reviewer-request-v0.md) for the external-write,
+only evidence of familiarity; See the [reviewer recommendation contract](docs/protocols/issue-fix-reviewer-recommendation-v0.md) for scoring,
+identity, and future-signal details, and the [reviewer request contract](docs/protocols/issue-fix-reviewer-request-v0.md) for the external-write,
 idempotency, and verification rules. Secondary delivery, dedicated-bot
 isolation, local-private identity mapping, and readback are defined by the
-[reviewer notification sink
-contract](protocols/issue-fix-reviewer-notification-sinks-v0.md).
+[reviewer notification sink contract](docs/protocols/issue-fix-reviewer-notification-sinks-v0.md).
 
 ### 6. PR publication and public-write boundary
 
@@ -370,7 +366,7 @@ The host agent may perform only the actions covered by current boundary
 authority. Reviewer notification is also an external write, but a standing
 `external_review_request` or `publish` authority lets the agent perform the
 formal request and its permission-only comment fallback automatically without
-another user prompt. This does not authorize arbitrary comments.
+another user prompt.
 Recommendation packets themselves remain read-only.
 
 ### 7. Continuous PR lifecycle
@@ -400,19 +396,77 @@ or structured no-follow-up; the agent must not stop silently in monitor-only
 state.
 
 When a review or public maintainer comment contains a concrete correction, the
-host compacts it into `issue_fix_maintainer_correction_input_v0` and passes it
+host compacts it into `issue_fix_maintainer_correction_input_v1` and passes it
 to `pr-lifecycle`. The compact input keeps only the correction kind, a public
-source reference, a bounded summary, and one of: verification plus PR update
-path, a concrete ambiguity question, or missing authority scopes. It never
-copies the raw review/comment body.
+source reference, a bounded summary, one of: verification plus PR update
+path, a concrete ambiguity question, or missing authority scopes, and a
+`source_event` naming the provider event that carried the correction:
+`{kind: issue_comment|review|review_comment, id, html_url, author_login,
+author_association, created_at, updated_at}`. It never copies the raw
+review/comment body. The older `issue_fix_maintainer_correction_input_v0`
+shape without `source_event` is still accepted and recorded as
+`admission_basis: host_asserted`; a v1 input is `provider_verified` because
+LoopX matches the event id and `updated_at` against the PR's body-free
+comment and review metadata (from the same `--metadata-json` fixture keys
+`comments`, `reviews`, `reviewComments`, or fetched with `gh api` under
+`--fetch-metadata`; reviews use `submitted_at` as their revision).
 
-With `--execute-transition`, an `actionable_patch` creates exactly one
+Every correction passes deterministic admission gates before any Todo write,
+and every rejection is recorded in the ledger row as a `context_only` entry
+with its `reason` instead of being dropped: `source_event_not_observed`,
+`source_event_revision_mismatch`, `stale_revision` (an older `updated_at` for
+an already admitted event), `self_or_bot_author` (login ending in `[bot]`;
+no configured LoopX actor login exists yet), `author_not_maintainer`
+(association outside COLLABORATOR/MEMBER/OWNER) and `terminal_pr_state`.
+Immediately before the Todo write the gates run again against the ledger as it
+stands, and a stopped Goal refuses with `goal_not_active`.
+
+Bind the row with `--origin-request-id`, `--origin-registry` and
+`--origin-runtime-root` alongside `--goal-id` and `--claimed-by`: the origin
+uses a separate lifecycle-only `source_session_v1` registry while issue-fix
+uses the project registry for Goal/Todo operations. All origin flags are
+required together; the binding survives reruns without them, and a different
+request id, registry or runtime root fails with `origin_request_conflict`.
+The request record supplies the origin Goal, receiver agent and optional Goal reference;
+`--goal-id` and `--claimed-by` identify only the project side. Binding requires
+one readable matching entry in the origin runtime; recipient addressing is unsupported.
+Settlement resolves the entry again and refuses missing or changed identities.
+Local locators remain ledger-only. Before Todo creation, origin inspection
+fails closed with `origin_request_cancelled` or `origin_request_unreadable`;
+existing Todos retain readback-only behavior. A completed Todo observed at a
+new head queues a body-free conclusion through the origin runtime, deduplicated
+by operation/head in `returns`, with `return_delivery` readback; cancellation
+or unreadability prevents enqueue. The complete conclusion text, request
+revision and selected update identity are persisted before `report()`, so an
+interrupted return-ledger write resumes the exact publication instead of
+reconstructing it from newer PR state. The return service owns actual delivery.
+Once the origin request is cancelled, no further result is returned even if an
+accepted correction completes later; the request's cancellation record is the
+accountability trail.
+
+With `--execute-transition`, an accepted `actionable_patch` creates exactly one
 `issue_fix_maintainer_correction_patch` todo claimed by the registered agent.
 `semantic_ambiguity` and `missing_authority` create a concrete user gate that
-blocks that same agent. `unchanged` creates no todo. The normalized correction
-fingerprint and deterministic todo text make retries idempotent, while terminal
-merged/closed state still takes precedence over late feedback.
-
+blocks that same agent. `unchanged` creates no todo. The Todo is written under
+a stable operation id derived from the repository, PR, event id and
+`updated_at` (or the correction fingerprint for v0), so an exact replay yields
+`already_exists` even after the Todo is done, two different comments with the
+same wording yield two Todos, and a newer revision of the same comment yields a
+new Todo while the earlier entry is marked `superseded`. The ledger row keeps
+these entries in `maintainer_corrections`
+(`operation_id`, `source_event`, `correction_fingerprint`, `admission_basis`,
+`disposition`, `reason`, `todo_id`, `recorded_at`, `superseded_by`,
+`todo_intent`); the accepted entry is written with `todo_id: null` before the
+Todo write and filled afterwards, and any later run retries a still-pending
+accepted entry under its operation id. Every retry revalidates a pending v1
+source event against the current provider metadata, including an ordinary poll
+that omits the correction input or reports a different current correction. The
+test-only
+`LOOPX_ISSUE_FIX_FAULT_BEFORE_CORRECTION_TODO=1` aborts between those two
+writes and exists only to exercise that recovery. The legacy
+`maintainer_correction` fields keep the latest accepted correction for older
+readers. Terminal merged/closed state still takes precedence over late
+feedback.
 When a connected lifecycle writeback observes `MERGED`, LoopX also appends one
 repository-qualified, public-safe, idempotent `pr_merge` rollout event. This is
 the event consumed by todo resume projection. A dependent todo such as
@@ -444,6 +498,23 @@ The merged PR does not directly execute an arbitrary callback, and the rollout
 event does not grant new write authority. [LoopX PR
 #1883](https://github.com/huangruiteng/loopx/pull/1883) is the implementation
 and regression evidence for this contract.
+
+`pr_wait_hook.py` registers dependency observation through the existing
+TurnStart contract. Executing quota guards, native Turns and compatibility
+prequota share the capability's permission resolution, durable per-dependency
+cadence and Goal-local single flight. Current Goal declarations and remembered
+host capabilities are reused; a Todo requirement never grants networking.
+Provider/configuration failure is observable and does not gate independent
+business work. The automatic wait observer requires the exact returned
+repository URL; redirects do not silently satisfy the original binding.
+
+The shared core consumes generic hook results; PR-specific target selection,
+metadata validation and summaries stay here. Diagnostic rows are bounded after
+complete-source selection and declare omitted rows/ids. Status/list/App/Lark
+context reads and original-journal recovery consume existing facts without
+polling. Installed executor adoption remains separate from source/wheel tests.
+See [continuation readback](../../../docs/reference/todo-continuation-readback.md#pr-dependency-observation--pr-依赖观察)
+for the entrypoint, permission and failure matrix.
 
 ### 8. Terminal closeout and repeatability
 
@@ -587,8 +658,7 @@ Packets preserve compact classifications and references. They do not preserve:
 
 An unavailable dependency, killed process, or missing service is environment
 evidence. It may block a validation surface without refuting the product bug.
-Conversely, a failing legacy test does not prove the new patch caused the
-failure; compare the pinned base and changed hunks before attribution.
+Conversely compare the pinned base and changed hunks before attribution.
 
 ## Reviewer Routing Contract
 
@@ -852,6 +922,11 @@ until verified. The public
 pilot applies that evidence order without introducing a repository-specific
 control path.
 
+The optional [repository-context pilot](../../../examples/repository-context-pilot/README.md)
+compares Rune's no-model MCP retrieval with direct search on pinned public issue
+source. It exports source-checked advisory evidence through this same input and
+reads it back through `workflow-plan`. This is a reproducible experiment.
+
 They also accept either `--repository-memory-json
 <compact-search-read-result.json>` or a configured context provider. The
 provider path is deliberately layered: the reusable LoopX context-provider
@@ -1069,7 +1144,7 @@ The existing `--runtime-root` override applies to reads, leases, writes and
 projection recovery. No new provider or capability is enabled.
 
 Missing ledger files, malformed bucket declarations, duplicate current targets,
-and older empty observations are errors, not evidence that all work has ended.
+and older empty observations are errors.
 Restore the ledger or resolve the duplicate before retrying; do not switch to
 legacy state. Buckets commit independently, so after a later failure read back
 `loopx todo list --goal-id GOAL` using the same registry/runtime root, then retry
@@ -1080,8 +1155,7 @@ never rolls back a successful business commit.
 
 Omit `--execute-transition` to inspect without reconciling Todos. To roll back
 this implementation, retain canonical state, writer fences and receipts; restore
-compatible code instead of reviving old Markdown authority. This does not grant
-publication, merge, additional capabilities or access to private material.
+compatible code instead of reviving old Markdown authority.
 
 Pass `--issue-ref` when persisting PR lifecycle state. This explicit public-safe
 link lets the outcome read model join the PR to its issue without guessing from
@@ -1105,8 +1179,8 @@ loopx issue-fix pr-lifecycle \
 
 The correction source is provider-neutral: any public HTTPS or repo-relative
 reference may be used, while the current PR monitor remains the authoritative
-lifecycle source. Exact retries neither add another successor nor rewrite the
-same lifecycle row.
+lifecycle source. `maintainer_correction_admission` in the output names the
+operation id, admission basis, disposition and reason for this input.
 
 ## Status And Output View
 
@@ -1317,6 +1391,7 @@ loopx issue-fix outcome \
 python3 examples/issue-fix-capability-guide-smoke.py
 python3 examples/issue-fix-reviewer-recommendation-smoke.py
 python3 examples/issue-fix-reviewer-request-smoke.py
+python3 examples/issue-fix-reviewer-notification-drain-postwrite-smoke.py
 python3 examples/issue-fix-reviewer-notification-sink-smoke.py
 python3 examples/issue-fix-workflow-plan-smoke.py
 python3 examples/issue-fix-workflow-contract-smoke.py

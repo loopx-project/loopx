@@ -97,7 +97,6 @@ def collect_fixture_status(root: Path, registry_path: Path) -> tuple[dict, str]:
     payload = collect_status(
         registry_path=registry_path,
         runtime_root_override=str(root / "runtime"),
-        scan_roots=[root / "project"],
         limit=5,
     )
     return payload, render_status_markdown(payload)
@@ -786,7 +785,8 @@ def assert_dependency_blockers_stay_separate(payload: dict, markdown: str) -> No
     blocker_item = items_by_goal[DEPENDENCY_BLOCKER_GOAL_ID]
     assert current_item["waiting_on"] == "codex", current_item
     assert current_item["agent_todos"]["open_count"] == 2, current_item
-    assert "user_todos" not in current_item, current_item
+    assert current_item["user_todos"]["open_count"] == 0, current_item
+    assert current_item["user_todos"]["items"] == [], current_item
     blockers = current_item["dependency_blockers"]
     assert blockers["open_count"] == 1, blockers
     assert blockers["source"] == "attention_queue.user_todos", blockers
@@ -997,7 +997,10 @@ def assert_project_asset_secret_scanner_boundaries() -> None:
 def assert_explicit_delivery_refresh(payload: dict, markdown: str) -> None:
     item = payload["attention_queue"]["items"][0]
     assert item["goal_id"] == DELIVERY_GOAL_ID, item
-    assert item["status"] == EXPLICIT_REFRESH_CLASSIFICATION, item
+    # Current canonical work stays primary; progress classification remains in history.
+    assert item["source"] == "active_state", item
+    assert item["status"] == "active_state_agent_todo", item
+    assert item["agent_todos"]["items"][0]["text"] == DELIVERY_AGENT_TODO, item
     readiness = item["handoff_readiness"]
     assert readiness["post_handoff_latest_run"]["classification"] == EXPLICIT_REFRESH_CLASSIFICATION, readiness
     assert readiness["post_handoff_latest_run"]["delivery_batch_scale"] == "multi_surface", readiness
@@ -1331,7 +1334,8 @@ def main() -> int:
     assert_project_asset_secret_scanner_boundaries()
     assert_promotion_readiness_full_scan_fallback()
     assert_promotion_readiness_warning_in_quota_guard()
-    assert_status_agent_lane_next_action_projection()
+    with tempfile.TemporaryDirectory(prefix="loopx-status-agent-lane-") as tmp:
+        assert_status_agent_lane_next_action_projection(Path(tmp))
     assert_status_agent_lane_todo_summary_display_compaction()
     assert_status_agent_member_selected_lane_claim_survives_truncated_claim_list()
     assert_status_agent_lane_vision_lookback_survives_display_trim()

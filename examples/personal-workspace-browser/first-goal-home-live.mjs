@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { resolveTestPython } from "../../scripts/test-python.mjs";
-import { outputDir, packaged, repoRoot } from "./fixture.mjs";
+import { outputDir, repoRoot } from "./fixture.mjs";
 import { fetchWorkspaceBackend, openWorkspacePage } from "./scenario-context.mjs";
 
 // End to end against the real service: a disposable `loopx chat` on a fresh
@@ -23,9 +23,10 @@ import { fetchWorkspaceBackend, openWorkspacePage } from "./scenario-context.mjs
 
 export const firstGoalHomeLiveScenario = {
   id: "first-goal-home-live",
+  requiresBackendReadback: true,
   async run({ browser, collectCoverage, url }) {
-    // The real service serves the packaged bundle; the development lane has none to serve.
-    if (!packaged) return { coverageEntries: [], note: "live first-Goal home runs against the packaged bundle only" };
+    // Both lanes prepare the verified Chat bundle for the real backend. The
+    // source lane keeps Vite's source maps while proxying this same owner.
     const root = await mkdtemp(join(tmpdir(), "loopx-first-goal-live-"));
     const python = resolveTestPython({ repoRoot });
     const child = spawn(python, ["-u", resolve(repoRoot, "examples/personal-workspace-browser/fresh-install-backend.py"), root], { cwd: repoRoot, env: { ...process.env, PYTHONPATH: repoRoot }, stdio: ["ignore", "pipe", "pipe"] });
@@ -130,7 +131,7 @@ export const firstGoalHomeLiveScenario = {
       await page.locator(".personal-goal-row", { hasText: title }).first().waitFor({ state: "visible", timeout: 20_000 });
       await firstGoal.waitFor({ state: "hidden", timeout: 20_000 });
       await page.screenshot({ path: resolve(outputDir, "first-goal-home-live-home.png"), animations: "disabled" });
-      return { coverageEntries: await session.close(), note: "real loopx chat on a fresh runtime: zero-Goal discovery with its own warning; first Goal registered from the page through the real action owner with the stub Agent's failed first Turn reported honestly; registry written, directory lists it" };
+      return { coverageEntries: await session.close(), backendReadbackVerified: true, note: "real loopx chat on a fresh runtime: zero-Goal discovery with its own warning; first Goal registered from the page through the real action owner with the stub Agent's failed first Turn reported honestly; registry written, directory lists it" };
     } catch (error) {
       if (diagnostics) process.stderr.write(diagnostics);
       await session?.close().catch(() => {});

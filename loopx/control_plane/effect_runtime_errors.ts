@@ -14,6 +14,7 @@ export interface EffectRuntimeErrorPayload {
   kind: EffectRuntimeErrorKind;
   code: string;
   message: string;
+  details?: string[];
 }
 
 abstract class EffectRuntimeBoundaryError extends Error {
@@ -29,9 +30,11 @@ abstract class EffectRuntimeBoundaryError extends Error {
 
 export class EffectRuntimeRequestError extends EffectRuntimeBoundaryError {
   readonly kind = "request_rejected" as const;
+  readonly details?: readonly string[];
 
-  constructor(message: string, code = "invalid_request") {
+  constructor(message: string, code = "invalid_request", details?: readonly string[]) {
     super(message, code);
+    this.details = details;
   }
 }
 
@@ -93,11 +96,16 @@ export function effectRuntimeErrorPayload(
   error: unknown,
 ): EffectRuntimeErrorPayload {
   if (error instanceof EffectRuntimeBoundaryError) {
-    return {
+    const payload: EffectRuntimeErrorPayload = {
       kind: error.kind,
       code: error.code,
       message: boundedMessage(error.message, "Effect runtime request failed"),
     };
+    if (error instanceof EffectRuntimeRequestError && error.details?.length) {
+      payload.details = error.details.slice(0, 128).map(detail => boundedMessage(detail, "Request validation failed"));
+      if (error.details.length > 128) payload.details[127] = `${error.details.length - 127} additional validation details omitted`;
+    }
+    return payload;
   }
   const ioCode = nodeErrorCode(error);
   if (ioCode && TRANSIENT_IO_CODES[ioCode]) {

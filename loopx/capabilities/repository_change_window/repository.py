@@ -1,12 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import os
-from pathlib import Path
 import re
 import subprocess
+from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import unquote, urlsplit
+
+from ...extensions.process_runtime import retire_owned_process
+
+# A managed commit or push hook must not wait forever on a Git helper. An
+# fsmonitor hook, a stale index lock or a checkout on a network mount can
+# otherwise hold the hook -- and the operation Git asked it to admit -- open.
+GIT_READ_TIMEOUT_SECONDS = 10.0
 
 
 class RepositoryChangeWindowError(ValueError):
@@ -24,19 +31,65 @@ class RepositoryContext:
     head_oid: str
 
 
+def _retire_owned_read(process: subprocess.Popen[bytes]) -> None:
+    """Retire the read's own process group and drop its pipes within a deadline.
+
+    The shared runtime bounds termination, Windows ``taskkill`` and pipe
+    closure under one budget. Git runs helpers -- fsmonitor hooks, pagers --
+    inside the session it starts in, so killing the leader alone leaves them
+    behind; an inherited pipe that a descendant still holds must not extend
+    the caller's wait either.
+    """
+
+    try:
+        retire_owned_process(process, process_tree_owned=True)
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+        # The answer is already unavailable; cleanup must not replace it with
+        # a traceback from a read-only or admission command. The read's own
+        # timeout or cancellation remains the caller's result.
+        pass
+
+
 def git(
     repo: Path,
     *args: str,
     check: bool = True,
     input_bytes: bytes | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
-    result = subprocess.run(
-        ["git", "-C", str(repo), *args],
-        check=False,
-        input=input_bytes,
+    """Run one Git read, or refuse when it cannot answer inside its budget.
+
+    An unanswered read is not an empty result. Callers fingerprint a pending
+    change, evaluate provider state and install or remove hooks from this one
+    entry point; raising here makes those paths fail closed instead of
+    reporting a clean worktree they never observed.
+    """
+
+    argv = ["git", "-C", str(repo), *args]
+    process = subprocess.Popen(
+        argv,
+        stdin=subprocess.PIPE if input_bytes is not None else None,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        start_new_session=os.name == "posix",
     )
+    try:
+        stdout, stderr = process.communicate(
+            input=input_bytes, timeout=GIT_READ_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired:
+        _retire_owned_read(process)
+        raise RepositoryChangeWindowError(
+            "git "
+            + " ".join(args)
+            + f" did not answer within {GIT_READ_TIMEOUT_SECONDS:g} seconds"
+        ) from None
+    except BaseException:
+        # A terminal cancellation reaches this process, not the session the
+        # read owns. Retire that session before letting the cancellation
+        # continue to its handler.
+        _retire_owned_read(process)
+        raise
+    result = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
     if check and result.returncode != 0:
         detail = (
             result.stderr.decode("utf-8", errors="replace").strip()

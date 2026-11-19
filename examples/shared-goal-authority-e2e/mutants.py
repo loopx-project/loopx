@@ -83,7 +83,7 @@ CASES = [
         'if (false) facts.push("base_source_basis_digest_mismatch");')),),
          'tests/control_plane_ts/goal_amendment_proposal.test.ts', 'canonical Todo bases cannot'),
     Case('governance_reads_legacy_after_promotion', (('loopx/control_plane/goals/shared_goal_work_source.py', replacement(
-        'if canonical is None:', 'if True:')),), 'tests/control_plane/test_canonical_goal_governance.py::test_empty_canonical_is_authoritative_and_missing_display_is_not_repaired'),
+        '    state_text = ""', '    state_text = state_path.read_text(encoding="utf-8")')),), 'tests/control_plane/test_canonical_goal_governance.py::test_empty_canonical_is_authoritative_and_missing_display_is_not_repaired'),
     Case('delivery_wait_target_unbound', (('loopx/control_plane/todos/resume_condition.ts', replacement(
         'condition.target_todo_id !== spec.target || ', '')),),
          'tests/control_plane_ts/delivery_response.test.ts', 'exact dependency identity'),

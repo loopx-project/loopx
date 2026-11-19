@@ -22,7 +22,6 @@ from loopx.capabilities.manager_context import (
     register_ingress,
 )
 from loopx.capabilities.manager_context.roundtrip import (
-    EXACT_DELIVERY_ADMISSION_SECONDS,
     ReturnResolutionBlocked,
     drain,
     report,
@@ -40,6 +39,7 @@ from loopx.file_lock import exclusive_cross_runtime_file_lock
 
 INSTANCE_A = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 INSTANCE_B = "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+RETURN_ADMISSION_SECONDS = 60
 
 
 @pytest.mark.skipif(os.open not in os.supports_dir_fd or not hasattr(os, "O_NOFOLLOW"),
@@ -125,6 +125,7 @@ def _http_snapshot(root, registry, session_id):
     # These fixtures script Host liveness; the real HTTP/store projection below
     # tests collaboration lifetime and receipts, not exited-process recovery.
     server.runtime_controller = SimpleNamespace(
+        coordination_runtime_root=root,
         recover_exited_turn=lambda _session_id: None, close=lambda: None,
     )
     worker = threading.Thread(target=server.serve_forever, daemon=True)
@@ -280,7 +281,7 @@ def _external_manager_request(root: Path, registry: Path):
         "adopt",
         "Work in A.",
         registry=registry,
-        caller_goal_ref=receipt["goal_ref"],
+        caller_goal_ref=receipt.get("goal_ref"),
     )
     report(
         root,
@@ -290,9 +291,87 @@ def _external_manager_request(root: Path, registry: Path):
         "conclusion",
         "A completed its bounded review.",
         registry=registry,
-        caller_goal_ref=receipt["goal_ref"],
+        caller_goal_ref=receipt.get("goal_ref"),
     )
     return store, session, receipt
+
+
+@pytest.mark.parametrize("exact", [False, True])
+@pytest.mark.parametrize("external", [False, True], ids=["private", "external"])
+def test_original_receipt_conflict_readback_recovers_the_same_result(tmp_path, exact, external):
+    if exact:
+        registry = _create_source_registry(tmp_path)
+    else:
+        registry = tmp_path / "registry.json"
+        registry.write_text(json.dumps({"goals": [{
+            "id": "delivery", "repo": str(tmp_path), "status": "active",
+            "coordination": {"registered_agents": ["builder", "reviewer"]},
+        }]}), encoding="utf-8")
+    if external:
+        store, session, receipt = _external_manager_request(tmp_path, registry)
+    else:
+        store, session, receipt = _manager_request(tmp_path, registry)
+        acknowledge(tmp_path, "delivery", "builder", receipt["request_id"], "adopt",
+                    "Checking the public input.", registry=registry,
+                    caller_goal_ref=receipt.get("goal_ref"))
+        report(tmp_path, "delivery", "builder", receipt["request_id"], "conclusion",
+               "A completed its bounded review.", registry=registry,
+               caller_goal_ref=receipt.get("goal_ref"))
+    rid = receipt["request_id"]
+    original = store.turn_for_client(session["session_id"], "owner-request")
+    store.append_message(session["session_id"], role="user", text=original["message"],
+                         turn_id=original["turn_id"], message_id="original-owner-request")
+    original_response = original["response"]
+    store.update_turn(session["session_id"], original["turn_id"], response={
+        **original_response, "context_handoff_receipt": {
+            **receipt, "request_id": "f" * 64, "agent_id": "reviewer",
+        },
+    })
+    result_path = _root(tmp_path) / "replies" / rid / "conclusion.json"
+    result_bytes = result_path.read_bytes()
+    sends = []
+
+    def sender(route, source_session, source_turn, text):
+        sends.append((route, source_session, source_turn, text))
+        return {"reply_verified": True, "idempotency_key": "sha256:" + "a" * 64}
+
+    admitted_at = datetime(2026, 9, 28, tzinfo=timezone.utc)
+    assert drain(tmp_path, registry, store, sender, now=admitted_at) == (0 if exact else 1)
+    assert sends == []
+    state_path = result_path.with_name("conclusion.delivery.json")
+    if exact:
+        assert not state_path.exists(), "an unproved exact request grants no receipt mutation"
+    else:
+        state = json.loads(state_path.read_text())
+        assert state["status"] == "retry_pending"
+        assert state["error"] == "initial_delivery_receipt_unavailable"
+        before = state_path.read_bytes()
+        assert drain(tmp_path, registry, store, sender,
+                     now=admitted_at + timedelta(seconds=1)) == 0
+        assert state_path.read_bytes() == before
+    assert not any(m.get("origin") == "manager_followup"
+                   for m in store.session_snapshot(session["session_id"])["messages"])
+    # Only this disposable host fixture restores its original committed source.
+    store.update_turn(session["session_id"], original["turn_id"], response=original_response)
+    if not exact and not external:
+        snapshot = _http_snapshot(tmp_path, registry, session["session_id"])
+        request = next(m["collaboration"] for m in snapshot["messages"]
+                       if m.get("collaboration", {}).get("request_id") == rid)
+        assert request["returns"][0]["error"] == "initial_delivery_receipt_unavailable"
+    assert drain(tmp_path, registry, store, sender,
+                 now=admitted_at + timedelta(seconds=11)) == 1
+    assert len(sends) == int(external)
+    if external:
+        assert sends[0][0]["request_id"] == rid
+        assert sends[0][1]["session_id"] == session["session_id"]
+        assert sends[0][2]["turn_id"] == original["turn_id"]
+    assert result_path.read_bytes() == result_bytes
+    assert drain(tmp_path, registry, store, sender,
+                 now=admitted_at + timedelta(days=1)) == 0
+    messages = [m for m in _http_snapshot(tmp_path, registry, session["session_id"])["messages"]
+                if m.get("origin") == "manager_followup"]
+    assert len(messages) == 1 and messages[0]["turn_id"] == original["turn_id"]
+    assert messages[0]["return_delivery"]["status"] == "delivered"
 
 
 def test_recreated_goal_cannot_observe_or_mutate_prior_instance_requests(
@@ -374,14 +453,14 @@ def test_inbox_read_rejects_recreation_before_response_commit(
     replacement = tmp_path / "replacement"
     replacement.mkdir()
     (replacement / input_path.name).write_text("instance B", encoding="utf-8")
-    render_followthrough = links.receiver_followthrough
+    read_work = links.receiver_work_observations
 
     def recreate_before_input_read(root, registry_path, items):
-        rendered = render_followthrough(root, registry_path, items)
+        rendered = read_work(root, registry_path, items)
         _recreate(registry, repo=replacement)
         return rendered
 
-    monkeypatch.setattr(links, "receiver_followthrough", recreate_before_input_read)
+    monkeypatch.setattr(links, "receiver_work_observations", recreate_before_input_read)
 
     with pytest.raises(ValueError, match="historical_mutation_forbidden"):
         read_inbox(
@@ -448,13 +527,22 @@ def test_inbox_read_does_not_commit_peer_return_before_response_succeeds(
         caller_goal_ref=goal_ref,
     )
 
+    # A real incoming input requires Host enrichment before the peer read commits.
+    input_path = tmp_path / "input.txt"
+    input_path.write_text("Current instance input", encoding="utf-8")
+    incoming_brief = {
+        **_brief("Inspect the current input before acknowledging peer delivery"),
+        "inputs": [{"ref": input_path.name, "description": "Current source input"}],
+    }
+    request(tmp_path, registry, "delivery", "reviewer", "builder", "read-input", incoming_brief)
+
     def interrupt_response(*_args):
         if interruption == "goal_recreation":
             _recreate(registry)
             return None
         raise RuntimeError("response enrichment failed")
 
-    monkeypatch.setattr(links, "receiver_followthrough", interrupt_response)
+    monkeypatch.setattr(links, "receiver_work_observations", interrupt_response)
 
     expected_error = ValueError if interruption == "goal_recreation" else RuntimeError
     expected_message = (
@@ -668,7 +756,7 @@ def test_exact_return_single_flight_outlives_admission_without_holding_lifetime(
             store,
             transport,
             now=admitted_at
-            + timedelta(seconds=EXACT_DELIVERY_ADMISSION_SECONDS + 1),
+            + timedelta(seconds=RETURN_ADMISSION_SECONDS + 1),
         )
         assert second.result(timeout=5) == 0
         release.set()
@@ -711,7 +799,7 @@ def test_exact_external_return_does_not_resend_after_expired_unknown_admission(
                 "admitted_at": admitted_at.isoformat(),
                 "expires_at": (
                     admitted_at
-                    + timedelta(seconds=EXACT_DELIVERY_ADMISSION_SECONDS)
+                    + timedelta(seconds=RETURN_ADMISSION_SECONDS)
                 ).isoformat(),
             },
         },
@@ -735,7 +823,7 @@ def test_exact_external_return_does_not_resend_after_expired_unknown_admission(
             store,
             transport,
             now=admitted_at
-            + timedelta(seconds=EXACT_DELIVERY_ADMISSION_SECONDS + 1),
+            + timedelta(seconds=RETURN_ADMISSION_SECONDS + 1),
         )
         == 0
     )
@@ -835,7 +923,7 @@ def test_exact_external_return_verifies_after_recreation_without_resend(
             store,
             transport,
             now=admitted_at
-            + timedelta(seconds=EXACT_DELIVERY_ADMISSION_SECONDS + 1),
+            + timedelta(seconds=RETURN_ADMISSION_SECONDS + 1),
         )
         == 1
     )
@@ -854,7 +942,7 @@ def test_exact_external_return_verifies_after_recreation_without_resend(
             assert failed["attempt"] == first["attempt"]
             # Another immediate pump must honor backoff, even after recreation.
             drain(tmp_path, registry, ChatSessionStore(tmp_path), transport,
-                  now=admitted_at + timedelta(seconds=EXACT_DELIVERY_ADMISSION_SECONDS + 1))
+                  now=admitted_at + timedelta(seconds=RETURN_ADMISSION_SECONDS + 1))
             assert transport.verify_calls == 1
         drain(tmp_path, registry, ChatSessionStore(tmp_path), transport,
               now=admitted_at + timedelta(days=1))
@@ -877,6 +965,69 @@ def test_exact_external_return_verifies_after_recreation_without_resend(
     assert state["verification"] == "reconciled_after_restart"
     drain(tmp_path, registry, ChatSessionStore(tmp_path), transport, now=admitted_at + timedelta(days=2))
     assert observations == ['verified']
+
+
+@pytest.mark.parametrize("exact", [False, True], ids=["legacy", "exact"])
+@pytest.mark.parametrize("corrupt", [False, True], ids=["missing-registry", "malformed-registry"])
+def test_unreadable_return_registry_preserves_the_original_attempt(tmp_path, monkeypatch, exact, corrupt):
+    monkeypatch.setattr("loopx.usage_ping.observe_verified_return", lambda: None)
+    registry = _create_source_registry(tmp_path)
+    if not exact:
+        registry.write_text(json.dumps({"goals": _source_payload(tmp_path, INSTANCE_A)["goals"]}))
+    store, session, receipt = _external_manager_request(tmp_path, registry)
+    state_path = _root(tmp_path) / "replies" / receipt["request_id"] / "conclusion.delivery.json"
+    attempt = {
+        "schema_version": "manager_return_delivery_attempt_v0", "provider": "lark",
+        "message_ref": "om_original_result", "intent_digest": "sha256:" + "a" * 64,
+        "provider_receipt": "sha256:" + "b" * 64,
+    }
+    calls = []
+
+    class Transport:
+        def send_with_attempt(self, route, _session, _turn, _text, record_attempt):
+            assert not calls, "the original provider write must not be repeated"
+            calls.append(("send", route["return_message_id"]))
+            record_attempt(attempt)
+            raise SystemExit("stopped after provider attempt")
+
+        def verify(self, route, current_session, _turn, _text, saved_attempt):
+            calls.append(("verify", route["return_message_id"]))
+            assert current_session["session_id"] == session["session_id"]
+            assert saved_attempt == attempt
+            return {"verification_performed": True, "reply_verified": True}
+
+    transport = Transport()
+    started = datetime(2026, 9, 28, tzinfo=timezone.utc)
+    with pytest.raises(SystemExit, match="stopped after provider attempt"):
+        drain(tmp_path, registry, store, transport, now=started)
+    original_state = state_path.read_bytes()
+    original_messages = store.messages(session["session_id"])
+    assert json.loads(original_state)["attempt"] == attempt
+    (send,) = calls
+
+    saved_registry = registry.with_suffix(".offline")
+    registry.rename(saved_registry)
+    later = started + timedelta(minutes=2)
+    try:
+        if corrupt:
+            registry.write_text("[")
+        with pytest.raises(ValueError if corrupt else FileNotFoundError):
+            drain(tmp_path, registry, ChatSessionStore(tmp_path), transport, now=later)
+        assert state_path.read_bytes() == original_state
+        assert store.messages(session["session_id"]) == original_messages
+        assert calls == [send]
+    finally:
+        saved_registry.replace(registry)
+
+    restored = later + timedelta(minutes=1)
+    assert drain(tmp_path, registry, ChatSessionStore(tmp_path), transport, now=restored) == 1
+    assert drain(tmp_path, registry, ChatSessionStore(tmp_path), transport, now=restored) == 0
+    assert calls == [("send", send[1]), ("verify", send[1])]
+    snapshot = _http_snapshot(tmp_path, registry, session["session_id"])
+    messages = [row for row in snapshot["messages"] if row.get("origin") == "manager_followup"]
+    assert len(messages) == 1
+    assert messages[0]["return_delivery"]["status"] == "delivered"
+    assert attempt["message_ref"] not in json.dumps(messages)
 
 
 def test_long_lived_mcp_keeps_its_captured_instance_after_recreation(
@@ -1318,6 +1469,47 @@ def test_lost_answer_readback_cannot_invent_or_rebind_a_commitment(tmp_path, dam
     snapshot = project_chat_session_snapshot(tmp_path, store, session["session_id"], registry=registry)
     assert snapshot["messages"] == before
     assert not any(m.get("collaboration") for m in snapshot["messages"])
+    assert _http_snapshot(tmp_path, registry, session["session_id"])["messages"] == before
+
+
+@pytest.mark.parametrize("exact", [False, True], ids=["legacy", "exact"])
+def test_lost_answer_recovers_distinct_recipients_around_an_ambiguous_request(tmp_path, exact):
+    registry = _create_source_registry(tmp_path)
+    if not exact:
+        registry.write_text(json.dumps({"goals": _source_payload(tmp_path, INSTANCE_A)["goals"]}))
+    store, session, receipt = _manager_request(tmp_path, registry, complete=False)
+    turn = store.turn_for_client(session["session_id"], "owner-request")
+    other = deliver(tmp_path, registry, session=session, turn=turn,
+                    request={"goal_id": "delivery", "agent_id": "reviewer",
+                             "brief": _brief("Independently review the delivery plan")})
+    store.update_turn(session["session_id"], turn["turn_id"], status="failed", response=None)
+    messages = store.messages(session["session_id"])
+
+    def source_bytes():
+        return {path.relative_to(_root(tmp_path)): path.read_bytes()
+                for path in _root(tmp_path).rglob("*.json")}
+
+    def read_requests():
+        before = source_bytes()
+        snapshot = _http_snapshot(tmp_path, registry, session["session_id"])
+        assert store.messages(session["session_id"]) == messages
+        assert source_bytes() == before
+        assert store.load_turn(session["session_id"], turn["turn_id"])["response"] is None
+        cards = [message for message in snapshot["messages"] if message.get("collaborations")]
+        assert len(cards) == 1 and cards[0]["role"] == "user"
+        return {item["request_id"]: item for item in cards[0]["collaborations"]}
+
+    initial = read_requests()
+    assert set(initial) == {receipt["request_id"], other["request_id"]}
+    assert {item["agent_id"] for item in initial.values()} == {"builder", "reviewer"}
+    assert all(item["returns"] == [] for item in initial.values())
+    route_path = _root(tmp_path) / "roundtrips" / (receipt["request_id"] + ".json")
+    duplicate = route_path.with_name("b" * 64 + ".json")
+    _write(duplicate, json.loads(route_path.read_text()))
+    for _ in range(2):
+        assert read_requests() == {other["request_id"]: initial[other["request_id"]]}
+    duplicate.unlink()
+    assert read_requests() == initial
 
 
 def test_exact_instance_updates_keep_original_route_and_http_readback(tmp_path):
@@ -1333,8 +1525,126 @@ def test_exact_instance_updates_keep_original_route_and_http_readback(tmp_path):
     assert drain(tmp_path, registry, ChatSessionStore(tmp_path), None) == 0
     snapshot = _http_snapshot(tmp_path, registry, session["session_id"])
     messages = [m for m in snapshot["messages"] if m.get("origin") == "manager_followup"]
-    assert [m["text"].split("\n\n")[-1] for m in messages] == ["Waiting for review.", "Review complete."]
+    assert [m["text"].split("\n\n", 1)[0] for m in messages] == ["Waiting for review.", "Review complete."]
     assert messages[-1]["return_delivery"]["result_key"] == update["result_key"]
     assert messages[-1]["return_delivery"]["status"] == "delivered"
     with pytest.raises((ValueError, FileNotFoundError)):
         report(tmp_path, "delivery", "builder", rid, "conclusion", "Wrong generation.", registry=registry, caller_goal_ref={"goal_id": "delivery", "goal_instance_id": INSTANCE_B}, update_id="wrong-instance")
+
+
+def test_native_return_process_exit_recovers_the_original_attempt(tmp_path):
+    from loopx.capabilities.manager_context import target_authority
+    from loopx.control_plane.collaboration.source_chat_observation import original_delivery_facts
+
+    registry = _create_source_registry(tmp_path)
+    store, session, receipt = _external_manager_request(tmp_path, registry)
+    rid = receipt["request_id"]
+    folder = _root(tmp_path)
+    entry_path = folder / "entries" / _hash({"goal_ref": receipt["goal_ref"], "agent_id": "builder"}) / (rid + ".json")
+    entry = json.loads(entry_path.read_text())
+    route = json.loads((folder / "roundtrips" / (rid + ".json")).read_text())
+    turn = store.turn_for_client(session["session_id"], "owner-request")
+    grant = target_authority(tmp_path, session=session, turn=turn,
+                             target={"goal_id": "delivery", "agent_id": "builder"})
+    command = {
+        "schema_version": "manager_return_delivery_transaction_v0", "runtime_root": str(tmp_path),
+        "request_id": rid, "result_key": "conclusion", "exact": True,
+        "now": "2026-01-02T03:04:05.123456+00:00",
+        "facts": {"entry": entry, "entry_path": str(entry_path), "route": route,
+                  "session": session, "turn": turn, "grant": grant,
+                  "scope": {"profile_id": "source_session_v1", "caller_goal_ref": receipt["goal_ref"],
+                            "current_goal_ref": receipt["goal_ref"]},
+                  "initial_delivery": original_delivery_facts(entry, route, turn, source_id=grant["source_id"])},
+    }
+    module = (Path(__file__).parents[1] / "loopx/control_plane/collaboration/return_delivery.ts").as_uri()
+
+    def invoke(phase, *, crash=False, **payload):
+        script = (f"import {{transactManagerReturnDelivery}} from {json.dumps(module)};"
+                  "const result=await transactManagerReturnDelivery(JSON.parse(process.argv[1]));"
+                  + ("process.exit(17);" if crash else "process.stdout.write(JSON.stringify(result));"))
+        child = subprocess.run(["node", "--no-warnings", "--experimental-strip-types", "--input-type=module",
+                                "-e", script, json.dumps({**command, **payload, "phase": phase})],
+                               capture_output=True, text=True, encoding="utf-8", timeout=10)
+        assert child.returncode == (17 if crash else 0), child.stderr
+        return None if crash else json.loads(child.stdout)
+
+    plan = invoke("prepare")
+    assert plan["action"] == "send"
+    attempt = {"schema_version": "manager_return_delivery_attempt_v0", "provider": "fixture",
+               "message_ref": "om_original", "intent_digest": "sha256:" + "a" * 64,
+               "provider_receipt": "sha256:" + "b" * 64}
+    invoke("attempt", crash=True, **{**plan, "attempt": attempt})
+    resumed = invoke("prepare", now="2026-01-02T03:06:05.123456+00:00")
+    assert resumed["action"] == "verify" and resumed["attempt"] == attempt
+    invoke("settle", **resumed, now="2026-01-02T03:06:05.123456+00:00",
+           outcome={"kind": "verified", "verification": {"verification_performed": True, "reply_verified": True}})
+    state_path = folder / "replies" / rid / "conclusion.delivery.json"
+    state = json.loads(state_path.read_text())
+    assert state["status"] == "delivered" and state["goal_ref"] == receipt["goal_ref"]
+    assert state["provider_receipt"] == attempt["provider_receipt"]
+    assert invoke("prepare")["action"] == "skip"
+    assert json.loads(state_path.read_text()) == state
+
+
+@pytest.mark.parametrize("exact", [False, True], ids=["legacy", "exact"])
+@pytest.mark.parametrize("start_offset", [0, 1], ids=["earlier-local-clock", "later-local-clock"])
+def test_return_retry_clock_keeps_the_original_chat(tmp_path, monkeypatch, exact, start_offset):
+    registry = _create_source_registry(tmp_path)
+    if not exact:
+        registry.write_text(json.dumps({"goals": _source_payload(tmp_path, INSTANCE_A)["goals"]}))
+    store, session, receipt = _manager_request(tmp_path, registry)
+    rid, goal_ref = receipt["request_id"], receipt.get("goal_ref")
+    acknowledge(tmp_path, "delivery", "builder", rid, "adopt", "Accepted", registry=registry, caller_goal_ref=goal_ref)
+    report(tmp_path, "delivery", "builder", rid, "conclusion", "Verified delivery findings.",
+           registry=registry, caller_goal_ref=goal_ref)
+    started = datetime(2026, 1, 2, 3 + start_offset, tzinfo=timezone(timedelta(hours=start_offset)))
+    caller_zone = timezone(timedelta(hours=1 - start_offset))
+    state_path = _root(tmp_path) / "replies" / rid / "conclusion.delivery.json"
+    route_path = _root(tmp_path) / "roundtrips" / (rid + ".json")
+    original_route = route_path.read_bytes()
+    original_turn = store.turn_for_client(session["session_id"], "owner-request")
+    original_messages = store.messages(session["session_id"])
+
+    def unavailable_chat(*_args, **_kwargs):
+        raise OSError("chat write temporarily unavailable")
+
+    with monkeypatch.context() as temporary:
+        temporary.setattr(store, "append_message", unavailable_chat)
+        assert drain(tmp_path, registry, store, None, now=started) == 1
+    state = json.loads(state_path.read_text())
+    deadline = started + timedelta(seconds=10)
+    assert state["status"] == "retry_pending"
+    assert state["retry_at"] == deadline.isoformat()
+    before = state_path.read_bytes()
+    assert drain(tmp_path, registry, store, None,
+                 now=(deadline - timedelta(microseconds=1)).astimezone(caller_zone)) == 0
+    assert state_path.read_bytes() == before
+    assert store.messages(session["session_id"]) == original_messages
+    recover = """from datetime import datetime
+from pathlib import Path
+import sys
+from loopx.chat_store import ChatSessionStore
+from loopx.capabilities.manager_context.roundtrip import drain
+root = Path(sys.argv[1])
+print(drain(root, Path(sys.argv[2]), ChatSessionStore(root), None,
+            now=datetime.fromisoformat(sys.argv[3])))
+"""
+    child = subprocess.run([sys.executable, "-c", recover, str(tmp_path), str(registry),
+                            deadline.astimezone(caller_zone).isoformat()],
+                           cwd=Path(__file__).parents[1], capture_output=True, text=True, timeout=30)
+    assert child.returncode == 0, child.stderr
+    assert child.stdout.strip() == "1", child.stderr
+    snapshot = _http_snapshot(tmp_path, registry, session["session_id"])
+    returned = [m for m in snapshot["messages"] if m.get("origin") == "manager_followup"]
+    assert len(returned) == 1
+    assert returned[0]["text"].split("\n\n", 1)[0] == "Verified delivery findings."
+    assert returned[0]["return_delivery"]["status"] == "delivered"
+    assert route_path.read_bytes() == original_route
+    current_turn = store.load_turn(session["session_id"], original_turn["turn_id"])
+    assert current_turn["response"] == original_turn["response"]
+    assert current_turn["status"] == original_turn["status"]
+    saved, messages = state_path.read_bytes(), store.messages(session["session_id"])
+    assert drain(tmp_path, registry, ChatSessionStore(tmp_path), None,
+                 now=(deadline + timedelta(seconds=1)).astimezone(caller_zone)) == 0
+    assert state_path.read_bytes() == saved
+    assert store.messages(session["session_id"]) == messages

@@ -767,7 +767,10 @@ def _enqueue_attached_agent_turn_under_grant(
 
 def enqueue_attached_agent_turn(*, store: ChatSessionStore, registry_path: Path | None,
                                 session_id: str, client_turn_id: str, message: str, origin: str,
-                                external_agent_target: dict[str, Any] | None = None) -> tuple[dict[str, Any], bool]:
+                                external_agent_target: dict[str, Any] | None = None,
+                                attachments: object = None) -> tuple[dict[str, Any], bool]:
+    if attachments:
+        raise ValueError("attached host session queue does not yet accept attachments")
     kwargs = dict(store=store, registry_path=registry_path, session_id=session_id,
                   client_turn_id=client_turn_id, message=message, origin=origin,
                   external_agent_target=external_agent_target)

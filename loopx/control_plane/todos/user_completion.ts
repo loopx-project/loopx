@@ -8,6 +8,7 @@ import {requireBoolean, requireJsonObject, requireStringLiteral} from "../runtim
 import {decisionScopeCovers} from "./decision_scope.ts";
 import {normalizeTodoDecisionScope, normalizeTodoRequiredDecisionScopes} from "./decision_metadata.ts";
 import type {DecisionOutcome, ResumeState} from "./user_completion_types.ts";
+import {TODO_DECISION_SCOPE_OUTCOME_SCHEMA_VERSION} from "./user_completion_types.ts";
 
 interface ResumeReceipt extends JsonObject { readonly state: ResumeState; }
 
@@ -16,8 +17,8 @@ export interface UserCompletionPlan extends JsonObject {
   readonly unblock_resume: ResumeReceipt | null;
   readonly decision_scope_resolution: JsonObject | null;
 }
-const inactiveTarget = (todo: JsonObject): boolean => todo.archive_state === "archive" ||
-  todo.done === true || !["open", "blocked"].includes(String(todo.status || "open"));
+export const isInactiveUserCompletionTarget = (todo: JsonObject): boolean => todo.archive_state === "archive" ||
+  todo.done === true || todo.superseded_by != null || !["open", "blocked"].includes(String(todo.status || "open"));
 
 // Terminal admission owns whether the source may complete. In particular, a
 // deferred User gate is still a legal explicit completion source even though
@@ -30,7 +31,6 @@ const unavailableSource = (todo: JsonObject): boolean => {
 };
 
 /** Shared outcome semantics with each caller's existing presence contract.
- * Cancelling a reminder is not an owner approval or a decision-scope outcome.
  * Native Gate closure may omit a decision; the legacy explicit bridge cannot.
  */
 export function requireCompletionDecisionOutcome(
@@ -69,8 +69,8 @@ export function planUserCompletion(
   const scope = gate ? normalizeTodoDecisionScope(source.decision_scope) : null;
   if (!target) return {...empty, unblock_resume: {...base,
     state: gate && outcome !== "approve" ? "target_or_decision_scope_not_found" : "target_not_found"}};
-  // A late decision must not revive completed, archived, or deferred work.
-  if (inactiveTarget(target)) return {...empty, unblock_resume: {...base, state: "target_not_active", status: target.status}};
+  // A late decision must not revive completed, archived, superseded, or deferred work.
+  if (isInactiveUserCompletionTarget(target)) return {...empty, unblock_resume: {...base, state: "target_not_active", status: target.status}};
   const status = String(target.status || "open");
   const requirements = normalizeTodoRequiredDecisionScopes(target.required_decision_scopes) ?? [];
   const rawOutcomes = target.decision_scope_outcomes ?? [];
@@ -79,7 +79,7 @@ export function planUserCompletion(
   const updates: JsonObject = {};
   if (gate && outcome !== "approve") {
     if (!scope) return {...empty, unblock_resume: {...base, state: "target_or_decision_scope_not_found"}};
-    const recorded = {schema_version: "todo_decision_scope_outcome_v0", outcome,
+    const recorded = {schema_version: TODO_DECISION_SCOPE_OUTCOME_SCHEMA_VERSION, outcome,
       decision_scope: scope, source_todo_id: source.todo_id};
     // Match the legacy codec: the newest decision replaces the same exact
     // scope in place, while independent scopes retain their order and evidence.
@@ -110,9 +110,9 @@ export function planUserCompletion(
   if (status !== "blocked") return result("target_not_blocked");
   if (target.task_class === "blocker") return result("explicit_blocker_repair_required");
   const blockers = todos.filter(row => row.role === "user" && row.todo_id !== source.todo_id &&
-    row.unblocks_todo_id === id && !inactiveTarget(row)).map(row => String(row.todo_id));
+    row.unblocks_todo_id === id && !isInactiveUserCompletionTarget(row)).map(row => String(row.todo_id));
   if (blockers.length) return result("other_user_blockers_active", {remaining_user_blocker_todo_ids: [...new Set(blockers)].sort()});
-  // Finishing one gate is not evidence that every independent requirement passed.
+
   if (remaining.length || remainingOutcomes.some(item => item.outcome === "reject" || item.outcome === "cancel")) return result("decision_requirements_remaining");
   updates.status = "open";
   updates.reason = `authorization satisfied by completed user todo ${source.todo_id}`;

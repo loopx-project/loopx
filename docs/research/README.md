@@ -27,10 +27,22 @@ establish an equal-budget efficiency gain or a general performance guarantee.
 
 ## Research Index
 
-- [Benchmark research workspace](https://github.com/huangruiteng/loopx/blob/main/benchmark/README.md): current protocols,
+- [Benchmark portfolio priority ranking and Bitter-Lesson boundary (2026-11)](../architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md#38-external-benchmark-survey-and-priority-ranking-2026-11)
+  ([中文](../architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.zh-CN.md#38-外部-benchmark-调研与优先级排序2026-11-更新)):
+  updated P0/P1/P2/Control-Only ranking across EdgeBench and 20 external
+  benchmarks, engineering readiness and platform constraints, and the
+  Raw-Artifact Reset Baseline contract requiring matched, fully costed evidence
+  for causal claims while separating self-authored retrieval from the five
+  governed control-plane failure regimes.
+- [Budgeted research planning: goals, theory and design rationale](budgeted-research-planning.md)
+  ([中文](budgeted-research-planning.zh-CN.md)): why conditional plans, costly
+  measurements and causal comparisons serve better long-budget outcomes; links
+  the existing Stride/Yardstick owners to the EdgeBench pilot and later learning.
+- [Benchmark research workspace](https://github.com/loopx-project/loopx/blob/main/benchmark/README.md): current protocols,
   benchmark-specific practice, and links to the governing research RFC.
-- [Legacy benchmark archive](https://github.com/huangruiteng/loopx/blob/main/deprecate/benchmark-legacy/README.md):
-  non-active runners, adapters, and historical packets retained for archaeology.
+- [Legacy benchmark history](https://github.com/loopx-project/loopx/tree/54d42da44283bb414b24f71d16642c25cbcaf5dd/deprecate/benchmark-legacy):
+  retired runners, adapters, and historical packets removed from the working
+  tree and retained in Git history for archaeology.
 - [Agent workflow audits](agent-workflow-audits/): bounded reviews of external
   agent workflow patterns.
 - [Jev external evidence supplement v0 (Chinese)](agent-workflow-audits/jev-external-evidence-supplement-v0.zh-CN.md):

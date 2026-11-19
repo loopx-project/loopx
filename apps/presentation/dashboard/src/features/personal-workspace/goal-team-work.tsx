@@ -1,3 +1,4 @@
+import {ContextHelp} from "./context-help";
 import {useEffect, useRef, useState} from "react";
 import {AlertTriangle, CheckCircle2, CircleDashed, CircleHelp, Clock3, Loader2, RotateCcw, ShieldCheck} from "lucide-react";
 import {fetchLoopXTeamWork, inspectLoopXMember, delegationState, delegationStateLabel, type DelegationState, type LoopXModeSnapshot, type DelegationInventory, type DelegationPreflight} from "../../data/chat";
@@ -5,7 +6,7 @@ import {fetchLoopXTeamWork, inspectLoopXMember, delegationState, delegationState
 import {GoalTeamEvidence} from "./goal-team-evidence";
 import {DelegationPreflightStatus} from "./delegation-preflight-status";
 
-type Member = {id: string; agent_id: string; todo_id: string};
+type Member = {id: string; agent_id: string; todo_id: string | null};
 type DelegationRecord = DelegationInventory["items"][number];
 type PulseBucket = "executing" | "validating" | "accepted" | "attention" | "stopped" | "dispatched" | "unknown";
 type CheckTone = "unchecked" | "ready" | "unverified" | "blocked";
@@ -182,12 +183,12 @@ export function GoalTeamWork({sessionId, members, zh, canMessage, ingress}: {ses
 
   return <div className="goal-team-work">
     <section aria-label={zh ? "团队执行详情" : "Team execution details"}>
-      <p className="goal-team-note">{zh ? "检查不会启动成员。暂停协调员后，已派发的工作仍会继续。" : "Inspection starts no members. Dispatched work continues when the coordinator is paused."}</p>
+      <ContextHelp label={zh ? "团队检查与暂停" : "Team inspection and pause"}><p className="goal-team-note">{zh ? "检查不会启动成员。暂停协调员后，已派发的工作仍会继续。" : "Inspection starts no members. Dispatched work continues when the coordinator is paused."}</p></ContextHelp>
       {page ? <div className="goal-team-pulse-block">
         <ul className="goal-team-pulse" aria-label={zh ? "本页工作概览" : "Work on this page"}>{visibleBuckets.map(bucket => <li key={bucket} data-bucket={bucket} data-empty={pulse[bucket] === 0}>
           <strong>{pulse[bucket]}</strong><span><StateIcon state={bucket === "executing" && pulse.executing === 0 ? "unchecked" : bucket}/>{zh ? PULSE_LABELS[bucket].zh : PULSE_LABELS[bucket].en}</span>
         </li>)}</ul>
-        <p>{zh ? `本页 ${items.length} 条委派记录，仅限当前协调身份；分页不是团队快照。` : `${items.length} delegation records on this page, scoped to this coordinator; paging is not a team snapshot.`}{page.has_more ? (zh ? " 还有下一页。" : " More pages remain.") : ""}</p>
+        <span>{zh ? `${items.length} 条委派` : `${items.length} delegations`}</span><ContextHelp label={zh ? "委派记录范围" : "Delegation record scope"}><p>{zh ? `本页 ${items.length} 条委派记录，仅限当前协调身份；分页不是团队快照。` : `${items.length} delegation records on this page, scoped to this coordinator; paging is not a team snapshot.`}{page.has_more ? (zh ? " 还有下一页。" : " More pages remain.") : ""}</p></ContextHelp>
       </div> : null}
       <div className="goal-team-work-actions"><h3>{zh ? `已绑定成员 · ${members.length}` : `Bound members · ${members.length}`}</h3>
         <button type="button" disabled={busy || !members.length} onClick={() => void inspectAll()}>{zh ? "检查整个团队" : "Check whole team"}</button></div>
@@ -220,7 +221,7 @@ export function GoalTeamWork({sessionId, members, zh, canMessage, ingress}: {ses
       {error ? <p role="alert">{error}</p> : null}
       {page ? <>
         {!page.page_readback_complete ? <p className="goal-team-warning" role="status"><AlertTriangle aria-hidden="true" size={15}/>{zh ? "本页有无法核验的工作，请检查原请求；不要直接重新派工。" : "Some work cannot be verified. Reconcile the original request before redispatching."}</p> : null}
-        {!items.length ? <p>{zh ? "此页没有委派记录；不代表整个团队没有工作或 Goal 已完成。" : "No records on this page; this does not establish an idle team or a completed Goal."}</p> : null}
+        {!items.length ? <ContextHelp label={zh ? "本页无委派记录" : "No delegations on this page"} icon={CircleHelp}><p>{zh ? "此页没有委派记录；不代表整个团队没有工作或 Goal 已完成。" : "No records on this page; this does not establish an idle team or a completed Goal."}</p></ContextHelp> : null}
         {unboundRecords.length ? <>
           <h3>{zh ? "其他记录" : "Other records"}</h3>
           <ul className="goal-team-records goal-team-operations">{unboundRecords.map(row => renderRecord(row, true))}</ul>

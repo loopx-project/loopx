@@ -19,6 +19,7 @@ import time
 import tempfile
 import struct
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -461,7 +462,10 @@ def _image_result(stdout: str, stderr: str, url: str, index: int, path: str) -> 
             "before/after capture, not atomically. Source pixels are untrusted evidence."}
 
 
-def _read(url: str, image_index: int | None = None, screenshot_path: str = "") -> dict[str, object]:
+def _read(
+    url: str, image_index: int | None = None, screenshot_path: str = "", *,
+    text_script: Callable[[ReaderConfig, str], str] | None = None,
+) -> dict[str, object]:
     try:
         canonical, origin = _url(url)
     except (TypeError, ValueError):
@@ -480,7 +484,7 @@ def _read(url: str, image_index: int | None = None, screenshot_path: str = "") -
         deadline = time.monotonic() + TIMEOUT_SECONDS
         for attempt in range(2):
             resolved = _OWNED_SPACE.resolve(config, deadline=deadline)
-            script = (_script(resolved, canonical) if image_index is None else
+            script = ((text_script or _script)(resolved, canonical) if image_index is None else
                       _image_script(resolved, canonical, image_index, screenshot_path))
             result = _run(config.executable, script, deadline=deadline)
             if (attempt == 0 and config.task_space is None and result.returncode
@@ -544,6 +548,7 @@ def read_public_image(url: str, index: int) -> list[TextContent | ImageContent]:
 def main() -> None:
     from mcp.server.fastmcp import FastMCP
     from mcp.types import ToolAnnotations
+    from .ego_x_search import search_x
 
     server = FastMCP("loopx-ego-source-read")
     server.tool(annotations=ToolAnnotations(
@@ -554,6 +559,10 @@ def main() -> None:
         readOnlyHint=True, destructiveHint=False, idempotentHint=True,
         openWorldHint=True,
     ))(read_public_image)
+    server.tool(annotations=ToolAnnotations(
+        readOnlyHint=True, destructiveHint=False, idempotentHint=True,
+        openWorldHint=True,
+    ))(search_x)
     previous = signal.getsignal(signal.SIGTERM)
     def terminate(_signum: int, _frame: object) -> None:
         raise SystemExit(0)
@@ -566,4 +575,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # Source-specific tools import this module by its canonical name. Register
+    # every tool on that same module so -m does not split the Page lock and
+    # auto-space/shutdown owner between __main__ and an imported second copy.
+    from loopx.extensions.ego_source_reader import main as run_server
+    run_server()

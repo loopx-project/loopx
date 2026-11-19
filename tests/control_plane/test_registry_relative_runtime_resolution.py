@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_authority
+from canonical_authority_fixture import advance_canonical_fixture_authority
 from examples.control_plane.quota_plan_fixtures import write_cli_fixture
 from loopx.capabilities.explore.result_log import (
     append_explore_result_event,
@@ -109,10 +109,10 @@ def test_history_and_quota_anchor_relative_runtime_to_registry_project(
         str(registry_path),
         "quota",
         "should-run",
+        "--context-delivery",
+        "off",
         "--goal-id",
         "half-speed",
-        "--scan-path",
-        str(project),
         cwd=independent_worktree,
     )
 
@@ -156,11 +156,8 @@ def test_todo_list_anchors_promoted_authority_to_registry_project(
             }
         ],
     )
-    initialize_canonical_authority(
-        target_runtime,
-        "half-speed",
-        projection,
-        state_path=state_path,
+    advance_canonical_fixture_authority(
+        target_runtime, "half-speed", projection, operation_id="canonical-relative-runtime",
     )
     independent_worktree = tmp_path / "independent-worktree"
     independent_worktree.mkdir()

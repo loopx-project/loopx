@@ -2,18 +2,19 @@ import type { AgentModelDiscovery, ChatSessionSummary } from "../../data/chat";
 
 /** A late Session response must not replace a pending owner selection. */
 export function modelSelectionFromReadback(
-  readback: Pick<ChatSessionSummary, "agent_model_id" | "agent_reasoning_effort">,
+  readback: Pick<ChatSessionSummary, "agent_model_id" | "agent_reasoning_effort" | "requested_agent_model_id" | "requested_agent_reasoning_effort">,
   requested: { model?: string; effort?: string },
 ) {
-  const sameModel = !requested.model || requested.model === readback.agent_model_id;
+  const model = readback.requested_agent_model_id ?? readback.agent_model_id;
+  const effort = readback.requested_agent_reasoning_effort ?? readback.agent_reasoning_effort;
+  const sameModel = !requested.model || requested.model === model;
   return {
-    model: sameModel ? readback.agent_model_id ?? "" : undefined,
-    effort: sameModel && (!requested.effort || requested.effort === readback.agent_reasoning_effort)
-      ? readback.agent_reasoning_effort ?? "" : undefined,
+    model: sameModel ? model ?? "" : undefined,
+    effort: sameModel && (!requested.effort || requested.effort === effort) ? effort ?? "" : undefined,
   };
 }
 
-/** Catalog choices describe the next binding; only Session readback is current. */
+/** Catalog choices are candidates; requested and observed Session settings stay distinct. */
 export function chatModelControls(
   discovery: AgentModelDiscovery | null,
   selectedModel: string,

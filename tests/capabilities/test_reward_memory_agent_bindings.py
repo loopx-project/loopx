@@ -188,7 +188,7 @@ def test_wrong_target_mixed_scope_and_failed_preflight_cannot_commit(independent
 
 
 def test_editor_api_preserves_target_and_rejects_ambiguous_off_requests():
-    from loopx.chat_goal_configuration_api import _goal_capability_options
+    from loopx.chat.goal_configuration_api import _goal_capability_options
     assert _goal_capability_options("reward_memory", {"agent_id": "writer", "enabled": False}) == {
         "reward_memory_agent_id": "writer", "clear_reward_memory_config": True}
     enabled = _goal_capability_options("reward_memory", {"agent_id": "writer", "enabled": True, "config_path": ".loopx/config/writer.json"})
@@ -259,7 +259,7 @@ def test_pending_settlement_cannot_follow_a_replacement_binding(independent):
 
 
 def test_editor_readback_accepts_verified_activation_and_keeps_partial_write_fact(independent):
-    from loopx.chat_goal_configuration_api import GoalConfigurationRequestMixin
+    from loopx.chat.goal_configuration_api import GoalConfigurationRequestMixin
     registry, _, _ = independent
     preview = enable_writer(registry, execute=False)
     desired = preview["feature_summary"]["reward_memory"]
@@ -321,7 +321,7 @@ def test_app_stage_resolves_the_registered_file_when_projection_omits_private_pa
 
 
 def test_committed_binding_with_unavailable_readback_is_partial_not_rollback(independent):
-    from loopx.chat_goal_configuration_api import GoalConfigurationRequestMixin
+    from loopx.chat.goal_configuration_api import GoalConfigurationRequestMixin
     registry, _, _ = independent
     applied = enable_writer(registry)
     class Unavailable(GoalConfigurationRequestMixin):

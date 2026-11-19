@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import assert_todo_read_unchanged, initialize_canonical_authority, isolate_sqlite_runtime
 
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
@@ -40,7 +40,7 @@ def string_leaves(value):
             yield from string_leaves(child)
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_detail_retains_one_complete_body_and_current_source(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry, state = _write_fixture(tmp_path, SCENARIOS[0])
@@ -75,7 +75,8 @@ def test_detail_retains_one_complete_body_and_current_source(tmp_path, monkeypat
     assert "TAIL:" in markdown and '"source_complete": true' in markdown
     assert state.read_bytes() == before
     rc, repeated = cli(registry, runtime, "--todo-id", TODO, "--agent-id", AGENT_IDS[0])
-    assert rc == 0 and repeated == full
+    assert rc == 0
+    assert_todo_read_unchanged(repeated, full)
     rc, thin = cli(registry, runtime, "--thin")
     assert rc == 0 and "TAIL:" not in json.dumps(thin)
     rc, missing = cli(registry, runtime, "--todo-id", "todo_missing")

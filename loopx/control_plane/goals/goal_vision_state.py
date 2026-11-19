@@ -1,19 +1,15 @@
 from __future__ import annotations
 
+from importlib.resources import files
+import json
 import re
 from typing import Any
 
 
 GOAL_VISION_DEFAULT_STATE = "vision_patch_proposed"
-GOAL_VISION_CLOSED_STATES = frozenset(
-    {
-        "vision_closed",
-        "retired",
-        "retired_or_superseded",
-        "superseded",
-        "no_followup",
-    }
-)
+GOAL_VISION_CLOSED_STATES = frozenset(json.loads(
+    files("loopx.control_plane").joinpath("goal_vision_lifecycle.json").read_text(encoding="utf-8")
+)["closed_states"])
 GOAL_VISION_SUCCESSOR_REQUIRED_STATES = frozenset({"vision_closed"})
 GOAL_VISION_STATE_ALIASES = {
     "closed": "vision_closed",

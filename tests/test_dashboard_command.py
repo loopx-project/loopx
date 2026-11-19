@@ -76,6 +76,10 @@ def _copy_dashboard_launcher(scripts_dir: Path) -> None:
     source_scripts = Path(__file__).resolve().parents[1] / "scripts"
     for name in ("dashboard-dev.sh", "loopx-python.sh"):
         shutil.copy2(source_scripts / name, scripts_dir / name)
+    contract = Path("loopx/control_plane/runtime/node_version.ts")
+    target = scripts_dir.parent / contract
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_scripts.parent / contract, target)
 
 
 def test_release_runtime_identity_uses_immutable_manifest_fields(tmp_path: Path) -> None:
@@ -259,6 +263,31 @@ def test_probe_existing_chat_accepts_exact_loopx_fingerprint() -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_probe_legacy_chat_falls_back_once_and_keeps_capability_checks():
+    from loopx.dashboard_launcher import _probe_existing_chat
+    paths = []
+    class Legacy(_CapabilitiesHandler):
+        def do_GET(self):
+            paths.append(self.path)
+            if self.path == "/api/chat/readiness":
+                self.send_response(404)
+                self.end_headers()
+            else:
+                super().do_GET()
+    server, thread = _serve_capabilities(Legacy)
+    try:
+        assert _probe_existing_chat("127.0.0.1", server.server_port) == "matching"
+        assert paths == ["/api/chat/readiness", "/api/chat/capabilities"]
+        paths.clear()
+        assert _probe_existing_chat("127.0.0.1", server.server_port,
+            goal_subagent_configuration_enabled=False) == "matching"
+        assert paths == ["/api/chat/capabilities"]
+    finally:
+        server.shutdown()
+        thread.join(5)
+        server.server_close()
 
 
 @pytest.mark.parametrize(
@@ -559,6 +588,7 @@ def test_dashboard_launcher_installs_missing_frontend_dependencies(
             **os.environ,
             "PATH": f"{fake_bin}:/usr/bin:/bin",
             "LOOPX_NPM_LOG": str(npm_log),
+            "LOOPX_PYTHON": str(python_stub),
         },
         text=True,
         capture_output=True,
@@ -614,6 +644,8 @@ def test_dashboard_launcher_honors_configured_python_runtime(
         "PATH": f"{fake_bin}:/usr/bin:/bin",
         "LOOPX_PYTHON_LOG": str(python_log),
     }
+    # Exercise each selection route without an ambient explicit override.
+    env.pop("LOOPX_PYTHON", None)
     if configured_via == "environment":
         env["LOOPX_PYTHON"] = str(configured_python)
     elif configured_via == "installer_record":
@@ -736,6 +768,7 @@ def test_dashboard_launcher_selects_a_compatible_nvm_node(
             **os.environ,
             "PATH": f"{fake_bin}:/usr/bin:/bin",
             "NVM_DIR": str(tmp_path / "nvm"),
+            "LOOPX_PYTHON": str(fake_bin / "python3.13"),
             "LOOPX_NPM_LOG": str(npm_log),
         },
         text=True,
@@ -845,14 +878,16 @@ def test_dashboard_launcher_ignores_stale_recorded_python(
         encoding="utf-8",
     )
 
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:/usr/bin:/bin",
+        "LOOPX_COMMAND_LOG": str(command_log),
+    }
+    env.pop("LOOPX_PYTHON", None)
     completed = subprocess.run(
         ["bash", str(dashboard_script)],
         cwd=release_root,
-        env={
-            **os.environ,
-            "PATH": f"{fake_bin}:/usr/bin:/bin",
-            "LOOPX_COMMAND_LOG": str(command_log),
-        },
+        env=env,
         text=True,
         capture_output=True,
         check=False,
@@ -927,6 +962,7 @@ def test_dashboard_launcher_discovers_agent_bins_outside_restricted_path(
             "PATH": str(fake_bin),
             "NVM_DIR": str(home / ".nvm"),
             "NVM_BIN": str(nvm_bin),
+            "LOOPX_PYTHON": str(fake_bin / "python3.13"),
             "LOOPX_COMMAND_LOG": str(command_log),
         },
         text=True,
@@ -991,6 +1027,7 @@ def test_dashboard_launcher_selects_highest_semantic_nvm_lark_cli(
             "PATH": f"{fake_bin}:/usr/bin:/bin",
             "NVM_DIR": str(home / ".nvm"),
             "NVM_BIN": "",
+            "LOOPX_PYTHON": str(fake_bin / "python3.13"),
             "LOOPX_COMMAND_LOG": str(command_log),
         },
         text=True,

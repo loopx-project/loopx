@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
+import re
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -9,6 +10,36 @@ from .cadence import normalize_report_cadence
 
 
 GoalPeriodicReportChange = tuple[bool, dict[str, Any] | None]
+
+
+def managed_session_report_destination(configuration: Mapping[str, Any]) -> str | None:
+    """Decode the reserved Core conversation route; this proves no authority.
+
+    The native Chat owner still validates the exact Session, registered Agent,
+    Goal lifetime, subscription, Task and original worker on every dispatch.
+    """
+    route = configuration.get("route_ref")
+    if configuration.get("profile_preset") in {"weekly-progress", "session-task"} and isinstance(route, str):
+        match = re.fullmatch(r"managed-session:([a-f0-9]{32})", route)
+        if match:
+            return match[1]
+    return None
+
+
+def normalize_session_task(value: object) -> dict[str, Any]:
+    """Codec for an existing native Task reference.
+
+    The existing Todo validator and managed Session admission still own
+    execution. A description cannot grant a workspace, recipient or command.
+    """
+    from ...control_plane.todos.contract import normalize_todo_id
+
+    if not isinstance(value, Mapping) or set(value) != {"source_todo_id"}:
+        raise ValueError("session task requires one existing source_todo_id; configuration cannot install commands")
+    todo_id = normalize_todo_id(value["source_todo_id"])
+    if not todo_id:
+        raise ValueError("session task requires an exact completed native source Todo")
+    return {"source_todo_id": todo_id}
 
 
 def configuration_summary(goal: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -22,7 +53,7 @@ def configuration_summary(goal: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def normalize_configuration(value: Mapping[str, Any]) -> dict[str, Any]:
-    allowed = {"enabled", "profile_preset", "route_ref", "timezone", "schedule"}
+    allowed = {"enabled", "profile_preset", "route_ref", "timezone", "schedule", "task", "review_required"}
     unknown = sorted(set(value) - allowed)
     if unknown:
         raise ValueError(
@@ -43,13 +74,29 @@ def normalize_configuration(value: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError(
             "enabled periodic_report requires profile_preset and route_ref"
         )
+    if route_ref.startswith("managed-session:") and managed_session_report_destination(value) is None:
+        raise ValueError("a managed Session calendar requires weekly-progress or session-task and its exact original Session route")
     normalized = {
         "enabled": enabled,
         "profile_preset": profile_preset or None,
         "route_ref": route_ref or None,
         "timezone": timezone,
     }
+    if "review_required" in value:
+        if type(value["review_required"]) is not bool:
+            raise TypeError("periodic_report.review_required must be a boolean")
+        if value["review_required"] and (profile_preset != "weekly-progress" or managed_session_report_destination(value) is None):
+            raise ValueError("automatic report review requires the original managed Session weekly-progress report route")
+        normalized["review_required"] = value["review_required"]
+    if profile_preset == "session-task":
+        if managed_session_report_destination(value) is None:
+            raise ValueError("a scheduled task requires its exact original managed Session")
+        normalized["task"] = normalize_session_task(value.get("task"))
+    elif "task" in value:
+        raise ValueError("task instructions require the explicit session-task profile")
     schedule = normalize_report_cadence(value.get("schedule"))
+    if profile_preset == "session-task" and schedule is None:
+        raise ValueError("session-task requires its explicit calendar schedule")
     if schedule is not None:
         if schedule["timezone"] != timezone:
             raise ValueError("schedule.timezone must match periodic_report.timezone")
@@ -95,4 +142,5 @@ __all__ = [
     "configuration_summary",
     "normalize_change",
     "normalize_configuration",
+    "normalize_session_task",
 ]

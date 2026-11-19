@@ -8,14 +8,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from ...file_lock import exclusive_file_lock
+from ...file_lock import (
+    exclusive_cross_runtime_file_lock,
+    exclusive_file_lock,
+    exclusive_mutation_file_lock,
+    try_exclusive_file_lock,
+    write_bytes_atomic,
+)
 from ..runtime.file_paths import windows_extended_path
 from ..content_digest import BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN
 from ..todos.contract import TODO_ID_PATTERN
@@ -33,6 +37,40 @@ REQUEST_TRIAGE_INSTRUCTION = (
 )
 
 
+def read_inbox_transaction(root: Path, request: dict, *, scope=None) -> dict:
+    from ..effect_runtime import EffectRuntimeIOError, EffectRuntimeRejected, effect_runtime_result
+
+    facts = {
+        "runtime_root": str(Path(root).resolve()),
+        "scope": {
+            "profile_id": scope.profile_id if scope is not None else None,
+            "caller_goal_ref": scope.caller_goal_ref if scope is not None else None,
+            "current_goal_ref": scope.current_goal_ref if scope is not None else None,
+        },
+        "observed_at": _now(),
+        **request,
+    }
+    if request.get("operation") == "record_read":
+        facts["items"] = [{key: item[key] for key in (
+            "goal_id", "agent_id", "goal_ref", "request_id", "request_revision", "request_revision_digest",
+        ) if key in item} for item in request["items"]]
+    # Full source pages may exceed the ordinary wire even when every record is legal.
+    snapshot = request["operation"] in {"pending", "turn_start", "receiver_read", "returns"}
+    snapshot = snapshot or len(request.get("rows", [])) > 1 or request.get("include_agenda") is True
+    try:
+        result = effect_runtime_result("collaboration.inbox.read", facts, large_local_snapshot=snapshot)
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from exc
+    except EffectRuntimeIOError as exc:
+        # The native owner reports filesystem failures as typed runtime errors.
+        # Callers and the CLI still classify them as IO failures; keep the
+        # retryable/permanent diagnostic instead of leaking a runtime traceback.
+        raise OSError(f"{exc.diagnostic_code}: {exc}") from exc
+    if not isinstance(result, dict):
+        raise RuntimeError("native Inbox read must return an object")
+    return result
+
+
 def _hash(value: Any) -> str:
     return hashlib.sha256(
         json.dumps(value, ensure_ascii=False, sort_keys=True).encode()
@@ -47,17 +85,14 @@ def _root(runtime_root: Path) -> Path:
 
 
 def _write(path: Path, value: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd, tmp = tempfile.mkstemp(dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(value, f, ensure_ascii=False)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
+    # A concurrent status reader on Windows can briefly deny replacement.
+    # Retry only the atomic publication, inside the caller's existing fence.
+    write_bytes_atomic(
+        path,
+        json.dumps(value, ensure_ascii=False).encode("utf-8"),
+        directory_mode=0o700,
+        replace_retry_seconds=0.5,
+    )
 
 
 def _read(path: Path) -> dict:
@@ -98,14 +133,28 @@ def _request_lock(
     request_id: str,
     scope: CollaborationGoalScope | None,
     legacy_path: Path,
+    *,
+    force_exact: bool = False,
+    preserve_holder: bool = False,
 ):
     lock = (
         _root(root) / "request-locks" / request_id
-        if scope is not None and scope.exact
+        if force_exact or scope is not None and scope.exact
         else legacy_path
     )
-    with exclusive_file_lock(lock):
-        yield
+    if not preserve_holder:
+        with exclusive_cross_runtime_file_lock(lock):
+            yield
+        return
+    # Inventory needs both fences but can keep the prior holder record when
+    # the kernel fence is free. A busy legacy writer gets the usual timed wait.
+    with exclusive_mutation_file_lock(lock):
+        with try_exclusive_file_lock(lock, preserve_holder=True) as held:
+            if held is not None:
+                yield
+                return
+        with exclusive_file_lock(lock):
+            yield
 
 
 def normalize_request(value: Any) -> dict | None:
@@ -117,6 +166,18 @@ def normalize_request(value: Any) -> dict | None:
         return dict(
             effect_runtime_result("collaboration.request.normalize", {"request": value})
         )
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def normalize_handoff(value: Any) -> dict | list[dict] | None:
+    """Adapt the typed multi-recipient contract without enabling ordinary IO."""
+    if value is None:
+        return None
+    from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+
+    try:
+        return effect_runtime_result("collaboration.handoff.normalize", {"handoff": value})["handoff"]
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from exc
 
@@ -145,234 +206,46 @@ def plan_request_publication(request, *, entry, operation=None):
         raise ValueError(str(exc)) from exc
 
 
-def _inbox_item(row: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
-    """Present the existing typed receipt state without changing its lifecycle."""
-    item = {**row, "inbox_state": state["kind"]}
-    item.pop("request_control", None)
-    if state.get("request_control_view") is not None:
-        view = state["request_control_view"]
-        item.update(original_brief=row["brief"], brief=view["brief"], request_control_view=view,
-            request_revision=view["revision"], request_revision_digest=view["revision_digest"])
-        item["source_request"] = {"request_id": row["request_id"], "request_revision": view["revision"],
-            "request_digest": view["revision_digest"]}
-    item["recorded_decision"] = state["recorded_decision"]
-    if state["recorded_decision"] is not None:
-        item["receiver_decision_recorded"] = True
-        item["next_action"] = "Review this request's recorded decision and linked work before returning its actual result. A recorded adoption is not a completed task; preserve the current owner and do not reprioritize unrelated work."
-    if state["warnings"]:
-        item["warnings"] = state["warnings"]
-        item["next_action"] = "Receiver receipt readback is unavailable or conflicting; recover the original receipt before continuing this request. Do not repeat the decision, result or execution. Other requests can continue."
-    elif state["kind"] == "settled":
-        item["next_action"] = "Inspect the concluded request as historical source. Reading it does not reopen work, repeat its result or grant execution authority."
-    elif state.get("request_control_view") is not None:
-        item["next_action"] = state["request_control_view"]["receiver_instruction"]
-    return item
 
 
 def pending(
-    runtime_root: Path,
-    goal_id: str,
-    agent_id: str,
-    *,
-    cursor: str | None = None,
-    operation_cursor: str | None = None,
-    request_id: str | None = None,
+    runtime_root: Path, goal_id: str, agent_id: str, *, cursor: str | None = None,
+    operation_cursor: str | None = None, request_id: str | None = None,
     scope: CollaborationGoalScope | None = None,
 ) -> dict:
-    if request_id is not None:
-        if cursor is not None or operation_cursor is not None:
-            raise ValueError("an exact request read cannot use inbox cursors")
-        try:
-            row = _entry(runtime_root, goal_id, agent_id, request_id, scope=scope)
-        except FileNotFoundError as exc:
-            raise ValueError("context request not found for this Goal and Agent") from exc
-        if row.get("schema_version") != (EXACT_ENTRY_SCHEMA if scope is not None and scope.exact else ENTRY_SCHEMA):
-            raise ValueError("context inbox scope mismatch")
-        if scope is not None:
-            from .goal_instance_scope import decide_collaboration_lifecycle
+    snapshot = read_inbox_transaction(runtime_root, {
+        "operation": "pending", "goal_id": goal_id, "agent_id": agent_id,
+        "cursor": cursor, "operation_cursor": operation_cursor, "request_id": request_id,
+    }, scope=scope)
+    snapshot.update(goal_id=goal_id, agent_id=agent_id)
+    return _pending_result(runtime_root, snapshot, scope, operation_cursor)
 
-            lifecycle = decide_collaboration_lifecycle(scope, operation="inbox_observe", record=row)
-            if lifecycle.get("kind") == "omit":
-                raise ValueError("context request is unavailable in this Goal lifetime")
-        state = _pending_receipt_states(runtime_root, [row])[0]
-        return {"ok": True, "request_id": request_id, "items": [_inbox_item(row, state)],
-            "has_more": False, "next_cursor": None,
-            "instruction": REQUEST_TRIAGE_INSTRUCTION + " This is an exact source read, including concluded requests; it does not reopen their work."}
-    cursor_scope = _hash(
-        (
-            [
-                "pending_requests_v1",
-                str(runtime_root.resolve()),
-                _target(goal_id, agent_id, scope),
-            ]
-            if scope is not None and scope.exact
-            else [
-                "pending_requests_v1",
-                str(runtime_root.resolve()),
-                goal_id,
-                agent_id,
-            ]
-        )
-    )
-    after = ""
-    if cursor is not None:
-        if not isinstance(cursor, str) or not re.fullmatch(
-            r"1:[a-f0-9]{64}:[a-f0-9]{64}", cursor
-        ):
-            raise ValueError("invalid pending request cursor")
-        _, supplied_scope, after = cursor.split(":")
-        if supplied_scope != cursor_scope:
-            raise ValueError("pending request cursor scope mismatch")
-    folder = (
-        _root(runtime_root)
-        / "entries"
-        / _hash(_target(goal_id, agent_id, scope))
-    )
-    try:
-        paths = sorted(folder.iterdir())
-    except FileNotFoundError:
-        paths = []
-    items, batch = [], []
 
-    def append_batch():
-        classified = iter(_pending_receipt_states(runtime_root, batch))
-        for row in batch:
-            if isinstance(row, Exception):
-                raise row
-            state = next(classified)
-            if state["kind"] == "settled":
-                continue
-            if scope is not None:
-                from .goal_instance_scope import decide_collaboration_lifecycle
-
-                lifecycle = decide_collaboration_lifecycle(
-                    scope, operation="inbox_observe", record=row,
-                )
-                if lifecycle.get("kind") == "omit":
-                    continue
-            items.append(_inbox_item(row, state))
-            if len(items) == 21:
-                break
-        batch.clear()
-
-    for path in paths:
-        if path.suffix != ".json" or not BARE_SHA256_PATTERN.fullmatch(path.stem):
-            continue  # Ignore lock holder sidecars and other non-entry files.
-        if path.stem <= after:
-            continue
-        try:
-            batch.append(_pending_entry(path, goal_id, agent_id, scope))
-        except (OSError, ValueError) as exc:
-            # Evaluate errors in scan order; batch lookahead cannot let a later
-            # page's damaged entry block an already complete current page.
-            batch.append(exc)
-        if len(batch) == 128:
-            append_batch()
-            if len(items) == 21:
-                break
-    if batch:
-        append_batch()
-    from .peers import returns
-
-    peer_returns = returns(runtime_root, goal_id, agent_id, scope=scope)
+def _pending_result(root, snapshot, scope, operation_cursor):
+    result = snapshot["result"]
+    if "request_id" in result or snapshot.get("completed") or snapshot.get("native_child_continuation"):
+        return result
     from .operation_handoff import pending_operation_handoffs
 
-    operation_handoffs = pending_operation_handoffs(
-        runtime_root,
-        goal_id,
-        agent_id,
-        registry_path=scope.registry_path if scope is not None else None,
-        scope=scope,
-        cursor=operation_cursor,
-        cursor_scope=cursor_scope,
+    handoffs = pending_operation_handoffs(
+        root, snapshot["goal_id"],
+        snapshot["agent_id"], registry_path=scope.registry_path if scope else None,
+        scope=scope, cursor=operation_cursor, cursor_scope=snapshot["cursor_scope"],
     )
-    return {
-        "ok": True,
-        **(
-            {
-                "operation_handoffs": operation_handoffs["items"],
-                "operation_handoff_pending_count": operation_handoffs["pending_count"],
-                "operation_handoff_overflow": operation_handoffs["overflow"],
-                "operation_handoff_next_cursor": operation_handoffs["next_cursor"],
-            }
-            if operation_handoffs["items"] or operation_cursor is not None
-            else {}
-        ),
-        **({"peer_returns": peer_returns} if peer_returns["items"] else {}),
-        "items": items[:20],
-        "has_more": len(items) > 20,
-        "next_cursor": (
-            f"1:{cursor_scope}:{items[19]['request_id']}"
-            if len(items) > 20
-            else None
-        ),
-        "instruction": (
-            REQUEST_TRIAGE_INSTRUCTION
-            + " Follow next_cursor to read later pending requests. Restart without a cursor "
-            "to discover new requests before it. The end of a page sequence is not work completion."
-        ),
-    }
+    if handoffs["items"] or operation_cursor is not None:
+        result.update(operation_handoffs=handoffs["items"],
+            operation_handoff_pending_count=handoffs["pending_count"],
+            operation_handoff_overflow=handoffs["overflow"],
+            operation_handoff_next_cursor=handoffs["next_cursor"])
+    return result
 
 
-def _pending_entry(path, goal_id, agent_id, scope):
-    if not BARE_SHA256_PATTERN.fullmatch(path.stem):
-        raise ValueError("invalid context request filename")
-    item = _read(path)
-    if (
-        item.get("schema_version")
-        != (EXACT_ENTRY_SCHEMA if scope is not None and scope.exact else ENTRY_SCHEMA)
-        or item.get("goal_id") != goal_id
-        or item.get("agent_id") != agent_id
-        or item.get("request_id") != path.stem
-    ):
-        raise ValueError("context inbox scope mismatch")
-    return item
 
 
 def _pending_receipt_states(runtime_root, rows):
-    """Observe private files, then batch the typed read model by wire bytes."""
-    from ..effect_runtime import effect_runtime_result
-
-    root = _root(runtime_root)
-    observations, states, encoded_bytes = [], [], 0
-    for row in rows:
-        if isinstance(row, Exception):
-            continue
-        request_id = row["request_id"]
-        observation = {
-            "request": {key: row[key] for key in (
-                "request_id", "goal_id", "agent_id", "source_id", "goal_ref"
-            ) if key in row},
-            "route_present": (root / "roundtrips" / (request_id + ".json")).exists(),
-            "decision": _observe_receipt(root / "decisions" / (request_id + ".json")),
-            "conclusion": _observe_receipt(root / "replies" / request_id / "conclusion.json"),
-        }
-        if "request_control" in row:
-            observation["request"] = row
-            observation["read"] = _observe_receipt(root / "reads" / (request_id + ".json"))
-            results = []
-            for path in result_paths(root / "replies" / request_id):
-                try:
-                    results.append(_result_observation(path.stem, _read(path)))
-                except (OSError, ValueError, TypeError):
-                    results.append({"unavailable": True})
-            observation["results"] = results
-        size = len(json.dumps(observation, separators=(",", ":")).encode())
-        # The existing bridge serializes ASCII-escaped JSON and admits 2 MiB.
-        # Leave room for its envelope; legal Unicode replies must not turn
-        # a bounded page into another oversized history request.
-        if observations and encoded_bytes + size > 1_000_000:
-            states.extend(effect_runtime_result(
-                "collaboration.inbox.inspect_receipts", {"observations": observations}
-            )["items"])
-            observations, encoded_bytes = [], 0
-        observations.append(observation)
-        encoded_bytes += size
-    if observations:
-        states.extend(effect_runtime_result(
-            "collaboration.inbox.inspect_receipts", {"observations": observations}
-        )["items"])
-    return states
+    return read_inbox_transaction(runtime_root, {
+        "operation": "receipt_states", "rows": rows,
+    })["items"]
 
 
 def controlled_request_readback(root: Path, row: dict[str, Any]) -> dict[str, Any] | None:
@@ -478,12 +351,14 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _entry(root: Path, goal_id: str, agent_id: str, request_id: str, *,
-           scope: CollaborationGoalScope | None = None) -> dict[str, Any]:
+def _entry(root: Path, goal_id: str | None, agent_id: str | None, request_id: str, *,
+           scope: CollaborationGoalScope | None = None, recipient: dict | None = None) -> dict[str, Any]:
     if not isinstance(request_id, str) or not BARE_SHA256_PATTERN.fullmatch(request_id):
         raise ValueError("invalid context request id")
-    target = _target(goal_id, agent_id, scope)
-    identity = _record_identity(goal_id, agent_id, scope)
+    if recipient is None and (not isinstance(goal_id, str) or not isinstance(agent_id, str)):
+        raise ValueError("a Goal receiver needs its original Goal and Agent identity")
+    target = {"recipient": recipient} if recipient is not None else _target(goal_id, agent_id, scope)
+    identity = {"recipient": recipient} if recipient is not None else _record_identity(goal_id, agent_id, scope)
     row = _read(_root(root) / "entries" / _hash(target) / (request_id + ".json"))
     if any(
         row.get(k) != v
@@ -493,63 +368,17 @@ def _entry(root: Path, goal_id: str, agent_id: str, request_id: str, *,
     return row
 
 
-def record_read(
-    root: Path,
-    items: list[dict],
-    *,
-    scope: CollaborationGoalScope | None = None,
-) -> None:
-    """CLI supplied these messages to the receiver; not proof of comprehension."""
-    for row in items:
-        _entry(
-            root,
-            row["goal_id"],
-            row["agent_id"],
-            row["request_id"],
-            scope=scope,
-        )
-        if scope is not None:
-            from .goal_instance_scope import decide_collaboration_lifecycle
-
-            decide_collaboration_lifecycle(
-                scope,
-                operation="read_record",
-                record=row,
-            )
-        path = _root(root) / "reads" / (row["request_id"] + ".json")
-        with _request_lock(
-            root,
-            row["request_id"],
-            scope,
-            path.with_suffix(".lock"),
-        ):
-            stored = _entry(root, row["goal_id"], row["agent_id"], row["request_id"], scope=scope)
-            if "request_control" in stored:
-                from ..effect_runtime import effect_runtime_result
-
-                decision, error = _receipt(root, "decisions", stored)
-                plan = effect_runtime_result("collaboration.request.record_read", {
-                    "entry": stored, "actor_agent_id": row["agent_id"], "observed_at": _now(),
-                    "revision": row.get("request_revision"), "revision_digest": row.get("request_revision_digest"),
-                    "legacy_assessment": decision or None, "legacy_assessment_unavailable": bool(error)})
-                if plan["changed"]:
-                    entry_path = _root(root) / "entries" / _hash(_target(row["goal_id"], row["agent_id"], scope)) / (row["request_id"] + ".json")
-                    _write(entry_path, plan["entry"])
-                row["request_read_receipt"] = plan["readback"]
-                continue
-            if not path.exists():
-                _write(
-                    path,
-                    {
-                        k: row[k]
-                        for k in ("request_id", "goal_id", "agent_id", "goal_ref")
-                        if k in row
-                    }
-                    | {
-                        "read_at": _now(),
-                        "kind": "receiver_cli_read",
-                    },
-                )
+def record_read(root: Path, items: list[dict], *, scope: CollaborationGoalScope | None = None) -> None:
+    """Record supplied source without certifying comprehension or adoption."""
+    if not items:
+        return
+    result = read_inbox_transaction(root, {
+        "operation": "record_read", "goal_id": items[0]["goal_id"],
+        "agent_id": items[0]["agent_id"], "items": items, "deliveries": [],
+    }, scope=scope)
+    for row, receipt in zip(items, result["read_receipts"], strict=True):
+        if receipt is not None:
+            row["request_read_receipt"] = receipt
 
 
 def _receipt(root: Path, lane: str, row: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
@@ -620,6 +449,7 @@ def record_result(
     update_id: str | None = None,
     attachments: list[dict[str, Any]] | None = None,
     request_revision: int | None = None,
+    remaining_work: dict[str, str] | None = None,
 ):
     """Persist a receiver conclusion; the transport adapter validates its audience."""
     request_id = row["request_id"]
@@ -635,8 +465,8 @@ def record_result(
     from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 
     folder = _root(root) / "replies" / request_id
-    with _request_lock(root, request_id, scope, folder / "report.lock"):
-        row = _entry(root, row["goal_id"], row["agent_id"], request_id, scope=scope)
+    with _request_lock(root, request_id, scope, folder / "report.lock", force_exact="recipient" in row):
+        row = _entry(root, row.get("goal_id"), row.get("agent_id"), request_id, scope=scope, recipient=row.get("recipient"))
         decision, error = _receipt(root, "decisions", row)
         if "request_control" not in row and (error or not decision):
             raise ValueError("record the receiver decision before returning a reply")
@@ -647,6 +477,7 @@ def record_result(
                 "decision": decision.get("decision"), "update_id": update_id,
                 "request_revision": request_revision, "legacy_assessment": decision or None,
                 "attachments": attachments,
+                "remaining_work": remaining_work,
                 "results": observations,
             })
         except EffectRuntimeRejected as exc:
@@ -684,6 +515,7 @@ def inspect_result_identity(reply, row, path):
             "request": row, "phase": reply.get("phase"), "text": reply.get("text"),
             "decision": reply.get("decision"), "update_id": reply.get("update_id"),
             "attachments": reply.get("attachments"),
+            "remaining_work": reply.get("remaining_work"),
             "request_revision": reply.get("request_revision"), "legacy_assessment": legacy.get("value"),
             "results": observations,
         })
@@ -706,7 +538,7 @@ def _result_observation(key, value):
         "value": {field: value[field] for field in (
             "request_id", "goal_id", "agent_id", "source_id", "goal_ref", "phase",
             "decision", "result_key", "previous_result_key", "update_id", "attachments",
-            "request_revision", "request_revision_digest",
+            "request_revision", "request_revision_digest", "recipient", "requester", "remaining_work", "return_format_version",
         ) if field in value},
         "text_chars": len(text),
         "text_sha256": hashlib.sha256(text.encode()).hexdigest(),
@@ -719,35 +551,22 @@ def iter_result_paths(folder: Path):
             yield from result_paths(request_folder)
 
 
-DELIVERY_STATUSES = {
-    "admitted",
-    "queued",
-    "retry_pending",
-    "verification_required",
-    "delivered",
-    "superseded",
-    "explicit_unverified",
-}
-DELIVERY_ERRORS = {
-    "provider_delivery_unverified",
-    "provider_locator_unavailable",
-    "provider_verifier_unavailable",
-    "provider_verification_unavailable",
-    "provider_delivery_intent_conflict",
-    "provider_message_missing",
-    "provider_delivery_mismatch",
-    "return_authorization_unavailable",
-    "original_route_unavailable",
-    "initial_delivery_receipt_unavailable",
-    "original_route_or_return_delivery_unavailable",
-    "delivery_state_unreadable",
-    "return_transport_unavailable",
-    "manager_return_payload_conflict",
-}
+# Retained public re-exports share the native delivery contract.
+_delivery_contract = json.loads(Path(__file__).with_name("return_delivery_contract.json").read_text(encoding="utf-8"))
+DELIVERY_STATUSES = set(_delivery_contract["delivery_statuses"])
+DELIVERY_ERRORS = set(_delivery_contract["delivery_errors"])
 
-def reply_status(root, row):
+
+def reply_status(root, row, *, include_result_key=None, observe_result=None):
+    """Read current delivery state, optionally selecting result identities first.
+
+    The selector narrows IO only; retained results use the same validation and
+    unreadable-state handling. No result content or status is cached.
+    """
     result = []
     for path in result_paths(_root(root) / "replies" / row["request_id"]):
+        if include_result_key is not None and not include_result_key(path.stem):
+            continue
         phase = "decision" if path.stem == "decision" or path.stem.startswith("decision-") else "conclusion"
         state_path = path.with_name(path.stem + ".delivery.json")
         try:
@@ -778,19 +597,9 @@ def reply_status(root, row):
             "delivered_at": delivered_at,
             "error": error,
         }
+        if observe_result is not None:
+            observe_result(path, reply)
         if state.get("verification") == "reconciled_after_restart":
             item["verification"] = "reconciled_after_restart"
         result.append(item)
     return result
-
-
-def prior_result_delivered(path, reply):
-    """Ordered transport: a newer update cannot race an uncertain earlier send."""
-    from ..effect_runtime import effect_runtime_result
-
-    previous = reply.get("previous_result_key")
-    state_path = path.with_name(previous + ".delivery.json") if previous else None
-    delivery = _read(state_path) if state_path and state_path.exists() else None
-    return effect_runtime_result("collaboration.result.delivery_ready", {
-        "result": reply, "previous_delivery": delivery,
-    })["ready"]

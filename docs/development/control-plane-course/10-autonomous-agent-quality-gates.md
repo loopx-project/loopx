@@ -12,7 +12,7 @@
 
 完成本讲后，开发者应该能够：
 
-1. 先判断状态和规则是否合理，再判断实现是否符合，而不是把当前输出录成 golden。
+1. 先判断状态和规则是否合理，再判断实现是否符合。
 2. 按改动风险选择 unit、focused smoke、decision replay、canary、模型行为验证和 release gate。
 3. 区分 blocking failure、advisory signal、deferred gap、`not_applicable` 和 manual hold。
 4. 解释为什么常规模型行为测试是 actual-default one-arm，而双臂只服务于明确的差分或提升声明。
@@ -26,7 +26,7 @@ agent-facing packet 读案例四；文档与社区资源读案例五；release/b
 
 ## 本讲沿三个 Showcase 验证什么
 
-质量门禁不是脱离产品路径的测试清单。三个 Showcase 各自暴露了不同风险：
+三个 Showcase 各自暴露了不同风险：
 
 | Showcase surface | 独立 oracle | 最小确定性证明 | 更高层证明 |
 | --- | --- | --- | --- |
@@ -78,7 +78,7 @@ Explore Graph 只能消费第二组 oracle 已接受的 finding；Explore Harnes
 
 ## 第一道门：独立语义 Oracle
 
-写测试前先用产品规则表达期望，而不是从实现输出复制期望：
+写测试前先用产品规则表达期望：
 
 ```text
 source facts
@@ -90,8 +90,7 @@ source facts
 
 例如 `required_decision_scopes=["publish"]` 的 agent todo 遇到一个
 `blocking=false` 的 `user_action`：即使提醒文本里提到 publish，它也不能授予 publish
-权限。这里的 oracle 来自 authority invariant，而不是当前 reducer 是否恰好返回
-`should_run=true`。
+权限。这里的 oracle 来自 authority invariant。
 
 Oracle 至少要写清：
 
@@ -157,7 +156,7 @@ if meaningful:
 
 - 模型通过不能覆盖 deterministic contract failure；
 - full-public 全通过不能替代一个明确命名旧故障的 focused regression；
-- output 字符数没增长不能证明 agent 仍知道下一步做什么；
+
 - release receipt 齐全不能替 owner 自动做发布决定。
 
 ## Quality Surface Catalog：先审计覆盖设计
@@ -179,9 +178,9 @@ loopx canary quality-audit
 
 - `not_applicable`：这层测试不适合该语义，例如用模型判断确定性的 scheduler 优先级；
 - `deferred`：这层有价值但尚未建设，必须保留 owner 和可见缺口；
-- `covered`：有真实路径和稳定 oracle，不是只写了一句“已有测试”。
+- `covered`：有真实路径和稳定 oracle。
 
-Catalog 不是测试结果汇总，而是“为什么这些层足够”的机器可审计设计。
+Catalog 是“为什么这些层足够”的机器可审计设计。
 
 ## PR 快速门：让普通迭代保持便宜
 
@@ -208,8 +207,7 @@ loopx canary premerge --from-git-diff
 loopx canary smoke-suite --suite full-public --jobs 4 --timeout-seconds 120
 ```
 
-它适合主干、每日或手动运行，不应成为每个文档 patch 的同步阻塞项。保护质量不等于
-把最宽的测试频率提高到每次保存文件。
+它适合主干、每日或手动运行，不应成为每个文档 patch 的同步阻塞项。
 
 ## 真实模型门：常规 one-arm，必要时才 pair
 
@@ -254,16 +252,17 @@ runner。
 ## Agent-facing 热路径与诊断冷路径
 
 默认 guided projection 是 agent 每轮都会消费的热路径；完整诊断包是显式请求的冷路径。
-把字段从热路径移到冷路径不是简单删 JSON，至少要同时证明：
+
+把字段从热路径移到冷路径，至少要同时证明：
 
 1. 热路径仍保留当前 authority、selected todo、可执行 commands 和 host activation；
 2. 被省略细节有显式 drill-down 命令；
 3. action signature 与状态语义没有漂移；
-4. CLI budget 显示输出确实收敛，而不是把重复文本搬到另一处；
+4. CLI budget 显示输出确实收敛
 5. actual-default model portfolio 中的真实 agent 行为仍正确。
 
 冷路径不会天然降低接入效果。真正的风险是把 agent 作决定所需的信息也当成“诊断噪声”
-一起移走。因此 owner review 应逐项解释字段为什么可移除，而不是只展示字符数下降。
+一起移走。因此 owner review 应逐项解释字段为什么可移除。
 
 ## 门禁结果也是状态机
 
@@ -329,9 +328,8 @@ if replan_decision_allowed:
 
 阅读断点：
 
-1. `monitor_quiet_skip` 只是候选结果，不是函数提前返回；
-2. `replan_decision_allowed` 显式改写 `should_run` 与 `effective_action`，所以 replan
-   precedence 不是靠 prompt 文案实现；
+1. `monitor_quiet_skip` 只是候选结果
+2. `replan_decision_allowed` 显式改写 `should_run` 与 `effective_action`
 3. 继续读同函数末尾的 `build_interaction_contract(payload)` 和 `_scheduler_hint(...)`：
    二者都消费已经仲裁完成的 payload，host 不应重新从低层 flags 猜一次决策。
 
@@ -347,7 +345,7 @@ if replan_decision_allowed:
 4. metamorphic case 把 advancement 改成 same-agent runnable，最终必须回到
    `normal_run`，证明 replan 没有抢占真实可执行工作。
 
-这里测试的不是一份当前 JSON，而是两条独立 invariant：monitor 停滞按 target identity
+这里测试的是两条独立 invariant：monitor 停滞按 target identity
 累计；runnable advancement 在工作选择上优先于 monitor-derived replan。
 仓库用 [issue #2272](https://github.com/huangruiteng/loopx/issues/2272) 记录过对应回归：
 M1、M2 交错 poll 时，错误的全局计数会让某条 lane 永远达不到 replan 阈值。下文的
@@ -426,8 +424,7 @@ if (conflicting.length) {
 if (compatible.length) continue;
 ```
 
-只有 task class、scope、owner 和精确目标一致的 gate 才满足依赖；依赖一致不等于
-批准或 lease。随后 `matchingActions` 只用于错误归因
+只有 task class、scope、owner 和精确目标一致的 gate 才满足依赖；随后 `matchingActions` 只用于错误归因
 `non_blocking_user_action_scope_collision`，不能成为 authority。只有不兼容 gate 时
 归因 `required_decision_scope_gate_owner_mismatch`；没有匹配来源时归因
 `dangling_required_decision_scope`。standing authority 的冲突与拒绝/取消后的阻塞要求
@@ -535,12 +532,11 @@ if any(_path_matches(path, BENCHMARK_SENSITIVE_TOKENS) for path in files):
 
 再进入 `build_premerge_validation_gate`，观察 classification 如何分别生成 direct checks、
 catalog run、risk-profile run 和 boundary scan。Docs-only 命中自己的 profile；只有实际
-路径命中 benchmark-sensitive token 才产生 manual hold。门禁由 diff surface 决定，
-不是由 PR 作者在描述里自报“低风险”。
+路径命中 benchmark-sensitive token 才产生 manual hold。门禁由 diff surface 决定。
 
 ## 组合案例六：Release 精确 Commit
 
-发布前的关键不是“这些测试最近跑过”，而是“这些回执是否属于即将打 tag 的同一个
+发布前的关键是“这些回执是否属于即将打 tag 的同一个
 clean source identity”。Exact-commit gate 聚合既有通道，不另造一套 runner：
 
 ```bash
@@ -634,7 +630,7 @@ def test_goal_frontier_replan_decision_table(...):
 
 第二层是 metamorphic test：不改变当前 agent 的 source facts，只扩大其他 peer 的 backlog，
 结果必须不变；再加入当前 agent 自己的 runnable advancement，结果必须翻转。它检查的是
-agent-scope invariant，不是某份固定 JSON。
+agent-scope invariant。
 
 第三层让 focused smoke 经由 `build_quota_should_run` 验证最终路由，防止纯 selector 正确、
 integration 却漏传 facts。第四层把 surface 登记进 quality catalog 和 risk-based canary。
@@ -718,7 +714,7 @@ outcome baseline 可以消费 readiness receipt，但不能反过来用一个分
 9. `tests/control_plane/test_goal_frontier_replan_rules.py`
 10. `examples/control_plane/quota-agent-scoped-user-gate-smoke.py`
 11. `tests/control_plane/test_goal_vision_blocked_successor.py`
-12. `deprecate/benchmark-legacy/tests/test_skillsbench_turn_runtime.py` (retired)
+12. [已退役的 SkillsBench Turn runtime 测试](https://github.com/loopx-project/loopx/blob/54d42da44283bb414b24f71d16642c25cbcaf5dd/deprecate/benchmark-legacy/tests/test_skillsbench_turn_runtime.py)（仅保留在 Git 历史中）
 
 ## 代表性实验
 
@@ -754,5 +750,4 @@ outcome baseline 可以消费 readiness receipt，但不能反过来用一个分
 7. 哪些改动允许 agent 自合并，哪些必须留下 manual hold？
 
 下一讲进入扩展层：Explore Graph/Harness、Single-Agent Auto ML、multi-agent kernel、
-Auto Research、supervisor 和 connectors 如何复用同一套状态内核与质量门禁，而不是创建
-第二套控制面。
+Auto Research、supervisor 和 connectors 如何复用同一套状态内核与质量门禁。

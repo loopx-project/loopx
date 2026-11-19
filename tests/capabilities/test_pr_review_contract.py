@@ -40,7 +40,7 @@ def test_execution_contract_owns_deep_review_requirements() -> None:
         "review_sequence_membership": "review_action_kind_non_null_only",
         "no_action_inventory_location": "pull_requests",
         "generic_rereview_terms_force_fresh_audit": False,
-        "no_action_behavior": "compact_exact_head_conclusion_readback_only",
+        "no_action_behavior": "compact_exact_head_review_or_lifecycle_readback_only",
         "no_action_execution_artifacts": "plan_and_template_null_commands_empty",
         "force_fresh_audit_requires": (
             "An explicit request to rerun evidence despite the unchanged/no-action "
@@ -125,6 +125,8 @@ def test_execution_contract_owns_deep_review_requirements() -> None:
         "pre_existing_unrelated", "external_unrelated",
     ]
     assert "same normalized failing identity" in attribution["rule"]
+    assert "unknown cause stays unresolved" in attribution["rule"]
+    assert "even on a diagnostic row" in attribution["rule"]
     assert "merge readiness remains on hold" in attribution["rule"]
     assert "not the union of all historical" in attribution["evidence_scope"]
     assert "A later green run alone does not resolve intermittency" in attribution["evidence_scope"]
@@ -132,6 +134,7 @@ def test_execution_contract_owns_deep_review_requirements() -> None:
     assert "without making completion" in requirements["validation_matrix"]["validation_source"]
     assert "required means review evidence" in requirements["validation_matrix"]["validation_source"]
     assert "only decisive coverage" in requirements["validation_matrix"]["validation_source"]
+    assert "smallest decisive check" in requirements["validation_matrix"]["validation_source"]
     assert "APPROVE when a required red check" in contract["verdict_policy"][
         "unrelated_validation_failure"
     ]
@@ -178,7 +181,7 @@ def test_execution_contract_owns_deep_review_requirements() -> None:
     assert "paired_counterfactual_validation" in isolation["fields"]
     assert "absence of a topology" in isolation["rule"]
     assert "automatically loaded" in isolation["rule"]
-    assert "availability from activation" in isolation["rule"]
+    assert "gate binds the intended scope and every required subject" in isolation["rule"]
     assert "runtime default of false" in isolation["rule"]
     authority = requirements["authority_semantics"]
     assert authority["verdict_values"] == [
@@ -279,6 +282,20 @@ def test_docs_plan_does_not_invent_code_symbols() -> None:
     )
     assert "### 关键内容讲解" in concrete["agent_instruction"]
     assert template["review_order"] == ["docs/design.md"]
+
+
+def test_bilingual_presentation_keeps_canonical_evidence_and_validation_requirements() -> None:
+    template = build_review_template(_item(areas={"product_runtime": 1}))
+    assert [section["label"] for section in template["sections"]] == [
+        "动机", "改动思路", "具体改动", "对主干的风险", "我的整体评价"]
+    assert [section["minimum_prose_characters"] for section in template["sections"]] == [40, 80, 180, 120, 60]
+    assert "## 动机 / Motivation" in template["sections"][0]["agent_instruction"]
+    assert "Problem / Evidence / " in template["output_hint"]
+    assert "PASS / FAIL / UNVERIFIED" in template["output_hint"]
+    assert "Do not translate every sentence twice, impose a language ratio" in template["output_hint"]
+    # Style is carried by the existing writing hint, not a new evidence bypass.
+    assert "check-result" in template["output_hint"]
+    assert "read it back" in template["output_hint"]
 
 
 def test_agent_instruction_plan_requires_default_off_user_experience_evidence() -> None:
@@ -502,6 +519,9 @@ def test_public_cli_delivers_state_review_without_claiming_it_was_performed(caps
         assert obligation in budget_rule
     assert packet["pull_requests"]
     instruction_rule = requirements["observable_semantics"]["decision_text_assessment"]
+    assert instruction_rule["fields_by_verdict"] == {
+        "intentional_change_validated": ["authorization_basis"],
+    }
     assert "decision_text_assessment" in requirements["observable_semantics"]["fields"]
     assert instruction_rule["blocking_verdicts"] == ["unintended_drift", "not_yet_proven"]
     for obligation in ("temporal ordering", "evidence provenance", "scope qualifiers",

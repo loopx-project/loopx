@@ -921,6 +921,15 @@ def test_agent_directory_withholds_a_credential_shaped_thread_from_the_packet(
     """
 
     registry = _registry(tmp_path, ["agent-a"])
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
+    runtime = tmp_path / "runtime"
+    state = tmp_path / "ACTIVE_GOAL_STATE.md"
+    state.write_text("# Goal\n\n## Agent Todo\n", encoding="utf-8")
+    config = json.loads(registry.read_text())
+    config["common_runtime_root"] = str(runtime)
+    config["goals"][0].update(repo=str(tmp_path), state_file=str(state))
+    registry.write_text(json.dumps(config), encoding="utf-8")
+    initialize_canonical_source_fixture(runtime, "goal", state_path=state)
     secret_thread = "ghp_" + "1234567890abcdefghijklmnopqrstuvwxyz1234"
     assert (
         bind_thread_agent_in_registry(
@@ -947,8 +956,6 @@ def test_agent_directory_withholds_a_credential_shaped_thread_from_the_packet(
                 "goal",
                 "--agent-id",
                 "agent-a",
-                "--scan-path",
-                str(tmp_path),
             ]
         )
 
@@ -962,3 +969,96 @@ def test_agent_directory_withholds_a_credential_shaped_thread_from_the_packet(
     assert row["peer_route"]["withheld_candidate_count"] == 1
     assert "route_candidate_withheld" in packet["limitations"]
     validate_public_safe_value(packet, path="peer_agent_directory")
+
+
+def test_list_attached_session_bindings_is_a_read_only_row_per_binding():
+    from loopx.thread_agent_binding import list_attached_session_bindings
+
+    goals = [
+        {
+            "id": "g1",
+            "display_name": "First",
+            "coordination": {
+                "thread_agent_bindings": [
+                    {"thread_id": "t1", "host_surface": "codex-app", "agent_id": "codex"},
+                    {"thread_id": "bad id", "host_surface": "codex-app", "agent_id": "codex"},
+                ]
+            },
+        },
+        {"id": "g2"},
+        "not-a-goal",
+    ]
+    assert list_attached_session_bindings(goals) == [
+        {
+            "host_surface": "codex-app",
+            "session_id": "t1",
+            "goal_id": "g1",
+            "goal_title": "First",
+            "agent_id": "codex",
+        }
+    ]
+
+
+def test_antigravity_thread_bindings_bridge_agy_and_antigravity_app_with_conflict_fence(
+    tmp_path: Path,
+) -> None:
+    path = _registry(tmp_path, ["agent-a", "agent-b"])
+    assert (
+        bind_thread_agent_in_registry(
+            registry_path=path,
+            goal_id="goal",
+            host_surface="agy",
+            thread_id="conv-1",
+            agent_id="agent-a",
+            execute=True,
+        )["ok"]
+        is True
+    )
+    resolved = resolve_registry_thread_agent_binding(
+        registry_path=path,
+        host_surface="antigravity-app",
+        thread_id="conv-1",
+    )
+    assert resolved["status"] == "bound"
+    assert resolved["agent_id"] == "agent-a"
+    assert resolved["matches"] == [{"goal_id": "goal", "agent_id": "agent-a"}]
+
+    conflict = bind_thread_agent_in_registry(
+        registry_path=path,
+        goal_id="goal",
+        host_surface="antigravity-app",
+        thread_id="conv-1",
+        agent_id="agent-b",
+        execute=True,
+    )
+    assert conflict["ok"] is False
+    assert conflict["error_kind"] == "thread_agent_binding_conflict"
+
+    same_agent = bind_thread_agent_in_registry(
+        registry_path=path,
+        goal_id="goal",
+        host_surface="antigravity-app",
+        thread_id="conv-1",
+        agent_id="agent-a",
+        execute=True,
+    )
+    assert same_agent["ok"] is True
+
+    # Unbinding stays exact-surface so removing antigravity-app preserves agy unless removed too
+    unb = unbind_thread_agent_in_registry(
+        registry_path=path,
+        goal_id="goal",
+        host_surface="antigravity-app",
+        thread_id="conv-1",
+        agent_id="agent-a",
+        execute=True,
+    )
+    assert unb["ok"] is True and unb["written"] is True
+    assert (
+        resolve_registry_thread_agent_binding(
+            registry_path=path,
+            host_surface="antigravity-app",
+            thread_id="conv-1",
+        )["agent_id"]
+        == "agent-a"
+    )

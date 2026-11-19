@@ -20,6 +20,47 @@ from test_lark_inbox_reactions import ReplyRunner, _fixture
 TEXT = "进展\n\n- **结果**\n  - 证据\n\n```python\nif ok:\n    done()\n```"
 
 
+def test_historical_raw_markdown_text_receipt_still_recovers_without_resending(tmp_path):
+    config, _, project = _fixture(tmp_path, lifecycle=False)
+    text = "| Case | Score |\n| --- | --- |\n| original | **0** |"
+    attempts = []
+    first = reply_lark_event_inbox(project=project, config_path=config,
+        message_id="om_reaction_fixture", text=text, content_format="text",
+        execute=True, runner=ReplyRunner(readback_text="unavailable"),
+        delivery_attempt_recorder=attempts.append)
+    assert first["status"] == "sent_unverified"
+    recovery = ReplyRunner(readback_text=text)
+    verified = verify_lark_inbox_reply(project=project, config_path=config,
+        message_id="om_reaction_fixture", text=text, attempt=attempts[0], runner=recovery)
+    assert verified["reply_verified"] is True
+    assert not any("+messages-send" in call or "+messages-reply" in call for call in recovery.calls)
+
+
+def test_rich_parts_recheck_native_source_authority_instead_of_using_legacy_membership(tmp_path):
+    config, _, project = _fixture(tmp_path, lifecycle=False)
+    text = "**完整内容**\n" * 2000
+    provider = ReplyRunner()
+    checks = []
+
+    def source(profile, chat, message):
+        checks.append((profile, chat, message))
+        return "Project Review Bot", len(checks) == 1
+
+    def runner(args):
+        if "--content" in args:
+            return {"returncode": 0, "stdout": json.dumps({"api": [{"body": {
+                "msg_type": "post", "content": args[args.index("--content") + 1],
+            }}]})}
+        return provider(args)
+
+    result = reply_lark_event_inbox(project=project, config_path=config,
+        message_id="om_reaction_fixture", text=text, content_format="markdown",
+        execute=True, runner=runner, source_authority_verifier=source)
+    assert len(checks) == 2 and checks[0] == checks[1]
+    assert not result["ok"]
+    assert not any(("+messages-send" in a or "+messages-reply" in a) and "--dry-run" not in a for a in provider.calls)
+
+
 def test_result_attachment_zone_matches_raw_post_and_flattened_cli_readback():
     keys = ("file_first", "file_second")
     content = json.loads(lark_markdown_post_content(TEXT))
@@ -133,84 +174,6 @@ def test_reply_transport_verifies_post_and_reuses_exact_idempotent_request(tmp_p
     sent = [args for args in calls if "--content" in args and "--dry-run" not in args]
     assert sent[0] == sent[1]
     assert ("--reply-in-thread" in sent[0]) == (placement == "source_thread")
-
-
-def test_large_post_falls_back_before_send_without_truncating(tmp_path):
-    config, _, project = _fixture(tmp_path, lifecycle=False)
-    text = "- 完整内容\n" * 2000
-    fallback = ReplyRunner(readback_text=text.strip())
-    calls = []
-    def runner(args):
-        calls.append(args)
-        if "--content" in args:
-            assert "--dry-run" in args  # oversized post must never be sent
-            return {"returncode": 0, "stdout": json.dumps({"api": [{"body": {
-                "msg_type": "post", "content": args[args.index("--content") + 1],
-            }}]})}
-        return fallback(args)
-    result = reply_lark_event_inbox(project=project, config_path=config,
-        message_id="om_reaction_fixture", text=text, content_format="markdown",
-        execute=True, runner=runner)
-    assert result["reply_verified"]
-    assert result["content_format"] == "text"
-    assert result["format_fallback"] == "post_size_limit"
-    sent = [args for args in calls if "--text" in args and "--dry-run" not in args]
-    assert len(sent) == 1
-    assert sent[0][sent[0].index("--text") + 1] == text.strip()
-
-
-def test_large_post_fallback_can_be_verified_without_resending(tmp_path):
-    config, _, project = _fixture(tmp_path, lifecycle=False)
-    text = "- 完整内容\n" * 2000
-    fallback = ReplyRunner(readback_text="different text")
-    attempts = []
-
-    def runner(args):
-        if "--content" in args:
-            return {
-                "returncode": 0,
-                "stdout": json.dumps(
-                    {
-                        "api": [
-                            {
-                                "body": {
-                                    "msg_type": "post",
-                                    "content": args[args.index("--content") + 1],
-                                }
-                            }
-                        ]
-                    }
-                ),
-            }
-        return fallback(args)
-
-    first = reply_lark_event_inbox(
-        project=project,
-        config_path=config,
-        message_id="om_reaction_fixture",
-        text=text,
-        content_format="markdown",
-        execute=True,
-        runner=runner,
-        delivery_attempt_recorder=attempts.append,
-    )
-    assert first["status"] == "sent_unverified"
-    assert first["content_format"] == "text"
-
-    recovery = ReplyRunner(readback_text=text.strip())
-    verified = verify_lark_inbox_reply(
-        project=project,
-        config_path=config,
-        message_id="om_reaction_fixture",
-        text=text,
-        attempt=attempts[0],
-        runner=recovery,
-    )
-    assert verified["reply_verified"] is True
-    assert not any(
-        "+messages-send" in call or "+messages-reply" in call
-        for call in recovery.calls
-    )
 
 
 def test_markdown_request_with_mentions_keeps_verified_text_transport(tmp_path):

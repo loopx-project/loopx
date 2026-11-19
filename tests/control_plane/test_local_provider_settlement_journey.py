@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from canonical_authority_fixture import isolate_sqlite_runtime
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 import test_quota_settlement_cli as settlement
 from test_todo_list_record_references import expand_references
 from test_quota_authority_settlement_journey import _source
@@ -23,7 +24,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 def test_file_sqlite_file_retains_new_todos_results_and_settled_turn(tmp_path, monkeypatch):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry, state, _ = _source(
+    project, runtime, registry, state, goal_intent = _source(
         tmp_path, provider="file", handoff_mode="hard_lease",
         extra=f"claimed_by={settlement.AGENT_ID}",
     )
@@ -39,7 +40,7 @@ def test_file_sqlite_file_retains_new_todos_results_and_settled_turn(tmp_path, m
             capture_output=True, text=True, timeout=90, check=False,
         )
         assert process.returncode == expected, process.stdout + process.stderr
-        return json.loads(process.stdout)
+        return read_cli_policy_payload(process.stdout, returncode=process.returncode)
 
     def listed():
         payload = run("todo", "list", "--goal-id", goal)
@@ -67,7 +68,7 @@ def test_file_sqlite_file_retains_new_todos_results_and_settled_turn(tmp_path, m
 
     guard_args = ("quota", "should-run", "--codex-app", "--goal-id", goal,
                   "--agent-id", actor, "--todo-id", todo, "--turn-instance-id", turn,
-                  "--scan-path", str(project))
+                  )
     lease_args = ("--goal-id", goal, "--todo-id", todo, "--owner", actor,
                   "--idempotency-key", "retained-work")
     try:
@@ -78,6 +79,9 @@ def test_file_sqlite_file_retains_new_todos_results_and_settled_turn(tmp_path, m
         assert listed()["authority_read"]["source_authority"] == "file_v0"
         assert run(*migration, "--execute")["selected_provider"] == "sqlite"
         state.unlink()  # Neither restart nor rollback may restore old display truth.
+        # Keep registered Goal intent available without restoring any Todo rows.
+        # Canonical work continuity is distinct from permission to lose intent.
+        state.write_text(goal_intent)
 
         add_args = ("todo", "add", "--goal-id", goal, "--role", "agent",
                     "--text", "Validate work added after the upgrade", "--priority", "P0",
@@ -90,11 +94,17 @@ def test_file_sqlite_file_retains_new_todos_results_and_settled_turn(tmp_path, m
         assert added_again["status"] == "replayed"
 
         guard = run(*guard_args)
-        assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+        assert guard["should_run"] is True
+        assert guard["execution_preparation"]["state"] == "claim_required"
+        assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
         identity = guard["heartbeat_receipt"]["settlement_identity"]
         acquired = run("task-lease", "acquire", *lease_args, "--expected-version", "0",
                        "--ttl-seconds", "3600", "--write-scope", "tests/**")
         version = str(acquired["lease"]["version"])
+        prepared = run(*guard_args)
+        assert prepared["execution_preparation"]["state"] == "ready"
+        assert prepared["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+        assert prepared["heartbeat_receipt"]["settlement_identity"] == identity
         proof = ("--task-lease-idempotency-key", "retained-work",
                  "--task-lease-expected-version", version)
         note = "New result after SQLite upgrade; 中文说明与原操作回执必须保留。"
@@ -183,7 +193,7 @@ def test_file_sqlite_file_retains_new_todos_results_and_settled_turn(tmp_path, m
         # silently treat the added Todo as proof of Goal acceptance.
         next_work = run("quota", "should-run", "--codex-app", "--goal-id", goal,
                         "--agent-id", actor, "--turn-instance-id", "turn-after-provider-rollback",
-                        "--scan-path", str(project))
+                        )
         assert next_work["decision"] == "autonomous_replan_required"
         assert next_work["effective_action"] != "unsettled_host_turn_recovery"
         assert next_work["replan_action_packet"]["obligation_id"]

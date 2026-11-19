@@ -4,6 +4,73 @@ Read before creating, repairing or changing a recurring host loop. Save only the
 
 ## Set Up Recurring Heartbeats
 
+### Antigravity App
+
+Select `antigravity-app` explicitly; `agy` remains the legacy CLI. Install its
+skill facade with `slash-commands --install --surface antigravity-app` and
+workflow skills with `workflow-skills --install --host-surface antigravity-app`.
+Use the activation packet for the already registered Goal/Agent. Bind its native
+conversation id from the current host's `ANTIGRAVITY_CONVERSATION_ID` (or the
+`<user_information>` `Conversation ID`), never another chat's title or the only
+registered lane: run `bind-agent-thread --goal-id <goal-id> --thread-id <conversation-id>
+--host-surface agy --agent-id <agent-id> --with-agy-hooks --execute` and `sync-global`
+so `~/.gemini/config/hooks.json` points to the active `loopx` CLI and `--conversation-id`.
+
+For a fixed resident in-session patrol (default when bound in an active
+Antigravity App conversation), do not create a `sidecar.json` (`agentapi new-conversation`).
+On every wake, run `loopx --format json --runtime-root <runtime-root> --registry <registry>
+heartbeat-prompt --thin --runtime-profile antigravity_app --goal-id <goal-id> --agent-id <agent-id>`,
+follow `task_body` only when `ok=true`, and perform all repository edits and
+`quota should-run` admission/settlement inside an isolated `.worktrees/` git worktree
+(keeping the main checkout clean so `workspace_guard` passes). Before ending every
+patrol turn — after settlement, on `waiting_external` / CI / PR review waits, or when
+idle/no-op — unless `scheduler_hint.action=stop_until_explicit_resume`, arm the native
+in-session wake with `schedule(DurationSeconds=max(180, recommended_interval_minutes * 60),
+TimerCondition="any", Prompt=...)` (minimum `180` seconds / 3 minutes; unchanged-wait
+backoff `3 -> 6 -> 10` minutes) and end the turn; never use shell `sleep` polling loops.
+When `scheduler_hint.action=stop_until_explicit_resume`, cancel any active schedule via
+`manage_task` without re-arming.
+
+Only when explicitly configuring detached background new-conversation ticks instead
+of a fixed resident session, write `sidecar_template.sidecar_json` to its
+`sidecar_config_path` under `~/.gemini/config/sidecars/<sidecar-id>/sidecar.json`.
+Native `builtin: schedule` requires an `args` array beginning with the cron expression.
+`config.cron`, a top-level `sidecar` wrapper and LoopX's template metadata are not
+native config. Preserve an existing sidecar's id, enable choice and scoped permissions.
+New sidecars retain the host's user enable step; Inspect native startup/tick results after any change.
+
+A detached native sidecar schedule starts a fresh conversation with the stable
+bootstrap, which must still load fresh Core admission before work and preserve its
+registered Goal/Agent and current settlement identity.
+
+`hooks_template` is a native top-level named `loopx` group containing `Stop`
+handlers, not `hooks.loopx` or a `before_continuation` event. Global
+`--with-agy-hooks` installation stays disabled until a concrete Goal, Agent and
+native conversation are bound (pass `--goal-id`, `--agent-id`, `--conversation-id`
+to `slash-commands --with-agy-hooks`, or use `bind-agent-thread --with-agy-hooks`).
+Bound recovery handles only the native `ERROR` event with a recognized Google model
+transport failure and fresh admission.
+The latest native input must match before and after admission; its index and
+creation time distinguish repeated identical messages. Missing native readback
+does not admit a continuation;
+it reserves at most two additional continuations per original input, at least
+60 seconds apart. Normal completion, user cancellation, permission/auth/quota
+failures and unrelated conversations remain untouched. The hook uses its
+corresponding Python installation and resolved LoopX executable, ignoring an
+unrelated inherited `PYTHONPATH`. This provider recovery
+is not a generic pre-invocation enforcement gate and does not repair an upstream
+network connection. Uninstall removes only an unchanged, recorded managed entry.
+
+Follow fresh `scheduler_hint.app_automation` for cadence and terminal actions:
+in fixed-session mode, use `max(180, recommended_interval_minutes * 60)` in
+in-session `schedule(...)` (`3 -> 6 -> 10`m backoff) and execute projected
+`ack_hint.cli_args` / `failure_hint.cli_args` when applicable; in detached
+sidecar mode, update the sidecar's `args[0]`, inspect host readback, then
+execute `ack_hint.cli_args` (or `failure_hint` on failure). A terminal stop
+requires no scheduler ACK. Never copy a Codex automation's identity or assume
+`automation_update` exists on Antigravity. In-session one-shot timers use
+`DurationSeconds`; recurring timers use `CronExpression`, without combining both forms.
+
 When the exact host is Codex App connected to a remote workspace over SSH and
 `automation_update` is unavailable because of that host boundary, use the
 visible Goal integration instead of reporting a missing-automation blocker:
@@ -171,8 +238,7 @@ comparison evidence is unknown; a summary cannot replace full requirements.
 The generated task body permits routine public commit, push and PR creation
 within existing user authority and repository rules after validation and a clean
 public/private boundary scan. Do not reintroduce a user gate for public-safe
-publication itself. An old trust setting, context or command does not grant new
-authority; merge and production retain their separate authorization.
+publication itself. Merge and production retain their separate authorization.
 For `notify_user_on_open_todo=true`, follow the current
 `interaction_contract.user_channel` for the concrete notice and cooldown.
 This notification flag does not decide delivery or accounting:

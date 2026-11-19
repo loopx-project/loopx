@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import contextlib
 import json
 import os
@@ -9,9 +11,14 @@ import tempfile
 from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
-from typing import Any
 
-from .agy_goal_mode import agy_home as _agy_home
+from .agy_goal_mode import (
+    ANTIGRAVITY_HOOKS_CONFIG_FILENAME,
+    ANTIGRAVITY_MCP_CONFIG_FILENAME,
+    agy_home as _agy_home,
+    antigravity_config_home as _antigravity_config_home,
+    build_antigravity_hooks_template,
+)
 from .kiro_cli_goal_mode import (
     KIRO_CLI_MCP_CONFIG_SUBPATH as _KIRO_MCP_CONFIG_SUBPATH,
     SKILLS_ROOT_LABEL as _KIRO_SKILLS_ROOT_LABEL,
@@ -110,7 +117,15 @@ def _loopx_start_goal_arguments_instruction(
         f'"<complete visible $ARGUMENTS>" --host-surface {selected_host}`. '
         "The CLI, not the model, owns parsing supported leading switches and "
         "preserving the remaining goal text. Never split or recompose the "
-        "arguments, and never infer a route from issue/PR wording or URLs."
+        "arguments, and never infer a route from issue/PR wording or URLs. "
+        "Use `--new-peer` only when the user explicitly asks for a fresh, new, "
+        "second, or additional Agent identity rather than continuing or taking "
+        "over an existing lane. A stable unbound host thread already defaults to "
+        "fresh registration; on a host without a stable thread id, pass "
+        "`--new-peer` as a separate argument before `--slash-command-arguments`, "
+        "or preserve it when supplied as a leading visible switch. Do not infer "
+        "a fresh identity from ordinary task wording, registry order, or the "
+        "availability of another lane."
     )
     if host_surface is None:
         instruction += (
@@ -175,29 +190,50 @@ def _dsh_native_loopx_instructions(*, cli_bin: str) -> list[str]:
     ]
 
 
-def _command_prompt_specs(*, cli_bin: str, include_legacy_aliases: bool) -> list[CommandFacadeSpec]:
+def _command_prompt_specs(
+    *,
+    cli_bin: str,
+    include_legacy_aliases: bool,
+    host_surface: str | None = None,
+) -> list[CommandFacadeSpec]:
+    codex_heartbeat_instruction = (
+        "For a Codex App heartbeat, run the returned activation command, require ok=true, and save its `LoopX managed heartbeat bootstrap v2` task_body through automation_update. The saved loader fetches the current thin contract on every wake; do not persist a raw thin/compact/full execution body. Preserve the current goal, registered agent, task binding and existing schedule; read back the automation through the same App."
+        if host_surface in {None, "codex", "codex-cli", "codex-ide-plugin", "codex-app", "codex-app-ssh"}
+        else None
+    )
+    antigravity_resident_instruction = (
+        f"For an Antigravity App fixed resident session (`antigravity-app` / `agy`), read `<user_information>` `Conversation ID` (or `$ANTIGRAVITY_CONVERSATION_ID`), bind it once via `{cli_bin} bind-agent-thread --goal-id <goal-id> --thread-id <conversation-id> --host-surface agy --agent-id <agent-id> --with-agy-hooks --execute` and `{cli_bin} sync-global` (updating `~/.gemini/config/hooks.json` `Stop` recovery with the active `{cli_bin}` path and `--conversation-id`; do not create a `new-conversation` `sidecar.json` for a fixed session). On every wake, run `{cli_bin} --format json heartbeat-prompt --thin --runtime-profile antigravity_app --goal-id <goal-id> --agent-id <agent-id>`, follow `task_body` only when `ok=true`, perform peer code/doc edits and `quota should-run` inside an isolated `.worktrees/` git worktree (keeping the main checkout clean for `workspace_guard`), and before ending every turn (settled, `waiting_external`, or idle) unless stopped, call `schedule(DurationSeconds=max(180, recommended_interval_minutes * 60), TimerCondition=\"any\", Prompt=...)` (`180`s floor; `3 -> 6 -> 10`m backoff) without shell `sleep`."
+        if host_surface in {"agy", "antigravity-app"}
+        else None
+    )
     specs: list[CommandFacadeSpec] = [
         {
             "command": "/loopx",
             "name": "loopx",
             "description": "Inspect LoopX state, or start concrete project work when arguments are provided.",
-            "argument_hint": "[--fine-grained] [--capability-route issue-fix] [task text]",
+            "argument_hint": "[--fine-grained] [--new-peer] [--capability-route issue-fix] [task text]",
             "instructions": [
-                "Visible command arguments: `$ARGUMENTS`.",
-                "Identify the exact current host surface (codex-app, trae_app, codex-app-ssh, codex-ide-plugin, codex-cli-tui, opencode, opencode2, traex-cli, pi, gemini-cli, cursor-agent, zcode, agy, kiro-cli, deepseek-harness, or ark-managed-agent).",
-                _loopx_start_goal_arguments_instruction(
-                    cli_bin=cli_bin,
-                    host_surface=None,
-                ),
-                "Treat the returned `ordered_steps` and `goal_start_contract` as authoritative. Follow their identity, capability-route, Todo, writeback, host-loop, quota, and stop/gate rules before substantive work; do not reconstruct those rules from skill memory.",
-                "When the host explicitly supplies a `loopx_task_planning_v0` packet from `loopx todo plan` for a registered Goal/Agent, execute that bounded planning checkpoint instead of starting another Goal. Follow its shared planner and Todo delta, then return actual Todo ids for readback. Its caller-owned execution_handoff retains host activation and quota; do not create a planning Todo, execute task work, or claim delivery during the checkpoint.",
-                "For a Codex App heartbeat, run the returned activation command, require ok=true, and save its `LoopX managed heartbeat bootstrap v2` task_body through automation_update. The saved loader fetches the current thin contract on every wake; do not persist a raw thin/compact/full execution body. Preserve the current goal, registered agent, task binding and existing schedule; read back the automation through the same App.",
-                "If the packet exposes a goal-selection gate, rerun one exact choice before any mutation.",
-                "When authoring task Todos, treat `--action-kind` as the documented extensible public-safe token: choose a short task-relevant value such as `implement`, `test`, or `review`; do not search the LoopX source for an allowlist.",
-                "Consume the turn-start quota JSON packet exactly once: read the complete output directly or save it and query it with `jq`; never pipe it through `head` or `tail`, and never rerun the turn-start call to recover hidden fields. A host whose runtime mints Turn identity uses `--begin-turn`; every other host passes its own `--turn-instance-id`. When selection is required, choose the Todo and use `interaction_contract.cli_channel.selection_command` with the returned Turn identity before mutation.",
-                "Runtime capability flags are host observations, not task requirements or grants; registered Agents reuse supported ones via `loopx agent-capabilities`. Before initial quota, include capabilities already established by this host context or successful task-facing use. Read capability_gate.repair_missing even when should_run is true: when runtime_capability_reentry is projected, verify its real callsite and follow the returned same-Turn command before choosing fallback work. Never infer credentials or production access from network availability, and do not claim a missing declaration proves a missing tool.",
-                f"If arguments are empty and the host already identifies an active LoopX goal, follow its exact CLI `interaction_contract` or quota command first; otherwise inspect `{cli_bin} status` and `{cli_bin} bootstrap-command-pack --project .` before changing files.",
-                "If this session cannot mutate the host loop surface, surface the exact pasteable gate instead of claiming autonomous setup.",
+                line
+                for line in [
+                    "Visible command arguments: `$ARGUMENTS`.",
+                    "Identify the exact current host surface (codex-app, trae_app, codex-app-ssh, codex-ide-plugin, codex-cli-tui, opencode, opencode2, traex-cli, pi, gemini-cli, cursor-agent, zcode, antigravity-app, agy, kiro-cli, deepseek-harness, or ark-managed-agent).",
+                    _loopx_start_goal_arguments_instruction(
+                        cli_bin=cli_bin,
+                        host_surface=None,
+                    ),
+                    "Treat the returned `ordered_steps` and `goal_start_contract` as authoritative. Follow their identity, capability-route, Todo, writeback, host-loop, quota, and stop/gate rules before substantive work; do not reconstruct those rules from skill memory.",
+                    "During first planning, follow the shared goal_requirements_guidance: reuse existing owner-approved requirements and declare only missing source-grounded overall requirements through the existing outcome owner, link actual Todos and read back the canonical declaration. Preserve existing requirements on resume; maximum timeout is not a minimum work commitment and independent executable checks stay optional.",
+                    "When the host explicitly supplies a `loopx_task_planning_v0` packet from `loopx todo plan` for a registered Goal/Agent, execute that bounded planning checkpoint instead of starting another Goal. Follow its shared planner, requirement declaration/readback and Todo delta in the same invocation, then return actual Todo ids for readback. Its caller-owned execution_handoff retains host activation and quota; do not create a planning Todo, execute task work, or claim delivery during the checkpoint.",
+                    codex_heartbeat_instruction,
+                    antigravity_resident_instruction,
+                    "If the packet exposes a goal-selection gate, rerun one exact choice before any mutation.",
+                    "When authoring task Todos, treat `--action-kind` as the documented extensible public-safe token: choose a short task-relevant value such as `implement`, `test`, or `review`; do not search the LoopX source for an allowlist.",
+                    "Consume the turn-start quota JSON packet exactly once: read the complete output directly or save it and query it with `jq`; never pipe it through `head` or `tail`, and never rerun the turn-start call to recover hidden fields. A host whose runtime mints Turn identity uses `--begin-turn`; every other host passes its own `--turn-instance-id`. When selection is required, choose the Todo and use `interaction_contract.cli_channel.selection_command` with the returned Turn identity before mutation.",
+                    "Runtime capability flags are host observations, not task requirements or grants; registered Agents reuse supported ones via `loopx agent-capabilities`. Before initial quota, include capabilities already established by this host context or successful task-facing use. Read capability_gate.repair_missing even when should_run is true: when runtime_capability_reentry is projected, verify its real callsite and follow the returned same-Turn command before choosing fallback work. Never infer credentials or production access from network availability, and do not claim a missing declaration proves a missing tool.",
+                    f"If arguments are empty and the host already identifies an active LoopX goal, follow its exact CLI `interaction_contract` or quota command first; otherwise inspect `{cli_bin} status` and `{cli_bin} bootstrap-command-pack --project .` before changing files.",
+                    "If this session cannot mutate the host loop surface, surface the exact pasteable gate instead of claiming autonomous setup.",
+                ]
+                if line is not None
             ],
         },
         {
@@ -326,7 +362,11 @@ class SkillFacadeReadbackStatus(str, Enum):
 _MAX_SKILL_FACADE_READ_BYTES = 1024 * 1024
 
 
-def inspect_skill_facades(skills_dir: Path) -> dict[str, dict[str, Any]]:
+def inspect_skill_facades(
+    skills_dir: Path,
+    *,
+    host_surface: str | None = None,
+) -> dict[str, dict[str, Any]]:
     """Read the canonical facades without changing files or running a host.
 
     Compare the installer's current rendering, allowing its existing cli_bin
@@ -334,7 +374,11 @@ def inspect_skill_facades(skills_dir: Path) -> dict[str, dict[str, Any]]:
     """
     cli_placeholder = "__LOOPX_FACADE_CLI_PARAMETER__"
     summaries: dict[str, dict[str, Any]] = {}
-    for spec in _command_prompt_specs(cli_bin=cli_placeholder, include_legacy_aliases=False):
+    for spec in _command_prompt_specs(
+        cli_bin=cli_placeholder,
+        include_legacy_aliases=False,
+        host_surface=host_surface,
+    ):
         name = str(spec["name"])
         path = skills_dir / name / "SKILL.md"
         status = SkillFacadeReadbackStatus.MISSING
@@ -414,6 +458,8 @@ def materialize_loopx_entry_skill(
         None,
         "ark-managed-agent",
         "deepseek-harness-native",
+        "agy",
+        "antigravity-app",
     }:
         raise ValueError(f"unsupported fixed LoopX entry host surface: {host_surface}")
     spec = next(
@@ -421,6 +467,7 @@ def materialize_loopx_entry_skill(
         for item in _command_prompt_specs(
             cli_bin=cli_bin,
             include_legacy_aliases=False,
+            host_surface=host_surface,
         )
         if item["name"] == "loopx"
     )
@@ -693,6 +740,8 @@ def _normalize_surfaces(surfaces: list[str] | None) -> list[str]:
             candidates = ["zcode"]
         elif surface in {"agy", "antigravity", "antigravity-cli"}:
             candidates = ["agy"]
+        elif surface in {"antigravity-app", "antigravity_app", "agy-app", "agy_app"}:
+            candidates = ["antigravity-app"]
         elif surface in {"kiro", "kiro-cli", "kirocli"}:
             candidates = ["kiro-cli"]
         else:
@@ -710,6 +759,9 @@ MANAGED_MCP_KEY = "loopx"
 CURSOR_MCP_MARKER_NAME = ".loopx-managed-mcp.json"
 CURSOR_MCP_MARKER_SCHEMA_VERSION = "loopx_managed_cursor_mcp_v0"
 KIRO_CLI_MCP_MARKER_SCHEMA_VERSION = "loopx_managed_kiro_cli_mcp_v0"
+ANTIGRAVITY_MCP_MARKER_SCHEMA_VERSION = "loopx_managed_antigravity_mcp_v0"
+ANTIGRAVITY_HOOKS_MARKER_NAME = ".loopx-managed-hooks.json"
+ANTIGRAVITY_HOOKS_MARKER_SCHEMA_VERSION = "loopx_managed_antigravity_hooks_v0"
 
 McpCommandFactory = Callable[[], tuple[str, str] | None]
 
@@ -822,11 +874,8 @@ def _merge_managed_mcp_json(
     """
     marker_path = config_path.parent / CURSOR_MCP_MARKER_NAME
     try:
-        raw = (
-            json.loads(config_path.read_text(encoding="utf-8"))
-            if config_path.exists()
-            else {}
-        )
+        text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+        raw = json.loads(text) if text.strip() else {}
     except (OSError, json.JSONDecodeError):
         return invalid_status
     if not isinstance(raw, dict):
@@ -893,11 +942,135 @@ def _merge_managed_mcp_json(
     return "written"
 
 
+def _merge_managed_hooks_json(
+    *,
+    config_path: Path,
+    cli_bin: str,
+    uninstall: bool,
+    execute: bool,
+    goal_id: str | None = None,
+    agent_id: str | None = None,
+    runtime_root: str | None = None,
+    conversation_id: str | None = None,
+    registry: str | None = None,
+    resolve_local_executable: bool = True,
+) -> str:
+    """Add or remove the managed ``loopx`` Stop recovery hook in Antigravity ``hooks.json``."""
+    marker_path = config_path.parent / ANTIGRAVITY_HOOKS_MARKER_NAME
+    try:
+        text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+        raw = json.loads(text) if text.strip() else {}
+    except (OSError, json.JSONDecodeError):
+        return "blocked_invalid_antigravity_hooks_json"
+    if not isinstance(raw, dict):
+        return "blocked_invalid_antigravity_hooks_json"
+    try:
+        marker_payload = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        marker_payload = {}
+    recorded_hooks = marker_payload.get("hooks") if isinstance(marker_payload, dict) else None
+    if not isinstance(recorded_hooks, dict):
+        recorded_hooks = {}
+    recorded = recorded_hooks.get(MANAGED_MCP_KEY)
+    # Native named hooks live at the top level. Earlier proposals wrote an
+    # ignored `hooks.loopx` wrapper; migrate it only with exact ownership proof.
+    legacy = raw.get("hooks")
+    legacy_entry = legacy.get(MANAGED_MCP_KEY) if isinstance(legacy, dict) else None
+    existing = raw.get(MANAGED_MCP_KEY)
+    legacy_owned = existing is None and legacy_entry is not None and legacy_entry == recorded
+    if legacy_owned:
+        existing = legacy_entry
+    elif existing is None and legacy_entry is not None:
+        return "skipped_user_owned_hooks_entry"
+    loopx_owned = existing is not None and existing == recorded
+    if execute and recorded is not None and not loopx_owned:
+        marker_path.unlink(missing_ok=True)
+
+    if uninstall:
+        if existing is None:
+            return "absent"
+        if not loopx_owned:
+            return "skipped_user_owned_hooks_entry"
+        if not execute:
+            return "would_retire"
+        if legacy_owned:
+            cast(dict[str, Any], legacy).pop(MANAGED_MCP_KEY)
+            if not legacy:
+                raw.pop("hooks")
+        else:
+            raw.pop(MANAGED_MCP_KEY)
+        _write_json_atomic(config_path, raw)
+        marker_path.unlink(missing_ok=True)
+        return "retired"
+
+    if existing is not None and not loopx_owned:
+        return "skipped_user_owned_hooks_entry"
+    entry = build_antigravity_hooks_template(
+        cli_bin=cli_bin,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        runtime_root=runtime_root,
+        conversation_id=conversation_id,
+        registry=registry,
+        resolve_local_executable=resolve_local_executable,
+    )[MANAGED_MCP_KEY]
+    if not execute:
+        return "unchanged" if existing == entry and not legacy_owned else "would_write"
+    if existing == entry and not legacy_owned:
+        return "unchanged"
+    if legacy_owned:
+        cast(dict[str, Any], legacy).pop(MANAGED_MCP_KEY)
+        if not legacy:
+            raw.pop("hooks")
+    raw[MANAGED_MCP_KEY] = entry
+    _write_json_atomic(config_path, raw)
+    _write_json_atomic(
+        marker_path,
+        {
+            "schema_version": ANTIGRAVITY_HOOKS_MARKER_SCHEMA_VERSION,
+            "hooks": {MANAGED_MCP_KEY: entry},
+        },
+    )
+    return "written"
+
+
+def sync_antigravity_hooks(
+    *,
+    cli_bin: str = "loopx",
+    agy_home: str | None = None,
+    uninstall: bool = False,
+    execute: bool,
+    goal_id: str | None = None,
+    agent_id: str | None = None,
+    runtime_root: str | None = None,
+    conversation_id: str | None = None,
+    registry: str | None = None,
+    resolve_local_executable: bool = True,
+) -> dict[str, str]:
+    """Preview or update Antigravity ``hooks.json`` with the managed Stop recovery hook."""
+    config_path = _antigravity_config_home(agy_home) / ANTIGRAVITY_HOOKS_CONFIG_FILENAME
+    status = _merge_managed_hooks_json(
+        config_path=config_path,
+        cli_bin=cli_bin,
+        uninstall=uninstall,
+        execute=execute,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        runtime_root=runtime_root,
+        conversation_id=conversation_id,
+        registry=registry,
+        resolve_local_executable=resolve_local_executable,
+    )
+    return {"path": str(config_path), "status": status}
+
+
 def install_slash_commands(
     *,
     execute: bool,
     uninstall: bool = False,
     with_goal_bridge: bool = False,
+    with_agy_mcp: bool = False,
+    with_agy_hooks: bool = False,
     surfaces: list[str] | None = None,
     cli_bin: str = "loopx",
     include_legacy_aliases: bool = True,
@@ -909,12 +1082,22 @@ def install_slash_commands(
     zcode_home: str | None = None,
     zcode_agents_home: str | None = None,
     agy_home: str | None = None,
+    agy_goal_id: str | None = None,
+    agy_agent_id: str | None = None,
+    agy_conversation_id: str | None = None,
+    agy_runtime_root: str | None = None,
+    agy_registry: str | None = None,
     kiro_home: str | None = None,
     pi_project: str | None = None,
     pi_scope: str = "project",
     pi_user_home: str | None = None,
 ) -> dict[str, Any]:
     facade_specs = _command_prompt_specs(cli_bin=cli_bin, include_legacy_aliases=True)
+    agy_facade_specs = _command_prompt_specs(
+        cli_bin=cli_bin,
+        include_legacy_aliases=True,
+        host_surface="antigravity-app",
+    )
     canonical_specs = [spec for spec in facade_specs if "alias_for" not in spec]
     legacy_alias_specs = [spec for spec in facade_specs if "alias_for" in spec]
     specs = facade_specs if include_legacy_aliases else canonical_specs
@@ -926,6 +1109,7 @@ def install_slash_commands(
     cursor_root = _cursor_home(cursor_home)
     zcode_root = _zcode_home(zcode_home or zcode_agents_home)
     agy_root = _agy_home(agy_home)
+    agy_config_root = _antigravity_config_home(agy_home)
     kiro_root = _kiro_home(kiro_home)
     if pi_scope not in {"project", "user"}:
         raise ValueError("pi_scope must be 'project' or 'user'")
@@ -1138,12 +1322,12 @@ def install_slash_commands(
     if "agy" in effective_surfaces:
         # Antigravity CLI discovers global skills from the fixed
         # ~/.gemini/antigravity-cli/skills root using the documented flat
-        # layout (one <name>.md per skill). The official docs describe no home
-        # override, so LoopX offers none: installs target exactly that path,
-        # and the root belongs to agy alone (Gemini CLI reads ~/.gemini/skills),
-        # so the managed skill surfaces never collide across different hosts.
+        # layout (one <name>.md per skill). When --agy-home is not explicitly
+        # overriding the root, also populate Antigravity 2.0's directory-based
+        # ~/.gemini/config/skills/<name>/SKILL.md root so both Antigravity App
+        # and legacy CLI work out of the box.
         _install_skill_facade(
-            specs=facade_specs,
+            specs=agy_facade_specs,
             installed=installed,
             skills_dir=agy_root / "skills",
             surface="agy",
@@ -1152,6 +1336,78 @@ def install_slash_commands(
             execute=execute,
             uninstall=uninstall,
             flat=True,
+        )
+        if agy_home is None and "antigravity-app" not in effective_surfaces:
+            _install_skill_facade(
+                specs=agy_facade_specs,
+                installed=installed,
+                skills_dir=agy_config_root / "skills",
+                surface="antigravity-app",
+                host_surfaces=["antigravity-app", "agy"],
+                mechanism="antigravity_app_skills",
+                execute=execute,
+                uninstall=uninstall,
+                invoke_prefix="/",
+            )
+
+    if "antigravity-app" in effective_surfaces:
+        _install_skill_facade(
+            specs=agy_facade_specs,
+            installed=installed,
+            skills_dir=agy_config_root / "skills",
+            surface="antigravity-app",
+            host_surfaces=["antigravity-app", "agy"],
+            mechanism="antigravity_app_skills",
+            execute=execute,
+            uninstall=uninstall,
+            invoke_prefix="/",
+        )
+
+    if ("antigravity-app" in effective_surfaces or "agy" in effective_surfaces) and with_agy_mcp:
+        agy_mcp_path = agy_config_root / ANTIGRAVITY_MCP_CONFIG_FILENAME
+        mcp_status = _merge_managed_mcp_json(
+            config_path=agy_mcp_path,
+            marker_schema_version=ANTIGRAVITY_MCP_MARKER_SCHEMA_VERSION,
+            invalid_status="blocked_invalid_antigravity_mcp_json",
+            command_factory=lambda: _loopx_mcp_command(),
+            uninstall=uninstall,
+            execute=execute,
+        )
+        installed.append(
+            {
+                "surface": "antigravity-app",
+                "host_surfaces": ["antigravity-app", "agy"],
+                "mechanism": "antigravity_mcp_server",
+                "command": "loopx",
+                "path": str(agy_mcp_path),
+                "status": mcp_status,
+                "invoke_as": [],
+            }
+        )
+
+    if ("antigravity-app" in effective_surfaces or "agy" in effective_surfaces) and with_agy_hooks:
+        agy_hooks_path = agy_config_root / ANTIGRAVITY_HOOKS_CONFIG_FILENAME
+        hooks_status = _merge_managed_hooks_json(
+            config_path=agy_hooks_path,
+            cli_bin=cli_bin,
+            uninstall=uninstall,
+            execute=execute,
+            goal_id=agy_goal_id,
+            agent_id=agy_agent_id,
+            runtime_root=agy_runtime_root,
+            conversation_id=agy_conversation_id,
+            registry=agy_registry,
+        )
+        installed.append(
+            {
+                "surface": "antigravity-app",
+                "host_surfaces": ["antigravity-app", "agy"],
+                "mechanism": "antigravity_stop_recovery_hook",
+                "command": "loopx",
+                "path": str(agy_hooks_path),
+                "status": hooks_status,
+                "invoke_as": [],
+            }
         )
 
     if "kiro-cli" in effective_surfaces:
@@ -1554,6 +1810,26 @@ def install_slash_commands(
             "cursor_mcp_path": str(cursor_root / "mcp.json") if "cursor" in effective_surfaces else None,
             "zcode_skill_dir": str(zcode_root / "skills") if "zcode" in effective_surfaces else None,
             "agy_skill_dir": str(agy_root / "skills") if "agy" in effective_surfaces else None,
+            "antigravity_app_skill_dir": (
+                str(agy_config_root / "skills")
+                if (
+                    "antigravity-app" in effective_surfaces
+                    or ("agy" in effective_surfaces and agy_home is None)
+                )
+                else None
+            ),
+            "antigravity_mcp_path": (
+                str(agy_config_root / ANTIGRAVITY_MCP_CONFIG_FILENAME)
+                if with_agy_mcp
+                and ("antigravity-app" in effective_surfaces or "agy" in effective_surfaces)
+                else None
+            ),
+            "antigravity_hooks_path": (
+                str(agy_config_root / ANTIGRAVITY_HOOKS_CONFIG_FILENAME)
+                if with_agy_hooks
+                and ("antigravity-app" in effective_surfaces or "agy" in effective_surfaces)
+                else None
+            ),
             "kiro_cli_skill_dir": str(kiro_root / "skills") if "kiro-cli" in effective_surfaces else None,
             "kiro_cli_mcp_path": str(kiro_root / _KIRO_MCP_CONFIG_SUBPATH) if "kiro-cli" in effective_surfaces else None,
             "opencode_skill_dir": str(opencode_root / "skills") if "opencode" in effective_surfaces else None,

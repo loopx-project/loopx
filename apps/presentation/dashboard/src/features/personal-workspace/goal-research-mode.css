@@ -1,0 +1,8 @@
+.goal-research-mode { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; max-width: 100%; }
+.goal-research-mode > button { min-height: 44px; padding: 8px 12px; font-size: var(--text-body); color: var(--pw-muted); }
+.goal-research-mode > .goal-research-mode-toggle { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--pw-line); border-radius: 8px; color: var(--pw-text); background: var(--pw-surface, #fff); }
+.goal-research-mode-toggle[aria-pressed="true"] { color: var(--pw-green); }
+.goal-research-mode > button:disabled { opacity: .6; cursor: default; }
+.goal-research-mode-error { flex-basis: 100%; display: flex; align-items: center; gap: 8px; color: var(--pw-red); font-size: var(--text-body); max-width: 440px; }
+.goal-research-mode-error button { min-height: 44px; flex-shrink: 0; text-decoration: underline; }
+@media (max-width: 720px) { .goal-research-mode { padding-bottom: 8px; } }

@@ -1,6 +1,6 @@
 # 工作图、权限与 Peer 协作
 
-A 可以实现 JSON，B 可以补文档，维护者仍未批准发布。这三件事可以同时成立。工作图的价值是把它们表达成有身份、有依赖和有接受条件的工作，而不是让“有人正在做”成为所有动作的许可。
+A 可以实现 JSON，B 可以补文档，维护者仍未批准发布。这三件事可以同时成立。工作图的价值是把它们表达成有身份、有依赖和有接受条件的工作。
 
 本章先分清工作归属、执行证明与决定范围，再走一次交接和集成。实际写入仍由当前 authority、handoff mode 与对应 writer 校验；本章不新增一个统一授权者。
 
@@ -26,11 +26,11 @@ A 可以实现 JSON，B 可以补文档，维护者仍未批准发布。这三�
 | 这个执行实例现在可以提交吗？ | 适用模式的 lease、当前 owner/key/version 与 writer fence | 原 acquire 曾成功 |
 | 这个具体动作被允许吗？ | Goal/repository 权限、Gate scope、能力和工作区要求 | 工具可调用、目录可写或 quota 有余额 |
 
-Agent identity 是工作 lane，不证明具体 Host，更不证明组织职级。`claimed_by` 表达归属而不是进程活性；lease 的有效性也不能证明模型判断正确。外部服务最终是否拒绝旧执行者，还取决于那个写入端实际执行的约束，不能从本地 lease 推导出全系统围栏。
+Agent identity 是工作 lane。`claimed_by` 表达归属。外部服务最终是否拒绝旧执行者，还取决于那个写入端实际执行的约束，不能从本地 lease 推导出全系统围栏。
 
 ## Gate 覆盖动作，不靠数量冻结全局
 
-G1 限制 T3 的 publication scope。T2 如果确实独立且自己的条件满足，可以继续；G1 仍应在用户通道中可见。独立 fallback 不是绕过 Gate，而是根本没有执行被它覆盖的动作。
+G1 限制 T3 的 publication scope。T2 如果确实独立且自己的条件满足，可以继续；G1 仍应在用户通道中可见。独立 fallback 是根本没有执行被它覆盖的动作。
 
 ```text
 G1: publication scope 尚未批准
@@ -46,7 +46,7 @@ scope 缺失或矛盾时不能猜成批准，也不能为了省事创造一个�
 
 当前 `handoff_mode` 决定适用约束：默认 `legacy` 保留软 claim / hard lease 的兼容路径，`soft_claim` 与 `hard_lease` 有自己的规则。部分 legacy terminal 路径可以出现 `terminal_fence_not_required`。因此，不能把一种模式上的回归测试推广为全部 writer 的强互斥证明。
 
-对已经提升的 File/SQLite authority，精确读取应来自选定 provider；读取失败不退回旧 lease 文件。来源选择、registration 和当前 Todo 约束与 lease 共同参与判断。`task-lease inspect` 是一次观察，不是跨后续操作持有的锁。
+对已经提升的 File/SQLite authority，精确读取应来自选定 provider；读取失败不退回旧 lease 文件。来源选择、registration 和当前 Todo 约束与 lease 共同参与判断。`task-lease inspect` 是一次观察。
 
 | 生命周期动作 | 在适用合同中表达什么 | 调用者需要保留什么 |
 | --- | --- | --- |
@@ -75,7 +75,7 @@ flowchart TD
     P --> W["受控执行、验证、提交"]
 ```
 
-同名 Agent、重新启动的终端和旧成功截图都不是绕过该过程的方法。`version_mismatch` 应触发当前状态核对；release 后的 `idempotency_key_reuse` 不通过修改历史 key 来“修复”。
+`version_mismatch` 应触发当前状态核对；release 后的 `idempotency_key_reuse` 不通过修改历史 key 来“修复”。
 
 ## 从交接到集成：把一次协作走完 {#handoff-to-integration}
 
@@ -83,17 +83,17 @@ flowchart TD
 
 **第一步，A 返回具体产物。** T1 的回报引用 C1、验证声明和结果，以及尚未满足的 M1/G1。不能只写“JSON 已完成”。
 
-**第二步，B 确认采用哪份输入。** B 的文档基于 C1 的字段约定；若无法访问该产物，问题是交接输入缺失，而不是需要重新实现 T1。Handoff 使用 bounded refs 和合法读取入口，不把全部私有 transcript 复制到公开 packet。
+**第二步，B 确认采用哪份输入。** B 的文档基于 C1 的字段约定；若无法访问该产物，问题是交接输入缺失。Handoff 使用 bounded refs 和合法读取入口，不把全部私有 transcript 复制到公开 packet。
 
 **第三步，当前归属合法转换。** Lease 转移与 Todo claim 是否同时改变，由所选命令合同决定。不要假设 lease-only transfer 自动改 claim，也不要在要求原子交接的路径上拆成两次手工写。接收方仍须满足 registration、binding、exclusion、scope 和 workspace 条件。对应操作说明以[canonical lease reference](https://github.com/loopx-project/loopx/blob/f49b4a00870604d39fa4318da24d6dd35e72bb6e/docs/reference/canonical-lease-renew.md)中的版本范围为准。
 
-**第四步，分别验证以后再验证组合。** T1 的代码检查和 T2 的示例检查只证明各自结果；集成者要检查两者在同一个候选版本上是否一致。两个分支都绿，不是组合提交也绿。
+**第四步，分别验证以后再验证组合。** T1 的代码检查和 T2 的示例检查只证明各自结果；集成者要检查两者在同一个候选版本上是否一致。
 
-**第五步，变化沿依赖传播。** A 将 C1 修正为 C2 时，B 检查字段或行为变化是否影响文档与验证。保留原历史，只更新受影响结论；已经基于 C1 完成的工作不是自动作废，也不是自动适用于 C2。
+**第五步，变化沿依赖传播。** A 将 C1 修正为 C2 时，B 检查字段或行为变化是否影响文档与验证。保留原历史，只更新受影响结论。
 
 **第六步，结果回到接受者。** 由 T3 对当前产物与决定再做判断。消息送达、接收者采用输入、工作被接受、发布被允许、外部交付发生，各有证据；不能用其中一项代替其余全部。
 
-这个六步过程是教学案例，不是在声明系统会自动完成所有跨 Host、跨设备或跨仓库编排。协作是否成功，必须检查用户所需的关系是否真正闭合。
+这个六步过程是教学案例。协作是否成功，必须检查用户所需的关系是否真正闭合。
 
 ## 工作区隔离不等于集成正确 {#parallel-editing}
 
@@ -110,7 +110,7 @@ flowchart TD
 | 两份改动独立验证通过 | 各自产物满足已检查条件 | 组合后行为正确 |
 | 集成验证通过 | 当前组合满足相关检查 | 有合并、远端写入或发布权限 |
 
-该模式是合作式代码编辑协调，不是 OS sandbox。旧 grant 不会因读取或续租自动升级为新模式；需要变更执行意图时，按当前生命周期退役并重新取得证明。安装 provider 或改变目录名不构成提升与授权。
+该模式是合作式代码编辑协调。旧 grant 不会因读取或续租自动升级为新模式；需要变更执行意图时，按当前生命周期退役并重新取得证明。
 
 ## 依赖与后继怎样保持可追溯
 
@@ -118,7 +118,7 @@ flowchart TD
 
 跨仓库依赖需要正确 repository identity。`pr_merged:#123` 可以由 Todo 的 GitHub `task_repository` 解析仓库；显式 `pr_merged:owner/repo#123` 直接指定对象。两者都不能确定仓库时，不按相同编号猜测。
 
-Successor 表达下一项有身份的工作；supersede 保留旧工作与替代关系（对应生命周期会把 predecessor 记为 done 并标记替代）；no-follow-up 说明为什么这一条路线不再需要后继，不能自动等同 Goal 全部验收。`independent_handoff` 与 `same_agent_non_delivery` 表达不同 continuation policy，按实际写回读取而不是从 prose 推断。
+Successor 表达下一项有身份的工作；supersede 保留旧工作与替代关系（对应生命周期会把 predecessor 记为 done 并标记替代）；no-follow-up 说明为什么这一条路线不再需要后继，不能自动等同 Goal 全部验收。`independent_handoff` 与 `same_agent_non_delivery` 表达不同 continuation policy，按实际写回读取。
 
 ## 用具名证据核对边界
 
@@ -129,6 +129,6 @@ Successor 表达下一项有身份的工作；supersede 保留旧工作与替代
 | 旧 writer 不能绕过已生效来源 | `test_legacy_coordination_writer_fence.py` | 旧模式已被全局删除 |
 | runtime root override 不绕过来源围栏 | `test_split_root_todo_writeback_fence.py` | 改一个 CLI 参数就能获得新权限 |
 
-这些测试属于各自固定输入和 writer 的证据，不是运行中的 Goal 已经健康的证明。练习和断言解释见[lease 检查](12-control-plane-course.md#checkpoint-lease)；实际取证入口见[附录](appendix-reference.md#read-before-change)。
+这些测试属于各自固定输入和 writer 的证据。练习和断言解释见[lease 检查](12-control-plane-course.md#checkpoint-lease)；实际取证入口见[附录](appendix-reference.md#read-before-change)。
 
 协作的最终标准是：接手者知道接受了什么，当前执行者具有什么资格，组合结果由谁验证，剩余决定由谁负责。范围、证明或输入不清楚时先补齐这一处关系，不重新分派全部任务碰碰运气。

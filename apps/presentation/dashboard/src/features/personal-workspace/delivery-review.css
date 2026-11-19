@@ -70,7 +70,7 @@
 .delivery-acceptance-contract > .delivery-acceptance-content { padding: 20px; }
 .delivery-check-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
 .delivery-check-heading h3 { margin: 0 0 4px; }
-.delivery-check-heading p, .delivery-check-boundary { color: var(--pw-muted); }
+.delivery-check-heading p { color: var(--pw-muted); }
 .delivery-acceptance-contract .delivery-check-primary { background: var(--pw-text); color: var(--pw-card); flex-shrink: 0; }
 .delivery-check-result > ul { display: grid; gap: 12px; }
 .delivery-check-result li > span + span { display: block; color: var(--pw-muted); font-size: var(--text-caption); }
@@ -106,7 +106,7 @@
 }
 
 
-.delivery-notice summary { cursor: pointer; min-height: 24px; }
+.delivery-notice summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; }
 
 .delivery-acceptance-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .delivery-acceptance-controls label, .delivery-acceptance-controls details { flex-basis: 100%; min-width: 0; }
@@ -114,3 +114,5 @@
 .delivery-acceptance-controls pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20rem; overflow: auto; }
 .delivery-oracle-evidence { margin-block: 12px; overflow-wrap: anywhere; }
 .delivery-oracle-evidence code { overflow-wrap: anywhere; word-break: break-word; }
+
+.delivery-check-state { display: flex; align-items: center; gap: 4px; }

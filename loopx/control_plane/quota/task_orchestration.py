@@ -1,6 +1,7 @@
 from __future__ import annotations
+
+from typing import Any, cast
 from .effective_action import EffectiveAction
-from typing import Any
 
 from ..agents.agent_scope_frontier import AgentScopeFrontierAction
 from ..agents.runtime_model import peer_work_key
@@ -13,7 +14,6 @@ from ..work_items.work_lane import WORK_LANE_CONTRACT_SCHEMA_VERSION
 from ..work_items.work_lane_context import build_work_lane_context_contract
 from .recent_runs import latest_unchanged_monitor_observation
 from .task_orchestration_admission import (
-    SUBAGENT_SPAWN_CAPABILITY,
     build_adaptive_task_orchestration_contract,
 )
 
@@ -22,6 +22,7 @@ AGENT_SCOPE_NON_EXECUTION_ACTIONS = {
     AgentScopeFrontierAction.AGENT_SCOPE_WAIT.value,
     AgentScopeFrontierAction.REASSIGNMENT_REQUIRED.value,
 }
+SUBAGENT_SPAWN_CAPABILITY = "subagent_spawn"
 PEER_AGENT_ACTIVATION_CAPABILITY = "peer_agent_activation"
 PEER_COORDINATION_BLOCKED_ACTION = EffectiveAction.PEER_COORDINATION_BLOCKED.value
 
@@ -32,6 +33,23 @@ def task_orchestration_contract_is_actionable(
     if not isinstance(contract, dict):
         return False
     return str(contract.get("execution_state") or "ready") == "ready"
+
+
+def apply_task_route_hint_override(
+    hint: dict[str, Any] | None,
+    override: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Apply the route patch returned by the TypeScript decision owner."""
+    if hint is None or override is None:
+        return hint
+    projected_hint = {
+        key: value for key, value in hint.items()
+        if not (override.get("omit_current_agent_next_action") is True
+                and key == "current_agent_next_action")
+    }
+    projected_hint.update({key: value for key, value in override.items()
+                           if key != "omit_current_agent_next_action"})
+    return projected_hint
 
 
 def task_orchestration_requires_material_change_stop(
@@ -117,7 +135,7 @@ def apply_task_orchestration_contract(
     fallback_work_lane_contract: dict[str, Any] | None,
     goal_boundary: dict[str, Any] | None,
     agent_identity: dict[str, Any] | None,
-    agent_todo_summary: dict[str, Any],
+    agent_todo_summary: dict[str, Any] | None,
     raw_agent_todo_summary: dict[str, Any] | None = None,
     raw_user_todo_summary: dict[str, Any] | None = None,
     agent_todo_source_items: list[dict[str, Any]] | None = None,
@@ -145,34 +163,6 @@ def apply_task_orchestration_contract(
     return contract, _task_orchestration_work_lane_contract(contract)
 
 
-def task_goal_route_hint(
-    goal_route_hint: dict[str, Any] | None,
-    contract: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    if not contract or not isinstance(goal_route_hint, dict):
-        return goal_route_hint
-    if not task_orchestration_contract_is_actionable(contract):
-        return goal_route_hint
-    lanes = contract.get("eligible_child_lanes")
-    if not isinstance(lanes, list):
-        lanes = contract.get("eligible_peer_lanes")
-    return {
-        **{
-            key: value
-            for key, value in goal_route_hint.items()
-            if key != "current_agent_next_action"
-        },
-        "kind": "task_orchestration",
-        "route_decision": "coordinate_task_bundle",
-        "reason": (
-            "task-scoped coordinator may spawn admitted child lanes"
-            if contract.get("mode") == "adaptive"
-            else "task-scoped coordinator must activate/resume eligible peer lanes"
-        ),
-        "peer_lane_count": len(lanes) if isinstance(lanes, list) else 0,
-    }
-
-
 def attach_task_orchestration_payload(
     payload: dict[str, Any],
     contract: dict[str, Any] | None,
@@ -191,7 +181,7 @@ def _agent_scope_payload_work_lane_contract(
     reason_codes = [
         str(value)
         for value in (
-            work_lane_contract.get("reason_codes")
+            cast(list[Any], work_lane_contract.get("reason_codes"))
             if isinstance(work_lane_contract.get("reason_codes"), list)
             else []
         )
@@ -249,13 +239,13 @@ def _task_orchestration_contract(
     if not agent_id:
         return None
     orchestration = (
-        goal_boundary.get("orchestration")
+        cast(dict[str, Any], goal_boundary.get("orchestration"))
         if isinstance(goal_boundary.get("orchestration"), dict)
         else {}
     )
     available = normalize_required_capabilities(available_capabilities)
     peer_coordination = (
-        goal_boundary.get("peer_task_coordination")
+        cast(dict[str, Any], goal_boundary.get("peer_task_coordination"))
         if isinstance(goal_boundary.get("peer_task_coordination"), dict)
         else {}
     )
@@ -349,7 +339,7 @@ def _registered_peer_task_orchestration_contract(
             key=lambda lane: (lane["agent_id"], lane["todo_id"]),
         ),
     }, fallback="task_orchestration")
-    return contract
+    return cast(dict[str, Any] | None, contract)
 
 
 def _task_orchestration_work_lane_contract(

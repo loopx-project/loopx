@@ -17,6 +17,7 @@ MANAGER_RUNTIME_PROFILE_SCHEMA = "manager_runtime_profile_v0"
 MANAGER_RUNTIME_EFFECTIVE_SCHEMA = "manager_runtime_effective_profile_v0"
 RESTRICTED_PROFILE = "restricted"
 TRUSTED_OWNER_PROFILE = "trusted_owner"
+DEFAULT_MANAGER_RUNTIME_PROFILE = TRUSTED_OWNER_PROFILE
 SUPPORTED_MANAGER_RUNTIME_PROFILES = frozenset(
     {RESTRICTED_PROFILE, TRUSTED_OWNER_PROFILE}
 )
@@ -51,7 +52,8 @@ def manager_runtime_machine_configuration_namespace() -> MachineConfigurationNam
         title="Manager runtime",
         description=(
             "Selects the effective host-tool profile for owner manager conversations. "
-            "The trusted profile is an explicit persistent machine grant; protected "
+            "Owner conversations use normal host tools by default. An explicit machine "
+            "choice can restrict them; protected "
             "operations and external provider permissions remain separately governed."
         ),
         documentation={
@@ -63,7 +65,7 @@ def manager_runtime_machine_configuration_namespace() -> MachineConfigurationNam
         },
         default_configuration={
             "schema_version": MANAGER_RUNTIME_PROFILE_SCHEMA,
-            "runtime_profile": RESTRICTED_PROFILE,
+            "runtime_profile": DEFAULT_MANAGER_RUNTIME_PROFILE,
         },
     )
 
@@ -75,7 +77,7 @@ def _projection(*, profile: str, source: str, revision: str) -> dict[str, Any]:
         "runtime_profile": profile,
         "source": source,
         "configuration_revision": revision,
-        "standing_grant": "machine_configuration" if trusted else "none",
+        "standing_grant": source if trusted else "none",
         "sandbox": "danger-full-access" if trusted else "read-only",
         "approval_policy": "never",
         "tool_classes": (
@@ -100,7 +102,7 @@ def effective_manager_runtime_profile(
 
     if machine_configuration is None:
         return _projection(
-            profile=RESTRICTED_PROFILE,
+            profile=DEFAULT_MANAGER_RUNTIME_PROFILE,
             source="capability_default",
             revision="absent",
         )
@@ -119,7 +121,7 @@ def effective_manager_runtime_profile(
     raw = namespaces.get("manager_runtime")
     if raw is None:
         return _projection(
-            profile=RESTRICTED_PROFILE,
+            profile=DEFAULT_MANAGER_RUNTIME_PROFILE,
             source="capability_default",
             revision="absent",
         )
@@ -147,7 +149,7 @@ def load_effective_manager_runtime_profile(
 
     The machine choice is sufficient for the local owner conversation. Native
     bindings may also supply a freshly checked Core owner-audience proof. This
-    proof alone grants no host tools; the persistent machine grant is required.
+    proof alone grants no host tools; the effective machine profile still applies.
     Other external audiences always remain restricted.
     """
 

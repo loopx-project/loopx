@@ -4,16 +4,21 @@ from __future__ import annotations
 import http.client
 import json
 import threading
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
 
+from loopx.chat_runtime import ChatRuntimeController
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+from loopx.chat_store import ChatSessionStore
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.effect_runtime import restart_effect_runtime
+from loopx.control_plane.goals.acceptance import inspect_goal_acceptance, refine_goal_outcome
 from loopx.control_plane.runtime.public_safety import validate_public_safe_value
 from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
+from loopx.control_plane.todos.list_readback import list_goal_todos
 from loopx.control_plane.todos.todo_summary import canonical_todo_read_record, structured_todo_item
 from loopx.state_refresh import refresh_state_run
 from loopx.status import collect_status
@@ -23,7 +28,7 @@ from tests.control_plane.canonical_authority_fixture import (
 )
 
 
-def make_project(root: Path) -> tuple[Path, Path]:
+def make_project(root: Path, *, provider: str = "file") -> tuple[Path, Path]:
     """A synthetic engineering handoff, usable by the packaged-browser smoke."""
     project, runtime = root / "project", root / "runtime"
     project.mkdir(parents=True)
@@ -38,9 +43,9 @@ def make_project(root: Path) -> tuple[Path, Path]:
         "- [ ] Review the release candidate\n"
         "  <!-- loopx:todo todo_id=todo_review status=open task_class=user_gate blocks_agent=builder -->\n"
         "- [ ] Confirm support coverage\n"
-        "  <!-- loopx:todo todo_id=todo_support status=open task_class=user_gate -->\n"
+        "  <!-- loopx:todo todo_id=todo_support status=open task_class=user_gate goal_bound=true global_gate=true -->\n"
         "- [ ] Approve the publication boundary\n"
-        "  <!-- loopx:todo todo_id=todo_publish status=open task_class=user_gate -->\n"
+        "  <!-- loopx:todo todo_id=todo_publish status=open task_class=user_gate goal_bound=true global_gate=true -->\n"
     )
     registry = project / "registry.json"
     registry.write_text(json.dumps({"schema_version": 1, "common_runtime_root": str(runtime), "goals": [{
@@ -48,6 +53,13 @@ def make_project(root: Path) -> tuple[Path, Path]:
         "repo": str(project), "state_file": state.name,
         "adapter": {"kind": "harness_self_improvement", "status": "connected-read-only"},
     }]}))
+    groups, _, _ = parse_todo_source(state.read_text())
+    records = [canonical_todo_read_record(structured_todo_item(
+        item, role=role, source_section=item["source_section"],
+    )) for role, rows in groups.items() for item in rows]
+    initialize_canonical_authority(runtime, "release-demo", build_todo_runtime_shadow_projection(
+        goal_id="release-demo", todos=records,
+    ), state_path=state, provider=provider)
     refresh_state_run(
         registry_path=registry, runtime_root_override=str(runtime), goal_id="release-demo", project=project,
         state_file=state, classification="state_refreshed", recommended_action="Review the independent verification evidence",
@@ -108,13 +120,71 @@ def test_http_review_discloses_unreadable_map_without_hiding_other_components(wo
     def unreadable(**_kwargs):
         raise PermissionError("synthetic unavailable source")
 
-    monkeypatch.setattr("loopx.chat_status_api.list_goal_todos", unreadable)
+    monkeypatch.setattr("loopx.chat.status_api.list_goal_todos", unreadable)
     status, review = get(server)
     assert status == 200 and review["goal_map"] is None and review["graph"] is not None
     envelope = review["projection_envelope"]
     assert not envelope["fresh"] and not envelope["complete"]
     assert "unreadable_sources" in envelope["alert_reasons"]
     assert envelope["coverage"]["omitted"] == [{"reason": "unavailable_components", "count": 1, "refs": []}]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_http_review_keeps_status_evidence_when_the_second_authority_read_fails(
+    workspace, tmp_path, monkeypatch, provider,
+):
+    server, _, _ = workspace
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime = make_project(tmp_path / "canonical", provider=provider)
+    server.registry_path = registry
+    server.runtime_root = runtime
+    server.runtime_root_override = str(runtime)
+    state = registry.parent / "ACTIVE_GOAL_STATE.md"
+    source_before = (registry.read_bytes(), state.read_bytes())
+    head_before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="release-demo")
+    status, before = get(server)
+    assert status == 200 and before["graph"] and before["goal_map"] and before["acceptance"]
+
+    marker = runtime / "authority" / f"provider-{sha256(b'release-demo').hexdigest()}.json"
+    marker_before = marker.read_bytes() if marker.exists() else None
+
+    def read_unavailable_map(**options):
+        # The status snapshot is already collected. Now fail only the map's
+        # independent provider read, using the real authority selector.
+        marker.write_text('{"private_fixture":"invalid selector"}', encoding="utf-8")
+        try:
+            return list_goal_todos(**options)
+        finally:
+            if marker_before is None:
+                marker.unlink()
+            else:
+                marker.write_bytes(marker_before)
+
+    with monkeypatch.context() as patch:
+        patch.setattr("loopx.chat.status_api.list_goal_todos", read_unavailable_map)
+        status, partial = get(server)
+    assert status == 200, partial
+    assert partial["goal_id"] == "release-demo"
+    assert partial["graph"] == before["graph"]
+    assert partial["acceptance"] == before["acceptance"]
+    assert partial["goal_map"] is None
+    envelope = partial["projection_envelope"]
+    assert not envelope["fresh"] and not envelope["complete"]
+    assert "unreadable_sources" in envelope["alert_reasons"]
+    assert envelope["coverage"]["included_count"] == 2
+    assert any(source["source_id"] == "goal_todos" and source["read_status"] == "unreadable"
+               for source in envelope["sources"])
+    validate_public_safe_value(partial)
+    assert "private_fixture" not in json.dumps(partial)
+
+    status, restored = get(server)
+    assert status == 200 and restored["goal_map"]["nodes"] == before["goal_map"]["nodes"]
+    assert restored["goal_map"]["projection_envelope"]["fresh"]
+    head_after = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="release-demo")
+    assert (head_after["provider_revision"], head_after["todos"]) == (
+        head_before["provider_revision"], head_before["todos"],
+    )
+    assert (registry.read_bytes(), state.read_bytes()) == source_before
 
 
 def test_http_review_inherits_source_age_and_replay_keeps_observation(workspace, monkeypatch):
@@ -154,8 +224,8 @@ def test_real_http_review_matches_cli_sources_without_canonical_writes(workspace
     assert {(node_todo[e["from_node_id"]], node_todo[e["to_node_id"]], e["relation"]) for e in goal_map["edges"]} == {
         ("todo_integrate", "todo_design", "continues"), ("todo_integrate", "todo_design", "depends_on")}
     assert goal_map["limits"]["topology_complete"] is True
-    canonical = collect_status(registry_path=registry, runtime_root_override=str(runtime), scan_roots=[], limit=20,
-                               goal_id="release-demo", include_public_boundary_scan=False, include_task_graph=True)
+    canonical = collect_status(registry_path=registry, runtime_root_override=str(runtime), limit=20,
+                               goal_id="release-demo", include_task_graph=True)
     item = canonical["attention_queue"]["items"][0]
     assert review["graph"] == item["task_graph_projection"]
     assert review["acceptance"] == canonical["run_history"]["goals"][0]["acceptance_observation"]
@@ -173,14 +243,13 @@ def test_real_http_review_matches_cli_sources_without_canonical_writes(workspace
 def test_canonical_http_goal_map_survives_repeated_reads_and_runtime_restart(
     workspace, tmp_path, monkeypatch, provider, display,
 ):
-    server, registry, runtime = workspace
+    server, _, _ = workspace
     isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime = make_project(tmp_path / "canonical", provider=provider)
+    server.registry_path, server.runtime_root = registry, runtime
+    server.runtime_root_override = str(runtime)
     state = registry.parent / "ACTIVE_GOAL_STATE.md"
     registry_before, source = registry.read_bytes(), state.read_bytes()
-    groups, _, _ = parse_todo_source(source.decode("utf-8"))
-    records = [canonical_todo_read_record(structured_todo_item(
-        item, role=role, source_section=item["source_section"],
-    )) for role, rows in groups.items() for item in rows]
     # This independently specified map covers every source Todo, including the
     # third gate omitted from the bounded attention graph.
     expected_nodes = [
@@ -218,15 +287,10 @@ def test_canonical_http_goal_map_survives_repeated_reads_and_runtime_restart(
         ],
     }
     try:
-        initialized = initialize_canonical_authority(
-            runtime, "release-demo", build_todo_runtime_shadow_projection(
-                goal_id="release-demo", todos=records,
-            ), state_path=state, provider=provider,
-        )
         before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="release-demo")
         assert before is not None
         assert before["source_authority"] == f"{provider}_v0"
-        assert before["provider_revision"] == initialized["provider_revision"]
+        assert before["provider_revision"]
         assert len(before["todos"]) == 5
         if display == "missing":
             state.unlink()
@@ -262,22 +326,13 @@ def test_review_is_cold_and_missing_observations_stay_unknown(workspace, monkeyp
     def collect(**kwargs):
         calls.append(kwargs)
         return {"ok": True, "attention_queue": {"items": []}, "run_history": {"goals": []}}
-    monkeypatch.setattr("loopx.chat_status_api.collect_status", collect)
+    monkeypatch.setattr("loopx.chat.status_api.collect_status", collect)
     assert get(server, "/status.json?goal_id=release-demo")[0] == 200
     assert calls[-1]["include_task_graph"] is False
     _, result = get(server)
     assert calls[-1]["include_task_graph"] is True
     assert result["graph"] is None and result["acceptance"] is None
     assert result["goal_map"]["schema_version"] == "goal_task_map_v0"
-
-
-def test_unreadable_todo_source_keeps_review_and_marks_map_unavailable(workspace):
-    server, registry, _ = workspace
-    (registry.parent / "ACTIVE_GOAL_STATE.md").unlink()
-    status, result = get(server)
-    assert status == 200
-    assert result["goal_map"] is None
-
 
 @pytest.mark.parametrize("query, expected", [("", 400), ("?goal_id=", 400), ("?goal_id=missing", 404),
     ("?goal_id=release-demo&goal_id=release-demo", 400), ("?goal_id=release-demo&view=workspace-directory", 400)])
@@ -295,14 +350,14 @@ def test_review_respects_origin_selected_goal_and_registry_drift(workspace, monk
     def collect(**kwargs):
         registry.write_text(json.dumps({"goals": []}))
         return {"ok": True}
-    monkeypatch.setattr("loopx.chat_status_api.collect_status", collect)
+    monkeypatch.setattr("loopx.chat.status_api.collect_status", collect)
     assert get(server)[0] == 409
 
 
 def test_review_failure_does_not_expose_local_diagnostics(workspace, monkeypatch):
     def fail(**kwargs):
         raise OSError("private diagnostic and local filesystem details")
-    monkeypatch.setattr("loopx.chat_status_api.collect_status", fail)
+    monkeypatch.setattr("loopx.chat.status_api.collect_status", fail)
     status, payload = get(workspace[0])
     assert status == 500
     assert "private diagnostic" not in json.dumps(payload)
@@ -313,8 +368,90 @@ def test_review_failure_does_not_expose_local_diagnostics(workspace, monkeypatch
     {"ok": True, "attention_queue": {"items": [{"goal_id": "release-demo", "task_graph_projection": {"raw_log": "must not export"}}]}},
 ])
 def test_failed_or_unsafe_projection_cannot_be_exported(workspace, monkeypatch, projection):
-    monkeypatch.setattr("loopx.chat_status_api.collect_status", lambda **kwargs: projection)
+    monkeypatch.setattr("loopx.chat.status_api.collect_status", lambda **kwargs: projection)
     status, result = get(workspace[0])
     assert status in {500, 503}
     assert result["ok"] is False
     assert "must not export" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_review_redacts_local_evidence_without_changing_original_acceptance(
+    workspace, tmp_path, monkeypatch, provider,
+):
+    server, _, _ = workspace
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime = make_project(tmp_path / "canonical", provider=provider)
+    state = registry.parent / "ACTIVE_GOAL_STATE.md"
+    configuration = json.loads(registry.read_text())
+    configuration["goals"][0]["coordination"] = {"registered_agents": ["agent-a", "builder", "reviewer"]}
+    registry.write_text(json.dumps(configuration))
+    evidence = runtime / "reports" / "verification.txt"
+    evidence.parent.mkdir()
+    evidence.write_text("Independent verification is still pending.")
+    basis = dict(registry_path=registry, goal_id="release-demo", runtime_root=str(runtime))
+    refine_goal_outcome(**basis, agent_id="agent-a", execute=True,
+        expected_provider_revision=inspect_goal_acceptance(**basis)["provider_revision"],
+        operation_id="local-evidence-review", refinement={
+            "outcome_id": "release", "owner_agent_id": "agent-a",
+            "objective": "Deliver the verified release",
+            "source": {"ref": "message:release", "summary": "The owner requested independent verification"},
+            "requirements": [{"id": "verification", "description": "The release is independently verified"}],
+            "review": [{"id": "verification", "conclusion": "uncertain",
+                        "evidence_refs": [str(evidence)], "note": "The verification remains incomplete"}],
+        })
+    before = inspect_goal_acceptance(**basis)
+    source_before = registry.read_bytes(), state.read_bytes(), evidence.read_bytes()
+    store = ChatSessionStore(tmp_path / "private-chat")
+    session = store.create_session(goal_id="release-demo", agent_id="agent-a",
+        adapter_kind="codex_app_server", upstream_thread_id="original", channel_id="workspace")
+    store.append_message(session["session_id"], role="agent", text="Retain the original conversation.")
+    chat_before = {path: path.read_bytes() for path in store.root.rglob("*.json")}
+    controller = ChatRuntimeController(store=store, registry_path=registry, codex_bin="must-not-run")
+    server.registry_path = registry
+    server.runtime_root = store.root.parent
+    server.runtime_root_override = str(store.root.parent)
+    server.runtime_controller = controller
+    try:
+        for restart in (False, True):
+            if restart:
+                restart_effect_runtime(wait_for_exit=True)
+            status, review = get(server)
+            assert status == 200, review
+            assert review["goal_id"] == "release-demo"
+            requirement = review["acceptance"]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]["requirements"][0]
+            assert requirement["id"] == "verification"
+            assert requirement["agent_review"]["evidence_refs"] == ["[local-path]"]
+            assert requirement["agent_review"]["conclusion"] == "uncertain"
+            assert requirement["agent_review"]["independently_verified"] is False
+            validate_public_safe_value(review)
+            assert str(tmp_path) not in json.dumps(review)
+            assert inspect_goal_acceptance(**basis) == before
+            assert (registry.read_bytes(), state.read_bytes(), evidence.read_bytes()) == source_before
+            assert {path: path.read_bytes() for path in chat_before} == chat_before
+    finally:
+        controller.close()
+
+
+@pytest.mark.parametrize("unsafe", [
+    {"api_key": "synthetic private field"},
+    {"note": "sk-" + "a" * 48},
+    {"raw_log": "synthetic private diagnostic"},
+    {"requestBody": {"message": "synthetic private payload"}},
+])
+def test_review_still_refuses_unsafe_acceptance_and_recovers(workspace, monkeypatch, unsafe):
+    server, _, _ = workspace
+    projection = {"ok": True, "run_history": {"goals": [
+        {"id": "release-demo", "acceptance_observation": unsafe},
+    ]}}
+    monkeypatch.setattr("loopx.chat.status_api.collect_status", lambda **kwargs: projection)
+    status, result = get(server)
+    assert status == 500 and result["ok"] is False
+    assert "synthetic private" not in json.dumps(result)
+    assert "sk-" not in json.dumps(result)
+    projection["run_history"]["goals"][0]["acceptance_observation"] = {"acceptance_assessed": False}
+    status, result = get(server)
+    assert status == 200
+    assert result["acceptance"]["acceptance_assessed"] is False
+    validate_public_safe_value(result)

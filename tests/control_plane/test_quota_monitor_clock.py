@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, empty_todo_display
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.scheduler import monitor_todo
 from loopx.control_plane.testing.canary_harness import write_fixture_registry, run_json_cli_result
@@ -70,9 +70,9 @@ def test_quota_monitor_selection_requires_one_clock_and_one_existing_batch(monke
         clocks.append(True)
         return NOW
 
-    def record(method, params):
+    def record(method, params, **kwargs):
         calls.append(method)
-        return original(method, params)
+        return original(method, params, **kwargs)
 
     monkeypatch.setattr(quota_selection, "now_utc", clock, raising=False)
     monkeypatch.setattr(quota_selection, "effect_runtime_result", record)
@@ -118,10 +118,10 @@ def test_public_quota_gap_count_uses_real_full_source_without_writing_it(tmp_pat
     projection = build_todo_runtime_shadow_projection(goal_id="goal-a", todos=fields["agent_todos"]["items"],
                                                      handoff_mode="soft_claim")
     initialize_canonical_authority(runtime, "goal-a", projection, state_path=state, provider=provider)
-    state.unlink()
+    empty_todo_display(state)
     before = state.read_bytes() if state.exists() else None
     code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
-        "--include-detail", "agent-todos", "--scan-path", str(tmp_path), registry_path=registry, runtime_root=runtime)
+        "--include-detail", "agent-todos",  registry_path=registry, runtime_root=runtime)
     assert code == 0, packet
     summary = packet["agent_todo_summary"]
     assert summary["monitor_schedule_gap_count"] == 25
@@ -189,7 +189,7 @@ def test_codex_cli_replan_streak_respects_canonical_monitor_expiry(
         sys.executable, "-c", entrypoint, "--registry", str(registry),
         "--runtime-root", str(runtime), "--format", "json",
         "quota", "should-run", "--codex-app", "--goal-id", "goal-a", "--agent-id", "agent-a",
-        "--turn-instance-id", "expiry-fixture-turn", "--scan-path", str(tmp_path),
+        "--turn-instance-id", "expiry-fixture-turn", "--context-delivery", "off",
     ], capture_output=True, text=True, encoding="utf-8", check=False)
     assert result.returncode == 0, result.stdout + result.stderr
     guard = json.loads(result.stdout)
@@ -246,7 +246,7 @@ def test_cli_due_order_and_successive_turns_preserve_exact_poll_settlement(
         _add_monitor(registry, text="[P1] Observe middle target", target_key="middle",
                      next_due_at="2001-01-01T00:00:00Z"),
     ]
-    state.unlink()  # Canonical authority, not a stale Markdown fallback.
+    empty_todo_display(state)  # Goal intent remains; no display Todo can select work.
 
     def call(*args):
         code, result = run_json_cli_result(

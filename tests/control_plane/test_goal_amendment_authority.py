@@ -13,6 +13,19 @@ from loopx.control_plane.goals.goal_amendment_proposal import _derive_open_repla
 from loopx.control_plane.projects.registry_codec import load_project_registry
 
 
+def _configure_fixture_stride(runtime: Path, strategy: str) -> None:
+    from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
+    from loopx.capabilities.machine_configuration.store import configure_machine_configuration
+
+    owner = build_builtin_machine_configuration_registry()
+    configuration = {"schema_version": "loopx_machine_configuration_v0", "namespaces": {
+        "todo_replan_cadence": {"schema_version": "todo_replan_cadence_machine_defaults_v2",
+            "count_unit": "effective_turns", "count": 6, "stride_strategy": strategy}}}
+    preview = configure_machine_configuration(runtime_root=runtime, registry=owner, configuration=configuration)
+    configure_machine_configuration(runtime_root=runtime, registry=owner, configuration=configuration,
+        execute=True, expected_plan_revision=preview["plan_revision"])
+
+
 @pytest.fixture(params=["file", "sqlite"])
 def source_goal(request, tmp_path, monkeypatch, capsys):
     if request.param == "sqlite":
@@ -179,6 +192,9 @@ def test_timed_out_commit_cannot_arrive_after_source_goal_recreation(source_goal
 @pytest.mark.parametrize("claim_agent", ["agent-a", "agent-b"])
 def test_claimed_successor_is_consumed_by_existing_replan_owner(source_goal, tmp_path, capsys, claim_agent):
     f = source_goal
+    # This journey verifies the direct successor acknowledgement and lease
+    # replay. The periodic journey below covers the distinct Stride gate.
+    _configure_fixture_stride(f["runtime"], "off")
     view = _call(f, tmp_path, capsys, "inspect")[1]
     root = _root(view)
     assert _call(f, tmp_path, capsys, "configure", root, agent=None, operation_id="root", execute=True)[0] == 0
@@ -222,8 +238,6 @@ def test_claimed_successor_is_consumed_by_existing_replan_owner(source_goal, tmp
 
 @pytest.mark.parametrize("strategy", ["off", "evidence_conditioned_v1"])
 def test_periodic_successor_readback_uses_live_machine_stride(source_goal, tmp_path, capsys, strategy):
-    from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
-    from loopx.capabilities.machine_configuration.store import configure_machine_configuration
     from loopx.capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
 
     f = source_goal
@@ -235,13 +249,7 @@ def test_periodic_successor_readback_uses_live_machine_stride(source_goal, tmp_p
         row["progress_observation"].update(result_class="advanced",
             surface_id=f"coverage-{index}", hypothesis_id=f"hypothesis-{index}")
     f["runs"].write_text("".join(json.dumps(row) + "\n" for row in rows))
-    owner = build_builtin_machine_configuration_registry()
-    configuration = {"schema_version": "loopx_machine_configuration_v0", "namespaces": {
-        "todo_replan_cadence": {"schema_version": "todo_replan_cadence_machine_defaults_v2",
-            "count_unit": "effective_turns", "count": 6, "stride_strategy": strategy}}}
-    preview = configure_machine_configuration(runtime_root=f["runtime"], registry=owner, configuration=configuration)
-    configure_machine_configuration(runtime_root=f["runtime"], registry=owner, configuration=configuration,
-        execute=True, expected_plan_revision=preview["plan_revision"])
+    _configure_fixture_stride(f["runtime"], strategy)
     goal = load_project_registry(f["registry"])["goals"][0]
     assert "stride_strategy" not in goal.get("execution_profile", {})
     effective = resolve_todo_replan_cadence_goal(goal, f["runtime"])

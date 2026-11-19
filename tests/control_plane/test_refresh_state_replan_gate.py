@@ -8,10 +8,15 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
+from canonical_authority_fixture import initialize_canonical_source_fixture
 
 from loopx.cli import main as cli_main
+from loopx.control_plane.effect_runtime import EffectRuntimeRejected
 from loopx.control_plane.status.autonomous_replan_projection import (
     AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD,
+)
+from loopx.control_plane.work_items.autonomous_replan_obligation import (
+    build_autonomous_replan_cli_actions,
 )
 from loopx.control_plane.work_items.semantic_replan_writeback import (
     ReplanWritebackRejected,
@@ -196,6 +201,23 @@ def test_turn_guard_keeps_its_exact_replan_target_strict() -> None:
         )
 
 
+@pytest.mark.parametrize("run_count", [0, AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD])
+def test_selected_replan_cannot_write_when_its_source_cannot_be_reconstructed(run_count: int) -> None:
+    # Deferring an obligation not selected by an ordinary Turn is legal. Losing
+    # the exact source of an already selected replan must instead fail closed.
+    with pytest.raises(EffectRuntimeRejected, match="identity conflicts"):
+        enforce_open_replan_writeback(
+            newest_first_runs=_durable_runs(run_count), state_text=STATE_TEXT,
+            agent_id=AGENT_ID, goal_id=GOAL_ID, guard_scoped=True,
+            guard_semantic_replan_obligation_id="replan-1111111111111111",
+            progress_observation={
+                "schema_version": "typed_progress_observation_v0",
+                "result_class": "blocked", "work_item_id": "replan-1111111111111111",
+                "blocker_id": "blocker:source-missing", "evidence_ids": ["evidence:source-read"],
+            },
+        )
+
+
 def _typed_repeat_runs() -> list[dict]:
     """Two consecutive identical blocked observations (external-wait stall).
 
@@ -338,6 +360,7 @@ def _replan_gate_tmp_fixture(
                         "status": "active",
                         "repo": str(project),
                         "state_file": str(state.relative_to(project)),
+                        "execution_profile": {"stride_strategy": "off"},
                         "coordination": {
                             "agent_model": "peer_v1",
                             "registered_agents": [AGENT_ID],
@@ -353,6 +376,7 @@ def _replan_gate_tmp_fixture(
         runtime_root / "goals" / GOAL_ID / "runs" / "index.jsonl"
     )
     _write_typed_repeat_runs_index(runs_index)
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID, state_path=state, provider="sqlite")
     return registry_path, project, runtime_root, runs_index
 
 
@@ -452,6 +476,7 @@ def test_legacy_material_run_cadence_rejects_maintenance_writeback(tmp_path: Pat
         for run in _durable_runs(AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD):
             handle.write(json.dumps(run) + "\n")
 
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID, state_path=state, provider="sqlite")
     with pytest.raises(ValueError) as exc:
         refresh_state_run(
             registry_path=registry_path,
@@ -654,6 +679,49 @@ def test_rotated_vision_obligation_contains_all_three_acceptance_gaps() -> None:
     assert obligation["triggers"][2]["completed_todo_threshold"] == 5
 
 
+def test_admitted_vision_checkpoint_survives_a_new_periodic_review() -> None:
+    admission_runs = [_open_vision_after_prior_ack()]
+    arguments = {"state_text": STATE_TEXT, "agent_id": AGENT_ID, "goal_id": GOAL_ID}
+    admitted, _ = qualify_replan_writeback(newest_first_runs=admission_runs, **arguments)
+    assert admitted is not None
+    assert [trigger["kind"] for trigger in admitted["triggers"]] == [
+        "vision_acceptance_gap",
+        "vision_outcome_checkpoint_required",
+    ]
+
+    later_runs = [
+        {**run, "generated_at": f"2026-08-13T12:{index:02d}:00+08:00"}
+        for index, run in enumerate(_durable_runs(AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD))
+    ][::-1]
+    current, _ = qualify_replan_writeback(
+        newest_first_runs=[*later_runs, *admission_runs], **arguments,
+    )
+    assert current is not None
+    assert [trigger["kind"] for trigger in current["triggers"]] == ["periodic_review_due"]
+    assert current["obligation_id"] != admitted["obligation_id"]
+
+    bound = {
+        **arguments,
+        "newest_first_runs": [*later_runs, *admission_runs],
+        "guard_scoped": True,
+        "guard_semantic_replan_obligation_id": admitted["obligation_id"],
+        "receipt_bound_guard_recorded_at": "2026-08-13T11:28:00+08:00",
+        "receipt_bound_guard_turn_instance_id": "vision-before-periodic",
+    }
+    with pytest.raises(ReplanWritebackRejected, match="typed semantic delta"):
+        enforce_open_replan_writeback(**bound)
+    delta = enforce_open_replan_writeback(
+        **bound,
+        agent_vision={
+            "vision_patch": {"acceptance_summary": "An independent check supports continuing."},
+            "path_delta": {"outcome": "continue", "evidence_refs": ["evidence:checkpoint-review"]},
+        },
+    )
+    assert delta is not None
+    assert delta["obligation_id"] == admitted["obligation_id"]
+    assert delta["satisfying_outcomes"] == ["fresh_vision_path_outcome"]
+
+
 def test_refresh_state_run_rejects_maintenance_after_vision_obligation_rotation(
     tmp_path: Path,
 ) -> None:
@@ -690,6 +758,7 @@ def test_refresh_state_run_rejects_maintenance_after_vision_obligation_rotation(
         for run in reversed(_rotated_vision_runs()):
             handle.write(json.dumps(run) + "\n")
 
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID, state_path=state, provider="sqlite")
     before = state.read_text(encoding="utf-8")
     with pytest.raises(ValueError, match="required vision outcome"):
         refresh_state_run(
@@ -993,7 +1062,9 @@ def test_todo_lifecycle_rejection_projects_exact_direct_settlement() -> None:
     assert all("spend-slot" not in action for action in actions)
 
 
+@pytest.mark.parametrize("independent_deferred", [False, True])
 def test_todo_complete_then_refresh_cli_projects_direct_settlement(
+    independent_deferred: bool,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -1088,6 +1159,15 @@ def test_todo_complete_then_refresh_cli_projects_direct_settlement(
         for index in (1, 2)
     ]
 
+    independent = None
+    if independent_deferred:
+        independent = add_goal_todo(
+            registry_path=registry_path, goal_id=GOAL_ID, role="agent",
+            text="Evaluate independent work when its window opens.",
+            task_class="advancement_task", claimed_by=AGENT_ID,
+            status="deferred", resume_when="resume_at:2099-01-01T00:00:00Z",
+        )
+
     for todo in todos:
         assert cli_main(
             [
@@ -1161,6 +1241,16 @@ def test_todo_complete_then_refresh_cli_projects_direct_settlement(
     assert all("refresh-state" not in action for action in actions)
     assert all("spend-slot" not in action for action in actions)
 
+    if independent:
+        assert cli_main([
+            "--registry", str(registry_path), "--format", "json", "todo", "complete",
+            "--goal-id", GOAL_ID, "--todo-id", str(todos[0]["todo_id"]),
+            "--agent-id", AGENT_ID, "--successor-todo-id", str(independent["todo_id"]),
+        ]) == 1
+        rejected = json.loads(capsys.readouterr().out)
+        assert "operation id already names a different coordination request" in rejected["error"]
+        assert any("terminal Todo cannot accept new successor links" in action for action in actions)
+
     for action in lifecycle_actions:
         tokens = shlex.split(action)
         loopx_index = tokens.index("loopx")
@@ -1192,7 +1282,22 @@ def test_todo_complete_then_refresh_cli_projects_direct_settlement(
     terminal_quota = json.loads(capsys.readouterr().out)
     assert terminal_exit == 1
     assert terminal_quota["should_run"] is False
-    assert terminal_quota["effective_action"] == "terminal_no_followup"
+    if independent_deferred:
+        assert terminal_quota["effective_action"] != "terminal_no_followup"
+    else:
+        assert terminal_quota["effective_action"] == "terminal_no_followup"
+    if independent:
+        assert cli_main(["--registry", str(registry_path), "--format", "json",
+                         "todo", "list", "--goal-id", GOAL_ID,
+                         "--todo-id", str(independent["todo_id"])]) == 0
+        readback = json.loads(capsys.readouterr().out)
+        # Full readback must keep the independent wait, not merely avoid a
+        # terminal recommendation by replacing it with an invented blocker.
+        retained = readback["todo"]
+        assert retained["todo_id"] == independent["todo_id"]
+        assert retained["status"] == "deferred"
+        assert retained["resume_when"] == "resume_at:2099-01-01T00:00:00Z"
+        assert retained["claimed_by"] == AGENT_ID
 
 
 @pytest.mark.parametrize(
@@ -1459,6 +1564,92 @@ def test_matching_non_successor_ack_clears_rotated_vision_obligation(
     )
 
     assert remaining is None
+
+
+def test_later_exact_ack_repairs_older_receipt_without_replaying_work() -> None:
+    runs = _durable_runs(AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD)
+    obligation_id = _current_obligation_id(runs)
+    semantic_delta = {
+        "schema_version": "replan_semantic_delta_v0",
+        "accepted": True,
+        "outcomes": ["fresh_vision_path_outcome"],
+        "satisfying_outcomes": ["fresh_vision_path_outcome"],
+        "obligation_id": obligation_id,
+    }
+    later_ack = {
+        "goal_id": GOAL_ID,
+        "agent_id": AGENT_ID,
+        "turn_instance_id": "guided-start:later",
+        "generated_at": "2026-08-13T12:00:02+00:00",
+        "classification": "bounded_replan_progress",
+        "autonomous_replan_ack": {
+            "schema_version": "autonomous_replan_ack_v0",
+            "recorded": True,
+            "source": "refresh_state",
+            "semantic_delta": semantic_delta,
+        },
+    }
+    malformed_exact_ack = {
+        **later_ack,
+        "turn_instance_id": "guided-start:malformed",
+        "generated_at": "2026-08-13T12:00:03+00:00",
+        "autonomous_replan_ack": {
+            **later_ack["autonomous_replan_ack"],
+            "schema_version": "wrong",
+        },
+    }
+    newer_unrelated_ack = {
+        **later_ack,
+        "turn_instance_id": "guided-start:unrelated",
+        "generated_at": "2026-08-13T12:00:04+00:00",
+        "autonomous_replan_ack": {
+            **later_ack["autonomous_replan_ack"],
+            "semantic_delta": {
+                **semantic_delta,
+                "obligation_id": "replan-ffffffffffffffff",
+            },
+        },
+    }
+
+    remaining, recovered_delta = qualify_replan_writeback(
+        newest_first_runs=[newer_unrelated_ack, malformed_exact_ack, later_ack, *runs],
+        state_text=STATE_TEXT,
+        agent_id=AGENT_ID,
+        goal_id=GOAL_ID,
+        guard_scoped=True,
+        guard_semantic_replan_obligation_id=obligation_id,
+        receipt_bound_guard_recorded_at="2026-08-13T12:00:01+00:00",
+        receipt_bound_guard_turn_instance_id="guided-start:original",
+    )
+
+    assert remaining is None
+    assert recovered_delta == semantic_delta
+
+
+def test_historical_ack_closeout_does_not_request_new_semantic_evidence() -> None:
+    actions = build_autonomous_replan_cli_actions(
+        {
+            "replan_action_packet": {
+                "writeback_contract": {
+                    "preferred_input": "exact_historical_ack",
+                    "cli_semantic_args": "--vision-unchanged-reason wrong",
+                }
+            }
+        },
+        goal_id=GOAL_ID,
+        settlement_args=" --todo-id todo-original",
+        scoped_cli_args=(
+            f" --agent-id {AGENT_ID} --turn-instance-id guided-start:original"
+        ),
+        quota_spend_action="loopx quota spend",
+        settlement_chain_ready=True,
+    )
+
+    assert len(actions) == 2
+    assert "--vision-" not in actions[0]
+    assert "--progress-result-class" not in actions[0]
+    assert "--todo-id todo-original" in actions[0]
+    assert "--turn-instance-id guided-start:original" in actions[0]
 
 
 @pytest.mark.parametrize("threshold", [2, 3])

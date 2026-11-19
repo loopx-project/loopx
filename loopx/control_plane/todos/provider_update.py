@@ -16,6 +16,8 @@ from ..coordination.local_authority import (
     LOCAL_AUTHORITY_SOURCES,
     LocalCoordinationAuthorityRejection,
     LocalCoordinationAuthorityUnavailable,
+    ambiguous_todo_write,
+    claim_worktree_candidate,
     raise_canonical_write_failure,
     read_canonical_todos_if_promoted,
 )
@@ -30,6 +32,7 @@ from .text import normalize_new_todo
 from .mutation_authority import todo_lifecycle_facts
 from ..coordination.authority_source_capture import authority_registry_source
 from .completion_validation import (
+    completion_validation_execution,
     completion_validation_failure,
     execute_completion_validation_effects,
     resolve_private_completion_validation_declaration,
@@ -45,6 +48,7 @@ from .completion_validation_projection import (
 from .external_wait_contract import TodoExternalWaitAuthoringError
 from .path_resolution import resolve_todo_state_path
 from .monitor_metadata import MonitorPollObservation
+from .resume_condition import normalize_supported_todo_resume_when
 
 
 def _dispatch_canonical_todo_update(
@@ -56,23 +60,10 @@ def _dispatch_canonical_todo_update(
             timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
         )
     except EffectRuntimeResponseAmbiguous as error:
-        # The request owns the identity even when no response can be verified.
-        # Expose only a read: a missing receipt cannot establish writer liveness
-        # or authorize another operation, and a found receipt is not a lease.
-        raise LocalCoordinationAuthorityUnavailable(
-            f"{error}. A missing receipt does not prove the original writer has stopped",
-            code=error.diagnostic_code,
-            payload={
-                "goal_id": request["goal_id"], "todo_id": request["todo_id"],
-                "operation_id": request["operation_id"],
-                "recovery_command": [
-                    "loopx", "--format", "json", "--registry",
-                    str(registry_path.expanduser().resolve()),
-                    "--runtime-root", request["runtime_root"],
-                    "todo", "receipt", "--goal-id", request["goal_id"],
-                    "--operation-id", request["operation_id"],
-                ],
-            },
+        raise ambiguous_todo_write(
+            error, registry_path=registry_path, runtime_root=request["runtime_root"],
+            goal_id=request["goal_id"], todo_id=request["todo_id"],
+            operation_id=request["operation_id"],
         ) from error
 
 
@@ -181,20 +172,54 @@ def _raise_public_update_rejection(
     result: dict[str, Any],
     *,
     planning_intent: dict[str, Any] | None,
+    runtime_root: Path | None = None,
+    goal_id: str | None = None,
+    todo_id: str | None = None,
 ) -> None:
     if result.get("status") != "failed":
         return
     reason_code = str(result.get("reason_code") or "")
     if reason_code.startswith("external_wait_"):
-        resume_when = str((planning_intent or {}).get("resume_when") or "")
-        resume_kind, separator, dependency_id = resume_when.partition(":")
+        raw_resume_when = (planning_intent or {}).get("resume_when")
         raw_successors = (planning_intent or {}).get("successor_todo_ids")
+        if (
+            (not raw_resume_when or raw_successors is None)
+            and runtime_root is not None
+            and goal_id
+            and todo_id
+        ):
+            canonical = read_canonical_todos_if_promoted(
+                runtime_root=runtime_root, goal_id=goal_id
+            )
+            target = next(
+                (
+                    todo
+                    for todo in (canonical or {}).get("todos", ())
+                    if todo.get("todo_id") == todo_id
+                ),
+                {},
+            )
+            if not raw_resume_when:
+                raw_resume_when = target.get("resume_when")
+            if raw_successors is None:
+                raw_successors = target.get("successor_todo_ids")
+        resume_when = (
+            normalize_supported_todo_resume_when(raw_resume_when)
+            or str(raw_resume_when or "").strip()
+        )
+        resume_kind, separator, dependency_spec = resume_when.partition(":")
+        monitor_id, scope_separator, scope = dependency_spec.partition("@")
         raise TodoExternalWaitAuthoringError(
             str(result.get("reason") or "external-wait Todo update was rejected"),
             code=reason_code,
             monitor_todo_id=(
-                dependency_id
-                if separator and resume_kind == "monitor_changed"
+                monitor_id
+                if separator and resume_kind == "monitor_changed" and monitor_id
+                else None
+            ),
+            material_change_scope=(
+                scope.lower()
+                if separator and resume_kind == "monitor_changed" and scope_separator and scope
                 else None
             ),
             successor_todo_ids=(
@@ -234,6 +259,7 @@ def update_canonical_todo_if_promoted(
     actor_agent_id: str | None, role: str | None, text: str | None,
     note: str | None, dry_run: bool,
     project: Path | None = None, state_file: Path | None = None,
+    claim_operation_id: str | None = None,
     operation_id: str | None = None, task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
     planning_intent: dict[str, Any] | None = None,
@@ -257,6 +283,9 @@ def update_canonical_todo_if_promoted(
         normalized_note = compact_todo_text(note)
         if normalized_note:
             patch["note"] = normalized_note
+    if claim_operation_id is not None and (monitor_observation is not None
+            or str((planning_intent or {}).get("status", "")).lower() == "done"):
+        raise ValueError("Claim execution progress does not observe Monitors; use todo complete for completion")
     completion = None
     validation_revision = None
     if completion_validation_revision is not None:
@@ -281,8 +310,10 @@ def update_canonical_todo_if_promoted(
                 registry_path=registry_path, goal_id=goal_id, todo_id=todo_id, role=role,
                 persist_if_resolved=not dry_run)
         completion = {"validation_declaration": declaration}
+    worktree = claim_worktree_candidate() if claim_operation_id is not None else None
     request = {
-        "schema_version": ("loopx_local_coordination_todo_update_request_v5" if validation_revision is not None
+        "schema_version": ("loopx_local_coordination_todo_update_request_v6" if claim_operation_id is not None
+                           else "loopx_local_coordination_todo_update_request_v5" if validation_revision is not None
                            else "loopx_local_coordination_todo_update_request_v4" if monitor_observation is not None
                            else "loopx_local_coordination_todo_update_request_v3" if completion is not None
                            else "loopx_local_coordination_todo_update_request_v2"),
@@ -296,6 +327,8 @@ def update_canonical_todo_if_promoted(
         "operation_id": (operation_id if operation_id is not None else
                          (monitor_observation.monitor_effect_id if monitor_observation else None)
                          or f"todo-update:{uuid4().hex}"),
+        **({"claim_operation_id": claim_operation_id} if claim_operation_id is not None else {}),
+        **({"write_worktree": str(worktree)} if worktree is not None else {}),
         "lease_idempotency_key": task_lease_idempotency_key,
         "lease_expected_version": task_lease_expected_version,
         "patch": patch, "clear_fields": [], "dry_run": dry_run,
@@ -316,18 +349,22 @@ def update_canonical_todo_if_promoted(
         if completion is None:
             raise RuntimeError("Ordinary Todo update cannot issue completion validation")
         completion["source_provider_revision"] = result["provider_revision"]
-        completion.update(execute_completion_validation_effects(
-            result, registry_path=registry_path, goal_id=goal_id))
-        completion_validation_executed = True
-        request["observed_at"] = now_local()
-        result = _dispatch_canonical_todo_update(request, registry_path=registry_path)
+        with completion_validation_execution(runtime_root=runtime_root, goal_id=goal_id, todo_id=todo_id):
+            request["observed_at"] = now_local()
+            result = _dispatch_canonical_todo_update(request, registry_path=registry_path)
+            if isinstance(result, dict) and result.get("status") == "execute_validation":
+                completion.update(execute_completion_validation_effects(
+                    result, registry_path=registry_path, goal_id=goal_id))
+                completion_validation_executed = True
+                request["observed_at"] = now_local()
+                result = _dispatch_canonical_todo_update(request, registry_path=registry_path)
     if isinstance(result, dict):
         # Preserve native recovery decisions and arguments, adding only the
         # caller's exact transport route. A default-registry command could read
         # an unrelated Goal when this call used an explicit registry/runtime.
         recovery = result.get("recovery")
         if isinstance(recovery, dict):
-            for step in ("inspect", "retry", "acquire", "release"):
+            for step in ("claim", "inspect", "retry", "acquire", "release"):
                 descriptor = recovery.get(step)
                 if isinstance(descriptor, dict) and isinstance(descriptor.get("cli_args"), list):
                     descriptor["cli_args"] = [f"--registry={registry_path}",
@@ -342,7 +379,13 @@ def update_canonical_todo_if_promoted(
             return failure
     # Keep the public lookup-error contract, without a second pre-transaction read.
     if isinstance(result, dict):
-        _raise_public_update_rejection(result, planning_intent=planning_intent)
+        _raise_public_update_rejection(
+            result,
+            planning_intent=planning_intent,
+            runtime_root=runtime_root,
+            goal_id=goal_id,
+            todo_id=todo_id,
+        )
     if isinstance(result, dict) and (
         result.get("status") == "missing"
         and result.get("source_authority") in LOCAL_AUTHORITY_SOURCES

@@ -12,6 +12,7 @@ import tempfile
 from typing import Any, Sequence
 
 from .file_lock import exclusive_file_lock
+from .control_plane.runtime.file_paths import windows_extended_path
 from .release_manifest import write_release_manifest
 from .skill_install_readback import (
     PACKAGED_HOST_SKILL_IDS,
@@ -87,6 +88,8 @@ def _ensure_chat_bundle(
 
 
 def _copy_release(source_root: Path, target: Path) -> None:
+    source_root = windows_extended_path(source_root)
+    target = windows_extended_path(target)
     ignored = shutil.ignore_patterns(
         "__pycache__", "*.pyc", "node_modules", ".next", "dist", "build", "coverage"
     )

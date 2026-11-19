@@ -57,6 +57,8 @@ def image_conversation(tmp_path):
     source = fixture["FAKE_CODEX"].replace(
         "        turn_count += 1",
         "        import hashlib\n"
+        f'        with open({str(capture.with_suffix(".inputs.json"))!r}, "w") as inputs:\n'
+        '            json.dump(request["params"]["input"], inputs)\n'
         f'        with open({str(capture)!r}, "w") as output:\n'
         '            json.dump([hashlib.sha256(i["url"].encode()).hexdigest() for i in request["params"]["input"] if i["type"] == "image"], output)\n'
         "        turn_count += 1",
@@ -207,3 +209,90 @@ def test_runtime_failure_is_not_reported_as_safe_to_replay(
     assert status == 400
     assert error.get("delivery_state") != "not_delivered"
     assert error.get("turn_replay_safe") is not True
+
+
+DOCUMENT_BYTES = "\ufeff# 要求\r\n\r\n    print('a  b')\r\n最后约束：保留全部原文。".encode("utf-8")
+
+
+def document_attachment(raw=DOCUMENT_BYTES):
+    return {"id": "requirements", "name": "requirements.md", "mime_type": "text/markdown",
+            "size": len(raw), "data_url": "data:text/markdown;base64," + base64.b64encode(raw).decode()}
+
+
+@pytest.mark.parametrize("queued", [False, True])
+def test_document_http_native_wire_and_original_readback(image_conversation, queued):
+    store, runtime, session, post, capture = image_conversation
+    body = {"message": "Read this source, without granting any additional permissions.",
+            "client_turn_id": "document-request", "attachments": [document_attachment()],
+            **({"delivery": "queue"} if queued else {})}
+    status, receipt = post(body)
+    assert status == 202, receipt
+    completed = runtime.wait_for_turn(session_id=session, turn_id=receipt["turn_id"], timeout_sec=10)
+    assert completed["status"] == "completed", completed
+    inputs = json.loads(capture.with_suffix(".inputs.json").read_text())
+    assert inputs[-1] == {"type": "text", "text": DOCUMENT_BYTES.decode("utf-8")}
+    assert "not additional permissions" in inputs[-2]["text"]
+    assert post(body)[1]["created"] is False  # lost ACK reuses original identity
+    assert len([row for row in store.messages(session) if row["role"] == "user"]) == 1
+    reopened = ChatSessionStore(store.root.parent)
+    assert reopened.messages(session)[0]["attachments"] == [document_attachment()]
+    status, _ = post({**body, "attachments": [document_attachment(b"different requirements")]})
+    assert status == 400
+    assert reopened.messages(session)[0]["attachments"] == [document_attachment()]
+
+
+@pytest.mark.parametrize("attachment", [
+    document_attachment(b"\xff"), document_attachment(b"a\0b"), document_attachment(b"a" * 48_000),
+    {**document_attachment(), "mime_type": "text/plain"},
+    {**document_attachment(), "name": "source.pdf"},
+    {**document_attachment(), "name": "../source.md"},
+    {**document_attachment(), "size": True},
+])
+def test_document_rejection_is_atomic_and_replay_safe(image_conversation, attachment):
+    store, _, session, post, capture = image_conversation
+    status, error = post({"message": "Read the whole source", "attachments": [attachment], "client_turn_id": "rejected"})
+    assert status == 400, error
+    assert error["turn_replay_safe"] is True
+    assert store.messages(session) == []
+    assert not capture.exists()
+
+
+@pytest.mark.parametrize("updates", [
+    {"session_mode": "attached_host"}, {"agent_id": "dsh"},
+    {"project_context": {"audience": "bound_owner"}},
+    {"steward_context": {"audience": "bound_group"}},
+])
+def test_document_unsupported_route_rejects_before_admission(image_conversation, monkeypatch, updates):
+    store, _, session, post, capture = image_conversation
+    load = store.load_session
+    monkeypatch.setattr(store, "load_session", lambda sid: {**load(sid), **updates})
+    status, error = post({"message": "Read the whole source", "attachments": [document_attachment()]})
+    assert status == 400 and error["turn_replay_safe"] is True
+    assert store.messages(session) == []
+    assert not capture.exists()
+
+
+
+def test_document_waits_for_busy_session_without_second_executor(image_conversation):
+    import time
+    store, runtime, session, post, capture = image_conversation
+    status, active = post({"message": "wait for interrupt", "client_turn_id": "busy"})
+    assert status == 202
+    for _ in range(100):
+        if store.load_turn(session, active["turn_id"]).get("upstream_turn_id"):
+            break
+        time.sleep(0.02)
+    else:
+        pytest.fail("native fixture did not start")
+    body = {"message": "Read after the current work", "client_turn_id": "queued-document",
+            "delivery": "queue", "attachments": [document_attachment()]}
+    status, queued = post(body)
+    assert status == 202 and queued["status"] == "queued", queued
+    assert store.load_session(session)["active_turn_id"] == active["turn_id"]
+    assert post(body)[1]["created"] is False
+    runtime.interrupt_turn(session_id=session, turn_id=active["turn_id"])
+    runtime.wait_for_turn(session_id=session, turn_id=active["turn_id"], timeout_sec=10)
+    runtime.resume_session_queue(session_id=session, work_dir=runtime.store.root.parent.parent, objective="Read source")
+    result = runtime.wait_for_turn(session_id=session, turn_id=queued["turn_id"], timeout_sec=10)
+    assert result["status"] == "completed", result
+    assert json.loads(capture.with_suffix(".inputs.json").read_text())[-1]["text"] == DOCUMENT_BYTES.decode()

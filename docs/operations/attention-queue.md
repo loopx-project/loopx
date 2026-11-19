@@ -78,8 +78,7 @@ Fields:
   Dashboard consumers should surface the first unfinished item before generic
   gate prose when present.
 - `agent_todos`: optional active-state checkbox summary for Codex/project
-  agents. This belongs in status/CLI and handoff context; it does not replace a
-  user/controller gate.
+  agents. This belongs in status/CLI and handoff context.
 - `source`: `contract`, `registry`, `run_history`, or `latest_run`.
 
 ## Summary Counters
@@ -105,6 +104,7 @@ Status treats these as user/controller attention:
 - `needs_user_relay`
 - `ready_for_controller_opt_in`
 - `ready_for_user_relay`
+- `state_incomplete`
 
 Status treats these as Codex-ready action:
 
@@ -122,12 +122,17 @@ Status treats these as Codex-ready action:
 docs without running a project adapter. The next Codex action is to inspect the
 refreshed state and continue one bounded progress segment.
 
+`state_incomplete` means a readable legacy Markdown active state lacks a
+required Todo source heading, currently `## Agent Todo` (or an accepted alias).
+Status treats the missing projection as unknown work, not as "no work", and
+asks the user or controller to restore the section before relying on the queue.
+
 A registry entry can explicitly override first-screen attention with
 `waiting_on`, `attention_status`, `recommended_action`, `operator_question`, and
 `next_handoff_condition`. This lets a controller keep a refreshed goal in the
 operator lane when the latest run is fresh but the real next step is still a
 human or target-controller decision. The override changes status and quota
-eligibility, but does not grant project-agent execution. If quota later reports
+eligibility. If quota later reports
 `safe_bypass_allowed=true`, the target heartbeat may work on another bounded
 read-only steering or analysis item from the active state, but it still must not
 execute the gated command or any adapter/write/production path.
@@ -274,8 +279,7 @@ refuse. A reminder with retained lease history requires the bound actor's
 current active lease key/version as well as provider CAS. An existing lease
 does not require or create an agent claim. Expired/released or incorrect proofs
 refuse; recovery points to inspection of a live proof or acquisition of a fresh
-lease, never claiming the user Todo. The edit neither renews nor releases the
-lease. A historical replay proves prior acceptance, not current authority.
+lease, never claiming the user Todo. A historical replay proves prior acceptance, not current authority.
 User gates, unbound actions, agent Todos and bundled non-copy edits retain
 their ordinary admission. Completing an action uses its separate terminal lifecycle contract.
 CLI and other transports share the canonical typed update owner; this rule
@@ -285,10 +289,8 @@ canonical `hard_lease` 下，尚无 claim 或租约历史的 OPEN `user_action` 
 注册 Agent 更新文案、note 和 evidence。更新复用 provider CAS 与操作幂等；不得借此
 改变生命周期、归属、执行要求或决策权限。有租约历史时，同绑定角色必须提供当前有效
 租约的 key/version，并通过 provider CAS；无需、也不新增 agent claim。过期、released、
-错误凭据仍拒绝，恢复须检查当前凭据或取得新租约；更新不续租或释放，旧回执重放不授予
-当前权限。其他角色、被排除角色、user gate、未绑定待办、agent Todo 和非文案混合更新
-仍执行原门禁。更新提醒不代表本人已执行，
-也不证明通知送达。
+错误凭据仍拒绝，恢复须检查当前凭据或取得新租约；更新不续租或释放。其他角色、被排除角色、user gate、未绑定待办、agent Todo 和非文案混合更新
+仍执行原门禁。
 
 ## Boundary
 

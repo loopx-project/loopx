@@ -10,7 +10,9 @@ from urllib.parse import urlencode
 import pytest
 
 from test_goal_amendment_authority import source_goal, _root  # noqa: F401
+from loopx.chat_runtime import ChatRuntimeController
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+from loopx.chat_store import ChatSessionStore
 from loopx.control_plane.effect_runtime import restart_effect_runtime
 
 
@@ -20,6 +22,11 @@ def api(source_goal, tmp_path):  # noqa: F811 - pytest fixture imported above.
     server.registry_path = source_goal["registry"]
     server.runtime_root = source_goal["runtime"]
     server.runtime_root_override = str(source_goal["runtime"])
+    server.chat_store = ChatSessionStore(source_goal["runtime"])
+    server.runtime_controller = ChatRuntimeController(
+        store=server.chat_store, codex_bin="unused-fixture-codex",
+        registry_path=source_goal["registry"],
+    )
     server.selected_goal_id = source_goal["ref"]["goal_id"]
     server.verbose = False
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -47,6 +54,7 @@ def api(source_goal, tmp_path):  # noqa: F811 - pytest fixture imported above.
     server.shutdown()
     thread.join(5)
     server.server_close()
+    server.runtime_controller.close()
     restart_effect_runtime()
 
 

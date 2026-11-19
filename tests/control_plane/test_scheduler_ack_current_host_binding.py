@@ -58,8 +58,10 @@ def _quota(
     registry_path: Path,
     runtime_root: Path,
     project: Path,
+    *, cli_bin: str | None = None,
 ) -> dict:
     _returncode, payload = run_json_cli_result(
+        *(["--cli-bin", cli_bin] if cli_bin else []),
         "quota",
         "should-run",
         "--goal-id",
@@ -221,9 +223,11 @@ def test_trae_app_followup_rejects_codex_rrule_alias() -> None:
         validate_quota_command_context_request(args)
 
 
+@pytest.mark.parametrize("cli_bin", [None, "loopx-candidate"])
 def test_scheduler_ack_current_replays_host_binding_after_update(
     tmp_path: Path,
     monkeypatch,
+    cli_bin,
 ) -> None:
     registry_path, runtime_root, project = write_cli_fixture(
         tmp_path / "fixture",
@@ -234,10 +238,20 @@ def test_scheduler_ack_current_replays_host_binding_after_update(
     monkeypatch.setenv("CODEX_THREAD_ID", "fixture-thread")
     _write_heartbeat_rrule(codex_home, "FREQ=MINUTELY;INTERVAL=3")
 
-    first = _quota(registry_path, runtime_root, project)
-    app = first["scheduler_hint"]["codex_app"]
+    first = _quota(registry_path, runtime_root, project, cli_bin=cli_bin)
+    app = first["scheduler_hint"]["app_automation"]
     target_rrule = app["recommended_rrule"]
     ack_hint = app["ack_hint"]
+    compact_app = build_turn_envelope(first)["scheduler"]["app_automation"]
+    if cli_bin:
+        assert ack_hint["cli_bin"] == cli_bin
+        assert compact_app["cli_bin"] == cli_bin
+        route_index = ack_hint["cli_args"].index("--cli-bin")
+        assert ack_hint["cli_args"][route_index + 1] == cli_bin
+        assert route_index < ack_hint["cli_args"].index("quota")
+    else:
+        assert "cli_bin" not in ack_hint and "--cli-bin" not in ack_hint["cli_args"]
+        assert "cli_bin" not in compact_app
     assert app["stateful_backoff"]["apply_needed"] is True
     assert ack_hint["after"] == "automation_update_rrule_success"
     assert ack_hint["args"]["host_match_observed"] is True
@@ -253,8 +267,8 @@ def test_scheduler_ack_current_replays_host_binding_after_update(
     assert ack["scheduler_state_mutated"] is True
     assert ack["already_applied"] is False
 
-    settled = _quota(registry_path, runtime_root, project)
-    settled_app = settled["scheduler_hint"]["codex_app"]
+    settled = _quota(registry_path, runtime_root, project, cli_bin=cli_bin)
+    settled_app = settled["scheduler_hint"]["app_automation"]
     assert settled_app["stateful_backoff"]["apply_needed"] is False
     assert settled_app["stateful_backoff"]["ack_needed"] is False
     assert settled_app["host_action"] == "none"
@@ -271,7 +285,7 @@ def test_scheduler_ack_current_rejects_claim_before_matching_host_readback(
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setenv("CODEX_THREAD_ID", "fixture-thread")
     _write_heartbeat_rrule(codex_home, "FREQ=MINUTELY;INTERVAL=3")
-    app = _quota(registry_path, runtime_root, project)["scheduler_hint"]["codex_app"]
+    app = _quota(registry_path, runtime_root, project)["scheduler_hint"]["app_automation"]
     if host_missing:
         (codex_home / "automations/fixture/automation.toml").unlink()
 
@@ -300,7 +314,7 @@ def test_scheduler_ack_current_resets_stale_identity_from_matching_host(
     _write_heartbeat_rrule(codex_home, "FREQ=MINUTELY;INTERVAL=3")
 
     first = _quota(registry_path, runtime_root, project)
-    first_app = first["scheduler_hint"]["codex_app"]
+    first_app = first["scheduler_hint"]["app_automation"]
     target_rrule = first_app["recommended_rrule"]
     _write_heartbeat_rrule(codex_home, target_rrule)
     stale_state = build_scheduler_state(
@@ -322,7 +336,7 @@ def test_scheduler_ack_current_resets_stale_identity_from_matching_host(
     )
 
     reset = _quota(registry_path, runtime_root, project)
-    reset_app = reset["scheduler_hint"]["codex_app"]
+    reset_app = reset["scheduler_hint"]["app_automation"]
     reset_backoff = reset_app["stateful_backoff"]
     assert reset_backoff["state_status"] == "reset_required"
     assert reset_backoff["apply_needed"] is False
@@ -341,7 +355,7 @@ def test_scheduler_ack_current_resets_stale_identity_from_matching_host(
     )
 
     settled = _quota(registry_path, runtime_root, project)
-    settled_backoff = settled["scheduler_hint"]["codex_app"][
+    settled_backoff = settled["scheduler_hint"]["app_automation"][
         "stateful_backoff"
     ]
     assert settled_backoff["state_status"] == "same_identity"
@@ -355,7 +369,7 @@ def test_quota_should_run_ignores_cross_agent_scheduler_state(tmp_path: Path) ->
         scoped_agents=True,
     )
     first = _quota(registry_path, runtime_root, project)
-    first_rrule = first["scheduler_hint"]["codex_app"]["recommended_rrule"]
+    first_rrule = first["scheduler_hint"]["app_automation"]["recommended_rrule"]
     ack = run_json_cli(
         "quota",
         "scheduler-ack",
@@ -380,7 +394,7 @@ def test_quota_should_run_ignores_cross_agent_scheduler_state(tmp_path: Path) ->
     )
 
     repaired = _quota(registry_path, runtime_root, project)
-    app = repaired["scheduler_hint"]["codex_app"]
+    app = repaired["scheduler_hint"]["app_automation"]
     assert app["recommended_rrule"] == first_rrule
     assert app["stateful_backoff"]["state_status"] == "missing"
     assert app["stateful_backoff"]["apply_needed"] is True
@@ -426,6 +440,134 @@ def test_scheduler_fail_current_rejects_missing_turn_receipt_without_state_write
     assert payload["scheduler_state_mutated"] is False
     assert payload["quota_spend_performed"] is False
     assert not state_path.exists()
+
+
+def _scheduler_state_files(runtime_root: Path) -> list[Path]:
+    return [
+        path
+        for goal_dir in sorted((runtime_root / "goals").glob(f"{GOAL_ID}*"))
+        for path in sorted((goal_dir / "scheduler-state").rglob("*.json"))
+    ]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("operation", ["scheduler-ack-current", "scheduler-fail-current"])
+def test_scheduler_followup_gates_state_migration(
+    tmp_path: Path, provider: str, operation: str,
+) -> None:
+    registry_path, runtime_root, project = write_cli_fixture(
+        tmp_path / "fixture", scoped_agents=True, provider=provider,
+    )
+
+    def call(command: str, turn: str, *flags: str):
+        return run_json_cli_result(
+            "quota", command, "--goal-id", GOAL_ID, "--agent-id", SCOPED_AGENT_ID,
+            "--codex-app", "--app-automation-current-rrule", "FREQ=MINUTELY;INTERVAL=5",
+            "--turn-instance-id", turn, *flags,
+            registry_path=registry_path, runtime_root=runtime_root, cwd=project,
+        )
+
+    stale, current = "heartbeat-older", "heartbeat-current"
+    for turn in (stale, current):
+        rc, guard = call("should-run", turn)
+        assert rc == 0 and guard["ok"] is True
+        assert guard["heartbeat_receipt"]["turn_instance_id"] == turn
+    app = guard["scheduler_hint"]["app_automation"]
+    key = APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
+    flags = ["--state-key", key]
+    if operation == "scheduler-fail-current":
+        flags.extend(["--failed-rrule", app["recommended_rrule"]])
+
+    def reject_stale(*execution: str) -> None:
+        rc, payload = call(operation, stale, *flags, *execution)
+        assert rc == 1 and payload["ok"] is False
+        assert payload["status"] == "heartbeat_receipt_stale"
+        assert payload["state"] == "blocked_receipt"
+        assert payload["error_code"] == "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE"
+        assert payload["write_performed"] is False
+        assert payload["scheduler_state_mutated"] is False
+        assert payload["quota_spend_performed"] is False
+
+    reject_stale("--execute")
+    assert _scheduler_state_files(runtime_root) == []
+
+    canonical = scheduler_state_path(
+        runtime_root, goal_id=GOAL_ID, agent_id=SCOPED_AGENT_ID, state_key=key,
+    )
+    legacy = (
+        runtime_root / "goals" / GOAL_ID / "scheduler-state"
+        / SCOPED_AGENT_ID / "codex_app" / canonical.name
+    )
+    assert legacy != canonical
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(json.dumps(build_scheduler_state(
+        goal_id=GOAL_ID, agent_id=SCOPED_AGENT_ID, state_key=key,
+        reset_token="earlier-upgrade", identity_signature="earlier-host",
+        progression_index=0, progression_minutes=[3, 10, 30],
+        last_applied_rrule="FREQ=MINUTELY;INTERVAL=5",
+        updated_at="2026-01-01T00:00:00Z",
+    )), encoding="utf-8")
+    original = legacy.read_bytes()
+
+    for execution in ([], ["--execute"]):
+        reject_stale(*execution)
+        assert legacy.read_bytes() == original
+        assert not canonical.exists()
+    rc, preview = call(operation, current, *flags)
+    assert rc == 0 and preview["ok"] is True
+    assert legacy.read_bytes() == original and not canonical.exists()
+
+    rc, committed = call(operation, current, *flags, "--execute")
+    assert rc == 0 and committed["ok"] is True
+    assert committed["scheduler_state_mutated"] is True
+    assert canonical.exists() and not legacy.exists()
+
+
+def test_scheduler_ack_current_routes_the_newest_turn_receipt(
+    tmp_path: Path,
+) -> None:
+    registry_path, runtime_root, project = write_cli_fixture(
+        tmp_path / "fixture",
+        scoped_agents=True,
+    )
+
+    seeded_rc, seeded = run_json_cli_result(
+        "quota",
+        "should-run",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--codex-app",
+        "--turn-instance-id",
+        "heartbeat-newest",
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    assert seeded_rc == 0
+    assert seeded["ok"] is True
+
+    returncode, payload = run_json_cli_result(
+        "quota",
+        "scheduler-ack-current",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--codex-app",
+        "--turn-instance-id",
+        "heartbeat-newest",
+        "--execute",
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+
+    assert returncode == 0
+    assert payload["ok"] is True
+    assert payload["scheduler_state_mutated"] is True
+    assert Path(payload["scheduler_state_path"]).exists()
 
 
 def test_trae_app_scheduler_failure_does_not_read_codex_automation_store(
@@ -568,8 +710,6 @@ def test_scheduler_ack_collects_the_periodic_should_run_lookback(
         use_current_hint=False,
         dry_run=False,
         execute=False,
-        scan_root=".",
-        scan_path=[],
         limit=5,
         format="json",
     )

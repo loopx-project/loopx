@@ -1,6 +1,7 @@
 """Ordinary CI covers policy/transport; no test here invokes a model."""
 
 import asyncio
+from copy import deepcopy
 import importlib.util
 import json
 import os
@@ -163,8 +164,15 @@ def test_real_claude_stdio_mcp_binding_and_identity_gate(tmp_path):
                 payload = json.loads(guard.content[0].text)
                 assert payload["ok"] is True and payload["selected_todo"]["todo_id"] == "todo_reducer"
                 contract = payload["interaction_contract"]
-                assert contract["cli_channel"]["next_cli_actions"] == []
+                channel = contract["cli_channel"]
+                assert channel["turn_binding_required"] is True
+                assert payload["normal_delivery_allowed"] is False
+                action, = channel["next_cli_actions"]
+                argv = shlex.split(action)
+                assert argv[argv.index("quota"):][:2] == ["quota", "should-run"]
+                assert argv[argv.index("--turn-instance-id") + 1] == "<unique-work-iteration-id-reuse-on-retry>"
                 assert contract["mcp_channel"]["delivery_executor"] == "complete_task"
+                assert contract["mcp_channel"]["delivery_todo_id"] is None
                 assert contract["mcp_channel"]["vision_authoring"]["fields"]["vision_patch"]["acceptance_summary"] == 420
                 rejected = await session.call_tool("claim_task", {"todo_id": "todo_reducer", "agent_id": "other-agent"})
                 assert json.loads(rejected.content[0].text)["ok"] is False
@@ -253,12 +261,29 @@ def test_replan_fixture_reentry_executes_bound_vision_settlement_once(tmp_path):
     assert "--progress-result-class" not in refresh_action
     assert "--source visible-goal" in spend_action
 
+    stride = deepcopy(bound["replan_action_packet"]["stride_control"]["minimal_example"])
+    stride["axes"] = {
+        "work_slice": {"plan": "Verify the listed files against the integrity acceptance.",
+                       "reason": "The original inventory established filenames."},
+        "route_distance": {"plan": "Extend the existing inventory route with byte-level verification.",
+                           "reason": "The verified asset list is a valid starting point."},
+        "validation_scope": {"plan": "Run an independent verifier against modified and intact copies.",
+                             "reason": "An unchanged copy alone cannot reveal a permissive verifier."},
+    }
+    stride["next_probe"] = {
+        "scope": "Run the verifier on the isolated manifest fixtures.",
+        "prediction": "The intact fixture passes and changed copies fail.",
+        "adoption_criterion": "Adopt the verifier when it distinguishes the intact and modified inputs.",
+        "cost_bound": "One run per frozen fixture.",
+        "minimum_evidence": "Original and contrary-case verifier results.",
+    }
     vision_path = project / "next-vision.json"
     vision_path.write_text(
         json.dumps(
             {
                 "schema_version": "goal_vision_replan_contract_v0",
                 "state": "vision_patch_proposed",
+                "stride_decision": stride,
                 "vision_patch": {
                     "vision_summary": "Verify asset contents and deliver a durable integrity manifest.",
                     "role_scope": "Implement and independently validate the bounded manifest integrity stage.",

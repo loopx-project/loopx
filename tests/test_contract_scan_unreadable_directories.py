@@ -65,7 +65,7 @@ def test_scan_records_directory_it_cannot_list(tmp_path: Path) -> None:
     assert boundary["unreadable_directories"] == ["notes: Permission denied"]
     assert boundary["unreadable_files"] == []
     assert boundary["hits"] == []
-    assert boundary["ok"] is True
+    assert boundary["ok"] is False
     assert boundary["scanned_files"] == 1
 
 
@@ -129,7 +129,7 @@ def test_check_contract_fails_closed_on_unreadable_directory(tmp_path: Path) -> 
     assert contract["public_boundary_scan"]["unreadable_directories"] == [
         "notes: Permission denied"
     ]
-    assert contract["public_boundary_scan"]["ok"] is True
+    assert contract["public_boundary_scan"]["ok"] is False
 
 
 def test_readable_tree_records_no_unreadable_directory(tmp_path: Path) -> None:
@@ -259,7 +259,7 @@ def test_walk_listing_failure_fails_the_scan_on_every_host(
 
     assert boundary["unreadable_directories"] == ["notes: Permission denied"]
     assert boundary["unreadable_files"] == []
-    assert boundary["ok"] is True
+    assert boundary["ok"] is False
 
 
 def test_check_contract_fails_closed_on_a_walk_listing_failure(

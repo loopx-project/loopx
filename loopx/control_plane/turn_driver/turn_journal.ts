@@ -1,3 +1,4 @@
+import { normalizeHostFailure, hostFailureRetryCheck } from "./host_failure.ts";
 import transactionContract from "../turn_transaction_contract.json" with {
   type: "json",
 };
@@ -15,6 +16,8 @@ import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import { preparedAttemptViolation } from "./turn_journal_attempt_contract.ts";
 import { recordedTurnEffects, type RecordedTurnEffects } from "./turn_journal_effect_readback.ts";
 import { selectedWorkTodoId } from "../work_items/interaction_contract.ts";
+import { turnPlanWorkSource, turnEnvelopeScopedSettlementIdentity } from "../quota/turn_envelope.ts";
+import { sourceNumberTokens } from "../runtime_decode.ts";
 
 export const TURN_JOURNAL_INSPECTION_SCHEMA_VERSION =
   "loopx_turn_journal_inspection_v1";
@@ -45,6 +48,7 @@ export interface TurnJournalInspectionRequest {
   turn_key: string;
   retry_failed?: boolean;
   session_recovery_check?: TurnRecoveryCheck | null;
+  source_number_tokens?: unknown;
 }
 
 export interface TurnRecoveryCheck {
@@ -159,29 +163,6 @@ export function journalPhaseViolation(
   return null;
 }
 
-const hostFailureKinds: ReadonlySet<string> = new Set([
-  "auth_failed",
-  "contract_rejected",
-  "executor_timeout",
-  "output_budget_exhausted",
-  "provider_capacity",
-  "provider_overloaded",
-  "quota_exhausted",
-  "rate_limited",
-  "session_missing",
-  "transport_lost",
-  "unknown",
-]);
-const hostRetryPolicies: Readonly<Record<string, {
-  maxAttempts: number;
-  baseBackoffSeconds: number;
-}>> = Object.freeze({
-  executor_timeout: { maxAttempts: 2, baseBackoffSeconds: 5 },
-  provider_capacity: { maxAttempts: 3, baseBackoffSeconds: 30 },
-  provider_overloaded: { maxAttempts: 3, baseBackoffSeconds: 30 },
-  rate_limited: { maxAttempts: 3, baseBackoffSeconds: 60 },
-  transport_lost: { maxAttempts: 3, baseBackoffSeconds: 10 },
-});
 
 function asObject(value: unknown): JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -245,6 +226,7 @@ function typedSettlementIdentityState(
   transaction: JsonObject,
   settlement: JsonObject,
   identity: JsonObject,
+  scopedIdentity?: JsonObject | null,
 ): [valid: boolean, turnInstanceMatches: boolean, bindingMatches: boolean] {
   if (
     settlement.schema_version !== SETTLEMENT_PLAN_SCHEMA_VERSION ||
@@ -266,14 +248,22 @@ function typedSettlementIdentityState(
     selected_todo: asObject(envelope.action).selected_todo,
     task_orchestration_contract: envelope.task_orchestration_contract,
   });
+  let bindingMatches = selectedTodoId !== null && parsed.value.binding_kind === "todo"
+    && parsed.value.todo_id === selectedTodoId && parsed.value.binding_id === selectedTodoId;
+  if (selectedTodoId === null && ["autonomous_replan", "request"].includes(parsed.value.binding_kind)) {
+    try {
+      bindingMatches = (scopedIdentity === undefined
+        ? turnEnvelopeScopedSettlementIdentity(envelope, expectedTurnInstance) : scopedIdentity)?.effect_id
+        === parsed.value.effect_id;
+    } catch {
+      bindingMatches = false; // Corrupt evidence remains a refusal, never a surrogate task.
+    }
+  }
   return [
     true,
     isValidIdentity(expectedTurnInstance) &&
       parsed.value.turn_instance_id === expectedTurnInstance,
-    selectedTodoId !== null &&
-      parsed.value.binding_kind === "todo" &&
-      parsed.value.todo_id === selectedTodoId &&
-      parsed.value.binding_id === selectedTodoId,
+    bindingMatches,
   ];
 }
 
@@ -332,78 +322,18 @@ function preparedEffectCheck(
   };
 }
 
-function hasExactKeys(value: JsonObject, expected: readonly string[]): boolean {
-  const actual = Object.keys(value);
-  return actual.length === expected.length &&
-    expected.every((key) => Object.hasOwn(value, key));
-}
-
 function hostRetryPolicyCheck(journal: JsonObject): TurnRecoveryCheck | null {
   if (!Object.hasOwn(journal, "host_failure")) return null;
-  const failure = asObject(journal.host_failure);
-  const retry = asObject(failure.retry);
+  let failure: JsonObject;
+  try { failure = normalizeHostFailure(journal.host_failure); }
+  catch (error) {
+    if (!(error instanceof EffectRuntimeRequestError)) throw error;
+    return {kind: "host_retry_policy", outcome: "failed", reason: "host_retry_contract_invalid"};
+  }
   const attempt = failure.attempt;
-  const hostAttemptCount = journal.host_attempt_count;
-  const retryable = failure.retryable;
-  const kind = typeof failure.kind === "string" ? failure.kind : "";
-  const policy = hostRetryPolicies[kind];
-  const expectedRetryable = policy !== undefined;
-  const expectedBackoff = policy && Number.isInteger(attempt)
-    ? Math.min(policy.baseBackoffSeconds * (2 ** Math.max(0, Number(attempt) - 1)), 300)
-    : null;
-  const failureFieldsValid = hasExactKeys(
-    failure,
-    expectedRetryable
-      ? ["schema_version", "kind", "attempt", "retryable", "retry"]
-      : ["schema_version", "kind", "attempt", "retryable"],
-  );
-  const contractValid =
-    failureFieldsValid &&
-    failure.schema_version === "loopx_turn_host_failure_v0" &&
-    hostFailureKinds.has(kind) &&
-    Number.isInteger(attempt) &&
-    Number(attempt) >= 1 &&
-    hostAttemptCount === attempt &&
-    typeof retryable === "boolean" &&
-    retryable === expectedRetryable &&
-    (
-      retryable === false
-        ? !Object.hasOwn(failure, "retry")
-        : hasExactKeys(
-          retry,
-          ["strategy", "max_attempts", "backoff_seconds"],
-        ) &&
-          retry.strategy === "same_configuration" &&
-          retry.max_attempts === policy?.maxAttempts &&
-          retry.backoff_seconds === expectedBackoff
-    );
-  if (!contractValid) {
-    return {
-      kind: "host_retry_policy",
-      outcome: "failed",
-      reason: "host_retry_contract_invalid",
-    };
-  }
-  if (retryable === true && Number(attempt) >= Number(retry.max_attempts)) {
-    return {
-      kind: "host_retry_policy",
-      outcome: "failed",
-      reason: "host_retry_budget_exhausted",
-    };
-  }
-  if (retryable === true) {
-    return { kind: "host_retry_policy", outcome: "passed" };
-  }
-  // A max-token terminal has no proved whole-Turn remaining budget or
-  // final-response reserve. Unlike legacy explicitly retried terminal errors,
-  // repeating it would be a blind rerun of an expensive request.
-  return kind === "output_budget_exhausted"
-    ? {
-        kind: "host_retry_policy",
-        outcome: "failed",
-        reason: "host_retry_not_available",
-      }
-    : null;
+  if (journal.host_attempt_count !== attempt)
+    return {kind: "host_retry_policy", outcome: "failed", reason: "host_retry_contract_invalid"};
+  return hostFailureRetryCheck(failure, true) as TurnRecoveryCheck | null;
 }
 
 function recoveryDecision(
@@ -445,6 +375,18 @@ function recoveryDecision(
   }
 
   const resumeFrom = recoveryResumePhase(journal, completedPhases, journalStatus);
+  // A durable dispatch intent without its result cannot prove non-execution.
+  if (journalStatus === "in_progress" && completedPhases.length < 2
+    && journal.host_attempt_count !== 0) {
+    return {
+      ...base,
+      action: "blocked",
+      can_continue: false,
+      resume_from: resumeFrom,
+      reinvoke_host: false,
+      reason: "host_outcome_unknown",
+    };
+  }
   if (journalStatus === "failed" && !retryFailed) {
     return {
       ...base,
@@ -604,7 +546,23 @@ export function interpretTurnJournalEffect(
   }
   const journal = asObject(request.journal);
   const plan = asObject(journal.plan);
-  const envelope = asObject(plan.turn_envelope);
+  let envelope = asObject(plan.turn_envelope);
+  let workContractValid = true;
+  let scopedIdentity: JsonObject | null | undefined;
+  try {
+      const tokens = sourceNumberTokens(journal, request.source_number_tokens)
+        .filter(({path}) => path[0] === "plan" && path[1] === "work_contract")
+        .map(({path, token}) => [path.slice(2), token]);
+      // Current journals consume the same checked source as Host dispatch.
+      // Keep transport/signature metadata, but derive execution fields from
+      // its owner. Only historical absence retains adapter-only decoding.
+      const checked = turnPlanWorkSource(plan, tokens);
+      envelope = checked.work;
+      scopedIdentity = checked.scopedIdentity;
+  } catch (error) {
+    if (!(error instanceof EffectRuntimeRequestError)) throw error;
+    workContractValid = false;
+  }
   const transaction = asObject(plan.transaction);
   const settlement = asObject(transaction.settlement_plan);
   const identity = asObject(settlement.identity);
@@ -634,9 +592,10 @@ export function interpretTurnJournalEffect(
     settlementIdentityValid,
     settlementTurnInstanceMatches,
     settlementBindingMatches,
-  ] = typedSettlementIdentityState(envelope, transaction, settlement, identity);
+  ] = typedSettlementIdentityState(envelope, transaction, settlement, identity, scopedIdentity);
 
   const violations: string[] = [];
+  if (!workContractValid) violations.push("work_contract_invalid");
   if (!goalComplete) violations.push("goal_identity_missing");
   else if (!goalMatches) violations.push("goal_mismatch");
   if (goalBinding.kind === "invalid") {
@@ -689,6 +648,7 @@ export function interpretTurnJournalEffect(
   }
 
   const lineageConsistent =
+    workContractValid &&
     goalMatches &&
     goalBinding.kind !== "invalid" &&
     (

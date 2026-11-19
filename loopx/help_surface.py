@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import re
+from collections.abc import Collection
 from typing import Any
 
 from . import __version__
@@ -12,7 +13,7 @@ from .cli_runtime import (
 HELP_FLAGS = {"-h", "--help"}
 
 
-def register_command_reference(subparsers: argparse._SubParsersAction) -> None:
+def register_command_reference(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = subparsers.add_parser(
         "commands",
         help="Show grouped LoopX command reference for operators and contributors.",
@@ -83,6 +84,13 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "purpose": "Start the local dashboard, status service, and Agent Chat service with one command.",
             },
             {
+                "command": "loopx dsh-launch [dsh args...]",
+                "purpose": (
+                    "Launch DeepSeek Harness with this machine's stored provider "
+                    "credential and no secret in argv or output."
+                ),
+            },
+            {
                 "command": "loopx chat --goal-id <goal-id>",
                 "purpose": "Open Goal Studio, ask the read-only Agent for a bounded Todo, and approve its preview before writeback.",
             },
@@ -127,10 +135,6 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "purpose": "Preview an explicit local-state path migration or receipt-bound rollback; stop writers before execution.",
             },
             {"command": "loopx todo --help", "purpose": "Show todo lifecycle commands."},
-            {
-                "command": "loopx task-lease --help",
-                "purpose": "Acquire, renew, transfer, release, or inspect a hard per-todo lease.",
-            },
             {
                 "command": "loopx coordination-shadow --help",
                 "purpose": "Inspect, bootstrap, or revision-fenced rollback the default-off Stage 2C file shadow.",
@@ -214,14 +218,6 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "command": "loopx codex-cli-bootstrap-message",
                 "purpose": "Generate the visible Codex CLI TUI setup message.",
             },
-            {
-                "command": "loopx codex-cli-tui-bootstrap-smoke-bundle",
-                "purpose": "Generate a transcript-free Codex CLI first-run smoke bundle.",
-            },
-            {
-                "command": "loopx codex-cli-visible-attach-acceptance",
-                "purpose": "Check public-safe visible Codex CLI attach evidence.",
-            },
             {"command": "loopx heartbeat-prompt", "purpose": "Generate a guarded heartbeat automation body."},
             {
                 "command": "loopx supervisor-prompt",
@@ -237,8 +233,11 @@ COMMAND_GROUPS: list[dict[str, object]] = [
             },
             {"command": "loopx upgrade-plan", "purpose": "Plan default heartbeat upgrade propagation."},
             {
-                "command": "loopx update [check|plan|apply]",
-                "purpose": "Inspect installation ownership, then explicitly apply archive updates.",
+                "command": "loopx update [check|plan|apply] / loopx upgrade",
+                "purpose": (
+                    "Inspect installation ownership, then explicitly apply archive updates, "
+                    "or run one command that upgrades the CLI and the installed macOS App."
+                ),
             },
             {
                 "command": "loopx project-skill --help",
@@ -253,6 +252,10 @@ COMMAND_GROUPS: list[dict[str, object]] = [
     {
         "title": "Maintainer and adapter commands",
         "commands": [
+            {
+                "command": "loopx task-lease --help",
+                "purpose": "Host/adapter execution ownership protocol; ordinary task work uses todo claim and update.",
+            },
             {"command": "loopx check", "purpose": "Run contract and public/private boundary checks."},
             {
                 "command": "loopx change-quality --help",
@@ -315,7 +318,6 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "command": "loopx periodic-report",
                 "purpose": "Resolve a portable weekly profile, evaluate report triggers, and compose provider-neutral run receipts.",
             },
-            {"command": "loopx auto-research", "purpose": "Project public-safe research frontiers."},
             {
                 "command": "loopx deepresearch",
                 "purpose": "Run a bounded, citation-auditable research ledger and report workflow.",
@@ -324,7 +326,6 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "command": "loopx agent-turn-recall",
                 "purpose": "Prepare goal-scoped memory guidance for one admitted autonomous agent turn.",
             },
-            {"command": "loopx multi-agent", "purpose": "Launch visible role-scoped Codex TUI agents."},
             {"command": "loopx canary", "purpose": "Plan or run catalog-informed smoke profiles."},
             {
                 "command": "loopx performance-diagnosis --help",
@@ -358,6 +359,7 @@ COMMAND_GROUPS: list[dict[str, object]] = [
 MANPAGE_COMMAND_HELP_ONLY = frozenset(
     {
         "agent-context",
+        "anti-entropy",
         "archive-runtime",
         "automation-prompts",
         "automation-cadence",
@@ -367,19 +369,6 @@ MANPAGE_COMMAND_HELP_ONLY = frozenset(
         "capability",
         "chat-endpoint",
         "checkpoint-context",
-        "codex-cli-bounded-visible-pilot-adapter",
-        "codex-cli-exec-handoff",
-        "codex-cli-local-driver-plan",
-        "codex-cli-local-scheduler-exec",
-        "codex-cli-local-scheduler-tick",
-        "codex-cli-one-message-loop-pilot",
-        "codex-cli-runtime-idle-detector",
-        "codex-cli-session-probe",
-        "codex-cli-visible-driver-plan",
-        "codex-cli-visible-driver-run",
-        "codex-cli-visible-first-response-capture-plan",
-        "codex-cli-visible-local-driver-pilot",
-        "codex-cli-visible-session-proof",
         "configure-goal",
         "configuration-backup",
         "delegation",
@@ -406,6 +395,7 @@ MANPAGE_COMMAND_HELP_ONLY = frozenset(
         "ml-experiment",
         "opencode2-goal-worker",
         "operator-gate",
+        "postgres",
         "pr-review",
         "promotion-gate",
         "read-only-map",
@@ -471,8 +461,28 @@ def top_level_help_requested(argv: list[str]) -> bool:
     return True
 
 
-def render_concise_help(program: str = "loopx") -> str:
+def render_concise_help(program: str = "loopx", *, standalone_core: bool = False) -> str:
     program = _program_name(program)
+    if standalone_core:
+        return "\n".join([
+            "LoopX keeps long-running agent work moving with durable state and evidence.",
+            "", "Usage:", f"  {program} [global options] <command> [command options]",
+            "", "Start:",
+            '  loopx start-goal --guided --project . --goal-text "<goal>"',
+            "                                Start from a goal with your existing model host.",
+            "  loopx connect --help           Connect a project and its objective.",
+            "  loopx configure-goal --help    Configure its Agent and execution budget.",
+            "  loopx todo --help              Create, claim and complete work.",
+            "", "Execute and recover:",
+            "  loopx turn run-once --help     Execute one task with a selected host and validation.",
+            "  loopx turn inspect-journal --help",
+            "                                Inspect an original attempt before resuming it.",
+            "  loopx status                   Read current work and its next action.",
+            "  loopx doctor --installation-only",
+            "                                Check this installation.",
+            "", "Global options: --registry PATH   --runtime-root PATH   --format markdown|json   --cli-bin PROGRAM",
+            "More: loopx commands; loopx <command> --help", "",
+        ])
     return "\n".join(
         [
             "LoopX keeps long-running agent work moving with durable state and evidence.",
@@ -494,7 +504,6 @@ def render_concise_help(program: str = "loopx") -> str:
             "  loopx status                   Show current goals, gates, and next action.",
             "  loopx diagnose --goal-id ID    Build a compact evidence packet.",
             "  loopx todo --help              Add, claim, complete, update, or archive todos.",
-            "  loopx task-lease --help        Manage a hard per-todo lease.",
             "  loopx coordination-shadow --help",
             "                                  Inspect, bootstrap, or roll back the default-off file shadow.",
             "  loopx quota should-run         Decide whether the next agent turn should run.",
@@ -507,7 +516,7 @@ def render_concise_help(program: str = "loopx") -> str:
             "  KunlunCode     run loopx-kunluncode connect, then loopx-kunluncode run.",
             "  Other agents   need a CLI/task/automation/loop hook, or run LoopX manually.",
             "",
-            "Global options: --registry PATH   --runtime-root PATH   --format markdown|json",
+            "Global options: --registry PATH   --runtime-root PATH   --format markdown|json   --cli-bin PROGRAM",
             "More:",
             "  loopx commands                 Show grouped command reference.",
             "  loopx <command> --help         Show flags for one command.",
@@ -516,17 +525,38 @@ def render_concise_help(program: str = "loopx") -> str:
     )
 
 
-def build_command_reference_payload() -> dict[str, Any]:
+def build_command_reference_payload(*, available_commands: Collection[str] | None = None) -> dict[str, Any]:
+    groups = COMMAND_GROUPS
+    more = ["loopx <command> --help", "man loopx", "docs/guides/getting-started.md#command-reference"]
+    if available_commands is not None:
+        # Filter display entries against the actual dispatcher, without loading
+        # omitted registrars. This is discovery, never execution admission.
+        groups = []
+        for group in COMMAND_GROUPS:
+            entries = group.get("commands")
+            if not isinstance(entries, list):
+                continue
+            commands = []
+            for entry in entries:
+                if not isinstance(entry, dict) or not isinstance(entry.get("command"), str):
+                    continue
+                match = re.match(r"loopx ([a-z0-9-]+)(?: |$)", entry["command"])
+                if match and match[1] in available_commands:
+                    commands.append(entry)
+            if commands:
+                groups.append({**group, "commands": commands})
+        remaining = set(available_commands) - manpage_top_level_commands()
+        if remaining:
+            groups.append({"title": "Command-specific help", "commands": [
+                {"command": f"loopx {name} --help", "purpose": "Show available command options."}
+                for name in sorted(remaining)]})
+        more = ["loopx <command> --help"]
     return {
         "ok": True,
         "schema_version": "loopx_command_reference_v0",
         "summary": "Grouped LoopX command reference for operators and contributors.",
-        "groups": COMMAND_GROUPS,
-        "more": [
-            "loopx <command> --help",
-            "man loopx",
-            "docs/guides/getting-started.md#command-reference",
-        ],
+        "groups": groups,
+        "more": more,
     }
 
 
@@ -537,13 +567,17 @@ def render_command_reference_markdown(payload: dict[str, Any]) -> str:
         str(payload.get("summary") or ""),
         "",
     ]
-    groups = payload.get("groups") if isinstance(payload.get("groups"), list) else []
+    groups = payload.get("groups")
+    if not isinstance(groups, list):
+        groups = []
     for group in groups:
         if not isinstance(group, dict):
             continue
         title = str(group.get("title") or "Commands")
         lines.extend([f"## {title}", ""])
-        commands = group.get("commands") if isinstance(group.get("commands"), list) else []
+        commands = group.get("commands")
+        if not isinstance(commands, list):
+            commands = []
         for command in commands:
             if not isinstance(command, dict):
                 continue
@@ -581,6 +615,7 @@ def render_manpage(*, version: str = __version__) -> str:
         r"[\fB\-\-registry\fR \fIPATH\fR]",
         r"[\fB\-\-runtime\-root\fR \fIPATH\fR]",
         r"[\fB\-\-format\fR \fImarkdown|json\fR]",
+        r"[\fB\-\-cli\-bin\fR \fIPROGRAM\fR]",
         r"\fICOMMAND\fR",
         r"[\fIARGS\fR]",
         ".br",

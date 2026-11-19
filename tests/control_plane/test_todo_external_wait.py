@@ -40,6 +40,7 @@ def _write_fixture(
     root: Path,
     *,
     dependency: bool = False,
+    provider: str = "file",
 ) -> tuple[Path, Path, Path]:
     project = root / "project"
     runtime = root / "runtime"
@@ -96,6 +97,7 @@ def _write_fixture(
             handoff_mode="soft_claim",
         ),
         state_path=state_file,
+        provider=provider,
     )
     return registry, runtime, state_file
 
@@ -241,6 +243,38 @@ def test_monitor_wait_diagnoses_status_and_successor_faults_separately(
             dry_run=True,
         )
     assert successor_error.value.code == "external_wait_successor_required"
+
+    update_goal_todo(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        todo_id=WAITING_ID,
+        resume_when=f"monitor_changed:{MONITOR_ID}@Case-B/Run-2",
+        successor_todo_ids=[FALLBACK_ID],
+        agent_id=AGENT_ID,
+    )
+    with pytest.raises(TodoExternalWaitAuthoringError) as persisted_scope_error:
+        update_goal_todo(
+            registry_path=registry,
+            goal_id=GOAL_ID,
+            todo_id=WAITING_ID,
+            status="blocked",
+            note="Cannot block a monitor-backed open wait",
+            agent_id=AGENT_ID,
+            dry_run=True,
+        )
+    assert persisted_scope_error.value.code == "external_wait_todo_status_must_remain_open"
+    assert persisted_scope_error.value.authoring_contract["waiting_todo"][
+        "resume_when"
+    ] == f"monitor_changed:{MONITOR_ID}@case-b/run-2"
+    assert persisted_scope_error.value.authoring_contract["material_change"][
+        "material_change_scope"
+    ] == "case-b/run-2"
+    assert (
+        "--material-change-scope"
+        in persisted_scope_error.value.authoring_contract["material_change"][
+            "required_args"
+        ]
+    )
 
 
 def test_todo_cli_projects_external_wait_repair_contract(tmp_path: Path) -> None:

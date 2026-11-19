@@ -115,9 +115,7 @@ def test_oracle_http_owner_journey_uses_same_real_authority(acceptance_goal):
 
     try:
         status, before = request()
-        assert status == 200 and before["goal_acceptance_contract"] == {
-            "enabled": False
-        }
+        assert status == 200 and before["goal_acceptance_contract"] == {}
         checker = project / "check.py"
         checker.write_text(
             "from pathlib import Path\nassert Path('artifact.txt').read_text() == 'accepted'\n"
@@ -197,10 +195,8 @@ def test_oracle_http_owner_journey_uses_same_real_authority(acceptance_goal):
                 "operation_id": "http-disable",
             }
         )
-        assert status == 200 and disabled["goal_acceptance_contract"] == {
-            "enabled": False
-        }
-        assert cli("inspect")[1]["goal_acceptance_contract"] == {"enabled": False}
+        assert status == 200 and disabled["goal_acceptance_contract"] == {}
+        assert cli("inspect")[1]["goal_acceptance_contract"] == {}
     finally:
         server.shutdown()
         server.server_close()

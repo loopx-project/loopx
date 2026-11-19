@@ -10,8 +10,8 @@ and size/count budgets.
 | --- | --- | --- | --- | --- | --- | --- |
 | `heartbeat_prompt_json` | heartbeat automation | wake and route one bounded turn | `quota should-run`, `status`, or `review-packet --handoff-only` | `json_chars <= 5400` plus `interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 30` |
 | `review_packet_handoff_only_json` | project-agent handoff | forward the smallest sufficient task packet | full `review-packet` or run-history artifact | `json_chars <= 3000` plus `handoff_interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 18` |
-| `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 20500` | `nested_keys <= 525` | `top_level_keys <= 54` |
-| `dashboard_status_json` | operator dashboard | render first-screen operator state | `history`, run artifacts, or project-local adapter output | `json_chars <= 24000` | `nested_keys <= 350` | `top_level_keys <= 27` |
+| `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 21000` | `nested_keys <= 575` | `top_level_keys <= 55` |
+| `dashboard_status_json` | operator dashboard | render first-screen operator state | `history`, run artifacts, or project-local adapter output | `json_chars <= 25000` | `nested_keys <= 350` | `top_level_keys <= 27` |
 
 These four budgets measure compact machine payloads. For
 `heartbeat_prompt_json`, the measured payload is the actual
@@ -23,7 +23,7 @@ indentation and Markdown wrappers can make emitted output materially larger;
 the emitted-output qualification matrix below measures that separate boundary
 through the real CLI entry point.
 
-The current quota fixture measures 15,419 characters, 378 nested keys, and 52
+The earlier projection-envelope quota fixture measured 15,419 characters, 378 nested keys, and 52
 top-level keys on `main`. The `quota_should_run` projection envelope raises the
 same workload to 18,636 characters, 513 nested keys, and 53 top-level keys. The
 new keys carry the inherited status sources, direct live-read facts, freshness,
@@ -41,6 +41,49 @@ records the useful contract growth instead of hiding it through compaction.
 嵌套键上限从 386 调至 525，顶层键上限仍为 54。精确 head 仍保留 1,864 字符、
 12 个嵌套键与一个顶层键余量。删除 envelope 行会破坏投影合同，因此这里记录有用的
 合同增长，而不是用压缩隐藏它。
+
+Ordinary reads now require canonical authority, so the smoke explicitly imports
+its disposable fixture through the saved backup/import plan. On the identical
+imported workload, base `0603b49f` and the read-retirement candidate both measure
+20,287 quota characters / 564 nested keys / 54 top-level keys and 24,315 status
+characters / 338 nested keys / 26 top-level keys. This is fixture qualification,
+not candidate payload growth. Retain canonical Task identity, source provenance
+and freshness instead of substituting legacy reads or dropping envelope rows.
+The original 525-key quota and 24,000-character status failures remain recorded;
+their presentation limits become 575 keys and 25,000 characters, leaving 11
+keys and 685 characters. Quota's 54 top-level keys also leave no cadence
+headroom under the earlier ceiling; a 55-key limit retains one key of margin.
+Quota characters, status key counts, fixture population,
+sampling depth and semantic assertions stay unchanged. These limits grant no
+execution authority or change to frozen experiment or promotion criteria.
+
+普通读取现在要求 canonical authority，因此 smoke 通过保存的备份／导入计划显式迁移
+一次性夹具。同一已迁移负载在 base `0603b49f` 与退役候选上完全一致：quota 为
+20,287 字符／564 个嵌套键／54 个顶层键，status 为 24,315 字符／338 个嵌套键／
+26 个顶层键。这是夹具资格补齐，没有候选输出增长。保留 Task 身份、来源与新鲜度，
+不以旧读取或删除 envelope 行代替。原 525 键和 24,000 字符失败记录保留；展示限制
+分别改为 575 键与 25,000 字符，余量为 11 键、685 字符。quota 原 54 个顶层键
+已占满旧限、没有 cadence 余量，改为 55 后保留一个键。quota 字符、status 键数、
+夹具数量、采样深度和语义断言不变；不授予执行权限，也不改变冻结的实验或 promotion 标准。
+
+The standard premerge runner adds an isolation directory around this fixture.
+On base `6a92640346051b79d08fb369354180b613c8fa46` and the budget-only candidate,
+quota measures 20,341 characters directly and 20,509 through the native runner,
+with 565 nested and 54 top-level keys. Eight complete fixture-root references
+each gain the runner's 21-character directory component, accounting for all 168
+additional characters. Preserve the original 20,500-ceiling
+failure. Calibrate only this character regression allowance to 21,000, leaving
+491 characters in the runner; keep the 575/55 structure limits and complete
+source paths. The same quota payload with an oversized reason remains rejected.
+No production payload, execution budget, host hard limit or frozen qualification
+result changes; this is not a compaction or efficiency claim.
+
+标准 premerge 的隔离目录会增长同一夹具的完整路径。上述 base 与仅改预算的候选均为
+直接运行 20,341 字符、原生 runner 20,509 字符，565 个嵌套键及 54 个顶层键；
+8 处完整夹具路径各增加 21 字符，解释全部 168 字符差异。
+保留原 20,500 超限失败，仅将字符回归余量调至 21,000，给 runner 留 491 字符；
+575/55 结构限制、完整来源路径及超长 reason 拒绝继续。生产负载、执行预算、宿主
+硬边界和冻结资格结果均不变，不据此声称压缩或效率提升。
 
 The successful thin heartbeat projection contains only `schema_version`,
 `ok`, `goal_id`, optional `agent_id`, `task_body`, and the compact
@@ -138,7 +181,7 @@ warning and any already-over-budget fixture instead of truncating requirements.
 仅人工诊断输出上限由 5,100 调至 5,250，机器 JSON／正文／行数／执行预算不变。
 重规划指导增加 363 字节，独立指导预算为 1,800；8 KiB 总包告警及原有超限仍保留。
 
-The same qualification also covers emitted `--compact` Markdown, independently
+The historical pause/correction qualification also covered emitted `--compact` Markdown, independently
 of the task-body and thin-output limits. On the unchanged native mode fixture,
 base `3e611660a` emits 11,315 characters and the pause/correction head
 `84e00bac1` emits 11,530, failing the old 11,500 ceiling; both have 145 lines.
@@ -150,7 +193,9 @@ only this Markdown regression ceiling to 11,750, leaving 220 characters of
 headroom (the base had 185) for bounded wording variation. JSON grows from
 12,658 to 12,873 under the unchanged 13,500 ceiling; the 155-line cap, semantic
 anchors, fixture population, growth checks and execution limits remain intact.
-This qualifies readable output size, not installed host behavior or model adoption.
+This qualified readable output size, not installed host behavior or model adoption.
+The current native-host ceilings and matched measurements are recorded in
+[Native fixture qualification](#native-fixture-qualification).
 
 The base/head differential independently detects the same instruction rollout:
 work-context text adds 208 characters (one receipt character may vary), optional
@@ -164,14 +209,15 @@ change. Missing or contradictory observations, already-upgraded bases, other
 surfaces and growth beyond the allowance retain ordinary failure behavior.
 This evidence does not qualify arbitrary future wording or runtime authority.
 
-同一资格化还须独立覆盖 `--compact` 的完整 Markdown 输出：不改原生 mode 夹具时，
+历史暂停／纠偏资格化还独立覆盖了 `--compact` 的完整 Markdown 输出：不改原生 mode 夹具时，
 基线 `3e611660a` 为 11,315 字符，暂停／纠偏头 `84e00bac1` 为 11,530，
 确实超过旧 11,500 上限；两者均为 145 行。新增 215 字符承载当前心跳单次停止、
 结果确认、未确认处理、证据限定的局部纠偏及原结算义务，各自支持不同决定，
 不能作为重复诊断删除。保留全文，仅将该 Markdown 回归上限调至 11,750，
 留 220 字符余量供有界措辞变化（基线余量为 185）。JSON 从 12,658 增至
 12,873，仍遵守原 13,500 上限；155 行、语义锚点、夹具规模、增长检查和执行限制
-不变。这只资格化可读输出尺寸，不证明安装态行为或模型采纳。
+不变。这只资格化可读输出尺寸，不证明安装态行为或模型采纳。当前原生宿主上限与
+成对测量见 [Native fixture qualification](#native-fixture-qualification)。
 
 base/head 差异门独立测得工作上下文增加 208 字符（回执可能差 1 字符）、可选
 replan 指引增加 363、thin/brief/compact 输出增加 154/163/215。既有 probe
@@ -404,6 +450,262 @@ qualified replacement replan-context projection and remains a review signal.
 Coverage-only to dense replan context has a measured, one-time allowance on its
 three affected JSON surfaces; dense-to-dense changes retain ordinary limits.
 
+### Canonical CLI fixture qualification
+
+The historical quota policy rows explicitly use `--context-delivery off`,
+including detail selectors and the TurnEnvelope variant. Their complete JSON
+and Markdown, semantic keys, growth checks and ceilings remain unchanged.
+Default progressive navigation is a different transport: the real File/SQLite
+test follows its digest-bound recovery through every byte, checks the complete
+policy and unchanged effect log, and rejects a modified capture. Navigation
+and all recovery-page bytes are measured separately; a small descriptor is
+neither a complete policy nor evidence of lower total model cost. Production
+defaults are unchanged. Both differential arms import their own pinned product
+with one frozen current caller fixture, so a fixture revision alone cannot
+appear as a product output change.
+
+历史 quota 策略行显式使用 `--context-delivery off`，详情和 TurnEnvelope 变体同样适用；
+完整正文、语义、增长和原预算保留。默认渐进导航另经真实 File/SQLite reader 完整补读、
+effect 日志不变与原捕获被改写后的拒绝验证。分别计量导航和全部补读字节，不将短导航
+冒充完整决策或模型成本收益；生产默认不变。两端各自导入已固定的产品版本，并共用
+同一份冻结的当前调用夹具，避免将夹具修订误计为产品输出变化。
+
+When a normal Turn still needs explicit selection or an ordinary claim, the
+progressive view can point to the captured write scope through
+`goal_boundary.write_scope_pointer`. Read that pointer using the same
+capture's supporting-source reference if the choice depends on write scope.
+Stop and approval rules remain inline. The claim checks scope atomically, and
+the ready decision supplies the complete current scope before delivery.
+
+正常 Turn 仍需选择任务或普通认领时，渐进视图可用
+`goal_boundary.write_scope_pointer` 指向原捕获中的写入范围。选择依赖写入范围时，
+按同一捕获给出的源引用读取该指针。停止和审批规则继续内联。认领会原子校验范围，
+进入可执行阶段后从当前决策读取完整写入范围。
+
+Ordinary CLI reads require canonical authority. Both differential arms explicitly
+back up and import the same complete synthetic source before measuring; fixture
+setup is outside the measured commands. On base `887d66551` and the read-retirement
+candidate, all 96 rows retain their population, format, semantic keys and growth
+checks. Every JSON character count is identical. Quota small/multi-agent JSON is
+24,099/24,820 characters; their characterization ceilings become 25,000/25,500.
+Canonical source witnesses and complete User context remain in the packet.
+
+The Markdown renderer removes only the second, identical instruction copy,
+retaining its wording and placement before the complete JSON source details.
+Small/crowded quota becomes 9,558/10,225 characters and 182/166 lines, 475 characters
+less than the same canonical baseline. Their limits become 10,000/10,500 characters
+and 190/180 lines. Explicit quota detail modes use 10,000 characters/190 lines.
+TurnEnvelope measures 10,681 JSON characters, 12,268 with multi-subagent, and
+4,521 Markdown characters/135 lines; its stdout limits become 13,000/4,800
+characters and 140 Markdown lines. The original failures remain validation
+evidence. Other limits, collection growth, wire-byte targets, execution authority
+and frozen experiment criteria do not change.
+
+普通 CLI 读取要求 canonical authority。差分两臂在测量前都显式备份并导入同一份完整
+合成来源，夹具准备不计入被测命令。base `887d66551` 与退役候选的 96 行保留原数量、
+格式、语义键及增长检查，全部 JSON 字符数相同。quota 小型／多 Agent 为
+24,099／24,820 字符，展示上限调整为 25,000／25,500；保留 canonical 来源见证及
+完整 User 上下文。
+
+Markdown 仅去掉第二份完全相同的 instruction，原措辞仍位于完整 JSON 来源详情之前。
+quota 小型／拥挤夹具为 9,558／10,225 字符、182／166 行，比同一 canonical 基线各少
+475 字符；上限调整为 10,000／10,500 字符、190／180 行。显式 quota detail 使用
+10,000 字符／190 行。TurnEnvelope 为 10,681 JSON 字符，启用多子 Agent 后为
+12,268；Markdown 为 4,521 字符／135 行，stdout 上限调整为 13,000／4,800 字符、
+140 行。原失败保留；其它限制、集合增长、wire-byte 目标、执行权限及冻结实验标准不变。
+
+### Native fixture qualification
+
+The opt-in captured TurnEnvelope heartbeat has a separate 400-character body
+allowance above ordinary thin: 4,600 without Reward Memory. It retains complete
+runtime/capture routes, same-invocation recovery, inline ACK conditions and the
+outcome guidance. Ordinary thin and capture-only thin remain at 4,200; the
+optional Reward Memory allowance remains 640. Native Goal's 4,000-character hard
+limit, other mode limits, JSON/key/line budgets and execution authority do not change.
+
+The original no-memory review input at `e552168e3` / `9197abd8d` measured
+3,551 / 3,653 against 3,600, a real historical failure. The independently
+reproduced native CLI workload below binds Goal/Agent/Turn, registry and runtime,
+uses a 128-character absolute root and an existing capture directory, and keeps
+all paths in the output. File and SQLite give the same measurements:
+
+| No-memory captured thin body | Default scope | 320-character scope |
+| --- | --- | --- |
+| Original base `e552168e3`, ceiling 3,600 | 3,587, pass | 3,887, overflow |
+| Original head `9197abd8d`, ceiling 3,600 | 3,689, overflow | 3,989, overflow |
+| Target main `82b1a8c72`, ceiling 4,200 | 4,110, pass | 4,410, overflow |
+| Inline ACK + complete current guidance, ceiling 4,600 | 4,212, pass | 4,512, pass |
+
+The 102-character ACK instruction delta survives the newer outcome rollout;
+simply adopting main's 4,200 ceiling still leaves the default bound input 12
+characters over. Keeping that ceiling fails this workload; no lossless removal
+of the actor, conditions, same-capture provenance or existing outcome obligations
+was established. The bounded opt-in allowance preserves those useful clauses
+with 88 characters of scoped headroom. Longer routes/scopes still report
+overflow; this is not an arbitrary-input guarantee. Compact Agent JSON is
+4,719 / 5,019 characters (381 scoped headroom under the unchanged 5,400
+envelope ceiling); emitted stdout including its newline is 4,720 / 5,020
+characters and 4,724 / 5,024 UTF-8 bytes. Both bodies have 38 lines and both
+payloads have seven top-level keys. The ordinary emitted thin matrix keeps its separate 4,500
+ceiling. Characters, UTF-8 bytes and model tokens are distinct; these measurements
+do not establish model compliance or total-cost improvement.
+
+可选 captured TurnEnvelope 的 thin 正文单独增加 400 字符展示余量，无 Reward
+Memory 时为 4,600；普通和仅 capture 的 thin 仍为 4,200，可选 memory 余量仍为
+640。完整路径、同次捕获、ACK 条件和成果要求均保留。原评审 3,551／3,653 对
+3,600 的失败保留；上表独立真实 CLI 在相同 128 字符根路径、默认／320 字符范围下
+复现原回归，并区分新 main 的既有超限。仅同步 main 仍使默认绑定输入超出 12 字符；
+未证明可无损删除必要条款，因此仅增加这项可选展示余量，范围输入余量为 88。
+紧凑 Agent JSON 为 4,719／5,019，沿用 5,400 上限，后者余量 381；含末尾换行的
+实际 stdout 为 4,720／5,020 字符、4,724／5,024 UTF-8 字节；正文均为 38 行，
+payload 均为七个顶层键。普通 thin
+输出矩阵仍受独立的 4,500 上限约束。更长输入仍如实告警；native Goal 硬限制、
+其他模式、结构／行数、执行额度和权限均不变，也不宣称模型遵从或完整成本收益。
+
+The current outcome rollout also affects the complete thin body and emitted
+JSON, measured independently. On the same public CLI fixture at main
+`4f6e20a13`, normalized body characters are 3,306 before / 3,829 after; the
+supported 320-character scope is 3,595 / 4,118. The thin body ceiling becomes
+4,200 instead of the original outcome proposal's insufficient 3,700. Final
+emitted JSON measures 4,172 normally and 4,461 with that scope; its ceiling
+becomes 4,500, leaving 39 characters at the latter boundary. Standard Markdown
+is 6,076 characters / 65 lines under the unchanged 6,200 / 72 limits. The body
+retains 82 characters of scoped headroom. Full scope and all authority,
+continuation, outcome and settlement instructions remain intact.
+
+The 96-row real base/head matrix initially fails 12 heartbeat rows: +523
+characters for brief/compact/full and +524 for thin because the overflow flag
+changed. With the thin body repaired, its prose growth is also +523. The
+existing differential observer records the full frozen pre-outcome rule and
+all added outcome clauses, granting at most 544 characters/bytes on those four
+heartbeat carriers only for their observed first transition. Partial or missing
+clauses, already-upgraded bases, other surfaces and excess growth still fail;
+line/shape/semantic-key and absolute limits remain independent.
+
+成果默认闭环还影响 thin 完整正文和实际 JSON，两层分别测量。同一公开 CLI fixture
+在 main `4f6e20a13` 上，归一化正文新增前后为 3,306／3,829 字符，受支持的
+320 字符 scope 为 3,595／4,118。thin 正文上限从成果原提案不足的 3,700 调至
+4,200；最终实际 JSON 普通为 4,172、带该 scope 为 4,461，上限调至 4,500，
+后者余量 39 字符。普通 Markdown 为 6,076 字符／65 行，沿用 6,200／72 上限；
+scope 正文余量为 82。范围、权限、续行、成果和结算指令全部保留。
+
+96 行真实 base/head 矩阵最初在 12 行 heartbeat 输出失败：brief／compact／full
+增加 523 字符，thin 因超限标志变化增加 524；正文修复后 thin 的指令增长同样为
+523。既有差分观察器记录完整冻结旧规则及全部新增条款，只在四类 heartbeat 输出
+首次观察到这项迁移时允许最多 544 字符／字节。缺失或部分条款、已升级基线、其他
+表面和超额增长仍失败；行数、结构、语义键和绝对上限分别保持约束。
+
+The persistent outcome guidance adds 523 characters to the complete heartbeat
+rule without deleting earlier instructions. On the unchanged real brief fixture
+with a 128-character root, main `4f6e20a13` emits 10,260 JSON / 8,559 Markdown
+characters; the outcome candidate emits 10,783 / 9,082. Both fail the former
+10,500 / 9,000 output ceilings. The initial outcome qualification used brief
+characterization ceilings of 11,100 / 9,600, retaining 317 / 518 characters of
+headroom and the existing 58 / 115 line limits. These clauses preserve cumulative
+requirements, evidence
+review and the distinction between supporting outcomes and root completion.
+They serve different decisions from existing continuation/settlement guidance;
+full executable paths and requirements remain intact. Other output modes,
+machine envelopes, execution quota and permission are separate contracts.
+Retain the historical overflows; this is measured presentation growth, not an
+efficiency claim or an expansion of model/execution allowance.
+
+持久成果指导给完整 heartbeat 规则增加 523 字符，旧条款全部保留。同一 128 字符
+根路径的真实 brief fixture，在 main `4f6e20a13` 为 JSON 10,260／Markdown
+8,559 字符，成果候选为 10,783／9,082，均超过旧 10,500／9,000 输出上限。
+最初的成果资格检查只把 brief 展示上限调至 11,100／9,600，保留 317／518 字符余量
+及原 58／115 行上限。新增条款指导保留累积要求、有据自查和区分支撑成果与根目标完成，与已有
+续行／结算指导分别服务不同决定；完整命令路径和要求不删减。其他模式、机器
+envelope、执行配额和权限另有合同。保留原始超限，不宣称效率提升或模型／执行
+额度扩张。
+
+The probe and its historical base share the current physical fixture-root owner:
+POSIX retains `/tmp/loopx-cli-budget-…`; Windows uses an owned directory in its
+native temporary root, without requiring a drive-root `tmp` directory. Implicit
+machine runtime paths use that same isolated root. Existing roots are refused
+and owned fixtures are removed on failure as well as success. Subprocess readers
+decode UTF-8 so an actual probe failure remains visible on Windows locales.
+
+On matched native Windows main/candidate fixtures, the guided-start Markdown
+rows measure 3,203 / 3,204 / 3,203 characters (small/crowded/multi-Agent) on both
+revisions, with identical JSON measurements and semantic checks. The previous
+3,200-character ceiling rejects these complete routed commands. The full nested
+canary layout measures 3,245 / 3,246 / 3,245 on both revisions. The shared
+characterization ceiling is now 3,400 for all three populations, leaving at
+least 154 characters for bounded host-path variation. No product prose is
+shortened; guided-start JSON, line, per-Todo growth and semantic guards are unchanged.
+
+The same native canary layout emits 5,989 Markdown characters for thin heartbeat
+(all three populations), and 13,685 JSON / 11,854 Markdown characters for compact
+heartbeat, identically on base and candidate with equal semantic receipts. Their
+previous 5,800 and 13,500 / 11,750 ceilings reject that native path cost. The
+characterization limits are 6,200 and 14,000 / 12,200 respectively; line limits,
+other modes, differential growth and semantic obligations remain unchanged.
+These bounded increases retain full executable routes rather than trimming
+agent-consumed instructions to satisfy a host-specific ceiling.
+
+Brief heartbeat JSON also retains the 128-character physical-root workload.
+Equal physical length does not imply equal serialized cost: native Windows
+roots with 7, 13 and 19 separators emit 10,482, 10,602 and 10,722 JSON characters.
+Markdown remains 8,579 characters / 94 lines. Replacing only each owned root
+produces identical complete JSON payloads and Markdown; the extra escaping
+cost preserves the same executable routes. Hosted main and candidate both
+fail the previous 10,500 ceiling at 10,522 characters. That path-only
+qualification raised the brief JSON ceiling to 10,800 and kept Markdown's
+9,000 ceiling. The combined characterization ceilings are 11,400 / 9,600,
+applying the outcome qualification's 600-character allowance to those native
+path ceilings. This retains the already measured 523-character content delta
+and the native escaping allowance; it is budget composition, not a new native
+Windows measurement. Line limits, body budgets and other modes retain their
+separate contracts. The native measurements qualify those layouts, not arbitrary
+path topology. The depth regression enforces raw output sizes; root replacement
+is used only for semantic comparison. If the native namespace cannot fit the
+depth-12 workload, that comparison reports a skip without shortening its root.
+
+Windows 原生路径资格检查把 brief JSON 上限调至 10,800，Markdown 仍为 9,000。
+组合后分别叠加成果指导已资格化的 600 字符余量，展示上限为 11,400／9,600，
+同时保留已测 523 字符内容增量和路径转义余量。这是两项预算的组合，不能作为
+新的 Windows 原生实测；原始路径测量、行数和语义检查仍保留其各自边界。
+
+The frozen 128-character Windows-spelling fixture was also compared on main
+`b5a1a816a` and the rebased outcome candidate without changing its routes.
+The body grows from 5,556 to 6,079 characters and Markdown from 8,579 to 9,102:
+the only body change is the complete 523-character outcome paragraph. JSON
+grows from 10,522 to 11,010, including the existing 35-character saving from
+omitting absent brief metadata. It fits the already qualified 11,400 / 9,600
+ceilings; no new allowance or shortened instruction is introduced. The earlier
+test still pinned the pre-outcome hashes and old ceilings and failed on that
+transition. Its hashes now pin the complete reviewed output. This portable
+synthetic fixture does not replace native Windows qualification.
+
+同一个冻结的 128 字符 Windows 拼写 fixture，在 main `b5a1a816a` 与 rebase 后的
+成果候选上保持全部路由不变。正文从 5,556 增至 6,079，Markdown 从 8,579 增至
+9,102，正文唯一变化是完整的 523 字符成果指导。JSON 从 10,522 增至 11,010，
+其中包括既有 brief 省略空元数据所节约的 35 字符。沿用已资格化的
+11,400／9,600 上限，不新增余量或删短指令。旧测试仍固定在成果指导之前的
+hash 与旧上限，因而失败；现将 hash 绑定到完整审阅输出。该跨平台 synthetic
+fixture 不能代替原生 Windows 资格检查。
+
+Windows qualification can use the existing explicit canary time budget:
+
+```powershell
+uv run --extra test loopx canary smoke-suite --script cli-output-budget-regression-smoke.py --timeout-seconds 660
+```
+
+The wrapper allows two 240-second probes plus checkout/cleanup within 600
+seconds; this is a validation-driver allowance, not a product latency claim.
+
+原生 Windows 与历史基线共用当前物理夹具目录，不要求预先创建盘符根目录下的
+`tmp`；默认机器运行时路径也归入同一隔离目录，已有目录拒绝覆盖，失败时照常
+清理。配对引导输出为 3,203 / 3,204 / 3,203 字符，原 3,200 上限无法保留完整路由；
+完整嵌套 canary 的成对测量为 3,245 / 3,246 / 3,245。三个规模的共用字符上限
+调整为 3,400，至少保留 154 字符路径余量，JSON、行数、增长和语义检查不变，不删减
+产品指令。心跳 thin 三个规模均为 5,989 字符，compact 为 JSON 13,685 / Markdown
+11,854 字符，基线与候选的成对测量和语义一致；对应上限由 5,800 和
+13,500 / 11,750 调整为 6,200 和 14,000 / 12,200，保留完整可执行路径，行数、
+其他模式和差分增长检查不变。原生检查可显式给予上述 660 秒预算，不据此
+宣称产品延迟改善。
+
 Both budget layers are intentionally about projections, not the full archival
 facts. When a surface needs more detail, put that detail behind a queryable
 cold-path command or a linked run-history artifact instead of making the
@@ -542,8 +844,11 @@ The instruction-coherence change keeps action-specific authorization, sustained
 integration/negative-case/readback work and exact current settlement/recovery in
 all heartbeat modes. On the same supported 320-character scope plus capability
 fixture, normalized thin body cost is 3,172 → 3,599 characters. The thin body
-ceiling is 3,600; CLI JSON/Markdown ceilings are 3,900/5,800 (previously
-3,400/5,250), against measured 3,651/5,579 on the same public fixture.
+ceiling is 3,600. That instruction rollout measured CLI JSON/Markdown at
+3,651/5,579 and used 3,900/5,800 ceilings (previously 3,400/5,250). Current
+native-host ceilings are 3,900/6,200; the matched native measurements and
+unchanged-body boundary are recorded in
+[Native fixture qualification](#native-fixture-qualification).
 The registered-profile brief body grows from 4,447 to 4,675, with a 4,800
 ceiling (previously 4,600). Full/compact remove duplicated static recipes; no host execution quota, authority,
 line, key or reward-memory allowance changes. Oversized custom inputs still fail.
@@ -554,3 +859,34 @@ characters once. Missing clauses, unrelated surfaces and later new→new growth
 retain ordinary gates. This is cost attribution, not admission logic or proof of
 semantic equivalence. The PR's clause review and current-path validation remain
 necessary; deleting an obligation cannot earn this allowance.
+
+### Thin native context route allowance
+
+The complete real-CLI workload (320-character scope, five capabilities and an
+explicit CLI route) now emits 4,999 normalized body characters on macOS with the
+default native context routes. The earlier route qualification measured 4,851; the
+current 4,900 ceiling therefore marks a supported combination over budget. Retain the
+complete commands and instructions and raise only the thin presentation
+allowance to 5,100, leaving 101 characters of headroom. The unchanged negative
+case adds 48 characters to the CLI route, repeated four times, and still fails
+with an overflow at 5,191. The original 4,900 failure remains historical evidence.
+
+Matched base/head rendering on one frozen fixture preserves every body byte in
+ordinary thin, explicit context-off, captured TurnEnvelope, brief, compact and
+full modes. The supported thin body remains 5,347 actual characters / 5,351
+UTF-8 bytes; this does not reduce model input or establish token, latency or
+cost savings. The separate 400-character captured-envelope and 640-character
+Reward Memory allowances remain fixed. The no-memory captured-envelope ceiling
+therefore becomes 5,500. Other mode limits, JSON/output/key/line guards,
+execution quotas, host hard limits and frozen qualification thresholds stay
+unchanged; already-over-budget brief/compact/full workloads remain failures.
+
+完整真实 CLI 负载（320 字符 scope、五项能力及显式 CLI 路径）在 macOS 默认原生上下文
+路由下为 4,999 个归一化正文字符；此前路径资格化为 4,851，现有 4,900
+展示上限因此将受支持组合标为超限。保留完整命令和指令，仅将 thin 展示预算调至 5,100，
+余量 101 字符。原负例仍将 CLI 路径增加 48 字符、重复四次，在 5,191 时报告超限；
+原 4,900 上限失败保留。单一冻结夹具的 base/head 各模式正文逐字节相同，受支持
+thin 仍为实际 5,347 字符／5,351 UTF-8 字节，不据此宣称输入、token、延迟或费用
+下降。可选 envelope 的 400 和 Reward Memory 的 640 字符余量不变；无 memory 的
+envelope 上限随 thin 基础预算变为 5,500。其余模式、JSON／输出／键数／行数、执行
+额度、宿主硬限制及冻结门槛不变；已超限的 brief／compact／full 场景仍保持失败。

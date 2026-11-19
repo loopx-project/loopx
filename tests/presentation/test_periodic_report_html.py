@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from html.parser import HTMLParser
+
 import pytest
 
 from loopx.capabilities.periodic_report import (
@@ -117,10 +119,7 @@ def test_html_artifact_is_self_contained_interactive_and_registry_valid() -> Non
     assert 'data-section-filter="completed"' in content
     assert 'data-presentation="editorial_dense_v2"' in content
     assert '<html lang="en">' in content
-    assert (
-        "Outcome: Release &lt;script&gt;alert(1)&lt;/script&gt;. "
-        "Next: Observe adoption."
-    ) in content
+    assert "Release shipped" in content and "Needs review" in content
     assert "July 13–20, 2026" in content
     assert 'href="#section-completed"' in content
     assert "data-copy-markdown" in content
@@ -182,6 +181,59 @@ def test_html_artifact_is_deterministic_for_the_same_document() -> None:
     assert first["artifact_ref"] == second["artifact_ref"]
 
 
+@pytest.mark.parametrize("language", ["en", "zh-CN"])
+def test_text_report_preserves_authored_overview_and_companion_copy(language) -> None:
+    document = _document(language=language)
+    document["editorial"]["highlights"][0]["detail"] = "Latency fell from 18 s to 11 s; rollout remains partial."
+    markdown = periodic_report_markdown_renderer_adapter().render(document)
+    html = periodic_report_html_renderer_adapter().render(document)
+
+    for value in ("Release shipped", "Needs review", "Latency fell from 18 s to 11 s; rollout remains partial."):
+        assert value in markdown["content"]
+        assert value in html["content"]
+    assert html["companion_markdown_digest"] == markdown["content_digest"]
+    # A generated title-only summary adds no facts to this authored overview.
+    assert document["editorial"]["summary"] not in markdown["content"]
+
+
+@pytest.mark.parametrize("language", ["en", "zh-CN"])
+def test_repeated_opaque_sources_are_lossless_references_instead_of_body_noise(language) -> None:
+    document = _document(language=language)
+    first = "sha256:" + "a" * 64
+    second = "sha256:" + "b" * 64
+    for item in document["sections"][0]["items"]:
+        item["source_ref"] = first
+    document["sections"][1]["items"][0]["source_ref"] = second
+    markdown = periodic_report_markdown_renderer_adapter().render(document)["content"]
+    html = periodic_report_html_renderer_adapter().render(document)["content"]
+
+    assert markdown.count(first) == markdown.count(second) == 1
+    body, appendix = html.split('<details class="supporting" data-supporting-context>', 1)
+    assert first not in body and second not in body
+    assert first in appendix and second in appendix
+    for value in ("Published & verified.", "One staged rollout completed.", "Observe adoption.", "Delivery digests were verified."):
+        assert value in markdown
+    # Two distinct identities stay distinct, including supporting-only sources.
+    assert 'href="#report-source-1"' in body
+    assert 'id="report-source-1"' in appendix
+    assert 'id="report-source-2"' in appendix
+
+
+def test_report_without_highlights_keeps_its_summary_and_web_links() -> None:
+    document = _document()
+    document["editorial"].pop("highlights")
+    for section in document["sections"]:
+        for item in section["items"]:
+            item["source_ref"] = "https://example.test/releases/2.5"
+    markdown = periodic_report_markdown_renderer_adapter().render(document)["content"]
+    html = periodic_report_html_renderer_adapter().render(document)["content"]
+    assert document["editorial"]["summary"] in markdown
+    assert "Outcome: Release &lt;script&gt;alert(1)&lt;/script&gt;." in html
+    assert "## Source references" not in markdown
+    assert "data-report-source-link" not in html
+    assert markdown.count("[source](https://example.test/releases/2.5)") == 3
+
+
 def test_html_and_markdown_share_one_document_and_primary_content() -> None:
     document = _document()
     html_artifact = periodic_report_html_renderer_adapter().render(document)
@@ -200,7 +252,8 @@ def test_html_and_markdown_share_one_document_and_primary_content() -> None:
         "Observe adoption.",
         "Release candidate",
         "Ready for review.",
-        "Outcome: Release &lt;script&gt;alert(1)&lt;/script&gt;. Next: Observe adoption.",
+        "Release shipped",
+        "Needs review",
     ):
         assert expected in html_artifact["content"]
     for expected in (
@@ -210,13 +263,72 @@ def test_html_and_markdown_share_one_document_and_primary_content() -> None:
         "Observe adoption.",
         "Release candidate",
         "Ready for review.",
-        "Outcome: Release <script>alert(1)</script>. Next: Observe adoption.",
+        "Release shipped",
+        "Needs review",
     ):
         assert expected in markdown_artifact["content"]
     assert "Appendix: delivery and runtime context" in markdown_artifact["content"]
     assert "Artifacts share one normalized document" in markdown_artifact["content"]
     assert markdown_artifact["content_policy"]["supporting_context"] == "appendix"
     assert markdown_artifact["content_policy"]["supporting_item_count"] == 1
+
+
+@pytest.mark.parametrize("language", ["en", "zh-CN"])
+@pytest.mark.parametrize("reference, linked", [
+    ("https://example.test/releases/2.5", True),
+    ("http://example.test/notes?view=full&part=2", True),
+    ("https://example.test/notes/(recovery)?title=\"before\"", True),
+    ("sha256:" + "a" * 64, False),
+    ("todo:completed-source", False),
+    ("artifact:report/window", False),
+    ("reports/private-window.md", False),
+    ("javascript:alert(1)", False),
+    ("data:text/html,<script>alert(1)</script>", False),
+    ("//example.test/relative", False),
+    ("https:///missing-host", False),
+    ("https://example.test:broken/path", False),
+    ("https://[broken/path", False),
+    ("https://user@example.test/private", False),
+    ("https://example.test/line\nbreak", False),
+    ("https://example.test/hidden\u202eaddress", False),
+    ("https://example.test/\\different-address", False),
+    ("https://example.test/" + "x" * 500, False),
+])
+def test_report_sources_keep_link_eligibility_in_both_formats(reference, linked, language):
+    class Links(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.targets = []
+
+        def handle_starttag(self, tag, attrs):
+            values = dict(attrs)
+            if tag == "a" and values.get("class") == "source-link":
+                self.targets.append(values["href"])
+
+    document = _document(language=language)
+    document["sections"][0]["items"][0]["source_ref"] = reference
+    html = periodic_report_html_renderer_adapter().render(document)
+    markdown = periodic_report_markdown_renderer_adapter().render(document)
+    links = Links()
+    links.feed(html["content"])
+    label = "来源" if language == "zh-CN" else "source"
+    assert (reference in links.targets) is linked
+    assert markdown["content"].count(f"[{label}](") == (2 if linked else 1)
+    assert html["companion_markdown_digest"] == markdown["content_digest"]
+    assert html["document_digest"] == markdown["document_digest"]
+    # Presentation does not replace substantive outcomes with citation metadata.
+    for text in ("Published & verified.", "One staged rollout completed.", "Observe adoption."):
+        assert text in markdown["content"]
+    if not linked and reference.startswith(("sha256:", "todo:", "artifact:")):
+        assert f"`{reference}`" in markdown["content"]
+
+
+def test_markdown_source_destination_does_not_end_at_literal_parentheses_or_quotes():
+    document = _document()
+    document["sections"][0]["items"][0]["source_ref"] = 'https://example.test/(before)?title="release"'
+    markdown = periodic_report_markdown_renderer_adapter().render(document)["content"]
+    assert '[source](https://example.test/%28before%29?title=%22release%22)' in markdown
+    assert '[source](https://example.test/(before)' not in markdown
 
 
 def test_source_receipts_are_supporting_context_not_visible_body_copy() -> None:

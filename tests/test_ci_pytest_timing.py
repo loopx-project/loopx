@@ -287,6 +287,54 @@ def test_completed_tests_cancel_pending_stall_snapshot(tmp_path, workers):
     assert "LOOPX_PYTEST_STACK " not in result.stdout + result.stderr
 
 
+@pytest.mark.parametrize("workers", [0, 2])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_stall_snapshot_is_visible_before_the_blocked_test_returns(tmp_path, workers, enabled):
+    # A diagnostic routed into capture or a discarded worker descriptor cannot
+    # help investigate a live stall. Keep the test blocked until we read it.
+    (tmp_path / "test_subject.py").write_text(
+        "import time\nfrom pathlib import Path\n"
+        "def test_wait_for_release():\n"
+        "    Path('entered').touch()\n"
+        "    while not Path('release').exists(): time.sleep(0.01)\n",
+        encoding="utf-8")
+    log = tmp_path / "live-stack.log"
+    with log.open("w") as output:
+        process = subprocess.Popen(
+            [sys.executable, "-m", "pytest", "-q", "-n", str(workers),
+             "-p", "scripts.ci.pytest_timing", "--ci-stall-after=" + str(0.1 if enabled else 0)],
+            cwd=tmp_path, env=environment(), stdout=output, stderr=subprocess.STDOUT)
+        try:
+            deadline = time.monotonic() + 10
+            while True:
+                text = log.read_text()
+                # The one-shot snapshot can land in setup or call. Both are
+                # this test's executing thread; require its node and real frames
+                # before release, without assuming which phase won the timer.
+                stack = "LOOPX_PYTEST_STACK test_subject.py::test_wait_for_release" in text
+                frames = any(line.startswith("  ") and " in " in line for line in text.splitlines())
+                ready = (tmp_path / "entered").exists() and (not enabled or (stack and frames))
+                if ready:
+                    assert process.poll() is None
+                    break
+                assert process.poll() is None, text
+                assert time.monotonic() < deadline, "No live blocked-test stack was visible: " + text
+                time.sleep(0.01)
+        finally:
+            (tmp_path / "release").touch()
+            try:
+                process.wait(timeout=10)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=10)
+    assert process.returncode == 0
+    assert ("LOOPX_PYTEST_STACK " in log.read_text()) == enabled
+    report = read_log(log)
+    assert report["execution_complete"] and report["pytest_exit_code"] == 0
+    assert report["selected_cases"] == report["finished_cases"] == 1
+
+
 @pytest.fixture
 def unread_stderr_pipe():
     reader, writer = os.pipe()

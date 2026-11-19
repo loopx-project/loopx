@@ -401,16 +401,14 @@ def test_canonical_machine_config_cli_uses_the_same_store_and_projection(
     assert main([*common, "describe"]) == 0
     catalog = json.loads(capsys.readouterr().out)
     assert catalog["schema_version"] == "machine_configuration_catalog_v0"
-    assert [item["namespace"] for item in catalog["namespaces"]] == [
-        "change_quality_qualification",
-        "codex_chat",
-        "goal_storage",
-        "manager_runtime",
-        "periodic_report",
-        "pull_request_review",
-        "steward_executor",
-        "todo_replan_cadence",
-    ]
+    namespaces = [item["namespace"] for item in catalog["namespaces"]]
+    assert namespaces == sorted(set(namespaces))
+    # Other capabilities may register independently; this integration owns the
+    # periodic-report discovery contract and its subsequent preview/apply path.
+    reports = [item for item in catalog["namespaces"] if item["namespace"] == "periodic_report"]
+    assert len(reports) == 1
+    assert reports[0]["schema_versions"] == ["periodic_report_machine_defaults_v0"]
+    assert reports[0]["configuration_template"]["enabled"] is False
 
     assert (
         main(

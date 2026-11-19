@@ -236,8 +236,31 @@ Pytest and the canary smoke runner also disable collection for local validation.
 Native Codex benchmark profiles force the same opt-out during installation,
 runtime and Agent shell execution, even when a minimal environment removes `CI`
 or the parent requests collection. Release qualification uses the same boundary.
-These synthetic runs must not count as reporting installations. Telemetry tests
-may explicitly enable collection only against a disposable local collector.
+These synthetic runs must not count as reporting installations.
+
+The shared sender also suppresses all channels when the machine home, telemetry
+state, host home/configuration, or loaded runtime lives under a recognized
+temporary root. This covers OS temporary directories (including macOS aliases
+and Windows Temp), absolute `TMPDIR`/`TEMP`/`TMP` roots, and symlinks into them,
+including a state file that does not exist yet. Status reports `temporary_path`;
+automatic disclosure creates no installation ID. Copied/enabled state cannot
+override this boundary or consume buffered counts. A temporary **working
+directory alone** is not a temporary installation: detached senders themselves
+work in the OS temp directory. Path checks remain local and upload no paths.
+
+For a custom scratch location outside those roots, declare its temporary root
+when launching the process or persist `usage-ping disable` in that fixture's
+machine state before rebuilding its environment. Directory names such as
+`test` or `scratch` are not evidence of ephemerality. Standalone smoke helpers
+must still force `LOOPX_USAGE_PING=0` after caller environment overrides; path
+eligibility is defense in depth when an opt-out flag is lost, not a replacement
+for test isolation. No historical installation IDs are relabeled or deleted.
+
+Telemetry transport qualifications use both `LOOPX_USAGE_PING=1` and an explicit
+numeric loopback collector (`127.0.0.1` or `::1`) to exercise sends from disposable
+state. This exception never permits remote collection and cannot override CI,
+Do Not Track, stored disable or consent-required policy. Ordinary persistent
+installations retain notice-before-default-on behavior.
 
 `LOOPX_USAGE_POLICY=consent_required` requires explicit enable; merely displaying
 the notice is insufficient. Default policy is `opt_out`; unknown policies fail
@@ -273,6 +296,16 @@ generation are rechecked after acquiring the lock, so queued observations cannot
 restore withdrawn collection.
 Offline `migrate-local-state` commands do not schedule these observations,
 because their previews and rollback receipts bind the machine-state bytes.
+
+Settings-service and local transport failures exit with status 1. With
+`--format json`, the command returns `ok=false`, `error` and a public-safe
+`message`; Markdown prints the same message. `mutation_lock_timeout` means the
+settings lock was not acquired, so that attempt did not change consent. Wait
+for the current settings operation to finish before retrying. Other unavailable
+results do not confirm a change's outcome: follow the message and inspect
+`loopx usage-ping status` before retrying a change. Child output, raw exceptions
+and local paths are not exposed. Invalid device-context input retains exit
+status 2. Consent, generation fencing and existing lock deadlines are unchanged.
 
 Each installation attempts at most one heartbeat per UTC day. The first measured
 CLI result attempts an aggregate send immediately, including a failed result.

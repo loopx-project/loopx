@@ -1,5 +1,19 @@
 .personal-private-conversation { display: grid; gap: 18px; }
-.personal-private-conversation > p { margin: 0; }
+.personal-private-conversation.personal-detail-card p { font-size: var(--text-body); line-height: var(--leading-body); }
+.personal-private-conversation > p, .personal-private-connection p, .personal-private-setup-body > p { margin: 0; }
+.personal-private-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.personal-private-heading h3 { flex: 1; margin: 0; }
+.personal-private-heading strong { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.personal-private-connection { display: grid; gap: 10px; padding-bottom: 18px; border-bottom: 1px solid var(--pw-line); }
+.personal-private-setup > summary { min-height: 44px; align-content: center; cursor: pointer; font-size: var(--text-body); font-weight: 600; }
+.personal-private-setup > summary:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
+.personal-private-setup-body { display: grid; gap: 16px; margin-top: 12px; }
+.personal-private-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.personal-private-groups { display: grid; grid-column: 1 / -1; gap: 12px; margin: 0; padding: 16px; border: 1px solid var(--pw-line-strong); border-radius: 10px; }
+@media (max-width: 640px) {
+  .personal-private-fields { grid-template-columns: minmax(0, 1fr); }
+  .personal-private-connection > .personal-private-heading { display: grid; grid-template-columns: minmax(0, 1fr); justify-items: start; }
+}
 .personal-private-conversation label { display: grid; gap: 8px; font-size: var(--text-body); line-height: var(--leading-body); }
 .personal-private-conversation select {
   width: 100%; min-height: 40px; padding: 10px 12px;
@@ -18,3 +32,5 @@
 .personal-private-conversation form button[type="submit"] { background: var(--pw-text); color: var(--pw-card); }
 .personal-private-conversation [role="alert"] { color: var(--pw-red); }
 .personal-private-conversation [role="status"]:empty { display: none; }
+.personal-private-conversation .personal-private-refresh { display: inline-flex; align-items: center; justify-content: center; width: 32px; min-height: 32px; padding: 0; border: 0; background: transparent; color: var(--pw-muted); }
+@media (pointer: coarse), (max-width: 640px) { .personal-private-conversation .personal-private-refresh { width: 44px; min-height: 44px; } }

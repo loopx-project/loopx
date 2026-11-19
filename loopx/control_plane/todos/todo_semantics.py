@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from typing import Any, Mapping, cast
+
+
 from datetime import datetime
 import re
-from typing import Any
 
 from ..scheduler.monitor_todo import (
     monitor_todo_expires_at,
-    monitor_todo_has_schedule,
     monitor_todo_is_actionable_open,
     monitor_todo_is_due,
     monitor_todo_is_expired,
@@ -194,7 +195,7 @@ def todo_projection_sort_key(
 
 
 def todo_item_task_text(
-    item: dict[str, Any],
+    item: Mapping[str, Any],
     *,
     keys: tuple[str, ...] = ("title", "text"),
 ) -> str:
@@ -204,7 +205,7 @@ def todo_item_task_text(
 
 
 def todo_item_task_class(
-    item: dict[str, Any],
+    item: Mapping[str, Any],
     *,
     task_text_keys: tuple[str, ...] = ("title", "text"),
 ) -> str:
@@ -227,10 +228,6 @@ def todo_item_is_deferred(item: dict[str, Any]) -> bool:
 
 def todo_item_next_due_at(item: dict[str, Any]) -> datetime | None:
     return monitor_todo_next_due_at(item)
-
-
-def todo_item_has_monitor_schedule(item: dict[str, Any]) -> bool:
-    return monitor_todo_has_schedule(item)
 
 
 def todo_item_expires_at(item: dict[str, Any]) -> datetime | None:
@@ -353,6 +350,27 @@ def agent_scoped_selectable_advancement_todo_ids(
     frontier = todo_advancement_frontier_items(agent_todo_summary, agent_id=agent_id)
     return {todo_id for item in frontier["current_agent_claimed_items"] + frontier["unclaimed_items"]
             if (todo_id := normalize_todo_id(item.get("todo_id")))}
+
+
+def todo_scoped_runnable_advancement_count(
+    summary: dict[str, Any] | None, *, agent_id: str | None,
+) -> int | None:
+    """Decode the typed selection count; unknown sources keep legacy fences.
+
+    Commitment floors intentionally include work held by receipt-owned waits.
+    They do not override a complete same-lane runnable-work projection.
+    """
+    counts = (summary or {}).get("work_counts")
+    if (
+        isinstance(counts, dict)
+        and counts.get("schema_version") == "todo_work_counts_v0"
+        and counts.get("complete") is True
+        and counts.get("agent_id") == agent_id
+        and type(counts.get("advancement")) is int
+        and counts["advancement"] >= 0
+    ):
+        return cast(int | None, counts["advancement"])
+    return None
 
 
 def todo_advancement_frontier_counts(

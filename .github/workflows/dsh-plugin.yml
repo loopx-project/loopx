@@ -22,6 +22,30 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  frozen-configuration:
+    name: dsh-pnpm-frozen (${{ matrix.pnpm }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        pnpm: ["9.15.9", "10.33.0", "12.10.1"]
+    defaults:
+      run:
+        working-directory: packages/dsh-loopx-plugin
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ matrix.pnpm }}
+      - name: Qualify the frozen override configuration without dependency scripts
+        run: pnpm install --frozen-lockfile --lockfile-only --ignore-scripts
+      - name: Keep the qualified dependency graph unchanged
+        run: git diff --exit-code -- pnpm-lock.yaml
+
   distribution:
     name: dsh-plugin (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -52,7 +76,7 @@ jobs:
       - name: Install frozen plugin dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Validate typed host and client contracts
-        run: pnpm typecheck && pnpm smoke:peer-range
+        run: pnpm typecheck && pnpm smoke:peer-range && pnpm smoke:mcp-transport
       - name: Validate unit and real LoopX admission contracts
         if: runner.os == 'Linux'
         run: PATH="$GITHUB_WORKSPACE/.venv/bin:$PATH" pnpm test
@@ -63,6 +87,10 @@ jobs:
           node -e 'require("node:fs").appendFileSync(process.env.GITHUB_ENV, "DSH_ARTIFACT=output/dsh-loopx-plugin-" + require("./package.json").version + ".tgz\n")'
       - name: Qualify the real package-name install and uninstall
         run: node smoke/dsh-registry-smoke.mjs --tarball "$DSH_ARTIFACT"
+      - name: Qualify the source installer and installed-version rejection
+        run: |
+          pnpm smoke:install
+          node smoke/dsh-installer-selected-host-smoke.mjs
       - name: Qualify packed Client and real web runtime
         if: runner.os == 'Linux'
         run: |

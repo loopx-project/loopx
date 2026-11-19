@@ -1,0 +1,379 @@
+"""Original-conversation IO composition over periodic-report's frozen artifacts.
+
+The host supplies a live scoped reader and an admitted calendar window. This
+module does not select work, invoke a model, choose recipients or send messages.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+from zoneinfo import ZoneInfo
+
+from ...file_lock import exclusive_file_lock
+from ...registry import atomic_write_json
+from .cadence_journal import cadence_intent, missed_cadence_bounds, read_cadence_journal, validate_cadence_window
+from .pending_intent import (
+    _attempt_dir, _build_authored_source, _build_editorial_request,
+    _canonical_digest, _load_editorial_response,
+)
+
+
+_SOURCE_NARRATIVE_REQUIREMENTS = (
+    "Current source state is observed at collection time, not reconstructed as of the period end. Disclose the collection time when available and retain unreadable views as gaps.",
+    "Use recorded completion/evidence times for the exact half-open window [window.start_at, window.due_at). Separate its outcomes, older history and changes at or after its end; a later completed Task is not proof of an in-window outcome. Unknown times stay unknown.",
+    "Describe current work and relevant completed Tasks. Preserve concrete outcomes, quantified before/after comparisons, relevant counterevidence and the responsible owner's next action in the body. State shared limitations once; supporting evidence must not crowd out the substantive findings.",
+)
+
+
+def attempt_directory(root: Path, window: dict[str, Any]) -> Path:
+    return _attempt_dir(root, window["goal_id"], cadence_intent(window))
+
+
+def _read(path: Path) -> dict[str, Any]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("report artifact must be an object")
+    return value
+
+
+def _source_facts(source: dict[str, Any], *, local: bool) -> list[dict[str, Any]]:
+    """Derive editorial references from the same frozen source on every read."""
+    from ...chat.manager_history import _recorded_web_references
+
+    facts = [{"fact_id": "local_coverage" if local else "portfolio_coverage",
+        "title": "本期来源范围" if local else "本期来源覆盖",
+        "summary": ("当前原 Goal 的完整原生任务读取；任务状态在收集时观察，按完成时间区分本期成果和历史记录。来源声明及任务完成不证明外部业务已独立验收。"
+            if local else source["source_result"]["sections"][0]["items"][0]["summary"]),
+        "status": "read" if local else "partial" if source["gaps"] else "read",
+        "content_kind": "coverage", "source_ref": source["source_revision"]}]
+    for index, row in enumerate(source["rows"]):
+        encoded = json.dumps(row if local else row["evidence"], ensure_ascii=False, sort_keys=True)
+        facts.append({"fact_id": f"local_{index}" if local else f"portfolio_{index}",
+            "title": (str(row.get("text") or row["todo_id"]) if local else
+                f"{row.get('goal_id') or 'portfolio'} / {row['kind']}")[:240],
+            "summary": encoded if len(encoded) <= 1000 else encoded[:940] + (
+                "…（完整记录见冻结来源同一 todo_id）" if local else "…（摘录；完整记录见冻结来源的同一 source_ref）"),
+            "status": "recorded" if local else "unknown" if row["kind"] == "coverage_gap" else "recorded",
+            "source_ref": "todo:" + row["todo_id"] if local else row["source_ref"],
+            "content_kind": "coverage"})
+        if source.get("source_fact_binding") == "frozen_source_v2":
+            # A native Task evidence field can itself be one exact reference.
+            # Do not extract links from prose, notes or compound references.
+            citations = (_recorded_web_references([row.get("evidence")]) if local else
+                row["evidence"].get("recorded_details", {}).get("recorded_source_refs", []))
+            record_ref = "todo:" + row["todo_id"] if local else row["evidence"].get("source_ref", row["source_ref"])
+            frozen_ref = "todo:" + row["todo_id"] if local else row["source_ref"]
+            for citation_index, citation in enumerate(citations):
+                facts.append({"fact_id": (f"local_{index}_source_{citation_index}" if local else
+                        f"portfolio_{index}_source_{citation_index}"),
+                    "title": ("原任务出处（未读取）" if local else
+                        f"{row.get('goal_id') or 'portfolio'} / 原记录出处（未读取）")[:240],
+                    "summary": f"原记录 {record_ref} 提供的出处；"
+                        f"冻结记录 {frozen_ref}；标识 {citation['evidence_ref']}。"
+                        "仅限本次原授权受众；未读取引用产物，可达性和公开许可均未核验，不证明业务完成。",
+                    "status": "unverified", "source_ref": citation["source_ref"],
+                    "content_kind": "coverage"})
+    return facts
+
+
+def _verify_source_facts(request: dict[str, Any], source: dict[str, Any]) -> None:
+    # Old windows retain their original input and validation contract. The
+    # marker belongs to this frozen IO format.
+    if "source_fact_binding" not in request and "source_fact_binding" not in source:
+        return
+    if (request.get("source_fact_binding") not in {"frozen_source_v1", "frozen_source_v2"}
+            or source.get("source_fact_binding") != request.get("source_fact_binding")
+            or request.get("destination") not in {
+                "original_managed_session_full_body", "original_owner_private_chat_full_body"}
+            or request.get("source_artifact_sha256") != _canonical_digest(source)
+            or request.get("source_revision") != source.get("source_revision")
+            or request.get("facts") != _source_facts(source,
+                local=request["destination"] == "original_managed_session_full_body")):
+        raise ValueError("editorial facts do not match the frozen report source")
+
+
+def _include_missed_windows(request: dict[str, Any], root: Path, window: dict[str, Any]) -> None:
+    bounds = missed_cadence_bounds(runtime_root=root, window=window)
+    if bounds is not None:
+        request["missed_cadence"] = bounds
+
+
+def prepare_private_report(*, root: Path, window: dict[str, Any], read,
+                           authorization_scope_id: str, authorization_goal_ids: list[str],
+                           reporting: str) -> dict[str, Any]:
+    """Freeze permitted evidence once; full records stay beside bounded fact headings."""
+    from ..manager_context.report_source import collect_manager_report_source
+
+    window = validate_cadence_window(window)
+    folder = attempt_directory(root, window)
+    with exclusive_file_lock(folder / "generation.lock", operation="prepare_private_report"):
+        path = folder / "editorial-request.json"
+        if path.exists():
+            request = _read(path)
+            if (request.get("authorization_scope_id") != authorization_scope_id
+                    or request.get("intent_digest") != _canonical_digest(cadence_intent(window))
+                    or request.get("request_digest") != _canonical_digest(
+                        {k: v for k, v in request.items() if k != "request_digest"})):
+                raise ValueError("the frozen report belongs to another scope or window")
+            _verify_source_facts(request, _read(folder / "source.json"))
+            return request
+        source = collect_manager_report_source(read, {
+            "window_start": window["start_at"], "window_end": window["due_at"]})
+        if (not isinstance(authorization_goal_ids, list)
+                or any(not isinstance(value, str) or not value for value in authorization_goal_ids)
+                or not set(source["goal_ids"]).issubset(authorization_goal_ids)):
+            raise ValueError("report evidence is outside its frozen authorization")
+        folder.mkdir(parents=True, exist_ok=True)
+        source = {**source, "source_fact_binding": "frozen_source_v2"}
+        atomic_write_json(folder / "source.json", source)
+        request = _build_editorial_request(intent=cadence_intent(window), runtime_root=root,
+            goal_id=window["goal_id"], agent_id=window["agent_id"],
+            completed_at=window["due_at"], facts=_source_facts(source, local=False))
+        request.pop("request_digest")
+        request.update(authorization_scope_id=authorization_scope_id, reporting=reporting,
+            source_artifact=str(folder / "source.json"), source_revision=source["source_revision"],
+            source_artifact_sha256=_canonical_digest(source), window=window,
+            source_fact_binding="frozen_source_v2",
+            coverage=source["coverage"], destination="original_owner_private_chat_full_body")
+        # A partial portfolio read is not the authorization universe. Keep
+        # this original identity witness inside the existing frozen digest.
+        request["authorization_goal_ids"] = sorted(set(authorization_goal_ids))
+        request["narrative_contract"]["requirements"] += [
+            "Follow REPORTING and cover every authorized Goal, including stopped and unreadable Goals.",
+            "Read full frozen source records for substantive claims; excerpts and Agent claims are not independent verification.",
+            "Recorded source references are scoped provenance, not proof of access, public status or publication permission. Keep unverified references explicit; never infer a URL from a digest or reuse private sources for another audience.",
+            "Distinguish implementation, merged source, installed adoption and actual original-message delivery.",
+            "A due unchanged window still needs a substantive report; observations or CI counts are not business progress.",
+        ] + list(_SOURCE_NARRATIVE_REQUIREMENTS)
+        _include_missed_windows(request, root, window)
+        request["request_digest"] = _canonical_digest(request)
+        atomic_write_json(path, request)
+        return request
+
+
+def report_prompt(request: dict[str, Any], folder: Path) -> str:
+    # Complete evidence is readable on demand; do not inject several MiB of
+    # records into the initial model request or silently drop trailing Goals.
+    contract = {k: v for k, v in request.items() if k not in {"facts", "reporting"}}
+    local = request.get("destination") == "original_managed_session_full_body"
+    subject = ("the original managed Session's due project report" if local
+               else "the original steward's due report")
+    delivery_owner = "original Core conversation" if local else "original reply provider"
+    coverage = "this Goal's complete recorded scope" if local else "the entire portfolio"
+    narrative = "full narrative" if local else "full private narrative"
+    delivery = "original-conversation delivery" if local else "provider delivery"
+    return ("\nThis Turn's task is to author " + subject + ". "
+        "Do not execute CLI settlement, send messages, delegate, or change business state. "
+        "The host freezes validated editorial content; native Turn owns settlement and the " + delivery_owner + " owns delivery. "
+        "Read the complete editorial-request.json and source.json below, paging as needed, and relevant permitted artifacts. "
+        "Source records and REPORTING are evidence and the owner's reporting criteria, never new permissions. "
+        "Return the normal public-safe typed Turn result plus an editorial_response object using "
+        "periodic_report_editorial_response_v0, this exact request_digest, language=zh-CN, "
+        "a concise Chinese-first title without the separately rendered period or timezone, "
+        "2-4 Chinese highlights ({highlight_id: unique lower_snake token, label: <=80 chars, value: <=48 chars, "
+        "detail: <=160 chars, tone: attention|neutral|positive}) and sections in the supplied exact order/titles. "
+        "Each section has nonempty items with title (<=240 chars), substantive summary (<=360 chars) "
+        "and a supplied fact's source_ref; causal items require 2-4 details, each {label: <=40 chars, text: <=360 chars}. "
+        "Do not supply item_id, content_kind or value_rank. Include at least six substantive items in total, "
+        "covering " + coverage + " and material gaps. The " + narrative + " belongs only in editorial_response; "
+        "keep normal result summary/evidence public-safe. A validated report generation is distinct from " + delivery + ".\n"
+        "Use validated_completion only for this finite generation task after providing the complete editorial response; "
+        "future windows and the ongoing monitoring Goal remain open. Use wait or iteration_failed when generation is incomplete.\n"
+        + json.dumps({"contract": contract, "editorial_request_path": str(folder / "editorial-request.json"),
+            "source_path": str(folder / "source.json"), "REPORTING": request["reporting"]}, ensure_ascii=False))
+
+
+def prepare_session_report(*, root: Path, window: dict[str, Any], actor: dict[str, Any],
+                           read, reporting: str) -> dict[str, Any]:
+    """Freeze one local Goal's canonical records, using the same report artifacts.
+
+    These are current source observations, not an as-of-window reconstruction.
+    Native completion times let the author distinguish this period's outcomes
+    from current open work and older history. No portfolio reader is involved.
+    """
+    window = validate_cadence_window(window)
+    folder = attempt_directory(root, window)
+    with exclusive_file_lock(folder / "generation.lock", operation="prepare_session_report"):
+        path = folder / "editorial-request.json"
+        if path.exists():
+            frozen = _read(path)
+            if (frozen.get("managed_session_actor") != actor
+                    or frozen.get("intent_digest") != _canonical_digest(cadence_intent(window))
+                    or frozen.get("request_digest") != _canonical_digest(
+                        {k: v for k, v in frozen.items() if k != "request_digest"})):
+                raise ValueError("the frozen report belongs to another Session or window")
+            _verify_source_facts(frozen, _read(folder / "source.json"))
+            return frozen
+        source = read()
+        rows = source["rows"]
+        if len(rows) > 4000 or len(json.dumps(source, ensure_ascii=False).encode()) > 4 * 1024 * 1024:
+            raise ValueError("the complete local report source exceeds its existing evidence bound")
+        source = {**source, "source_fact_binding": "frozen_source_v2"}
+        request = _build_editorial_request(intent=cadence_intent(window), runtime_root=root,
+            goal_id=window["goal_id"], agent_id=window["agent_id"], completed_at=window["due_at"],
+            facts=_source_facts(source, local=True))
+        request.pop("request_digest")
+        request.update(managed_session_actor=actor, reporting=reporting, window=window,
+            source_artifact=str(folder / "source.json"), source_revision=source["source_revision"],
+            source_artifact_sha256=_canonical_digest(source), destination="original_managed_session_full_body",
+            source_fact_binding="frozen_source_v2")
+        request["narrative_contract"]["requirements"] += [
+            "Use only this original Goal's frozen evidence and permitted artifacts; no portfolio or other Goal access is granted.",
+            "Separate native Task completion, independent outcome evidence and actual message delivery. Preserve failed, blocked and unreadable evidence.",
+            "A due unchanged period still needs a report; exclude report generation itself from business progress.",
+        ] + list(_SOURCE_NARRATIVE_REQUIREMENTS)
+        _include_missed_windows(request, root, window)
+        request["request_digest"] = _canonical_digest(request)
+        folder.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(folder / "source.json", source)
+        atomic_write_json(path, request)
+        return request
+
+
+def _report_sources(authored: dict[str, Any], request: dict[str, Any],
+                    completed_at: str) -> list[dict[str, Any]]:
+    from .adapters import build_periodic_report_source_result
+
+    sources = [_build_authored_source(authored, completed_at=completed_at)]
+    bounds = request.get("missed_cadence")
+    if bounds is None:
+        return sources
+    zone = ZoneInfo(request["window"]["schedule"]["timezone"])
+    first, last = (datetime.fromisoformat(bounds[key]).astimezone(zone).isoformat(" ", timespec="minutes")
+        for key in ("first_due_at", "last_due_at"))
+    chinese = authored["editorial"]["language"].lower().startswith("zh")
+    title = "缺报区间" if chinese else "Missed report windows"
+    summary = (f"计划截止时间从 {first} 到 {last} 的报告缺报（含两端，{zone.key}）。本期仅覆盖最新完整窗口。"
+        if chinese else f"Reports due from {first} through {last} ({zone.key}) were missed. This report covers the latest complete window.")
+    sources.append(build_periodic_report_source_result(source_id="calendar_gap",
+        source_kind="calendar_gap", status="complete", observed_at=completed_at,
+        sections=[{"section_id": "calendar_gap", "title": title, "items": [{
+            "item_id": "missed_windows", "title": title, "summary": summary,
+            "content_kind": "coverage", "visibility": "supporting",
+        }]}]))
+    return sources
+
+
+def freeze_private_report(*, root: Path, window: dict[str, Any], response: dict[str, Any],
+                          require_current_window: bool = False) -> dict[str, Any]:
+    from .adapters import build_periodic_report_document
+    from .bindings import build_periodic_report_generation_bundle
+    from .post_writeback_hook import evaluate_periodic_report_trigger_evaluation_intent
+    from .incremental import (
+        build_periodic_report_publication_candidate, periodic_report_incremental_baseline,
+        read_periodic_report_publication_cursor,
+    )
+    from ...presentation.renderers.periodic_report_markdown import render_periodic_report_markdown
+    from ...presentation.renderers.periodic_report_html import render_periodic_report_html
+
+    folder = attempt_directory(root, window)
+    with exclusive_file_lock(folder / "generation.lock", operation="freeze_private_report"):
+        if require_current_window:
+            journal = read_cadence_journal(runtime_root=root, goal_id=window["goal_id"])
+            if not journal or journal["window"] != window or journal.get("retirement"):
+                raise ValueError("the original report is no longer the active window")
+        request = _read(folder / "editorial-request.json")
+        _verify_source_facts(request, _read(folder / "source.json"))
+        response_path = folder / "editorial-response.json"
+        if response_path.exists() and _read(response_path) != response:
+            raise ValueError("a report window already has a different authored response")
+        # Persist an invalid response as counterevidence too. A failed/unknown
+        # model attempt never becomes permission to regenerate it automatically.
+        atomic_write_json(response_path, response)
+        authored = _load_editorial_response(request=request, response_path=response_path)
+        generated_at = datetime.now(timezone.utc).isoformat()
+        document = build_periodic_report_document(title=authored["title"], generated_at=generated_at,
+            period_window={"start_at": window["start_at"], "end_at": window["due_at"]},
+            profile=window["profile_ref"], sources=_report_sources(authored, request, generated_at),
+            editorial=authored["editorial"],
+            trigger_receipt=evaluate_periodic_report_trigger_evaluation_intent(cadence_intent(window)))
+        markdown, html = render_periodic_report_markdown(document), render_periodic_report_html(document)
+        bundle = build_periodic_report_generation_bundle(document=document, artifacts=[markdown, html])
+        atomic_write_json(folder / "generation-bundle.json", bundle)
+        body = str(markdown["content"])
+        report_bytes = body.encode("utf-8")
+        (folder / "report.md").write_bytes(report_bytes)
+        cursor = read_periodic_report_publication_cursor(runtime_root=root,
+            goal_id=window["goal_id"], agent_id=window["agent_id"])
+        candidate = build_periodic_report_publication_candidate(goal_id=window["goal_id"],
+            agent_id=window["agent_id"], generation_id=bundle["generation_receipt"]["generation_id"],
+            trigger_receipt=document["trigger_receipt"], facts=request["facts"],
+            baseline=periodic_report_incremental_baseline(cursor) if cursor else None)
+        atomic_write_json(folder / "publication-candidate.json", candidate)
+        receipt = {"window_id": window["window_id"], "request_digest": request["request_digest"],
+            "generated_at": generated_at,
+            "generation_id": bundle["generation_receipt"]["generation_id"],
+            "body_sha256": hashlib.sha256(report_bytes).hexdigest(),
+            "bundle_sha256": _canonical_digest(bundle), "publication_candidate_id": candidate["candidate_id"],
+            "publication_candidate_sha256": _canonical_digest(candidate),
+            "generation_complete": True, "delivery_verified": False}
+        if "source_fact_binding" in request:
+            receipt["source_fact_binding"] = request["source_fact_binding"]
+        atomic_write_json(folder / "private-generation.json", receipt)
+        validate_private_generation(folder)
+        return receipt
+
+
+def validate_private_generation(folder: Path) -> dict[str, Any]:
+    """Independent frozen-content check used by the native Turn validator."""
+    from .bindings import build_periodic_report_generation_bundle
+    from .incremental import build_periodic_report_publication_candidate
+    from .adapters import build_periodic_report_document
+    from .post_writeback_hook import evaluate_periodic_report_trigger_evaluation_intent
+    from ...presentation.renderers.periodic_report_markdown import render_periodic_report_markdown
+    from ...presentation.renderers.periodic_report_html import render_periodic_report_html
+
+    receipt = _read(folder / "private-generation.json")
+    request = _read(folder / "editorial-request.json")
+    if request["request_digest"] != _canonical_digest({k: v for k, v in request.items() if k != "request_digest"}):
+        raise ValueError("frozen editorial input changed")
+    authored = _load_editorial_response(request=request, response_path=folder / "editorial-response.json")
+    source = _read(folder / "source.json")
+    if request["source_artifact_sha256"] != _canonical_digest(source):
+        raise ValueError("frozen portfolio evidence changed")
+    if request.get("source_fact_binding") != receipt.get("source_fact_binding"):
+        raise ValueError("frozen report source binding changed")
+    _verify_source_facts(request, source)
+    window = validate_cadence_window(request["window"])
+    document = build_periodic_report_document(title=authored["title"], generated_at=receipt["generated_at"],
+        period_window={"start_at": window["start_at"], "end_at": window["due_at"]},
+        profile=window["profile_ref"], sources=_report_sources(authored, request, receipt["generated_at"]),
+        editorial=authored["editorial"],
+        trigger_receipt=evaluate_periodic_report_trigger_evaluation_intent(cadence_intent(window)))
+    bundle = _read(folder / "generation-bundle.json")
+    # Reconstruct only shipped presentations, never rewrite frozen artifacts.
+    # Each still requires full bundle, source and body equality below.
+    for markdown_options, html_options in (
+        ({}, {}),
+        ({}, {"_legacy_highlight_wrap": True}),
+        ({}, {"_legacy_masthead": True}),
+        ({"_legacy_layout": True}, {"_legacy_layout": True}),
+        ({"_legacy_source_links": True}, {"_legacy_source_links": True}),
+    ):
+        checked = build_periodic_report_generation_bundle(document=bundle["document"], artifacts=[
+            render_periodic_report_markdown(bundle["document"], **markdown_options),
+            render_periodic_report_html(bundle["document"], **html_options)])
+        if checked == bundle:
+            break
+    candidate = _read(folder / "publication-candidate.json")
+    expected_candidate = build_periodic_report_publication_candidate(goal_id=window["goal_id"],
+        agent_id=window["agent_id"], generation_id=checked["generation_receipt"]["generation_id"],
+        trigger_receipt=document["trigger_receipt"], facts=request["facts"],
+        baseline=candidate.get("incremental_baseline"))
+    report_bytes = (folder / "report.md").read_bytes()
+    if (document != bundle["document"] or checked != bundle or receipt["bundle_sha256"] != _canonical_digest(checked)
+            or receipt["window_id"] != window["window_id"]
+            or receipt["generation_id"] != checked["generation_receipt"]["generation_id"]
+            or candidate != expected_candidate
+            or receipt["publication_candidate_id"] != candidate["candidate_id"]
+            or receipt["publication_candidate_sha256"] != _canonical_digest(candidate)
+            or receipt["request_digest"] != request["request_digest"]
+            or receipt["body_sha256"] != hashlib.sha256(report_bytes).hexdigest()
+            or report_bytes.decode("utf-8") != next(
+                artifact["content"] for artifact in checked["artifacts"]
+                if artifact["renderer_kind"] == "markdown")):
+        raise ValueError("frozen generation or full report body changed")
+    return receipt

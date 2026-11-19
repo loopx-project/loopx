@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import json
 import threading
+import tracemalloc
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
+from canonical_authority_fixture import promoted_create_fixture
 
 import loopx.state_refresh as state_refresh_module
 from loopx.control_plane.quota.codex_session_usage import (
@@ -134,6 +136,54 @@ def test_read_codex_session_usage_extracts_cumulative_totals(tmp_path: Path) -> 
     assert observation["measurement_kind"] == "absolute"
     assert observation["duration_ms"] == 300_000
     assert "cost_usd" not in observation  # unmeasured stays unknown, not zero
+
+
+@pytest.mark.parametrize("position", [0, 2, 3])
+def test_read_codex_session_usage_rejects_conflicting_session_metadata(
+    tmp_path: Path, position: int,
+) -> None:
+    lines = _fixture_rollout(tmp_path).read_text(encoding="utf-8").splitlines()
+    lines.insert(position, _rollout_header(OTHER_SESSION_ID)[0])
+    rollout = _write_rollout(tmp_path / "rollout-mixed-sessions.jsonl", lines)
+
+    with pytest.raises(CodexSessionUsageError, match="conflicting session_meta ids"):
+        read_codex_session_usage(rollout)
+
+
+@pytest.mark.parametrize("id_key", ["id", "session_id"])
+def test_read_codex_session_usage_retains_first_same_session_clock(
+    tmp_path: Path, id_key: str,
+) -> None:
+    rollout = _fixture_rollout(tmp_path)
+    original = read_codex_session_usage(rollout)
+    lines = rollout.read_text(encoding="utf-8").splitlines()
+    repeated = json.loads(_rollout_header()[0])
+    repeated["payload"].pop("session_id")
+    repeated["payload"][id_key] = SESSION_ID
+    repeated["payload"]["timestamp"] = "2026-08-26T01:06:00.000Z"
+    lines.append(json.dumps(repeated))
+    _write_rollout(rollout, lines)
+
+    assert read_codex_session_usage(rollout) == original
+
+
+def test_read_codex_session_usage_rejects_unidentified_metadata(tmp_path: Path) -> None:
+    lines = _fixture_rollout(tmp_path).read_text(encoding="utf-8").splitlines()
+    lines.insert(0, json.dumps({"type": "session_meta", "payload": {}}))
+    rollout = _write_rollout(tmp_path / "rollout-unidentified-session.jsonl", lines)
+
+    with pytest.raises(CodexSessionUsageError, match="no session_meta id"):
+        read_codex_session_usage(rollout)
+
+
+def test_read_codex_session_usage_requires_metadata_before_counters(tmp_path: Path) -> None:
+    lines = _fixture_rollout(tmp_path).read_text(encoding="utf-8").splitlines()
+    rollout = _write_rollout(
+        tmp_path / "rollout-late-session.jsonl", [lines[1], lines[2], lines[0]]
+    )
+
+    with pytest.raises(CodexSessionUsageError, match="usage before session_meta"):
+        read_codex_session_usage(rollout)
 
 
 def test_read_codex_session_usage_binds_model_when_token_snapshot_is_observed(
@@ -324,12 +374,13 @@ def test_session_usage_baseline_missing_index_means_first_observation(
     assert session_usage_baseline(tmp_path / "index.jsonl", SESSION_ID) is None
 
 
+@pytest.mark.parametrize("padding", ["", "\u0085", "\u2028"])
 def test_session_usage_baseline_telescopes_only_its_own_session_rows(
-    tmp_path: Path,
+    tmp_path: Path, padding: str,
 ) -> None:
     index_path = tmp_path / "index.jsonl"
     index_path.write_text(
-        "\n".join(
+        (padding + "\n").join(
             [
                 _index_row(
                     generated_at="2026-08-26T01:05:00",
@@ -385,6 +436,80 @@ def test_session_usage_baseline_fails_closed_on_corrupt_index_row(
     index_path.write_text('{"generated_at": "2026-08-26T01:05:00"\n', encoding="utf-8")
     with pytest.raises(CodexSessionUsageError, match="row 1 is corrupt"):
         session_usage_baseline(index_path, SESSION_ID)
+
+
+def test_booking_reads_the_complete_ledger_without_buffering_other_history(
+    tmp_path: Path,
+) -> None:
+    index_path = tmp_path / "index.jsonl"
+    with index_path.open("w", encoding="utf-8") as stream:
+        stream.write(_index_row(
+            generated_at="2026-08-26T01:01:00", source_snapshot_id=f"codex:{SESSION_ID}:t1",
+            input_tokens=700, output_tokens=100, cache_tokens=0,
+            measurement_kind="absolute",
+        ) + "\n")
+        unrelated = json.dumps({"recommended_action": "x" * 8192}) + "\n"
+        for _ in range(512):
+            stream.write(unrelated)
+        stream.write(_index_row(
+            generated_at="2026-08-26T01:02:00", source_snapshot_id=f"codex:{SESSION_ID}:t2",
+            input_tokens=100, output_tokens=50, cache_tokens=0,
+            measurement_kind="delta",
+        ))
+    rollout = _fixture_rollout(tmp_path)
+    record: dict[str, Any] = {}
+    index_record: dict[str, Any] = {}
+    tracemalloc.start()
+    try:
+        book_codex_session_usage(record, rollout, index_path, index_record=index_record)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 1024 * 1024
+    assert record["usage"]["measurement_kind"] == "delta"
+    assert record["usage"]["input_tokens"] == 400
+    assert record["usage"]["output_tokens"] == 150
+    assert record["usage"] == index_record["usage"]
+
+
+def test_index_read_failure_does_not_publish_a_partial_usage_booking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    index_path = tmp_path / "index.jsonl"
+    index_path.write_text(_index_row(
+        generated_at="2026-08-26T01:01:00", source_snapshot_id=f"codex:{SESSION_ID}:t1",
+        input_tokens=700, output_tokens=100, measurement_kind="absolute",
+    ) + "\n", encoding="utf-8")
+    rollout = _fixture_rollout(tmp_path)
+    original_open = Path.open
+
+    class FailedIndex:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return self.stream.__exit__(*args)
+
+        def read(self, *args):
+            raise PermissionError("fixture index read failed")
+
+        def __iter__(self):
+            yield next(self.stream)
+            raise PermissionError("fixture index read failed")
+
+    def failed_open(path, *args, **kwargs):
+        stream = original_open(path, *args, **kwargs)
+        return FailedIndex(stream) if path == index_path else stream
+
+    monkeypatch.setattr(Path, "open", failed_open)
+    record: dict[str, Any] = {}
+    index_record: dict[str, Any] = {}
+    with pytest.raises(CodexSessionUsageError, match="cannot read run index"):
+        book_codex_session_usage(record, rollout, index_path, index_record=index_record)
+    assert record == index_record == {}
 
 
 @pytest.mark.parametrize(
@@ -443,29 +568,11 @@ def test_book_codex_session_usage_fails_closed_on_invalid_baseline_without_appen
     assert "usage" not in index_record
 
 
-def _goal_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
-    project = tmp_path / "project"
-    state = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
-    state.parent.mkdir(parents=True)
-    state.write_text("# Active Goal State\n", encoding="utf-8")
-    registry_path = tmp_path / "registry.json"
-    registry_path.write_text(
-        json.dumps(
-            {
-                "goals": [
-                    {
-                        "id": GOAL_ID,
-                        "status": "active",
-                        "repo": str(project),
-                        "state_file": str(state.relative_to(project)),
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
+def _goal_fixture(tmp_path: Path, *, provider: str = "sqlite") -> tuple[Path, Path, Path]:
+    registry_path, runtime_root, _ = promoted_create_fixture(
+        tmp_path, provider=provider, goal_id=GOAL_ID, registered_agents=[],
     )
-    runtime_root = tmp_path / "runtime"
-    return registry_path, project, runtime_root
+    return registry_path, tmp_path / "project", runtime_root
 
 
 def _refresh(
@@ -508,10 +615,11 @@ def _summary_totals(runtime_root: Path) -> dict[str, Any]:
     return summary["totals"]
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_refresh_state_codex_session_produces_non_zero_usage_summary(
-    tmp_path: Path,
+    tmp_path: Path, provider: str,
 ) -> None:
-    registry_path, project, runtime_root = _goal_fixture(tmp_path)
+    registry_path, project, runtime_root = _goal_fixture(tmp_path, provider=provider)
     rollout = _fixture_rollout(tmp_path)
 
     payload = _refresh(
@@ -537,6 +645,48 @@ def test_refresh_state_codex_session_produces_non_zero_usage_summary(
     assert totals["output_tokens_24h"] == 300
     assert totals["cache_tokens_24h"] == 200
     assert totals["duration_ms_24h"] == 300_000
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_refresh_state_rejects_session_rebinding_and_recovers_without_rebooking(
+    tmp_path: Path, provider: str,
+) -> None:
+    registry_path, project, runtime_root = _goal_fixture(tmp_path, provider=provider)
+    rollout = _fixture_rollout(tmp_path)
+    lines = rollout.read_text(encoding="utf-8").splitlines()
+    _refresh(
+        registry_path=registry_path, runtime_root=runtime_root,
+        project=project, usage_codex_session=rollout,
+    )
+    index_path = runtime_root / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    before = index_path.read_bytes()
+    totals = _summary_totals(runtime_root)
+    _write_rollout(rollout, [*lines, _rollout_header(OTHER_SESSION_ID)[0]])
+
+    with pytest.raises(CodexSessionUsageError, match="conflicting session_meta ids"):
+        _refresh(
+            registry_path=registry_path, runtime_root=runtime_root,
+            project=project, usage_codex_session=rollout,
+        )
+
+    assert index_path.read_bytes() == before
+    assert _summary_totals(runtime_root) == totals
+    assert session_usage_baseline(index_path, OTHER_SESSION_ID) is None
+
+    repeated = json.loads(_rollout_header()[0])
+    repeated["payload"]["timestamp"] = "2026-08-26T01:06:00.000Z"
+    _write_rollout(rollout, [*lines, json.dumps(repeated)])
+    result = _refresh(
+        registry_path=registry_path, runtime_root=runtime_root,
+        project=project, usage_codex_session=rollout,
+    )
+
+    assert result["ok"] is True
+    assert result["usage"]["measurement_kind"] == "delta"
+    for field in ("input_tokens", "output_tokens", "cache_tokens", "duration_ms"):
+        assert result["usage"][field] == 0
+    assert len(_index_runs(runtime_root)) == 2
+    assert _summary_totals(runtime_root)["input_tokens_24h"] == totals["input_tokens_24h"]
 
 
 def test_refresh_state_replaying_same_snapshot_does_not_double_count(

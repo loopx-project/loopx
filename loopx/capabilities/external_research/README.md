@@ -54,7 +54,6 @@ counts as execution or evidence coverage.
 
 Connector registry 仅拥有库存与遥测。即使 connector 标为 `supported`，在当前
 provider 生命周期读回证明 installed/enabled/ready 之前仍投影为 `ready=false`。
-注册不等于调用，更不等于证据覆盖。
 
 ## CLI / 命令行
 
@@ -65,7 +64,7 @@ and non-object roots are reported separately in JSON and default Markdown output
 so callers can correct the input.
 
 `external-evidence` 的 `--*-json` 参数接收**文件路径**，不接收 inline JSON。
-provider inventory 文件的根对象须包含 `providers` 数组，不是裸数组。
+provider inventory 文件的根对象须包含 `providers` 数组。
 JSON 与默认 Markdown 输出分别报告文件读取、JSON 解析和根对象类型错误，
 便于调用者修正输入。
 
@@ -182,7 +181,7 @@ setup and execution remain with the upstream tool and host adapter.
    lineage coverage and retirement readiness before declaring the slice used.
 
 实际 probe 后才能填 ready inventory；先生成 plan，再调用选中的宿主工具。上述 JSON
-是 caller 回执，不是执行认证。逐来源记录原始 URL、同源关系、依据、真实日期、读取
+是 caller 回执。逐来源记录原始 URL、同源关系、依据、真实日期、读取
 内容 digest 与局限；用 `receipt` 验证，再独立采纳/拒绝。持久化沿用既有 deepresearch
 账本，研究问题必须与 plan objective 完全一致；实际读回覆盖后才可退休。
 
@@ -199,6 +198,46 @@ images, authenticated scope and broad reliability are separate qualifications.
 
 [Host-provider reuse checkpoint](../../../docs/architecture/rfcs/ledger/external-evidence-research-capability-v0/2026-10-11-host-provider-reuse.md)
 records a bounded real method, public-scope connector and failed-reader journey.
+
+## Ego/X discovery / Ego/X 发现
+
+Use X discovery when the question needs creator demos, current discussions or
+original announcements, or the user requests that platform. It is a retrieval
+route, not a mandatory source for every research question. Prefer official docs
+or source code for technical verification. The host `external-research` method
+guides that choice; the contract does not automatically run a browser or search
+X merely because a research plan exists.
+
+需要作者演示、近期讨论、原始公告或用户指定 X 时，使用 X 发现路径；不是每个问题
+都必须搜索 X。技术事实继续回到官方文档或源码核验。宿主 `external-research` 方法
+指导选路；研究计划本身不会自动启动浏览器或搜索。
+
+Reuse the optional [Ego source reader's `search_x`](../../../docs/integrations/ego-source-reader.md#x-search-and-original-post-discovery)
+when that tool is available. Otherwise use the installed `ego-browser` CLI under
+its current skill: open the platform search UI, wait for actual results, retain
+original post links and inspect relevant media. Preserve the existing
+TaskSpace and account boundary; do not copy cookies, install a browser, change
+profiles or take over user control to complete a search.
+
+优先复用已启用 Ego reader 的 `search_x`；没有该工具时，按当前 Ego skill 使用已安装
+CLI 打开平台搜索、等待真实结果、保留原帖链接并检查相关媒体。沿用现有 TaskSpace 和账户边界，不复制 cookie、
+安装浏览器、更换 profile 或接管用户控制。
+
+After a bounded real readiness probe, represent this observed host tool as a
+`connector` in the existing inventory; its provider id is caller-declared, not a
+new built-in registration. Use `plan` before the selected research execution,
+then `receipt`, explicit `admit`/reject and `readback` as above. Query excerpts
+are discovery evidence; original-post and video reads have their own scopes.
+An empty platform state is different from a loading shell, login wall or failed
+read. Keep raw result pages and account context provider-private. No new Goal,
+evidence ledger, automatic admission, account mutation or background search is
+created by this route.
+
+真实有界 probe 后才把宿主工具作为既有 inventory 的 `connector`；provider id 由调用者
+声明，不新增 built-in 注册。正式执行前生成 plan，随后校验 receipt、明确采纳/拒绝并
+读回。搜索摘录、原帖读取和视频观察分别记录范围；空结果、加载中、登录墙和失败不能
+混为一谈。原始结果与账户上下文留私有侧，不创建新 Goal、平行账本、自动采纳、账户
+写入或后台搜索。
 
 ## Public GitHub method / 公开 GitHub 方法
 
@@ -218,13 +257,12 @@ bounded read; receipt `completed_at` is recorded after all attempted reads,
 including failures. Neither timestamp establishes publication or first availability.
 
 每条成功来源的 `accessed_at` 在有界读取后记录 UTC 观察时间；回执的
-`completed_at` 在全部读取尝试（包括失败）结束后记录。两者均不证明发布或首次可得时间。
+`completed_at` 在全部读取尝试（包括失败）结束后记录。
 
 Failure limitations identify the reached step: public repository visibility,
 source file read, or source text validation. HTTP status codes remain visible;
 exception messages, response bodies and transport reasons remain redacted.
-The step is diagnostic context, not proof of a timeout, missing permission or
-source unavailability beyond this attempt. Partial successful reads are retained.
+The step is diagnostic context. Partial successful reads are retained.
 
 失败局限会标明实际到达的步骤：仓库公开性核验、来源文件读取或文本验证。保留 HTTP
 状态码，不暴露异常正文、响应内容或传输原因；步骤只辅助诊断，不能据此推断超时、
@@ -258,15 +296,14 @@ sources and exhausted source budgets remain blockers; partial projection stays
 retained until every admitted source is actually read back with matching lineage.
 Omit `--execute` for read-only projection; omit `--public-github` to avoid the
 provider readiness probe. There is no persistent provider enablement to uninstall.
-Original sources remain available on partial, empty and failed results. Literal
-matches prove neither semantic conclusions nor evidence completeness.
+Original sources remain available on partial, empty and failed results.
 
 `execute --execute` 只授权读取来源；`readback --execute` 只把已明确采纳的紧凑证据
 写入现有研究账本，且要求研究问题与 plan objective 相同。同一 admission 可幂等重试；
 问题不匹配、已有不相关来源或预算耗尽仍为 blocker。部分下游投影保持 retained，
 直至全部已采纳来源以匹配 lineage 实际回读。省略 `--execute` 可只读回读；省略
 `--public-github` 不探测该 provider。没有持久开关需要卸载。部分、空或失败证据
-保留原始来源退路；字面匹配不证明语义结论或证据完整性。
+保留原始来源退路；
 
 Real qualification (anonymous network reads, disposable synthetic ledger):
 `uv run --extra test python examples/public-github-evidence-live-smoke.py --execute-public-provider --source https://github.com/OWNER/REPO/blob/FULL_COMMIT_SHA/README.md`.
@@ -277,4 +314,4 @@ Live authenticated connector and Lark delivery qualification remain separate;
 this method grants no connector credentials or outbound-message authority.
 
 真实验收会进行匿名网络读取并使用一次性合成账本；打包会话验收沿用上述环境变量和命令。
-真实带凭据 connector 与 Lark 送达资格仍是独立边界；本方法不授予 connector 凭据或外发消息权限。
+真实带凭据 connector 与 Lark 送达资格仍是独立边界；

@@ -173,10 +173,12 @@ provider revision、receipt 内容和初始 projection 必须全部一致。
 ## 大 Goal 的捕获证明
 
 序号恢复以前会返回完整 head 和历史事务的完整 projection，大 Goal 可能因此超过
-现有 2 MiB RPC 响应上限，甚至不能产生晋升所需的 shadow 变更。
+当时的 2 MiB RPC 响应上限，甚至不能产生晋升所需的 shadow 变更。
 现在 `outbox_read` 的 proof read model 在 TS 内完整校验事务链，只传回进度、receipt、
 projection digest 和 partition marker；分配序号不返回事务行，drain 使用紧凑行。
-原有完整诊断读取保持默认合同，不提高传输上限、不减少持久数据，也不省略链校验。
+原有完整诊断读取保持默认合同；该 proof-read 变更不提高传输上限、不减少持久数据，
+也不省略链校验。普通传输现沿用单独测量的[共享 8 MiB 预算](canonical-snapshot-pagination.md#shared-rpc-byte-budget)，
+原超限仍保留为历史失败。
 若 outbox 尚未结清，晋升仍会拒绝。先执行并检查既有的有界 drain：
 `authority-shadow drain --goal-id example-goal --budget-seconds 60`。
 

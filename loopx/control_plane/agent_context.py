@@ -15,6 +15,7 @@ def project_agent_context(
     orchestration: Mapping[str, Any],
     observations: Mapping[str, Any] | None = None,
     capability_improvement: object = None,
+    delegation_facts: Mapping[str, Any] | None = None,
 ):
     return effect_runtime_result(
         "capability_hook.agent_context.project",
@@ -24,6 +25,7 @@ def project_agent_context(
             "orchestration": dict(orchestration),
             "observations": dict(observations or {}),
             **({"capability_improvement": capability_improvement} if capability_improvement is not None else {}),
+            **({"delegation_facts": dict(delegation_facts)} if delegation_facts is not None else {}),
         },
     )
 
@@ -37,44 +39,42 @@ def project_goal_agent_context(
     runtime_root: Path,
     observations: Mapping[str, Any] | None = None,
 ):
-    """Project the Goal policy plus its public-safe delegated runtime facts."""
+    """Project the Goal policy plus the host facts behind its delegated routes."""
 
     orchestration = compact_orchestration_policy(goal.get("spawn_policy"))
-    projected_observations = dict(observations or {})
-    enabled = (
-        orchestration.get("mode") == "multi_subagent"
+    execution_config = str(orchestration.get("execution_config") or "") or None
+    facts = None
+    # Host I/O guard only: a retained configuration of a disabled capability is
+    # never read. The TypeScript owner decides whether the capability is enabled.
+    if (
+        execution_config
+        and "delegation_context" not in (observations or {})
+        and orchestration.get("mode") == "multi_subagent"
         and orchestration.get("spawn_allowed") is True
         and int(orchestration.get("max_children") or 0) > 0
-    )
-    execution_config = str(orchestration.get("execution_config") or "") or None
-    if enabled and execution_config:
-        project = Path(str(goal.get("repo") or ".")).expanduser()
-        # Import lazily: the delegation projection reuses the Turn host owner,
-        # whose package also imports envelope_agent_context for later lifecycle
-        # phases.
-        from .collaboration.delegation_context import project_delegation_context
+    ):
+        # Import lazily: the facts reader reuses the Turn host owner, whose
+        # package also imports envelope_agent_context for later lifecycle phases.
+        from .collaboration.delegation_context import read_delegation_facts
 
-        projected_observations.setdefault(
-            "delegation_context",
-            project_delegation_context(
-                runtime_root=runtime_root,
-                registry_path=registry_path,
-                goal_id=str(scope.get("goal_id") or ""),
-                agent_id=str(scope.get("agent_id") or ""),
-                project=project,
-                execution_config=execution_config,
-                include_operation_receipts=phase == "after_delegate_result",
-            ),
+        facts = read_delegation_facts(
+            runtime_root=runtime_root,
+            registry_path=registry_path,
+            goal_id=str(scope.get("goal_id") or ""),
+            agent_id=str(scope.get("agent_id") or ""),
+            project=Path(str(goal.get("repo") or ".")).expanduser(),
+            execution_config=execution_config,
+            include_operation_inventory=phase == "after_delegate_result",
         )
     control_plane = goal.get("control_plane")
     return project_agent_context(
         phase=phase,
         scope=scope,
         orchestration=orchestration,
-        observations=projected_observations,
+        observations=observations,
         capability_improvement=(control_plane.get("capability_improvement") if isinstance(control_plane, Mapping) else None),
+        delegation_facts=facts,
     )
-
 
 def _signed_delegation_observation(context: Mapping[str, Any]) -> Mapping[str, Any] | None:
     contributions = context.get("contributions")

@@ -1,4 +1,5 @@
 import {planTodoCreationPriority} from "../todos/priority.ts";
+import {planMonitorSchedule} from "../todos/monitor_metadata.ts";
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
 import type { JsonObject } from "../effect_program.ts";
 import {CoordinationCommandReceipt} from "./command_receipt.ts";
@@ -51,15 +52,23 @@ function failure(code: string, reason: string, detail: JsonObject = {}): Coordin
   };
 }
 
+/** Decode the creation owner's existing receipt without reading current state. */
+export function decodeCoordinationTodoCreateReceipt(original: JsonObject, todoId: string) {
+  const todo = canonicalAuthorityObject(original.todo, "created Todo receipt");
+  if (original.schema_version !== COORDINATION_TODO_CREATE_RECEIPT_SCHEMA ||
+      original.todo_id !== todoId || todo.todo_id !== todoId) {
+    throw new AuthorityStoreProtocolError("created Todo receipt identity mismatch");
+  }
+  return {fields: {todo_id: original.todo_id, todo, original_receipt: original}, changed: true};
+}
+
 function createReceipt(input: CoordinationTodoCreateInput, requestSha: string) {
   return new CoordinationCommandReceipt({result_schema: COORDINATION_TODO_CREATE_RESULT_SCHEMA,
     identity: {schema_version: COORDINATION_TODO_CREATE_RECEIPT_SCHEMA,
       operation_id: input.operation_id, goal_id: input.goal_id, todo_id: String(input.todo.todo_id),
       request_sha256: requestSha}, failure,
     decode(original) {
-      const todo = canonicalAuthorityObject(original.todo, "created Todo receipt");
-      if (todo.todo_id !== input.todo.todo_id) throw new AuthorityStoreProtocolError("created Todo receipt identity mismatch");
-      return {fields: {todo_id: original.todo_id, todo, original_receipt: original}, changed: true};
+      return decodeCoordinationTodoCreateReceipt(original, String(input.todo.todo_id));
     }});
 }
 
@@ -109,6 +118,7 @@ function semanticDuplicateResult(
   duplicate: JsonObject,
   providerRevision: unknown,
   cursor: unknown,
+  identityDescription = "role/text",
 ): CoordinationTodoCreateResult {
   const ignored = new Set(["schema_version", "todo_id", "created_by", "last_actor_agent_id", "updated_at"]);
   const mismatch = Object.entries(todo).find(([field, value]) =>
@@ -123,7 +133,7 @@ function semanticDuplicateResult(
   if (mismatch !== undefined) {
     return failure(
       "todo_semantic_duplicate_conflict",
-      `an active Todo with the same role/text has different ${mismatch[0]}; use Todo update`,
+      `an active Todo with the same ${identityDescription} has different ${mismatch[0]}; use Todo update`,
       {todo_id: duplicate.todo_id},
     );
   }
@@ -165,15 +175,34 @@ export function planCoordinationTodoCreate(
   rawInput: CoordinationTodoCreateInput,
   todos: ReadonlyMap<string, JsonObject>,
   readModelSchema: unknown,
-  identity: "role_text" | "operation_lane" = "role_text",
+  identity: "role_text" | "role_target" | "operation_lane" = "role_text",
   claimPolicy: "actor_owned" | "registered_peer_handoff" = "actor_owned",
 ): CoordinationTodoCreateResult {
   const input = normalizeCreateInput(rawInput, claimPolicy);
   const candidate = createCandidate(input, readModelSchema);
-  const duplicate = identity === "role_text" ? [...todos.values()].find((todo) =>
+  const active = [...todos.values()].filter((todo) =>
     todo.role === input.todo.role && todo.archive_state === "active" &&
-    todo.status !== "done" && todo.status !== "deferred" && todo.text === candidate.text) : undefined;
-  if (identity === "role_text" && duplicate !== undefined) return semanticDuplicateResult(candidate, duplicate, null, null);
+    todo.status !== "done" && todo.status !== "deferred");
+  const textDuplicate = identity === "role_text"
+    ? active.find((todo) => todo.text === candidate.text)
+    : undefined;
+  if (textDuplicate !== undefined) {
+    return semanticDuplicateResult(candidate, textDuplicate, null, null);
+  }
+  if (identity === "role_target" &&
+      (typeof candidate.target_key !== "string" || candidate.target_key.length === 0)) {
+    return failure("todo_target_identity_missing", "target-key Todo identity requires target_key");
+  }
+  const targetDuplicates = identity === "role_target"
+    ? active.filter((todo) => todo.target_key === candidate.target_key)
+    : [];
+  if (targetDuplicates.length > 1) {
+    return failure("todo_semantic_duplicate_ambiguous",
+      "multiple active Todos have the same role/target_key");
+  }
+  if (targetDuplicates.length === 1) {
+    return semanticDuplicateResult(candidate, targetDuplicates[0]!, null, null, "role/target_key");
+  }
   if (todos.has(String(input.todo.todo_id))) {
     return failure("todo_already_exists", "Todo id already exists in canonical authority", {todo_id: input.todo.todo_id});
   }
@@ -261,7 +290,14 @@ export async function executeCoordinationTodoCreate(
   }
   const todoId = requireAuthorityStoreId(input.todo.todo_id, "todo id");
   const readModel = canonicalAuthorityObject(head.head.todo_read_model, "Todo read model");
-  const plan = planCoordinationTodoCreate(input, projection.todos, readModel.schema_version);
+  // A derived due time belongs to the first result, never to the retry identity.
+  const {todo} = input;
+  const needsInitialDue = todo.role === "agent" && todo.task_class === "continuous_monitor" &&
+    todo.next_due_at == null && todo.cadence != null;
+  const initialDue = needsInitialDue
+    ? planMonitorSchedule(input.now.toISOString(), todo.cadence).next_due_at : null;
+  const plannedInput = initialDue === null ? input : {...input, todo: {...todo, next_due_at: initialDue}};
+  const plan = planCoordinationTodoCreate(plannedInput, projection.todos, readModel.schema_version);
   if (!await authoritySourcesCurrent()) return failure(AUTHORITY_SOURCE_CHANGED.code, AUTHORITY_SOURCE_CHANGED.reason);
   if (plan.status !== "planned") return {...plan, provider_revision: head.provider_revision, cursor: head.cursor};
   const created = canonicalAuthorityObject(plan.todo, "created Todo");

@@ -96,6 +96,37 @@ for (const provider of ["file", "sqlite", "postgresql"] as const) {
     assert.equal((resumed.blocked_lifecycle_transition as JsonObject).execution_authority_granted, false);
     assert.deepEqual((await head(store)).head.leases, paused.head.leases);
   });
+  test(`${provider}: deferred wait recovery reaches a reviewed new wait without execution`, options, async t => {
+    const {store, input} = await fixture(t, provider, "released");
+    const defer = {...input, operation_id: "original-wait", planning_intent: {status: "deferred",
+      resume_when: "resume_at:2026-09-26T06:00:00Z", reason: "Original observation"}};
+    assert.equal((await executeCoordinationTodoUpdate(store, defer)).status, "applied");
+    const before = await head(store);
+    const revised = {...defer, operation_id: "revised-wait", planning_intent: {...defer.planning_intent,
+      resume_when: "resume_at:2026-09-27T06:00:00Z", reason: "Reviewed next observation"}};
+    const refused = await executeCoordinationTodoUpdate(store, revised);
+    assert.equal(refused.status, "failed");
+    const recovery = refused.recovery as JsonObject;
+    assert.equal(recovery.execution_authority_granted, false);
+    const retry = recovery.retry as JsonObject, argv = retry.cli_args as string[];
+    assert.equal(argv[argv.indexOf("--status") + 1], "open");
+    assert.ok(argv.includes("--clear-resume-when"));
+    assert.deepEqual(await head(store), before);
+    const resume = {...input, operation_id: "reviewed-resume", expected_provider_revision: before.provider_revision,
+      planning_intent: {status: "open", clear_resume_when: true, reason: "Owner reviewed the old wait"}};
+    assert.equal((await executeCoordinationTodoUpdate(store, resume)).status, "applied");
+    const opened = await head(store);
+    const result = await executeCoordinationTodoUpdate(store, {...revised, expected_provider_revision: opened.provider_revision});
+    assert.equal(result.status, "applied", JSON.stringify(result));
+    assert.equal((result.deferred_transition as JsonObject).execution_authority_granted, false);
+    const after = await head(store), todo = (after.head.todos as JsonObject[])[0]!;
+    assert.equal(todo.status, "deferred");
+    assert.equal(todo.resume_when, revised.planning_intent.resume_when);
+    assert.deepEqual(todo.required_write_scopes, ["src/**"]);
+    assert.deepEqual(after.head.leases, before.head.leases);
+    assert.equal((await executeCoordinationTodoUpdate(store, resume)).status, "replayed");
+    assert.deepEqual(await head(store), after);
+  });
   test(`${provider}: explicit stale proof, foreign holder and changed provider revision never auto-heal`, options, async t => {
     const {store, input} = await fixture(t, provider);
     const before = await head(store);

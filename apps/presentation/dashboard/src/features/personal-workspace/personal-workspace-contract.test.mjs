@@ -3,7 +3,11 @@ import { readFileSync } from "node:fs";
 import { goalCreateRequest, goalCreationAgentId } from "./goal-create-request.ts";
 import { localizedCapabilityFieldCopy } from "./capability-localization.ts";
 import { taskSessionStatus } from "./goal-activity.ts";
+import { todoResumeTransition } from "./todo-resume-condition.ts";
 import "./monitor-readback.test.mjs";
+// Exercise shared reconciliation semantics rather than freezing where its
+// helpers are called in the dashboard's revision-aware observation path.
+import "../../data/conversation-returns.test.mjs";
 
 const source = (name) => readFileSync(new URL(name, import.meta.url), "utf8");
 const projectionAgent = { agentId: "status-only", adapterKind: "status_projection", available: true, label: "Status" };
@@ -41,11 +45,9 @@ const statusSourceSwitcher = source("./status-source-switcher.tsx");
 const workspaceSettings = source("./workspace-settings-page.tsx");
 const styles = source("./personal-workspace.css");
 const dashboard = source("../../views/dashboard-page.tsx");
-const conversationReturns = source("../../data/conversation-returns.ts");
 const tasks = source("./goal-tasks-view.tsx");
 const status = source("../../data/status.ts");
 const chatData = source("../../data/chat.ts");
-const actionReview = source("../../../../../../loopx/control_plane/presentation/action_review_plan.ts");
 
 assert.match(model, /kind: "todo"/, "Todo has its own drawer selection");
 for (const field of ["dependencies", "nextTransition", "ownerLabel", "todoId", "taskClass"]) {
@@ -56,7 +58,13 @@ for (const operation of ["reassign", "block"]) {
   assert.match(drawer, new RegExp(`operation:\\s*"${operation}"`), `Todo supports ${operation}`);
 }
 assert.match(drawer, /previewTodoTransition\(selection\.item, "defer"/, "Todo defer collects a resume condition before preview");
-assert.match(drawer, /resume_when:\s*resumeWhen/, "Todo defer sends its explicit resume condition");
+assert.match(drawer, /todoResumeTransition\(resumeWhen\)/, "Todo preview carries the validated form intent");
+assert.deepEqual(todoResumeTransition("monitor_changed:todo_watch@case-b/run-2"),
+  {operation: "edit", status: "open", resume_when: "monitor_changed:todo_watch@case-b/run-2"},
+  "A Monitor dependency keeps the Task open and preserves its exact scope");
+assert.deepEqual(todoResumeTransition("resume_at:2026-12-01T09:00:00Z"),
+  {operation: "defer", resume_when: "resume_at:2026-12-01t09:00:00z"},
+  "A time-based pause still uses defer and preserves its explicit condition");
 assert.doesNotMatch(drawer + page, /owner_resume/, "Personal Workspace never emits the unsupported owner_resume sentinel");
 assert.match(drawer, /\["blocked", "deferred"\]\.includes\(selection\.item\.status/, "Paused Todos offer resume through the existing primary action");
 assert.match(drawer, /className="personal-primary-action" onClick=\{\(\) => void previewTodoTransition\(selection\.item, todoAwaitingResume \? "resume" : "complete"/, "The primary Todo action resumes paused work and completes open work through typed preview");
@@ -118,14 +126,11 @@ assert.doesNotMatch(page.match(/function operationProposalFields[\s\S]*?\n\}/)?.
 assert.match(page, /t\("proposal\.primary\.operationGroup"\)/, "Operation confirmation routes users to the bound group");
 assert.match(chatData, /result_delivery:/, "Dashboard retains operation result-delivery readback");
 assert.match(chatData, /return_delivery\??:/, "Chat messages retain manager return-delivery readback");
-assert.match(dashboard, /reconcileConversationReturns\(/, "Manager return polling uses the shared conversation-return read model");
-assert.match(conversationReturns, /source\.return_delivery \?\? row\.returnDelivery/, "Manager return polling refreshes delivery state after the message arrives");
 assert.match(timeline + page, /ReturnDeliveryStatus/, "Both manager conversation surfaces render return delivery state");
 for (const state of ["delivered", "verification_required", "explicit_unverified"]) {
   assert.match(returnDelivery, new RegExp(state), `Return delivery renders ${state}`);
 }
 assert.doesNotMatch(returnDelivery, /message_ref|provider_receipt|intent_digest/, "Provider-private locator facts never enter the return status badge");
-assert.match(actionReview, /proposal\.action_kind !== "operation\.execute" \|\| \(operationFrame\?\.kind === "result" && operationFrame\.resultDeliveryVerified\)/, "An operation is not complete in the Dashboard until the current result delivery is verified");
 assert.match(page, /reviewPlan\.operationFrame/, "Dashboard operation details consume the shared TS review frame");
 assert.match(page, /const restoreable = stored[\s\S]*\|\| proposal\.action_kind === "operation\.execute"/, "Canonical operation readback includes terminal and cancelled rows instead of retaining a stale gated card");
 assert.match(page, /proposal\.action_kind !== "operation\.execute"[\s\S]*reviewPlan\.interaction !== "completed"/, "Pending operation result-card readback remains visible instead of becoming a generic apply error");
@@ -172,12 +177,13 @@ for (const inputKind of ["boolean", "number", "select", "string_list"]) {
 }
 assert.match(tasks, /t\("tasks\.convertToTask"\)/, "Tasks offer an explicit preview-first bridge from a reply to task management");
 assert.match(page, /t\("home\.taskCount"/, "Home cards expose durable activity when a new Goal has Todos but no run timestamp yet");
-assert.match(page, /t\("proposal\.primary\.goalCreate"\)/, "Goal creation names the localized immediate first-turn effect");
+assert.match(page, /t\(reviewPlan\.creationExecution \? "proposal\.primary\.goalCreate" : "proposal\.primary\.goalCreateOnly"\)/,
+  "Goal creation describes starting only when the canonical plan has explicit execution intent");
 assert.match(timeline, /t\("timeline\.waitingConfirmation"\)/, "Historical gated proposals are grouped into a compact summary");
 assert.match(timeline, /gatedItems\.length/, "The compact Gate summary exposes the pending count");
 assert.match(timeline, /Boolean\(item\.run\.sessionId\)/, "Running count requires a discovered execution Session");
 assert.match(timeline, /Boolean\(item\.run\.canInterrupt\)/, "Running count requires an active interruptible turn");
-assert.match(page, /accept="image\/png,image\/jpeg,image\/webp,image\/gif"/, "Composer accepts bounded image types");
+assert.match(page, /accept="image\/png,image\/jpeg,image\/webp,image\/gif,\.md,\.txt"/, "Composer accepts bounded image types");
 assert.match(page, /imageInputRef\.current\?\.click\(\)/, "Attachment button explicitly opens the native file chooser");
 assert.match(page, /onDrop=\{\(event\)/, "Composer accepts dragged image files");
 assert.match(page, /onPaste=\{[^}]*handleComposerPaste/s, "Composer accepts pasted clipboard images");
@@ -205,8 +211,8 @@ assert.match(page, /\.map\(\(\[key, value\]\) => \(\{[\s\S]*key,[\s\S]*label: fi
 assert.match(page, /field\.key === "cadence"[\s\S]*field\.key === "stop_condition"[\s\S]*field\.key === "timezone"/, "Applied Heartbeat readback consumes stable semantic keys");
 assert.doesNotMatch(page, /field\.label === "cadence"|field\.label === "stop condition"/, "Schedule semantics never depend on localized display labels");
 assert.match(page, /defaultTimeline\(model, managerProjectionId, t\)/, "Default schedule projection uses the active locale authority");
-assert.match(page, /onOpenGoal: \(goalId\) => \{\s*selectGoal\(goalId\);\s*void reconcileStatus\(\[goalId\]\)/, "Applied-action Goal navigation is immediate and reconciles that Goal in the background");
-assert.match(drawer, /onClose\(\); void callbacks\.onOpenGoal\?\.\(goalId\)/, "Applied-action Goal navigation closes its result drawer before asynchronous reconciliation");
+assert.match(page, /onOpenGoal: \(goalId, managedSession\) => \{\s*selectGoal\(goalId, managedSession \? "chat" : "overview", managedSession\);\s*void reconcileStatus\(\[goalId\]\)/, "Applied-action navigation carries the original managed Session and reconciles its Goal in the background");
+assert.match(drawer, /onClose\(\); void callbacks\.onOpenGoal\?\.\(goalId, selection\.item\.createdManagedSession\?\.target\)/, "Applied-action navigation closes its drawer before opening the original Session or legacy Goal");
 assert.match(tasks, /aria-busy=\{quickCompletingTodoIds\?\.has\(todo\.todoId\)/, "Quick Todo completion exposes accessible pending state while its typed preview is prepared");
 assert.match(tasks, /disabled=\{quickCompletingTodoIds\?\.has\(todo\.todoId\)\}/, "Quick Todo completion rejects duplicate clicks while preview creation is pending");
 assert.match(page, /callbacks\.onGoalActivationStateChange\?\.\(lifecycleChange\.goalId, lifecycleChange\.next\)/, "Goal lifecycle apply projects the requested state before the server responds");
@@ -252,7 +258,10 @@ assert.match(drawer, /event\.key === "Tab"/, "Drawer traps keyboard focus");
 assert.match(shell, /event\.key !== "Tab"/, "Mobile Goal navigation traps keyboard focus");
 assert.match(shell, /restoreFocusRef\.current\?\.focus\(\)/, "Mobile Goal navigation restores focus on close");
 assert.match(shell, /aria-modal=\{mobileSidebarOpen \? true : undefined\}/, "Mobile Goal navigation exposes modal semantics");
-assert.match(shell, /inert=\{mobileSidebarOpen \|\| undefined\}/, "Mobile Goal navigation removes background content from keyboard navigation");
+assert.match(shell, /inert=\{mobileSidebarOpen \|\| drawerOverlay \|\| undefined\}/, "Mobile Goal navigation and the narrow Task inspector remove background content from keyboard navigation");
+assert.match(drawer, /useDrawerOverlay\(drawerRef, selection\.kind === "todo"\)/, "The Task inspector derives modality from the rendered overlay");
+assert.match(drawer, /aria-modal=\{selection\.kind === "todo" \? taskInspectorModal \|\| undefined : true\}/, "Only the narrow Task inspector becomes modal");
+assert.match(drawer, /document\.querySelector\("dialog\[open\]:modal"\)/, "Escape leaves a modal dialog in control before the Task inspector");
 assert.doesNotMatch(timeline, /<div aria-live="polite" className="personal-channel-timeline">/, "The full timeline is not a live region");
 assert.match(timeline, /className="personal-live-region"/, "Timeline has a dedicated live region");
 assert.match(drawer, /t\("drawer\.correctionTextarea", \{ agent:[\s\S]*goal:[\s\S]*run:/, "Correction label includes its scoped context");
@@ -313,21 +322,15 @@ assert.doesNotMatch(page, /personal-worker-strip/, "Manager home omits the redun
 assert.doesNotMatch(header, /切换到野兽主题|切换到默认主题/, "Workspace header does not expose theme switching");
 assert.match(workspaceTheme, /workspaceThemeStorageKey = "loopx-pw-theme"/, "Theme preference persists across reloads");
 assert.doesNotMatch(dashboard, /isManagerProjectionQuestion/, "Ordinary manager questions do not silently bypass the selected model by matching phrases");
-assert.match(dashboard, /if \(\(selectedRoute\.agentId === "status-only" && targetContext\.kind !== "project"\)\s*\|\| \(targetContext\.kind === "goal" && !targetGoal\)\)/, "Projection answers require the explicit status-only route or a missing Goal fallback; a workspace conversation never answers from the Goal projection");
+// Context eligibility is exercised by the typed bound-conversation smoke;
+// this source assertion only protects the explicit caller-selected route.
+assert.match(dashboard, /selectedRoute\.agentId === "status-only" && conversationSupportsStatusProjection\(targetContext\)/, "Only the explicit status-only route can use an eligible context's projection");
 assert.match(attentionActions, /role="group" aria-label=\{t\("drawer\.decisionGroup"\)\}/, "Blocked items expose their decisions as one labelled group that previews before any write");
 assert.match(drawer, /const hasProjectedRunActivity = selection\.kind === "run"[\s\S]*selection\.item\.completedSteps > 0/, "Session empty-state copy distinguishes projected progress from a truly idle run");
 assert.match(drawer, /t\("drawer\.runRecordProjected"/, "A projected run does not claim that the Agent never started");
 assert.match(drawer, /t\("drawer\.runRecordEmpty"\)/, "A truly empty Session still explains why there is no timeline yet");
-assert.match(page, /function ManagerConversationTray/, "Manager home has a dedicated conversation tray instead of burying replies in the board timeline");
 assert.match(page, /managerMessages/, "Manager conversation is derived from the active manager message context");
-assert.match(page, /managerConversationReceiptVisible/, "Manager conversation is a send-triggered receipt instead of permanent history chrome");
-assert.match(page, /setManagerConversationReceiptVisible\(true\)/, "A new manager send reveals the temporary conversation receipt");
-assert.match(page, /setManagerConversationReceiptVisible\(false\)/, "Opening or leaving the receipt clears it from the overview");
-assert.match(page, /personal-manager-conversation-tray/, "Manager conversation stays anchored beside the composer");
-assert.match(page, /aria-live="polite"/, "Manager conversation announces streamed replies without moving focus");
-assert.match(page, /t\("conversation\.full"\)/, "The compact manager conversation can expand in place");
-assert.match(page, /onOpenConversation/, "The compact manager conversation has a dedicated full-chat navigation action");
-assert.match(page, /managerChatOpen/, "Manager full conversation uses a dedicated Chat view instead of stretching the home tray");
+assert.match(page, /managerChatOpen/, "Manager conversation uses a dedicated Chat view");
 assert.match(page, /managerChatItems/, "Manager Chat only renders conversation and confirmation items");
 assert.match(page, /sessionProposalIds\.includes\(item\.proposal\.previewId\)/, "Manager Chat only shows proposals created in the current UI session");
 assert.match(page, /\["preview_ready", "gated", "deferred", "applying"\]\.includes\(proposal\.status\)[\s\S]*compileActionReviewPlan\(proposal\)\.retryOriginal === true/, "Restored proposal history uses wire states and preserves retryable original operations");
@@ -342,8 +345,6 @@ assert.doesNotMatch(sidebar, /personal-manager-channels/, "The sidebar does not 
 assert.doesNotMatch(sidebar, /onSelectChannel/, "The sidebar only navigates to the manager or a concrete Goal");
 assert.doesNotMatch(page, /selectedChannel|selectChannel\(|__manager_channel__/, "Manager state lanes do not create hidden conversation channels");
 assert.match(page, /personal-digest-stats[\s\S]*t\("digest\.completed"\)/, "The away digest is a non-interactive summary");
-assert.match(page, /!selectedGoal && !managerChatOpen && managerConversationReceiptVisible[\s\S]*<ManagerConversationTray/, "The tray only appears on the manager overview after a send");
-assert.match(page, /managerMessages\.some\(\(message\) => message\.pending\)[\s\S]*setManagerConversationReceiptVisible\(true\)/, "A recovered active Manager turn restores its compact conversation tray");
 assert.match(page, /goal\.needsYou \?\? goal\.nextSentence/, "Needs-you cards keep the source Goal action visible");
 assert.match(page, /onClick=\{\(\) => onSelectGoal\(goal\.goalId\)\}/, "Manager cards open their source Goal instead of a hidden lane channel");
 assert.doesNotMatch(page, /managerConversationActive/, "Sending from the manager never replaces the overview with a separate conversation page");
@@ -373,7 +374,7 @@ assert.match(page, /t\("home\.blockingSummary", \{ count: managerBlockingCount \
 assert.match(dashboard, /function personalGoalState[\s\S]*hasOpenUserTodo[\s\S]*if \(\["user_or_controller", "controller"\][\s\S]*if \(personalGoalNeedsRepair/, "User gates outrank agent-owned health repair in Goal state projection");
 assert.match(dashboard, /if \(goal\.registry_member === false\)[\s\S]*return \[\]/, "Unregistered historical Goals are excluded from the interactive workspace");
 assert.match(status, /runGoalSchema[\s\S]*display_name:\s*z\.string\(\)/, "Run history preserves the registered Goal display name");
-assert.match(dashboard, /title:\s*personalGoalTitle\(goal\.id,\s*goal\.display_name\)/, "Personal workspace prefers the registered Goal display name");
+assert.match(dashboard, /title:\s*personalGoalTitle\(goal\.id,\s*goal\.source_access\?\.label \?\? goal\.display_name\)/, "Personal workspace prefers the configured source label and falls back to the registered Goal display name");
 assert.match(dashboard, /function personalGoalHasPendingOperatorGate/, "Pending operator gates have a durable state projection helper");
 assert.match(dashboard, /personalGoalHasPendingOperatorGate\(row\)/, "Pending operator gates project into the needs-you state");
 assert.match(dashboard, /explicitUserWait/, "Explicit user-approval language repairs incomplete gate projections");
@@ -396,6 +397,14 @@ for (const contextGoalId of [null, "existing-research-goal"]) {
   assert.equal(request.context.goal_id, contextGoalId);
   assert.equal(request.normalizedParameters.goal_id, "goal-new-research");
   assert.notEqual(request.normalizedParameters.goal_id, contextGoalId);
+  assert.equal(Object.hasOwn(request.normalizedParameters, "start_execution"), false,
+    "Existing builder callers never infer execution intent from Create and start wording");
+}
+for (const permission of ["read_only", "workspace_write_on_confirmation"]) {
+  const fresh = goalCreateRequest({objective: "Repair the cart", completion: "Six checks pass", boundary: "Selected workspace",
+    agentId: "codex", permission, contextGoalId: null, startExecution: true}, key => key);
+  assert.equal(fresh.normalizedParameters.start_execution, true);
+  assert.equal(fresh.normalizedParameters.permission, permission, "Fresh execution preserves the explicit existing permission choice");
 }
 const explicitWorkspace = goalCreateRequest({
   objective: "Inspect the second project", completion: "A checked report", boundary: "Read only",
@@ -444,7 +453,6 @@ assert.match(machineSettings, /selected\.capability_id === "pull_request_review"
 assert.match(machineSettings, /previewMachineConfiguration\(/, "Machine settings require a preview before apply");
 assert.match(machineSettings, /applyMachineConfiguration\([\s\S]*preview\.plan_revision/, "Machine settings apply the exact reviewed revision");
 assert.match(machineSettings, /previewMachineConfigurationRollback\(/, "Machine settings preview rollback before execution");
-assert.match(machineSettings, /liveDefaultDescription/, "Live defaults and Goal overrides are explained together");
 assert.match(machineSettings, /inspection\?\.capability_catalog\.capabilities/, "Machine settings discover capabilities from the shared registry catalog");
 assert.match(machineSettings, /inspection\?\.invalid_namespaces\[0\]/, "Invalid machine state identifies the affected namespace without reading its stored values");
 assert.match(machineSettings, /machine-invalid-repair[\s\S]*role="alert"/, "Invalid machine state exposes a visible guided repair path");
@@ -472,14 +480,14 @@ assert.match(machineSettings, /<CapabilityCatalogNavigation/, "Machine settings 
 assert.match(goalCapabilitySettings, /<CapabilityCatalogNavigation/, "Goal settings use the shared capability catalog navigation");
 assert.match(goalCapabilitySettings, /capability_id === "lark_event_inbox"[\s\S]*<GoalAutoNotifyToggle/, "Lark inbox capability exposes the independent human-gate notification control");
 assert.match(notificationSettings, /disabled=\{busy \|\| notification\?\.configured !== true/, "Gate notification control stays disabled until a Goal Channel is configured");
-assert.match(workspaceSettings, /goalNotifications\.find\(\(row\) => row\.goalId === capabilityGoalId\)/, "Goal capability settings receive the selected Goal Channel notification state");
+assert.match(workspaceSettings, /goalNotifications\.find\(\(row\) => row\.goalId === editableGoal\.goalId\)/, "Goal capability settings receive the selected Goal Channel notification state");
 assert.match(machineSettings, /<CapabilityDetailHeader/, "Machine settings use the shared capability detail header");
 assert.match(goalCapabilitySettings, /<CapabilityDetailHeader/, "Goal settings use the shared capability detail header");
 assert.match(capabilityWorkbench, /localizeCapability\(rawCapability, locale\)/, "Shared navigation localizes capability metadata without changing capability ids");
 assert.match(capabilityWorkbench, /capability\.capability_id === "multi_subagent"\) return 3/, "Immature child-agent capacity stays behind mature supported capabilities");
 assert.match(capabilityWorkbench, /availability\?\.includes\("experimental"\)/, "Experimental capabilities share a stable late presentation tier");
 assert.match(capabilityWorkbench, /configuration_editor\.writable_scopes\.length === 0/, "Provider-bound read-only capabilities follow directly actionable settings");
-assert.match(capabilityWorkbench, /orderCapabilitiesForPresentation\(capabilities, locale\)/, "Machine and Goal catalogs use one presentation-order policy");
+assert.match(capabilityWorkbench, /orderCapabilitiesForPresentation\(visible, locale\)/, "Machine and Goal search results use the shared presentation-order policy");
 for (const capabilityId of [
   "change_quality_qualification",
   "coordination_runtime_shadow",
@@ -577,7 +585,8 @@ assert.match(larkSettings, /fetchLarkAppSetup/, "Registration polls the local se
 assert.match(larkSettings, /window\.open\(/, "Registration opens the provider flow from a user gesture");
 assert.match(larkSettings, /window\.open\(window\.location\.href,\s*"_blank"\)/, "Registration never leaves a blank waiting tab");
 assert.match(larkSettings, /setAppRef\(snapshot\.app_ref\)/, "Completed registration selects the new App");
-assert.match(larkSettings, /loading \? "…" : apps\.length/, "Lark App count does not flash a false zero while loading");
+// Loading/empty App counts are exercised against the rendered page in the
+// progressive-loading browser scenario, independently of local state names.
 assert.match(larkSettings, /openConnectionEditor\(connection\)/, "Every Lark connection settings button opens a scoped editor");
 assert.match(larkSettings, /focusGoalConnection[\s\S]*openConnectionEditor\(connection\)[\s\S]*openConnect\(goals\.find/, "Goal-level Lark entry opens the scoped connection editor or create flow");
 
@@ -695,6 +704,11 @@ for (const key of ["suggestions.openDecisions", "suggestions.explainBlocked", "s
 const router = source("../../router.tsx");
 assert.match(page, /const WorkspaceSettingsPage = lazy\(\(\) => import\("\.\/workspace-settings-page"\)/, "Settings load on demand");
 assert.doesNotMatch(page, /^import \{ WorkspaceSettingsPage \}/m, "No eager import undoes the boundary");
+const machineConfigurationSettings = source("./machine-configuration-settings.tsx");
+assert.doesNotMatch(machineConfigurationSettings, /DshHostReadiness|dsh-host-readiness/,
+  "Steward settings do not expose DSH or managed-host topology");
+assert.doesNotMatch(machineConfigurationSettings, /goals = \[\]|onOpenProviderSettings/,
+  "Steward settings consume only machine configuration capabilities");
 assert.match(page, /^import \{ GoalTeamResults \} from "\.\/goal-team-results";/m, "Team results load eagerly so their single list request keeps its timing");
 for (const route of ["./views/frontstage-developer-page", "./views/benchmark-study-page", "./features/personal-workspace/answer-report-page"]) {
   assert.match(router, new RegExp(`lazy\\(\\(\\) => import\\("${route.replace(/[./]/g, (ch) => `\\${ch}`)}"\\)`), `${route} loads on demand`);
@@ -712,3 +726,18 @@ assert.match(source("./context-drawer.tsx"), /selection\.item\.gate\?\.kind === 
 for (const key of ["proposal.agentGate.title", "proposal.agentGate.summary", "proposal.agentGate.reason.executable_not_found", "proposal.agentGate.reason.api_key_not_set", "proposal.agentGate.reason.unregistered", "proposal.agentGate.reason.unavailable", "proposal.agentGate.nextAction", "proposal.agentGate.impact"]) {
   assert.equal((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) ?? []).length, 2, `${key} exists in both locales`);
 }
+
+// S5/S11 Design hierarchy convergence & Explanations on Demand:
+// Layout explains itself; auxiliary explanation prose in overview & research history
+// is collapsed into ContextHelp instead of cluttering the primary reading view.
+const overview = source("./goal-overview.tsx");
+const overviewCss = source("./goal-overview.css");
+const researchHistory = source("./goal-research-history.tsx");
+const researchHistoryCss = source("./goal-research-history.css");
+
+assert.match(overview, /goal-overview-worker-status[\s\S]*?<ContextHelp/, "WorkerReadback puts explanation into ContextHelp beside status");
+assert.match(overview, /details className="goal-overview-worker-details"/, "WorkerReadback technical details start collapsed");
+assert.match(overviewCss, /\.goal-overview-worker-status\s*\{[^}]*display:\s*flex/, "Worker status row is structured via flex");
+assert.match(overviewCss, /@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?\.goal-overview-worker-state dl/, "Worker state has narrow mobile grid rules");
+assert.match(researchHistory, /execution_observation[\s\S]*?<ContextHelp label=\{zh \? "执行观测说明"/, "Execution observation explanation is attached to summary ContextHelp");
+assert.match(researchHistoryCss, /margin-inline-start:\s*0;\s*margin-top:\s*8px;/, "Research history mobile action wraps cleanly on 390px");

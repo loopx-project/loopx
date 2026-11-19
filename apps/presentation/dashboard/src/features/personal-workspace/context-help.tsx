@@ -1,10 +1,10 @@
 import {useEffect, useId, useRef, useState, type ReactNode} from "react";
-import {Info} from "lucide-react";
+import {Info, type LucideIcon} from "lucide-react";
 import "./context-help.css";
 
 /** Optional, non-interactive explanation. Outcomes and action consequences stay
  * in the caller; this disclosure never performs the caller's operation. */
-export function ContextHelp({label, children}: {label: string; children: ReactNode}) {
+export function ContextHelp({label, children, icon: Icon = Info}: {label: string; children: ReactNode; icon?: LucideIcon}) {
   const id = useId();
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -30,17 +30,21 @@ export function ContextHelp({label, children}: {label: string; children: ReactNo
   };
   useEffect(() => () => clearTimeout(timer.current), []);
   useEffect(() => {
-    if (!open) return;
+    // toggle is queued by the browser. Escape can arrive while the visible
+    // popover has not yet updated React state; guard the actual DOM state.
     const escape = (event: KeyboardEvent) => {
       if (event.key === "Escape" && panel.current?.matches(":popover-open")) {
         event.preventDefault(); event.stopPropagation(); dismiss();
       }
     };
     window.addEventListener("keydown", escape, true);
+    return () => window.removeEventListener("keydown", escape, true);
+  }, []);
+  useEffect(() => {
+    if (!open) return;
     window.addEventListener("resize", place);
     window.addEventListener("scroll", place, true);
     return () => {
-      window.removeEventListener("keydown", escape, true);
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
     };
@@ -51,8 +55,8 @@ export function ContextHelp({label, children}: {label: string; children: ReactNo
       onPointerEnter={event => {if (event.pointerType === "mouse") show();}} onPointerLeave={leave}
       onFocus={show}
       onBlur={() => {if (!panel.current?.matches(":hover")) dismiss();}}
-      onClick={() => {if (pinned.current) dismiss(); else {pinned.current = true; show();}}}>
-      <Info size={15} aria-hidden="true"/>
+      onClick={event => {event.stopPropagation(); if (pinned.current) dismiss(); else {pinned.current = true; show();}}}>
+      <Icon size={15} aria-hidden="true"/>
     </button>
     <div ref={panel} id={id} className="context-help-popover" role="tooltip" popover="auto"
       onToggle={event => {const visible = event.currentTarget.matches(":popover-open"); setOpen(visible); if (!visible) pinned.current = false;}}

@@ -234,8 +234,9 @@ Status, unfiltered `todo list`, `todo list --thin` without an exact ID,
 dashboard and chat attention views keep their existing bounded summaries.
 An exact `todo list --todo-id ID` without `--thin` returns the complete current
 or retained request text through the existing Task detail reader. The canonical
-provider and regenerated active state retain the complete source; a display
-summary is not an input to source serialization. Combining `--thin` with an
+provider and the File Markdown projection retain the complete source. SQLite
+renders a bounded active view and includes an exact Todo query for any omitted
+fields. Combining `--thin` with an
 exact Todo ID is rejected so a bounded inventory projection cannot replace a
 full requirement read. No new frontend setting, Lark command or parallel state
 store is introduced. This change stays in the permanent Python Markdown/legacy
@@ -256,8 +257,9 @@ their existing closed diagnostics.
 上限。显式标题冲突仍拒绝，即使前 500 字符相同；不能靠缩短已提交任务来修显示。
 状态、未过滤的 `todo list`、未指定精确 ID 的 `todo list --thin`、前端及聊天继续使用原有
 有界摘要。`todo list --todo-id ID` 返回完整的当前或保留请求文本；同时指定 `--thin` 时会
-拒绝请求，避免有界摘要替代完整需求读取。canonical provider 及重建后的活动状态保留完整
-源文本，不新增设置、Lark 命令或第二状态库。本次仅修既有 Python Markdown／兼容 I/O，TS
+拒绝请求，避免有界摘要替代完整需求读取。canonical provider 和 File Markdown 投影保留完整
+源文本。SQLite 渲染有界活动视图，为被省略的字段附上精确 Todo 查询。不新增设置、Lark 命令
+或第二状态库。本次仅修既有 Python Markdown／兼容 I/O，TS
 的权威、准入和交付确认 owner 不变。
 
 若业务已提交、长文本一致性失败导致显示 pending，先读取当前 provider revision，

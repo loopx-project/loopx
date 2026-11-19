@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import hashlib
 import json
 import re
@@ -8,7 +10,6 @@ import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
 
 from ...agent_registry import normalize_registered_agents
 from ...control_plane.reward_memory import (
@@ -19,7 +20,7 @@ from ...control_plane.operator_inbox_binding import local_private_config_digest
 from ...control_plane.todos.contract import normalize_todo_claimed_by
 from ..context_providers import build_context_provider
 from ..context_providers.base import ContextProvider
-from ..context_providers.openviking import classify_openviking_scope
+from ..context_providers.openviking_scope import classify_openviking_scope
 from .application import TOKEN_RE, normalize_reward_memory_provider_binding
 from .ingestion import normalize_reward_memory_standing_policy
 from .registry import MAX_CORPORA, normalize_reward_memory_corpus
@@ -850,7 +851,7 @@ def resolve_reward_memory_experiment(
     if not normalized_agent:
         raise ValueError("agent_id must be a public-safe registered agent id")
     registry = _read_json_object(registry_path)
-    goals = registry.get("goals") if isinstance(registry.get("goals"), list) else []
+    goals = cast(list[Any], registry.get("goals")) if isinstance(registry.get("goals"), list) else []
     goal = next(
         (
             item

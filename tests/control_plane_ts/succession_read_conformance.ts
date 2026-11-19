@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
-import {spawnSync} from "node:child_process";
 import test from "node:test";
 import type {AuthorityStoreConformanceFactory} from "./authority_store_conformance.ts";
 import {productionScaleSuccessionFixture} from "./production_scale_coordination_fixture.ts";
 import {validateCoordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
-import {resolveTestPython} from "../../scripts/test-python.mjs";
-
-const PYTHON = resolveTestPython();
+import {runPythonReadConsumer} from "./python_read_consumer.ts";
 
 // Exercise the shipped Python consumer → typed policy, not a second test reducer.
 const CONSUMER = `
@@ -32,8 +29,7 @@ export function registerSuccessionReadConformance(name: string, factory: Authori
       next_projection: projection, events: [], receipts: []})).status, "applied");
     const before = await store.loadAuthority();
     assert.equal(before.status, "loaded");
-    const child = spawnSync(PYTHON, ["-c", CONSUMER], {encoding: "utf8", timeout: 90_000,
-      input: JSON.stringify({todos: before.head.todos, cases})});
+    const child = runPythonReadConsumer(CONSUMER, {todos: before.head.todos, cases});
     assert.equal(child.status, 0, child.stderr);
     const actual = JSON.parse(child.stdout);
     assert.deepEqual(actual.inferred_source, {gap: 0, gates: [], closure: false});

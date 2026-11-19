@@ -4,29 +4,20 @@ import argparse
 from collections.abc import Callable
 from pathlib import Path
 
-from ..agent_registry import (
-    agent_profile_from_registry,
-    load_goal_from_registry,
-    registered_agent_ids_from_registry,
-    require_registered_agent_id,
+from ..cli_runtime import (
+    _handle_registry_inspection_command,
+    _register_registry_inspection_commands,
 )
 from ..chat_server import (
     DEFAULT_CHAT_HOST,
     DEFAULT_CHAT_PORT,
     serve_chat,
 )
-from ..control_plane.scheduler.execution_context import SchedulerRuntimeProfile
-from ..dashboard_launcher import launch_dashboard, replace_existing_loopx_chat
-from ..execution_profile import execution_profile_turn_granularity
+from ..dashboard_launcher import launch_dashboard
+from ..runtime_activation import replace_managed_loopx_chat as replace_existing_loopx_chat
 from ..heartbeat_prequota import (
     render_heartbeat_pre_quota_markdown,
     run_heartbeat_pre_quota,
-)
-from ..heartbeat_prompt import (
-    build_heartbeat_prompt,
-    build_heartbeat_prompt_error_payload,
-    project_heartbeat_agent_input,
-    render_heartbeat_prompt_markdown,
 )
 from ..kiro_cli_goal_mode import KIRO_CLI_BIN
 from ..paths import default_public_scan_root
@@ -50,6 +41,7 @@ from .support_control_chat import chat_server_options, register_chat_and_dashboa
 from .support_control_chat_endpoint import (
     handle_chat_endpoint_command,
 )
+from .dsh_launch import handle_dsh_launch_command, register_dsh_launch_command
 from .support_control_heartbeat_registration import (
     register_heartbeat_control_commands,
 )
@@ -57,10 +49,7 @@ from .support_control_promotion import (
     handle_promotion_control_command,
     register_promotion_control_commands,
 )
-from .support_control_registry import (
-    explicit_global_registry,
-    resolve_heartbeat_active_state,
-)
+from .support_control_registry import explicit_global_registry
 from .support_control_supervisor import (
     SUPERVISOR_CONTROL_COMMANDS,
     handle_supervisor_control_command,
@@ -87,12 +76,13 @@ SUPPORT_CONTROL_COMMANDS = {
     "chat",
     "chat-endpoint",
     "dashboard",
+    "dsh-launch",
     "heartbeat-prequota",
-    "heartbeat-prompt",
     "promotion-gate",
     "promotion-readiness",
     "upgrade-plan",
     "update",
+    "upgrade",
     "registry",
     "registry-boundary",
     "serve-status",
@@ -118,28 +108,9 @@ def register_support_control_commands(
     register_promotion_control_commands(subparsers, add_subcommand_format)
 
     register_update_command(subparsers, add_subcommand_format)
+    register_dsh_launch_command(subparsers, add_subcommand_format)
 
-    subparsers.add_parser(
-        "registry", help="Inspect registry goals and adapter declarations."
-    )
-    registry_boundary_parser = subparsers.add_parser(
-        "registry-boundary",
-        help="Classify a registry file as local-only, global-local, public projection, or public fixture.",
-    )
-    registry_boundary_parser.add_argument(
-        "--path",
-        help="Registry path to classify. Defaults to the active --registry path.",
-    )
-    registry_boundary_parser.add_argument(
-        "--require-not-tracked",
-        action="store_true",
-        help="Return non-zero if the registry is tracked while publication policy disallows pushing it.",
-    )
-    registry_boundary_parser.add_argument(
-        "--require-gitignored",
-        action="store_true",
-        help="Return non-zero if the registry should be ignored but is neither ignored nor tracked.",
-    )
+    _register_registry_inspection_commands(subparsers)
 
     serve_status_parser = subparsers.add_parser(
         "serve-status", help="Serve live status JSON for the local dashboard."
@@ -241,6 +212,9 @@ def handle_support_control_command(
             print_payload=print_payload,
         )
 
+    if args.command == "dsh-launch":
+        return handle_dsh_launch_command(args)
+
     if args.command == "configuration-backup":
         from .configuration_backup import handle_configuration_backup
         return handle_configuration_backup(args, registry_path=registry_path,
@@ -260,221 +234,16 @@ def handle_support_control_command(
         )
 
     if args.command == "heartbeat-prequota":
-        prequota_registry = (
-            registry_path
-            if registry_was_supplied
-            else explicit_global_registry(args.runtime_root)
-        )
-        payload = run_heartbeat_pre_quota(
-            registry_path=prequota_registry,
-            runtime_root_arg=args.runtime_root,
-            goal_id=args.goal_id,
-            agent_id=args.agent_id,
-            fetch_timeout_seconds=args.fetch_timeout_seconds,
-        )
-        print_payload(
-            payload,
-            output_format(args),
-            render_heartbeat_pre_quota_markdown,
-        )
-        return 0
+        from .support_control_heartbeat import handle_heartbeat_prequota_command
 
-    if args.command == "heartbeat-prompt":
-        active_state = None
-        resolved_active_state = None
-        active_state_source = None
-        registered_agents = None
-        effective_agent_id = args.agent_id
-        agent_registry_path = registry_path
-        requested_runtime_profile = (
-            SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT.value
-            if args.codex_app
-            else SchedulerRuntimeProfile.TRAE_APP.value
-            if getattr(args, "trae_app", False)
-            else args.runtime_profile
+        return handle_heartbeat_prequota_command(
+            args, registry_path=registry_path,
+            registry_was_supplied=registry_was_supplied,
+            print_payload=print_payload, output_format=output_format,
+            runner=run_heartbeat_pre_quota,
+            markdown_renderer=render_heartbeat_pre_quota_markdown,
+            global_registry_resolver=explicit_global_registry,
         )
-        try:
-            active_state, resolved_active_state, active_state_source = (
-                resolve_heartbeat_active_state(
-                    goal_id=args.goal_id,
-                    active_state_arg=args.active_state,
-                    registry_path=registry_path,
-                    runtime_root_arg=args.runtime_root,
-                    allow_global_goal_lookup_fallback=not registry_was_supplied,
-                )
-            )
-            agent_registry_path = registry_path
-            if active_state_source.startswith("registry:"):
-                agent_registry_path = Path(
-                    active_state_source.removeprefix("registry:")
-                )
-            registered_agents = registered_agent_ids_from_registry(
-                agent_registry_path, args.goal_id
-            )
-            registry_goal = load_goal_from_registry(
-                agent_registry_path,
-                args.goal_id,
-            )
-            turn_granularity = execution_profile_turn_granularity(
-                registry_goal.get("execution_profile")
-                if isinstance(registry_goal, dict)
-                else None
-            )
-            agent_profile = None
-            if args.agent_id:
-                effective_agent_id = require_registered_agent_id(
-                    registry_path=agent_registry_path,
-                    goal_id=args.goal_id,
-                    agent_id=args.agent_id,
-                    field="agent_id",
-                )
-                agent_profile = agent_profile_from_registry(
-                    agent_registry_path, args.goal_id, effective_agent_id
-                )
-            reward_memory_enabled = False
-            if effective_agent_id is not None:
-                from ..capabilities.reward_memory.configuration import (
-                    reward_memory_automatic_ingest_for_agent,
-                )
-
-                reward_memory_enabled = reward_memory_automatic_ingest_for_agent(
-                    registry_goal if isinstance(registry_goal, dict) else {},
-                    effective_agent_id,
-                )
-            explicit_scheduler_fields = (
-                args.host_surface,
-                args.scheduler_owner,
-                args.execution_mode,
-            )
-            app_alias_count = int(bool(args.codex_app)) + int(
-                bool(getattr(args, "trae_app", False))
-            )
-            if app_alias_count > 1:
-                raise ValueError(
-                    "--codex-app and --trae_app are mutually exclusive"
-                )
-            if app_alias_count and (
-                args.runtime_profile or any(explicit_scheduler_fields)
-            ):
-                raise ValueError(
-                    "app runtime aliases cannot be combined with --runtime-profile, "
-                    "--host-surface, --scheduler-owner, or --execution-mode"
-                )
-            if args.runtime_profile and any(explicit_scheduler_fields):
-                raise ValueError(
-                    "--runtime-profile cannot be combined with --host-surface, "
-                    "--scheduler-owner, or --execution-mode"
-                )
-            runtime_profile = requested_runtime_profile
-            payload = build_heartbeat_prompt(
-                goal_id=args.goal_id,
-                active_state=active_state,
-                active_state_source=active_state_source,
-                resolved_active_state=resolved_active_state,
-                material_queue_rule=args.material_rule,
-                permission_rule=args.permission_rule,
-                full=bool(args.full),
-                compact=bool(args.compact),
-                brief=bool(args.brief),
-                thin=bool(args.thin),
-                cli_bin=args.cli_bin,
-                runtime_root=args.runtime_root,
-                registry_path=agent_registry_path.resolve(),
-                agent_id=effective_agent_id,
-                agent_scopes=args.agent_scopes,
-                agent_profile=agent_profile,
-                registered_agents=registered_agents,
-                available_capabilities=args.available_capabilities,
-                runtime_profile=runtime_profile,
-                scheduler_execution_context=(
-                    {
-                        "host_surface": args.host_surface,
-                        "scheduler_owner": args.scheduler_owner,
-                        "execution_mode": args.execution_mode,
-                    }
-                    if any(explicit_scheduler_fields)
-                    else None
-                ),
-                visible_goal_host=args.visible_goal_host,
-                turn_granularity=turn_granularity,
-                turn_instance_id=args.turn_instance_id,
-                decision_output_root=args.decision_output_root,
-                decision_handoff_socket=args.decision_handoff_socket,
-                turn_envelope=args.turn_envelope,
-                reward_memory_enabled=reward_memory_enabled,
-            )
-            if args.bootstrap and payload.get("ok"):
-                from ..control_plane.heartbeat.bootstrap_prompt import goal_bootstrap
-                from ..control_plane.heartbeat.budget import build_interface_budget
-                body = goal_bootstrap(args, registry=agent_registry_path)
-                payload["task_body"] = body
-                payload["bootstrap"] = True
-                payload["interface_budget"] = build_interface_budget(
-                    task_body=body, goal_id=args.goal_id,
-                    active_state=str(payload.get("active_state") or ""), thin=True,
-                )
-                if not payload["interface_budget"]["within_budget"]:
-                    raise ValueError("bootstrap exceeds the thin budget; move lengthy policy into registered state")
-        except Exception as exc:
-            fallback_active_state = active_state
-            fallback_resolved_active_state = resolved_active_state
-            fallback_active_state_source = active_state_source
-            if fallback_active_state is None and args.active_state:
-                fallback_active_state = Path(args.active_state).expanduser()
-                fallback_resolved_active_state = (
-                    fallback_resolved_active_state or fallback_active_state
-                )
-                fallback_active_state_source = (
-                    fallback_active_state_source or "explicit"
-                )
-            elif fallback_active_state_source is None:
-                fallback_active_state_source = "registry"
-            payload = build_heartbeat_prompt_error_payload(
-                goal_id=args.goal_id,
-                error=str(exc),
-                active_state=fallback_active_state,
-                active_state_source=fallback_active_state_source,
-                resolved_active_state=fallback_resolved_active_state,
-                material_queue_rule=args.material_rule,
-                permission_rule=args.permission_rule,
-                full=bool(args.full),
-                compact=bool(args.compact),
-                brief=bool(args.brief),
-                thin=bool(args.thin),
-                cli_bin=args.cli_bin,
-                runtime_root=args.runtime_root,
-                registry_path=agent_registry_path.resolve(),
-                agent_id=effective_agent_id or args.agent_id,
-                agent_scopes=args.agent_scopes,
-                registered_agents=registered_agents,
-                available_capabilities=args.available_capabilities,
-            )
-        selected_output_format = output_format(args)
-        recurring_runtime_profile = requested_runtime_profile in {
-            None,
-            SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT.value,
-            SchedulerRuntimeProfile.TRAE_APP.value,
-            SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP.value,
-            # Kiro CLI moved off generic_cli onto its own profile; its facade
-            # still reads the thin Agent input, so keep that output shape.
-            SchedulerRuntimeProfile.KIRO_CLI_VISIBLE.value,
-        }
-        recurring_thin_surface = bool(
-            recurring_runtime_profile and args.visible_goal_host is None
-        )
-        output_payload = (
-            project_heartbeat_agent_input(payload)
-            if selected_output_format == "json"
-            and payload.get("thin") is True
-            and recurring_thin_surface
-            else payload
-        )
-        print_payload(
-            output_payload,
-            selected_output_format,
-            render_heartbeat_prompt_markdown,
-        )
-        return 0 if payload.get("ok") else 1
 
     supervisor_result = handle_supervisor_control_command(
         args,
@@ -504,41 +273,13 @@ def handle_support_control_command(
             output_format=output_format,
         )
 
-    if args.command == "registry":
-        payload = inspect_registry(registry_path)
-        print_payload(payload, args.format, render_registry_markdown)
-        return 0 if payload.get("ok") else 1
-
-    if args.command == "registry-boundary":
-        boundary_path = Path(args.path).expanduser() if args.path else registry_path
-        payload = inspect_registry_boundary(boundary_path)
-        git = payload.get("git") if isinstance(payload.get("git"), dict) else {}
-        if (
-            args.require_not_tracked
-            and payload.get("ok")
-            and git.get("tracked")
-            and not payload.get("github_push_allowed")
-        ):
-            payload = dict(payload)
-            payload["ok"] = False
-            payload.setdefault("risks", []).append(
-                "registry_tracked_but_not_push_allowed"
-            )
-        if (
-            args.require_gitignored
-            and payload.get("ok")
-            and payload.get("should_be_gitignored")
-        ):
-            if (
-                git.get("inside_worktree")
-                and not git.get("ignored")
-                and not git.get("tracked")
-            ):
-                payload = dict(payload)
-                payload["ok"] = False
-                payload.setdefault("risks", []).append("registry_should_be_gitignored")
-        print_payload(payload, args.format, render_registry_boundary_markdown)
-        return 0 if payload.get("ok") else 1
+    if args.command in {"registry", "registry-boundary"}:
+        return _handle_registry_inspection_command(
+            args, registry_path=registry_path, print_payload=print_payload,
+            inspect_registry=inspect_registry, render_registry_markdown=render_registry_markdown,
+            inspect_registry_boundary=inspect_registry_boundary,
+            render_registry_boundary_markdown=render_registry_boundary_markdown,
+        )
 
     if args.command == "serve-status":
         try:

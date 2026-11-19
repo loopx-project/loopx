@@ -185,7 +185,7 @@ def test_full_scan_projection_matches_serial_reads_and_observes_later_changes(
     assert fresh["files"] == 3
 
 
-def test_tracked_private_policy_and_warning_order_are_preserved(
+def test_tracked_url_policy_does_not_authorize_private_state_export(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     state = tmp_path / ".codex" / "ACTIVE_GOAL_STATE.md"
@@ -200,7 +200,8 @@ def test_tracked_private_policy_and_warning_order_are_preserved(
     payload = contract.scan_public_boundary([tmp_path], registry={
         "public_boundary": {"tracked_private_doc_urls": "allow"},
     })
-    assert payload["ok"] is True
+    assert payload["ok"] is False
+    assert payload["blocking_hits"] == [".codex/ACTIVE_GOAL_STATE.md: local_private_state"]
     assert payload["allowed_hits"] == [".codex/ACTIVE_GOAL_STATE.md:1: private_doc_url"]
     assert payload["skipped_private_state_files"] == [".codex/untracked.md"]
     assert payload["private_state_git_warnings"] == [
@@ -239,9 +240,10 @@ def test_private_scan_targets_cannot_hide_their_ancestry(
 
     monkeypatch.setattr(Path, "read_text", read)
     payload = contract.scan_public_boundary(scan_roots)
-    assert payload["ok"] is True
+    assert payload["ok"] is False
+    assert any(hit.endswith(": local_private_state") for hit in payload["blocking_hits"])
     assert payload["scanned_files"] == (0 if roots == "alone" else 1)
-    assert len(payload["skipped_private_state_files"]) == 1
+    assert len(payload["skipped_private_state_files"]) == (0 if roots == "alone" else 1)
     assert opened == ([] if roots == "alone" else [public.resolve()])
 
 
@@ -279,13 +281,18 @@ def test_overlapping_roots_preserve_real_tracked_private_policy(
     if reverse:
         roots.reverse()
     blocked = contract.scan_public_boundary(roots)
-    assert blocked["hits"] == [".codex/notes/tracked.md:1: private_doc_url"]
+    assert blocked["hits"] == [
+        ".codex/notes: local_private_state",
+        ".codex/notes/tracked.md: local_private_state",
+        ".codex/notes/tracked.md:1: private_doc_url",
+    ]
     assert blocked["skipped_private_state_files"] == [".codex/notes/untracked.md"]
     allowed = contract.scan_public_boundary(roots, registry={
         "public_boundary": {"tracked_private_doc_urls": "allow"},
     })
-    assert allowed["ok"] is True
-    assert allowed["allowed_hits"] == blocked["hits"]
+    assert allowed["ok"] is False
+    assert allowed["allowed_hits"] == [".codex/notes/tracked.md:1: private_doc_url"]
+    assert allowed["blocking_hits"] == blocked["blocking_hits"][:2]
     assert allowed["skipped_private_state_files"] == blocked["skipped_private_state_files"]
 
 
@@ -298,10 +305,12 @@ def test_private_alias_retarget_is_classified_again_on_the_next_scan(tmp_path: P
     alias = tmp_path / "alias.md"
     alias.symlink_to(private)
     first = contract.scan_public_boundary([alias])
+    assert first["ok"] is False and first["blocking_hits"]
     assert first["scanned_files"] == 0
     alias.unlink()
     alias.symlink_to(public)
     second = contract.scan_public_boundary([alias])
+    assert second["ok"] is True
     assert second["scanned_files"] == 1
     assert second["skipped_private_state_files"] == []
 
@@ -312,5 +321,6 @@ def test_git_marker_alone_cannot_hide_private_scan_ancestry(tmp_path: Path) -> N
     (private.parent / ".git").mkdir()
     private.write_text("synthetic private content", encoding="utf-8")
     payload = contract.scan_public_boundary([private])
+    assert payload["ok"] is False and payload["blocking_hits"]
     assert payload["scanned_files"] == 0
-    assert len(payload["skipped_private_state_files"]) == 1
+    assert payload["skipped_private_state_files"] == []

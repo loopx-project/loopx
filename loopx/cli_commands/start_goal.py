@@ -27,11 +27,13 @@ PrintPayload = Callable[
 
 _CAPABILITY_ROUTE_SWITCH = "--capability-route"
 _FINE_GRAINED_SWITCH = "--fine-grained"
+_NEW_PEER_SWITCH = "--new-peer"
 _CAPABILITY_ROUTE_PREFIX = re.compile(
     r"\A--capability-route(?:=(?P<equals>\S+)|\s+(?P<spaced>\S+))"
     r"(?P<remainder>[\s\S]*)\Z"
 )
 _FINE_GRAINED_PREFIX = re.compile(r"\A--fine-grained(?P<remainder>(?:\s[\s\S]*)?)\Z")
+_NEW_PEER_PREFIX = re.compile(r"\A--new-peer(?P<remainder>(?:\s[\s\S]*)?)\Z")
 _CODEX_APP_SSH_HOST_SURFACE = "codex-app-ssh"
 _SSH_TRANSPORT_ENV_VARS = ("SSH_CONNECTION", "SSH_CLIENT")
 
@@ -105,6 +107,9 @@ def _effect_runtime_startup_failure_payload(
 
 def _render_start_goal_markdown(payload: dict[str, object]) -> str:
     if payload.get("ok") is not False:
+        message = payload.get("message")
+        if isinstance(message, str):
+            return message
         return render_start_goal_guided_markdown(payload)
     lines = ["# Guided Start Goal", "", f"- error: `{payload.get('error')}`"]
     for field in (
@@ -204,8 +209,9 @@ def register_start_goal_command(subparsers: argparse._SubParsersAction) -> None:
         "--thread-id",
         help=(
             "Stable opaque host thread id used to reuse the bound agent lane. "
-            "Codex App defaults to CODEX_THREAD_ID and Trae App to "
-            "TRAECLI_THREAD_ID when available."
+            "Codex App defaults to CODEX_THREAD_ID, Trae App to "
+            "TRAECLI_THREAD_ID, and Antigravity to ANTIGRAVITY_CONVERSATION_ID "
+            "(or <user_information> Conversation ID) when available."
         ),
     )
     start_goal_parser.add_argument(
@@ -249,9 +255,9 @@ def register_start_goal_command(subparsers: argparse._SubParsersAction) -> None:
     goal_input_group.add_argument(
         "--slash-command-arguments",
         help=(
-            "Complete visible /loopx arguments. The CLI consumes only an optional "
-            "leading --fine-grained and --capability-route switches and treats the "
-            "remainder as goal text. "
+            "Complete visible /loopx arguments. The CLI consumes optional leading "
+            "--fine-grained, --new-peer and --capability-route switches and treats "
+            "the remainder as goal text. "
             "Use --slash-command-arguments='<arguments>' when the value begins with --."
         ),
     )
@@ -265,12 +271,15 @@ def register_start_goal_command(subparsers: argparse._SubParsersAction) -> None:
     )
 
 
-def _resolve_start_goal_input(args: argparse.Namespace) -> tuple[str, str | None, bool]:
+def _resolve_start_goal_input(
+    args: argparse.Namespace,
+) -> tuple[str, str | None, bool, bool]:
     raw_arguments = getattr(args, "slash_command_arguments", None)
     capability_route = getattr(args, "capability_route", None)
     fine_grained = bool(getattr(args, "fine_grained", False))
+    new_peer = bool(getattr(args, "new_peer", False))
     if raw_arguments is None:
-        return str(args.goal_text), capability_route, fine_grained
+        return str(args.goal_text), capability_route, fine_grained, new_peer
     if capability_route is not None:
         raise ValueError(
             "--slash-command-arguments cannot be combined with --capability-route; "
@@ -281,12 +290,12 @@ def _resolve_start_goal_input(args: argparse.Namespace) -> tuple[str, str | None
             "--slash-command-arguments cannot be combined with --fine-grained; "
             "the raw argument string already owns leading switches"
         )
-
     normalized = str(raw_arguments).strip()
     if not normalized:
         raise ValueError("--slash-command-arguments must contain goal text")
     route = None
     parsed_fine_grained = False
+    parsed_new_peer = new_peer
     last_switch = None
     remainder = normalized
     while True:
@@ -300,6 +309,18 @@ def _resolve_start_goal_input(args: argparse.Namespace) -> tuple[str, str | None
                 raise ValueError("duplicate leading --fine-grained switch")
             parsed_fine_grained = True
             last_switch = _FINE_GRAINED_SWITCH
+            remainder = str(match.group("remainder") or "").strip()
+            continue
+        if remainder.startswith(_NEW_PEER_SWITCH):
+            match = _NEW_PEER_PREFIX.fullmatch(remainder)
+            if match is None:
+                raise ValueError(
+                    "malformed leading --new-peer in --slash-command-arguments"
+                )
+            if parsed_new_peer:
+                raise ValueError("duplicate leading --new-peer switch")
+            parsed_new_peer = True
+            last_switch = _NEW_PEER_SWITCH
             remainder = str(match.group("remainder") or "").strip()
             continue
         if remainder.startswith(_CAPABILITY_ROUTE_SWITCH):
@@ -326,10 +347,14 @@ def _resolve_start_goal_input(args: argparse.Namespace) -> tuple[str, str | None
             raise ValueError(
                 "--slash-command-arguments must contain goal text after --capability-route"
             )
+        if last_switch == _NEW_PEER_SWITCH:
+            raise ValueError(
+                "--slash-command-arguments must contain goal text after --new-peer"
+            )
         raise ValueError(
             "--slash-command-arguments must contain goal text after --fine-grained"
         )
-    return goal_text, route, parsed_fine_grained
+    return goal_text, route, parsed_fine_grained, parsed_new_peer
 
 
 def handle_start_goal_command(
@@ -348,7 +373,9 @@ def handle_start_goal_command(
         print_payload(payload, args.format, _render_start_goal_markdown)
         return 2
     try:
-        goal_text, capability_route, fine_grained = _resolve_start_goal_input(args)
+        goal_text, capability_route, fine_grained, new_peer = _resolve_start_goal_input(
+            args
+        )
     except ValueError as exc:
         payload = {
             "ok": False,
@@ -376,7 +403,7 @@ def handle_start_goal_command(
                 goal_id=args.goal_id,
                 agent_id=args.agent_id,
                 thread_id=current_host_thread_id(args),
-                new_peer=bool(getattr(args, "new_peer", False)),
+                new_peer=new_peer,
                 cli_bin=args.cli_bin,
                 goal_text=goal_text,
                 available_capabilities=args.available_capabilities,
@@ -398,7 +425,7 @@ def handle_start_goal_command(
             goal_id=args.goal_id,
             agent_id=args.agent_id,
             thread_id=current_host_thread_id(args),
-            new_peer=bool(getattr(args, "new_peer", False)),
+            new_peer=new_peer,
             cli_bin=args.cli_bin,
             host_surface=args.host_surface,
             goal_text=goal_text,

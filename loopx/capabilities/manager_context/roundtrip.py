@@ -7,10 +7,18 @@ routing, receiver-authored replies, and publication receipts. No model polling.
 from __future__ import annotations
 
 import logging
+import json
+import re
+from fnmatch import fnmatch
+from hashlib import sha256
 import threading
-from contextlib import ExitStack
-from datetime import datetime, timezone, timedelta
-from uuid import uuid4
+from itertools import islice
+from os import scandir
+from contextlib import contextmanager, ExitStack, nullcontext
+from urllib.parse import quote
+from datetime import datetime, timezone
+
+from ...extensions.background_runtime import HostedWorker
 
 from . import _root, _read, _write, _hash, authority, target_authority
 from .tracking import _entry, _now
@@ -24,19 +32,17 @@ from ...control_plane.collaboration.goal_instance_scope import (
     collaboration_goal_scope,
     decide_collaboration_lifecycle,
 )
+from ...control_plane.collaboration.source_policy_fence import source_policy_fence
 from ...control_plane.projects.registry_codec import (
     SOURCE_SESSION_PROFILE_ID,
     load_project_registry,
 )
 from ...presentation.public_safety import scan_public_boundary_text
-from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_request_scope, effect_runtime_result
 
 from ...control_plane.collaboration.inbox import (
     _request_lock,
     iter_result_paths,
-    result_paths,
-    inspect_result_identity,
-    prior_result_delivered,
     DELIVERY_STATUSES as DELIVERY_STATUSES,
     DELIVERY_ERRORS as DELIVERY_ERRORS,
     reply_status as reply_status,
@@ -44,8 +50,7 @@ from ...control_plane.collaboration.inbox import (
 from ...control_plane.content_digest import BARE_SHA256_PATTERN
 from ...control_plane.collaboration.source_chat_observation import original_delivery_facts
 from ...chat import ChatMessagePayloadConflictError
-
-EXACT_DELIVERY_ADMISSION_SECONDS = 60
+from ...chat_store import TERMINAL_TURN_STATES
 
 class ReturnResolutionBlocked(ValueError, RuntimeError):
     """A return cannot be resolved; ``reason`` is the provider-neutral code.
@@ -64,47 +69,12 @@ class ReturnResolutionBlocked(ValueError, RuntimeError):
         super().__init__(message)
 
 
-def _delivery_attempt(value):
-    return dict(
-        effect_runtime_result(
-            "manager.return_delivery.normalize_attempt", {"attempt": value}
-        )
-    )
-
-
-def _attempt_locator(value):
-    """The provider locator a recorded attempt can be verified against.
-
-    ``None`` covers both a record no normalization can read and the typed state
-    where the provider accepted the write without reporting a message id. The
-    attempt still proves a write happened; it just cannot name a readback
-    target, and that is what stops the pump from treating the return as unsent.
-    """
-
-    if value is None:
-        return None
-    try:
-        message_ref = _delivery_attempt(value).get("message_ref")
-    except (ValueError, EffectRuntimeRejected):
-        return None
-    return message_ref if isinstance(message_ref, str) and message_ref.strip() else None
-
-
 def _verification_decision(outcome):
     return dict(
         effect_runtime_result(
             "manager.return_delivery.classify_verification", {"outcome": outcome}
         )
     )
-
-
-def _verification_exception_error(exc):
-    decision = _verification_decision({
-        "verification_performed": False,
-        "reply_verified": False,
-        "blocker": exc.reason if isinstance(exc, ReturnResolutionBlocked) else None,
-    })
-    return decision["error"] if decision["status"] == "explicit_unverified" else None
 
 
 def _register_unlocked(root, row, session, turn, *, source_store=None):
@@ -175,10 +145,14 @@ def _route(root, row, *, scope=None):
                     # An unrelated damaged/oversized historical turn cannot
                     # prevent recovery of this exact request's return receipt.
                     continue
-                receipt = (turn.get("response") or {}).get(
-                    "context_handoff_receipt"
-                ) or {}
-                if receipt.get("request_id") == row["request_id"]:
+                response = turn.get("response") or {}
+                receipts = response.get("context_handoff_receipts")
+                if receipts is None:
+                    receipts = [response.get("context_handoff_receipt") or {}]
+                if isinstance(receipts, list) and sum(
+                    isinstance(receipt, dict) and receipt.get("request_id") == row["request_id"]
+                    for receipt in receipts
+                ) == 1:
                     matches.append((session, turn))
         if len(matches) != 1:
             raise ReturnResolutionBlocked(
@@ -212,6 +186,7 @@ def report(
     attachment_refs=None,
     workspace=None,
     request_revision=None,
+    remaining_work=None,
 ):
     """Chat audience adapter; the shared Inbox owns result validation/persistence."""
     if scope is None and registry is not None:
@@ -237,13 +212,15 @@ def report(
                 attachment_refs=attachment_refs,
                 workspace=workspace,
                 request_revision=request_revision,
+                remaining_work=remaining_work,
             )
     row = _entry(root, goal_id, agent_id, request_id, scope=scope)
     route = _route(root, row, scope=scope)
     if route.get("kind") == "peer" and phase != "conclusion":
         raise ValueError("peer replies require a conclusion; report a concrete result or blocker")
+    audience_text = text + ("\n" + json.dumps(remaining_work, ensure_ascii=False) if remaining_work is not None else "")
     if (route["channel_id"] != "peer" and not conversation_scope(route)["private_conversation"]
-            and not scan_public_boundary_text(text)["ok"]):
+            and not scan_public_boundary_text(audience_text)["ok"]):
         raise ValueError("reply contains private boundary material; write an audience-safe conclusion")
     from ...control_plane.collaboration.inbox import record_result
     attachments = None
@@ -267,6 +244,7 @@ def report(
             update_id=update_id,
             attachments=attachments,
             request_revision=request_revision,
+            remaining_work=remaining_work,
         ),
         "status": (
             "queued_for_requester"
@@ -276,8 +254,61 @@ def report(
     }
 
 
-def project_chat_return_deliveries(root, session_id, messages):
+def _chat_return_files(root, route, path, reply, message, store, registry):
+    """Read the published result, never its mutable workspace source or sender."""
+    if not reply.get("attachments") or store is None:
+        return []
+    session = store.load_session(route["session_id"])
+    turn = store.load_turn(route["session_id"], message.get("turn_id")) if message.get("turn_id") else None
+    if (not session or not turn or message.get("role") not in {"agent", "assistant"}
+            or session.get("channel_id") != route.get("channel_id")
+            or turn.get("client_turn_id") != route.get("client_turn_id")
+            or turn.get("session_id") != session["session_id"]):
+        return []
+    if route.get("goal_ref") and registry is None:
+        return []
+    with (collaboration_goal_scope(registry, goal_id=route["goal_id"], agents=(),
+            caller_goal_ref=route.get("goal_ref")) if route.get("goal_ref") else nullcontext(None)) as scope:
+        row = _entry(root, route["goal_id"], route["agent_id"], route["request_id"], scope=scope)
+        if any(row.get(key) != route.get(key) for key in ("request_id", "goal_id", "agent_id", "source_id", "goal_ref")):
+            return []
+        from ...control_plane.collaboration.inbox import inspect_result_identity
+        inspected = inspect_result_identity(reply, row, path)
+        if inspected is None:
+            return []
+        attachments = inspected["value"].get("attachments") or []
+    base = f"/api/chat/sessions/{quote(session['session_id'], safe='')}/messages/{quote(message['message_id'], safe='')}/files/"
+    return [{"id": f"result-file.{item['sha256']}.{index}", "name": item["name"], "size": item["size"],
+             "mime_type": "application/octet-stream", "data_url": base + f"{item['sha256']}.{index}"}
+            for index, item in enumerate(attachments)]
+
+
+def read_chat_return_file(root, store, session_id, message_id, file_id, *, registry):
+    """Resolve one file through its original saved message, then verify bytes."""
+    match = re.fullmatch(r"([a-f0-9]{64})\.([0-3])", file_id)
+    if not match:
+        raise KeyError("returned file unavailable")
+    digest = match[1]
+    message = next((item for item in store.messages(session_id, strict=True)
+                    if item.get("message_id") == message_id and item.get("origin") == "manager_followup"), None)
+    if message is None:
+        raise KeyError("returned file unavailable")
+    # Only files independently resolved from the immutable result can authorize
+    # a download; persisted input attachments are not file-store locators.
+    projected = project_chat_return_deliveries(root, session_id, [{**message, "attachments": []}],
+        source_store=store, registry=registry)[0]
+    attachment = next((item for item in projected.get("attachments", [])
+                       if item["id"] == "result-file." + file_id), None)
+    if attachment is None:
+        raise KeyError("returned file unavailable")
+    from ...control_plane.collaboration.result_files import read_result_file
+    return attachment, read_result_file(root, {"sha256": digest, "size": attachment["size"]})
+
+
+def project_chat_return_deliveries(root, session_id, messages, *, source_store=None, registry=None):
     """Attach public-safe delivery readback to returned Chat transcript rows."""
+
+    from ...control_plane.collaboration.source_chat_observation import is_source_chat_host
 
     pending_message_ids = {
         message_id
@@ -288,17 +319,88 @@ def project_chat_return_deliveries(root, session_id, messages):
     }
     if not pending_message_ids:
         return list(messages)
-    statuses = {}
-    paths = sorted((_root(root) / "roundtrips").glob("*.json"))
-    for path in paths:
+    statuses, files = {}, {}
+    visible = {message.get("message_id"): message for message in messages}
+    routes = _root(root) / "roundtrips"
+
+    def candidate_paths():
+        # The original Turn normally names its requests. Prefer those locators
+        # over scanning every conversation's routes for every history page.
+        # They are only hints: the route, source host and result identity below
+        # still have to match. Lost/older receipts retain the exhaustive fallback.
+        known = set()
+        if source_store is not None:
+            turn_ids = dict.fromkeys(
+                message.get("turn_id") for message in messages
+                if message.get("message_id") in pending_message_ids
+                and isinstance(message.get("turn_id"), str) and message.get("turn_id")
+            )
+            # A cursor page holds at most 200 rows. Wider reads with a dense
+            # set of returns can skip opening each original Turn: the complete
+            # route scan costs at most a Turn and route lookup per visible Turn.
+            # Only choose locators here; the same route and result checks apply.
+            if len(turn_ids) > 200:
+                lookup_limit = 2 * len(turn_ids)
+                try:
+                    with scandir(routes) as entries:
+                        names = list(islice((entry.name for entry in entries if fnmatch(entry.name, "*.json")),
+                                            lookup_limit + 1))
+                except OSError:
+                    pass  # A direct locator may still be readable.
+                else:
+                    if 0 < len(names) <= lookup_limit:
+                        yield from sorted(routes / name for name in names)
+                        return
+            for turn_id in turn_ids:
+                try:
+                    turn = source_store.load_turn(session_id, turn_id) or {}
+                    if turn.get("session_id") != session_id or turn.get("turn_id") != turn_id:
+                        continue
+                    response = turn.get("response") or {}
+                    if not isinstance(response, dict):
+                        continue
+                    receipts = response.get("context_handoff_receipts")
+                    if receipts is None:
+                        receipts = [response.get("context_handoff_receipt")]
+                    for receipt in receipts if isinstance(receipts, list) else []:
+                        request_id = receipt.get("request_id") if isinstance(receipt, dict) else None
+                        if (isinstance(request_id, str) and BARE_SHA256_PATTERN.fullmatch(request_id)
+                                and request_id not in known):
+                            known.add(request_id)
+                            yield routes / (request_id + ".json")
+                except (OSError, ValueError, KeyError, TypeError):
+                    continue
+        # This part is lazy: a fully resolved page never enumerates the directory.
+        for path in sorted(routes.glob("*.json")):
+            if path.stem not in known:
+                yield path
+
+    for path in candidate_paths():
         try:
             route = _read(path)
-            if route.get("session_id") != session_id:
+            if (route.get("session_id") != session_id
+                    or (source_store is not None and not is_source_chat_host(root, route, source_store))):
                 continue
             request_id = str(route.get("request_id") or "")
             if path.stem != request_id or not BARE_SHA256_PATTERN.fullmatch(request_id):
                 continue
-            for item in reply_status(root, route):
+            def observe_result(result_path, reply):
+                mid = "handoff." + _hash([request_id, result_path.stem])
+                try:
+                    files[mid] = _chat_return_files(root, route, result_path, reply,
+                        visible[mid], source_store, registry)
+                except (OSError, ValueError, KeyError, TypeError):
+                    # Preserve delivery history even when a file cannot be read.
+                    files[mid] = []
+            # A legacy/unmatched row can require the exhaustive route fallback.
+            # Match immutable result keys before reading potentially long reply
+            # bodies and delivery sidecars for off-page results. The existing
+            # result owner still validates every selected status on this read.
+            for item in reply_status(
+                root, route,
+                include_result_key=lambda key: "handoff." + _hash([request_id, key]) in pending_message_ids,
+                observe_result=observe_result,
+            ):
                 message_id = "handoff." + _hash([request_id, item.get("result_key", item["phase"])])
                 if message_id not in pending_message_ids:
                     continue
@@ -313,7 +415,11 @@ def project_chat_return_deliveries(root, session_id, messages):
             continue
     return [
         (
-            {**message, "return_delivery": statuses[message.get("message_id")]}
+            {**message, "return_delivery": statuses[message.get("message_id")],
+             **({"attachments": [*(item for item in (message.get("attachments") or [])
+                                    if item.get("id") not in {file["id"] for file in files[message["message_id"]]}),
+                                  *files[message["message_id"]]]}
+                if files.get(message.get("message_id")) else {})}
             if message.get("message_id") in statuses
             else message
         )
@@ -321,275 +427,360 @@ def project_chat_return_deliveries(root, session_id, messages):
     ]
 
 
-def project_chat_session_snapshot(root, store, session_id, *, registry):
+def _saved_answer_rows(messages, message_id, expected_turn_id):
+    matches = [row for row in messages if row.get("message_id") == message_id]
+    if len(matches) > 1:
+        raise ValueError("saved answer has conflicting message identities")
+    if not matches or matches[0].get("role") not in {"agent", "assistant"}:
+        return [], []
+    answer = matches[0]
+    turn_id = answer.get("turn_id")
+    if expected_turn_id is not None and turn_id != expected_turn_id:
+        return [], []
+    if not turn_id:
+        return [answer], [answer]
+    original = [row for row in messages if row.get("turn_id") == turn_id]
+    question = next((row for row in original if row.get("role") == "user"), None)
+    return ([question, answer] if question else [answer]), original
+
+
+def project_chat_session_snapshot(root, store, session_id, *, registry,
+                                  message_limit=None, message_cursor=None, turn_id=None, report_message_id=None,
+                                  resume_from=None, project_history_messages=None, include_turn_error=False):
     """Project return delivery state into one existing Chat snapshot."""
 
-    snapshot = store.session_snapshot(session_id)
+    turn = None
+    if turn_id is not None and report_message_id is None:
+        if message_limit is None:
+            raise ValueError("a selected original Turn requires paged history")
+        turn = store.load_turn(session_id, turn_id)
+        if not turn or turn.get("session_id") != session_id or turn.get("turn_id") != turn_id:
+            raise ValueError("original Turn is unavailable from this Session")
+    strict = message_limit is not None or resume_from is not None or report_message_id is not None
+    # Read the status first: terminal completion persists its answer before
+    # publishing completed. An older message prefix must not appear final.
+    snapshot = (store.session_snapshot(session_id, strict_messages=True) if strict
+                else store.session_snapshot(session_id))
+    report_context = None
+    if report_message_id is not None:
+        snapshot["messages"], report_context = _saved_answer_rows(snapshot["messages"], report_message_id, turn_id)
+        snapshot["report_message_id"] = report_message_id
+        snapshot["active_turn"] = None
+    elif turn is not None:
+        status = turn["status"]
+        snapshot["selected_turn"] = {"turn_id": turn_id, "status": status, "terminal": status in TERMINAL_TURN_STATES}
+        # Failure records persist the reason with the status, before appending the message.
+        error = turn.get("error")
+        if include_turn_error and status in {"failed", "timed_out"} and isinstance(error, str) and error.strip():
+            snapshot["selected_turn"]["error"] = error
+        snapshot["active_turn"] = None
+        # OriginalRequest already displays only this Turn. Select it before
+        # paging/projection, retaining every message and the strict journal read.
+        snapshot["messages"] = [row for row in snapshot["messages"] if row.get("turn_id") == turn_id]
+    elif project_history_messages is not None:
+        # Extension-owned, presentation-only rows must join the frozen page
+        # prefix. A selected Turn only reads its canonical messages.
+        snapshot["messages"] = project_history_messages(snapshot["messages"])
+    if resume_from is not None and not 0 <= len(snapshot["messages"]) - resume_from <= 200:
+        return None  # Bound the complete visible stream, including provider-only notices.
+    from .chat_history import page_chat_messages
+    page = (page_chat_messages(session_id, snapshot["messages"], limit=message_limit,
+                              cursor=message_cursor, turn_id=turn_id) if message_limit is not None else None)
+    context_messages = snapshot["messages"] if report_context is None else report_context
+    if page is not None:
+        context_messages = context_messages[:page["message_page"]["total"]]
+        snapshot["messages"] = page["messages"]
     snapshot["messages"] = project_chat_return_deliveries(
-        root, session_id, snapshot["messages"]
+        root, session_id, snapshot["messages"], source_store=store, registry=registry
     )
     from .presentation import project_collaboration
-    snapshot["messages"] = project_collaboration(store, root, session_id, snapshot["messages"], registry=registry)
+    # Use the frozen context to choose the carrier, projecting only this page.
+    # A question and answer can straddle pages without duplicating a commitment
+    # or re-reading every off-page Turn for each page.
+    projected = project_collaboration(store, root, session_id, snapshot["messages"],
+        registry=registry, context_messages=context_messages)
+    if report_message_id is not None:
+        # Collaboration may include the original receipt carrier. The saved
+        # answer only exposes its precise answer and the question it displays.
+        visible_ids = {row.get("message_id") for row in snapshot["messages"]}
+        projected = [row for row in projected if row.get("message_id") in visible_ids]
+    snapshot["messages"] = projected
+    # Provider-owned history joins the selected page at the composition root.
+    # Core capabilities never import an extension projection sink.
+    if page is not None:
+        snapshot["message_page"] = page["message_page"]
     return snapshot
 
 
 
-def _exact_return_scope(registry, reply):
-    return collaboration_goal_scope(
-        registry,
-        goal_id=reply["goal_id"],
-        agents=(reply["agent_id"],),
-        caller_goal_ref=reply["goal_ref"],
-    )
+def parse_chat_history_selection(query):
+    """Validate one HTTP history selection before any recovery observation."""
+    keys = set(query)
+    report = "report_message_id" in keys
+    if (keys - {"message_limit", "message_cursor", "turn_id", "known_history",
+                      "task_goal_id", "task_todo_id", "report_message_id"}
+            or any(len(values) != 1 or not values[0] for values in query.values())
+            or (report and keys - {"report_message_id", "turn_id"})
+            or (not report and "message_limit" not in keys and keys & {"message_cursor", "turn_id", "known_history"})):
+        raise ValueError("invalid history page arguments")
+    limit = int(query["message_limit"][0]) if "message_limit" in query else None
+    if limit is not None and not 1 <= limit <= 200:
+        raise ValueError("message_limit must be between 1 and 200")
+    task_scope = None
+    if "task_goal_id" in query or "task_todo_id" in query:
+        if not {"turn_id", "message_limit", "task_goal_id", "task_todo_id"} <= query.keys():
+            raise ValueError("a Task receipt requires its Goal, Task and original Turn")
+        task_scope = (query["task_goal_id"][0], query["task_todo_id"][0])
+    basis = query.get("known_history", [None])[0]
+    parsed_basis = None
+    if basis is not None:
+        if limit != 200 or "turn_id" in query or "message_cursor" in query:
+            raise ValueError("invalid history resume arguments")
+        count_text, _, proof = basis.partition(":")
+        if not re.fullmatch(r"[1-9][0-9]{0,3}", count_text):
+            raise ValueError("invalid known history proof")
+        count = int(count_text)
+        if count > 5000 or len(proof) != ((count + 199) // 200) * 64 or not re.fullmatch(r"[a-f0-9]+", proof):
+            raise ValueError("invalid known history proof")
+        parsed_basis = (basis, count, proof)
+    return {"message_limit": limit, "message_cursor": query.get("message_cursor", [None])[0],
+            "turn_id": query.get("turn_id", [None])[0], "known_history": parsed_basis, "task_scope": task_scope,
+            "report_message_id": query.get("report_message_id", [None])[0]}
 
 
-def _exact_return_context(root, registry, store, path, state_path, now):
-    reply = _read(path)
-    if not isinstance(reply.get("goal_ref"), dict):
-        raise ValueError("exact return reply is missing goal_ref")
-    with _exact_return_scope(registry, reply) as scope:
-        row = _entry(
-            root,
-            reply["goal_id"],
-            reply["agent_id"],
-            reply["request_id"],
-            scope=scope,
-        )
-        inspected = inspect_result_identity(reply, row, path)
-        if (
-            path.parent.name != row["request_id"]
-            or inspected is None
-            or any(
-                reply.get(key) != row.get(key)
-                for key in ("source_id", "goal_ref")
-            )
-        ):
-            raise ValueError("return_reply_identity_mismatch")
-        route = _route(root, row, scope=scope)
-        if route.get("kind") == "peer":
-            return None
-        session = store.load_session(route["session_id"])
-        turn = store.turn_for_client(route["session_id"], route["client_turn_id"])
-        if (
-            not session
-            or session.get("status") == "closed"
-            or session.get("channel_id") != route["channel_id"]
-            or not turn
-        ):
-            raise ValueError("original_conversation_unavailable")
-        target = {key: row[key] for key in ("goal_id", "agent_id")}
-        grant = target_authority(
-            root,
-            session=session,
-            turn=turn,
-            target=target,
-        )
-        if (
-            target not in grant["targets"]
-            or grant.get("source_id") != row["source_id"]
-        ):
-            raise ValueError("return_authorization_unavailable")
-        decide_collaboration_lifecycle(
-            scope,
-            operation="original_return_admit",
-            record=row,
-            route=route,
-            initial_delivery=original_delivery_facts(row, route, turn, source_id=grant.get("source_id")),
-        )
-        with _request_lock(
-            root,
-            row["request_id"],
-            scope,
-            path.with_suffix(".lock"),
-        ):
-            if not prior_result_delivered(path, reply):
-                return None
-            state = _read(state_path) if state_path.exists() else {}
-            if state.get("status") in {
-                "delivered",
-                "superseded",
-                "explicit_unverified",
-            }:
-                return None
-            admission = state.get("admission")
-            if (
-                isinstance(admission, dict)
-                and isinstance(admission.get("expires_at"), str)
-                and now.isoformat() < admission["expires_at"]
-            ):
-                return None
-            if (
-                state.get("status") == "admitted"
-                and state.get("attempt") is None
-                and not conversation_scope(session)["private_conversation"]
-            ):
-                _write(
-                    state_path,
-                    {
-                        "status": "explicit_unverified",
-                        "error": "provider_delivery_unverified",
-                        "goal_ref": row["goal_ref"],
-                    },
-                )
-                return None
-            if (
-                state.get("retry_at")
-                and state.get("status") != "admitted"
-                and now.isoformat() < state["retry_at"]
-            ):
-                return None
-            if inspected["interim_superseded"]:
-                _write(
-                    state_path,
-                    {
-                        "status": "superseded",
-                        "reason": "conclusion_ready",
-                        "goal_ref": row["goal_ref"],
-                    },
-                )
-                return None
-            token = uuid4().hex
-            prior_status = (
-                admission.get("prior_status")
-                if isinstance(admission, dict)
-                else state.get("status", "queued")
-            )
-            admitted = {
-                **state,
-                "status": "admitted",
-                "goal_ref": row["goal_ref"],
-                "admission": {
-                    "token": token,
-                    "prior_status": prior_status,
-                    "admitted_at": now.isoformat(),
-                    "expires_at": (
-                        now + timedelta(seconds=EXACT_DELIVERY_ADMISSION_SECONDS)
-                    ).isoformat(),
-                },
+def prepare_chat_history_session(store, session_id, selection, *, recover_turn):
+    """Use the existing lifecycle owner only for the execution this read owns."""
+    task_scope = selection["task_scope"]
+    turn_id = selection["turn_id"]
+    if task_scope is None:
+        if turn_id is None and selection["report_message_id"] is None:
+            recover_turn(session_id)
+        return store.load_session(session_id) or {}
+
+    session = store.load_session(session_id) or {}
+    goal_id, todo_id = task_scope
+    if session.get("goal_id") != goal_id or session.get("channel_id") != f"task.{todo_id}":
+        raise ValueError("the original Task Session could not be verified")
+    if selection["message_cursor"] is not None or session.get("active_turn_id") != turn_id:
+        return session
+
+    turn = store.load_turn(session_id, turn_id)
+    if not turn or turn.get("session_id") != session_id or turn.get("turn_id") != turn_id:
+        raise ValueError("the original Task Turn could not be verified")
+    recover_turn(session_id, turn_id)
+    return store.load_session(session_id) or {}
+
+
+def _visible_history_page_digest(session_id, offset, messages):
+    # Bind the displayed rows, including fresh provider projections, to the source.
+    body = json.dumps([session_id, offset, messages], sort_keys=True, ensure_ascii=False,
+                      separators=(",", ":")).encode("utf-8")
+    return sha256(body).hexdigest()
+
+
+def read_chat_history_selection(root, store, session_id, *, registry, selection, project_provider,
+                                project_history_messages=None):
+    """Compose the same provider projections for page reads and suffix proof."""
+    basis = selection["known_history"]
+    if basis is None:
+        snapshot = project_chat_session_snapshot(root, store, session_id, registry=registry,
+            message_limit=selection["message_limit"], message_cursor=selection["message_cursor"],
+            turn_id=selection["turn_id"], project_history_messages=project_history_messages,
+            report_message_id=selection["report_message_id"],
+            include_turn_error=selection["task_scope"] is not None)
+        snapshot["messages"] = project_provider(snapshot["messages"])
+        if selection["message_limit"] == 200 and selection["turn_id"] is None:
+            page = snapshot["message_page"]
+            if 1 <= page["total"] <= 5000:
+                page["visible_page_sha256"] = _visible_history_page_digest(
+                    session_id, page["offset"], snapshot["messages"])
+        return snapshot
+
+    basis, count, proof = basis
+    resume = {"schema_version": "loopx_chat_history_resume_v1"}
+    restart = {"ok": True, **resume, "status": "restart"}
+    snapshot = project_chat_session_snapshot(root, store, session_id, registry=registry, resume_from=count,
+        project_history_messages=project_history_messages)
+    if snapshot is None or len(snapshot["messages"]) > 5000:
+        return restart
+    messages = project_provider(snapshot["messages"])
+    current_prefix = "".join(
+        _visible_history_page_digest(session_id, offset, messages[offset:min(offset + 200, count)])
+        for offset in range(0, count, 200))
+    if current_prefix != proof:
+        return restart
+    total = len(messages)
+    # The old last page may have been short; earlier pages were just verified.
+    unchanged = count if total == count else count - count % 200
+    next_proof = proof[:((unchanged + 199) // 200) * 64] + "".join(
+        _visible_history_page_digest(session_id, offset, messages[offset:offset + 200])
+        for offset in range(unchanged, total, 200))
+    return {**snapshot, "messages": messages[count:], "history_resume": {
+        **resume, "base": basis, "next": f"{total}:{next_proof}",
+    }}
+
+
+RETURN_DELIVERY_TRANSACTION = "manager_return_delivery_transaction_v0"
+
+
+def _hold_return_source_fence(root, route, effects):
+    # Match the grant writer through transcript/provider publication. Owner-only
+    # returns stay independent of source policy and create no policy storage.
+    if conversation_scope(route)["kind"] == "external_audience":
+        effects.enter_context(source_policy_fence(_root(root) / "policy.json"))
+
+
+@contextmanager
+def _return_source(host, path, frozen_route, original_grant=None):
+    """Observe original Chat/provider sources under their existing lifetime fence."""
+    root, registry, store, exact = (host[key] for key in ("root", "registry", "store", "exact"))
+    with ExitStack() as guards:
+        try:
+            reply = _read(path)
+            scope = guards.enter_context(collaboration_goal_scope(
+                registry, goal_id=reply["goal_id"],
+                agents=(reply["agent_id"],) if exact else (),
+                caller_goal_ref=reply.get("goal_ref") if exact else None,
+            ))
+            if exact:
+                guards.enter_context(_request_lock(root, reply["request_id"], scope, path.with_suffix(".lock")))
+            row = _entry(root, reply["goal_id"], reply["agent_id"], reply["request_id"], scope=scope)
+            route = _route(root, row, scope=scope)
+            if route != frozen_route:
+                raise ValueError("context return route changed during admission")
+            session = store.load_session(route["session_id"])
+            turn = store.turn_for_client(route["session_id"], route["client_turn_id"])
+            grant = original_grant
+            if grant is None and session and turn:
+                grant = (target_authority(root, session=session, turn=turn,
+                    target={key: row[key] for key in ("goal_id", "agent_id")})
+                    if exact else authority(root, registry, session, turn))
+            target = scope.target(reply["agent_id"])
+            facts = {
+                "entry": row,
+                "entry_path": str(_root(root) / "entries" / _hash(target) / (reply["request_id"] + ".json")),
+                "route": route, "session": session, "turn": turn,
+                "grant": grant or {"targets": []},
+                "scope": {"profile_id": scope.profile_id,
+                    "caller_goal_ref": scope.caller_goal_ref,
+                    "current_goal_ref": scope.current_goal_ref},
+                "initial_delivery": original_delivery_facts(row, route, turn,
+                    source_id=(grant or {}).get("source_id")) if turn else None,
             }
-            admitted.pop("retry_at", None)
-            _write(state_path, admitted)
-        return {
-            "reply": reply,
-            "row": row,
-            "route": route,
-            "session": session,
-            "turn": turn,
-            "store": store,
-            "state_path": state_path,
-            "state": admitted,
-            "token": token,
-            "source_id": grant["source_id"],
-        }
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+            facts = {"error": exc.reason if isinstance(exc, ReturnResolutionBlocked) else "return_source_unavailable"}
+        yield facts
 
 
-def _write_exact_return_state(
-    root,
-    registry,
-    context,
-    value,
-    *,
-    preserve_admission=False,
-):
-    reply = context["reply"]
-    with _exact_return_scope(registry, reply) as scope:
-        row = _entry(
-            root,
-            reply["goal_id"],
-            reply["agent_id"],
-            reply["request_id"],
-            scope=scope,
-        )
-        route = _route(root, row, scope=scope)
-        turn = context["store"].turn_for_client(
-            route["session_id"],
-            route["client_turn_id"],
-        )
-        decide_collaboration_lifecycle(
-            scope,
-            operation="original_return_settle",
-            record=row,
-            route=route,
-            initial_delivery=(
-                original_delivery_facts(row, route, turn, source_id=context["source_id"])
-                if isinstance(turn, dict) else None
-            ),
-        )
-        with _request_lock(
-            root,
-            row["request_id"],
-            scope,
-            context["state_path"].with_suffix(".lock"),
-        ):
-            current = _read(context["state_path"])
-            admission = current.get("admission")
-            if (
-                not isinstance(admission, dict)
-                or admission.get("token") != context["token"]
-            ):
-                raise ValueError("exact return delivery admission changed")
-            result = {**value, "goal_ref": row["goal_ref"],
-                      **({"result_key": reply["result_key"]} if "result_key" in reply else {})}
-            # A refusal does not erase evidence that the provider already wrote.
-            # Terminal state remains terminal; preserving its locator is no retry.
-            if result.get("status") == "explicit_unverified" and current.get("attempt") is not None:
-                result["attempt"] = current["attempt"]
-            if preserve_admission:
-                result["admission"] = admission
-            else:
-                result.pop("admission", None)
-            _write(context["state_path"], result)
-            if (result.get("status") == "delivered" and result.get("reply_verified") is True
-                    and current.get("status") != "delivered"):
-                from ...usage_ping import observe_verified_return
-                observe_verified_return()
-
-
-def _retry_state(state, now, *, error):
-    attempts = int(state.get("attempts", 0)) + 1
-    result = {
-        key: value
-        for key, value in state.items()
-        if key not in {"admission", "delivered_at", "message_id", "verification"}
-    }
-    result.update(
-        status="retry_pending",
-        attempts=attempts,
-        error=error,
-        retry_at=(
-            now + timedelta(seconds=min(300, 5 * 2 ** min(attempts, 6)))
-        ).isoformat(),
-    )
+def _return_transaction(host, path, phase, request):
+    root, exact = (host[key] for key in ("root", "exact"))
+    payload = {key: value for key, value in request.items() if key != "facts"}
+    observed = dict(request["facts"])
+    for field, keys in {
+        "session": ("session_id", "goal_id", "channel_id", "status", "project_context", "steward_context"),
+        "turn": ("turn_id", "client_turn_id", "status"),
+        "grant": ("source_id", "targets"),
+    }.items():
+        if isinstance(observed.get(field), dict):
+            observed[field] = {key: observed[field][key] for key in keys if key in observed[field]}
+    result = effect_runtime_result("manager.return_delivery.transact", {
+        "schema_version": RETURN_DELIVERY_TRANSACTION,
+        "runtime_root": str(root), "request_id": path.parent.name,
+        "result_key": path.stem, "phase": phase, "now": host["clock"]().isoformat(),
+        "exact": exact, "facts": observed, **payload,
+    }, retry_safe=False)
+    if (not isinstance(result, dict) or result.get("schema_version") != RETURN_DELIVERY_TRANSACTION
+            or result.get("action") not in {"skip", "private", "verify", "send"}
+            or type(result.get("processed")) is not int or result["processed"] not in {0, 1}):
+        raise RuntimeError("return delivery transaction result shape mismatch")
     return result
 
 
-def _transport_route(route, reply, external_sender):
-    attachments = reply.get("attachments") or []
-    if not attachments:
-        return route
-    if getattr(external_sender, "supports_result_files", False) is not True:
-        raise ValueError("return_transport_unavailable")
-    # Ephemeral transport payload, never part of the persisted audience/grant.
-    return {**route, "result_attachments": attachments}
+def _return_provider(plan, source, sender, record_attempt):
+    route, session, turn = (source[key] for key in ("route", "session", "turn"))
+    # The typed transaction owns the canonical result identity. Transports may
+    # verify a mirror of this message, never guess its identity from its body.
+    route = {**route, "return_message_id": plan["message_id"]}
+    attachments = plan.get("attachments") or []
+    if attachments:
+        if getattr(sender, "supports_result_files", False) is not True:
+            raise ValueError("return_transport_unavailable")
+        route = {**route, "result_attachments": attachments}
+    if plan["action"] == "private":
+        return {"kind": "private"}
+    if plan["action"] == "verify":
+        attempt = plan.get("attempt")
+        if not attempt or attempt.get("message_ref") is None:
+            return {"kind": "locator_unavailable"}
+        verifier = getattr(sender, "verify", None)
+        if not callable(verifier):
+            return {"kind": "verify_unavailable"}
+        return {"kind": "verified", "verification": verifier(route, session, turn, plan["text"], attempt)}
+    provider = getattr(sender, "send_with_attempt", None)
+    if callable(provider):
+        sent = provider(route, session, turn, plan["text"], record_attempt)
+    elif callable(sender):
+        sent = sender(route, session, turn, plan["text"])
+    else:
+        return {"kind": "sender_unavailable"}
+    if isinstance(sent.get("verification"), dict) and sent.get("external_write_performed") is False:
+        # A provider outbox may already own publication. Its adapter records the
+        # existing attempt before returning a readback, including unavailable
+        # or mismatched results, through the ordinary verification state machine.
+        return {"kind": "verified", "verification": sent["verification"]}
+    return {"kind": "sent", "reply_verified": sent.get("reply_verified"),
+            "external_write_performed": sent.get("external_write_performed"),
+            "idempotency_key": sent.get("idempotency_key")}
 
 
-def _resolve_delivery_sender(external_sender):
-    """Resolve a manager return transport to ``(sender, attempt_aware)``.
+def _deliver_return(host, path, sender, frozen_route):
+    store, cancelled = host["store"], host["cancelled"]
+    with _return_source(host, path, frozen_route) as facts:
+        plan = _return_transaction(host, path, "prepare", {"facts": facts})
+        source = dict(facts)
+    if plan.get("source_unavailable") is True:
+        logging.getLogger(__name__).warning("Exact manager return admission unavailable")
+    if plan["action"] == "skip":
+        return plan["processed"]
+    if cancelled():
+        return 0
+    checkpoint = {key: plan[key] for key in ("revision", "token")}
 
-    Two transport shapes are legitimate: an object exposing a callable
-    ``send_with_attempt`` (the attempt-aware protocol) and a bare callable
-    transport. The predicate is shape-based on purpose — the transports
-    share no base class, so an ``isinstance`` check would reject valid
-    transports. ``(None, False)`` means the transport cannot deliver:
-    callers must record ``return_transport_unavailable`` before invoking
-    instead of letting the call raise ``TypeError`` mid-loop.
-    """
-    sender = getattr(external_sender, "send_with_attempt", None)
-    if callable(sender):
-        return sender, True
-    if callable(external_sender):
-        return external_sender, False
-    return None, False
+    def transact(phase, **payload):
+        with _return_source(host, path, frozen_route, source["grant"]) as current:
+            return _return_transaction(host, path, phase,
+                {"facts": current, **checkpoint, **payload})
+
+    def record_attempt(attempt):
+        saved = transact("attempt", attempt=dict(attempt))
+        checkpoint.update({key: saved[key] for key in ("revision", "token")})
+
+    try:
+        store.append_message(source["route"]["session_id"], role="agent", text=plan["text"],
+            turn_id=source["turn"]["turn_id"], origin="manager_followup", message_id=plan["message_id"])
+        if cancelled():
+            return 0
+        outcome = _return_provider(plan, source, sender, record_attempt)
+    except ChatMessagePayloadConflictError as exc:
+        logging.getLogger(__name__).warning("Manager return payload conflict on %s: %s", plan["message_id"], exc.field)
+        outcome = {"kind": "conflict"}
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+        outcome = {"kind": "verification_error" if plan["action"] == "verify" else "error",
+                   "blocker": exc.reason if isinstance(exc, ReturnResolutionBlocked) else None}
+    settled = transact("settle", outcome=outcome, message_id=plan["message_id"])
+    # The reply may already be visible while its provider receipt is queued.
+    # Invalidate the existing session read hint after settlement so cached
+    # conversations re-read the receipt without rewriting history or activity.
+    try:
+        store.update_session(source["route"]["session_id"])
+    except (OSError, ValueError):
+        # Publication is already committed. A presentation hint failure must
+        # never reclassify delivery or cause the original reply to be resent.
+        logging.getLogger(__name__).warning("Manager return session read hint unavailable")
+    if settled.get("observe_verified"):
+        from ...usage_ping import observe_verified_return
+        observe_verified_return()
+    return settled["processed"]
 
 
 def _belongs_to_chat_host(root, store, path):
@@ -597,9 +788,6 @@ def _belongs_to_chat_host(root, store, path):
 
     route_path = _root(root) / "roundtrips" / (path.parent.name + ".json")
     try:
-        # Missing legacy routes can only be recovered from the coordination
-        # root's Chat receipts. Private hosts recover their frozen provenance
-        # at startup before draining; a foreign host must never claim them.
         route = _read(route_path) if route_path.exists() else {}
         return route.get("kind") != "peer" and is_source_chat_host(root, route, store)
     except (OSError, ValueError, TypeError):
@@ -607,697 +795,68 @@ def _belongs_to_chat_host(root, store, path):
         return False
 
 
-def _drain_exact(root, registry, store, external_sender, *, now, cancelled):
+def _pending_return_paths(host, paths):
+    root, scan_at, exact, cancelled = (host[key] for key in ("root", "scan_at", "exact", "cancelled"))
+    paths = iter(paths)
+    while not cancelled() and (batch := list(islice(paths, 128))):
+        candidates = [{"request_id": path.parent.name, "result_key": path.stem} for path in batch]
+        selected = effect_runtime_result("manager.return_delivery.transact", {
+            "schema_version": RETURN_DELIVERY_TRANSACTION, "phase": "scan",
+            "runtime_root": str(root), "now": scan_at.isoformat(), "exact": exact,
+            "candidates": candidates,
+        })
+        if not isinstance(selected, dict) or selected.get("schema_version") != RETURN_DELIVERY_TRANSACTION:
+            raise RuntimeError("return delivery scan result shape mismatch")
+        if selected.get("unavailable_count"):
+            logging.getLogger(__name__).warning("Unreadable manager return receipt")
+        ready = {(row["request_id"], row["result_key"]) for row in selected["candidates"]}
+        yield from (path for path in batch if (path.parent.name, path.stem) in ready)
+
+
+@effect_runtime_request_scope()
+def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda: False, progress=lambda: None):
+    """Run the typed return transaction with the existing Chat/provider adapters."""
+    if cancelled():
+        return 0
+
+    # Derive source paths and the typed transaction's root from one directory.
+    root = root.resolve()
+
+    def clock() -> datetime:
+        return datetime.now(timezone.utc) if now is None else now
+
+    # Keep one eligibility instant for the scan. The per-return transaction
+    # observes its own time after acquiring the route and source guards.
+    scan_at = clock()
+    # An unreadable registry cannot authorize legacy delivery. Let the hosted
+    # worker retry the scan without advancing any of its receipts.
+    exact = load_project_registry(registry).get("profile_id") == SOURCE_SESSION_PROFILE_ID
     processed = 0
-    for path in iter_result_paths(_root(root) / "replies"):
+    host = {
+        "root": root, "registry": registry, "store": store,
+        "scan_at": scan_at, "clock": clock, "exact": exact, "cancelled": cancelled,
+    }
+    paths = iter_result_paths(_root(root) / "replies")
+    for path in _pending_return_paths(host, paths):
+        progress()
         if cancelled():
             break
         if not _belongs_to_chat_host(root, store, path):
             continue
-        state_path = path.with_name(path.stem + ".delivery.json")
-        effect_locks = ExitStack()
+        lock_path = (_root(root) / "return-effect-locks" / path.parent.name / path.stem
+                     if exact else path.with_suffix(".lock"))
         try:
-            effect_locks.enter_context(
-                exclusive_file_lock(
-                    _root(root)
-                    / "return-effect-locks"
-                    / path.parent.name
-                    / path.stem,
-                    policy=LockAcquisitionPolicy.SINGLE_FLIGHT,
-                    operation="manager_return_delivery",
-                )
-            )
+            with exclusive_file_lock(lock_path, **({"policy": LockAcquisitionPolicy.SINGLE_FLIGHT,
+                                     "operation": "manager_return_delivery"} if exact else {})), ExitStack() as effects:
+                frozen_route = _read(_root(root) / "roundtrips" / (path.parent.name + ".json"))
+                _hold_return_source_fence(root, frozen_route, effects)
+                processed += _deliver_return(host, path, external_sender, frozen_route)
         except LockAcquireTimeoutError:
             continue
-        try:
-            context = _exact_return_context(
-                root,
-                registry,
-                store,
-                path,
-                state_path,
-                now,
-            )
         except (OSError, ValueError, KeyError, TypeError, RuntimeError):
-            effect_locks.close()
-            logging.getLogger(__name__).warning(
-                "Exact manager return admission unavailable"
-            )
-            continue
-        if context is None:
-            effect_locks.close()
-            continue
-        row = context["row"]
-        route = context["route"]
-        session = context["session"]
-        turn = context["turn"]
-        reply = context["reply"]
-        state = context["state"]
-        prefix = "处理结论" if reply["phase"] == "conclusion" else "处理进展"
-        text = (
-            f"{prefix} · {row['agent_id']} · 委托 {row['request_id'][:8]}"
-            f"\n\n{reply['text']}"
-        )
-        mid = "handoff." + _hash([row["request_id"], path.stem])
-        try:
-            if cancelled():
-                return processed
-            route = _transport_route(route, reply, external_sender)
-            try:
-                store.append_message(
-                    route["session_id"],
-                    role="agent",
-                    text=text,
-                    turn_id=turn["turn_id"],
-                    origin="manager_followup",
-                    message_id=mid,
-                )
-            except ChatMessagePayloadConflictError as exc:
-                logging.getLogger(__name__).warning(
-                    "Manager return payload conflict on %s: %s",
-                    mid,
-                    exc.field,
-                )
-                _write_exact_return_state(
-                    root,
-                    registry,
-                    context,
-                    {
-                        "status": "explicit_unverified",
-                        "error": "manager_return_payload_conflict",
-                    },
-                )
-                processed += 1
-                continue
-            if cancelled():
-                return processed
-            if conversation_scope(session)["private_conversation"]:
-                _write_exact_return_state(
-                    root,
-                    registry,
-                    context,
-                    {
-                        "status": "delivered",
-                        "delivered_at": now.isoformat(),
-                        "message_id": mid,
-                    },
-                )
-                processed += 1
-                continue
-
-            prior_status = state["admission"]["prior_status"]
-            if prior_status == "verification_required" or state.get("attempt") is not None:
-                attempt = state.get("attempt")
-                if attempt is None or _attempt_locator(attempt) is None:
-                    _write_exact_return_state(
-                        root,
-                        registry,
-                        context,
-                        {
-                            **({"attempt": attempt} if attempt is not None else {}),
-                            "status": "explicit_unverified",
-                            "error": "provider_locator_unavailable",
-                        },
-                    )
-                    processed += 1
-                    continue
-                normalized_attempt = _delivery_attempt(attempt)
-                verifier = getattr(external_sender, "verify", None)
-                if not callable(verifier):
-                    _write_exact_return_state(
-                        root,
-                        registry,
-                        context,
-                        {
-                            "status": "explicit_unverified",
-                            "error": "provider_verifier_unavailable",
-                        },
-                    )
-                    processed += 1
-                    continue
-                try:
-                    decision = _verification_decision(
-                        verifier(
-                            route,
-                            session,
-                            turn,
-                            text,
-                            normalized_attempt,
-                        )
-                    )
-                except (
-                    OSError,
-                    ValueError,
-                    KeyError,
-                    TypeError,
-                    RuntimeError,
-                ) as exc:
-                    error = _verification_exception_error(exc)
-                    next_state = (
-                        {
-                            "status": "explicit_unverified",
-                            "error": error,
-                        }
-                        if error
-                        else _retry_state(
-                            {"attempt": normalized_attempt, **state},
-                            now,
-                            error="provider_verification_unavailable",
-                        )
-                    )
-                    _write_exact_return_state(
-                        root,
-                        registry,
-                        context,
-                        next_state,
-                    )
-                    processed += 1
-                    continue
-                if decision["status"] == "delivered":
-                    next_state = {
-                        "status": "delivered",
-                        "delivered_at": now.isoformat(),
-                        "message_id": mid,
-                        "provider_receipt": normalized_attempt["provider_receipt"],
-                        "reply_verified": True,
-                        "verification": decision["verification"],
-                    }
-                elif decision["status"] == "explicit_unverified":
-                    next_state = {
-                        "status": "explicit_unverified",
-                        "error": decision["error"],
-                    }
-                else:
-                    next_state = _retry_state(
-                        {"attempt": normalized_attempt, **state},
-                        now,
-                        error=decision["error"],
-                    )
-                _write_exact_return_state(
-                    root,
-                    registry,
-                    context,
-                    next_state,
-                )
-                processed += 1
-                continue
-
-            def record_attempt(value):
-                nonlocal state
-                attempt = _delivery_attempt(value)
-                existing = state.get("attempt")
-                if existing is not None and _delivery_attempt(existing) != attempt:
-                    raise ValueError("manager return delivery attempt conflict")
-                state = {**state, "attempt": attempt}
-                _write_exact_return_state(
-                    root,
-                    registry,
-                    context,
-                    state,
-                    preserve_admission=True,
-                )
-
-            sender, attempt_aware = _resolve_delivery_sender(external_sender)
-            if sender is None:
-                _write_exact_return_state(
-                    root,
-                    registry,
-                    context,
-                    _retry_state(
-                        state,
-                        now,
-                        error="return_transport_unavailable",
-                    ),
-                )
-                processed += 1
-                continue
-            sent = (
-                sender(route, session, turn, text, record_attempt)
-                if attempt_aware
-                else sender(route, session, turn, text)
-            )
-            if sent.get("reply_verified") is not True:
-                if sent.get("external_write_performed") is True:
-                    attempt = state.get("attempt")
-                    next_state = (
-                        {
-                            "status": "verification_required",
-                            "error": "provider_delivery_unverified",
-                            "attempt": attempt,
-                        }
-                        if attempt is not None and _attempt_locator(attempt) is not None
-                        else {
-                            **({"attempt": attempt} if attempt is not None else {}),
-                            "status": "explicit_unverified",
-                            "error": "provider_locator_unavailable",
-                        }
-                    )
-                    _write_exact_return_state(
-                        root,
-                        registry,
-                        context,
-                        next_state,
-                    )
-                    processed += 1
-                    continue
-                raise ValueError("return_transport_unavailable")
-            _write_exact_return_state(
-                root,
-                registry,
-                context,
-                {
-                    "status": "delivered",
-                    "delivered_at": now.isoformat(),
-                    "message_id": mid,
-                    "provider_receipt": sent.get("idempotency_key"),
-                    "reply_verified": True,
-                },
-            )
-        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
-            attempt = state.get("attempt")
-            error = (
-                _verification_exception_error(exc)
-                if attempt is not None
-                else None
-            )
-            if error:
-                next_state = {
-                    "status": "explicit_unverified",
-                    "error": error,
-                }
-            elif attempt is not None and _attempt_locator(attempt) is None:
-                next_state = {
-                    "status": "explicit_unverified",
-                    "error": "provider_locator_unavailable",
-                    "attempt": attempt,
-                }
-            else:
-                next_state = _retry_state(
-                    state,
-                    now,
-                    error="original_route_or_return_delivery_unavailable",
-                )
-            try:
-                _write_exact_return_state(
-                    root,
-                    registry,
-                    context,
-                    next_state,
-                )
-            except (OSError, ValueError, KeyError, TypeError, RuntimeError):
-                logging.getLogger(__name__).warning(
-                    "Exact manager return settlement unavailable"
-                )
-        finally:
-            effect_locks.close()
-        processed += 1
+            logging.getLogger(__name__).warning("Manager return transaction unavailable")
         if processed >= 20:
             break
-    return processed
-
-
-def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda: False):
-    """Restart-safe return delivery; transport retries never rerun the worker/model."""
-    now = now or datetime.now(timezone.utc)
-    try:
-        profile_id = load_project_registry(registry).get("profile_id")
-    except (OSError, ValueError, TypeError):
-        profile_id = None
-    if profile_id == SOURCE_SESSION_PROFILE_ID:
-        return _drain_exact(
-            root,
-            registry,
-            store,
-            external_sender,
-            now=now,
-            cancelled=cancelled,
-        )
-    processed = 0
-    for path in iter_result_paths(_root(root) / "replies"):
-        if cancelled():
-            break
-        if not _belongs_to_chat_host(root, store, path):
-            continue
-        state_path = path.with_name(path.stem + ".delivery.json")
-        with exclusive_file_lock(path.with_suffix(".lock")):
-            try:
-                state = _read(state_path) if state_path.exists() else {}
-            except (OSError, ValueError):
-                # A damaged receipt has unknown delivery state: do not resend
-                # it blindly, and do not starve unrelated pending returns.
-                logging.getLogger(__name__).warning("Unreadable manager return receipt")
-                continue
-            if state.get("status") in {"delivered", "superseded", "explicit_unverified"}:
-                continue
-            if state.get("retry_at") and now.isoformat() < state["retry_at"]:
-                continue
-            try:
-                reply = _read(path)
-                row = _entry(
-                    root, reply["goal_id"], reply["agent_id"], reply["request_id"]
-                )
-                inspected = inspect_result_identity(reply, row, path)
-                if (
-                    path.parent.name != row["request_id"]
-                    or inspected is None
-                    or reply.get("source_id") != row["source_id"]
-                ):
-                    raise ValueError("return_reply_identity_mismatch")
-                route = _transport_route(_route(root, row), reply, external_sender)
-                if route.get("kind") == "peer":
-                    continue  # Delivered by the requester inbox, never a Chat audience.
-                session = store.load_session(route["session_id"])
-                turn = store.turn_for_client(
-                    route["session_id"], route["client_turn_id"]
-                )
-                if (
-                    not session
-                    or session.get("status") == "closed"
-                    or session.get("channel_id") != route["channel_id"]
-                    or not turn
-                ):
-                    raise ReturnResolutionBlocked("original_route_unavailable", "original_conversation_unavailable")
-                grant = authority(root, registry, session, turn)
-                target = {k: row[k] for k in ("goal_id", "agent_id")}
-                if (
-                    target not in grant["targets"]
-                    or grant.get("source_id") != row["source_id"]
-                ):
-                    raise ReturnResolutionBlocked("return_authorization_unavailable", "return_authorization_unavailable")
-                with collaboration_goal_scope(registry, goal_id=row["goal_id"], agents=()) as scope:
-                    decide_collaboration_lifecycle(
-                        scope, operation="original_return_admit", record=row, route=route,
-                        initial_delivery=original_delivery_facts(row, route, turn, source_id=grant.get("source_id")),
-                    )
-                if inspected["interim_superseded"]:
-                    _write(
-                        state_path,
-                        {"status": "superseded", "reason": "conclusion_ready"},
-                    )
-                    continue
-                if not prior_result_delivered(path, reply):
-                    continue
-                # A conclusion can be a deferral or rejection. Transport completion
-                # is not completion of the delegated work.
-                prefix = "协作回复" if reply["phase"] == "conclusion" else "协作进展"
-                text = f"{prefix} · {row['agent_id']} · 委托 {row['request_id'][:8]}\n\n{reply['text']}"
-                # Transcript writes are independently idempotent, including when
-                # Lark is offline. Keep the original Turn and logical conversation.
-                mid = "handoff." + _hash([row["request_id"], path.stem])
-                if cancelled():
-                    return processed
-                try:
-                    store.append_message(
-                        route["session_id"],
-                        role="agent",
-                        text=text,
-                        turn_id=turn["turn_id"],
-                        origin="manager_followup",
-                        message_id=mid,
-                    )
-                except ChatMessagePayloadConflictError as exc:
-                    logging.getLogger(__name__).warning(
-                        "Manager return payload conflict on %s: %s",
-                        mid,
-                        exc.field,
-                    )
-                    _write(
-                        state_path,
-                        {
-                            **state,
-                            "status": "explicit_unverified",
-                            "error": "manager_return_payload_conflict",
-                        },
-                    )
-                    processed += 1
-                    continue
-                if cancelled():
-                    return processed
-                transport = {}
-                if not conversation_scope(session)["private_conversation"]:
-                    if state.get("status") == "verification_required":
-                        if state.get("attempt") is None:
-                            # A record written before locators were persisted has
-                            # no trustworthy provider identity: never guess and
-                            # never resend the conclusion.
-                            _write(
-                                state_path,
-                                {
-                                    **state,
-                                    "status": "explicit_unverified",
-                                    "error": "provider_locator_unavailable",
-                                },
-                            )
-                            continue
-                        try:
-                            attempt = _delivery_attempt(state.get("attempt"))
-                        except (ValueError, EffectRuntimeRejected):
-                            _write(
-                                state_path,
-                                {
-                                    **state,
-                                    "status": "explicit_unverified",
-                                    "error": "provider_locator_unavailable",
-                                },
-                            )
-                            continue
-                        if _attempt_locator(state.get("attempt")) is None:
-                            # The attempt records a provider write that carried no
-                            # locator, so no readback can prove it and the provider
-                            # must not be called again. Converging here keeps the
-                            # attempt as the evidence of that write while making
-                            # the return terminal, instead of looping the pump
-                            # through verification attempts forever.
-                            _write(
-                                state_path,
-                                {
-                                    **state,
-                                    "status": "explicit_unverified",
-                                    "error": "provider_locator_unavailable",
-                                },
-                            )
-                            continue
-                        verifier = getattr(external_sender, "verify", None)
-                        if not callable(verifier):
-                            _write(
-                                state_path,
-                                {
-                                    **state,
-                                    "status": "explicit_unverified",
-                                    "error": "provider_verifier_unavailable",
-                                },
-                            )
-                            continue
-                        try:
-                            verified = verifier(route, session, turn, text, attempt)
-                            decision = _verification_decision(verified)
-                        except (
-                            OSError,
-                            ValueError,
-                            KeyError,
-                            TypeError,
-                            RuntimeError,
-                        ) as exc:
-                            error = _verification_exception_error(exc)
-                            if error:
-                                _write(
-                                    state_path,
-                                    {**state, "status": "explicit_unverified", "error": error},
-                                )
-                                continue
-                            # An unclassified readback failure keeps the locator and
-                            # stays retryable, but must never re-run the provider on
-                            # every pump without backoff.
-                            attempts = int(state.get("attempts", 0)) + 1
-                            _write(
-                                state_path,
-                                {
-                                    **state,
-                                    "status": "verification_required",
-                                    "attempts": attempts,
-                                    "retry_at": (
-                                        now
-                                        + timedelta(
-                                            seconds=min(300, 5 * 2 ** min(attempts, 6))
-                                        )
-                                    ).isoformat(),
-                                },
-                            )
-                            continue
-                        if decision["status"] == "delivered":
-                            _write(
-                                state_path,
-                                {
-                                    "status": "delivered",
-                                    **({"result_key": path.stem} if "result_key" in reply else {}),
-                                    "delivered_at": now.isoformat(),
-                                    "message_id": mid,
-                                    "provider_receipt": attempt["provider_receipt"],
-                                    "reply_verified": True,
-                                    "verification": decision["verification"],
-                                },
-                            )
-                            continue
-                        if decision["status"] == "explicit_unverified":
-                            _write(
-                                state_path,
-                                {
-                                    **state,
-                                    "status": "explicit_unverified",
-                                    "error": decision["error"],
-                                },
-                            )
-                            continue
-                        attempts = int(state.get("attempts", 0)) + 1
-                        _write(
-                            state_path,
-                            {
-                                **state,
-                                "status": "verification_required",
-                                "attempts": attempts,
-                                "error": decision["error"],
-                                "retry_at": (
-                                    now
-                                    + timedelta(
-                                        seconds=min(300, 5 * 2 ** min(attempts, 6))
-                                    )
-                                ).isoformat(),
-                            },
-                        )
-                        continue
-
-                    def record_attempt(value):
-                        attempt = _delivery_attempt(value)
-                        current = _read(state_path) if state_path.exists() else {}
-                        existing = current.get("attempt")
-                        if existing is not None and _delivery_attempt(existing) != attempt:
-                            raise ValueError("manager return delivery attempt conflict")
-                        _write(
-                            state_path,
-                            {
-                                "status": "verification_required",
-                                "error": "provider_delivery_unverified",
-                                "attempt": attempt,
-                            },
-                        )
-
-                    sender, attempt_aware = _resolve_delivery_sender(external_sender)
-                    if sender is None:
-                        attempts = int(state.get("attempts", 0)) + 1
-                        _write(
-                            state_path,
-                            {
-                                "status": "retry_pending",
-                                "attempts": attempts,
-                                "error": "return_transport_unavailable",
-                                "retry_at": (
-                                    now
-                                    + timedelta(
-                                        seconds=min(300, 5 * 2 ** min(attempts, 6))
-                                    )
-                                ).isoformat(),
-                            },
-                        )
-                        processed += 1
-                        continue
-                    sent = (
-                        sender(route, session, turn, text, record_attempt)
-                        if attempt_aware
-                        else sender(route, session, turn, text)
-                    )
-                    if sent.get("reply_verified") is not True:
-                        if sent.get("external_write_performed") is True:
-                            current = _read(state_path) if state_path.exists() else {}
-                            if (
-                                current.get("attempt") is not None
-                                and _attempt_locator(current.get("attempt")) is not None
-                            ):
-                                _write(
-                                    state_path,
-                                    {
-                                        **current,
-                                        "status": "verification_required",
-                                        "error": "provider_delivery_unverified",
-                                    },
-                                )
-                            else:
-                                # Either nothing was recorded or the record says
-                                # the provider took the write without a locator.
-                                # Both leave no readback target, so the return is
-                                # terminal rather than retryable: a retry would
-                                # post the same text again.
-                                _write(
-                                    state_path,
-                                    (
-                                        {
-                                            **current,
-                                            "status": "explicit_unverified",
-                                            "error": "provider_locator_unavailable",
-                                        }
-                                        if current.get("attempt") is not None
-                                        else {
-                                            "status": "explicit_unverified",
-                                            "error": "provider_locator_unavailable",
-                                        }
-                                    ),
-                                )
-                            continue
-                        raise ValueError("return_transport_unavailable")
-                    transport = {
-                        "provider_receipt": sent.get("idempotency_key"),
-                        "reply_verified": True,
-                    }
-                _write(
-                    state_path,
-                    {
-                        "status": "delivered",
-                        **({"result_key": path.stem} if "result_key" in reply else {}),
-                        "delivered_at": now.isoformat(),
-                        "message_id": mid,
-                        **transport,
-                    },
-                )
-            except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
-                current = _read(state_path) if state_path.exists() else {}
-                if current.get("status") == "verification_required" and current.get(
-                    "attempt"
-                ) is not None:
-                    error = _verification_exception_error(exc)
-                    if error:
-                        _write(
-                            state_path,
-                            {**current, "status": "explicit_unverified", "error": error},
-                        )
-                    elif _attempt_locator(current.get("attempt")) is None:
-                        # The record says the provider took the write and named
-                        # no locator, so there is nothing left to verify and a
-                        # retry would post the same text again. Converge now
-                        # instead of leaving the return in a retryable state.
-                        _write(
-                            state_path,
-                            {
-                                **current,
-                                "status": "explicit_unverified",
-                                "error": "provider_locator_unavailable",
-                            },
-                        )
-                    processed += 1
-                    continue
-                attempts = int(state.get("attempts", 0)) + 1
-                _write(
-                    state_path,
-                    {
-                        "status": "retry_pending",
-                        "attempts": attempts,
-                        "error": "original_route_or_return_delivery_unavailable",
-                        "retry_at": (
-                            now + timedelta(seconds=min(300, 5 * 2 ** min(attempts, 6)))
-                        ).isoformat(),
-                    },
-                )
-            processed += 1
-            if processed >= 20:
-                break
     return processed
 
 
@@ -1322,7 +881,7 @@ def recover_source_chat_provenance(root, registry, store, *, cancelled=lambda: F
             if path.stem != route.get("request_id"):
                 continue
             # Reject other hosts before taking a Goal lifetime lock or loading
-            # its registry. This is one startup pass, not a polling-time scan.
+            # its registry. This is one startup pass.
             session, turn = observe_source_chat(store.root.parent, route)
             with collaboration_goal_scope(
                 registry, goal_id=route["goal_id"], agents=(route["agent_id"],),
@@ -1359,28 +918,50 @@ class ReturnService:
     def __init__(self, root, registry, store, external_sender):
         self.args = (root, registry, store, external_sender)
         self.stop = threading.Event()
-        self.thread = threading.Thread(
-            target=self.run, daemon=True, name="loopx-manager-returns"
-        )
+        self._execution_pump = None
+        self._return_worker = HostedWorker(target=self.run, stop=self.stop,
+                                          name="loopx-manager-returns", retry_seconds=3)
+        self._execution_worker = HostedWorker(target=self.run_executions, stop=self.stop,
+                                             name="loopx-manager-executions", retry_seconds=3)
+        self.thread = self._return_worker.thread
+        self.execution_thread = self._execution_worker.thread
 
     def start(self) -> None:
-        self.thread.start()
+        self._return_worker.start()
+        self._execution_worker.start()
+        self.thread = self._return_worker.thread
+        self.execution_thread = self._execution_worker.thread
 
     def run(self):
         try:
             recover_source_chat_provenance(*self.args[:3], cancelled=self.stop.is_set)
         except (OSError, ValueError, KeyError, TypeError, RuntimeError):
             logging.getLogger(__name__).warning("Source Chat provenance recovery unavailable")
-        while not self.stop.is_set():
-            try:
-                drain(*self.args, cancelled=self.stop.is_set)
-            except (OSError, ValueError, KeyError, TypeError, RuntimeError):
-                logging.getLogger(__name__).warning(
-                    "Manager return receipts unavailable; retrying"
-                )
-            self.stop.wait(3)
+        self._return_worker.repeat(
+            self._return_step, interval_seconds=3,
+            on_error=lambda: logging.getLogger(__name__).warning(
+                "Manager return receipts unavailable; retrying"),
+        )
+
+    def _return_step(self) -> None:
+        drain(*self.args, cancelled=self.stop.is_set, progress=self._return_worker.checkpoint)
+
+    def run_executions(self) -> None:
+        # Native previews may wait on a subprocess. Keep result publication
+        # independent, using the same server lifetime and one serial probe.
+        from .execution import QueuedSourcePump
+        if self._execution_pump is None:
+            self._execution_pump = QueuedSourcePump(*self.args[:3])
+        execution_pump = self._execution_pump
+
+        def step() -> None:
+            execution_pump.tick(cancelled=self.stop.is_set)
+
+        self._execution_worker.repeat(step, interval_seconds=3,
+            on_error=lambda: logging.getLogger(__name__).warning(
+                "Queued source execution unavailable; retrying"))
 
     def close(self) -> None:
         self.stop.set()
-        if self.thread.ident is not None:
-            self.thread.join(timeout=3)
+        self._return_worker.close(timeout=1.5)
+        self._execution_worker.close(timeout=1.5)

@@ -9,15 +9,18 @@ only record types and timestamps; message content is never projected.
 
 from __future__ import annotations
 
-import json
+import hashlib
 import os
 import re
 import sqlite3
 import tomllib
+from threading import Lock
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+from .hosts.codex_rollout_cursor import Reader, RolloutCursor
+from .hosts.codex_rollout_file import open_rollout
 from .control_plane.agents.host_thread_activity import (
     HostDeliveryExpectation,
     HostDeliveryScope,
@@ -27,8 +30,10 @@ from .control_plane.agents.host_thread_activity import (
     HostThreadUnknownReason,
 )
 
-# Remote surfaces such as codex-app-ssh keep their store on another machine.
-CODEX_LOCAL_STORE_SURFACES = frozenset({"codex-app", "codex-cli-tui", "codex-ide-plugin"})
+# The surface describes the session, not the observer's machine. On an SSH
+# source host a codex-app-ssh task has a local store too. Missing local records
+# remain unknown; this observer never connects to another host or starts work.
+CODEX_LOCAL_STORE_SURFACES = frozenset({"codex-app", "codex-app-ssh", "codex-cli-tui", "codex-ide-plugin"})
 
 # An installed app automation drives the app surface; the home's other local
 # surfaces keep their own loop, so the automation cadence is not theirs to carry.
@@ -37,11 +42,8 @@ CODEX_HOMES_ENV = "LOOPX_CODEX_HOMES"
 
 _STATE_DB_RE = re.compile(r"^state_(\d+)\.sqlite$")
 _REQUIRED_THREAD_COLUMNS = frozenset({"id", "rollout_path", "archived"})
-_TURN_START = "task_started"
-_TURN_ENDS = frozenset({"task_complete", "turn_aborted"})
-_EVENT_MSG_RECORD = b'"event_msg"'
-_TAIL_CHUNK_BYTES = 256 * 1024
-_TAIL_LIMIT_BYTES = 8 * 1024 * 1024
+_OBSERVATION_CHUNK_BYTES = 256 * 1024
+_OBSERVATION_READ_BYTES = 8 * 1024 * 1024
 _ROLLOUT_CACHE_LIMIT = 256
 
 # The canonical rrule parser reads INTERVAL with JavaScript's integer
@@ -49,7 +51,8 @@ _ROLLOUT_CACHE_LIMIT = 256
 _MAX_SAFE_INTEGER = 2**53 - 1
 _MAX_SAFE_INTEGER_DIGITS = len(str(_MAX_SAFE_INTEGER))
 
-_rollout_cache: dict[tuple[str, int, int], HostThreadActivity] = {}
+_rollout_cache: dict[str, RolloutCursor] = {}
+_rollout_cache_lock = Lock()
 
 
 class _UnrecognizedStore(Exception):
@@ -62,6 +65,8 @@ def codex_homes(env: Mapping[str, str] | None = None, user_home: Path | None = N
     ``LOOPX_CODEX_HOMES`` (``os.pathsep``-separated) is used verbatim when set.
     Otherwise ``CODEX_HOME``, ``~/.codex`` and sibling ``~/.codex-*`` homes are
     searched, because Codex App installs can each keep their own home.
+    Preserve distinct path names: callers also use them as profile aliases.
+    Relative entries use the process working directory when their store is read.
     """
 
     env = os.environ if env is None else env
@@ -106,14 +111,16 @@ def _query_threads(uri: str, thread_ids: list[str]) -> dict[str, tuple[Any, Any]
 
 
 def _thread_rows(db: Path, thread_ids: list[str]) -> dict[str, tuple[Any, Any]]:
+    # Configured homes may be relative; SQLite file URIs require an absolute path.
+    uri = db.absolute().as_uri()
     try:
-        return _query_threads(f"{db.as_uri()}?mode=ro", thread_ids)
+        return _query_threads(f"{uri}?mode=ro", thread_ids)
     except sqlite3.OperationalError:
         # A WAL store whose -shm is absent cannot be read with mode=ro.
         # Without a -wal file the main file is the whole store.
         if Path(f"{db}-wal").exists():
             raise
-        return _query_threads(f"{db.as_uri()}?immutable=1", thread_ids)
+        return _query_threads(f"{uri}?immutable=1", thread_ids)
 
 
 def current_codex_execution_identity(
@@ -152,119 +159,114 @@ def current_codex_execution_identity(
         return {"status": "unavailable", "reason": "host_runtime_unavailable"}
 
 
-def _record(line: bytes) -> dict[str, Any] | None:
-    try:
-        record = json.loads(line)
-    except (UnicodeDecodeError, ValueError):
-        return None
-    if not isinstance(record, dict) or not isinstance(record.get("type"), str):
-        return None
-    return record if isinstance(record.get("timestamp"), str) else None
+def observe_codex_thread_execution_identity(
+    thread_id: str,
+    *,
+    homes: list[Path] | None = None,
+) -> dict[str, Any]:
+    """Read the latest recorded Turn identity for a bound Codex thread across homes."""
+    from .control_plane.effect_runtime import effect_runtime_result
+
+    normalized = str(thread_id or "").strip()
+    if not normalized:
+        return {"status": "unavailable", "reason": "session_not_bound"}
+    search_homes = codex_homes() if homes is None else homes
+    fallback = "session_not_found"
+    for home in search_homes:
+        try:
+            db = _state_db(home)
+            if db is None:
+                continue
+            rows = _thread_rows(db, [normalized])
+        except _UnrecognizedStore:
+            fallback = "host_store_unavailable"
+            continue
+        except (OSError, sqlite3.Error):
+            if fallback == "session_not_found":
+                fallback = "host_store_unavailable"
+            continue
+        row = rows.get(normalized)
+        if row is None:
+            continue
+        path, archived = row
+        if archived != 0 or not isinstance(path, str) or not path:
+            return {"status": "unavailable", "reason": "session_record_unavailable"}
+        try:
+            result: dict[str, Any] = effect_runtime_result(
+                "runtime.execution_identity.codex",
+                {
+                    "home": str(home.expanduser().resolve()),
+                    "path": path,
+                    "thread_id": normalized,
+                    "allow_completed_turn": True,
+                },
+            )
+            return result
+        except RuntimeError:
+            return {"status": "unavailable", "reason": "host_runtime_unavailable"}
+    return {"status": "unavailable", "reason": fallback}
 
 
-def _turn_marker(record: dict[str, Any]) -> HostThreadState | None:
-    payload = record.get("payload")
-    if record["type"] != "event_msg":
-        return None
-    if not isinstance(payload, dict):
-        return HostThreadState.UNKNOWN
-    kind = payload.get("type")
-    if not isinstance(kind, str):
-        return HostThreadState.UNKNOWN
-    if kind == _TURN_START:
-        return HostThreadState.TURN_OPEN
-    return HostThreadState.IDLE if kind in _TURN_ENDS else None
-
-
-def _tail_lines(path: Path) -> Iterable[bytes]:
-    """Yield complete lines from the end of the file backwards, within the tail limit.
-
-    A final line without a newline is still being appended and is skipped.
-    """
-
-    with path.open("rb") as handle:
-        position = handle.seek(0, os.SEEK_END)
-        floor = max(0, position - _TAIL_LIMIT_BYTES)
-        pending = b""
-        in_progress = True
-        while position > floor:
-            size = min(_TAIL_CHUNK_BYTES, position - floor)
-            position -= size
-            handle.seek(position)
-            parts = (handle.read(size) + pending).split(b"\n")
-            pending = parts.pop(0)
-            if in_progress:
-                if not parts:
-                    pending = b""
-                    continue
-                parts.pop()
-                in_progress = False
-            for line in reversed(parts):
-                if line.strip():
-                    yield line
-        if position == 0 and not in_progress and pending.strip():
-            yield pending
-
-
-def _rollout_activity(rollout_path: Any, home: Path) -> HostThreadActivity:
+def _rollout_activity(
+    rollout_path: Any, home: Path, *, thread_id: str, cache_root: Path | None = None,
+) -> HostThreadActivity:
     if not isinstance(rollout_path, str) or not rollout_path:
         return HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
-    path = Path(os.path.realpath(rollout_path))
-    if not path.is_relative_to(Path(os.path.realpath(home))):
+    path, root = Path(os.path.realpath(rollout_path)), Path(os.path.realpath(home))
+    if not path.is_relative_to(root):
         return HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
+    # Never write to Codex's store, even if an optional cache is misconfigured.
+    if cache_root is not None:
+        try:
+            if cache_root.resolve().is_relative_to(root):
+                cache_root = None
+        except (OSError, RuntimeError):
+            cache_root = None
+    binding = hashlib.sha256(f"{root}\0{path}\0{thread_id}".encode()).hexdigest()
     try:
-        stat = path.stat()
+        if not path.is_file():
+            return HostThreadActivity.unknown(HostThreadUnknownReason.STORE_UNAVAILABLE)
+        with open_rollout(path) as handle:
+            stat = os.fstat(handle.fileno())
+            if Path(os.path.realpath(path)) != path or (stat.st_dev, stat.st_ino) != (path.stat().st_dev, path.stat().st_ino):
+                return HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
+            reader = Reader(handle, _OBSERVATION_READ_BYTES, chunk_bytes=_OBSERVATION_CHUNK_BYTES)
+            with _rollout_cache_lock:
+                cursor = _rollout_cache.get(binding)
+                if cursor is None:
+                    cursor = RolloutCursor(binding, thread_id)
+                    if len(_rollout_cache) >= _ROLLOUT_CACHE_LIMIT:
+                        _rollout_cache.pop(next(iter(_rollout_cache)))
+                    _rollout_cache[binding] = cursor
+            if not cursor.lock.acquire(blocking=False):
+                return HostThreadActivity.unknown(HostThreadUnknownReason.STORE_UNAVAILABLE)
+            try:
+                result = cursor.observe(reader, stat, cache_root=cache_root)
+                end, named = os.fstat(handle.fileno()), path.stat()
+                if Path(os.path.realpath(path)) != path or (end.st_dev, end.st_ino) != (named.st_dev, named.st_ino) or end.st_size < stat.st_size:
+                    _rollout_cache.pop(binding, None)
+                    return HostThreadActivity.unknown(HostThreadUnknownReason.STORE_UNAVAILABLE)
+                if end.st_size == stat.st_size and (end.st_mtime_ns != stat.st_mtime_ns or end.st_ctime_ns != stat.st_ctime_ns):
+                    _rollout_cache.pop(binding, None)
+                    return HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
+                cursor.save(cache_root)
+                # An append may contain a newer end/cancel. Do not publish an old
+                # open marker across that unread interval; the next read catches up.
+                if end.st_size != stat.st_size:
+                    return HostThreadActivity.unknown(HostThreadUnknownReason.NO_TURN_MARKER)
+                return result
+            finally:
+                cursor.lock.release()
+
     except OSError:
         return HostThreadActivity.unknown(HostThreadUnknownReason.STORE_UNAVAILABLE)
-    key = (str(path), stat.st_size, stat.st_mtime_ns)
-    if key not in _rollout_cache:
-        try:
-            activity = _scan_rollout(path)
-        except OSError:
-            return HostThreadActivity.unknown(HostThreadUnknownReason.STORE_UNAVAILABLE)
-        if len(_rollout_cache) >= _ROLLOUT_CACHE_LIMIT:
-            _rollout_cache.clear()
-        _rollout_cache[key] = activity
-    return _rollout_cache[key]
-
-
-def _scan_rollout(path: Path) -> HostThreadActivity:
-    last_event_at: str | None = None
-    for line in _tail_lines(path):
-        if last_event_at is None:
-            record = _record(line)
-            if record is None:
-                return HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
-            last_event_at = record["timestamp"]
-        elif _EVENT_MSG_RECORD not in line and b"\\u" not in line:
-            continue
-        else:
-            record = _record(line)
-            if record is None:
-                return HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
-        marker = _turn_marker(record)
-        if marker is HostThreadState.UNKNOWN:
-            return HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
-        if marker is HostThreadState.TURN_OPEN:
-            return HostThreadActivity(
-                state=HostThreadState.TURN_OPEN,
-                turn_started_at=record["timestamp"],
-                last_event_at=last_event_at,
-            )
-        if marker is HostThreadState.IDLE:
-            return HostThreadActivity(
-                state=HostThreadState.IDLE,
-                last_turn_ended_at=record["timestamp"],
-                last_event_at=last_event_at,
-            )
-    reason = HostThreadUnknownReason.NO_TURN_MARKER if last_event_at else HostThreadUnknownReason.RECORD_UNRECOGNIZED
-    return HostThreadActivity.unknown(reason)
 
 
 def observe_codex_threads(
     thread_ids: Iterable[str],
     *,
     homes: list[Path] | None = None,
+    cache_root: Path | None = None,
 ) -> dict[str, HostThreadActivity]:
     remaining = sorted(set(thread_ids))
     if not remaining:
@@ -293,16 +295,18 @@ def observe_codex_threads(
             elif archived:
                 result[thread_id] = HostThreadActivity(state=HostThreadState.ARCHIVED)
             else:
-                result[thread_id] = _rollout_activity(rollout_path, home)
+                result[thread_id] = _rollout_activity(rollout_path, home, thread_id=thread_id, cache_root=cache_root)
         remaining = [thread_id for thread_id in remaining if thread_id not in rows]
     for thread_id in remaining:
         result[thread_id] = HostThreadActivity.unknown(fallback)
     return result
 
 
-def codex_thread_observers(homes: list[Path] | None = None) -> dict[str, HostThreadObserver]:
+def codex_thread_observers(
+    homes: list[Path] | None = None, *, cache_root: Path | None = None,
+) -> dict[str, HostThreadObserver]:
     def observe(thread_ids: Iterable[str]) -> dict[str, HostThreadActivity]:
-        return observe_codex_threads(thread_ids, homes=homes)
+        return observe_codex_threads(thread_ids, homes=homes, cache_root=cache_root)
 
     return {surface: observe for surface in CODEX_LOCAL_STORE_SURFACES}
 
@@ -374,8 +378,22 @@ def _installed_automation_intervals(
 
     intervals: dict[tuple[str, str, str], int] = {}
     ambiguous: set[tuple[str, str, str]] = set()
+    identities: set[tuple[int, int]] = set()
     for home in codex_homes() if homes is None else homes:
-        for path in sorted((home / "automations").glob("*/automation.toml")):
+        # Discovery retains logical profile names; read each physical store only
+        # once here so an alias cannot masquerade as a second installed heartbeat.
+        try:
+            directory = home.stat()
+            identity = (directory.st_dev, directory.st_ino)
+            if identity in identities:
+                continue
+            paths = sorted((home / "automations").glob("*/automation.toml"))
+        except OSError:
+            # A discovered home can disappear or become unreadable during the
+            # scan. Preserve healthy sources and retry this home on the next read.
+            continue
+        identities.add(identity)
+        for path in paths:
             try:
                 item = tomllib.loads(path.read_text(encoding="utf-8"))
             except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):

@@ -5,7 +5,7 @@ export const acceptance = {
   truncated: false, historical_progress: [], acceptance_gaps: [], guards: [], next_action: null, next_action_source: null,
 };
 export const contract = {
-  enabled: true, revision: 7, digest: "a".repeat(64), objective: "Deliver a recoverable release",
+  revision: 7, digest: "a".repeat(64), objective: "Deliver a recoverable release",
   non_goals: ["Publishing the release"], status: "held", held_todo_ids: ["todo_unbound", "todo_stale"], verification: null,
   criteria: [{ id: "recovery", description: "An independent recovery check passes." }],
   tasks: [

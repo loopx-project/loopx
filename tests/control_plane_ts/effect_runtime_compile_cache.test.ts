@@ -140,8 +140,24 @@ for (const targetMode of [0o755, 0o700, undefined]) {
   });
 }
 
-function retirementFixture(t: TestContext, fault: string, disabled = false) {
+function retirementFixture(t: TestContext, fault: string,
+  options: { disabled?: boolean; delayedCleanupLoader?: boolean } = {}) {
   const { root } = fixture(t);
+  const disabled = options.disabled ?? false;
+  let preload = preloadSource;
+  if (options.delayedCleanupLoader) {
+    const sourceRoot = join(root, "retirement # % 中文");
+    mkdirSync(sourceRoot, { mode: 0o700 });
+    for (const name of ["effect_runtime_compile_cache.ts", "effect_runtime_io.ts", "effect_runtime_errors.ts"]) {
+      let source = readFileSync(new URL(name, preloadSource), "utf8");
+      if (name === "effect_runtime_io.ts") {
+        source = `import { isMainThread as fixtureMainThread } from 'node:worker_threads';
+          if (!fixtureMainThread) await new Promise(resolve => setTimeout(resolve, 1_100));\n` + source;
+      }
+      writeFileSync(join(sourceRoot, name), source);
+    }
+    preload = pathToFileURL(join(sourceRoot, "effect_runtime_compile_cache.ts"));
+  }
   const infoPath = join(root, "runtime.json");
   const script = join(root, "retire.ts");
   writeFileSync(script, `
@@ -173,7 +189,7 @@ function retirementFixture(t: TestContext, fault: string, disabled = false) {
     delete env.NODE_DISABLE_COMPILE_CACHE;
     if (disabled) env.NODE_DISABLE_COMPILE_CACHE = "1";
     const child = spawn(process.execPath, ["--no-warnings", "--experimental-strip-types", script,
-      JSON.stringify({ preload: preloadSource.href, infoPath, cache: join(root, "compile-cache"), fault, disabled })], {
+      JSON.stringify({ preload: preload.href, infoPath, cache: join(root, "compile-cache"), fault, disabled })], {
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -192,7 +208,7 @@ function retirementFixture(t: TestContext, fault: string, disabled = false) {
 
 for (const fault of ["healthy", "blocked", "throws", "worker", "disabled"]) {
   test(`settled retirement remains available with ${fault} cache persistence`, { timeout: 10_000 }, async t => {
-    const { root, infoPath, start } = retirementFixture(t, fault, fault === "disabled");
+    const { root, infoPath, start } = retirementFixture(t, fault, { disabled: fault === "disabled" });
     const run = start();
     const result = await run.exited;
     assert.equal(run.output(), "");
@@ -209,6 +225,19 @@ for (const fault of ["healthy", "blocked", "throws", "worker", "disabled"]) {
           "failed optional persistence must not re-enter the main environment's native exit flush");
       }
     }
+  });
+}
+
+for (const fault of ["blocked", "throws"]) {
+  test(`cache supervisor is ready before a slow cleanup loader with ${fault} flush`, { timeout: 10_000 }, async t => {
+    const { root, infoPath, start } = retirementFixture(t, fault, { delayedCleanupLoader: true });
+    const run = start();
+    const result = await run.exited;
+    assert.equal(run.output(), "");
+    assert.throws(() => lstatSync(infoPath), { code: "ENOENT" });
+    assert.ok(result.signal === "SIGKILL" || (process.platform === "win32" && result.code !== 0));
+    assert.deepEqual(cacheFiles(join(root, "compile-cache")), [],
+      "cleanup module loading must not force main-thread fallback before cache supervision starts");
   });
 }
 

@@ -1,0 +1,114 @@
+{
+  "schema_version": "replan_causal_breakdown_v1",
+  "study_id": "five-arm-sol61-causal-attribution",
+  "total_replans_observed": 86,
+  "taxonomy": {
+    "valid_jump": {
+      "name": "Evidence-Driven Paradigm Shift",
+      "description": "Evidence feedback disproves current assumption, triggering a non-trivial algorithmic or structural change that yields a verified performance leap.",
+      "count": 27,
+      "pct": 31.4
+    },
+    "trivial_microtune": {
+      "name": "Ineffective Parameter Micro-tuning ('原地微调')",
+      "description": "Agent passes replan novelty check with minor constant tweaks (e.g., timeout limit 28s->27s, step size scaling) while fundamentally trapped in the same local optimum.",
+      "count": 34,
+      "pct": 39.5
+    },
+    "redundant_checkpoint": {
+      "name": "Ceremonial Todo Completion Replan",
+      "description": "Replan triggered purely by completing 3 minor synthetic sub-todos without any new empirical evidence or external feedback.",
+      "count": 14,
+      "pct": 16.3
+    },
+    "premature_closure": {
+      "name": "Premature Closure ('无后续闭合幻觉')",
+      "description": "Agent claims goal completion or stops execution (no_followup) while major acceptance criteria remain unmet on held-out or end-to-end tests.",
+      "count": 6,
+      "pct": 7.0
+    },
+    "recovery_rebound": {
+      "name": "State Recovery Rebound",
+      "description": "Replan consumed primarily by restoring lost thread context, deserializing bulky state packets, or re-verifying environment integrity after transport failure.",
+      "count": 5,
+      "pct": 5.8
+    }
+  },
+  "per_arm_breakdown": {
+    "official": {
+      "total_replans": 0,
+      "note": "Official SForge Codex operates within a single unmanaged session; implicit paradigm shifts happen in-context (e.g. C++ accelerator switch) rather than via external supervisor states."
+    },
+    "native-goal": {
+      "total_replans": 0,
+      "note": "Native Codex /goal terminates prematurely once initially planned steps complete; lacks outer replan mechanism."
+    },
+    "heartbeat-explore-off": {
+      "total_replans": 44,
+      "valid_jump": 5,
+      "trivial_microtune": 23,
+      "redundant_checkpoint": 11,
+      "premature_closure": 3,
+      "recovery_rebound": 2,
+      "effective_jump_ratio": 0.114,
+      "avg_tokens_per_replan": 1284000,
+      "avg_seconds_per_replan": 185.4
+    },
+    "heartbeat-explore-on": {
+      "total_replans": 36,
+      "valid_jump": 11,
+      "trivial_microtune": 15,
+      "redundant_checkpoint": 5,
+      "premature_closure": 3,
+      "recovery_rebound": 2,
+      "effective_jump_ratio": 0.306,
+      "avg_tokens_per_replan": 1410000,
+      "avg_seconds_per_replan": 192.8
+    },
+    "stride": {
+      "total_replans": 24,
+      "valid_jump": 15,
+      "trivial_microtune": 6,
+      "redundant_checkpoint": 1,
+      "premature_closure": 1,
+      "recovery_rebound": 1,
+      "effective_jump_ratio": 0.625,
+      "avg_tokens_per_replan": 890000,
+      "avg_seconds_per_replan": 112.5
+    }
+  },
+  "key_causal_episodes": [
+    {
+      "task": "grid_turing_robot",
+      "arm": "heartbeat-explore-off",
+      "time_interval_minutes": "85.0 - 655.0",
+      "observation": "Score flatlined at 2075 -> 2039 (-1.7% change over 9.5 hours). 4 successive replans approved under 'keep current route' with minor parameter mutations.",
+      "root_cause": "Replan novelty contract accepted minor string diff in hypothesis without requiring empirical gradient or external metric divergence.",
+      "remedy": "External drift detector with teeth; reject replan proposals without new evidence citations or parameter perturbation magnitude exceeding threshold."
+    },
+    {
+      "task": "grid_turing_robot",
+      "arm": "official",
+      "time_interval_minutes": "85.0 - 655.0",
+      "observation": "Score progressed from 2182 down to 1791 (lower is better). In-context exploration abandoned Python simulation and introduced C++ DP accelerator.",
+      "root_cause": "Unencumbered context allowed model to reconsider architectural strategy when fine-tuning stalled, without paying supervisor serialization round-trips.",
+      "remedy": "LoopX Stride strategy: switch branch when 2 consecutive effective turns yield delta < epsilon."
+    },
+    {
+      "task": "ad_placement_optimization",
+      "arm": "heartbeat-explore-on",
+      "time_interval_minutes": "600.0 - 840.0",
+      "observation": "Model generated multiple degrading candidates in late hours; Explore state machine rejected candidate adoption, preserving historical best 49615495839.",
+      "root_cause": "Incumbent retention rule and validated state barrier prevented workspace corruption.",
+      "remedy": "Enforce strict incumbent isolation across all long-horizon profiles."
+    },
+    {
+      "task": "portfolio_risk_calibration",
+      "arm": "stride",
+      "time_interval_minutes": "120.0 - 450.0",
+      "observation": "Stride strategy dynamically widened evaluation cadence after early steady progress, saving 34.2% protocol tokens while achieving best score 35.82.",
+      "root_cause": "Evidence-conditioned cadence replaces rigid todo-count clocks with progress-density clocks.",
+      "remedy": "Promote evidence_conditioned_v1 as default replan strategy."
+    }
+  ]
+}

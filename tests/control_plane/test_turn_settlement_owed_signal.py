@@ -7,6 +7,7 @@ from pathlib import Path
 
 from loopx.control_plane.quota.effect_program import SettlementIdentity
 from loopx.rollout_event_log import rollout_event_log_path
+from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
 from loopx.state_refresh import refresh_state_run
 
 GOAL_ID = "goal-owed-spend"
@@ -74,6 +75,7 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
         ),
         encoding="utf-8",
     )
+    initialize_canonical_source_fixture(tmp_path / "runtime", GOAL_ID, state_path=state_path)
     return registry_path, project, tmp_path / "runtime"
 
 

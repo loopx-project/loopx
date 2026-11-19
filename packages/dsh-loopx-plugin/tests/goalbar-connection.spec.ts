@@ -107,7 +107,11 @@ describe('GoalBar Connection carrier', () => {
       readRequest(),
       new AbortController().signal,
       { id: 'operator-fixture' as Parameters<ConnectionRpcHandler>[3]['id'],
-        ctx: {} as Context, dispose: async () => {} },
+        ctx: {} as Context,
+        principal: { kind: 'owner' },
+        signal: new AbortController().signal,
+        interactions: 'answer',
+        dispose: async () => {} },
     )
     expect(result).toEqual({ ok: true, value: readResponse() })
 

@@ -164,8 +164,8 @@ export const blockedReasonReadbackScenario = {
             };
             const field = (drawer, label) => drawer.locator("dl > div", { has: page.locator("dt", { hasText: label }) }).locator("dd").innerText();
             const refresh = async () => {
-              // The Todo inspector is non-modal. Keyboard activation keeps it
-              // open even at widths where it overlaps the header control.
+              // The desktop inspector is non-modal; keep it open while
+              // refreshing through the workspace's real status owner.
               await Promise.all([
                 page.waitForResponse(response => new URL(response.url()).pathname === "/status.json" && response.status() === 200),
                 page.getByRole("button", { name: locale === "en" ? "Refresh status" : "刷新状态", exact: true }).press("Enter"),
@@ -180,8 +180,21 @@ export const blockedReasonReadbackScenario = {
             assert.equal(await drawer.evaluate(element => element.scrollWidth > element.clientWidth + 1), false);
             await authority.cli("todo", "update", "--goal-id", "goal-a", "--todo-id", authority.prerequisite,
               "--clear-resume-when", "--reason", "Reviewed obsolete back edge");
+            assert.equal(await drawer.getAttribute("aria-modal"), mobile ? "true" : null);
+            assert.equal(await page.locator(".personal-workspace-main").evaluate(element => element.inert), mobile);
+            if (mobile) {
+              // The narrow inspector is modal and makes the workspace inert.
+              // Return to the board before using its refresh control, then
+              // reopen the same Todo to read back the authority change.
+              await page.keyboard.press("Escape");
+              await drawer.waitFor({ state: "hidden" });
+              assert.equal(await page.locator(".personal-workspace-main").evaluate(element => element.inert), false);
+            }
             await refresh();
+            if (mobile) drawer = await openTodo("Synthetic circular dependency");
             await drawer.getByText(locale === "en" ? "Waiting for condition" : "等待条件满足", {exact: true}).waitFor();
+            assert.equal(await drawer.getAttribute("aria-modal"), mobile ? "true" : null);
+            assert.equal(await page.locator(".personal-workspace-main").evaluate(element => element.inert), mobile);
             await drawer.screenshot({ path: resolve(outputDir, `dependency-cycle-repaired-${suffix}.png`) });
             drawer = await openTodo("Synthetic blocked readback");
             await drawer.screenshot({ path: resolve(outputDir, `blocked-reason-${suffix}.png`) });

@@ -1,3 +1,4 @@
+import {claimExecutionReference} from "./claim_execution.ts";
 /** Canonical edit decoding and materialization shared by ordinary updates and
  * User completion. Admission, validation effects and commits stay with callers. */
 import {decodeTaskLeaseProof} from "./task_lease_proof.ts";
@@ -6,7 +7,7 @@ import {isDeferredReopen} from "./todo_deferred_lifecycle.ts";
 import {planTodoPriority} from "../todos/priority.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {AuthorityStoreProtocolError, canonicalAuthorityObject, canonicalAuthorityBytes,
-  requireAuthorityStoreId} from "./authority_store_codec.ts";
+  requireAuthorityBoolean, requireAuthorityDate, requireAuthorityStoreId} from "./authority_store_codec.ts";
 import {normalizeRegisteredTodoAgents, normalizeTodoAgent} from "./todo_agents.ts";
 import {canonicalTodoRecord} from "./todo_presentation.ts";
 import {planTodoAuthoringScope, TODO_AUTHORING_SCOPE_REQUEST_SCHEMA} from "../todos/authoring_scope.ts";
@@ -36,6 +37,7 @@ export interface CoordinationTodoUpdateInput {
   readonly clear_fields: readonly string[];
   readonly dry_run: boolean;
   readonly now: Date;
+  readonly claim_operation_id?: string;
   readonly lease_idempotency_key?: string | null;
   readonly lease_expected_version?: number | null;
   readonly planning_intent?: JsonObject;
@@ -88,6 +90,8 @@ export function normalizeTodoUpdateEnvelope(
   if (raw.completion !== undefined && planningIntent.status !== "done") {
     throw new AuthorityStoreProtocolError("Completion payload requires status=done");
   }
+  claimExecutionReference(raw.claim_operation_id, raw.lease_idempotency_key, raw.lease_expected_version);
+  if (raw.claim_operation_id != null && raw.actor_agent_id === null) throw new AuthorityStoreProtocolError("A task claim reference requires its actor");
   const key = raw.lease_idempotency_key ?? null;
   const version = raw.lease_expected_version ?? null;
   if (key !== null && (typeof key !== "string" || !key.trim() || key !== key.trim())) {
@@ -142,12 +146,8 @@ export function normalizeTodoUpdateEnvelope(
   if (raw.expected_role !== null && !["agent", "user"].includes(raw.expected_role)) {
     throw new AuthorityStoreProtocolError("expected_role must be agent or user");
   }
-  if (typeof raw.dry_run !== "boolean") {
-    throw new AuthorityStoreProtocolError("dry_run must be a boolean");
-  }
-  if (!(raw.now instanceof Date) || Number.isNaN(raw.now.valueOf())) {
-    throw new AuthorityStoreProtocolError("now must be a valid Date");
-  }
+  requireAuthorityBoolean(raw.dry_run, "dry_run");
+  requireAuthorityDate(raw.now, "now");
   return {...raw, ...(completion === undefined ? {} : {completion}),
     ...(observation === undefined ? {} : {monitor_observation: observation}),
     ...(validationRevision === undefined ? {} : {completion_validation_revision: validationRevision}),

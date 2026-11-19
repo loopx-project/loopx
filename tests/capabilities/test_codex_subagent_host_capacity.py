@@ -11,7 +11,7 @@ from loopx.capabilities.multi_subagent.codex_host_capacity import (
 from loopx.control_plane.goals.configure_goal_service import (
     configure_goal_with_global_sync,
 )
-from loopx.chat_goal_subagent_api import GoalSubagentConfigurationRequestMixin
+from loopx.chat.goal_subagent_api import GoalSubagentConfigurationRequestMixin
 from loopx.file_lock import exclusive_cross_runtime_file_lock
 from loopx.paths import global_registry_path
 

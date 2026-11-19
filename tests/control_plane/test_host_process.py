@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import time
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 import pytest
@@ -17,9 +18,97 @@ from loopx.control_plane.turn_driver.executor import _run_host
 from loopx.control_plane.turn_driver.host_process_transport import (
     HOST_PROCESS_RECORD_ENV,
     HostOutputLines,
+    HostProcessInterruptionUnconfirmed,
+    execution_host_drain,
     run_host_process,
 )
 from tests.control_plane.host_process_fixture import COUNTER_PROCESS_SOURCE
+
+
+def test_launch_guard_releases_before_running_host_output(tmp_path: Path) -> None:
+    held = []
+    observed = []
+
+    @contextmanager
+    def admission():
+        held.append(True)
+        try:
+            yield
+        finally:
+            held.pop()
+
+    def output(text: str) -> None:
+        # A running Host must not hold the owner lock and delay a user stop.
+        assert not held
+        observed.append(text)
+
+    result = run_host_process(
+        [sys.executable, "-c", "print('current work')"], project=tmp_path,
+        input_text="", timeout_seconds=5, launch_guard=admission, on_stdout=output,
+    )
+    assert result["returncode"] == 0 and observed and not held
+    failed = run_host_process(
+        [str(tmp_path / "absent-host")], project=tmp_path,
+        input_text="", timeout_seconds=5, launch_guard=admission,
+    )
+    assert failed["outcome"] == "spawn_failed" and not held
+
+
+def test_rejected_launch_guard_keeps_nonexecution_evidence(tmp_path: Path, monkeypatch) -> None:
+    from loopx.control_plane.turn_driver.host_process_transport import prepare_host_process_record
+
+    marker, record = tmp_path / "work", tmp_path / "host.json"
+    prepare_host_process_record(record)
+    before = record.read_bytes()
+    monkeypatch.setenv(HOST_PROCESS_RECORD_ENV, str(record))
+
+    @contextmanager
+    def stopped():
+        raise ValueError("Goal was stopped after planning")
+        yield
+
+    with pytest.raises(ValueError, match="stopped after planning"):
+        run_host_process(
+            [sys.executable, "-c", "from pathlib import Path;Path('work').touch()"],
+            project=tmp_path, input_text="", timeout_seconds=5, launch_guard=stopped,
+        )
+    assert not marker.exists() and record.read_bytes() == before
+
+
+@pytest.mark.skipif(os.name != "posix", reason="native SIGINT handling on POSIX")
+@pytest.mark.parametrize("handles_interrupt", [True, False])
+def test_running_guard_interrupts_silent_host(tmp_path: Path, monkeypatch, handles_interrupt: bool) -> None:
+    ready, interrupted = tmp_path / "ready", tmp_path / "interrupted"
+    record = tmp_path / "host.json"
+    monkeypatch.setenv(HOST_PROCESS_RECORD_ENV, str(record))
+    handler = "on_interrupt" if handles_interrupt else "signal.SIG_IGN"
+    host = f'''
+import signal, sys, time
+from pathlib import Path
+
+def on_interrupt(_signum, _frame):
+    Path("interrupted").touch()
+    sys.exit(1)
+
+signal.signal(signal.SIGINT, {handler})
+Path("ready").touch()
+time.sleep(30)
+'''
+
+    def check_running() -> None:
+        if ready.exists():
+            raise ValueError("Goal stopped while Host was running")
+
+    error = ValueError if handles_interrupt else HostProcessInterruptionUnconfirmed
+    message = "Goal stopped while Host was running" if handles_interrupt else "interrupt unconfirmed"
+    with pytest.raises(error, match=message):
+        run_host_process(
+            [sys.executable, "-c", host], project=tmp_path, input_text="", timeout_seconds=8,
+            launch_guard=nullcontext, check_running=check_running, interrupt_before_terminate=True,
+        )
+    assert ready.exists()
+    assert interrupted.exists() is handles_interrupt
+    assert execution_host_drain(record) == ("drained" if handles_interrupt else "unattributable")
 
 
 def test_host_output_lines_bound_storage_and_use_lf() -> None:
@@ -435,3 +524,99 @@ def test_default_turn_deadline_is_optional_and_real_transport_accepts_none(tmp_p
     )
     assert result["outcome"] == "exited"
     assert result["returncode"] == 0
+
+
+@pytest.mark.parametrize("operation", ["send", "cancel"])
+def test_host_bridge_preserves_process_helper_patch_points(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str,
+) -> None:
+    from loopx.control_plane.turn_driver import host_bridge_transport as bridge_module
+
+    calls: list[str] = []
+    original_write = bridge_module.write_process_stdin_before_deadline
+    original_terminate = bridge_module.force_terminate_process
+
+    def write(*args, **kwargs):
+        calls.append("send")
+        return original_write(*args, **kwargs)
+
+    def terminate(*args, **kwargs):
+        assert kwargs["process_tree_owned"] is True
+        calls.append("cancel")
+        return original_terminate(*args, **kwargs)
+
+    monkeypatch.setattr(bridge_module, "write_process_stdin_before_deadline", write)
+    monkeypatch.setattr(bridge_module, "force_terminate_process", terminate)
+    source = """
+import json, sys
+print(json.dumps({"kind": "ready"}), flush=True)
+assert json.loads(sys.stdin.readline()) == {"message": "bridge λ😀"}
+print(json.dumps({"kind": "result", "outcome": "exited"}), flush=True)
+"""
+    with subprocess.Popen(
+        [sys.executable, "-u", "-c", source], cwd=tmp_path,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+        encoding="utf-8", start_new_session=True,
+    ) as process:
+        bridge = bridge_module.GuardedHostBridge(
+            process, deadline=time.monotonic() + 5, cleanup_timeout=2,
+        )
+        try:
+            if operation == "send":
+                bridge.send(json.dumps({"message": "bridge λ😀"}, ensure_ascii=False) + "\n")
+                process.wait(timeout=5)
+            bridge.cancel()
+            bridge.cancel()
+            assert calls == [operation]
+            assert process.poll() is not None
+            assert bridge.not_launched is (operation == "cancel")
+            if operation == "send":
+                assert bridge.result == {"kind": "result", "outcome": "exited"}
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+            bridge.close_output()
+        assert not bridge.reader.is_alive() and bridge.output.closed
+
+
+@pytest.mark.parametrize("broken_observation", ["not-json", "[]"])
+def test_host_bridge_parser_failure_closes_reader_without_claiming_cleanup(broken_observation):
+    from loopx.control_plane.turn_driver.host_bridge_transport import GuardedHostBridge
+
+    source = """
+import json, sys
+print(json.dumps({"kind": "ready"}), flush=True)
+sys.stdin.readline()
+for line in (sys.argv[1], sys.argv[1], '{"kind":"stdout","text":"diagnostic"}',
+             '{"kind":"result","outcome":"exited"}'):
+    print(line, flush=True)
+"""
+    with subprocess.Popen([sys.executable, "-u", "-c", source, broken_observation],
+                          stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          text=True, encoding="utf-8") as process:
+        bridge = GuardedHostBridge(process, deadline=time.monotonic() + 5, cleanup_timeout=.2)
+        try:
+            bridge.send("{}\n")
+            process.wait(timeout=5)
+            with pytest.raises((json.JSONDecodeError, RuntimeError)):
+                bridge.next(deadline=time.monotonic() + 5)
+            with pytest.raises(RuntimeError, match="cleanup unconfirmed"):
+                bridge.cancel()
+            bridge.close_output()
+            assert not bridge.reader.is_alive()
+            assert bridge.output.closed
+            bridge.close_output()
+            # A dead bridge or reclaimed pipe cannot establish the Host's exit.
+            assert bridge.not_launched is False and bridge.result is None
+        finally:
+            # Keep a failing baseline from stranding its producer in the test runner.
+            import queue
+            for _ in range(4):
+                if not bridge.reader.is_alive():
+                    break
+                try:
+                    bridge.pending.get(timeout=.2)
+                except queue.Empty:
+                    pass
+                bridge.reader.join(timeout=.2)

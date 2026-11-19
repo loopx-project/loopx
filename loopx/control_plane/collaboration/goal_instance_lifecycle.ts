@@ -1,6 +1,6 @@
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
-import { assertNever, jsonObject } from "../runtime_decode.ts";
+import { assertNever, jsonObject, requireJsonObject } from "../runtime_decode.ts";
 import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 import {
   parseExactGoalRef,
@@ -61,6 +61,7 @@ export type CollaborationLifecycleDecision =
       | "route_instance_mismatch"
       | "historical_mutation_forbidden"
       | "initial_delivery_unproved";
+    delivery_proof_reason?: "handoff_receipt_conflict";
   }>;
 
 function operation(value: unknown): CollaborationOperation {
@@ -134,7 +135,18 @@ function proveCommittedRequest(value: unknown): JsonObject {
       || facts?.authorized_source_id !== request.source_id) {
     return { kind: "unproved", reason: "source_mismatch" };
   }
-  const receiptValue = turn.context_handoff_receipt;
+  let receiptValue = turn.context_handoff_receipt;
+  if (turn.context_handoff_receipts != null) {
+    if (receiptValue != null || !Array.isArray(turn.context_handoff_receipts)) {
+      return {kind: "unproved", reason: "handoff_receipt_conflict"};
+    }
+    const receipts = turn.context_handoff_receipts.map(jsonObject);
+    const matching = receipts.filter(receipt => receipt?.request_id === request.request_id);
+    if (receipts.some(receipt => !receipt) || matching.length !== 1) {
+      return {kind: "unproved", reason: "handoff_receipt_conflict"};
+    }
+    receiptValue = matching[0];
+  }
   if (receiptValue !== null && receiptValue !== undefined) {
     const receipt = jsonObject(receiptValue);
     const receiptRef = optionalGoalRef(receipt?.goal_ref);
@@ -302,6 +314,19 @@ function decideExactLifecycle(
   }
 }
 
+function withOriginalRequestDiagnostic(
+  decision: CollaborationLifecycleDecision,
+  raw: JsonObject,
+  selectedOperation: CollaborationOperation,
+): CollaborationLifecycleDecision {
+  if (selectedOperation === "original_request_inspect" && decision.kind === "reject"
+      && decision.code === "initial_delivery_unproved"
+      && proveCommittedRequest(raw.initial_delivery).reason === "handoff_receipt_conflict") {
+    return { ...decision, delivery_proof_reason: "handoff_receipt_conflict" };
+  }
+  return decision;
+}
+
 export function decideCollaborationLifecycle(
   value: unknown,
 ): CollaborationLifecycleDecision {
@@ -314,7 +339,9 @@ export function decideCollaborationLifecycle(
   const selectedOperation = operation(raw.operation);
   if (raw.profile_id === null) {
     if (requiresRequestProof(selectedOperation) && !requestProof(raw, selectedOperation)) {
-      return { kind: "reject", code: "initial_delivery_unproved" };
+      return withOriginalRequestDiagnostic(
+        { kind: "reject", code: "initial_delivery_unproved" }, raw, selectedOperation,
+      );
     }
     return { kind: "legacy" };
   }
@@ -322,5 +349,24 @@ export function decideCollaborationLifecycle(
     return { kind: "reject", code: "unsupported_profile" };
   }
   const facts = lifecycleFacts(raw, selectedOperation);
-  return "operation" in facts ? decideExactLifecycle(facts) : facts;
+  return withOriginalRequestDiagnostic(
+    "operation" in facts ? decideExactLifecycle(facts) : facts, raw, selectedOperation,
+  );
+}
+
+/** Decide one existing inventory batch under the caller's retained lifetime guard. */
+export function inspectOriginalRequestBatch(value: JsonObject): JsonObject {
+  const { profile_id, caller_goal_ref, current_goal_ref, items } = value;
+  if (!Array.isArray(items) || items.length > 12) {
+    throw new EffectRuntimeRequestError("original request inspection accepts at most 12 items");
+  }
+  return {
+    items: items.map((item) => decideCollaborationLifecycle({
+      ...requireJsonObject(item, "original request inspection item"),
+      profile_id,
+      caller_goal_ref,
+      current_goal_ref,
+      operation: "original_request_inspect",
+    })),
+  };
 }

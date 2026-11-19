@@ -196,7 +196,7 @@ export function StatusSourceSwitcher({
           <button aria-label={t("source.remove", { source: activeSource.label })} onClick={() => onRemove(activeSource.id)} title={t("source.removeCurrent")} type="button"><Trash2 size={12} /></button>
         ) : null}
       </div>
-      {errorMessage ? <p className="personal-status-source-error" role="alert">{errorMessage}</p> : null}
+      {errorMessage && !runtimeSources ? <p className="personal-status-source-error" role="alert">{errorMessage}</p> : null}
       {adding ? (
         <div className="personal-status-source-form">
           <header><strong>{t("source.addSsh")}</strong><button aria-label={t("source.closeForm")} onClick={closeForm} type="button"><X size={13} /></button></header>

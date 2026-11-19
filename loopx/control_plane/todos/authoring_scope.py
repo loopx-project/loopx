@@ -39,7 +39,6 @@ def plan_todo_creation_scope(
     *, role: str, intent: dict[str, Any], registered_agents: list[str],
     goal_id: str, unblocks_todo_id: str | None,
     unblocks_todo_id_declared: bool, monitor_metadata: dict[str, Any] | None,
-    generated_at: str,
 ) -> dict[str, Any]:
     """Transport one fresh draft; the existing typed owners compose admission."""
     try:
@@ -48,7 +47,7 @@ def plan_todo_creation_scope(
             "role": role, "intent": intent, "registered_agents": registered_agents,
             "goal_id": goal_id, "unblocks_todo_id": unblocks_todo_id,
             "unblocks_todo_id_declared": unblocks_todo_id_declared,
-            "monitor_metadata": monitor_metadata, "generated_at": generated_at,
+            "monitor_metadata": monitor_metadata,
         })
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from None
@@ -69,16 +68,22 @@ def require_user_todo_task_class(
     }, registered_agents=[], goal_id="")
 
 
+# Status asks the canonical reader for these same facts. Keep the wire
+# projection and the standalone diagnostics adapter on one field inventory.
+TODO_CONTRACT_DIAGNOSTIC_FIELDS = (
+    "todo_id", "role", "status", "task_class", "blocks_agent", "global_gate",
+    "bound_agent", "goal_bound", "claimed_by", "excluded_agents",
+    "removed_continuation_policy", "archive_state",
+)
+
+
 def todo_contract_diagnostics(
     *, todos: list[dict[str, Any]], registered_agents: list[str],
     terminal_statuses: set[str] | frozenset[str],
 ) -> dict[str, Any]:
     """Read-only canonical Todo diagnostics; the shared TS owner keeps the rule."""
     # Transport only bounded semantic facts, never narrative text.
-    fields = ("todo_id", "role", "status", "task_class", "blocks_agent",
-              "global_gate", "bound_agent", "goal_bound", "claimed_by",
-              "excluded_agents", "removed_continuation_policy", "archive_state")
-    rows = [{field: todo.get(field) for field in fields} for todo in todos]
+    rows = [{field: todo.get(field) for field in TODO_CONTRACT_DIAGNOSTIC_FIELDS} for todo in todos]
     diagnostics: list[dict[str, Any]] = []
     checked = 0
     for offset in range(0, len(rows), 512):

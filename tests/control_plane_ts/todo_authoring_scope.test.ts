@@ -12,6 +12,17 @@ function plan(intent: JsonObject, overrides: JsonObject = {}): JsonObject {
     registered_agents: ["agent-a", "agent-b"], intent, ...overrides});
 }
 
+test("a human action can carry a capability binding without gaining gate scope", () => {
+  const action = {task_class: "user_action", actor_agent_id: "agent-a", capability_binding_ref: "report:edition-a"};
+  const scope = plan(action);
+  assert.equal(scope.bound_agent, "agent-a");
+  assert.equal(scope.blocks_agent, null);
+  assert.equal(scope.global_gate, null);
+  assert.throws(() => plan({...action, task_class: "user_gate"}), /capability_binding_ref/);
+  for (const field of ["task_repository", "task_domain"])
+    assert.throws(() => plan({...action, [field]: "example"}), /only valid for agent/);
+});
+
 test("global blocking is never inferred from actor, goal binding, or missing scope", () => {
   for (const actor of [undefined, "agent-a"]) for (const goal of [false, true]) {
     const intent: JsonObject = {task_class: "user_gate", goal_bound: goal};

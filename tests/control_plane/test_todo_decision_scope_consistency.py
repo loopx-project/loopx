@@ -12,7 +12,7 @@ from loopx.control_plane.todos.decision_scope import (
     build_required_decision_scope_repair_hint,
     standing_decision_authority_for_agent,
 )
-from loopx.control_plane.todos.standing_decision import build_standing_decision_authority
+from loopx.control_plane.todos.standing_decision import standing_decision_source_items
 from loopx.quota import build_quota_should_run
 
 AGENT_ID = "codex-quality-qualification"
@@ -22,6 +22,17 @@ SCOPE = {
     "granularity": "action",
     "scope_key": "publish_quality_contract",
 }
+
+
+def project_standing_authority(items, *, legacy_source_order=True, canonical_records=False):
+    """Exercise the production source decoder and composed Todo read transaction."""
+    from loopx.control_plane.todos.goal_todo_projection import source_todo_fields
+
+    return source_todo_fields(
+        [], lineage=[],
+        standing_items=standing_decision_source_items(items, canonical_records=canonical_records),
+        legacy_source_order=legacy_source_order and not canonical_records,
+    ).get("standing_decision_authority")
 
 
 def test_explicit_gate_scope_is_not_cancelled_by_another_claimant() -> None:
@@ -291,7 +302,7 @@ def test_standing_approval_satisfies_matching_agent_scope() -> None:
         "granularity": "goal",
         "scope_key": "benchmark_pr_self_merge",
     }
-    authority = build_standing_decision_authority(
+    authority = project_standing_authority(
         [
             {
                 "todo_id": "todo_standing_approval",
@@ -338,7 +349,7 @@ def test_latest_rejection_revokes_exact_standing_approval() -> None:
         "blocks_agent": AGENT_ID,
         "decision_scope": "write_scope:goal:benchmark_pr_self_merge",
     }
-    authority = build_standing_decision_authority(
+    authority = project_standing_authority(
         [
             {
                 **base,
@@ -393,7 +404,7 @@ def test_latest_rejection_revokes_exact_standing_approval() -> None:
 def test_non_authoritative_completed_items_do_not_become_standing(
     invalid_item: dict,
 ) -> None:
-    assert build_standing_decision_authority([invalid_item]) is None
+    assert project_standing_authority([invalid_item]) is None
 
 
 @pytest.mark.parametrize("decision_outcome", ["reject", "cancel"])

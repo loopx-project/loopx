@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import errno
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -12,6 +14,55 @@ import pytest
 
 from managed_effect_runtime_fixture import capture_disposable_effect_runtimes, stop_disposable_effect_runtimes
 from loopx.control_plane import effect_runtime
+
+
+def test_capture_continues_after_a_runtime_directory_disappears(tmp_path, monkeypatch):
+    disappearing = tmp_path / "retiring"
+    removed = disappearing / "loopx-effect-runtime-gone" / "runtime-gone.json"
+    retained = tmp_path / "remaining" / "loopx-effect-runtime-live" / "runtime-live.json"
+    for locator in (removed, retained):
+        locator.parent.mkdir(parents=True)
+        locator.write_text("synthetic locator", encoding="utf-8")
+    scandir = os.scandir
+    removals = []
+
+    def retire_before_scan(path):
+        if isinstance(path, (str, bytes, os.PathLike)) and Path(path) == disappearing:
+            if not removals:
+                shutil.rmtree(disappearing)
+                removals.append(disappearing)
+        return scandir(path)
+
+    monkeypatch.setattr(os, "scandir", retire_before_scan)
+    captured = capture_disposable_effect_runtimes(tmp_path)
+    assert removals == [disappearing]
+    assert captured == [(retained, "synthetic locator")]
+    assert retained.read_text(encoding="utf-8") == "synthetic locator"
+
+
+def test_capture_preserves_unexpected_directory_read_errors(tmp_path, monkeypatch):
+    scandir = os.scandir
+
+    def unreadable(path):
+        if isinstance(path, (str, bytes, os.PathLike)) and Path(path) == tmp_path:
+            raise OSError(errno.EIO, "synthetic directory read failure")
+        return scandir(path)
+
+    with monkeypatch.context() as failing:
+        failing.setattr(os, "scandir", unreadable)
+        with pytest.raises(OSError, match="synthetic directory read failure"):
+            capture_disposable_effect_runtimes(tmp_path)
+
+
+@pytest.fixture
+def nested_pytest_environment(tmp_path):
+    repository = Path(__file__).resolve().parents[1]
+    # The nested session's import-time leak census must not claim caller writes.
+    home = tmp_path / "nested-home"
+    home.mkdir()
+    return {**os.environ, "HOME": str(home), "USERPROFILE": str(home), "PYTHONPATH": os.pathsep.join([
+        str(repository / "tests"), str(repository),
+    ])}
 
 
 def _has_exited(pid):
@@ -30,7 +81,9 @@ def _has_exited(pid):
 
 @pytest.mark.parametrize("failing", [False, True])
 @pytest.mark.parametrize("retention", ["all", "none"])
-def test_pytest_retires_source_and_copied_package_runtimes(tmp_path, failing, retention):
+def test_pytest_retires_source_and_copied_package_runtimes(
+    tmp_path, failing, retention, nested_pytest_environment,
+):
     repository = Path(__file__).resolve().parents[1]
     records = tmp_path / "runtimes.jsonl"
     probe = tmp_path / "test_disposable_namespace.py"
@@ -66,15 +119,12 @@ print(json.dumps({"path": str(locator), "info": json.loads(locator.read_text(enc
                 stream.write(child.stdout.strip() + "\\n")
             assert not {failing!r}, "fixture failure retained"
     '''), encoding="utf-8")
-    environment = {**os.environ, "PYTHONPATH": os.pathsep.join([
-        str(repository / "tests"), str(repository),
-    ])}
     observed = []
     try:
         result = subprocess.run([
             sys.executable, "-m", "pytest", "-q", "-p", "conftest",
             "-o", f"tmp_path_retention_policy={retention}", str(probe),
-        ], cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=120)
+        ], cwd=tmp_path, env=nested_pytest_environment, capture_output=True, text=True, timeout=120)
         assert result.returncode == (1 if failing else 0), result.stdout + result.stderr
         if failing:
             assert "2 failed" in result.stdout and "fixture failure retained" in result.stdout
@@ -92,6 +142,28 @@ print(json.dumps({"path": str(locator), "info": json.loads(locator.read_text(enc
             effect_runtime._stop_effect_runtime(
                 Path(row["path"]), row["info"], timeout=5, wait_for_process_exit=True,
             )
+
+
+@pytest.mark.parametrize("writer_home", ["caller", "nested"])
+def test_nested_pytest_attributes_default_route_writes_to_its_own_home(
+    tmp_path, nested_pytest_environment, writer_home,
+):
+    home = Path(os.environ["HOME"] if writer_home == "caller" else nested_pytest_environment["HOME"])
+    leaked_route = home / ".loopx"
+    assert not leaked_route.exists()
+    probe = tmp_path / "test_default_route_writer.py"
+    probe.write_text(textwrap.dedent(f'''
+        from pathlib import Path
+
+        def test_writer():
+            Path({str(leaked_route)!r}).mkdir()
+    '''), encoding="utf-8")
+    result = subprocess.run([
+        sys.executable, "-m", "pytest", "-q", "-p", "conftest", str(probe),
+    ], cwd=tmp_path, env=nested_pytest_environment, capture_output=True, text=True, timeout=120)
+    owns_write = writer_home == "nested"
+    assert result.returncode == (1 if owns_write else 0), result.stdout + result.stderr
+    assert ("loopx default runtime route leak" in result.stdout) == owns_write
 
 
 def test_cleanup_preserves_foreign_namespace_and_rejects_wrong_pid(tmp_path, monkeypatch):

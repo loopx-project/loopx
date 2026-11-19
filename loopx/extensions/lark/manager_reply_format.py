@@ -1,11 +1,9 @@
 """Repair the mechanically fixable rich-text defects in a manager answer.
 
-A steward answer reaches Lark as provider text.  When the model or the
-transport hands over the presentation as one line of literal ``\\n`` tokens, the
-strict outbound validator rejects the whole message and the recovery path
-degrades the answer to plain text: the reader loses the markdown bullet list
-and the delivery is recorded as degraded.  An unresolved template placeholder
-such as ``{new_description}`` passes that validator and reaches the reader as
+A steward answer reaches Lark as a rich post. When presentation contains
+literal ``\\n`` tokens outside code, repair the mechanical defect before
+validation so Markdown lists and tables retain their rich presentation.
+An unresolved template placeholder such as ``{new_description}`` passes that validator and reaches the reader as
 raw braces.
 
 This module owns the repair that runs *before* the first send: escaped newlines

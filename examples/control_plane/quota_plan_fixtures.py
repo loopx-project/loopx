@@ -22,6 +22,7 @@ from loopx.quota import (  # noqa: E402
     render_quota_slot_preview_markdown,
     void_quota_slot,
 )
+from tests.control_plane.cli_output_fixture import read_cli_context_for_oracle  # noqa: E402
 
 
 SCOPED_AGENT_ID = "codex-side-bypass"
@@ -37,7 +38,7 @@ def _nested_value(payload: dict, path: str):
 
 
 def scheduler_reset_profile_snapshot(scheduler: dict) -> dict:
-    codex_app = scheduler["codex_app"]
+    codex_app = scheduler["app_automation"]
     unchanged_poll = scheduler["unchanged_poll"]
     limits = unchanged_poll["limits"]
     return {
@@ -321,7 +322,7 @@ def write_codex_heartbeat_fixture(root: Path, *, goal_id: str, agent_id: str, rr
     path.write_text("\n".join(f"{key} = {json.dumps(value)}" for key, value in fields.items()) + "\n", encoding="utf-8")
 
 
-def write_cli_fixture(root: Path, *, scoped_agents: bool = False) -> tuple[Path, Path, Path]:
+def write_cli_fixture(root: Path, *, scoped_agents: bool = False, provider: str = "sqlite") -> tuple[Path, Path, Path]:
     project = root / "project"
     runtime = root / "runtime"
     registry_path = project / ".loopx" / "registry.json"
@@ -346,7 +347,8 @@ def write_cli_fixture(root: Path, *, scoped_agents: bool = False) -> tuple[Path,
             "---\n\n"
             f"# {goal_id}\n\n"
             "## Next Action\n\n"
-            f"- continue {goal_id}\n",
+            f"- continue {goal_id}\n\n"
+            "## Agent Todo\n",
             encoding="utf-8",
         )
         goal_record = {
@@ -436,6 +438,14 @@ def write_cli_fixture(root: Path, *, scoped_agents: bool = False) -> tuple[Path,
         + "\n",
         encoding="utf-8",
     )
+    # Production reads require canonical authority; the run-ledger operator
+    # gate remains independent of a manually authored user Todo.
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    for record in registry_goals:
+        initialize_canonical_authority(runtime, record["id"],
+            build_todo_runtime_shadow_projection(goal_id=record["id"], todos=[], handoff_mode="soft_claim"),
+            state_path=project / record["state_file"], provider=provider)
     return registry_path, runtime, project
 
 
@@ -451,14 +461,14 @@ def run_cli_quota_plan(root: Path) -> tuple[dict, str]:
         str(runtime),
     ]
     json_result = subprocess.run(
-        [*base_args, "--format", "json", "quota", "plan", "--scan-path", str(project)],
+        [*base_args, "--format", "json", "quota", "plan"],
         cwd=REPO_ROOT,
         check=True,
         capture_output=True,
         text=True,
     )
     markdown_result = subprocess.run(
-        [*base_args, "quota", "plan", "--scan-path", str(project)],
+        [*base_args, "quota", "plan"],
         cwd=REPO_ROOT,
         check=True,
         capture_output=True,
@@ -486,15 +496,13 @@ def run_cli_throttled_should_run(root: Path) -> dict:
             "throttled-half",
             "--runtime-profile",
             "outer_controller",
-            "--scan-path",
-            str(project),
         ],
         cwd=REPO_ROOT,
         check=True,
         capture_output=True,
         text=True,
     )
-    return json.loads(result.stdout)
+    return json.loads(read_cli_context_for_oracle(result.stdout)[0])
 
 
 def run_cli_slot_preview(root: Path) -> tuple[dict, dict]:
@@ -519,8 +527,6 @@ def run_cli_slot_preview(root: Path) -> tuple[dict, dict]:
             "near-limit-half",
             "--slots",
             "1",
-            "--scan-path",
-            str(project),
         ],
         cwd=REPO_ROOT,
         check=True,
@@ -535,15 +541,13 @@ def run_cli_slot_preview(root: Path) -> tuple[dict, dict]:
             "near-limit-half",
             "--runtime-profile",
             "outer_controller",
-            "--scan-path",
-            str(project),
         ],
         cwd=REPO_ROOT,
         check=True,
         capture_output=True,
         text=True,
     )
-    return json.loads(preview_result.stdout), json.loads(should_run_result.stdout)
+    return json.loads(preview_result.stdout), json.loads(read_cli_context_for_oracle(should_run_result.stdout)[0])
 
 
 def run_cli_slot_spend_execute(root: Path) -> tuple[dict, dict, str, str]:
@@ -574,8 +578,6 @@ def run_cli_slot_spend_execute(root: Path) -> tuple[dict, dict, str, str]:
             "--execute",
             "--agent-id",
             SCOPED_AGENT_ID,
-            "--scan-path",
-            str(project),
         ],
         cwd=REPO_ROOT,
         check=True,
@@ -592,8 +594,6 @@ def run_cli_slot_spend_execute(root: Path) -> tuple[dict, dict, str, str]:
             "outer_controller",
             "--agent-id",
             SCOPED_AGENT_ID,
-            "--scan-path",
-            str(project),
         ],
         cwd=REPO_ROOT,
         check=True,
@@ -602,7 +602,7 @@ def run_cli_slot_spend_execute(root: Path) -> tuple[dict, dict, str, str]:
     )
     return (
         json.loads(result.stdout),
-        json.loads(should_run_result.stdout),
+        json.loads(read_cli_context_for_oracle(should_run_result.stdout)[0]),
         registry_before,
         registry_path.read_text(encoding="utf-8"),
     )
@@ -636,8 +636,6 @@ def run_cli_slot_void_execute(root: Path) -> tuple[dict, dict, dict, str, str]:
             "--execute",
             "--agent-id",
             SCOPED_AGENT_ID,
-            "--scan-path",
-            str(project),
         ],
         cwd=REPO_ROOT,
         check=True,
@@ -660,8 +658,6 @@ def run_cli_slot_void_execute(root: Path) -> tuple[dict, dict, dict, str, str]:
             "--execute",
             "--agent-id",
             SCOPED_AGENT_ID,
-            "--scan-path",
-            str(project),
         ],
         cwd=REPO_ROOT,
         check=True,
@@ -678,8 +674,6 @@ def run_cli_slot_void_execute(root: Path) -> tuple[dict, dict, dict, str, str]:
             "outer_controller",
             "--agent-id",
             SCOPED_AGENT_ID,
-            "--scan-path",
-            str(project),
         ],
         cwd=REPO_ROOT,
         check=True,
@@ -689,7 +683,7 @@ def run_cli_slot_void_execute(root: Path) -> tuple[dict, dict, dict, str, str]:
     return (
         spend_payload,
         json.loads(void_result.stdout),
-        json.loads(should_run_result.stdout),
+        json.loads(read_cli_context_for_oracle(should_run_result.stdout)[0]),
         registry_before,
         registry_path.read_text(encoding="utf-8"),
     )

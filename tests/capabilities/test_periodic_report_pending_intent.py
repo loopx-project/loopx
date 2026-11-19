@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import hashlib
+from html.parser import HTMLParser
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -64,6 +65,8 @@ def _enable_calendar(registry):
 
 
 def test_calendar_actual_cli_preserves_capability_action_without_host(tmp_path, capsys, monkeypatch):
+    from copy import deepcopy
+
     from loopx.cli import main
     from loopx.control_plane.turn_driver.loop_controller import decide_loop_disposition
 
@@ -77,7 +80,7 @@ def test_calendar_actual_cli_preserves_capability_action_without_host(tmp_path, 
         no_host,
     )
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
-    scope = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--scan-path", str(tmp_path)]
+    scope = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, ]
     with monkeypatch.context() as read_only:
         read_only.setattr("loopx.cli_commands.lark_inbox.dispatch_goal_lark_turn_start_hooks", no_host)
         read_only.setattr("loopx.capabilities.periodic_report.cadence_runtime.extend_cadence_turn_start_dispatch", no_host)
@@ -101,7 +104,7 @@ def test_calendar_actual_cli_preserves_capability_action_without_host(tmp_path, 
     for action, execute, host in [("plan", False, "generic-cli"),
         ("run-once", False, "generic-cli"), ("run-once", True, "generic-cli"),
         ("run-once", True, "codex-cli")]:
-        extras = ["--project", str(registry.parent)] if action == "run-once" else []
+        extras = ["--project", str(registry.parent)] if action == "run-once" else ["--include-transaction-detail"]
         code = main([*prefix, "turn", action, *scope, "--host", host,
                      "--execution-mode", "isolated-headless", *extras,
                      *(["--execute"] if execute else [])])
@@ -113,12 +116,22 @@ def test_calendar_actual_cli_preserves_capability_action_without_host(tmp_path, 
         assert turn["capability_action"]["intent"]["command"] == command
         assert turn["capability_action"]["command_argv"][:5] == ["loopx", "--registry", str(registry), "--runtime-root", str(runtime)]
         assert turn["capability_action"]["executed"] is False
-        assert turn["turn_envelope"]["writeback"]["next_cli_actions"] == [command]
-        assert turn["turn_envelope"]["replan_action_packet"] is None
+        # Current plans expose one complete source; the controller consumes it
+        # directly instead of requiring the historical executor adapter.
+        assert "turn_envelope" not in turn
+        work = turn["work_contract"]
+        assert work["effective_action"] == "governed_capability_intent"
+        assert work["interaction_contract"]["cli_channel"]["next_cli_actions"] == [command]
         assert not any(turn["effects"].values())
-        disposition = decide_loop_disposition(turn_receipt=None, quota_decision=turn["turn_envelope"])
+        # The source may retain competing replan advice; capability precedence
+        # must still keep the host idle and the owned consumer next.
+        disposition = decide_loop_disposition(turn_receipt=None, quota_decision=work)
         assert disposition["disposition"] == "capability_action_required"
         assert not disposition["launches_host"]
+        changed = deepcopy(work)
+        changed["pending_capability_intent"]["command"] = "loopx turn run-once --execute"
+        with pytest.raises(ValueError):
+            decide_loop_disposition(turn_receipt=None, quota_decision=changed)
     assert not list((runtime / "goals" / GOAL_ID / "periodic_reports").glob("*/editorial_request.json"))
 
 
@@ -156,7 +169,7 @@ def test_calendar_hook_to_editorial_to_delivery_todo_preserves_window(tmp_path: 
     required = consume_pending_periodic_report_intent(registry_path=registry,
         runtime_root=runtime, goal_id=GOAL_ID, agent_id=AGENT_ID, execute=True)
     assert required["status"] == "editorial_required"
-    request = json.loads(Path(required["editorial_request_path"]).read_text())
+    request = json.loads(Path(required["editorial_request_path"]).read_text(encoding="utf-8"))
     assert request["actual_work_window"]["start_at"] == "2026-09-04T10:00:00Z"
     assert request["actual_work_window"]["end_at"] == "2026-09-11T10:00:00Z"
     assert "2026-09-04 18:00" in request["actual_work_window"]["period_label"]
@@ -304,6 +317,32 @@ def test_inactive_goal_does_not_reactivate_an_admitted_report(tmp_path, field, v
     assert read_cadence_journal(runtime_root=runtime, goal_id=GOAL_ID) == original
 
 
+def test_canonically_stopped_goal_does_not_admit_periodic_report_window(tmp_path):
+    from datetime import datetime
+    from loopx.capabilities.periodic_report.cadence_journal import read_cadence_journal
+    from loopx.capabilities.periodic_report.cadence_runtime import extend_cadence_turn_start_dispatch
+    from loopx.capabilities.periodic_report.pending_intent import _active_delivery_subscription
+
+    registry, runtime = _calendar_fixture(tmp_path)
+    config = json.loads(registry.read_text())
+    config["goals"][0]["activation"] = {
+        "schema_version": "loopx_goal_activation_v1", "state": "stopped"
+    }
+    registry.write_text(json.dumps(config))
+
+    kwargs = dict(registry_path=registry, runtime_root=runtime, goal_id=GOAL_ID)
+    dispatch = extend_cadence_turn_start_dispatch(
+        {}, **kwargs, agent_id=AGENT_ID,
+        now=datetime.fromisoformat("2026-09-11T10:00:00+00:00"),
+    )
+
+    assert (
+        dispatch["invoked_count"],
+        read_cadence_journal(runtime_root=runtime, goal_id=GOAL_ID),
+        _active_delivery_subscription(**kwargs),
+    ) == (0, None, None)
+
+
 def test_calendar_does_not_preempt_existing_stage_work(tmp_path):
     from datetime import datetime
     from loopx.capabilities.periodic_report.cadence_runtime import extend_cadence_turn_start_dispatch
@@ -320,7 +359,7 @@ def test_calendar_does_not_preempt_existing_stage_work(tmp_path):
     assert "cadence_window" in pending[-1]["payload"]
     required = consume_pending_periodic_report_intent(registry_path=registry,
         runtime_root=runtime, goal_id=GOAL_ID, agent_id=AGENT_ID, execute=True)
-    request = json.loads(Path(required["editorial_request_path"]).read_text())
+    request = json.loads(Path(required["editorial_request_path"]).read_text(encoding="utf-8"))
     assert request["completed_at"] == original[0]["payload"]["stage_completion"]["completed_at"]
 
 
@@ -439,12 +478,8 @@ def _fixture(
     finished_updated_at: str = "2026-08-30T09:00:00Z",
     provider: str = "file",
 ) -> tuple[Path, Path]:
-    from loopx.control_plane.coordination.runtime_shadow import (
-        build_todo_runtime_shadow_projection,
-    )
-    from loopx.todos import list_goal_todos
     from tests.control_plane.canonical_authority_fixture import (
-        initialize_canonical_authority,
+        initialize_canonical_source_fixture,
     )
 
     project = tmp_path / "project"
@@ -495,16 +530,7 @@ status: active
         ),
         encoding="utf-8",
     )
-    todos = list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"]
-    initialize_canonical_authority(
-        runtime,
-        GOAL_ID,
-        build_todo_runtime_shadow_projection(
-            goal_id=GOAL_ID, todos=todos, handoff_mode="soft_claim"
-        ),
-        state_path=state,
-        provider=provider,
-    )
+    initialize_canonical_source_fixture(runtime, GOAL_ID, state_path=state, provider=provider)
     sidecar_dir = runtime / "goals" / GOAL_ID / "post_writeback_hooks"
     sidecar_dir.mkdir(parents=True)
     sidecar = sidecar_dir / ("pwh_" + "a" * 64 + ".json")
@@ -789,9 +815,35 @@ def test_consumption_queues_authorized_delivery_and_exact_replay_does_not_duplic
     assert Path(first["artifacts"]["generation_bundle_path"]).is_file()
     assert Path(first["artifacts"]["publication_candidate_path"]).is_file()
     html = Path(first["artifacts"]["html_path"]).read_text(encoding="utf-8")
-    assert "本期结论：阶段分析已经形成完整判断" in html
-    assert "当前风险：问题已按影响与证据分层" in html
-    assert "下一步：按影响与可证伪性推进下一阶段" in html
+    class ArticleText(HTMLParser):
+        in_article = False
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "article":
+                self.in_article = True
+
+        def handle_endtag(self, tag):
+            if tag == "article":
+                self.in_article = False
+
+        def handle_data(self, data):
+            if self.in_article:
+                article_text.append(data)
+
+    # Highlights replace the redundant title-only masthead summary. The
+    # authored conclusion, risks and next steps must still reach report readers.
+    article_text = []
+    ArticleText().feed(html)
+    visible = " ".join(article_text)
+    for authored in (
+        "阶段分析已经形成完整判断",
+        "当前证据已经覆盖全景分类、重点因果与后续处置。",
+        "问题已按影响与证据分层",
+        "主问题、次要问题与待确认边界已经拆开呈现。",
+        "按影响与可证伪性推进下一阶段",
+        "优先验证能覆盖多个问题族的修复。",
+    ):
+        assert authored in visible
     assert replay["status"] == "no_pending_intent"
     assert (
         pending_periodic_report_intents(
@@ -817,7 +869,6 @@ def test_consumption_queues_authorized_delivery_and_exact_replay_does_not_duplic
     status = collect_status(
         registry_path=registry,
         runtime_root_override=str(runtime),
-        scan_roots=[registry.parent],
         limit=20,
         goal_id=GOAL_ID,
     )
@@ -1997,7 +2048,7 @@ def test_real_cli_editorial_fallback_reads_canonical_work_without_display(
         AGENT_ID,
         "--execute",
     ]
-    run = subprocess.run(command, capture_output=True, text=True, timeout=90)
+    run = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", timeout=90)
     assert run.returncode == 0, run.stderr
     result = json.loads(run.stdout)
     assert result["status"] == "editorial_required", result
@@ -2006,7 +2057,7 @@ def test_real_cli_editorial_fallback_reads_canonical_work_without_display(
     request = json.loads(before)
     assert {fact["source_ref"] for fact in request["facts"]} == {"todo:todo_finished"}
     assert not state.exists()
-    retry = subprocess.run(command, capture_output=True, text=True, timeout=90)
+    retry = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", timeout=90)
     assert retry.returncode == 0, retry.stderr
     assert frozen.read_bytes() == before, (
         "retry must retain the same authored-input basis"

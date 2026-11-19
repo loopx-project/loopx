@@ -1,4 +1,7 @@
+
 """Conversation evidence reads use real canonical providers without granting work."""
+
+from canonical_authority_fixture import assert_todo_read_unchanged
 
 import json
 import subprocess
@@ -54,7 +57,7 @@ def test_common_context_recovers_constraints_from_canonical_authority(tmp_path, 
     allowed[0] = False
     assert not tool.read(CONTEXT_TOOL_NAME, {"view": "todos", "goal_id": "goal-a"})["ok"]
     assert len(observed) == 4
-    assert list_goal_todos(registry_path=registry, goal_id="goal-a") == canonical
+    assert_todo_read_unchanged(list_goal_todos(registry_path=registry, goal_id="goal-a"), canonical)
     assert not state.exists()
 
     # The shipped CLI uses the same exact selector but an external audience.

@@ -8,7 +8,6 @@ from ...control_plane.runtime.runtime_projection_route import (
     resolve_goal_source_runtime_route,
 )
 from ...control_plane.projects.registry_codec import load_registry
-from ...paths import registry_project_root
 from ...quota import build_quota_should_run
 from ...status import collect_status
 from ..runtime import default_extension_state_file, resolve_extension_activation
@@ -329,11 +328,8 @@ def sync_human_gate_after_refresh(
             status = collect_status(
                 registry_path=source_registry_path,
                 runtime_root_override=str(runtime_root),
-                scan_roots=[registry_project_root(source_registry_path)],
                 limit=20,
                 goal_id=goal_id,
-                # Delivery needs Goal/quota state, not a publication audit.
-                include_public_boundary_scan=False,
             )
             quota_packet = build_quota_should_run(
                 status,
@@ -532,10 +528,8 @@ def sync_blocked_notice_after_refresh(
     status = collect_status(
         registry_path=source_registry_path,
         runtime_root_override=str(runtime_root),
-        scan_roots=[registry_project_root(source_registry_path)],
         limit=20,
         goal_id=goal_id,
-        include_public_boundary_scan=False,
     )
     quota_packet = build_quota_should_run(status, goal_id=goal_id, agent_id=agent_id)
     return deliver_blocked_notices(

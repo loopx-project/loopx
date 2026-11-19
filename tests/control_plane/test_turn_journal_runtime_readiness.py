@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from threading import Event
 from typing import Any
@@ -17,6 +18,64 @@ class _Completed:
         self.returncode = returncode
 
 
+def test_source_snapshot_observes_each_selected_file_metadata_once(tmp_path, monkeypatch):
+    names = ["first.ts", "nested/data.json", "....json", "folder.ts/child.ts"]
+    for name in [*names, ".json", ".ts", "ignored.py", "UPPER.TS"]:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}", encoding="utf-8")
+    for name in names:
+        os.utime(tmp_path / name, ns=(1_000_000_000, 1_000_000_000))
+    selected = {tmp_path / name for name in names}
+    expected = []
+    for name in sorted(names):
+        metadata = (tmp_path / name).stat()
+        expected.append((name, metadata.st_mtime_ns, metadata.st_ctime_ns, metadata.st_size))
+    observed: list[Path] = []
+    original_stat = Path.stat
+
+    def observe_stat(path, *args, **kwargs):
+        if path in selected:
+            observed.append(path)
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", observe_stat)
+    assert effect_runtime._runtime_source_snapshot(tmp_path) == tuple(expected)
+    assert sorted(observed) == sorted(selected)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires filesystem symlinks")
+def test_source_snapshot_follows_file_links_and_ignores_directory_or_broken_links(tmp_path):
+    root = tmp_path / "package"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    target = outside / "actual.ts"
+    target.write_text("export {};", encoding="utf-8")
+    (root / "alias.ts").symlink_to(target)
+    (root / "directory").symlink_to(outside, target_is_directory=True)
+    (root / "missing.ts").symlink_to(outside / "missing.ts")
+    (root / "loop.ts").symlink_to(root / "loop.ts")
+    metadata = target.stat()
+    assert effect_runtime._runtime_source_snapshot(root) == (
+        ("alias.ts", metadata.st_mtime_ns, metadata.st_ctime_ns, metadata.st_size),
+    )
+
+
+def test_source_snapshot_keeps_pathlib_policy_for_nonencodable_entries(tmp_path, monkeypatch):
+    source = tmp_path / "source.ts"
+    source.write_text("export {};", encoding="utf-8")
+    original_stat = Path.stat
+
+    def nonencodable_stat(path, *args, **kwargs):
+        if path == source:
+            raise ValueError("non-encodable path")
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", nonencodable_stat)
+    assert effect_runtime._runtime_source_snapshot(tmp_path) == ()
+
+
 def test_runtime_fingerprint_rotates_when_any_owned_source_changes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -25,6 +84,7 @@ def test_runtime_fingerprint_rotates_when_any_owned_source_changes(
     source_files = effect_runtime._runtime_source_files(source_root)
     assert "effect_runtime_server.ts" in source_files
     assert "runtime_decode.ts" in source_files
+    assert "runtime/private_permissions.py" in source_files
     assert "turn_transaction_contract.json" in source_files
     for relative in source_files:
         source = source_root / relative
@@ -91,17 +151,17 @@ def test_runtime_fingerprint_rescans_when_a_discovered_file_disappears(
     removed = tmp_path / "removed.ts"
     kept.write_text("export const kept = true;\n", encoding="utf-8")
     removed.write_text("export const removed = true;\n", encoding="utf-8")
-    original_scan = effect_runtime._scan_runtime_source_files
+    original_scan = effect_runtime._scan_runtime_source_snapshot
     scans: list[tuple[str, ...]] = []
 
-    def scan_then_remove(root: Path) -> tuple[str, ...]:
+    def scan_then_remove(root: Path) -> effect_runtime._RuntimeSourceSnapshot:
         files = original_scan(root)
-        scans.append(files)
+        scans.append(tuple(row[0] for row in files))
         if len(scans) == 1:
             removed.unlink()
         return files
 
-    monkeypatch.setattr(effect_runtime, "_scan_runtime_source_files", scan_then_remove)
+    monkeypatch.setattr(effect_runtime, "_scan_runtime_source_snapshot", scan_then_remove)
 
     monkeypatch.setattr(effect_runtime, "_control_plane_root", lambda: tmp_path)
 
@@ -123,25 +183,25 @@ def test_runtime_fingerprint_rescans_when_a_snapshotted_file_disappears_while_re
     later.write_text("export const later = true;\n", encoding="utf-8")
     original_read_bytes = Path.read_bytes
     reads: list[str] = []
-    later_prefetched = Event()
+    first_read = Event()
 
-    def remove_later_after_prefetch(path: Path) -> bytes:
+    def remove_first_after_reading_last(path: Path) -> bytes:
         content = original_read_bytes(path)
-        if path == later:
+        if path == first:
             reads.append(path.name)
-            later_prefetched.set()
+            first_read.set()
         else:
-            if later.exists():
-                assert later_prefetched.wait(timeout=5)
-                later.unlink()
+            if first.exists():
+                assert first_read.wait(timeout=5)
+                first.unlink()
             reads.append(path.name)
         return content
 
     monkeypatch.setattr(effect_runtime, "_control_plane_root", lambda: tmp_path)
-    monkeypatch.setattr(Path, "read_bytes", remove_later_after_prefetch)
+    monkeypatch.setattr(Path, "read_bytes", remove_first_after_reading_last)
 
     assert len(effect_runtime._runtime_fingerprint()) == 64
-    assert reads == ["later.ts", "first.ts", "first.ts"]
+    assert reads == ["first.ts", "later.ts", "later.ts"]
 
 
 def _install_persistent_stat_read_churn(
@@ -152,34 +212,34 @@ def _install_persistent_stat_read_churn(
     later = tmp_path / "later.ts"
     first.write_text("export const first = true;\n", encoding="utf-8")
     later.write_text("export const later = true;\n", encoding="utf-8")
-    original_scan = effect_runtime._scan_runtime_source_files
+    original_scan = effect_runtime._scan_runtime_source_snapshot
     original_read_bytes = Path.read_bytes
     scans: list[tuple[str, ...]] = []
-    later_prefetched = Event()
-    first_reads = 0
+    first_read = Event()
+    later_reads = 0
 
-    def record_scan(root: Path) -> tuple[str, ...]:
+    def record_scan(root: Path) -> effect_runtime._RuntimeSourceSnapshot:
         files = original_scan(root)
-        scans.append(files)
+        scans.append(tuple(row[0] for row in files))
         return files
 
-    def churn_after_each_first_read(path: Path) -> bytes:
-        nonlocal first_reads
+    def churn_after_each_later_read(path: Path) -> bytes:
+        nonlocal later_reads
         content = original_read_bytes(path)
-        if path == later:
-            later_prefetched.set()
-        else:
-            first_reads += 1
-        if first_reads == 1 and path == first:
-            assert later_prefetched.wait(timeout=5)
-            later.unlink()
-        elif first_reads == 2 and path == first:
-            later.write_text("export const later = true;\n", encoding="utf-8")
+        if path == first:
+            first_read.set()
+        elif path == later:
+            later_reads += 1
+            if later_reads == 1:
+                assert first_read.wait(timeout=5)
+                first.unlink()
+            elif later_reads == 2:
+                first.write_text("export const first = true;\n", encoding="utf-8")
         return content
 
     monkeypatch.setattr(effect_runtime, "_control_plane_root", lambda: tmp_path)
-    monkeypatch.setattr(effect_runtime, "_scan_runtime_source_files", record_scan)
-    monkeypatch.setattr(Path, "read_bytes", churn_after_each_first_read)
+    monkeypatch.setattr(effect_runtime, "_scan_runtime_source_snapshot", record_scan)
+    monkeypatch.setattr(Path, "read_bytes", churn_after_each_later_read)
     return scans
 
 
@@ -204,7 +264,7 @@ def test_runtime_source_churn_has_a_stable_readiness_diagnostic(
     )
     assert scans == [
         ("first.ts", "later.ts"),
-        ("first.ts",),
+        ("later.ts",),
         ("first.ts", "later.ts"),
     ]
 
@@ -221,7 +281,7 @@ def test_runtime_request_source_churn_raises_a_stable_startup_diagnostic(
     assert error.value.diagnostic_code == "packaged_runtime_source_unstable"
     assert scans == [
         ("first.ts", "later.ts"),
-        ("first.ts",),
+        ("later.ts",),
         ("first.ts", "later.ts"),
     ]
 
@@ -298,6 +358,8 @@ def test_current_node_standard_probe_does_not_execute_rule(
         "restart_policy": "automatic_on_next_control_plane_request",
         "idle_shutdown": True,
         "diagnostic_code": None,
+        "locator_state": "missing",
+        "recorded_pid_alive": None,
     }
 
 
@@ -380,6 +442,8 @@ def test_doctor_markdown_projects_runtime_lifecycle_for_app_health() -> None:
                 "runtime_lifecycle": {
                     "state": "unavailable",
                     "diagnostic_code": "runtime_exited_before_ready",
+                    "locator_state": "missing",
+                    "recorded_pid_alive": None,
                 },
             },
             "checks": [],
@@ -387,6 +451,8 @@ def test_doctor_markdown_projects_runtime_lifecycle_for_app_health() -> None:
     )
 
     assert "typescript_runtime_state: `unavailable`" in rendered
+    assert "typescript_runtime_locator_state: `missing`" in rendered
+    assert "typescript_runtime_recorded_pid_alive: `None`" in rendered
     assert (
         "typescript_runtime_diagnostic: `runtime_exited_before_ready`" in rendered
     )

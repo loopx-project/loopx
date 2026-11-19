@@ -246,7 +246,6 @@ def test_refresh_lifecycle_no_gate_does_not_require_extension(
     assert "extension_activation" not in result
     assert len(status_reads) == 1
     assert status_reads[0]["goal_id"] == GOAL_ID
-    assert status_reads[0]["include_public_boundary_scan"] is False
 
 
 def test_refresh_lifecycle_unconfigured_binding_failure_does_not_require_extension(

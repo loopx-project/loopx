@@ -71,19 +71,48 @@ export const RUN_IDENTITY_FIELDS = [
 const IDENTITY_TOKEN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,120}$/u
 const SUMMARY_TOKEN = /^[A-Za-z0-9][A-Za-z0-9_./:-]{0,79}$/u
 const LOCAL_PATH_SURFACES = [
-  /(?<![:/a-z0-9])\/(?:users|home|volumes|private|tmp|var|etc|opt|srv|mnt|root|workspace|workspaces)\/[^\s`'"<>]+/iu,
-  /(?<![:/a-z0-9])[a-z]:[/\\](?:users|documents and settings)[/\\][^\s`'"<>]+/iu,
-  /(?<![\w:])path:[/\\][^\s`'"<>]+/iu,
+  /(?<![:/A-Za-z0-9])\/(?:Users|home|Volumes|private|tmp|var|etc|opt|srv|mnt|root|data|workspace|workspaces)\/[^\s`'"<>]+/iu,
+  /(?<![:/A-Za-z0-9])[A-Za-z]:[\\/][^\s`'"<>]+/iu,
+  /(?<![:/A-Za-z0-9])\\\\[A-Za-z0-9_.-]+\\[^\s`'"<>]+/iu,
+  /(?<![\w~])~[\\/][^\s`'"<>]+/iu,
+  /(?<![\w:])path:[\\/][^\s`'"<>]+/iu,
   /\bfile:\/+/iu,
 ] as const
+/**
+ * One literal per arm of `loopx/public_safe_text.py` SECRET_LIKE_SURFACE_PATTERN,
+ * byte-identical to the canonical body and case-folded the way its leading
+ * `(?i)` folds it. The plugin is published standalone and cannot import the
+ * repository's control-plane modules, so the copy stays — but
+ * `tests/capabilities/test_reliability_diagnostics_dsh_provider.py` compares
+ * these bodies against the canonical owner, and fails when an arm is missing,
+ * narrowed or added on only one side (Refs #5136).
+ *
+ * One difference the text comparison cannot see: JavaScript's `\b` is an ASCII
+ * word boundary under the `u` flag while Python's is Unicode-aware, so a token
+ * glued to a non-ASCII letter is rejected here and accepted there. That is the
+ * fail-closed direction, so it stays.
+ */
 const SECRET_LIKE_SURFACES = [
   /\bbearer\s+[a-z0-9._~+/=-]{16,}/iu,
-  /\b(?:access|secret)[_-]?key\s*[=:]\s*[^\s`'"<>]+/iu,
-  /\b(?:ak|sk)\s*[=:]\s*[^\s`'"<>]+/iu,
+  /\b[a-z][a-z0-9+.-]*:\/\/[^\/\s:@`'"<>]+:[^\/\s@`'"<>]+@[^\s`'"<>]*/iu,
+  /\b(?:(?:aws[_-]?)?secret[_-]?access[_-]?key|(?:access|api|secret)[_-]?key)["']?\s*[=:]\s*["']?[^\s`'"<>]+/iu,
+  /\b(?:ak|sk)["']?\s*[=:]\s*["']?[^\s`'"<>]+/iu,
   /(?<![a-z0-9_])(?:ak|sk)[-_=:][a-z0-9_=-]{10,}/iu,
-  /\bgh[pousr]_[a-z0-9]{20,}\b/iu,
+  /\bgh[pousr]_[a-z0-9]{16,}\b/iu,
+  /\bgithub_pat_[a-z0-9_]{20,}/iu,
+  /\b(?:akia|asia)[a-z0-9]{16}\b/iu,
+  /\bxox[baprs]-[a-z0-9-]{10,}/iu,
+  /\baiza[a-z0-9_-]{20,}/iu,
+  /\b(?:sk|rk)_(?:live|test)_[a-z0-9]{12,}/iu,
+  /\bsk-(?:proj|svcacct|admin)-[a-z0-9_-]{20,}/iu,
+  /\bsk-ant-[a-z0-9_-]{20,}/iu,
+  /\bnpm_[a-z0-9]{20,}/iu,
+  /\bpypi-[a-z0-9_-]{20,}/iu,
   /\beyj[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\b/iu,
-  /\btoken\s*[=:]\s*[^\s`'"<>]{12,}/iu,
+  /\b(?:access|refresh)[_-]?token["']?\s*[=:]\s*["']?[^\s`'"<>]{12,}/iu,
+  /\b(?:password|secret)["']?\s*[=:]\s*["']?[^\s`'"<>]{12,}/iu,
+  /-{3,}\s*BEGIN (?:[A-Z]+ )?PRIVATE KEY[\s\S]*?(?:-{3,}\s*END (?:[A-Z]+ )?PRIVATE KEY-{3,}|$)/iu,
+  /\btoken["']?\s*[=:]\s*["']?[^\s`'"<>]{12,}/iu,
 ] as const
 const CREDENTIAL_FIELD_FAMILIES = new Set([
   'accesskey', 'accesstoken', 'apikey', 'authtoken', 'authorization',
@@ -278,7 +307,12 @@ export function ledgerPath(config: ShadowObserverConfig): string {
   return join(config.ledgerDir, 'by-goal', `${digest}.ndjson`)
 }
 
-async function appendLedgerLines(config: ShadowObserverConfig, lines: readonly string[]): Promise<void> {
+/**
+ * The shipped ledger writer. Exported so the overhead bench measures this exact
+ * path (legacy-ledger refusal, directory creation, and append) instead of a
+ * bench-local copy that would drift from the production writer.
+ */
+export async function appendLedgerLines(config: ShadowObserverConfig, lines: readonly string[]): Promise<void> {
   if (lines.length === 0) return
   const legacy = join(config.ledgerDir, `${config.goalId.replaceAll(':', '_')}.ndjson`)
   if (lstatSync(legacy, { throwIfNoEntry: false })) {

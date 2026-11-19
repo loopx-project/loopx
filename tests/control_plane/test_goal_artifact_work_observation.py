@@ -6,6 +6,7 @@ import copy
 import json
 
 import pytest
+from canonical_authority_fixture import initialize_canonical_source_fixture
 
 from loopx.session_runtime import build_session_runtime_readonly_projection
 from loopx.status import collect_status
@@ -19,7 +20,7 @@ def test_persisted_local_evidence_is_omitted_from_public_lifecycle(tmp_path, loc
     project, runtime = tmp_path / "project", tmp_path / "runtime"
     project.mkdir()
     state = project / "ACTIVE_GOAL_STATE.md"
-    state.write_text("---\nstatus: active\n---\n\n# Goal\n", encoding="utf-8")
+    state.write_text("---\nstatus: active\n---\n\n# Goal\n\n## Agent Todo\n", encoding="utf-8")
     registry = project / "registry.json"
     registry.write_text(json.dumps({
         "schema_version": 1, "common_runtime_root": str(runtime),
@@ -41,11 +42,12 @@ def test_persisted_local_evidence_is_omitted_from_public_lifecycle(tmp_path, loc
     run_path.write_text(json.dumps(record), encoding="utf-8")
     index = runs / "index.jsonl"
     index.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    initialize_canonical_source_fixture(runtime, "demo", state_path=state, provider="sqlite")
     before = {path: path.read_bytes() for path in (state, registry, run_path, index)}
 
     result = collect_status(
         registry_path=registry, runtime_root_override=str(runtime),
-        scan_roots=[], limit=5, include_public_boundary_scan=False,
+        limit=5,
     )
     assert result["ok"] is True
     lifecycle = result["run_history"]["goals"][0]["artifact_lifecycle"]
@@ -103,10 +105,11 @@ def test_persisted_work_observation_coverage_before_display_trimming(
     run_path.write_text(json.dumps(record))
     markdown_path.write_text("# Compact session-runtime observation\n")
     (runs / "index.jsonl").write_text(json.dumps(record) + "\n")
+    initialize_canonical_source_fixture(runtime, "demo", state_path=state, provider="sqlite")
     before = {path: path.read_bytes() for path in (state, registry, run_path, markdown_path, runs / "index.jsonl")}
     result = collect_status(
         registry_path=registry, runtime_root_override=str(runtime),
-        scan_roots=[], limit=display_limit, include_public_boundary_scan=False,
+        limit=display_limit,
     )
     assert result["ok"] is True
     goal = result["run_history"]["goals"][0]

@@ -98,10 +98,13 @@ turn marker restores its observed state.
 | `archived` | The host archived the thread. |
 | `unknown` | Not observable; `reason` is `unsupported_host`, `store_unavailable`, `thread_not_found`, `record_unrecognized` or `no_turn_marker`. |
 
-Codex local surfaces (`codex-app`, `codex-cli-tui`, `codex-ide-plugin`) are read
+Codex surfaces (`codex-app`, `codex-app-ssh`, `codex-cli-tui`, `codex-ide-plugin`) are read
 from `<CODEX_HOME>/state_<n>.sqlite` and the thread's rollout JSONL. The Codex
 store is not a public contract: any shape the adapter does not recognize is
-`unknown`, never `turn_open`. Remote surfaces such as `codex-app-ssh` are
-`unsupported_host`. Homes are searched in the order `CODEX_HOME`, `~/.codex`,
+`unknown`, never `turn_open`. An SSH session's store is local on its source
+host, so `codex-app-ssh` now uses this same observer instead of always returning
+`unsupported_host`. A missing store stays unknown; the observer does not connect
+to another host, deliver a message or qualify live execution. Homes are searched
+in the order `CODEX_HOME`, `~/.codex`,
 then sibling `~/.codex-*` directories; set `LOOPX_CODEX_HOMES` (an
 `os.pathsep`-separated list) to search exactly those homes instead.

@@ -104,6 +104,9 @@ def build_fixture(root: Path) -> Path:
             }
         ],
     )
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+    for goal in goals:
+        import_fixture_authority(registry_path, goal["id"], provider="sqlite")
     return registry_path
 
 

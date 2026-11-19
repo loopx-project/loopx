@@ -6,6 +6,16 @@ advances one LoopX goal without hiding compute policy inside the timer.
 The timer only wakes the executor. LoopX decides whether that wakeup
 should spend delivery compute.
 
+The [unified-contract RFC](architecture/rfcs/controller-executor-unified-contract-v0.md)
+keeps Codex App heartbeat as a required product qualification path. Its proposed
+controller session would consume one canonical contract and delegate ordinary
+work to an executor. That profile is not enabled by this template: continue to
+use the installed runtime's fresh contract and existing scheduler/stop rules.
+
+中文：[统一契约提案](architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
+将 Codex App heartbeat 列为必验产品路径。拟议 controller 消费统一契约后向 executor
+交付业务任务；本模板不启用该模式，仍以已安装运行时的最新契约和调度/停止规则执行。
+
 ## Two Prompt Layers
 
 Keep the Codex App visible goal text and the heartbeat automation task body as
@@ -52,6 +62,17 @@ transport-neutral goal prompt and lets the goal runtime own inner iteration;
 see the host integration protocol instead of adapting this recurring
 automation contract.
 
+Antigravity App (`--runtime-profile antigravity_app` or `--antigravity_app`)
+keeps a fixed resident session patrolling in place rather than relying on
+Codex's `automation_update`: bind the conversation's `Conversation ID` /
+`ANTIGRAVITY_CONVERSATION_ID` with `bind-agent-thread --with-agy-hooks --execute`
+and `sync-global`, perform repository work and `quota should-run` in an isolated
+`.worktrees/` git worktree (leaving the primary checkout clean for
+`workspace_guard`), and suspend between wakes via in-session
+`schedule(DurationSeconds=max(180, interval * 60), TimerCondition="any", Prompt=...)`
+(`180`s minimum floor; `3 -> 6 -> 10` minute unchanged backoff; no shell `sleep`,
+and no `new-conversation` `sidecar.json` unless explicitly requested).
+
 ### Native Goal bootstrap and live execution instructions
 
 Full, compact and brief automation use the same fully qualified notification/execution rule
@@ -62,6 +83,14 @@ static refresh/spend sequence: after validated work it follows the current
 `next_cli_actions` when there is no plan. Generator command fields remain for
 compatibility, not as a stale fallback. Todo acceptance alone is not Turn
 settlement or terminal vision closure. The brief base budget is 4,800 characters; reward-memory headroom remains separate.
+
+Markdown prints a complete guard command once when the successful task body
+already contains that exact command as a whole line. Generator Inputs then
+points to the body; JSON fields remain complete. Missing, different, partial or
+failed bodies retain the complete diagnostic command.
+
+成功正文已按完整行包含同一 guard 命令时，Markdown 诊断区指向正文，避免重复长命令；
+JSON 字段保留全文。正文缺失、不同、仅匹配前缀或生成失败时，诊断区仍打印完整命令。
 
 Brief 与 thin 共用完整执行义务路径；full、compact、brief 均移除固定结算配方，而不是
 删除结算义务。真实 App preflight、registry scope、完整 guard 和静态安全规则
@@ -421,6 +450,186 @@ loopx-canary heartbeat-prompt \
   --goal-id <GOAL_ID>
 ```
 
+### Opt-in native context delivery
+
+`--context-delivery {off,on}` defaults to `on` for supported native Codex App/SSH and benchmark heartbeat entries; save the machine setting as off or pass `--context-delivery off` to disable. An explicitly saved off is preserved. Other hosts and ordinary CLI keep full delivery. It reuses
+existing scheduler-owned host declarations and the benchmark worker's explicit
+execution settings; it does not guess a host from process names or ambient native
+session variables. These declared run modes can activate it:
+
+| Supported entry | Existing host declaration |
+| --- | --- |
+| Codex App heartbeat, same-session resume and recovery | `--codex-app`, equivalently `--runtime-profile codex_app_heartbeat` (or its complete explicit host tuple) |
+| Interactive Codex App SSH Goal | `--runtime-profile codex_app_ssh_goal`; retains native `--begin-turn` and visible-Goal settlement |
+| Codex benchmark heartbeat worker | Existing `generic_cli` profile plus the worker-owned `LOOPX_EXECUTION_MODE=heartbeat` and `LOOPX_CONTEXT_DELIVERY=on` declarations; its execution owner rejects other modes |
+
+`--codex-app` is a shortcut for a complete runtime profile. `--host-surface` alone
+is only one field. With `on`, missing, incomplete, contradictory or unsupported
+run-mode declarations are configuration errors: the CLI exits nonzero with a
+reason before admission or transport writes, including in native hooks. Correct
+the declaration or select `off`; there is no owner question or new approval.
+In a supported run mode, a missing or invalid continuity basis still
+delivers the same original full capture. The current recovery reference is saved
+before optional delta computation, so an oversized warm request or failed
+candidate update cannot select an older capture after compaction or resume.
+If the current recovery cannot be saved, the old session lookup is invalidated;
+use the explicit original capture reference. If preparation fails before that
+can be established, or invalidation also fails, the CLI reports
+`quota_decision_transport_failed` with the saved decision and receipt. Do not
+rerun admission to recover a presentation failure.
+
+If the compact recovery reference cannot be written, a bounded failure reply can
+carry only the saved capture path and SHA-256. Use `quota context-read` with that
+identity in a larger output channel. When `decision.json` could not be saved,
+the fallback capture contains the original committed receipt and diagnostics.
+
+When the caller also selects `--record-host-poll`, the existing liveness owner
+records that observation once before the original capture. The saved decision,
+ordinary/envelope output and native recovery view retain the same
+`host_poll_receipt`, including an unreadable-receipt diagnostic. A capture or
+handoff failure still reports an already-recorded poll; its count can advance
+even when presentation fails. Reading the original evidence never records
+another poll, launches work or spends quota. Without this flag, capture and
+context delivery do not create a liveness receipt.
+
+`off` creates no native journal, hook configuration or input
+observation; directories alone never turn it on. This declaration check is not
+host authentication, execution authority or proof of retained input. Native
+delivery uses the explicit lifecycle assumption described below; final-input
+Host clients keep their independent retained-input confirmation contract.
+Other generic CLI and native Goal profiles, Claude and other hosts remain outside
+this opt-in. Harbor/container and installed desktop adoption retain their separate
+unqualified boundaries; listing an entry does not certify live adoption.
+
+For a trusted Codex host, render the native setup through the installed CLI.
+Private context/capture directories are selected and created automatically under
+the resolved machine runtime; advanced callers may override those locations:
+
+```sh
+loopx --format json quota context-config --context-delivery on --codex-app \
+  --goal-id <goal> --agent-id <agent>
+```
+
+The result contains `native_config.config_overrides`, `native_config.hooks` and
+`native_config.developer_instructions`. Merge the hooks into the host's existing
+`hooks.json` or inline hook configuration, and append the recovery instruction to
+its existing developer instructions. Apply each flat key/value in `config_overrides`
+to the native host configuration (or as a `-c key=value` override). This selects
+64000-byte context continuations, a 20000-token history limit, and a shell-scoped
+reader budget declaration. The initial guard uses the same output budget. Its instruction requests
+22000 tokens per reader result and 24000 for code-mode emission, with one directly
+forwarded stdout per call. Native paging uses this default without the shell declaration;
+the isolated benchmark worker applies this profile automatically when opted in.
+Keep short context readers in the foreground (`exec_command`'s normal 10000 ms
+wait). Early output followed by polling can leave the native post-tool hook with
+only an empty tail, so a visibly complete page still cannot establish a baseline.
+Consume every chunk if a command yields and preserve full fallback when hook
+coverage is incomplete; do not re-admit or invent a retention receipt.
+Preserve other configuration. Review and
+trust only these exact hooks through Codex's native hook trust surface; the CLI
+does not install files, approve hashes, enable diagnostics or run a guard.
+Rollback removes these generated output overrides along with the context hooks
+and recovery instruction; restore any previous host values. The profile does not
+establish model retention, task gains or net fee savings.
+An already loaded native thread may keep its earlier hook configuration even
+when `hooks/list` discovers the new handlers as enabled and trusted. That readback
+does not deliver `SessionStart` or initialize its context journal. After active
+work reaches its normal safe boundary, use the host's start/resume path with the
+resulting configuration and verify actual lifecycle delivery before qualifying
+live use. Do not restart an active host merely to manufacture a sample. Until
+then, preserve full delivery and the original capture; do not fabricate events
+or borrow another session's journal.
+Use one configuration for the declared Goal/Agent. A shared private root keeps
+different native sessions in separate journals, including interleaved sessions.
+For an interactive SSH Goal, use `--runtime-profile codex_app_ssh_goal` in place
+of `--codex-app` for both setup and the thin prompt. It retains the 4000-character
+native Goal limit and the full command paths, with the same live contract and
+native blocked/resume rules; it does not become a hosted heartbeat.
+
+Generate the normal bootstrap with `heartbeat-prompt --thin --codex-app
+--bootstrap`, its existing Goal/Agent/registry arguments, and
+`--context-delivery on`; optionally add `--turn-envelope` or explicit private paths. The loader preserves
+these options without freezing a Turn ID. Each wake loads current instructions
+and binds the existing `LOOPX_TURN` before its generated guard. Selection keeps
+the same transport. An unset wake identity fails in the shell before admission.
+
+Native guards and JSON recovery readers use the existing 64000-byte output
+profile even when an App shell lacks the configuration environment override.
+Small captures finish inline; larger captures continue with the same large-page
+budget. Explicit smaller budgets remain available for truncated-range recovery.
+The native hook accepts complete JSON records alongside other shell output and
+still verifies each record against the trusted original capture before reuse.
+
+Native reuse assumes a normally completed full read was read and remains
+available until a lifecycle invalidation. `PostToolUse` merges complete reader
+ranges in the existing private session journal. EOF alone, known read failures,
+malformed/truncated pages and interrupted paging cannot establish a baseline.
+Compaction, clear, fork, session/workspace change and unqualified SessionStart
+invalidate it; ordinary tools and turn endings do not. A same-session resume can
+retain its baseline only when the native replay checkpoint verifies continuity.
+Read the pinned original completely before establishing a new differential chain.
+Repeated events and parallel pages are idempotent.
+Workspace identity comes from native lifecycle events, not a shell command's
+working directory. The same native session can run projection and recovery
+commands in a subdirectory or another checkout without discarding its baseline.
+A native SessionStart reporting a changed workspace still retires the previous
+candidate and recovery selector. Session, Goal and Agent isolation remains in
+force; changing command directories grants no work or publication authority.
+工作区身份由原生生命周期事件确定。命令切换到子目录或另一 checkout 不会清除同一
+原生会话的差分基线；原生 SessionStart 报告工作区变化时仍清除旧基线和恢复选择器。
+Session、Goal 和 Agent 隔离保持不变，切换命令目录不授予工作或发布权限。
+This replaces per-request input-history proof, not the capture integrity check.
+It preserves native providers, authentication, endpoints and connection mode,
+including implicit history. No input diagnostics or forced HTTP is required.
+Unreported downstream output loss or missed/externally disabled hooks can escape
+detection; this is an engineering assumption, not measured retention or a model ACK.
+
+Read back native hook discovery/trust and the generated guard options, then
+verify cold full, warm delta after completed reader delivery,
+resume and compaction recovery on the actual host. The persistent instruction
+names `quota context-read --codex-context-root ...` when an entire hook is lost;
+lookup is read-only and subsequent pages pin the original file/hash. It never
+readmits or spends. Normal native trust/settings UI remains the activation and
+error surface; failed setup keeps the full path. Explicit off stops projection.
+Replacing machine configuration also invalidates reuse, so an off/on round trip
+cannot reuse a baseline that missed lifecycle events while disabled.
+An existing decision-handoff socket may use this same capture. Handoff validates
+and releases the immutable original first; native projection follows release.
+It does not create a second checkpoint or change the handoff's failure/recovery
+rules. If interrupted while held, consume the original full continuation packet.
+
+For a host that already saved the quota decision before invoking Codex, present
+that immutable snapshot from the native tool instead of running its guard again:
+
+```sh
+loopx --format json quota context-project --context-delivery on --codex-app \
+  --capture-file <original-quota-json> --capture-sha256 <original-sha256> \
+  --goal-id <goal> --agent-id <agent> --turn-instance-id <original-turn> \
+  --codex-context-root <private-context-root> --decision-output-root <private-capture-root>
+```
+
+The JSON response supplies `mode`, the digest-pinned read `command`, the target
+when available, and an original full `recovery` reference. Cold mode delivers
+complete context plus its target; a warm delta names its native-hook continuity
+basis. Follow every page and reconstruct before dependent work. Optional codec
+or delivery-cache failure after recovery publication falls back to that same
+full capture. Enabled native preparation or unsafe recovery publication fails
+with `ok: false`, `quota_decision_transport_failed`, and the original `recovery`
+reference and receipt; follow that explicit reference instead of a session lookup.
+Invalid source hash or Goal/Agent/Turn refuses publication. This is integrity-checked presentation of
+the caller's snapshot, not fresh authority, registry lookup, installation,
+admission or accounting. The original file stays unchanged; generated caches
+remain private. A missing projection command can use `quota context-read` with
+the original file/hash. Set `--context-delivery off` and remove context options from generated host
+configuration to restore ordinary full-read instructions. Remove only these generated hook entries and
+appended recovery instruction from native configuration. Preserve unrelated
+diagnostics, providers, hooks and settings; the CLI does
+not edit host configuration. No stored decision or receipt is rewritten.
+To roll back, remove the context/capture options from this bootstrap and remove
+only the generated hooks/recovery instruction from the native configuration.
+Existing captures remain private recovery evidence. This opt-in does not grant
+execution authority or prove installed App adoption or net token savings.
+
 ## Template
 
 Generate the persistent prompt from the installed runtime:
@@ -514,6 +723,19 @@ For every automatic heartbeat turn, the agent-facing checklist is:
 
 1. Guard first: `quota should-run --turn-instance-id <HEARTBEAT_TURN_ID>` using
    this trigger's `<current_time_iso>` and reusing it for same-heartbeat retries.
+   If the caller has already chosen the unfinished work for this new Turn,
+   append `--todo-id <chosen-id>` to that first guard. This requests current
+   qualification and complete required context in one call; it does not adopt
+   the previous Turn's authority, read coverage or settlement. Read the current
+   contract before work and follow rejection/recovery when the choice is stale
+   or gated. When the choice is unknown, discover candidates and then use the
+   returned `selection_command`. Never guess a Todo or change an existing Turn
+   binding to avoid a read. Same-Turn compaction alone does not start this flow.
+   若本次新 Turn 已明确继续哪项未完成工作，可在首次 guard 中直接附加
+   `--todo-id <chosen-id>`，一次取得当前资格及必要上下文。旧任务引用不继承旧
+   权限、阅读覆盖或结算身份；仍须读取当前合同，过期或受限时按返回结果恢复。
+   尚未选定工作则先发现候选，再用 `selection_command`；不猜测任务、不为少读
+   一次而更换既有 Turn 绑定，同一 Turn 的压缩恢复也不触发这条新准入路径。
    If `loopx` is not initially on PATH, export `$HOME/.local/bin:$PATH`
    and run the local installer fallback before declaring preflight failure.
 2. If `should_run=false` with `state=operator_gate`, ask the user/controller the
@@ -521,9 +743,11 @@ For every automatic heartbeat turn, the agent-facing checklist is:
    Every heartbeat guard commits one idempotent receipt. If
    `effective_action=monitor_quiet_skip`, it also commits the no-spend stall
    observation and returns the follow-up decision; do not append another manual
-   poll. Return quiet `DONT_NOTIFY` if it remains monitor-only. Keep monitor
-   todos visible but do no delivery edits and no spend until material evidence
-   changes or the guard exposes `autonomous_replan_required` /
+   poll. For a monitor-only turn with `DONT_NOTIFY`, leave chat quiet. If the
+   host requires a completion result, use its complete quiet result without
+   additional chat text. A bare decision or skip explanation is not a host
+   result. Keep monitor todos visible and do no delivery edits or spend until
+   material evidence changes or the guard exposes `autonomous_replan_required` /
    `execution_obligation.must_attempt_work=true`.
 3. For `notify_user_on_open_todo=true`, follow the current
    `interaction_contract.user_channel` for the concrete notice and cooldown.

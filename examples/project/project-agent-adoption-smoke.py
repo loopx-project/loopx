@@ -23,6 +23,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from tests.control_plane.cli_output_fixture import read_cli_context_for_oracle  # noqa: E402
+
 from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
 
 GOAL_ID = "adoption-main-control"
@@ -110,7 +112,8 @@ def run_cli(root: Path, registry_path: Path, *args: str, check: bool = True) -> 
         text=True,
         capture_output=True,
     )
-    return json.loads(result.stdout)
+    body, _ = read_cli_context_for_oracle(result.stdout)
+    return json.loads(body)
 
 
 def quota_should_run(
@@ -129,8 +132,6 @@ def quota_should_run(
         "--goal-id",
         GOAL_ID,
         *context_args,
-        "--scan-root",
-        str(project),
     )
 
 
@@ -145,6 +146,25 @@ def assert_adoption(provider: str) -> None:
         root = Path(tmp)
         registry_path = write_planned_fixture(root)
         project = root / "project"
+
+        add_gate = (
+            "todo", "add", "--goal-id", GOAL_ID, "--role", "user",
+            "--task-class", "user_gate", "--global-gate", "--text", USER_TODO,
+        )
+        state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+        before_state, before_registry = state.read_bytes(), registry_path.read_bytes()
+        refused = run_cli(root, registry_path, *add_gate, check=False)
+        assert refused["ok"] is False, refused
+        assert refused["error_code"] == "canonical_authority_required", refused
+        assert state.read_bytes() == before_state
+        assert registry_path.read_bytes() == before_registry
+        import_fixture_authority(registry_path, GOAL_ID, provider=provider)
+        imported = run_cli(root, registry_path, "todo", "list", "--goal-id", GOAL_ID)
+        assert imported["authority_read"]["source_authority"] == f"{provider}_v0", imported
+        assert imported["authority_read"]["legacy_fallback_used"] is False, imported
+        assert len(imported["todos"]) == 1, imported
+        original = imported["todos"][0]
+        assert original["text"] == AGENT_TODO and original["status"] == "open", original
 
         missing_context_quota = quota_should_run(
             root,
@@ -184,24 +204,6 @@ def assert_adoption(provider: str) -> None:
         assert first_quota["agent_todo_summary"]["open_count"] == 1, first_quota
         assert first_quota["selected_todo"]["text"] == AGENT_TODO, first_quota
 
-        add_gate = (
-            "todo", "add", "--goal-id", GOAL_ID, "--role", "user",
-            "--task-class", "user_gate", "--global-gate", "--text", USER_TODO,
-        )
-        state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
-        before_state, before_registry = state.read_bytes(), registry_path.read_bytes()
-        refused = run_cli(root, registry_path, *add_gate, check=False)
-        assert refused["ok"] is False, refused
-        assert refused["error_code"] == "canonical_authority_required", refused
-        assert state.read_bytes() == before_state
-        assert registry_path.read_bytes() == before_registry
-        import_fixture_authority(registry_path, GOAL_ID, provider=provider)
-        imported = run_cli(root, registry_path, "todo", "list", "--goal-id", GOAL_ID)
-        assert imported["authority_read"]["source_authority"] == f"{provider}_v0", imported
-        assert imported["authority_read"]["legacy_fallback_used"] is False, imported
-        assert len(imported["todos"]) == 1, imported
-        original = imported["todos"][0]
-        assert original["text"] == AGENT_TODO and original["status"] == "open", original
         todo_payload = run_cli(root, registry_path, *add_gate)
         assert todo_payload["ok"] is True, todo_payload
         assert todo_payload["added"] is True, todo_payload
@@ -210,7 +212,7 @@ def assert_adoption(provider: str) -> None:
                        "--todo-id", gate_id)["todo"]
         assert gate["text"] == USER_TODO and gate["global_gate"] is True, gate
 
-        status_after_todo = run_cli(root, registry_path, "status", "--scan-root", str(project))
+        status_after_todo = run_cli(root, registry_path, "status", )
         item_after_todo = attention_item(status_after_todo)
         assert item_after_todo["waiting_on"] == "controller", item_after_todo
         assert item_after_todo["user_todos"]["open_count"] == 1, item_after_todo
@@ -270,7 +272,7 @@ def assert_adoption(provider: str) -> None:
         ), approved_quota
         assert "--priority P1" in approved_quota["todo_write_hint"]["agent_todo_command_template"], approved_quota
 
-        packet = run_cli(root, registry_path, "review-packet", "--goal-id", GOAL_ID, "--scan-root", str(project))
+        packet = run_cli(root, registry_path, "review-packet", "--goal-id", GOAL_ID, )
         assert packet["ok"] is True, packet
         assert packet["kind"] == "codex", packet
         assert packet["operator_gate_approved_handoff"] is True, packet

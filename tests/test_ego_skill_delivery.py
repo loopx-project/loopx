@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -54,6 +55,8 @@ def test_refresh_copies_installed_skill_without_editing_app_and_reuses_idle_task
     assert "without another ownership-confirmation question" in text
     assert "Stop immediately for active user interaction" in text
     assert "explicit pause" in text and "unrelated space" in text
+    assert "A refused claim never permits replacement" in text
+    assert "Finish exactly\nonce per space lifetime" in text
     assert "grants no new operation" in text
     assert "Finish once; protect user tabs." in text
     assert (entry / "references/api.md").read_text() == "Version-one API.\n"
@@ -61,6 +64,87 @@ def test_refresh_copies_installed_skill_without_editing_app_and_reuses_idle_task
         delivery.reconcile_ego_browser_skill(skills_dir=skills, execute=True)["status"]
         == "unchanged"
     )
+
+
+@pytest.mark.parametrize(
+    "scenario,expected",
+    [
+        (
+            {"ownership": "agent", "historicalStop": True},
+            ["task", "tabs", "page", "snapshot"],
+        ),
+        (
+            {"ownership": "user", "handback": True},
+            ["claim", "tabs", "page", "snapshot"],
+        ),
+        ({"ownership": "user"}, []),
+        ({"ownership": "inactive"}, []),
+        ({"ownership": "agent", "pause": True}, []),
+        ({"ownership": "agent", "userStep": True}, []),
+        ({"ownership": "agent", "wrongTask": True}, []),
+        ({"ownership": "agent", "liveStop": True}, ["task"]),
+        ({"ownership": "user", "handback": True, "liveStop": True}, ["claim"]),
+        (
+            {"ownership": "agent", "unmanaged": True},
+            ["task", "tabs", "adopt", "snapshot"],
+        ),
+    ],
+)
+def test_installed_continuation_recipe_honors_current_control(host, scenario, expected):
+    """Run the delivered recipe; history cannot substitute for live control.
+
+    This validates executable guidance, not model compliance or a live human
+    takeover. Native stops after inventory must never cause another recovery.
+    """
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is required to exercise the delivered Ego recipe")
+    _, _, _, entry, skills = host
+    assert workflow_skill_install(skills_dir=skills, execute=True)["ok"]
+    recipe = (
+        (entry / "SKILL.md").read_text().split("```js\n", 1)[1].split("\n```", 1)[0]
+    )
+    harness = r"""
+const knownSpaceId = 7, knownTaskId = "browser-check";
+const knownPageUrl = "https://example.com/check";
+const explicitPauseOrControlReservation = !!scenario.pause;
+const unresolvedUserStep = !!scenario.userStep;
+const qualifiedNormalHandback = !!scenario.handback;
+const actions = [];
+const page = {async snapshot(){actions.push("snapshot");return "resumed";}};
+const task = {
+  async tabs(){actions.push("tabs");return [{url:knownPageUrl,
+    label:scenario.unmanaged ? undefined : "p4",page}];},
+  page(label){if(label!=="p4")throw Error("old label reused");actions.push("page");return page;},
+  async adopt(original){if(original!==page)throw Error("wrong page");actions.push("adopt");return page;}
+};
+let inventoryReads=0;
+async function listTaskSpaces(){inventoryReads++;return [{id:knownSpaceId,
+  taskId:scenario.wrongTask ? "unrelated" : knownTaskId,ownership:scenario.ownership}];}
+async function resolve(action){actions.push(action);if(scenario.liveStop)throw Error("native control stop");return task;}
+async function taskSpace(){return resolve("task");}
+async function claimTaskSpace(){return resolve("claim");}
+(async()=>{try{await eval("(async()=>{"+recipe+"})()");}catch{}
+  console.log(JSON.stringify({actions,inventoryReads}));})();
+"""
+    result = subprocess.run(
+        [
+            node,
+            "-e",
+            "const scenario="
+            + json.dumps(scenario)
+            + ";const recipe="
+            + json.dumps(recipe)
+            + ";"
+            + harness,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10,
+    )
+    observed = json.loads(result.stdout.splitlines()[-1])
+    assert observed == {"actions": expected, "inventoryReads": 1}
 
 
 def test_loopx_refresh_tracks_new_vendor_version_and_rollback_follows_current_source(
@@ -112,9 +196,16 @@ def test_guidance_correction_refreshes_existing_install_without_version_bump(
     current_policy = delivery._POLICY
     # The old policy is a completed managed installation, not a user edit.
     # Corrected guidance must replace it even when Ego and LoopX versions match.
+    previous_policy = (
+        "\n\n## LoopX: continuing an authorized browser task\n\n"
+        "Create one replacement only after successful finish({ keep: [] }).\n"
+        "Absence alone does not prove normal closure.\n"
+    )
     with monkeypatch.context() as old:
-        old.setattr(delivery, "_POLICY", "\n\nPrevious managed continuation policy.\n")
+        old.setattr(delivery, "_POLICY", previous_policy)
         assert workflow_skill_install(skills_dir=skills, execute=True)["ok"]
+    old_marker = json.loads((entry / ".loopx-ego-skill.json").read_text())
+    assert (entry / "SKILL.md").read_text().endswith(previous_policy)
     assert (
         workflow_skill_install(skills_dir=skills)["ego_browser"]["status"]
         == "would_refresh"
@@ -125,6 +216,11 @@ def test_guidance_correction_refreshes_existing_install_without_version_bump(
         entry / "SKILL.md"
     ).read_text() == upstream.decode().rstrip() + current_policy
     marker = json.loads((entry / ".loopx-ego-skill.json").read_text())
+    assert marker["loopx_version"] == old_marker["loopx_version"]
+    assert (
+        "Absence alone does not prove normal closure"
+        not in (entry / "SKILL.md").read_text()
+    )
     assert (
         marker["policy_sha256"] == hashlib.sha256(current_policy.encode()).hexdigest()
     )

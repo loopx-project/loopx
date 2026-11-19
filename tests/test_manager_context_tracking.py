@@ -1,6 +1,7 @@
 """Handoff states, durable receipts and audience separation through real stores."""
 
 import json
+import shlex
 import subprocess
 import sys
 from argparse import Namespace
@@ -42,11 +43,17 @@ def test_delivery_read_decision_are_separate_and_restart_safe(fixture, capsys):
 
     first = status()
     assert first["delivery"]["at"] and first["read"]["status"] == "not_recorded"
-    turn_start_hook(root, registry, "research", "worker").producer()
+    hook = turn_start_hook(root, registry, "research", "worker")
+    assert hook.producer()["agent_read_required"] is True
+    argv = shlex.split(hook.required_read["command"])
+    assert argv[argv.index("manager-inbox") + 1] == "read"
     assert status()["read"]["status"] == "not_recorded"
     args = Namespace(manager_inbox_action="read", goal_id="research", agent_id="worker")
     assert handle_manager_inbox(args, registry, root) == 0
-    assert json.loads(capsys.readouterr().out)["items"][0]["message"] == turn["message"]
+    read = json.loads(capsys.readouterr().out)
+    assert read["items"][0]["message"] == turn["message"]
+    assert "Explain unfamiliar terms on first use" in read["instruction"]
+    assert "Preserve the original author, audience and facts" in read["instruction"]
     read_at = status()["read"]["at"]
     record_read(root, pending(root, "research", "worker")["items"])
     assert status()["read"]["at"] == read_at
@@ -60,6 +67,79 @@ def test_delivery_read_decision_are_separate_and_restart_safe(fixture, capsys):
         "replayed"
     ]
     assert status()["delivery"]["at"] == first["delivery"]["at"]
+
+
+def test_next_turn_requires_reading_a_durable_native_child_result(fixture, capsys):
+    from loopx.capabilities.multi_subagent.native_child_receipts import record_native_child
+    from loopx.rollout_event_log import append_rollout_event, build_rollout_event, rollout_event_log_path
+
+    root, registry, _session, _turn, _target = fixture
+    turn = "turn-native-result"
+    append_rollout_event(rollout_event_log_path(root, "research"), build_rollout_event(
+        goal_id="research", event_kind="quota_should_run", agent_id="worker",
+        run_id=turn, todo_id="todo_native_1", status="normal_run",
+        details={"todo_id": "todo_native_1", "settlement_effect_id": f"research:worker:todo_native_1:{turn}"},
+    ))
+    identity = dict(runtime_root=root, goal_id="research", agent_id="worker",
+                    turn_instance_id=turn, operation_id="operation-native-result",
+                    configured_limit=3, execute=True, _host_observed=True)
+    record_native_child(**identity, stage="decision", operation="spawn",
+                        outcome="started", entrypoint_id="codex_native_tools")
+    record_native_child(**identity, stage="result", outcome="completed",
+                        _host_result_text="The independent check found one actionable boundary.")
+    hook = turn_start_hook(root, registry, "research", "worker")
+    observed = hook.producer()
+    assert observed["status"] == "observed"
+    assert observed["agent_read_required"] is True
+    assert observed["observation_count"] == 1
+
+    args = Namespace(manager_inbox_action="read", goal_id="research", agent_id="worker")
+    assert handle_manager_inbox(args, registry, root) == 0
+    read = json.loads(capsys.readouterr().out)
+    [result] = read["native_child_results"]["items"]
+    assert result["operation_id"] == identity["operation_id"]
+    assert result["text"] == "The independent check found one actionable boundary."
+    assert "native-child acknowledge-result" in result["acknowledge_command"]
+
+    # Delivery does not consume the result; without acknowledgement, restart
+    # projects the same stable identity again on the next Turn.
+    replay = turn_start_hook(root, registry, "research", "worker").producer()
+    assert replay["agent_read_required"] is True
+    assert replay["observation_count"] == 1
+
+
+def test_native_result_continuation_runs_via_manager_inbox_cli(fixture, capsys):
+    from loopx.capabilities.multi_subagent.native_child_receipts import record_native_child
+    from loopx.rollout_event_log import append_rollout_event, build_rollout_event, rollout_event_log_path
+
+    root, registry, _session, _turn, _target = fixture
+    turn = "turn-native-result-continuation"
+    append_rollout_event(rollout_event_log_path(root, "research"), build_rollout_event(
+        goal_id="research", event_kind="quota_should_run", agent_id="worker",
+        run_id=turn, todo_id="todo_native_1", status="normal_run",
+        details={"todo_id": "todo_native_1", "settlement_effect_id": f"research:worker:todo_native_1:{turn}"},
+    ))
+    identity = dict(runtime_root=root, goal_id="research", agent_id="worker",
+                    turn_instance_id=turn, operation_id="operation-native-result",
+                    configured_limit=3, execute=True, _host_observed=True)
+    record_native_child(**identity, stage="decision", operation="spawn",
+                        outcome="started", entrypoint_id="codex_native_tools")
+    record_native_child(**identity, stage="result", outcome="completed",
+                        _host_result_text="Continuation preserves the original result.")
+    metadata, = (root / ".local" / "native-child-result-inbox").glob("*/*.json")
+    from hashlib import sha256
+    scope = sha256(json.dumps(["native-child-result", str(metadata.parent.resolve())],
+                              separators=(",", ":")).encode()).hexdigest()
+    args = Namespace(manager_inbox_action="read", goal_id="research", agent_id="worker",
+                     cursor=f"native-child:1:{scope}:ncr_{'0' * 32}")
+    assert handle_manager_inbox(args, registry, root) == 0
+    result = json.loads(capsys.readouterr().out)
+    [native] = result["native_child_results"]["items"]
+    assert native["result_id"] == metadata.stem
+    assert result["items"] == [] and "unfinished_delegations" not in result
+    assert result["native_child_results"]["next_cursor"] is None
+    readback = json.loads(metadata.read_bytes())
+    assert readback["delivery"]["delivery_count"] == 1
 
 
 def test_legacy_decision_is_not_a_fabricated_read(fixture):
@@ -334,6 +414,26 @@ def test_cli_links_generated_core_id_and_reads_live_state(tmp_path, monkeypatch,
     cli("manager-inbox", "link", *inbox, "--evidence-id", ref)
     follow = cli("manager-inbox", "read", "--goal-id", "goal-a", "--agent-id", "agent-a")["items"][0]["receiver_followthrough"]
     assert follow["evidence_refs"] == [ref]
+
+    # Archiving completed work changes its storage lane, not the request's
+    # explicit link or the receiver's need to return an answer.
+    link_bytes = path.read_bytes()
+    cli("todo", "complete", "--goal-id", "goal-a", "--todo-id", tid,
+        "--agent-id", "agent-a", "--evidence", "Verified isolated result", "--no-follow-up")
+    cli("todo", "archive-completed", "--goal-id", "goal-a",
+        "--max-active-done", "0", "--execute")
+    archived = cli("todo", "list", "--goal-id", "goal-a", "--todo-id", tid)
+    assert archived["todo"]["archive_state"] == "archive"
+    assert archived["todo"]["status"] == "done"
+    follow = cli("manager-inbox", "read", "--goal-id", "goal-a", "--agent-id", "agent-a")["items"][0]["receiver_followthrough"]
+    assert follow["step"] == "review_request_work"
+    assert [(t["todo_id"], t["title"], t["status"]) for t in follow["linked_todos"]] == [
+        (tid, "[P1] Verified current work", "done")
+    ]
+    assert follow["recorded_decision"] == "adopt" and follow["answer_owed"] is True
+    assert cli("manager-inbox", "status", *inbox)["rows"][0]["linked_todos"] == follow["linked_todos"]
+    assert path.read_bytes() == link_bytes
+    assert cli("todo", "list", "--goal-id", "goal-a", "--todo-id", tid)["authority_read"]["provider_revision"] == archived["authority_read"]["provider_revision"]
     assert state.exists()
 
 
@@ -430,3 +530,59 @@ def test_receiver_keeps_unavailable_work_unknown_without_replaying_or_hiding_oth
     assert page[rid]["warnings"] == ["links_unreadable_or_conflicting"]
     assert page[other]["receiver_followthrough"]["step"] == "assess_request"
     assert path.read_text() == "{damaged"
+
+
+def test_history_links_are_scoped_and_do_not_hide_other_work(fixture, monkeypatch):
+    from loopx.control_plane.collaboration.peers import read_inbox
+    import loopx.control_plane.collaboration.links as links
+
+    root, registry, session, turn, target = fixture
+    active = {"todo_id": "todo_active", "claimed_by": "worker", "status": "open", "text": "Current work"}
+    history = {"todo_id": "todo_history", "claimed_by": "worker", "status": "done", "text": "Verified history"}
+    reads, unavailable = [], False
+
+    def core_read(**kwargs):
+        tid = kwargs.get("todo_id")
+        reads.append(tid)
+        if tid is None:
+            return {"ok": True, "todos": [active]}
+        assert tid == "todo_history"
+        if unavailable:
+            raise ValueError("Exact source unavailable")
+        return {"ok": True, "todo": history}
+
+    monkeypatch.setattr(links, "list_goal_todos", core_read)
+    ids = []
+    for key, tid in [("active", "todo_active"), ("history-1", "todo_history"), ("history-2", "todo_history")]:
+        rid = deliver(root, registry, session=session,
+                      turn=dict(turn, client_turn_id=key), request=target)["request_id"]
+        acknowledge(root, "research", "worker", rid, "adopt", "Use existing work")
+        link(root, registry, "research", "worker", rid, [tid], [])
+        ids.append(rid)
+    items = {item["request_id"]: item for item in read_inbox(root, registry, "research", "worker")["items"]}
+
+    def observe():
+        reads.clear()
+        rows = links.receiver_work_observations(root, registry, [items[rid] for rid in ids])
+        # A later request can need history after the Goal queue is cached;
+        # repeated links need no second exact lookup or complete history export.
+        assert reads == [None, "todo_history"]
+        assert rows[0]["linked_todos"][0]["status"] == "open"
+        assert rows[0]["evidence_unavailable"] is False
+        return rows
+
+    assert [row["linked_todos"][0]["status"] for row in observe()] == ["open", "done", "done"]
+    unavailable = True
+    missing = observe()[1:]
+    assert all(row["evidence_unavailable"] for row in missing)
+    assert all(row["linked_todos"][0]["status"] == "unknown" for row in missing)
+    assert all(row["linked_todos"][0]["title"] is None for row in missing)
+    unavailable = False
+    assert [row["linked_todos"][0]["status"] for row in observe()] == ["open", "done", "done"]
+    history["claimed_by"] = "peer"
+    history["text"] = "Other receiver's private work"
+    foreign = observe()[1:]
+    assert all(row["linked_todos"][0]["status"] == "unknown" for row in foreign)
+    assert "Other receiver's private work" not in json.dumps(foreign)
+    with pytest.raises(ValueError, match="must belong"):
+        link(root, registry, "research", "worker", ids[1], ["todo_history"], [])

@@ -1,4 +1,5 @@
 from copy import deepcopy
+from hashlib import sha256
 import json
 import subprocess
 import sys
@@ -108,25 +109,64 @@ def test_signed_envelope_preserves_context_and_detects_changed_guidance():
     assert turn_envelope_action_signature_document(tampered) != signature
 
 
-def test_large_envelope_keeps_signed_context_reference_and_read_instruction():
+def test_large_envelope_retains_bounded_context_without_a_full_decision_read():
     decision = _full_decision()
     decision["goal_boundary"] = {"execution_profile": {"padding": "x" * 2500}}
     assert build_turn_envelope(decision)["compaction"]["within_budget"] is True
-    decision["interaction_contract"]["agent_context"] = context()
+    expected = context()
+    decision["interaction_contract"]["agent_context"] = expected
     envelope = build_turn_envelope(decision)
-    reference = envelope["agent_context"]
-    assert reference["detail_ref"] == "full_decision.interaction_contract.agent_context"
-    assert reference["scope"] == SCOPE
-    assert "read capability context before planning" in reference["instruction"]
-    assert envelope["compaction"]["within_budget"] is True
+    assert envelope["agent_context"] == expected
+    assert "detail_ref" not in envelope["agent_context"]
+    assert envelope["compaction"]["budget_bytes"] == 8192
     assert envelope["action_signature"]["matches"] is True
+    original_signature = turn_envelope_action_signature_document(envelope)
     decision["interaction_contract"]["agent_context"]["contributions"][0][
         "guidance"
     ] = ["Changed"]
-    assert (
-        build_turn_envelope(decision)["agent_context"]["content_hash"]
-        != reference["content_hash"]
-    )
+    assert turn_envelope_action_signature_document(
+        build_turn_envelope(decision)
+    ) != original_signature
+
+
+@pytest.mark.parametrize("legacy_reference", [False, True])
+@pytest.mark.parametrize("provider_failure", [False, True])
+def test_shared_host_delivers_signed_context_and_original_legacy_detail(legacy_reference, provider_failure):
+    from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
+
+    decision = _full_decision()
+    full_context = context()
+    if provider_failure:
+        full_context["failures"] = [{"hook_id": "fixture.unavailable", "code": "context_provider_failed"}]
+    decision["interaction_contract"]["agent_context"] = full_context
+    envelope = build_turn_envelope(decision, captured_decision_path="private capture/decision.json")
+    if legacy_reference:
+        # A supported historical carrier: delivery=projected also occurs on
+        # complete context; only detail_ref denotes an omitted contribution.
+        envelope["agent_context"] = {
+            **{k: full_context[k] for k in ("schema_version", "phase", "scope", "target", "authority", "delivery")},
+            "content_hash": "sha256:" + sha256(json.dumps(full_context, ensure_ascii=False,
+                sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+            "detail_ref": "full_decision.interaction_contract.agent_context",
+            "instruction": "Read original capability context before planning.",
+        }
+        signature = turn_envelope_action_signature_document(envelope)
+        digest = "sha256:" + sha256(json.dumps(signature, ensure_ascii=False,
+            sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        envelope["action_signature"].update(source_hash=digest, envelope_hash=digest)
+    authority = extract_turn_authority({"turn_envelope": envelope})
+    assert authority["agent_context"] == envelope["agent_context"]
+    prompt = render_prompt(authority)
+    assert json.dumps(envelope["agent_context"], ensure_ascii=False,
+                      sort_keys=True, separators=(",", ":")) in prompt
+    # The captured source accompanies current inline work context as well as
+    # historical context references; both retain the original signed carrier.
+    assert authority["detail_ref"] == envelope["detail_ref"]
+    assert authority["action_signature"] == envelope["action_signature"]
+    invalid = deepcopy(envelope)
+    invalid["agent_context"]["scope"]["agent_id"] = "different-agent"
+    with pytest.raises(ValueError, match="action signature"):
+        extract_turn_authority({"turn_envelope": invalid})
 
 
 def test_managed_request_and_return_carry_parent_context_without_fabricating_completion():
@@ -290,6 +330,90 @@ def test_native_cli_is_read_only_and_does_not_claim_native_receipts(tmp_path, ph
     rejected = subprocess.run(command, capture_output=True, text=True)
     assert rejected.returncode == 1
     assert json.loads(rejected.stdout)["ok"] is False
+
+
+@pytest.mark.parametrize(
+    ("binding_length", "model"),
+    [(94, "gpt-6.1-terra"), (95, "gpt-6.1-terra"), (95, "m" * 160)],
+)
+def test_native_cli_keeps_complete_context_with_large_bound_routes(
+    tmp_path, binding_length, model,
+):
+    config_ref = ".loopx/config/delegations.json"
+    config = tmp_path / config_ref
+    config.parent.mkdir(parents=True)
+    bindings = []
+    for index in range(3):
+        prefix = f"binding-{index}-"
+        bindings.append({
+            "id": prefix + "a" * (binding_length - len(prefix)),
+            "agent_id": f"worker-{index}-" + "a" * (40 if index else 41),
+            "todo_id": f"todo_review000{index}",
+            "requesters": [SCOPE["agent_id"]],
+            "workspace": str(tmp_path / f"worker-{index}"),
+            "host_args": ["--host", "codex-cli"],
+            "timeout_seconds": 60,
+            "output_refs": ["result.json"],
+        })
+    config.write_text(json.dumps({
+        "schema_version": "loopx_local_delegation_v0", "bindings": bindings,
+    }))
+    model_config = {"model": model, "reasoning_effort": "max"}
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({
+        "schema_version": 1,
+        "goals": [{
+            "id": SCOPE["goal_id"], "repo": str(tmp_path), "status": "active",
+            "registered_agents": [SCOPE["agent_id"], *(b["agent_id"] for b in bindings)],
+            "spawn_policy": {
+                **POLICY, "max_children": 3, "model_config": model_config,
+                "execution_config": config_ref,
+            },
+        }],
+    }))
+    command = [
+        sys.executable, "-m", "loopx.cli",
+        "--registry", str(registry), "--runtime-root", str(tmp_path / "runtime"),
+        "agent-context", "--goal-id", SCOPE["goal_id"], "--agent-id", SCOPE["agent_id"],
+        "--format", "json",
+    ]
+    for phase in ("before_plan", "before_delegate", "after_delegate_result"):
+        args = [*command, "--phase", phase]
+        if phase == "after_delegate_result":
+            args += [
+                "--native-child-operation", "followup",
+                "--native-child-outcome", "agent_thread_limit_reached",
+            ]
+        result = subprocess.run(args, capture_output=True, text=True, check=True)
+        payload = json.loads(result.stdout)
+        assert payload["ok"] is True
+        context = payload["agent_context"]
+        assert context["phase"] == phase
+        assert context["authority"] == "guidance_only"
+        assert context["failures"] == []
+        [contribution] = context["contributions"]
+        assert contribution["guidance"]
+        facts = contribution["facts"]
+        assert facts["model_preference"] == model_config
+        assert len(json.dumps(contribution, separators=(",", ":")).encode()) <= 2048
+        assert len(json.dumps(context, separators=(",", ":")).encode()) <= 3072
+        if phase == "after_delegate_result":
+            assert "delegation_context" not in facts
+            assert facts["delegation_receipts"]["operation_receipts"] == {"observed": 0}
+            assert facts["native_host_capacity"]["retry_same_turn"] is False
+            assert facts["receipt_observation"] == "not_supplied"
+        else:
+            routes = facts["delegation_context"]
+            assert routes["execution_scope"] == "bound_delegation"
+            assert routes["preflight"] == "required"
+            assert routes["authorized_count"] == 3
+            assert routes["projected_count"] == 2
+            assert routes["routes_truncated"] is True
+            assert [route["binding_id"] for route in routes["routes"]] == [
+                b["id"] for b in bindings[:2]
+            ]
+            assert all(route["readiness"] == "unknown" for route in routes["routes"])
+        assert str(tmp_path) not in result.stdout
 
 
 def test_native_cli_projects_typed_capacity_exhaustion_without_raw_error(tmp_path):

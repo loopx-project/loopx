@@ -1,3 +1,4 @@
+import {ContextHelp} from "./context-help";
 import {useEffect, useRef, useState} from "react";
 import {readLoopXTeamWork, type DelegationDependency, type DelegationReadback} from "../../data/chat";
 import {changedRange, comparisonSource, currentComparisonSelection, preferredComparisonIndex, type ComparisonSelection} from "./team-artifact-comparison";
@@ -69,9 +70,9 @@ export function GoalTeamComparison({sessionId, result, zh}: {
             : <TeamArtifactContent artifact={pane.artifact} label={`${pane.title}: ${pane.artifact.ref}`}/>}
         </article>)}
       </div>
-      <p>{before.text === after.text ? (zh ? "两个版本的文本相同。" : "Both versions contain the same text.")
+      <ContextHelp label={zh ? "版本比较范围" : "Version comparison scope"}><p>{before.text === after.text ? (zh ? "两个版本的文本相同。" : "Both versions contain the same text.")
         : raw ? (zh ? "标记文本变化所在范围；不代表结论正确或已被采用。" : "Marks the range containing text changes; does not establish correctness or adoption.")
-        : (zh ? "正文对照；验收与采用见版本关系。" : "Read the reports; see lineage for acceptance and adoption.")}</p>
+        : (zh ? "正文对照；验收与采用见版本关系。" : "Read the reports; see lineage for acceptance and adoption.")}</p></ContextHelp>
       <details><summary>{zh ? "核验的版本" : "Verified versions"}</summary>
         <code>{before.ref} · sha256:{before.sha256}</code><code>{after.ref} · sha256:{after.sha256}</code>
       </details>

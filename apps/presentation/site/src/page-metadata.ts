@@ -26,12 +26,12 @@ export const pageMetadata = {
   home: {
     path: "",
     en: {
-      title: "LoopX — Stateful control plane for long-running AI agents",
-      description: "Keep long-running AI agents on track across sessions with durable goals, tasks, human approval gates and recovery. Works with Codex, Claude Code and other agent runtimes.",
+      title: "LoopX — Start long-running agent work with one goal",
+      description: "Tell Codex, Claude Code or another agent one natural-language goal. LoopX keeps the work, decisions, verification and recovery durable across sessions.",
     },
     zh: {
-      title: "LoopX — 长程 AI Agent 的有状态控制面",
-      description: "让 Codex、Claude Code 等 Agent 跨会话持续推进任务，用持久目标、任务看板、人工审批与恢复机制管理长程工作。",
+      title: "LoopX — 从一个目标开始长程 Agent 工作",
+      description: "给 Codex、Claude Code 等 Agent 一个自然语言目标。LoopX 跨会话保留工作、判断、验证结果与恢复状态。",
     },
   },
   sweMarathon: {

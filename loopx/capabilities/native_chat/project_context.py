@@ -1,7 +1,7 @@
 """Filesystem observations for the shared project conversation owner.
 
-Only explicitly configured Chat workspace roots are eligible. This is neither
-a Goal registry nor a transport-owned Session authority. Each use observes the
+Only explicitly configured Chat workspace roots are eligible.
+Each use observes the
 roots again, so a missing root or retargeted symlink cannot retain a Session's grant.
 """
 
@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Mapping
 
 from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ...presentation.answer_instruction import conversation_answer_instruction
+
+if TYPE_CHECKING:
+    from ...chat_store import ChatSessionStore
 
 
 PROJECT_CONVERSATION_OBJECTIVE = (
@@ -30,6 +33,16 @@ PROJECT_WORK_OBJECTIVE = (
     "do not bypass material authority, intake, ranking or readback gates. The grant "
     "does not create a LoopX Goal, scheduling, delegation or portfolio access. "
     "Do not create an implicit Goal or borrow the global manager identity."
+)
+
+_ISOLATED_WORK_GUIDANCE = (
+    "System temporary directories are outside this workspace-only grant; shell "
+    "here-documents can fail before the intended file write. Prefer the patch "
+    "tool or direct file writes inside the granted workspace. For dependent "
+    "steps, inspect the preceding tool result and exit code, then read back the "
+    "required artifact before starting the next step. Awaiting a tool call does "
+    "not mean its command succeeded. If a prerequisite fails, repair and verify "
+    "it before continuing; keep independent work separate."
 )
 
 
@@ -62,10 +75,11 @@ class ChatProjectContexts:
 
     def resolve(self, project_ref: str, *, session_context: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
-            return effect_runtime_result("collaboration.project.context", {
+            result: dict[str, Any] = effect_runtime_result("collaboration.project.context", {
                 "project_ref": project_ref, "available": self.available(),
                 **({"session_context": session_context} if session_context is not None else {}),
             })
+            return result
         except EffectRuntimeRejected as exc:
             raise ValueError(str(exc)) from exc
 
@@ -74,7 +88,7 @@ class ChatProjectContexts:
         if isinstance(steward, dict):
             if self.conversation_bindings is None:
                 raise ValueError("bound steward authority is unavailable")
-            selected = self.conversation_bindings.session_context(steward)
+            selected = self.conversation_bindings.session_context(steward, session=session)
             return self.runtime_context(session, selected)
         saved = session.get("project_context")
         if not isinstance(saved, dict) or session.get("goal_id") is not None:
@@ -82,7 +96,7 @@ class ChatProjectContexts:
         if saved.get("audience") in {"bound_owner", "bound_group"}:
             if self.conversation_bindings is None:
                 raise ValueError("bound project conversation authority is unavailable")
-            selected = self.conversation_bindings.session_context(saved)
+            selected = self.conversation_bindings.session_context(saved, session=session)
         else:
             selected = self.resolve(str(saved.get("project_ref") or ""), session_context=saved)
         return self.runtime_context(session, selected)
@@ -99,6 +113,9 @@ class ChatProjectContexts:
         if session.get("goal_id") is not None or session.get("channel_id") != selected["channel_id"]:
             raise ValueError("project conversation channel mismatch")
         objective = PROJECT_WORK_OBJECTIVE if selected["context"]["grant"] == "workspace_write" else PROJECT_CONVERSATION_OBJECTIVE
+        if (selected["context"]["grant"] == "workspace_write"
+                and selected["context"].get("filesystem_scope") == "workspace_only"):
+            objective += " " + _ISOLATED_WORK_GUIDANCE
         return {"project": Path(selected["context"]["workspace_path"]),
                 "objective": objective + " " + conversation_answer_instruction(),
                 "title": Path(selected["context"]["workspace_path"]).name}
@@ -115,10 +132,13 @@ class ChatProjectContexts:
         session = {"goal_id": "loopx-manager" if steward else None, "channel_id": selected["channel_id"],
                    "project_context": None if steward else selected["context"],
                    "steward_context": selected["context"] if steward else None}
-        return {**session, **self.session_context(session)}
+        # This is a construction plan, not a canonical Session yet. Subsequent
+        # input/recovery validates the stored identity against a fresh binding.
+        return {**session, **self.runtime_context(session, selected)}
 
     @staticmethod
-    def initialize_bound_scope(store, session, *, runtime_root=None):
+    def initialize_bound_scope(store: ChatSessionStore, session: dict[str, Any], *,
+                               runtime_root: Path | None = None) -> dict[str, Any]:
         steward = session.get("steward_context")
         if not steward:
             return session

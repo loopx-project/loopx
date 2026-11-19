@@ -8,6 +8,7 @@ import type {
   LoopXCommand,
 } from '../cli.ts'
 import {
+  GOALBAR_ADMISSION_CLEAR,
   isGoalBarAgentId,
   isGoalBarGoalId,
   isGoalBarSessionId,
@@ -85,7 +86,8 @@ function isContained(root: string, candidate: string): boolean {
 }
 
 function validatedSourcePaths(options: GoalBarSourceRevisionOptions): string[] {
-  if (!isAbsolute(options.cwd) || resolve(options.cwd) !== options.cwd) {
+  // Only the separator spelling may differ; dot segments and repeated separators stay rejected.
+  if (!isAbsolute(options.cwd) || resolve(options.cwd) !== options.cwd.split('/').join(sep)) {
     throw new GoalBarSourceRevisionError('project cwd must be absolute and normalized')
   }
   const paths = [resolve(options.cwd, GOALBAR_PROJECT_REGISTRY)]
@@ -276,6 +278,9 @@ export async function readStableGoalBarModel(
           goalActivation: activation.goalActivation,
           agentStatus: options.agentStatus,
           progress: progress.progress,
+          // Driver admission state is process-local; the service publishes the
+          // live value at read time, exactly as it refreshes agentStatus.
+          continuationAdmission: GOALBAR_ADMISSION_CLEAR,
         },
       },
       sourceRevision: sourceAfter,
@@ -302,7 +307,11 @@ export type GoalBarBindingReadResult =
   | { readonly kind: 'fault'; readonly code: GoalBarReadFaultCode }
 
 export type GoalBarActivationReadResult =
-  | { readonly kind: 'value'; readonly goalActivation: GoalBarActivationV1 }
+  | {
+      readonly kind: 'value'
+      readonly goalActivation: GoalBarActivationV1
+      readonly stateFingerprint?: string
+    }
   | { readonly kind: 'fault'; readonly code: GoalBarReadFaultCode }
 
 export type GoalBarProgressReadResult =
@@ -614,9 +623,15 @@ export async function readGoalBarActivation(
       goalId,
       result.exitCode,
     )
+    const fingerprint = result.payload.observed_state_fingerprint
     return goalActivation === undefined
       ? { kind: 'fault', code: 'activation_read_failed' }
-      : { kind: 'value', goalActivation }
+      : {
+          kind: 'value',
+          goalActivation,
+          ...(typeof fingerprint === 'string' && /^[a-f0-9]{64}$/u.test(fingerprint)
+            ? { stateFingerprint: fingerprint } : {}),
+        }
   } catch (error: unknown) {
     return fixedFault(error, 'activation_read_failed')
   }
@@ -711,6 +726,7 @@ export async function readGoalBarModel(
       goalActivation: activation.goalActivation,
       agentStatus: options.agentStatus,
       progress: progress.progress,
+      continuationAdmission: GOALBAR_ADMISSION_CLEAR,
     },
   }
 }

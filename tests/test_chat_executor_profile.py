@@ -19,7 +19,7 @@ def test_explicit_endpoint_selects_defaults_without_changing_overrides(endpoint)
     expected = (
         {"model": "managed-fixture-model", "reasoning_effort": "low"}
         if endpoint == "dsh"
-        else {"model": "gpt-6-astra", "reasoning_effort": "high"}
+        else {"model": "gpt-6.1-sol", "reasoning_effort": "xhigh"}
     )
     assert manager_model_config(environment, endpoint=endpoint) == expected
     assert manager_model_config(

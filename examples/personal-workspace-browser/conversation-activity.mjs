@@ -10,9 +10,12 @@ export const conversationActivityScenario = {
   id: "conversation-activity",
   async run({ browser, collectCoverage, url }) {
     const streams = new Map();
+    const observations = [];
     const event = (sequence, kind, payload) => `id: ${sequence}\nevent: ${kind}\ndata: ${JSON.stringify({ event_id: String(sequence), sequence, kind, payload })}\n\n`;
     const server = createServer((request, response) => {
+      observations.push(request.url);
       response.writeHead(200, { "Content-Type": "text/event-stream", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-cache" });
+      response.write(event(0, "turn.started", {}));
       response.write(event(1, "agent.phase", { label: "Agent 正在执行命令" }));
       response.write(event(2, "agent.phase", { label: "Agent 正在检索" }));
       response.write(event(3, "agent.phase", { label: "Agent 正在执行命令" }));
@@ -21,7 +24,27 @@ export const conversationActivityScenario = {
       response.on("close", () => { if (streams.get(request.url) === response) streams.delete(request.url); });
     });
     await new Promise(resolveListen => server.listen(0, "127.0.0.1", resolveListen));
-    const context = await openWorkspacePage(browser, url, { collectCoverage });
+    const context = await openWorkspacePage(browser, url, { collectCoverage, beforeGoto: async (_api, page) => {
+      await page.addInitScript(() => {
+        window.__loopxSetSessionStorageFailure = message => {
+          if (!window.__loopxNativeSetItem) window.__loopxNativeSetItem = Storage.prototype.setItem;
+          const failForSessionStorage = function setItem(key, value) {
+            if (this === window.sessionStorage) throw new Error(message);
+            return window.__loopxNativeSetItem.call(this, key, value);
+          };
+          Storage.prototype.setItem = failForSessionStorage;
+          Object.defineProperty(window.sessionStorage, "setItem", {
+            configurable: true,
+            value: () => { throw new Error(message); },
+          });
+        };
+        window.__loopxRestoreSessionStorage = () => {
+          delete window.sessionStorage.setItem;
+          if (window.__loopxNativeSetItem) Storage.prototype.setItem = window.__loopxNativeSetItem;
+          delete window.__loopxNativeSetItem;
+        };
+      });
+    }});
     const { page, api } = context;
     try {
       for (const pattern of ["**/events/**", "**/api/chat/sessions/*/turns/*/events"]) {
@@ -41,22 +64,29 @@ export const conversationActivityScenario = {
       };
       assert.equal(await page.getByRole("button", { name: "恢复未确认的追加指令", exact: true }).count(), 0, "A new conversation has no recovery control");
       const turn = await send("请检查当前任务状态，并说明下一步。");
+      await page.getByRole("status", {name: "正在回复", exact: true}).waitFor();
       const pending = page.locator(".personal-message").filter({ has: page.getByRole("button", { name: "中断本轮", exact: true }) });
-      await page.clock.install();
+      // Pin Date to a fixed instant first, then advance timers without a
+      // running wall clock, and pause. Any finite future pause target leaves a
+      // scheduling race — the clock keeps running between commands, so a
+      // delayed pause can again aim into the past. With the Date pinned the
+      // comparisons use one deterministic instant regardless of command
+      // latency; the system time is restored before the scenario continues.
+      const clockStart = Date.UTC(2030, 0, 1);
+      await page.clock.install({time: clockStart});
+      await page.clock.setFixedTime(clockStart);
       await page.clock.fastForward(25000);
-      // Compare the same instant across views; clock.install alone keeps
-      // advancing and can cross a second boundary while navigation completes.
-      await page.clock.pauseAt(await page.evaluate(() => Date.now()));
+      await page.clock.pauseAt(clockStart);
       await pending.locator(".personal-message-quiet").waitFor();
       const elapsedBefore = await pending.locator(".personal-message-elapsed").textContent();
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "总览", exact: true }).click();
       const tray = page.locator(".personal-manager-conversation-tray");
-      await tray.getByRole("button", { name: "中断本轮", exact: true }).waitFor();
-      assert.equal(await tray.locator(".personal-message-elapsed").textContent(), elapsedBefore, "view switch keeps request elapsed time");
-      await tray.locator(".personal-message-quiet").waitFor();
       await page.screenshot({ path: resolve(outputDir, "conversation-waiting-overview.png"), animations: "disabled" });
-      await tray.getByRole("button", { name: "查看完整对话", exact: true }).click();
+      assert.equal(await tray.count(), 0, "Background updates never cover the overview with a conversation");
+      assert.equal(await page.getByRole("status", {name: "正在回复", exact: true}).count(), 1, "Activity stays on the Chat entry");
+      await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "对话", exact: true }).click();
       assert.equal(await pending.locator(".personal-message-elapsed").textContent(), elapsedBefore);
+      await page.clock.setSystemTime(Date.now());
       await page.clock.resume();
       const adjustments = [];
       let legacyMigrationAttempts = 0;
@@ -93,6 +123,38 @@ export const conversationActivityScenario = {
       const composer = page.getByLabel("向 LoopX 发送消息");
       const submit = page.getByRole("button", { name: "发送", exact: true });
       const feedback = page.locator(".personal-action-feedback");
+      const makeStorageUnavailable = reason => page.evaluate(message => {
+        window.__loopxSetSessionStorageFailure(message);
+      }, reason);
+      const restoreStorage = () => page.evaluate(() => {
+        window.__loopxRestoreSessionStorage();
+      });
+      const assertStorageUnavailable = async reason => {
+        const message = await page.evaluate(() => {
+          try {
+            window.sessionStorage.setItem("loopx-storage-probe", "1");
+            return "";
+          } catch (error) {
+            return error instanceof Error ? error.message : String(error);
+          }
+        });
+        assert.equal(message, reason);
+      };
+      const waitForFeedback = async (text, detail) => {
+        await feedback.filter({ hasText: text }).waitFor({timeout: 3000}).catch(async error => {
+          const storage = await page.evaluate(() => {
+            let probe = "";
+            try {
+              window.sessionStorage.setItem("loopx-storage-probe-after", "1");
+              probe = "ok";
+            } catch (cause) {
+              probe = cause instanceof Error ? cause.message : String(cause);
+            }
+            return { probe, steering: window.sessionStorage.getItem("loopx-pw-composer-steering") };
+          });
+          throw new Error(`${detail}: ${error.message}; feedback=${JSON.stringify(await feedback.allTextContents())}; adjustments=${adjustments.length}; turn_requests=${api.turnRequests.length}; send_disabled=${await submit.isDisabled()}; composer_value=${JSON.stringify(await composer.inputValue())}; active=${await page.evaluate(() => document.activeElement?.id ?? document.activeElement?.tagName)}; storage=${JSON.stringify(storage)}`);
+        });
+      };
       await pending.getByRole("button", { name: "调整本轮", exact: true }).click();
       assert.equal(await composer.evaluate(node => node === document.activeElement), true, "Adjust focuses the shared composer");
       assert.equal(await page.locator("textarea:visible").count(), 1, "Only one editable conversation input is visible");
@@ -105,10 +167,10 @@ export const conversationActivityScenario = {
       assert.equal(await composer.inputValue(), "先核对依赖，再继续当前任务。");
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "总览", exact: true }).click();
       assert.equal(await composer.inputValue(), "先核对依赖，再继续当前任务。", "The same draft survives switching to the overview");
-      await tray.getByRole("button", { name: "调整本轮", exact: true }).click();
-      assert.equal(await composer.evaluate(node => node === document.activeElement), true, "Overview activity focuses the same input");
-      assert.equal(await tray.locator("textarea").count(), 0);
-      await tray.getByRole("button", { name: "查看完整对话", exact: true }).click();
+      assert.equal(await tray.count(), 0, "An uncertain steering receipt cannot recreate a floating conversation");
+      await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "对话", exact: true }).click();
+      await pending.getByRole("button", { name: "调整本轮", exact: true }).click();
+      assert.equal(await composer.evaluate(node => node === document.activeElement), true, "Chat activity focuses the same input");
       await submit.click();
       await feedback.filter({ hasText: "回执不匹配" }).waitFor();
       await page.reload({ waitUntil: "domcontentloaded" });
@@ -147,6 +209,58 @@ export const conversationActivityScenario = {
       const correctionIndex = conversation.findIndex(row => row.user && row.text.includes("先核对依赖"));
       assert.ok(originalIndex >= 0 && originalIndex < workIndex && workIndex < correctionIndex,
         "The request, ongoing work and accepted correction remain together in conversation order");
+      await pending.getByRole("button", { name: "调整本轮", exact: true }).click();
+      await makeStorageUnavailable("storage unavailable");
+      await assertStorageUnavailable("storage unavailable");
+      await composer.fill("先检查最新证据。");
+      // A slow resume cannot turn a correction into a fresh message while
+      // the same manager conversation still owns an active Turn.
+      let releaseResume;
+      const resumeGate = new Promise(resolve => { releaseResume = resolve; });
+      const delayResume = async route => {
+        const request = route.request();
+        const body = request.method() === "POST" ? request.postDataJSON() : null;
+        if (body?.context_kind === "manager" && body.mode === "resume_latest") await resumeGate;
+        return route.fallback();
+      };
+      await page.route("**/api/chat/sessions", delayResume);
+      const streamsBeforeViewChange = observations.length;
+      const dispatchedBeforeStorageFailure = adjustments.length;
+      const turnsBeforeStorageFailure = api.turnRequests.length;
+      try {
+        await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "总览", exact: true }).click();
+        await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
+        assert.equal(await composer.inputValue(), "先检查最新证据。", "Blocked storage preserves the page draft across manager views");
+        await composer.focus();
+        await page.keyboard.press("Meta+Enter");
+        await waitForFeedback("调整尚未发送", "Storage failure did not report a retained steering draft");
+        assert.equal(adjustments.length, dispatchedBeforeStorageFailure, "Storage failure cannot dispatch steering");
+        assert.equal(api.turnRequests.length, turnsBeforeStorageFailure, "Storage failure cannot queue a new conversation Turn");
+        assert.equal(await composer.inputValue(), "先检查最新证据。");
+        await page.screenshot({path: resolve(outputDir, "conversation-steering-storage-unavailable.png"), animations: "disabled"});
+        assert.equal(observations.length, streamsBeforeViewChange, "Switching manager views keeps the original observer");
+      } finally {
+        releaseResume();
+        await page.unroute("**/api/chat/sessions", delayResume);
+      }
+      await restoreStorage();
+      await composer.fill("先检查最新证据，再继续。");
+      await composer.focus();
+      await page.keyboard.press("Meta+Enter");
+      await feedback.filter({ hasText: "原回合指令未确认" }).waitFor();
+      const durableRequest = adjustments.at(-1);
+      await makeStorageUnavailable("QuotaExceededError");
+      await assertStorageUnavailable("QuotaExceededError");
+      await composer.fill("另一个尚未保存的调整。");
+      await submit.click();
+      await feedback.filter({ hasText: "上条投递尚未确认" }).waitFor();
+      assert.equal(adjustments.length, dispatchedBeforeStorageFailure + 1, "A changed draft cannot replace an uncertain request");
+      await composer.fill("先检查最新证据，再继续。");
+      await submit.click();
+      await feedback.filter({ hasText: "执行器已接收本轮追加指令" }).waitFor();
+      assert.equal(adjustments.at(-1).client_ingress_id, durableRequest.client_ingress_id, "A storage failure cannot replace an existing durable retry identity");
+      await restoreStorage();
+      const adjustmentsAfterStorageFailure = adjustments.length;
       await pending.locator("summary").filter({ hasText: "最近活动" }).click();
       assert.deepEqual((await pending.locator(".personal-message-activity li").allTextContents()).slice(-3), ["Agent 正在执行命令", "Agent 正在检索", "Agent 正在执行命令"]);
       await page.screenshot({ path: resolve(outputDir, "conversation-activity-desktop.png"), animations: "disabled" });
@@ -161,6 +275,15 @@ export const conversationActivityScenario = {
       live.write(event(5, "answer.delta", { text: "\n\n" + "公开资料与待核实事项。\n\n".repeat(80) }));
       await page.getByText("公开资料与待核实事项。", { exact: true }).first().waitFor();
       const scroller = page.locator(".personal-channel-scroll");
+      // A responsive resize can leave scrollTop at zero before the follow
+      // frame runs. Start at a real end position so the next step moves up.
+      const startingPosition = await scroller.evaluate(node => {
+        node.scrollTop = node.scrollHeight;
+        node.dispatchEvent(new Event("scroll"));
+        return { top: node.scrollTop, remaining: node.scrollHeight - node.scrollTop - node.clientHeight };
+      });
+      assert.ok(startingPosition.top > 0 && startingPosition.remaining < 64,
+        "Exercise upward reading from the scrollable end, not an already-zero position");
       await scroller.evaluate(node => { node.scrollTop = 0; node.dispatchEvent(new Event("scroll")); });
       await page.getByRole("button", { name: "回到最新消息 ↓", exact: true }).waitFor();
       live.write(event(6, "answer.delta", { text: "新增证据已经到达。" }));
@@ -168,7 +291,7 @@ export const conversationActivityScenario = {
       assert.ok(await scroller.evaluate(node => node.scrollTop < 10), "new output preserves upward reading position");
       await page.getByRole("button", { name: "回到最新消息 ↓", exact: true }).click();
       assert.ok(await scroller.evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight < 64));
-      assert.equal(await page.locator(".personal-composer-tools").count(), 0, "conversation removes redundant suggestion strip");
+      assert.equal(await page.locator(".personal-composer-tools-panel").count(), 0, "conversation removes redundant suggestion strip");
 
       let interrupts = 0;
       const rejectThenMismatch = async route => {
@@ -189,6 +312,7 @@ export const conversationActivityScenario = {
       await pending.getByRole("button", { name: "中断本轮", exact: true }).click();
       await page.getByText("已中断。你可以在当前会话继续发送消息。", { exact: true }).waitFor();
       assert.equal(await page.locator(".personal-md").filter({ hasText: "已找到两个待处理项" }).count(), 1, "interruption preserves partial output");
+      await page.locator(".personal-chat-activity").waitFor({state: "hidden"});
       assert.deepEqual(api.interrupts.at(-1), { sessionId: turn.sessionId, turnId: turn.turnId });
       await page.screenshot({ path: resolve(outputDir, "conversation-activity-interrupted.png"), animations: "disabled" });
       await page.unroute("**/interrupt", rejectThenMismatch);
@@ -203,25 +327,91 @@ export const conversationActivityScenario = {
         const answer = "检查完成，下一步已列出。";
         const runtime = page.__loopxRuntime;
         runtime.sessions.set(next.sessionId, { ...runtime.sessions.get(next.sessionId), active_turn_id: null, status: "ready" });
-        runtime.messages.get(next.sessionId).push({ message_id: `${next.turnId}-assistant`, turn_id: next.turnId, role: "assistant", text: answer });
+        runtime.messages.get(next.sessionId).push({
+          message_id: `${next.turnId}-assistant`, turn_id: next.turnId, role: "assistant", text: answer,
+          created_at: await page.evaluate(() => new Date().toISOString()),
+        });
         response.end(event(5, "turn.completed", { response: { schema_version: "loopx_chat_agent_response_v0", message: answer, proposals: [], gate: null } }));
         await route.fulfill({ json: { ok: true, session_id: next.sessionId, turn_id: next.turnId, status: "completed" } });
       });
       await page.getByRole("button", { name: "中断本轮", exact: true }).click();
       await page.getByText("检查完成，下一步已列出。", { exact: true }).waitFor();
+      await page.locator(".personal-chat-activity").waitFor({state: "hidden"});
       assert.equal(await page.getByRole("button", { name: "中断本轮", exact: true }).count(), 0);
       assert.equal(await composer.inputValue(), "保留我的未发送草稿。");
       assert.equal(await submit.isEnabled(), true, "An unsent draft becomes an explicit follow-up after completion");
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "总览", exact: true }).click();
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
       assert.equal(await composer.inputValue(), "保留我的未发送草稿。", "finished turn retains the unsent draft across unmount");
-      assert.equal(adjustments.length, 4, "Completion never dispatches the retained draft");
+      assert.equal(adjustments.length, adjustmentsAfterStorageFailure, "Completion never dispatches the retained draft");
       await page.unroute("**/interrupt");
 
       // The same interaction is present in Goal Chat, through the same timeline.
       await page.locator(".personal-goal-link").first().click();
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
+      // Native ordinary sends can be acknowledged as queued before starting.
+      // Their original observer must survive the asynchronous current-Turn read.
+      let pendingActiveRead;
+      await page.route("**/api/chat/sessions/*/turns", async route => {
+        const body = route.request().postDataJSON();
+        if (body.message !== "请检查这个 Goal 的当前状态。") return route.fallback();
+        const sessionId = new URL(route.request().url()).pathname.split("/").at(-2);
+        const turnId = `queued-start-${Date.now()}`;
+        const runtime = page.__loopxRuntime;
+        runtime.turnMessages.set(turnId, body.message);
+        runtime.sessions.set(sessionId, {...runtime.sessions.get(sessionId), active_turn_id: turnId, status: "busy"});
+        runtime.messages.get(sessionId).push({
+          message_id: `${turnId}-user`, turn_id: turnId, role: "user", text: body.message,
+          created_at: await page.evaluate(() => new Date().toISOString()),
+        });
+        api.turnRequests.push({message: body.message, sessionId, turnId});
+        let holdFirstRead = true;
+        await page.route(`**/api/chat/sessions/${sessionId}`, snapshot => {
+          if (holdFirstRead) { holdFirstRead = false; pendingActiveRead = snapshot; return; }
+          return snapshot.fallback();
+        });
+        await route.fulfill({status: 202, json: {ok: true, session_id: sessionId, turn_id: turnId,
+          created: true, status: "queued", events_url: `/events/${sessionId}/${turnId}`}});
+      });
       const goalTurn = await send("请检查这个 Goal 的当前状态。");
+      const goalTabs = page.getByRole("navigation", {name: "Goal 视图"});
+      for (const width of [1512, 390]) {
+        await page.setViewportSize({width, height: width === 390 ? 844 : 982});
+        for (const tab of ["概览", "任务", "研究", "成果"]) {
+          await goalTabs.getByRole("button", {name: tab, exact: true}).click();
+          assert.equal(await tray.count(), 0, `${tab} stays clear of background conversations`);
+          assert.equal(await page.getByRole("status", {name: "正在回复", exact: true}).count(), 1);
+          assert.equal(api.turnRequests.length, 3, "Navigation neither restarts nor cancels work");
+          await page.screenshot({path: resolve(outputDir, `conversation-background-${tab}-${width}.png`), animations: "disabled"});
+        }
+      }
+      await page.setViewportSize({width: 1512, height: 982});
+      await page.locator(".personal-goal-link").nth(1).click();
+      await page.locator(".personal-chat-activity").waitFor({state: "hidden"});
+      assert.equal(api.interrupts.length, 1, "Changing Goals does not interrupt the active conversation");
+      await page.locator(".personal-goal-link").first().click();
+      await page.getByRole("status", {name: "正在回复", exact: true}).waitFor();
+      await page.emulateMedia({reducedMotion: "reduce"});
+      assert.equal(await page.locator(".personal-chat-activity svg").evaluate(node => getComputedStyle(node).animationName), "none");
+      await page.emulateMedia({reducedMotion: "no-preference"});
+      await page.setViewportSize({width: 1512, height: 982});
+      await goalTabs.getByRole("button", {name: "对话", exact: true}).focus();
+      const resumedSession = page.waitForResponse(response => new URL(response.url()).pathname === "/api/chat/sessions"
+        && response.request().method() === "POST");
+      await page.keyboard.press("Enter");
+      await resumedSession;
+      await page.evaluate(() => new Promise(resolveFrame => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))));
+      assert.equal(await goalTabs.getByRole("button", {name: "对话", exact: true}).getAttribute("aria-current"), "page");
+      await page.screenshot({path: resolve(outputDir, "conversation-observer-desktop.png"), animations: "disabled"});
+      await page.setViewportSize({width: 390, height: 844});
+      await page.screenshot({path: resolve(outputDir, "conversation-observer-narrow.png"), animations: "disabled"});
+      await page.setViewportSize({width: 1512, height: 982});
+      assert.equal(observations.filter(path => path === `/events/${goalTurn.sessionId}/${goalTurn.turnId}`).length, 1,
+        "Returning to Goal Chat preserves the original live observer instead of attaching a recovery stream");
+      assert.equal(await page.getByRole("button", {name: "调整本轮", exact: true}).count(), 1,
+        "The same running Session/Turn has one set of controls after navigation");
+      assert.ok(pendingActiveRead, "The queued-start confirmation remains outstanding during navigation");
+      await pendingActiveRead.fallback();
       await page.getByRole("button", { name: "调整本轮", exact: true }).click();
       assert.equal(await composer.inputValue(), "", "another conversation never inherits the old draft");
       await page.evaluate(({sessionId, turnId}) => {
@@ -233,7 +423,7 @@ export const conversationActivityScenario = {
       await page.reload({ waitUntil: "domcontentloaded" });
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
       await page.waitForFunction(() => document.querySelector("#personal-conversation-composer")?.value === "旧版保留的原回合草稿。");
-      assert.equal(adjustments.length, 4, "Migrating an old draft never dispatches it");
+      assert.equal(adjustments.length, adjustmentsAfterStorageFailure, "Migrating an old draft never dispatches it");
       const migrated = await page.evaluate(() => JSON.parse(sessionStorage.getItem("loopx-pw-composer-steering"))
         .filter(([, request]) => request.id === "legacy-exact-ingress"));
       assert.equal(migrated.length, 1, "One retry owner remains after durable migration");
@@ -243,35 +433,19 @@ export const conversationActivityScenario = {
       await feedback.filter({ hasText: "执行器已接收本轮追加指令" }).waitFor();
       assert.equal(adjustments.at(-1).client_ingress_id, "legacy-exact-ingress");
       await composer.fill("");
-      await page.evaluate(() => { window.sessionStorage.setItem = () => { throw new Error("storage unavailable"); }; });
-      await composer.fill("先检查最新证据。");
-      await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "任务", exact: true }).click();
-      await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
-      assert.equal(await composer.inputValue(), "先检查最新证据。", "Blocked storage preserves the page draft across views");
-      const dispatchedBeforeStorageFailure = adjustments.length;
-      await composer.press("Meta+Enter");
-      await feedback.filter({ hasText: "调整尚未发送" }).waitFor();
-      assert.equal(adjustments.length, dispatchedBeforeStorageFailure, "Storage failure cannot dispatch steering");
-      assert.equal(await composer.inputValue(), "先检查最新证据。");
-      await page.screenshot({path: resolve(outputDir, "conversation-steering-storage-unavailable.png"), animations: "disabled"});
-      await page.evaluate(() => { delete window.sessionStorage.setItem; });
-      await composer.fill("先检查最新证据，再继续。");
-      await composer.press("Meta+Enter");
-      await feedback.filter({ hasText: "原回合指令未确认" }).waitFor();
-      const durableRequest = adjustments.at(-1);
-      await page.evaluate(() => { window.sessionStorage.setItem = () => { throw new Error("QuotaExceededError"); }; });
-      await composer.fill("另一个尚未保存的调整。");
-      await submit.click();
-      await feedback.filter({ hasText: "上条投递尚未确认" }).waitFor();
-      assert.equal(adjustments.length, dispatchedBeforeStorageFailure + 1, "A changed draft cannot replace an uncertain request");
-      await composer.fill("先检查最新证据，再继续。");
-      await submit.click();
-      await feedback.filter({ hasText: "执行器已接收本轮追加指令" }).waitFor();
-      assert.equal(adjustments.at(-1).client_ingress_id, durableRequest.client_ingress_id, "A storage failure cannot replace an existing durable retry identity");
-      await page.evaluate(() => { delete window.sessionStorage.setItem; });
       await page.getByRole("button", { name: "中断本轮", exact: true }).click();
       await page.getByText("已中断。你可以在当前会话继续发送消息。", { exact: true }).waitFor();
+      await page.locator(".personal-chat-activity").waitFor({state: "hidden"});
       assert.deepEqual(api.interrupts.at(-1), { sessionId: goalTurn.sessionId, turnId: goalTurn.turnId });
+      page.__loopxRuntime.queuedTurns.set(goalTurn.sessionId, [{
+        turn_id: "waiting-for-host", created_at: "2026-08-13T01:00:01Z", origin: "web",
+        preview: "等待执行器接收的后续消息", character_count: 13, attachment_count: 0, steering: null,
+      }]);
+      await page.reload({waitUntil: "domcontentloaded"});
+      await page.getByRole("button", {name: "对话", exact: true}).click();
+      await page.getByRole("region", {name: "待处理消息", exact: true}).waitFor();
+      assert.equal(await page.locator(".personal-chat-activity").count(), 0, "A queued message alone is not active execution");
+      assert.equal(api.turnRequests.length, 3, "Queue readback does not start work");
       return { coverageEntries: context.coverageEntries, note: "Shared steward/Goal activity and steering: view/reload recovery without automatic dispatch, one composer, blocked storage, terminal draft isolation, interruption and completion races." };
     } finally {
       for (const response of streams.values()) response.destroy();

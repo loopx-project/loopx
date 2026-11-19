@@ -12,9 +12,10 @@ type FieldCopy = Record<string, Readonly<{ description?: string; label: string; 
 
 const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
   en: {
+    context_delivery: {displayName: "Progressive context", description: "Read current requirements before supporting material. Supported hosts can reuse unchanged context independently."},
     codex_chat: {displayName: "Codex Goal conversation defaults", description: "Choose the native Codex profile, model, speed tier and reasoning effort for new Goal conversations. Existing conversations keep their original history. This does not start or reconfigure an active Agent Loop, worker or steward."},
     decision_context: {displayName: "Find evidence", description: "Find advisory evidence with a temporary private profile. OpenViking and BM25 are retrieval implementations; this page does not save a binding or enable automatic memory."},
-    content_ops: {displayName: "Reference styles", description: "Retrieve source styles from an existing private catalog and prepare attributed outlines. No source or material-store writes."},
+    content_ops: {displayName: "Content production", description: "Prepare source-backed outlines, compose local videos or generate cloud images and footage with the optional media provider. Review the result before sharing."},
     goal_storage: { displayName: "New Goal authority", description: "New Goals default to canonical SQLite with hard leases. Choose storage and execution policy for future Goals. Existing Goals require a separate backed-up migration." },
     manager_runtime: {
       displayName: "Runtime",
@@ -81,9 +82,10 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
     },
   },
   "zh-CN": {
+    context_delivery: {displayName: "渐进上下文", description: "先展示当前目标与约束，按需读取材料；支持的宿主可独立复用跨轮上下文。"},
     codex_chat: {displayName: "Codex Goal 对话默认值", description: "分别选择 Codex 配置来源、模型、速度档和推理强度，作用于本机的新 Goal 对话。已有对话保留原历史；不会启动或重配正在运行的 Agent Loop、工作 Agent 或管家。"},
     decision_context: {displayName: "资料召回", description: "通过临时私有配置查找参考证据。OpenViking、BM25 是检索实现；本页不保存绑定，也不启用自动记忆。"},
-    content_ops: {displayName: "素材与风格", description: "从原有私有目录检索表达结构，准备带来源署名的提纲；不执行来源或素材库写入。"},
+    content_ops: {displayName: "内容制作", description: "准备有来源的提纲，使用可选媒体扩展制作本机视频、生成云端图像与镜头，检查作品后再分享。"},
     goal_storage: { displayName: "新 Goal 的权威存储", description: "新 Goal 默认使用 canonical SQLite 与 hard lease；可选择之后新 Goal 的存储与执行策略。已有 Goal 仍需单独备份、迁移。" },
     manager_runtime: {
       displayName: "运行环境",
@@ -156,14 +158,15 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     new_goal_provider: { label: "New Goal storage provider", description: "File or SQLite; frozen at creation, independently of execution policy." },
     canonical_creation: { label: "Create canonical authority", description: "Required for new Goals in 2.0. An older disabled setting remains visible until you enable it; existing Goals require import." },
     new_goal_handoff_mode: { label: "New Goal execution policy", description: "soft_claim or hard_lease, used with canonical creation. Agents inherit the Goal policy; tool authority is unchanged." },
-    runtime_profile: { label: "Runtime profile", description: "Restricted keeps scoped LoopX reads only. Trusted owner enables normal host tools while protected operations retain separate checks." },
+    runtime_profile: { label: "Runtime profile", description: "Use local host tools by default, or restrict the steward to LoopX reads. Protected operations retain their own checks.", options: { trusted_owner: "Local tools", restricted: "Read-only" } },
     selection_policy: { label: "Selection policy", description: "Preferred allows an explicit user choice; pinned rejects another executor; flexible permits fallback only inside the eligible pool." },
     executor_endpoint: { label: "Primary steward executor", description: "The preferred or pinned executor for this machine. In a flexible pool it is tried first when available." },
     eligible_endpoints: { label: "Flexible eligible executors", description: "One authorized executor per line. Use only with flexible selection and include the primary executor." },
     executor_model: { label: "Model", description: "Optional model for the selected executor. Leave blank to keep the executor's own default." },
     executor_reasoning_effort: { label: "Reasoning effort", description: "Optional reasoning effort for the selected executor. Leave blank to keep the executor's own default." },
     count_unit: { label: "Review after", description: "Work Turns require accepted settlement; polls and retries do not count.", options: { completed_todos: "Completed Todos", effective_turns: "Settled work Turns" } },
-    planning_horizon_goal: { label: "Show Goal in planning horizon", description: "Default off. Read the full original Goal and acceptance before choosing work. Does not change replan, stride or execution authority." },
+    planning_horizon_goal: { label: "Show Goal in planning horizon", description: "Default on. Keep the original Goal and acceptance visible before choosing work. Turn off for rollback or comparisons; replan, stride and execution authority are unchanged." },
+    yardstick_enabled: { label: "Review measurement criteria", description: "Default off. Review measurement scope and feedback using available Explore evidence. Requires Explore evidence; does not enable it or authorize execution." },
     stride_strategy: { label: "Stride strategy", description: "Structured work scope, route and validation proposals are required for enabled fresh Vision reviews. Does not grant execution authority.", options: { off: "Off", evidence_conditioned_v1: "Evidence-conditioned · v1" } },
     count: { label: "Number between reviews", description: "Settled work Turns: 1–6; completed Todos: 1–5. Goal overrides take precedence over device defaults." },
     allowed_domains: { label: "Allowed responsibility domains", description: "Enter one bounded, public-safe domain per line." },
@@ -176,6 +179,7 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     composition_mode: { label: "Composition policy", description: "Replan requires an exact experiment successor or typed result; it grants no execution authority.", options: {disabled: "Off", explicit_only: "Explicit candidates"} },
     composition_scope_id: { label: "Research coverage scope", description: "An opaque scope id required by the explicit-only composition policy." },
     profile_preset: { label: "Report profile", description: "Capability-owned report profile, such as weekly-progress." },
+    review_required: { label: "Request review when ready", description: "For reports returned to this Goal's original conversation. Each edition stays on Home until you handle its review." },
     wait_for_ci: { label: "Wait for CI", description: "Disable to use local validation without querying or waiting for CI. Merge authority is unchanged." },
     review_order: { label: "Review direction", description: "Forward visits other authors first and oldest first. Reverse inverts the whole actionable queue." },
     agent_orders: { label: "Agent review directions", description: "Use the Goal default or choose a direction for each registered Agent." },
@@ -192,14 +196,15 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     new_goal_provider: { label: "新 Goal 的存储 provider", description: "选择 File 或 SQLite；创建时固定，与执行策略分别选择。" },
     canonical_creation: { label: "建立 canonical 权威存储", description: "2.0 新建 Goal 必须启用。旧的关闭设置会保留显示，需自行启用；已有 Goal 需导入。" },
     new_goal_handoff_mode: { label: "新 Goal 的执行策略", description: "canonical 创建使用 soft_claim 或 hard_lease。Agent 继承 Goal 策略；不授予工具权限。" },
-    runtime_profile: { label: "运行模式", description: "restricted 仅使用受限 LoopX 读取；trusted_owner 开放常规宿主工具，但受保护操作仍单独校验。" },
+    runtime_profile: { label: "运行模式", description: "默认使用本机工具，也可限制为只读 LoopX 状态；受保护操作仍单独校验。", options: { trusted_owner: "本机工具", restricted: "只读" } },
     selection_policy: { label: "选择策略", description: "preferred 允许用户显式改选；pinned 拒绝其他执行器；flexible 只在已授权资源池内回退。" },
     executor_endpoint: { label: "首选管家执行器", description: "本机首选或锁定的执行器；灵活池模式下优先尝试它。" },
     eligible_endpoints: { label: "灵活池可用执行器", description: "每行一个已授权执行器，仅用于 flexible；必须包含首选执行器。" },
     executor_model: { label: "模型", description: "所选执行器使用的模型，可留空；留空表示沿用执行器自身的默认模型。" },
     executor_reasoning_effort: { label: "推理档位", description: "所选执行器使用的推理档位，可留空；留空表示沿用执行器自身的默认档位。" },
     count_unit: { label: "复核计数依据", description: "有效工作 Turn 须完成结算；轮询和重复重试不计数。", options: { completed_todos: "已完成 Todo", effective_turns: "已结算工作 Turn" } },
-    planning_horizon_goal: { label: "在规划视野中显示 Goal", description: "默认关闭。选择工作前读取完整原目标与验收要求，不改变复盘、步幅策略或执行权限。" },
+    planning_horizon_goal: { label: "在规划视野中显示 Goal", description: "默认开启，选择工作前可见原目标与验收要求。可为回滚或对照实验关闭；不改变复盘、步幅策略或执行权限。" },
+    yardstick_enabled: { label: "复核衡量标准", description: "默认关闭。使用已有 Explore 证据复核测量范围与反馈；需有可用的 Explore 证据，不会自动启用它或授予执行权限。" },
     stride_strategy: { label: "步幅策略", description: "启用后，新的 Vision 路线复盘须提交工作大小、路线及验证范围的结构化提案，不授予执行权限。", options: { off: "关闭", evidence_conditioned_v1: "依据证据调整 · v1" } },
     count: { label: "两次复核间的数量", description: "已结算工作 Turn 为 1–6，已完成 Todo 为 1–5；Goal 显式设置优先于设备默认值。" },
     allowed_domains: { label: "允许的职责域", description: "每行填写一个有边界、可公开的职责域。" },
@@ -212,6 +217,7 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     composition_mode: { label: "组合策略", description: "重新规划需要精确的实验后继或类型化结果；它不授予执行权限。", options: {disabled: "关闭", explicit_only: "仅显式候选"} },
     composition_scope_id: { label: "研究覆盖范围", description: "显式组合策略要求填写不含私有内容的范围标识。" },
     profile_preset: { label: "报告 Profile", description: "由该能力管理的报告 profile，例如 weekly-progress。" },
+    review_required: { label: "材料就绪后请求验收", description: "适用于回到本 Goal 原工作对话的报告。每个版本独立提醒，处理审阅后从首页移除。" },
     wait_for_ci: { label: "等待 CI", description: "关闭后使用本地验证，不查询或等待 CI；不改变合并权限。" },
     review_order: { label: "审阅方向", description: "正向先审其他作者，同层先审较早就绪的 PR；反向将整个可执行队列倒序。" },
     agent_orders: { label: "Agent 审阅方向", description: "每个注册 Agent 可继承 Goal，或单独选择正向、反向。" },
@@ -244,6 +250,15 @@ export function localizeCapability(
 }
 
 export function localizedCapabilityFieldCopy(locale: WorkspaceLocale, capabilityId?: string): FieldCopy {
+  if (capabilityId === "context_delivery") return {...fieldCopy[locale], mode: locale === "zh-CN" ? {
+    label: "渐进读取", description: "适用于各宿主；关闭后保留完整内联输入。", options: {off: "关闭", on: "开启"},
+  } : {
+    label: "Progressive reads", description: "Applies across hosts; off keeps full inline input.", options: {off: "Off", on: "On"},
+  }, delta_delivery: locale === "zh-CN" ? {
+    label: "跨轮差分", description: "仅在支持连续性的宿主自动启用；可独立关闭，保留渐进读取。", options: {off: "关闭", auto: "自动"},
+  } : {
+    label: "Cross-Turn Delta", description: "Automatic only on supported continuity hosts; off preserves progressive reads.", options: {off: "Off", auto: "Automatic"},
+  }};
   if (capabilityId === "codex_chat") return {...fieldCopy[locale], ...(locale === "zh-CN" ? {
     codex_profile: {label: "Codex 配置来源", description: "选择已有本机配置，例如 codex-gpt。账户和凭据留在原目录，不复制；留空继承服务配置。"},
     model: {label: "对话模型", description: "例如 gpt-6.1-sol；留空继承所选 Codex 配置的模型。"},

@@ -1,3 +1,4 @@
+import os
 import subprocess
 from pathlib import Path
 
@@ -19,7 +20,10 @@ def test_transient_download_discards_partial_bytes_before_execution(
         if args[0] == "curl":
             script = Path(args[args.index("--output") + 1])
             assert script.read_bytes() == b""
-            assert script.stat().st_mode & 0o777 == 0o600
+            # Windows does not expose POSIX owner-only permission bits. Keep
+            # that assertion on POSIX; partial-byte and retry checks run on both.
+            if os.name != "nt":
+                assert script.stat().st_mode & 0o777 == 0o600
             if len(calls) == 1:
                 script.write_text("echo PARTIAL_SECRET")
                 return subprocess.CompletedProcess(

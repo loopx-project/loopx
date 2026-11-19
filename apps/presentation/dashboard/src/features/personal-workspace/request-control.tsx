@@ -1,3 +1,4 @@
+import {ContextHelp} from "./context-help";
 import {useCallback, useEffect, useRef, useState} from "react";
 import {ChatApiError} from "../../data/chat";
 import {applyRequestControl, fetchRequestControl, pendingRequestControlSchema, requestControlRouteKey,
@@ -128,8 +129,8 @@ export function RequestControl({route, active, onReadback, onEditing}: {route: R
       : view.control_state === "effect_pending" ? c.pending : c.current}</p>}
     {terminal && <p>{c.revision} {terminal.binding.request_revision}: {c[terminal.terminal.outcome]}
       {terminal.terminal.goal_revision !== null ? ` · ${c.goalRevision} ${terminal.terminal.goal_revision}` : ""}</p>}
-    {view?.terminal_effects.length ? <p className="personal-request-help">{c.retained}</p> : null}
-    <p className="personal-request-help">{c.limitation}</p>
+    {view?.terminal_effects.length ? <ContextHelp label={locale === "zh-CN" ? "历史请求与操作范围" : "Request history and operation scope"}><p className="personal-request-help">{c.retained}</p><p className="personal-request-help">{c.limitation}</p></ContextHelp> : null}
+
     {error && <p role="alert">{error}</p>}
     <div className="personal-request-actions">
       <button type="button" disabled={busy} onClick={() => void load()}>{c.refresh}</button>

@@ -13,7 +13,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPO_ROOT / "packages" / "dsh-loopx-plugin"
 PHASE_SCRIPTS = {
-    "quality": ("typecheck", "test", "smoke:peer-range"),
+    "quality": ("typecheck", "test", "smoke:peer-range", "smoke:mcp-transport"),
     "package": ("build", "smoke:artifact", "smoke:profile"),
     "runtime": ("smoke:runtime",),
 }

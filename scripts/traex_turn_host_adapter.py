@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Thin TraeX host adapter for the LoopX governed Turn contract.
 
-LoopX runs this adapter with one ``loopx_turn_host_request_v0`` JSON object on
-stdin. The adapter:
+LoopX supplies the versioned Turn Host request on stdin. The adapter:
 
-1. extracts the bounded action text from the Turn envelope,
+1. checks the recorded request version and renders the governed Turn input,
 2. invokes one headless ``traex exec`` in the governed workspace,
 3. asks TraeX for one schema-constrained public-safe result file,
 4. emits exactly one ``loopx_turn_result_v0`` JSON object on stdout.
@@ -33,15 +32,27 @@ from loopx.extensions.process_runtime import (  # noqa: E402
     CappedProcessResult,
     run_capped_process,
 )
+from loopx.control_plane.turn_driver.executor import (  # noqa: E402
+    HOST_AGENT_VISION_JSON_MAX_CHARS,
+    HOST_PATH_DELTA_MODES,
+    HOST_PROGRESS_OBSERVATION_JSON_MAX_CHARS,
+    HOST_RESULT_EVIDENCE_LIMITS,
+)
 from loopx.control_plane.turn_driver.host_candidate import (  # noqa: E402
+    ACCEPTED_RESULT_KINDS as COMPLETE_RESULT_KINDS,
+    LOOPX_TURN_HOST_REQUEST_SCHEMA as LOOPX_TURN_HOST_REQUEST_SCHEMA,
     COMPLETED_PHASES as COMPLETED_PHASES,
-    LOOPX_TURN_HOST_REQUEST_SCHEMA,
+    assert_turn_host_request_version,
     LOOPX_TURN_RESULT_SCHEMA as LOOPX_TURN_RESULT_SCHEMA,
     TEXT_LIMITS,
     build_result as build_host_result,
     extract_action_text as extract_action_text,
     extract_turn_authority,
+    render_prompt as render_host_prompt,
 )
+
+from loopx.control_plane.work_items.delivery_batch_scale import DELIVERY_BATCH_SCALE_CHOICES  # noqa: E402
+from loopx.control_plane.work_items.delivery_outcome import DELIVERY_OUTCOME_CHOICES  # noqa: E402
 
 TRAEX_OUTPUT_LIMIT_BYTES = 1_000_000
 
@@ -52,6 +63,8 @@ ACCEPTED_RESULT_KINDS = {
     "user_action_required",
     "wait",
 }
+
+
 def render_prompt(authority: Mapping[str, Any]) -> str:
     """Wrap one signed Turn authority packet in the result-block framing.
 
@@ -59,11 +72,10 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
     reads back as a typed candidate. It stays public-safe and bounded.
     """
 
+    if "_model_input" in authority:
+        return render_host_prompt(authority)
     authority_json = json.dumps(
-        dict(authority),
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
+        dict(authority), ensure_ascii=False, sort_keys=True, separators=(",", ":"),
     )
     return (
         "You are executing one bounded LoopX-governed work segment.\n"
@@ -87,34 +99,45 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
     )
 
 
-def traex_result_schema() -> dict[str, Any]:
-    properties = {
+def traex_result_schema(*, complete: bool = False) -> dict[str, Any]:
+    properties: dict[str, Any] = {
         "result_kind": {
             "type": "string",
-            "enum": sorted(ACCEPTED_RESULT_KINDS),
+            "enum": sorted(COMPLETE_RESULT_KINDS if complete else ACCEPTED_RESULT_KINDS),
         },
         **{
             field: {"type": "string", "maxLength": limit}
             for field, limit in TEXT_LIMITS.items()
         },
     }
+    if complete:
+        properties.update({
+            "delivery_batch_scale": {"type": "string", "enum": list(DELIVERY_BATCH_SCALE_CHOICES)},
+            "delivery_outcome": {"type": "string", "enum": list(DELIVERY_OUTCOME_CHOICES)},
+            "path_delta_mode": {"type": "string", "enum": sorted(HOST_PATH_DELTA_MODES - {""})},
+            "agent_vision_json": {"type": "string", "maxLength": HOST_AGENT_VISION_JSON_MAX_CHARS},
+            "progress_observation_json": {"type": "string", "maxLength": HOST_PROGRESS_OBSERVATION_JSON_MAX_CHARS},
+            **{
+                name: {"type": "array", "minItems": 1, "maxItems": count,
+                       "items": {"type": "string", "minLength": 1, "maxLength": width}}
+                for name, (count, width, _) in HOST_RESULT_EVIDENCE_LIMITS.items()
+            },
+        })
     return {
         "type": "object",
         "properties": properties,
-        "required": list(properties),
+        "required": ["result_kind"] if complete else list(properties),
         "additionalProperties": False,
     }
 
 
-def read_structured_result(path: Path) -> dict[str, Any] | None:
+def read_structured_result(path: Path, *, complete: bool = False) -> dict[str, Any] | None:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    if (
-        not isinstance(value, dict)
-        or str(value.get("result_kind") or "") not in ACCEPTED_RESULT_KINDS
-    ):
+    accepted_kinds = COMPLETE_RESULT_KINDS if complete else ACCEPTED_RESULT_KINDS
+    if not isinstance(value, dict) or str(value.get("result_kind") or "") not in accepted_kinds:
         return None
     return value
 
@@ -202,23 +225,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (json.JSONDecodeError, ValueError) as exc:
         print(f"adapter: invalid request JSON on stdin: {exc}", file=sys.stderr)
         return 2
-    if not isinstance(request, dict) or request.get("schema_version") != LOOPX_TURN_HOST_REQUEST_SCHEMA:
-        print("adapter: stdin is not a loopx_turn_host_request_v0 object", file=sys.stderr)
-        return 2
-
     try:
+        if not isinstance(request, dict):
+            raise ValueError("Host request must be an object")
+        assert_turn_host_request_version(request)
         authority = extract_turn_authority(request)
-    except ValueError as exc:
-        print(f"adapter: invalid TurnEnvelope authority: {exc}", file=sys.stderr)
+    except (ValueError, RuntimeError) as exc:
+        print(f"adapter: invalid LoopX Turn Host request: {exc}", file=sys.stderr)
         return 2
 
+    complete = "_model_input" in authority
     with tempfile.TemporaryDirectory(prefix="loopx-turn-traex-") as directory:
         temporary = Path(directory)
         schema_path = temporary / "result-schema.json"
         output_path = temporary / "last-message.json"
         schema_path.write_text(
             json.dumps(
-                traex_result_schema(),
+                traex_result_schema(complete=complete),
                 ensure_ascii=False,
                 sort_keys=True,
                 separators=(",", ":"),
@@ -255,7 +278,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return completed.returncode if completed.returncode > 0 else 1
 
-        candidate = read_structured_result(output_path)
+        candidate = read_structured_result(output_path, complete=complete)
     result = build_result(request, candidate)
     print(json.dumps(result, ensure_ascii=False, separators=(",", ":")), flush=True)
     return 0

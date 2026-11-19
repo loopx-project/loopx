@@ -117,6 +117,59 @@ def test_native_preparation_is_visible_without_answer_or_private_labels():
         "phase": "unrecognized", "label": "private output"}}]) is None
 
 
+def test_reasoning_summary_is_private_owner_only_bounded_and_omits_tool_titles():
+    events = [{"event_id": f"summary_{index}", "kind": "agent.phase", "payload": {
+        "method": "item/reasoning/summaryTextDelta", "step": {"id": f"summary_{index}", "kind": "reasoning",
+        "state": "running", "reasoning_summary": True, "detail": f"思考步骤 {index}：" + "公开摘要。" * 100}}}
+        for index in range(6)]
+    events += [{"event_id": str(index), "kind": "agent.phase", "payload": {
+        "method": "item/started", "step": {"id": str(index), "kind": "tool", "state": "running",
+        "title": f"read_{index}", "detail": "not a tool result"}}} for index in range(7)]
+    state = {"activities": [{"id": "legacy", "title": "legacy_tool", "state": "running"}]}
+    view = project_progress(state, events, owner_private=True)
+    assert "思考摘要" in view and "公开摘要" in view
+    assert "思考步骤 5" in view and "思考步骤 0" not in view
+    assert "最近步骤" not in view and "read_6" not in view and "legacy_tool" not in view
+    assert len(state["public_summary"]) <= 1200 and len(state["thinking_summaries"]) == 4
+    assert "activities" not in state
+    assert "not a tool result" not in view
+    events += [{"event_id": "raw", "kind": "agent.phase", "payload": {
+        "method": "item/reasoning/textDelta", "step": {"id": "raw", "kind": "reasoning",
+        "state": "running", "reasoning_summary": True, "detail": "hidden reasoning"}}}]
+    assert "hidden reasoning" not in project_progress(state, events[-1:], owner_private=True)
+    assert "公开摘要" not in project_progress(state, [], owner_private=False)
+    assert "thinking_summaries" not in state and "public_summary" not in state
+    assert "公开摘要" not in project_progress({}, events)
+
+
+def test_original_private_post_shows_native_public_summary_before_final_answer(ordinary):  # noqa: F811
+    fake = ordinary[-2]
+    # Feed the real Codex protocol reader, not hand-built presentation state.
+    source = fake.read_text()
+    anchor = '            continue\n        response ='
+    summary_event = {"method": "item/reasoning/summaryTextDelta", "params": {
+        "threadId": "durable-thread", "itemId": "public-summary", "summaryIndex": 0,
+        "delta": "先核对原始请求与已保存结果。"}}
+    injection = '            print(json.dumps(dict(' + repr(summary_event) + ', params=dict(' + repr(summary_event["params"]) + ', turnId=active_turn))), flush=True)\n'
+    assert anchor in source
+    fake.write_text(source.replace(anchor, injection + anchor))
+    store, runtime, provider, transport, row = start(ordinary)
+    try:
+        draft = provider.writes[0][1]
+        assert "思考摘要" in draft and "先核对原始请求与已保存结果" in draft
+        assert "source.txt" not in draft and "synthetic private reasoning" not in draft
+        assert store.load_turn(row["session_id"], row["turn_id"])["status"] == "running"
+        transport.reconcile()
+        assert len(provider.writes) == 1
+        runtime.adapters[row["session_id"]].steer_turn("finish", store.load_turn(row["session_id"], row["turn_id"])["upstream_turn_id"])
+        assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)["status"] == "completed"
+        transport.reconcile()
+        assert provider.edits[-1][2] == "Steered response."
+        assert len(provider.writes) == 1
+    finally:
+        runtime.close()
+
+
 def test_observed_tool_progress_changes_the_view_without_exposing_output_or_inventing_activity():
     state = {}
     for kind, method, observed in [
@@ -147,11 +200,12 @@ def test_output_activity_updates_the_original_post_then_preserves_terminal_answe
             store.append_event(sid, tid, kind="agent.phase", payload={
                 "method": "item/commandExecution/outputDelta", "step": {
                     "id": "read", "kind": "command", "state": "running", "verb": "read",
-                    "title": "private command", "duration_ms": duration}})
+                    "title": "source.txt", "detail": "private command output", "duration_ms": duration}})
             allow_update(transport, row)
             transport.reconcile()
             assert f"已运行 {duration // 1000} 秒" in provider.edits[-1][2]
             assert "第一段回答" in provider.edits[-1][2] and "private" not in provider.edits[-1][2]
+            assert "source.txt" not in provider.edits[-1][2]
         count = len(provider.edits)
         allow_update(transport, row)
         transport.reconcile()
@@ -666,5 +720,57 @@ def test_ambiguous_progress_edit_counts_against_budget_before_provider_write(ord
         record = _read_json(transport.root / f"{row['request_ref']}.json")
         assert record["stream"]["edit_attempts"] == 1  # Readback recovery spends no edit.
         assert len(provider.edits) == 1
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("rollover", ["terminal", "progress"])
+def test_split_draft_retires_only_after_readback_and_keeps_the_full_next_reply(ordinary, rollover):  # noqa: F811
+    store, runtime, provider, transport = streaming(ordinary)
+    try:
+        event = provider.event("notes-app", "split-draft", "wait for interrupt")
+        transport.admit("notes-app", event)
+        row = transport.core.pending()[0]
+        active(store, row)
+        path = transport.root / f"{row['request_ref']}.json"
+        record = _read_json(path)
+        def inbox():
+            return transport._inbox(record)
+        draft = "## Draft\n\n" + "完整草稿字段。" * 4000
+        assert transport._deliver(path, record, "progress", draft, inbox=inbox)
+        count = len(provider.writes)
+        assert count > 1
+        assert record["deliveries"]["progress"]["attempt"]["message_ref"].startswith("lark-parts:")
+        provider.verify_replies = False
+        if rollover == "terminal":
+            assert not transport._deliver(path, record, "terminal", draft + "Final.", inbox=inbox)
+        else:
+            assert not transport._continue_progress(path, record, inbox=inbox)
+        assert len(provider.writes) == count
+        provider.verify_replies = True
+        if rollover == "progress":
+            assert transport._continue_progress(path, record, inbox=inbox)
+            assert record["deliveries"]["progress.0"]["verified"]
+        else:
+            assert transport._deliver(path, record, "terminal", draft + "Final.", inbox=inbox)
+            assert record["stream"]["closed"] and record["deliveries"]["terminal"]["verified"]
+            sent = len(provider.writes)
+            assert transport._deliver(path, record, "terminal", draft + "Final.", inbox=inbox)
+            assert len(provider.writes) == sent
+            from loopx.extensions.lark.post_delivery import _path
+
+            attempt = record["deliveries"]["terminal"]["attempt"]
+            assert attempt["message_ref"].startswith("lark-parts:")
+            parts = _read_json(_path(transport.runtime_root, inbox(), attempt["intent_digest"]))
+            concrete = [parts["delivery_part_attempts"][str(index)]["message_ref"]
+                        for index in range(len(parts["delivery_parts"]))]
+            assert len(concrete) == len(set(concrete))
+            # Inspect every retained provider post, including a verified draft
+            # prefix reused by the final delivery, against the authored text.
+            final_parts = [json.loads(provider.messages[ref]["body"]["content"])
+                           ["zh_cn"]["content"][0][0]["text"].split("\n\n", 1)[1]
+                           for ref in concrete]
+            assert "".join(final_parts) == draft + "Final."
+        assert all(message["msg_type"] == "post" for ref, message in provider.messages.items() if ref.startswith("om_out_"))
     finally:
         runtime.close()

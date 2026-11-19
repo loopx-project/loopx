@@ -101,7 +101,7 @@ def test_completed_registration_recovers_missing_display_from_current_authority(
 
 def test_pending_registration_rejects_source_changed_during_validation(recoverable_registration, monkeypatch):
     from loopx.control_plane.coordination import goal_storage_initialization
-    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from loopx.control_plane.coordination.local_authority import CanonicalAuthorityRequired, read_canonical_todos_if_promoted
 
     arguments = recoverable_registration
     capture = goal_storage_initialization.build_runtime_shadow_source_snapshot
@@ -114,8 +114,14 @@ def test_pending_registration_rejects_source_changed_during_validation(recoverab
     monkeypatch.setattr(goal_storage_initialization, "build_runtime_shadow_source_snapshot", changed_capture)
     with pytest.raises(ValueError, match="source changed during validation"):
         project_registry.register_project_goal(**arguments)
-    assert read_canonical_todos_if_promoted(
-        runtime_root=arguments["runtime_root"], goal_id=arguments["goal_id"]) is None
+    # Ordinary reads must refuse the uninitialized Goal after registration was
+    # rejected; the retired pre-cutover None fallback would hide that state.
+    with pytest.raises(CanonicalAuthorityRequired) as rejected:
+        read_canonical_todos_if_promoted(
+            runtime_root=arguments["runtime_root"], goal_id=arguments["goal_id"])
+    assert rejected.value.code == "canonical_authority_required"
+    assert rejected.value.payload["goal_id"] == arguments["goal_id"]
+    assert rejected.value.payload["legacy_fallback_used"] is False
 
 
 @pytest.mark.parametrize("objective", [
@@ -464,6 +470,7 @@ def test_project_register_conflict_does_not_create_losing_root_under_concurrency
     r'Inspect C:\tools\new and "quoted text".',
     "Compare --- in prose & preserve <tags>.",
     "Example\u2028## Agent Todo\u2029- [ ] Example only.",
+    "比较中文输入并保留 café 与 🧪。",
 ])
 def test_project_register_repeated_identical_request_is_a_noop(
     tmp_path: Path,
@@ -538,25 +545,25 @@ def test_project_register_repeated_identical_request_is_a_noop(
 
     # A completed creation receipt does not roll later presentation back to the
     # initial template, including updated metadata or owner-written narrative.
-    text = state_file.read_text()
+    text = state_file.read_text(encoding="utf-8")
     header, body = text.split("\n---\n", 1)
     header = "\n".join(
         "objective: " + json.dumps(objective, ensure_ascii=True)
         if line.startswith("objective: ") else line for line in header.split("\n")
     )
     equivalent = header + "\n---\n" + body
-    state_file.write_text(equivalent)
+    state_file.write_text(equivalent, encoding="utf-8")
     assert main(arguments) == 0
     capsys.readouterr()
-    assert state_file.read_text() == equivalent
+    assert state_file.read_text(encoding="utf-8") == equivalent
     for drifted in (equivalent.replace("status: active", "status: paused", 1),
                     equivalent.replace("A verified Spec diff is produced.", "Different acceptance.", 1)):
-        state_file.write_text(drifted)
+        state_file.write_text(drifted, encoding="utf-8")
         assert main(arguments) == 0
         replay = json.loads(capsys.readouterr().out)
         assert replay["changed"] is False
         assert replay["storage_selection"]["status"] == "replayed"
-        assert state_file.read_text() == drifted
+        assert state_file.read_text(encoding="utf-8") == drifted
         assert registry_path.read_bytes() == registry_before
 
 

@@ -129,7 +129,7 @@ def assert_bound_projection(provider: str) -> None:
                     "generated_at": f"2090-01-01T00:00:{number % 60:02d}+00:00",
                     "classification": "quota_slot_spent"}) + "\n")
         status = collect_status(registry_path=registry, runtime_root_override=str(runtime),
-            scan_roots=[project], limit=2)
+            limit=2)
         decision = build_quota_should_run(status, goal_id=GOAL_ID, agent_id="codex-side-bypass",
             scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT)
         assert decision["should_run"] is True
@@ -162,7 +162,7 @@ def assert_bound_projection(provider: str) -> None:
         # Display metadata cannot complete the authoritative selected task.
         state.write_text(state.read_text().replace("todo_side status=open", "todo_side status=done"))
         assert state.read_bytes() != before
-        spoofed = collect_status(registry_path=registry, runtime_root_override=str(runtime), scan_roots=[project], limit=2)
+        spoofed = collect_status(registry_path=registry, runtime_root_override=str(runtime), limit=2)
         spoofed_decision = build_quota_should_run(spoofed, goal_id=GOAL_ID, agent_id="codex-side-bypass",
             scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT)
         assert spoofed_decision["agent_lane_next_action"]["todo_id"] == "todo_side"
@@ -179,7 +179,7 @@ def assert_bound_projection(provider: str) -> None:
         assert after_rows["todo_side"]["status"] == "done"
         assert after_rows["todo_side"]["claimed_by"] == before_rows["todo_side"]["claimed_by"]
         assert after_rows["todo_primary"] == before_rows["todo_primary"]
-        changed = collect_status(registry_path=registry, runtime_root_override=str(runtime), scan_roots=[project], limit=2)
+        changed = collect_status(registry_path=registry, runtime_root_override=str(runtime), limit=2)
         next_decision = build_quota_should_run(changed, goal_id=GOAL_ID, agent_id="codex-side-bypass",
             scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT)
         assert step not in next_decision["interaction_contract"]["agent_channel"]["primary_action"]

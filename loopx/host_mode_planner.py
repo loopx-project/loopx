@@ -14,8 +14,8 @@ from .project_prompt import render_quota_guard_command, shell_arg
 SCHEMA_VERSION = "host_mode_plan_v0"
 
 # Host-mode selector modes. These are user/operator choices that map onto the
-# shipped connector catalog and LoopX Turn contract; they are not a second
-# runtime authority.
+# shipped connector catalog and LoopX Turn contract.
+
 MODE_VISIBLE_TUI = "visible_tui"
 MODE_ISOLATED_HEADLESS_TURN = "isolated_headless_turn"
 MODE_IM_GATEWAY = "im_gateway"

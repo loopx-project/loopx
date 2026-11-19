@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import { projectTodoResumePlanning, RESUME_PLANNING_REQUEST } from "../../loopx/control_plane/todos/resume_planning.ts";
+import {evaluateTodoResumeConditions} from "../../loopx/control_plane/todos/resume_condition.ts";
 
 function fact(id: string, overrides: JsonObject = {}): JsonObject {
   return {
@@ -26,6 +27,53 @@ function request(overrides: JsonObject = {}): JsonObject {
     ...overrides,
   };
 }
+
+test("only the actual pending Monitor generation can cover an in-scope successor", () => {
+  const waiter = {todo_id: "todo_waiting", role: "agent", status: "open", task_class: "advancement_task",
+    text: "Validate after the watched artifact changes.", resume_when: "monitor_changed:todo_source",
+    resume_monitor_generation: 0};
+  const source = {todo_id: "todo_source", role: "agent", status: "open", task_class: "continuous_monitor"};
+  const evaluate = (items: JsonObject[]) => (evaluateTodoResumeConditions({
+    schema_version: "todo_resume_evaluation_request_v0", items: [waiter], source_items: items,
+  }).conditions as JsonObject[])[0].condition as JsonObject;
+  const condition = evaluate([source]);
+  const waiting = fact(waiter.todo_id, {status: "open", claim: "agent-a", resume: waiter.resume_when,
+    target_id: source.todo_id, target_status: "open", target_class: "continuous_monitor",
+    payload: {...waiter, resume_ready: false, resume_condition: condition}});
+  const project = (row: JsonObject) => {
+    const input = request();
+    (input.sources as JsonObject).resume_blocked_items = [row];
+    return projectTodoResumePlanning(input).blocked_successor_items as JsonObject[];
+  };
+  assert.equal(project(waiting)[0].todo_id, waiter.todo_id);
+  for (const changed of [evaluate([]), evaluate([{...source, material_change_generation: 1}]),
+    {...condition, baseline_generation: undefined}, {...condition, target_status: undefined}]) {
+    assert.equal(project({...waiting, payload: {...waiter, resume_ready: false, resume_condition: changed}}).length, 0);
+  }
+  assert.equal(project({...waiting, claim: "another-agent"}).length, 0);
+  assert.equal(project({...waiting, excluded: ["agent-a"]}).length, 0);
+});
+
+test("automatic resume selects the earliest scoped clock before the display limit", () => {
+  const dates = ["06", "05", "04", "03", "02", "01"];
+  const rows = dates.map((day, index) => {
+    const id = "todo_clock_" + day, target = `2099-01-${day}T00:00:00Z`;
+    const todo = {todo_id: id, text: "Wait for the scheduled input", status: "deferred",
+      task_class: "advancement_task", resume_when: "resume_at:" + target};
+    const conditions = evaluateTodoResumeConditions({
+      schema_version: "todo_resume_evaluation_request_v0", items: [todo], source_items: [todo],
+      evaluated_at: "2098-12-01T00:00:00Z",
+    }).conditions as JsonObject[];
+    const claim = index === dates.length - 1 ? "peer" : "agent-a";
+    return fact(id, {index, claim, resume: todo.resume_when,
+      payload: {...todo, index, claimed_by: claim, resume_ready: false, resume_condition: conditions[0].condition}});
+  });
+  const input = request({item_limit: 1});
+  (input.sources as JsonObject).deferred_items = rows;
+  const result = projectTodoResumePlanning(input);
+  assert.equal((result.automatic_resume_todo as JsonObject).todo_id, "todo_clock_02");
+  assert.equal(((result.deferred_lanes as JsonObject).deferred_items as JsonObject[]).length, 1);
+});
 
 test("capacity evaluation and claim lanes use one snapshot without mutating it", () => {
   const input = request({ available_capabilities: ["compiler"] });
@@ -162,5 +210,30 @@ test("wire faults fail closed before selection instead of inventing readiness", 
     const input = request();
     (input.sources as JsonObject).items = [fact("todo_invalid", override)];
     assert.throws(() => projectTodoResumePlanning(input));
+  }
+});
+
+test("explicit blocked work waits in scope regardless of class or resume metadata", () => {
+  for (const taskClass of ["blocker", "advancement_task"]) {
+    const blocked = (id: string, overrides: JsonObject = {}) => fact(id, {
+      status: "blocked", resume: null, ready: null,
+      payload: {todo_id: id, text: "Wait for external input", task_class: taskClass, status: "blocked"},
+      ...overrides,
+    });
+    const current = blocked("todo_current", {claim: "agent-a"});
+    const unclaimed = blocked("todo_unclaimed");
+    const input = request({item_limit: 1});
+    (input.sources as JsonObject).items = [current, unclaimed,
+      blocked("todo_peer", {claim: "agent-b"}),
+      blocked("todo_excluded", {excluded: ["agent-a"]}),
+      blocked("todo_ready", {ready: true}),
+      blocked("todo_open", {status: "open"})];
+    (input.sources as JsonObject).backlog_items = [current];
+    const before = structuredClone(input);
+    const result = projectTodoResumePlanning(input);
+    assert.deepEqual((result.blocked_wait_items as JsonObject[]).map(row => row.todo_id),
+      ["todo_current", "todo_unclaimed"]);
+    assert.deepEqual(input, before);
+    assert.deepEqual(projectTodoResumePlanning({...input, agent_id: null}).blocked_wait_items, []);
   }
 });

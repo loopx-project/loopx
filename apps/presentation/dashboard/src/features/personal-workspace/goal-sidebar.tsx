@@ -1,10 +1,10 @@
-import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Bot, ChevronDown, ChevronRight, Focus, LoaderCircle, Pause, Plus, RotateCcw, Settings2, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Bot, ChevronDown, ChevronRight, Focus, LoaderCircle, Pause, Plus, RotateCcw, Search, Settings2, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { DesktopUpdate } from "./desktop-update";
 import { useGoalOrder } from "./use-goal-order";
 import { goalHierarchy, visibleGoalTree } from "./goal-hierarchy";
 
-import { GoalIdentityMark, useGoalActivity } from "./goal-activity-view";
+import { GoalActivityHelp, GoalIdentityMark, useGoalActivity } from "./goal-activity-view";
 import { useWorkspaceI18n } from "./i18n";
 import type { WorkspaceGoal, WorkspaceGoalArchiveLoadState } from "./personal-workspace-model";
 import { StatusSourceSwitcher, type StatusSourceControl } from "./status-source-switcher";
@@ -16,7 +16,7 @@ function GoalRowActivity({ goal, showLoad }: { goal: WorkspaceGoal; showLoad: bo
   return (
     <small className={`is-${activity.tone}`} title={activity.text}>
       <span className="personal-goal-row-activity-copy">{activity.text}</span>
-      {activity.windowBadge ? <span className={`personal-goal-window-badge is-${activity.windowBadge.state}`}>{t(activity.windowBadge.labelKey)}</span> : null}
+      {activity.windowBadge ? <span className={`personal-goal-window-badge is-${activity.windowBadge.state}`}>{activity.windowBadge.text}</span> : null}
     </small>
   );
 }
@@ -28,6 +28,7 @@ export function GoalSidebar({
   lifecycleBusyGoalIds,
   goalLifecycleOperations,
   onRequestGoalCreate,
+  onOpenCommands,
   onOpenSettings,
   onRetryGoalArchive,
   onRequestGoalLifecycle,
@@ -43,6 +44,7 @@ export function GoalSidebar({
   lifecycleBusyGoalIds?: ReadonlySet<string>;
   goalLifecycleOperations?: readonly ("stop" | "resume" | "delete")[];
   onRequestGoalCreate?: () => void;
+  onOpenCommands?: () => void;
   onOpenSettings?: () => void;
   onRetryGoalArchive?: () => void;
   onRequestGoalLifecycle?: (goal: WorkspaceGoal, operation: "stop" | "resume" | "delete") => void;
@@ -103,13 +105,15 @@ export function GoalSidebar({
           {tree.parents.has(goal.goalId) ? <span className="personal-sr-only">{t("sidebar.childOf", {goal: tree.byId.get(tree.parents.get(goal.goalId)!)!.title})}</span> : null}
           <GoalRowActivity goal={goal} showLoad={!stopped || selectedGoalId === goal.goalId} />
         </span>
-        {tree.invalidParents.has(goal.goalId) && goal.goalId !== rootGoalId ? <AlertTriangle size={14} aria-label={t("sidebar.invalidParent")}><title>{t("sidebar.invalidParent")}</title></AlertTriangle> : <ChevronRight size={15} />}
+        {tree.invalidParents.has(goal.goalId) && goal.goalId !== rootGoalId ? <AlertTriangle size={14} aria-label={t("sidebar.invalidParent")}><title>{t("sidebar.invalidParent")}</title></AlertTriangle>
+          : !sorting && goal.hostThreadActivity && !stopped && !goal.loadState ? null : <ChevronRight size={15} />}
       </button>
+      {!sorting ? <GoalActivityHelp key={`${statusSourceControl?.activeSource.statusUrl}:${goal.sourceAccess?.namespace}:${goal.goalId}`} goal={goal} /> : null}
       {!stopped && sorting ? <div className="personal-goal-move-actions">
         <button type="button" aria-label={t("sidebar.moveUp", { goal: goal.title })} disabled={siblingGroups.get(tree.parents.get(goal.goalId) ?? null)?.[0]?.goalId === goal.goalId} onClick={() => ordering.moveBy(goal.goalId, -1)}><ArrowUp aria-hidden="true" size={13} /></button>
         <button type="button" aria-label={t("sidebar.moveDown", { goal: goal.title })} disabled={siblingGroups.get(tree.parents.get(goal.goalId) ?? null)?.at(-1)?.goalId === goal.goalId} onClick={() => ordering.moveBy(goal.goalId, 1)}><ArrowDown aria-hidden="true" size={13} /></button>
       </div> : null}
-      {onRequestGoalLifecycle && lifecycleOperationEnabled(stopped ? "resume" : "stop") ? (
+      {!goal.sourceAccess?.readOnly && onRequestGoalLifecycle && lifecycleOperationEnabled(stopped ? "resume" : "stop") ? (
         <>
           <button
             aria-label={`${stopped ? t("sidebar.resume") : t("sidebar.stop")} ${goal.title}`}
@@ -198,13 +202,18 @@ export function GoalSidebar({
 
       <div className="personal-sidebar-footer">
         <DesktopUpdate />
-        {onOpenSettings ? (
-          <button aria-label={t("settings.open")} className="personal-sidebar-utility" onClick={onOpenSettings} type="button">
-            <span className="personal-sidebar-utility-icon"><Settings2 size={17} /></span>
-            <span className="personal-sidebar-utility-copy"><strong>{t("settings.open")}</strong></span>
-            <ChevronRight aria-hidden="true" size={15} />
-          </button>
-        ) : null}
+        <div className="personal-sidebar-actions">
+          {onOpenSettings ? (
+            <button aria-label={t("settings.open")} className="personal-sidebar-utility" onClick={onOpenSettings} type="button">
+              <Settings2 aria-hidden="true" size={17} /><span>{t("settings.open")}</span>
+            </button>
+          ) : null}
+          {onOpenCommands ? <div className="personal-sidebar-search">
+            <button onClick={onOpenCommands} type="button" aria-label={t("palette.title")}
+              aria-describedby="workspace-navigation-hint" aria-keyshortcuts="Control+k Meta+k"><Search aria-hidden="true" size={18} /></button>
+            <span id="workspace-navigation-hint" role="tooltip">{t("palette.title")}</span>
+          </div> : null}
+        </div>
       </div>
     </div>
   );

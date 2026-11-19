@@ -40,6 +40,7 @@ def write_bytes_atomic(
     preserve_mode: bool = False,
     directory_mode: int | None = None,
     fsync_directory: bool = False,
+    replace_retry_seconds: float = 0,
 ) -> None:
     """Replace one file with `payload` through a same-directory temp file.
 
@@ -52,7 +53,7 @@ def write_bytes_atomic(
     untouched; an explicit `mode` is applied with chmod. `preserve_mode` keeps
     an existing destination's mode and wins over both.
     """
-    destination = Path(path).expanduser()
+    destination = windows_extended_path(Path(path).expanduser())
     destination.parent.mkdir(parents=True, exist_ok=True, mode=directory_mode or 0o777)
     if preserve_mode and destination.exists():
         mode = destination.stat().st_mode & 0o777
@@ -69,7 +70,17 @@ def write_bytes_atomic(
             os.fsync(handle.fileno())
         if mode is not None:
             os.chmod(temporary, mode)
-        os.replace(temporary, destination)
+        deadline = time.monotonic() + replace_retry_seconds
+        while True:
+            try:
+                os.replace(temporary, destination)
+                break
+            except OSError as error:
+                remaining = deadline - time.monotonic()
+                if (os.name != "nt" or getattr(error, "winerror", None) != 5
+                        or remaining <= 0):
+                    raise
+                time.sleep(min(0.05, remaining))
         if fsync_directory and os.name == "posix":
             directory_fd = os.open(
                 destination.parent,
@@ -91,6 +102,7 @@ def write_json_atomic(
     preserve_mode: bool = False,
     directory_mode: int | None = None,
     fsync_directory: bool = False,
+    replace_retry_seconds: float = 0,
     indent: int | None = 2,
     sort_keys: bool = False,
     separators: tuple[str, str] | None = None,
@@ -116,6 +128,7 @@ def write_json_atomic(
         preserve_mode=preserve_mode,
         directory_mode=directory_mode,
         fsync_directory=fsync_directory,
+        replace_retry_seconds=replace_retry_seconds,
     )
 
 
@@ -345,7 +358,20 @@ def _write_holder_sidecar(holder_path: Path, record: dict[str, object]) -> None:
             holder_file.write("\n")
             holder_file.flush()
             os.fsync(holder_file.fileno())
-        os.replace(temporary_path, holder_path)
+        # A Windows reader may briefly deny DELETE sharing. Keep the old
+        # complete diagnostic until atomic replacement succeeds; persistent
+        # access denial still propagates within this bounded IO window.
+        deadline = time.monotonic() + 0.5
+        while True:
+            try:
+                os.replace(temporary_path, holder_path)
+                break
+            except OSError as error:
+                remaining = deadline - time.monotonic()
+                if (os.name != "nt" or getattr(error, "winerror", None) != 5
+                        or remaining <= 0):
+                    raise
+                time.sleep(min(0.05, remaining))
     finally:
         temporary_path.unlink(missing_ok=True)
 
@@ -423,7 +449,7 @@ def _read_latest_holder_record(path: Path) -> tuple[dict[str, object], bool]:
             text = holder_path.read_text(encoding="utf-8")
         except FileNotFoundError:
             continue
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             unreadable = True
             continue
         try:
@@ -492,7 +518,10 @@ def lock_holder_liveness(path: Path) -> tuple[str, dict[str, object]]:
     return (LOCK_HOLDER_LIVE if process_is_alive(pid) else LOCK_HOLDER_DEAD), record
 
 
-def _operator_action(holder: dict[str, object], *, retry_mode: str) -> dict[str, object]:
+def _operator_action(
+    holder: dict[str, object], *, retry_mode: str, kernel_fence: bool
+) -> dict[str, object]:
+    fence = "kernel lock" if kernel_fence else "mutation marker"
     return {
         "required": True,
         "action": "inspect_lock_holder",
@@ -503,9 +532,13 @@ def _operator_action(holder: dict[str, object], *, retry_mode: str) -> dict[str,
         "retry_mode": retry_mode,
         "steps": [
             "Inspect the recorded holder host, PID and operation on that host.",
-            "Confirm the process is stalled before terminating it.",
+            "Confirm the process still holds the lock and is stalled before terminating it.",
             "Retry according to retry_mode after the holder exits.",
             "Do not delete the lock file; the kernel lock is authoritative.",
+        ] if holder else [
+            f"The {fence} was busy at the deadline; current holder unknown.",
+            "Check for overlapping operations and retry according to retry_mode after contention clears.",
+            "Do not delete the lock files.",
         ],
     }
 
@@ -547,10 +580,11 @@ class LockAcquireTimeoutError(TimeoutError):
         self.incident_channel = incident_channel
         raw_holder = incident.get("holder")
         holder: dict[str, object] = raw_holder if isinstance(raw_holder, dict) else {}
-        super().__init__(
-            "file lock acquisition timed out"
-            + (f" while waiting for holder pid {holder.get('pid')}" if holder.get("pid") else "")
+        detail = (
+            f"recorded holder pid {holder['pid']}" if holder.get("pid")
+            else "lock busy, current holder unknown"
         )
+        super().__init__(f"file lock acquisition timed out ({detail})")
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -571,6 +605,7 @@ def lock_timeout_error_fields(error: BaseException) -> dict[str, object]:
 def _timeout_error(
     path: Path,
     *,
+    kernel_fence: bool,
     policy: LockAcquisitionPolicy,
     timeout_seconds: float,
     waited_seconds: float,
@@ -578,24 +613,38 @@ def _timeout_error(
     agent_id: str | None,
     operation: str | None,
 ) -> LockAcquireTimeoutError:
-    holder, _ = _read_latest_holder_record(path)
+    state, last_holder = lock_holder_liveness(path)
+    lock_id = _lock_id(path)
+    holder: dict[str, object] = {}
+    if kernel_fence and state == LOCK_HOLDER_LIVE and last_holder.get("lock_id") == lock_id:
+        # A marker can belong to a reader that preserves the kernel record, or
+        # to a contender still waiting for the kernel lock. Neither binds the
+        # recorded PID to the fence we are waiting on.
+        try:
+            _effect_mutation_lock_path(path).lstat()
+        except FileNotFoundError:
+            holder = last_holder
+        except OSError:
+            pass
     waiter = {
         **_identity(agent_id=agent_id, operation=operation, policy=policy),
         "started_at": started_at,
         "timeout_seconds": round(timeout_seconds, 3),
         "waited_seconds": round(waited_seconds, 3),
     }
-    action = _operator_action(holder, retry_mode=LOCK_POLICIES[policy].retry_mode)
+    action = _operator_action(holder, retry_mode=LOCK_POLICIES[policy].retry_mode, kernel_fence=kernel_fence)
     incident: dict[str, object] = {
         "schema_version": LOCK_INCIDENT_SCHEMA_VERSION,
         "error_code": LOCK_ACQUIRE_TIMEOUT_ERROR_CODE,
         "recorded_at": _utc_now_iso(),
-        "lock_id": _lock_id(path),
+        "lock_id": lock_id,
         "policy": policy.value,
         "holder": holder,
         "waiter": waiter,
         "operator_action": action,
     }
+    if last_holder and not holder:
+        incident["last_kernel_holder"] = last_holder
     recorded = _append_incident(path, incident)
     return LockAcquireTimeoutError(
         incident=incident,
@@ -647,6 +696,7 @@ def exclusive_file_lock(
             if now >= deadline:
                 raise _timeout_error(
                     path,
+                    kernel_fence=True,
                     policy=selected_policy,
                     timeout_seconds=timeout,
                     waited_seconds=now - started,
@@ -689,13 +739,39 @@ def try_exclusive_file_lock(
 ) -> Iterator[Path | None]:
     """Try once to hold a sibling lock file for single-flight work.
 
-    ``None`` means another process already owns the lock. POSIX uses ``flock``;
-    Windows uses the standard-library ``msvcrt`` byte-range lock.
-    Non-executing recovery can preserve the previous holder record while
-    taking the same kernel fence, so a failed recovery does not consume proof
-    of the original executor's death. Other callers retain normal recording.
+    ``None`` means another process already owns the lock. Non-executing
+    recovery can take the fence without overwriting the prior holder record.
     """
+    with _try_exclusive_lock(
+        path, agent_id=agent_id, operation=operation, preserve_holder=preserve_holder,
+    ) as held:
+        yield None if held is None else held[0]
 
+
+@contextmanager
+def try_posix_child_retained_file_lock(
+    path: Path, *, operation: str,
+) -> Iterator[int | None]:
+    """Yield the POSIX lock descriptor for explicit inheritance by a supervisor.
+
+    Only closing all copies releases the flock. The descriptor is not generally
+    inheritable; pass it only to the child that owns this operation's cleanup.
+    """
+    if fcntl is None:
+        raise RuntimeError("child-retained file locks require POSIX flock")
+    with _try_exclusive_lock(path, operation=operation, release_by_close=True) as held:
+        yield None if held is None else held[1]
+
+
+@contextmanager
+def _try_exclusive_lock(
+    path: Path,
+    *,
+    agent_id: str | None = None,
+    operation: str | None = None,
+    preserve_holder: bool = False,
+    release_by_close: bool = False,
+) -> Iterator[tuple[Path, int] | None]:
     lock_path = _lock_path(path)
     holder_path = lock_holder_path(path)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -721,7 +797,7 @@ def try_exclusive_file_lock(
                     holder_path=holder_path,
                     record=record,
                 )
-            yield lock_path
+            yield lock_path, lock_file.fileno()
         finally:
             if not preserve_holder:
                 _mark_released(
@@ -730,7 +806,8 @@ def try_exclusive_file_lock(
                     holder_path=holder_path,
                     record=record,
                 )
-            _release_kernel_lock(lock_file)
+            if not release_by_close:
+                _release_kernel_lock(lock_file)
 
 
 EFFECT_MUTATION_LOCK_SUFFIX = ".ts-effect.lock"
@@ -751,7 +828,7 @@ def _effect_mutation_claim_path(path: Path, token: str) -> Path:
 def process_is_alive(pid: object) -> bool:
     """Probe a process without sending signals or console control events."""
 
-    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+    if isinstance(pid, bool) or not isinstance(pid, int) or not 0 < pid <= 0xFFFFFFFF:
         return False
     if os.name == "nt":
         # Windows signal 0 is CTRL_C_EVENT, not the side-effect-free POSIX
@@ -759,7 +836,7 @@ def process_is_alive(pid: object) -> bool:
         return _windows_process_is_alive(pid)
     try:
         os.kill(pid, 0)
-    except ProcessLookupError:
+    except (ProcessLookupError, OverflowError):
         return False
     except PermissionError:
         return True
@@ -826,7 +903,6 @@ def _read_effect_mutation_owner(path: Path) -> dict[str, object] | None:
 @dataclass(frozen=True)
 class _EffectMutationClaim:
     path: Path
-    token: str
     identity: tuple[int, int, int, int]
 
 
@@ -957,7 +1033,7 @@ def _claim_effect_mutation_lock(
             raise
         if identity is None:
             return None
-        return _EffectMutationClaim(claim_path, token, identity)
+        return _EffectMutationClaim(claim_path, identity)
     return None
 
 
@@ -965,38 +1041,17 @@ def _release_effect_mutation_claim(
     claim: _EffectMutationClaim | Path,
     token: str | None = None,
 ) -> None:
-    expected_token: str | None
-    identity: tuple[int, int, int, int] | None
     if isinstance(claim, _EffectMutationClaim):
-        path = claim.path
-        expected_token = claim.token
-        identity = claim.identity
-    else:
-        path = claim
-        expected_token = token
-        identity = _effect_file_identity(path)
-    if not expected_token:
+        # Remove only the file we created, even if its contents became unreadable.
+        _remove_created_effect_file(claim.path, claim.identity)
         return
-    owner = _read_effect_mutation_owner(path)
-    if isinstance(claim, _EffectMutationClaim):
-        if (
-            owner is None
-            or owner.get("pid") != os.getpid()
-            or owner.get("token") != expected_token
-        ):
-            # The pathname may have been corrupted or replaced after this
-            # caller created the claim.  Its captured identity still permits
-            # removing only its own inode, preventing claim leaks without
-            # touching a later claimant.
-            _remove_created_effect_file(path, identity)
-            return
-    elif (
-        owner is None
-        or owner.get("pid") != os.getpid()
-        or owner.get("token") != expected_token
-    ):
+    if not token:
         return
-    _remove_created_effect_file(path, identity)
+    identity = _effect_file_identity(claim)
+    owner = _read_effect_mutation_owner(claim)
+    if owner is None or owner.get("pid") != os.getpid() or owner.get("token") != token:
+        return
+    _remove_created_effect_file(claim, identity)
 
 
 def _reclaim_stale_effect_mutation_lock(path: Path) -> bool:
@@ -1075,6 +1130,7 @@ def _release_effect_mutation_lock(
         if claim is None:
             return False
         retired_path = path.with_name(f"{path.name}.released.{uuid4()}")
+        retired_cleaned = False
         try:
             current = _read_effect_mutation_owner(path)
             if current is None or current.get("token") != token:
@@ -1089,20 +1145,23 @@ def _release_effect_mutation_lock(
                 retired_path.unlink(missing_ok=True)
             except OSError:
                 pass
+            else:
+                retired_cleaned = True
             return True
         finally:
-            if claim is not None:
-                _release_effect_mutation_claim(claim)
-            try:
-                retired_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+            _release_effect_mutation_claim(claim)
+            if not retired_cleaned:
+                try:
+                    retired_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
     except OSError:
         if suppress_errors:
             return False
         raise
     finally:
         if claim is not None:
+            # Retry best-effort removal if the first attempt left our claim.
             _release_effect_mutation_claim(claim)
 
 
@@ -1184,6 +1243,7 @@ def exclusive_mutation_file_lock(
             if now >= deadline:
                 raise _timeout_error(
                     path,
+                    kernel_fence=False,
                     policy=selected_policy,
                     timeout_seconds=timeout,
                     waited_seconds=now - started,
@@ -1211,14 +1271,12 @@ def exclusive_mutation_file_lock(
     try:
         yield effect_lock_path
     finally:
-        _release_effect_mutation_lock(
-            effect_lock_path,
-            token,
-            # Lock cleanup is secondary to the durable body result.  A cleanup
-            # failure must not replace either a successful result or its
-            # original exception; stale-owner recovery handles a later retry.
-            suppress_errors=True,
-        )
+        # A transient cleanup error can strand the marker while its process is
+        # still alive. Retry once for the marker this context created and let
+        # the release operation recheck its token and claim before retiring it.
+        released = _release_effect_mutation_lock(effect_lock_path, token, suppress_errors=True)
+        if not released and _same_effect_file_identity(identity, _effect_file_identity(effect_lock_path)):
+            _release_effect_mutation_lock(effect_lock_path, token, suppress_errors=True)
 
 
 @contextmanager

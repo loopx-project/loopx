@@ -19,6 +19,7 @@ mirroring ``goal_channel_projection`` behavior.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -48,13 +49,47 @@ _ACTIVE_STATUS_MARKERS = (
     "keepalive",
     "relaunched",
 )
+# ``controller`` is a human gate in the runtime contract: the attention
+# emitters write ``waiting_on="controller"`` (see ``session_runtime``) while
+# ``acceptance_observation`` and ``project_agent_context`` read
+# ``{"controller", "user_or_controller"}`` as the human-gate set. Leaving it out
+# dropped those goals into ``other`` instead of ``needs_user``.
 _USER_WAITING_MARKERS = (
     "user",
+    "controller",
     "operator",
     "human",
     "owner",
     "user_gate",
 )
+# A status that names the user is waiting on them, the same way a ``waiting_on``
+# that names a human is.
+_USER_STATUS_MARKERS = ("user",)
+
+
+# Statuses are free-form: goal registries, run classifiers, and attention
+# emitters each write their own words, so the bucket fold has to read them as
+# words instead of raw substrings. Otherwise ``installed`` reads as ``stalled``
+# and ``incomplete`` reads as ``complete`` -- the prose-substring defect class
+# reported in #4336, where a healthy ``installed`` goal was folded into a
+# stalled one.
+_MARKER_BOUNDARY_TEMPLATE = r"(?<![a-z0-9]){marker}(?![a-z0-9])"
+_NEGATED_STATUS_PREFIXES = ("not_", "not-", "no_", "no-", "never_")
+
+
+def _has_status_marker(text: str, markers: tuple[str, ...]) -> bool:
+    """True when one of ``markers`` appears in ``text`` as a whole word."""
+
+    return any(
+        re.search(_MARKER_BOUNDARY_TEMPLATE.format(marker=re.escape(marker)), text)
+        for marker in markers
+    )
+
+
+def _is_negated_status(status_text: str) -> bool:
+    """True for a status that negates the word it carries (``not_completed``)."""
+
+    return status_text.startswith(_NEGATED_STATUS_PREFIXES)
 
 
 def _as_mapping(value: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -97,17 +132,26 @@ def _status_bucket(*, status: str | None, waiting_on: str | None) -> str:
     Buckets: ``active`` (agent is working), ``needs_user`` (waiting on a
     human), ``blocked`` (stuck on a gate/blocker), ``done`` (finished),
     ``other`` (not enough signal to classify).
+
+    Markers are matched as whole words, so a status that merely contains a
+    marker's letters keeps its own bucket, and a negated status
+    (``not_completed``) is not a done signal. ``waiting_on`` of ``controller``
+    is a human gate, matching the set the runtime emitters and
+    ``acceptance_observation`` already agree on.
     """
 
     status_text = (status or "").lower()
     waiting = (waiting_on or "").lower()
-    if any(marker in status_text for marker in _DONE_STATUS_MARKERS):
+    done_markers = () if _is_negated_status(status_text) else _DONE_STATUS_MARKERS
+    if _has_status_marker(status_text, done_markers):
         return "done"
-    if any(marker in status_text for marker in _BLOCKED_STATUS_MARKERS):
+    if _has_status_marker(status_text, _BLOCKED_STATUS_MARKERS):
         return "blocked"
-    if any(marker in waiting for marker in _USER_WAITING_MARKERS) or "user" in status_text:
+    if _has_status_marker(waiting, _USER_WAITING_MARKERS) or _has_status_marker(
+        status_text, _USER_STATUS_MARKERS
+    ):
         return "needs_user"
-    if any(marker in status_text for marker in _ACTIVE_STATUS_MARKERS):
+    if _has_status_marker(status_text, _ACTIVE_STATUS_MARKERS):
         return "active"
     return "other"
 

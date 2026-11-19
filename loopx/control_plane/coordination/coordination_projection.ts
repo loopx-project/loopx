@@ -91,6 +91,7 @@ const TODO_CONTRACT_REVISION_FIELDS: readonly (readonly string[])[] = [
   ["completion_validation_revision", "completion_validation_revision_history"],
   ["completion_result"],
   ["completion_receipt_id"],
+  ["material_change_scope", "material_change_scope_generations"],
 ];
 
 interface HistoricalTodoContract {
@@ -119,6 +120,16 @@ function historicalTodoContracts(
     });
   }
   return contracts;
+}
+
+function usesFieldsOutsideTodoContract(
+  records: readonly JsonObject[],
+  contract: HistoricalTodoContract,
+): boolean {
+  for (const field of contract.absentFields) {
+    if (records.some((record) => field in record)) return true;
+  }
+  return false;
 }
 
 function sortedIds(values: Iterable<string>): string[] {
@@ -180,13 +191,13 @@ export function validateCoordinationTodoReadModel(
   value: JsonObject,
   expectedGoalId: string,
 ): JsonObject {
-  return validateIndexedTodoReadModel(value, indexCoordinationProjectionTodos(value, expectedGoalId));
+  return validateIndexedTodoReadModel(value, indexCoordinationProjectionTodos(value, expectedGoalId)).readModel;
 }
 
 function validateIndexedTodoReadModel(
   value: JsonObject,
   index: CoordinationTodoProjectionIndex,
-): JsonObject {
+): { readModel: JsonObject; historicalContract: HistoricalTodoContract | undefined } {
   const records = index.todo_ids.map((todoId) => index.todos.get(todoId)!);
   // Identity indexing already validates/copies every record and rejects duplicate
   // IDs. The insertion order of those same records proves order; serializing
@@ -221,14 +232,13 @@ function validateIndexedTodoReadModel(
   if (!currentContract && historicalContract === undefined) {
     throw new AuthorityStoreProtocolError("coordination Todo read-model field contract mismatch");
   }
-  if (historicalContract !== undefined &&
-      records.some((record) => [...historicalContract.absentFields].some((field) => field in record))) {
+  if (historicalContract !== undefined && usesFieldsOutsideTodoContract(records, historicalContract)) {
     throw new AuthorityStoreProtocolError("coordination Todo record exceeds its historical field contract");
   }
   for (const [recordIndex, record] of records.entries()) {
     canonicalTodoRecord(record, `coordination Todo read record ${recordIndex}`);
   }
-  return readModel;
+  return { readModel, historicalContract };
 }
 
 function requireCompleteTodoReplacement(
@@ -360,7 +370,7 @@ export class CoordinationProjectionRead {
   }
 
   validateTodoReadModel(): JsonObject {
-    return validateIndexedTodoReadModel(this.head, this.todoIndex);
+    return validateIndexedTodoReadModel(this.head, this.todoIndex).readModel;
   }
 }
 
@@ -379,8 +389,8 @@ export function reduceCoordinationProjection(
     throw new AuthorityStoreProtocolError("coordination projection mutation batch is empty");
   }
   const current = indexCoordinationProjection(value, expectedGoalId);
-  const readModel = value.todo_read_model === undefined
-    ? undefined : validateCoordinationTodoReadModel(value, expectedGoalId);
+  const previous = value.todo_read_model === undefined
+    ? undefined : validateIndexedTodoReadModel(value, current);
   const todos = new Map(current.todos);
   const leases = new Map(current.leases);
   const mutatedRecords = new Set<string>();
@@ -414,13 +424,20 @@ export function reduceCoordinationProjection(
     }
   }
   const nextTodos = sortedIds(todos.keys()).map((todoId) => todos.get(todoId)!);
+  const readModel = previous && coordinationTodoReadModel(nextTodos, previous.readModel.schema_version);
+  const historicalContract = previous?.historicalContract;
+  // Ordinary writes should keep a released declaration readable by its
+  // original consumer. A write that uses newer fields needs the current one.
+  if (readModel && historicalContract && !usesFieldsOutsideTodoContract(nextTodos, historicalContract)) {
+    readModel.contract_fields = [...historicalContract.fields];
+  }
   const reduced = canonicalAuthorityObject({
     ...value,
     todos: nextTodos,
     leases: sortedIds(leases.keys()).map((todoId) => leases.get(todoId)!),
     ...(readModel === undefined
       ? {}
-      : { todo_read_model: coordinationTodoReadModel(nextTodos, readModel.schema_version) }),
+      : { todo_read_model: readModel }),
   }, "coordination projection");
   if (value.todo_read_model !== undefined) {
     validateCoordinationTodoReadModel(reduced, expectedGoalId);

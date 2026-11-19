@@ -216,7 +216,7 @@ def test_actual_chat_status_projects_canonical_host_eligibility_without_extra_re
             reads.append(path)
             return original_read(path, **kwargs)
         monkeypatch.setattr(routes, "_read_source_registry_with_deadline", counted)
-        kwargs = {"registry_path": shared, "runtime_root_override": None, "scan_roots": [project], "limit": 8, "include_public_boundary_scan": False}
+        kwargs = {"registry_path": shared, "runtime_root_override": None, "limit": 8}
         baseline = collect_status(**kwargs)
         baseline_reads = list(reads)
         assert all("zcode_goal_eligible_agent_ids" not in row for row in baseline["run_history"]["goals"])
@@ -841,6 +841,52 @@ def _revise_acceptance(registry: Path, objective: str) -> dict:
                                         document=_acceptance_document(objective), operation_id=f"revise-{objective}", execute=True)
     assert applied["status"] == "applied"
     return bridge._goal_basis(bridge.validate_zcode_binding(registry_path=registry, goal_id="delivery", agent_id="zcode-worker"))
+
+
+@pytest.mark.parametrize("context_mode", ["on", "off"])
+@pytest.mark.parametrize("condition", ["ready", "user_gate", "zero_quota"])
+def test_native_admission_matches_core_with_model_context_enabled(
+    promoted_native_goal, monkeypatch, context_mode, condition,
+):
+    import os
+    from loopx.todos import add_goal_todo
+
+    registry, project, stub, _ = promoted_native_goal
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", context_mode)
+    if condition == "user_gate":
+        add_goal_todo(registry_path=registry, goal_id="delivery", role="user",
+            text="Confirm the original export destination", task_class="user_gate",
+            blocks_agent="zcode-worker")
+    elif condition == "zero_quota":
+        data = json.loads(registry.read_text(encoding="utf-8"))
+        data["goals"][0]["quota"]["allowed_slots"] = 0
+        registry.write_text(json.dumps(data), encoding="utf-8")
+    source = registry.read_bytes()
+    state = (project / "state.md").read_bytes()
+    direct = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+        "--format", "json", "quota", "should-run", "--goal-id", "delivery",
+        "--agent-id", "zcode-worker", "--runtime-profile", "generic_cli",
+        "--available-capability", "shell", "--available-capability", "filesystem_write"],
+        capture_output=True, text=True, check=True,
+        env={**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"})
+    expected = json.loads(direct.stdout)
+    assert expected["should_run"] is (condition == "ready"), expected
+    bound = bridge.zcode_goal_operation(action="bind", registry_path=registry,
+        goal_id="delivery", agent_id="zcode-worker", project=project, cli_path=str(stub))
+    assert bound["ok"] is True
+    observed = bridge.zcode_goal_operation(action="start", registry_path=registry,
+        goal_id="delivery", agent_id="zcode-worker")
+    assert observed["quota"]["should_run"] == expected["should_run"], observed
+    assert observed["quota"]["reason"] == expected["reason"], observed
+    assert observed["native"]["running"] is (condition == "ready"), observed
+    if condition != "ready":
+        assert observed["native"]["target_id"] is None
+    else:
+        assert bridge.zcode_goal_operation(action="stop", registry_path=registry,
+            goal_id="delivery", agent_id="zcode-worker")["ok"] is True
+    assert os.environ["LOOPX_CONTEXT_DELIVERY"] == context_mode
+    assert registry.read_bytes() == source
+    assert (project / "state.md").read_bytes() == state
 
 
 def test_journal_without_recorded_basis_refuses_resume_until_stop_start_records_it(promoted_native_goal):

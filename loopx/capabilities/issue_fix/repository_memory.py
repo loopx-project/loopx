@@ -7,6 +7,7 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from ...control_plane.runtime.public_safety import public_safe_compact_text
+from ...public_safe_text import COMPACT_LABEL_PATTERN as _LABEL_PATTERN
 
 
 ISSUE_FIX_REPOSITORY_MEMORY_READ_RESULT_SCHEMA_VERSION = (
@@ -31,7 +32,6 @@ DECISION_INFLUENCE_ASPECTS = {
 }
 MAX_MEMORY_RESULTS = 6
 
-_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$")
 _INPUT_FIELDS = {
     "schema_version",
     "provider",

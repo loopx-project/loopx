@@ -1,46 +1,96 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from importlib import import_module
+from pathlib import Path
 from typing import Any
 
-from .contract import MachineConfigurationRegistry
+from .contract import MachineConfigurationNamespace, MachineConfigurationRegistry
+
+# Namespace id, owner module and factory. Owners stay at the composition
+# boundary: the generic contract does not depend on any consumer capability,
+# and a reader loads only the namespaces it resolves.
+_BUILTIN_NAMESPACES = (
+    (
+        "context_delivery",
+        "loopx.capabilities.machine_configuration.context_delivery",
+        "context_delivery_machine_configuration_namespace",
+    ),
+    (
+        "explore_harness",
+        "loopx.capabilities.explore.machine_defaults",
+        "explore_machine_configuration_namespace",
+    ),
+    (
+        "codex_chat",
+        "loopx.capabilities.native_chat.machine_defaults",
+        "codex_chat_machine_configuration_namespace",
+    ),
+    (
+        "goal_storage",
+        "loopx.capabilities.machine_configuration.goal_storage",
+        "goal_storage_machine_configuration_namespace",
+    ),
+    (
+        "manager_runtime",
+        "loopx.capabilities.manager_runtime.machine_profile",
+        "manager_runtime_machine_configuration_namespace",
+    ),
+    (
+        "periodic_report",
+        "loopx.capabilities.periodic_report.machine_defaults",
+        "periodic_report_machine_configuration_namespace",
+    ),
+    (
+        "todo_replan_cadence",
+        "loopx.capabilities.todo_replan_cadence.machine_defaults",
+        "todo_replan_cadence_machine_configuration_namespace",
+    ),
+    (
+        "change_quality_qualification",
+        "loopx.capabilities.change_quality.machine_defaults",
+        "change_quality_machine_configuration_namespace",
+    ),
+    (
+        "pull_request_review",
+        "loopx.capabilities.pr_review_queue.machine_defaults",
+        "pull_request_review_machine_configuration_namespace",
+    ),
+    (
+        "steward_executor",
+        "loopx.capabilities.steward_executor.machine_defaults",
+        "steward_executor_machine_configuration_namespace",
+    ),
+)
+
+
+def _owner(module: str, factory: str) -> Callable[[], MachineConfigurationNamespace]:
+    def load() -> MachineConfigurationNamespace:
+        contract: MachineConfigurationNamespace = getattr(
+            import_module(module), factory
+        )()
+        return contract
+
+    return load
 
 
 def build_builtin_machine_configuration_registry() -> MachineConfigurationRegistry:
-    # Imports stay at the composition boundary: the generic contract does not
-    # depend on any consumer capability.
-    from ..change_quality.machine_defaults import (
-        change_quality_machine_configuration_namespace,
-    )
-    from ..periodic_report.machine_defaults import (
-        periodic_report_machine_configuration_namespace,
-    )
-    from ..manager_runtime.machine_profile import (
-        manager_runtime_machine_configuration_namespace,
-    )
-    from ..pr_review_queue.machine_defaults import (
-        pull_request_review_machine_configuration_namespace,
-    )
-    from ..steward_executor.machine_defaults import (
-        steward_executor_machine_configuration_namespace,
-    )
-    from ..todo_replan_cadence.machine_defaults import (
-        todo_replan_cadence_machine_configuration_namespace,
-    )
+    from .compaction_memory import normalize_compaction_memory
 
-    from .goal_storage import goal_storage_machine_configuration_namespace
-    from ..native_chat.machine_defaults import codex_chat_machine_configuration_namespace
+    registry = MachineConfigurationRegistry()
+    registry.register_retired("compaction_memory", normalize_compaction_memory)
+    for namespace, module, factory in _BUILTIN_NAMESPACES:
+        registry.register_deferred(namespace, _owner(module, factory))
+    return registry
 
-    return (
-        MachineConfigurationRegistry()
-        .register(codex_chat_machine_configuration_namespace())
-        .register(goal_storage_machine_configuration_namespace())
-        .register(manager_runtime_machine_configuration_namespace())
-        .register(periodic_report_machine_configuration_namespace())
-        .register(todo_replan_cadence_machine_configuration_namespace())
-        .register(change_quality_machine_configuration_namespace())
-        .register(pull_request_review_machine_configuration_namespace())
-        .register(steward_executor_machine_configuration_namespace())
+
+def read_builtin_goal_machine_configuration(runtime_root: Path) -> dict[str, Any] | None:
+    """Read the owners composed by project_goal_with_builtin_machine_configuration."""
+    from .store import read_machine_configuration
+
+    return read_machine_configuration(
+        runtime_root, registry=build_builtin_machine_configuration_registry(),
+        namespace_ids=("explore_harness", "todo_replan_cadence", "change_quality_qualification"),
     )
 
 
@@ -57,6 +107,9 @@ def project_goal_with_builtin_machine_configuration(
         apply_todo_replan_cadence_machine_default,
     )
 
+    from ..explore.machine_defaults import apply_explore_machine_default
+
+    goal = apply_explore_machine_default(goal, machine_configuration)
     projected = apply_todo_replan_cadence_machine_default(
         goal, machine_configuration
     )
@@ -79,7 +132,10 @@ def builtin_machine_inheritable_goal_overrides(
 
     from ..pr_review_queue.goal_configuration import configuration_summary as pr_review_summary
 
+    from ..explore.machine_defaults import configuration_summary as explore_summary
+
     summaries = {
+        "explore_harness": explore_summary(goal),
         "pull_request_review": pr_review_summary(goal),
         "change_quality_qualification": change_quality_summary(goal),
         "todo_replan_cadence": cadence_summary(goal),
@@ -93,6 +149,7 @@ def builtin_machine_inheritable_goal_overrides(
 
 __all__ = [
     "build_builtin_machine_configuration_registry",
+    "read_builtin_goal_machine_configuration",
     "builtin_machine_inheritable_goal_overrides",
     "project_goal_with_builtin_machine_configuration",
 ]

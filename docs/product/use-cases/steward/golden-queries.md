@@ -20,8 +20,7 @@ This pack qualifies the [overall roadmap R1–R3](../../../architecture/rfcs/loo
 and [shared conversation surface](../../../architecture/rfcs/intelligent-review-presentation-surfaces-v0.md#88-reusable-conversation-work-surface).
 It adds no capability, runtime schema, routing keyword list or scheduler.
 Canonical Todos own implementation work; this document owns case intent and
-evaluation rules. Existing [workspace qualification](README.md) uses synthetic
-turns and does not establish these live outcomes.
+evaluation rules.
 
 ## Request style / 请求写法
 
@@ -71,7 +70,7 @@ past the compact scheduling label, with a public evidence link. The App detail
 and provider notice must retain the request object and available evidence. Two
 requests with the same title remain distinguishable; a replay sends no second
 notice. Bound oversized content explicitly and preserve redaction. A notification
-is a preview, not proof of approval, execution or a fresh authorization grant.
+is a preview.
 
 ### A working receiver still owes this request / 负责人正在工作，仍需接续这条请求
 
@@ -109,6 +108,47 @@ new work is needed. Shared CLI/MCP regression tests qualify these seams only;
 release-only live evaluation must still prove receiver adoption and the original
 App/channel result without human reminders or manual relay.
 
+### Delegation backlog to fulfilled requests / 从委派积压到兑现请求
+
+“这些已经交办的事，落实后把结果带回来。” / “Finish the requests I delegated
+and bring the results back.” This is a GQ03/GQ07–GQ09 journey under
+[handoff RFC §5.15](../../../architecture/rfcs/capable-manager-semantic-handoff-v0.md#515-accepted-requests-remain-accountable-through-fulfillment),
+with A25–A28 acceptance.
+
+Freeze a disposable source with more than 40 requests, several qualified
+receivers, mixed dispositions and long original content. Include two requests
+linked to one work item, an adopted later correction, an independent same-text
+request, an old eligible commitment amid new arrivals, a completed Todo without
+a usable result, an already-verified artifact awaiting return, and a historical
+Turn whose current handoff receipt conflicts with an older request. Preserve
+source/revision, current grants, output budgets and declared capacity limits.
+
+Observe the original entry → actual receiver assessment/planning → authorized
+work → checked result → original-conversation return. Check idle/busy behavior,
+persistence-before-wake crash, lost ACK, revoked grant, stopped/unknown Host,
+sender restart and uncertain delivery. These failures must not create duplicate
+effects, hidden Todos or false fulfillment. A short response needs no invented
+work item. An implementation plan or delivered conclusion cannot pass a request
+for an actual repair; a genuine remainder keeps its owner and continuation.
+The sender checks all current requirements and integrates results without a
+user reminder, manual relay or an extra routine acknowledgement.
+
+The reader must distinguish request/work counts, matches, loaded pages and
+unreadable coverage. Reach every authorized page and full detail through the
+packaged desktop/narrow/keyboard journey, including refresh/search and changing
+snapshots. Locate evidence conflicts and read back their supported typed
+recovery; never repair a counter by deleting history or weakening identity and
+audience checks. Repeat denied-source/privacy cases; qualify Lark/CLI separately
+where advertised. Record source/build/installed boundaries and waiting age,
+false closeouts, duplicate effects, reminders and complete IO/model/attention
+cost. This defines qualification, not a claim that the backlog has been cleared.
+
+中文验收：多条补充逐项保留并影响实际工作；已采用请求持续进入原负责人的规划；
+已完成产物优先补返回，不重跑；阶段回复与要求兑现分开；长列表、原文和冲突恢复
+均可达。保留暂停/停止、撤权、预算、租约及受众边界，不批量关闭或唤醒旧工作。
+用真实后端和打包界面读回，区分确定性测试、安装采用和实际模型表现；不能只凭
+任务 done、回执、截图或列表变短判定成功。
+
 ### Direct group conversation / 群里直接说话
 
 For the Lark variant of P0 reliable entry, configure the steward connection to
@@ -121,7 +161,7 @@ while a mention or verified bot reply still works. Bots, missing sender evidence
 historical backfill (even with an old mention), an unrelated group and a worker's
 own Topic are negative cases. This admission probe does not qualify autonomous
 execution: the external read-only profile and recipient grants must be evaluated
-separately. Passing transport fixtures is not evidence of a deployed group run.
+separately.
 
 #### Source-bound follow-ups / 找准追问对象
 
@@ -171,6 +211,35 @@ Agent must preserve that referent in the existing brief and checked result,
 without treating quoted content as authority. Directory metadata tests do not
 qualify model interpretation, receiver adoption or the original-channel return;
 observe each separately in the live journey.
+
+#### Topic owner and misroute correction / 主题归属与误派纠正
+
+Use the bounded public [routing cases](../../../../examples/evaluations/chat-routing.public.json)
+with the existing [intake evaluator](../../../../examples/evaluations/chat-intake.py).
+Two Agents share a generalist role; the first Agent's id resembles the owner's
+shorthand, but relevant current work and recent delivery identify the other as
+the RFC researcher. A delivered earlier misroute is evidence of where the
+message went, not ownership. Require the topic owner's exact Goal/Agent pair
+and preserve the original artifact, purpose, privacy boundary and return audience.
+Then explicitly name the other pair for a separate verification request: the
+topic-owner inference must not override that instruction. A standalone
+explanation requires no handoff; equally relevant evidence requires one focused
+clarification. Missing delivery permission cannot be repaired by substituting
+the tempting role match. Qualified new work needs no pre-existing matching Todo.
+
+Supply a delivered correct-topic handoff with no read/adoption record. Do not
+resend it. If the old recipient still has uncorrected intent, send only the
+bounded ownership correction through the existing permitted path. Once both
+corrections are delivered, answer from their receipts with zero further effects.
+Neither receipt proves cancellation, receiver adoption or the RFC revision.
+Preserve unknown effects and do not interrupt unrelated work or change authority.
+
+Offline tests check prompt/managed-skill delivery, parser/scorer oracles and
+negative outputs; they do not qualify model reasoning. Release-only live runs
+use `--cases examples/evaluations/chat-routing.public.json` and the existing
+explicit paid-call opt-in below. Review the complete rationale and correction
+brief, including no invented cancellation/adoption. Score actual discovery,
+receiver assessment and original-channel return separately in the live journey.
 
 #### Repair and merge / 修复并合并
 
@@ -229,8 +298,7 @@ suggestions. Unknown requirements stay unspecified. Selecting a suggestion must
 only fill the composer; a free-text correction must remain usable. After a reply,
 reload and recover the corrected draft, optionally open the existing Goal form and edit its
 criteria, preview and explicitly apply once, then inspect the creation receipt.
-Before confirmation there is no Goal/action write or worker launch. A draft is
-neither a created Goal nor completed research. Ask an ordinary explanatory question
+Before confirmation there is no Goal/action write or worker launch. Ask an ordinary explanatory question
 and confirm no draft appears. Reject an attempted permission/Agent-binding field
 inside a draft. Qualify model response quality separately from scripted transport
 and packaged-browser tests; the full GQ01 start-and-return outcome remains open.
@@ -267,7 +335,6 @@ high reasoning, a fresh disposable working directory per case and the current
 host login. API raw-envelope integrity and Codex adapter outcomes are separate
 measurements, not interchangeable provider scores. Fixed contexts do not certify dynamic tool
 discovery or receiver adoption. Compare providers/settings separately.
-
 
 ### App-first execution profiles and ordinary questions
 
@@ -457,8 +524,7 @@ documents conversation/topic identity
 and separate conversation/operation permissions. Its
 [steering study](https://github.com/deepcoldy/botmux/blob/982e2c9f16e4f45ae2581967bc1a35a286e7bfa2/docs/design/2026-05-28-codex-type-ahead-steer-design.md)
 describes merged and separate replies under one tested Codex version. These
-are source observations, not proof of current LoopX behavior or universal
-provider guarantees. Do not install Botmux or bind a live bot to run this case.
+are source observations. Do not install Botmux or bind a live bot to run this case.
 
 Use the existing presentation RFC as the already-indexed twin. The evaluator
 then supplies a small synthetic public note and a disposable work item, varying

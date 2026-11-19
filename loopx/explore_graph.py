@@ -2,22 +2,23 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 from collections.abc import Mapping
 from functools import lru_cache
-from typing import Any
 
 from .control_plane.effect_runtime import effect_runtime_result, EffectRuntimeRejected
 
 
 @lru_cache(maxsize=4)
 def _resolve(evidence: bool, planning: bool) -> dict[str, Any]:
-    return effect_runtime_result(
+    return cast(dict[str, Any], effect_runtime_result(
         "explore.configuration.resolve",
         {
             "evidence_enabled": evidence,
             "planning_enabled": planning,
         },
-    )
+    ))
 
 
 def explore_configuration(graph: Any, harness: Any = None) -> dict[str, Any]:
@@ -35,9 +36,9 @@ def plan_explore_configuration(
     current: Mapping[str, Any], changes: Mapping[str, Any]
 ) -> dict[str, Any]:
     try:
-        return effect_runtime_result(
+        return cast(dict[str, Any], effect_runtime_result(
             "explore.configuration.plan",
             {"current": dict(current), "changes": dict(changes)},
-        )
+        ))
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from exc

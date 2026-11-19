@@ -1,22 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from ..control_plane.coordination.local_authority import (
-    LocalCoordinationAuthorityRejection,
-)
-from ..control_plane.todos.external_wait_contract import TodoExternalWaitAuthoringError
-from ..control_plane.todos.handoff_mode import HandoffModeError
+from ..command_invocation import cli_option_args, loopx_cli_argv
 from ..control_plane.todos.contract import decision_scope_metadata_value
-from ..control_plane.work_items.task_lease import TaskLeaseError
 from ..file_lock import lock_timeout_error_fields
-from ..control_plane.coordination.legacy_writer_fence import LegacyCoordinationWriterFenced
-from ..control_plane.coordination.shadow_management import ShadowManagementError
-from ..control_plane.coordination.legacy_writer_fence import ActiveStateAuthorityMutationError
-from ..control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
-from .todo_argument_validation import TodoClaimArgumentError
+from .todo_argument_validation import TODO_OPTION_FIELDS
 
 
 RolloutEventAppender = Callable[..., dict[str, object]]
@@ -31,10 +23,107 @@ TODO_EVENT_KINDS = {
 }
 
 
+def _original_todo_arguments(args: argparse.Namespace) -> list[str]:
+    """Carry parsed caller inputs; Core still decides whether a retry is legal."""
+    arguments = ["todo", args.todo_command, "--goal-id", args.goal_id]
+    for flag, field in (*TODO_OPTION_FIELDS, ("--project", "project"),
+                        ("--dry-run", "dry_run"), ("--result-file", "result_file")):
+        value = getattr(args, field, None)
+        if isinstance(value, bool):
+            if value:
+                arguments.append(flag)
+        elif isinstance(value, list):
+            for item in value:
+                arguments.extend(cli_option_args(flag, item))
+        elif value is not None:
+            arguments.extend(cli_option_args(flag, value))
+    return arguments
+
+
+def _route_native_recovery(
+    payload: dict[str, object], args: argparse.Namespace, *,
+    registry_path: Path, runtime_root_arg: str | None,
+) -> None:
+    """Adapt native guidance to this CLI without changing its recovery decision."""
+    recovery = payload.get("recovery")
+    if not isinstance(recovery, dict):
+        return
+    route = loopx_cli_argv()
+    routed = dict(recovery)
+    for step, descriptor in recovery.items():
+        if not isinstance(descriptor, dict) or not isinstance(descriptor.get("command"), str):
+            continue
+        try:
+            command = shlex.split(descriptor["command"])
+        except ValueError:
+            continue  # Malformed optional guidance must not hide the refusal.
+        if not command or command[0] != "loopx":
+            continue
+        arguments = descriptor.get("cli_args")
+        if descriptor.get("reference_source") == "claim_operation_id_from_claim":
+            arguments = _original_todo_arguments(args)
+            required = descriptor.get("requires_flags")
+            if isinstance(required, list) and "--update-expected-provider-revision" in required:
+                # Core requires a post-claim targeted read. Project its pending
+                # references, not the old values or the claim's new revision.
+                for flag, placeholder in (
+                    ("--claim-operation-id", "<claim_operation_id_from_claim>"),
+                    ("--update-expected-provider-revision", "<provider_revision_from_reconciled_todo_read>"),
+                ):
+                    for index, argument in enumerate(arguments):
+                        if argument == flag and index + 1 < len(arguments):
+                            arguments[index + 1] = placeholder
+                            break
+                        if argument.startswith(flag + "="):
+                            arguments[index] = flag + "=" + placeholder
+                            break
+                    else:
+                        arguments.extend(cli_option_args(flag, placeholder))
+        else:
+            arguments = list(arguments) if isinstance(arguments, list) else command[1:]
+        # The update adapter may already bind selectors. Inspect only the global
+        # prelude, never user prose that happens to resemble an option.
+        start = next((i for i in range(len(arguments) - 1)
+                      if arguments[i:i + 2] == command[1:3]), 0)
+        prelude = arguments[:start]
+        selectors = list(route[1:])
+        for flag, value in (("--registry", str(registry_path)),
+                            ("--runtime-root", runtime_root_arg), ("--format", "json")):
+            if value is not None and not any(part == flag or part.startswith(flag + "=") for part in prelude):
+                selectors.extend(cli_option_args(flag, value))
+        for flag, field in (("--goal-id", "goal_id"), ("--todo-id", "todo_id")):
+            value = descriptor.get(field) or getattr(args, field, None)
+            if flag not in arguments and value is not None:
+                arguments.extend(cli_option_args(flag, value))
+        if step in {"claim", "retry"} and arguments[start:start + 2] == command[1:3]:
+            for flag, field in (("--agent-id", "agent_id"), ("--role", "role"),
+                                ("--project", "project"), ("--state-file", "state_file")):
+                value = getattr(args, field, None)
+                if flag not in arguments and value is not None:
+                    arguments.extend(cli_option_args(flag, value))
+            if getattr(args, "dry_run", False) and "--dry-run" not in arguments:
+                arguments.append("--dry-run")
+        routed[step] = {**descriptor, "command": shlex.join([*route, *command[1:]]),
+                        "cli_args": [*selectors, *arguments]}
+    payload["recovery"] = routed
+
+
 def todo_error_payload(
     args: argparse.Namespace, exc: Exception, *, registry_path: Path,
     runtime_root_arg: str | None,
 ) -> dict[str, object]:
+    from ..control_plane.coordination.local_authority import (
+        LocalCoordinationAuthorityRejection, LocalCoordinationAuthorityUnavailable,
+    )
+    from ..control_plane.coordination.legacy_writer_fence import (
+        ActiveStateAuthorityMutationError, LegacyCoordinationWriterFenced,
+    )
+    from ..control_plane.coordination.shadow_management import ShadowManagementError
+    from ..control_plane.todos.external_wait_contract import TodoExternalWaitAuthoringError
+    from ..control_plane.todos.handoff_mode import HandoffModeError
+    from ..control_plane.work_items.local_lease_record import TaskLeaseError
+    from .todo_argument_validation import TodoClaimArgumentError
+
     payload: dict[str, object] = {
         "ok": False,
         "dry_run": not bool(args.execute)
@@ -72,6 +161,7 @@ def todo_error_payload(
         payload["error_code"] = exc.code
         if exc.authoring_contract is not None:
             payload["authoring_contract"] = exc.authoring_contract
+    _route_native_recovery(payload, args, registry_path=registry_path, runtime_root_arg=runtime_root_arg)
     return payload
 
 
@@ -84,6 +174,11 @@ def append_todo_rollout_event(
     append_cli_rollout_event: RolloutEventAppender,
 ) -> None:
     turn_instance_id = getattr(args, "turn_instance_id", None)
+    identity = payload.get("settlement_identity")
+    if turn_instance_id is None and isinstance(identity, Mapping):
+        # Lifecycle reentry carries the TS-verified historical binding; the
+        # opaque completion key is not a Turn id and must never be parsed.
+        turn_instance_id = identity.get("turn_instance_id")
     terminal_closeout = bool(
         turn_instance_id
         and args.todo_command == "complete"
@@ -141,8 +236,8 @@ def append_todo_rollout_event(
             "mutation_authority": payload.get("mutation_authority"),
             "replan_transition": payload.get("replan_transition"),
             "settlement_effect_id": (
-                payload.get("settlement_identity", {}).get("effect_id")
-                if isinstance(payload.get("settlement_identity"), dict)
+                identity.get("effect_id")
+                if isinstance(identity, dict)
                 else None
             ),
         },

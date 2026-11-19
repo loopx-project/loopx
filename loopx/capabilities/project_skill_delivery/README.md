@@ -32,7 +32,9 @@ loopx project-skill install \
 | Surface | Project target |
 | --- | --- |
 | `codex` | `.agents/skills/<skill-id>/` |
+| `antigravity` | `.agent/skills/<skill-id>/` |
 | `claude-code` | `.claude/skills/<skill-id>/` |
+| `kiro-cli` | `.kiro/skills/<skill-id>/` |
 | `opencode` | `.opencode/skills/<skill-id>/` |
 | `pi` | `.pi/skills/<skill-id>/` |
 
@@ -97,9 +99,9 @@ workflow globally discoverable and also permits an explicitly requested project
 copy. Missing or unknown markers are rejected by project delivery; an unmarked
 source is not implicitly eligible.
 
-The six packaged workflows (`loopx-project`, `loopx-self-repair`,
-`loopx-pr-review`, `loopx-pr-program`, `loopx-doc-registry`, and
-`loopx-benchmark`) declare `global`. Connection, repair, review, and shared
+The seven packaged workflows (`loopx-project`, `loopx-self-repair`,
+`loopx-pr-review`, `loopx-pr-program`, `loopx-doc-registry`,
+`loopx-benchmark`, and `loopx-performance-diagnosis`) declare `global`. Connection, repair, review, and shared
 workflow instructions must be available before a project installs a local
 copy. Their existing task, project, and permission checks still apply.
 `loopx-material` and `loopx-change-quality` remain `project` workflows.

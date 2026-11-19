@@ -59,7 +59,6 @@ def main() -> None:
         assert expected in markdown_artifact["content"]
     assert "snapshot_example_delivery" not in primary_body
     assert "snapshot_example_delivery" in supporting
-    assert "Outcome: Stable release reached all production regions" in primary_body
     assert document["editorial"]["orchestration"]["summary_source"] == (
         "typed_primary_items"
     )

@@ -12,6 +12,7 @@ from loopx.control_plane.coordination.local_authority import (
     read_canonical_todos_if_promoted, read_canonical_todo_fields_if_promoted,
 )
 from loopx.control_plane.goals.goal_frontier.acceptance import acceptance_gaps_from_held_goal_binding
+from loopx.control_plane.testing.model_tool_behavior import QuotaToolContext
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -59,6 +60,8 @@ def test_cli_restore_then_reacquire_preserves_acceptance_and_exact_retry(tmp_pat
                                "--format", "json", *args, "--goal-id", goal],
                               cwd=delivery, capture_output=True, text=True, timeout=60)
         assert proc.returncode == expected, proc.stdout + proc.stderr
+        if args[:2] == ("quota", "should-run"):
+            return QuotaToolContext.from_output(proc.stdout).packet
         return json.loads(proc.stdout)
 
     def inspect():
@@ -73,7 +76,7 @@ def test_cli_restore_then_reacquire_preserves_acceptance_and_exact_retry(tmp_pat
     assert first["acquired"]
     turn_binding = ["--agent-id", "agent-a", "--todo-id", target,
                     "--turn-instance-id", "turn-restore-acceptance"]
-    guard = cli("quota", "should-run", "--codex-app", *turn_binding, "--scan-path", str(delivery))
+    guard = cli("quota", "should-run", "--codex-app", *turn_binding, )
     assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == target
     cli("todo", "update", "--todo-id", target, "--agent-id", "agent-a", "--clear-resume-when",
         "--task-lease-idempotency-key", "execution-one", "--task-lease-expected-version", "1")
@@ -128,7 +131,7 @@ def test_cli_restore_then_reacquire_preserves_acceptance_and_exact_retry(tmp_pat
     assert refresh["ok"]
     assert refresh["delivery_workspace"]["workspace_kind"] == "independent_git_worktree"
     spend_args = ["quota", "spend-slot", *turn_binding, "--slots", "1", "--source", "heartbeat",
-                  "--execute", "--scan-path", str(delivery)]
+                  "--execute", ]
     first_spend = cli(*spend_args)
     assert first_spend["settlement_result"]["ok"]
     assert cli(*restore)["status"] == "replayed"

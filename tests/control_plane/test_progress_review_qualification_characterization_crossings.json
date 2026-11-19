@@ -1,0 +1,37 @@
+{
+  "empty": {},
+  "manual_legacy": {
+    "progress_review.evidence_scope": 1
+  },
+  "multiple": {
+    "goal.acceptance.inspect": 2,
+    "progress_review.criterion_basis": 2,
+    "progress_review.evidence_scope": 2
+  },
+  "off": {},
+  "outside_pin": {
+    "goal.acceptance.inspect": 1,
+    "progress_review.criterion_basis": 1,
+    "progress_review.evidence_scope": 1
+  },
+  "removed": {
+    "goal.acceptance.inspect": 1,
+    "progress_review.criterion_basis": 1,
+    "progress_review.evidence_scope": 1
+  },
+  "repeated": {
+    "goal.acceptance.inspect": 1,
+    "progress_review.criterion_basis": 2,
+    "progress_review.evidence_scope": 2
+  },
+  "unavailable_inspection": {
+    "goal.acceptance.inspect": 2,
+    "progress_review.criterion_basis": 1,
+    "progress_review.evidence_scope": 2
+  },
+  "unavailable_store": {},
+  "wrong_instance": {
+    "goal.acceptance.inspect": 1,
+    "progress_review.evidence_scope": 1
+  }
+}

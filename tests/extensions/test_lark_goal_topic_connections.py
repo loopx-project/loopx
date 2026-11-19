@@ -176,6 +176,45 @@ def test_lists_apps_with_readiness_without_returning_secrets() -> None:
     assert all("app_id" not in app for app in apps)
 
 
+def test_profile_catalog_never_verifies_or_infers_health() -> None:
+    state: dict[str, Any] = {}
+    apps = list_lark_apps(runner=_runner(state), cli_bin="fake-lark", verify=False)
+    assert len(state["calls"]) == 1
+    assert {app["app_ref"] for app in apps} == {"mew", "standby"}
+    assert all(not app["ready"] and not app["reply_ready"] for app in apps)
+    assert all(app["health_error_code"] == "lark_app_unverified" for app in apps)
+    # A selected observation re-enumerates the current profile and checks only it.
+    state["calls"].clear()
+    observed = list_lark_apps(runner=_runner(state), cli_bin="fake-lark", app_ref="mew")
+    assert len(observed) == 1 and observed[0]["ready"]
+    assert len(state["calls"]) == 2
+    assert not any("standby" in call for call in state["calls"])
+    with pytest.raises(ValueError, match="no longer configured"):
+        list_lark_apps(runner=_runner(state), cli_bin="fake-lark", app_ref="removed")
+
+
+@pytest.mark.parametrize("payload,code", [(None, 0), ({}, 0), ([], 1)])
+def test_profile_read_failure_is_not_an_empty_catalog(payload: Any, code: int) -> None:
+    def runner(*_args: Any) -> dict[str, Any]:
+        return {"returncode": code, "stdout": json.dumps(payload), "stderr": "private diagnostic"}
+    with pytest.raises(RuntimeError, match="Could not read local Lark profiles"):
+        list_lark_apps(runner=runner, verify=False)
+
+
+def test_profile_identity_mismatch_is_not_ready() -> None:
+    state: dict[str, Any] = {}
+    original = _runner(state)
+    def runner(args: list[str], cwd: Any, timeout: Any) -> dict[str, Any]:
+        result = original(args, cwd, timeout)
+        if "auth" in args:
+            value = json.loads(result["stdout"])
+            value["appId"] = "cli_different_app"
+            result["stdout"] = json.dumps(value)
+        return result
+    app = list_lark_apps(runner=runner, app_ref="mew")[0]
+    assert not app["ready"] and app["health_error_code"] == "lark_app_unverified"
+
+
 def test_connections_for_two_agents_coexist(tmp_path: Path) -> None:
     registry = _registry(tmp_path)
     registry["goals"][0]["coordination"] = {
@@ -2338,7 +2377,13 @@ def test_set_connection_reconnect_reuses_root_without_resend(tmp_path: Path) -> 
     assert _connect_registered_agent(**kwargs)["ok"] is True
     first_sends = [call for call in state["calls"] if "+messages-send" in call]
     assert len(first_sends) == 1
-    assert _connect_registered_agent(**kwargs)["ok"] is True
+    # Reconnect uses the saved source, including the Inbox registered above.
+    # Rewriting the initial seed here would erase that registration first.
+    kwargs["registry"] = json.loads(
+        (tmp_path / ".loopx" / "registry.json").read_text(encoding="utf-8")
+    )
+    reconnected = _connect_registered_agent(**kwargs)
+    assert reconnected["ok"] is True, reconnected
     total_sends = [call for call in state["calls"] if "+messages-send" in call]
     assert len(total_sends) == 1
     connection = binding_for_goal(

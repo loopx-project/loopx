@@ -242,11 +242,14 @@ def list_lark_apps(
     *,
     runner: CommandRunner = default_subprocess_runner,
     cli_bin: str = DEFAULT_CLI_BIN,
+    verify: bool = True,
+    app_ref: str | None = None,
 ) -> list[dict[str, Any]]:
+    selected = _profile_ref(app_ref) if app_ref is not None else None
     result = call(runner, [cli_bin, "profile", "list"])
     raw_profiles = _json_value(result)
     if result.get("returncode") != 0 or not isinstance(raw_profiles, list):
-        return []
+        raise RuntimeError("Could not read local Lark profiles; retry the configuration read")
     apps: list[dict[str, Any]] = []
     for raw in raw_profiles:
         if not isinstance(raw, Mapping):
@@ -255,7 +258,11 @@ def list_lark_apps(
             app_ref = _profile_ref(raw.get("name"))
         except ValueError:
             continue
-        identity = _app_identity(app_ref=app_ref, runner=runner, cli_bin=cli_bin)
+        if selected is not None and selected != app_ref:
+            continue
+        identity = _app_identity(app_ref=app_ref, runner=runner, cli_bin=cli_bin) if verify else None
+        if identity and raw.get("appId") and identity["app_id"] != raw["appId"]:
+            identity = None
         bot_ready = bool(identity and identity.get("ready"))
         apps.append(
             {
@@ -265,9 +272,11 @@ def list_lark_apps(
                 "active": raw.get("active") is True,
                 "ready": bool(identity and identity.get("ready")),
                 "reply_ready": bot_ready,
-                "health_error_code": None if bot_ready else "lark_app_not_ready",
+                "health_error_code": None if bot_ready else "lark_app_not_ready" if identity else "lark_app_unverified",
             }
         )
+    if selected is not None and not apps:
+        raise ValueError("Lark App profile is no longer configured; refresh the configuration")
     return apps
 
 
@@ -1143,7 +1152,7 @@ def list_lark_connections(
                     "health_error_code": health_error_code,
                     "history_permission_guidance": history_permission_guidance,
                     "listener_status": listener_status or None,
-                    "listener_error_code": listener.get("error_code"),
+                    "listener_error_code": listener.get("error_code") or listener.get("callback_error_code"),
                     "last_event_status": last_event_status or None,
                     "last_event_reason": last_event_reason or None,
                     "event_count": event_count,

@@ -5,7 +5,6 @@
 > or the selected File/SQLite authority. See the
 > [retirement contract](../../reference/protocols/event-sourced-state-contract-v0.md).
 
-
 > **本讲结论：** Canonical event/state contract 拥有长期事实；active state、status 和
 > dashboard 是可重建 read model；session context 不能替代 project memory。
 
@@ -79,11 +78,10 @@ truth，也不成为第四个状态源。
 Runnable | Claimed | Waiting on user | Monitoring | Blocked | Review | Done
 ```
 
-这些列不是新的事实源。“Waiting on user”来自 scoped user gate，“Monitoring”来自
-带 cadence 和 target key 的 monitor，“Review”可以来自领域状态与当前 acceptance，
-而不是把每个展示名称写进 Kernel lifecycle enum。
+“Waiting on user”来自 scoped user gate，“Monitoring”来自
+带 cadence 和 target key 的 monitor，“Review”可以来自领域状态与当前 acceptance。
 
-看板上的移动也对应结构化算子，而不是任意拖拽：
+看板上的移动也对应结构化算子：
 
 | 操作 | 必须保持的约束 |
 | --- | --- |
@@ -102,7 +100,7 @@ closure，最终 transition 仍由 Kernel 接受或拒绝。
 
 ## Goal 不是聊天线程
 
-LoopX 的 durable identity 是 goal，不是某个 Codex thread：
+LoopX 的 durable identity 是 goal：
 
 ```text
 Goal: 长期存在的目标、边界和进度身份
@@ -130,7 +128,7 @@ Dashboard: 只读观察和路由界面
 | Project memory | goal identity、objective/boundary、todo/gate、紧凑 evidence、run lineage | 被 replay、投影或由另一 peer 恢复 | 可以，但必须经过 canonical contract |
 | Environment | 当前 checkout、host capability、外部服务与 fresh source | 在 handoff 之间变化 | 不能，必须重新探测 |
 
-恢复的目标不是逐字重建旧 transcript，而是从持久化事实和新鲜环境重新生成可执行
+恢复的目标是从持久化事实和新鲜环境重新生成可执行
 决定：
 
 ```text
@@ -142,7 +140,7 @@ Project memory 的充分性标准是：更换 session 后，新的 peer 仍能�
 condition。它不要求逐字复现旧推理。第 5 讲会把这个要求进一步写成 handoff 的
 不动点检查。
 
-可以把这看成长期任务的“最小可恢复状态”，而不是“最大可记忆内容”。外置状态应优先保存：
+可以把这看成长期任务的“最小可恢复状态”。外置状态应优先保存：
 
 - 能改变合法 action set 的事实，例如 gate、claim、capability 与 workspace boundary；
 - 能改变下一步判断的事实，例如 fresh observation、acceptance gap 与 monitor due time；
@@ -199,7 +197,7 @@ Registry 适合保存：
 
 ### 2. Event ledger：追加式事实
 
-事件流保存“发生过什么”。协议见 `docs../../reference/protocols/event-sourced-state-contract-v0.md`。
+事件流保存“发生过什么”。协议见 `docs/reference/protocols/event-sourced-state-contract-v0.md`。
 
 代表性事件包括：
 
@@ -277,7 +275,7 @@ projection_synced
 - 当前 peer lane 在做什么？
 - 是否有 contract errors、projection gaps 或 repair needs？
 
-Status 不是写入口。Dashboard、Lark kanban、review packet 都应该消费 status 或其他 public-safe projection，而不是反向解析私有源文件再写回。
+Dashboard、Lark kanban、review packet 都应该消费 status 或其他 public-safe projection。
 
 ## Core State、Domain State 与 Runtime Artifact
 
@@ -330,8 +328,8 @@ os.replace(tmp_name, path)
 
 从这段代码应读出三个边界：
 
-1. Domain State 是 project-local、按 goal 与 pack 分区的事实，不是全局 memory dump。
-2. 稳定 key 和 unchanged 判定用于幂等观察，不代表领域 pack 可以决定下一轮执行。
+1. Domain State 是 project-local、按 goal 与 pack 分区的事实。
+2. 稳定 key 和 unchanged 判定用于幂等观察。
 3. 返回值显式使用 `path_recorded=False`，public receipt 不应泄露本地路径。
 
 Issue-Fix 与 ML Experiment 的 smoke 分别验证这条通用 seam：
@@ -386,8 +384,7 @@ CLI validation
 这里有三个不能省略的性质：
 
 - `agent-a` 必须是注册 peer；
-- claim 是 soft ownership，不是永久权限；
-- status 看到 claim 不等于 status 自己写了 claim。
+- claim 是 soft ownership
 
 ## 为什么不能直接编辑 Projection
 
@@ -425,7 +422,7 @@ registry policy
 = current status projection
 ```
 
-Replay 不是简单地重放聊天。聊天里可能有：
+聊天里可能有：
 
 - 未执行的建议；
 - 失败的命令；
@@ -433,7 +430,7 @@ Replay 不是简单地重放聊天。聊天里可能有：
 - 私有文本；
 - 被后续状态 supersede 的结论。
 
-事件则应明确区分 proposal、attempt、executed receipt 和 validation。例如 supervisor 的 `inject` proposal 不是 session 已被注入的证明；只有 capability-matched host receipt 才是执行事实。
+事件则应明确区分 proposal、attempt、executed receipt 和 validation。只有 capability-matched host receipt 才是执行事实。
 
 ## Projection Gap：控制面常见故障
 
@@ -555,7 +552,7 @@ def resolve_state_file(repo: Path, state_file: str | None) -> Path | None:
 
 ### 2. Event store 用锁、sequence 和 fingerprint 保证可 replay
 
-`loopx/event_sourced_state.py` 先规范化事件，再在 append 时重新读取锁内真相：
+历史版本的 [`loopx/event_sourced_state.py`](https://github.com/loopx-project/loopx/blob/4619475a39c760e04e7f2df4f7fd3608eaa1bb7b/loopx/event_sourced_state.py#L509) 先规范化事件，再在 append 时重新读取锁内真相：
 
 ```python
 def make_state_event(*, event_id, goal_id, event_type,
@@ -595,7 +592,7 @@ def append(self, event):
 
 这就是“append-only”比“只用文件追加模式打开”更强的地方。
 
-建议断点：`AppendOnlyStateEventStore.append:511`。用同一事件 append 两次，再修改 payload append 第三次，比较两个结果。
+历史版本的建议断点：`AppendOnlyStateEventStore.append:560`。用同一事件 append 两次，再修改 payload append 第三次，比较两个结果。
 
 ### 3. Todo projection 先信结构化事件，缺失时才兼容 Markdown
 
@@ -680,7 +677,6 @@ loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id>
 
 ### 读完这一段应能回答
 
-1. Registry 为什么不是 todo truth？
 2. 为什么 event id 冲突必须 fail closed？
 3. Markdown fallback 为什么应保留，但不能继续定义新 runtime 语义？
 4. `state_projection_gap` 在哪一层产生，又在哪一层改变执行选择？
@@ -692,7 +688,7 @@ loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id>
 | --- | --- | --- |
 | 1 | `examples/registry.example.json` | 注册配置的边界 |
 | 2 | `examples/active-goal-state.example.md` | 人可读工作台 |
-| 3 | `docs../../reference/protocols/event-sourced-state-contract-v0.md` | 事件与 replay |
+| 3 | `docs/reference/protocols/event-sourced-state-contract-v0.md` | 事件与 replay |
 | 4 | `docs/reference/protocols/active-state-structured-projection-v0.md` | projection 非写 API |
 | 5 | `docs/status-data-contract.md` | status read model |
 | 6 | `loopx/control_plane/todos/`、`loopx/control_plane/work_items/lifecycle.py` | todo contract 与 transition lifecycle |

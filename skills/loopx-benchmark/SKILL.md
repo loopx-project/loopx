@@ -10,16 +10,13 @@ Use this skill to operate or analyze a LoopX-managed benchmark experiment. The b
 integrity boundaries. This packaged skill is its task-triggered Agent playbook.
 
 An assigned solver follows its task instructions and current execution contract.
-The words “benchmark”, “evaluation”, or “submission” in that task do not grant
-the operator role or require experiment-board discovery. Use this workflow when
+Use this workflow when
 the requested work actually includes run management, analysis of an active run,
 or post-run analysis; an explicit request to use the skill still applies. Keep
 the solver's task-local validation and authorized submission path distinct from
 experiment management.
 
-The capability is catalog-ready without a per-Goal enable switch. Installing
-this skill does not grant runner, shell, network, credential, private-evidence,
-or Goal mutation authority. Respect the selected todo's required capabilities,
+The capability is catalog-ready without a per-Goal enable switch. Respect the selected todo's required capabilities,
 any external provider binding, host permissions, and user gates.
 
 ## Capability surface
@@ -50,8 +47,7 @@ must match; the run row remains the only arm, score, countability, integrity, an
 treatment-fidelity authority. Reduce private post-run evidence to bounded prose
 and public-safe handles or digests before building the envelope.
 
-The local provider is a no-network simulation. It does not grant remote upload,
-publication, credentials, retention, or benchmark submission authority. Adapters
+The local provider is a no-network simulation. Adapters
 keep their native metric names and reduce private post-run evidence before envelope
 construction.
 
@@ -66,8 +62,7 @@ upload nor a full study manifest and have no score authority.
 
 Freeze the authorized disclosure projection before rendering. Review the same
 scope in visible text, foldouts, embedded data, downloads, and PR attachments.
-Permission to share duration does not grant permission to share outcome totals
-or deltas. Schema validity and a producer redaction attestation are not publication
+Schema validity and a producer redaction attestation are not publication
 approval or verification of unshared evidence. Keep selected-case observations
 explicitly exploratory and retain the relevant limitations and counterexamples.
 
@@ -125,6 +120,18 @@ separate: fewer bytes, calls or tokens are not proof of a better task outcome.
    analysis. Do not substitute profiler hotspots for outcome evidence or require
    profiling to inspect duplicate content and unnecessary interactions.
 
+For recorded model-request totals, use `loopx benchmark trajectory-pack-register`
+with `--usage-jsonl` and `--usage-session-id`, then read
+`solver_usage.projection.request_coverage`. Registration does not run an analyzer;
+an unfinished final Turn requires the explicit `--include-incomplete-usage`
+option. Live-tail `usage_cumulative` and `token_count` observations retain the
+native session-counter basis, which may exclude compaction. Only verified
+`request_coverage.all_requests` supplies the reconciled recorded-request total;
+retain its `counter_basis`, capture window and limitations. Compaction is a
+subset and its mirrored record is not another request. Do not add either to
+the session totals. Missing or unavailable coverage remains unknown. This
+source selection does not rewrite Goal accounting or establish billing coverage.
+
 ## Experiment sequence
 
 1. **Read the experiment board before launching or selecting a case.**
@@ -155,6 +162,12 @@ separate: fewer bytes, calls or tokens are not proof of a better task outcome.
    The running row uses `status=running`, empty `metrics`, and
    `countability={integrity_qualified:false, official_result_present:false,
    score_countable:false}`. Keep the same stable `run_id` for every transition.
+   Upsert returns the normalized affected `row` and `write` receipt by default.
+   Check its identity and preview/write outcome directly. Read the board again
+   when the next comparison needs it, using the same route and relevant
+   `--benchmark-id`/`--study-id`; do not re-fetch a whole study merely to confirm
+   one update. `--include-board` restores the previous full-board response for
+   consumers that need it. A row receipt does not establish comparison eligibility.
 
 4. **Preview and upsert terminal score, countability, effort, and insight.**
    First run integrity qualification. An automated restricted-access match is a
@@ -190,6 +203,34 @@ separate: fewer bytes, calls or tokens are not proof of a better task outcome.
    Only claim paired results from `matched_pair_countable` comparisons. Keep
    diagnostic-only explore rows in a separate evidence lane.
 
+## Quota interruption and checkpoint continuation
+
+When an authorized run encounters hard native account exhaustion, preserve its
+actual failure and task progress. Verify the exact job, terminal/runtime state,
+source account and original budget before selecting a replacement. Unknown
+quota. Reuse
+the installed native account provider's read-only observations and TypeScript
+selection through `python -m benchmark.runtime.codex_accounts`; inspect the
+preview, then execute only within the owner's explicit account allowlist.
+Never close the desktop or switch its global login to repair an isolated job.
+
+If the worker was removed, prefer its latest verified complete checkpoint to
+a fresh task. Retain the original attempt and source, restore native session
+history/research/incumbent/opportunity counters/cooldown through the existing
+receiver, and use fresh destination identities. Preregister the continuation
+and show its source and inherited results without merging attempt curves.
+Confirm actual adopted context, current replan and subsequent task work.
+Prepared credentials or a running container alone do not prove recovery.
+
+Follow the EdgeBench account-continuation protocol for the native controller's
+paused remaining-duration clock. An unchanged absolute deadline requires an
+external finite owner cutoff, including setup and cleanup; no implicit phase
+extension, replenished evaluation opportunities or repeated cold launches.
+The helper prepares a new private login only. Existing Official sessions need
+their own authorized idle handoff; never overwrite an active credential file
+using the preparation helper. If no allowed account is freshly usable, retain
+the observed reset/backoff and avoid repeated model probes.
+
 ## Run-row contract
 
 - `benchmark_id`, `study_id`, `case_id`, `run_id`, `arm_id`, `arm_role`,
@@ -213,10 +254,13 @@ separate: fewer bytes, calls or tokens are not proof of a better task outcome.
   fetch, install, or launch. It blocks new admissions only.
 - `integrity-qualification` reduces private trajectory and runner isolation
   evidence to a compact public-safe receipt (hashes, counts, reason codes).
-- Scanner hits for restricted source access or host-boundary escape probes set
-  `restricted_access_review=suspected` while keeping the run score-eligible. Use
-  `--restricted-access-adjudication-json` for the post-run agent decision; only
-  confirmed disclosure plus causal use disqualifies the score.
+- Scanner hits for restricted source access, host-boundary escape, or credential
+  probes set `restricted_access_review=suspected` while keeping the run
+  score-eligible. Use `--restricted-access-adjudication-json` for the post-run
+  agent decision; only confirmed disclosure plus causal use disqualifies the
+  score. An observed credential value remains fail-closed. A broad shell probe
+  that bypasses an explicit typed task-environment contract is also a hard
+  policy violation rather than reviewable suspicion.
 - `classify-artifacts` classifies benchmark artifact paths without reading them;
   use it before reading or publishing any candidate artifact.
 - The solver lane must not read hidden tests, verifier sources or gold answers.
@@ -259,8 +303,7 @@ become a second source of score, integrity, or countability truth.
   state; put only reusable guidance in the shipped skill.
 - Verify the rendered view: requested baselines and active ablations appear,
   retired attempts are reachable through history, and links survive a selection
-  update. Review the populated first viewport for readable labels and navigation;
-  a correct query alone does not establish a usable comparison view.
+  update. Review the populated first viewport for readable labels and navigation.
 
 ## Campaign monitoring and post-run insight
 
@@ -290,3 +333,12 @@ become a second source of score, integrity, or countability truth.
   only when a complete authorized post-run review observed no such transition;
   otherwise absence is `unknown`. Keep terminal settlement separate.
 - Do not send a repetitive user update when nothing material changed.
+
+For fixed-duration studies, use the campaign report's duration policy for **every
+declared arm**, including Official. At each terminal transition reconcile its
+active solver intervals and any maintained make-up obligation with the report.
+Only waive a short run when its arm is expressly allowed and its own audited Goal
+completed normally. Keep unknown duration pending evidence. Keep provider holds
+visible with the outstanding duration and the condition for resuming. Preserve
+session, scoring opportunities and cooldown when resuming; record fresh runs
+separately. A duration shortfall alone never authorizes overriding a stop.

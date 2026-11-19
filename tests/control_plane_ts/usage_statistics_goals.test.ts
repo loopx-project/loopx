@@ -15,7 +15,7 @@ async function fixture(t: test.TestContext) {
   t.after(() => rm(root, { recursive: true, force: true }));
   return join(root, "usage.json");
 }
-const ctx = (now: number): Context => ({ env: { LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:1/v1/ping" }, version: "1.0.0", python: "3.13", channel: "source", now: new Date(now) });
+const ctx = (now: number): Context => ({ env: { LOOPX_USAGE_PING: "1", LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:1/v1/ping" }, version: "1.0.0", python: "3.13", channel: "source", now: new Date(now) });
 const checkpoint = (start: number, end: number) => ({ key, start, end, measurement: "host_call" as const, host: "unknown" as const });
 
 test("union counts concurrent/nested intervals once and preserves idle gaps under replay and reordering", () => {

@@ -1,5 +1,6 @@
+import {ArrowRight, CircleAlert, CircleHelp, Download, ExternalLink, RefreshCw, Search} from "lucide-react";
+import {ContextHelp} from "./context-help";
 import { useId, useMemo, useRef, useState } from "react";
-import { ArrowRight, CircleAlert, Download, ExternalLink, RefreshCw, Search } from "lucide-react";
 import { deliveryReviewMarkdown, deliveryReviewWarning, filterReviewNodes, reviewCoverageIncomplete, reviewNodeColumn, type ReviewFocus, type ReviewGraph, type ReviewNode } from "../../data/delivery-review";
 import type { WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceModel, WorkspaceTimelineItem } from "./personal-workspace-model";
 import { GoalAcceptanceObservationCard } from "./goal-acceptance-observation-card";
@@ -13,12 +14,17 @@ import "./delivery-review.css";
 
 type Copy = typeof deliveryReviewCopy.en;
 
-function SourceNotice({review, copy, mapOnly = false}: {review: DeliveryReviewRead; copy: Copy; mapOnly?: boolean}) {
+function SourceNotice({review, copy, mapOnly = false, includeBoundary = false}: {review: DeliveryReviewRead; copy: Copy; mapOnly?: boolean; includeBoundary?: boolean}) {
+  const {locale} = useWorkspaceI18n();
   const snapshot = review.snapshot;
   const warning = snapshot ? deliveryReviewWarning(mapOnly ? {...snapshot,
     projection_envelope: snapshot.goal_map?.projection_envelope} : snapshot, copy) : null;
   const envelope = mapOnly ? snapshot?.goal_map?.projection_envelope : snapshot?.projection_envelope;
-  return warning ? <p role={!envelope || !envelope.fresh ? "alert" : "status"} className="delivery-notice"><CircleAlert aria-hidden size={15} />{warning}</p> : null;
+  return warning || includeBoundary ? <ContextHelp icon={warning ? CircleAlert : undefined}
+    label={warning ? (!envelope || !envelope.fresh ? (locale === "zh-CN" ? "来源未核验" : "Source unverified") : (locale === "zh-CN" ? "来源覆盖不完整" : "Source coverage incomplete")) : (locale === "zh-CN" ? "交付与验收范围" : "Delivery and acceptance scope")}>
+    {warning ? <p>{warning}</p> : null}
+    {includeBoundary ? <p>{copy.scope} {copy.acceptanceBoundary}</p> : null}
+  </ContextHelp> : null;
 }
 
 function ReviewMap({ graph, nodes, selected, onSelect, copy }: {
@@ -117,7 +123,7 @@ export function DeliveryReviewContent({ goal, items, userTodos, onSelect, review
   }
   return <section className="delivery-review" aria-label={copy.title}>
     <header className="delivery-review-toolbar">
-      <h2>{copy.title}</h2>
+      <h2>{copy.title}</h2>{snapshot ? <SourceNotice review={review} copy={copy} includeBoundary /> : null}
       <div><button type="button" disabled={state.kind === "loading"} onClick={() => review.refresh()}><RefreshCw size={15} />{copy.refresh}</button><button type="button" disabled={!usable} onClick={download}><Download size={15} />{copy.export}</button></div>
     </header>
     {feedback ? <p role="status">{feedback}</p> : null}
@@ -127,9 +133,7 @@ export function DeliveryReviewContent({ goal, items, userTodos, onSelect, review
       <p className="delivery-snapshot-time">{copy.observed} · <time dateTime={snapshot.observed_at}>{new Date(snapshot.observed_at).toLocaleString(locale)}</time>
         {state.kind === "loading" || (stale && state.kind !== "error") ? <span role="status"> · {copy.updating}</span> : null}</p>
       {stale && state.kind === "error" ? <p role="alert" className="delivery-notice is-error"><CircleAlert aria-hidden size={15} />{copy.changed}</p> : null}
-      <SourceNotice review={review} copy={copy} />
       {!hideWorkMap ? <DeliveryWorkMap goal={goal} userTodos={userTodos} review={review} showSourceNotice={false} onSelect={selection => {if (selection) onSelect(selection);}} /> : null}
-      <p className="delivery-boundary">{copy.scope} {copy.acceptanceBoundary}</p>
       {graph ? <>
         {reviewCoverageIncomplete(graph) ? <details className="delivery-notice"><summary>{copy.incomplete}</summary><dl>
           <div><dt>{copy.omittedGates}</dt><dd>{graph.limits.user_gate_truncated_count}</dd></div>
@@ -146,7 +150,7 @@ export function DeliveryReviewContent({ goal, items, userTodos, onSelect, review
               <option value="all">{copy.all}</option><option value="conditions">{copy.conditions}</option><option value="evidence">{copy.evidence}</option><option value="related" disabled={!selected}>{copy.related}</option>
             </select><button type="button" onClick={reset}>{copy.reset}</button>
           </div>
-          {!nodes.length ? <p className="delivery-empty" role="status">{copy.empty}</p> : mapView ? <ReviewMap graph={graph} nodes={nodes} selected={selectedId} onSelect={selectNode} copy={copy} /> : <ul className="delivery-node-list">{nodes.map(node => <li key={node.node_id}><button type="button" aria-pressed={selectedId === node.node_id} onClick={() => selectNode(node.node_id)}><span>{copy.kind[node.kind]}</span><strong>{node.title}</strong><small>{node.owner_agent ?? copy.unavailable}</small><em data-state={node.state}>{copy.state[node.state]}</em></button></li>)}</ul>}
+          {!nodes.length ? <ContextHelp label={locale === "zh-CN" ? "交付链范围" : "Delivery chain scope"} icon={CircleHelp}><p className="delivery-empty" role="status">{copy.empty}</p></ContextHelp> : mapView ? <ReviewMap graph={graph} nodes={nodes} selected={selectedId} onSelect={selectNode} copy={copy} /> : <ul className="delivery-node-list">{nodes.map(node => <li key={node.node_id}><button type="button" aria-pressed={selectedId === node.node_id} onClick={() => selectNode(node.node_id)}><span>{copy.kind[node.kind]}</span><strong>{node.title}</strong><small>{node.owner_agent ?? copy.unavailable}</small><em data-state={node.state}>{copy.state[node.state]}</em></button></li>)}</ul>}
         </section>
         <section className="delivery-node-detail" aria-label={copy.details} ref={detailRef}>
           {!selected ? <p>{copy.select}</p> : <>
@@ -160,7 +164,7 @@ export function DeliveryReviewContent({ goal, items, userTodos, onSelect, review
             <details><summary>{copy.refs}</summary><code>{selected.node_id}</code>{Object.entries(selected.refs).map(([kind, refs]) => <p key={kind}><strong>{kind}</strong> {refs.join(", ")}</p>)}</details>
           </>}
         </section>
-      </> : <p className="delivery-notice">{copy.noGraph}</p>}
+      </> : <ContextHelp label={locale === "zh-CN" ? "交付链来源" : "Delivery chain source"} icon={CircleHelp}><p className="delivery-notice">{copy.noGraph}</p></ContextHelp>}
 
     </>}
     {!hideAcceptanceContract ? <GoalAcceptanceContractSection goalId={goal.goalId} contract={snapshot?.acceptance?.goal_acceptance_contract} copy={copy.contract} current={usable} canManage={active && usable} /> : null}

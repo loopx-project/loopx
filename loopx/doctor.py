@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 from datetime import datetime, timezone
 from functools import partial
-from importlib.metadata import PackageNotFoundError, distribution
+from importlib.metadata import Distribution, PackageNotFoundError, distribution
 import json
 import os
 import re
 import shlex
 import sys
 from pathlib import Path
-from typing import Any
 
 from . import __version__, doctor_git
 from .command_invocation import resolve_command_path
@@ -19,17 +20,19 @@ from .control_plane.runtime.promotion_readiness import (
 )
 from .control_plane.runtime.time import chronology_key
 from .install_contract import (
-    _powershell_literal,
     NO_CLONE_INSTALL_URL,
     local_install_command,
     no_clone_upgrade_command,
+    powershell_literal,
 )
 from .paths import configured_runtime_route, default_runtime_route, global_registry_path
 from .python_install_owner import (
     PythonInstallOwner,
-    interpreter_invocation,
+    distribution_record_path,
+    installed_loopx_distribution,
     python_distribution_upgrade_command,
     resolve_python_install_owner,
+    verified_distribution_console,
 )
 from .capabilities.project_skill_delivery import discover_project_scoped_skill_ids
 from .registry_writability import probe_registry_write_path
@@ -79,7 +82,7 @@ REQUIRED_INSTALLED_SKILL_PHRASES = {
     "loopx-benchmark": (
         "builtin `benchmark-toolkit` capability owns provider-neutral",
         "without a per-Goal enable switch",
-        "Installing this skill does not grant runner",
+        "Respect the selected todo's required capabilities, any external provider binding, host permissions, and user gates.",
         "For a generic library microbenchmark",
     ),
     "loopx-self-repair": (
@@ -122,10 +125,10 @@ def command_release_root(command_realpath: Path | None) -> Path | None:
     return None
 
 
-def current_script_invocation_path() -> Path | None:
-    """Return the active LoopX executable when invoked through its console script."""
+def _current_invocation(*, inspect_distribution_launcher: bool) -> tuple[Path | None, bool]:
+    """Return the invocation path and whether a verified module owns the route."""
     if not sys.argv or not sys.argv[0]:
-        return None
+        return None, False
     path = Path(sys.argv[0]).expanduser()
     if not path.is_absolute():
         path = Path.cwd() / path
@@ -134,26 +137,65 @@ def current_script_invocation_path() -> Path | None:
     except OSError:
         path = path.absolute()
     if path.exists() and path.name.lower() in {"loopx", "loopx.exe"}:
-        return path
+        return path, False
+    module_path = Path(__file__).resolve()
+    entrypoint = module_path.with_name("entrypoint.py")
+    if path != entrypoint and (not inspect_distribution_launcher or path != module_path.with_name("cli.py")):
+        return None, False
+    installed = _python_distribution_owning_module(module_path)
+    if installed is None:
+        return None, False
+    if installed.name == "loopx-core":
+        return (path, True) if path == entrypoint else (None, False)
+    # Source metadata can list the module without recording an installed script.
+    if not inspect_distribution_launcher or installed.read_text("RECORD") is None:
+        return None, False
+
+    # The package updater invokes Doctor with its interpreter. Resolve that
+    # distribution's console script even if the shell names a different CLI.
+    script_name = "loopx.exe" if os.name == "nt" else "loopx"
+    scripts = {
+        distribution_record_path(item)
+        for item in installed.files or ()
+        if Path(item.as_posix()).name.lower() == script_name
+    }
+    if len(scripts) == 1:
+        script = verified_distribution_console(scripts.pop())
+        if script is not None and os.access(script, os.X_OK):
+            return script, True
+    return None, True
+
+
+def current_script_invocation_path() -> Path | None:
+    """Return the launcher eligible under the existing service activation policy."""
+    return _current_invocation(inspect_distribution_launcher=False)[0]
+
+
+def doctor_invocation_path() -> tuple[Path | None, bool]:
+    """Resolve Doctor's invocation while retaining ownership if its launcher is unavailable."""
+    return _current_invocation(inspect_distribution_launcher=True)
+
+
+def _python_distribution_owning_module(module_path: Path) -> Distribution | None:
+    try:
+        installed = installed_loopx_distribution(distribution)
+    except PackageNotFoundError:
+        return None
+    expected = module_path.resolve()
+    module_suffix = os.path.join("loopx", "doctor.py")
+    for item in installed.files or ():
+        entry = item.as_posix()
+        if os.path.normcase(entry).endswith(module_suffix) and distribution_record_path(item).resolve() == expected:
+            return installed
     return None
 
 
 def python_distribution_install(module_path: Path) -> dict[str, Any]:
     """Identify a wheel/sdist install that owns the imported LoopX module."""
-
-    try:
-        installed = distribution("loopx")
-    except PackageNotFoundError:
+    installed = _python_distribution_owning_module(module_path)
+    if installed is None:
         return {"available": False}
     installer = (installed.read_text("INSTALLER") or "").strip() or "unknown"
-    expected = module_path.resolve()
-    owns_module = any(
-        item.as_posix().endswith("loopx/doctor.py")
-        and Path(item.locate()).resolve() == expected
-        for item in installed.files or ()
-    )
-    if not owns_module:
-        return {"available": False}
     owner = resolve_python_install_owner(default_installer=installer, prefix=Path(sys.prefix))
     return {
         "available": True,
@@ -161,7 +203,9 @@ def python_distribution_install(module_path: Path) -> dict[str, Any]:
         "version": installed.version,
         "installer": owner.manager,
         "installer_environment": owner.environment,
-        "root": str(Path(installed.locate_file("")).resolve()),
+        "root": str(Path(cast(Path, installed.locate_file(""))).resolve()),
+        **({"distribution_name": "loopx-core"}
+           if getattr(installed, "name", "loopx") == "loopx-core" else {}),
     }
 
 
@@ -180,7 +224,7 @@ def command_root_summary(
         "command": str(command_path) if command_path else None,
         "realpath": str(command_realpath) if command_realpath else None,
         "root": str(root) if root else None,
-        "release_id": root.name if is_release_snapshot(root) else None,
+        "release_id": cast(Path, root).name if is_release_snapshot(root) else None,
         "is_release_snapshot": is_release_snapshot(root),
     }
 
@@ -218,7 +262,7 @@ def build_install_freshness(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     reference = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    release_id = release_root.name if is_release_snapshot(release_root) else None
+    release_id = cast(Path, release_root).name if is_release_snapshot(release_root) else None
     release_time = parse_release_id_time(release_id)
     age_hours: float | None = None
     if release_time:
@@ -269,9 +313,9 @@ def build_install_freshness(
         requires_upgrade = False
 
     manifest = release_manifest if isinstance(release_manifest, dict) else {}
-    manifest_body = manifest.get("manifest") if isinstance(manifest.get("manifest"), dict) else {}
+    manifest_body = cast(dict[str, Any], manifest.get("manifest")) if isinstance(manifest.get("manifest"), dict) else {}
     manifest_package = (
-        manifest_body.get("package") if isinstance(manifest_body.get("package"), dict) else {}
+        cast(dict[str, Any], manifest_body.get("package")) if isinstance(manifest_body.get("package"), dict) else {}
     )
     manifest_package_version = manifest_package.get("version")
     manifest_package_version_tag = manifest_package.get("version_tag") or (
@@ -286,7 +330,7 @@ def build_install_freshness(
         else None
     )
     manifest_source = (
-        manifest_body.get("source") if isinstance(manifest_body.get("source"), dict) else {}
+        cast(dict[str, Any], manifest_body.get("source")) if isinstance(manifest_body.get("source"), dict) else {}
     )
     no_clone_command = no_clone_upgrade_command(
         manifest_source.get("ref"),
@@ -310,6 +354,7 @@ def build_install_freshness(
         owner=distribution_owner,
         python_executable=sys.executable,
         doctor_command=f"loopx doctor{doctor_agent_arg}",
+        distribution_name=str((distribution_install or {}).get("distribution_name") or "loopx"),
     ) if distribution_owner else no_clone_command
     manifest_source_git_commit = manifest_source.get("git_commit")
     manifest_source_revision = (
@@ -362,7 +407,7 @@ def build_install_freshness(
         requires_upgrade = True
 
     manifest_skills = (
-        manifest_body.get("skills") if isinstance(manifest_body.get("skills"), dict) else {}
+        cast(dict[str, Any], manifest_body.get("skills")) if isinstance(manifest_body.get("skills"), dict) else {}
     )
     return {
         "schema_version": "loopx_install_freshness_v0",
@@ -719,11 +764,18 @@ def collect_doctor(
         else None
     )
     loopx_path = resolve_command_path("loopx")
-    invocation_path = current_script_invocation_path()
+    invocation_path, module_owns_route = doctor_invocation_path()
     loopx_canary_path = resolve_command_path("loopx-canary")
-    command_path_primary = loopx_path or invocation_path
+    command_path = invocation_path if module_owns_route else loopx_path or invocation_path
+    if module_owns_route:
+        command_detail = str(invocation_path) if invocation_path else "installed Python console script unavailable"
+    elif loopx_path:
+        command_detail = str(loopx_path)
+    elif invocation_path:
+        command_detail = f"loopx was not found on PATH; using current invocation {invocation_path}"
+    else:
+        command_detail = "loopx was not found on PATH"
     canary_path = loopx_canary_path
-    command_path = command_path_primary
     command_realpath = command_path.resolve() if command_path else None
     canary_realpath = canary_path.resolve() if canary_path else None
     loopx_canary_realpath = loopx_canary_path.resolve() if loopx_canary_path else None
@@ -764,7 +816,7 @@ def collect_doctor(
         skills = inspect_skill_facades(skill_roots[0])
         project_skill = skills["loopx"]
         home_arg = (
-            _powershell_literal(selected_zcode_home)
+            powershell_literal(selected_zcode_home)
             if os.name == "nt"
             else shlex.quote(str(selected_zcode_home))
         )
@@ -772,6 +824,23 @@ def collect_doctor(
             "loopx slash-commands --install --surface zcode "
             f"--zcode-home {home_arg}"
         )
+    elif canonical_agent_type in {"agy", "antigravity-app"}:
+        from .agy_goal_mode import antigravity_config_home
+        from .slash_command_install import inspect_skill_facades
+
+        agy_cfg_skills = antigravity_config_home() / "skills"
+        if (agy_cfg_skills / "loopx-project" / "SKILL.md").exists():
+            skill_roots = (agy_cfg_skills,)
+            skills = installed_skill_summary(skill_roots)
+            project_skill = skills["loopx-project"]
+        elif (agy_cfg_skills / "loopx" / "SKILL.md").exists():
+            skill_roots = (agy_cfg_skills,)
+            skills = inspect_skill_facades(agy_cfg_skills, host_surface="antigravity-app")
+            project_skill = skills["loopx"]
+        else:
+            skill_roots = (agy_cfg_skills, *codex_skill_roots())
+            skills = installed_skill_summary(skill_roots)
+            project_skill = skills["loopx-project"]
     else:
         skill_roots = codex_skill_roots()
         skills = installed_skill_summary(skill_roots)
@@ -793,12 +862,12 @@ def collect_doctor(
     default_release["release_manifest_available"] = release_manifest.get("available")
     default_release["release_manifest_path"] = release_manifest.get("path")
     release_manifest_body = (
-        release_manifest.get("manifest")
+        cast(dict[str, Any], release_manifest.get("manifest"))
         if isinstance(release_manifest.get("manifest"), dict)
         else {}
     )
     release_manifest_source = (
-        release_manifest_body.get("source")
+        cast(dict[str, Any], release_manifest_body.get("source"))
         if isinstance(release_manifest_body.get("source"), dict)
         else {}
     )
@@ -981,13 +1050,7 @@ def collect_doctor(
             "id": "command_available",
             "required": True,
             "ok": command_path is not None,
-            "detail": str(loopx_path)
-            if loopx_path
-            else (
-                f"loopx was not found on PATH; using current invocation {invocation_path}"
-                if invocation_path
-                else "loopx was not found on PATH"
-            ),
+            "detail": command_detail,
         },
         {
             "id": "command_on_path",
@@ -1205,9 +1268,16 @@ def collect_doctor(
             if canonical_agent_type
             and agent_type_uses_host_managed_skills(canonical_agent_type)
             else (
-                "Run `loopx workflow-skills --install`, then "
-                "`loopx slash-commands --install`, and rerun doctor. Upgrade this "
-                f"installation with `{interpreter_invocation(sys.executable)} -m pip install --upgrade loopx`."
+                (
+                    f"Upgrade this installation with:\n\n```\n{install_freshness['upgrade_command']}\n```"
+                    if install_freshness["upgrade_command"]
+                    else (
+                        "Run `loopx workflow-skills --install`, then "
+                        "`loopx slash-commands --install`, and rerun doctor. "
+                        "Use the original package manager "
+                        f"({python_distribution.get('installer') or 'unknown installer'}) to upgrade this installation."
+                    )
+                )
                 if python_distribution.get("available")
                 else (
                     f"Run `{local_install_command(repo_root, skip_skills=externally_managed_skills)}` "
@@ -1242,6 +1312,77 @@ def collect_doctor(
             payload["fix"] = skill_fix
         else:
             payload["fix"] += "\nAfter restoring the LoopX installation/runtime, " + skill_fix
+    if canonical_agent_type in {"agy", "antigravity-app"}:
+        from .agy_goal_mode import (
+            ANTIGRAVITY_HOOKS_CONFIG_FILENAME,
+            ANTIGRAVITY_MCP_CONFIG_FILENAME,
+            ANTIGRAVITY_SIDECAR_FILENAME,
+            agy_home,
+            antigravity_config_home,
+        )
+        from .slash_command_install import inspect_skill_facades
+
+        agy_cfg_home = antigravity_config_home()
+        legacy_agy_home = agy_home()
+        agy_workflow_readback = inspect_skill_install_readback(
+            skills_dir=agy_cfg_home / "skills",
+            required_skill_ids=ARK_MANAGED_AGENT_REQUIRED_SKILL_IDS,
+            source_root=repo_root,
+        )
+        agy_facades = inspect_skill_facades(
+            agy_cfg_home / "skills",
+            host_surface="antigravity-app",
+        )
+        workflow_skill_ids = set(
+            agy_workflow_readback.get("materialized_skill_ids") or ()
+        )
+        agy_facades_ready = all(
+            item.get("required_phrases") or name in workflow_skill_ids
+            for name, item in agy_facades.items()
+        )
+        legacy_loopx_exists = (legacy_agy_home / "skills" / "loopx.md").is_file()
+        agy_ready = bool(
+            agy_workflow_readback.get("ready")
+            or agy_facades_ready
+            or legacy_loopx_exists
+        )
+        payload["antigravity"] = {
+            "config_home": str(agy_cfg_home),
+            "legacy_cli_home": str(legacy_agy_home),
+            "skills_dir": str(agy_cfg_home / "skills"),
+            "legacy_skills_dir": str(legacy_agy_home / "skills"),
+            "workflow_skills_readback": agy_workflow_readback,
+            "command_facades": agy_facades,
+            "command_facades_ready": agy_facades_ready,
+            "legacy_cli_loopx_skill_exists": legacy_loopx_exists,
+            "mcp_config_path": str(agy_cfg_home / ANTIGRAVITY_MCP_CONFIG_FILENAME),
+            "mcp_config_exists": (
+                agy_cfg_home / ANTIGRAVITY_MCP_CONFIG_FILENAME
+            ).is_file(),
+            "hooks_config_path": str(agy_cfg_home / ANTIGRAVITY_HOOKS_CONFIG_FILENAME),
+            "hooks_config_exists": (
+                agy_cfg_home / ANTIGRAVITY_HOOKS_CONFIG_FILENAME
+            ).is_file(),
+            "sidecar_config_path": str(agy_cfg_home / "sidecars" / "loopx-antigravity-heartbeat" / ANTIGRAVITY_SIDECAR_FILENAME),
+            "sidecar_config_exists": (
+                agy_cfg_home / "sidecars" / "loopx-antigravity-heartbeat" / ANTIGRAVITY_SIDECAR_FILENAME
+            ).is_file(),
+            "repair_commands": [
+                "loopx workflow-skills --install --host-surface antigravity-app",
+                "loopx slash-commands --install --surface antigravity-app --with-agy-mcp --with-agy-hooks",
+            ],
+        }
+        checks.append(
+            {
+                "id": "antigravity_host_surface_ready",
+                "required": False,
+                "ok": agy_ready,
+                "applicable": True,
+                "detail": (
+                    f"{agy_cfg_home / 'skills'} (ready={agy_ready})"
+                ),
+            }
+        )
     if deep_validation:
         payload["release_candidate"] = deep_validation
     return payload
@@ -1251,12 +1392,12 @@ def render_doctor_markdown(payload: dict[str, Any]) -> str:
     release_provenance = payload.get("release_provenance") or {}
     default_release = release_provenance.get("default_release") or {}
     typescript_control_plane = (
-        payload.get("typescript_control_plane")
+        cast(dict[str, Any], payload.get("typescript_control_plane"))
         if isinstance(payload.get("typescript_control_plane"), dict)
         else {}
     )
     typescript_runtime_lifecycle = (
-        typescript_control_plane.get("runtime_lifecycle")
+        cast(dict[str, Any], typescript_control_plane.get("runtime_lifecycle"))
         if isinstance(typescript_control_plane.get("runtime_lifecycle"), dict)
         else {}
     )
@@ -1293,19 +1434,23 @@ def render_doctor_markdown(payload: dict[str, Any]) -> str:
         f"- typescript_control_plane: `{typescript_control_plane.get('status')}`",
         f"- typescript_runtime_state: `{typescript_runtime_lifecycle.get('state')}`",
         f"- typescript_runtime_diagnostic: `{typescript_runtime_lifecycle.get('diagnostic_code')}`",
+        "- typescript_runtime_locator_state: "
+        f"`{(typescript_runtime_lifecycle or {}).get('locator_state')}`",
+        "- typescript_runtime_recorded_pid_alive: "
+        f"`{(typescript_runtime_lifecycle or {}).get('recorded_pid_alive')}`",
         "",
         "## Checks",
     ]
     for check in payload.get("checks") or []:
         required = "required" if check.get("required") else "optional"
         lines.append(f"- {check.get('id')} ({required}): `{check.get('ok')}` - {check.get('detail')}")
-    provenance = payload.get("release_provenance") if isinstance(payload.get("release_provenance"), dict) else {}
+    provenance = cast(dict[str, Any], payload.get("release_provenance")) if isinstance(payload.get("release_provenance"), dict) else {}
     if provenance:
-        default_release = provenance.get("default_release") if isinstance(provenance.get("default_release"), dict) else {}
-        live_canary = provenance.get("live_canary") if isinstance(provenance.get("live_canary"), dict) else {}
-        current = provenance.get("current_invocation") if isinstance(provenance.get("current_invocation"), dict) else {}
+        default_release = cast(dict[str, Any], provenance.get("default_release")) if isinstance(provenance.get("default_release"), dict) else {}
+        live_canary = cast(dict[str, Any], provenance.get("live_canary")) if isinstance(provenance.get("live_canary"), dict) else {}
+        current = cast(dict[str, Any], provenance.get("current_invocation")) if isinstance(provenance.get("current_invocation"), dict) else {}
         readiness = (
-            provenance.get("promotion_readiness")
+            cast(dict[str, Any], provenance.get("promotion_readiness"))
             if isinstance(provenance.get("promotion_readiness"), dict)
             else {}
         )
@@ -1342,7 +1487,7 @@ def render_doctor_markdown(payload: dict[str, Any]) -> str:
                 ),
             ]
         )
-    freshness = payload.get("install_freshness") if isinstance(payload.get("install_freshness"), dict) else {}
+    freshness = cast(dict[str, Any], payload.get("install_freshness")) if isinstance(payload.get("install_freshness"), dict) else {}
     if freshness:
         manifest_source_repo = freshness.get("manifest_source_repo") or freshness.get("manifest_source_kind")
         manifest_source_ref = (
@@ -1399,6 +1544,10 @@ def render_doctor_markdown(payload: dict[str, Any]) -> str:
                 f"- minimum_node_version: `{typescript_control_plane.get('minimum_node_version')}`",
                 f"- detected_node_version: `{typescript_control_plane.get('detected_node_version')}`",
                 f"- semantic_probe: `{typescript_control_plane.get('semantic_probe')}`",
+                "- locator_state: "
+                f"`{(typescript_runtime_lifecycle or {}).get('locator_state')}`",
+                "- recorded_pid_alive: "
+                f"`{(typescript_runtime_lifecycle or {}).get('recorded_pid_alive')}`",
             ]
         )
         runtime_identity = typescript_control_plane.get("runtime_identity")

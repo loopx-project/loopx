@@ -1,3 +1,4 @@
+import {ContextHelp} from "./context-help";
 import {useMemo, useRef, useState} from "react";
 import {captureContentReference, planReferenceDraft, searchContentReferences, type ContentReference} from "../../../../../../loopx/control_plane/capabilities/content_reference";
 import {useWorkspaceI18n} from "./i18n";
@@ -59,9 +60,9 @@ export function ContentReferenceWorkbench() {
     catch (reason) {setError(reason instanceof Error ? reason.message : String(reason));}
   }
   return <section aria-label={copy("素材与风格检索", "Reference styles")} className="personal-capability-field-summary personal-content-reference">
-    <p>{copy("选择你有权使用的现有素材目录。内容仅在本页内处理；离开或清除后移除。", "Choose an existing catalog you are authorized to use. Contents stay in this page and are removed when you leave or clear it.")}</p>
+    <ContextHelp label={copy("素材来源与使用范围", "Reference sources and scope")}><p>{copy("选择你有权使用的现有素材目录。内容仅在本页内处理；离开或清除后移除。", "Choose an existing catalog you are authorized to use. Contents stay in this page and are removed when you leave or clear it.")}</p><p>{copy("收录仅生成待审文件。原目录、素材状态和来源权限仍由原 owner 管理；当前页面不执行写入、恢复或发布。", "Capture creates a review artifact. The original owner retains catalog, lifecycle and source permissions; this page cannot apply, restore or publish.")}</p></ContextHelp>
     <label>{copy("导入原目录 JSON", "Import original catalog JSON")}<input ref={fileInput} accept=".json,application/json" type="file" onChange={event => void importCatalog(event.target.files?.[0])} /></label>
-    <p>{copy("收录仅生成待审文件。原目录、素材状态和来源权限仍由原 owner 管理；当前页面不执行写入、恢复或发布。", "Capture creates a review artifact. The original owner retains catalog, lifecycle and source permissions; this page cannot apply, restore or publish.")}</p>
+
     {error ? <p role="alert" className="personal-machine-error">{error}</p> : null}
     {library ? <>
       <label>{copy("主题或用途", "Topic or use case")}<input maxLength={2000} value={query} onChange={event => {setQuery(event.target.value); setSelected(null); setDraft(null);}} /></label>

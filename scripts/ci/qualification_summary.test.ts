@@ -36,6 +36,20 @@ test("coverage or aggregation failures remain visible even without a failing tes
   assert.match(result, /Gate step: failure/);
 });
 
+test("static and runtime contract failures remain execution failures ahead of checks", () => {
+  for (const name of ["kernel-static-checks", "kernel-contracts"]) {
+    const result = renderQualificationSummary(input({jobs: [
+      job("checks", "failure", {id: 11}), job(name, "failure", {
+        steps: [{name: "Qualify owned contract", conclusion: "failure"}],
+      }), job("pytest", "failure", {id: 12}),
+    ]}));
+    assert.ok(result.indexOf(name) < result.indexOf("Aggregate failures"));
+    assert.match(result, /Failing jobs[\s\S]*Qualify owned contract/);
+    assert.match(result, /Aggregate failures[\s\S]*checks[\s\S]*pytest/);
+    assert.match(result, /Gate step: failure/);
+  }
+});
+
 test("exempt checks and unavailable evidence cannot become passing test claims", () => {
   const docs = renderQualificationSummary(input({gateResult: "success", needs: {
     changes: {result: "success", outputs: {change_kind: "docs"}}, pytest: {result: "skipped"},

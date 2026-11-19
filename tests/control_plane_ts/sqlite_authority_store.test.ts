@@ -11,6 +11,9 @@ import { AUTHORITY_STATE_CHECKPOINT_INTERVAL } from "../../loopx/control_plane/c
 import { canonicalAuthorityBytes } from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import { authorityStoreCommitFixture, registerAuthorityStoreConformance } from "./authority_store_conformance.ts";
 
+import {migrateSqliteAuthorityStoreV1ToV2} from "../../loopx/control_plane/coordination/sqlite_authority_migration.ts";
+import {createSqliteAuthorityStoreV1} from "./sqlite_authority_v1_fixture.ts";
+
 import {registerAuthorityOperationReplayConformance} from "./authority_operation_replay_conformance.ts";
 
 async function fixture(t: test.TestContext) {
@@ -547,5 +550,71 @@ for (const cursor of [1, 2]) for (const field of ["events", "receipts"] as const
       const head = await store.loadAuthority();
       assert.equal(head.status, "loaded"); if (head.status === "loaded") assert.equal(head.cursor, "3");
     } finally { db.close(); }
+  });
+}
+
+for (const construction of ["new", "explicit V1 migration"]) {
+  test(`SQLite cursor covering index stays optional after ${construction}`, async t => {
+    const {store} = await fixture(t);
+    const inputs = Array.from({length: 3}, (_, index) => ({
+      operation_id: `retained-operation-${index + 1}`,
+      next_projection: {step: index + 1}, events: [{step: index + 1}],
+      receipts: [{operation_id: `retained-operation-${index + 1}`, original: index + 1}],
+    }));
+    if (construction === "explicit V1 migration") {
+      createSqliteAuthorityStoreV1(dirname(store.path), "goal", inputs.map(input => ({
+        operation_id: input.operation_id, projection: input.next_projection,
+        events: input.events, receipts: input.receipts,
+      })));
+      assert.equal(migrateSqliteAuthorityStoreV1ToV2(dirname(store.path), "goal", {execute: true}).status,
+        "migrated");
+    } else {
+      let revision: string | null = null;
+      for (const input of inputs) {
+        const result = await store.commitAuthority({...input, expected_provider_revision: revision});
+        assert.equal(result.status, "applied");
+        if (result.status === "applied") revision = result.provider_revision;
+      }
+    }
+    const {DatabaseSync} = createRequire(import.meta.url)("node:sqlite");
+    const db: import("node:sqlite").DatabaseSync = new DatabaseSync(store.path);
+    let originalSchema: unknown;
+    try {
+      // Choose by physical columns, not a migration-dependent index name.
+      const cursorIndex = db.prepare("SELECT name FROM pragma_index_list('commits') WHERE [unique] = 0")
+        .all().find(index => {
+          const columns = db.prepare("SELECT name FROM pragma_index_info(?)").all(String(index.name));
+          return columns.length === 1 && columns[0]?.name === "cursor";
+        });
+      assert.ok(cursorIndex, "newly constructed stores need a narrow cursor covering index");
+      const indexName = String(cursorIndex.name);
+      assert.match(String(db.prepare("EXPLAIN QUERY PLAN SELECT COUNT(*) FROM commits").get()?.detail),
+        new RegExp(`COVERING INDEX ${indexName}\\b`));
+      assert.ok(db.prepare("EXPLAIN SELECT COUNT(*) FROM commits").all()
+        .some(row => row.opcode === "Count"), "retain SQLite's exact count");
+      // Reproduce the original index-free V2 schema. Ordinary reads and writes
+      // must remain compatible without silently rebuilding an existing store.
+      db.exec(`DROP INDEX "${indexName.replaceAll('"', '""')}"`);
+      originalSchema = db.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY name").all();
+    } finally { db.close(); }
+    const reopened = new SqliteAuthorityStore(dirname(store.path), "goal", {existingOnly: true});
+    const head = await reopened.loadAuthority();
+    assert.equal(head.status, "loaded");
+    if (head.status !== "loaded") return;
+    assert.deepEqual(head.head, {step: 3});
+    const first = await reopened.readReceipt(inputs[0]!.operation_id);
+    assert.equal(first.status, "found");
+    if (first.status === "found") assert.deepEqual(first.receipts, inputs[0]!.receipts);
+    const replay = await reopened.commitAuthority({...inputs[0]!, expected_provider_revision: null});
+    assert.equal(replay.status, "applied");
+    if (replay.status === "applied") assert.equal(replay.cursor, "1");
+    assert.equal((await reopened.commitAuthority({expected_provider_revision: head.provider_revision,
+      operation_id: "later-operation", next_projection: {step: 4}, events: [], receipts: []})).status, "applied");
+    assert.equal((await reopened.verifyAuthorityHistory()).status, "verified");
+    const readback: import("node:sqlite").DatabaseSync = new DatabaseSync(store.path, {readOnly: true});
+    try {
+      assert.equal(readback.prepare("PRAGMA user_version").get()?.user_version, 2);
+      assert.deepEqual(readback.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY name").all(), originalSchema);
+    } finally { readback.close(); }
   });
 }

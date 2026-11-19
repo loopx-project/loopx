@@ -1,9 +1,9 @@
 """CLI surface for the managed-step consumer of same-Turn continuation.
 
 Split from ``turn.py`` to respect the CLI command-owner size budget. The
-subcommand resolves the canonical Turn journal, rebuilds its validated receipt,
-projects the current control-plane decision as a fresh envelope, asks the pure
-controller for a disposition, and prints a typed answer. It never launches a
+subcommand reads the canonical Turn journal and a fresh control-plane envelope,
+then sends both to the typed controller for qualification and continuation.
+It prints the existing managed-step answer. It never launches a
 host, writes state, or spends quota.
 """
 
@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 from ..control_plane.runtime.status_projection_cache import (
     resolve_status_projection_cache_runtime_root,
@@ -46,7 +47,7 @@ def _load_journal(
     journal = load_turn_journal(path)
     if journal is None:
         raise ValueError("LoopX Turn journal does not exist")
-    return journal
+    return cast(dict[str, object], journal)
 
 
 def handle_turn_managed_step(

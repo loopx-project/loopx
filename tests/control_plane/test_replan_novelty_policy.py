@@ -345,6 +345,40 @@ def test_semantic_terminal_ack_cannot_close_an_open_todo_succession_gap() -> Non
     ) is True
 
 
+def test_monitor_ack_is_not_vetoed_by_an_independent_todo_succession_gap() -> None:
+    obligation = _obligation([{
+        "kind": "monitor_no_change_streak",
+        "monitor_target_id": "pending-public-source",
+        "run_count": 5,
+        "threshold": 5,
+    }])
+    ack = {
+        "recorded": True,
+        "semantic_delta": {
+            "accepted": True,
+            "obligation_id": obligation["obligation_id"],
+            "outcomes": ["new_concrete_blocker"],
+        },
+    }
+    assert autonomous_replan_ack_satisfies_obligation(
+        ack, replan_obligation=obligation, acceptance_gaps=[],
+        todo_succession_gap_open=True,
+    ) is True
+    # A separate lifecycle duty still needs its own exact receipt; neither a
+    # wrong identity nor a blocker for that duty becomes a successor.
+    lifecycle = _obligation([{
+        "kind": "completed_advancement_without_successor", "todo_id": "todo_prior_result",
+    }])
+    for selected, identity in (
+        (obligation, lifecycle["obligation_id"]),
+        (lifecycle, lifecycle["obligation_id"]),
+    ):
+        assert autonomous_replan_ack_satisfies_obligation(
+            {**ack, "semantic_delta": {**ack["semantic_delta"], "obligation_id": identity}},
+            replan_obligation=selected, acceptance_gaps=[], todo_succession_gap_open=True,
+        ) is False
+
+
 def test_policy_normalization_precedes_deterministic_peer_scope_selection() -> None:
     obligation = _obligation([{"kind": "periodic_review_due", "source": "fixture"}])
     registered_agents = ["codex-primary", "codex-reviewer"]

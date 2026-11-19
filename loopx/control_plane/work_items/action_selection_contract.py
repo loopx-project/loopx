@@ -4,14 +4,23 @@ import shlex
 from collections.abc import Mapping
 from typing import Any
 
+from ...command_invocation import loopx_cli_argv
+from ...install_contract import render_host_cli_command
 from ..agents.capability_gate import runtime_capabilities_for_cli_projection
 from ..todos.contract import normalize_todo_id
 from ..quota.effective_action import EffectiveAction
 
 
-def render_cli_command_prefix(*, runtime_root: str | None = None, registry_path: str | None = None) -> str:
-    return ("loopx" + (f" --registry {shlex.quote(str(registry_path))}" if registry_path else "")
-        + (f" --runtime-root {shlex.quote(str(runtime_root))}" if runtime_root else ""))
+def render_cli_command_prefix(
+    *, runtime_root: str | None = None, registry_path: str | None = None, host_shell: bool = False,
+) -> str:
+    argv = loopx_cli_argv()
+    if registry_path:
+        argv.extend(("--registry", str(registry_path)))
+    if runtime_root:
+        argv.extend(("--runtime-root", str(runtime_root)))
+    # Parsed command templates retain their shell-neutral shlex grammar.
+    return render_host_cli_command(argv) if host_shell else shlex.join(argv)
 
 
 def action_portfolio_requires_explicit_selection(
@@ -116,7 +125,7 @@ def apply_action_selection_cli_gate(
             format_index >= 1
             and command_tokens[format_index : format_index + 2]
             == ["--format", "json"]
-            and command_tokens[0] == "loopx"
+            and command_tokens[0] == loopx_cli_argv()[0]
         ):
             command_args_template = shlex.join(command_tokens[format_index + 2 :])
             route_prefix = shlex.join(command_tokens[: format_index + 2])
@@ -160,13 +169,14 @@ def delivery_spend_allowed(
 def action_selection_context(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Transport bounded current facts; TypeScript owns every admission decision."""
     fields = ("ok", "should_run", "effective_action", "normal_delivery_allowed", "recovery_delivery_allowed",
-              "self_repair_allowed", "capability_repair_allowed", "workspace_repair_allowed", "safe_bypass_allowed",
+              "self_repair_allowed", "capability_repair_allowed", "workspace_repair_allowed", "safe_bypass_allowed", "safe_bypass_kind",
               "actionable_by_codex", "spend_allowed_now", "spend_after_validation")
     result = {key: payload[key] for key in fields if key in payload}
     for field, keys in (
         ("selected_todo", ("todo_id", "selection_binding")),
         ("autonomous_replan_obligation", ("selection_binding",)),
         ("action_selection_qualification", ("state", "requested_todo_id", "recovery_action")),
+        ("execution_preparation", ("schema_version", "state", "todo_id", "delivery_allowed")),
     ):
         raw = payload.get(field)
         if isinstance(raw, Mapping):
@@ -175,6 +185,11 @@ def action_selection_context(payload: Mapping[str, Any]) -> dict[str, Any]:
                 result[field]["todo_id"] = normalize_todo_id(raw.get("todo_id"))
             if field == "action_selection_qualification" and isinstance(raw.get("selected_todo"), Mapping):
                 result[field]["selected_todo"] = {"todo_id": normalize_todo_id(raw["selected_todo"].get("todo_id"))}
+    fallback = payload.get("scoped_user_gate_fallback")
+    if isinstance(fallback, Mapping) and isinstance(fallback.get("selected_executable"), Mapping):
+        result["scoped_user_gate_fallback"] = {"selected_executable": {
+            "todo_id": normalize_todo_id(fallback["selected_executable"].get("todo_id")),
+        }}
     return result
 
 
@@ -328,7 +343,7 @@ def action_selection_recovery_command(
     scheduler_args: str, available_capabilities: Any = None,
     goal_ref: Mapping[str, object] | None = None,
 ) -> str:
-    argv = ["loopx"]
+    argv = loopx_cli_argv()
     if registry_path:
         argv.extend(["--registry", registry_path])
     if runtime_root:

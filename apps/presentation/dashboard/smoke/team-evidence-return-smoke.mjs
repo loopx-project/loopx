@@ -21,8 +21,12 @@ try {
   await page.getByRole("button", {name: "开启 LoopX 模式", exact: true}).click();
   await page.getByLabel("已注册的协调身份").selectOption("lead");
   await page.getByLabel("协调员总 token 额度").fill("100000");
+  const configurationAccepted = page.waitForResponse(response => response.request().method() === "POST"
+    && response.request().postDataJSON()?.operation === "configure");
   await page.getByRole("button", {name: "保存设置", exact: true}).click();
+  assert.equal((await configurationAccepted).status(), 200);
   const configured = api.loopxModeRequests.findLast(row => row.operation === "configure");
+  assert.ok(configured, "The accepted configuration must have its original request");
   const mode = page.__loopxRuntime.loopxModes.get(configured.sessionId);
   Object.assign(mode, {enabled: true, paused: false, active_turn_id: "fixture-loopx-turn",
     native: {status: "active", tokenBudget: 100000}, fixtureCorrectionEpisode: true, fixtureAdoptionState: "current"});
@@ -60,7 +64,8 @@ try {
     if (body?.operation !== "read" || body.operation_id !== "accepted-analysis") return route.fallback();
     api.loopxModeRequests.push({sessionId: configured.sessionId, ...body});
     return checkUnavailable ? route.fulfill({status: 409, json: {error: "delegation output changed during validation"}})
-      : route.fulfill({json: {...legacyReadback, validation}});
+      : route.fulfill({json: {...legacyReadback,
+        ...(validation.source === "request_validation" ? {todo_id: null} : {}), validation}});
   };
   await page.route("**/api/chat/sessions/*/loopx", checkedRead);
   const recheck = evidence.getByRole("button", {name: "重新检查交付", exact: true});
@@ -86,8 +91,16 @@ try {
   await checkObservation.getByText(outputVersions[1].sha256, {exact: true}).scrollIntoViewIfNeeded();
   await page.screenshot({path: resolve(outputDir, "team-checked-output-mobile.png"), animations: "disabled"});
   await page.setViewportSize({width: 1512, height: 980});
+  validation = {...currentValidation, source: "request_validation", pinned_file_count: 0};
+  await recheck.click();
+  await original().waitFor();
+  await evidence.getByText("本次验收依据", {exact: true}).click();
+  await checkObservation.getByText("请求独立验收规则", {exact: false}).waitFor();
+  assert.doesNotMatch(await checkObservation.innerText(), /任务验收规则|Task validation rules/,
+    "An independently validated original request must not claim a Todo validation basis");
   // Another version's witness must never appear as a check of this report.
-  validation = {...validation, output_versions: [{ref: "report.json", sha256: "f".repeat(64)}, outputVersions[1]]};
+  // Restore the original Todo subject before the linked recovery journey.
+  validation = {...currentValidation, output_versions: [{ref: "report.json", sha256: "f".repeat(64)}, outputVersions[1]]};
   await recheck.click();
   await original().waitFor();
   await evidence.getByText("本次验收依据", {exact: true}).click();
@@ -143,7 +156,12 @@ try {
   const correction = evidence.getByRole("region", {name: "纠偏证据路径", exact: true});
   await correction.getByText("负责人指定的版本固定检查器", {exact: true}).waitFor();
   await verificationGap.waitFor();
-  await correction.getByText("检查在声明文件的隔离副本上执行；不代表远程复核者身份或异议已解决。", {exact: true}).waitFor();
+  const checkScope = correction.getByText("检查在声明文件的隔离副本上执行；不代表远程复核者身份或异议已解决。", {exact: true});
+  await checkScope.waitFor({state: "hidden"});
+  await correction.getByRole("button", {name: "独立检查范围", exact: true}).click();
+  await checkScope.waitFor();
+  await page.keyboard.press("Escape");
+  await checkScope.waitFor({state: "hidden"});
   await selectedOutput().waitFor();
   await verificationGap.scrollIntoViewIfNeeded();
   await page.screenshot({path: resolve(outputDir, "team-local-checker-gap-desktop.png"), animations: "disabled"});

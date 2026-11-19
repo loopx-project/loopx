@@ -1,5 +1,9 @@
 # Protocol Action Packet Router Comparison v0
 
+> Historical synthetic experiment only. The production packet reader is retired;
+> see the [current format contract](protocol-action-packet-decision-v0.md).
+> These examples do not qualify current execution or quota-size reduction.
+
 `protocol_action_packet_v0` was the rule-only hot-path baseline for executor
 action clarity. Under the [PR-05 migration](protocol-action-packet-decision-v0.md),
 new `quota should-run` output uses structured contracts and omits this packet.

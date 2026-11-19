@@ -19,7 +19,16 @@ import {
 } from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
 import { openLocalAuthorityStoreHandle } from "../../loopx/control_plane/coordination/local_authority_provider.ts";
 import {readLocalCoordinationTodoSource} from "../../loopx/control_plane/coordination/local_authority_read.ts";
+import {CANONICAL_SNAPSHOT_PAGE_REQUEST, readCanonicalSnapshotFromStore, readCanonicalSnapshotPage} from "../../loopx/control_plane/coordination/canonical_snapshot_page.ts";
+import {projectTodoContextPage} from "../../loopx/control_plane/todos/context_projection.ts";
+import {readCanonicalTodoProjection, readCanonicalQuotaProjection} from "../../loopx/control_plane/todos/read_transaction.ts";
+import {canonicalReadRoot} from "./local_promotion_fixture.ts";
 import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
+import {inspectGoalAcceptance, refineGoalAcceptanceOutcome} from "../../loopx/control_plane/goals/acceptance_authority.ts";
+import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
+import {exportLocalToPgGenesisSeed, setupPostgreSqlAuthoritySchemaAndRole} from "../../loopx/control_plane/coordination/postgresql_authority_seed.ts";
+import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
+import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {
   authorityStoreCommitFixture as commit,
   registerAuthorityStoreConformance,
@@ -30,6 +39,7 @@ const pool = connectionString ? new Pool({ connectionString, max: 12 }) : null;
 const STORE_IDENTITY = `postgresql:${"b".repeat(32)}`;
 const TENANT_SCOPED_TABLES = [
   "authority_heads",
+  "authority_checkpoints",
   "authority_commits",
   "authority_events",
   "authority_receipts",
@@ -52,20 +62,11 @@ function quotedRole(role: string): string {
 }
 
 async function createRuntimeRole(role: string): Promise<void> {
-  const identifier = quotedRole(role);
-  await pool!.query(`CREATE ROLE ${identifier} NOLOGIN`);
-  await pool!.query(`GRANT USAGE ON SCHEMA loopx_control_plane TO ${identifier}`);
-  await pool!.query(
-    `GRANT SELECT ON loopx_control_plane.authority_store_metadata TO ${identifier}`,
-  );
-  await pool!.query(
-    `GRANT SELECT, INSERT, UPDATE ON loopx_control_plane.authority_heads TO ${identifier}`,
-  );
-  await pool!.query(
-    `GRANT SELECT, INSERT ON loopx_control_plane.authority_commits,
-       loopx_control_plane.authority_events,
-       loopx_control_plane.authority_receipts TO ${identifier}`,
-  );
+  const result = await setupPostgreSqlAuthoritySchemaAndRole(database!, {
+    storeIdentity: STORE_IDENTITY,
+    runtimeRole: role,
+  });
+  assert.equal(result.status, "installed", result.reason);
 }
 
 function databaseForRuntimeRole(value: Pool, role: string): PostgreSqlAuthorityDatabase {
@@ -121,6 +122,114 @@ async function cleanScope(tenantId: string, goalId: string): Promise<void> {
 }
 
 if (database && installed) {
+  test("PostgreSQL canonical quota transaction binds one provider read and complete caller differences", async t => {
+    await installed;
+    const options = {tenant_id: `tenant-${randomUUID()}`, goal_id: `goal-${randomUUID()}`};
+    t.after(() => cleanScope(options.tenant_id, options.goal_id));
+    const root = await canonicalReadRoot(t, options.goal_id);
+    const store = new PostgreSqlAuthorityStore(database, options);
+    const projection = authorityProjectionFixture(options.goal_id, [{todo_id: "todo_native_quota", role: "agent",
+      status: "open", done: false, archive_state: "active", text: "Deliver the complete required artifact", priority: "P1",
+      task_class: "advancement_task", required_write_scopes: ["output.json"], note: "Retained source note", evidence: "artifact:retained"}]);
+    const seeded = await store.commitAuthority({operation_id: "quota-native-seed", expected_provider_revision: null,
+      next_projection: projection, events: [], receipts: []});
+    assert.equal(seeded.status, "applied");
+    let loads = 0;
+    const observed = new Proxy(store, {get(target, property) {
+      if (property === "loadAuthority") return async () => {loads++; return target.loadAuthority();};
+      const value = Reflect.get(target, property);
+      return typeof value === "function" ? value.bind(target) : value;
+    }});
+    const dependencies = {createStore: () => observed};
+    const read = {schema_version: "todo_read_request_v0", kind: "canonical_fields",
+      source: {runtime_root: root, goal_id: options.goal_id, include_leases: false, projection_readback: null},
+      observed_at: 1790812800, evaluated_at: "2026-10-01T00:00:00Z", rollout_events: []};
+    const initial = await readCanonicalTodoProjection(read, dependencies);
+    const fields = initial.fields as JsonObject, lineage = initial.source_projection as JsonObject;
+    const request = (field: string, changes: JsonObject[], displays: boolean): JsonObject => ({
+      schema_version: "todo_quota_planning_request_v4", current_time: "2026-10-01T00:00:00Z",
+      summary_request: {kind: "user", materialize_source: true, materialize_resume: true, consume_display_views: displays,
+        source_reference: {read, expected_source: lineage.source, field, field_sha256: (lineage.field_digests as JsonObject)[field], changes, python_values: []},
+        integer_counts: {source: null, warning: null}},
+      source_contract: fields[field], handoff_items: [], route_items: [],
+      resume_options: {agent_id: "agent-a", item_limit: 8, available_capabilities: []},
+      selection: {observed_at: 1790812800, available: [], agent_id: "agent-a", profile: null, user_gate_scope: field === "user_todos",
+        monitor_supported: false, items: [], active_items: [], active_executable_items: [], source_open_count: 1, source_complete: true,
+        diagnostic_limit: 3, backlog_limit: 8, visibility_limit: 16},
+    });
+    const requests = [request("user_todos", [], false), request("agent_todos", [{path: ["vision_wait_states"], value: [{agent_id: "agent-a", state: "waiting"}]}], true)];
+    loads = 0;
+    const result = await readCanonicalQuotaProjection({requests}, dependencies);
+    assert.equal(loads, 1, "both role requests share this one native provider read only");
+    const wires = result.quota_wires as JsonObject[];
+    assert.equal(wires[0]!.display_views, undefined, "the User caller did not request three displays");
+    const views = wires[1]!.display_views as JsonObject;
+    assert.equal((views.terminal as JsonObject[])[0]!.note, "Retained source note");
+    assert.deepEqual((views.summary as JsonObject[])[0]!.required_write_scopes, ["output.json"]);
+    const forged = structuredClone(requests);
+    ((forged[1]!.summary_request as JsonObject).source_reference as JsonObject).changes = [{path: ["items", 0, "note"], value: "Forged source fact"}];
+    await assert.rejects(readCanonicalQuotaProjection({requests: forged}, dependencies), /canonical Todo facts/);
+    const agentField = fields.agent_todos as JsonObject;
+    const sourceItem = (agentField.items as JsonObject[])[0]!;
+    for (const changes of [
+      [{path: ["items", 0, "required_write_scopes", 0], value: "different.json"}],
+      [{path: ["open_count"], value: Number(agentField.open_count) + 1}],
+      [{path: ["items"], delete: true}],
+    ]) {
+      const changed = structuredClone(requests);
+      ((changed[1]!.summary_request as JsonObject).source_reference as JsonObject).changes = changes;
+      await assert.rejects(readCanonicalQuotaProjection({requests: changed}, dependencies), /canonical Todo facts/);
+    }
+    // Source protection compares the final complete value. Temporary changes
+    // that are restored, including a parent replacement and deletion, retain
+    // the same read result and never mutate provider data.
+    const restored = structuredClone(requests);
+    const originalChanges = ((requests[1]!.summary_request as JsonObject).source_reference as JsonObject).changes as JsonObject[];
+    ((restored[1]!.summary_request as JsonObject).source_reference as JsonObject).changes = [
+      {path: ["items"], value: structuredClone(agentField.items)},
+      {path: ["items", 0, "note"], delete: true},
+      {path: ["items", 0, "note"], value: sourceItem.note},
+      ...structuredClone(originalChanges),
+    ];
+    assert.deepEqual(await readCanonicalQuotaProjection({requests: restored}, dependencies), result);
+    const untouched = await store.loadAuthority();
+    assert.equal(untouched.status, "loaded");
+    if (untouched.status !== "loaded") throw new Error("synthetic provider disappeared");
+    assert.deepEqual(untouched.head, projection);
+    const changed = await store.commitAuthority({operation_id: "quota-native-source-change", expected_provider_revision: untouched.provider_revision,
+      next_projection: authorityProjectionFixture(options.goal_id, (projection.todos as JsonObject[]).map(row => ({...row, text: "A new requirement"}))), events: [], receipts: []});
+    assert.equal(changed.status, "applied");
+    await assert.rejects(readCanonicalQuotaProjection({requests}, dependencies), /canonical source changed/);
+  });
+  test("PostgreSQL planning reads the Agent declaration and work links from the canonical head", async t => {
+    await installed;
+    const options = {tenant_id: `tenant-${randomUUID()}`, goal_id: `goal-${randomUUID()}`};
+    t.after(() => cleanScope(options.tenant_id, options.goal_id));
+    const store = new PostgreSqlAuthorityStore(database, options);
+    const projection = authorityProjectionFixture(options.goal_id, [{todo_id: "todo_plan", role: "agent",
+      status: "open", done: false, archive_state: "active", text: "Implement the requested outcome",
+      task_class: "advancement_task", claimed_by: "author"}]);
+    await store.commitAuthority({expected_provider_revision: null, operation_id: "seed-planning",
+      events: [], receipts: [], next_projection: projection});
+    const inspect = () => inspectGoalAcceptance(store, options.goal_id, undefined, undefined, false, "author");
+    const before = await inspect();
+    assert.equal((before.planning_requirements as JsonObject).declaration_current, false);
+    const result = await refineGoalAcceptanceOutcome(store, {goal_id: options.goal_id,
+      actor_agent_id: "author", expected_provider_revision: before.provider_revision, operation_id: "declare-planning",
+      refinement: {outcome_id: "requested", owner_agent_id: "author", objective: "Deliver the requested outcome",
+        requirements: [{id: "complete", description: "Complete the requested implementation"}],
+        todo_ids: ["todo_plan"], source: {ref: "message:request", summary: "The owner requested this implementation"}}});
+    assert.equal(result.status, "applied");
+    const after = await inspect();
+    const loaded = await store.loadAuthority();
+    assert.equal(loaded.status, "loaded");
+    if (loaded.status !== "loaded") return;
+    assert.equal(after.provider_revision, loaded.provider_revision);
+    assert.deepEqual(after.planning_requirements, {agent_id: "author", declaration_current: true,
+      outcome_ids: ["requested"], linked_todo_ids: ["todo_plan"]});
+    assert.deepEqual((after.goal_acceptance_contract as JsonObject).criteria ?? [], [], "Independent executable checks remain optional");
+  });
+
   test("PostgreSQL historical Todo source retains the original frontier", async t => {
     await installed;
     const options = {tenant_id: `tenant-${randomUUID()}`, goal_id: `goal-${randomUUID()}`};
@@ -153,6 +262,93 @@ if (database && installed) {
     assert.equal((await readLocalCoordinationTodoSource({...request,
       source: {...source, store_identity: "foreign"}}, {createStore: () => store})).reason_code,
     "todo_source_lineage_mismatch");
+  });
+
+  test("PostgreSQL snapshot reports a rejected field contract without changing authority", async t => {
+    await installed;
+    const options = {tenant_id: `tenant-${randomUUID()}`, goal_id: `goal-${randomUUID()}`};
+    t.after(() => cleanScope(options.tenant_id, options.goal_id));
+    const store = new PostgreSqlAuthorityStore(database, options);
+    const projection = authorityProjectionFixture(options.goal_id, []);
+    ((projection.todo_read_model as JsonObject).contract_fields as string[]).push("future_field");
+    const committed = await store.commitAuthority({expected_provider_revision: null,
+      operation_id: "seed-unsupported-contract", events: [], receipts: [], next_projection: projection});
+    assert.equal(committed.status, "applied");
+    const before = await store.loadAuthority();
+    const result = await readCanonicalSnapshotPage({schema_version: CANONICAL_SNAPSHOT_PAGE_REQUEST,
+      runtime_root: await canonicalReadRoot(t, options.goal_id), goal_id: options.goal_id,
+      include_leases: true, projection_readback: null, after: null}, {createStore: () => store});
+    assert.equal(result.status, "failed");
+    assert.equal(result.reason_code, "canonical_snapshot_projection_invalid");
+    assert.match(String(result.reason), /field contract mismatch/);
+    assert.equal(result.legacy_fallback_used, false);
+    assert.equal("todos" in result, false);
+    assert.deepEqual(await store.loadAuthority(), before);
+  });
+
+  test("PostgreSQL canonical snapshot feeds complete display views without becoming a fresh authority read", async t => {
+    await installed;
+    const options = {tenant_id: `tenant-${randomUUID()}`, goal_id: `goal-${randomUUID()}`};
+    t.after(() => cleanScope(options.tenant_id, options.goal_id));
+    const store = new PostgreSqlAuthorityStore(database, options);
+    const retainedNote = "Keep every acceptance clause.\nRecover the original artifact and settlement identity.";
+    const todos = [
+      {todo_id: "todo_01_open", role: "agent", status: "open", done: false, archive_state: "active",
+        text: "Implement the requested outcome", task_class: "advancement_task",
+        required_write_scopes: ["result.json"], note: retainedNote},
+      {todo_id: "todo_02_blocker", role: "agent", status: "blocked", done: false, archive_state: "active",
+        text: "Wait for the required input", task_class: "blocker", claimed_by: "author"},
+      {todo_id: "todo_03_completed", role: "agent", status: "done", done: true, archive_state: "active",
+        text: "Preserve the verified artifact", task_class: "advancement_task",
+        note: retainedNote, evidence: "artifact:verified-result", completed_at: "2026-01-01T00:00:00Z"},
+    ];
+    const projection = authorityProjectionFixture(options.goal_id, todos);
+    const committed = await store.commitAuthority({expected_provider_revision: null,
+      operation_id: "seed-display-source", events: [], receipts: [], next_projection: projection});
+    assert.equal(committed.status, "applied");
+    if (committed.status !== "applied") return;
+    const request = {schema_version: CANONICAL_SNAPSHOT_PAGE_REQUEST, runtime_root: tmpdir(),
+      goal_id: options.goal_id, include_leases: true, projection_readback: null, after: null};
+    const first = await readCanonicalSnapshotFromStore(request, store);
+    assert.equal(first.status, "page");
+    assert.equal(first.next, null);
+    const source = {source: {record: {items: first.todos}}, handoff_gates: []};
+    const before = JSON.stringify(first);
+    const views = projectTodoContextPage({summary_display_views: source});
+    const ids = (rows: unknown) => (rows as JsonObject[]).map(row => row.todo_id);
+    assert.deepEqual(ids(views.summary), ["todo_01_open", "todo_02_blocker"]);
+    assert.deepEqual(ids(views.planning), ["todo_01_open", "todo_02_blocker"]);
+    assert.deepEqual(ids(views.terminal), ["todo_01_open", "todo_02_blocker", "todo_03_completed"]);
+    assert.deepEqual((views.planning as JsonObject[])[0].required_write_scopes, ["result.json"]);
+    const terminal = (views.terminal as JsonObject[])[2];
+    assert.equal(terminal.note, retainedNote);
+    assert.equal(terminal.evidence, "artifact:verified-result");
+    assert.equal(terminal.completed_at, "2026-01-01T00:00:00Z");
+    assert.equal(JSON.stringify(first), before, "display cannot mutate the complete source snapshot");
+    const unchanged = await store.loadAuthority();
+    assert.equal(unchanged.status, "loaded");
+    if (unchanged.status !== "loaded") return;
+    assert.equal(unchanged.provider_revision, committed.provider_revision);
+    assert.deepEqual(unchanged.head, projection, "display cannot write or compact provider records");
+
+    const changed = authorityProjectionFixture(options.goal_id, todos.map(row =>
+      row.todo_id === "todo_01_open" ? {...row, status: "done", done: true} : row));
+    const later = await store.commitAuthority({expected_provider_revision: committed.provider_revision,
+      operation_id: "advance-display-source", events: [], receipts: [], next_projection: changed});
+    assert.equal(later.status, "applied");
+    if (later.status !== "applied") return;
+    const fresh = await readCanonicalSnapshotFromStore(request, store);
+    assert.equal(fresh.status, "page");
+    assert.notEqual((fresh.snapshot as JsonObject).provider_revision, (first.snapshot as JsonObject).provider_revision);
+    assert.deepEqual((fresh.todos as JsonObject[]).filter(row => row.todo_id !== "todo_01_open"),
+      (first.todos as JsonObject[]).filter(row => row.todo_id !== "todo_01_open"), "non-target provider rows stay unchanged");
+    assert.deepEqual(ids(projectTodoContextPage({summary_display_views: {
+      source: {record: {items: fresh.todos}}, handoff_gates: [],
+    }}).planning), ["todo_02_blocker"]);
+    assert.deepEqual(ids(projectTodoContextPage({summary_display_views: source}).planning), ["todo_01_open", "todo_02_blocker"],
+      "the retained source is historical evidence, never a newly read provider head");
+    await assert.rejects(readCanonicalSnapshotFromStore({...request,
+      after: {snapshot: first.snapshot, todo_offset: 1, lease_offset: 0}}, store), /canonical snapshot changed/);
   });
 
   registerAuthorityStoreConformance("PostgreSQL provider", async (t) => {
@@ -488,10 +684,53 @@ if (database && installed) {
       tenant_id: secondTenant,
       goal_id: goalId,
     });
-    assert.equal((await first.commitAuthority(commit(null, "operation-a", 1, 1))).status, "applied");
+    const root = await mkdtemp(join(tmpdir(), "pg-genesis-source-"));
+    t.after(() => rm(root, {recursive: true, force: true}));
+    const source = new FileAuthorityStore(root, goalId);
+    const synthetic = {goal_id: goalId, counter: 1, detail: "stable fixture"};
+    assert.equal((await source.commitAuthority({
+      operation_id: "local-fixture", expected_provider_revision: null,
+      events: [], receipts: [], next_projection: synthetic,
+    })).status, "applied");
+    const seed = {runtimeRoot: root, goalId, tenantId: firstTenant, localStore: source,
+      outputPath: join(root, "seed.json"),
+      storeIdentity: STORE_IDENTITY, targetDatabase: runtimeDatabase, execute: true};
+    const genesis = await exportLocalToPgGenesisSeed(seed);
+    assert.equal(genesis.status, "seeded", genesis.reason);
+    const originalSeedReceipt = await first.readReceipt(genesis.operation_id);
+    assert.equal(originalSeedReceipt.status, "found");
+    const retried = await exportLocalToPgGenesisSeed(seed);
+    assert.equal(retried.status, "seeded", retried.reason);
+    assert.equal(retried.provider_revision, genesis.provider_revision);
+    assert.equal(retried.seed_digest, genesis.seed_digest);
+    assert.deepEqual(await first.readReceipt(genesis.operation_id), originalSeedReceipt);
+    assert.equal((await exportLocalToPgGenesisSeed({...seed, storeIdentity: `postgresql:${"d".repeat(32)}`})).status, "failed");
     assert.equal((await second.commitAuthority(commit(null, "operation-b", 1, 1))).status, "applied");
-    assert.equal((await first.loadAuthority()).status, "loaded");
     assert.equal((await second.readReceipt("operation-b")).status, "found");
+    let revision = genesis.provider_revision;
+    for (let cursor = 2; cursor <= 67; cursor++) {
+      const result = await first.commitAuthority({
+        expected_provider_revision: revision,
+        operation_id: `append-${cursor}`,
+        events: [{counter: cursor}],
+        receipts: [{verified_cursor: cursor}],
+        next_projection: {...synthetic, counter: cursor},
+      });
+      assert.equal(result.status, "applied", JSON.stringify(result));
+      if (result.status === "applied") revision = result.provider_revision;
+    }
+    const page = await first.scanCommitted("62", 4);
+    assert.equal(page.status, "page");
+    if (page.status !== "page") assert.fail(JSON.stringify(page));
+    assert.deepEqual(page.transactions.map(row => row.projection.counter), [63, 64, 65, 66]);
+    assert.deepEqual(page.transactions[2]?.events, [{counter: 65}]);
+    assert.deepEqual(page.transactions[2]?.receipts, [{verified_cursor: 65}]);
+    assert.equal(page.has_more, true);
+    assert.equal((await first.readReceipt("append-65")).status, "found");
+    const original = await first.readReceipt("append-65");
+    assert.deepEqual(await first.readReceipts(["append-65", "operation-b", "append-65"]), {
+      status: "receipts", results: [original, {status: "missing"}, original],
+    });
 
     await queryAsRuntimeRole(runtimePool, role, async (client) => {
       for (const table of TENANT_SCOPED_TABLES) {
@@ -513,6 +752,14 @@ if (database && installed) {
         assert.deepEqual(scoped.rows, [{ tenant_id: firstTenant }]);
       }
       await client.query("ROLLBACK");
+
+      for (const statement of [
+        "UPDATE loopx_control_plane.authority_checkpoints SET projection = '{}'::jsonb",
+        "DELETE FROM loopx_control_plane.authority_checkpoints",
+        "UPDATE loopx_control_plane.authority_commits SET projection_digest = ''",
+        "DELETE FROM loopx_control_plane.authority_commits",
+        "CREATE TABLE loopx_control_plane.forbidden (id text)",
+      ]) await assert.rejects(client.query(statement), /permission denied/);
 
       await client.query("BEGIN");
       await client.query(
@@ -539,6 +786,100 @@ if (database && installed) {
         /permission denied/,
       );
     });
+  });
+
+  test("PostgreSQL v0 upgrade preserves restricted history access and rejects corrupt prefixes", async t => {
+    const suffix = randomUUID().replaceAll("-", "");
+    const name = `upgrade_${suffix}`;
+    const role = `worker_${suffix}`;
+    const grantRole = `journal_${suffix}`;
+    const url = new URL(connectionString!);
+    url.pathname = `/${name}`;
+    const legacy = new Pool({connectionString: url.href});
+    await pool!.query(`CREATE DATABASE ${name}`);
+    t.after(async () => {
+      await legacy.end();
+      await pool!.query(`DROP DATABASE ${name} WITH (FORCE)`);
+      await pool!.query(`DROP ROLE IF EXISTS ${quotedRole(role)}, ${quotedRole(grantRole)}`);
+    });
+    await legacy.query(POSTGRESQL_AUTHORITY_STORE_SCHEMA_SQL);
+    // Restore the released v0 shape in the disposable database. There are no
+    // v1 rows or checkpoints at this point.
+    await legacy.query(`
+      DROP TABLE loopx_control_plane.authority_checkpoints;
+      ALTER TABLE loopx_control_plane.authority_commits
+        DROP COLUMN delta, DROP COLUMN projection_digest, ALTER COLUMN projection SET NOT NULL;
+      INSERT INTO loopx_control_plane.authority_store_metadata (schema_version, store_identity)
+        VALUES ('loopx_postgresql_authority_store_v0', '${STORE_IDENTITY}');
+      CREATE ROLE ${quotedRole(grantRole)} NOLOGIN;
+      CREATE ROLE ${quotedRole(role)} NOLOGIN;
+      GRANT ${quotedRole(grantRole)} TO ${quotedRole(role)};
+      GRANT USAGE ON SCHEMA loopx_control_plane TO ${quotedRole(role)};
+      GRANT SELECT ON loopx_control_plane.authority_store_metadata TO ${quotedRole(role)};
+      GRANT SELECT, INSERT, UPDATE ON loopx_control_plane.authority_heads TO ${quotedRole(role)};
+      GRANT SELECT, INSERT ON loopx_control_plane.authority_commits TO ${quotedRole(grantRole)};
+      GRANT SELECT, INSERT ON loopx_control_plane.authority_events,
+        loopx_control_plane.authority_receipts TO ${quotedRole(role)};
+    `);
+    const tenantId = `tenant-${randomUUID()}`;
+    const goalId = `goal-${randomUUID()}`;
+    const store = new PostgreSqlAuthorityStore(databaseForRuntimeRole(legacy, role), {tenant_id: tenantId, goal_id: goalId});
+    const projection = (counter: number) => ({goal_id: goalId, counter});
+    const scope = [tenantId, goalId];
+    await legacy.query(
+      `INSERT INTO loopx_control_plane.authority_heads (tenant_id, goal_id, provider_revision, cursor, head)
+       VALUES ($1, $2, 2, 2, $3)`, [...scope, projection(2)]);
+    for (const cursor of [1, 2]) {
+      await legacy.query(
+        `INSERT INTO loopx_control_plane.authority_commits
+           (tenant_id, goal_id, cursor, provider_revision, operation_id, projection)
+         VALUES ($1, $2, $3, $3, $4, $5)`, [...scope, cursor, `legacy-${cursor}`, projection(cursor)]);
+    }
+    await legacy.query(
+      `INSERT INTO loopx_control_plane.authority_receipts (tenant_id, goal_id, cursor, receipt_index, receipt)
+       VALUES ($1, $2, 2, 0, $3)`, [...scope, {before_upgrade: true}]);
+    const upgraded = await setupPostgreSqlAuthoritySchemaAndRole(databaseFromPool(legacy), {storeIdentity: STORE_IDENTITY});
+    assert.equal(upgraded.status, "installed", upgraded.reason);
+    const original = await store.readReceipt("legacy-2");
+    assert.equal(original.status, "found");
+    if (original.status !== "found") assert.fail(JSON.stringify(original));
+    assert.equal(original.cursor, "2");
+    assert.equal(original.provider_revision, `${STORE_IDENTITY}:2`);
+    assert.deepEqual(original.receipts, [{before_upgrade: true}]);
+    await queryAsRuntimeRole(legacy, role, async (client) => {
+      const result = await client.query(`
+        SELECT
+          has_table_privilege('loopx_control_plane.authority_checkpoints', 'SELECT') AS can_read,
+          has_table_privilege('loopx_control_plane.authority_checkpoints', 'INSERT') AS can_append,
+          has_table_privilege('loopx_control_plane.authority_checkpoints', 'UPDATE,DELETE') AS can_mutate
+      `);
+      assert.deepEqual(result.rows, [{can_read: true, can_append: true, can_mutate: false}]);
+    });
+    let revision = `${STORE_IDENTITY}:2`;
+    for (const cursor of [3, 4, 5]) {
+      const result = await store.commitAuthority({operation_id: `new-${cursor}`,
+        expected_provider_revision: revision, next_projection: projection(cursor),
+        events: [], receipts: [{after_upgrade: cursor}]});
+      if (result.status !== "applied") assert.fail(JSON.stringify(result));
+      revision = result.provider_revision;
+    }
+    assert.deepEqual(await store.readReceipt("legacy-2"), original);
+    const page = await store.scanCommitted("1", 3);
+    if (page.status !== "page") assert.fail(JSON.stringify(page));
+    assert.deepEqual(page.transactions.map(row => row.projection), [2, 3, 4].map(projection));
+
+    const tamper = {schema_version: "authority_state_delta_v0", operations: [{op: "set", path: ["counter"], value: 999}]};
+    await legacy.query(
+      `UPDATE loopx_control_plane.authority_commits SET delta=$3
+       WHERE tenant_id=$1 AND goal_id=$2 AND cursor=3`, [...scope, tamper]);
+    const corrupt = await store.scanCommitted("3", 1);
+    assert.equal(corrupt.status, "failed");
+    assert.match("reason" in corrupt ? corrupt.reason : "", /digest mismatch/);
+    await legacy.query(
+      "DELETE FROM loopx_control_plane.authority_commits WHERE tenant_id=$1 AND goal_id=$2 AND cursor=3", scope);
+    const missing = await store.scanCommitted("3", 1);
+    assert.equal(missing.status, "failed");
+    assert.match("reason" in missing ? missing.reason : "", /window is incomplete/);
   });
 } else {
   test("PostgreSQL authority-store integration (set LOOPX_TEST_POSTGRES_URL)", { skip: true }, () => {});
@@ -634,7 +975,7 @@ test("PostgreSQL provider evicts and awaits cleanup-uncertain read connections",
         }
         if (text.includes("authority_store_metadata")) {
           return {
-            rows: [{ schema_version: "loopx_postgresql_authority_store_v0", store_identity: STORE_IDENTITY }],
+            rows: [{ schema_version: "loopx_postgresql_authority_store_v1", store_identity: STORE_IDENTITY }],
             rowCount: 1,
           };
         }

@@ -6,6 +6,28 @@ import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 export const EXPLORE_MODES = ["off", "evidence", "planning"] as const;
 export type ExploreMode = typeof EXPLORE_MODES[number];
 
+export function researchIdentifier(value: unknown, field: string): string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) {
+    throw new EffectRuntimeRequestError(`${field} must be an opaque public-safe identifier`);
+  }
+  return value;
+}
+
+export function normalizeResearchCompositionPolicy(params: JsonObject): JsonObject {
+  const harness = requireJsonObject(params.harness, "Explore harness");
+  const mode = harness.composition_mode ?? "disabled";
+  if (typeof mode !== "string" || !["disabled", "explicit_only"].includes(mode)) {
+    throw new EffectRuntimeRequestError("composition_mode must be disabled or explicit_only");
+  }
+  const scope = harness.composition_scope_id == null || harness.composition_scope_id === "" ? null
+    : researchIdentifier(harness.composition_scope_id, "composition_scope_id");
+  if (mode === "explicit_only" && scope === null) {
+    throw new EffectRuntimeRequestError("explicit_only composition requires composition_scope_id");
+  }
+  return {schema_version: "research_composition_policy_v0", mode, coverage_scope_id: scope,
+    enabled: harness.enabled === true && mode === "explicit_only"};
+}
+
 function mode(value: unknown): ExploreMode {
   if (!EXPLORE_MODES.includes(value as ExploreMode)) {
     throw new EffectRuntimeRequestError("explore_mode must be off, evidence or planning");
@@ -18,6 +40,32 @@ export function resolveExploreConfiguration(params: JsonObject): JsonObject {
   const evidence = params.evidence_enabled === true || planning;
   return {mode: planning ? "planning" : evidence ? "evidence" : "off",
     evidence_enabled: evidence, planning_enabled: planning};
+}
+
+/** Resolve one mode for both live runtime policy and configuration readback.
+ * Legacy enabled fields are explicit Goal choices, including false. A profile
+ * or composition setting alone does not pin the mode. No authority is added.
+ */
+export function resolveExploreGoalConfiguration(params: JsonObject): JsonObject {
+  const graph = requireJsonObject(params.graph ?? {}, "Explore graph configuration");
+  const harness = requireJsonObject(params.harness ?? {}, "Explore harness configuration");
+  const explicit = Object.hasOwn(graph, "enabled") || Object.hasOwn(harness, "enabled");
+  const machine = params.machine_mode == null ? null : mode(params.machine_mode);
+  const selected = explicit
+    ? resolveExploreConfiguration({evidence_enabled: graph.enabled, planning_enabled: harness.enabled})
+    : planExploreConfiguration({current: {}, changes: {mode: machine ?? "off"}});
+  const override: JsonObject = {};
+  if (explicit) override.mode = selected.mode;
+  for (const key of ["profile", "composition_mode", "composition_scope_id"]) {
+    if (Object.hasOwn(harness, key)) override[key] = harness[key];
+  }
+  return {
+    ...selected,
+    mode_source: explicit ? "goal_override" : machine == null ? "capability_default" : "machine_default",
+    goal_override: Object.keys(override).length ? override : null,
+    configuration: {profile: "generic", composition_mode: "disabled", composition_scope_id: null,
+      ...override, mode: selected.mode},
+  };
 }
 
 export function planExploreConfiguration(params: JsonObject): JsonObject {

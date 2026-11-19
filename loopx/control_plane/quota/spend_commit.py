@@ -111,7 +111,11 @@ def _quota_spend_commit_result(
         source_admission=source_admission,
     )
     try:
-        result = effect_runtime_result("quota.spend.commit", params)
+        # The complete preview participates in the durable request digest. Keep
+        # it intact when wide decision context exceeds the inline wire budget.
+        result = effect_runtime_result(
+            "quota.spend.commit", params, large_local_snapshot=True,
+        )
     except EffectRuntimeConflict as exc:
         if exc.diagnostic_code == QuotaRunIndexConflict.reason_code:
             raise QuotaRunIndexConflict(str(exc)) from None

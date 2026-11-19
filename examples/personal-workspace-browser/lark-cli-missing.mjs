@@ -57,9 +57,12 @@ export const larkCliMissingScenario = {
       // With lark-cli available again the same entries stay usable.
       await page.unroute(larkReads, answerCliMissing);
       await page.reload({ waitUntil: "networkidle" });
-      await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
-      await page.getByRole("button", { name: "设置", exact: true }).click();
-      await page.getByRole("button", { name: "Lark", exact: true }).click();
+      const restoredSettings = page.getByRole("region", { name: "设置", exact: true });
+      await restoredSettings.waitFor({ state: "visible" });
+      if (!await restoredSettings.getByRole("radio", { name: "本机设置", exact: true }).isChecked()) {
+        throw new Error("Reload did not retain the explicit device settings scope");
+      }
+      await restoredSettings.getByRole("button", { name: "Lark", exact: true }).click();
       await page.locator(".personal-lark-tabs").getByRole("button", { name: /^Lark Apps/u }).click();
       if (await page.getByRole("button", { name: "新建 Lark App" }).isDisabled()) {
         throw new Error("New Lark App stayed disabled with lark-cli available");

@@ -5,10 +5,14 @@ import shlex
 
 from .zcode_goal_mode import native_goal_activation
 from .agent_registry import normalize_registered_agents
-from .agy_goal_mode import AGY_ACCEPTED_INPUTS
+from .agy_goal_mode import (
+    AGY_ACCEPTED_INPUTS,
+    ANTIGRAVITY_APP_AGENT_TYPE_CATALOG_ENTRY,
+)
 from .control_plane.scheduler.execution_context import SchedulerRuntimeProfile
 from .hosts.skill_facade import (
     agy_cli_activation,
+    antigravity_app_activation,
     cursor_agent_activation,
     gemini_cli_activation,
     kiro_cli_activation,
@@ -61,6 +65,7 @@ def scheduler_command_binding_for_agent_type(
         "cursor-agent": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
         "zcode": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
         "agy": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
+        "antigravity-app": SchedulerRuntimeProfile.ANTIGRAVITY_APP,
         "kiro-cli": SchedulerRuntimeProfile.KIRO_CLI_VISIBLE,
         "deepseek-harness": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
         "deepseek-harness-native": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
@@ -91,6 +96,7 @@ SUPPORTED_AGENT_TYPES = [
     "cursor-agent",
     "zcode",
     "agy",
+    "antigravity-app",
     "kiro-cli",
     "deepseek-harness",
     "deepseek-harness-native",
@@ -282,6 +288,7 @@ AGENT_TYPE_CATALOG: dict[str, dict[str, Any]] = {
         "entry": "the LoopX skill installed in ~/.gemini/antigravity-cli/skills",
         "accepted_inputs": list(AGY_ACCEPTED_INPUTS),
     },
+    "antigravity-app": ANTIGRAVITY_APP_AGENT_TYPE_CATALOG_ENTRY,
     "kiro-cli": KIRO_CLI_AGENT_TYPE_CATALOG_ENTRY,
     "deepseek-harness": {
         "display_name": "DeepSeek Harness",
@@ -389,6 +396,10 @@ HOST_SURFACE_TO_AGENT_TYPE = {
     "agy": "agy",
     "antigravity": "agy",
     "antigravity-cli": "agy",
+    "antigravity-app": "antigravity-app",
+    "antigravity_app": "antigravity-app",
+    "agy-app": "antigravity-app",
+    "agy_app": "antigravity-app",
     "kiro-cli": "kiro-cli",
     "kiro": "kiro-cli",
     "deepseek-harness": "deepseek-harness",
@@ -513,6 +524,7 @@ def _heartbeat_commands(
     agent_type: str,
     cli_bin: str,
     runtime_root: str | None = None,
+    registry: str | None = None,
     agent_id: str | None,
     available_capabilities: list[str] | None = None,
 ) -> dict[str, str]:
@@ -532,6 +544,7 @@ def _heartbeat_commands(
         "cursor-agent": "Cursor Agent CLI loop gated by LoopX",
         "zcode": "ZCode agent loop gated by LoopX",
         "agy": "Antigravity CLI agent loop with advisory LoopX quota pacing",
+        "antigravity-app": "Antigravity App schedule timer & sidecar heartbeat loop",
         "kiro-cli": "Kiro CLI native /goal loop with advisory LoopX quota pacing",
         "deepseek-harness": "DeepSeek Harness automation loop gated by LoopX",
         "deepseek-harness-native": "DeepSeek Harness same-session plugin loop gated by LoopX",
@@ -540,12 +553,13 @@ def _heartbeat_commands(
     }
     agent_scope = scope_by_type.get(agent_type, scope_by_type["other-agent"])
     scheduler_binding = scheduler_command_binding_for_agent_type(agent_type)
-    renderer_binding = {"visible_goal_host": "traex-cli"} if agent_type == "traex-cli" else {}
+    renderer_binding: dict[str, Any] = {"visible_goal_host": "traex-cli"} if agent_type == "traex-cli" else {}
     commands = {
         "heartbeat_prompt_json": render_heartbeat_prompt_json_command(
             goal_id,
             cli_bin=cli_bin,
             runtime_root=runtime_root,
+            registry_path=registry,
             agent_id=agent_id,
             agent_scope=agent_scope,
             available_capabilities=available_capabilities,
@@ -556,6 +570,7 @@ def _heartbeat_commands(
             goal_id,
             cli_bin=cli_bin,
             runtime_root=runtime_root,
+            registry_path=registry,
             agent_id=agent_id,
             agent_scope=agent_scope,
             available_capabilities=available_capabilities,
@@ -1104,23 +1119,26 @@ def _traex_activation(commands: dict[str, str]) -> dict[str, Any]:
         "host_mutation": {
             "owner": "TraeX CLI TUI",
             "host_command": "/goal <task_body>",
+            "preferred_tool": "create_goal",
             "cli_can_mutate_directly": False,
             "requires_host_feature_flag": "[features] goals = true in ~/.trae/traecli.toml",
             "missing_host_tool_gate": (
-                "TraeX /goal is unavailable; if goal mode is disabled, show the exact "
+                "Native Goal tools and active Goal context are unavailable; show the exact "
                 "`/goal <task_body>` text for the user to paste after enabling "
-                "`[features] goals = true`. Do not claim another host-loop surface "
+                "`[features] goals = true` if goal mode is disabled. Do not claim another host-loop surface "
                 "without a verified LoopX adapter."
             ),
         },
         "activation_steps": [
             "Run the visible-goal prompt JSON command after project state and todos are written.",
             "Read task_body from the JSON payload.",
-            "Set the visible TraeX goal to `/goal <task_body>`; enable `[features] goals = true` first if goal mode is off.",
+            "Read the current native Goal with get_goal when available, otherwise use the current host-provided Goal context. Tool availability is an observation, not permission to change a Goal.",
+            "For continuation inside the verified same-thread LoopX Goal/Agent binding, retain the active native Goal and its original objective. Do not call create_goal or replace that objective with task_body. Preserve paused, blocked and completed states; never resume them without user direction.",
+            "For an authorized fresh start, when the host confirms no native Goal exists, call create_goal with objective=task_body if available, then verify the Goal with get_goal or current host context. If native tools and active Goal context are unavailable, use the missing_host_tool_gate manual /goal path; enable `[features] goals = true` only if goal mode is off.",
             "Keep delivery in the visible TUI turn; gate each continuation through LoopX quota should-run and do not switch to hidden headless execution.",
         ],
         "success_criteria": [
-            "The visible TraeX TUI has `/goal <task_body>` active for this goal.",
+            "The visible TraeX TUI has a verified active native Goal for this work: retain its original objective on continuation, or verify task_body after fresh activation. A preview is not activation or model adoption.",
             "Future goal turns enter through LoopX quota/status/state before delivery work.",
         ],
     }
@@ -1226,6 +1244,7 @@ def build_host_loop_activation_packet(
     goal_id: str,
     cli_bin: str = "loopx",
     runtime_root: str | None = None,
+    registry: str | None = None,
     identity_runtime_root: str | None = None,
     agent_id: str | None = None,
     registered_agents: list[str] | None = None,
@@ -1251,6 +1270,7 @@ def build_host_loop_activation_packet(
             agent_type=canonical,
             cli_bin=cli_bin,
             runtime_root=runtime_root,
+            registry=registry,
             agent_id=str(selected_agent_id) if selected_agent_id else None,
             available_capabilities=normalized_available_capabilities,
         )
@@ -1306,6 +1326,15 @@ def build_host_loop_activation_packet(
         )
     elif canonical == "agy":
         surface = agy_cli_activation(commands, cli_bin)
+    elif canonical == "antigravity-app":
+        surface = antigravity_app_activation(
+            commands,
+            cli_bin,
+            goal_id=goal_id,
+            agent_id=str(selected_agent_id) if selected_agent_id else None,
+            runtime_root=runtime_root,
+            registry=registry,
+        )
     elif canonical == "kiro-cli":
         surface = kiro_cli_activation(commands, cli_bin)
     elif canonical == "deepseek-harness":
@@ -1326,6 +1355,7 @@ def build_host_loop_activation_packet(
                 agent_type=canonical,
                 cli_bin=cli_bin,
                 runtime_root=runtime_root,
+                registry=registry,
                 agent_id=candidate,
                 available_capabilities=normalized_available_capabilities,
             )

@@ -1,4 +1,4 @@
-"""Private owner audience and explicit host grant meet at the native Session.
+"""Private owner audience and machine host policy meet at the native Session.
 
 The real Core, configuration store and app-server RPC path are exercised with
 synthetic provider/model fixtures, not live credentials or model acceptance.
@@ -34,7 +34,14 @@ def test_private_steward_uses_machine_grant_and_continues_without_widening_other
         return store.load_session(row["session_id"])
 
     first = admit("default", "Remember the owner's initial request.")
-    assert first["manager_runtime_profile"] == "restricted"
+    first_readback = store.public_session(first)["manager_runtime"]
+    assert first_readback["runtime_profile"] == "trusted_owner"
+    assert first_readback["standing_grant"] == "capability_default"
+    apply_profile(store.root.parent, "restricted")
+    restricted = admit("restricted", "Respect the owner's explicit read-only choice.")
+    assert restricted["session_id"] == first["session_id"]
+    assert restricted["manager_runtime_sandbox"] == "read-only"
+    assert restricted["manager_runtime_standing_grant"] == "none"
     apply_profile(store.root.parent, "trusted_owner")
     trusted = admit("authorized", "Use the available tools for this authorized request.")
     assert trusted["session_id"] == first["session_id"]
@@ -48,10 +55,23 @@ def test_private_steward_uses_machine_grant_and_continues_without_widening_other
     assert followup["upstream_thread_id"] == trusted["upstream_thread_id"]
     calls = [json.loads(line) for line in capture.read_text().splitlines()]
     starts = [call["params"] for call in calls if call.get("method") == "thread/start"]
-    assert [call["sandbox"] for call in starts] == ["read-only", "danger-full-access"]
+    assert [call["sandbox"] for call in starts] == [
+        "danger-full-access", "read-only", "danger-full-access",
+    ]
     prompts = [call["params"]["input"][0]["text"] for call in calls if call.get("method") == "turn/start"]
     assert "normal tools and skills" in prompts[-1]
-    assert "Remember the owner's initial request." in prompts[1]
+    injected = [call["params"]["items"] for call in calls
+                if call.get("method") == "thread/inject_items"]
+    assert [len(items) for items in injected] == [2, 4]
+    assert [item["role"] for item in injected[0]] == ["user", "assistant"]
+    assert injected[0][0]["content"] == [{
+        "type": "input_text", "text": "Remember the owner's initial request.",
+    }]
+    assert injected[1][:2] == injected[0]
+    assert injected[1][2]["content"] == [{
+        "type": "input_text", "text": "Respect the owner's explicit read-only choice.",
+    }]
+    assert all("Remember the owner's initial request." not in prompt for prompt in prompts[1:])
     assert "Do not inspect arbitrary repositories" not in prompts[-1]
     transport.reconcile()
     assert all(item[0] == "steward-app" for item in provider.writes)

@@ -34,11 +34,13 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from loopx.entrypoint import pin_utf8_stdio  # noqa: E402
+from loopx.control_plane.coordination.nokv_qualification import (  # noqa: E402
+    QUALIFIED_NOKV_API_VERSION as QUALIFIED_NOKV_API_VERSION,
+    QUALIFIED_NOKV_SDK_VERSION as QUALIFIED_NOKV_SDK_VERSION,
+)
 
 _HEX_128 = re.compile(r"^[0-9a-f]{32}$")
 _CLIENT_AVAILABILITY_ERRORS = (RuntimeError, OSError)
-QUALIFIED_NOKV_SDK_VERSION = "0.11.1"
-QUALIFIED_NOKV_API_VERSION = 1
 # NoKV 0.11.1 evaluates ``expected_workspace_incarnation_id`` atomically with
 # the generation before any durable row or object exists and refuses a stale
 # incarnation with a typed exception. Both halves are admission requirements.

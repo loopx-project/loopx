@@ -1,6 +1,7 @@
 """Cold-import stop ordering with native leases and real owned Host processes.
 
-Disposable unpromoted sources only. This qualifies the operator-led POSIX stop
+Disposable unpromoted sources only. The source Host is an owned pre-cutover
+process fixture, not a new current unpromoted-Goal execution. This qualifies the operator-led POSIX stop
 and fresh canonical-lease reactivation journey, not automatic Host discovery,
 outbox disposition, model execution or whole-Goal restore.
 """
@@ -51,10 +52,13 @@ def source_execution(tmp_path, monkeypatch, ttl=120):
         "--runtime-root", str(runtime), "--format", "json", "task-lease"]
     selected = ["--goal-id", "cold", "--todo-id", "todo_current"]
 
-    def command(action, *args):
+    def command(action, *args, success=True):
+        if action == "inspect-source":
+            from loopx.control_plane.work_items.local_lease_record import read_lease
+            return {"ok": True, "lease": read_lease(lease_path), "execution_authority_granted": False}
         child = subprocess.run([*argv, action, *selected, *map(str, args)],
             cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60)
-        assert child.returncode == 0, child.stdout + child.stderr
+        assert (child.returncode == 0) is success, child.stdout + child.stderr
         return json.loads(child.stdout)
 
     identity = ["--owner", "agent-a", "--idempotency-key", "old-execution"]
@@ -81,13 +85,15 @@ def source_execution(tmp_path, monkeypatch, ttl=120):
     lease_path = runtime / "goals/cold/task-leases/todo_current.json"
     lease_path.parent.mkdir(parents=True)
     lease_path.write_text(json.dumps(lease), encoding="utf-8")
-    assert command("inspect")["lease"] == lease
+    assert command("inspect-source")["lease"] == lease
+    refused = command("inspect", success=False)
+    assert refused["error_code"] == "canonical_authority_required"
     context = {"lease": lease, "ttl_seconds": ttl,
         "read_argv": [*argv, "inspect", *selected],
         "renew_argv": [*argv, "renew", *selected, *identity]}
 
     def release():
-        current = command("inspect")
+        current = command("inspect-source")
         result = command("release", *identity, "--expected-version", current["lease"]["version"])
         assert result["ok"] and result["lease"]["status"] == "released", result
         return result["lease"]
@@ -121,7 +127,8 @@ def source_execution(tmp_path, monkeypatch, ttl=120):
 def test_cold_import_settlement_and_fresh_canonical_host_reactivation(tmp_path, monkeypatch, provider):
     cli, command, release, prepare, drain, launch, context, runtime, _ = source_execution(tmp_path, monkeypatch)
     marker, record = tmp_path / "host.pid", tmp_path / "owned-host.json"
-    owner = launch(context, marker, record)
+    # Model an already-running older Host without issuing a new Goal grant.
+    owner = launch(None, marker, record)
     try:
         deadline = time.monotonic() + 60
         while not marker.exists() and owner.poll() is None and time.monotonic() < deadline:
@@ -141,7 +148,7 @@ def test_cold_import_settlement_and_fresh_canonical_host_reactivation(tmp_path, 
         assert drain(record) == "drained"
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
-        still_active = command("inspect")["lease"]
+        still_active = command("inspect-source")["lease"]
         assert still_active["status"] == "active"
         assert still_active["idempotency_key"] == "old-execution"
         assert prepare(provider, success=False)["reason_code"] == "cold_import_lease_requires_settlement"
@@ -241,7 +248,7 @@ def test_elapsed_source_lease_requires_native_release_before_import(tmp_path, mo
     _, command, release, prepare, _, _, context, runtime, _ = source_execution(tmp_path, monkeypatch, ttl=1)
     expires = datetime.fromisoformat(context["lease"]["expires_at"].replace("Z", "+00:00")).timestamp()
     time.sleep(max(0, expires - time.time()) + .05)
-    current = command("inspect")["lease"]
+    current = command("inspect-source")["lease"]
     assert current["status"] == "active" and current["expires_at"] == context["lease"]["expires_at"]
     assert prepare(provider, success=False)["reason_code"] == "cold_import_lease_requires_settlement"
     assert not list(runtime.rglob("writer-fence.json"))

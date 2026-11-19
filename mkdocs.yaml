@@ -99,7 +99,6 @@ nav:
       - Long-Running Coding Agents: guides/long-running-coding-agents.md
       - Minimal Custom Runtime Example: guides/minimal-custom-runtime-example.md
       - Custom Runner Integration: guides/custom-agent-runner-integration.md
-      - Auto Research Stop/Takeover/Wake: guides/auto-research-stop-takeover-wake-walkthrough.md
   - Concepts:
       - concepts/README.md
       - Interaction Patterns: concepts/interaction-pattern-catalog.md
@@ -156,6 +155,7 @@ nav:
   - Product:
       - product/README.md
       - Vision: product/vision.md
+      - Steward Monitoring: product/periodic-reports.md
       - Release Readiness: product/release-readiness.md
       - Surfaces: product/surfaces/README.md
       - Runtimes: product/runtimes/README.md

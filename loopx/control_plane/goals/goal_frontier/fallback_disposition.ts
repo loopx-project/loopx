@@ -27,7 +27,9 @@ function disposition(
   if (item.task_class !== "advancement_task" ||
       (item.role !== undefined && item.role !== "agent") ||
       (item.archive_state !== undefined && item.archive_state !== "active") ||
-      requireBoolean(item.done, "done") ||
+      // Canonical read rows also mark deferred work as checkbox-closed. Its
+      // typed status and positive resume proof still decide a legitimate wait.
+      (requireBoolean(item.done, "done") && item.status !== "deferred") ||
       requireBoolean(item.removed_continuation, "removed_continuation") ||
       (agent && (excluded.includes(agent) || (claim !== null && claim !== agent)))) return "unresolved";
   if (!["open", "deferred"].includes(String(item.status))) return "unresolved";

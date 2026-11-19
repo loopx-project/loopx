@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from urllib.parse import parse_qs, urlsplit
 
 from contextlib import ExitStack
 from types import SimpleNamespace
@@ -16,7 +17,13 @@ from unittest.mock import patch
 from loopx.chat_server import ChatRequestHandler, default_chat_assets_dir
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from codex_attached_peer import append_message, fixture, provider
+from codex_attached_peer import (
+    THREAD,
+    add_conversation,
+    append_message,
+    fixture,
+    provider,
+)
 
 stop = threading.Event()
 signal.signal(signal.SIGTERM, lambda *_: stop.set())
@@ -54,6 +61,7 @@ with (
         live_revision = 0
         live_updates = 0
         body_fault = None
+        content_release = threading.Event()
 
         def open_spy(argv, **options):
             global fail_next_open
@@ -84,41 +92,93 @@ with (
                 elif (
                     body_fault
                     and self.path.startswith("/api/chat/codex-attached?")
-                    and "agent_id=" not in self.path
+                    and (
+                        "before" in parse_qs(urlsplit(self.path).query)
+                        if body_fault == "history"
+                        else "entry_id" in parse_qs(urlsplit(self.path).query)
+                        if body_fault in {"content", "content-denied", "content-held"}
+                        else "agent_id" not in parse_qs(urlsplit(self.path).query)
+                    )
                 ):
-                    # Headers first, then a body that never completes: the client
-                    # read limit aborts a stalled body, and a short close against
-                    # the declared length surfaces as a network error. Both keep
-                    # the status the response already carried.
+                    # Send actual headers, then end the connection short of the
+                    # declared body length (or let the browser's read time out).
                     mode, body_fault = body_fault, None
-                    self.send_response(503 if mode == "timeout" else 403)
-                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    status = {
+                        "timeout": 503,
+                        "drop": 403,
+                        "history": 200,
+                        "content": 200,
+                        "content-denied": 403,
+                        "content-held": 200,
+                    }[mode]
+                    self.send_response(status)
+                    self.send_header(
+                        "Content-Type",
+                        "application/json"
+                        if status == 200
+                        else "text/html; charset=utf-8",
+                    )
                     self.send_header("Content-Length", "200")
                     self.end_headers()
-                    self.wfile.write(b"<html><body>Service unavailable")
+                    self.wfile.write(
+                        b'{"ok":'
+                        if status == 200
+                        else b"<html><body>Service unavailable"
+                    )
                     self.wfile.flush()
                     if mode == "timeout":
                         time.sleep(7.5)
+                    elif mode == "content-held":
+                        content_release.wait(7.5)
                     self.close_connection = True
                 else:
                     super().do_GET()
 
             def do_POST(self):
                 global fail_next_open, live_revision, live_updates, body_fault
-                if self.path in {
-                    "/fixture/discovery-body-timeout",
-                    "/fixture/discovery-body-drop",
-                }:
-                    body_fault = "timeout" if self.path.endswith("timeout") else "drop"
+                if self.path == "/fixture/second-conversation":
+                    add_conversation(
+                        registry,
+                        _home,
+                        agent_id="worker",
+                        thread_id="22222222-2222-4222-8222-222222222222",
+                        text="Separate investigation",
+                    )
+                    self._send_json({"ok": True})
+                    return
+                faults = {
+                    "/fixture/discovery-body-timeout": "timeout",
+                    "/fixture/discovery-body-drop": "drop",
+                    "/fixture/history-body-drop": "history",
+                    "/fixture/content-body-drop": "content",
+                    "/fixture/content-body-denied": "content-denied",
+                    "/fixture/content-body-hold": "content-held",
+                }
+                if self.path in faults:
+                    if self.path == "/fixture/content-body-hold":
+                        content_release.clear()
+                    body_fault = faults[self.path]
+                    self._send_json({"ok": True})
+                    return
+                if self.path == "/fixture/content-body-release":
+                    content_release.set()
                     self._send_json({"ok": True})
                     return
                 if self.path == "/fixture/work-records":
+                    # Genuine, already public-safe display data; only the host
+                    # protocol and carrier messages are synthetic. Keep one
+                    # non-BMP prefix to exercise character-based detail offsets.
+                    reference = (
+                        Path(__file__).resolve().parents[2]
+                        / "apps/presentation/dashboard/src/data/fixtures"
+                        / "edgebench-grid-context-on-20261103-history.json"
+                    )
                     records = [
                         {
                             "type": "function_call",
-                            "name": "validate",
+                            "name": "read_file",
                             "call_id": "work-1",
-                            "arguments": "Check the release artifact",
+                            "arguments": json.dumps({"path": reference.name}),
                         },
                         {
                             "type": "function_call_output",
@@ -126,9 +186,7 @@ with (
                             "output": [
                                 {
                                     "type": "text",
-                                    "text": "Validation output\n"
-                                    + "🧭验证结果\n" * 6000
-                                    + "COMPLETE TOOL RESULT",
+                                    "text": "🧭\n" + reference.read_text().strip(),
                                 }
                             ],
                         },
@@ -264,11 +322,16 @@ with (
                             + "\n"
                         )
                     self._send_json({"ok": True})
-                elif self.path == "/fixture/rebind":
+                elif self.path in {"/fixture/rebind", "/fixture/restore-binding"}:
                     value = json.loads(registry.read_text())
-                    value["goals"][0]["coordination"]["thread_agent_bindings"][0][
-                        "thread_id"
-                    ] = "22222222-2222-4222-8222-222222222222"
+                    binding = value["goals"][0]["coordination"][
+                        "thread_agent_bindings"
+                    ][0]
+                    binding["thread_id"] = (
+                        THREAD
+                        if self.path == "/fixture/restore-binding"
+                        else "22222222-2222-4222-8222-222222222222"
+                    )
                     registry.write_text(json.dumps(value))
                     self._send_json({"ok": True})
                 elif self.path in {
@@ -303,12 +366,29 @@ with (
                                         "payload": {
                                             "type": "task_complete"
                                             if finished
-                                            else "task_started"
+                                            else "task_started",
+                                            "turn_id": "live-workspace-fixture",
                                         },
                                     }
                                 )
                                 + "\n"
                             )
+                            if not finished:
+                                stream.write(
+                                    json.dumps(
+                                        {
+                                            "type": "turn_context",
+                                            "timestamp": "2026-01-01T00:00:04Z",
+                                            "payload": {
+                                                "turn_id": "live-workspace-fixture",
+                                                "model": "codex-synthetic-attached-workspace-verification-model",
+                                                "model_provider": "openai",
+                                                "effort": "max",
+                                            },
+                                        }
+                                    )
+                                    + "\n"
+                                )
                     if finished:
                         append_message(rollout, "assistant", text)
                     request.publish_live(

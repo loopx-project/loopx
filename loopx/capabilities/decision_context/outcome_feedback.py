@@ -121,7 +121,7 @@ def _retrieval_counts(
     rejected_record_count: int,
 ) -> tuple[int, int, str]:
     if packet is None:
-        result_count = promoted_count + rejected_record_count
+        result_count: Any = promoted_count + rejected_record_count
         return result_count, rejected_record_count, "evidence_records"
     if not isinstance(packet, Mapping):
         raise TypeError("retrieval_receipt must be an object")

@@ -79,7 +79,7 @@ def _assert_the_shipped_default_ignores_the_credential() -> dict[str, object]:
         "the one shipped decision must be named, and it is not a credential branch",
     )
     _assert(
-        without_credential["model"] == with_credential["model"] == "gpt-6-astra"
+        without_credential["model"] == with_credential["model"] == "gpt-6.1-sol"
         and with_credential["model_source"] == MANAGER_MODEL_SOURCE_VENDOR_DEFAULT
         and with_credential["execution_profile"] is None,
         "a credential must not hand the CLI endpoint a managed model or profile",
@@ -98,7 +98,7 @@ def _assert_the_shipped_default_ignores_the_credential() -> dict[str, object]:
         manager_model_config(
             {CREDENTIAL_ENV: CREDENTIAL_VALUE, "LOOPX_MANAGER_MODEL": "fixture-model"}
         )
-        == {"model": "fixture-model", "reasoning_effort": "high"},
+        == {"model": "fixture-model", "reasoning_effort": "xhigh"},
         "an explicit model override must win over the shipped default",
     )
     return {

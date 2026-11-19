@@ -13,7 +13,7 @@ async function fixture(t: test.TestContext) {
   const root = await mkdtemp(join(tmpdir(), "loopx-usage-delivery-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const path = join(root, "usage-ping.json");
-  const ctx: Context = { env: { LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:8787/v1/ping" },
+  const ctx: Context = { env: { LOOPX_USAGE_PING: "1", LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:8787/v1/ping" },
     version: "1.2.2", python: "3.13", channel: "source", now: new Date("2026-09-28T23:59:00Z") };
   await configure(path, ctx, "enable");
   const state = async () => JSON.parse(await readFile(path, "utf8"));

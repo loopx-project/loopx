@@ -1,46 +1,161 @@
-# LoopX 个人工作区控制台（Personal Workspace Console）使用指南
+<a id="loopx-个人工作区控制台personal-workspace-console使用指南"></a>
 
-LoopX 控制台是为工程师与 Agent 深度协作打造的统一本地工作台。它将分散在不同会话、话题与后台运行中的 Agent 任务统一汇聚，提供**「LoopX 管家全局总览」**、**「Goal 4 列任务看板」**、**「轻量悬浮会话托盘」**、**「先预览后确认安全门禁」**与**「Lark / 飞书话题直连」**。
+# LoopX 个人工作区使用指南
 
----
+在 LoopX 工作区里，你可以交代任务、查看 Agent 的进展、处理需要你决定的事项，
+再检查交付结果。**Goal 是你想要的结果，Todo 是为实现它而推进的具体工作。**
+管家汇总多个 Goal；进入一个 Goal 后，再看它的任务、对话和成果。
 
-## 🎬 30 秒产品发布演示视频
-
-<video controls width="100%" poster="https://loopx-project.github.io/loopx/docs/assets/personal-workspace/guide_manager_overview.png" style="border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);">
-  <source src="https://loopx-project.github.io/loopx/docs/assets/personal-workspace/loopx-dashboard-launch.mp4" type="video/mp4">
-  您的浏览器暂不支持直接播放视频，可下载 <a href="https://loopx-project.github.io/loopx/docs/assets/personal-workspace/loopx-dashboard-launch.mp4">MP4 视频文件</a> 进行查看。
-</video>
-
-> 💡 **视频高光**：终端一键启动 ➔ 管家 4 泳道任务流 ➔ 快捷指令浮动托盘 ➔ 4 列看板与智能「转为 Task」清洗 ➔ 飞书话题直连 ➔ Brutal 野兽派主题切换。
+第一次使用，先按第 1 节完成一个小任务。第 3–4 节说明日常查看与跟进，第 6 节
+按需接入飞书，第 8 节解释操作确认与结果核对。演示视频放在文末，不必看完视频再开始。
+想从代码修复入手，也可以先做[查 bug 练习](first-bugfix-loop.zh-CN.md)。
 
 ---
 
 ## 🚀 1. 快速启动与访问
 
-在本地仓库或已安装 LoopX 的终端中执行：
+先按[安装指南](installing-loopx.md)准备 LoopX、Python 3.11+ 和 Node.js 22.22.3+
+（推荐 24 LTS）。普通使用不需要克隆源码或启动前端开发服务器。
+在你要使用的项目目录打开终端，执行：
 
 ```bash
+loopx doctor
 # 启动本地 Dashboard 控制台（默认自动打开浏览器）
 loopx dashboard
 ```
+
+若 `doctor` 报告缺少依赖，先修复它指出的问题。若缺的是 Agent 登录或运行环境，
+按下文「Agent 运行环境未就绪」处理；
 
 安装版会在同一个进程中启动打包后的工作区、状态投影和 Agent Chat，不需要另开
 终端运行 `loopx serve-status`。命令默认自动打开浏览器；无界面启动可使用
 `loopx dashboard --no-open`，并访问命令实际打印的 URL。默认地址为
 `http://127.0.0.1:8767/chat/`。
 
-可用下面两条命令验证页面和状态投影都来自同一个进程：
+普通 Codex / ACP 交互任务默认不设总时长截止；有持续进展的工作可以继续。
+启动连接和无活动检测仍有期限，停止操作仍可中断。需要限时可显式传入
+`--hard-timeout-seconds 1800`；`--hard-timeout-seconds 0` 取消该截止。
+已有 macOS 服务保留原设置，使用 `LOOPX_CHAT_HARD_TIMEOUT_SECONDS=0`
+经既有安装/启动管理器更新；有已接收任务时先等其结束，不强杀服务。
+已接收的排队消息默认保留到执行或停止，显式 TTL 仍会到期。
+这不改变 Goal、租约、权限、实验预算或有界 managed-host segment 的期限；
+持续执行仍消耗宿主模型与工具额度。旧超时记录保留，恢复时先核对已产生的效果，
+继续尚未完成的部分，避免重复外发、委派或其他操作。
+
+English: Interactive Codex/ACP turns have no default wall-clock cutoff. Startup,
+idle detection and Stop remain active. Set `--hard-timeout-seconds 1800` for an
+explicit deadline, or `0` to disable it. Existing managed macOS installations
+preserve their setting; update through their existing service owner using
+`LOOPX_CHAT_HARD_TIMEOUT_SECONDS=0` and wait for accepted work to settle before
+activation. Accepted queued input no longer expires implicitly; explicit TTLs
+still apply. Goal/lease/permission boundaries, experiment budgets and bounded
+managed-host segments remain in force. Continued execution still consumes host
+allowance. Retain old timeout records and reconcile effects before continuing
+unfinished work.
+
+<details>
+<summary>可选：从终端检查页面和状态是否可读</summary>
+
+下面使用默认地址；若启动命令打印了其他端口，替换为实际地址。两项均读取本地服务，
+不创建 Goal，也不启动 Agent：
 
 ```bash
 curl -fsS http://127.0.0.1:8767/chat/ >/dev/null
 curl -fsS http://127.0.0.1:8767/status.json
 ```
 
+</details>
+
 > 💡 **两种入口可共存**：`loopx dashboard`（浏览器 / PWA）与 Tauri 原生桌面壳
 > 都会复用已经在运行且版本匹配的 LoopX Chat 服务。先开 dashboard 再开桌面壳，
 > 或先开桌面壳再执行 `loopx dashboard`，两种顺序都可以；当桌面壳已经启动时，
 > 也可以直接访问 `http://127.0.0.1:8767/chat/` 使用浏览器 / PWA，无需再启动一套
 > 服务。
+
+### 第一次使用：完成一个小任务
+
+先用你愿意让 Agent 读取的项目，体验一次「提出要求 → 确认 → 执行 → 核对结果」。
+已有同一目标的 Goal 时直接打开它，不重复创建。
+
+1. 点击 **创建 Goal**（或侧栏 `+`），可以用下面这组内容填写：
+
+   - **目标：** 梳理这个项目的启动与测试方式。
+   - **完成标准：** 给出启动命令、测试命令及对应文件依据；没有找到明确说明时如实说明。
+   - **执行边界：** 只读取项目文件，不启动项目、不运行测试、不修改文件、不调用外部服务；回答后停止。
+
+2. 选择正确的**工作目录**，将**执行权限**设为「只读」，点击**检查配置**。
+   预览应写明目标、完成标准、实际目录和权限；先检查这些内容。检查配置仍未创建 Goal。
+3. 确认预览后点击**创建 Goal 并开始首轮**。默认 Codex 路径会创建 Goal、首个 Todo
+   和原对话，并保留这次任务请求。先进入该 Goal 的**对话**查看只读回答；原任务在
+   必需的独立检查和既有额度就绪后执行。排队、正在执行和检查通过是不同状态，
+   失败时先看原错误，不重复创建同一个 Goal。
+4. 按回答给出的文件依据核对命令。这个任务没有运行测试，回答也就不能声称“测试通过”。
+   要让 Agent 继续验证或修改代码，再在原 Goal 中说明新增范围与权限，沿既有流程处理。
+
+跑通的标志是：找到了正确的项目、Agent 返回了有依据的说明、你能核对它的结果。
+没有可用执行器、目录不可用或来源只读时，
+先处理页面报告的具体问题，不把本机新建 Goal 当作远端工作的替代。
+
+**准备与费用：** 本地页面与 Agent 执行是两件事。创建首轮或发送执行任务会使用所选
+宿主的模型额度和工具资源；周期任务还会增加唤醒与检查开销。先用这个有终点的小任务，
+确认既有额度、运行环境和停止条件，再考虑定时任务。升级沿用原安装渠道；运行时登录、
+飞书连接等按各自设置维护，不需要为了开始而全部配置。
+
+English: Start with one bounded task in a project you choose. Create a Goal with
+an objective, completion criteria, workspace and **Read only** permission; review
+the configuration before **Create Goal and start first run**. For example, ask
+for the project's documented start/test commands and their file references,
+without running tests or changing files. Inspect the returned references rather
+than treating a created card as a completed result. Reuse an existing Goal for
+the same work. Agent execution uses the selected host's allowance; recurring
+work adds wakeup/checking costs.
+
+### 在原对话执行已检查的任务 / Run the checked original task
+
+需要修改文件时，在创建预览中明确选择「确认后允许修改工作区」，核对其显示的
+整个工作目录范围，再确认原请求。当前 Codex 入口不会
+把单个文件或子目录授权扩大成整个工作区。首次回答及普通追问保持只读。
+
+![桌面确认工作区修改范围](../assets/personal-workspace/goal-creation-workspace-review-desktop.webp)
+
+![窄屏确认同一工作区范围](../assets/personal-workspace/goal-creation-workspace-review-narrow.webp)
+
+若原任务缺少可信的独立检查，对话保留等待原因。核对并确认已有检查方案后，先前
+确认的任务请求会在同一对话继续执行；确认检查本身不会新授予文件修改权限。
+「等待」表示请求已保留、尚未开始执行；只有实际运行时显示「正在推进」。进入
+新 Goal 会保留原会话和当前来源地址，重新加载沿用该地址读取结果。
+
+![桌面原任务等待检查](../assets/personal-workspace/goal-creation-pending-desktop.webp)
+
+![窄屏同一原任务等待检查](../assets/personal-workspace/goal-creation-pending-narrow.webp)
+
+结果应包含原任务状态、产物及检查结果。检查失败时原任务保持未完成，沿页面的
+「继续任务」处理剩余工作；重新打开页面或重试创建不会重放已有执行。
+若创建时额度暂不可用，原 Goal 和任务已经保留，这次创建会保持可重试。额度恢复
+后重试原创建操作，沿用它的要求和权限选择，不再建立另一个 Goal。
+
+For file changes, explicitly choose **Allow workspace changes after confirmation**
+and review the displayed whole-workspace scope before confirming the original
+request. Read-only grants no file writes; this Codex entry does not widen a file
+or subdirectory approval. The first reply and ordinary follow-up messages remain
+read-only. Missing independent checks leave the original request waiting. Review
+and confirm the existing check plan; the previously confirmed task then continues
+in the same conversation when its allowance is ready. Check confirmation grants
+no new write permission. **Waiting** means the retained request has not started;
+**Working** appears only while the Task runs. Opening the new Goal retains its
+original conversation and source address; reload reads back through that address.
+Inspect the original task, artifact and check result;
+after failure, use **Continue Task** for remaining work. Reloading or retrying
+creation preserves the original execution.
+If initial allowance is held, the Goal and task stay retained and the creation
+remains retryable. Once allowance is ready, retry the original creation with
+its retained requirements and permission choice instead of creating another Goal.
+
+这些当前使用图展示打包 UI 和真实本地后端；示例中的模型回答与文件编辑由脚本
+提供，用于说明确认范围。
+These current guide images show the packaged UI with a real local backend and
+scripted model replies/editing. They explain the confirmation scope and do not
+certify live-model, installed-runtime or full-goal acceptance.
 
 ---
 
@@ -51,7 +166,7 @@ curl -fsS http://127.0.0.1:8767/status.json
 LoopX 通过本机已安装的命令行工具驱动 Agent（Codex、Claude Code、Kiro CLI），或通过 API 密钥。
 如果这台机器上一个都没有就绪，管家总览会在顶部说明原因，逐项列出缺什么（未在 PATH 中找到的命令、
 未设置的环境变量），并提供「重新检查」和「安装指引」。安装并登录后点「重新检查」，页面重新读取
-服务的运行环境目录并回读结果；本页不会安装任何东西，也不授予任何权限。打开 Goal 对话时，如果选中的
+服务的运行环境目录并回读结果；本页不会安装任何东西。打开 Goal 对话时，如果选中的
 运行环境在本机不可用，输入框上方会给出同样的说明和重新检查。
 执行环境缺失不影响管家和 Goal 中的「仅查状态」：它保存原问题与状态回答，不启动 Agent。
 没有该选项的项目对话会明确拒绝未就绪的执行路线，并保留未发送的草稿。
@@ -154,7 +269,7 @@ Markdown links keep their readable labels instead of unusable local destinations
 status, proposals and gates still redact entire local paths. This changes answer
 presentation, not read or write authority.
 
-管家与 Goal 的前端对话共用运行视图，适用于查询、编码、投研等各种任务：回答下方显示当前正在做的一步，例如「正在读取 notes.md」。使用 Codex 执行器时，展开「执行过程」可逐步查看思考、读取、搜索、运行的命令、调用的工具和修改的文件；同一步的开始与结束合并为一行，失败的步骤标出退出码，点击一行可查看完整命令、改动文件列表或思考内容。思考内容仅在模型向宿主公开时显示（有的模型只给出思考用时）；不显示命令输出、工具参数与结果或文件改动内容，项目内路径显示为相对路径，其余本机路径和疑似凭据会被隐藏。「完成」只表示该步结束，不代表检查通过。这些步骤只保存在本机、仅所有者可读的会话回放记录中；回合结束超过 24 小时后，下次启动 LoopX Chat 时清理。其他执行器继续显示「最近活动」中的最近六条记录。尚未收到活动时保留等待提示，不根据等待时长推测执行进度。
+管家与 Goal 的前端对话共用运行视图，适用于查询、编码、投研等各种任务：回答下方显示当前正在做的一步，例如「正在读取 notes.md」。使用 Codex 执行器时，展开「执行过程」可逐步查看思考、读取、搜索、运行的命令、调用的工具和修改的文件；同一步的开始与结束合并为一行，失败的步骤标出退出码，点击一行可查看完整命令、改动文件列表或思考内容。思考内容仅在模型向宿主公开时显示（有的模型只给出思考用时）；不显示命令输出、工具参数与结果或文件改动内容，项目内路径显示为相对路径，其余本机路径和疑似凭据会被隐藏。「完成」只表示该步结束。这些步骤只保存在本机、仅所有者可读的会话回放记录中；回合结束超过 24 小时后，下次启动 LoopX Chat 时清理。其他执行器继续显示「最近活动」中的最近六条记录。尚未收到活动时保留等待提示，不根据等待时长推测执行进度。
 
 ![运行中的回答显示当前活动、最近活动和中断本轮](../assets/personal-workspace/conversation-activity-desktop.png)
 
@@ -162,7 +277,7 @@ presentation, not read or write authority.
 
 The steward and Goal conversations share the same frontend activity view across task types. The reply shows the step in progress, such as "Reading notes.md". With the Codex executor, expand **Work steps** to follow each thought, read, search, command, tool call and file edit; a step's start and end share one row, failures show their exit code, and clicking a row reveals the full command, the changed files or the thinking text. Thinking text appears only when the model exposes it to the host (some models report only how long they thought). Command output, tool arguments and results, and file diffs are never shown; project paths read as relative paths, other local paths and credential-like values are hidden. A completed step means it ended, not that a check passed. Steps live only in the owner-only local session replay; the next LoopX Chat start after a Turn is more than 24 hours old clears them. Other executors keep **Recent activity** with the latest six observations; missing activity stays an honest waiting state. **Interrupt turn** targets that reply, preserves already visible text, and keeps the conversation available for continuation. A rejected interruption leaves the live reply visible; completion wins a race with interruption. This control does not stop the Goal. Attached hosts that do not expose interruption report that limitation.
 
-运行中可点击「调整本轮」，向原任务追加指令。当前支持原生 Codex 执行器；只有收到匹配的执行器回执后才显示已接收，这不代表调整后的任务已经完成。不支持的执行器、过期回合或无法确认的回执会保留草稿，不自动变成新任务。送达状态未知时，重试沿用同一请求编号，防止重复投递；执行器明确拒绝且确认未送达时，条件恢复后可用原文安全地重新发起。回合结束后，未发送的草稿仍可复制到输入框。「调整本轮」和普通会话输入框中的追加指令，在发送前必须将重试信息保存到当前标签页的浏览器存储并读回；刷新后恢复原请求身份，不自动发送。存储不可用时会提示尚未发送，草稿仅保留在当前页面；恢复存储后再重试。
+运行中可点击「调整本轮」，向原任务追加指令。当前支持原生 Codex 执行器；只有收到匹配的执行器回执后才显示已接收。不支持的执行器、过期回合或无法确认的回执会保留草稿，不自动变成新任务。送达状态未知时，重试沿用同一请求编号，防止重复投递；执行器明确拒绝且确认未送达时，条件恢复后可用原文安全地重新发起。回合结束后，未发送的草稿仍可复制到输入框。「调整本轮」和普通会话输入框中的追加指令，在发送前必须将重试信息保存到当前标签页的浏览器存储并读回；刷新后恢复原请求身份，不自动发送。存储不可用时会提示尚未发送，草稿仅保留在当前页面；恢复存储后再重试。
 
 Use **Adjust turn** to add instructions to the running task. Native Codex executors currently support this control. A matching executor receipt confirms acceptance, not completion. Unsupported executors, expired turns and unconfirmed receipts retain the draft without starting another task. An unresolved delivery keeps the request identity on retry to prevent duplicates; a confirmed pre-delivery rejection allows the unchanged draft to start a new request after recovery. After the turn ends, copy an unsent draft to the composer. Both **Adjust turn** and an ordinary conversation's in-turn composer save and read back retry information in tab-local browser storage before dispatch. Reload restores the original identity without sending. If storage is unavailable, the adjustment is not sent and its draft stays in the current page; restore storage before retrying.
 
@@ -178,7 +293,7 @@ id for a fresh attempt. Existing LoopX-mode and Lark ingress keep their contract
 
 Codex 上游声明仍会重试时，会话显示「Codex 正在重试」并继续等待最终结果。若上游明确终止，LoopX 保存失败回执，不把已经出现的部分文字当成完整回答。明确的策略拦截、用量限制、频率限制、上下文超限和身份验证失败会保留各自类别；未知错误仍显示通用失败，不从报错正文猜测原因。
 
-策略拦截是本轮已结束，不是仍在安全检查中。LoopX 不会自动重放该请求；重启或重复提交同一个请求编号也会返回原失败回执。界面提示只说明上游给出的类别，不解释其未提供的具体触发原因，也不公开上游原始错误详情。
+策略拦截是本轮已结束。LoopX 不会自动重放该请求；重启或重复提交同一个请求编号也会返回原失败回执。界面提示只说明上游给出的类别，不解释其未提供的具体触发原因，也不公开上游原始错误详情。
 
 ### 3.1 停止暂时不活跃的 Goal
 
@@ -211,6 +326,25 @@ loopx goal-lifecycle --goal-id <goal-id> --operation resume --actor-kind owner -
 预览仍保持只读。写入的 activation receipt 会保留该 actor kind。
 
 执行时，LoopX 会写入权威 source registry、同步全局 registry，并验证两端 readback；任一端未验证成功时不会宣称操作完成。
+
+暂停/恢复只由持久化的 `activation.state` 控制。Registry 的 `status` 继续表达注册、
+归档等状态，不再接受旧的 `paused` / `stopped` 值；前端响应中的 `activation_state`
+是派生展示值，不能写回 registry。
+
+使用 `loopx upgrade` 或 snapshot 安装器时，会在启用候选运行时前，通过已有的
+`authority-archive upgrade --all-known --execute` 流程备份并迁移这些旧元数据。
+直接通过 pip 安装、源码运行或恢复旧备份时，可先只读检查：
+
+```bash
+loopx authority-archive upgrade --all-known --require-current
+# 需要迁移时，先备份原字节，再执行迁移
+loopx authority-archive upgrade --all-known --execute
+```
+
+原 registry 保存在相邻 `backups/registry-preimages/` 下，迁移结果返回具体备份路径。
+迁移保留暂停意图；字段冲突时保持停止，不会自动 Resume，也不改 Todo、执行回执或额度。
+之后仍可从「已停止」区或上面的同一 CLI 恢复。迁移失败时升级不会宣称完成，备份保留，
+原命令可重试；不要用备份覆盖迁移之后产生的新工作。
 
 切换到 SSH 状态来源后，只有来源与本机 OpenSSH 配置中的精确 Host alias 绑定时，
 侧边栏才显示停止/恢复按钮。操作通过 SSH 在目标主机执行同一个
@@ -279,6 +413,10 @@ execution permissions.
 
 - 默认显示四列看板；可切换到分组列表，列表中空分组隐藏、已完成分组默认折叠。
 - 看板与列表共享已完成历史（包含归档，排除持续监控任务），按工作 Agent 筛选。列表的已完成组默认折叠；展开并滚动可按需加载，每页 40 条，使用五分钟快照保持翻页稳定。两种视图均只渲染可见区域附近的记录，切换视图保留历史和总数。快照过期可重试，读取失败保留当前记录。只读远端来源不调用本机历史接口。本机历史详情保留 Todo 读取层返回的文本、路径和证据，不额外截断或替换路径；Markdown 读取层原有的 500 字符规范化上限仍适用。
+- 在已完成列的「搜索完成历史」中输入标题片段或 Todo ID，按 Enter 或「搜索」。查询覆盖当前 Goal 与 Agent 筛选下的完整保留历史（含归档），不是仅搜索已加载的页面；总数是匹配数量。「清除」恢复未筛选的历史。搜索与重试只读，不完成任务或启动执行；远端只读来源不使用本机搜索。查询为不区分大小写的字面子串，最多 256 个字符，不搜索证据正文。
+
+Completed history supports a title fragment or Todo ID search from the Tasks board or expanded completed list. Submit with Enter or **Search** to search all retained history, including archives, within the selected Goal and Agent lane. The count shows matches; **Clear** restores unfiltered history. Search and retry are read-only. Remote read-only sources never use local history search. Matching is a case-insensitive literal substring of the title or ID, limited to 256 characters; evidence bodies are not searched. The Overview rail retains its separate “Search listed tasks” scope.
+
 - 初次连接先显示加载状态，不把示例任务当作实时数据。执行会话连接失败时显示重连提示并退避轮询，隐藏页面暂停新的会话查询。
 - Files 的“前往会话”进入 Goal 会话；“导出摘要”导出安全摘要 Markdown，不下载原始文件。
 
@@ -392,11 +530,11 @@ the available timeline; it makes no complete-history claim.
 （单项超过 2 个已完成前序时折叠为计数），以及待决定事项会解锁的工作；已完成或延后的其余工作
 隐藏并计数。「全部」包含早期已完成工作。互不相连的工作链分框排列，需要决定的链在前；
 没有关联的事项单独列出。选中事项会高亮全部前序与后续，检查器列出「之前 / 之后」并可打开任务详情。
-连线只来自已记录关系，不代表可以执行；遗漏、来源裁剪或依赖成环时显示「部分工作未出现在此地图中」，
+连线只来自已记录关系；遗漏、来源裁剪或依赖成环时显示「部分工作未出现在此地图中」，
 关联端点未找到时同样保留不完整提示，不能推断它已归档或属于其他 Goal。手机改为列表。
 
 **范围与刷新：**交付链覆盖当前选中工作及有限前序；完整 Goal 关系请看工作地图。
-缺失前序、来源裁剪与未展开决定可展开查看；任务完成或缺口列表为空都不代表通过验收。
+缺失前序、来源裁剪与未展开决定可展开查看；
 概览与任务页共用一次交付快照读取；「刷新快照」可更新它，离开两页时取消未完成请求，
 不增加普通状态读取的图计算。状态变化后自动重读快照，重读完成前暂停来源跳转和导出；
 重读失败才提示快照已过期。
@@ -408,7 +546,7 @@ Markdown。搜索筛选不会裁剪导出；不包含原始日志、文件正文
 
 **显式验收合同：**若本地所有者已为使用 canonical authority 的 Goal 启用合同，
 交付链下方可展开「Goal 验收合同」，查看条件、任务关联与独立的产物检查结果。
-「任务关联已确认」不等于「产物检查通过」，后者也不自动批准或完成 Goal。
+
 缺失、停用保持原界面；旧检查显示其原版本，刷新失败不会作为最新结果导出。
 配置入口是本地所有者 CLI：先 `loopx goal-acceptance inspect --goal-id example-goal`，
 再按[配置与回滚指南（v0）](../reference/goal-acceptance-observations.md#owner-authorized-contract-v0)
@@ -479,6 +617,31 @@ The local Chat HTTP read is `GET /api/chat/delivery-review?goal_id=example-goal`
 Lark continues using its existing Goal Channel projection; this slice adds no
 Lark card or notification and does not qualify cross-channel presentation parity.
 
+### 查找先前的要求和答复 / Find earlier instructions and answers
+
+在管家或 Goal 的**对话**中点击 **查找对话 / Find in conversation**，输入原消息中的
+文字。查找不区分大小写，支持中文；数字表示匹配消息的位置和总数，同一消息中的
+多次出现只算一条。使用箭头或 Enter / Shift+Enter 跳到下一条 / 上一条，匹配的
+历史长回复会展开原文。Esc 关闭查找并将键盘焦点还给入口，切换对话后查询会清空。
+
+查找只检查当前已加载的消息文本，不搜索附件内容、工具输出或未读取的会话。
+历史读取失败或仍在加载时，提示会明确说明范围；沿原历史提示重试读取，补载后
+仍保留正在查看的原消息。没有匹配不代表尚未读取的历史中没有结果。
+查找不会发送消息、创建 Turn 或调用模型，也不会把查询存到服务器。
+
+English: **Find in conversation** locates matching loaded messages, including full
+text behind folded answers. Enter / Shift+Enter navigate; Esc closes the reader.
+Results are case-insensitive literal matches, one per message. Attachments, tool
+output and unread history are outside the search. Retry failed history reads from
+the existing history notice; new pages preserve the selected original message.
+Searching does not send messages, start a Turn or persist the query.
+
+下图为合成会话示例。桌面保留周围消息，手机上输入框独占一行，箭头仍可直接操作。
+
+![Find an earlier instruction in the desktop conversation](assets/conversation-find/desktop.png)
+
+<img src="assets/conversation-find/mobile.png" alt="Find controls and the selected original message on a narrow screen" width="390" />
+
 ## 💬 5. 悬浮会话托盘（ManagerConversationTray）
 
 无论你在浏览总览还是在处理看板，只要点击带有 **`立即发送`** 标识的快捷指令，页面右下角都会弹出抽屉式的轻量对话托盘：
@@ -541,7 +704,7 @@ loopx quota should-run --goal-id <goal-id>
 
 要撤销 Dashboard 配置面的 opt-in，停止当前 Dashboard 后不带
 `--enable-goal-subagent-configuration` 重新启动。这个启动参数只暴露本机 loopback
-上的 preview-locked 配置合同，不授予 Agent 新的 Goal、仓库、凭证、发布或生产权限。
+上的 preview-locked 配置合同。
 
 关闭时再次点击开关、检查预览并确认；也可以使用同一配置入口：
 
@@ -601,7 +764,7 @@ Goal 的 Topic 路由，不删除 Goal、Agent Session、历史 Todo 或其他 G
 变化不会通知；开启当下已经在等你的事项也不会重复提醒；可选提醒（不阻塞 Agent 的用户操作）会列在
 工作区里，但不会打扰你。关闭开关后立即停止后台读取。如果浏览器曾拒绝通知，之后在站点设置里允许，
 回到本页面或打开设置时会重新读到允许，开关即可再次开启；反过来在站点设置里撤销，页面也会如实显示
-并停止后台读取。这只在本页面保持打开时生效，不是服务端推送，也不替代飞书等渠道通知。
+并停止后台读取。这只在本页面保持打开时生效。
 
 "Settings → Appearance → Desktop notifications" is a per-browser switch, off by default. Turning it
 on asks the browser for permission once and keeps the switch on only when granted; the page reads
@@ -615,7 +778,72 @@ replace channel notifications such as Lark. An optional reminder (a user action 
 
 ## 🛡️ 8. 安全与不可逆操作保护
 
-LoopX 控制台严格遵循 **Human-in-the-Loop（人类介入）安全模型**：
-1. **先预览，后确认**：任何会写入 Goal 状态、修改配置或执行外部变更的指令，都会先在界面弹出 **Typed Action 预览卡片**，明确展示影响范围与待填参数；
-2. **用户点击确认后才下发**：杜绝 Agent 自行执行未授权的高危操作；
-3. **操作回执（Receipt）**：每次操作执行完毕均会生成不可篡改的带时间戳回执，随时可溯源。
+需要你确认的操作使用各自的预览与确认流程。以创建 Goal 为例：
+
+1. **先检查范围：** 预览列出目标、目录、执行权限及预期影响；内容不对就返回修改。
+2. **再确认具体操作：** 创建 Goal 的确认会开始首轮推进。合并、发布、删除、支付等
+   受保护操作仍按各自授权流程处理；批准一项操作不会顺带批准另一项。
+3. **核对实际结果：** 查看操作回执和刷新后的状态。预览、请求被接收、执行完成、
+   产物通过验收是不同阶段；失败或结果未知时保留这个区别，不能只凭提示文字认定成功。
+
+Agent 在既有授权内推进普通任务，不等于每一步都要你重新点击确认。阅读页面、筛选任务、
+下载快照也不会增加执行权限。只读来源保留其限制，截图、导出和对外分享仍需检查是否含私有内容。
+
+### 键盘快速导航 / Keyboard quick navigation
+
+按 **⌘K / Ctrl-K**，或点击侧栏底部的「快速导航」，按名称或 ID 搜索目标，
+以及当前目标的已加载任务、成果与已有操作预览。使用 ↑ / ↓ 选择，Enter 打开，
+Esc 关闭并返回原焦点。中文输入法的确认键不会触发导航。
+
+Press **⌘K / Ctrl-K**, or choose **Quick navigation** at the bottom of the
+sidebar. Search Goals and the current Goal's loaded tasks, results and existing
+reviewable previews by name or ID. Use ↑ / ↓ to select, Enter to open, and Esc
+to close and restore focus. IME confirmation does not navigate.
+
+导航使用当前来源的投影，不创建预览、不发送 Agent 指令，也不执行操作。
+已有预览仍需在原详情中确认。只读来源只提供浏览；加载中或不可用的目标会明确标注。
+未加载的历史任务和其他结果仍通过现有任务、文件入口查看。
+
+Navigation uses the current source projection. It creates no preview, sends no
+Agent instruction and executes no action. Existing previews still require their
+normal confirmation. Read-only sources offer browsing only; loading or unavailable
+Goals are labelled. This is not a full history index: use the existing Tasks and
+Files views for history and additional results that are not currently loaded.
+
+浏览目标概览、任务或文件时不再提前准备聊天会话；打开 Chat 或主动发送消息后，
+仍由原有会话 owner 准备会话。
+
+Browsing Goal Overview, Tasks or Files no longer prepares a chat session in the
+background. Opening Chat or explicitly sending a message still prepares it
+through the existing session owner.
+
+![快速导航：中文窄屏](../assets/personal-workspace/command-palette-narrow.png)
+
+### 保存团队报告原文 / Save a team report source
+
+在成果、对话或证据视图打开团队报告后，点击 **下载原文 / Download source**，
+保存当前显示版本的 UTF-8 原文。文件名包含版本摘要；Markdown、JSON 和文本保留
+相应扩展名，其他类型按文本保存。下载不会重新运行 Agent、核验或采用报告，也不会
+修改 Goal。它是所读版本的本地副本；报告读取失败或失效时，
+先通过原有刷新/重试恢复可读内容。
+
+Open a team report in Results, conversation or evidence, then choose **Download source**
+to save the displayed version's exact UTF-8 source. The filename includes a version
+prefix. Markdown, JSON and text retain their extensions; other types download as text.
+Saving reuses the existing readback without running an Agent, invoking validation,
+recording adoption or changing the Goal. The file is a local copy of that version,
+not a promise of continuing acceptance. If the reader becomes unavailable, use its
+existing refresh/retry before downloading again.
+
+---
+
+## 🎬 30 秒产品发布演示视频
+
+<video controls width="100%" poster="https://loopx-project.github.io/loopx/docs/assets/personal-workspace/guide_manager_overview.png" style="border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);">
+  <source src="https://loopx-project.github.io/loopx/docs/assets/personal-workspace/loopx-dashboard-launch.mp4" type="video/mp4">
+  您的浏览器暂不支持直接播放视频，可下载 <a href="https://loopx-project.github.io/loopx/docs/assets/personal-workspace/loopx-dashboard-launch.mp4">MP4 视频文件</a> 进行查看。
+</video>
+
+视频展示总览、任务看板、对话托盘、飞书连接和主题切换。
+也可以直接[打开演示视频](https://loopx-project.github.io/loopx/docs/assets/personal-workspace/loopx-dashboard-launch.mp4)。
+具体按钮与状态以当前安装版本和上文操作说明为准。

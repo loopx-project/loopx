@@ -13,6 +13,7 @@ import {
 import {
   requireBoolean,
   requireInteger,
+  jsonObject,
   requireJsonObject as requiredObject,
   requireNonEmptyString as requiredString,
   requireStringArray,
@@ -20,7 +21,35 @@ import {
 import { projectRepositoryDeliveryGate } from "./work_items/repository_delivery.ts";
 import { projectPendingCapabilityIntent } from "./work_items/pending_capability_intent.ts";
 
-import {exploreResultWritebackAffordance} from "./capabilities/explore_result_writeback.ts";
+import {exploreResultWritebackAffordance, exploreReusableContextPaths} from "./capabilities/explore_context_delivery.ts";
+import {agentPreferenceReusableContextPaths} from "./capabilities/agent_preferences.ts";
+
+/** The registered owner selects reusable read-model subtrees. Unknown hooks
+ * remain complete; payloads cannot nominate their own execution fields. */
+export function reusableTurnContext(source: JsonObject, binding: JsonObject): {
+  identity: unknown[]; paths: (string | number)[][];
+} | null {
+  const content = jsonObject(source.content);
+  if (source.source !== "turn_start_capability_hook" || content?.ok !== true) return null;
+  let paths: (string | number)[][], goal: unknown, agent: unknown;
+  if (source.hook_id === "explore.turn_context" && source.capability_id === "explore"
+      && source.kind === "explore_turn_context") {
+    paths = exploreReusableContextPaths(content);
+    goal = content.goal_id; agent = content.agent_id;
+  } else if (source.hook_id === "semantic_preference.agent_context" && source.capability_id === "semantic-preference"
+      && source.kind === "agent_preferences") {
+    // This existing hook reads the guard's exact Goal/Agent but has no scope
+    // fields in its body. The validated capture already owns that binding;
+    // keep ordinary/default-off producer output unchanged. Never infer scope
+    // from prose, commands or an unregistered hook.
+    goal = binding.goal_id; agent = binding.agent_id;
+    if ((content.goal_id !== undefined && content.goal_id !== goal)
+        || (content.agent_id !== undefined && content.agent_id !== agent)) return null;
+    paths = agentPreferenceReusableContextPaths(content);
+  } else return null;
+  return paths.length && typeof goal === "string" && typeof agent === "string"
+    ? {identity: [source.source, source.hook_id, source.capability_id, goal, agent, content.todo_id ?? null], paths} : null;
+}
 
 export const CAPABILITY_HOOK_REGISTRATION_SCHEMA_VERSION =
   CAPABILITY_HOOK_REGISTRATION_SCHEMA;
@@ -169,6 +198,7 @@ const TURN_START_WRITE_SCOPES = new Set([
   "owner_private_inbox",
   "owner_private_cursor",
   "provider_message_reaction",
+  "goal_event_log",
 ]);
 const TURN_START_STATUSES = new Set([
   "not_applicable",
@@ -487,7 +517,18 @@ export function validateTurnStartHookInvocation(input: {
 }): JsonObject {
   const registration = validateTurnStartHookRegistration(input.registration);
   const result = requiredObject(input.result, "turn-start hook result");
-  requireExactFields(result, TURN_START_RESULT_FIELDS, "turn-start hook result");
+  const fields = new Set(TURN_START_RESULT_FIELDS);
+  if ("readback" in result) fields.add("readback");
+  requireExactFields(result, fields, "turn-start hook result");
+  if ("readback" in result) {
+    const readback = requiredObject(result.readback, "turn-start capability readback");
+    if ("summary_lines" in readback) {
+      const lines = requireStringArray(readback.summary_lines, "turn-start readback summary_lines");
+      if (lines.length > 32 || lines.some(line => line.length > 360 || /[\u0000-\u001f\u007f]/.test(line))) {
+        throw new Error("turn-start readback summary is outside its display budget");
+      }
+    }
+  }
   if (
     result.schema_version !== TURN_START_HOOK_RESULT_SCHEMA_VERSION ||
     result.hook_id !== registration.hook_id ||
@@ -521,7 +562,10 @@ export function validateTurnStartHookInvocation(input: {
     "private_content_returned",
     "provider_payload_returned",
   ]) {
-    if (typeof result[field] !== "boolean") {
+    const uncertainEffect = result[field] === null &&
+      ["failed", "partial", "unavailable"].includes(status) &&
+      ["external_reads_performed", "local_private_state_mutated"].includes(field);
+    if (typeof result[field] !== "boolean" && !uncertainEffect) {
       throw new Error(`turn-start hook ${field} must be boolean`);
     }
   }
@@ -529,7 +573,7 @@ export function validateTurnStartHookInvocation(input: {
     throw new Error("turn-start hook cannot return private provider content");
   }
   if (
-    result.local_private_state_mutated &&
+    result.local_private_state_mutated !== false &&
     registration.requested_write_scope.length === 0
   ) {
     throw new Error("turn-start hook mutated undeclared local-private state");
@@ -547,7 +591,7 @@ export function validateTurnStartHookInvocation(input: {
   if (status === "observed" && (
     observationCount === 0 ||
     errorCode !== null ||
-    result.agent_read_required !== true
+    (!result.agent_read_required && !(registration.required_read === null && "readback" in result))
   )) {
     throw new Error("observed turn-start hook result is inconsistent");
   }
@@ -571,7 +615,7 @@ export function validateTurnStartHookInvocation(input: {
   if (["partial", "unavailable", "failed"].includes(status) && errorCode === null) {
     throw new Error("failed turn-start hook result requires error_code");
   }
-  if (status === "partial" && observationCount > 0 && !result.agent_read_required) {
+  if (status === "partial" && observationCount > 0 && !result.agent_read_required && !(registration.required_read === null && "readback" in result)) {
     throw new Error("partial turn-start observations require Agent reading");
   }
   if (["unavailable", "failed"].includes(status) && result.agent_read_required) {

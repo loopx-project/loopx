@@ -44,7 +44,7 @@ export function normalizeMonitorPollFields(observation: unknown, intent: unknown
     Pick<MonitorBatchInput, "observation" | "intent"> {
   const fields = {observation: canonicalAuthorityObject(observation, "Monitor observation"),
     intent: canonicalAuthorityObject(intent, "Monitor successor intent")};
-  const observationFields = new Set(["todo_id", "target_key", "generated_at", "result_hash", "material_change", "cadence", "next_due_at", "reason_summary"]);
+  const observationFields = new Set(["todo_id", "target_key", "generated_at", "result_hash", "material_change", "material_change_scope", "cadence", "next_due_at", "reason_summary"]);
   for (const key of Object.keys(fields.observation)) if (!observationFields.has(key)) throw new EffectRuntimeRequestError(`unsupported Monitor observation field: ${key}`);
   const intentFields = new Set(["next_agent_todo", "next_action_kind", "next_task_repository", "next_required_capabilities",
     "next_continuation_policy", "next_target_key", "next_claimed_by", "next_user_todo", "next_user_task_class",
@@ -122,7 +122,8 @@ function planWriteback(input: MonitorBatchInput) {
     const created = planCoordinationTodoCreate({goal_id: input.goal_id, operation_id: input.operation_id,
       actor_agent_id: actor, registered_agents: input.registered_agents, dry_run: input.dry_run,
       now: new Date(String(observation.generated_at)), todo}, plannedTodos,
-      input.read_model_schema ?? TODO_DOMAIN_READ_RECORD_SCHEMA, "role_text", "actor_owned");
+      input.read_model_schema ?? TODO_DOMAIN_READ_RECORD_SCHEMA,
+      role === "agent" && intent.next_target_key ? "role_target" : "role_text", "actor_owned");
     if (created.status !== "planned" && created.status !== "no_change") throw new EffectRuntimeRequestError(String(created.reason));
     const record = canonicalAuthorityObject(created.todo, "successor Todo");
     nextTodos.push({...record, todo: record.text, ok: true, dry_run: input.dry_run});
@@ -135,6 +136,10 @@ function planWriteback(input: MonitorBatchInput) {
     goal_id: input.goal_id, todo_id: monitor.todo_id, monitor_effect_id: input.operation_id,
     target_key: transition.target_key || null, result_hash: observation.result_hash,
     material_change: observation.material_change, material_change_generation: transition.material_change_generation,
+    ...(transition.material_change_scope == null ? {} : {
+      material_change_scope: transition.material_change_scope,
+      scoped_material_change_generation: transition.scoped_material_change_generation ?? null,
+    }),
     consecutive_no_change: transition.consecutive_no_change, last_checked_at: observation.generated_at,
     next_due_at: transition.next_due_at ?? null, cadence: transition.cadence || null,
     todo_update: {ok: true, todo_id: monitor.todo_id, monitor_poll_transition: transition},

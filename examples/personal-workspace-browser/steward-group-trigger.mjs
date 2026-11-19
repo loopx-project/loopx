@@ -23,6 +23,9 @@ export const stewardGroupTriggerScenario = {
       await dialog.getByRole("button", {name: "连接", exact: true}).click();
       await dialog.waitFor({state: "hidden"});
       const row = page.locator(".personal-lark-table-row", {hasText: "Product group"});
+      // Closing the editor starts an asynchronous readback; the table is absent while it loads.
+      await row.waitFor({state: "visible"});
+      if (await page.getByRole("columnheader").count() !== 5 || await row.getByRole("cell").count() !== 5) throw new Error("Populated Goal connections lack accessible table cells and headers");
       await row.getByText("群成员直接发消息，无需 @", {exact: true}).waitFor();
       await row.getByText("监听已连接，尚无新消息验证这条连接。请在群里直接发一条任务，无需 @；若没有收到事件，再检查 im.message.receive_v1 和接收群内所有消息的权限。", {exact: true}).waitFor();
       if (api.larkWrites[0]?.read_goal_scope !== "all_registered") throw new Error("Evidence scope not saved");
@@ -36,8 +39,7 @@ export const stewardGroupTriggerScenario = {
       ]) {
         Object.assign(connection, {event_count: 3, last_event_status: "context_only_captured", last_event_reason: reason});
         await page.reload();
-        await page.getByRole("button", {name: "设置", exact: true}).click();
-        await page.locator(".personal-settings-tabs").getByRole("button", {name: "Lark", exact: true}).click();
+        await page.locator(".personal-settings-page").getByRole("heading", {name: "Lark", exact: true}).waitFor();
         const feedback = row.getByText(detail, {exact: true});
         await feedback.waitFor();
         if (await feedback.evaluate((element) => getComputedStyle(element).whiteSpace) === "nowrap") throw new Error("Recovery feedback is visually truncated");
@@ -60,6 +62,9 @@ export const stewardGroupTriggerScenario = {
       if (api.larkWrites[1]?.turn_trigger !== "addressed") throw new Error("Trigger not restored");
       if (context.errors.length) throw new Error(context.errors.join(" | "));
       return {coverageEntries: await context.close(), note: "Steward group trigger opt-in/readback/revocation and typed non-execution feedback; desktop and narrow screen; scripted provider state only"};
-    } catch (error) { await context.close(); throw error; }
+    } catch (error) {
+      await context.close();
+      throw new Error(`${error.message}; page errors=${context.errors.join(" | ")}`, {cause: error});
+    }
   },
 };

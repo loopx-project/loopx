@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
+
+from ..acceptance_readback import configured_checks
 
 GOAL_TERMINAL_STATE_SCHEMA_VERSION = "goal_terminal_state_v0"
 GOAL_TERMINAL_SOURCE_COMPLETENESS_SCHEMA_VERSION = "goal_terminal_source_completeness_v0"
@@ -31,6 +33,7 @@ def _terminal_todo_source_state(
     done = summary.get("done_count")
     deferred = summary.get("deferred_count")
     watch_only = summary.get("watch_only_monitor_count", 0)
+    monitor_open_items = summary.get("monitor_open_items")
     if not (
         type(total) is int
         and total >= 0
@@ -40,8 +43,8 @@ def _terminal_todo_source_state(
         and done + watch_only == total
         and _strict_zero(summary.get("convergence_open_count", summary.get("open_count")))
         and _strict_zero(deferred)
-        and isinstance(summary.get("monitor_open_items"), list)
-        and len(summary.get("monitor_open_items")) == watch_only
+        and isinstance(monitor_open_items, list)
+        and len(monitor_open_items) == watch_only
     ):
         return "invalid", False
     intent = summary.get("closure_intent")
@@ -52,7 +55,7 @@ def _terminal_todo_source_state(
         and intent.get("derived") is True
         and intent.get("source") == "todo_no_followup"
         and type(intent.get("count")) is int
-        and 0 < intent.get("count") <= done
+        and 0 < cast(int, intent.get("count")) <= done
     )
     return "valid", has_no_followup_intent
 
@@ -65,7 +68,12 @@ def _projection_has_empty_terminal_frontier(projection: dict[str, Any] | None) -
     frontier = projection.get("remaining_advancement_frontier")
     monitors = projection.get("monitor_only_lanes")
     successors = projection.get("deferred_successors")
-    if not all(isinstance(value, dict) for value in (normalized, frontier, monitors, successors)):
+    if not (
+        isinstance(normalized, dict)
+        and isinstance(frontier, dict)
+        and isinstance(monitors, dict)
+        and isinstance(successors, dict)
+    ):
         return False
 
     required_keys = (
@@ -107,14 +115,24 @@ def _terminal_todo_source_contract(
 ) -> tuple[dict[str, Any], bool]:
     user_status, user_intent = _terminal_todo_source_state(user_todo_summary, role="user")
     agent_status, agent_intent = _terminal_todo_source_state(agent_todo_summary, role="agent")
-    source_completeness = {
+    source_completeness: dict[str, object] = {
         "schema_version": GOAL_TERMINAL_SOURCE_COMPLETENESS_SCHEMA_VERSION,
         "user_todos": user_status,
         "agent_todos": agent_status,
     }
+    acceptance = (agent_todo_summary or {}).get("goal_acceptance_contract")
+    acceptance_confirmed = True
+    if isinstance(acceptance, dict) and configured_checks(acceptance) is not None:
+        # Todo completion runs only that Todo's criteria. The typed acceptance
+        # owner separately qualifies the current contract and complete work
+        # basis; a local pass/no-follow-up cannot manufacture that receipt.
+        status = acceptance.get("status")
+        source_completeness["goal_acceptance"] = status
+        acceptance_confirmed = status == "accepted"
     return (
         source_completeness,
-        user_status == agent_status == "valid" and (user_intent or agent_intent),
+        user_status == agent_status == "valid" and (user_intent or agent_intent)
+        and acceptance_confirmed,
     )
 
 
@@ -163,7 +181,7 @@ def _terminal_no_followup_resolves_vision_checkpoint(
 
 
 def goal_frontier_is_terminal_no_followup(*, projection: dict[str, Any] | None) -> bool:
-    if not _projection_has_empty_terminal_frontier(projection):
+    if projection is None or not _projection_has_empty_terminal_frontier(projection):
         return False
     terminal_state = projection.get("terminal_state")
     completeness = projection.get("source_completeness")
@@ -177,4 +195,5 @@ def goal_frontier_is_terminal_no_followup(*, projection: dict[str, Any] | None) 
         and completeness.get("schema_version") == GOAL_TERMINAL_SOURCE_COMPLETENESS_SCHEMA_VERSION
         and completeness.get("user_todos") == "valid"
         and completeness.get("agent_todos") == "valid"
+        and completeness.get("goal_acceptance", "accepted") == "accepted"
     )

@@ -43,6 +43,7 @@ import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from ..file_lock import exclusive_file_lock
 from ..paths import select_default_runtime_root
@@ -454,6 +455,46 @@ def operator_provider_host_credential(
         for name in (OPERATOR_CREDENTIAL_ENV_VARS[0], OPERATOR_ENDPOINT_ENV_VAR)
         if resolved.get(name)
     }
+
+
+MESSAGES_COMPATIBILITY_OK = "ok"
+MESSAGES_COMPATIBILITY_MISSING = "endpoint_missing"
+MESSAGES_COMPATIBILITY_UNPARSABLE = "endpoint_unparsable"
+MESSAGES_COMPATIBILITY_PATH_REQUIRED = "compat_path_required"
+
+
+def messages_endpoint_compatibility(base_url: object) -> str:
+    """Classify one stored endpoint for a Messages-transport consumer.
+
+    The DeepSeek Messages provider resolves its request URL as
+    ``<base>/v1/messages``. A bare API root therefore answers 404 instead of
+    reaching the compatibility surface, and the failure surfaces far from the
+    configuration that caused it. Classify the stored value before a managed
+    host spends a model call:
+
+    - ``ok``: an HTTP(S) root that carries the provider's compatibility path
+      (for DeepSeek: ``/anthropic``);
+    - ``compat_path_required``: a valid root without that path;
+    - ``endpoint_unparsable``: not a usable HTTP(S) root;
+    - ``endpoint_missing``: nothing stored, so the runtime default applies.
+    """
+
+    text = str(base_url or "").strip()
+    if not text:
+        return MESSAGES_COMPATIBILITY_MISSING
+    parsed = urlsplit(text)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        return MESSAGES_COMPATIBILITY_UNPARSABLE
+    if not parsed.path.rstrip("/").endswith("/anthropic"):
+        return MESSAGES_COMPATIBILITY_PATH_REQUIRED
+    return MESSAGES_COMPATIBILITY_OK
 
 
 __all__ = [

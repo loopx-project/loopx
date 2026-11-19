@@ -5,6 +5,9 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from managed_effect_runtime_fixture import stop_disposable_effect_runtimes
+from canonical_authority_fixture import advance_canonical_fixture_authority, read_fixture_todos
+from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID,
@@ -13,7 +16,6 @@ from tests.control_plane.test_quota_settlement_cli import (
     TODO_ID,
     _append_newly_due_monitor,
     _classification_count,
-    _initialize_fixture_authority,
     _projected_cli_args,
     _run_cli,
     _spend_run_count,
@@ -22,11 +24,24 @@ from tests.control_plane.test_quota_settlement_cli import (
 from tests.control_plane.test_cli_output_budget import _stable_budget_fixture_root
 
 
+def _advance_monitor_fixture(project, runtime, *, handoff_mode="soft_claim", leases=None):
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    advance_canonical_fixture_authority(
+        runtime, GOAL_ID, build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID, todos=read_fixture_todos(state),
+            handoff_mode=handoff_mode, leases=leases or [],
+        ), operation_id="fixture-auxiliary-monitor-arrived",
+    )
+
+
 @pytest.fixture
 def settlement_budget_root(tmp_path: Path) -> Iterator[Path]:
     # Measure the actual output with stable paths, as other CLI budgets do.
     with _stable_budget_fixture_root(tmp_path) as root:
-        yield root
+        try:
+            yield root
+        finally:
+            stop_disposable_effect_runtimes(root)
 
 
 def test_settled_advancement_hold_preserves_independent_monitor(
@@ -34,18 +49,18 @@ def test_settled_advancement_hold_preserves_independent_monitor(
 ) -> None:
     """A post-settlement hold does not strand a due independent observation."""
     status = "blocked"
-    project, runtime, registry = _write_fixture(tmp_path)
+    project, runtime, registry = _write_fixture(tmp_path, provider="sqlite")
     turn = "turn-settled-advancement-hold"
     binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                "--turn-instance-id", turn)
     capabilities = ("--available-capability", "network",
                     "--available-capability", "external_evidence_poll")
     guard = ("quota", "should-run", "--codex-app", *binding,
-             *capabilities, "--scan-path", str(project))
+             *capabilities, )
     rc, first = _run_cli(registry, runtime, *guard)
     assert rc == 0, first
     _append_newly_due_monitor(project, watch_only=True)
-    _initialize_fixture_authority(project, runtime)
+    _advance_monitor_fixture(project, runtime)
     rc, admitted = _run_cli(registry, runtime, *guard)
     assert rc == 0, admitted
     poll_command = admitted["interaction_contract"]["cli_channel"][
@@ -75,9 +90,8 @@ def test_settled_advancement_hold_preserves_independent_monitor(
         "--claimed-by", AGENT_ID, "--text", "Validate an independent artifact",
     )
     assert rc == 0, successor
-    poll_args = tuple("observed-after-hold" if token == "${LOOPX_MONITOR_RESULT_HASH:?}"
-                      else token for token in _projected_cli_args(
-                          poll_command, turn_instance_id=turn)) + ("--scan-path", str(project))
+    poll_args = list(_projected_cli_args(poll_command, turn_instance_id=turn))
+    poll_args[poll_args.index("--result-hash") + 1] = "observed-after-hold"
     for expected_replay in (False, True):
         rc, poll = _run_cli(registry, runtime, *poll_args)
         assert rc == 0, (poll.get("error_code"), poll.get("reason"), poll.get("error"))
@@ -96,7 +110,7 @@ def test_settled_advancement_hold_preserves_independent_monitor(
 def test_receipt_bound_advancement_allows_one_auxiliary_due_monitor_receipt(
     tmp_path: Path,
 ) -> None:
-    project, runtime, registry_path = _write_fixture(tmp_path)
+    project, runtime, registry_path = _write_fixture(tmp_path, provider="sqlite")
     turn_instance_id = "turn-advancement-with-auxiliary-monitor"
     guard_args = (
         "quota",
@@ -108,15 +122,13 @@ def test_receipt_bound_advancement_allows_one_auxiliary_due_monitor_receipt(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
     )
     first_rc, first = _run_cli(registry_path, runtime, *guard_args)
     assert first_rc == 0, first
     assert first["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
 
     _append_newly_due_monitor(project, watch_only=True)
-    _initialize_fixture_authority(project, runtime)
+    _advance_monitor_fixture(project, runtime)
     capability_args = (
         "--available-capability",
         "network",
@@ -141,12 +153,8 @@ def test_receipt_bound_advancement_allows_one_auxiliary_due_monitor_receipt(
         auxiliary_cli["command"],
         turn_instance_id=turn_instance_id,
     )
-    poll_args = tuple(
-        "unchanged-auxiliary-monitor"
-        if token == "${LOOPX_MONITOR_RESULT_HASH:?}"
-        else token
-        for token in poll_args
-    ) + ("--scan-path", str(project))
+    poll_args = list(poll_args)
+    poll_args[poll_args.index("--result-hash") + 1] = "unchanged-auxiliary-monitor"
     poll_rc, poll = _run_cli(registry_path, runtime, *poll_args)
     poll_replay_rc, poll_replay = _run_cli(
         registry_path,
@@ -207,6 +215,7 @@ def test_receipt_bound_advancement_allows_one_auxiliary_due_monitor_receipt(
     ("provider", "writeback", "spend_first"),
     [
         ("file", False, False),
+        ("sqlite", False, False),
         ("file", True, False),
         ("sqlite", True, False),
         ("file", True, True),
@@ -215,20 +224,22 @@ def test_receipt_bound_advancement_allows_one_auxiliary_due_monitor_receipt(
 )
 def test_completed_advancement_retains_auxiliary_monitor_admission(
     settlement_budget_root: Path,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     provider: str,
     writeback: bool,
     spend_first: bool,
 ) -> None:
-    tmp_path = settlement_budget_root
     from canonical_authority_fixture import isolate_sqlite_runtime
     from loopx.control_plane.coordination.local_authority import (
         read_canonical_todos_if_promoted,
     )
 
     if provider == "sqlite":
+        # The Effect process uses the temporary directory as its cwd. Keep
+        # it outside the measured fixture, which is removed before it exits.
         isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry_path = _write_fixture(tmp_path)
+    project, runtime, registry_path = _write_fixture(settlement_budget_root, provider=provider)
     turn = "turn-completed-advancement-with-auxiliary-monitor"
     binding = (
         "--goal-id",
@@ -250,8 +261,6 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
         "--codex-app",
         *binding,
         *capabilities,
-        "--scan-path",
-        str(project),
     )
     rc, first = _run_cli(registry_path, runtime, *guard)
     assert rc == 0, first
@@ -275,10 +284,9 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
             (DUE_MONITOR_TODO_ID, "own-monitor-execution"),
         )
     ]
-    _initialize_fixture_authority(
+    _advance_monitor_fixture(
         project,
         runtime,
-        provider=provider,
         handoff_mode="hard_lease",
         leases=leases,
     )
@@ -287,12 +295,8 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
     auxiliary = open_guard["interaction_contract"]["cli_channel"][
         "auxiliary_monitor_poll"
     ]
-    poll_args = tuple(
-        "completed-primary-observation"
-        if token == "${LOOPX_MONITOR_RESULT_HASH:?}"
-        else token
-        for token in _projected_cli_args(auxiliary["command"], turn_instance_id=turn)
-    ) + ("--scan-path", str(project))
+    poll_args = list(_projected_cli_args(auxiliary["command"], turn_instance_id=turn))
+    poll_args[poll_args.index("--result-hash") + 1] = "completed-primary-observation"
     rc, complete = _run_cli(
         registry_path,
         runtime,
@@ -375,15 +379,30 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
     assert resume["identity"]["turn_instance_id"] == turn
     assert resume["grants_new_delivery"] is False
     assert resume["progress_ref"] == "$.settlement_progress"
-    # Same stable fixture: v1.3.1 writeback was 1,831 chars; the bounded vision
-    # authoring contract and unavailable-monitor closeout now require 5,328.
-    # Keep useful decision guidance, with 672 chars of measured headroom. Spend
-    # and settled packets retain the original 2,000-character regression budget.
+    # The complete current contract emits 8,642 writeback characters on both
+    # providers, including Vision bounds and continuation/cost review. Retain
+    # the historical 7,500 failure and the original 694 chars of headroom.
+    # Spend (1,432) and settled (572) retain their 2,000-character ceiling.
     resume_budget = (
-        6_000 if (resume["next_step"] or {}).get("kind") == "durable_writeback"
+        9_336 if (resume["next_step"] or {}).get("kind") == "durable_writeback"
         else 2_000
     )
     assert len(json.dumps(resume, ensure_ascii=False, indent=2)) < resume_budget
+    if (resume["next_step"] or {}).get("kind") == "durable_writeback":
+        # Recovery specializes the completed Task to semantic closeout. Keep
+        # complete authoring bounds and every argument from the admitted path.
+        from loopx.cli import build_parser
+        import shlex
+
+        original_writeback = first["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]
+        assert resume["next_step"]["vision_authoring"] == original_writeback["vision_authoring"]
+
+        def parsed_closeout(step):
+            command = step["semantic_closeout_command_template"].replace(
+                "<scale>", "single_surface").replace("<outcome>", "outcome_progress")
+            return vars(build_parser().parse_args(shlex.split(command)[1:]))
+
+        assert parsed_closeout(resume["next_step"]) == parsed_closeout(original_writeback)
     after_cli = poll["after"]["interaction_contract"]["cli_channel"]
     assert after_cli["settlement_resume_ref"] == "$.settlement_resume"
     assert after_cli["spend_after_validation"] is False

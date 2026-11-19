@@ -3,10 +3,10 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { EffectRuntimeRequestError } from "../../loopx/control_plane/effect_runtime_errors.ts";
+import {createEffectRuntimeHandlers, dispatchEffectRuntimeMethod} from "../../loopx/control_plane/effect_runtime_handlers.ts";
 import { FileAuthorityStore } from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {localAuthorityShadowHeadDigest, localAuthorityShadowPartitionDigest,
-  recordLocalAuthorityShadow, readLocalAuthorityShadow} from "../../loopx/control_plane/coordination/local_authority_shadow.ts";
+  readLocalAuthorityShadow} from "../../loopx/control_plane/coordination/local_authority_shadow.ts";
 
 test("runtime shadow parity ignores only the resume evaluation observation clock", () => {
   const head = {
@@ -62,11 +62,12 @@ test("runtime shadow parity ignores only the resume evaluation observation clock
 test("retired record RPC rejects even a stale client without creating any storage", async t => {
   const root = await mkdtemp(join(tmpdir(), "loopx-retired-observer-"));
   t.after(() => rm(root, {recursive: true, force: true}));
-  for (const request of [null, {}, {schema_version: "loopx_local_authority_shadow_request_v0",
+  const handlers = createEffectRuntimeHandlers({fingerprint: "test", requestShutdown: () => undefined});
+  for (const request of [{}, {schema_version: "loopx_local_authority_shadow_request_v0",
     mode: "file_one_way", runtime_root: root, goal_id: "goal-a", observation_id: "old-op",
     source_digest: `sha256:${"a".repeat(64)}`, observation_trigger: "todo_update", source_projection: {}}]) {
-    await assert.rejects(recordLocalAuthorityShadow(request), error =>
-      error instanceof EffectRuntimeRequestError && error.code === "local_authority_shadow_retired");
+    await assert.rejects(dispatchEffectRuntimeMethod(handlers, "coordination.local_authority_shadow.record", request),
+      {code: "unsupported_method"});
   }
   assert.deepEqual(await readdir(root), []);
 });

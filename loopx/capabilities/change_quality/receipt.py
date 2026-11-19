@@ -93,15 +93,11 @@ def _goal_from_registry(
         raise ValueError(f"goal_id not found in registry: {goal_id}")
     if runtime_root is not None:
         from ..machine_configuration.builtins import (
-            build_builtin_machine_configuration_registry,
+            read_builtin_goal_machine_configuration,
             project_goal_with_builtin_machine_configuration,
         )
-        from ..machine_configuration.store import read_machine_configuration
 
-        machine_configuration = read_machine_configuration(
-            runtime_root,
-            registry=build_builtin_machine_configuration_registry(),
-        )
+        machine_configuration = read_builtin_goal_machine_configuration(runtime_root)
         return project_goal_with_builtin_machine_configuration(
             goal, machine_configuration
         )

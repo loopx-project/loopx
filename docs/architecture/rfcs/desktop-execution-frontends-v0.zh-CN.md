@@ -86,7 +86,7 @@ manager Agent，也不把连接器硬编码到 Codex。
 | `todo_replan_cadence` | 设备默认值 + Goal 覆盖 | 复用复盘频率并允许 Goal 工作节奏；这是已完成工作复盘频率，不是 automation timer。 |
 | `multi_subagent` | 仅 Goal | 子模型、容量、职责域和委托 binding 属于一个 Goal 的团队与资源边界。 |
 | `peer_task_coordination` | 仅 Goal | coordinator 必须是本 Goal 成员，不能继承无关 Agent 身份。 |
-| `explore_harness`、`explore_graph` | 仅 Goal | 探索策略与 opt-in 只影响本 Goal 的规划和证据图。 |
+| `explore_harness` | 设备模式默认值 + Goal 覆盖 | 已有与新建 Goal 实时继承 off/evidence/planning。Goal 的显式模式或旧 enabled 标志优先；规划 profile、组合范围和外部交付权限仍属于各 Goal。 |
 | `progress_review` | 仅 Goal | drift 模式与阈值绑定本 Goal 固定的验收合同版本。 |
 | `reward_memory` | 仅 Goal | 私有 provider binding 和启用 Agent 是 Goal 局部配置，设备偏好不能扩散数据 binding。 |
 | `lark_kanban_heartbeat_sync` | 仅 Goal | 目标看板与同步遵循本 Goal 的 binding 和受众。 |

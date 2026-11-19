@@ -33,27 +33,7 @@ def guard_native_controller_writeback(control_plane: Any) -> None:
     def blocked_claim(_todo_id: str, _agent_id: str) -> str:
         return _native_controller_rejection("claim_task")
 
-    def blocked_complete(
-        _todo_id: str,
-        _agent_id: str,
-        _evidence: str,
-        next_agent_todo: str = "",
-        task_lease_idempotency_key: str = "",
-        task_lease_expected_version: int | None = None,
-        no_follow_up: bool = False,
-        successor_todo_ids: list[str] | None = None,
-        agent_vision: dict | None = None,
-        vision_unchanged_reason: str = "",
-    ) -> str:
-        del (
-            next_agent_todo,
-            task_lease_idempotency_key,
-            task_lease_expected_version,
-            no_follow_up,
-            successor_todo_ids,
-            agent_vision,
-            vision_unchanged_reason,
-        )
+    def blocked_complete(*_args: Any, **_kwargs: Any) -> str:
         return _native_controller_rejection("complete_task")
 
     control_plane.claim_task = blocked_claim
@@ -102,6 +82,8 @@ def native_controller_cli_write_block(arguments: Any) -> dict[str, Any] | None:
             operation = f"task-lease {lease_command}".strip()
     elif command == "turn" and getattr(arguments, "turn_command", None) == "run-once":
         operation = "turn run-once"
+    elif command == "goal-lifecycle" and getattr(arguments, "execute", False):
+        operation = f"goal-lifecycle {getattr(arguments, 'operation', '')}".strip()
     elif command in {
         "archive-runtime",
         "configure-goal",

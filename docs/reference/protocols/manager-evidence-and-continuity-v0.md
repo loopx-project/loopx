@@ -27,8 +27,28 @@ Long-running work is assigned to an exact worker with a durable return route.
 The initial receipt does not end the exchange: the worker evaluates or executes
 within its current authority and returns an audience-ready decision/result to
 the original conversation automatically. Acknowledgement or adoption does not
-remove the request from the receiver's hook; a committed conclusion does. The
-Chat runtime then owns transport recovery, separately from work completion.
+remove the request from the receiver's hook. An explicit remainder on the
+latest conclusion retains the original request; a queued return retains its
+delivery obligation. The scoped manager handoff reader reuses the native Inbox
+agenda and exposes `inbox_state` and `remaining_work` alongside transport
+receipts. An older delivered conclusion cannot resolve a newer remainder or
+pending reply. Unavailable receipts remain unknown. These are receipt facts,
+not independent acceptance that the original question was answered. The Chat
+runtime owns transport recovery, separately from work completion.
+
+An ordinary private project request interrupted by a host restart after tool
+work is not safe to replay. The original worker can reserve one separately
+correlated read-only review in the same native thread, retaining the failed
+Turn and its notice. Core rechecks the original source, binding, grant, idle
+state and absence of stop/correction intent. Complete, stable native inventory
+must show an interrupted request without a final answer or live work. The
+existing workspace-only read profile denies writes and network, disables MCP,
+Apps and delegation, and retains the original native store and project grant.
+The review returns verified existing results or an explicit verification gap;
+it cannot redo business effects. A failed review remains pending without an
+automatic second attempt. Steward/attached/group requests are outside this
+staged path. Delivery uses the original transport and independent readback;
+admission or review completion alone does not certify business completion.
 
 The expected exchange is receipt → receiver assessment/work → conclusion.
 Meaningful intermediate feedback is optional and coalesced when a conclusion
@@ -81,8 +101,33 @@ in a `manager.context` event, and supplies it to the executor. Chat prose is
 never the inventory. Normal manager questions no longer silently use a limited
 frontend projection; explicitly choosing status-only still uses that projection.
 
+An ordinary Codex turn in a bound steward conversation starts with the current
+authorized Goal directory. Its unread status rows carry omitted coverage. When
+an answer needs Goal status, the executor uses `loopx_manager_read` with
+`view=portfolio` to collect the requested scope. Each read rechecks the grant.
+Native execution, observations and prompt-only endpoints keep their existing
+evidence preparation.
+
+Agent discovery without a `source_id` treats local and authorized SSH sources
+equally. The reader fans out a bounded batch only when called, and interleaves
+source-qualified rows so a large local registry cannot hide a remote project.
+It preserves each source's read quality and `next_reads` for remaining pages,
+failures or sources beyond the batch; a scoped continuation does not reread other
+hosts. Explicit `source_id=local` and Goal-scoped conversations retain local-only
+reads. The initial local preview is not evidence that the subject belongs locally.
+Registration search does not cover requirements: browse responsibilities and
+read relevant Todos when a shorthand has no match. Todo `query` searches permitted
+full text before paging; exact Todo reads recover excerpted decision terms.
+Older source CLIs that cannot apply this query return a compatibility gap, not
+an apparently empty or unfiltered search. All existing audience grants remain.
+
+Legacy bound steward sessions without a stored executor allocation adopt explicit
+machine model/effort choices at the next idle boundary. Unset fields retain their
+observed settings; this repair does not change endpoints, interrupt an active
+Turn, discard history or affect worker configuration.
+
 The manager channel's model and reasoning effort follow its executor. On the
-interactive CLI endpoint the defaults are `gpt-6-astra` with `high` reasoning; on
+interactive CLI endpoint the defaults are `gpt-6.1-sol` with `xhigh` reasoning; on
 the managed host they are the managed execution profile
 (`deepseek-official` / `deepseek-flash` / `high`). The machine's
 `steward_executor` machine configuration decides the executor, the model and the
@@ -93,6 +138,18 @@ configuration means that field keeps resolving from the layers below it. Thread
 start, resume and turn start explicitly carry the settings; worker configuration
 is unchanged. Capabilities expose the manager defaults, their source, and the
 status and revision of the machine document they were read from.
+
+When a Codex context or model migration needs a fresh upstream thread, the
+adapter preserves all nonempty visible user/assistant messages, in order and
+with their original text, through native
+[`thread/inject_items`](https://developers.openai.com/codex/app-server/#inject-items-into-a-thread).
+It persists this history before Core publishes the replacement binding, without
+starting a model turn. Later requests carry the stable objective and fresh Core
+evidence; they do not reattach the migrated transcript. Native resume reuses the
+stored history, including after a restart before the first request. An injection
+failure closes the new adapter without publishing it or replaying the operation;
+older hosts that lack this RPC must be upgraded. Existing failed requests remain
+failed and are not automatically retried by this context transfer.
 
 The managed profile reaches the channel as the same one-line readback the
 governed Turn publishes (`deepseek-flash@high`), so the channel and the
@@ -403,6 +460,38 @@ bind the resulting receipt to the exact target. Replays return that receipt
 without reapplying. After a crash with an uncertain external effect, reconcile
 by provider idempotency/readback before retry; if the provider cannot prove the
 result, retain outcome-unknown. Do not promise universal exactly-once effects.
+
+For private native Chat, a verified failure notice does not close its original
+request. The existing reply worker may reserve a bounded, separately correlated
+continuation after a recognized routing discovery failure or timeout. Admission
+rechecks the original provider message, binding, grant and idle Session. Native
+readback must enumerate every Turn and the failed Turn's complete item history:
+all Turns are terminal, and an older failure contains exactly its original user
+item. Later completed work alone does not establish execution of that request.
+The native compaction exception applies only to the latest failed Turn. Any
+answer, tool, correction, unknown item, local response delta or interrupted work
+keeps the original failure pending; it cannot be replayed by this path. Existing
+backoff, three-attempt limit, reservation recovery and per-attempt delivery
+readback remain in force, preserving the failed Turn and its original notice.
+
+个人原生 Chat 的失败通知不代表原请求完成。既有回复 worker 只能在明确识别的路由
+发现失败或超时、原消息和绑定权限再次核验、会话空闲及原生完整读回后，有界接续原
+请求。历史失败必须只有原始用户输入；之后其他请求完成不能证明它已经执行。仅最新
+失败可包含原生压缩记录；任何回答、工具、纠正、未知项、本地回答增量或中断的工作
+仍保留待核对，不能走此路径重放。退避、三次上限、稳定接续身份、失败历史和逐次
+原受众送达读回均保持原约束。
+
+The existing pending count retains delivered quota failures while work remains
+outstanding. A later same-source `/stop` or `/new`, or closure of the original
+Session, retires that backlog from the read-only count without deleting the
+failed Turn or notice. Temporary binding/provider unavailability, backoff and
+retry exhaustion are not retirement evidence. Health reads neither admit
+recovery nor contact a provider.
+
+既有待处理数量保留已送达失败通知、仍未结束的额度失败工作。后续同来源 `/stop`、
+`/new` 或原 Session 关闭后，只读计数不再包含该积压；失败 Turn 和通知仍保留。
+临时绑定／provider 不可用、退避和重试耗尽不代表退休。健康读取不准入恢复，
+也不访问 provider。
 
 Default manager duties allow authorized reads and summaries; reminders use an
 existing authorized destination/subscription. Goal changes, steering,

@@ -11,17 +11,34 @@ import threading
 import time
 from pathlib import Path
 
+from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError
+from benchmark.runtime.layout import _ACTIVE_PHASE_DEADLINE, _PHASE_DEADLINE
+
 from .checkpoint_controller import _controller
-from .checkpoint_worker import _archive, capture_worker
+from .checkpoint_worker import (
+    _archive, _guest_path, _validate_request, capture_failure_fields, capture_worker, qualify_export_storage,
+)
 
 
 class CheckpointSupervisor:
     def __init__(self, controller_file: Path, destination: Path, retention_policy: Path | None = None,
-                 *, retention_enabled: bool = True):
+                 *, retention_enabled: bool = True, terminal_components: list[dict[str, str]] | None = None,
+                 terminal_receipt: Path | None = None, phase_deadline_path: str = _PHASE_DEADLINE):
+        _guest_path(phase_deadline_path)
+        self.phase_deadline_path = phase_deadline_path
         _controller(controller_file)  # Fail before native registration.
+        qualify_export_storage(destination)
         if not retention_enabled and retention_policy is not None:
             raise ValueError("A retention policy cannot be combined with disabled retention")
         self.controller_file, self.destination = controller_file, destination
+        self.preservation = None
+        if terminal_components is not None:
+            from .terminal_capture import FailurePreservation
+            if terminal_receipt is None or terminal_receipt.exists():
+                raise ValueError("Terminal preservation requires a fresh private receipt")
+            _validate_request({"container_id": "0" * 64, "components": terminal_components,
+                               "phase_deadline_path": phase_deadline_path})
+            self.preservation = FailurePreservation(self, terminal_components, terminal_receipt)
         self.token = None
         self.stop = threading.Event()
         self.thread = None
@@ -41,9 +58,24 @@ class CheckpointSupervisor:
             raise ValueError("Checkpoint controller requires one native worker registration")
         self.token = environment["SFORGE_TOKEN"]
 
+    def capture_phase_deadline_path(self):
+        """Use a published continuation clock; fresh workers keep their default."""
+        if self.phase_deadline_path != _PHASE_DEADLINE:
+            return self.phase_deadline_path
+        from docker.errors import NotFound
+
+        with tempfile.TemporaryDirectory(prefix=".phase-clock-", dir=self.destination) as temporary:
+            try:
+                _archive(self.container, _ACTIVE_PHASE_DEADLINE, Path(temporary) / "clock",
+                         deadline=time.time() + 5)
+            except NotFound:
+                return _PHASE_DEADLINE
+        return _ACTIVE_PHASE_DEADLINE
+
     def start(self, container):
         if self.thread is not None or self.token is None:
             raise ValueError("Checkpoint supervisor requires one bound worker execution")
+        self.container = container
         self.destination.mkdir(mode=0o700, parents=True, exist_ok=False)
         if self.retention_enabled:
             from loopx.hosts.checkpoint_retention import _state
@@ -55,9 +87,32 @@ class CheckpointSupervisor:
                                   mode=0o600, fsync_directory=True)
             self.maintenance = threading.Thread(target=self._maintain, daemon=True)
             self.maintenance.start()
-        self.container = container
         self.thread = threading.Thread(target=self._run, args=(container,), daemon=True)
         self.thread.start()
+
+    def finish_solver(self, execution):
+        if self.preservation is None:
+            self.close()
+        else:
+            self.preservation.finish(execution)
+
+    def finish_grading(self, status):
+        if self.preservation is not None:
+            self.preservation.finish_grading(status)
+
+    def finish_grading_from_receipt(self, trial, *, run_id, task_id):
+        """Recover the drain observation when the native runner raises."""
+        if self.preservation is None or self.preservation.receipt is None:
+            return
+        from .managed_run import native_grading_drained
+
+        try:
+            drained = native_grading_drained(
+                trial, history_file="run_history.json", run_id=run_id, task_id=task_id)
+        except (OSError, ValueError):
+            return  # Bad optional evidence must not mask the original exception.
+        if drained:
+            self.finish_grading("complete")
 
     def close(self):
         self.stop.set()
@@ -155,7 +210,7 @@ class CheckpointSupervisor:
                         request = stage / "request.json"
                         request.write_text(json.dumps({"container_id": container.id,
                             "components": value["components"],
-                            "phase_deadline_path": "/opt/loopx-benchmark/control/phase-deadline",
+                            "phase_deadline_path": self.capture_phase_deadline_path(),
                             "handoff": {"source_path": remote, "sha256": digest}}))
                         remaining = value["deadline_epoch"] - time.time()
                         if remaining <= 0:
@@ -167,7 +222,12 @@ class CheckpointSupervisor:
                     except Exception as error:
                         # Optional capture failure resumes the original source;
                         # credentials and raw provider errors never enter it.
-                        response["error_kind"] = type(error).__name__
+                        response.update(capture_failure_fields(error))
+                        if isinstance(error, EffectRuntimeRemoteError):
+                            response["runtime_failure"] = {
+                                "error_kind": error.error_kind,
+                                "diagnostic_code": error.diagnostic_code,
+                            }
                         diagnostic = self.destination / (nonce + ".error.txt")
                         diagnostic.write_text(str(error).replace(self.token, "[redacted]")[:2000])
                         diagnostic.chmod(0o600)

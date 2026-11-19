@@ -32,6 +32,156 @@ def observation(node: str) -> dict:
     }
 
 
+def test_native_snapshot_holds_inherited_mode_and_graph_until_release(tmp_path):
+    from loopx.capabilities.machine_configuration.store import machine_configuration_store_path
+    from loopx.file_lock import exclusive_file_lock, LockAcquireTimeoutError
+
+    root = tmp_path / "runtime"
+    configuration = machine_configuration_store_path(root)
+    configuration.parent.mkdir(parents=True)
+    configuration.write_text(json.dumps({"schema_version": "loopx_machine_configuration_v0", "namespaces": {
+        "explore_harness": {"schema_version": "explore_harness_machine_defaults_v0", "mode": "planning"}}}))
+    request = {"runtime_root": str(root), "goal_id": "locked-research", "graph": {},
+               "harness": {"composition_mode": "explicit_only", "composition_scope_id": "scope-fixture"},
+               "todos": [], "agent_id": "fixture-agent"}
+    process = subprocess.Popen([sys.executable, "-m", "loopx.capabilities.explore.research_snapshot_host"],
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        process.stdin.write(json.dumps(request) + "\n")
+        process.stdin.flush()
+        snapshot = json.loads(process.stdout.readline())
+        assert snapshot["frontier"]["enabled"] is True
+        paths = [configuration, explore_result_log_path(root, "locked-research")]
+        for path in paths:
+            with pytest.raises(LockAcquireTimeoutError):
+                with exclusive_file_lock(path, timeout_seconds=0):
+                    pytest.fail("native completion released its decision source before the transaction")
+        process.stdin.write("release\n")
+        process.stdin.flush()
+        assert process.wait(timeout=10) == 0
+        for path in paths:
+            with exclusive_file_lock(path, timeout_seconds=1):
+                pass
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.communicate(timeout=10)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("completed_before_invalidation", [False, True])
+def test_transitive_research_eligibility_preserves_completed_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, completed_before_invalidation: bool,
+) -> None:
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from loopx.control_plane.todos.provider_terminal_lifecycle import archive_canonical_todos_if_promoted
+    from loopx.control_plane.work_items.task_lease import acquire_task_lease
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    try:
+        goal, agent = "research-ancestry-fixture", "fixture-agent"
+        state = tmp_path / "ACTIVE_GOAL_STATE.md"
+        state.write_text("# Goal\n\n## Agent Todo\n\n")
+        runtime, registry = tmp_path / "runtime", tmp_path / "registry.json"
+        harness = {"enabled": True, "composition_mode": "explicit_only", "composition_scope_id": "scope-joint"}
+        registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
+            "id": goal, "repo": str(tmp_path), "state_file": state.name, "status": "active",
+            "spawn_policy": {"explore_harness": harness},
+            "coordination": {"agent_model": "peer_v1", "registered_agents": [agent]},
+        }]}))
+        log = explore_result_log_path(runtime, goal)
+        for name in ["left", "right", "a", "b", "joint"]:
+            append_explore_result_event(log, build_explore_node_event(
+                goal_id=goal, node_id=name, title=f"Research {name}", status="resolved",
+                node_kind="experiment" if name in {"a", "joint"} else "hypothesis"))
+        observations = {}
+        for name in ["left", "right", "b"]:
+            observations[name] = append_research_observation(log, goal_id=goal, observation=observation(name))["observation"]
+        for child, parents in [("a", ["left", "right"]), ("joint", ["a", "b"])]:
+            for parent in parents:
+                append_explore_result_event(log, build_explore_edge_event(
+                    goal_id=goal, from_node=child, to_node=parent, edge_type="depends_on"))
+        source = observation("a")
+        source["input_observations"] = [{"node_id": name, "fingerprint": observations[name]["fingerprint"]}
+                                        for name in ["left", "right"]]
+        source["composition_candidates"] = [{"basis": "explicit", "target_node_id": "b",
+            "interaction_kind": "producer_consumer", "evidence_ids": ["ev-a", "ev-b"]}]
+        append_research_observation(log, goal_id=goal, observation=source)
+        events = load_explore_result_events_strict(log, goal_id=goal)
+        frontier = build_research_composition_frontier(build_explore_result_projection(events, goal_id=goal),
+            candidate_sources=[{"node_id": event["result_id"], "research_observation": event["research_observation"]}
+                               for event in events if event.get("research_observation")],
+            harness=harness, todos=[], agent_id=agent)
+        gap = frontier["selected_gap"]
+        task = {"schema_version": "todo_item_v0", "todo_id": "todo_joint", "index": 1,
+                "role": "agent", "status": "open", "done": False, "text": "Run the downstream joint experiment.",
+                "archive_state": "active", "source_section": "Agent Todo", "priority": "P1",
+                "claimed_by": agent, "task_class": "advancement_task", "action_kind": "joint_probe",
+                "target_key": "joint", "explore_result_node_refs": ["joint"], "replan_obligation_id": gap["obligation_id"]}
+        initialize_canonical_authority(runtime, goal,
+            build_todo_runtime_shadow_projection(goal_id=goal, todos=[task]), state_path=state, provider=provider)
+        result = observation("joint")
+        result["input_observations"] = gap["input_observations"]
+        result["execution_lineage"] = {"schema_version": "research_execution_lineage_v0", "goal_id": goal,
+            "gap_id": gap["gap_id"], "replan_obligation_id": gap["obligation_id"],
+            "successor_todo_id": "todo_joint", "agent_id": agent}
+        append_research_observation(log, goal_id=goal, observation=result, agent_id=agent,
+                                   registry_path=registry, runtime_root=runtime)
+        acquired = acquire_task_lease(registry_path=registry, runtime_root=runtime, goal_id=goal,
+            todo_id="todo_joint", owner=agent, idempotency_key="nested-research-proof", ttl_seconds=300)
+        assert acquired["ok"]
+
+        def complete():
+            return complete_goal_todo(registry_path=registry, goal_id=goal, todo_id="todo_joint",
+                agent_id=agent, claimed_by=agent, clear_claim=True, no_followup=True,
+                evidence="Synthetic typed experiment recorded.", task_lease_idempotency_key="nested-research-proof",
+                task_lease_expected_version=acquired["lease"]["version"])
+
+        if completed_before_invalidation:
+            accepted = complete()
+            assert accepted["completed"]
+            archived = archive_canonical_todos_if_promoted(registry_path=registry, runtime_root=runtime,
+                goal_id=goal, role="agent", max_active_done=0, dry_run=False)
+            assert archived["moved_todo_ids"] == ["todo_joint"]
+        before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal)
+        retained = log.read_bytes()
+        append_explore_result_event(log, build_explore_node_event(
+            goal_id=goal, node_id="left", title="Reopen the ancestor", status="open"))
+        assert log.read_bytes().startswith(retained)
+        invalidated_log = log.read_bytes()
+        process = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+            "--registry", str(registry), "--runtime-root", str(runtime), "explore", "summary",
+            "--goal-id", goal, "--agent-id", agent], cwd=Path(__file__).resolve().parents[2],
+            capture_output=True, text=True, timeout=60)
+        assert process.returncode == 0, process.stdout + process.stderr
+        summary = json.loads(process.stdout)
+        assert summary["research_execution_frontier"]["ineligible_count"] == 1
+        assert summary["research_execution_frontier"]["observed_count"] == 0
+        joint = next(row for row in summary["nodes"] if row["node_id"] == "joint")
+        assert joint["status"] == "resolved"
+        assert joint["research_observation"]["execution_lineage"] == result["execution_lineage"]
+        replay = append_research_observation(log, goal_id=goal, observation=result)
+        assert replay["replayed"] and not replay["written"]
+        if completed_before_invalidation:
+            replayed = complete()
+            assert replayed["provider_status"] == "replayed"
+            assert replayed["capability_completion_evidence"] == accepted["capability_completion_evidence"]
+        else:
+            with pytest.raises(ValueError, match="current typed experiment observation"):
+                complete()
+            revised = json.loads(json.dumps(result))
+            revised["progress"]["evidence_ids"].append("ev-additional")
+            with pytest.raises(ValueError, match="pending gap"):
+                append_research_observation(log, goal_id=goal, observation=revised, agent_id=agent,
+                                           registry_path=registry, runtime_root=runtime)
+        after = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal)
+        assert after["provider_revision"] == before["provider_revision"]
+        assert after["todos"] == before["todos"]
+        assert log.read_bytes() == invalidated_log
+    finally:
+        restart_effect_runtime()
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("canonical_owner", ["fixture-agent", "other-agent"])
 def test_execution_attribution_reads_promoted_provider(
@@ -99,9 +249,12 @@ def test_execution_attribution_reads_promoted_provider(
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("resolution", ["observed", "dismissed", "deferred"])
-@pytest.mark.parametrize("diagnostic_timing", [None, "before_activation", "after_activation"])
+@pytest.mark.parametrize("mode_source,diagnostic_timing", [
+    ("goal", None), ("goal", "before_activation"), ("goal", "after_activation"), ("machine", None),
+])
 def test_native_completion_refuses_missing_result_and_accepts_exact_observation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, resolution: str, diagnostic_timing: str | None,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, resolution: str,
+    mode_source: str, diagnostic_timing: str | None,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     try:
@@ -110,9 +263,18 @@ def test_native_completion_refuses_missing_result_and_accepts_exact_observation(
         state.write_text("# Goal\n\n## Agent Todo\n\n")
         runtime, registry = tmp_path / "runtime", tmp_path / "registry.json"
         harness = {"enabled": True, "composition_mode": "explicit_only", "composition_scope_id": "scope-joint"}
+        stored_harness = {key: value for key, value in harness.items() if key != "enabled"} if mode_source == "machine" else harness
+        if mode_source == "machine":
+            from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
+            from loopx.capabilities.machine_configuration.store import configure_machine_configuration
+            args = dict(runtime_root=runtime, registry=build_builtin_machine_configuration_registry(), configuration={
+                "schema_version": "loopx_machine_configuration_v0", "namespaces": {"explore_harness": {
+                    "schema_version": "explore_harness_machine_defaults_v0", "mode": "planning"}}})
+            preview = configure_machine_configuration(**args)
+            configure_machine_configuration(**args, execute=True, expected_plan_revision=preview["plan_revision"])
         registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
             "id": goal, "repo": str(tmp_path), "state_file": state.name, "status": "active",
-            "spawn_policy": {"explore_harness": {"enabled": True} if diagnostic_timing == "before_activation" else harness},
+            "spawn_policy": {"explore_harness": {"enabled": True} if diagnostic_timing == "before_activation" else stored_harness},
             "coordination": {"agent_model": "peer_v1", "registered_agents": [agent]},
         }]}))
         def cli(*args: str, success: bool = True) -> dict:

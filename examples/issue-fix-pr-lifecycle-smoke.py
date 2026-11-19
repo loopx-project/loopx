@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import os
 import re
 import subprocess
 import sys
@@ -70,14 +71,12 @@ def assert_public_safe(payload: dict[str, Any] | str) -> None:
 def run_cli(
     args: list[str],
     *,
+    runtime_root: Path,
     registry_path: Path | None = None,
-    runtime_root: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    control_plane_args: list[str] = []
+    control_plane_args = ["--runtime-root", str(runtime_root)]
     if registry_path is not None:
         control_plane_args.extend(["--registry", str(registry_path)])
-    if runtime_root is not None:
-        control_plane_args.extend(["--runtime-root", str(runtime_root)])
     return subprocess.run(
         [
             sys.executable,
@@ -89,6 +88,7 @@ def run_cli(
             *args,
         ],
         cwd=ROOT,
+        env={**os.environ, "LOOPX_USAGE_PING": "0"},
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -408,7 +408,8 @@ def check_lifecycle(provider: str) -> None:
                 "example-goal",
                 "--project",
                 str(project),
-            ]
+            ],
+            runtime_root=runtime_root,
         )
         cli_packet = json.loads(cli_result.stdout)
         completed_before = datetime.now(timezone.utc).replace(microsecond=0)
@@ -445,7 +446,8 @@ def check_lifecycle(provider: str) -> None:
                 "--generated-at",
                 explicit_time,
                 "--no-write-domain-state",
-            ]
+            ],
+            runtime_root=runtime_root,
         )
         explicit_packet = json.loads(explicit_result.stdout)
         assert explicit_packet["generated_at"] == explicit_time, explicit_packet
@@ -568,7 +570,6 @@ def check_lifecycle(provider: str) -> None:
             if item["todo_id"] == "todo_merge_gate_1716"
         )
         assert gate_item["status"] == "done", gate_item
-        assert "state=MERGED" in gate_item["evidence"], gate_item
         assert_public_safe(reconciled_gate)
 
         repeated_gate = json.loads(
@@ -696,7 +697,6 @@ def check_lifecycle(provider: str) -> None:
         )
         assert review_item["status"] == "done", review_item
         assert review_item["no_followup"] is True, review_item
-        assert "state=MERGED" in review_item["evidence"], review_item
         assert_public_safe(reconciled_review)
 
         repeated_review = json.loads(
@@ -796,6 +796,7 @@ def check_lifecycle(provider: str) -> None:
         for todo_id in ("todo_merge_gate_1716", "todo_review_action_1716"):
             assert rows[todo_id]["status"] == "done", rows[todo_id]
             assert rows[todo_id]["last_actor_agent_id"] == "codex-test", rows[todo_id]
+            assert "state=MERGED" in rows[todo_id]["evidence"], rows[todo_id]
 
 
 def main() -> int:

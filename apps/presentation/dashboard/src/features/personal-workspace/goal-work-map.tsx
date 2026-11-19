@@ -1,5 +1,6 @@
+import {Circle, CircleCheck, CircleDashed, CircleHelp, ExternalLink, Eye, Hand, OctagonAlert, X, ZoomIn, ZoomOut} from "lucide-react";
+import {ContextHelp} from "./context-help";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
-import { Circle, CircleCheck, CircleDashed, ExternalLink, Eye, Hand, OctagonAlert, X, ZoomIn, ZoomOut } from "lucide-react";
 import { goalWorkMapCard, goalWorkMapGeometry, goalWorkMapCoverage, goalWorkMapLayout, goalWorkMapLineage, goalWorkMapSharedOwner, goalWorkMapSummary, goalWorkMapTone,
   type GoalWorkMap, type GoalWorkMapEdge, type GoalWorkMapFocus, type GoalWorkMapNode, type GoalWorkMapTone } from "../../data/goal-work-map";
 import type { deliveryReviewCopy } from "./delivery-review-copy";
@@ -141,7 +142,7 @@ export function GoalWorkMapView({ map, copy, selectedId, onSelect, onOpen, canOp
       <div><dt>{copy.truncated}</dt><dd>{limits.source_truncated ? "✓" : "–"}</dd></div>
       <div><dt>{copy.cycles}</dt><dd>{limits.cycle_edge_count}</dd></div>
     </dl></details> : null}
-    {!map.nodes.length ? <p className="work-map-empty" role="status">{copy.empty}</p> : <>
+    {!map.nodes.length ? <ContextHelp label={copy.title} icon={CircleHelp}><p className="work-map-empty" role="status">{copy.empty}</p></ContextHelp> : <>
       <div className="work-map-body" data-selected={Boolean(selected) || undefined}>
       {compact ? <ol className="work-map-list">{placedNodes.map(node => {
         const needs = layout.edges.filter(edge => edge.from_node_id === node.node_id).map(edge => nodeById.get(edge.to_node_id)!.title);
@@ -167,7 +168,7 @@ export function GoalWorkMapView({ map, copy, selectedId, onSelect, onOpen, canOp
             {placedNodes.map(node => <NodeCard key={node.node_id} node={node} copy={copy} selected={node.node_id === selectedId}
               dimmed={Boolean(selected) && !lineage.nodes.has(node.node_id)} style={{ left: position.get(node.node_id)!.x, top: position.get(node.node_id)!.y }} sharedOwner={sharedOwner} doneBefore={layout.collapsed.get(node.node_id)} onSelect={onSelect} />)}
           </div>
-        </div> : <p className="work-map-empty">{copy.noLinks}</p>}
+        </div> : <ContextHelp label={copy.title} icon={CircleHelp}><p className="work-map-empty">{copy.noLinks}</p></ContextHelp>}
       </div>
       <section className="work-map-inspector" ref={inspectorRef} tabIndex={-1} aria-label={copy.selected}>
         {!selected ? <p>{copy.select}</p> : <>

@@ -1,12 +1,41 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
 
+from ...extensions.process_runtime import retire_owned_process
 
 CHANGE_QUALITY_SCOPE_SCHEMA_VERSION = "change_quality_scope_v0"
+
+
+# The scope reads a checkout the operator may not control. A repository blocked
+# on a stale index lock, a network mount or an oversized history must not hold
+# the receipt open with no answer, so every read shares one budget.
+GIT_PROBE_TIMEOUT_SECONDS = 10.0
+
+
+class GitProbeUnavailable(ValueError):
+    """Git did not answer inside the read budget, or could not start."""
+
+
+def _retire_owned_probe(process: subprocess.Popen[Any]) -> None:
+    """Stop the read's own session, then drop its pipes unread.
+
+    Git runs helpers -- fsmonitor hooks, pagers -- inside the session it starts
+    in, so killing the leader alone leaves them behind. An inherited pipe also
+    outlives the leader, so the pipes are closed instead of drained: a drain
+    would wait on work this call no longer owns.
+    """
+
+    try:
+        retire_owned_process(process, process_tree_owned=True)
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+        # Cleanup is best effort. The read's own timeout or cancellation is the
+        # result the caller must receive, even when termination is unconfirmed.
+        pass
 
 
 def _git(
@@ -18,24 +47,61 @@ def _git(
     # text mode: a non-None encoding would silently flip bytes-mode callers
     # into text mode because CPython treats any of text/encoding/errors as
     # text-mode requests.
-    return subprocess.run(
-        ["git", "-C", str(repo_root), *args],
-        check=False,
-        text=text,
-        encoding="utf-8" if text else None,
-        errors="replace" if text else None,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+    argv = ["git", "-C", str(repo_root), *args]
+    budget = GIT_PROBE_TIMEOUT_SECONDS
+    try:
+        process = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=text,
+            encoding="utf-8" if text else None,
+            errors="replace" if text else None,
+            start_new_session=os.name == "posix",
+        )
+    except OSError as exc:
+        raise GitProbeUnavailable(f"git {' '.join(args)} could not start: {exc}") from exc
+    try:
+        stdout, stderr = process.communicate(timeout=budget)
+    except subprocess.TimeoutExpired:
+        _retire_owned_probe(process)
+        raise GitProbeUnavailable(
+            f"git {' '.join(args)} did not answer within {budget:.1f}s"
+        ) from None
+    except BaseException:
+        # A terminal Ctrl-C reaches this process's group, not the session the
+        # read started, so the cancellation retires its helpers here and then
+        # keeps travelling to its own handler.
+        _retire_owned_probe(process)
+        raise
+    return subprocess.CompletedProcess(
+        args=argv, returncode=process.returncode, stdout=stdout, stderr=stderr
     )
+
+
+def _git_path_text(output: bytes, *, operation: str) -> str:
+    """Decode one Git path output without normalizing its contents."""
+
+    raw = bytes(output)
+    # Git terminates path output with one LF. Strip only that separator so a
+    # repository directory ending in CR or LF keeps its literal name.
+    if raw.endswith(b"\n"):
+        raw = raw[:-1]
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError(f"{operation} returned a path that is not valid UTF-8") from None
 
 
 def resolve_git_root(repo_path: Path) -> Path:
     candidate = repo_path.expanduser().resolve()
-    result = _git(candidate, "rev-parse", "--show-toplevel", text=True)
-    root = str(result.stdout or "").strip()
-    if result.returncode != 0 or not root:
-        detail = str(result.stderr or "").strip()
+    result = _git(candidate, "rev-parse", "--show-toplevel")
+    if result.returncode != 0 or not result.stdout:
+        detail = bytes(result.stderr or b"").decode("utf-8", errors="replace").strip()
         raise ValueError(f"repo_path is not a git worktree: {candidate}; {detail}")
+    root = _git_path_text(result.stdout, operation="git rev-parse --show-toplevel")
+    if not root:
+        raise ValueError(f"repo_path is not a git worktree: {candidate}")
     return Path(root).resolve()
 
 
@@ -49,15 +115,30 @@ def _required_git_text(repo_root: Path, *args: str) -> str:
 
 
 def _name_only(repo_root: Path, *args: str) -> list[str]:
-    result = _git(repo_root, *args, text=True)
+    """Return the exact paths Git reported, one per NUL-separated record.
+
+    ``-z`` is required at every call site: without it Git quotes non-ASCII
+    names (``"\\346\\226\\226..."``) and separates records with newlines, so a
+    legal file name that contains a newline, leading or trailing spaces, or a
+    literal backslash would arrive as a fragment the caller could not open.
+    """
+
+    result = _git(repo_root, *args)
     if result.returncode != 0:
-        detail = str(result.stderr or "").strip()
+        detail = bytes(result.stderr or b"").decode("utf-8", errors="replace").strip()
         raise ValueError(f"git {' '.join(args)} failed: {detail}")
-    return [
-        line.strip().replace("\\", "/")
-        for line in str(result.stdout or "").splitlines()
-        if line.strip()
-    ]
+    records = bytes(result.stdout or b"").split(b"\0")
+    names: list[str] = []
+    for record in records:
+        if not record:
+            continue
+        try:
+            names.append(record.decode("utf-8"))
+        except UnicodeDecodeError:
+            raise ValueError(
+                "git reported a changed pathname that is not valid UTF-8"
+            ) from None
+    return names
 
 
 def _dedupe(values: list[str]) -> list[str]:
@@ -124,12 +205,15 @@ def build_change_quality_scope(
         repo_root,
         "diff",
         "--name-only",
+        "-z",
         committed_range,
         "--",
     )
-    staged = _name_only(repo_root, "diff", "--name-only", "--cached")
-    unstaged = _name_only(repo_root, "diff", "--name-only")
-    untracked = _name_only(repo_root, "ls-files", "--others", "--exclude-standard")
+    staged = _name_only(repo_root, "diff", "--name-only", "-z", "--cached")
+    unstaged = _name_only(repo_root, "diff", "--name-only", "-z")
+    untracked = _name_only(
+        repo_root, "ls-files", "--others", "--exclude-standard", "-z"
+    )
     changed_files = _dedupe([*committed, *staged, *unstaged, *untracked])
 
     digest = hashlib.sha256()

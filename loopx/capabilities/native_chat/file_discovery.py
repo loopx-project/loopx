@@ -1,0 +1,254 @@
+"""File-backed Chat journal discovery and bounded reply image artifacts."""
+from __future__ import annotations
+
+from collections.abc import Callable, Iterable, Iterator
+from copy import deepcopy
+from datetime import datetime
+import base64
+import hashlib
+from pathlib import Path
+import re
+import sys
+from urllib.parse import unquote
+from threading import Lock
+from typing import Any
+
+
+def external_source_route_path(root: Path, binding_id: str, source_ref: str) -> Path:
+    """Locate the original source's cross-process admission fence."""
+    return root / "source-fences" / f"{binding_id}.{source_ref}.json"
+
+
+def _ordinary_request_text_digest(row: dict[str, Any]) -> str | None:
+    """Match ordinary private text without retaining its body in discovery."""
+    message = row.get("message")
+    source = row.get("source")
+    status = row.get("status")
+    if (status not in ("accepted", "prepared") or row.get("command") is not None
+            or row.get("capture_origin") is not None or row.get("agent_target") is not None
+            or row.get("attachments") not in (None, []) or not isinstance(message, str) or not message
+            or not row.get("session_id")
+            or not isinstance(source, dict) or source.get("private_human_message") is not True):
+        return None
+    return hashlib.sha256(message.encode("utf-8", errors="surrogatepass")).hexdigest()
+
+
+_RECOVERY_JOURNAL_FIELDS = (
+    "request_ref",
+    "status",
+    "delivery_verified",
+    "commission_adoption_pending",
+    "agent_target",
+    "session_id",
+    "turn_id",
+    "binding_id",
+    "source",
+    "capture_origin",
+    "native_mention",
+    "created_at",
+    "commission_resources",
+)
+
+
+def recovery_journal_fields(_path: Path, row: dict[str, Any]) -> dict[str, Any] | None:
+    """Keep only bounded recovery/commission metadata in the long-lived file cache."""
+    if not isinstance(row, dict) or "request_ref" not in row or "status" not in row:
+        return None
+    return {key: row[key] for key in _RECOVERY_JOURNAL_FIELDS if key in row}
+
+
+def source_control_fields(path: Path, row: dict[str, Any]) -> dict[str, Any] | None:
+    """Keep exact source controls and the metadata needed to prove admission."""
+    fields = ("binding_id", "source", "command", "created_at")
+    # A tolerant reader can return an incomplete journal after a transient
+    # failure. Do not cache that read as an unchanged-file observation.
+    if not all(key in row for key in fields):
+        return None
+    result = {key: row[key] for key in fields}
+    digest = _ordinary_request_text_digest(row)
+    if digest is None:
+        return result
+    if row["status"] == "accepted" and row.get("turn_id"):
+        result.update(text_sha256=digest, session_id=row["session_id"])
+    elif (row["status"] == "prepared" and row.get("turn_id") is None
+            and row.get("request_ref") == path.stem):
+        result.update(text_sha256=digest, session_id=row["session_id"],
+                      prepared_client_turn_id=f"external-{path.stem}", origin=row.get("origin", "lark"))
+    return result
+
+
+def later_equivalent_source_input(
+    row: dict[str, Any],
+    read_controls: Callable[[], list[dict[str, Any]]],
+    read_turn_for_client: Callable[[str, str], dict[str, Any] | None],
+) -> bool | None:
+    """Check canonical acceptance in the same source and Session, even before dispatch."""
+    if row.get("status") != "accepted" or not row.get("turn_id"):
+        return None
+    digest = _ordinary_request_text_digest(row)
+    if digest is None:
+        return None
+    created = datetime.fromisoformat(row["created_at"])
+    for item in read_controls():
+        if (item.get("text_sha256") != digest or item["binding_id"] != row["binding_id"]
+                or item["source"] != row["source"] or item["session_id"] != row["session_id"]
+                or datetime.fromisoformat(item["created_at"]) <= created):
+            continue
+        client_turn_id = item.get("prepared_client_turn_id")
+        if client_turn_id is None:
+            return True
+        # Core owns the durable queue receipt even if the outer journal has
+        # not finished its write. Never treat preparation alone as admission.
+        turn = read_turn_for_client(item["session_id"], client_turn_id)
+        if (turn is not None and turn.get("origin") == item["origin"]
+                and turn.get("_queue_original_message", turn.get("message")) == row["message"]
+                and turn.get("attachments") in (None, [])
+                and turn.get("external_agent_target") is None and turn.get("collaboration_request") is None):
+            return True
+    return False
+
+
+def file_change_fingerprint(path: Path) -> tuple[int, ...] | None:
+    """A local mutation token, or no reuse when the platform lacks one."""
+    # Windows stat ctime can be creation time, not a mutation stamp. Keep
+    # the original fresh reader there rather than trusting an mtime match.
+    if sys.platform == "win32":
+        return None
+    stat = path.stat()
+    return stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size
+
+
+class FileChatDiscovery:
+    """Keep only caller-selected metadata while the complete file is unchanged.
+
+    Native Chat uses this for terminal-Turn discovery and source-control fields.
+    Selected Turns/requests and every admission still use their original fresh
+    readers. No body, grant, queue decision or provider effect is retained here.
+    """
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._directories: dict[Path, dict[Path, tuple[tuple[int, ...], dict[str, Any]]]] = {}
+
+    def rows(self, directory: Path, paths: Iterable[Path], *,
+             read: Callable[[Path], dict[str, Any]],
+             project: Callable[[Path, dict[str, Any]], dict[str, Any] | None],
+             ) -> Iterator[tuple[Path, dict[str, Any]]]:
+        seen = set()
+        with self._lock:
+            entries = self._directories.setdefault(directory, {})
+        for path in paths:
+            seen.add(path)
+            try:
+                before = file_change_fingerprint(path)
+            except OSError:
+                before = None
+            with self._lock:
+                saved = entries.get(path)
+                if before is None or saved is None or saved[0] != before:
+                    entries.pop(path, None)
+                    saved = None
+            if saved is not None:
+                yield path, deepcopy(saved[1])
+                continue
+            # Preserve the owning reader's missing/unreadable/strict behavior.
+            value = read(path)
+            view = project(path, value)
+            if before is not None and view is not None:
+                try:
+                    unchanged = file_change_fingerprint(path) == before
+                except OSError:
+                    unchanged = False
+                if unchanged:
+                    with self._lock:
+                        entries[path] = before, deepcopy(view)
+            yield path, value if view is None else view
+        with self._lock:
+            for path in entries.keys() - seen:
+                del entries[path]
+
+
+_REPLY_IMAGE_TYPES = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp",
+}
+_REPLY_IMAGE_SIGNATURES = {"image/png": b"\x89PNG\r\n\x1a\n", "image/jpeg": b"\xff\xd8\xff", "image/gif": b"GIF8"}
+REPLY_IMAGE_NAME_PATTERN = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,119}")
+
+
+def reply_image_directory(turn_id: str) -> Path:
+    """Return the sole workspace output directory for this exact Core Turn."""
+    if not re.fullmatch(r"[a-f0-9]{32}", turn_id):
+        raise ValueError("invalid reply image Turn")
+    return Path(".local/loopx-reply-images") / turn_id
+
+
+def reply_image_workspace(session: dict[str, Any], turn: dict[str, Any]) -> Path | None:
+    """Local image output belongs to an ordinary, bound-owner Lark project Turn."""
+    context = session.get("project_context") or {}
+    if (turn.get("origin") != "lark" or session.get("session_mode") != "managed_runtime"
+            or session.get("agent_id") != "codex" or context.get("audience") != "bound_owner"
+            or context.get("grant") != "workspace_write" or not context.get("workspace_path")
+            or session.get("steward_context")):
+        return None
+    return Path(context["workspace_path"]).resolve()
+
+
+def _check_reply_image(data: bytes, mime: str) -> None:
+    from ...chat_attachments import CHAT_IMAGE_MAX_BYTES
+
+    if not data or len(data) > CHAT_IMAGE_MAX_BYTES:
+        raise ValueError("reply image is empty or exceeds its size bound")
+    if not ((mime in _REPLY_IMAGE_SIGNATURES and data.startswith(_REPLY_IMAGE_SIGNATURES[mime]))
+            or (mime == "image/webp" and data[:4] == b"RIFF" and data[8:12] == b"WEBP")):
+        raise ValueError("unsupported reply image bytes")
+
+
+def reply_image_attachment(data: bytes, mime: str, index: int) -> dict[str, Any]:
+    _check_reply_image(data, mime)
+    return {"id": f"reply-image-{index}", "name": f"original-{index}.{mime.split('/')[1]}",
+            "mime_type": mime, "size": len(data),
+            "data_url": f"data:{mime};base64," + base64.b64encode(data).decode("ascii")}
+
+
+def read_reply_image(workspace: Path, turn_id: str, name: str) -> tuple[str, bytes]:
+    from ...control_plane.collaboration.result_files import _workspace_file
+
+    if not REPLY_IMAGE_NAME_PATTERN.fullmatch(name):
+        raise ValueError("invalid reply image name")
+    mime = _REPLY_IMAGE_TYPES.get(Path(name).suffix.lower())
+    if mime is None:
+        raise ValueError("unsupported reply image type")
+    ref = reply_image_directory(turn_id) / name
+    data = _workspace_file(workspace, ref)
+    _check_reply_image(data, mime)
+    return mime, data
+
+
+def capture_reply_image_plan(workspace: Path, turn_id: str, targets: list[str]) -> list[str | dict[str, Any] | None]:
+    """Pin exact local bytes without keeping host paths in Chat responses."""
+    from ...chat_attachments import CHAT_IMAGE_MAX_COUNT, CHAT_IMAGE_MAX_TOTAL_BYTES
+
+    if all(target.startswith("https://") for target in targets):
+        return []  # The original remote-image path remains authoritative.
+    if len(targets) > CHAT_IMAGE_MAX_COUNT:
+        return [None]
+    output_dir = workspace / reply_image_directory(turn_id)
+    result: list[str | dict[str, Any] | None] = []
+    total = 0
+    for target in targets:
+        if target.startswith("https://"):
+            result.append(target)
+            continue
+        try:
+            path = Path(unquote(target))
+            if path.parent != output_dir or ".." in path.parts:
+                raise ValueError("reply image is outside the current Turn's output directory")
+            _, data = read_reply_image(workspace, turn_id, path.name)
+            total += len(data)
+            if total > CHAT_IMAGE_MAX_TOTAL_BYTES:
+                raise ValueError("reply images exceed their aggregate size bound")
+            result.append({"name": path.name, "sha256": hashlib.sha256(data).hexdigest()})
+        except (OSError, ValueError):
+            result.append(None)
+    return result

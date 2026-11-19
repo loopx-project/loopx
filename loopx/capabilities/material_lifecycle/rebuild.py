@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ._validation import (
+    APPLY_STATUSES,
     capability_contract,
     check_record_keys,
     compact_text,
@@ -33,9 +34,6 @@ _REBUILT_ENTRY_FIELDS = {
     "target_rank",
 }
 _RANK_ANCHOR_FIELDS = {"material_ref", "rank"}
-_APPLY_STATUSES = {"applied", "no_change", "rejected", "rolled_back"}
-
-
 def _ordered_token_list(
     values: Sequence[Any],
     *,
@@ -404,7 +402,7 @@ def build_material_ranked_entry_rebuild_apply_receipt(
     """Record an owner-gated structural rebuild result."""
 
     normalized_status = compact_token(status, field="status")
-    if normalized_status not in _APPLY_STATUSES:
+    if normalized_status not in APPLY_STATUSES:
         raise ValueError(f"unsupported status: {normalized_status}")
     before = compact_token(before_revision, field="before_revision")
     after = compact_token(after_revision, field="after_revision")

@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from ..goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL
 from ..coordination.coordination_state_contract_generated import (
     ACTION_PORTFOLIO_PLANNING_PACKET_REQUEST_SCHEMA,
     ACTION_PORTFOLIO_PLANNING_PACKET_RESULT_SCHEMA,
@@ -55,7 +56,7 @@ def build_quota_planning_packet(
     goal_frontier_projection: Mapping[str, Any] | None,
     replan_selection_context: Mapping[str, Any] | None = None,
     source_status: Mapping[str, Any] | None = None,
-    planning_horizon_goal: bool = False,
+    planning_horizon_goal: bool = DEFAULT_PLANNING_HORIZON_GOAL,
 ) -> dict[str, Any]:
     """Project every requested planning lens through one TypeScript request."""
 
@@ -125,6 +126,9 @@ def qualify_action_selection(
     should_run: bool,
     normal_delivery_allowed: bool,
     delivery_preemptions: list[str],
+    scoped_fallback_todo_id: str | None = None,
+    quota_state: str | None = None,
+    goal_health_ok: bool = False,
 ) -> dict[str, Any]:
     """Adapt current Python projections into the TS-owned selection reducer."""
 
@@ -140,6 +144,9 @@ def qualify_action_selection(
                 "should_run": should_run,
                 "normal_delivery_allowed": normal_delivery_allowed,
                 "delivery_preemptions": delivery_preemptions,
+                "scoped_fallback_todo_id": scoped_fallback_todo_id,
+                "quota_state": quota_state,
+                "goal_health_ok": goal_health_ok,
             },
         )
     except EffectRuntimeRejected as exc:
@@ -159,6 +166,9 @@ def qualify_action_selection_from_inventory(
     should_run: bool,
     normal_delivery_allowed: bool,
     delivery_preemptions: list[str],
+    scoped_fallback_todo_id: str | None = None,
+    quota_state: str | None = None,
+    goal_health_ok: bool = False,
 ) -> dict[str, Any]:
     """Resolve the requested task class before invoking the typed reducer."""
 
@@ -186,6 +196,9 @@ def qualify_action_selection_from_inventory(
         should_run=should_run,
         normal_delivery_allowed=normal_delivery_allowed,
         delivery_preemptions=delivery_preemptions,
+        scoped_fallback_todo_id=scoped_fallback_todo_id,
+        quota_state=quota_state,
+        goal_health_ok=goal_health_ok,
     )
 
 

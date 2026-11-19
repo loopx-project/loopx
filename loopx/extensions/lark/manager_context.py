@@ -37,6 +37,7 @@ def opaque_digest(*values: Any) -> str:
 
 def manager_failure_reply(
     error: Exception | Mapping[str, Any], *, retry_info: Any = None,
+    preparation_recovery: bool = False, phase_events: list[dict[str, Any]] | None = None,
 ) -> tuple[str, str]:
     labels = {
         "cyber_policy": "上游安全策略拦截",
@@ -52,13 +53,14 @@ def manager_failure_reply(
         "hard_timeout": "处理超过时间限制",
         "interrupted": "处理已中断",
         "manager_authorization_unavailable": "当前连接的授权范围不可用",
-        # host_gate is a generic host failure. It does not establish whether
-        # quota, authentication, configuration, or another host condition failed.
+        # host_gate is a generic host failure.
+
         "host_gate": "执行器未能完成本次调用，请检查管家执行器的具体错误",
         "upstream_invalid_request": "上游拒绝了请求参数，请检查所选模型与 Codex CLI、账户的兼容性",
         "server_restarted": "管家服务在处理过程中重启",
         "runtime_unavailable": "本地运行环境初始化失败，请检查 LoopX 安装与运行配置，修复后重试",
         "resume_failed": "原 Agent 会话恢复失败，请检查执行器状态，修复后重试",
+        "model_auth_unavailable": "账户模型连接暂时不可用",
         "manager_channel_executor_rebind_required": (
             "管家的执行器已由本机设置更改，需要重新应用一次管家连接"
         ),
@@ -66,12 +68,39 @@ def manager_failure_reply(
             "管家连接自动重绑未能完成，旧连接已保留；请在连接设置中查看修复状态"
         ),
     }
-    code = str(
+    source_code = str(
         error.get("error_code", "")
         if isinstance(error, Mapping)
         else getattr(error, "error_code", "")
     )
-    code = code if code in labels else "processing_failed"
+    code = source_code if source_code in labels else "processing_failed"
+    events = phase_events or []
+    if code == "host_gate" and retry_info is None:
+        retry_info = next((event.get("payload", {}).get("retry", {}).get("codex_error_info")
+            for event in reversed(events) if event.get("kind") == "agent.phase"
+            and event.get("payload", {}).get("method") == "error"), None)
+    timeout_info = next((event.get("payload", {}).get("timeout")
+        for event in reversed(events) if event.get("kind") == "agent.phase"
+        and event.get("payload", {}).get("method") == "native/timeout"), None) if source_code == "response_timeout" else None
+    if source_code == "response_timeout" and isinstance(timeout_info, Mapping):
+        # Use only the adapter's typed observation. Do not infer the deadline
+        # from error prose or publish arbitrary host diagnostics.
+        kind = timeout_info.get("kind")
+        if isinstance(kind, str) and kind in {"idle", "hard"}:
+            label = "等待原生助手有效进展超时" if kind == "idle" else "原生助手达到本次执行时限"
+            count = timeout_info.get("native_error_count")
+            observed = "期间原生助手记录了调用错误。" if type(count) is int and count > 0 else ""
+            return code, (f"本次未能完成：{label}。{observed}"
+                          "没有生成完整答复，本次请求不会自动重放。")
+    if code == "manager_authorization_unavailable" and preparation_recovery:
+        return code, ("已收到你的消息，但本轮在准备授权上下文时失败。请求已保留；只有核验为模型调用前失败、"
+                      "连接恢复且没有后续重交时，原队列才会限次接续。可用 /status 查看状态。")
+    if code in {"model_auth_unavailable", "resume_failed"} and preparation_recovery:
+        return code, ("已收到你的消息，但本轮准备执行器连接时失败。请求已保留；只有核验为模型调用前失败、"
+                      "连接恢复且没有后续重交时，原队列才会按剩余次数接续。可用 /status 查看状态。")
+    if code == "server_restarted":
+        return code, ("处理被管家服务重启中断，原请求和会话已保留。系统会先核对原执行记录，"
+                      "符合条件的由原队列恢复结果回复；执行效果不明的操作不会直接重做。")
     # Old hosts can terminate with `other` after typed disconnect retries.
     # Describe that observed history without changing the terminal category,
     # inferring an authorization failure, or granting permission to replay.
@@ -81,7 +110,11 @@ def manager_failure_reply(
         return code, "上游响应流曾中断，自动重试后本轮仍未完成。没有生成完整答复，本次请求不会自动重放。"
     if code == "server_overloaded":
         return code, "当前模型繁忙，本轮未完成。请先查看 /status 与已有结果，再决定是否稍后重试；本次请求不会自动重放。"
-    return code, f"已收到你的消息，但本次未能完成：{labels.get(code, '管家处理失败')}。没有生成完整答复，本次请求不会自动重放。"
+    # This owner also supplies failure codes to group admission. Improve the
+    # display without promoting previously generic errors into routing input.
+    label = labels.get(code) or {"response_timeout": "等待助手响应超时",
+        "antigravity_step_error": "原生助手调用失败"}.get(source_code, "管家处理失败")
+    return code, f"已收到你的消息，但本次未能完成：{label}。没有生成完整答复，本次请求不会自动重放。"
 
 
 def session_turn_effect(route: Mapping[str, Any]) -> dict[str, Any]:
@@ -375,7 +408,7 @@ def manager_message(text: str, materials: object, *, reply_context: str = "") ->
     context = materials if isinstance(materials, list) else []
     lines = [
         "这是来自已绑定 Lark 管家群的已授权用户消息。请直接回答当前问题；"
-        "对已有授权的意图委托使用 context_handoff，直接交给目标 Agent 自主判断并推进，"
+        "对已有授权的意图委托使用 context_handoff；同时询问多位 Agent 时使用逐接收者完整简报数组，各自校验授权、投递及回传，直接交给目标 Agent 自主判断并推进，"
         "不要添加确认或直接替它改优先级。"
     ]
     if reply_context:

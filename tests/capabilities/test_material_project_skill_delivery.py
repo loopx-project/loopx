@@ -183,7 +183,11 @@ def test_generic_delivery_supports_every_registered_surface(
     source = _source(tmp_path)
     project = _project(tmp_path)
     surfaces = PROJECT_SKILL_SURFACES
+    assert "antigravity" in surfaces
     assert "kiro-cli" in surfaces
+    assert project_skill_target(project, "loopx-material", "antigravity") == (
+        project.resolve() / ".agent" / "skills" / "loopx-material"
+    )
 
     preview = install_project_skill(
         project,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -7,6 +8,7 @@ import signal
 import stat
 import subprocess
 import sys
+import threading
 import time
 from unittest.mock import Mock
 
@@ -14,10 +16,332 @@ import pytest
 
 import loopx.extensions.process_runtime as process_runtime
 from loopx.extensions.process_runtime import (
+    force_terminate_process,
+    retire_owned_process,
     remove_owned_tree,
     run_capped_process,
     terminate_process_tree,
+    write_process_stdin_before_deadline,
 )
+
+
+@pytest.mark.parametrize("written", [None, 0, 2])
+def test_partial_native_frame_retires_receiver_before_return(written) -> None:
+    process = Mock(spec=subprocess.Popen)
+    process.stdin = Mock()
+    process.stdin.write.return_value = written
+    process.poll.return_value = None
+    retired = []
+
+    def cancel() -> None:
+        retired.append(True)
+        process.poll.return_value = -9
+
+    with pytest.raises(OSError, match="incomplete native input frame"):
+        write_process_stdin_before_deadline(
+            process, "完整☃\n", deadline=time.monotonic() + 2, cancel_and_reap=cancel,
+        )
+    assert retired == [True] and process.poll() is not None
+    process.stdin.flush.assert_not_called()
+    process.stdin.close.assert_not_called()
+
+
+def test_complete_native_unicode_frame_uses_character_count() -> None:
+    process = Mock(spec=subprocess.Popen)
+    process.stdin = Mock()
+    text = "完整☃\n"
+    process.stdin.write.return_value = len(text)
+    cancel = Mock()
+    write_process_stdin_before_deadline(
+        process, text, deadline=time.monotonic() + 2, cancel_and_reap=cancel,
+    )
+    process.stdin.write.assert_called_once_with(text)
+    process.stdin.flush.assert_called_once_with()
+    process.stdin.close.assert_not_called()
+    cancel.assert_not_called()
+
+
+def test_failed_native_cancellation_still_observes_blocked_writer() -> None:
+    process = Mock(spec=subprocess.Popen)
+    process.stdin = Mock()
+    release = threading.Event()
+    writers = []
+
+    def blocked_write(text):
+        writers.append(threading.current_thread())
+        assert release.wait(timeout=5)
+        return len(text)
+
+    process.stdin.write.side_effect = blocked_write
+    failure = OSError("synthetic native cleanup failure")
+    try:
+        began = time.monotonic()
+        with pytest.raises(RuntimeError, match="writer did not drain") as raised:
+            write_process_stdin_before_deadline(
+                process, "frame\n", deadline=began + .1,
+                cancel_and_reap=Mock(side_effect=failure),
+            )
+        assert raised.value.__cause__ is failure
+        assert time.monotonic() - began < 2.5
+        process.stdin.close.assert_not_called()
+    finally:
+        release.set()
+        for writer in writers:
+            writer.join(timeout=2)
+            assert not writer.is_alive()
+
+
+@pytest.mark.parametrize("phase", ["write", "flush"])
+def test_native_stream_error_retires_receiver_before_propagation(phase) -> None:
+    process = Mock(spec=subprocess.Popen)
+    process.stdin = Mock()
+    process.stdin.write.return_value = len("frame\n")
+    failure = OSError("synthetic partial native stream error")
+    getattr(process.stdin, phase).side_effect = failure
+    process.poll.return_value = None
+    cancel = Mock(side_effect=lambda: setattr(process.poll, "return_value", -9))
+    with pytest.raises(OSError) as raised:
+        write_process_stdin_before_deadline(
+            process, "frame\n", deadline=time.monotonic() + 2, cancel_and_reap=cancel,
+        )
+    assert raised.value is failure and process.poll() is not None
+    cancel.assert_called_once_with()
+    process.stdin.close.assert_not_called()
+
+
+@pytest.mark.parametrize("outcome", ["success", "failed", "timeout", "missing", "unreaped_helper"])
+def test_windows_force_cleanup_reserves_bounded_original_receiver_reap(monkeypatch, outcome):
+    process = Mock(spec=subprocess.Popen)
+    helper = Mock(spec=subprocess.Popen)
+    process.pid, process.poll.return_value = 12345, None
+    helper.poll.return_value = None
+    clock, events = [0.0], []
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+
+    def taskkill(command, **kwargs):
+        assert command == ["taskkill", "/PID", "12345", "/T", "/F"]
+        assert kwargs == {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        events.append("tree-start")
+        if outcome == "missing":
+            raise FileNotFoundError("taskkill unavailable")
+        return helper
+
+    def helper_wait(*, timeout):
+        assert 0 < timeout <= .5
+        first = "tree-wait" not in events
+        events.append("tree-wait" if first else "tree-reap")
+        clock[0] += timeout
+        if outcome == "unreaped_helper" or (first and outcome == "timeout"):
+            raise subprocess.TimeoutExpired("taskkill", timeout)
+        helper.poll.return_value = int(outcome == "failed")
+        return helper.poll.return_value
+
+    def reap(*, timeout):
+        assert 0 < timeout <= (1 if outcome == "missing" else .5)
+        events.append("reap")
+        process.poll.return_value = -9
+        return -9
+
+    monkeypatch.setattr(subprocess, "Popen", taskkill)
+    helper.kill.side_effect = lambda: events.append("tree-kill")
+    helper.wait.side_effect = helper_wait
+    process.kill.side_effect = lambda: events.append("kill")
+    process.wait.side_effect = reap
+    if outcome == "success":
+        process_runtime._force_terminate_windows_process_tree(process, 1)
+    else:
+        with pytest.raises((RuntimeError, subprocess.TimeoutExpired, FileNotFoundError)):
+            process_runtime._force_terminate_windows_process_tree(process, 1)
+    assert events[-2:] == ["kill", "reap"] and process.poll() is not None
+    if outcome == "missing":
+        assert events == ["tree-start", "kill", "reap"]
+    else:
+        assert events.count("tree-start") == 1 and events.count("tree-reap") == 1
+        assert ("tree-kill" in events) == (outcome in {"timeout", "unreaped_helper"})
+
+
+def test_windows_exited_leader_does_not_certify_descendant_cleanup(monkeypatch):
+    monkeypatch.setattr(process_runtime.time, "monotonic", lambda: 0.0)
+    process = Mock(spec=subprocess.Popen)
+    process.poll.return_value = 0
+    taskkill = Mock()
+    monkeypatch.setattr(subprocess, "Popen", taskkill)
+    with pytest.raises(RuntimeError, match="unconfirmed after leader exit"):
+        process_runtime._force_terminate_windows_process_tree(process, .1)
+    taskkill.assert_not_called()
+    process.kill.assert_not_called()
+    assert 0 <= process.wait.call_args.kwargs["timeout"] <= .1
+
+
+def test_windows_force_cleanup_cannot_accept_an_unreaped_receiver(monkeypatch):
+    monkeypatch.setattr(process_runtime.time, "monotonic", lambda: 0.0)
+    process = Mock(spec=subprocess.Popen)
+    helper = Mock(spec=subprocess.Popen)
+    helper.wait.return_value, helper.poll.return_value = 0, 0
+    process.pid, process.poll.return_value = 12345, None
+    monkeypatch.setattr(subprocess, "Popen", Mock(return_value=helper))
+    process.wait.side_effect = subprocess.TimeoutExpired("native", .1)
+    with pytest.raises(subprocess.TimeoutExpired):
+        process_runtime._force_terminate_windows_process_tree(process, .1)
+    process.wait.assert_called_once()
+    assert 0 <= process.wait.call_args.kwargs["timeout"] <= .1
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group regression")
+def test_force_cleanup_darwin_observation_spends_only_remaining_budget(monkeypatch):
+    process = Mock(spec=subprocess.Popen)
+    process.pid, process.poll.return_value = 12345, 0
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(os, "killpg", Mock(side_effect=PermissionError("empty owned group")))
+    observer = Mock(spec=subprocess.Popen)
+    observer.communicate.return_value = ("1 S\n12345 Z\n", None)
+    observer.poll.return_value, observer.returncode = 0, 0
+    observer.args, observer.stdout = ["ps"], Mock()
+    monkeypatch.setattr(subprocess, "Popen", Mock(return_value=observer))
+    force_terminate_process(process, process_tree_owned=True, timeout=.1)
+    assert 0 < observer.communicate.call_args.kwargs["timeout"] <= .05
+    assert 0 <= observer.wait.call_args.kwargs["timeout"] <= .1
+    assert 0 <= process.wait.call_args.kwargs["timeout"] <= .1
+    process.kill.assert_not_called()
+
+
+def test_force_posix_observer_timeout_has_bounded_self_reap(monkeypatch):
+    observer = Mock(spec=subprocess.Popen)
+    observer.poll.return_value, observer.stdout = None, Mock()
+    clock = [0.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+
+    def collect(*, timeout):
+        assert 0 < timeout <= .05
+        clock[0] += timeout
+        raise subprocess.TimeoutExpired("ps", timeout)
+
+    observer.communicate.side_effect = collect
+    monkeypatch.setattr(subprocess, "Popen", Mock(return_value=observer))
+    with pytest.raises(subprocess.TimeoutExpired):
+        process_runtime._bounded_posix_group_snapshot(.1)
+    observer.kill.assert_called_once_with()
+    assert 0 < observer.wait.call_args.kwargs["timeout"] <= .05
+    observer.stdout.close.assert_called_once_with()
+
+
+class _NoStreamsProcess:
+    """Stand-in for a Popen whose pipes ``communicate`` already released."""
+
+    stdin = None
+    stdout = None
+    stderr = None
+
+
+def test_retire_owned_process_never_widens_a_sub_grace_budget(monkeypatch):
+    """A 20 ms cleanup stays inside 20 ms; it is not raised to a 50 ms floor."""
+
+    process = _NoStreamsProcess()
+    captured = {}
+
+    def record_termination(process, *, process_tree_owned, timeout):
+        captured["timeout"] = timeout
+        captured["owned"] = process_tree_owned
+
+    monkeypatch.setattr(process_runtime, "force_terminate_process", record_termination)
+    started = time.monotonic()
+    retire_owned_process(process, process_tree_owned=True, timeout=.02)
+    elapsed = time.monotonic() - started
+
+    assert captured["owned"] is True
+    assert 0 < captured["timeout"] <= .016
+    assert elapsed < .05
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf")])
+def test_force_cleanup_rejects_an_unbounded_or_invalid_budget(timeout):
+    process = Mock(spec=subprocess.Popen)
+    with pytest.raises(ValueError, match="positive and finite"):
+        force_terminate_process(process, process_tree_owned=True, timeout=timeout)
+    process.kill.assert_not_called()
+    process.wait.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", ["backpressure", "short_write", "partial_error"])
+def test_native_pipe_failure_reaps_receiver_and_writer_before_fence_release(tmp_path, failure):
+    ready, release, accepted = (tmp_path / name for name in ("ready", "release", "accepted"))
+    if failure != "backpressure":
+        release.touch()
+    peer = (
+        "import sys,time\nfrom pathlib import Path\n"
+        f"Path({str(ready)!r}).touch()\n"
+        f"while not Path({str(release)!r}).exists(): time.sleep(.01)\n"
+        "line=sys.stdin.readline()\n"
+        f"if line.endswith('\\n'): Path({str(accepted)!r}).write_text(line, encoding='utf-8')\n"
+    )
+    process = subprocess.Popen(
+        [sys.executable, "-c", peer], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
+        start_new_session=os.name == "posix",
+        creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0,
+    )
+    stream = process.stdin
+    assert stream is not None
+    writers, retired = [], []
+    fence = threading.Lock()
+
+    class NativeInput:
+        def write(self, text):
+            writers.append(threading.current_thread())
+            if failure == "backpressure":
+                return stream.write(text)
+            stream.write(text[:32])
+            stream.flush()
+            if failure == "partial_error":
+                raise BrokenPipeError("synthetic failure after a real partial send")
+            return 32
+
+        def flush(self):
+            stream.flush()
+
+    process.stdin = NativeInput()
+
+    def cancel() -> None:
+        assert fence.locked()
+        force_terminate_process(process, process_tree_owned=True)
+        retired.append(process.returncode)
+
+    def stop() -> int:
+        with fence:
+            assert process.poll() is not None
+            assert all(not writer.is_alive() for writer in writers)
+            return process.returncode
+
+    try:
+        ready_deadline = time.monotonic() + 5
+        while not ready.exists() and process.poll() is None and time.monotonic() < ready_deadline:
+            time.sleep(.01)
+        assert ready.exists()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            with fence:
+                stopped = executor.submit(stop)
+                began = time.monotonic()
+                expected = TimeoutError if failure == "backpressure" else OSError
+                with pytest.raises(expected):
+                    write_process_stdin_before_deadline(
+                        process, "完整☃" * (1024 * 1024) + "\n",
+                        deadline=began + .1, cancel_and_reap=cancel,
+                    )
+                assert time.monotonic() - began < 2.5
+                assert retired == [process.returncode] and process.poll() is not None
+                assert writers and all(not writer.is_alive() for writer in writers)
+                assert not stopped.done()
+            assert stopped.result(timeout=2) == process.returncode
+        assert not accepted.exists()
+    finally:
+        release.touch()
+        if process.poll() is None:
+            force_terminate_process(process, process_tree_owned=True)
+        for writer in writers:
+            writer.join(timeout=2)
+            assert not writer.is_alive()
+        stream.close()
+    assert not accepted.exists()
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX process-group regression")

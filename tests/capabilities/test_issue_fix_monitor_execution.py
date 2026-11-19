@@ -168,11 +168,11 @@ def test_cli_runtime_override_keeps_reconciliation_on_selected_authority(tmp_pat
     from loopx.cli import main
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.todos import list_goal_todos
-    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
     project, state, registry = _fixture(tmp_path)
     runtime = tmp_path / "selected-runtime"
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    todos = list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"]
+    todos = read_fixture_todos(state)
     initialize_canonical_authority(runtime, GOAL_ID,
         build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos, leases=[], handoff_mode="hard_lease"),
         state_path=state, provider=provider)

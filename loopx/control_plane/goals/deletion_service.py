@@ -7,7 +7,6 @@ from contextlib import ExitStack
 import hashlib
 import os
 from pathlib import Path
-import re
 import shutil
 from typing import Any
 import uuid
@@ -25,6 +24,7 @@ from ...file_lock import (
     lock_incident_path,
 )
 from ...history import load_registry
+from ...public_safe_text import OPAQUE_ID_PATTERN as _OPAQUE_ID
 from ...registry import atomic_write_json, read_json
 from ...registry_writability import probe_registry_write_path
 from ..coordination.shadow_management import shadow_maintenance_lock_target
@@ -48,7 +48,6 @@ GOAL_DELETION_STATE_FINGERPRINT_SCHEMA_VERSION = (
     "loopx_goal_deletion_state_fingerprint_v1"
 )
 GOAL_DELETION_RECOVERY_SCHEMA_VERSION = "loopx_goal_deletion_recovery_v1"
-_OPAQUE_ID = re.compile(r"^[A-Za-z0-9._:-]{1,200}$")
 _MAX_RECOVERY_RECEIPT_BYTES = 64 * 1024
 
 

@@ -1,0 +1,14 @@
+.source-goal-document { margin-block: 0 20px; }
+.source-goal-document > summary { display: flex; gap: 8px; align-items: center; width: fit-content; cursor: pointer; min-height: 36px; }
+.source-goal-document[open] > summary .source-document-chevron { transform: rotate(90deg); }
+.source-goal-document > section { border-block: 1px solid var(--pw-line); padding-block: 20px; margin-top: 8px; min-width: 0; }
+.source-goal-document header { display: flex; gap: 12px; align-items: center; }
+.source-goal-document header h2 { margin: 0; }
+.source-goal-document header > button { margin-left: auto; }
+.source-goal-document button { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; min-width: 44px; padding: 8px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-bg); color: var(--pw-text); font: inherit; cursor: pointer; }
+.source-goal-document article { max-width: 80ch; font-size: 16px; line-height: 1.7; overflow-wrap: anywhere; }
+.goal-research-workbench .source-goal-document article .personal-md { font-size: var(--text-lead); line-height: var(--leading-prose); }
+.source-goal-document article pre, .source-goal-document-provenance pre { max-width: 100%; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.source-goal-document-provenance { margin-top: 24px; font-size: 14px; }
+.source-goal-document-provenance dd { margin-inline-start: 0; overflow-wrap: anywhere; }
+.source-goal-document-provenance pre { font-size: 14px; line-height: 1.6; }

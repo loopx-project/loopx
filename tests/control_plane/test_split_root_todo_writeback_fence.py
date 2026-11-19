@@ -17,7 +17,6 @@ import pytest
 from canonical_authority_fixture import initialize_canonical_authority
 from loopx.cli import main
 from loopx.cli_commands.turn_todo_writeback import (
-    write_turn_repair_update,
     write_turn_validated_completion,
 )
 from loopx.control_plane.coordination.local_authority import CanonicalAuthorityRequired
@@ -25,6 +24,7 @@ from loopx.control_plane.coordination.runtime_shadow import (
     build_todo_runtime_shadow_projection,
 )
 from loopx.control_plane.quota import monitor_poll
+from loopx.control_plane.todos.mutation_api import update_goal_todo
 from loopx.control_plane.scheduler.monitor_poll_writeback import (
     write_monitor_poll_todo_state,
 )
@@ -319,7 +319,7 @@ def test_read_only_quota_still_collects_unmigrated_state(
     assert context.status_payload["runtime_root"] == str(runtime_override)
 
 
-def test_turn_repair_update_blocked_without_canonical_override(
+def test_explicit_todo_update_blocked_without_canonical_override(
     tmp_path: Path,
 ) -> None:
     registry, state, runtime_registry, runtime_override = (
@@ -328,7 +328,7 @@ def test_turn_repair_update_blocked_without_canonical_override(
     before = state.read_bytes()
 
     with pytest.raises(CanonicalAuthorityRequired) as error:
-        write_turn_repair_update(
+        update_goal_todo(
             registry_path=registry,
             runtime_root_arg=str(runtime_override),
             goal_id=GOAL_ID,
@@ -360,24 +360,27 @@ def test_turn_validated_completion_blocked_without_canonical_override(
     )
     before = state.read_bytes()
 
-    with pytest.raises(CanonicalAuthorityRequired) as error:
-        write_turn_validated_completion(
-            registry_path=registry,
-            runtime_root_arg=str(runtime_override),
-            goal_id=GOAL_ID,
-            todo_id=ADVANCE_ID,
-            completion_turn_key="turn_splitroot_0001",
-            evidence="LoopX Turn validated completion: slice merged",
-            note="advance to the next bounded slice",
-            agent_id=AGENT_ID,
-        )
+    rejected = write_turn_validated_completion(
+        registry_path=registry,
+        runtime_root_arg=str(runtime_override),
+        goal_id=GOAL_ID,
+        todo_id=ADVANCE_ID,
+        completion_turn_key="turn_splitroot_0001",
+        evidence="LoopX Turn validated completion: slice merged",
+        note="advance to the next bounded slice",
+        agent_id=AGENT_ID,
+    )
 
-    assert error.value.code == "canonical_authority_required"
-    assert error.value.payload["operation"] == "todo_terminal"
-    assert error.value.payload["write_admitted"] is False
-    assert error.value.payload["decision_read_from_provider"] is False
-    assert error.value.payload["legacy_fallback_used"] is False
-    assert error.value.payload["recovery"] == {
+    assert rejected["ok"] is False
+    assert rejected["appended"] is False
+    assert rejected["completed"] is False
+    assert rejected["reason_code"] == "canonical_authority_required"
+    assert "back up and migrate this Goal" in rejected["reason"]
+    assert rejected["operation"] == "todo_terminal"
+    assert rejected["write_admitted"] is False
+    assert rejected["decision_read_from_provider"] is False
+    assert rejected["legacy_fallback_used"] is False
+    assert rejected["recovery"] == {
         "action": "migrate_goal_authority",
         "backup_required": True,
     }
@@ -425,7 +428,7 @@ def test_turn_validated_completion_blocked_without_canonical_override(
     assert payload["write_admitted"] is False
     assert payload["decision_read_from_provider"] is False
     assert payload["legacy_fallback_used"] is False
-    assert payload["recovery"] == error.value.payload["recovery"]
+    assert payload["recovery"] == rejected["recovery"]
     assert state.read_bytes() == before
     assert not (runtime_override / "authority").exists()
     assert not (runtime_registry / "authority").exists()

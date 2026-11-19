@@ -9,12 +9,16 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+from contextlib import ExitStack
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "tests"))
+
+from managed_effect_runtime_fixture import stop_disposable_effect_runtimes  # noqa: E402
 
 from loopx import __version__  # noqa: E402
 from loopx.cli import build_parser  # noqa: E402
@@ -26,7 +30,7 @@ from loopx.help_surface import (  # noqa: E402
 )
 
 
-LONG_TAIL_COMMAND = "codex-cli-visible-first-response-capture-plan"
+LONG_TAIL_COMMAND = "configuration-backup"
 
 
 def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
@@ -151,8 +155,11 @@ def assert_installer_manpage_surface() -> None:
     script = REPO_ROOT / "scripts" / "install-local.sh"
     subprocess.run(["bash", "-n", str(script)], check=True)
 
-    with tempfile.TemporaryDirectory(prefix="loopx-help-manpage-smoke-") as raw_tmp:
+    with tempfile.TemporaryDirectory(prefix="loopx-help-manpage-smoke-") as raw_tmp, ExitStack() as cleanup:
         tmp = Path(raw_tmp)
+        temporary = tmp / "temporary"
+        temporary.mkdir()
+        cleanup.callback(stop_disposable_effect_runtimes, tmp)
         home = tmp / "home"
         bin_dir = home / ".local" / "bin"
         man_root = home / ".local" / "share" / "man"
@@ -172,6 +179,9 @@ def assert_installer_manpage_surface() -> None:
             "LOOPX_RELEASE_ID": "help-manpage-smoke-release",
             "PATH": os.environ.get("PATH", ""),
             "SHELL": "/bin/zsh",
+            "TMPDIR": str(temporary),
+            "TEMP": str(temporary),
+            "TMP": str(temporary),
         }
 
         help_result = subprocess.run(

@@ -27,6 +27,9 @@ SELECTED_TODO_COMPACT_FIELDS = (
     "blocks_agent",
     "excluded_agents",
     "unblocks_todo_id",
+    "resume_when",
+    "resume_ready",
+    "resume_condition",
     "target_key",
     "next_due_at",
     "expires_at",
@@ -96,18 +99,6 @@ def selected_todo_projection(
         "source": "work_lane_contract.selected_todo_id",
         "todo_id": selected_todo_id,
     }
-
-
-def first_todo_id_from_items(value: Any) -> str | None:
-    if not isinstance(value, list):
-        return None
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        todo_id = normalize_todo_id(item.get("todo_id") or item.get("id"))
-        if todo_id:
-            return todo_id
-    return None
 
 
 def _compact_selected_todo(

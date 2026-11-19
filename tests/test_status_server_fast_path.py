@@ -27,7 +27,7 @@ def _status_server(tmp_path: Path, *, reward_write_enabled: bool = False) -> Ite
     registry.write_text(json.dumps({"goals": []}) + "\n", encoding="utf-8")
     server = StatusHTTPServer(("127.0.0.1", 0), StatusRequestHandler)
     server.registry_path = registry
-    server.runtime_root_override = None
+    server.runtime_root_override = str(tmp_path / "runtime")
     server.scan_roots = [tmp_path]
     server.limit = 80
     server.status_path = DEFAULT_STATUS_PATH
@@ -54,22 +54,17 @@ def test_status_endpoint_defers_repository_boundary_scan(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[dict[str, object]] = []
+    def unexpected_scan(*args, **kwargs):
+        pytest.fail("operational status opened public scan inputs")
 
-    def fake_collect_status(**kwargs: object) -> dict[str, object]:
-        calls.append(kwargs)
-        return {"ok": True, "contract": {"ok": True}}
-
-    monkeypatch.setattr("loopx.status_server.collect_status", fake_collect_status)
+    monkeypatch.setattr("loopx.contract.scan_public_boundary", unexpected_scan)
 
     with _status_server(tmp_path) as base_url:
         with urllib.request.urlopen(f"{base_url}{DEFAULT_STATUS_PATH}", timeout=5) as response:
             payload = json.loads(response.read().decode("utf-8"))
 
     assert payload["ok"] is True
-    assert len(calls) == 1
-    assert calls[0]["include_public_boundary_scan"] is False
-    assert calls[0]["include_goal_subagent_configuration"] is False
+    assert any("public boundary scan deferred" in check for check in payload["contract"]["checks"])
 
 
 def test_status_keeps_its_startup_identity_after_package_replacement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

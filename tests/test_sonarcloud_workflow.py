@@ -126,7 +126,9 @@ def test_separate_trusted_cleanup_does_not_activate_analysis() -> None:
     caller = yaml.load(WORKFLOW.with_name("python-tests.yml").read_text(), Loader=yaml.BaseLoader)
     maintenance = yaml.load(WORKFLOW.with_name("ci-maintenance.yml").read_text(), Loader=yaml.BaseLoader)
     assert "pull_request_target" not in caller["on"]
-    assert maintenance["on"]["pull_request_target"]["types"] == ["closed", "synchronize"]
+    assert set(maintenance["on"]["pull_request_target"]["types"]) == {
+        "closed", "synchronize", "opened", "reopened", "edited",
+    }
     for job in maintenance["jobs"].values():
         assert "uses" not in job and "secrets" not in job
         assert all(not step.get("uses", "").startswith("actions/checkout@") for step in job["steps"])

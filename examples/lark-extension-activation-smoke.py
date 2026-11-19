@@ -104,6 +104,17 @@ with tempfile.TemporaryDirectory(prefix="loopx-lark-extension-") as raw_temp:
         ),
         encoding="utf-8",
     )
+    # Capability availability is tested on a valid canonical Goal, independently
+    # of the explicit unmigrated-Goal refusal covered by authority smokes.
+    state = project / "STATE.md"
+    state.write_text("# Extension fixture\n\n## Objective\nObserve local extension availability.\n\n## Next Action\nInspect installed extension availability.\n\n## User Todo / Owner Review Reading Queue\n\n## Agent Todo\n")
+    data = json.loads(registry.read_text())
+    data["common_runtime_root"] = str(runtime_root)
+    data["goals"][0]["state_file"] = state.name
+    registry.write_text(json.dumps(data))
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+    import_fixture_authority(registry, "lark-extension-fixture", provider="sqlite")
+
     drain_args = (
         "lark-inbox",
         "drain",

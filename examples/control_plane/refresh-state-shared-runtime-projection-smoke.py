@@ -27,6 +27,7 @@ from loopx.control_plane.runtime.runtime_projection_route import (  # noqa: E402
 from loopx import doctor as doctor_module  # noqa: E402
 from loopx import paths as paths_module  # noqa: E402
 from loopx.paths import global_registry_path  # noqa: E402
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
 from loopx.presentation.renderers.status_markdown import (  # noqa: E402
     render_status_markdown,
 )
@@ -48,6 +49,7 @@ def run_cli(*args: str, cwd: Path, shared_runtime: Path) -> dict:
             **os.environ,
             "PYTHONPATH": str(REPO_ROOT),
             "LOOPX_RUNTIME_ROOT": str(shared_runtime),
+            "LOOPX_CONTEXT_DELIVERY": "off",
         },
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -67,6 +69,7 @@ def run_cli_failure(*args: str, cwd: Path, shared_runtime: Path) -> dict:
             **os.environ,
             "PYTHONPATH": str(REPO_ROOT),
             "LOOPX_RUNTIME_ROOT": str(shared_runtime),
+            "LOOPX_CONTEXT_DELIVERY": "off",
         },
     )
     assert result.returncode != 0, result.stdout + result.stderr
@@ -92,6 +95,8 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
     goal = {
         "id": GOAL_ID,
         "domain": "refresh-state-shared-runtime-smoke",
+        # This fixture qualifies routing/writeback, not a Stride review.
+        "execution_profile": {"stride_strategy": "off"},
         "status": "active",
         "repo": str(project),
         "state_file": str(state_file.relative_to(project)),
@@ -136,6 +141,8 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
         + "\n",
         encoding="utf-8",
     )
+    import_fixture_authority(source_registry, GOAL_ID)
+    import_fixture_authority(shared_registry, GOAL_ID)
     return project, project_runtime, source_registry, shared_registry
 
 
@@ -175,6 +182,7 @@ def write_route_source(
         + "\n",
         encoding="utf-8",
     )
+    import_fixture_authority(registry, goal_id)
     return registry, goal_id
 
 
@@ -644,6 +652,15 @@ def main() -> None:
         audit = quota["interaction_contract"]["agent_channel"][
             "vision_continuation_audit"
         ]
+        if "projection_ref" in audit:
+            # Complete decisions retain the full audit once in the same capture.
+            assert quota["schema_version"] == "loopx_turn_envelope_v1"
+            assert audit["projection_ref"] == "$.vision_continuation_audit"
+            owner = quota["vision_continuation_audit"]
+            assert "projection_ref" not in owner
+            assert audit["required"] == owner["required"]
+            assert audit["decision"] == owner["decision"]
+            audit = owner
         assert audit["acceptance_gaps"][0]["acceptance_summary"] == VISION_ACCEPTANCE
 
     print("refresh-state shared-runtime projection smoke passed")

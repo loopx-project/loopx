@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import re
-from typing import Any
 
 from .control_plane.goals.goal_vision_policy import (
     completed_todo_replan_threshold,
@@ -159,6 +160,11 @@ def compact_execution_profile(value: Any) -> dict[str, Any]:
             raise ValueError("planning_horizon_goal must be a boolean")
         profile["planning_horizon_goal"] = value["planning_horizon_goal"]
 
+    if "yardstick_enabled" in value:
+        if not isinstance(value["yardstick_enabled"], bool):
+            raise ValueError("yardstick_enabled must be a boolean")
+        profile["yardstick_enabled"] = value["yardstick_enabled"]
+
     if "stride_strategy" in value:
         from .control_plane.work_items.stride_policy_codec import normalize_stride_strategy
         profile["stride_strategy"] = normalize_stride_strategy(value["stride_strategy"])
@@ -185,7 +191,7 @@ def compact_execution_profile(value: Any) -> dict[str, Any]:
     profile["must_include"] = _label_list(value.get("must_include"), list(profile["must_include"]))
     profile["spend_rule"] = _label(value.get("spend_rule"), str(profile["spend_rule"]))
 
-    raw_policy = value.get("degradation_policy") if isinstance(value.get("degradation_policy"), dict) else {}
+    raw_policy = cast(dict[str, Any], value.get("degradation_policy")) if isinstance(value.get("degradation_policy"), dict) else {}
     policy = dict(profile["degradation_policy"])
     policy["small_scale_streak_threshold"] = _positive_int(
         raw_policy.get("small_scale_streak_threshold"),
@@ -194,7 +200,7 @@ def compact_execution_profile(value: Any) -> dict[str, Any]:
     policy["on_degradation"] = _label(raw_policy.get("on_degradation"), str(policy["on_degradation"]))
     profile["degradation_policy"] = policy
 
-    raw_floor = value.get("outcome_floor") if isinstance(value.get("outcome_floor"), dict) else {}
+    raw_floor = cast(dict[str, Any], value.get("outcome_floor")) if isinstance(value.get("outcome_floor"), dict) else {}
     floor = dict(profile["outcome_floor"])
     floor["required_when"] = _label(raw_floor.get("required_when"), str(floor["required_when"]))
     floor["surface_streak_threshold"] = _positive_int(
@@ -256,6 +262,8 @@ def apply_goal_execution_profile_change(
     clear_stride_strategy: bool = False,
     planning_horizon_goal: bool | None = None,
     clear_planning_horizon_goal: bool = False,
+    yardstick_enabled: bool | None = None,
+    clear_yardstick_enabled: bool = False,
 ) -> None:
     if (
         clear_replan_after_completed_todos
@@ -273,10 +281,14 @@ def apply_goal_execution_profile_change(
         raise ValueError("choose a stride strategy override or clear operation")
     if planning_horizon_goal is not None and clear_planning_horizon_goal:
         raise ValueError("choose a planning horizon Goal override or clear operation")
+    if yardstick_enabled is not None and clear_yardstick_enabled:
+        raise ValueError("choose a Yardstick override or clear operation")
     raw = goal.get("execution_profile")
     profile = dict(raw) if isinstance(raw, dict) else {}
     if (
-        planning_horizon_goal is None
+        yardstick_enabled is None
+        and not (clear_yardstick_enabled and "yardstick_enabled" in profile)
+        and planning_horizon_goal is None
         and not clear_planning_horizon_goal
         and stride_strategy is None
         and not clear_stride_strategy
@@ -287,6 +299,10 @@ def apply_goal_execution_profile_change(
         and not (clear_replan_after_completed_todos and "replan_after_completed_todos" in profile)
     ):
         return
+    if clear_yardstick_enabled:
+        profile.pop("yardstick_enabled", None)
+    if yardstick_enabled is not None:
+        profile["yardstick_enabled"] = yardstick_enabled
     if clear_planning_horizon_goal:
         profile.pop("planning_horizon_goal", None)
     if planning_horizon_goal is not None:
@@ -355,7 +371,7 @@ def execution_profile_with_turn_granularity(
 
 def execution_profile_threshold(profile: dict[str, Any] | None) -> int:
     normalized = compact_execution_profile(profile)
-    policy = normalized.get("degradation_policy") if isinstance(normalized.get("degradation_policy"), dict) else {}
+    policy = cast(dict[str, Any], normalized.get("degradation_policy")) if isinstance(normalized.get("degradation_policy"), dict) else {}
     return _positive_int(
         policy.get("small_scale_streak_threshold"),
         int(DEFAULT_EXECUTION_PROFILE["degradation_policy"]["small_scale_streak_threshold"]),
@@ -364,7 +380,7 @@ def execution_profile_threshold(profile: dict[str, Any] | None) -> int:
 
 def execution_profile_outcome_floor(profile: dict[str, Any] | None) -> dict[str, Any]:
     normalized = compact_execution_profile(profile)
-    floor = normalized.get("outcome_floor") if isinstance(normalized.get("outcome_floor"), dict) else {}
+    floor = cast(dict[str, Any], normalized.get("outcome_floor")) if isinstance(normalized.get("outcome_floor"), dict) else {}
     return dict(floor)
 
 
@@ -378,11 +394,11 @@ def outcome_floor_threshold(profile: dict[str, Any] | None) -> int:
 
 def execution_profile_summary(profile: dict[str, Any] | None) -> str:
     normalized = compact_execution_profile(profile)
-    policy = normalized.get("degradation_policy") if isinstance(normalized.get("degradation_policy"), dict) else {}
-    floor = normalized.get("outcome_floor") if isinstance(normalized.get("outcome_floor"), dict) else {}
+    policy = cast(dict[str, Any], normalized.get("degradation_policy")) if isinstance(normalized.get("degradation_policy"), dict) else {}
+    floor = cast(dict[str, Any], normalized.get("outcome_floor")) if isinstance(normalized.get("outcome_floor"), dict) else {}
     floor_suffix = ""
-    outcome_markers = floor.get("outcome_markers") if isinstance(floor.get("outcome_markers"), list) else []
-    surface_hints = floor.get("surface_only_hints") if isinstance(floor.get("surface_only_hints"), list) else []
+    outcome_markers = cast(list[Any], floor.get("outcome_markers")) if isinstance(floor.get("outcome_markers"), list) else []
+    surface_hints = cast(list[Any], floor.get("surface_only_hints")) if isinstance(floor.get("surface_only_hints"), list) else []
     if outcome_markers or surface_hints:
         floor_suffix = (
             " "

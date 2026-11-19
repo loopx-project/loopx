@@ -45,7 +45,10 @@ export type GoalHostThread = {
   agentId?: string | null;
   hostSurface: string;
   state: "turn_open" | "idle" | "archived" | "unknown";
+  /** Host-owned read failure, distinct from the cadence window's reason. */
+  reason?: string | null;
   lastEventAt: string | null;
+  turnStartedAt?: string | null;
   deliveryWindow?: {
     state: "fresh" | "stale" | "missing" | "unknown";
     reason?: string | null;
@@ -100,6 +103,10 @@ export function goalExecution(
   const open = (sessions ?? []).filter((session) => session.goal_id === goalId && session.status !== "closed");
   const active = open.filter((session) => Boolean(session.active_turn_id));
   if (active.length === 0 && hostTurns.length === 0) {
+    // An idle managed-session list cannot establish that unreadable or omitted
+    // host lanes are idle. Keep their coverage gap independent of other lanes.
+    if (hostThreadActivity && (hostThreadActivity.completeness !== "complete"
+      || hostThreadActivity.threads.some((thread) => thread.state !== "idle" && thread.state !== "archived"))) return { kind: "unknown" };
     if (sessions === undefined) return undefined;
     return sessions === null ? { kind: "unknown" } : { kind: "idle", hostSurfaces: hostSurfacesOf(open) };
   }
@@ -149,18 +156,23 @@ export function goalHostSurfaces(goal: Pick<GoalActivityInput, "boundHostSurface
   return Array.from(new Set([...(goal.boundHostSurfaces ?? []), ...attached]));
 }
 
-/** Cadence evidence shown separately from execution; unknown/no-expectation is not an alert. */
-export function goalHostDeliveryWindows(goal: Pick<GoalActivityInput, "hostThreadActivity">) {
-  const windows = (goal.hostThreadActivity?.threads ?? [])
-    .filter((thread) => thread.deliveryWindow?.state === "stale" || thread.deliveryWindow?.state === "missing" || thread.deliveryWindow?.state === "fresh")
-    .map((thread) => ({
-      agentId: thread.agentId ?? null,
-      hostSurface: thread.hostSurface,
-      state: thread.deliveryWindow!.state as "fresh" | "stale" | "missing",
-      ageHours: thread.deliveryWindow?.ageHours ?? null,
-    }));
-  const rank = { stale: 0, missing: 1, fresh: 2 } as const;
-  return windows.sort((a, b) => rank[a.state] - rank[b.state]);
+/** Local presentation counts. A missing lane
+ * cannot erase another lane's observed execution or recent completed turn. */
+export function goalObservationGaps(goal: Pick<GoalActivityInput, "hostThreadActivity">) {
+  const observation = goal.hostThreadActivity;
+  const threads = observation?.threads ?? [];
+  let missing = 0, stale = 0;
+  for (const thread of threads) {
+    if (thread.state === "unknown" || thread.deliveryWindow?.state === "missing"
+      || (thread.state === "turn_open" && (!thread.lastEventAt || Number.isNaN(Date.parse(thread.lastEventAt))))
+      || thread.deliveryWindow?.reason === "unparseable_observation") missing++;
+    else if (thread.deliveryWindow?.state === "stale") stale++;
+  }
+  return {
+    missing, stale,
+    incomplete: observation?.completeness === "incomplete",
+    unavailable: threads.length > 0 && missing === threads.length,
+  };
 }
 
 export type GoalActivityTone = "running" | "attention" | "danger" | "waiting" | "queued" | "quiet" | "stopped";
@@ -214,6 +226,9 @@ export function presentGoalActivity(goal: GoalActivityInput): GoalActivity {
   if (work === "unrecognized") return { labelKey: "activity.modeUnrecognized", tone: "attention", live: false, alsoKey: null };
   if (work === "executing") return { labelKey: "activity.running", tone: live ? "running" : "attention", live, alsoKey: modeAlsoKey };
   if (goal.state === "等待条件") return { labelKey: "state.waiting", tone: "waiting", live: false, alsoKey: null };
+  if (goal.execution?.kind === "unknown" && goal.hostThreadActivity && goal.state !== "已完成") {
+    return { labelKey: "activity.observationUnavailable", tone: "queued", live: false, alsoKey: null };
+  }
   if (goal.state === "已安排") {
     const hostThreads = goal.hostThreadActivity?.threads ?? [];
     const hostsIdle = goal.hostThreadActivity?.completeness === "complete"
@@ -230,6 +245,21 @@ export function presentGoalActivity(goal: GoalActivityInput): GoalActivity {
 const identityHues = [212, 262, 330, 24, 150, 190, 44, 290] as const;
 
 /** Stable, readable identity for scanning; never a status signal. */
+/** The most recent live fact, with a start only if tied to that observed host turn. */
+export function observedLiveTurnClock(goal: GoalActivityInput, now = Date.now()) {
+  if (!presentGoalActivity(goal).live || goal.execution?.kind !== "running") return null;
+  const parseClock = (value: string | null | undefined) => value && /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)
+    ? Date.parse(value) : Number.NaN;
+  const lastActivityAt = goal.execution.lastActivityAt;
+  const last = parseClock(lastActivityAt);
+  if (!lastActivityAt || !Number.isFinite(last) || last > now || now - last > quietTurnMinutes * 60_000) return null;
+  const matchingThreads = openHostTurns(goal.hostThreadActivity?.threads ?? [], now)
+    .filter(thread => thread.lastEventAt === lastActivityAt);
+  const start = matchingThreads.length === 1 ? matchingThreads[0]?.turnStartedAt : null;
+  const startMs = parseClock(start);
+  return {lastActivityAt, startedAt: Number.isFinite(startMs) && startMs <= last ? start ?? null : null};
+}
+
 export function goalIdentity(goalId: string, title: string): { glyph: string; hue: number } {
   let hash = 2_166_136_261;
   for (const character of goalId) {

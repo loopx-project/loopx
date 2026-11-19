@@ -1,0 +1,165 @@
+{
+  "goal_id": "synthetic-case-search",
+  "parent_goal_id": "synthetic-benchmark",
+  "display_name": "Search · Case 研究",
+  "events": [],
+  "analyses": [
+    {
+      "title": "初版解读",
+      "input": {
+        "schema_version": "trajectory_assessment_input_v1",
+        "scope": {
+          "goal_id": "synthetic-solver",
+          "case_id": "Search",
+          "run_id": "synthetic-run",
+          "revision": "fixed-synthetic-evidence",
+          "window": "Three synthetic observations"
+        },
+        "objective": "Compare valid error measurements without inventing retention or causality.",
+        "selection": {
+          "rule": "Complete synthetic illustration",
+          "population_episodes": 1,
+          "exhaustive": true
+        },
+        "sources": [
+          {
+            "id": "facts",
+            "artifact": "facts.txt",
+            "artifact_sha256": "2dec56af0cdca4e603227b1a42b56d15c2ccec3ad4973bd2b34d2d94122aeb91",
+            "first_line": 1,
+            "text": "Synthetic candidate A measured error 7 points.\nSynthetic candidate B was invalid and has no score.\nSynthetic candidate C measured error 3 points.\nRetention and matched treatment controls were not captured."
+          }
+        ],
+        "episodes": [
+          {
+            "id": "search",
+            "question": "What changed and what is still unknown?",
+            "source_ids": [
+              "facts"
+            ],
+            "eligible_metrics": [
+              "benefit_test"
+            ]
+          }
+        ]
+      },
+      "artifacts": {
+        "facts.txt": "Synthetic candidate A measured error 7 points.\nSynthetic candidate B was invalid and has no score.\nSynthetic candidate C measured error 3 points.\nRetention and matched treatment controls were not captured."
+      },
+      "case_study": {
+        "title": "搜索示例：误差下降了，是否真正采用仍未知",
+        "language": "zh",
+        "summary": "合成观测中，后续候选把误差从 **7 分降至 3 分**，中间还有一次无效候选。这个变化值得研究，但不能直接称作最终交付，更不能当成 LoopX 的因果收益。\n\n理解本案需要分开三个问题：怎样算更好，测到了什么，以及改善是否真的留在最终成果里。下面按这个顺序解释，原始事实可在每一节查阅。",
+        "citations": [
+          {
+            "source_id": "facts",
+            "first_line": 1,
+            "last_line": 4
+          }
+        ],
+        "sections": [
+          {
+            "id": "problem",
+            "title": "先理解题目：什么才算一次有效改善",
+            "text": "本例用误差衡量候选结果与目标的距离，因此数值越低越好。有效性先于数值比较：一次未通过有效性检查的尝试没有可比较的分数，不能把它补成零。\n\n**本页全部数据都是合成的展示样本。** 它用于验证负例、未知状态和证据阅读，不代表真实 benchmark 的结果。后面的最佳值也只描述这个固定窗口，不代表窗口外的历史。",
+            "citations": [
+              {
+                "source_id": "facts",
+                "first_line": 1,
+                "last_line": 4
+              }
+            ],
+            "table": {
+              "columns": [
+                "概念",
+                "怎样理解",
+                "本例中可说什么"
+              ],
+              "rows": [
+                [
+                  "误差",
+                  "偏离目标的程度；更低更好",
+                  "候选 C 的 3 分低于 A 的 7 分"
+                ],
+                [
+                  "无效结果",
+                  "没有通过资格检查",
+                  "候选 B 没有分数，不能当作零"
+                ],
+                [
+                  "最终采用",
+                  "改善被保留在实际成果中",
+                  "未捕获保留证据，仍未知"
+                ]
+              ]
+            }
+          },
+          {
+            "id": "trajectory",
+            "title": "过程与结果：看到进展，也保留空白",
+            "text": "只看第一轮和最后一轮，会漏掉中间的无效尝试。把三次观测放回顺序中，可以确认后续出现了更低误差，但看不出它为何出现。\n\n这里不连接缺失点，也不从提交序号推导时间成本。没有耗时记录，就不能把一次更好的结果进一步解释成效率提高。",
+            "citations": [
+              {
+                "source_id": "facts",
+                "first_line": 1,
+                "last_line": 3
+              }
+            ],
+            "series": {
+              "label": "固定窗口内的观测",
+              "unit": "误差分 · 更低更好",
+              "points": [
+                {
+                  "label": "候选 A",
+                  "value": 7
+                },
+                {
+                  "label": "候选 B",
+                  "value": null
+                },
+                {
+                  "label": "候选 C",
+                  "value": 3
+                }
+              ]
+            },
+            "timeline": [
+              {
+                "label": "第一次",
+                "title": "有了可比较的起点",
+                "text": "候选 A 的误差为 7 分。"
+              },
+              {
+                "label": "第二次",
+                "title": "一次失败不能从故事中消失",
+                "text": "候选 B 无效，没有分数。失败仍是过程的一部分。"
+              },
+              {
+                "label": "第三次",
+                "title": "更低误差出现，但保留未明",
+                "text": "候选 C 的误差为 3 分；最终采用仍需另一份证据。"
+              }
+            ]
+          },
+          {
+            "id": "limits",
+            "title": "关于系统强弱，证据支持到哪一步",
+            "text": "这条记录支持“窗口内出现过更好的有效候选”。它还不能回答是哪种机制促成改善：模型本身、额外搜索、工具反馈或结构化状态，都可能影响结果。\n\n如果没有相同条件下的对照，便无法把全部变化归于某一个系统。类似地，没有最终成果的保留记录，也无法把最佳观测值称为交付值。\n\n这些信息共同界定了判断的范围：**有进展的观测，有无效尝试，也有尚未回答的问题。**",
+            "citations": [
+              {
+                "source_id": "facts",
+                "first_line": 4,
+                "last_line": 4
+              }
+            ]
+          }
+        ],
+        "limitations": [
+          "本页是合成示例；不作为科研结论或产品效果证据。",
+          "未记录保留状态、耗时或匹配对照，不能补造这些事实。"
+        ]
+      },
+      "outputs": {}
+    }
+  ]
+}

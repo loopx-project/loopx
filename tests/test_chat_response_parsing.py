@@ -10,6 +10,79 @@ from loopx.chat import (
 )
 
 
+@pytest.mark.parametrize("metadata", [
+    {"context_handoff": [{"goal_id": "work", "agent_id": "worker", "brief": "invalid brief"}]},
+    {"context_handoff": {"goal_id": "work", "agent_id": "worker", "brief": []}},
+])
+def test_invalid_action_metadata_preserves_answer_without_admitting_actions(metadata):
+    response = parse_agent_response("The original answer.\n" + CHAT_REVIEW_OPEN_TAG
+        + json.dumps({"message": "", **metadata}) + CHAT_REVIEW_CLOSE_TAG)
+    assert response["message"].startswith("The original answer.\n\n待处理：")
+    assert "相关操作和委派尚未提交" in response["message"]
+    assert response["gate"]["kind"] == "response_metadata_invalid"
+    assert not response.get("context_handoff") and not response.get("goal_draft")
+    assert response["proposals"] == [] and response["protected_action"] is None
+
+
+@pytest.mark.parametrize("message_field", [{}, {"message": None}, {"message": " "}])
+def test_invalid_legacy_handoff_keeps_visible_answer_when_envelope_has_no_answer(message_field):
+    visible = "已核对 [报告](/custom-volume/project/report.md)。结论已保留。"
+    payload = {**message_field, "GlobalSummary": "hidden metadata", "context_handoff": [{
+        "goal_id": "existing-work", "agent_id": "existing-worker", "brief": "invalid brief",
+    }], "proposals": [{"kind": "todo", "text": "must not run"}]}
+    response = parse_agent_response(visible + "\n" + CHAT_REVIEW_OPEN_TAG
+        + json.dumps(payload) + CHAT_REVIEW_CLOSE_TAG, protected_paths=["/custom-volume/project"])
+
+    assert response["message"].startswith("已核对 报告。结论已保留。\n\n待处理：")
+    assert response["gate"]["kind"] == "response_metadata_invalid"
+    assert not response.get("context_handoff") and not response.get("goal_draft")
+    assert response["proposals"] == [] and response["protected_action"] is None
+    assert "hidden metadata" not in response["message"]
+    assert "invalid brief" not in response["message"]
+
+
+def test_invalid_handoff_without_any_answer_still_fails_closed():
+    raw = CHAT_REVIEW_OPEN_TAG + json.dumps({"context_handoff": [{
+        "goal_id": "existing-work", "agent_id": "existing-worker", "brief": "invalid brief",
+    }]}) + CHAT_REVIEW_CLOSE_TAG
+    with pytest.raises(ValueError):
+        parse_agent_response(raw)
+
+
+def test_invalid_handoff_never_recovers_an_earlier_hidden_envelope_as_prose():
+    raw = 'Answer.\n<loopx-review-json>{"message":"hidden"}</loopx-review-json>\n'
+    raw += CHAT_REVIEW_OPEN_TAG + json.dumps({"context_handoff": [{
+        "goal_id": "existing-work", "agent_id": "existing-worker", "brief": "invalid brief",
+    }]}) + CHAT_REVIEW_CLOSE_TAG
+    response = parse_agent_response(raw)
+    assert response["message"].startswith("Answer.\n\n待处理：")
+    assert "hidden" not in response["message"] and "loopx-review-json" not in response["message"]
+
+
+@pytest.mark.parametrize("change", [None, {"effects_settled": False}, {"effects_settled": "true"},
+    {"remaining": ""}, {"remaining": "x" * 1001}, {"dependency": 4}, {"grant": "workspace_write"}])
+def test_unfinished_work_is_explicit_bounded_data_never_inferred_from_prose(change):
+    work = {"remaining": "Finish the remaining verified update", "dependency": "Original source is temporarily unavailable",
+            "effects_settled": True}
+    response = parse_agent_response(CHAT_REVIEW_OPEN_TAG + json.dumps({
+        "message": "This request is still incomplete.", "unfinished_work": {**work, **(change or {})},
+    }) + CHAT_REVIEW_CLOSE_TAG)
+    assert response.get("unfinished_work") == (work if change is None else None)
+    assert "unfinished_work" not in parse_agent_response("Incomplete: retry when the source recovers.")
+
+
+@pytest.mark.parametrize("field", ["gate", "protected_action", "context_handoff", "goal_draft", "proposals"])
+def test_unfinished_work_cannot_accompany_a_gate_protected_action_or_handoff(field):
+    work = {"remaining": "Remaining work", "dependency": "A temporary dependency", "effects_settled": True}
+    payload = {"message": "Waiting", "unfinished_work": work, field: [{"kind": "todo", "text": "Another job"}]
+               if field == "proposals" else {"unresolved": True}}
+    if field == "context_handoff":
+        payload[field] = {"goal_id": "existing-work", "agent_id": "existing-worker", "brief": {
+            "schema_version": "collaboration_brief_v0", "purpose": "Verify the original work", "context": "Original source",
+            "constraints": [], "inputs": [], "acceptance": ["Verified original result returned"], "return_requirement": "Return the actual result"}}
+    assert "unfinished_work" not in parse_agent_response(CHAT_REVIEW_OPEN_TAG + json.dumps(payload) + CHAT_REVIEW_CLOSE_TAG)
+
+
 @pytest.mark.parametrize("goal_id", ["release-work", "legacy.goal_1", "", "../foreign", "/private/work", 123])
 def test_todo_target_is_preserved_or_rejected_without_becoming_unscoped(goal_id):
     payload = {"message": "Preview only", "proposals": [{"kind": "todo", "goal_id": goal_id,
@@ -60,6 +133,61 @@ def test_missing_or_empty_body_does_not_invent_an_answer() -> None:
 def test_compact_answer_never_reveals_an_earlier_hidden_envelope() -> None:
     raw = 'Answer.\n<loopx-review-json>{"message":"hidden"}</loopx-review-json>\n<loopx-review-json>{"message":""}</loopx-review-json>'
     assert parse_agent_response(raw)["message"] == "Answer."
+
+
+@pytest.mark.parametrize("example", [
+    "Use `<loopx-review-json>` as the opening marker.",
+    'Use ``<loopx-review-json>{"message":"example"}</loopx-review-json>`` literally.',
+    '```json\n<loopx-review-json>{"message":"example"}</loopx-review-json>\n```',
+    r"Escaped \` text and \<loopx-review-json> are literal.",
+    r"A path ending with a slash, `C:\`, is code.",
+])
+def test_quoted_review_examples_survive_compact_answers_and_stream_splits(example):
+    visible = example + "\nThe complete explanation continues here."
+    raw = visible + "\n" + CHAT_REVIEW_OPEN_TAG + json.dumps({"message": ""}) + CHAT_REVIEW_CLOSE_TAG
+
+    assert parse_agent_response(raw)["message"] == visible
+    for split in range(len(raw) + 1):
+        stream = VisibleResponseStreamFilter()
+        assert (stream.feed(raw[:split]) + stream.feed(raw[split:]) + stream.finish()).strip() == visible
+
+
+def test_review_example_without_an_envelope_is_text_and_admits_no_actions():
+    example = '```json\n<loopx-review-json>{"message":"example","proposals":[{"kind":"todo","text":"must not run"}]}</loopx-review-json>\n```'
+    response = parse_agent_response(example)
+    assert response["message"] == example
+    assert response["proposals"] == [] and response["gate"] is None
+    assert response["protected_action"] is None
+
+
+@pytest.mark.parametrize("metadata", [
+    {"context_handoff": [{"brief": "invalid"}]},
+    {"proposals": [{"kind": "todo", "text": "must not run"}]},
+])
+def test_quoted_markers_do_not_restore_an_earlier_hidden_envelope(metadata):
+    visible = "The `<loopx-review-json>` example is followed by the full answer."
+    hidden = CHAT_REVIEW_OPEN_TAG + json.dumps({"message": "hidden"}) + CHAT_REVIEW_CLOSE_TAG
+    raw = visible + "\n" + hidden + "\n" + CHAT_REVIEW_OPEN_TAG + json.dumps({"message": "", **metadata})
+    response = parse_agent_response(raw)
+    assert response["message"] == visible
+    assert response["proposals"] == [] and response["gate"] is None
+    assert response["protected_action"] is None and not response.get("context_handoff")
+
+
+def test_legacy_message_can_contain_literal_review_markers():
+    message = "Literal <loopx-review-json> and </loopx-review-json> inside the answer."
+    raw = CHAT_REVIEW_OPEN_TAG + json.dumps({"message": message}) + CHAT_REVIEW_CLOSE_TAG
+    assert parse_agent_response(raw)["message"] == message
+
+
+@pytest.mark.parametrize("summary", ["hidden", "hidden ` detail"])
+def test_unclosed_code_does_not_expose_a_possible_review_envelope(summary):
+    visible = "An unfinished `example."
+    raw = visible + "\n" + CHAT_REVIEW_OPEN_TAG + json.dumps({"message": "", "GlobalSummary": summary}) + CHAT_REVIEW_CLOSE_TAG
+    assert parse_agent_response(raw)["message"] == visible
+    for split in range(len(raw) + 1):
+        stream = VisibleResponseStreamFilter()
+        assert (stream.feed(raw[:split]) + stream.feed(raw[split:]) + stream.finish()).strip() == visible
 
 
 @pytest.mark.parametrize("suffix", ["", CHAT_REVIEW_CLOSE_TAG])

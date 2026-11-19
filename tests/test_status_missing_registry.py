@@ -11,9 +11,7 @@ def _collect(tmp_path: Path, **overrides):
     return collect_status(
         registry_path=tmp_path / ".loopx" / "registry.json",
         runtime_root_override=str(tmp_path / "runtime"),
-        scan_roots=[],
         limit=5,
-        include_public_boundary_scan=False,
         **overrides,
     )
 

@@ -5,10 +5,13 @@ work authority is performed while projecting research evidence.
 """
 from __future__ import annotations
 
+from typing import Any, Iterator, TYPE_CHECKING
+
+from .machine_defaults import resolve_explore_goal
+
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
 
 from ...control_plane.work_items.autonomous_replan_obligation import build_autonomous_replan_obligation_payload
 from .research_evidence import _research_result, _research_todo_facts
@@ -128,24 +131,28 @@ def public_research_composition_frontier(frontier: Mapping[str, Any] | None) -> 
     return public
 
 
+if TYPE_CHECKING:
+    from ...control_plane.work_items.semantic_replan_writeback import CapabilityReplanEvidence
+
+
 def prepare_research_replan_evidence(
     *, runtime_root: Path, goal_id: str, agent_id: str, registry_goal: dict[str, Any] | None,
     state_text: str, capability_guard: Mapping[str, Any] | None = None,
-):
+) -> CapabilityReplanEvidence | None:
     """IO composition root adapter; the shared gate never imports Explore."""
     import shlex
     from ...control_plane.work_items.semantic_replan_writeback import CapabilityReplanEvidence
     from .composition_frontier import project_live_explore_composition_frontier
 
     goal = {**(registry_goal or {}), "id": goal_id}
-    harness = (goal.get("spawn_policy") or {}).get("explore_harness") or {}
+    harness = (resolve_explore_goal(goal, runtime_root).get("spawn_policy") or {}).get("explore_harness") or {}
     if not (harness.get("enabled") is True and harness.get("composition_mode") == "explicit_only") and capability_guard is None:
         return None
     frontier = project_live_explore_composition_frontier(runtime_root=runtime_root, goal_id=goal_id,
         agent_id=agent_id, state_text=state_text, capability_guard=capability_guard,
         status_payload={"run_history": {"goals": [goal]}}) or {}
 
-    def qualify(guard: Mapping[str, Any], obligation_id: str, progress: dict[str, Any] | None, runs: list[dict[str, Any]]):
+    def qualify(guard: Mapping[str, Any], obligation_id: str, progress: dict[str, Any] | None, runs: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
         if guard.get("capability_id") != "explore":
             raise ValueError("selected capability writeback owner is not available")
         obligation = research_composition_obligation(
@@ -172,7 +179,7 @@ def attach_research_execution_projection(
     from ...control_plane.todos.contract import normalize_todo_claimed_by
 
     goal = find_registry_goal(registry, projection["goal_id"]) or {}
-    harness = (goal.get("spawn_policy") or {}).get("explore_harness") or {}
+    harness = (resolve_explore_goal(goal, runtime_root).get("spawn_policy") or {}).get("explore_harness") or {}
     if harness.get("enabled") is not True or harness.get("composition_mode") != "explicit_only":
         return
     registered = registered_agent_ids_for_goal(goal)
@@ -203,7 +210,7 @@ def attach_research_execution_projection(
 def hold_research_completion_evidence(
     *, registry_path: Path, runtime_root: Path, goal_id: str, todo: Mapping[str, Any],
     state_text: str, actor_agent_id: str | None,
-):
+) -> Iterator[dict[str, Any] | None]:
     """Legacy writer transport; the same typed rule guards canonical commits."""
     from ...history import load_registry
     from ...materials import find_registry_goal
@@ -214,7 +221,7 @@ def hold_research_completion_evidence(
         yield None
         return
     goal = find_registry_goal(load_registry(registry_path), goal_id) or {}
-    harness = (goal.get("spawn_policy") or {}).get("explore_harness") or {}
+    harness = (resolve_explore_goal(goal, runtime_root).get("spawn_policy") or {}).get("explore_harness") or {}
     policy = _research_result("explore.research.composition_policy", {"harness": harness})
     if not policy["enabled"] or todo.get("status") == "done" or todo.get("role") == "user":
         yield None

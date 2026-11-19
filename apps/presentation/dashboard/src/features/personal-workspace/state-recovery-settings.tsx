@@ -1,3 +1,4 @@
+import {ContextHelp} from "./context-help";
 import {useEffect, useRef, useState} from "react";
 import {inspectStateBackup, listStateRecoveries, readStateRecovery, stateRecoveryProfile, uploadRecoveryInput,
   type RecoveryHistoryItem, type StateRecoveryResult} from "../../data/state-recovery";
@@ -63,8 +64,8 @@ export function StateRecoverySettings() {
   }
   return <section className="personal-recovery" aria-label={zh ? "完整备份检查" : "Full backup inspection"}>
     {supported === false ? <p role="alert">{zh ? "当前服务或平台不支持完整归档检查。配置快照仍可使用。" : "This service or platform does not support full archive inspection. Configuration snapshots remain available."}</p> : null}
-    <p>{zh ? "选择完整归档和配套清单，建立私有隔离副本并查看可读内容。此处不会恢复 Goal 运行；旧备份缺少一致性信息时会明确保留未知。"
-      : "Choose an archive and its matching manifest to inspect a private, isolated copy. This does not resume a Goal; missing consistency information stays unknown."}</p>
+    <ContextHelp label={zh ? "归档检查范围" : "Archive inspection scope"}><p>{zh ? "选择完整归档和配套清单，建立私有隔离副本并查看可读内容。此处不会恢复 Goal 运行；旧备份缺少一致性信息时会明确保留未知。"
+      : "Choose an archive and its matching manifest to inspect a private, isolated copy. This does not resume a Goal; missing consistency information stays unknown."}</p></ContextHelp>
     <div className="personal-recovery-files"><label>{zh ? "完整归档（tar.gz）" : "Full archive (tar.gz)"}<input type="file" accept=".gz,.tgz" disabled={busy || supported !== true}
       aria-label={zh ? "完整归档" : "Full archive"} onChange={event => choose(event.target.files?.[0] ?? null, "archive")} /></label>
     <label>{zh ? "配套清单（manifest.json）" : "Matching manifest (manifest.json)"}<input type="file" accept=".json" disabled={busy || supported !== true}

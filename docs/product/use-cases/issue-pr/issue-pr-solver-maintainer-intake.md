@@ -5,9 +5,7 @@ issue/PR solver should become a high-value proof anchor. The solver may live
 outside LoopX. LoopX's job is to make the maintainer decision, boundary,
 evidence, and showcase path explicit.
 
-The packet is intentionally pre-execution. It does not authorize reading
-private source, generating patches, pushing branches, posting comments,
-publishing artifacts, or claiming benchmark uplift. It turns an issue/PR solver
+The packet is intentionally pre-execution. It turns an issue/PR solver
 opportunity into reviewable LoopX state.
 
 ## When To Use It

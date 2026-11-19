@@ -55,14 +55,6 @@ export {
   LOCAL_AUTHORITY_SHADOW_REQUEST_SCHEMA,
 };
 
-/** Compatibility tombstone for older clients: never open or mint a store. */
-export async function recordLocalAuthorityShadow(_value: unknown): Promise<never> {
-  throw new EffectRuntimeRequestError(
-    "Post-commit observation is retired; configure runtime shadow and explicitly bootstrap its source lineage.",
-    "local_authority_shadow_retired",
-  );
-}
-
 export interface LocalAuthorityShadowDependencies {
   openStore?: (directory: string, goalId: string) => AuthorityStore;
 }
@@ -728,28 +720,6 @@ export interface ValidatedShadowLineage {
   last_sequences: Record<ShadowPartition, number>;
   last_applied_sequences: Record<ShadowPartition, number>;
   write_classes: string[];
-}
-
-/** The caller holds its primary partition lock. This is existing-only and
- * never takes M or writes a cursor: management cannot complete a transition
- * while that primary lock is held, and a changed binding still fails closed.
- */
-export async function readProvenShadowSequence(
-  runtimeRoot: string, goalId: string, partition: ShadowPartition, expectedLineageId: string,
-  expectedGoalRef: unknown = null,
-): Promise<number> {
-  const binding = await requireShadowCaptureBinding(runtimeRoot, goalId);
-  if (expectedGoalRef === null) {
-    requireLineage(shadowBindingGoalRef(binding) === null, "legacy_goal_binding");
-  } else {
-    requireShadowBindingGoalRef(binding, expectedGoalRef, goalId);
-  }
-  requireLineage(binding.capture_lineage_id === expectedLineageId, "stale_generation");
-  const store = new FileAuthorityStore(join(runtimeRoot, "authority-shadow", "file-v0"), goalId, { existingOnly: true });
-  const lineage = await loadValidatedShadowLineage(store, runtimeRoot, goalId, binding);
-  const current = await requireShadowCaptureBinding(runtimeRoot, goalId);
-  requireLineage(canonicalAuthorityBytes(binding).equals(canonicalAuthorityBytes(current)), "stale_generation");
-  return lineage.last_sequences[partition];
 }
 
 /** Validate the exact bootstrap, every transaction, and the final readback.

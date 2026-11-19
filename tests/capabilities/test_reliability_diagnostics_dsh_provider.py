@@ -25,6 +25,12 @@ from loopx.capabilities.reliability_diagnostics import (
     normalize_observer_envelope,
 )
 from loopx.capabilities.reliability_diagnostics.intake import STATS_FIELDS
+from loopx.public_safe_text import (
+    HOME_RELATIVE_PATH_PATTERN,
+    LOCAL_PATH_SURFACE_PATTERN,
+    PATH_PREFIX_LOCAL_PATTERN,
+    SECRET_LIKE_SURFACE_PATTERN,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 OBSERVER_TS = ROOT / "packages/dsh-loopx-plugin/src/observer.ts"
@@ -158,6 +164,79 @@ def test_shared_counterfactual_allows_safe_source_ref(value: str) -> None:
         "source_refs": {"event_seq": "5", "tool_call_id": value},
     }
     assert normalize_observer_envelope(record).source_refs["tool_call_id"] == value
+
+
+def _typescript_arms(constant: str) -> list[str]:
+    """Return the regex bodies of one `observer.ts` shape list, in file order.
+
+    The producer writes one literal per line so each body is the text between
+    the opening slash and the `/iu` flags. The order is read from the file
+    because the canonical comparison rebuilds its alternation in that order, so
+    reordering the arms reads as a failure here even though it changes no
+    verdict. That is the point: the list is a copy, and a copy is compared as
+    text.
+    """
+
+    source = OBSERVER_TS.read_text(encoding="utf-8")
+    block = source.split(f"const {constant} = [", 1)[1].split("] as const", 1)[0]
+    arms = []
+    for line in block.splitlines():
+        arm = line.strip().rstrip(",")
+        if not arm:
+            continue
+        assert arm.startswith("/") and arm.endswith("/iu"), arm
+        arms.append(arm[1 : -len("/iu")])
+    return arms
+
+
+def _reduced_pattern_source(source: str) -> str:
+    """Drop the escapes that only one spelling of the same regex needs.
+
+    `public_safe_text.py` writes `\\"` inside raw strings, a redundant escape of
+    `"`, and a JavaScript regex literal must escape a `/` that appears outside a
+    character class. Neither escape changes either regex's meaning, so reducing
+    both lets the two owners be compared as exact text. Only an odd-length
+    backslash run escapes those characters, which keeps `[\\\\/]` intact.
+    """
+
+    return re.sub(r'(?<!\\)((?:\\\\)*)\\([/"])', r"\1\2", source)
+
+
+def test_typescript_mirror_equals_the_canonical_credential_arms() -> None:
+    """Refs #7729: the producer's fail-closed check is a copy of the canonical
+    owner's shapes, and a scan that recognizes only some issuers certifies the
+    rest as public-safe. Rebuilding the alternation from the mirror's own arms
+    makes a missing, narrowed, reordered or invented arm fail here -- which is
+    where the canonical owner's next issuer addition lands.
+    """
+
+    rebuilt = "(?i)(?:" + "|".join(_typescript_arms("SECRET_LIKE_SURFACES")) + ")"
+    assert _reduced_pattern_source(rebuilt) == _reduced_pattern_source(
+        SECRET_LIKE_SURFACE_PATTERN.pattern
+    )
+
+
+def test_typescript_mirror_equals_the_canonical_local_path_surfaces() -> None:
+    """Refs #7729: the mirror narrowed the drive arm to two directory names, so
+    every other drive path reached the ledger. The absolute, drive and UNC
+    alternatives share one lookbehind in the canonical owner, so the mirror
+    spells that lookbehind on each of the three.
+    """
+
+    lookbehind = r"(?<![:/A-Za-z0-9])"
+    mirrored = [
+        _reduced_pattern_source(arm) for arm in _typescript_arms("LOCAL_PATH_SURFACES")
+    ]
+    absolute = [arm for arm in mirrored if arm.startswith(lookbehind)]
+    assert len(absolute) == 3
+    rebuilt = (
+        lookbehind + "(?:" + "|".join(arm[len(lookbehind) :] for arm in absolute) + ")"
+    )
+    assert rebuilt == _reduced_pattern_source(LOCAL_PATH_SURFACE_PATTERN.pattern)
+    for pattern in (HOME_RELATIVE_PATH_PATTERN, PATH_PREFIX_LOCAL_PATTERN):
+        assert _reduced_pattern_source(pattern.pattern) in mirrored
+    # The file-URL arm stays at least as broad as the canonical `file://`.
+    assert r"\bfile:/+" in mirrored
 
 
 def test_observer_is_a_separate_default_off_plugin_row() -> None:

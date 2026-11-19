@@ -77,6 +77,8 @@ def test_public_source_context_requires_actual_admission_not_environment(monkeyp
     admitted = public_source_reader({}, {})
     monkeypatch.setenv("LOOPX_CHAT_PUBLIC_SOURCE_READ", "off")
     assert "read_public_url" in public_source_read_context(admitted)
+    assert "next_offset" in public_source_read_context(admitted)
+    assert "expected_sha256" in public_source_read_context(admitted)
     disabled = public_source_reader(admitted, disable_mcp_servers(admitted, {}))
     assert public_source_read_context(disabled) == ""
 

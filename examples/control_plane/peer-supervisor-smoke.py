@@ -142,6 +142,12 @@ def main() -> int:
             encoding="utf-8",
         )
 
+        from loopx.control_plane.testing.canary_harness import import_fixture_authority
+        config = json.loads(registry_path.read_text(encoding="utf-8"))
+        config["common_runtime_root"] = str(root / "runtime")
+        registry_path.write_text(json.dumps(config), encoding="utf-8")
+        import_fixture_authority(registry_path, GOAL_ID, provider="sqlite")
+
         assert peer_supervisor_for_goal(read_goal(registry_path)) is None
 
         preview = configure_goal(

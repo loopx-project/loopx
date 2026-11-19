@@ -4,6 +4,7 @@ import { completionDependencyCycles } from "./completion_dependency.ts";
 import { readGoalRolloutEventSnapshot } from "../rollout_receipt_log.ts";
 
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
+import { monitorScopeGeneration, normalizeMonitorChangeScope } from "./monitor_scope.ts";
 import {
   optionalNonEmptyString,
   requireInteger,
@@ -42,7 +43,7 @@ export const TODO_RESUME_KINDS = [
 
 export const UNSUPPORTED_TODO_RESUME_CONDITION_MESSAGE =
   "unsupported Todo resume condition; supported conditions are: " +
-  "todo_done:<todo_id>, monitor_changed:<monitor_todo_id>, " +
+  "todo_done:<todo_id>, monitor_changed:<monitor_todo_id>[@<scope>], " +
   "pr_merged:[owner/repo]#<number>, capacity_available:<capability>, " +
   "or resume_at:<timezone-aware-rfc3339-timestamp>";
 
@@ -54,7 +55,7 @@ const RESUME_PATTERN = /^[a-z][a-z\d_-]{0,31}(?::[a-z\d_.:@#/-]{1,181})?$/;
 const PR_RESUME_PATTERN =
   /^pr_merged:(?:[a-z\d_.-]{1,80}\/[a-z\d_.-]{1,100})?#[1-9]\d{0,8}$/;
 const RESUME_AT_PATTERN =
-  /^resume_at:(?<timestamp>[1-9]\d{3}-(?<month>\d{2})-(?<day>\d{2})[tT](?<hour>\d{2}):(?<minute>\d{2}):(?<second>\d{2})(?:\.(?<fraction>\d{1,3}))?(?<timezone>[zZ]|(?<sign>[+-])(?<offsetHour>\d{2}):(?<offsetMinute>\d{2})))$/;
+  /^resume_at:(?<timestamp>[1-9]\d{3}-(?<month>\d{2})-(?<day>\d{2})[tT](?<hour>\d{2}):(?<minute>\d{2}):(?<second>\d{2})(?:\.(?<fraction>\d{1,6}))?(?<timezone>[zZ]|(?<sign>[+-])(?<offsetHour>\d{2}):(?<offsetMinute>\d{2})))$/;
 const GITHUB_PULL_URL_PATTERN =
   /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)(?:\b|\/|#|\?)/i;
 const PR_REF_PATTERN =
@@ -70,15 +71,18 @@ interface ResumeSpec {
   kind: TodoResumeKind;
   target: string;
   normalized: string;
+  scope?: string;
 }
 
 interface ResumeTimestamp {
   iso: string;
-  milliseconds: number;
+  microseconds: bigint;
 }
 
-function normalizedTimestamp(milliseconds: number): string {
-  return new Date(milliseconds).toISOString().replace(".000Z", "Z");
+function normalizedTimestamp(milliseconds: number, remainderMicros: number): string {
+  const iso = new Date(milliseconds).toISOString();
+  if (remainderMicros === 0) return iso.replace(".000Z", "Z");
+  return iso.replace(/Z$/, `${String(remainderMicros).padStart(3, "0").replace(/0+$/, "")}Z`);
 }
 
 /** Strict RFC3339 date-time parsing for user-authored wakeups. A timezone is
@@ -92,7 +96,9 @@ function resumeTimestamp(value: unknown): ResumeTimestamp | null {
     .slice(0, 19)
     .split(/[-tT:]/)
     .map((part) => Number.parseInt(part, 10));
-  const fraction = Number.parseInt((match.groups.fraction ?? "").padEnd(3, "0") || "0", 10);
+  const fractionText = (match.groups.fraction ?? "").padEnd(6, "0");
+  const fraction = Number.parseInt(fractionText.slice(0, 3), 10);
+  const remainderMicros = Number.parseInt(fractionText.slice(3), 10);
   const local = new Date(0);
   local.setUTCFullYear(year, month - 1, day);
   local.setUTCHours(hour, minute, second, fraction);
@@ -106,7 +112,10 @@ function resumeTimestamp(value: unknown): ResumeTimestamp | null {
   if (Number.isNaN(milliseconds)) return null;
   const utcYear = new Date(milliseconds).getUTCFullYear();
   if (utcYear < 1000 || utcYear > 9999) return null;
-  return { iso: normalizedTimestamp(milliseconds), milliseconds };
+  // Date supplies the checked calendar/offset, but must not round a receipt's
+  // microsecond deadline down and release work before its original clock.
+  return { iso: normalizedTimestamp(milliseconds, remainderMicros),
+    microseconds: BigInt(milliseconds) * 1000n + BigInt(remainderMicros) };
 }
 
 function parsedResumeAt(value: string): ResumeTimestamp | null {
@@ -122,6 +131,7 @@ interface TodoItem extends JsonObject {
   resume_when?: string;
   resume_monitor_generation?: number;
   material_change_generation?: number;
+  material_change_scope_generations?: string;
 }
 
 function nonNegativeInteger(value: unknown, label: string): number | null {
@@ -159,6 +169,8 @@ function todoItem(value: unknown, label: string): TodoItem {
     "source_section",
     "claimed_by",
     "task_repository",
+    "next_due_at",
+    "expires_at",
   ] as const) {
     const normalized = optionalString(raw[field], `${label}.${field}`);
     if (normalized !== undefined) item[field] = normalized;
@@ -180,6 +192,11 @@ function todoItem(value: unknown, label: string): TodoItem {
   if (materialGeneration !== null) {
     item.material_change_generation = materialGeneration;
   }
+  const scopeGenerations = optionalString(
+    raw.material_change_scope_generations,
+    `${label}.material_change_scope_generations`,
+  );
+  if (scopeGenerations !== undefined) item.material_change_scope_generations = scopeGenerations;
   return item;
 }
 
@@ -200,8 +217,17 @@ function parseResumeWhen(value: unknown): ResumeSpec | null {
   const separator = normalized.indexOf(":");
   if (separator < 1) return null;
   const kind = normalized.slice(0, separator);
-  const target = normalized.slice(separator + 1);
+  const rawTarget = normalized.slice(separator + 1);
   if (!TODO_RESUME_KINDS.includes(kind as TodoResumeKind)) return null;
+  let target = rawTarget;
+  let scope: string | undefined;
+  if (kind === "monitor_changed" && rawTarget.includes("@")) {
+    const parts = rawTarget.split("@");
+    if (parts.length !== 2) return null;
+    target = parts[0]!;
+    scope = normalizeMonitorChangeScope(parts[1]) ?? undefined;
+    if (!scope) return null;
+  }
   if ((kind === "todo_done" || kind === "monitor_changed") && !TODO_ID_PATTERN.test(target)) {
     return null;
   }
@@ -209,19 +235,31 @@ function parseResumeWhen(value: unknown): ResumeSpec | null {
     return null;
   }
   if (kind === "pr_merged" && !PR_RESUME_PATTERN.test(normalized)) return null;
-  return { kind: kind as TodoResumeKind, target, normalized };
+  return { kind: kind as TodoResumeKind, target, normalized, ...(scope ? {scope} : {}) };
 }
 
 function requireResumeWhen(value: unknown, label: string): ResumeSpec {
   const parsed = parseResumeWhen(value);
   if (!parsed) {
     throw new EffectRuntimeRequestError(
-      `${label} must use todo_done:<todo_id>, monitor_changed:<monitor_todo_id>, ` +
+      `${label} must use todo_done:<todo_id>, monitor_changed:<monitor_todo_id>[@<scope>], ` +
         "pr_merged:[owner/repo]#<number>, capacity_available:<capability>, " +
         "or resume_at:<timezone-aware-rfc3339-timestamp>",
     );
   }
   return parsed;
+}
+
+/** Project only a typed Todo dependency; a monitor scope is never part of its identity. */
+export function todoResumeDependencyId(value: unknown): string | null {
+  const spec = parseResumeWhen(value);
+  return spec?.kind === "todo_done" || spec?.kind === "monitor_changed" ? spec.target : null;
+}
+
+/** The Todo whose completion this condition awaits, in any stored spelling. */
+export function todoDoneResumeTargetId(value: unknown): string | null {
+  const spec = parseResumeWhen(value);
+  return spec?.kind === "todo_done" ? spec.target : null;
 }
 
 export function normalizeTodoResumeWhen(value: unknown): string | null {
@@ -512,7 +550,7 @@ function conditionFor(
     if (!scheduled || !evaluatedAt) {
       return { ...condition, invalid_state: "runtime_clock_unavailable" };
     }
-    const satisfied = evaluatedAt.milliseconds >= scheduled.milliseconds;
+    const satisfied = evaluatedAt.microseconds >= scheduled.microseconds;
     const receiptId = `resume_at_${createHash("sha256")
       .update(`${item.todo_id}\n${spec.normalized}`, "utf8")
       .digest("hex")
@@ -540,12 +578,30 @@ function conditionFor(
   }
   const monitor = byId.get(spec.target);
   const baseline = item.resume_monitor_generation;
-  const generation = monitor?.material_change_generation ?? 0;
+  const globalGeneration = monitor?.material_change_generation ?? 0;
+  const generation = spec.scope && monitor
+    ? monitorScopeGeneration(monitor.material_change_scope_generations, spec.scope)
+    : globalGeneration;
   condition.target_todo_id = spec.target;
   condition.target_status = monitor?.status ?? null;
   condition.target_task_class = monitor?.task_class ?? null;
+  if (monitor) {
+    // Source scheduling facts qualify quiet rechecks separately from the
+    // material-generation fence. They do not make the successor ready.
+    condition.target_archive_state = monitor.archive_state ?? null;
+    condition.target_next_due_at = monitor.next_due_at ?? null;
+    condition.target_expires_at = monitor.expires_at ?? null;
+    if (evaluatedAt) {
+      condition.evaluated_at = evaluatedAt.iso;
+      condition.clock_provider = "runtime_clock";
+    }
+  }
   condition.baseline_generation = baseline ?? null;
-  condition.material_change_generation = generation;
+  condition.material_change_generation = globalGeneration;
+  if (spec.scope) {
+    condition.monitor_change_scope = spec.scope;
+    condition.scoped_material_change_generation = generation;
+  }
   condition.generation_fence = "strictly_greater_than_baseline";
   if (!monitor) condition.invalid_state = "monitor_not_found";
   else if (monitor.task_class !== "continuous_monitor") {
@@ -565,8 +621,8 @@ export type ResumeConditionDiagnosis = {
   | { state: "invalid"; reason: string }
 );
 
-/** Shared by canonical evaluation and old compact projections. Missing source
- * facts are not proof of an invalid dependency. A historical completed monitor
+/** Shared by canonical evaluation and old compact projections.
+ *  A historical completed monitor
  * remains satisfied; a live monitor completion wait requires an explicit replan,
  * never an inferred monitor_changed generation baseline. */
 export function diagnoseTodoResumeCondition(
@@ -610,16 +666,22 @@ export function resumeConditionHasKnownPendingTarget(condition: JsonObject, wait
     && (condition.target_todo_id !== spec.target || spec.target === waitingTodo.todo_id)) return false;
   switch (spec.kind) {
     case "todo_done":
-      return ["open", "deferred"].includes(String(condition.target_status))
+      // A blocked prerequisite is still identified unfinished work. Waiting
+      // for its completion neither resolves its blocker nor resumes its owner.
+      return ["open", "deferred", "blocked"].includes(String(condition.target_status))
         && ["advancement_task", "user_gate", "user_action", "blocker"].includes(String(condition.target_task_class))
         && (condition.target_archive_state === null || condition.target_archive_state === "active");
-    case "monitor_changed":
+    case "monitor_changed": {
+      const observedGeneration = spec.scope
+        ? condition.scoped_material_change_generation
+        : condition.material_change_generation;
       return condition.target_task_class === "continuous_monitor" && condition.target_status === "open"
         && typeof condition.baseline_generation === "number" && Number.isSafeInteger(condition.baseline_generation)
         && condition.baseline_generation >= 0 && condition.baseline_generation === waitingTodo.resume_monitor_generation
-        && typeof condition.material_change_generation === "number"
-        && Number.isSafeInteger(condition.material_change_generation) && condition.material_change_generation >= 0
-        && condition.material_change_generation <= condition.baseline_generation;
+        && typeof observedGeneration === "number"
+        && Number.isSafeInteger(observedGeneration) && observedGeneration >= 0
+        && observedGeneration <= condition.baseline_generation;
+    }
     case "capacity_available": return condition.provider_required === false
       && condition.provider === "runtime_available_capabilities" && condition.capability === spec.target;
     case "pr_merged": {
@@ -637,7 +699,7 @@ export function resumeConditionHasKnownPendingTarget(condition: JsonObject, wait
         && condition.material_change === false
         && condition.material_change_generation === 0
         && condition.resume_receipt === null
-        && evaluated.milliseconds < scheduled.milliseconds;
+        && evaluated.microseconds < scheduled.microseconds;
     }
     default: return false;
   }
@@ -674,7 +736,7 @@ export function evaluateTodoResumeConditions(value: unknown): JsonObject {
     const spec = parseResumeWhen(item.resume_when);
     return spec?.kind === "resume_at" && (!requestedKinds || requestedKinds.has(spec.kind));
   });
-  const evaluatedAt = needsRuntimeClock ? resumeTimestamp(request.evaluated_at) : null;
+  const evaluatedAt = resumeTimestamp(request.evaluated_at);
   if (needsRuntimeClock && !evaluatedAt) {
     throw new EffectRuntimeRequestError(
       "todo_resume_evaluation_request.evaluated_at must be a timezone-aware RFC3339 timestamp",
@@ -884,6 +946,8 @@ function externalWaitMetadata(
   const baselineGeneration =
     sameCondition && waitingTodo.resume_monitor_generation !== undefined
       ? waitingTodo.resume_monitor_generation
+      : spec.scope
+      ? monitorScopeGeneration(dependency.material_change_scope_generations, spec.scope)
       : dependency.material_change_generation ?? 0;
   updates.resume_monitor_generation = baselineGeneration;
   return { updates, baselineGeneration };

@@ -48,7 +48,7 @@ def _original_operation_turn(
     turn_id = "operation-wake-" + hashlib.sha256(str(proposal["proposal_id"]).encode()).hexdigest()
     arguments = ["turn", "run-once", "--goal-id", parameters["goal_id"],
         "--agent-id", parameters["agent_id"], "--todo-id", executor["todo_id"],
-        "--turn-instance-id", turn_id, "--project", str(workspace), "--scan-root", str(workspace),
+        "--turn-instance-id", turn_id, "--project", str(workspace),
         "--timeout-seconds", str(timeout), *host_args,
         "--confirmed-operation-id", str(proposal["proposal_id"]),
         # An authenticated human confirmation is manual input, not a scheduled
@@ -62,7 +62,7 @@ def _original_operation_turn(
     if ((selected.goal_id, selected.agent_id, selected.todo_id, selected.turn_instance_id)
             != (parameters["goal_id"], parameters["agent_id"], executor["todo_id"], turn_id)
             or Path(selected.project).resolve() != workspace
-            or Path(selected.scan_root).resolve() != workspace or selected.resume_turn_key
+            or selected.resume_turn_key
             or selected.retry_failed_turn or selected.iteration_context == "fresh"
             or selected.timeout_seconds != timeout or selected.dsh_runner is not None
             or selected.host != executor.get("host", "codex-cli")):
@@ -214,6 +214,13 @@ def dispatch_confirmed_operation_wake(
                             "model": profile["model"],
                             "reasoning_effort": profile["reasoning_effort"]},
         )
+        # Confirmation does not make an occupied/unknown native lane idle.
+        # Reuse the same typed preflight as Chat; a refused callback retains
+        # its canonical confirmation without publishing peer work or a worker.
+        preflight = service.inspect(configuration["binding_id"])
+        if preflight.get("dispatch_allowed") is not True:
+            return {**base, "state": "blocked", "reason_code": "execution_not_launchable",
+                    "preflight": preflight}
         brief = {
             "schema_version": "collaboration_brief_v0",
             "purpose": "Resume the exact human-confirmed canonical operation",

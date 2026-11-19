@@ -10,10 +10,12 @@ import hashlib
 import json
 import re
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from ...chat_store import _read_json
+from ...control_plane.coordination.local_authority import CanonicalAuthorityRequired
 from ...control_plane.effect_runtime import effect_runtime_result
 from ...control_plane.todos.list_readback import list_goal_todos
 from ...file_lock import exclusive_file_lock, try_exclusive_file_lock, write_json_atomic
@@ -91,10 +93,11 @@ class LarkOwnerAttention:
             raise ValueError("notifications require an authorized owner private steward")
         return row
 
-    def _route(self, binding: dict[str, Any], saved: dict[str, Any] | None = None) -> dict[str, Any]:
-        candidates = [saved] if saved is not None else [
+    def _route(self, binding: dict[str, Any], saved: dict[str, Any] | None = None, *,
+               session_id: str | None = None, source_ref: str | None = None) -> dict[str, Any]:
+        candidates = [saved] if saved is not None else (
             _read_json(path) for path in sorted(self.transport.root.glob("*.json"), reverse=True)
-            if re.fullmatch(r"[a-f0-9]{24}", path.stem)]
+            if re.fullmatch(r"[a-f0-9]{24}", path.stem))
         for record in candidates:
             if not isinstance(record, dict):
                 continue
@@ -111,6 +114,12 @@ class LarkOwnerAttention:
                     or native.get("origin", "lark") != "lark"
                     or native.get("status") in {"prepared", "rejected"}):
                 continue
+            # A report belongs to one prepared actor, even when this private
+            # chat has older Sessions. Core owns the Session correlation; a
+            # transport receipt's filename or copied session_id cannot select it.
+            if ((session_id is not None and native.get("session_id") != session_id)
+                    or (source_ref is not None and (native.get("source") or {}).get("source_ref") != source_ref)):
+                continue
             selected = self.transport.bindings.resolve(binding_id=binding["binding_id"],
                 **record["source"], include_observation=True)
             if not self.transport._source_message(record, selected=selected, render_content=False):
@@ -122,34 +131,86 @@ class LarkOwnerAttention:
                     "event": {key: event[key] for key in ("message_id", "chat_id", "chat_type", "sender_type", "sender_id")}}
         raise ValueError("send a message to this private steward before enabling notifications")
 
-    def _snapshot(self, binding: dict[str, Any]) -> list[dict[str, Any]]:
+    def _snapshot(self, binding: dict[str, Any]) -> dict[str, Any]:
         controller = self.transport.core.controller
         if controller.registry_path is None:
             raise ValueError("the steward registry is unavailable")
-        goals = []
-        for goal_id in self.transport.bindings.goal_scope_ids(binding):
-            args = dict(registry_path=controller.registry_path, goal_id=goal_id,
-                        runtime_root_arg=str(controller.coordination_runtime_root), role="user")
-            listing = list_goal_todos(**args)
-            if listing.get("ok") is not True or listing.get("todo_count") != len(listing.get("todos", [])):
-                raise ValueError("the native Todo source is incomplete")
-            todos = []
-            # The same typed owner selects the complete active population.
-            # Terminal history needs no full-body read on every service scan;
-            # bounded summaries never supply the actual notification terms.
-            refs = effect_runtime_result("presentation.owner_attention.references", {"goal_id": goal_id, "todos": listing["todos"]})
-            for todo_id in refs["todo_ids"]:
-                detail = list_goal_todos(**args, todo_id=todo_id)
-                if detail.get("ok") is not True or not detail.get("matched") or not isinstance(detail.get("todo"), dict):
-                    raise ValueError("a native Todo changed while reading")
-                todos.append(detail["todo"])
-            goals.append({"goal_id": goal_id, "todos": todos})
-        return goals
+        # Scope enumeration remains all-or-nothing. A failed authority read
+        # inside that grant is a missing Goal, never an empty Todo list.
+        scope = self.transport.bindings.goal_scope_ids(binding)
+        goals, unavailable, failures = [], [], []
+        for goal_id in scope:
+            try:
+                goals.append({"goal_id": goal_id, "todos": self._goal_todos(goal_id),
+                              "failures": self._goal_failures(goal_id)})
+            except (ValueError, OSError, KeyError, TypeError, RuntimeError) as exc:
+                unavailable.append(goal_id)
+                # Only native error codes reach health; exception messages may
+                # contain private paths, credentials or untrusted source text.
+                failures.append({"goal_id": goal_id, "error_code": "canonical_authority_required"
+                                 if isinstance(exc, CanonicalAuthorityRequired) else "source_unavailable"})
+        return {"goals": goals, "scope_goal_ids": scope, "unavailable_goal_ids": unavailable,
+                "source_complete": not unavailable, "source_failures": failures}
+
+    def _goal_todos(self, goal_id: str) -> list[dict[str, Any]]:
+        controller = self.transport.core.controller
+        args = dict(registry_path=controller.registry_path, goal_id=goal_id,
+                    runtime_root_arg=str(controller.coordination_runtime_root), role="user")
+        listing = list_goal_todos(**args)
+        if listing.get("ok") is not True or listing.get("todo_count") != len(listing.get("todos", [])):
+            raise ValueError("the native Todo source is incomplete")
+        todos = []
+        refs = effect_runtime_result("presentation.owner_attention.references", {"goal_id": goal_id, "todos": listing["todos"]})
+        for todo_id in refs["todo_ids"]:
+            detail = list_goal_todos(**args, todo_id=todo_id)
+            if detail.get("ok") is not True or not detail.get("matched") or not isinstance(detail.get("todo"), dict):
+                raise ValueError("a native Todo changed while reading")
+            todos.append(detail["todo"])
+        return todos
+
+    def _goal_failures(self, goal_id: str) -> list[dict[str, Any]]:
+        controller = self.transport.core.controller
+        args = dict(registry_path=controller.registry_path, goal_id=goal_id,
+                    runtime_root_arg=str(controller.coordination_runtime_root), status="blocked")
+        listing = list_goal_todos(**args)
+        if listing.get("ok") is not True or listing.get("todo_count") != len(listing.get("todos", [])):
+            raise ValueError("the native terminal Todo source is incomplete")
+        failures = []
+        for reference in listing["todos"]:
+            # List rows may be compact. Exact reads own complete outcome terms.
+            detail = list_goal_todos(**args, todo_id=reference["todo_id"])
+            if detail.get("ok") is not True or not detail.get("matched") or not isinstance(detail.get("todo"), dict):
+                raise ValueError("a native terminal Todo changed while reading")
+            todo = detail["todo"]
+            if todo.get("status") != "blocked" or todo.get("done") or todo.get("superseded_by"):
+                continue
+            outcomes = [row for row in todo.get("decision_scope_outcomes", [])
+                        if row.get("outcome") in {"reject", "cancel"}]
+            if not outcomes:
+                continue
+            # Without complete timestamps the authoritative list order wins.
+            latest = outcomes[-1]
+            if all(row.get("recorded_at") for row in outcomes):
+                latest = max(enumerate(outcomes), key=lambda pair: (
+                    datetime.fromisoformat(pair[1]["recorded_at"].replace("Z", "+00:00")).timestamp(), pair[0]))[1]
+            failure = {"todo_id": todo["todo_id"], "text": todo["text"], "outcome": latest["outcome"],
+                       "reason": latest.get("reason", todo.get("reason", "")),
+                       "terminal_outcome_count": len(outcomes),
+                       # Only typed identity fields participate; never copy private outcome prose.
+                       "terminal_outcome_identities": sorted(
+                           [{key: row[key] for key in ("decision_scope", "outcome", "source_todo_id")
+                             if key in row} for row in outcomes],
+                           key=lambda row: json.dumps(row, sort_keys=True))}
+            evidence = latest.get("evidence", todo.get("evidence"))
+            if evidence is not None:
+                failure["evidence"] = evidence
+            failures.append(failure)
+        return failures
 
     @staticmethod
-    def _plan(state: dict[str, Any], goals: list[dict[str, Any]]) -> dict[str, Any]:
+    def _plan(state: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
         return dict(effect_runtime_result("presentation.owner_attention.plan",
-                    {"state": state, "goals": goals, "source_complete": True}))
+                    {"state": state, **snapshot}))
 
     @staticmethod
     def _observe(state: dict[str, Any], row: dict[str, Any], event: str, **facts: Any) -> dict[str, Any]:
@@ -170,7 +231,6 @@ class LarkOwnerAttention:
                 # historical burst. Re-enable retains pending/unknown receipts.
                 state["route"] = self._route(binding, state.get("route"))
                 state = self._plan(state, self._snapshot(binding))
-                state["error_code"] = None
             state.update(enabled=enabled, revision=revision + 1)
             self._write(path, state)
 
@@ -208,9 +268,10 @@ class LarkOwnerAttention:
                 try:
                     binding = self._binding(path.stem)
                     state = self._plan(state, self._snapshot(binding))
-                    state.update(last_checked_at=time.time(), error_code=None)
+                    state["last_checked_at"] = time.time()
                     self._write(path, state)
                     ready = [row["id"] for row in state["outbox"] if row["status"] in {"pending", "unconfirmed"}
+                             and (row["status"] != "pending" or row.get("source_current") is True)
                              and float(row.get("next_attempt_at", 0)) <= time.time()
                              and (row["status"] == "pending" or row.get("message_id"))][:2]
                     for notice_id in ready:
@@ -220,8 +281,12 @@ class LarkOwnerAttention:
                         state = self._plan(state, self._snapshot(binding))
                         self._write(path, state)
                         row = next((row for row in state["outbox"] if row["id"] == notice_id), None)
-                        if row is None or row["status"] not in {"pending", "unconfirmed"}:
+                        if (row is None or row["status"] not in {"pending", "unconfirmed"}
+                                or (row["status"] == "pending" and row.get("source_current") is not True)):
                             continue
+                        # New writes need current Todo terms. Readback only
+                        # verifies the already-frozen effect on its original
+                        # authorized route, even if that Todo was withdrawn.
                         route = self._route(binding, state["route"])
                         if row["status"] == "pending":
                             text = present_lark_conversation_text(row["body"])

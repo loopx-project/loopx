@@ -1,3 +1,4 @@
+import {ContextHelp} from "./context-help";
 import { ZCodeGoalControl } from "./zcode-goal-control";
 import { GoalAcceptanceObservationCard } from "./goal-acceptance-observation-card";
 import { AttentionActions } from "./attention-actions";
@@ -42,13 +43,16 @@ import type {
 } from "./personal-workspace-model";
 import type { LarkGoalConnection } from "../../data/chat";
 import { localizedGoalState, localizedSessionStatus, useWorkspaceI18n } from "./i18n";
-import { formatCostUsd, formatDurationMs, formatTokenCount, formatUsageValue } from "./personal-workspace-model";
+import { formatCostUsd, formatDurationMs, formatTokenCount, formatUsageValue, hasGoalUsage } from "./personal-workspace-model";
 import { TeamPlanResult } from "./team-plan-result";
-import { TaskRequest } from "./task-request";
-import { parseTodoResumeCondition } from "./todo-resume-condition";
+import { TaskRequest, taskRequestIdentity, type TaskRequestRead } from "./task-request";
+import { ConfirmedTaskResult } from "./confirmed-task-result";
+import {GoalCreationExecution} from "./goal-creation-execution";
+import { parseTodoResumeCondition, todoResumeTransition } from "./todo-resume-condition";
 import { MarkdownText } from "./markdown";
 import { formatMonitorDate } from "./monitor-readback";
 import { parseTodoCompletionProof } from "./todo-completion-feedback";
+import { useDrawerOverlay } from "./workspace-shell";
 
 function subagentModelRequest(include: boolean, model: string, effort: string) {
   if (!include) return {};
@@ -143,6 +147,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
   const { locale, t } = useWorkspaceI18n();
   const [correction, setCorrection] = useState("");
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [taskRequestRead, setTaskRequestRead] = useState<TaskRequestRead | null>(null);
   const [repositoryCopyState, setRepositoryCopyState] = useState<"idle" | "copied" | "error">("idle");
   const [runDrawerTab, setRunDrawerTab] = useState<"record" | "details">("record");
   const [runActions, setRunActions] = useState<Record<string, RunActionStates>>({});
@@ -167,10 +172,12 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
   const drawerRef = useRef<HTMLDivElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
+  const taskInspectorOverlay = useDrawerOverlay(drawerRef, selection.kind === "todo");
+  const taskInspectorModal = selection.kind === "todo" && taskInspectorOverlay;
   const selectionIdentity = selection.kind === "run" ? `run:${selection.item.runId}`
     : selection.kind === "proposal" ? `proposal:${selection.item.previewId}`
       : selection.kind === "todo" ? `todo:${selection.item.goalId}:${selection.item.todoId}`
-        : selection.kind === "attention" ? `attention:${selection.item.goalId}:${selection.item.todoId}`
+        : selection.kind === "attention" ? JSON.stringify(["attention", selection.item.sourceId ?? "", selection.item.goalId, selection.item.todoId])
           : selection.kind === "output" ? `output:${selection.item.outputId}`
             : selection.kind === "schedule" ? `schedule:${selection.item.scheduleId}`
                 : `goal:${selection.item.goalId}`;
@@ -179,6 +186,8 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
   const visibleProposalFields = selection.kind === "proposal"
     ? selection.item.fields.filter(field => !completionProofFields.includes(field)) : [];
   const proposalTarget = selection.kind === "proposal" ? selection.item : null;
+  const taskExecution = proposalTarget?.status === "applied" && !proposalReadbackUnavailable && !readOnly
+    ? proposalTarget.reviewPlan?.taskExecution : undefined;
   const proposalRequests = proposalTarget?.todoId
     ? attentionHistory.filter(item => item.goalId === proposalTarget.goalId && item.todoId === proposalTarget.todoId) : [];
 
@@ -269,29 +278,60 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     return () => window.cancelAnimationFrame(frame);
   }, [selectionIdentity]);
 
+  useEffect(() => {
+    if (!taskInspectorModal || drawerRef.current?.contains(document.activeElement)) return;
+    titleRef.current?.focus();
+  }, [taskInspectorModal]);
+
   const closeDrawer = useCallback(() => {
     const returnFocus = returnFocusRef.current;
     onClose();
-    window.requestAnimationFrame(() => returnFocus?.focus());
+    window.requestAnimationFrame(() => {
+      const activeElement = document.activeElement;
+      if (activeElement instanceof HTMLElement && activeElement !== document.body
+        && !drawerRef.current?.contains(activeElement)) return;
+      if (returnFocus && returnFocus !== document.body) {
+        returnFocus.focus();
+        if (document.activeElement === returnFocus) return;
+      }
+      const fallback = document.querySelector<HTMLElement>('[data-goal-panel="tasks"]:not([hidden]) .personal-task-board')
+        ?? document.querySelector<HTMLElement>('.personal-goal-tabs button[aria-current="page"]');
+      fallback?.focus();
+    });
   }, [onClose]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented) return;
       if (event.key === "Escape") {
+        if (document.querySelector("dialog[open]:modal")) return;
+        const openMenu = Array.from(drawerRef.current?.querySelectorAll<HTMLDetailsElement>(
+          ".personal-task-management[open], .personal-compact-menu[open]",
+        ) ?? []).at(-1);
+        if (openMenu) {
+          event.preventDefault();
+          openMenu.open = false;
+          openMenu.querySelector<HTMLElement>(":scope > summary")?.focus();
+          return;
+        }
         event.preventDefault();
         closeDrawer();
         return;
       }
-      if (event.key === "Tab" && selection.kind !== "todo") {
+      if (event.key === "Tab" && (selection.kind !== "todo" || taskInspectorModal)) {
         const focusable = Array.from(drawerRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? [])
           .filter((element) => !element.hasAttribute("disabled") && element.getAttribute("aria-hidden") !== "true" && element.checkVisibility({ visibilityProperty: true }));
         if (focusable.length === 0) return;
         const first = focusable[0];
         const last = focusable[focusable.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
+        const activeIndex = focusable.indexOf(document.activeElement as HTMLElement);
+        if (activeIndex === -1) {
+          event.preventDefault();
+          (event.shiftKey ? last : first).focus();
+        } else if (event.shiftKey && activeIndex === 0) {
           event.preventDefault();
           last.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
+        } else if (!event.shiftKey && activeIndex === focusable.length - 1) {
           event.preventDefault();
           first.focus();
         }
@@ -301,13 +341,14 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     return () => {
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [closeDrawer, selection.kind]);
+  }, [closeDrawer, selection.kind, taskInspectorModal]);
 
   const operationUnknown = selection.kind === "proposal"
     && selection.item.reviewPlan?.operationFrame?.kind === "result"
     && selection.item.reviewPlan.operationFrame.resultKind === "unknown";
   const decisionFrame = selection.kind === "proposal" ? selection.item.reviewPlan?.decisionFrame : undefined;
-  const title = selection.kind === "attention" ? t("drawer.titleAttention")
+  const title = taskExecution ? t("drawer.taskLaunchReceipt")
+    : selection.kind === "attention" ? t("drawer.titleAttention")
     : selection.kind === "todo" ? t("drawer.taskDetails")
       : selection.kind === "run" ? t("drawer.runDetails")
         : selection.kind === "output" ? t("drawer.titleOutput")
@@ -318,6 +359,17 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
               : t("drawer.goalDetails");
   const goalId = selection.kind === "proposal" ? selection.item.goalId ?? "manager"
       : selection.item.goalId;
+  const taskNamespace = goals.find(goal => goal.goalId === goalId)?.sourceAccess?.namespace;
+  const taskReadable = !readOnly || Boolean(taskNamespace);
+  const taskDetail = selection.kind === "todo" && taskRequestRead?.phase === "ready"
+    && taskRequestRead.identity === taskRequestIdentity(selection.item, taskReadable, taskNamespace)
+    ? taskRequestRead.detail : null;
+  // Missing fields retain compatibility with older/local request-only readers;
+  // an explicit null from the current source clears an outdated display hint.
+  const taskEvidence = taskDetail && "evidence" in taskDetail ? taskDetail.evidence
+    : selection.kind === "todo" ? selection.item.evidence : undefined;
+  const taskNote = taskDetail && "note" in taskDetail ? taskDetail.note
+    : selection.kind === "todo" ? selection.item.note : undefined;
   const contextLabel = selection.kind === "attention" ? selection.item.goalTitle ?? t("drawer.currentGoal")
     : selection.kind === "todo" ? selection.item.goalTitle
       : selection.kind === "run" ? selection.item.goalTitle
@@ -428,7 +480,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
         operation: operation === "resume" ? "edit" : operation,
         ...(operation === "resume" ? {status: "open"} : {}),
         ...(operation === "block" ? { note: t("drawer.taskSuccessorNote") } : {}),
-        ...(operation === "defer" && resumeWhen ? { resume_when: resumeWhen } : {}),
+        ...(operation === "defer" && resumeWhen ? todoResumeTransition(resumeWhen) : {}),
         todo_id: todo.todoId,
         ...(proof ?? {}),
       },
@@ -607,14 +659,14 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
   return (
     <div
       aria-labelledby="personal-drawer-title"
-      aria-modal={selection.kind === "todo" ? undefined : "true"}
+      aria-modal={selection.kind === "todo" ? taskInspectorModal || undefined : true}
       className="personal-context-drawer"
       data-context-kind={selection.kind}
       ref={drawerRef}
       role="dialog"
     >
       <header className={`personal-drawer-header${selection.kind === "todo" ? " is-task-inspector" : ""}`}>
-        <div><h2 id="personal-drawer-title" ref={titleRef} tabIndex={-1}>{title}</h2><p>{contextLabel}</p></div>
+        <div><h2 id="personal-drawer-title" ref={titleRef} tabIndex={-1}>{title}</h2>{selection.kind !== "goal" && !taskExecution ? <p>{contextLabel}</p> : null}</div>
         <div className="personal-drawer-header-actions">
           {selection.kind === "todo" && onToggleInspectorSize ? <button aria-label={inspectorExpanded ? t("drawer.inspectorHalf") : t("drawer.inspectorFull")} className="personal-icon-button personal-inspector-size" onClick={onToggleInspectorSize} title={inspectorExpanded ? t("drawer.inspectorHalfView") : t("drawer.inspectorFullView")} type="button">
             {inspectorExpanded ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
@@ -627,6 +679,11 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
       </header>
 
       <div className="personal-drawer-body">
+        {selection.kind === "proposal" && onSelectAttention && proposalRequests.length === 1
+          && (selection.item.actionKind === "gate.resolve" || selection.item.actionKind === "todo.update") ? <button
+            className="personal-secondary-action" type="button" onClick={() => onSelectAttention(proposalRequests[0])}>
+            <ArrowLeft aria-hidden size={16}/>{locale === "zh-CN" ? "返回原待处理事项" : "Back to the original request"}
+          </button> : null}
         {previewFailure?.identity === selectionIdentity ? <p className="personal-proposal-explainer" role="alert">{previewFailure.message}</p> : null}
         {selection.kind === "attention" ? (
           <>
@@ -642,7 +699,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
         ) : selection.item.detailMode ? (
           <section className="personal-task-inspector-summary">
             <p className="personal-proposal-explainer">{t(selection.item.detailMode === "missing_current" ? "drawer.taskReadbackUnavailable" : "drawer.taskRequestOnly")}</p>
-            <TaskRequest todo={selection.item} local={!readOnly} />
+            <TaskRequest todo={selection.item} local={taskReadable} sourceNamespace={taskNamespace} onRead={setTaskRequestRead} />
           </section>
         ) : (
           <>
@@ -654,8 +711,9 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                 {selection.item.priority ? <span>{selection.item.priority}</span> : null}
                 <span>{selection.item.taskClass === "advancement_task" ? t("drawer.taskAdvancement") : selection.item.taskClass ?? t("drawer.taskOrdinary")}</span>
               </div>
-              <TaskRequest key={`${selection.item.goalId}:${selection.item.todoId}`} todo={selection.item} local={!readOnly}
-                onSave={!todoCompleted ? callbacks.onSaveTodoRequirements : undefined} />
+              <TaskRequest key={`${taskNamespace}:${selection.item.goalId}:${selection.item.todoId}`} todo={selection.item} local={taskReadable} sourceNamespace={taskNamespace}
+                onRead={setTaskRequestRead}
+                onSave={!readOnly && !todoCompleted ? callbacks.onSaveTodoRequirements : undefined} />
               {selection.item.status === "blocked" ? <section aria-label={t("drawer.blockedReason")} className="personal-task-blocked-reason" data-recorded={selection.item.blockedReason ? "true" : "false"}>
                 <h4><AlertCircle size={14} />{t("drawer.blockedReason")}</h4>
                 <p>{selection.item.blockedReason ?? t("drawer.blockedReasonMissing")}</p>
@@ -746,13 +804,13 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                   <small>{t("drawer.taskCompletionProofHint")}</small></label>
               </details>}
             </div> : null}
-            {selection.item.evidence ? <section className="personal-detail-card" aria-label={t("drawer.evidence")}>
+            {taskEvidence ? <section className="personal-detail-card" aria-label={t("drawer.evidence")}>
               <h4>{t("drawer.evidence")}</h4>
-              <MarkdownText text={selection.item.evidence} />
+              <MarkdownText text={taskEvidence} />
             </section> : null}
-            {selection.item.note ? <details className="personal-detail-card" aria-label={t("drawer.notes")}>
+            {taskNote ? <details className="personal-detail-card" aria-label={t("drawer.notes")}>
               <summary>{t("drawer.notes")}</summary>
-              <MarkdownText text={selection.item.note} />
+              <MarkdownText text={taskNote} />
             </details> : null}
             {todoCompleted ? <div className="personal-task-completed-note"><Check size={16} /><span><strong>{t("drawer.taskCompletedTitle")}</strong><small>{t("drawer.taskCompletedNote")}</small></span></div> : null}
           </>
@@ -760,17 +818,23 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
 
         {selection.kind === "goal" ? (
           <>
-            <section className="personal-detail-card">
+            <section className="personal-detail-card personal-goal-detail-summary">
               <small>{localizedGoalState(selection.item.state, locale)}</small>
               <h3>{selection.item.title}</h3>
               <p>{selection.item.agentSentence}</p>
-              <dl>
-                <div><dt>{t("drawer.tokens")}</dt><dd>{formatUsageValue(selection.item.usage?.tokens24h, t("drawer.usageNotMeasured"), formatTokenCount)} / {formatUsageValue(selection.item.usage?.tokens7d, t("drawer.usageNotMeasured"), formatTokenCount)}</dd></div>
-                <div><dt>{t("drawer.cost")}</dt><dd>{formatUsageValue(selection.item.usage?.costUsd24h, t("drawer.usageNotMeasured"), formatCostUsd)} / {formatUsageValue(selection.item.usage?.costUsd7d, t("drawer.usageNotMeasured"), formatCostUsd)}</dd></div>
-                <div><dt>{t("drawer.duration")}</dt><dd>{formatUsageValue(selection.item.usage?.durationMs24h, t("drawer.usageNotMeasured"), formatDurationMs)} / {formatUsageValue(selection.item.usage?.durationMs7d, t("drawer.usageNotMeasured"), formatDurationMs)}</dd></div>
-              </dl>
             </section>
             <GoalAcceptanceObservationCard goal={selection.item} />
+            <section className="personal-detail-card personal-goal-detail-usage">
+              <h3>{t("drawer.goalUsage")}</h3>
+              {hasGoalUsage(selection.item.usage) ? <table>
+                <thead><tr><td /><th scope="col">{t("drawer.period24h")}</th><th scope="col">{t("drawer.period7d")}</th></tr></thead>
+                <tbody>
+                  <tr><th scope="row">{t("drawer.tokensShort")}</th><td>{formatUsageValue(selection.item.usage.tokens24h, t("drawer.usageNotMeasured"), formatTokenCount)}</td><td>{formatUsageValue(selection.item.usage.tokens7d, t("drawer.usageNotMeasured"), formatTokenCount)}</td></tr>
+                  <tr><th scope="row">{t("drawer.costShort")}</th><td>{formatUsageValue(selection.item.usage.costUsd24h, t("drawer.usageNotMeasured"), formatCostUsd)}</td><td>{formatUsageValue(selection.item.usage.costUsd7d, t("drawer.usageNotMeasured"), formatCostUsd)}</td></tr>
+                  <tr><th scope="row">{t("drawer.durationShort")}</th><td>{formatUsageValue(selection.item.usage.durationMs24h, t("drawer.usageNotMeasured"), formatDurationMs)}</td><td>{formatUsageValue(selection.item.usage.durationMs7d, t("drawer.usageNotMeasured"), formatDurationMs)}</td></tr>
+                </tbody>
+              </table> : <p>{t("drawer.usageNotMeasured")}</p>}
+            </section>
             {(() => {
               const notification = goalNotifications.find((row) => row.goalId === selection.item.goalId);
               const connection = larkConnections.find((row) => row.goal_id === selection.item.goalId);
@@ -814,11 +878,11 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                   ) : (
                     <>
                       <h3>{t("drawer.larkNotConfigured")}</h3>
-                      <p>{t("drawer.larkNotConfiguredDescription")}</p>
+                      <ContextHelp label={t("drawer.larkNotConfigured")}><p>{t("drawer.larkNotConfiguredDescription")}</p></ContextHelp>
                     </>
                   )}
                   <button className="personal-secondary-action" onClick={() => callbacks.onOpenNotificationSettings?.(selection.item.goalId)} type="button"><Bell size={16} />{connection ? t("drawer.larkConfigure") : t("drawer.larkConnect")}</button>
-                  </section> : <section className="personal-detail-card personal-goal-notification"><small>{t("drawer.larkConnection")}</small><h3>{t("drawer.remoteDetailsUnavailable")}</h3><p>{t("drawer.remoteDetailsDescription")}</p></section>}
+                  </section> : <section className="personal-detail-card personal-goal-notification"><small>{t("drawer.larkConnection")}</small><h3>{t("drawer.remoteDetailsUnavailable")}</h3><ContextHelp label={t("drawer.remoteDetailsUnavailable")}><p>{t("drawer.remoteDetailsDescription")}</p></ContextHelp></section>}
                 </>
               );
             })()}
@@ -833,7 +897,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
               ) : (
                 <>
                   <h3>{t("drawer.noRun")}</h3>
-                  <p>{t("drawer.noRunDescription")}</p>
+                  <ContextHelp label={t("drawer.noRun")}><p>{t("drawer.noRunDescription")}</p></ContextHelp>
                 </>
               )}
             </section>
@@ -967,7 +1031,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                   </label>
                   <button className="personal-secondary-action" disabled={subagentBusy} type="button" onClick={() => { setSubagentModel("gpt-5.6-luna"); setSubagentEffort("max"); setSubagentPreview(null); setSubagentMutationState("idle"); setSubagentFeedback(null); }}>{t("drawer.subagentLunaPreset")}</button>
                   <button className="personal-secondary-action" disabled={subagentBusy} type="button" onClick={() => { setSubagentModel(""); setSubagentEffort(""); setSubagentPreview(null); setSubagentMutationState("idle"); setSubagentFeedback(null); }}>{t("drawer.subagentClearModel")}</button>
-                  <p>{t("drawer.subagentModelHint")}</p>
+                  <ContextHelp label={t("drawer.subagentModel")}><p>{t("drawer.subagentModelHint")}</p></ContextHelp>
                   <label>
                     <span>{t("drawer.subagentExecutionConfig")}</span>
                     <input
@@ -1160,15 +1224,15 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
               ? <div role="status" className="personal-proposal-state is-error" data-testid="operation-readback-unavailable"><p>{t("proposal.readbackUnavailable")}</p>
                 {onRetryProposalReadback ? <button type="button" className="personal-secondary-action" disabled={proposalReadbackFetching} onClick={onRetryProposalReadback}>{t("proposal.readbackRetry")}</button> : null}</div> : null}
             {selection.item.actionKind === "team.plan" && selection.item.status === "applied" ? <TeamPlanResult proposal={selection.item} t={t} /> : <section className="personal-proposal-card">
-              <small>{selection.item.reviewPlan?.operationFrame?.kind === "pending"
+              {!taskExecution ? <small>{selection.item.reviewPlan?.operationFrame?.kind === "pending"
                 ? t(`proposal.kind.${selection.item.actionKind}`)
-                : `${t(`proposal.kind.${selection.item.actionKind}`)} · ${t(`proposal.status.${selection.item.status}`)}`}</small>
+                : `${t(`proposal.kind.${selection.item.actionKind}`)} · ${t(`proposal.status.${selection.item.status}`)}`}</small> : null}
               {decisionFrame ? <span className={`personal-decision-chip is-${decisionFrame.decision}`}>{t(`proposal.decision.${decisionFrame.decision}`)}</span> : null}
               <h3>{selection.item.title}</h3>
               {selection.item.todoId && (selection.item.actionKind === "gate.resolve" || selection.item.actionKind === "todo.update")
                 ? <div className="personal-attention-meta"><AttentionProvenance detail={proposalRequests.length === 1 ? proposalRequests[0].details : undefined} /></div> : null}
               {selection.item.impact ? <p>{selection.item.impact}</p> : null}
-              {selection.item.reviewPlan && !selection.item.reviewPlan.retryOriginal && selection.item.actionKind !== "team.plan" && !(decisionFrame && ["ready", "applied"].includes(selection.item.status)) ? <p className="personal-proposal-explainer" data-action-review={selection.item.reviewPlan.interaction}>{operationUnknown
+              {selection.item.reviewPlan && !selection.item.reviewPlan.creationExecution && !selection.item.reviewPlan.retryOriginal && !taskExecution && selection.item.actionKind !== "team.plan" && !(decisionFrame && ["ready", "applied"].includes(selection.item.status)) ? <p className="personal-proposal-explainer" data-action-review={selection.item.reviewPlan.interaction}>{operationUnknown
                 ? t("actionReview.operation_reconcile_original")
                 : selection.item.reviewPlan.operationFrame?.kind === "inactive"
                 ? t(`actionReview.${selection.item.reviewPlan.operationFrame.reason}`)
@@ -1179,8 +1243,9 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                 : selection.item.actionKind === "operation.execute" && selection.item.reviewPlan.reason === "readback_unverified"
                   ? t("actionReview.operation_result_delivery_pending")
                   : t(`actionReview.${selection.item.reviewPlan.reason}`)}</p> : null}
-              {selection.item.status === "ready" && selection.item.actionKind !== "team.plan" && !decisionFrame ? <p className="personal-proposal-explainer">{t("drawer.proposalExplainer")}</p> : null}
-              {visibleProposalFields.length ? <dl>{visibleProposalFields.map((field) => <div key={field.key}><dt>{field.label}</dt><dd>{field.value}</dd></div>)}</dl> : null}
+              {selection.item.status === "ready" && !selection.item.reviewPlan?.creationExecution && selection.item.actionKind !== "team.plan" && !decisionFrame ? <p className="personal-proposal-explainer">{t("drawer.proposalExplainer")}</p> : null}
+              {selection.item.reviewPlan?.creationExecution ? <GoalCreationExecution execution={selection.item.reviewPlan.creationExecution}/> : null}
+              {!taskExecution && visibleProposalFields.length ? <dl>{visibleProposalFields.map((field) => <div key={field.key}><dt>{field.label}</dt><dd>{field.value}</dd></div>)}</dl> : null}
             </section>}
             {selection.item.reviewPlan?.creationProgress?.goalId && selection.item.status !== "applied" ? <div className="personal-proposal-state is-applied" role="status" data-testid="goal-creation-committed"><Check size={16} /><span>
               <strong>{t("proposal.field.goalId")}: {selection.item.reviewPlan.creationProgress.goalId} · {t("proposal.status.applied")}</strong>
@@ -1188,8 +1253,11 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
               {selection.item.reviewPlan.creationProgress.todoIds ? <small>{t("proposal.field.initialTodos")}: {selection.item.reviewPlan.creationProgress.todoIds.length} · {t("proposal.status.applied")}</small> : null}
             </span></div> : null}
             {selection.item.status === "applied" && decisionFrame ? <p className="personal-proposal-state is-applied" role="status"><Check size={16} /><span><strong>{t(`proposal.applied.gate.${decisionFrame.decision}`)}</strong>{decisionFrame.dependentEffect ? <small>{t(`proposal.dependentEffect.${decisionFrame.dependentEffect}`)}</small> : null}</span></p>
-              : selection.item.status === "applied" && selection.item.actionKind !== "team.plan" ? <p className={`personal-proposal-state ${selection.item.actionKind === "operation.execute" && selection.item.reviewPlan?.reason === "readback_unverified" ? "is-gated" : "is-applied"}`}><Check size={16} />{selection.item.actionKind === "operation.execute" ? selection.item.primaryLabel : t("drawer.proposalApplied")}</p> : null}
-            {selection.item.status === "applied" && selection.item.actionKind !== "operation.execute" && selection.item.goalId ? <button className="personal-primary-action" onClick={() => { const goalId = selection.item.goalId!; onClose(); void callbacks.onOpenGoal?.(goalId); }} type="button"><ExternalLink size={16} />{selection.item.actionKind === "goal.create" ? t("drawer.proposalEnterGoal") : t(selection.item.actionKind === "team.plan" ? "proposal.teamPlan.openGoal" : "drawer.proposalViewGoal")}</button> : null}
+              : selection.item.status === "applied" && selection.item.actionKind !== "team.plan" ? <p className={`personal-proposal-state ${selection.item.actionKind === "operation.execute" && selection.item.reviewPlan?.reason === "readback_unverified" ? "is-gated" : "is-applied"}`}><Check size={16} />{selection.item.actionKind === "operation.execute" ? selection.item.primaryLabel : t(taskExecution ? "feedback.taskStartRequested" : "drawer.proposalApplied")}</p> : null}
+            {taskExecution ? <ConfirmedTaskResult key={JSON.stringify([taskExecution.goalId, taskExecution.todoId,
+              taskExecution.sessionId, taskExecution.turnId])} receipt={taskExecution} />
+              : selection.item.createdManagedSession?.invalid ? <p role="alert">{t("proposal.goalSessionUnavailable")} <button type="button" disabled={proposalReadbackFetching} onClick={onRetryProposalReadback}>{t("history.retry")}</button></p>
+              : selection.item.status === "applied" && selection.item.actionKind !== "operation.execute" && selection.item.goalId ? <button className="personal-primary-action" onClick={() => { const goalId = selection.item.goalId!; onClose(); void callbacks.onOpenGoal?.(goalId, selection.item.createdManagedSession?.target); }} type="button"><ExternalLink size={16} />{selection.item.actionKind === "goal.create" ? t("drawer.proposalEnterGoal") : t(selection.item.actionKind === "team.plan" ? "proposal.teamPlan.openGoal" : "drawer.proposalViewGoal")}</button> : null}
             {selection.item.status === "stale" ? <p className="personal-proposal-state is-stale">{t("drawer.proposalStale")}</p> : null}
             {selection.item.status === "error" && !selection.item.reviewPlan?.retryOriginal ? <div className="personal-proposal-state is-error"><span>{operationUnknown ? t("proposal.operationState.submission_unknown") : selection.item.actionKind === "team.plan" || selection.item.actionKind === "goal.create" || selection.item.reviewPlan?.reason === "readback_unverified" ? t("actionReview.readback_unverified") : t("drawer.proposalApplyFailed")}</span>{selection.item.errorMessage ? <small>{selection.item.errorMessage}</small> : null}{selection.item.actionKind !== "goal.create" ? <small>{t(operationUnknown ? "actionReview.operation_reconcile_original" : selection.item.actionKind === "team.plan" ? "proposal.teamPlan.retryUnavailable" : "drawer.proposalApplyFailedHint")}</small> : null}</div> : null}
             {selection.item.status === "rejected" ? <p className="personal-proposal-state is-error">{t("drawer.proposalRejected")}</p> : null}
@@ -1200,7 +1268,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
             {selection.item.status === "gated" && selection.item.actionKind === "gate.resolve" ? <div className="personal-proposal-state is-gated"><span><strong>{t("drawer.gateDecisionRecheckTitle")}</strong>{t("drawer.gateDecisionRecheck")}</span></div>
               : selection.item.status === "gated" ? <div className="personal-proposal-state is-gated"><span><strong>{selection.item.actionKind === "operation.execute" ? selection.item.primaryLabel : selection.item.workspaceCandidates?.length || selection.item.gate?.kind === "agent_unavailable" ? selection.item.title : t("drawer.gateRequiresHost")}</strong>{selection.item.actionKind === "operation.execute" || selection.item.workspaceCandidates?.length || selection.item.gate?.kind === "agent_unavailable" ? selection.item.impact : t("drawer.gateRequiresHostDescription")}</span>{selection.item.gate?.nextAction ? <small>{selection.item.gate.nextAction}</small> : null}</div> : null}
             {!readOnly && selection.item.workspaceCandidates?.length ? <div className="personal-workspace-candidates" aria-label={t("drawer.workspaceCandidates")}>{selection.item.workspaceCandidates.map((candidate) => <button key={candidate.workspaceRef} onClick={() => void callbacks.onSelectWorkspaceCandidate?.(selection.item, candidate.workspaceRef)} type="button"><strong>{candidate.label}</strong><small>{t("proposal.workspaceGate.candidateValue")}</small></button>)}</div> : null}
-            {!readOnly && selection.item.actionKind !== "operation.execute" && selection.item.status === "error" && (!["team.plan", "goal.create"].includes(selection.item.actionKind) || (selection.item.reviewPlan?.retryOriginal && selection.item.reviewPlan.canApply)) ? <button className="personal-primary-action" onClick={() => void (selection.item.reviewPlan?.retryOriginal ? callbacks.onApplyProposal?.(selection.item) : callbacks.onTransitionProposal?.(selection.item, "regenerate"))} type="button"><RotateCcw size={17} />{t(selection.item.reviewPlan?.retryOriginal ? "drawer.retryOriginal" : "drawer.proposalRegenerate")}</button> : !readOnly && selection.item.actionKind !== "operation.execute" && selection.item.status !== "gated" && !(["team.plan", "goal.create"].includes(selection.item.actionKind) && ["error", "stale"].includes(selection.item.status)) && !((selection.item.actionKind === "team.plan" || decisionFrame) && selection.item.status === "applied") ? <button className="personal-primary-action" disabled={!['ready', 'deferred'].includes(selection.item.status) || selection.item.reviewPlan?.canApply === false} onClick={() => void callbacks.onApplyProposal?.(selection.item)} type="button"><Check size={17} />{selection.item.status === "applying" ? t("drawer.applying") : selection.item.primaryLabel ?? t("drawer.apply")}</button> : null}
+            {!readOnly && selection.item.actionKind !== "operation.execute" && selection.item.status === "error" && (!["team.plan", "goal.create"].includes(selection.item.actionKind) || (selection.item.reviewPlan?.retryOriginal && selection.item.reviewPlan.canApply)) ? <button className="personal-primary-action" onClick={() => void (selection.item.reviewPlan?.retryOriginal ? callbacks.onApplyProposal?.(selection.item) : callbacks.onTransitionProposal?.(selection.item, "regenerate"))} type="button"><RotateCcw size={17} />{t(selection.item.reviewPlan?.retryOriginal ? "drawer.retryOriginal" : "drawer.proposalRegenerate")}</button> : !readOnly && selection.item.actionKind !== "operation.execute" && selection.item.status !== "gated" && !(["team.plan", "goal.create"].includes(selection.item.actionKind) && ["error", "stale"].includes(selection.item.status)) && !((selection.item.actionKind === "team.plan" || decisionFrame || taskExecution) && selection.item.status === "applied") ? <button className="personal-primary-action" disabled={!['ready', 'deferred'].includes(selection.item.status) || selection.item.reviewPlan?.canApply === false} onClick={() => void callbacks.onApplyProposal?.(selection.item)} type="button"><Check size={17} />{selection.item.status === "applying" ? t("drawer.applying") : selection.item.primaryLabel ?? t("drawer.apply")}</button> : null}
             {!readOnly && selection.item.actionKind !== "operation.execute" && !selection.item.reviewPlan?.creationProgress?.goalId && (["stale", "gated", "rejected"].includes(selection.item.status) || (selection.item.status === "ready" && selection.item.reviewPlan?.canApply === false)) ? <button className="personal-secondary-action" onClick={() => void callbacks.onTransitionProposal?.(selection.item, "regenerate")} type="button"><RotateCcw size={16} />{t("drawer.proposalRecheck")}</button> : null}
             {!readOnly && selection.item.persisted !== false && selection.item.actionKind !== "operation.execute" && selection.item.actionKind !== "gate.resolve" && ["ready", "gated"].includes(selection.item.status) ? <div className="personal-drawer-action-grid"><button className="personal-secondary-action" onClick={() => void callbacks.onTransitionProposal?.(selection.item, "defer")} type="button">{t("drawer.proposalDefer")}</button><button className="personal-secondary-action" onClick={() => void callbacks.onTransitionProposal?.(selection.item, "reject")} type="button">{t("drawer.decisionReject")}</button></div> : null}
             {!["applied", "applying"].includes(selection.item.status) ? <button className="personal-secondary-action" onClick={onClose} type="button">{t("drawer.proposalClose")}</button> : null}
@@ -1255,7 +1323,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
               <div className="personal-diagnostics">
                 <code>goal_id: {goalId}</code><code>kind: {selection.kind}</code>
                 {selection.kind === "run" ? <><code>session_id: {selection.item.sessionId ?? t("drawer.notLinked")}</code><code>turn_id: {selection.item.turnId ?? t("common.none")}</code><code>adapter: {selection.item.agentId}</code><code>status: {selection.item.sessionStatus ?? selection.item.status}</code></> : selection.kind === "proposal" ? <><code>action: {selection.item.actionKind}</code><code>status: {selection.item.status}</code></> : <><code>schedule_id: {selection.item.scheduleId}</code><code>status: {selection.item.status ?? "active"}</code></>}
-                {completionProofFields.map(field => <code key={field.key}>{field.key}: {field.value}</code>)}
+                {(taskExecution ? visibleProposalFields : completionProofFields).map(field => <code key={field.key}>{taskExecution ? field.label : field.key}: {field.value}</code>)}
               </div>
             ) : null}
           </>

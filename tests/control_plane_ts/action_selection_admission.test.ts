@@ -37,6 +37,31 @@ test("workspace repair needs its repair route and explicit delivery refusal", ()
     {...agent, delivery_allowed: false}).admitted, false);
 });
 
+test("qualified scoped delivery retains its exact identity and current channel permission", () => {
+  const packet: JsonObject = {...source("qualified"), normal_delivery_allowed: false,
+    safe_bypass_allowed: true, safe_bypass_kind: "scoped_user_gate_fallback",
+    selected_todo: {todo_id: "todo_target", selection_binding: "pending_action_selection"},
+    scoped_user_gate_fallback: {selected_executable: {todo_id: "todo_target"}}};
+  assert.equal(currentActionSelectionAdmission(packet, "todo_target", agent).admitted, true);
+  assert.equal(packet.normal_delivery_allowed, false);
+  for (const patch of [
+    {safe_bypass_allowed: false}, {safe_bypass_kind: "unrelated_bypass"},
+    {scoped_user_gate_fallback: null},
+    {scoped_user_gate_fallback: {selected_executable: {todo_id: "todo_other"}}},
+    {action_selection_qualification: {state: "deferred", requested_todo_id: "todo_target"}},
+    {action_selection_qualification: {state: "qualified", requested_todo_id: "todo_other"}},
+    {ok: false}, {should_run: false},
+  ]) {
+    assert.equal(currentActionSelectionAdmission({...packet, ...patch}, "todo_target", agent).admitted,
+      false, JSON.stringify(patch));
+  }
+  for (const facts of [{must_attempt: false, delivery_allowed: true},
+    {must_attempt: true, delivery_allowed: false}, {must_attempt: true, delivery_allowed: null}]) {
+    assert.equal(currentActionSelectionAdmission(packet, "todo_target", facts).admitted, false);
+  }
+  assert.equal(currentActionSelectionAdmission(packet, "todo_other", agent).admitted, false);
+});
+
 test("pending delivery cannot borrow root permission from a denied or missing channel grant", () => {
   const packet = {...source(), normal_delivery_allowed: true,
     selected_todo: {todo_id: "todo_target", selection_binding: "pending_action_selection"}};
@@ -45,6 +70,39 @@ test("pending delivery cannot borrow root permission from a denied or missing ch
     assert.equal(currentActionSelectionAdmission(packet, "todo_target", facts).admitted, false);
     assert.equal(actionSelectionNeedsRecovery(packet, facts), true);
   }
+});
+
+test("qualified claim preparation binds only its exact Todo while delivery stays denied", () => {
+  const preparation = {schema_version: "execution_preparation_v0", state: "claim_required",
+    todo_id: "todo_target", delivery_allowed: false};
+  const packet: JsonObject = {...source("qualified"), normal_delivery_allowed: false,
+    selected_todo: {todo_id: "todo_target", selection_binding: "pending_action_selection"},
+    execution_preparation: preparation};
+  const preparing = {must_attempt: true, delivery_allowed: false};
+  assert.equal(currentActionSelectionAdmission(packet, "todo_target", preparing).admitted, true);
+  assert.equal(packet.normal_delivery_allowed, false);
+  assert.equal(preparation.delivery_allowed, false);
+  for (const patch of [
+    {execution_preparation: null},
+    ...["schema_version", "state", "todo_id", "delivery_allowed"].map(field => ({
+      execution_preparation: {...preparation, [field]: field === "delivery_allowed" ? true : "other"},
+    })),
+    ...["ready", "blocked_by_conflict", "authority_unavailable"].map(state => ({
+      execution_preparation: {...preparation, state},
+    })),
+    {action_selection_qualification: {state: "deferred", requested_todo_id: "todo_target"}},
+    {action_selection_qualification: {state: "rejected", requested_todo_id: "todo_target"}},
+    {action_selection_qualification: {state: "qualified", requested_todo_id: "todo_other"}},
+    {normal_delivery_allowed: true}, {ok: false}, {should_run: false},
+  ]) {
+    assert.equal(currentActionSelectionAdmission({...packet, ...patch}, "todo_target", preparing).admitted,
+      false, JSON.stringify(patch));
+  }
+  for (const facts of [{must_attempt: false, delivery_allowed: false}, agent,
+    {must_attempt: true, delivery_allowed: null}]) {
+    assert.equal(currentActionSelectionAdmission(packet, "todo_target", facts).admitted, false);
+  }
+  assert.equal(currentActionSelectionAdmission(packet, "todo_other", preparing).admitted, false);
 });
 
 test("compatibility annotations neither grant nor veto canonical current-work admission", () => {

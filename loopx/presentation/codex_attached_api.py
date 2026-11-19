@@ -22,6 +22,7 @@ from ..capabilities.native_chat.codex_attached import (
     history_revision,
     input_fingerprint,
     locate_thread,
+    observed_turn_model,
     open_conversation,
     read_messages,
 )
@@ -69,8 +70,12 @@ def bound_conversations(goal: dict[str, Any]) -> list[dict[str, str]]:
 
 
 def current_binding(goal: dict[str, Any], agent: str, expected: str) -> dict[str, str]:
-    rows = [row for row in bound_conversations(goal) if row["agent_id"] == agent]
-    if len(rows) != 1 or rows[0]["binding_ref"] != expected:
+    bindings = bound_conversations(goal)
+    rows = [row for row in bindings if row["agent_id"] == agent and row["binding_ref"] == expected]
+    if len(rows) != 1 or any(
+        row["thread_id"] == rows[0]["thread_id"] and row["agent_id"] != agent
+        for row in bindings
+    ):
         raise ValueError(
             "The Agent conversation binding changed or is ambiguous. Choose it again."
         )
@@ -234,8 +239,15 @@ class CodexAttachedRequestMixin:
                 "entry_id",
                 "content_offset",
                 "content_ref",
+                "turn_model",
             } or any(len(v) != 1 for v in query.values()):
                 raise ValueError("Conversation query is invalid")
+            if "turn_model" in query and (
+                set(query)
+                != {"goal_id", "agent_id", "binding_ref", "revision", "turn_model"}
+                or query["turn_model"] != ["1"]
+            ):
+                raise ValueError("Model readback needs a single snapshot revision")
             goal = self._codex_goal(query.get("goal_id", [""])[0])
             if "agent_id" not in query:
                 http._send_json({"ok": True, "agents": bound_conversations(goal)})
@@ -258,6 +270,26 @@ class CodexAttachedRequestMixin:
                 http._send_json(receipt_readback(receipt))
                 return
             home, path = locate_thread(binding["thread_id"])
+            if "turn_model" in query:
+                # Model readback is optional and must not stall ordinary history.
+                stamp = path.stat()
+                revision = history_revision(stamp)
+                turn_model = None
+                thread_id = binding["thread_id"]
+                if (
+                    query["revision"][0] == revision
+                    and activity(home, thread_id)["state"] == "turn_open"
+                ):
+                    turn_model = observed_turn_model(home, path, thread_id, stamp)
+                current_binding(
+                    self._codex_goal(query["goal_id"][0]),
+                    query["agent_id"][0],
+                    binding["binding_ref"],
+                )
+                http._send_json(
+                    {"ok": True, "revision": revision, "turn_model": turn_model}
+                )
+                return
             if "entry_id" in query:
                 content = read_content(
                     path,
@@ -358,7 +390,7 @@ class CodexAttachedRequestMixin:
                 body["binding_ref"],
             )
             open_conversation(binding["thread_id"])
-            # OS dispatch is not proof of a displayed conversation or a new turn.
+
             http._send_json({"ok": True, "requested": True})
         except (ValueError, KeyError, TypeError):
             http._send_error(

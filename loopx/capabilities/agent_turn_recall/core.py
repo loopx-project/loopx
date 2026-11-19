@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from ...control_plane.digest_envelope import sha256_envelope
 from ...control_plane.runtime.public_safety import public_safe_compact_text
 from ..context_providers.base import ContextProvider
-from ..reward_memory.runtime_hooks import run_reward_memory_automatic_recall_hook
 
 
 AGENT_TURN_SITUATION_SCHEMA_VERSION = "agent_turn_situation_v0"
@@ -32,7 +31,7 @@ def _canonical_hash(value: object) -> str:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+    return sha256_envelope(encoded)
 
 
 def _recent_outcomes(quota_decision: Mapping[str, Any]) -> list[str]:
@@ -214,6 +213,8 @@ def run_agent_turn_recall(
     provider: ContextProvider | None = None,
 ) -> dict[str, Any]:
     """Recall guidance and inject it into this turn's private reasoning context."""
+
+    from ..reward_memory.runtime_hooks import run_reward_memory_automatic_recall_hook
 
     query = _turn_query(situation)
     context = {

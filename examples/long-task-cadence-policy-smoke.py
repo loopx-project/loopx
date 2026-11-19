@@ -183,6 +183,8 @@ def assert_status_and_quota_projection() -> None:
                     "## Objective",
                     "Validate cadence hint projection.",
                     "",
+                    "## Agent Todo",
+                    "",
                     "## Latest Run",
                     "- Run ID: run_thin_2",
                     "- Agent: codex-cadence",
@@ -229,6 +231,9 @@ def assert_status_and_quota_projection() -> None:
             ),
             encoding="utf-8",
         )
+
+        from loopx.control_plane.testing.canary_harness import import_fixture_authority
+        import_fixture_authority(registry, "cadence", provider="sqlite")
 
         status = subprocess.check_output(
             [

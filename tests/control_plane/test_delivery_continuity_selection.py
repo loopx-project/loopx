@@ -89,6 +89,33 @@ def test_outcome_gap_releases_normal_queue_selection() -> None:
     assert "delivery_continuity" not in packet
 
 
+@pytest.mark.parametrize("prior", [
+    {"vision_checkpoint": {"schema_version": "vision_checkpoint_v0", "agent_id": AGENT_ID}},
+    {"agent_vision": {"agent_id": AGENT_ID, "path_delta": {"outcome": "replan",
+        "prior_assumption": "The experiment might reveal a defect.", "observed_reality": "The scoped question was answered.",
+        "changed": ["Select the independent remaining work"], "evidence_refs": ["evidence:result"]}}},
+])
+def test_closed_or_replanned_delivery_does_not_pin_the_old_open_todo(prior) -> None:
+    status = _status()
+    status["run_history"]["goals"][0]["latest_runs"][0].update(prior)
+    packet = build_quota_should_run(status, goal_id=GOAL_ID, agent_id=AGENT_ID)
+    assert packet["selected_todo"]["todo_id"] == QUEUE_HEAD_TODO_ID
+    assert packet["selected_todo"].get("selected_by") != "in_flight_todo"
+    # Releasing an old preference is not permission to mutate its Todo or skip
+    # current eligibility. The ordinary portfolio remains the decision surface.
+    assert packet["interaction_contract"]["cli_channel"]["selection_required"]
+
+
+def test_replan_prose_or_another_agents_vision_does_not_change_continuity() -> None:
+    status = _status()
+    status["run_history"]["goals"][0]["latest_runs"][0].update({
+        "recommended_action": "Replan the finished experiment",
+        "agent_vision": {"agent_id": "peer", "path_delta": {"outcome": "replan"}},
+    })
+    packet = build_quota_should_run(status, goal_id=GOAL_ID, agent_id=AGENT_ID)
+    assert packet["selected_todo"]["todo_id"] == CURRENT_TODO_ID
+
+
 def test_closed_or_blocked_todo_releases_normal_queue_selection() -> None:
     packet = build_quota_should_run(
         _status(current_status="blocked"),

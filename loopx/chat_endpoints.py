@@ -22,6 +22,7 @@ CHAT_ENDPOINT_SCHEMA_VERSION = "loopx_chat_endpoint_v1"
 # already advertises.
 RESERVED_AGENT_IDS = {
     "codex",
+    "antigravity",
     "claude-code",
     "anthropic-api",
     "openai-api",

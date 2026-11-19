@@ -64,6 +64,17 @@ Milestone 的达成：优先取 goal 声明的 acceptance 标记；没有声明�
 3. 第一个消费者：status markdown 与 dashboard 的 goal 详情（与 `goal_channel_projection_v0` 并列展示 `goal_artifact_lifecycle_projection_v0`），让运维能回答例子里的三个问题。
 4. 公开边界与现有投影一致：不含 raw logs、evidence body、credentials、本地路径。
 
+### 验收观察的数据来源
+
+现有 `goal_acceptance_observation_projection_v0` 从近期记录和保留的语义历史中
+识别 Agent lane。它调用现有 `goal_frontier.semantic_history` module 的 vision
+读取 interface。对已知 Agent，存在的语义历史决定当前 vision 或其缺失状态。
+退休标记或缺失的 lane 不能让较早的近期记录重新生效。没有语义历史时，保留
+原有近期列表回退。未归属的历史记录仍不归属到其他 Agent。保留的观察只提供
+部分覆盖，不证明验收完成。公开文本校验和输出上限保持不变。同一个观察
+module 为 artifact lifecycle 提供证据 guard。这个只读修复不新增存储状态、
+权限或执行 gate。
+
 ## 4. 中期应用（2-4 个 release）
 
 1. **全局 goal board**：把 per-goal 投影跨 goal 聚合——哪些 goal 达成哪些 milestone、哪些 guard 阻塞了多少 goal、每个 goal 的 next transition 是什么。这是现有 `/loopx-global-*` 家族和 operator dashboard 的自然落点。

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import AbstractContextManager, nullcontext
 from collections.abc import Callable, Mapping, Sequence
 from functools import partial
 from pathlib import Path
@@ -24,16 +25,29 @@ from ..goals.first_party_host_admission import (
 )
 from ..goals.goal_vision import normalize_goal_vision_packet
 from ..work_items.delivery_batch_scale import require_delivery_batch_scale
-from ..work_items.delivery_outcome import require_delivery_outcome
+from ..work_items.delivery_outcome import (
+    explain_turn_scoped_settlement_gap,
+    require_delivery_outcome,
+)
 from . import subagent_execution_topology as subagent
 from .command_validation import (
     TaskValidator,
     build_loopx_turn_command_validator,
     normalize_host_argv,
+    host_request_schema_mismatch,
     normalize_reward_memory_reflection_validation,
     reward_memory_reflection_digest,
 )
-from .driver import selected_turn_todo
+from ..quota.turn_envelope import (
+    COMPLETE_TURN_HOST_REQUEST_SCHEMA,
+    captured_turn_host_input,
+    turn_plan_host_source,
+)
+from .driver import (
+    COMPLETE_TURN_PLAN_SCHEMA_VERSION,
+    selected_turn_todo, turn_host_lineage,
+)
+from .decision_capture import stage_turn_decision_capture
 from .execution_readback import execution_payload
 from .host_process_transport import run_host_process
 from .host_binding import (
@@ -54,7 +68,9 @@ from .recovery import (
     build_turn_recovery_audit,
     require_turn_recovery_continuation,
 )
-from .post_settlement import PostSettlement, run_post_settlement_callback
+from .post_settlement import PostSettlement, recover_post_settlement, run_post_settlement_callback
+from ..capability_hooks import capability_result_fields, project_turn_context
+from ..reward_memory import reward_memory_automation_enabled
 from .session_recovery import (
     SessionBindingResolver,
     build_host_recovery_record,
@@ -91,6 +107,7 @@ LOOPX_TURN_JOURNAL_INSPECTION_SCHEMA_VERSION = "loopx_turn_journal_inspection_v1
 LOOPX_TURN_TASK_VALIDATION_SCHEMA_VERSION = "loopx_turn_task_validation_v0"
 HOST_RESULT_MAX_BYTES = 12_000
 HOST_AGENT_VISION_JSON_MAX_CHARS = 3_200
+HOST_PROGRESS_OBSERVATION_JSON_MAX_CHARS = 4_096
 HOST_REWARD_MEMORY_REFLECTION_JSON_MAX_CHARS = 2_400
 HOST_PATH_DELTA_MODES = {"", "unchanged", "material_replan"}
 HOST_RESULT_TEXT_LIMITS = (
@@ -100,6 +117,10 @@ HOST_RESULT_TEXT_LIMITS = (
     ("vision_unchanged_reason", 240),
     ("summary", 400),
 )
+HOST_RESULT_EVIDENCE_LIMITS = {
+    "work_evidence": (8, 240, 1_200),
+    "validation_evidence": (8, 240, 1_200),
+}
 MATERIAL_HOST_RESULT_KINDS = {
     LoopXTurnResultKind.VALIDATED_PROGRESS,
     LoopXTurnResultKind.VALIDATED_COMPLETION,
@@ -119,8 +140,10 @@ HOST_RESULT_FIELDS = {
     "vision_unchanged_reason",
     "path_delta_mode",
     "agent_vision_json",
+    "progress_observation_json",
     "summary",
     "reward_memory_reflection_json",
+    *HOST_RESULT_EVIDENCE_LIMITS,
 }
 
 
@@ -134,43 +157,16 @@ HostRunner = Callable[[Mapping[str, Any]], dict[str, Any]]
 JournalPersist = Callable[[Mapping[str, Any]], None]
 
 
-def reward_memory_automation_enabled(
-    payload: Mapping[str, Any] | None, *, operation: str,
-) -> bool:
-    """Project verified capability automation into the host IO contract.
-
-    The experiment resolver owns enablement, config/receipt verification and
-    provider policy. A recall packet's presence or old context is not opt-in.
-    """
-    if not isinstance(payload, Mapping):
-        return False
-    recall = payload.get("reward_memory_recall")
-    if not isinstance(recall, Mapping):
-        return False
-    experiment = recall.get("experiment")
-    envelope = payload.get("turn_envelope")
-    if not isinstance(experiment, Mapping) or not isinstance(envelope, Mapping):
-        return False
-    boundary = envelope.get("boundary")
-    capabilities = boundary.get("capabilities") if isinstance(boundary, Mapping) else None
-    memory = capabilities.get("reward_memory") if isinstance(capabilities, Mapping) else None
-    return (
-        isinstance(memory, Mapping)
-        and memory.get(operation) is True
-        # Recall resolves the binding again after admission. A stale envelope
-        # must not resurrect a now unavailable or disabled binding.
-        and experiment.get("enabled") is True
-        and experiment.get("available") is True
-        and experiment.get("configured_for_agent") is True
-        and bool(envelope.get("goal_id"))
-        and experiment.get("goal_id") == envelope.get("goal_id")
-        and bool(envelope.get("agent_id"))
-        and experiment.get("agent_id") == envelope.get("agent_id")
-        and experiment.get(operation) is True
-    )
-
 
 def build_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
+    """Deliver the plan's original source; decode saved v0 plans as recorded."""
+    return _complete_loopx_turn_host_request(_assemble_loopx_turn_host_request(plan))
+
+
+def _assemble_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
+    boundary = plan.get("boundary")
+    if isinstance(boundary, Mapping) and boundary.get("inspection_only") is True:
+        raise ValueError("LoopX Turn CLI inspection requires the explicit run-once execution surface")
     transaction = (
         plan.get("transaction") if isinstance(plan.get("transaction"), dict) else {}
     )
@@ -179,7 +175,7 @@ def build_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("LoopX Turn plan has no valid transaction turn_key")
     route = plan.get("route") if isinstance(plan.get("route"), dict) else {}
     if route.get("would_invoke_host") is not True:
-        raise ValueError("LoopX Turn route is not host executable")
+        raise ValueError(str(plan.get("error") or "LoopX Turn route is not host executable"))
     request = {
         "schema_version": LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION,
         "turn_key": turn_key,
@@ -192,22 +188,46 @@ def build_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
             "stdout": "one public-safe JSON object",
         },
     }
+    if plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION:
+        request.pop("turn_envelope")
+        request.update(turn_plan_host_source(plan))
+    if "work_contract" in plan:
+        # Presence selects the current reader, including malformed values.
+        # The checked source below must refuse them, never select legacy input.
+        contract = plan["work_contract"]
+        request["work_contract"] = dict(contract) if isinstance(contract, Mapping) else contract
     goal_ref = plan.get("goal_ref")
     if isinstance(goal_ref, Mapping):
         request["goal_ref"] = dict(goal_ref)
-    reward_memory_recall = plan.get("reward_memory_recall")
-    recall_enabled = reward_memory_automation_enabled(plan, operation="automatic_recall")
-    ingest_enabled = reward_memory_automation_enabled(plan, operation="automatic_ingest")
-    if isinstance(reward_memory_recall, Mapping) and (recall_enabled or ingest_enabled):
-        request["reward_memory_recall"] = dict(reward_memory_recall)
-        if not recall_enabled:
-            request["reward_memory_recall"]["context"] = None
+    request.update(project_turn_context(plan))
     request.update(subagent.subagent_host_request_projection(plan))
     from ...extensions.codex_native_child import configured_native_child_limit
 
     if configured_native_child_limit(request) is not None:
         request["turn_instance_id"] = transaction.get("turn_instance_id") or turn_key
     return request
+
+
+def _complete_loopx_turn_host_request(request: dict[str, Any]) -> dict[str, Any]:
+    if "work_contract" in request:
+        from .host_candidate import complete_host_input
+
+        return complete_host_input(request)
+    return request
+
+
+def _build_staged_dispatch_request(plan: Mapping[str, Any]) -> dict[str, Any]:
+    """Assemble staged input for the immediate mandatory dispatch check."""
+    request = _assemble_loopx_turn_host_request(plan)
+    if (plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION
+            and request.get("schema_version") == COMPLETE_TURN_HOST_REQUEST_SCHEMA
+            and "work_contract" in request and "turn_envelope" not in request):
+        # All assembly guards and projections still run on the staged aliases.
+        # This carrier's existing conversion only copies the top-level mapping;
+        # host_context returns no facts used by it. The caller checks this exact
+        # source with host_dispatch_context before admission or publication.
+        return captured_turn_host_input(request)
+    return _complete_loopx_turn_host_request(request)
 
 
 def _bounded_public_text(
@@ -218,7 +238,13 @@ def _bounded_public_text(
     required: bool,
     errors: list[str],
 ) -> str | None:
-    text = str(result.get(field) or "").strip()
+    value = result.get(field)
+    # Missing/null legacy optional text remains absent. Other JSON types must
+    # not acquire instruction meaning through Python string coercion.
+    if value is not None and not isinstance(value, str):
+        errors.append(f"{field} must be a string")
+        return None
+    text = (value or "").strip()
     if required and not text:
         errors.append(f"{field} is required")
         return None
@@ -233,6 +259,51 @@ def _bounded_public_text(
         errors.append(str(exc))
         return None
     return text
+
+
+def _bounded_public_evidence(
+    result: Mapping[str, Any],
+    field: str,
+    *,
+    required: bool,
+    errors: list[str],
+) -> list[str] | None:
+    max_items, max_item_chars, max_total_chars = HOST_RESULT_EVIDENCE_LIMITS[field]
+    raw = result.get(field)
+    if raw is None:
+        if required:
+            errors.append(
+                f"{field} is required for a material host result carrying "
+                "execution_profile"
+            )
+        return None
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        errors.append(f"{field} must be an array of strings")
+        return None
+    evidence = [item.strip() for item in raw]
+    if not evidence or any(not item for item in evidence):
+        errors.append(f"{field} must contain 1-{max_items} non-empty strings")
+        return None
+    if len(evidence) > max_items:
+        errors.append(f"{field} must contain at most {max_items} items")
+        return None
+    if any(len(item) > max_item_chars for item in evidence):
+        errors.append(
+            f"{field} items must contain at most {max_item_chars} characters"
+        )
+        return None
+    if sum(len(item) for item in evidence) > max_total_chars:
+        errors.append(
+            f"{field} must contain at most {max_total_chars} characters total"
+        )
+        return None
+    for index, item in enumerate(evidence):
+        try:
+            validate_public_safe_text(f"host_result.{field}[{index}]", item)
+        except ValueError as exc:
+            errors.append(str(exc))
+            return None
+    return evidence
 
 
 def _normalize_host_path_delta(
@@ -272,22 +343,23 @@ def _normalize_host_path_delta(
 
     agent_vision: dict[str, Any] | None = None
     if from_journal and "agent_vision" in result:
-        # The journal stores the typed owner's decoded packet. Revalidate it
-        # through that same owner, without treating derived budget diagnostics
-        # as a new Host wire string or widening the untrusted Host protocol.
+        # Keep one decoded packet for Goal fields and capability attachments.
+        # Revalidate Goal semantics through their owner; capability owners
+        # validate their existing inline payloads before durable writeback.
         try:
             if "agent_vision_json" in result:
                 raise ValueError("cached vision cannot carry both packet forms")
             packet = result["agent_vision"]
             if not isinstance(packet, dict):
                 raise TypeError("cached agent_vision must be a JSON object")
-            envelope = plan.get("turn_envelope") or {}
-            agent_vision = normalize_goal_vision_packet(
-                packet,
-                goal_id=str(envelope.get("goal_id") or ""),
-                agent_id=str(envelope.get("agent_id") or "") or None,
+            lineage = turn_host_lineage(plan)
+            goal_vision = normalize_goal_vision_packet(
+                packet, goal_id=lineage["goal_id"], agent_id=lineage["agent_id"] or None,
             )
-        except (TypeError, ValueError) as exc:
+            agent_vision = goal_vision
+            if "explore_result" in packet:
+                agent_vision = {**goal_vision, "explore_result": packet["explore_result"]}
+        except (TypeError, ValueError, RuntimeError) as exc:
             errors.append(f"invalid cached agent_vision: {exc}")
     elif agent_vision_json:
         if len(agent_vision_json) > HOST_AGENT_VISION_JSON_MAX_CHARS:
@@ -300,17 +372,14 @@ def _normalize_host_path_delta(
                 packet = json.loads(agent_vision_json)
                 if not isinstance(packet, dict):
                     raise TypeError("agent_vision_json must decode to a JSON object")
-                envelope = (
-                    plan.get("turn_envelope")
-                    if isinstance(plan.get("turn_envelope"), dict)
-                    else {}
+                lineage = turn_host_lineage(plan)
+                goal_vision = normalize_goal_vision_packet(
+                    packet, goal_id=lineage["goal_id"], agent_id=lineage["agent_id"] or None,
                 )
-                agent_vision = normalize_goal_vision_packet(
-                    packet,
-                    goal_id=str(envelope.get("goal_id") or ""),
-                    agent_id=str(envelope.get("agent_id") or "") or None,
-                )
-            except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                agent_vision = goal_vision
+                if "explore_result" in packet:
+                    agent_vision = {**goal_vision, "explore_result": packet["explore_result"]}
+            except (json.JSONDecodeError, TypeError, ValueError, RuntimeError) as exc:
                 errors.append(f"invalid agent_vision_json: {exc}")
 
     if path_delta_mode == "material_replan":
@@ -328,8 +397,16 @@ def _normalize_host_path_delta(
             errors.append("material_replan cannot also declare vision_unchanged_reason")
     elif path_delta_mode == "unchanged":
         if agent_vision is not None:
-            errors.append("unchanged path_delta_mode cannot include agent_vision_json")
-        if not unchanged_reason:
+            path_delta = agent_vision.get("path_delta")
+            if not isinstance(path_delta, dict):
+                errors.append("unchanged agent_vision_json requires goal_path_delta_v0")
+            elif path_delta.get("outcome") not in {"continue", "no_change"}:
+                errors.append(
+                    "unchanged goal_path_delta_v0 outcome must be continue or no_change"
+                )
+            if unchanged_reason:
+                errors.append("fresh agent_vision cannot also declare vision_unchanged_reason")
+        elif not unchanged_reason:
             errors.append("unchanged path_delta_mode requires vision_unchanged_reason")
 
     return path_delta_mode, agent_vision
@@ -344,9 +421,21 @@ def validate_loopx_turn_host_result(
 ) -> dict[str, Any]:
     result = dict(value)
     errors: list[str] = []
-    allowed_fields = HOST_RESULT_FIELDS | subagent.subagent_host_result_fields(plan)
+    optional_fields = capability_result_fields(project_turn_context(plan, from_journal=from_journal))
+    if (
+        from_journal
+        and "turn_context_contributions" not in plan
+        and reward_memory_automation_enabled(plan, operation="automatic_ingest")
+    ):
+        # Pre-registration journals already admitted this bounded wire field.
+        # Preserve the cached result that independent validation attested;
+        # never reconstruct context, activate a Host, or change ingest policy.
+        optional_fields["reward_memory_reflection_json"] = {
+            "type": "string", "maxLength": HOST_REWARD_MEMORY_REFLECTION_JSON_MAX_CHARS,
+        }
+    allowed_fields = HOST_RESULT_FIELDS | subagent.subagent_host_result_fields(plan) | set(optional_fields)
     if from_journal:
-        allowed_fields = allowed_fields | {"agent_vision"}
+        allowed_fields = allowed_fields | {"agent_vision", "progress_observation"}
     unknown = sorted(set(result) - allowed_fields)
     if unknown:
         errors.append("unsupported host result fields: " + ", ".join(unknown))
@@ -399,25 +488,33 @@ def validate_loopx_turn_host_result(
             normalized[field] = text
     # Old/custom hosts may still return this field. Ignore it while disabled:
     # ordinary work must not gain a memory validation gate or retain the content.
-    reflection_json = (
-        _bounded_public_text(
-            result,
-            "reward_memory_reflection_json",
-            limit=HOST_REWARD_MEMORY_REFLECTION_JSON_MAX_CHARS,
-            required=False,
-            errors=errors,
+    for field, descriptor in optional_fields.items():
+        text = _bounded_public_text(
+            result, field, limit=descriptor["maxLength"], required=False, errors=errors,
         )
-        if reward_memory_automation_enabled(plan, operation="automatic_ingest")
-        else None
-    )
-    if reflection_json:
-        if material:
-            normalized["reward_memory_reflection_json"] = reflection_json
-        else:
-            errors.append(
-                "non-material host results cannot declare a reward memory reflection"
-            )
+        if text:
+            if material:
+                normalized[field] = text
+            else:
+                errors.append("non-material host results cannot declare optional capability results")
+    progress_observation = None
     if material:
+        raw_progress = result.get("progress_observation_json", "")
+        try:
+            from ..work_items.progress_observation import normalize_progress_observation
+
+            if from_journal and "progress_observation" in result:
+                if "progress_observation_json" in result:
+                    raise ValueError("cached progress observation cannot also supply JSON")
+                progress_observation = normalize_progress_observation(result["progress_observation"])
+            elif not isinstance(raw_progress, str):
+                raise ValueError("progress_observation_json must be a JSON string")
+            elif raw_progress.strip():
+                if len(raw_progress) > HOST_PROGRESS_OBSERVATION_JSON_MAX_CHARS:
+                    raise ValueError("progress_observation_json exceeds the Host result limit")
+                progress_observation = normalize_progress_observation(json.loads(raw_progress))
+        except (TypeError, ValueError) as exc:
+            errors.append(f"invalid progress observation: {exc}")
         try:
             normalized["delivery_batch_scale"] = require_delivery_batch_scale(
                 result.get("delivery_batch_scale")
@@ -428,8 +525,28 @@ def validate_loopx_turn_host_result(
             normalized["delivery_outcome"] = require_delivery_outcome(
                 result.get("delivery_outcome")
             ).value
+            if not from_journal:
+                # Observation transport does not add a no-spend Host closeout.
+                # Refuse new candidates before preparing an impossible write.
+                # Saved results retain provider readback/recovery: an effect
+                # may already have committed under an older producer.
+                settlement_gap = explain_turn_scoped_settlement_gap(
+                    normalized["delivery_outcome"], None,
+                )
+                if settlement_gap:
+                    errors.append(settlement_gap)
         except ValueError as exc:
             errors.append(str(exc))
+
+        for field in HOST_RESULT_EVIDENCE_LIMITS:
+            evidence = _bounded_public_evidence(
+                result,
+                field,
+                required=False,
+                errors=errors,
+            )
+            if evidence is not None:
+                normalized[field] = evidence
 
         unchanged_reason = str(normalized.get("vision_unchanged_reason") or "")
         path_delta_mode, agent_vision = _normalize_host_path_delta(
@@ -454,15 +571,20 @@ def validate_loopx_turn_host_result(
         str(result.get("path_delta_mode") or "").strip()
         or str(result.get("agent_vision_json") or "").strip()
         or (from_journal and "agent_vision" in result)
+        or ("progress_observation_json" in result and result["progress_observation_json"] != "")
+        or (from_journal and "progress_observation" in result)
+        or any(field in result for field in HOST_RESULT_EVIDENCE_LIMITS)
     ):
         errors.append(
-            "non-material host results cannot declare path_delta_mode or agent_vision_json"
+            "non-material host results cannot declare path_delta_mode or "
+            "agent_vision_json, progress observation, or work/validation evidence"
         )
     if subagent.subagent_execution_topology(plan) is not None:
         subagent.observe_subagent_host_result(plan, result, normalized, errors)
     return {
         "ok": not errors,
-        "result": normalized,
+        "result": (normalized if progress_observation is None else
+                   {**normalized, "progress_observation": progress_observation}),
         "errors": errors,
     }
 
@@ -635,6 +757,7 @@ def inspect_loopx_turn_journal(
     turn_key: str,
     retry_failed: bool = False,
     session_binding_resolver: SessionBindingResolver | None = None,
+    require_decision_capture: bool = False,
 ) -> dict[str, object]:
     """Inspect one canonical Turn journal without granting execution authority."""
 
@@ -649,46 +772,61 @@ def inspect_loopx_turn_journal(
     try:
         with exclusive_file_lock(path):
             journal = _load_journal(path)
+            if journal is None:
+                raise ValueError("LoopX Turn journal does not exist")
+
+            request: dict[str, Any] = {}
+            session_check = None
+            recovery_error = None
+            assess_session = True
+            if retry_failed and journal.get("status") == "failed":
+                plan = journal.get("plan")
+                if isinstance(plan, Mapping):
+                    try:
+                        request = build_loopx_turn_host_request(plan)
+                    except (TypeError, ValueError) as exc:
+                        assess_session = False
+                        recovery_error = ValueError("failed-Turn Host request is invalid")
+                        session_check = {
+                            "kind": "host_session_binding",
+                            "outcome": "failed",
+                            "reason": "host_request_invalid",
+                        }
+                        recovery_error.__cause__ = exc
+
+            assessment = assess_existing_turn_recovery(
+                journal,
+                request,
+                goal_id=safe_goal_id,
+                agent_id=agent_id,
+                turn_key=turn_key,
+                retry_failed=retry_failed,
+                session_binding_resolver=session_binding_resolver,
+                assess_session=assess_session,
+                session_recovery_check=session_check,
+                recovery_error=recovery_error,
+            )
+            if (require_decision_capture
+                    and assessment.decision.get("action") == "continue"
+                    and assessment.decision.get("reinvoke_host") is True):
+                # Use dispatch's read-only check only when recovery needs Host
+                # input. Stored results and terminal replay need no new input.
+                try:
+                    stage_turn_decision_capture(
+                        journal["plan"], journal_path=path,
+                        decision=None, existing_journal=True,
+                    )
+                except json.JSONDecodeError:
+                    raise ValueError("Turn decision capture contains malformed JSON") from None
+                except OSError:
+                    raise ValueError("Turn decision capture could not be read") from None
+            return assessment.inspection
     except json.JSONDecodeError:
         raise ValueError("LoopX Turn journal contains malformed JSON") from None
     except LockAcquireTimeoutError:
         raise
     except OSError:
         raise ValueError("LoopX Turn journal could not be read") from None
-    if journal is None:
-        raise ValueError("LoopX Turn journal does not exist")
-
-    request: dict[str, Any] = {}
-    session_check = None
-    recovery_error = None
-    assess_session = True
-    if retry_failed and journal.get("status") == "failed":
-        plan = journal.get("plan")
-        if isinstance(plan, Mapping):
-            try:
-                request = build_loopx_turn_host_request(plan)
-            except (TypeError, ValueError) as exc:
-                assess_session = False
-                recovery_error = ValueError("failed-Turn Host request is invalid")
-                session_check = {
-                    "kind": "host_session_binding",
-                    "outcome": "failed",
-                    "reason": "host_request_invalid",
-                }
-                recovery_error.__cause__ = exc
-
-    return assess_existing_turn_recovery(
-        journal,
-        request,
-        goal_id=safe_goal_id,
-        agent_id=agent_id,
-        turn_key=turn_key,
-        retry_failed=retry_failed,
-        session_binding_resolver=session_binding_resolver,
-        assess_session=assess_session,
-        session_recovery_check=session_check,
-        recovery_error=recovery_error,
-    ).inspection
 
 
 def _receipt(
@@ -745,7 +883,14 @@ def _run_host(
     argv: Sequence[str],
     project: Path,
     timeout_seconds: float | None,
+    launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
 ) -> dict[str, Any]:
+    # Dispatch has checked the source and its internal effect adapter before
+    # journal/cadence admission. External stdin gets the same single complete
+    # input as native model prompts, not another executable authority carrier.
+    from ..quota.turn_envelope import captured_turn_host_input
+
+    host_input = captured_turn_host_input(request) if "work_contract" in request else request
     stdout: list[str] = []
     stderr_chars = 0
 
@@ -757,12 +902,15 @@ def _run_host(
         observed = run_host_process(
             argv,
             project=project,
-            input_text=json.dumps(request, ensure_ascii=False, separators=(",", ":")),
+            input_text=json.dumps(host_input, ensure_ascii=False, separators=(",", ":")),
             timeout_seconds=timeout_seconds,
             stdout_limit_bytes=HOST_RESULT_MAX_BYTES,
             on_stdout=stdout.append,
             on_stderr=count_stderr,
+            launch_guard=launch_guard,
         )
+    except FirstPartyHostRuntimeRejected:
+        raise
     except (OSError, RuntimeError, ValueError) as exc:
         return {"ok": False, "reason": type(exc).__name__, "returncode": None}
     if observed["outcome"] == "output_limit":
@@ -873,6 +1021,7 @@ def _host_result_stage(
     confirm_start: Callable[[], None] | None = None,
     usage_runtime_root: Path | None = None,
     usage_goal_id: str = "",
+    host_launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
 ) -> tuple[dict[str, Any] | None, list[str], dict[str, Any] | None]:
     completed_phases = list(journal.get("completed_phases") or [])
     from_journal = "typed_result" in completed_phases
@@ -895,22 +1044,32 @@ def _host_result_stage(
             confirm_start()
         from ...usage_goal import observe_goal_execution
 
-        with observe_goal_execution(
-            usage_runtime_root or project,
-            usage_goal_id,
-            host=str((plan.get("host") or {}).get("kind") or "unknown"),
-        ):
-            host_observation = (
-                _run_host_runner(request, runner=host_runner)
-                if host_runner is not None
-                else _run_host(
-                    request,
-                    argv=argv or [],
-                    project=project,
-                    timeout_seconds=timeout_seconds,
+        rejected_launch = None
+        try:
+            with observe_goal_execution(
+                usage_runtime_root or project,
+                usage_goal_id,
+                host=str((plan.get("host") or {}).get("kind") or "unknown"),
+            ):
+                host_observation = (
+                    _run_host_runner(request, runner=host_runner)
+                    if host_runner is not None
+                    else _run_host(
+                        request,
+                        argv=argv or [],
+                        project=project,
+                        timeout_seconds=timeout_seconds,
+                        launch_guard=host_launch_guard,
+                    )
                 )
-            )
-        effects["host_invoked"] = True
+        except FirstPartyHostRuntimeRejected as exc:
+            # Stdio checks the Goal only before spawn. A native Host can reject
+            # after dispatch too, so retain reconciliation for other failures.
+            if host_runner is not None and exc.code != "current_turn_work_changed":
+                raise
+            rejected_launch = exc.code
+            host_observation = {"ok": False, "reason": str(exc), "failure_kind": "contract_rejected"}
+        effects["host_invoked"] = rejected_launch is None
         if not host_observation.get("ok"):
             failure = _host_failure(
                 plan,
@@ -936,22 +1095,16 @@ def _host_result_stage(
             else:
                 journal.pop("host_recovery", None)
             persist_journal(journal)
-            return (
-                None,
-                [],
-                execution_payload(
-                    plan,
-                    journal,
-                    execute=True,
-                    replayed=False,
-                    effects=effects,
-                ),
-            )
+            terminal = execution_payload(plan, journal, execute=True, replayed=False, effects=effects)
+            if rejected_launch is not None:
+                terminal["error_code"] = rejected_launch
+            return None, [], terminal
         result = dict(host_observation["value"])
         completed_phases = list(TRANSACTION_PHASES[:2])
 
+    recorded_plan = journal.get("plan")
     validation = validate_loopx_turn_host_result(
-        plan,
+        recorded_plan if from_journal and isinstance(recorded_plan, Mapping) else plan,
         result or {},
         completion_lifecycle_configured=completion_lifecycle_configured,
         from_journal=from_journal,
@@ -1092,20 +1245,26 @@ def _task_validation_stage(
 def _ensure_turn_settlement_plan(
     plan: Mapping[str, Any],
     transaction_plan: dict[str, Any],
-) -> None:
+) -> dict[str, str] | None:
+    # Check the complete source once before either new execution or journal
+    # recovery. Reuse this call-local identity below; never cache it across a
+    # host attempt, source replacement or another invocation.
+    lineage = turn_host_lineage(plan) if "work_contract" in plan or plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION else None
     if isinstance(transaction_plan.get("settlement_plan"), Mapping):
-        return
-    envelope = plan.get("turn_envelope")
-    if not isinstance(envelope, Mapping):
-        return
-    selected_todo = selected_turn_todo(envelope)
-    lineage = {
-        "goal_id": str(envelope.get("goal_id") or ""),
-        "agent_id": str(envelope.get("agent_id") or ""),
-        "todo_id": str(selected_todo.get("todo_id") or ""),
-    }
+        return lineage
+    if lineage is None:
+        # Preserve the historical decoder, including its exact string handling.
+        envelope = plan.get("turn_envelope")
+        if not isinstance(envelope, Mapping):
+            return None
+        selected_todo = selected_turn_todo(envelope)
+        lineage = {
+            "goal_id": str(envelope.get("goal_id") or ""),
+            "agent_id": str(envelope.get("agent_id") or ""),
+            "todo_id": str(selected_todo.get("todo_id") or ""),
+        }
     if not all(lineage.values()):
-        return
+        return lineage
     host = plan.get("host")
     host_fields = host if isinstance(host, Mapping) else {}
     built = build_loopx_turn_transaction_plan(
@@ -1126,6 +1285,7 @@ def _ensure_turn_settlement_plan(
     settlement_plan = built.get("settlement_plan")
     if isinstance(settlement_plan, Mapping):
         transaction_plan["settlement_plan"] = settlement_plan
+    return lineage
 
 
 def _typed_settlement_stage(
@@ -1364,11 +1524,46 @@ def _typed_settlement_stage(
     )
 
 
+def _prepare_host_invocation(
+    plan: Mapping[str, Any], *, host_argv: Sequence[str] | None,
+    host_runner: HostRunner | None,
+) -> tuple[list[str] | None, dict[str, str | int]]:
+    """Normalize the existing external or built-in transport before admission."""
+    if host_runner is not None and host_argv is not None:
+        raise ValueError("run-once accepts either host_argv or host_runner, not both")
+    if host_runner is None:
+        argv = normalize_host_argv(host_argv or [])
+        return argv, {"executable": Path(argv[0]).name, "argv_count": len(argv)}
+    planned_host = plan.get("host") if isinstance(plan.get("host"), dict) else {}
+    return None, {"executable": "built-in", "kind": str(planned_host.get("kind") or "codex-cli")}
+
+
+def _host_attempt_requirements(
+    journal: Mapping[str, Any] | None,
+) -> tuple[bool, bool, Mapping[str, Any] | None]:
+    """Choose the Host attempt, result retry and recorded complete input."""
+    if journal is None:
+        return True, False, None
+    receipt = journal.get("receipt")
+    retry_validation = (
+        journal.get("status") == "failed"
+        and isinstance(receipt, Mapping)
+        and receipt.get("failed_phase") == "validation"
+        and journal.get("validation_stage") != "task_postcondition"
+    )
+    needs_host = retry_validation or "typed_result" not in list(journal.get("completed_phases") or [])
+    recorded = journal.get("plan")
+    if isinstance(recorded, Mapping) and recorded.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION:
+        return needs_host, retry_validation, recorded
+    return needs_host, retry_validation, None
+
+
 @single_executor_per_turn_lane(execution_payload)
 def run_loopx_turn_once(
     plan: Mapping[str, Any],
     *,
     host_argv: Sequence[str] | None = None,
+    host_adapter_request_schema: str | None = None,
     host_runner: HostRunner | None = None,
     session_binding_resolver: SessionBindingResolver | None = None,
     project: Path,
@@ -1390,26 +1585,17 @@ def run_loopx_turn_once(
     terminal_closeout_resolver: TurnEffectResolver | None = None,
     scheduler: Scheduler | None = None,
     post_settlement: PostSettlement | None = None,
+    settlement_admission: Callable[[], AbstractContextManager] | None = None,
     admit_start: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
     confirm_start: Callable[[], None] | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
+    host_launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
 ) -> dict[str, Any]:
-    if host_runner is not None and host_argv is not None:
-        raise ValueError("run-once accepts either host_argv or host_runner, not both")
-    if host_runner is None:
-        argv = normalize_host_argv(host_argv or [])
-        host_projection = {"executable": Path(argv[0]).name, "argv_count": len(argv)}
-    else:
-        argv = None
-        planned_host = plan.get("host") if isinstance(plan.get("host"), dict) else {}
-        host_projection = {
-            "executable": "built-in",
-            "kind": str(planned_host.get("kind") or "codex-cli"),
-        }
+    argv, host_projection = _prepare_host_invocation(plan, host_argv=host_argv, host_runner=host_runner)
     transaction_plan = (
         plan.get("transaction") if isinstance(plan.get("transaction"), dict) else {}
     )
-    _ensure_turn_settlement_plan(plan, transaction_plan)
+    settlement_lineage = _ensure_turn_settlement_plan(plan, transaction_plan)
     request = build_loopx_turn_host_request(plan)
     empty_effects = {
         "host_invoked": False,
@@ -1483,16 +1669,32 @@ def run_loopx_turn_once(
 
     with exclusive_file_lock(journal_path):
         journal = _load_journal(journal_path)
+        # Settlement recovery uses its cached host result and must not reserve
+        # another interval. A new host attempt, including failed-result retry,
+        # goes through admission before any host or journal attempt mutation.
+        needs_host, validation_reinvokes_host, recorded_plan = _host_attempt_requirements(journal)
         recovery_decision: dict[str, Any] | None = None
         if journal is not None:
             if goal_admission is not None:
-                goal_admission.require_current()
-            envelope = (
-                plan.get("turn_envelope")
-                if isinstance(plan.get("turn_envelope"), Mapping)
-                else {}
-            )
-            agent_id = str(envelope.get("agent_id") or "")
+                # One lifetime owner checks source instances and legacy registrations;
+                # recovery does not reserve another quota interval.
+                with goal_admission.launch_lifetime(
+                    operation="turn_recovery_lifetime",
+                ):
+                    pass
+            if recorded_plan is not None:
+                # Recovery uses the recorded source through Host dispatch,
+                # cached-result validation and settlement.
+                plan, request = recorded_plan, build_loopx_turn_host_request(recorded_plan)
+            if settlement_lineage is not None:
+                agent_id = settlement_lineage["agent_id"]
+            else:
+                envelope = (
+                    plan.get("turn_envelope")
+                    if isinstance(plan.get("turn_envelope"), Mapping)
+                    else {}
+                )
+                agent_id = str(envelope.get("agent_id") or "")
             assessment = assess_existing_turn_recovery(
                 journal,
                 request,
@@ -1512,6 +1714,9 @@ def run_loopx_turn_once(
                     replayed=True,
                     effects=empty_effects,
                 )
+                payload.update(recover_post_settlement(
+                    plan=plan, post_settlement=post_settlement, journal=journal,
+                ))
                 payload["recovery"] = build_turn_recovery_audit(
                     recovery_decision,
                     journal,
@@ -1521,35 +1726,30 @@ def run_loopx_turn_once(
                 return payload
             request = require_turn_recovery_continuation(assessment)
 
-        # Settlement recovery uses its cached host result and must not reserve
-        # another interval. A new host attempt, including failed-result retry,
-        # goes through admission before any host or journal attempt mutation.
-        receipt = journal.get("receipt") if isinstance(journal, Mapping) else None
-        validation_reinvokes_host = (
-            isinstance(journal, Mapping)
-            and journal.get("status") == "failed"
-            and isinstance(receipt, Mapping)
-            and receipt.get("failed_phase") == "validation"
-            and journal.get("validation_stage") != "task_postcondition"
-        )
-        needs_host = (
-            validation_reinvokes_host
-            or journal is None
-            or "typed_result" not in list(journal.get("completed_phases") or [])
-        )
         if needs_host and goal_admission is not None:
             goal_admission.require_current()
-        if require_decision_capture and needs_host:
-            from .decision_capture import prepare_turn_decision_capture
-
-            original_plan = journal["plan"] if journal is not None else plan
-            plan = prepare_turn_decision_capture(
-                original_plan, journal_path=journal_path,
-                decision=decision_capture_payload, existing_journal=journal is not None,
+        if needs_host and argv is not None and (reason := host_request_schema_mismatch(
+            request["schema_version"], host_adapter_request_schema,
+        )) is not None:
+            return execution_payload(
+                plan, {"status": "unavailable", "host": host_projection, "reason": reason},
+                execute=True, replayed=False, effects=empty_effects,
             )
-            # Preserve any session recovery adjustment; only the original
-            # observation replaces the fresh request's context.
-            request = {**request, "turn_envelope": plan["turn_envelope"]}
+        capture = stage_turn_decision_capture(
+            journal["plan"] if journal is not None else plan, journal_path=journal_path,
+            decision=decision_capture_payload, existing_journal=journal is not None,
+        ) if require_decision_capture and needs_host else None
+        if needs_host:
+            from ..quota.turn_envelope import complete_turn_host_source
+
+            # Check the exact input selected for publication before reserving
+            # an automatic start or writing a new journal/capture. A refusal
+            # must not put otherwise eligible work into an interval wait.
+            # Saved typed results retain their original finalization path.
+            complete_turn_host_source(
+                _build_staged_dispatch_request(capture.plan) if capture is not None else request,
+                operation="host_dispatch_context",
+            )
         admission = None
         if needs_host and admit_start is not None:
             admission = admit_start(
@@ -1573,6 +1773,8 @@ def run_loopx_turn_once(
                 return execution_payload(
                     plan, waiting, execute=True, replayed=False, effects=empty_effects
                 )
+        if capture is not None:
+            plan, request = capture.publish_for_host(request)
         if journal is not None and recovery_decision is not None:
             journal["recovery_audit"] = build_turn_recovery_audit(
                 recovery_decision,
@@ -1605,19 +1807,22 @@ def run_loopx_turn_once(
             journal.pop("host_failure", None)
             journal["status"] = "in_progress"
             persist_journal(journal)
-        if journal is None:
-            journal = {
+        reserved_start = admission is not None and admission.get("reserved") is True
+        if journal is None or reserved_start:
+            journal = journal or {
                 "schema_version": LOOPX_TURN_JOURNAL_SCHEMA_VERSION,
                 "turn_key": turn_key,
                 "goal_id": goal_id,
                 "status": "in_progress",
                 "host": host_projection,
                 "completed_phases": [],
+                "host_attempt_count": 0,
                 "plan": dict(plan),
             }
-            persist_journal(journal)
-        if admission is not None and admission.get("reserved") is True:
-            journal["admission"] = admission
+            if reserved_start:
+                journal["admission"] = admission
+            # The accepted reservation belongs to the initial snapshot. Keep
+            # the later durable Host-attempt checkpoint and confirmation separate.
             persist_journal(journal)
 
         effects = dict(empty_effects)
@@ -1655,11 +1860,8 @@ def run_loopx_turn_once(
             journal=journal,
             persist_journal=persist_journal,
             effects=effects,
-            confirm_start=(
-                confirm_start
-                if admission is not None and admission.get("reserved") is True
-                else None
-            ),
+            confirm_start=confirm_start if reserved_start else None,
+            host_launch_guard=host_launch_guard,
         )
         if terminal is not None:
             return finish_recovery(terminal)
@@ -1677,37 +1879,38 @@ def run_loopx_turn_once(
         if terminal is not None:
             return finish_recovery(terminal)
 
-        settled = _typed_settlement_stage(
-            plan,
-            result,
-            completed_phases=completed_phases,
-            journal=journal,
-            persist_journal=persist_journal,
-            effects=effects,
-            writeback=writeback,
-            completion_writeback=completion_writeback,
-            completion_intent=completion_intent,
-            terminal_closeout=terminal_closeout,
-            spend=spend,
-            effect_resolvers=turn_effect_resolvers(
-                writeback=writeback_resolver,
-                spend=spend_resolver,
-                terminal_closeout=terminal_closeout_resolver,
-            ),
-            scheduler=scheduler,
-            post_settlement=post_settlement,
-            source_effects=(
-                goal_admission.turn_effect_admission(
-                    turn_key=turn_key,
-                    journal_path=journal_path,
-                )
-                if goal_admission is not None
-                else None
-            ),
-            persist_source_journal=(
-                persist_source_journal
-                if goal_admission is not None and goal_admission.enabled
-                else None
-            ),
-        )
+        with settlement_admission() if settlement_admission is not None else nullcontext():
+            settled = _typed_settlement_stage(
+                plan,
+                result,
+                completed_phases=completed_phases,
+                journal=journal,
+                persist_journal=persist_journal,
+                effects=effects,
+                writeback=writeback,
+                completion_writeback=completion_writeback,
+                completion_intent=completion_intent,
+                terminal_closeout=terminal_closeout,
+                spend=spend,
+                effect_resolvers=turn_effect_resolvers(
+                    writeback=writeback_resolver,
+                    spend=spend_resolver,
+                    terminal_closeout=terminal_closeout_resolver,
+                ),
+                scheduler=scheduler,
+                post_settlement=post_settlement,
+                source_effects=(
+                    goal_admission.turn_effect_admission(
+                        turn_key=turn_key,
+                        journal_path=journal_path,
+                    )
+                    if goal_admission is not None
+                    else None
+                ),
+                persist_source_journal=(
+                    persist_source_journal
+                    if goal_admission is not None and goal_admission.enabled
+                    else None
+                ),
+            )
         return finish_recovery(settled)

@@ -89,7 +89,7 @@ function ConfigurationFieldControl({ copy, field, id, onChange, value, timezone 
   // `deepseek-flash` id of DeepSeek-V4.1-Flash. Suggestions only: the field
   // stays free text so an operator can name any id their endpoint serves.
   const modelSuggestions = field.key === "executor_model"
-    ? ["gpt-6-sol", "gpt-6-luna", "gpt-6-astra", "deepseek-flash", "deepseek-v4-pro"] : [];
+    ? ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-6-astra", "deepseek-flash", "deepseek-v4-pro"] : [];
   return (
     <label htmlFor={id}>
       <span>{label}</span>
@@ -116,6 +116,7 @@ type CapabilityConfigurationFieldsProps = Readonly<{
   editor: CapabilityConfigurationEditor;
   enabledAction?: ReactNode;
   omitKeys?: readonly string[];
+  advancedKeys?: readonly string[];
   onChange?: FieldChange;
   value: Record<string, unknown>;
 }>;
@@ -126,15 +127,17 @@ export function CapabilityConfigurationFields({
   editor,
   enabledAction,
   omitKeys = [],
+  advancedKeys = [],
   onChange,
   value,
 }: CapabilityConfigurationFieldsProps) {
   const idPrefix = useId();
+  const { locale } = useWorkspaceI18n();
   const omitted = new Set(omitKeys);
+  const advanced = new Set(advancedKeys);
+  const fields = editor.fields.filter((field) => !omitted.has(field.key));
 
-  return (
-    <fieldset className="personal-capability-fields" disabled={disabled}>
-      {editor.fields.filter((field) => !omitted.has(field.key)).map((field) => {
+  const controls = (items: ConfigurationField[]) => items.map((field) => {
         const control = <ConfigurationFieldControl
           copy={copy}
           field={field}
@@ -147,7 +150,14 @@ export function CapabilityConfigurationFields({
         return field.key === "enabled" && field.input_kind === "boolean"
           ? <div className="personal-capability-enabled-row" key={field.key}>{control}{enabledAction}</div>
           : control;
-      })}
+      });
+  return (
+    <fieldset className="personal-capability-fields" disabled={disabled}>
+      {controls(fields.filter((field) => !advanced.has(field.key)))}
+      {fields.some((field) => advanced.has(field.key)) ? <details className="personal-capability-help">
+        <summary>{locale === "zh-CN" ? "高级设置" : "Advanced settings"}</summary>
+        <div className="personal-capability-fields">{controls(fields.filter((field) => advanced.has(field.key)))}</div>
+      </details> : null}
     </fieldset>
   );
 }

@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+
 import json
+import shutil
 from pathlib import Path
 
 import pytest
 
 from loopx.cli import main as cli_main
 from loopx.control_plane.goals.goal_vision import normalize_goal_vision_packet
+from loopx.control_plane.goals import goal_vision_wait
 from loopx.control_plane.scheduler.execution_context import (
     scheduler_execution_context_for_runtime_profile,
 )
@@ -19,6 +23,7 @@ from loopx.control_plane.work_items.semantic_replan_writeback import (
     enforce_open_replan_writeback,
 )
 from loopx.quota import build_quota_should_run
+from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
 
 GOAL = "fallback-wait-fixture"
 AGENT = "worker"
@@ -98,6 +103,20 @@ def fallback_state(metadata: str) -> str:
     )
 
 
+def test_vision_wait_composition_uses_one_runtime_crossing(monkeypatch) -> None:
+    methods = []
+    original = goal_vision_wait.effect_runtime_result
+
+    def counted(method, request, **kwargs):
+        methods.append(method)
+        return original(method, request, **kwargs)
+
+    monkeypatch.setattr(goal_vision_wait, "effect_runtime_result", counted)
+    decision()
+
+    assert methods == ["goal.vision_wait.project"]
+
+
 @pytest.mark.parametrize(
     "extra_count,reverse", [(0, False), (8, False), (40, False), (40, True)]
 )
@@ -146,6 +165,7 @@ def test_cli_wait_coverage_is_independent_of_display_size(
     runtime = tmp_path / "runtime"
     runs = runtime / "goals" / GOAL / "runs"
     runs.mkdir(parents=True)
+    initialize_canonical_source_fixture(runtime, GOAL, state_path=state_file)
     if not declared:
         assert (
             cli_main(
@@ -180,7 +200,7 @@ def test_cli_wait_coverage_is_independent_of_display_size(
             )
             == 0
         )
-        authored = json.loads(capsys.readouterr().out)
+        authored = read_cli_policy_payload(capsys.readouterr().out, returncode=0)
         assert authored["ok"] is True
     else:
         run = vision_run(declared=declared)
@@ -216,17 +236,30 @@ def test_cli_wait_coverage_is_independent_of_display_size(
         "ark_managed_agent_goal",
     ]
     assert cli_main(args) == 0
-    missing = json.loads(capsys.readouterr().out)
+    missing = read_cli_policy_payload(capsys.readouterr().out, returncode=0)
     assert missing["effective_action"] == "autonomous_replan_required"
+    runtime_revision = 0
+
+    def reload_source_authority() -> None:
+        nonlocal runtime, runtime_revision
+        next_runtime = tmp_path / f"runtime-source-{runtime_revision}"
+        shutil.copytree(runtime / "goals" / GOAL / "runs", next_runtime / "goals" / GOAL / "runs")
+        runtime = next_runtime
+        runtime_revision += 1
+        initialize_canonical_source_fixture(runtime, GOAL, state_path=state_file)
+        args[args.index("--runtime-root") + 1] = str(runtime)
+
     state_file.write_text(state("status=open claimed_by=worker"))
+    reload_source_authority()
     assert cli_main(args) == 0
-    continued = json.loads(capsys.readouterr().out)
+    continued = read_cli_policy_payload(capsys.readouterr().out, returncode=0)
     assert continued["selected_todo"]["todo_id"] == "todo_source_b"
     state_file.write_text(
         state("status=deferred claimed_by=worker resume_when=todo_done:todo_recovery")
     )
+    reload_source_authority()
     assert cli_main(args) == 0
-    waiting = json.loads(capsys.readouterr().out)
+    waiting = read_cli_policy_payload(capsys.readouterr().out, returncode=0)
     assert waiting["execution_obligation"]["must_attempt_work"] is False
     assert (
         waiting["scheduler_hint"]["goal_runtime_continuation"]["disposition"] == "defer"
@@ -353,3 +386,49 @@ def test_monitor_and_excluded_blocker_cannot_cover_causal_work() -> None:
         result = decision(state=source, runs=[vision_run(declared=False)])
         assert not result["goal_frontier_projection"].get("vision_wait_state")
         assert result["goal_frontier_projection"]["acceptance_gaps"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("priority", ["P0", "P2"])
+def test_cli_current_agent_wait_preserves_canonical_blocker_priority(
+    tmp_path: Path, capsys, provider: str, priority: str,
+) -> None:
+    state_file = tmp_path / "ACTIVE_GOAL_STATE.md"
+    state_file.write_text(
+        f"# Active Goal State\n\n## Agent Todo\n\n"
+        f"- [ ] [{priority}] Await authorized source recovery.\n"
+        "  <!-- loopx:todo todo_id=todo_source_a status=blocked "
+        "task_class=blocker claimed_by=worker -->\n"
+    )
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"goals": [{
+        "id": GOAL, "status": "active", "domain": "engineering",
+        "waiting_on": "codex", "state_file": str(state_file), "repo": str(tmp_path),
+        "adapter": {"kind": "fixture_connected_delivery_v0", "status": "connected-delivery"},
+        "quota": {"compute": 1.0, "window_hours": 24, "slot_minutes": 1},
+        "coordination": COORDINATION,
+    }]}))
+    runtime = tmp_path / "runtime"
+    initialize_canonical_source_fixture(runtime, GOAL, state_path=state_file, provider=provider)
+    runs = runtime / "goals" / GOAL / "runs"
+    runs.mkdir(parents=True, exist_ok=True)
+    run = vision_run(declared=False)
+    run["agent_vision"]["todo_delta"] = ["retain:todo_source_a"]
+    json_path, markdown_path = runs / "checkpoint.json", runs / "checkpoint.md"
+    json_path.write_text(json.dumps(run))
+    markdown_path.write_text("# Source checkpoint\n")
+    (runs / "index.jsonl").write_text(json.dumps({
+        **run, "json_path": str(json_path), "markdown_path": str(markdown_path),
+    }) + "\n")
+
+    assert cli_main([
+        "--format", "json", "--registry", str(registry), "--runtime-root", str(runtime),
+        "quota", "should-run", "--verbose", "--goal-id", GOAL, "--agent-id", AGENT,
+        "--runtime-profile", "ark_managed_agent_goal",
+    ]) == 0
+    result = read_cli_policy_payload(capsys.readouterr().out, returncode=0)
+    wait = result["goal_frontier_projection"]["vision_wait_state"]
+    assert wait["reason_code"] == "current_agent_blocker"
+    assert wait["selected_todo_id"] == "todo_source_a"
+    assert wait["selected_todo_priority"] == priority
+    assert wait["automatic_resume"] is False

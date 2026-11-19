@@ -1,21 +1,26 @@
+import {useManagedConversation} from "../data/use-managed-conversation";
 import { normalizeGoalDraft, type GoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { withTurnActivity, type TurnStep } from "../data/turn-steps";
-import { conversationReturnSessions, conversationPendingReturnSessions, reconcileConversationHistory, reconcileConversationReturns } from "../data/conversation-returns";
+import { conversationReturnSessions, conversationPendingReturnSessions, reconcileConversationHistory } from "../data/conversation-returns";
 import { readConversationReturns, readTaskSessions } from "../data/conversation-return-observation";
 import { currentChannelSession, useConversationHistory } from "../data/use-conversation-history";
 import { useChatProjects } from "../data/use-chat-projects";
+import { useBoundConversation } from "../data/use-bound-conversation";
+import {AppStewardEntry, useAppStewardTarget} from "../features/personal-workspace/app-steward-entry";
 import { goalSubtree } from "../features/personal-workspace/goal-hierarchy";
+import {readGoalWorkBrowse, writeGoalWorkBrowse, type GoalWorkBrowseState} from "../features/personal-workspace/goal-work-browse";
+import { caseChapterHashPrefix } from "../features/personal-workspace/research-case-study";
 import {compactWorkspaceText as compactShareText, workspaceAgentTodoFromItem} from "../features/personal-workspace/personal-workspace-model";
 import type { GoalAcceptanceObservation } from "../data/goal-acceptance-observation";
 import { attentionDetails, attentionDetailsFromSnapshot, sourceAttention } from "../features/personal-workspace/attention-details";
 import type { AttentionDetails } from "../features/personal-workspace/attention-details";
-import { directoryStatusPayload, fetchWorkspaceDirectory, loadWorkspaceGoalSnapshots, workspaceReadPlan, type WorkspaceProgress, type WorkspaceLoadError, type WorkspaceReadScope } from "../data/workspace-progressive-status";
+import { directoryStatusPayload, fetchWorkspaceDirectory, loadWorkspaceGoalSnapshots, scopeWorkspaceDirectory, workspaceReadPlan, type WorkspaceProgress, type WorkspaceLoadError, type WorkspaceReadScope } from "../data/workspace-progressive-status";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CircleAlert, Moon, RefreshCw, Sun } from "lucide-react";
 import type { DigestAttentionSummary } from "../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
 import { hasGoalFailureStatus } from "../../../../../loopx/control_plane/presentation/goal_failure_status.js";
 
-import { dashboardRoute } from "../router";
+import { clearedResearchSearch, dashboardRoute } from "../router";
 import {
   QueueItem,
   RunGoal,
@@ -49,8 +54,11 @@ import {
   conversationChannelId,
   conversationContextKey,
   conversationContextOfKey,
+  conversationSupportsStatusProjection,
   createChatSession,
   type ConversationContext,
+  type BoundConversationTarget,
+  type ManagedConversationTarget,
   updateLoopXMode,
   type LoopXModeSettings,
   fetchChatCapabilities,
@@ -76,6 +84,7 @@ import {
   type ChatSessionSummary,
   type ChatImageAttachment,
   type ChatVisibleMessage,
+  mergeChatSessionMessages,
   type ManagerChannelBinding,
   type ManagerRuntimeSessionReadback,
   type AgentResponse,
@@ -99,6 +108,7 @@ import {
 } from "../features/personal-workspace/agent-family";
 import { PersonalWorkspacePage } from "../features/personal-workspace/personal-workspace-page";
 import { modelSelectionFromReadback } from "../features/personal-workspace/chat-model-controls";
+import { configureChatSessionModel } from "../data/chat";
 import { visibleAgentMessage } from "../features/personal-workspace/answer-text";
 import { useWorkspaceI18n, type WorkspaceTranslate } from "../features/personal-workspace/i18n";
 import {
@@ -120,6 +130,7 @@ import {
   type WorkspaceGoalArchiveLoadState,
   type WorkspaceActionPreviewRequest,
   type WorkspaceAgentTodo,
+  type WorkspaceAttention,
 } from "../features/personal-workspace/personal-workspace-model";
 import { monitorTodoReadback } from "../features/personal-workspace/monitor-readback";
 import { goalExecution, taskSessionStatus } from "../features/personal-workspace/goal-activity";
@@ -190,6 +201,7 @@ import {
   activeStatusSourceForUrl,
   removeStatusSource,
   runtimeStatusSourceCatalog,
+  statusSourceForUrl,
   saveStatusSourceCatalog,
   type StatusSource,
 } from "../data/status-source-catalog";
@@ -400,7 +412,7 @@ function quotaStateForShare(row?: GoalDirectoryRow) {
 
 function buildAgentManagementRows(
   rows: GoalDirectoryRow[],
-  todoIndex?: TodoIndexSummary | null,
+  _todoIndex?: TodoIndexSummary | null,
   projection?: AgentManagementProjection | null,
 ): AgentManagementRow[] {
   const items: TodoExplorerItem[] = [];
@@ -468,6 +480,8 @@ type PersonalGoalItem = {
   needsYou?: string | null;
   needsYouActionKind?: string | null;
   needsYouBlocking?: boolean;
+  reportReviewAttention?: WorkspaceAttention[];
+  reportReviewCount?: number;
   attentionSummary?: DigestAttentionSummary;
   needsYouTaskClass?: string | null;
   needsYouTodoId?: string | null;
@@ -523,6 +537,10 @@ type PersonalHomeModel = {
   workers?: WorkspaceWorker[];
 };
 type PersonalManagerMessage = {
+  queueInputRevision?: number;
+  queueInputCancelled?: true;
+  queued?: boolean;
+  replyContext?: ChatVisibleMessage["reply_context"];
   goalDraft?: GoalDraft | null;
   sourceMessageId?: string;
   sourceSessionId?: string;
@@ -541,6 +559,7 @@ type PersonalManagerMessage = {
   endedAt?: number;
   returnDelivery?: ChatVisibleMessage["return_delivery"];
   collaboration?: ChatVisibleMessage["collaboration"];
+  collaborations?: ChatVisibleMessage["collaborations"];
   reconnect?: boolean;
   role: "assistant" | "user";
   sourceLabel?: string;
@@ -598,6 +617,9 @@ function readPersonalAgentSelections() {
     return Object.fromEntries(
       Object.entries(value).filter((entry): entry is [string, string] =>
         typeof entry[0] === "string" && typeof entry[1] === "string"
+          // The steward executor is machine-owned; only its status-only view
+          // remains a browser preference. Goal/workspace picks stay local.
+          && (entry[0] !== "manager" || entry[1] === "status-only")
       ),
     );
   } catch {
@@ -672,6 +694,13 @@ function personalAgentCapability(agentId: string, adapterKind?: string | null) {
 
 function personalTodosForQueueItem(item: QueueItem, role: "user" | "agent") {
   const projectAsset = item.project_asset;
+  const queueGroup = role === "user" ? item.user_todos : item.agent_todos;
+  if (role === "user" && queueGroup?.items?.length) {
+    // The owner view needs the canonical bounded queue, not the 3-row project
+    // asset teaser. Both remain display projections; the full-source
+    // capability_actions summary carries counts beyond this list.
+    return queueGroup;
+  }
   return role === "user"
     ? todosFromProjectAssetSummary(projectAsset?.user_todos, item.user_todos, role)
     : todosFromProjectAssetSummary(projectAsset?.agent_todos, item.agent_todos, role);
@@ -1054,6 +1083,21 @@ function buildPersonalHomeModel(
     ];
     const agentRow = sortedGoalAgentRows[0];
     const goalAgentTodos = mergePersonalAgentTodos(personalAgentTodos(row), sortedGoalAgentRows, row);
+    const capabilityActions = row.queueItem?.user_todos?.capability_actions
+      ?? row.queueItem?.project_asset?.user_todos?.capability_actions;
+    const reportReviewGroup = capabilityActions?.groups.find(group => group.action_kind === "review_periodic_report");
+    const reportReviewAttention: WorkspaceAttention[] = (reportReviewGroup?.items ?? []).flatMap(todo => {
+      const todoId = todo.todo_id?.trim();
+      if (!todoId) return [];
+      return [{
+        blocking: false,
+        goalId: goal.id,
+        text: todo.text,
+        todoId,
+        updatedAt: todo.updated_at ?? null,
+        details: attentionDetails(todo),
+      }];
+    });
     const nextSentence = [
       agentTodoFacts.nextTodoText,
       row.queueItem?.recommended_action,
@@ -1061,6 +1105,11 @@ function buildPersonalHomeModel(
       personalAgentSentence(payload, row, state, t),
     ].map((value) => projectionSentence(value, t))
       .find((value) => value !== "" && value !== "暂无") ?? t("projection.nextUpdatePending");
+    const sourceStrategies = goal.source_access ? goal.semantic_history?.agents.flatMap(({latest_agent_vision_run: run}) => {
+      const summary = run?.agent_vision.vision_patch?.vision_summary?.trim();
+      if (!run || !summary || !Number.isFinite(Date.parse(run.generated_at))) return [];
+      return [{recordedAt: run.generated_at, summary, observation: run.agent_vision.path_delta?.observed_reality?.trim()}];
+    }) : undefined;
     return [{
       activationState: goal.activation_state,
       objective: goal.goal_objective ?? null,
@@ -1082,7 +1131,9 @@ function buildPersonalHomeModel(
           agentId: thread.agent_id ?? null,
           hostSurface: thread.host_surface,
           lastEventAt: thread.last_event_at ?? null,
+          turnStartedAt: thread.turn_started_at ?? null,
           state: thread.state,
+          reason: thread.reason ?? null,
           deliveryWindow: thread.delivery_window ? {
             state: thread.delivery_window.state,
             ageHours: thread.delivery_window.age_hours ?? null,
@@ -1091,12 +1142,19 @@ function buildPersonalHomeModel(
         })),
       } : undefined,
       acceptanceObservation: goal.acceptance_observation,
+      workerObservations: !goal.host_worker_observations ? null
+        : goal.host_worker_observations.goal_id === goal.id ? goal.host_worker_observations
+        : {read_status: "unreadable", rows: []},
       goalId: goal.id,
       parentGoalId: goal.parent_goal_id,
+      sourceAccess: goal.source_access ? {...goal.source_access, readOnly: true} : undefined,
+      sourceStrategy: sourceStrategies?.sort((left, right) => Date.parse(right.recordedAt) - Date.parse(left.recordedAt))[0],
       latestActivity: row.latestRun?.generated_at ?? "",
       needsYou,
       needsYouActionKind: needsYouTodo?.actionKind ?? null,
       needsYouBlocking: needsYouTodo?.blocking ?? false,
+      reportReviewAttention,
+      reportReviewCount: reportReviewGroup?.count ?? reportReviewAttention.length,
       attentionSummary: goal.activation_state === "stopped"
         ? { blocking: 0, optional: 0, coverage: "complete" } satisfies DigestAttentionSummary
         : attentionSummaries.get(goal.id),
@@ -1120,7 +1178,7 @@ function buildPersonalHomeModel(
           modelConfig: goal.spawn_policy?.model_config,
         },
       } : {}),
-      title: personalGoalTitle(goal.id, goal.display_name),
+      title: personalGoalTitle(goal.id, goal.source_access?.label ?? goal.display_name),
       usage: (() => {
         const goalUsage = usageById.get(goal.id);
         return goalUsage ? {
@@ -1214,11 +1272,18 @@ function buildPersonalHomeModel(
   };
 }
 function PersonalGoalHome({
+  appEntry,
   goalArchiveLoadState,
   sourceError,
   selectedView,
   selectedTodoId,
   selectedWorkAgentId,
+  selectedWorkSessionId,
+  conversationMessageFocus,
+  onClearMessageFocus,
+  workBrowseSearch,
+  onWorkBrowseChange,
+  onSelectWorkSession,
   onSelectWorkAgent,
   onSelectTodo,
   onSelectView,
@@ -1226,6 +1291,7 @@ function PersonalGoalHome({
   onGoalDeleted,
   onSelectGoal,
   onSelectWorkspace,
+  onOpenOriginalConversation,
   onReconcileStatus,
   onRefresh,
   onBackgroundRefresh,
@@ -1235,24 +1301,34 @@ function PersonalGoalHome({
   rows,
   selectedGoalId: requestedGoalId,
   selectedWorkspaceRef: requestedWorkspaceRef,
+  boundConversation: requestedBoundConversation,
   rootGoalId,
   onChangeGoalRoot,
   statusSourceControl,
   theme,
 }: {
+  appEntry: ReturnType<typeof useAppStewardTarget>;
   goalArchiveLoadState: WorkspaceGoalArchiveLoadState;
   /** The current source's latest read failed; the retained payload is stale. */
   sourceError: string | null;
   selectedView?: WorkspaceGoalTab;
   selectedTodoId?: string | null;
   selectedWorkAgentId?: string | null;
-  onSelectWorkAgent: (agentId: string | null) => void;
+  selectedWorkSessionId?: string;
+  conversationMessageFocus?: {sessionId: string; messageId: string};
+  onClearMessageFocus?: () => void;
+  workBrowseSearch?: Record<string, unknown>;
+  onWorkBrowseChange?: (patch: Partial<GoalWorkBrowseState>, source: string, replace?: boolean) => void;
+  onSelectWorkSession: (sessionId: string, replace?: boolean) => void;
+  onSelectWorkAgent: (agentId: string | null, sessionId?: string) => void;
   onSelectTodo: (todoId: string | null) => void;
   onSelectView: (view: WorkspaceGoalTab) => void;
   onGoalActivationStateChange: (goalId: string, activationState: "active" | "stopped") => void;
   onGoalDeleted: (goalId: string) => void;
-  onSelectGoal: (goalId: string, view?: WorkspaceGoalTab) => void;
+  onSelectGoal: (goalId: string, view?: WorkspaceGoalTab, managedSession?: ManagedConversationTarget) => void;
   onSelectWorkspace: (projectRef: string | null) => void;
+  onOpenOriginalConversation: (target: BoundConversationTarget) => void;
+  boundConversation: BoundConversationTarget | null;
   selectedWorkspaceRef: string | null;
   rootGoalId?: string;
   onChangeGoalRoot: (goalId: string | null) => void;
@@ -1268,6 +1344,7 @@ function PersonalGoalHome({
   theme: "light" | "dark";
 }) {
   const readOnly = statusSourceControl.activeSource.readOnly
+    || rows.find(row => row.goal.id === requestedGoalId)?.goal.source_access?.read_only === true
     || Boolean(rootGoalId && !rows.some(row => row.goal.id === rootGoalId));
   const remoteGoalLifecycleHost = statusSourceControl.activeSource.kind === "ssh_tunnel"
     ? statusSourceControl.activeSource.hostAlias
@@ -1355,13 +1432,24 @@ function PersonalGoalHome({
       },
     };
   }, [sourceError, scopedModel, t]);
+  const appEntryBlocked = appEntry.loading || appEntry.unavailable;
+  const boundConversation = requestedBoundConversation ?? appEntry.target;
   const selectedGoalId = rootGoalId && !model.goals.some(goal => goal.goalId === requestedGoalId)
     ? rootGoalId : requestedGoalId;
-  const selectedWorkspaceRef = rootGoalId ? null : requestedWorkspaceRef;
+  const selectedWorkspaceRef = rootGoalId || boundConversation ? null : requestedWorkspaceRef;
   // A workspace conversation has no Goal, so no Goal projection may apply to it.
-  const selectedGoal = selectedWorkspaceRef ? null : model.goals.find((goal) => goal.goalId === selectedGoalId) ?? null;
+  const selectedGoal = selectedWorkspaceRef || boundConversation ? null : model.goals.find((goal) => goal.goalId === selectedGoalId) ?? null;
   const workspaceProjects = useChatProjects(readOnly);
-  const conversationContext: ConversationContext = selectedWorkspaceRef
+  const originalReadback = useBoundConversation(boundConversation, !readOnly && !rootGoalId);
+  const originalConversation = rootGoalId && boundConversation
+    ? { session: undefined, source: undefined, error: "Original conversation is outside this Goal navigation scope.", retry: originalReadback.retry }
+    : originalReadback;
+  const managedTarget = selectedWorkAgentId != null && selectedWorkSessionId?.startsWith("managed:") && requestedGoalId
+    ? {goalId: requestedGoalId, agentId: selectedWorkAgentId, sessionId: selectedWorkSessionId.slice(8)} : null;
+  const managedConversation = useManagedConversation(managedTarget, !readOnly);
+  const fixedSession = Boolean(boundConversation || managedTarget);
+  const conversationContext: ConversationContext = managedTarget ? {kind: "managed", ...managedTarget} : boundConversation
+    ? { kind: "bound", ...boundConversation } : selectedWorkspaceRef
     ? { kind: "project", projectRef: selectedWorkspaceRef }
     : selectedGoal ? { kind: "goal", goalId: selectedGoal.goalId } : { kind: "manager" };
   const selectedPayload = progress?.snapshots[selectedGoalId] ?? payload;
@@ -1373,6 +1461,8 @@ function PersonalGoalHome({
   const sessionDiscoveryKey = model.goals.some((goal) => goal.activationState === "active" && goal.loadState === "loading")
     ? "loading" : model.goals.map((goal) => `${goal.goalId}:${goal.agentId}`).join("|");
   const contextId = conversationContextKey(conversationContext);
+  const activeConversationContext = useRef(contextId);
+  activeConversationContext.current = contextId;
   const discoveredAgents: PersonalAgentOption[] = runtimeAgents.length > 0
     ? runtimeAgents.map((agent) => ({
         agentId: agent.agent_id,
@@ -1404,7 +1494,7 @@ function PersonalGoalHome({
   // The status projection answers about Goals; a workspace conversation needs an executor.
   const agentOptions = [
     ...discoveredAgents,
-    ...(conversationContext.kind === "project" ? [] : [{
+    ...(!conversationSupportsStatusProjection(conversationContext) ? [] : [{
       agentId: "status-only",
       available: true,
       capability: t("header.statusOnlyDescription"),
@@ -1422,8 +1512,8 @@ function PersonalGoalHome({
     ?? discoveredAgents.find((agent) => agent.available)?.agentId
     ?? "status-only";
   // The manager channel answers on the executor this machine declares for the
-  // steward, and the client is expected to send no endpoint until the operator
-  // picks one. The picker therefore has to show that same resolution: an
+  // steward, and the client sends no endpoint override. The header therefore
+  // has to show that same resolution: an
   // executor merely discovered on this machine is not a reason to present
   // itself as the steward's runtime, or the header chip, the composer and the
   // answer would tell three different stories.
@@ -1440,8 +1530,16 @@ function PersonalGoalHome({
   // Runtime readback drives the label; only an owner pick drives a new binding.
   const requestedAgentModels = useRef<Record<string, string>>({});
   const requestedAgentEfforts = useRef<Record<string, string>>({});
-  const selectedAgentId = selectedAgents[contextId] ?? agentDefaultForContext(contextId);
-  const selectedAgent = selectChatAgent(agentOptions, selectedAgentId, defaultAgentId);
+  const selectedAgentId = managedTarget ? managedConversation.session?.agent_id ?? "original-managed-session" : boundConversation ? originalConversation.session?.agent_id ?? "original-conversation" : selectedAgents[contextId] ?? agentDefaultForContext(contextId);
+  const selectedAgent: PersonalAgentOption = managedTarget
+    ? {...(discoveredAgents.find(agent => agent.agentId === selectedAgentId) ?? {agentId: selectedAgentId, label: selectedAgentId, capability: "", statusLabel: t("agent.statusNeedsSetup")}), available: Boolean(managedConversation.session) && discoveredAgents.some(agent => agent.agentId === selectedAgentId && agent.available)}
+    : boundConversation
+    ? discoveredAgents.find(agent => agent.agentId === selectedAgentId) ?? {
+      agentId: selectedAgentId, available: false, label: selectedAgentId === "original-conversation"
+        ? (locale === "zh-CN" ? "原会话" : "Original conversation") : selectedAgentId,
+      capability: "", source: "unavailable", statusLabel: t("agent.statusNeedsSetup"),
+    }
+    : selectChatAgent(agentOptions, selectedAgentId, defaultAgentId);
   const [messagesByContext, setMessagesByContext] = useState<Record<string, PersonalManagerMessage[]>>({});
   const [runtimeBindings, setRuntimeBindings] = useState<Record<string, PersonalRuntimeBinding>>({});
   // Bound Sessions whose mode queues a message sent while a Turn runs, read
@@ -1462,9 +1560,10 @@ function PersonalGoalHome({
   const newSessionRequired = useRef(new Set<string>());
   const activeTurnIds = useRef(new Map<string, string>());
   const streamControllers = useRef(new Map<string, AbortController>());
+  const pendingTurnAdmissions = useRef(new Map<string, AbortController>());
   const preparationControllers = useRef(new Map<string, AbortController>());
   const interruptedTurnIds = useRef(new Set<string>());
-  const recoveringTurnKeys = useRef(new Map<string, AbortController>());
+  const turnObservers = useRef(new Map<string, AbortController>());
   // A running Turn a 409 reported, keyed by context: its pending reply holds
   // the composer closed until the recovery effect adopts it or an
   // authoritative Session read finds no such Turn, so the handoff never leaves
@@ -1475,11 +1574,15 @@ function PersonalGoalHome({
   const turnHandoffs = useRef(new Map<string, { agentId: string; failedReads: number; messageId: number; sessionId: string; turnId: string }>());
   const contextMessages = messagesByContext[contextId] ?? [];
   const conversationHistory = useConversationHistory({
-    agentId: conversationContext.kind === "manager" ? undefined : selectedAgent.agentId,
+    // A saved answer can belong to an earlier executor in this same channel.
+    // Read that transcript without changing the runtime that owns new sends.
+    agentId: conversationContext.kind === "manager" || conversationMessageFocus ? undefined : selectedAgent.agentId,
     currentAgentId: selectedAgent.agentId,
     channelId: conversationChannelId(conversationContext),
     goalId: selectedGoal?.goalId,
-    enabled: !readOnly && selectedAgent.available,
+    bound: boundConversation ?? undefined,
+    managed: managedTarget ?? undefined,
+    enabled: !readOnly && !appEntryBlocked && (selectedWorkAgentId == null || managedTarget !== null) && (managedTarget ? Boolean(managedConversation.session) : boundConversation ? Boolean(originalConversation.session) : selectedAgent.available),
   });
 
   // Who is speaking in the transcript. The manager channel answers as the LoopX
@@ -1487,8 +1590,27 @@ function PersonalGoalHome({
   // to the machine-capability chip, so a person reading an answer is never told
   // the CLI brand of whatever host happened to run it. Goal channels still name
   // the Goal's own Agent.
-  const answerIdentityLabel = (targetContextId: string, goalFallback: string) =>
-    targetContextId === "manager" ? t("header.manager") : goalFallback;
+  const answerIdentityLabel = (targetContextId: string, goalFallback: string) => {
+    const target = conversationContextOfKey(targetContextId);
+    return target.kind === "managed" ? target.agentId : target.kind === "manager" ? t("header.manager") : goalFallback;
+  };
+
+  function conversationHistoryMessage(targetContextId: string, message: ChatVisibleMessage, sessionLabel: string): PersonalManagerMessage {
+    return {
+      sourceMessageId: message.message_id, sourceSessionId: message.session_id,
+      sourceTurnId: message.turn_id ?? undefined, sourceCreatedAt: message.created_at,
+      goalDraft: normalizeGoalDraft(message.goal_draft),
+      agentLabel: message.role === "user" ? message.origin === "peer" ? (locale === "zh-CN" ? "协作者" : "Collaborator") : undefined
+        : message.origin === "manager_followup" ? "协作回执" : answerIdentityLabel(targetContextId, sessionLabel),
+      attachments: workspaceImageAttachments(message.attachments),
+      id: managerMessageId.current++, lines: [], role: message.role === "user" ? "user" : "assistant",
+      returnDelivery: message.return_delivery, collaboration: message.collaboration, collaborations: message.collaborations,
+      replyContext: message.reply_context, queueInputRevision: message.queue_input_revision, queueInputCancelled: message.queue_input_cancelled,
+      sourceLabel: message.role === "user" ? undefined : message.role === "error" ? "本地会话记录"
+        : targetContextId === "manager" ? `恢复的${t("header.manager")}会话` : `恢复的 ${sessionLabel} 会话`,
+      text: message.role === "user" ? message.reply_context?.source_text ?? message.text : visibleAgentMessage(message.text),
+    };
+  }
 
   useEffect(() => {
     const resolved = resolveLocalStatusUrl(
@@ -1534,7 +1656,7 @@ function PersonalGoalHome({
   // navigation. A single index read detects changes; snapshots refresh only
   // their original context and never take ownership of the current stream.
   const conversationReturnSessionKey = JSON.stringify(Object.fromEntries(
-    [...new Set([...Object.keys(runtimeBindings), ...Object.keys(messagesByContext)])].sort().map<[string, string[]]>((id) => [
+    [...new Set([...Object.keys(runtimeBindings), ...Object.keys(messagesByContext)])].filter(id => !["bound", "managed"].includes(conversationContextOfKey(id).kind)).sort().map<[string, string[]]>((id) => [
       id, conversationReturnSessions(runtimeBindings[id]?.sessionId, messagesByContext[id] ?? []),
     ]).filter(([, ids]) => ids.length > 0),
   ));
@@ -1563,13 +1685,14 @@ function PersonalGoalHome({
               for (const [targetContextId, ids] of Object.entries(contexts)) {
                 if (!ids.includes(sessionId)) continue;
                 const previous = current[targetContextId] ?? [];
-                const updated = reconcileConversationReturns(previous, sessionId, snapshot.messages, (row) => ({
-                  id: managerMessageId.current++, sourceMessageId: row.message_id,
-                  sourceSessionId: sessionId, sourceCreatedAt: row.created_at,
-                  role: "assistant" as const,
-                  agentLabel: "协作回执", sourceLabel: "协作回执", text: visibleAgentMessage(row.text), lines: [],
-                  returnDelivery: row.return_delivery, collaboration: row.collaboration,
-                }));
+                // A terminal queue read can precede the final transcript write.
+                // The existing revision observer must also adopt later native
+                // rows after reload has retired their optimistic placeholders.
+                const messages = mergeChatSessionMessages([snapshot]);
+                const sessionLabel = runtimeAgents.find(agent => agent.agent_id === snapshot.session.agent_id)?.display_name
+                  ?? snapshot.session.agent_id;
+                const updated = reconcileConversationHistory(previous, messages,
+                  row => conversationHistoryMessage(targetContextId, row, sessionLabel));
                 if (updated !== previous) next = { ...next, [targetContextId]: updated };
               }
               return next;
@@ -1590,7 +1713,9 @@ function PersonalGoalHome({
 
   function recordSessionAdmission(targetContextId: string, session: ChatSessionSummary) {
     const key = agentModelSelectionKey(targetContextId, session.agent_id);
-    setAgentModelReadbacks(current => ({...current, [key]: session}));
+    setAgentModelReadbacks(current => current[key]?.session_id === session.session_id
+      && Date.parse(current[key].updated_at) > Date.parse(session.updated_at)
+      ? current : {...current, [key]: session});
     const selection = modelSelectionFromReadback(session, { model: requestedAgentModels.current[key], effort: requestedAgentEfforts.current[key] });
     if (selection.model !== undefined) setSelectedAgentModels((current) => current[key] === selection.model
       ? current : { ...current, [key]: selection.model! });
@@ -1671,35 +1796,41 @@ function PersonalGoalHome({
     }
   }, [selectedAgents]);
 
+  // Admission and history can arrive in either order. Stream callbacks need
+  // the current read owner, with its exact context, rather than the snapshot
+  // captured when the original send began.
+  const reconcileReadHistory = useRef<(targetContextId: string, previous: PersonalManagerMessage[], sessionId?: string) => PersonalManagerMessage[]>(
+    (_targetContextId, previous) => previous,
+  );
+  reconcileReadHistory.current = (targetContextId, previous, sessionId) => {
+    if (targetContextId !== contextId || !conversationHistory.history) return previous;
+    const messages = sessionId ? conversationHistory.history.messages.filter(message => message.session_id === sessionId)
+      : conversationHistory.history.messages;
+    const sessionLabels = new Map(conversationHistory.history.sessions.map(session => [session.session_id,
+      runtimeAgents.find(agent => agent.agent_id === session.agent_id)?.display_name ?? session.agent_id]));
+    return reconcileConversationHistory(previous, messages,
+      message => conversationHistoryMessage(targetContextId, message, sessionLabels.get(message.session_id ?? "") ?? selectedAgent.label),
+      boundConversation?.sessionId);
+  };
   useEffect(() => {
     if (!conversationHistory.history) return;
-    const messages = conversationHistory.history.messages;
     setMessagesByContext((current) => {
       const previous = current[contextId] ?? [];
-      const updated = reconcileConversationHistory(previous, messages, (message): PersonalManagerMessage => ({
-        sourceMessageId: message.message_id,
-        sourceSessionId: message.session_id,
-        sourceTurnId: message.turn_id ?? undefined,
-        sourceCreatedAt: message.created_at,
-        goalDraft: normalizeGoalDraft(message.goal_draft),
-        agentLabel: message.role === "user" ? undefined : message.origin === "manager_followup"
-          ? "协作回执" : answerIdentityLabel(contextId, selectedAgent.label),
-        attachments: workspaceImageAttachments(message.attachments),
-        id: managerMessageId.current++, lines: [],
-        role: message.role === "user" ? "user" : "assistant",
-        returnDelivery: message.return_delivery, collaboration: message.collaboration,
-        sourceLabel: message.role === "user" ? undefined : message.role === "error" ? "本地会话记录"
-          : contextId === "manager" ? `恢复的${t("header.manager")}会话` : `恢复的 ${selectedAgent.label} 会话`,
-        text: message.role === "user" ? message.text : visibleAgentMessage(message.text),
-      }));
+      const updated = reconcileReadHistory.current(contextId, previous);
       return updated === previous ? current : { ...current, [contextId]: updated };
     });
-  }, [conversationHistory.history, contextId, selectedAgent.label]);
+  }, [conversationHistory.history, contextId, selectedAgent.label, runtimeAgents]);
 
+  // Switching steward views keeps the same conversation. A Goal's overview
+  // still cannot initiate recovery for a conversation that was not opened.
+  const mayRecoverConversation = !selectedGoal || selectedView === "chat";
   useEffect(() => {
-    if (readOnly) return;
+    if (readOnly || appEntryBlocked) return;
     if (!selectedAgent.available) return;
     if (!conversationHistory.connectionKey || !conversationHistory.history) return;
+    // Browsing a Goal (including palette navigation) must not create/resume
+    // a session. Explicit Chat entry or sending through the composer owns that.
+    if (!mayRecoverConversation) return;
     const readHistory = conversationHistory.history;
     const targetContextId = contextId;
     const sessionKey = `${targetContextId}:${selectedAgent.agentId}`;
@@ -1734,10 +1865,9 @@ function PersonalGoalHome({
           });
           return;
         }
-        // The steward channel owns its executor default; only a pick the owner
-        // actually made for this context is sent.
+        // The steward channel owns its executor; Goal/workspace picks stay local.
         const sessionEndpoint =
-          targetContext.kind === "manager" ? selectedAgents[targetContextId] : selectedAgent.agentId;
+          targetContext.kind === "manager" ? undefined : selectedAgent.agentId;
         const created = await createChatSession(targetContext, sessionEndpoint, "resume_latest", undefined,
           requestedAgentModels.current[agentModelSelectionKey(targetContextId, sessionEndpoint ?? selectedAgent.agentId)],
           requestedAgentEfforts.current[agentModelSelectionKey(targetContextId, sessionEndpoint ?? selectedAgent.agentId)]);
@@ -1746,11 +1876,13 @@ function PersonalGoalHome({
           setManagerRuntime(created.session.manager_runtime);
         }
         recordSessionAdmission(targetContextId, created.session);
+        const observedSessionId = targetContext.kind === "bound" || targetContext.kind === "managed"
+          ? targetContext.sessionId : sessionIds.current.get(sessionKey);
         sessionIds.current.set(sessionKey, created.session_id);
         const activeSnapshot = history.snapshots.find(
           (snapshot) => snapshot.session.session_id === created.session_id,
         );
-        const activeTurnId = activeSnapshot?.session.active_turn_id ?? "";
+        const activeTurnId = ((targetContext.kind === "bound" || targetContext.kind === "managed") ? created.session.active_turn_id : activeSnapshot?.session.active_turn_id) ?? "";
         recordRuntimeBinding(targetContextId, {
           agentId: created.agent_id || selectedAgent.agentId,
           resumable: true,
@@ -1760,10 +1892,32 @@ function PersonalGoalHome({
         });
         newSessionRequired.current.delete(sessionKey);
         if (!activeTurnId) return;
+        // A source index can observe the Turn this very composer is already
+        // streaming. Preserve its observer in every conversation kind, using
+        // the Session known before this read replaced the cached admission.
+        // The history may discover our native Turn before the original ACK
+        // supplies its id. Its in-flight admission still owns observation.
+        if (observedSessionId === created.session_id
+          && pendingTurnAdmissions.current.get(targetContextId)?.signal.aborted === false) return;
         const recoveryKey = `${created.session_id}:${activeTurnId}`;
-        if (recoveringTurnKeys.current.has(recoveryKey)) return;
+        const existingObserver = turnObservers.current.get(recoveryKey);
+        if (existingObserver && !existingObserver.signal.aborted) {
+          // The Session may confirm a queued Turn started before its stream
+          // reports that start. Adopt its controls and row, not another stream.
+          activeTurnIds.current.set(targetContextId, activeTurnId);
+          streamControllers.current.set(targetContextId, existingObserver);
+          setMessagesByContext(current => {
+            const rows = current[targetContextId] ?? [];
+            if (!rows.some(row => row.role === "assistant" && row.queued
+              && row.sourceSessionId === created.session_id && row.sourceTurnId === activeTurnId)) return current;
+            return {...current, [targetContextId]: rows.map(row => row.role === "assistant" && row.queued
+              && row.sourceSessionId === created.session_id && row.sourceTurnId === activeTurnId
+              ? {...row, queued: false, pending: true, endedAt: undefined, startedAt: Date.now()} : row)};
+          });
+          return;
+        }
         const observer = new AbortController();
-        recoveringTurnKeys.current.set(recoveryKey, observer);
+        turnObservers.current.set(recoveryKey, observer);
         activeTurnIds.current.set(targetContextId, activeTurnId);
         recordRuntimeBinding(targetContextId, {
           agentId: selectedAgent.agentId,
@@ -1792,8 +1946,8 @@ function PersonalGoalHome({
           text: "",
         });
         const releaseObservation = () => {
-          if (recoveringTurnKeys.current.get(recoveryKey) === observer) {
-            recoveringTurnKeys.current.delete(recoveryKey);
+          if (turnObservers.current.get(recoveryKey) === observer) {
+            turnObservers.current.delete(recoveryKey);
           }
           // A late completion may still project its draft after navigation.
           // It no longer owns the display or controls of a replacement observer.
@@ -1949,7 +2103,7 @@ function PersonalGoalHome({
       retireRecoveryObservation?.();
       window.clearTimeout(handoffRetryTimer);
     };
-  }, [conversationHistory.connectionKey, contextId, model.goals[0]?.goalId, readOnly, selectedGoal?.goalId, selectedAgent.agentId, selectedAgent.available, selectedAgent.label, selectedAgents, turnRecoveryRequest]);
+  }, [conversationHistory.connectionKey, contextId, model.goals[0]?.goalId, readOnly, appEntryBlocked, mayRecoverConversation, selectedGoal?.goalId, selectedAgent.agentId, selectedAgent.available, selectedAgent.label, selectedAgents, turnRecoveryRequest]);
 
   // The projection deliberately outlives the mounted view. Its caller may be
   // running for a Goal the owner has already left, and the recovery stream's
@@ -2053,7 +2207,7 @@ function PersonalGoalHome({
         channelId: `goal.${goal.goalId}`,
         goalId: goal.goalId,
       });
-      return { goalId: goal.goalId, session: listed.sessions[0] ?? null };
+      return { goalId: goal.goalId, session: currentChannelSession(listed, goal.agentId) };
     })).then((rows) => {
       if (cancelled) return;
       setRuntimeBindings((current) => {
@@ -2162,13 +2316,14 @@ function PersonalGoalHome({
     message: Omit<PersonalManagerMessage, "id" | "role">,
   ) {
     const id = managerMessageId.current++;
-    setMessagesByContext((messages) => ({
-      ...messages,
-      [targetContextId]: [
+    setMessagesByContext((messages) => {
+      const updated: PersonalManagerMessage[] = [
         ...(messages[targetContextId] ?? []),
         { sourceCreatedAt: new Date().toISOString(), startedAt: message.pending ? Date.now() : undefined, updatedAt: Date.now(), ...message, id, role: "assistant" },
-      ],
-    }));
+      ];
+      return {...messages, [targetContextId]: message.sourceSessionId && message.sourceTurnId
+        ? reconcileReadHistory.current(targetContextId, updated, message.sourceSessionId) : updated};
+    });
     return id;
   }
 
@@ -2177,9 +2332,14 @@ function PersonalGoalHome({
     messageId: number,
     update: Partial<Omit<PersonalManagerMessage, "id" | "role">>,
   ) {
-    setMessagesByContext((messages) => ({
-      ...messages,
-      [targetContextId]: (messages[targetContextId] ?? []).filter((message) =>
+    setMessagesByContext((messages) => {
+      const previous = messages[targetContextId] ?? [];
+      const original = previous.find(message => message.id === messageId);
+      if (!original) return messages;
+      const identityChanged = (update.sourceSessionId !== undefined && update.sourceSessionId !== original.sourceSessionId)
+        || (update.sourceTurnId !== undefined && update.sourceTurnId !== original.sourceTurnId)
+        || ("sourceMessageId" in update && update.sourceMessageId !== original.sourceMessageId);
+      const updated = previous.filter((message) =>
         // A read may arrive before the original send's storage receipt. Keep
         // the live row when its exact persisted identity becomes known.
         message.id === messageId || !update.sourceMessageId || !update.sourceSessionId
@@ -2188,8 +2348,11 @@ function PersonalGoalHome({
           ...(update.text !== undefined || update.activity !== undefined ? { updatedAt: Date.now() } : {}),
           ...(message.pending && update.pending === false ? { preparing: false, endedAt: Date.now() } : {}),
           ...update,
-        } : message),
-    }));
+        } : message);
+      return {...messages, [targetContextId]: identityChanged
+        ? reconcileReadHistory.current(targetContextId, updated, update.sourceSessionId ?? original.sourceSessionId)
+        : updated};
+    });
   }
 
   async function prepareGoalConversation(goalId: string, agentId: string, signal?: AbortSignal) {
@@ -2210,6 +2373,7 @@ function PersonalGoalHome({
       return;
     }
     const targetContextId = route?.contextId ?? contextId;
+    if (appEntryBlocked && targetContextId === contextId) throw new Error("The App steward entry is unavailable; retry its source lookup.");
     if (route?.queue && runtimeBindings[targetContextId]?.sessionId !== route.queue.sessionId) {
       throw new ChatApiError("The original Session changed; the message was not queued.", { delivery_state: "not_delivered" });
     }
@@ -2217,7 +2381,7 @@ function PersonalGoalHome({
     const targetGoal = targetContext.kind === "goal"
       ? model.goals.find((goal) => goal.goalId === targetContext.goalId) ?? null
       : null;
-    const selectedRoute = route?.agentId
+    const selectedRoute = targetContext.kind === "managed" || targetContext.kind === "bound" ? selectedAgent : route?.agentId
       ? selectChatAgent(agentOptions, route.agentId, defaultAgentId)
       : selectedAgent;
     if (!selectedRoute.available) throw new Error(t("agent.workspaceUnavailable"));
@@ -2244,7 +2408,7 @@ function PersonalGoalHome({
       ],
     }));
 
-    if ((selectedRoute.agentId === "status-only" && targetContext.kind !== "project")
+    if ((selectedRoute.agentId === "status-only" && conversationSupportsStatusProjection(targetContext))
       || (targetContext.kind === "goal" && !targetGoal)) {
       const answer = personalManagerSnapshot(targetQuestionModel);
       const usesStatusOnlyRoute = selectedRoute.agentId === "status-only";
@@ -2284,6 +2448,8 @@ function PersonalGoalHome({
     let submittedTurnId: string | undefined;
     let submittedSessionId: string | undefined;
     let streamController: AbortController | undefined;
+    const previousStreamController = streamControllers.current.get(targetContextId);
+    let submittedAsQueue = Boolean(route?.queue);
     let queueAccepted = false;
     let streamEnded = false;
     let handedOff = false;
@@ -2295,7 +2461,7 @@ function PersonalGoalHome({
       if (!sessionId) {
         const mode = newSessionRequired.current.has(sessionKey) ? "new" : "resume_latest";
         const sessionEndpoint =
-          targetContext.kind === "manager" ? selectedAgents[targetContextId] : selectedRoute.agentId;
+          targetContext.kind === "manager" ? undefined : selectedRoute.agentId;
         const session = await createChatSession(targetContext, sessionEndpoint, mode, preparationController.signal,
           requestedAgentModels.current[agentModelSelectionKey(targetContextId, sessionEndpoint ?? selectedRoute.agentId)],
           requestedAgentEfforts.current[agentModelSelectionKey(targetContextId, sessionEndpoint ?? selectedRoute.agentId)]);
@@ -2326,12 +2492,15 @@ function PersonalGoalHome({
         signal: (() => {
           const controller = new AbortController();
           streamController = controller;
-          if (!route?.queue) streamControllers.current.set(targetContextId, controller);
+          if (!route?.queue) {
+            streamControllers.current.set(targetContextId, controller);
+            pendingTurnAdmissions.current.set(targetContextId, controller);
+          }
           return controller.signal;
         })(),
         onDelta: (delta: string) => {
           streamedText += delta;
-          updateConversationMessage(targetContextId, streamingMessageId, { text: streamedText });
+          updateConversationMessage(targetContextId, streamingMessageId, { text: streamedText, queued: false });
         },
         onActivity: (label: string, step: TurnStep | null) => {
           setMessagesByContext((messages) => ({
@@ -2342,6 +2511,10 @@ function PersonalGoalHome({
           }));
         },
         onPhase: (phase: string, turnId: string) => {
+          // Queued admission also owns an observer. A later native start may
+          // precede the Session read that confirms which Turn owns controls.
+          if (streamController) turnObservers.current.set(`${sessionId}:${turnId}`, streamController);
+          if (pendingTurnAdmissions.current.get(targetContextId) === streamController) pendingTurnAdmissions.current.delete(targetContextId);
           if (submittedTurnId !== turnId) updateConversationMessage(targetContextId, userMessageId, {
             sourceTurnId: turnId, sourceSessionId: sessionId,
             ...(route?.queue ? {sourceMessageId: undefined} : {}),
@@ -2351,18 +2524,28 @@ function PersonalGoalHome({
             sourceTurnId: turnId, sourceSessionId: sessionId,
             ...(phase === "turn.accepted" ? { activity: [locale === "zh-CN" ? "请求已接收，等待执行器输出" : "Request accepted · waiting for executor output"] } : {}),
           });
-          if (route?.queue) {
-            if (phase === "turn.queued") {
-              updateConversationMessage(targetContextId, streamingMessageId, {
-                pending: false, preparing: false, endedAt: undefined,
-                text: locale === "zh-CN" ? "已排队，等待当前回合结束。" : "Queued for the next turn.", activity: [],
-              });
-              return;
+          if (phase === "turn.queued") {
+            submittedAsQueue = true;
+            updateConversationMessage(targetContextId, streamingMessageId, {
+              pending: false, preparing: false, endedAt: undefined,
+              text: "", queued: true, activity: [],
+            });
+            // Native hosts can queue ordinary sends; their receipt must not
+            // replace the observed running Turn's stream controls.
+            if (!route?.queue && streamControllers.current.get(targetContextId) === streamController) {
+              if (previousStreamController && !previousStreamController.signal.aborted) {
+                streamControllers.current.set(targetContextId, previousStreamController);
+              } else {
+                streamControllers.current.delete(targetContextId);
+              }
             }
+            return;
+          }
+          if (submittedAsQueue) {
             // Queued is a durable receipt, not observed execution. Only the
             // original worker's start/stream may take the active controls.
             if (phase === "turn.started") {
-              updateConversationMessage(targetContextId, streamingMessageId, { pending: true, startedAt: Date.now(), endedAt: undefined, text: "" });
+              updateConversationMessage(targetContextId, streamingMessageId, { queued: false, pending: true, startedAt: Date.now(), endedAt: undefined, text: "" });
               const previousActive = activeTurnIds.current.get(targetContextId);
               // Replaying an acknowledged queued Turn can include a historical
               // start. Its original Session, not that replay, owns live controls.
@@ -2408,11 +2591,12 @@ function PersonalGoalHome({
       }
       const response = streamed.response;
       updateConversationMessage(targetContextId, streamingMessageId, {
+        queued: Boolean(streamed.steeredIntoTurnId),
         goalDraft: response.goal_draft,
         lines: response.gate ? [response.gate.summary, response.gate.next_action].filter(Boolean).slice(0, 2) : [],
         pending: false,
-        text: visibleAgentMessage(response.message || streamedText.trim())
-          || `${answerIdentityLabel(targetContextId, selectedRoute.label)} 已完成分析。`,
+        text: streamed.steeredIntoTurnId ? "" : (visibleAgentMessage(response.message || streamedText.trim())
+          || `${answerIdentityLabel(targetContextId, selectedRoute.label)} 已完成分析。`),
       });
       // The completed transcript is the immutable answer owner. Resolve its
       // stored identity before offering a link; a failed read never hides the
@@ -2428,7 +2612,7 @@ function PersonalGoalHome({
         if (answer) updateConversationMessage(targetContextId, completedMessageId, {
           sourceMessageId: answer.message_id, sourceSessionId: sessionId,
           sourceCreatedAt: answer.created_at,
-          collaboration: answer.collaboration, returnDelivery: answer.return_delivery,
+          collaboration: answer.collaboration, collaborations: answer.collaborations, returnDelivery: answer.return_delivery,
         });
         if (targetContextId === contextId) void conversationHistory.refresh().catch(() => {});
       }).catch(() => { /* The original conversation remains readable. */ });
@@ -2466,6 +2650,7 @@ function PersonalGoalHome({
         || (error instanceof ChatApiError && error.payload.error_code === "turn_interrupted");
       if (userInterrupted) {
         const interruptedMessage = {
+          queued: false,
           agentLabel: answerIdentityLabel(targetContextId, selectedRoute.label),
           lines: [],
           pending: false,
@@ -2535,7 +2720,12 @@ function PersonalGoalHome({
       const gateSummary = gate && typeof gate === "object"
         ? String((gate as { summary?: unknown }).summary ?? "")
         : "";
+      // This controller is retired immediately before Turn dispatch. A failed
+      // Session/configuration read cannot have delivered the user's message;
+      // an unacknowledged dispatch after that boundary remains uncertain.
+      const preparationFailed = preparationControllers.current.get(targetContextId) === preparationController;
       const failureMessage = {
+        queued: false,
         agentLabel: answerIdentityLabel(targetContextId, selectedRoute.label),
         lines: gateSummary ? [gateSummary] : [],
         pending: false,
@@ -2543,11 +2733,13 @@ function PersonalGoalHome({
         sourceLabel: "LoopX Chat 本地后端",
         text: payloadError?.error_code === "server_restarted"
           ? t("feedback.turnRestarted")
+          : payloadError?.error_code === "unsupported_configuration" && payloadError.delivery_state === "not_delivered"
+          ? (locale === "zh-CN" ? "所选模型或思考深度未获运行时确认。消息未发送；请在模型菜单调整后重试。原会话和草稿已保留。" : "The runtime did not confirm the selected model or reasoning effort. No message was sent. Adjust the model menu and retry; this conversation and draft are retained.")
           : payloadError?.error_code === "resume_failed"
           ? `原 ${answerIdentityLabel(targetContextId, selectedRoute.label)} 会话无法恢复。本地历史已经保留，请在运行详情里选择“重试恢复”或“开始新 Session”。`
           : payloadError?.delivery_state === "not_delivered" && payloadError.turn_replay_safe === true && !submittedTurnId
-            ? `${locale === "zh-CN" ? "请求未提交；草稿和图片已保留，可以修改后重新发送。" : "Request not submitted. Draft and images retained; edit and send again."}\n\n${error instanceof Error ? error.message : ""}`
-          : preparationControllers.current.has(targetContextId)
+            ? `${locale === "zh-CN" ? "请求未提交；草稿和附件已保留，可以修改后重新发送。" : "Request not submitted. Draft and attachments retained; edit and send again."}\n\n${error instanceof Error ? error.message : ""}`
+          : preparationFailed
             ? `${locale === "zh-CN" ? "尚未提交请求。连接执行器失败，可以重新发送。" : "Request not submitted. Could not connect to the executor; you can send again."}\n\n${error instanceof Error ? error.message : ""}`
           : error instanceof Error
             ? error.message
@@ -2557,10 +2749,13 @@ function PersonalGoalHome({
       if (route?.queue && !queueAccepted) throw error;
       // Only confirmed pre-admission rejection restores the composer. An
       // uncertain delivery must never invite an automatic duplicate request.
-      if (!submittedTurnId && payloadError?.delivery_state === "not_delivered"
-        && payloadError.turn_replay_safe === true) throw error;
+      if (preparationFailed || (!submittedTurnId && payloadError?.delivery_state === "not_delivered"
+        && payloadError.turn_replay_safe === true)) throw error;
     } finally {
       streamEnded = true;
+      const observationKey = `${submittedSessionId}:${submittedTurnId}`;
+      if (turnObservers.current.get(observationKey) === streamController) turnObservers.current.delete(observationKey);
+      if (pendingTurnAdmissions.current.get(targetContextId) === streamController) pendingTurnAdmissions.current.delete(targetContextId);
       // A handed-off Turn is still running: its ownership stays for the
       // recovery that adopts it or the read that finds it ended.
       const ownsTurn = !handedOff && activeTurnIds.current.get(targetContextId) === submittedTurnId;
@@ -2666,34 +2861,54 @@ function PersonalGoalHome({
   }
 
   function chooseAgent(agentId: string) {
+    if (fixedSession) return;
     if (!agentOptions.some((agent) => agent.agentId === agentId && agent.available)) {
       return;
     }
-    setSelectedAgents((current) => ({ ...current, [contextId]: agentId }));
+    setSelectedAgents((current) => {
+      const next = { ...current };
+      if (contextId === "manager" && agentId !== "status-only") delete next[contextId];
+      else next[contextId] = agentId;
+      return next;
+    });
   }
 
-  function chooseAgentModel(agentId: string, modelId: string) {
+  async function chooseAgentModel(agentId: string, modelId: string) {
+    if (fixedSession) return;
     const selectionKey = agentModelSelectionKey(contextId, agentId);
-    if (selectedAgentModels[selectionKey] === modelId) return;
-    requestedAgentModels.current[selectionKey] = modelId;
-    delete requestedAgentEfforts.current[selectionKey];
+    if (selectedAgentModels[selectionKey] === modelId
+      && requestedAgentModels.current[selectionKey] === modelId) return;
     setSelectedAgentEfforts((current) => { const next = { ...current }; delete next[selectionKey]; return next; });
     setSelectedAgentModels((current) => current[selectionKey] === modelId ? current : { ...current, [selectionKey]: modelId });
     const key = `${contextId}:${agentId}`;
-    sessionIds.current.delete(key);
-    newSessionRequired.current.add(key);
-    recordRuntimeBinding(contextId, null);
+    const sessionId = agentModelReadbacks[selectionKey]?.session_id ?? sessionIds.current.get(key);
+    if (sessionId) {
+      const result = await configureChatSessionModel(sessionId, modelId);
+      requestedAgentModels.current[selectionKey] = result.session.requested_agent_model_id ?? modelId;
+      const effort = result.session.requested_agent_reasoning_effort;
+      if (effort) requestedAgentEfforts.current[selectionKey] = effort;
+      recordSessionAdmission(contextId, result.session);
+    } else {
+      requestedAgentModels.current[selectionKey] = modelId;
+      delete requestedAgentEfforts.current[selectionKey];
+    }
   }
 
-  function chooseAgentReasoningEffort(agentId: string, effort: string) {
+  async function chooseAgentReasoningEffort(agentId: string, effort: string) {
+    if (fixedSession) return;
     const key = agentModelSelectionKey(contextId, agentId);
-    if (selectedAgentEfforts[key] === effort) return;
-    if (effort) requestedAgentEfforts.current[key] = effort;
-    else delete requestedAgentEfforts.current[key];
+    if (selectedAgentEfforts[key] === effort && requestedAgentEfforts.current[key] === effort) return;
     setSelectedAgentEfforts((current) => ({ ...current, [key]: effort }));
-    sessionIds.current.delete(key);
-    newSessionRequired.current.add(key);
-    recordRuntimeBinding(contextId, null);
+    const sessionId = agentModelReadbacks[key]?.session_id ?? sessionIds.current.get(key);
+    if (sessionId) {
+      const model = selectedAgentModels[key] ?? agentModelReadbacks[key]?.requested_agent_model_id ?? agentModelReadbacks[key]?.agent_model_id;
+      if (!model) throw new Error("Choose a model before changing this conversation's reasoning effort.");
+      const result = await configureChatSessionModel(sessionId, model, effort);
+      requestedAgentModels.current[key] = result.session.requested_agent_model_id ?? model;
+      if (result.session.requested_agent_reasoning_effort) requestedAgentEfforts.current[key] = result.session.requested_agent_reasoning_effort;
+      recordSessionAdmission(contextId, result.session);
+    } else if (effort) requestedAgentEfforts.current[key] = effort;
+    else delete requestedAgentEfforts.current[key];
   }
 
   function openGoalChat(goalId: string) {
@@ -2802,12 +3017,15 @@ function PersonalGoalHome({
           attachments: message.attachments,
         id: String(message.id),
         pending: message.pending,
+        queued: message.queued,
         preparing: message.preparing,
         startedAt: message.startedAt,
         updatedAt: message.updatedAt,
         endedAt: message.endedAt,
         returnDelivery: message.returnDelivery,
-        collaboration: message.collaboration,
+        collaboration: message.collaboration, collaborations: message.collaborations,
+        replyContext: message.replyContext,
+        queueInputCancelled: message.queueInputCancelled,
         goalDraft: message.goalDraft,
         role: message.role,
         sourceTurnId: message.sourceTurnId,
@@ -2865,6 +3083,10 @@ function PersonalGoalHome({
     goals: normalizedModel.goals.map((goal) => ({
       ...goal,
       execution: goalExecution(goalSessionFacts, goal.goalId, goal.hostThreadActivity),
+      reportReviewAttention: goal.reportReviewAttention?.map(item => sourceAttention(
+        item, statusSourceControl.activeSource.statusUrl,
+        sourceIsReady && !progress?.errors[goal.goalId], goal.title,
+      )),
     })),
     userTodos: model.userTodos.map(attentionForWorkspace),
     attentionHistory: (model.attentionHistory ?? model.userTodos).map(attentionForWorkspace),
@@ -2874,12 +3096,23 @@ function PersonalGoalHome({
     },
     timeline: workspaceTimeline,
   };
+  // Navigation may leave an Agent's exact Session while its existing stream
+  // continues. Project that observed Turn within its Goal, without another read.
+  const observedConversationRunning = Object.entries(runtimeBindings).some(([key, binding]) => {
+    if (binding.status !== "running" || !binding.turnId) return false;
+    const target = conversationContextOfKey(key);
+    return selectedGoal ? (target.kind === "goal" || target.kind === "managed") && target.goalId === selectedGoal.goalId
+      : key === contextId;
+  });
   return (
     <div className={theme === "dark" ? "dark" : ""} data-testid="personal-goal-home">
       <PersonalWorkspacePage
         typedActionsRevision={typedActionsRevision}
-        workspaceConversations={{ ...workspaceProjects, selectedRef: selectedWorkspaceRef, onSelect: onSelectWorkspace }}
-        agents={agentOptions.map((agent) => ({
+        observedConversationRunning={observedConversationRunning}
+        workspaceConversations={{ ...workspaceProjects, selectedRef: selectedWorkspaceRef, onSelect: onSelectWorkspace,
+          onOpenOriginal: onOpenOriginalConversation,
+          entryGate: appEntryBlocked ? {unavailable: appEntry.unavailable, ownerLoginUnavailable: appEntry.ownerLoginUnavailable, retry: appEntry.retry} : undefined, managed: managedTarget ? {target: managedTarget, ...managedConversation} : undefined, bound: boundConversation ? { target: boundConversation, ...originalConversation } : undefined }}
+        agents={(fixedSession ? [selectedAgent] : agentOptions).map((agent) => ({
           adapterKind: agent.adapterKind,
           agentId: agent.agentId,
           available: agent.available,
@@ -2920,6 +3153,10 @@ function PersonalGoalHome({
             if (turnId) {
               activeTurnIds.current.set(run.goalId, turnId);
               const controller = new AbortController();
+              const observationKey = `${run.sessionId}:${turnId}`;
+              // History recovery must adopt this correction's observer when
+              // the owner returns to Chat, just as it adopts composer Turns.
+              turnObservers.current.set(observationKey, controller);
               streamControllers.current.set(run.goalId, controller);
               let streamedText = "";
               const messageId = appendManagerAssistantMessage(run.goalId, {
@@ -2954,14 +3191,18 @@ function PersonalGoalHome({
                   text: interrupted ? [streamedText.trim(), "已中断。你可以在当前会话继续发送消息。"].filter(Boolean).join("\n\n") : error instanceof Error ? error.message : "纠偏回合失败。",
                 });
               } finally {
-                activeTurnIds.current.delete(run.goalId);
-                streamControllers.current.delete(run.goalId);
-                recordRuntimeBinding(run.goalId, {
-                  agentId: run.agentId,
-                  resumable: true,
-                  sessionId: run.sessionId,
-                  status: "ready",
-                });
+                if (turnObservers.current.get(observationKey) === controller) turnObservers.current.delete(observationKey);
+                const ownsStream = streamControllers.current.get(run.goalId) === controller;
+                if (ownsStream) streamControllers.current.delete(run.goalId);
+                if (ownsStream && activeTurnIds.current.get(run.goalId) === turnId) {
+                  activeTurnIds.current.delete(run.goalId);
+                  recordRuntimeBinding(run.goalId, {
+                    agentId: run.agentId,
+                    resumable: true,
+                    sessionId: run.sessionId,
+                    status: "ready",
+                  });
+                }
               }
             }
           },
@@ -3013,11 +3254,13 @@ function PersonalGoalHome({
                 sourceSessionId: sessionId,
                 agentLabel: message.role === "user" ? undefined : run.agentLabel,
                 attachments: workspaceImageAttachments(message.attachments),
+                replyContext: message.reply_context,
+                queueInputRevision: message.queue_input_revision, queueInputCancelled: message.queue_input_cancelled,
                 id: managerMessageId.current++,
                 lines: [],
                 role: message.role === "user" ? "user" : "assistant",
                 sourceLabel: message.role === "user" ? undefined : `${run.agentLabel} · 执行 Session`,
-                text: message.role === "user" ? message.text : visibleAgentMessage(message.text),
+                text: message.role === "user" ? message.reply_context?.source_text ?? message.text : visibleAgentMessage(message.text),
               })),
             }));
             recordRuntimeBinding(run.goalId, {
@@ -3115,18 +3358,33 @@ function PersonalGoalHome({
           onRecheckRuntimes: () => setCapabilityRevision((revision) => revision + 1),
           onBackgroundRefresh,
           onRetryResumeRun: retryManagerSession,
-          onSelectAgent: chooseAgent,
+          onSelectAgent: (agentId) => { onClearMessageFocus?.(); return chooseAgent(agentId); },
           onSelectAgentModel: chooseAgentModel,
           onSelectAgentReasoningEffort: chooseAgentReasoningEffort,
-          onSelectGoal: (goalId, view) => onSelectGoal(goalId ?? "", view),
+          onSelectGoal: (goalId, view, managedSession) => onSelectGoal(goalId ?? "", view, managedSession),
           onSelectView,
           onSelectWorkAgent,
+          onSelectWorkSession,
           onSelectTodo,
           onSendMessage: async (message, agentId, targetContextId, attachments) => sendManagerQuestion(message, { agentId, contextId: targetContextId, attachments }),
           onQueueConversationTurn: (targetContextId, sessionId, message, ingressId, attachments) => new Promise<void>((resolve, reject) => {
             void sendManagerQuestion(message, { agentId: runtimeBindings[targetContextId]?.agentId,
               contextId: targetContextId, attachments, queue: { sessionId, ingressId, onAccepted: resolve } }).catch(reject);
           }),
+          onObserveConversationQueue: async (targetContextId, sessionId) => {
+            const key = `${targetContextId}:${selectedAgent.agentId}`;
+            if (activeConversationContext.current !== targetContextId || sessionIds.current.get(key) !== sessionId) return;
+            // Queue advancement is a read observation. The existing history
+            // recovery owner adopts the exact current Session/Turn and stream.
+            const history = await conversationHistory.refresh();
+            const current = currentChannelSession(history, selectedAgent.agentId);
+            if (activeConversationContext.current === targetContextId && sessionIds.current.get(key) === sessionId
+                && current?.session_id === sessionId && current.active_turn_id
+                && (activeTurnIds.current.get(targetContextId) !== current.active_turn_id
+                  || streamControllers.current.get(targetContextId)?.signal.aborted !== false)) {
+              setTurnRecoveryRequest(value => value + 1);
+            }
+          },
           onPrepareLoopX: (agentId, goalId) => prepareGoalConversation(goalId, agentId),
           onStartLoopX: (operation, agentId, goalId, settings) => { void sendManagerQuestion(operation === "start" ? "开启 LoopX 模式，持续推进当前 Goal。" : "恢复 LoopX 模式。", {agentId, contextId: goalId, loopxMode: {operation, settings}}); },
           onStartNewRunSession: startNewManagerSession,
@@ -3135,6 +3393,10 @@ function PersonalGoalHome({
         selectedView={selectedView}
         selectedTodoId={selectedTodoId}
         selectedWorkAgentId={selectedWorkAgentId}
+        selectedWorkSessionId={selectedWorkSessionId}
+        conversationMessageFocus={conversationMessageFocus}
+        workBrowseSearch={workBrowseSearch}
+        onWorkBrowseChange={onWorkBrowseChange}
         managerChannelBinding={managerChannelBinding}
         managerRuntime={managerRuntime}
         conversationSessionId={runtimeBindings[contextId]?.sessionId}
@@ -3151,7 +3413,7 @@ function PersonalGoalHome({
         readOnly={readOnly}
         selectedAgentId={selectedAgent.agentId}
         selectedAgentModelId={selectedAgentModels[agentModelSelectionKey(contextId, selectedAgent.agentId)]}
-        selectedAgentModelReadback={agentModelReadbacks[agentModelSelectionKey(contextId, selectedAgent.agentId)]}
+        selectedAgentModelReadback={agentModelReadbacks[agentModelSelectionKey(contextId, selectedAgent.agentId)] ?? originalConversation.session}
         selectedAgentReasoningEffort={selectedAgentEfforts[agentModelSelectionKey(contextId, selectedAgent.agentId)]}
         selectedGoalId={selectedGoal?.goalId ?? null}
         serviceNotice={rootGoalId && !model.goals.some(goal => goal.goalId === rootGoalId)
@@ -3251,6 +3513,10 @@ function StatusRequestView({
 }
 
 
+function keepCaseChapterHash(hash = "") {
+  return hash.startsWith(caseChapterHashPrefix.slice(1)) ? hash : "";
+}
+
 export function DashboardPage() {
   const search = dashboardRoute.useSearch();
   const navigate = dashboardRoute.useNavigate();
@@ -3259,6 +3525,9 @@ export function DashboardPage() {
   const progressiveAbortRef = useRef<AbortController | null>(null);
   const preferredGoalRef = useRef(search.goalId);
   preferredGoalRef.current = search.goalId;
+  const rootGoalRef = useRef(search.rootGoalId);
+  rootGoalRef.current = search.rootGoalId;
+  const requestedRootRef = useRef<string | undefined>(undefined);
   const [payload, setPayload] = useState<StatusPayload>(exampleStatusPayload);
   const [source, setSource] = useState<DataSource>({ kind: "example", label: "bundled example" });
   const [statusSourceCatalog, setStatusSourceCatalog] = useState(() => {
@@ -3356,6 +3625,11 @@ export function DashboardPage() {
       setPayload((current) => mergeScopedStatusProjections(current, nextPayload));
       return true;
     }
+    const prepared = runtimeStatusSourceCatalog(nextPayload.local_dashboard_api?.read_only_sources,
+      url, window.location.href);
+    const bound = prepared ? statusSourceForUrl(prepared, url, window.location.href) : null;
+    const bindingInitialIdentity = bound?.kind === "runtime" && bound.statusUrl !== url;
+    if (bindingInitialIdentity) url = bound.statusUrl;
     const nextSource: DataSource = { kind: "url", label: url };
     statusRequestFenceRef.current.loadedUrl = url;
     setPayload(nextPayload);
@@ -3364,12 +3638,27 @@ export function DashboardPage() {
     // Loading the current source on reload must not add a duplicate history
     // entry: Back should return to the user's previous workspace view.
     if (search.statusUrl !== url) {
+      const keepsSource = (currentUrl: string) => !currentUrl || currentUrl === url
+        || Boolean(prepared && bound && statusSourceForUrl(prepared, currentUrl, window.location.href)?.statusUrl === bound.statusUrl);
       await navigate({
-        search: (current) => ({
-          ...current,
-          statusUrl: url,
-          workAgent: "statusUrl" in current && (!current.statusUrl || current.statusUrl === url) ? current.workAgent : undefined,
-        }),
+        replace: bindingInitialIdentity,
+        hash: keepsSource(search.statusUrl) ? keepCaseChapterHash : undefined,
+        search: (current) => {
+          // Normalizing an alias of the same physical reader preserves its
+          // bookmarks; a different source still clears source-local selection.
+          const sameStatusSource = "statusUrl" in current && keepsSource(current.statusUrl);
+          return {
+            ...current,
+            statusUrl: url,
+            messageSession: sameStatusSource ? current.messageSession : undefined,
+            message: sameStatusSource ? current.message : undefined,
+            workAgent: sameStatusSource ? current.workAgent : undefined,
+            workSession: sameStatusSource ? current.workSession : undefined,
+            // Node/pack ids are source-local even when the Goal ids coincide.
+            // Back restores the original source's URL and its own selection.
+            ...(sameStatusSource ? {} : clearedResearchSearch),
+          };
+        },
       });
     }
     if (!statusRequestIsCurrent(statusRequestFenceRef.current, request)) return false;
@@ -3400,6 +3689,10 @@ export function DashboardPage() {
       selectionRevision: options.selectionRevision,
     });
     if (!request) return;
+    const requestRoot = rootGoalRef.current;
+    requestedRootRef.current = requestRoot;
+    const canCommit = () => rootGoalRef.current === requestRoot
+      && statusRequestCanCommit(statusRequestFenceRef.current, request);
     progressiveAbortRef.current?.abort();
     const progressiveAbort = new AbortController();
     progressiveAbortRef.current = progressiveAbort;
@@ -3412,9 +3705,12 @@ export function DashboardPage() {
       setGoalArchiveLoadState({ error: null, phase: "idle" });
     }
     try {
-      const directory = await fetchWorkspaceDirectory(trimmed, window.location.href).catch(() => null);
-      if (!statusRequestCanCommit(statusRequestFenceRef.current, request)) return;
-      if (directory) {
+      const discovered = await fetchWorkspaceDirectory(trimmed, window.location.href).catch(() => null);
+      if (!canCommit()) return;
+      if (discovered) {
+        // Root views must not open unrelated Goals just to hide them later.
+        // Keep discovery metadata and the source's original revision fence.
+        const directory = scopeWorkspaceDirectory(discovered, requestRoot);
         // Keep valid snapshots on screen during a refresh. Only an explicit
         // partial read may skip them; lifecycle identity is not data freshness.
         const { snapshots, requestedDirectory } = workspaceReadPlan(
@@ -3429,9 +3725,10 @@ export function DashboardPage() {
         setGoalArchiveLoadState({ error: null, phase: "loading" });
         await loadWorkspaceGoalSnapshots(trimmed, window.location.href, requestedDirectory,
           (id, snapshot, error) => {
+            if (!canCommit()) return;
             if (error === "revision") directoryChanged = true;
             setProgress((current) => {
-              if (!current) return current;
+              if (!canCommit() || !current) return current;
               const snapshots = { ...current.snapshots };
               const errors = { ...current.errors };
               if (snapshot) { snapshots[id] = snapshot; delete errors[id]; }
@@ -3439,16 +3736,16 @@ export function DashboardPage() {
               return { ...current, snapshots, errors };
             });
           },
-          () => statusRequestCanCommit(statusRequestFenceRef.current, request),
+          canCommit,
           () => preferredGoalRef.current,
           progressiveAbort.signal,
         );
         if (directoryChanged && (options.resyncAttempt ?? 0) < 1
-          && statusRequestCanCommit(statusRequestFenceRef.current, request)) {
+          && canCommit()) {
           await loadFromUrl(trimmed, { resyncAttempt: 1 });
           return;
         }
-        if (statusRequestCanCommit(statusRequestFenceRef.current, request)) {
+        if (canCommit()) {
           setGoalArchiveLoadState({ error: null, phase: "ready" });
         }
         return;
@@ -3456,7 +3753,7 @@ export function DashboardPage() {
       const nextPayload = await fetchStatusPayload(
         scopedStatusUrl(trimmed, "active", window.location.href),
       );
-      if (!statusRequestCanCommit(statusRequestFenceRef.current, request)) return;
+      if (!canCommit()) return;
       setProgress(null);
       request.registryRevision = nextPayload.goal_projection?.registry_revision ?? null;
       if (!await commitLoadedStatus(trimmed, nextPayload, request)) return;
@@ -3467,13 +3764,13 @@ export function DashboardPage() {
       }
       loadGoalArchive(trimmed, request, options.resyncAttempt ?? 0);
     } catch (error) {
-      if (!statusRequestIsCurrent(statusRequestFenceRef.current, request)) return;
+      if (!canCommit()) return;
       if (!background) setLoadError(formatStatusError(error));
       // A confirmed action keeps its receipt while its caller reports that
       // the independent status read needs retrying. Passive refreshes stay quiet.
       if (options.rejectOnError) throw error;
     } finally {
-      if (!background && statusRequestIsCurrent(statusRequestFenceRef.current, request)) {
+      if (!background && canCommit()) {
         setIsLoading(false);
       }
     }
@@ -3554,6 +3851,22 @@ export function DashboardPage() {
   };
 
   useEffect(() => {
+    if (requestedRootRef.current !== search.rootGoalId && !exampleModeRequested) {
+      // Re-scope an in-flight source selection as well as a loaded source.
+      // Older root responses cannot populate the newly selected subtree.
+      // A history entry restores source and root together, so the route's
+      // restored source outranks the source that is still loaded. Only when
+      // the route names no source does the loaded source act as the fallback.
+      // The app commits the route only from a loaded source, so a route naming
+      // another source came from Back/Forward; it also outranks a re-scope of
+      // the loaded source that is still in flight.
+      const routeUrl = search.statusUrl.trim();
+      const routeRestoresSource = source.kind === "url" && routeUrl !== "" && routeUrl !== source.label;
+      const target = routeRestoresSource ? routeUrl : requestedStatusUrl
+        ?? (routeUrl || (source.kind === "url" ? source.label : ""));
+      void loadFromUrl(target || defaultGlobalStatusUrl);
+      return;
+    }
     const trimmedStatusUrl = search.statusUrl.trim();
     if (trimmedStatusUrl) {
       if (suppressedStatusUrlRef.current === trimmedStatusUrl) {
@@ -3579,34 +3892,30 @@ export function DashboardPage() {
     if (source.kind === "example") {
       void loadFromUrl(defaultGlobalStatusUrl);
     }
-  }, [exampleModeRequested, requestedStatusUrl, search.statusUrl, source.kind, source.label]);
+  }, [exampleModeRequested, requestedStatusUrl, search.statusUrl, search.rootGoalId, source.kind, source.label]);
 
   useEffect(() => {
+    // A source transition can still expose the previous source's Goal rows.
+    // Reconcile only its committed URL, including during browser Back/Forward.
+    if (statusRequestActive || isLoading || (source.kind === "url" && search.statusUrl && search.statusUrl !== source.label)) return;
     if (search.statusUrl && source.kind === "example") {
       return;
     }
+    // Empty active rows and failed history do not establish Goal absence.
+    // Wait for the complete source before discarding a stopped-Goal bookmark.
+    if (source.kind === "url" && goalArchiveLoadState.phase !== "ready") return;
     const goalIds = new Set(goalRows.map((row) => row.goal.id));
-    if (goalRows.length === 0) {
-      if (search.goalId) {
-        void navigate({
-          search: (current) => ({
-            ...current,
-            goalId: "",
-          }),
-        });
-      }
-      return;
-    }
-    if (search.goalId && !goalIds.has(search.goalId)
-      && goalArchiveLoadState.phase !== "loading") {
+    if (search.goalId && !goalIds.has(search.goalId)) {
       void navigate({
+        replace: true,
         search: (current) => ({
           ...current,
+          ...clearedResearchSearch,
           goalId: "",
         }),
       });
     }
-  }, [goalArchiveLoadState.phase, goalRows, navigate, search.goalId, search.statusUrl, source.kind]);
+  }, [goalArchiveLoadState.phase, goalRows, isLoading, navigate, search.goalId, search.rootGoalId, search.statusUrl, source.kind, source.label, statusRequestActive]);
 
   useEffect(() => {
     if (!progress || isLoading || !search.goalId || source.kind !== "url") return;
@@ -3616,21 +3925,31 @@ export function DashboardPage() {
     }
   }, [search.goalId, isLoading, progress, source]);
 
-  function selectGoal(goalId: string, view?: WorkspaceGoalTab) {
+  function selectGoal(goalId: string, view?: WorkspaceGoalTab, managedSession?: ManagedConversationTarget) {
     void navigate({
-      search: (current) => ({
-        ...current,
-        goalId,
-        workspace: undefined,
-        workAgent: undefined,
-        todo: undefined,
-        view: view === "chat" ? "conversation" : view,
-      }),
+      hash: search.goalId === goalId ? keepCaseChapterHash : undefined,
+      search: (current) => {
+        const currentSearch = current as Partial<typeof search>;
+        const keepResearch = (currentSearch.research_goal ?? currentSearch.goalId) === goalId;
+        return ({
+          ...current,
+          ...(keepResearch ? {} : clearedResearchSearch),
+          goalId,
+          workspace: undefined,
+          conversationBinding: undefined,
+          conversationSession: undefined,
+          messageSession: undefined, message: undefined,
+          workAgent: managedSession?.agentId, workSession: managedSession ? `managed:${managedSession.sessionId}` : undefined,
+          todo: undefined,
+          view: view === "chat" ? "conversation" : view,
+        });
+      },
     });
   }
 
   function selectWorkspace(projectRef: string | null) {
-    void navigate({ search: (current) => ({ ...current, goalId: "", todo: undefined, workAgent: undefined, workspace: projectRef ?? undefined, view: "conversation" }) });
+    void navigate({ search: (current) => ({ ...current, ...clearedResearchSearch, goalId: "", todo: undefined, workAgent: undefined, workSession: undefined, workspace: projectRef ?? undefined,
+      conversationBinding: undefined, conversationSession: undefined, messageSession: undefined, message: undefined, view: "conversation" }) });
   }
 
   if (statusRequestActive) {
@@ -3646,28 +3965,56 @@ export function DashboardPage() {
     );
   }
 
-  return (
+  const home = (appEntry: ReturnType<typeof useAppStewardTarget>) => (
     <PersonalGoalHome
+      appEntry={appEntry}
+      conversationMessageFocus={search.messageSession && search.message ? {sessionId: search.messageSession, messageId: search.message} : undefined}
+      onClearMessageFocus={() => void navigate({replace: true, hash: keepCaseChapterHash,
+        search: current => ({...current, messageSession: undefined, message: undefined})})}
+      workBrowseSearch={search}
+      onWorkBrowseChange={(patch, workSource, replace = false) => {
+        const goalId = search.goalId, statusUrl = search.statusUrl;
+        void navigate({replace, hash: keepCaseChapterHash, search: current => "goalId" in current && current.goalId === goalId && current.statusUrl === statusUrl
+          ? {...current, ...writeGoalWorkBrowse({...readGoalWorkBrowse(current, goalId, workSource), ...patch}, goalId, workSource)} : current});
+      }}
+      boundConversation={search.conversationBinding !== undefined || search.conversationSession !== undefined
+        ? { bindingId: search.conversationBinding ?? "", sessionId: search.conversationSession ?? "" } : null}
+      onOpenOriginalConversation={target => void navigate({search: current => ({...current, ...clearedResearchSearch, goalId: "", workspace: undefined,
+        workAgent: undefined, workSession: undefined, todo: undefined, messageSession: undefined, message: undefined, conversationBinding: target.bindingId, conversationSession: target.sessionId, view: "conversation"})})}
       rootGoalId={search.rootGoalId}
-      onChangeGoalRoot={rootGoalId => void navigate({search: current => ({...current,
-        rootGoalId: rootGoalId ?? undefined, goalId: rootGoalId ?? ("goalId" in current ? current.goalId : ""), workspace: undefined})})}
+      onChangeGoalRoot={rootGoalId => void navigate({
+        hash: !rootGoalId || rootGoalId === search.goalId ? keepCaseChapterHash : undefined,
+        search: current => ({...current,
+          workAgent: undefined, workSession: undefined, messageSession: undefined, message: undefined,
+          rootGoalId: rootGoalId ?? undefined, goalId: rootGoalId ?? ("goalId" in current ? current.goalId : ""), workspace: undefined}),
+      })}
       goalArchiveLoadState={goalArchiveLoadState}
       sourceError={loadError}
       selectedTodoId={search.todo ?? null}
+      selectedWorkSessionId={search.workSession}
+      onSelectWorkSession={(sessionId, replace = false) => {
+        const goalId = search.goalId, agentId = search.workAgent, statusUrl = search.statusUrl;
+        void navigate({replace, hash: keepCaseChapterHash, search: current => "goalId" in current && current.goalId === goalId && current.workAgent === agentId && current.statusUrl === statusUrl
+          ? {...current, workSession: sessionId, messageSession: current.workSession === sessionId ? current.messageSession : undefined,
+            message: current.workSession === sessionId ? current.message : undefined} : current});
+      }}
       selectedWorkAgentId={search.workAgent ?? null}
-      onSelectWorkAgent={(agentId) => {
+      onSelectWorkAgent={(agentId, sessionId) => {
         const goalId = search.goalId, statusUrl = search.statusUrl;
-        void navigate({search: current => "goalId" in current && current.goalId === goalId && current.statusUrl === statusUrl
-          ? {...current, todo: undefined, workAgent: agentId ?? undefined, view: agentId === null ? "overview" : "conversation"} : current});
+        void navigate({hash: keepCaseChapterHash, search: current => "goalId" in current && current.goalId === goalId && current.statusUrl === statusUrl
+          ? {...current, todo: undefined, workAgent: agentId ?? undefined, workSession: sessionId, messageSession: undefined, message: undefined, view: agentId === null ? "overview" : "conversation"} : current});
       }}
       onSelectTodo={(todoId) => {
         const goalId = search.goalId, statusUrl = search.statusUrl;
-        void navigate({search: current => "goalId" in current && current.goalId === goalId && current.statusUrl === statusUrl
+        void navigate({hash: keepCaseChapterHash, search: current => "goalId" in current && current.goalId === goalId && current.statusUrl === statusUrl
           ? {...current, todo: todoId ?? undefined} : current});
       }}
       selectedView={search.view === "conversation" ? "chat" : search.goalId ? search.view ?? "overview" : "overview"}
       onSelectView={(view) => {
-        void navigate({ search: current => ({ ...current, workAgent: undefined, view: view === "chat" ? "conversation" : view }) });
+        void navigate({
+          hash: keepCaseChapterHash,
+          search: current => ({ ...current, workAgent: undefined, workSession: undefined, messageSession: undefined, message: undefined, view: view === "chat" ? "conversation" : view }),
+        });
       }}
       onGoalActivationStateChange={(goalId, activationState) => {
         statusRequestFenceRef.current.projectionRevision += 1;
@@ -3692,7 +4039,7 @@ export function DashboardPage() {
       onRetryGoalArchive={retryGoalArchive}
       onRefresh={async (readScope = "all") => {
         try {
-          await loadFromUrl(source.kind === "url" ? source.label : (statusUrl || defaultGlobalStatusUrl), { readScope, rejectOnError: true });
+          await loadFromUrl(activeStatusRequestUrl || (source.kind === "url" ? source.label : (statusUrl || defaultGlobalStatusUrl)), { readScope, rejectOnError: true });
           return { ok: true } as const;
         } catch (error) {
           return { ok: false, error: formatStatusError(error) } as const;
@@ -3708,4 +4055,18 @@ export function DashboardPage() {
       theme={theme}
     />
   );
+  const stewardEntryEnabled = !search.goalId && !search.rootGoalId
+    && !search.workspace && search.workAgent === undefined && !search.workSession
+    && search.conversationBinding === undefined && search.conversationSession === undefined
+    && activeStatusSource.kind === "local" && !activeStatusSource.readOnly;
+  return <AppStewardEntry enabled={stewardEntryEnabled} intercept={stewardEntryEnabled && search.view === "conversation"}
+    onOpen={target => void navigate({replace: true,
+    search: current => "goalId" in current && current.statusUrl === search.statusUrl && current.view === "conversation"
+      && !current.goalId && !current.rootGoalId && !current.workspace && current.workAgent === undefined
+      && !current.workSession && current.conversationBinding === undefined && current.conversationSession === undefined
+      ? {...current, conversationBinding: target.bindingId, conversationSession: target.sessionId,
+        messageSession: current.messageSession === target.sessionId ? current.messageSession : undefined,
+        message: current.messageSession === target.sessionId ? current.message : undefined} : current})}>
+    {home}
+  </AppStewardEntry>;
 }

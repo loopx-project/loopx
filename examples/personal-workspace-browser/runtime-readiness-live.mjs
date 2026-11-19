@@ -7,7 +7,7 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { waitForHttp } from "../dashboard-browser-smoke-support.mjs";
 import { resolveTestPython } from "../../scripts/test-python.mjs";
-import { outputDir, packaged, repoRoot } from "./fixture.mjs";
+import { outputDir, repoRoot } from "./fixture.mjs";
 import { fetchWorkspaceBackend, openWorkspacePage } from "./scenario-context.mjs";
 
 // End to end against the real service: a disposable `loopx chat` whose Codex,
@@ -19,8 +19,8 @@ import { fetchWorkspaceBackend, openWorkspacePage } from "./scenario-context.mjs
 
 export const runtimeReadinessLiveScenario = {
   id: "runtime-readiness-live",
+  requiresBackendReadback: true,
   async run({ browser, collectCoverage, url }) {
-    if (!packaged) return { coverageEntries: [], note: "live runtime readiness runs against the packaged bundle only" };
     const root = await mkdtemp(join(tmpdir(), "loopx-readiness-live-"));
     const python = resolveTestPython({ repoRoot });
     const child = spawn(python, ["-u", resolve(repoRoot, "examples/personal-workspace-browser/runtime-readiness-backend.py"), root, "--with-goal"], { cwd: repoRoot, env: { ...process.env, PYTHONPATH: repoRoot }, stdio: ["ignore", "pipe", "pipe"] });
@@ -152,7 +152,7 @@ export const runtimeReadinessLiveScenario = {
       const codex = catalog.adapters.find((row) => row.agent_id === "codex");
       assert.equal(codex.available, true, "The real catalog now reports Codex available");
       assert.equal(codex.unavailable_reason, undefined);
-      return { coverageEntries: await session.close(), note: "real loopx chat service, live PATH probe, real re-check" };
+      return { coverageEntries: await session.close(), backendReadbackVerified: true, note: "real loopx chat service, live PATH probe, real re-check" };
     } catch (error) {
       await session?.page.screenshot({ path: resolve(outputDir, "runtime-readiness-live-failure.png"), animations: "disabled" }).catch(() => {});
       if (session?.errors.length) process.stderr.write(`${JSON.stringify(session.errors)}\n`);

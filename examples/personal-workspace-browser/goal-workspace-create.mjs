@@ -23,13 +23,16 @@ export const goalWorkspaceCreateScenario = {
       const ready=await Promise.race([once(lines,'line').then(([line])=>JSON.parse(line)),closed.then(()=>{throw new Error(diagnostics);}),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(`Todo backend startup: ${diagnostics}`)),30000);})]);
       clearTimeout(timer);
       const backend=`http://127.0.0.1:${ready.port}`, requests=[];
-      let refuseApply=true;
+      let refuseApply=true, applyAttempts=0;
       const target=new URL(url);target.searchParams.set('goalId','progress-projection');target.searchParams.set('view','overview');
       context=await openWorkspacePage(browser,target.toString(),{gotoWaitUntil:"domcontentloaded",beforeGoto:async(_api,page)=>{
         for(const pattern of ['**/status.json*','**/api/actions{,/**,?*}','**/api/chat/todo/detail?*']) await page.route(pattern,async route=>{
           const request=route.request(),path=new URL(request.url());
           if(path.pathname==='/api/actions/preview')requests.push(request.postDataJSON());
-          if(path.pathname.endsWith('/apply')&&refuseApply){await route.fulfill({status:503,json:{ok:false,error:'Synthetic temporary transport refusal'}});return;}
+          if(path.pathname.endsWith('/apply')){
+            applyAttempts++;
+            if(refuseApply){await route.fulfill({status:503,json:{ok:false,error:'Synthetic temporary transport refusal'}});return;}
+          }
           const response=await fetchWorkspaceBackend(route,backend);await route.fulfill({response});
         });
       }});
@@ -37,24 +40,32 @@ export const goalWorkspaceCreateScenario = {
       const now=page.getByRole('region',{name:'当前工作',exact:true});await now.waitFor();
       await now.getByRole('button',{name:'添加任务',exact:true}).click();
       const task=now.getByRole('textbox',{name:'任务内容',exact:true});
+      const review=now.getByRole('button',{name:'检查任务',exact:true});
+      for (const count of [399,400,401]) {
+        await task.fill('🌱'.repeat(count));
+        assert.equal(await review.isEnabled(),count<=400,'Inline task admission counts code points');
+      }
+      await task.fill('\u0085\u001c');assert.equal(await review.isEnabled(),false,'Python-only whitespace is empty');
+      await task.fill('a'+'\ufeff'.repeat(500)+'b');assert.equal(await review.isEnabled(),false,'BOM is content, not collapsible whitespace');
       const text='Verify the packaged workspace task creation result';
-      await task.fill(text);await now.getByRole('button',{name:'检查任务',exact:true}).click();
+      const rawText='\u0085Verify'+ '\u0085'.repeat(500) +'the packaged workspace task creation result\u001c';
+      await task.fill(rawText);await review.click();
       const drawer=page.locator('.personal-context-drawer');await drawer.waitFor();
       assert.equal(requests.length,1);assert.equal(requests[0].normalized_parameters.text,text);
       assert.equal(requests[0].normalized_parameters.priority,undefined,'Ordinary creation leaves priority to the Todo owner');
       await drawer.locator('.personal-primary-action').click();
-      await drawer.getByText(/失败/).first().waitFor();
-      await page.locator('.personal-drawer-close').click();assert.equal(await task.inputValue(),text);
+      await page.getByRole('status').filter({hasText:'Synthetic temporary transport refusal'}).waitFor();
+      assert.equal(applyAttempts,1,'The first apply was attempted exactly once');
+      assert.equal(await now.locator('.goal-work-row').filter({hasText:text}).count(),0,'The refused apply did not create a task');
+      await page.locator('.personal-drawer-close').click();assert.equal(await task.inputValue(),rawText);
       refuseApply=false;
       await now.getByRole('button',{name:'检查任务',exact:true}).click();
-      // The action owner may require regenerating the preview after failure.
-      await drawer.locator('.personal-primary-action').click();
-      await drawer.getByRole('button',{name:'确认并应用',exact:true}).waitFor();
       await drawer.getByRole('button',{name:'确认并应用',exact:true}).click();
       await now.locator('.goal-work-row').filter({hasText:text}).waitFor();
       assert.equal(await task.inputValue(),'');
       const {stdout}=await promisify(execFile)(python,['-c','from loopx.entrypoint import main; main()','--format','json','--registry',ready.registry,'todo','list','--goal-id','progress-projection','--role','agent'],{cwd:repoRoot,env:{...process.env,PYTHONPATH:repoRoot,LOOPX_USAGE_PING:'0'},timeout:30000});
       const result=JSON.parse(stdout),created=result.todos.filter(todo=>todo.title===text);
+      assert.equal(applyAttempts,2,'Recovery attempted only one new apply');
       assert.equal(created.length,1,'CLI must read exactly one created task');
       assert.equal(created[0].priority,'P1','The real Todo owner defaults omitted creation priority');
       await page.screenshot({path:resolve(outputDir,'goal-workspace-created.png'),animations:'disabled'});

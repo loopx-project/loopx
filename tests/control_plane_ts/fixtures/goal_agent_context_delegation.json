@@ -1,0 +1,1036 @@
+{
+ "_comment": "Captured from the Python delegation projection before its TypeScript cutover; observed_at is pinned so context_id can be compared.",
+ "scope": {
+  "goal_id": "goal-a",
+  "agent_id": "coordinator",
+  "todo_id": null
+ },
+ "scenarios": {
+  "three/before_plan": {
+   "phase": "before_plan",
+   "orchestration": {
+    "mode": "multi_subagent",
+    "spawn_allowed": true,
+    "max_children": 3,
+    "execution_config": ".loopx/config/delegations.json"
+   },
+   "observed_at": "2026-10-25T10:20:28+00:00",
+   "delegation_facts": {
+    "config": {
+     "schema_version": "loopx_local_delegation_v0",
+     "bindings": [
+      {
+       "id": "binding-0",
+       "agent_id": "worker-0",
+       "todo_id": "todo_review0000",
+       "requesters": [
+        "coordinator"
+       ],
+       "workspace": "/workspace/worker-0",
+       "host_args": [
+        "--host",
+        "generic-cli"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "result.json"
+       ]
+      },
+      {
+       "id": "binding-1",
+       "agent_id": "worker-1",
+       "todo_id": "todo_review0001",
+       "requesters": [
+        "coordinator"
+       ],
+       "workspace": "/workspace/worker-1",
+       "host_args": [
+        "--host",
+        "codex-cli",
+        "--codex-model",
+        "model-a",
+        "--codex-reasoning-effort",
+        "high"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "result.json"
+       ]
+      },
+      {
+       "id": "binding-2",
+       "agent_id": "worker-2",
+       "todo_id": "todo_review0002",
+       "requesters": [
+        "coordinator"
+       ],
+       "workspace": "/workspace/worker-2",
+       "host_args": [
+        "--host",
+        "generic-cli"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "result.json"
+       ]
+      },
+      {
+       "id": "foreign",
+       "agent_id": "other",
+       "todo_id": "todo_foreign",
+       "requesters": [
+        "someone-else"
+       ],
+       "workspace": "/workspace/other",
+       "host_args": [
+        "--host",
+        "generic-cli"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "r.json"
+       ]
+      }
+     ]
+    },
+    "config_error": null,
+    "registered_agent_ids": [
+     "coordinator",
+     "worker-0",
+     "worker-1",
+     "worker-2",
+     "other"
+    ],
+    "executors": [
+     {
+      "host_args": [
+       "--host",
+       "generic-cli"
+      ],
+      "executor": {
+       "schema_version": "managed_executor_binding_v0",
+       "executor": "generic-cli",
+       "executor_kind": "generic",
+       "credential_env": null,
+       "endpoint_env": null,
+       "execution_profile": null,
+       "operator_credential_bound": false,
+       "available": null,
+       "unavailable_reason": null,
+       "unavailable_remediation": [],
+       "runtime_probe": null
+      }
+     },
+     {
+      "host_args": [
+       "--host",
+       "codex-cli",
+       "--codex-model",
+       "model-a",
+       "--codex-reasoning-effort",
+       "high"
+      ],
+      "executor": {
+       "schema_version": "managed_executor_binding_v0",
+       "executor": "codex-cli",
+       "executor_kind": "individual",
+       "credential_env": null,
+       "endpoint_env": null,
+       "execution_profile": "model-a@high",
+       "operator_credential_bound": false,
+       "available": null,
+       "unavailable_reason": null,
+       "unavailable_remediation": [],
+       "runtime_probe": null
+      }
+     }
+    ],
+    "operation_inventory": null
+   },
+   "expected_context": {
+    "schema_version": "loopx_agent_context_v0",
+    "phase": "before_plan",
+    "scope": {
+     "goal_id": "goal-a",
+     "agent_id": "coordinator",
+     "todo_id": null
+    },
+    "target": "coordinator",
+    "authority": "guidance_only",
+    "delivery": "projected",
+    "contributions": [
+     {
+      "hook_id": "multi_subagent.coordinator",
+      "capability_id": "multi_subagent",
+      "revision": "v6",
+      "guidance": [
+       "Prefer bounded independent delegation; max_children is a configured ceiling, not live availability. Admit native children incrementally, avoid duplicate reads, and keep one parent question.",
+       "Host-native child work uses loopx native-child record/read for bounded Turn receipts; these calls do not start Turns or spend quota.",
+       "Choose independent work from current routes and user preferences. Runtime availability is not entrypoint admission; inspect bound delegation. Peer-activation blocks do not assess native children or delegation. Do not relaunch every route on every heartbeat."
+      ],
+      "facts": {
+       "max_children": 3,
+       "capacity_contract": {
+        "schema_version": "multi_subagent_capacity_v0",
+        "configured_limit_kind": "upper_bound",
+        "live_availability": "not_observed"
+       },
+       "model_preference": null,
+       "delegation_context": {
+        "schema_version": "loopx_delegation_context_v0",
+        "configuration_state": "ready",
+        "observed_at": "2026-10-25T10:20:28+00:00",
+        "authorized_count": 3,
+        "projected_count": 3,
+        "entrypoint": "loopx delegation",
+        "execution_scope": "bound_delegation",
+        "preflight": "required",
+        "routes": [
+         {
+          "binding_id": "binding-0",
+          "agent_id": "worker-0",
+          "todo_id": "todo_review0000",
+          "runtime_id": "generic-cli",
+          "readiness": "unknown",
+          "runtime_readiness": "unknown",
+          "executor_kind": "generic"
+         },
+         {
+          "binding_id": "binding-1",
+          "agent_id": "worker-1",
+          "todo_id": "todo_review0001",
+          "runtime_id": "codex-cli",
+          "readiness": "unknown",
+          "runtime_readiness": "unknown",
+          "executor_kind": "individual",
+          "execution_profile": "model-a@high"
+         },
+         {
+          "binding_id": "binding-2",
+          "agent_id": "worker-2",
+          "todo_id": "todo_review0002",
+          "runtime_id": "generic-cli",
+          "readiness": "unknown",
+          "runtime_readiness": "unknown",
+          "executor_kind": "generic"
+         }
+        ]
+       }
+      },
+      "source_refs": [
+       "goal_boundary.orchestration",
+       "docs/integrations/host-native-child-receipts.md"
+      ],
+      "context_id": "a4e4d2491d5fb467412ea31d"
+     }
+    ],
+    "failures": []
+   },
+   "baseline_effect_runtime_requests": 7
+  },
+  "three/after_delegate_result": {
+   "phase": "after_delegate_result",
+   "orchestration": {
+    "mode": "multi_subagent",
+    "spawn_allowed": true,
+    "max_children": 3,
+    "execution_config": ".loopx/config/delegations.json"
+   },
+   "observed_at": "2026-10-25T10:20:28+00:00",
+   "delegation_facts": {
+    "config": {
+     "schema_version": "loopx_local_delegation_v0",
+     "bindings": [
+      {
+       "id": "binding-0",
+       "agent_id": "worker-0",
+       "todo_id": "todo_review0000",
+       "requesters": [
+        "coordinator"
+       ],
+       "workspace": "/workspace/worker-0",
+       "host_args": [
+        "--host",
+        "generic-cli"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "result.json"
+       ]
+      },
+      {
+       "id": "binding-1",
+       "agent_id": "worker-1",
+       "todo_id": "todo_review0001",
+       "requesters": [
+        "coordinator"
+       ],
+       "workspace": "/workspace/worker-1",
+       "host_args": [
+        "--host",
+        "codex-cli",
+        "--codex-model",
+        "model-a",
+        "--codex-reasoning-effort",
+        "high"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "result.json"
+       ]
+      },
+      {
+       "id": "binding-2",
+       "agent_id": "worker-2",
+       "todo_id": "todo_review0002",
+       "requesters": [
+        "coordinator"
+       ],
+       "workspace": "/workspace/worker-2",
+       "host_args": [
+        "--host",
+        "generic-cli"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "result.json"
+       ]
+      },
+      {
+       "id": "foreign",
+       "agent_id": "other",
+       "todo_id": "todo_foreign",
+       "requesters": [
+        "someone-else"
+       ],
+       "workspace": "/workspace/other",
+       "host_args": [
+        "--host",
+        "generic-cli"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "r.json"
+       ]
+      }
+     ]
+    },
+    "config_error": null,
+    "registered_agent_ids": [
+     "coordinator",
+     "worker-0",
+     "worker-1",
+     "worker-2",
+     "other"
+    ],
+    "executors": [
+     {
+      "host_args": [
+       "--host",
+       "generic-cli"
+      ],
+      "executor": {
+       "schema_version": "managed_executor_binding_v0",
+       "executor": "generic-cli",
+       "executor_kind": "generic",
+       "credential_env": null,
+       "endpoint_env": null,
+       "execution_profile": null,
+       "operator_credential_bound": false,
+       "available": null,
+       "unavailable_reason": null,
+       "unavailable_remediation": [],
+       "runtime_probe": null
+      }
+     },
+     {
+      "host_args": [
+       "--host",
+       "codex-cli",
+       "--codex-model",
+       "model-a",
+       "--codex-reasoning-effort",
+       "high"
+      ],
+      "executor": {
+       "schema_version": "managed_executor_binding_v0",
+       "executor": "codex-cli",
+       "executor_kind": "individual",
+       "credential_env": null,
+       "endpoint_env": null,
+       "execution_profile": "model-a@high",
+       "operator_credential_bound": false,
+       "available": null,
+       "unavailable_reason": null,
+       "unavailable_remediation": [],
+       "runtime_probe": null
+      }
+     }
+    ],
+    "operation_inventory": {
+     "items": [],
+     "has_more": false
+    }
+   },
+   "expected_context": {
+    "schema_version": "loopx_agent_context_v0",
+    "phase": "after_delegate_result",
+    "scope": {
+     "goal_id": "goal-a",
+     "agent_id": "coordinator",
+     "todo_id": null
+    },
+    "target": "coordinator",
+    "authority": "guidance_only",
+    "delivery": "projected",
+    "contributions": [
+     {
+      "hook_id": "multi_subagent.coordinator",
+      "capability_id": "multi_subagent",
+      "revision": "v6",
+      "guidance": [
+       "Check returned sources, omissions and contradictions against the question. Record native child result and parent review separately, then reconcile fresh Turn receipts and bound delegation receipts; missing or rejected receipts do not establish completed work.",
+       "On typed agent_thread_limit_reached, stop same-Turn spawn/followup retries, mark unlaunched work incomplete, and continue useful parent work.",
+       "Verify decisive sources and record accept/defer/reject with reasons. Link accepted evidence to the deliverable and run parent validation before writeback; opinions are not independent evidence."
+      ],
+      "facts": {
+       "max_children": 3,
+       "capacity_contract": {
+        "schema_version": "multi_subagent_capacity_v0",
+        "configured_limit_kind": "upper_bound",
+        "live_availability": "not_observed"
+       },
+       "model_preference": null,
+       "receipt_observation": "not_supplied",
+       "delegation_receipts": {
+        "configuration_state": "ready",
+        "observed_at": "2026-10-25T10:20:28+00:00",
+        "operation_receipts": {
+         "observed": 0
+        }
+       }
+      },
+      "source_refs": [
+       "goal_boundary.orchestration",
+       "docs/integrations/host-native-child-receipts.md"
+      ],
+      "context_id": "7721d8fadddd5edf4e464501"
+     }
+    ],
+    "failures": []
+   },
+   "baseline_effect_runtime_requests": 9
+  },
+  "eight/before_plan": {
+   "phase": "before_plan",
+   "orchestration": {
+    "mode": "multi_subagent",
+    "spawn_allowed": true,
+    "max_children": 3,
+    "execution_config": ".loopx/config/delegations.json"
+   },
+   "observed_at": "2026-10-25T10:20:28+00:00",
+   "delegation_facts": {
+    "config": {
+     "schema_version": "loopx_local_delegation_v0",
+     "bindings": [
+      {
+       "id": "binding-0-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+       "agent_id": "worker-0",
+       "todo_id": "todo_review0000",
+       "requesters": [
+        "coordinator"
+       ],
+       "workspace": "/workspace/worker-0",
+       "host_args": [
+        "--host",
+        "generic-cli"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "result.json"
+       ]
+      },
+      {
+       "id": "binding-1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+       "agent_id": "worker-1",
+       "todo_id": "todo_review0001",
+       "requesters": [
+        "coordinator"
+       ],
+       "workspace": "/workspace/worker-1",
+       "host_args": [
+        "--host",
+        "codex-cli",
+        "--codex-model",
+        "model-a",
+        "--codex-reasoning-effort",
+        "high"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "result.json"
+       ]
+      },
+      {
+       "id": "binding-2-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+       "agent_id": "worker-2",
+       "todo_id": "todo_review0002",
+       "requesters": [
+        "coordinator"
+       ],
+       "workspace": "/workspace/worker-2",
+       "host_args": [
+        "--host",
+        "generic-cli"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "result.json"
+       ]
+      },
+      {
+       "id": "binding-3-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+       "agent_id": "worker-3",
+       "todo_id": "todo_review0003",
+       "requesters": [
+        "coordinator"
+       ],
+       "workspace": "/workspace/worker-3",
+       "host_args": [
+        "--host",
+        "codex-cli",
+        "--codex-model",
+        "model-a",
+        "--codex-reasoning-effort",
+        "high"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "result.json"
+       ]
+      },
+      {
+       "id": "binding-4-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+       "agent_id": "worker-4",
+       "todo_id": "todo_review0004",
+       "requesters": [
+        "coordinator"
+       ],
+       "workspace": "/workspace/worker-4",
+       "host_args": [
+        "--host",
+        "generic-cli"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "result.json"
+       ]
+      },
+      {
+       "id": "binding-5-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+       "agent_id": "worker-5",
+       "todo_id": "todo_review0005",
+       "requesters": [
+        "coordinator"
+       ],
+       "workspace": "/workspace/worker-5",
+       "host_args": [
+        "--host",
+        "codex-cli",
+        "--codex-model",
+        "model-a",
+        "--codex-reasoning-effort",
+        "high"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "result.json"
+       ]
+      },
+      {
+       "id": "binding-6-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+       "agent_id": "worker-6",
+       "todo_id": "todo_review0006",
+       "requesters": [
+        "coordinator"
+       ],
+       "workspace": "/workspace/worker-6",
+       "host_args": [
+        "--host",
+        "generic-cli"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "result.json"
+       ]
+      },
+      {
+       "id": "binding-7-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+       "agent_id": "worker-7",
+       "todo_id": "todo_review0007",
+       "requesters": [
+        "coordinator"
+       ],
+       "workspace": "/workspace/worker-7",
+       "host_args": [
+        "--host",
+        "codex-cli",
+        "--codex-model",
+        "model-a",
+        "--codex-reasoning-effort",
+        "high"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "result.json"
+       ]
+      },
+      {
+       "id": "foreign",
+       "agent_id": "other",
+       "todo_id": "todo_foreign",
+       "requesters": [
+        "someone-else"
+       ],
+       "workspace": "/workspace/other",
+       "host_args": [
+        "--host",
+        "generic-cli"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "r.json"
+       ]
+      }
+     ]
+    },
+    "config_error": null,
+    "registered_agent_ids": [
+     "coordinator",
+     "worker-0",
+     "worker-1",
+     "worker-2",
+     "worker-3",
+     "worker-4",
+     "worker-5",
+     "worker-6",
+     "worker-7",
+     "other"
+    ],
+    "executors": [
+     {
+      "host_args": [
+       "--host",
+       "generic-cli"
+      ],
+      "executor": {
+       "schema_version": "managed_executor_binding_v0",
+       "executor": "generic-cli",
+       "executor_kind": "generic",
+       "credential_env": null,
+       "endpoint_env": null,
+       "execution_profile": null,
+       "operator_credential_bound": false,
+       "available": null,
+       "unavailable_reason": null,
+       "unavailable_remediation": [],
+       "runtime_probe": null
+      }
+     },
+     {
+      "host_args": [
+       "--host",
+       "codex-cli",
+       "--codex-model",
+       "model-a",
+       "--codex-reasoning-effort",
+       "high"
+      ],
+      "executor": {
+       "schema_version": "managed_executor_binding_v0",
+       "executor": "codex-cli",
+       "executor_kind": "individual",
+       "credential_env": null,
+       "endpoint_env": null,
+       "execution_profile": "model-a@high",
+       "operator_credential_bound": false,
+       "available": null,
+       "unavailable_reason": null,
+       "unavailable_remediation": [],
+       "runtime_probe": null
+      }
+     }
+    ],
+    "operation_inventory": null
+   },
+   "expected_context": {
+    "schema_version": "loopx_agent_context_v0",
+    "phase": "before_plan",
+    "scope": {
+     "goal_id": "goal-a",
+     "agent_id": "coordinator",
+     "todo_id": null
+    },
+    "target": "coordinator",
+    "authority": "guidance_only",
+    "delivery": "projected",
+    "contributions": [
+     {
+      "hook_id": "multi_subagent.coordinator",
+      "capability_id": "multi_subagent",
+      "revision": "v6",
+      "guidance": [
+       "Prefer bounded independent delegation; max_children is a configured ceiling, not live availability. Admit native children incrementally, avoid duplicate reads, and keep one parent question.",
+       "Host-native child work uses loopx native-child record/read for bounded Turn receipts; these calls do not start Turns or spend quota.",
+       "Choose independent work from current routes and user preferences. Runtime availability is not entrypoint admission; inspect bound delegation. Peer-activation blocks do not assess native children or delegation. Do not relaunch every route on every heartbeat."
+      ],
+      "facts": {
+       "max_children": 3,
+       "capacity_contract": {
+        "schema_version": "multi_subagent_capacity_v0",
+        "configured_limit_kind": "upper_bound",
+        "live_availability": "not_observed"
+       },
+       "model_preference": null,
+       "delegation_context": {
+        "schema_version": "loopx_delegation_context_v0",
+        "configuration_state": "ready",
+        "observed_at": "2026-10-25T10:20:28+00:00",
+        "authorized_count": 8,
+        "projected_count": 2,
+        "entrypoint": "loopx delegation",
+        "execution_scope": "bound_delegation",
+        "preflight": "required",
+        "routes": [
+         {
+          "binding_id": "binding-0-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "agent_id": "worker-0",
+          "todo_id": "todo_review0000",
+          "runtime_id": "generic-cli",
+          "readiness": "unknown",
+          "runtime_readiness": "unknown",
+          "executor_kind": "generic"
+         },
+         {
+          "binding_id": "binding-1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "agent_id": "worker-1",
+          "todo_id": "todo_review0001",
+          "runtime_id": "codex-cli",
+          "readiness": "unknown",
+          "runtime_readiness": "unknown",
+          "executor_kind": "individual",
+          "execution_profile": "model-a@high"
+         }
+        ],
+        "routes_truncated": true
+       }
+      },
+      "source_refs": [
+       "goal_boundary.orchestration",
+       "docs/integrations/host-native-child-receipts.md"
+      ],
+      "context_id": "bd8d6603e04d22c0f4d17d7e"
+     }
+    ],
+    "failures": []
+   },
+   "baseline_effect_runtime_requests": 15
+  },
+  "eight/after_delegate_result": {
+   "phase": "after_delegate_result",
+   "orchestration": {
+    "mode": "multi_subagent",
+    "spawn_allowed": true,
+    "max_children": 3,
+    "execution_config": ".loopx/config/delegations.json"
+   },
+   "observed_at": "2026-10-25T10:20:29+00:00",
+   "delegation_facts": {
+    "config": {
+     "schema_version": "loopx_local_delegation_v0",
+     "bindings": [
+      {
+       "id": "binding-0-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+       "agent_id": "worker-0",
+       "todo_id": "todo_review0000",
+       "requesters": [
+        "coordinator"
+       ],
+       "workspace": "/workspace/worker-0",
+       "host_args": [
+        "--host",
+        "generic-cli"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "result.json"
+       ]
+      },
+      {
+       "id": "binding-1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+       "agent_id": "worker-1",
+       "todo_id": "todo_review0001",
+       "requesters": [
+        "coordinator"
+       ],
+       "workspace": "/workspace/worker-1",
+       "host_args": [
+        "--host",
+        "codex-cli",
+        "--codex-model",
+        "model-a",
+        "--codex-reasoning-effort",
+        "high"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "result.json"
+       ]
+      },
+      {
+       "id": "binding-2-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+       "agent_id": "worker-2",
+       "todo_id": "todo_review0002",
+       "requesters": [
+        "coordinator"
+       ],
+       "workspace": "/workspace/worker-2",
+       "host_args": [
+        "--host",
+        "generic-cli"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "result.json"
+       ]
+      },
+      {
+       "id": "binding-3-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+       "agent_id": "worker-3",
+       "todo_id": "todo_review0003",
+       "requesters": [
+        "coordinator"
+       ],
+       "workspace": "/workspace/worker-3",
+       "host_args": [
+        "--host",
+        "codex-cli",
+        "--codex-model",
+        "model-a",
+        "--codex-reasoning-effort",
+        "high"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "result.json"
+       ]
+      },
+      {
+       "id": "binding-4-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+       "agent_id": "worker-4",
+       "todo_id": "todo_review0004",
+       "requesters": [
+        "coordinator"
+       ],
+       "workspace": "/workspace/worker-4",
+       "host_args": [
+        "--host",
+        "generic-cli"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "result.json"
+       ]
+      },
+      {
+       "id": "binding-5-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+       "agent_id": "worker-5",
+       "todo_id": "todo_review0005",
+       "requesters": [
+        "coordinator"
+       ],
+       "workspace": "/workspace/worker-5",
+       "host_args": [
+        "--host",
+        "codex-cli",
+        "--codex-model",
+        "model-a",
+        "--codex-reasoning-effort",
+        "high"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "result.json"
+       ]
+      },
+      {
+       "id": "binding-6-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+       "agent_id": "worker-6",
+       "todo_id": "todo_review0006",
+       "requesters": [
+        "coordinator"
+       ],
+       "workspace": "/workspace/worker-6",
+       "host_args": [
+        "--host",
+        "generic-cli"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "result.json"
+       ]
+      },
+      {
+       "id": "binding-7-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+       "agent_id": "worker-7",
+       "todo_id": "todo_review0007",
+       "requesters": [
+        "coordinator"
+       ],
+       "workspace": "/workspace/worker-7",
+       "host_args": [
+        "--host",
+        "codex-cli",
+        "--codex-model",
+        "model-a",
+        "--codex-reasoning-effort",
+        "high"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "result.json"
+       ]
+      },
+      {
+       "id": "foreign",
+       "agent_id": "other",
+       "todo_id": "todo_foreign",
+       "requesters": [
+        "someone-else"
+       ],
+       "workspace": "/workspace/other",
+       "host_args": [
+        "--host",
+        "generic-cli"
+       ],
+       "timeout_seconds": 60,
+       "output_refs": [
+        "r.json"
+       ]
+      }
+     ]
+    },
+    "config_error": null,
+    "registered_agent_ids": [
+     "coordinator",
+     "worker-0",
+     "worker-1",
+     "worker-2",
+     "worker-3",
+     "worker-4",
+     "worker-5",
+     "worker-6",
+     "worker-7",
+     "other"
+    ],
+    "executors": [
+     {
+      "host_args": [
+       "--host",
+       "generic-cli"
+      ],
+      "executor": {
+       "schema_version": "managed_executor_binding_v0",
+       "executor": "generic-cli",
+       "executor_kind": "generic",
+       "credential_env": null,
+       "endpoint_env": null,
+       "execution_profile": null,
+       "operator_credential_bound": false,
+       "available": null,
+       "unavailable_reason": null,
+       "unavailable_remediation": [],
+       "runtime_probe": null
+      }
+     },
+     {
+      "host_args": [
+       "--host",
+       "codex-cli",
+       "--codex-model",
+       "model-a",
+       "--codex-reasoning-effort",
+       "high"
+      ],
+      "executor": {
+       "schema_version": "managed_executor_binding_v0",
+       "executor": "codex-cli",
+       "executor_kind": "individual",
+       "credential_env": null,
+       "endpoint_env": null,
+       "execution_profile": "model-a@high",
+       "operator_credential_bound": false,
+       "available": null,
+       "unavailable_reason": null,
+       "unavailable_remediation": [],
+       "runtime_probe": null
+      }
+     }
+    ],
+    "operation_inventory": {
+     "items": [],
+     "has_more": false
+    }
+   },
+   "expected_context": {
+    "schema_version": "loopx_agent_context_v0",
+    "phase": "after_delegate_result",
+    "scope": {
+     "goal_id": "goal-a",
+     "agent_id": "coordinator",
+     "todo_id": null
+    },
+    "target": "coordinator",
+    "authority": "guidance_only",
+    "delivery": "projected",
+    "contributions": [
+     {
+      "hook_id": "multi_subagent.coordinator",
+      "capability_id": "multi_subagent",
+      "revision": "v6",
+      "guidance": [
+       "Check returned sources, omissions and contradictions against the question. Record native child result and parent review separately, then reconcile fresh Turn receipts and bound delegation receipts; missing or rejected receipts do not establish completed work.",
+       "On typed agent_thread_limit_reached, stop same-Turn spawn/followup retries, mark unlaunched work incomplete, and continue useful parent work.",
+       "Verify decisive sources and record accept/defer/reject with reasons. Link accepted evidence to the deliverable and run parent validation before writeback; opinions are not independent evidence."
+      ],
+      "facts": {
+       "max_children": 3,
+       "capacity_contract": {
+        "schema_version": "multi_subagent_capacity_v0",
+        "configured_limit_kind": "upper_bound",
+        "live_availability": "not_observed"
+       },
+       "model_preference": null,
+       "receipt_observation": "not_supplied",
+       "delegation_receipts": {
+        "configuration_state": "ready",
+        "observed_at": "2026-10-25T10:20:29+00:00",
+        "operation_receipts": {
+         "observed": 0
+        }
+       }
+      },
+      "source_refs": [
+       "goal_boundary.orchestration",
+       "docs/integrations/host-native-child-receipts.md"
+      ],
+      "context_id": "0b5d5829e806f7acb87f2eb6"
+     }
+    ],
+    "failures": []
+   },
+   "baseline_effect_runtime_requests": 17
+  }
+ }
+}

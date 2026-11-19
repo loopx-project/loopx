@@ -896,6 +896,7 @@ def build_goal_configuration_catalog(
         feature_id = str(feature.get("feature_id") or "")
         if feature_id not in {
             "todo_replan_cadence",
+            "explore_harness",
             "change_quality_qualification",
             "pull_request_review",
         }:

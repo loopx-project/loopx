@@ -7,6 +7,7 @@ It does not capture process memory or qualify a native conversation cursor.
 from __future__ import annotations
 
 from contextlib import closing
+from copy import copy
 import hashlib
 import json
 import math
@@ -25,8 +26,56 @@ from benchmark.runtime.checkpoint_handoff import controller_completion_deadline
 from .checkpoint_controller import _controller, _physical, _remaining, _phase_budget, capture
 
 
+_COMPONENT_ID = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}")
+
+
+def capture_failure_fields(error: Exception) -> dict[str, str]:
+    """Keep a bounded diagnostic for a declared component's failed Docker read."""
+    fields = {"error_kind": type(error).__name__}
+    component_id = getattr(error, "checkpoint_component_id", None)
+    if isinstance(component_id, str) and _COMPONENT_ID.fullmatch(component_id):
+        from docker.errors import NotFound
+
+        if isinstance(error, NotFound):
+            fields["missing_component_id"] = component_id
+    return fields
+
+
+def qualify_export_storage(destination: Path) -> None:
+    """Check filename fidelity before registration, without reserving a run.
+
+    Linux source trees can contain case-only or Unicode-normalization-only
+    siblings. A shared host volume may silently merge these during extraction
+    or sealing, even when the controller itself runs on Linux.
+    """
+    if not destination.is_absolute() or destination.resolve() != destination:
+        raise ValueError("Checkpoint export destination must be normalized, physical and absolute")
+    if destination.exists():
+        raise ValueError("Checkpoint export destination must be fresh; preserve the existing bank")
+    parent = destination.parent
+    while not parent.exists():
+        parent = parent.parent
+    _physical(parent)
+    names = ("Candidate", "candidate", "caf\u00e9", "cafe\u0301")
+    with tempfile.TemporaryDirectory(prefix=".checkpoint-storage-", dir=parent) as directory:
+        root = Path(directory)
+        try:
+            for index, name in enumerate(names):
+                with (root / name).open("xb") as stream:
+                    stream.write(bytes([index]))
+        except FileExistsError as error:
+            raise ValueError("Checkpoint export storage must preserve case and Unicode filename distinctions; "
+                             "select a compatible volume with --checkpoint-export-root") from error
+        if (set(entry.name for entry in root.iterdir()) != set(names) or
+                any((root / name).read_bytes() != bytes([index]) for index, name in enumerate(names))):
+            raise ValueError("Checkpoint export storage changed filename identities or bytes")
+
+
 def _request(path: Path) -> dict:
-    value = json.loads(_physical(path).read_bytes())
+    return _validate_request(json.loads(_physical(path).read_bytes()))
+
+
+def _validate_request(value: dict) -> dict:
     if (not isinstance(value, dict) or
             set(value) not in ({"container_id", "components", "phase_deadline_path"},
                               {"container_id", "components", "phase_deadline_path", "handoff"}) or
@@ -38,7 +87,7 @@ def _request(path: Path) -> dict:
     for entry in value["components"]:
         if (not isinstance(entry, dict) or set(entry) != {"id", "source_path"} or
                 not isinstance(entry["id"], str) or
-                not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", entry["id"]) or entry["id"] in ids):
+                not _COMPONENT_ID.fullmatch(entry["id"]) or entry["id"] in ids):
             raise ValueError("Worker components require unique IDs")
         ids.add(entry["id"])
         paths.append(_guest_path(entry["source_path"]))
@@ -80,7 +129,7 @@ class _ArchiveReader:
 
 
 def _archive(container, remote: str, destination: Path, *, deadline: float | None = None) -> Path:
-    """Read through the daemon, rejecting links/devices and archive traversal.
+    """Read through the daemon, rejecting symlinks/devices and archive traversal.
 
     Docker's archive reader works while paused, unlike exec-based file readers.
     Keep only the declared object, not parent filesystem or process credentials.
@@ -120,16 +169,36 @@ def _archive(container, remote: str, destination: Path, *, deadline: float | Non
             with tarfile.open(fileobj=_ArchiveReader(raw, deadline) if deadline is not None else raw) as archive:
                 members = []
                 root = PurePosixPath(remote).name
-                names = set()
+                names = {}
                 for member in archive:
                     check()
                     path = PurePosixPath(member.name)
                     if (path.is_absolute() or ".." in path.parts or not path.parts or
                             path.parts[0] != root or str(path) in names or
-                            not (member.isfile() or member.isdir())):
+                            not (member.isfile() or member.isdir() or member.islnk())):
                         raise ValueError("Worker archive contains undeclared, linked or special members")
-                    names.add(str(path))
+                    names[str(path)] = member
                     members.append(member)
+
+                # The typed artifact owner observes regular files, not inode
+                # sharing. Docker encodes a second name for the same inode as a
+                # tar hardlink (common in build outputs). Materialize its bytes
+                # from an inventoried regular member; never resolve a link on
+                # the host filesystem or permit a link chain/symlink escape.
+                extracted = []
+                for member in members:
+                    check()
+                    if member.islnk():
+                        target_path = PurePosixPath(member.linkname)
+                        target = names.get(str(target_path))
+                        if (target_path.is_absolute() or ".." in target_path.parts or
+                                target is None or not target.isfile()):
+                            raise ValueError("Worker archive contains undeclared, linked or special members")
+                        regular = copy(target)
+                        regular.name, regular.mode = member.name, member.mode
+                        extracted.append(regular)
+                    else:
+                        extracted.append(member)
 
                 def filtered(member, path):
                     check()
@@ -137,7 +206,7 @@ def _archive(container, remote: str, destination: Path, *, deadline: float | Non
                     check()
                     return result
 
-                archive.extractall(destination, members=members, filter=filtered)
+                archive.extractall(destination, members=extracted, filter=filtered)
                 # The data filter intentionally drops directory modes. This is a
                 # private raw transport witness, so restore only ordinary permission
                 # bits after safe extraction; never restore owners or special bits.
@@ -200,7 +269,7 @@ def _worker_lock(client, container_id: str) -> Path:
 
 def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                    destination: Path, request_file: Path, timeout: float = 30,
-                   seal_within_phase: bool = False) -> dict:
+                   seal_within_phase: bool = False, terminal_scheduler_phases: bool = False) -> dict:
     """Freeze one explicitly owned worker and seal its files with native state.
 
     A fresh identity is required. Failed or uncertain attempts never recapture a
@@ -218,6 +287,8 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
     request = _request(request_file)
     if seal_within_phase and "handoff" not in request:
         raise ValueError("Post-release sealing requires an exact prepared handoff")
+    if terminal_scheduler_phases and "handoff" in request:
+        raise ValueError("Terminal phase discovery cannot change a prepared handoff")
     controller = _controller(controller_file)
     destination = Path(destination)
     _physical(destination.parent)
@@ -226,6 +297,7 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
         raise ValueError("Worker capture requires a fresh physical destination and 32-hex identity")
     if (controller["bank_root"] / capture_id).exists():
         raise ValueError("Existing native point cannot acquire later worker files")
+    qualify_export_storage(destination)
     attempts = controller["bank_root"] / ".loopx-worker-attempts"
     attempts.mkdir(exist_ok=True, mode=0o700)
     _physical(attempts)
@@ -257,6 +329,10 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                     container.reload()
                     if not container.attrs["State"]["Paused"]:
                         raise RuntimeError("Worker writer barrier was not established")
+                    if terminal_scheduler_phases:
+                        from .terminal_capture import _scheduler_components_at_barrier
+                        request = _validate_request({**request, "components": _scheduler_components_at_barrier(
+                            container, request["components"], stage, deadline=deadline)})
                     if "handoff" in request:
                         held = _archive(container, request["handoff"]["source_path"], stage / "held", deadline=deadline)
                         raw = held.read_bytes()
@@ -273,7 +349,13 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                         deadline = min(deadline, time.monotonic() + prepared["deadline_epoch"] - time.time())
                     for entry in request["components"]:
                         client.api.timeout = _remaining(deadline)
-                        copied = _archive_component(container, entry["source_path"], stage / "workers" / entry["id"], deadline=deadline)
+                        try:
+                            copied = _archive_component(
+                                container, entry["source_path"], stage / "workers" / entry["id"], deadline=deadline)
+                        except docker.errors.NotFound as error:
+                            # Keep the provider exception for direct capture callers.
+                            error.checkpoint_component_id = entry["id"]
+                            raise
                         components.append({"id": entry["id"], "source_path": str(copied)})
                     if prepared is not None:
                         observed = effect_runtime_result("runtime.checkpoint_artifacts", {

@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import io
 import json
+import math
 import os
 import subprocess
 import socket
@@ -18,6 +20,13 @@ from unittest.mock import Mock
 import pytest
 
 from benchmark.edgebench import checkpoint_controller as transport
+from benchmark.edgebench.source import active_source_receipt
+
+
+@pytest.mark.parametrize("clock", [b"nan\n", b"9007199254740992.0\n", b"2000.25000000000000001\n"])
+def test_phase_budget_rejects_invalid_or_rounded_clock(clock):
+    with pytest.raises(ValueError, match="Host phase deadline"):
+        transport._phase_budget(clock, {"captured_at_epoch": 1000})
 
 
 @contextmanager
@@ -51,6 +60,7 @@ def wait(predicate):
 
 @pytest.fixture
 def controllers(tmp_path, monkeypatch):
+    active_source_receipt()  # A supplied frozen-source receipt must match the real imported provider.
     pytest.importorskip("sforge.harness.checkpoint", reason="Requires native checkpoint API source pin")
     from sforge.harness import judge_server as native
     from sforge.harness.config import SForgeConfig
@@ -111,8 +121,33 @@ def submit(url, token, score):
         files={"archive": ("candidate.tar.gz", str(score).encode())}, timeout=5)
     if response.status_code == 200:
         identifier = response.json()["submission_id"]
-        wait(lambda: requests.get(url + "/api/v1/result/" + identifier, timeout=5).json()["status"] == "completed")
+        wait(lambda: requests.get(url + "/api/v1/result/" + identifier, params={"token": token}, timeout=5).json()["status"] == "completed")
     return response
+
+
+def test_activation_accepts_only_bound_native_fields_and_valid_optional_relay():
+    body = {"checkpoint_id": "fixture", "manifest_sha256": "a" * 64, "run_id": "branch"}
+    result = {**body, "token": "synthetic-host-token"}
+    transport._activation_result(result, body)
+    transport._activation_result({**result, "feedback_relay_id": "synthetic-relay"}, body)
+    for altered in ({**result, "run_id": "unrelated"}, {**result, "token": ""},
+                    {**result, "unexpected": True}, *(
+                        {**result, "feedback_relay_id": value} for value in (None, "", 1, {}))):
+        with pytest.raises(ValueError):
+            transport._activation_result(altered, body)
+
+
+def test_native_bank_rejects_an_unknown_schema_even_with_matching_bytes(tmp_path):
+    packet = {"schema_version": "sforge_judge_checkpoint_v3", "task_id": "fixture",
+              "source_run_id": "source", "opportunity": {}, "incumbent": None}
+    raw = json.dumps(packet).encode()
+    digest = hashlib.sha256(raw).hexdigest()
+    (tmp_path / "manifest.json").write_bytes(raw)
+    (tmp_path / "manifest.sha256").write_text(digest)
+    reference = {key: packet[key] for key in ("task_id", "source_run_id", "opportunity", "incumbent")}
+    reference["manifest_sha256"] = digest
+    with pytest.raises(ValueError, match="Native bank bytes differ"):
+        transport._bound_bank(tmp_path, reference)
 
 
 def test_native_controller_transport_preserves_original_point_and_fresh_authority(controllers, tmp_path, capsys):
@@ -154,7 +189,7 @@ def test_native_controller_transport_preserves_original_point_and_fresh_authorit
     fresh = json.loads(private_result.read_text())["token"]
     assert fresh != token and fresh not in output
     assert private_result.stat().st_mode & 0o077 == 0 and len(grades) == 3
-    history = requests.get(second + "/api/v1/history", params={"token": fresh}, timeout=5).json()
+    history = requests.get(second + "/api/v1/history", params={"token": fresh, "admin_secret": destination.state.judge.admin_secret}, timeout=5).json()
     assert history["best_score"] == 7 and history["best_round"] == "agent-1" and history["agent_submissions"] == 2
     assert submit(second, fresh, 1).status_code == 429
     assert source.state.judge.get_run_history("source", "fixture")["best_score"] == 99
@@ -163,8 +198,82 @@ def test_native_controller_transport_preserves_original_point_and_fresh_authorit
     assert len(grades) == 3
 
 
+def test_native_controller_transport_retains_nonfinite_released_results(
+        controllers, tmp_path, monkeypatch):
+    from sforge.harness import judge_server as native
+
+    source, destination, first, second, files, grades = controllers
+    clock = SimpleNamespace(epoch=time.time())
+    # Native admission and checkpoint capture share this wall clock. HTTP and
+    # transport deadlines keep using the real monotonic clock.
+    monkeypatch.setattr(native.time, "time", lambda: clock.epoch)
+    for app in (source, destination):
+        app.state.judge.tasks["fixture"].judge.score_direction = "minimize"
+    original_grade = native.judge_submission
+
+    def grade(**kwargs):
+        report = original_grade(**kwargs).to_dict()
+        if kwargs["archive"] == b"inf":
+            report.update(valid=False, pass_rate=.5, passed=1, failed=1, total_tests=2,
+                          summary="Synthetic partial result",
+                          metrics={"lower_bound": -math.inf, "residual": math.nan},
+                          details=[{"name": "synthetic-timeout", "score": math.inf}])
+        return SimpleNamespace(to_dict=lambda: report)
+
+    monkeypatch.setattr(native, "judge_submission", grade)
+    token = register(source, first, max_agent_submissions=3, submission_cooldown=2)
+    assert submit(first, token, 7).status_code == 200
+    clock.epoch += 2.05
+    rejected = submit(first, token, math.inf)
+    assert rejected.status_code == 200
+    rejected_id = rejected.json()["submission_id"]
+    # A released partial result still consumed its native round. It neither
+    # replaces the finite incumbent nor prevents preserving the whole point.
+    before = json.dumps((source.state.judge.tokens, source.state.judge.submissions,
+                         source.state.judge.run_history), sort_keys=True)
+    exported = tmp_path / "nonfinite-point"
+    point = transport.capture(files[0], token=token, capture_id="e" * 32,
+                              destination=exported)
+    assert point["native_reference"]["incumbent"]["round"] == "agent-1"
+    assert (exported / "components/native_judge/incumbent.tar.gz").read_bytes() == b"7"
+
+    def reject_non_json_constant(value):
+        pytest.fail(f"Native checkpoint contains a non-JSON numeric constant: {value}")
+
+    manifest = exported / "components/native_judge/manifest.json"
+    json.loads(manifest.read_bytes(), parse_constant=reject_non_json_constant)
+    restored = transport.restore(files[1], root=exported, expected_sha256=point["sha256"],
+                                 run_id="nonfinite-branch")
+    fresh = restored["token"]
+    assert fresh != token and len(grades) == 2  # Restoring does not regrade.
+    history = destination.state.judge.get_run_history("nonfinite-branch", "fixture")
+    assert history["best_round"] == "agent-1" and history["best_score"] == 7
+    assert history["agent_submissions"] == 2 and history["auto_submissions"] == 0
+    released = next(entry for entry in history["entries"] if entry["round"] == "agent-2")
+    assert released["submission_id"] != rejected_id
+    report = destination.state.judge.submissions[released["submission_id"]]["report"]
+    assert report["score"] == math.inf and report["valid"] is False
+    assert report["failed"] == 1 and report["pass_rate"] == .5
+    assert report["metrics"]["lower_bound"] == -math.inf
+    assert math.isnan(report["metrics"]["residual"])
+    assert report["details"] == [{"name": "synthetic-timeout", "score": math.inf}]
+    opportunity = destination.state.judge.tokens[fresh]
+    assert opportunity["next_agent"] == 3 and opportunity["max_agent_submissions"] == 3
+    assert opportunity["submission_cooldown"] == 2
+    assert submit(second, fresh, 1).status_code == 429
+    clock.epoch += 2.05
+    assert submit(second, fresh, 1).status_code == 200
+    clock.epoch += 2.05
+    assert submit(second, fresh, 0).status_code == 429
+    history = destination.state.judge.get_run_history("nonfinite-branch", "fixture")
+    assert history["agent_submissions"] == 3 and history["best_score"] == 1
+    assert history["best_round"] == "agent-3" and len(grades) == 3
+    assert json.dumps((source.state.judge.tokens, source.state.judge.submissions,
+                       source.state.judge.run_history), sort_keys=True) == before
+
+
 def host_phase_command(tmp_path, monkeypatch):
-    """Real command builder; only installation/inference are outside this oracle."""
+    """Real phase admission shell, isolated from installation and model access."""
     pytest.importorskip("harbor")
     from sforge.harness.config import SForgeConfig
     from benchmark.runtime.sforge import BenchmarkCodex, SForgeWorker
@@ -172,37 +281,51 @@ def host_phase_command(tmp_path, monkeypatch):
     async def installed(self, environment):
         pass
     monkeypatch.setattr(BenchmarkCodex, "install", installed)
-    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-not-read")
     logs = tmp_path / "phase-worker"
     logs.mkdir()
-    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+    # The model-free prefix must not try to inspect a desktop login. The
+    # custom endpoint uses the same phase shell and is never contacted.
+    config = SForgeConfig(agent_model="fixture", agent_effort="xhigh",
+        agent_api_base_url="http://127.0.0.1:1/v1", agent_api_key="fixture-not-used")
+    backend = Mock()
+    backend.exec_run.return_value = SimpleNamespace(exit_code=0, output=config.agent_api_base_url)
+    worker = SForgeWorker(config,
         profile="heartbeat-resume", cwd="/task", timeout_seconds=43200, task_entry="seeded-todo")
-    worker.install_stop_hook(None, None, logs, None)
+    worker.install_stop_hook(backend, None, logs, None)
     worker.prepared = True
-    # The provider's own phase-file/admission shell executes. Its following
-    # model command is excluded explicitly; candidate writing below is synthetic.
-    return worker.format_run_cmd("/task.md").split(
-        "set +e; timeout --signal=TERM --kill-after=30 ${remaining}s env", 1)[0]
+    # Exercise the custom-endpoint prefix exactly as rendered, up to model dispatch.
+    phase, dispatch, _ = worker.format_run_cmd("/task.md").partition(
+        "set +e; timeout --signal=TERM --kill-after=30 ${remaining}s env")
+    assert dispatch and "benchmark.runtime.codex_readiness" not in phase
+    return phase
 
 
+@pytest.mark.parametrize("fraction", [None, 0.0, 0.625], ids=["fresh", "resumed", "subsecond"])
 def test_host_phase_and_native_opportunities_continue_without_offline_refill(
-        controllers, tmp_path, monkeypatch, capsys):
+        controllers, tmp_path, monkeypatch, capsys, fraction):
     import requests
     source, destination, first, second, files, grades = controllers
     token = register(source, first, max_agent_submissions=3, submission_cooldown=2)
     assert submit(first, token, 7).status_code == 200
     before = copy.deepcopy((source.state.judge.tokens, source.state.judge.submissions, source.state.judge.run_history))
-    # An already admitted Host has 2h left from its original 12h configured
-    # trial. Fixture seeding represents that prior elapsed research, not a new run.
+    # An admitted continuation retains about 2h from its original 12h trial.
+    # The scheduler publishes a decimal deadline for this phase.
     source_phase = tmp_path / "source-phase"
-    source_phase.write_text(f"{int(time.time()) + 7200}\n")
+    source_epoch = int(time.time()) + 7200
+    if fraction is not None:
+        source_epoch += fraction
+    source_phase.write_text(f"{source_epoch}\n")
     source_bytes = source_phase.read_bytes()
     unit = tmp_path / "unit"
     point = transport.capture(files[0], token=token, capture_id="c" * 32,
                               destination=unit, phase_deadline_file=source_phase)
     body = json.loads((unit / "checkpoint.json").read_bytes())
-    retained = body["point_metadata"]["host_phase_budget"]["remaining_seconds"]
-    assert 7190 < retained <= 7200
+    budget = body["point_metadata"]["host_phase_budget"]
+    retained = budget["remaining_seconds"]
+    assert budget["source_deadline_epoch"] == source_epoch
+    assert retained == source_epoch - budget["captured_at_epoch"]
+    assert (unit / "components" / "host_phase_deadline").read_bytes() == source_bytes
+    assert 7190 < retained <= 7200.625
     prefix = host_phase_command(tmp_path, monkeypatch)
     control = tmp_path / "host-control"
     control.mkdir()
@@ -228,13 +351,14 @@ def test_host_phase_and_native_opportunities_continue_without_offline_refill(
     result = subprocess.run(["/bin/bash", "-c", shell +
         f"printf '8' > '{candidate}'; printf '%s' \"$remaining\""],
         env={"PATH": str(bin) + ":/usr/bin:/bin"}, capture_output=True, text=True, check=True)
-    assert 7180 < int(result.stdout) <= 7200 and candidate.read_bytes() == b"8"
-    history = requests.get(second + "/api/v1/history", params={"token": fresh}, timeout=5).json()
+    assert int(result.stdout) == int(phase.read_bytes()) - int(clock)
+    assert candidate.read_bytes() == b"8"
+    history = requests.get(second + "/api/v1/history", params={"token": fresh, "admin_secret": destination.state.judge.admin_secret}, timeout=5).json()
     assert history["agent_submissions"] == 1 and history["best_score"] == 7
     assert submit(second, fresh, 8).status_code == 429
     time.sleep(body["point_metadata"]["native_reference"]["opportunity"]["remaining_cooldown_seconds"] + .05)
     assert submit(second, fresh, float(candidate.read_bytes())).status_code == 200
-    history = requests.get(second + "/api/v1/history", params={"token": fresh}, timeout=5).json()
+    history = requests.get(second + "/api/v1/history", params={"token": fresh, "admin_secret": destination.state.judge.admin_secret}, timeout=5).json()
     assert history["agent_submissions"] == 2 and history["best_round"] == "agent-2" and history["best_score"] == 8
     assert source_phase.read_bytes() == source_bytes
     assert (source.state.judge.tokens, source.state.judge.submissions, source.state.judge.run_history) == before
@@ -245,8 +369,9 @@ def test_host_phase_and_native_opportunities_continue_without_offline_refill(
     assert len(destination.state.judge.tokens) == 1 and len(grades) == 2
 
 
+@pytest.mark.parametrize("cap", [None, 600, 100000])
 def test_explicit_phase_extension_is_first_activation_bound_without_native_refill(
-        controllers, tmp_path, monkeypatch):
+        controllers, tmp_path, monkeypatch, cap):
     import requests
     source, destination, first, second, files, grades = controllers
     token = register(source, first, max_agent_submissions=3, submission_cooldown=3600)
@@ -261,12 +386,18 @@ def test_explicit_phase_extension_is_first_activation_bound_without_native_refil
     target = tmp_path / "continued-phase"
     started = time.time()
     result = transport.restore(files[1], root=unit, expected_sha256=point["sha256"],
-        run_id="extended-branch", phase_deadline_file=target, phase_extension_seconds=64800)
+        run_id="extended-branch", phase_deadline_file=target, phase_extension_seconds=64800,
+        phase_remaining_cap_seconds=cap)
     deadline = int(target.read_text())
-    assert started + retained + 64800 - 1 <= deadline <= time.time() + retained + 64800
+    allowance = retained + 64800 if cap is None else min(retained + 64800, cap)
+    assert started + allowance - 1 <= deadline <= time.time() + allowance
     binding = json.loads(target.with_name(target.name + ".restore.json").read_text())
     assert binding["binding"]["phase_extension_seconds"] == 64800
-    history = requests.get(second + "/api/v1/history", params={"token": result["token"]}, timeout=5).json()
+    if cap is None:
+        assert "phase_remaining_cap_seconds" not in binding["binding"]
+    else:
+        assert binding["binding"]["phase_remaining_cap_seconds"] == cap
+    history = requests.get(second + "/api/v1/history", params={"token": result["token"], "admin_secret": destination.state.judge.admin_secret}, timeout=5).json()
     assert history["agent_submissions"] == 1 and history["best_score"] == 7
     assert submit(second, result["token"], 8).status_code == 429
     info = destination.state.judge.tokens[result["token"]]
@@ -278,13 +409,18 @@ def test_explicit_phase_extension_is_first_activation_bound_without_native_refil
     monkeypatch.setattr(transport, "time", SimpleNamespace(time=lambda: clock))
     assert transport.restore(files[1], root=unit, expected_sha256=point["sha256"],
         run_id="extended-branch", phase_deadline_file=target, recover=True,
-        phase_extension_seconds=64800) == result
+        phase_extension_seconds=64800, phase_remaining_cap_seconds=cap) == result
     assert int(target.read_text()) == deadline and info["last_agent_submit_at"] == accepted_clock
     for changed in (0, 64801):
         with pytest.raises(ValueError, match="original activation"):
             transport.restore(files[1], root=unit, expected_sha256=point["sha256"],
                 run_id="extended-branch", phase_deadline_file=target, recover=True,
-                phase_extension_seconds=changed)
+                phase_extension_seconds=changed, phase_remaining_cap_seconds=cap)
+    for changed in ([600] if cap is None else [None, cap + 1]):
+        with pytest.raises(ValueError, match="original activation"):
+            transport.restore(files[1], root=unit, expected_sha256=point["sha256"],
+                run_id="extended-branch", phase_deadline_file=target, recover=True,
+                phase_extension_seconds=64800, phase_remaining_cap_seconds=changed)
     assert phase.read_bytes() == original and len(grades) == 1
     assert len(destination.state.judge.tokens) == 1
 
@@ -302,6 +438,69 @@ def test_phase_extension_requires_a_captured_clock_before_controller_access(tmp_
     with pytest.raises(ValueError, match="captured Host phase clock"):
         transport.restore(tmp_path / "absent-controller", root=tmp_path / "absent-point",
             expected_sha256="a" * 64, run_id="branch", phase_extension_seconds=64800)
+
+
+@pytest.mark.parametrize("cap", [-1, True, 1.5, float("nan"), float("inf"), 2 ** 53])
+def test_invalid_phase_cap_rejects_before_controller_access(tmp_path, cap):
+    with pytest.raises(ValueError, match="non-negative integer"):
+        transport.restore(tmp_path / "absent-controller", root=tmp_path / "absent-point",
+            expected_sha256="a" * 64, run_id="branch", phase_deadline_file=tmp_path / "phase",
+            phase_remaining_cap_seconds=cap)
+    assert not (tmp_path / "phase").exists()
+
+
+def test_phase_cap_requires_a_captured_clock_before_controller_access(tmp_path):
+    with pytest.raises(ValueError, match="captured Host phase clock"):
+        transport.restore(tmp_path / "absent-controller", root=tmp_path / "absent-point",
+            expected_sha256="a" * 64, run_id="branch", phase_remaining_cap_seconds=600)
+
+
+@pytest.mark.parametrize("cap", [0, transport.PHASE_WORK_RESERVE_SECONDS])
+def test_empty_capped_allowance_cannot_activate_native(controllers, tmp_path, cap):
+    source, destination, first, second, files, grades = controllers
+    token = register(source, first)
+    source_phase = tmp_path / "source-phase"
+    source_phase.write_text(f"{int(time.time()) + 7200}\n")
+    unit = tmp_path / "unit"
+    point = transport.capture(files[0], token=token, capture_id="d" * 32,
+                              destination=unit, phase_deadline_file=source_phase)
+    target = tmp_path / "phase"
+    with pytest.raises(ValueError, match="no work allowance"):
+        transport.restore(files[1], root=unit, expected_sha256=point["sha256"], run_id="branch",
+                          phase_deadline_file=target, phase_remaining_cap_seconds=cap)
+    assert not target.exists() and destination.state.judge.tokens == {} and grades == []
+
+
+def test_cli_cap_survives_lost_activation_without_refill(controllers, tmp_path, monkeypatch):
+    source, destination, first, second, files, grades = controllers
+    token = register(source, first)
+    source_phase = tmp_path / "source-phase"
+    source_phase.write_text(f"{int(time.time()) + 7200}\n")
+    unit = tmp_path / "unit"
+    point = transport.capture(files[0], token=token, capture_id="d" * 32,
+                              destination=unit, phase_deadline_file=source_phase)
+    target, result = tmp_path / "phase", tmp_path / "result"
+    args = ["--controller-file", str(files[1]), "restore", "--root", str(unit),
+            "--expected-sha256", point["sha256"], "--run-id", "branch", "--result-file", str(result),
+            "--phase-deadline-file", str(target), "--phase-remaining-cap-seconds", "600"]
+    post = transport._post
+    def lost(controller, route, body, timeout):
+        value = post(controller, route, body, timeout)
+        if route.endswith("/restore"):
+            raise TimeoutError("Lost committed activation")
+        return value
+    monkeypatch.setattr(transport, "_post", lost)
+    started = time.time()
+    with pytest.raises(TimeoutError):
+        transport.main(args)
+    binding = json.loads(target.with_name(target.name + ".restore.json").read_bytes())
+    deadline = binding["deadline_epoch"]
+    assert started + 599 <= deadline <= time.time() + 600
+    assert target.read_bytes() == b"" and result.read_bytes() == b""
+    monkeypatch.setattr(transport, "time", SimpleNamespace(time=lambda: started + 120))
+    transport.main(args + ["--recover"])
+    assert int(target.read_text()) == deadline and json.loads(result.read_bytes())["token"]
+    assert len(destination.state.judge.tokens) == 1 and grades == []
 
 
 @pytest.mark.parametrize("fault", ["missing_clock", "exhausted", "existing", "alias", "modified"])
@@ -438,7 +637,7 @@ def test_recovery_refuses_mismatched_or_unavailable_original_activation(controll
         assert calls == ["/api/v1/checkpoint/restore"]
 
 
-@pytest.mark.parametrize("raw", [b"", b"nan\n", b"1.5\n", b"9007199254740992\n"])
+@pytest.mark.parametrize("raw", [b"", b"nan\n", b"1.50\n", b"1.5.0\n", b"0.0\n", b"9007199254740992\n"])
 def test_invalid_host_epoch_cannot_create_native_point(controllers, tmp_path, raw):
     source, destination, first, second, files, grades = controllers
     token = register(source, first)
@@ -449,6 +648,24 @@ def test_invalid_host_epoch_cannot_create_native_point(controllers, tmp_path, ra
                           destination=tmp_path / "unit", phase_deadline_file=phase)
     bank = source.state.judge.config.log_dir / "checkpoints"
     assert not (bank / ("f" * 32)).exists() and not (bank / ".loopx-phase-attempts").exists()
+    assert destination.state.judge.tokens == {} and grades == []
+
+
+def test_expired_fractional_epoch_seals_without_work_allowance(controllers, tmp_path):
+    source, destination, first, _, files, grades = controllers
+    token = register(source, first)
+    phase = tmp_path / "source-phase"
+    phase.write_bytes(b"1.5\n")
+    unit = tmp_path / "unit"
+    point = transport.capture(files[0], token=token, capture_id="f" * 32,
+                              destination=unit, phase_deadline_file=phase)
+    manifest = json.loads((unit / "checkpoint.json").read_bytes())
+    budget = manifest["point_metadata"]["host_phase_budget"]
+    assert budget["source_deadline_epoch"] == 1.5 and budget["remaining_seconds"] == 0
+    assert (unit / "components" / "host_phase_deadline").read_bytes() == phase.read_bytes()
+    with pytest.raises(ValueError, match="no work allowance"):
+        transport.restore(files[1], root=unit, expected_sha256=point["sha256"], run_id="expired",
+                          phase_deadline_file=tmp_path / "destination-phase")
     assert destination.state.judge.tokens == {} and grades == []
 
 
@@ -622,7 +839,7 @@ def test_real_docker_controller_export_import_and_next_grade(tmp_path, monkeypat
         if response.status_code == 200:
             sid = response.json()["submission_id"]
             report = wait(lambda: (packet if (packet := requests.get(url + "/api/v1/result/" + sid,
-                timeout=10).json())["status"] in {"completed", "error"} else None))
+                params={"token": token}, timeout=10).json())["status"] in {"completed", "error"} else None))
             assert report["status"] == "completed" and report["report"]["score"] == score
         return response
     try:
@@ -733,7 +950,7 @@ def test_real_docker_controller_export_import_and_next_grade(tmp_path, monkeypat
                 finally:
                     guest.remove(force=True)
             assert grade(second, fresh, continued_score).json()["round_id"] == "agent-2"
-            history = requests.get(second + "/api/v1/history", params={"token": fresh}, timeout=5).json()
+            history = requests.get(second + "/api/v1/history", params={"token": fresh, "admin_secret": destination.state.judge.admin_secret}, timeout=5).json()
             assert history["best_score"] == 7 and history["best_round"] == "agent-1"
             assert grade(second, fresh, 99).status_code == 429 and len(grades) == 2
             assert (source.state.judge.tokens, source.state.judge.submissions, source.state.judge.run_history) == before

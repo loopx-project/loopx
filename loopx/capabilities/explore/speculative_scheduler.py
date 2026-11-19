@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence, cast
+
 
 
 SPECULATIVE_SCHEDULER_SCHEMA_VERSION = "loopx_explore_speculative_scheduler_v0"
@@ -19,7 +20,7 @@ def step_throughput(batch_size: int, *, load_factor: float) -> float:
 
     batch = max(1, int(batch_size))
     load = _clamp(float(load_factor), 0.0, 1.0)
-    return 1.0 / (1.0 + load * max(0, batch - 1) ** 1.18)
+    return cast(float, 1.0 / (1.0 + load * max(0, batch - 1) ** 1.18))
 
 
 def calibrate_load_factor(
@@ -180,6 +181,12 @@ def conditional_branch_confidence(
     return round(0.82 * raw + 0.18 * previous, 3)
 
 
+def _expected_evidence_units(candidate: Mapping[str, Any]) -> float:
+    # Zero is a known estimate; only a missing estimate uses the prior.
+    value = candidate.get("expected_evidence_units")
+    return 1.0 if value is None else float(value)
+
+
 def prefix_metrics(
     candidates: Sequence[Mapping[str, Any]],
     *,
@@ -205,7 +212,7 @@ def prefix_metrics(
         )
         previous_confidence = confidence
         survival *= confidence
-        expected_evidence += survival * float(candidate.get("expected_evidence_units") or 1.0)
+        expected_evidence += survival * _expected_evidence_units(candidate)
     throughput = step_throughput(limit, load_factor=load_factor)
     theta = expected_evidence * throughput
     return {
@@ -253,7 +260,7 @@ def schedule_confidence_prefix(
         )
         previous_confidence = confidence
         survival *= confidence
-        expected_units = float(candidate.get("expected_evidence_units") or 1.0)
+        expected_units = _expected_evidence_units(candidate)
         expected_evidence += survival * expected_units
         throughput = step_throughput(index, load_factor=load_factor)
         theta = expected_evidence * throughput
@@ -367,7 +374,7 @@ def schedule_independent_lanes(
     steps: list[dict[str, Any]] = []
     for index, candidate in enumerate(safe_candidates, 1):
         confidence = _clamp(float(candidate.get("confidence") or 0.05), 0.0, 1.0)
-        expected_units = float(candidate.get("expected_evidence_units") or 1.0)
+        expected_units = _expected_evidence_units(candidate)
         expected_evidence += confidence * expected_units
         throughput = step_throughput(index, load_factor=load)
         lane_value = confidence * expected_units * throughput
@@ -468,9 +475,9 @@ def build_branch_plan_ab_result(
     selected: Sequence[Mapping[str, Any]],
     rejected: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    comparison = scheduler.get("ab_comparison") if isinstance(scheduler.get("ab_comparison"), Mapping) else {}
-    baseline = comparison.get("baseline_serial") if isinstance(comparison.get("baseline_serial"), Mapping) else {}
-    dspark = comparison.get("dspark_selected") if isinstance(comparison.get("dspark_selected"), Mapping) else {}
+    comparison = cast(Mapping[str, Any], scheduler.get("ab_comparison")) if isinstance(scheduler.get("ab_comparison"), Mapping) else {}
+    baseline = cast(Mapping[str, Any], comparison.get("baseline_serial")) if isinstance(comparison.get("baseline_serial"), Mapping) else {}
+    dspark = cast(Mapping[str, Any], comparison.get("dspark_selected")) if isinstance(comparison.get("dspark_selected"), Mapping) else {}
     baseline_theta = max(0.001, float(baseline.get("theta") or 0.0))
     selected_expected_evidence = round(
         sum(float(item.get("expected_evidence_units") or 0.0) for item in selected),

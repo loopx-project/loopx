@@ -56,6 +56,14 @@ def test_host_spawn_result_parent_review_and_restart(tmp_path: Path):
     assert len(events) == 4
     assert "private child" not in json.dumps(events)
     assert all(event.get("event_kind") != "quota_spend" for event in events)
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+    inbox = effect_runtime_result("multi_subagent.native_result_inbox", {
+        "operation": "list", "runtime_root": str(tmp_path),
+        "goal_id": GOAL, "agent_id": AGENT, "goal_ref": None,
+    })
+    assert len(inbox["items"]) == 1
+    assert inbox["items"][0]["text"] == "private child result"
+    assert inbox["items"][0]["operation_id"] == operation["operation_id"]
 
 
 @pytest.mark.parametrize("items", [[], [{"type": "agentMessage", "text": "I spawned three children"}],
@@ -108,6 +116,94 @@ def test_feature_off_has_no_observer_and_reports_cannot_attest_reviews(tmp_path:
             turn_instance_id=TURN, configured_limit=3, operation_id="review-1", stage="review",
             outcome="accepted", evidence_ref="evidence-1", validation_ref="validation-1",
             execute=True, _host_observed=True)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_complete_host_observes_children_without_reading_legacy_context(tmp_path, monkeypatch, enabled):
+    import copy
+    from hashlib import sha256
+    import sys
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision, build_turn_envelope
+    from loopx.control_plane.turn_driver import codex_cli
+    from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
+    from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
+    from tests.test_turn_envelope import _full_decision
+
+    source = _full_decision()
+    source["goal_id"] = GOAL
+    source["agent_identity"]["agent_id"] = AGENT
+    source["selected_todo"].update(todo_id="todo_native_1", claimed_by=AGENT)
+    channel = source["interaction_contract"]["agent_channel"]
+    goal = tmp_path / "goal.md"
+    goal.write_text("Observe disposable host events; no external model.\n")
+    # Fulfill the existing Goal read with its actual file and full revision;
+    # metadata alone must not get this fixture past Host dispatch.
+    channel["required_reads"] = [read for read in channel["required_reads"]
+        if read.get("source") not in {"goal_state", "selected_todo"}]
+    channel["work_context"] = {"complete": True, "selected_todo_text_verified": True,
+        "sources": [{"source": "goal_state", "content": {"full_source": True,
+                        "state_file": str(goal), "text": goal.read_text(),
+                        "revision": "sha256:" + sha256(goal.read_bytes()).hexdigest()}},
+                    {"source": "selected_todo", "content": {"todo": source["selected_todo"]}}]}
+    if enabled:
+        source["interaction_contract"]["agent_context"] = {"contributions": [
+            {"capability_id": "multi_subagent", "facts": {"max_children": 3}}]}
+    contract = compose_turn_decision(source)
+    plan = build_loopx_turn_plan(build_turn_envelope(contract), work_contract=contract,
+        host="codex-cli", execution_mode="isolated-headless", turn_instance_id=TURN)
+    request = build_loopx_turn_host_request(plan)
+
+    assert request["schema_version"] == "loopx_turn_host_request_v1"
+    assert "turn_envelope" not in request
+    request["host_attempt"] = 1
+    _admit(tmp_path)
+    script = tmp_path / "host.py"
+    script.write_text("import json,sys\nfrom pathlib import Path\n"
+        "sys.stdin.read()\n"
+        "print(json.dumps({'type':'thread.started','thread_id':'parent-1'}),flush=True)\n"
+        f"for item in {_turn()['items']!r}:\n"
+        " print(json.dumps({'type':'item.completed','item':item}),flush=True)\n"
+        "Path(sys.argv[1]).write_text(json.dumps({'parent_work':'preserved'}))\n")
+    launched = []
+
+    def command(**kwargs):
+        launched.append(True)
+        return [sys.executable, str(script), str(kwargs["output_path"])]
+
+    monkeypatch.setattr(codex_cli, "_codex_command", command)
+    assert codex_cli.run_codex_cli_host(request, runtime_root=tmp_path, project=tmp_path,
+        codex_bin=sys.executable) == {"parent_work": "preserved"}
+    activity = load_native_child_activity(tmp_path, goal_id=GOAL, agent_id=AGENT,
+        turn_instance_id=TURN, configured_limit=3)
+    assert activity["host_attested"] is enabled
+    assert activity["launched_count"] == int(enabled)
+    assert activity["parent_accepted_count"] == 0
+    events = load_rollout_events(rollout_event_log_path(tmp_path, GOAL))
+    assert "private child" not in json.dumps(events)
+    assert not any(event["event_kind"] == "quota_spend" for event in events)
+
+    # The native adapter does not grant authority. Corrupting the supplied
+    # complete source must still stop before another process or receipt.
+    tampered = copy.deepcopy(request)
+    tampered["work_contract"]["reason"] = "different source"
+    with pytest.raises(RuntimeError, match="integrity mismatch"):
+        codex_cli.run_codex_cli_host(tampered, runtime_root=tmp_path, project=tmp_path,
+            codex_bin=sys.executable)
+    assert launched == [True]
+    assert load_rollout_events(rollout_event_log_path(tmp_path, GOAL)) == events
+
+    # A historical-context trap cannot be attached to the current producer:
+    # its second carrier is retired. Challenge the same no-fallback boundary
+    # with an injected, contradictory capability instead; refuse before effects.
+    mixed = copy.deepcopy(request)
+    mixed["turn_envelope"] = {"agent_context": {"contributions": [
+        {"capability_id": "multi_subagent", "facts": {"max_children": 0 if enabled else 3}},
+    ]}}
+    with pytest.raises(ValueError, match="without an executor adapter"):
+        codex_cli.run_codex_cli_host(mixed, runtime_root=tmp_path, project=tmp_path,
+            codex_bin=sys.executable)
+    assert launched == [True]
+    assert load_rollout_events(rollout_event_log_path(tmp_path, GOAL)) == events
 
 
 def test_cli_host_collects_native_items_before_returning_parent_result(tmp_path: Path, monkeypatch):
@@ -240,6 +336,66 @@ def test_restart_replay_uses_the_original_invocation_binding(tmp_path):
     _observe(tmp_path, [followup])
     _observe(tmp_path, [followup])
     assert len(load_rollout_events(rollout_event_log_path(tmp_path, GOAL))) == 2
+
+
+def test_rejected_terminal_replay_never_delivers_conflicting_text(tmp_path):
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+
+    _admit(tmp_path)
+    spawn, wait = _turn()["items"]
+    completed = {**wait, "agentsStates": {"child-1": {"status": "completed"}}}
+    _observe(tmp_path, [spawn, completed])
+    events = load_rollout_events(rollout_event_log_path(tmp_path, GOAL))
+
+    conflicting = {**wait, "agentsStates": {
+        "child-1": {"status": "errored", "message": "Contradictory terminal text"},
+    }}
+    with pytest.raises(ValueError, match="conflicting"):
+        _observe(tmp_path, [conflicting])
+    assert load_rollout_events(rollout_event_log_path(tmp_path, GOAL)) == events
+    read = {"operation": "list", "runtime_root": str(tmp_path), "goal_id": GOAL,
+            "agent_id": AGENT, "goal_ref": None}
+    assert effect_runtime_result("multi_subagent.native_result_inbox", read)["items"] == []
+
+    # A matching terminal replay can supply the omitted result body.
+    _observe(tmp_path, [wait, wait])
+    result, = effect_runtime_result("multi_subagent.native_result_inbox", read)["items"]
+    assert result["outcome"] == "completed" and result["text"] == "private child result"
+    assert load_rollout_events(rollout_event_log_path(tmp_path, GOAL)) == events
+
+
+def test_interrupted_terminal_append_preserves_recoverable_body(tmp_path, monkeypatch):
+    import loopx.rollout_event_log as event_log
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+
+    _admit(tmp_path)
+    spawn, wait = _turn()["items"]
+    _observe(tmp_path, [spawn])
+    original_append = event_log._append_rollout_event_line
+    read = {"operation": "list", "runtime_root": str(tmp_path), "goal_id": GOAL,
+            "agent_id": AGENT, "goal_ref": None}
+
+    def interrupted(path, payload):
+        snapshot = effect_runtime_result("multi_subagent.native_result_inbox", read)
+        assert snapshot["items"] == []
+        assert snapshot["unavailable_count"] == 1
+        assert "private child result" not in json.dumps(snapshot)
+        raise OSError("simulated interruption after private write")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(event_log, "_append_rollout_event_line", interrupted)
+        with pytest.raises(OSError, match="simulated interruption"):
+            _observe(tmp_path, [wait])
+    assert event_log._append_rollout_event_line is original_append
+    assert not any(row["event_kind"] == "native_child_result"
+                   for row in load_rollout_events(rollout_event_log_path(tmp_path, GOAL)))
+
+    _observe(tmp_path, [wait, wait])
+    result, = effect_runtime_result("multi_subagent.native_result_inbox", read)["items"]
+    assert result["text"] == "private child result"
+    events = load_rollout_events(rollout_event_log_path(tmp_path, GOAL))
+    assert sum(row["event_kind"] == "native_child_result" for row in events) == 1
+    assert "private child result" not in json.dumps(events)
 
 
 @pytest.mark.parametrize('with_spawn', [False, True])

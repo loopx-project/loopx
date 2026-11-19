@@ -14,6 +14,8 @@ import sys
 
 import pytest
 
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+
 import test_canonical_todo_writer_isolation as journeys
 from test_canonical_todo_writer_isolation import (
     isolated_todo_distribution, retirement_wheel,  # noqa: F401 -- distribution fixtures
@@ -122,7 +124,9 @@ def test_monitor_replay_uses_retained_owners(
     registry, runtime, display, monitor = _canonical(
         tmp_path, native=True, provider=provider, lease=LEASE,
     )
-    display.unlink()
+    from canonical_authority_fixture import empty_todo_display
+    empty_todo_display(display)
+    initial_display = display.read_bytes()
 
     def cli(*args, succeeds=True):
         result = subprocess.run(
@@ -131,7 +135,7 @@ def test_monitor_replay_uses_retained_owners(
             cwd=tmp_path, capture_output=True, text=True, timeout=45,
         )
         assert (result.returncode == 0) is succeeds, result.stdout + result.stderr
-        return json.loads(result.stdout)
+        return read_cli_policy_payload(result.stdout, returncode=result.returncode)
 
     def current():
         return cli("todo", "list", "--goal-id", GOAL_ID)
@@ -161,7 +165,7 @@ def test_monitor_replay_uses_retained_owners(
     try:
         failed = cli(*poll, succeeds=False)
         assert failed["ok"] is False
-        assert not backend.exists() and not display.exists()
+        assert not backend.exists() and display.read_bytes() == initial_display
     finally:
         offline.rename(backend)
     assert current()["todos"] == before["todos"]

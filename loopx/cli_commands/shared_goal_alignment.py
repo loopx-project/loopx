@@ -15,6 +15,7 @@ from pathlib import Path
 from ..control_plane.goals.shared_goal_alignment import (
     project_shared_goal_alignment,
 )
+from ..control_plane.coordination.local_authority import CanonicalAuthorityRequired
 from ..control_plane.todos.path_resolution import resolve_todo_state_path
 
 PrintPayload = Callable[
@@ -161,6 +162,10 @@ def handle_shared_goal_alignment_command(
         )
         payload = {"ok": True, **projection}
         exit_code = 0
+    except CanonicalAuthorityRequired as exc:
+        payload = {**exc.payload, "ok": False, "error_code": exc.code,
+            "agent_id": getattr(args, "agent_id", None), "error": str(exc)}
+        exit_code = 1
     except Exception as exc:
         payload = {
             "ok": False,

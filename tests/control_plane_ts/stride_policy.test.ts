@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {normalizeStrideDecision, strideControlContract, stridePlanningGuidance, strideReviewMismatch} from "../../loopx/control_plane/work_items/stride_policy.ts";
+import {normalizeStrideDecision, strideControlContract, strideReviewMismatch} from "../../loopx/control_plane/work_items/stride_policy.ts";
 import {buildVisionCheckpoint, VISION_REFRESH_REQUEST_SCHEMA} from "../../loopx/control_plane/goals/vision_checkpoint.ts";
 import {projectReplanSemantics} from "../../loopx/control_plane/work_items/replan_semantics.ts";
 
 const contextId = "replan-context-" + "a".repeat(24);
+const decisionReviewTriggers = ["periodic_review_due", "typed_progress_repeat",
+  "no_progress_streak", "repeated_action_loop", "external_progress_review_drift"];
 const proposal = {schema_version: "stride_decision_v2", strategy_version: "evidence_conditioned_v1",
   reference_context_id: contextId, reference_obligation_id: "replan-" + "a".repeat(16), basis: "unexplained_gap", action: "switch", axes: {
     work_slice: {plan: "Build the complete alternate engine and compare it with the incumbent.", reason: "A partial component cannot test the end-to-end explanation."},
@@ -20,6 +22,31 @@ const packet = {schema_version: "goal_vision_replan_contract_v0", agent_id: "age
 const request = {schema_version: VISION_REFRESH_REQUEST_SCHEMA, phase: "prepare", goal_id: "goal-a",
   agent_id: "agent-a", merge_patch: false, existing_agent_vision: null,
   require_path_delta_for_durable_change: false, agent_vision_packet: packet};
+
+test("an absent recorded decision roundtrips without satisfying an enabled stride review", () => {
+  for (const value of [undefined, null]) {
+    const vision = buildVisionCheckpoint({...request,
+      agent_vision_packet: {...packet, stride_decision: value}}).agent_vision as Record<string, unknown>;
+    assert.equal(Object.hasOwn(vision, "stride_decision"), false);
+    for (const kind of ["vision_acceptance_gap", ...decisionReviewTriggers]) {
+      const obligation = {obligation_id: proposal.reference_obligation_id,
+        triggers: [{kind}], replan_context: {
+          stride_strategy: "evidence_conditioned_v1", context_id: contextId}};
+      const observation_delta = {delta_kinds: ["new_surface"], evidence_novel: true};
+      const missing = projectReplanSemantics({operation: "qualify", obligation,
+        observation_delta, agent_vision: vision});
+      assert.equal(missing.accepted, false, kind);
+      assert.equal(missing.reason_code, "stride_decision_required", kind);
+      assert.equal(projectReplanSemantics({operation: "qualify", obligation: {
+        ...obligation, replan_context: {stride_strategy: "off"}},
+        observation_delta, agent_vision: vision}).accepted, true, kind);
+    }
+  }
+  for (const value of [false, 0, "", [], {}]) {
+    assert.throws(() => buildVisionCheckpoint({...request,
+      agent_vision_packet: {...packet, stride_decision: value}}));
+  }
+});
 
 test("previous-outcome claims need subsequent evidence; old comparison evidence remains usable", () => {
   const previous = "replan-decision-" + "b".repeat(24);
@@ -67,6 +94,25 @@ test("Explore review keeps bare lowercase digest revisions and unavailable null 
   }
 });
 
+test("each authored review list advertises and enforces its own three-reference bound", () => {
+  const control = strideControlContract({stride_strategy: "evidence_conditioned_v1"})!;
+  assert.equal(control.review_reference_limit, 3);
+  const evidence = ["evidence:first", "evidence:second", "evidence:third"];
+  const review = {reference_decision_ref: "replan-decision-" + "b".repeat(24), adoption: "unknown",
+    information_gain: "unknown", goal_gain: "unknown", lesson: "Interpret three observations together.",
+    evidence_refs: evidence};
+  const explore = {revision: "a".repeat(64), disposition: "used", considered_refs: evidence, reason: "Compared three findings."};
+  const decision = {...proposal, previous_review: review, explore_review: explore};
+  assert.deepEqual(normalizeStrideDecision(decision)[0]!.previous_review, review);
+  for (const extra of ["evidence:fourth", "evidence:first"]) {
+    const refs = extra === "evidence:first" ? [extra, extra] : [...evidence, extra];
+    assert.throws(() => normalizeStrideDecision({...decision, previous_review: {...review, evidence_refs: refs}}),
+      /previous_review\.evidence_refs requires at most 3 distinct/);
+    assert.throws(() => normalizeStrideDecision({...decision, explore_review: {...explore, considered_refs: refs}}),
+      /explore_review\.considered_refs requires at most 3 distinct/);
+  }
+});
+
 test("concrete independent plans retain action choice and fit the shared vision budget", () => {
   for (const basis of ["unexplained_gap", "uncertain_evidence", "supported_progress"]) {
     const decision = normalizeStrideDecision({...proposal, basis})[0]!;
@@ -86,7 +132,6 @@ test("concrete independent plans retain action choice and fit the shared vision 
 
 test("goal-value questions are enabled review input, not persisted decisions or extra admission gates", () => {
   assert.equal(strideControlContract({stride_strategy: "off"}), null);
-  assert.deepEqual(stridePlanningGuidance("off"), []);
   const contract = strideControlContract({stride_strategy: "evidence_conditioned_v1"}, proposal.reference_obligation_id)!;
   assert.deepEqual(Object.keys(contract.decision_value_review as object),
     ["work_slice", "route_distance", "validation_scope"]);
@@ -108,6 +153,11 @@ test("goal-value questions are enabled review input, not persisted decisions or 
   assert.match(work, /recovering an avoidable initial quality deficit/);
   assert.match(route, /retained best artifact/);
   assert.match(route, /subsequent work actually implements/);
+  assert.match(route, /generate a small set of genuinely different explanations or approaches/);
+  assert.match(route, /representation, decomposition, search method or information source/);
+  assert.match(route, /Contrast their predictions and full costs/);
+  assert.match(route, /parameter variants of the same mechanism are not independent alternatives/);
+  assert.match(route, /Missing feedback is a wait or evidence gap/);
   assert.match(validation, /artifact version, input conditions/);
   assert.match(validation, /feedback became available/);
   assert.match(validation, /not proof of restoration or continued execution/);
@@ -161,9 +211,9 @@ test("an accepted schema and vector do not authorize work or certify gain; stale
   assert.equal(projectReplanSemantics({operation: "qualify", obligation, stride_decision: proposal}).accepted, false);
 });
 
-test("every enabled due review records stride even when progress, a successor or a blocker is the exit", () => {
+for (const kind of decisionReviewTriggers) test(`${kind} records stride even when progress, a successor or a blocker is the exit`, () => {
   const obligation = {obligation_id: proposal.reference_obligation_id,
-    triggers: [{kind: "periodic_review_due"}],
+    triggers: [{kind}],
     replan_context: {stride_strategy: "evidence_conditioned_v1", context_id: contextId}};
   const authored = buildVisionCheckpoint(request).agent_vision;
   const withoutDecision = {...authored, stride_decision: undefined};
@@ -190,6 +240,14 @@ test("every enabled due review records stride even when progress, a successor or
       reference_context_id: "replan-context-" + "b".repeat(24)}}});
   assert.equal(foreignContext.accepted, false);
   assert.equal(foreignContext.reason_code, "stride_review_basis_mismatch");
+  const recovery = foreignContext.context_recovery as Record<string, any>;
+  assert.deepEqual(recovery.replan_context, obligation.replan_context);
+  assert.equal(recovery.stride_control.reference_context_id, contextId);
+  assert.equal(recovery.received_context_id, "replan-context-" + "b".repeat(24));
+  assert.equal(stale.context_recovery, undefined);
+  // Returning the current facts must not alias or mutate the authority input.
+  recovery.replan_context.context_id = "changed-by-consumer";
+  assert.equal(obligation.replan_context.context_id, contextId);
   const bareDecision = projectReplanSemantics({operation: "qualify", obligation,
     observation_delta: {delta_kinds: ["new_concrete_blocker"]},
     agent_vision: {stride_decision: proposal}});
@@ -197,7 +255,7 @@ test("every enabled due review records stride even when progress, a successor or
   assert.equal(bareDecision.reason_code, "stride_path_evidence_required");
 });
 
-test("terminal due review can record stride without manufacturing a continuing path", () => {
+for (const kind of decisionReviewTriggers) test(`${kind} can record a terminal decision without manufacturing a continuing path`, () => {
   const terminalPacket = {...packet,
     state: "no_followup", path_delta: {...packet.path_delta, outcome: "stop"}};
   assert.throws(() => buildVisionCheckpoint({...request, agent_vision_packet: terminalPacket}), /stride_decision requires/);
@@ -206,7 +264,7 @@ test("terminal due review can record stride without manufacturing a continuing p
   const terminal = buildVisionCheckpoint({...request, allow_terminal_stride_path: true,
     agent_vision_packet: terminalPacket}).agent_vision;
   const obligation = {obligation_id: proposal.reference_obligation_id,
-    triggers: [{kind: "periodic_review_due"}],
+    triggers: [{kind}],
     replan_context: {stride_strategy: "evidence_conditioned_v1", context_id: contextId}};
   const observation_delta = {delta_kinds: ["coverage_backed_no_followup"]};
   assert.equal(projectReplanSemantics({operation: "qualify", obligation, observation_delta,
@@ -215,9 +273,9 @@ test("terminal due review can record stride without manufacturing a continuing p
     agent_vision: terminal}).accepted, true);
 });
 
-test("a successor Todo transition cannot silently settle an enabled due review", () => {
+for (const kind of decisionReviewTriggers) test(`${kind} cannot be silently settled by a successor Todo transition`, () => {
   const obligation = {obligation_id: proposal.reference_obligation_id,
-    triggers: [{kind: "periodic_review_due"}]};
+    triggers: [{kind}]};
   const semantic_delta = {schema_version: "replan_semantic_delta_v0", accepted: true,
     obligation_id: proposal.reference_obligation_id, successor_todo_id: "todo_successor",
     outcomes: ["new_runnable_successor"], satisfying_outcomes: ["new_runnable_successor"]};
@@ -235,6 +293,23 @@ test("a successor Todo transition cannot silently settle an enabled due review",
     selected_obligation_id: proposal.reference_obligation_id, current_obligation: obligation,
     transition_candidates: [candidate], replay_phase: "open", stride_strategy: "evidence_conditioned_v1"});
   assert.equal((bound.obligation as Record<string, unknown>).resolution_mode, undefined);
+});
+
+for (const kind of decisionReviewTriggers) test(`${kind} can retain useful work through an evidenced decision without inventing progress`, () => {
+  const obligation = {obligation_id: proposal.reference_obligation_id, triggers: [{kind}],
+    replan_context: {stride_strategy: "evidence_conditioned_v1", context_id: contextId}};
+  const requirements = projectReplanSemantics({operation: "requirements", obligation});
+  assert.ok((requirements.required_any_of as string[]).includes("fresh_vision_path_outcome"));
+  assert.ok(((requirements.writeback_contract as Record<string, unknown>).required_fields as string[])
+    .includes("agent_vision.stride_decision"));
+  for (const action of ["grow", "switch", "verify"]) {
+    const vision = buildVisionCheckpoint({...request, agent_vision_packet: {...packet,
+      path_delta: {...packet.path_delta, outcome: "continue"},
+      stride_decision: {...proposal, action}}}).agent_vision;
+    const result = projectReplanSemantics({operation: "qualify", obligation, agent_vision: vision});
+    assert.equal(result.accepted, true, action);
+    assert.deepEqual(result.satisfying_outcomes, ["fresh_vision_path_outcome"]);
+  }
 });
 
 test("all three actions preserve independently planned complete work and validation", () => {
@@ -276,6 +351,30 @@ test("Explore evidence and previous adoption are bound without inferring gain or
   assert.match(String(strideReviewMismatch({...decision, explore_review: {...reviewed.explore_review,
     considered_refs: ["finding-foreign"]}}, context)), /foreign/);
   assert.equal(basis.result_page.remaining, 4); // Omitted evidence is not an empty graph.
+  const measuredBasis = projectStrideExploreBasis({ok: true, goal_id: "goal-a", agent_id: "agent-a",
+    graph_enabled: true, harness_enabled: true,
+    graph: {writeback_results: [{finding_id: "finding-negative", node_id: "question-route", status: "refuted"}],
+      measurement_feedback: [{node_id: "question-route", metric: "quality", unit: "points", higher_is_better: true,
+        best: {finding_id: "finding-negative", candidate_ref: "candidate:b", evidence_ref: "result:b", value: 20},
+        latest: {finding_id: "finding-negative", measurement: {metric: "quality", unit: "points", higher_is_better: true,
+          candidate_ref: "candidate:b", evidence_ref: "result:b", value: 20}}, improvement: 10}],
+      omitted_measurement_feedback: 1,
+      measurement_feedback_page: {total: 4, offset: 0, limit: 3, remaining: 1, revision: "b".repeat(64),
+        next_command: ["loopx", "explore", "turn-context", "--result-offset", "3", "--result-revision", "b".repeat(64)]},
+      work_yardsticks: [{todo_id: "todo-route", node_id: "question-route", source_finding_id: "finding-negative",
+        comparison_candidate_ref: "candidate:b", proxy_order_reversed: true}],
+      omitted_work_yardsticks: 2,
+      result_page: {remaining: 4, revision: "b".repeat(64)}},
+    harness: {selected_branches: [{todo_id: "todo-route", selection_status: "selected", actionable_open: true}]}}, "goal-a", "agent-a")!;
+  assert.equal(measuredBasis.revision, basis.revision);
+  assert.equal((measuredBasis.measurement_feedback as Record<string, unknown>[])[0].improvement, 10);
+  assert.deepEqual(measuredBasis.measurement_feedback[0].latest, {candidate_ref: "candidate:b", value: 20});
+  assert.deepEqual(measuredBasis.measurement_feedback[0].best, {candidate_ref: "candidate:b", value: 20});
+  assert.equal(measuredBasis.measurement_feedback_page.remaining, 1);
+  assert.equal(measuredBasis.measurement_feedback_page.next_command.at(-1), "b".repeat(64));
+  assert.equal(measuredBasis.omitted_measurement_feedback, 1);
+  assert.equal((measuredBasis.work_yardsticks as Record<string, unknown>[])[0].proxy_order_reversed, true);
+  assert.equal(measuredBasis.omitted_work_yardsticks, 2);
   assert.throws(() => projectStrideExploreBasis({ok: true, goal_id: "foreign", agent_id: "agent-a"}, "goal-a", "agent-a"), /scope/);
   const unavailable = projectStrideExploreBasis({ok: false, goal_id: "goal-a", agent_id: "agent-a"}, "goal-a", "agent-a")!;
   const unknown = normalizeStrideDecision({...proposal, explore_review: {revision: null, disposition: "unavailable",
@@ -350,17 +449,43 @@ test("independent v1 records preserve their values but cannot satisfy a current 
   assert.ok(Number(budget.total_usage) < 1800);
 });
 
-// The shipped syntax example must be authorable; off does not gain this prompt.
-test("ordinary-work guidance and its example retain off isolation and bounded authoring", () => {
-  assert.deepEqual(stridePlanningGuidance("off"), []);
-  const guidance = stridePlanningGuidance("evidence_conditioned_v1").join(" ");
-  assert.match(guidance, /coherent accepted deliverable/);
-  assert.match(guidance, /Do not bundle independent commitments/);
+// Shared review guidance does not enable the opt-in stride proposal contract.
+test("shared replan guidance retains stride-off isolation and bounded enabled authoring", () => {
+  const requirements = (strategy: string) => projectReplanSemantics({operation: "requirements",
+    obligation: {obligation_id: proposal.reference_obligation_id, triggers: [{kind: "periodic_review_due"}],
+      replan_context: {stride_strategy: strategy, context_id: contextId}}});
+  const off = requirements("off");
+  const enabled = requirements("evidence_conditioned_v1");
+  assert.equal(Object.hasOwn(off, "stride_control"), false);
+  assert.deepEqual(off.planning_guidance, enabled.planning_guidance);
+  assert.ok((off.planning_guidance as string[]).length > 0);
+  assert.equal(((off.writeback_contract as Record<string, unknown>).required_fields as string[])
+    .includes("agent_vision.stride_decision"), false);
+  assert.ok(((enabled.writeback_contract as Record<string, unknown>).required_fields as string[])
+    .includes("agent_vision.stride_decision"));
   const contract = strideControlContract({stride_strategy: "evidence_conditioned_v1", context_id: contextId}, proposal.reference_obligation_id)!;
+  assert.deepEqual(enabled.stride_control, contract);
   const example = contract.minimal_example as Record<string, unknown>;
   assert.equal(normalizeStrideDecision(example)[0]!.action, "verify");
   const prepared = buildVisionCheckpoint({...request, agent_vision_packet: {...packet, stride_decision: example}});
   assert.ok(Number(((prepared.agent_vision as Record<string, unknown>).vision_budget as Record<string, unknown>).total_usage) < 1800);
+});
+
+test("fresh Vision authoring advertises the stride decision its validator requires", () => {
+  for (const kind of ["required_agent_vision_missing", "vision_acceptance_gap"]) {
+    for (const strategy of ["off", "evidence_conditioned_v1"]) {
+      const obligation = {obligation_id: proposal.reference_obligation_id, triggers: [{kind}],
+        replan_context: {stride_strategy: strategy, context_id: contextId}};
+      const requirements = projectReplanSemantics({operation: "requirements", obligation});
+      const fields = (requirements.writeback_contract as {required_fields: string[]}).required_fields;
+      const {stride_decision, ...vision} = packet;
+      const without = projectReplanSemantics({operation: "qualify", obligation, agent_vision: vision});
+      const withDecision = projectReplanSemantics({operation: "qualify", obligation,
+        agent_vision: {...vision, stride_decision}});
+      assert.equal(fields.includes("agent_vision.stride_decision"), without.reason_code === "stride_decision_required", kind);
+      assert.equal(withDecision.accepted, true, kind);
+    }
+  }
 });
 
 test("all decision codecs reject non-string reference identities without coercion", () => {

@@ -100,11 +100,50 @@ through `--explore-result-json result.json`. It additionally supplies
 reusable result differs from the current route delta. Two sources must normalize
 to identical results; a conflict fails before primary commit.
 
+## Execution evidence on the same input
+
+Both attachment forms accept the following `execution_observation` value
+when the candidate ran on the finding's declared `input_revision`.
+
+```json
+{
+  "schema_version": "explore_execution_from_finding_v0",
+  "candidate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "planned_method_id": "bounded-probe",
+  "executed_method_id": "bounded-probe",
+  "change_reason": null,
+  "elapsed_seconds": 0.125,
+  "limit_seconds": 10,
+  "search_iterations": 2,
+  "stop_reason": "iteration_limit",
+  "evidence_refs": "finding"
+}
+```
+
+Use the actual candidate digest, method and measured resource values. Set
+unknown measurements to null. The shorthand binds the required input revision
+from this finding and rejects an explicit nested `input_revision`. Choose
+`"finding"` only when all of the finding's validated evidence refs describe
+the execution. Otherwise list its exact nonempty subset. With path-delta
+capture this operates on the finding's selected refs, after excluding any local
+file pointers. A released result still requires its `result_ref` and
+matching `result_candidate_sha256`.
+
+The Explore owner expands this input to the complete
+`explore_execution_observation_v0` before the existing attribution checks
+and durable write. That complete form still accepts explicit values and rejects
+mismatches. Standalone observations, including `explore finding` and stored
+records, use the complete form. The captured writeback plan and Explore
+turn-context expose `optional_execution_observation_example` when relevant.
+
+## Bounds and readback
+
 A path-delta reference requires this same vision packet's top-level delta;
 a previous stored vision, a nested delta or a separate result file alone cannot
-supply it. Observation allows 320 characters and interpretation 1200, matching
-the Goal observation budget and retaining every legal route item as plain list
-text without JSON escaping expansion. The combined finding, including its input
+supply it. Question allows 180 characters and applicability 200. Observation's
+320-character limit matches the Goal observation budget. Interpretation allows
+1200 characters and retains every legal route item as plain list text without
+JSON escaping expansion. The combined finding, including its input
 revision and applicability, fits within the 2000-character stored and next-turn
 summary budget. This replaces the previous 300/300 attachment and 1200 summary
 limits; the default three-result page and progressive reads are unchanged. No

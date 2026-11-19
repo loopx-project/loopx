@@ -4,7 +4,7 @@ import { once } from "node:events";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { resolveTestPython } from "../../../../scripts/test-python.mjs";
-import { fetchChatHistory } from "../src/data/chat";
+import { fetchChatHistory, fetchChatSessionHistory } from "../src/data/chat";
 import { readConversationReturns } from "../src/data/conversation-return-observation";
 import { conversationReturnSessions, reconcileConversationReturns } from "../src/data/conversation-returns";
 
@@ -41,7 +41,8 @@ try {
   assert.equal((await next()).recovered, true);
   requests.length = 0;
   const restored = await fetchChatHistory(options, partial);
-  assert.deepEqual(requests, ["/api/chat/sessions/old"], "Recovery reads only the missing session");
+  assert.deepEqual(requests.map(request => new URL(request, origin).pathname),
+    ["/api/chat/sessions/old"], "Recovery reads only the missing session");
   assert.deepEqual(restored.unavailableSessionIds, []);
   assert.deepEqual(restored.messages.map(row => row.text), ["Earlier public report", "Current public report"]);
   assert.deepEqual(restored.messages.map(row => row.session_id), ["old", "current"], "Colliding IDs preserve both sessions");
@@ -67,7 +68,9 @@ try {
   child.stdin.write("result\n");
   assert.equal((await next()).published, "result");
   await observe();
-  assert.equal(transcript.at(-1)?.text, "First checked result");
+  const firstResult = "First checked result\n\nForm: https://example.org/forms/result。";
+  const revisedResult = "Revised checked result\n\nForm: https://example.org/forms/revision。";
+  assert.equal(transcript.at(-1)?.text, firstResult);
   requests.length = 0;
   await observe();
   assert.equal(requests.length, 1, "Delivery does not trigger continuous full history reads");
@@ -79,22 +82,75 @@ try {
   assert.equal((await next()).published, "revision");
   assert.equal((await next()).unavailable, "old");
   assert.deepEqual(await observe(), ["old"]);
-  assert.equal(transcript.at(-1)?.text, "First checked result", "Failed reads preserve the first result");
+  assert.equal(transcript.at(-1)?.text, firstResult, "Failed reads preserve the complete first result, including its link");
   child.stdin.write("recover\n");
   assert.equal((await next()).recovered, true);
   requests.length = 0;
   await observe();
   assert.deepEqual(requests, ["/api/chat/sessions?", "/api/chat/sessions/old"], "Retry reads only the changed old session");
-  assert.equal(transcript.at(-1)?.text, "Revised checked result");
-  assert.equal(transcript.filter(row => row.text === "Revised checked result").length, 1);
+  assert.equal(transcript.at(-1)?.text, revisedResult);
+  assert.equal(transcript.filter(row => row.text === revisedResult).length, 1);
   assert.equal(transcript.find(row => row.sourceSessionId === "current"), originalCurrent, "Old updates preserve current text and object identity");
   await observe();
-  assert.equal(transcript.filter(row => row.text === "Revised checked result").length, 1);
+  assert.equal(transcript.filter(row => row.text === revisedResult).length, 1);
+  child.stdin.write("history\n");
+  const expectedRows = (await next()).history_rows;
+  requests.length = 0;
+  const complete = await fetchChatSessionHistory("old");
+  assert.equal(complete.messages.length, expectedRows);
+  assert.equal(new Set(complete.messages.map(row => row.message_id)).size, expectedRows);
+  assert.equal(complete.messages.find(row => row.message_id === "history-201")?.text, "Original full body. ".repeat(600));
+  assert.equal(requests.length, 3, "A complete original requires every real HTTP page");
+  assert.ok(requests.every(path => new URL(path, origin).searchParams.get("message_limit") === "200"));
+  assert.deepEqual((await fetchChatSessionHistory(complete.session)).messages, complete.messages,
+    "Existing discovered-summary history and delegation-ID readers share one complete-prefix owner");
+  child.stdin.write("page-fault\n");
+  assert.equal((await next()).unavailable_message_pages, true);
+  await assert.rejects(() => fetchChatSessionHistory("old"));
+  child.stdin.write("recover\n"); assert.equal((await next()).recovered, true);
+  assert.equal((await fetchChatSessionHistory("old")).messages.length, expectedRows);
+  const routedFetch = globalThis.fetch;
+  // Challenge the original-source and frozen-prefix rules, not only length.
+  for (const mutate of [
+    (value: any) => {value.session.goal_id = "unrelated-goal";},
+    (value: any) => {value.message_page.snapshot_sha256 = "0".repeat(64);},
+    (value: any) => {value.message_page.offset = 0;},
+    (value: any) => {value.messages[0].message_id = complete.messages[0].message_id;},
+    (value: any) => {delete value.message_page;},
+  ]) {
+    globalThis.fetch = async (input, init) => {
+      const response = await routedFetch(input, init);
+      if (!new URL(String(input), origin).searchParams.has("message_cursor")) return response;
+      const value = await response.json(); mutate(value);
+      return new Response(JSON.stringify(value), {status: response.status});
+    };
+    await assert.rejects(() => fetchChatSessionHistory("old"), "Never accept mixed or partial pages");
+  }
+  globalThis.fetch = routedFetch;
+  const abort = new AbortController(); abort.abort(); requests.length = 0;
+  await assert.rejects(() => fetchChatSessionHistory("old", abort.signal));
+  assert.equal(requests.length, 0, "A closed reader must not start another page read");
+  const inFlight = new AbortController();
+  let pageAborted = false;
+  globalThis.fetch = async (input, init) => {
+    if (!new URL(String(input), origin).searchParams.has("message_cursor")) return routedFetch(input, init);
+    assert.ok(init?.signal);
+    inFlight.abort();
+    pageAborted = init.signal.aborted;
+    init.signal.throwIfAborted();
+    throw new Error("The page did not receive the reader's cancellation");
+  };
+  await assert.rejects(() => fetchChatSessionHistory("old", inFlight.signal));
+  assert.equal(pageAborted, true, "The in-flight page shares the reader's cancellation");
+  // The existing full-snapshot service remains compatible on the first read.
+  globalThis.fetch = async () => new Response(JSON.stringify(complete));
+  assert.deepEqual((await fetchChatSessionHistory(complete.session)).messages, complete.messages);
+  globalThis.fetch = routedFetch;
   child.stdin.end("inspect\n");
   assert.deepEqual(await next(), { store_unchanged: true, turn_count: 0 });
   const [exitCode] = await exited;
   assert.equal(exitCode, 0, stderr);
-  console.log("conversation-history: passed (real HTTP/store, partial read, channel isolation, missing-only recovery, scoped identity, quiet index reads, late revisions, recovery, zero read-side writes or Turns)");
+  console.log("conversation-history: passed (real HTTP/store, channel isolation, missing-only recovery, quiet index reads, late revisions, complete bounded pages, source/prefix conflicts, cancellation, legacy parity, zero read-side writes or Turns)");
 } finally {
   globalThis.fetch = originalFetch;
   output.close();

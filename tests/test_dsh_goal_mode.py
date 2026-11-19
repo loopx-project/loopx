@@ -16,7 +16,7 @@ from loopx.control_plane.quota.turn_envelope import (
     turn_envelope_action_signature_document,
 )
 from loopx.control_plane.turn_driver.executor import validate_loopx_turn_host_result
-from loopx.control_plane.turn_driver.codex_cli import codex_cli_result_schema
+from loopx.control_plane.turn_driver.codex_cli import codex_cli_result_schema, normalize_codex_result
 from loopx.control_plane.turn_driver.host_failure import (
     BuiltInHostError,
     build_host_failure_record,
@@ -34,6 +34,8 @@ def _signed_request(
     goal_id: str = "g",
     agent_id: str = "a",
     todo_id: str | None = None,
+    boundary: dict | None = None,
+    execution_profile: dict | None = None,
 ) -> dict:
     request = {
         "schema_version": dsh_goal_mode.LOOPX_TURN_HOST_REQUEST_SCHEMA,
@@ -76,6 +78,12 @@ def _signed_request(
     }
     if todo_id is not None:
         request["turn_envelope"]["action"]["selected_todo"] = {"todo_id": todo_id}
+    if boundary is not None:
+        request["turn_envelope"]["boundary"].update(boundary)
+    if execution_profile is not None:
+        request["turn_envelope"]["contract_capsule"] = {
+            "execution_profile": execution_profile
+        }
     signature = turn_envelope_action_signature_document(
         request["turn_envelope"]
     )
@@ -247,6 +255,7 @@ def test_dsh_host_forwards_the_resolved_credential_to_the_runtime(
 
     assert calls[0]["env"] == {
         **credential,
+        "LOOPX_TURN_KEY": TURN_KEY,
         "LOOPX_TURN_GOAL_ID": "g",
         "LOOPX_TURN_AGENT_ID": "a",
         "LOOPX_TURN_TODO_ID": "",
@@ -456,6 +465,154 @@ def test_build_result_shapes_material_results_with_required_fields() -> None:
     assert "agent_vision_json" not in result
 
 
+@pytest.mark.parametrize("kind", ["validated_progress", "repair_required", "replan_required"])
+@pytest.mark.parametrize("field,value,valid", [
+    ("delivery_batch_scale", "test_only", True),
+    ("delivery_batch_scale", "multi_surface", True),
+    ("delivery_batch_scale", "implementation", True),
+    ("delivery_outcome", "surface_only", False),
+    ("delivery_outcome", "outcome_gap", False),
+    ("delivery_outcome", "primary_goal_outcome", True),
+    ("delivery_batch_scale", "single_segment", False),
+    ("delivery_batch_scale", "bounded_segment", False),
+    *[(field, value, False)
+      for field in ("delivery_batch_scale", "delivery_outcome")
+      for value in (None, False, 0, {}, [], "", "unknown")],
+])
+def test_explicit_delivery_metadata_reaches_its_existing_validator(kind, field, value, valid):
+    request = _signed_request()
+    base = {
+        "result_kind": kind, "classification": "artifact_checked",
+        "next_action": "Continue the accepted task.",
+        "vision_unchanged_reason": "The accepted Goal remains unchanged.",
+    }
+    adapted = turn_host_adapter.build_result(request, {**base, field: value})
+    assert type(adapted[field]) is type(value) and adapted[field] == value
+    direct = {**turn_host_adapter.build_result(request, base), field: value}
+    # Legal outcome names alone cannot settle a material Turn. The current
+    # Host result has no typed blocker observation, so outcome_gap is refused.
+    for result in (adapted, direct):
+        verdict = validate_loopx_turn_host_result(_turn_plan(request), result)
+        assert verdict["ok"] is valid, verdict["errors"]
+def test_material_result_preserves_profile_classification_and_evidence() -> None:
+    request = _signed_request(
+        execution_profile={
+            "minimum_scale": "multi_surface_or_implementation",
+            "must_include": ["coherent_artifact", "targeted_validation"],
+        }
+    )
+    result = turn_host_adapter.build_result(
+        request,
+        {
+            "result_kind": "validated_progress",
+            "classification": "implementation completed",
+            "summary": "The bounded implementation and validation completed.",
+            "next_action": "Review the validated implementation.",
+            "delivery_batch_scale": "implementation",
+            "delivery_outcome": "primary_goal_outcome",
+            "vision_unchanged_reason": "The accepted outcome remains unchanged.",
+            "work_evidence": ["artifact:implementation-change"],
+            "validation_evidence": ["check:targeted-tests"],
+        },
+    )
+
+    assert result["delivery_batch_scale"] == "implementation"
+    assert result["delivery_outcome"] == "primary_goal_outcome"
+    assert result["work_evidence"] == ["artifact:implementation-change"]
+    assert result["validation_evidence"] == ["check:targeted-tests"]
+    verdict = validate_loopx_turn_host_result(_turn_plan(request), result)
+    assert verdict["ok"], verdict["errors"]
+    assert verdict["result"]["delivery_batch_scale"] == "implementation"
+    assert verdict["result"]["delivery_outcome"] == "primary_goal_outcome"
+    assert verdict["result"]["work_evidence"] == result["work_evidence"]
+    assert verdict["result"]["validation_evidence"] == result["validation_evidence"]
+
+
+def test_execution_readback_projects_host_evidence() -> None:
+    from loopx.control_plane.turn_driver.execution_readback import execution_payload
+
+    request = _signed_request()
+    payload = execution_payload(
+        _turn_plan(request),
+        {
+            "status": "committed",
+            "host_result": {
+                "work_evidence": ["artifact:change"],
+                "validation_evidence": ["check:targeted-tests"],
+            },
+        },
+        execute=True,
+        replayed=False,
+        effects={},
+    )
+
+    assert payload["host_evidence"] == {
+        "work_evidence": ["artifact:change"],
+        "validation_evidence": ["check:targeted-tests"],
+    }
+
+
+def test_shared_host_fails_closed_without_profile_evidence() -> None:
+    request = _signed_request(
+        execution_profile={"minimum_scale": "multi_surface_or_implementation"}
+    )
+    result = turn_host_adapter.build_result(
+        request,
+        {
+            "result_kind": "validated_progress",
+            "classification": "implementation completed",
+            "next_action": "Review the implementation.",
+            "delivery_batch_scale": "implementation",
+            "delivery_outcome": "primary_goal_outcome",
+        },
+    )
+
+    assert result["result_kind"] == "wait"
+    assert result["classification"] == "missing_host_execution_evidence"
+    assert "work_evidence and validation_evidence" in result["next_action"]
+    verdict = validate_loopx_turn_host_result(_turn_plan(request), result)
+    assert verdict["ok"], verdict["errors"]
+
+
+@pytest.mark.parametrize(
+    ("change", "expected_error"),
+    [
+        ({"work_evidence": "artifact:change"}, "work_evidence must be an array"),
+        ({"validation_evidence": [""]}, "validation_evidence must contain"),
+        ({"work_evidence": ["x" * 241]}, "work_evidence items"),
+        (
+            {"validation_evidence": [f"check:{index}" for index in range(9)]},
+            "validation_evidence must contain at most 8 items",
+        ),
+        (
+            {"work_evidence": ["/Users/example/private.txt"]},
+            "work_evidence[0]",
+        ),
+    ],
+)
+def test_profile_material_result_rejects_unbounded_or_unsafe_evidence(
+    change: dict[str, object], expected_error: str,
+) -> None:
+    request = _signed_request(
+        execution_profile={"minimum_scale": "multi_surface_or_implementation"}
+    )
+    candidate: dict[str, object] = {
+        "result_kind": "validated_progress",
+        "classification": "implementation completed",
+        "next_action": "Review the implementation.",
+        "delivery_batch_scale": "implementation",
+        "delivery_outcome": "primary_goal_outcome",
+        "work_evidence": ["artifact:change"],
+        "validation_evidence": ["check:targeted-tests"],
+    }
+    candidate.update(change)
+    result = turn_host_adapter.build_result(request, candidate)
+
+    verdict = validate_loopx_turn_host_result(_turn_plan(request), result)
+    assert not verdict["ok"]
+    assert expected_error in " ".join(verdict["errors"])
+
+
 def _material_replan_candidate() -> tuple[dict[str, object], str]:
     vision = {
         "schema_version": "goal_vision_replan_contract_v0",
@@ -559,14 +716,35 @@ def test_stop_candidates_cannot_smuggle_material_path_fields(kind: str) -> None:
 
 
 @pytest.mark.parametrize("kind", ["wait", "user_action_required", "iteration_failed"])
-def test_codex_schema_stop_with_required_empty_path_fields_passes_executor(kind: str) -> None:
-    request = _signed_request()
+def test_stop_candidates_cannot_declare_work_or_validation_evidence(kind: str) -> None:
+    result = turn_host_adapter.build_result(
+        _signed_request(),
+        {
+            "result_kind": kind,
+            "classification": "bounded stop",
+            "next_action": "Await the next authorized iteration.",
+            "work_evidence": ["artifact:unexpected"],
+            "validation_evidence": ["check:unexpected"],
+        },
+    )
+
+    verdict = validate_loopx_turn_host_result(_turn_plan(_signed_request()), result)
+    assert not verdict["ok"]
+    assert "work/validation evidence" in " ".join(verdict["errors"])
+
+
+@pytest.mark.parametrize("kind", ["wait", "user_action_required", "iteration_failed"])
+@pytest.mark.parametrize("with_profile", [False, True])
+@pytest.mark.parametrize("evidence", [None, [], False, ["artifact:unexpected"]])
+def test_codex_schema_stop_with_required_empty_path_fields_passes_executor(kind, with_profile, evidence) -> None:
+    request = _signed_request(execution_profile={"work_kind": "engineering_change"} if with_profile else None)
     schema = codex_cli_result_schema(request)
     required = schema["required"]
     properties = schema["properties"]
     assert "path_delta_mode" in required and "agent_vision_json" in required
     assert properties["path_delta_mode"]["type"] == "string"
     assert properties["agent_vision_json"]["type"] == "string"
+    assert "work_evidence" in required and "validation_evidence" in required
     value = {field: "" for field in required}
     value.update(
         {
@@ -576,11 +754,47 @@ def test_codex_schema_stop_with_required_empty_path_fields_passes_executor(kind:
             "completed_phases": ["host_execute", "typed_result"],
             "classification": "bounded stop",
             "next_action": "Await the next authorized iteration.",
+            "work_evidence": evidence,
+            "validation_evidence": evidence,
         }
     )
 
-    verdict = validate_loopx_turn_host_result(_turn_plan(request), value)
-    assert verdict["ok"], verdict["errors"]
+    adapted = normalize_codex_result(request, value)
+    verdict = validate_loopx_turn_host_result(_turn_plan(request), adapted)
+    assert verdict["ok"] is (evidence is None), verdict["errors"]
+    # Only null placeholders disappear; real/invalid evidence remains visible.
+    assert value["work_evidence"] is evidence
+    if evidence is not None:
+        assert adapted == value
+    else:
+        assert "work_evidence" not in adapted and "validation_evidence" not in adapted
+
+
+@pytest.mark.parametrize("kind", ["validated_progress", "repair_required", "replan_required"])
+@pytest.mark.parametrize("with_profile", [False, True])
+@pytest.mark.parametrize("field", ["work_evidence", "validation_evidence"])
+@pytest.mark.parametrize("evidence", ["missing", None, [], False, {}, ["artifact:checked"]])
+def test_codex_material_evidence_keeps_profile_and_legacy_rules(kind, with_profile, field, evidence):
+    request = _signed_request(execution_profile={"work_kind": "engineering_change"} if with_profile else None)
+    value = turn_host_adapter.build_result(request, {
+        "result_kind": kind, "classification": "artifact_checked",
+        "next_action": "Continue the accepted task.",
+        "vision_unchanged_reason": "The accepted Goal remains unchanged.",
+        "work_evidence": ["artifact:checked"], "validation_evidence": ["check:independent"],
+    })
+    if evidence == "missing":
+        value.pop(field)
+    else:
+        value[field] = evidence
+    if with_profile and (evidence is None or evidence == "missing"):
+        with pytest.raises(BuiltInHostError, match="codex_material_result_missing_evidence"):
+            normalize_codex_result(request, value)
+        return
+    adapted = normalize_codex_result(request, value)
+    assert adapted == value
+    verdict = validate_loopx_turn_host_result(_turn_plan(request), adapted)
+    expected = evidence is None or evidence == "missing" or isinstance(evidence, list) and bool(evidence)
+    assert verdict["ok"] is expected, verdict["errors"]
 
 
 def _turn_plan(request: dict) -> dict:
@@ -629,20 +843,74 @@ def test_build_result_is_accepted_by_the_real_host_result_validator(
     assert verdict["ok"], verdict["errors"]
 
 
-def test_build_result_bounds_every_free_text_field() -> None:
+@pytest.mark.parametrize("field,limit", [
+    ("classification", 120), ("summary", 400), ("next_action", 1_200),
+    ("recommended_action", 1_200), ("vision_unchanged_reason", 240),
+])
+@pytest.mark.parametrize("kind", ["validated_progress", "wait"])
+@pytest.mark.parametrize("extra", [0, 1])
+def test_candidate_text_reaches_executor_limits_without_losing_its_tail(
+    field: str, limit: int, kind: str, extra: int,
+) -> None:
+    # Independent limits from the Turn result contract. A trailing restriction
+    # must reach the validator, including on stop and legacy unchanged paths.
+    tail = "Stop before publication."
+    value = "验" * (limit + extra - len(tail)) + tail
+    candidate = {
+        "result_kind": kind, "classification": "implementation_refined",
+        "summary": "The isolated artifact was checked.",
+        "next_action": "Continue the accepted work.",
+        "recommended_action": "Read the next current decision.",
+        "vision_unchanged_reason": "The accepted Goal remains unchanged.",
+        field: value,
+    }
+    request = _signed_request()
     result = turn_host_adapter.build_result(
-        _signed_request(),
-        {
-            "result_kind": "user_action_required",
-            "classification": "x" * 500,
-            "summary": "y" * 900,
-            "next_action": "z" * 5000,
-        },
+        request, candidate,
     )
-    # Independent limits from the Turn result contract, not the adapter's table.
-    assert len(result["classification"]) <= 120
-    assert len(result["summary"]) <= 400
-    assert len(result["next_action"]) <= 1_200
+    assert result[field] == value
+    verdict = validate_loopx_turn_host_result(_turn_plan(request), result)
+    assert verdict["ok"] is (extra == 0), verdict["errors"]
+    if extra:
+        assert f"{field} exceeds {limit} characters" in verdict["errors"]
+
+
+@pytest.mark.parametrize("field", [
+    "classification", "summary", "next_action", "recommended_action", "vision_unchanged_reason",
+])
+@pytest.mark.parametrize("value", [True, False, 42, 0, 1.25, {}, [], {"action": "Continue"}, ["Continue"]])
+@pytest.mark.parametrize("kind", ["validated_progress", "wait"])
+def test_nontext_candidate_fields_reach_the_executor_without_coercion(field, value, kind):
+    request = _signed_request()
+    valid = {
+        "result_kind": kind, "classification": "artifact_checked", "summary": "Evidence checked.",
+        "next_action": "Continue the accepted task.", "recommended_action": "Read current requirements.",
+        "vision_unchanged_reason": "The accepted Goal is unchanged.",
+    }
+    adapted = turn_host_adapter.build_result(request, {**valid, field: value})
+    assert type(adapted[field]) is type(value) and adapted[field] == value
+    # The generic host route must reject the same raw JSON type even without
+    # the shared DSH/Ark adapter. A transport cannot repair malformed meaning.
+    direct = {**turn_host_adapter.build_result(request, valid), field: value}
+    for result in (adapted, direct):
+        verdict = validate_loopx_turn_host_result(_turn_plan(request), result)
+        assert not verdict["ok"]
+        assert f"{field} must be a string" in verdict["errors"]
+
+
+@pytest.mark.parametrize("field", [
+    "classification", "summary", "next_action", "recommended_action", "vision_unchanged_reason",
+])
+@pytest.mark.parametrize("kind", ["validated_progress", "wait"])
+def test_legacy_null_candidate_text_still_uses_the_existing_absent_field_behavior(field, kind):
+    request = _signed_request()
+    result = turn_host_adapter.build_result(request, {
+        "result_kind": kind, "classification": "artifact_checked", "summary": "Evidence checked.",
+        "next_action": "Continue the accepted task.", "recommended_action": "Read current requirements.",
+        "vision_unchanged_reason": "The accepted Goal is unchanged.", field: None,
+    })
+    verdict = validate_loopx_turn_host_result(_turn_plan(request), result)
+    assert verdict["ok"], verdict["errors"]
 
 
 def test_adapter_runs_hermetically_through_the_module_entry() -> None:
@@ -669,6 +937,41 @@ def test_adapter_runs_hermetically_through_the_module_entry() -> None:
     assert result["schema_version"] == dsh_goal_mode.LOOPX_TURN_RESULT_SCHEMA
     assert result["result_kind"] == "validated_progress"
     assert result["classification"] == "fake dsh typed result"
+
+
+def test_module_entry_delivers_complete_signed_boundary_and_refuses_tampering(tmp_path) -> None:
+    boundary = {
+        "guards": ["Preserve complete evidence.\n" * 20 + "Do not publish private material."],
+        "stop_condition": "Read current authority.\n" * 20 + "Stop when approval is missing.",
+        "requires_parent_approval": ["write", "publish", "production-action"],
+        "checkpointed_boundary_authority": {
+            "schema_version": "checkpointed_boundary_authority_v0", "active_count": 1,
+            "active_write_scope": ["docs/**"],
+        },
+    }
+    runner = tmp_path / "boundary_runner.py"
+    runner.write_text(
+        "import json\nfrom tests.dsh_goal_mode_fake_runner import run_dsh_turn as original\n"
+        f"EXPECTED = {boundary!r}\n"
+        "def run_dsh_turn(**kwargs):\n"
+        "    wire = kwargs['prompt'].split('Turn authority JSON:\\n', 1)[1]\n"
+        "    authority, _ = json.JSONDecoder().raw_decode(wire)\n"
+        "    assert authority['boundary'] == EXPECTED\n"
+        "    assert authority['write_scope'] == ['docs/**', 'tests/**']\n"
+        "    return original(**kwargs)\n",
+        encoding="utf-8",
+    )
+    request = _signed_request(boundary=boundary)
+    argv = [sys.executable, "-m", "loopx.dsh_goal_mode", "--dsh-runner", str(runner)]
+    completed = subprocess.run(argv, input=json.dumps(request), text=True,
+                               capture_output=True, cwd=REPO_ROOT, check=False)
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout)["result_kind"] == "validated_progress"
+    request["turn_envelope"]["boundary"]["stop_condition"] = "Continue without approval."
+    rejected = subprocess.run(argv, input=json.dumps(request), text=True,
+                              capture_output=True, cwd=REPO_ROOT, check=False)
+    assert rejected.returncode != 0
+    assert "action signature" in rejected.stderr
 
 
 def test_classify_dsh_failure_maps_each_known_signal() -> None:
@@ -1260,6 +1563,7 @@ def test_dsh_sdk_overrides_follow_each_verified_turn(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     calls = []
+    monkeypatch.setenv("LOOPX_TURN_KEY", "ambient-wrong-turn")
     monkeypatch.setenv("LOOPX_TURN_GOAL_ID", "ambient-wrong-goal")
 
     def runner(**kwargs):
@@ -1267,15 +1571,43 @@ def test_dsh_sdk_overrides_follow_each_verified_turn(
         return '{"result_kind":"wait"}'
 
     monkeypatch.setattr(turn_host_adapter, "run_dsh_turn", runner)
-    pinned = {"LOOPX_TURN_TODO_ID": "stale-todo", "DSH_PERMISSION_MODE": "read-only"}
+    pinned = {"LOOPX_TURN_KEY": "stale-turn", "LOOPX_TURN_TODO_ID": "stale-todo",
+              "DSH_PERMISSION_MODE": "read-only"}
     config = turn_host_adapter.DshHostConfig(workspace=tmp_path, env=pinned)
     turn_host_adapter.run_dsh_host(_signed_request(todo_id="first"), config=config)
     turn_host_adapter.run_dsh_host(_signed_request(todo_id="second"), config=config)
     turn_host_adapter.run_dsh_host(_signed_request(), config=config)
     assert [env["LOOPX_TURN_TODO_ID"] for env in calls] == ["first", "second", ""]
     for env in calls:
+        assert env["LOOPX_TURN_KEY"] == TURN_KEY
         assert env["LOOPX_TURN_GOAL_ID"] == "g"
         assert env["LOOPX_TURN_AGENT_ID"] == "a"
         assert env["LOOPX_TURN_WORKSPACE"] == str(tmp_path.resolve())
         assert env["DSH_PERMISSION_MODE"] == "read-only"
     assert pinned["LOOPX_TURN_TODO_ID"] == "stale-todo"
+    assert pinned["LOOPX_TURN_KEY"] == "stale-turn"
+
+
+@pytest.mark.parametrize("goal,agent,todo", [
+    (" goal ", " agent ", " todo "), (17, True, 23), (False, 0, ""),
+])
+def test_dsh_historical_runner_retains_raw_lineage_and_tool_coercion(
+    tmp_path, monkeypatch, goal, agent, todo,
+):
+    calls = []
+
+    def runner(**kwargs):
+        calls.append(kwargs)
+        return '{"result_kind":"wait"}'
+
+    monkeypatch.setattr(turn_host_adapter, "run_dsh_turn", runner)
+    request = _signed_request(goal_id=goal, agent_id=agent, todo_id=todo)
+    turn_host_adapter.run_dsh_host(request, config=turn_host_adapter.DshHostConfig(workspace=tmp_path))
+    [call] = calls
+    raw = [value if value else None for value in (goal, agent, todo)]
+    expected = ("dsh-lineage-v1-" + sha256(json.dumps(raw, ensure_ascii=False,
+                sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                if any(raw) else "dsh-" + TURN_KEY.removeprefix("sha256:")[:24])
+    assert call["session_id"] == expected
+    assert [call["env"][key] for key in ("LOOPX_TURN_GOAL_ID", "LOOPX_TURN_AGENT_ID", "LOOPX_TURN_TODO_ID")] == [
+        str(value or "") for value in (goal, agent, todo)]

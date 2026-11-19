@@ -56,6 +56,7 @@ from .paths import (
     rel_or_abs,
     require_single_goal_state_route,
     resolve_runtime_root,
+    validate_goal_id_path_segment,
 )
 from .control_plane.goals.active_state_metadata import markdown_blockquote, markdown_frontmatter_string
 from .registry_writability import probe_registry_write_path
@@ -327,10 +328,10 @@ def bootstrap_project(
     creation_operation_id: str | None = None,
 ) -> dict[str, Any]:
     project = project.expanduser().resolve()
+    goal_id = validate_goal_id_path_segment(goal_id or default_goal_id(project))
     registry_path = registry_path.expanduser()
     if not registry_path.is_absolute():
         registry_path = project / registry_path
-    goal_id = goal_id or default_goal_id(project)
     explicit_state_file = state_file is not None
     state_file = state_file or registered_goal_state_file(
         project, goal_id, read_json_if_exists(registry_path)

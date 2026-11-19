@@ -1,0 +1,442 @@
+"""Real Explore capture, strict read, CLI and next-turn score feedback."""
+from copy import deepcopy
+import json
+import subprocess
+import sys
+
+import pytest
+
+from tests.control_plane.test_explore_result_writeback import fixture, payload
+from loopx.capabilities.explore.result_log import (
+    build_explore_finding_event,
+    build_explore_result_projection,
+    explore_history_rows,
+    explore_result_log_path,
+    load_explore_result_events_strict,
+)
+from loopx.capabilities.explore.result_writeback import deliver_result_attachment, prepare_result_attachment
+from loopx.capabilities.explore.turn_context import explore_turn_context
+from loopx.control_plane.effect_runtime import EffectRuntimeRejected
+
+
+def measurement(candidate, value, **changes):
+    return dict(metric="quality", value=value, unit="points", higher_is_better=True,
+                comparison_scope="validation:fixed-budget-v1", input_revision="fixture-v1",
+                evaluation_ref="evaluator:v1", candidate_ref=f"candidate:{candidate}",
+                evidence_ref="validation:counterexample-1", **changes)
+
+
+def context(args):
+    return explore_turn_context(**{key: args[key] for key in
+        ("registry_path", "runtime_root", "goal_id", "agent_id")})
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_paired_cli_refresh_rejects_duplicates_then_replays_and_reads_both_candidates(tmp_path, monkeypatch, provider):
+    from canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        _write_fixture, _run_cli, GOAL_ID, AGENT_ID, TODO_ID, TURN_ID,
+    )
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    import threading
+    from urllib.request import urlopen
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path, provider=provider)
+    config = json.loads(registry.read_text())
+    config["goals"][0]["explore_graph"] = {"enabled": True}
+    registry.write_text(json.dumps(config))
+    binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+               "--turn-instance-id", TURN_ID)
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding, cwd=project)
+    assert rc == 0 and guard["should_run"], guard
+    pair = [{**measurement("baseline", 9), "evidence_ref": "result:baseline"},
+            {**measurement("alternative", 6), "evidence_ref": "result:alternative"}]
+    attachment = {**payload()["explore_result"], "measurements": pair,
+                  "evidence_refs": [row["evidence_ref"] for row in pair]}
+    source = tmp_path / "paired-result.json"
+    args = ("refresh-state", *binding, "--classification", "validated_change",
+            "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+            "--no-global-sync", "--suppress-external-sinks", "--explore-result-json", str(source))
+    log = explore_result_log_path(runtime, GOAL_ID)
+    index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    previous = index.read_bytes() if index.exists() else b""
+    # Different receipts cannot disguise duplicate candidate observations.
+    source.write_text(json.dumps({**attachment, "measurements": [pair[0],
+        {**pair[1], "candidate_ref": pair[0]["candidate_ref"]}]}))
+    rc, rejected = _run_cli(registry, runtime, *args, cwd=project)
+    assert rc == 1 and not rejected["appended"], rejected
+    assert "duplicated" in rejected["error"]
+    assert (index.read_bytes() if index.exists() else b"") == previous
+    assert not log.exists()
+
+    source.write_text(json.dumps(attachment))
+    rc, captured = _run_cli(registry, runtime, *args, cwd=project)
+    assert rc == 0 and captured["appended"] and captured["explore_result_delivery"]["ok"], captured
+    committed = (index.read_bytes(), log.read_bytes())
+    rc, replay = _run_cli(registry, runtime, *args, cwd=project)
+    assert rc == 0 and replay["idempotent_replay"], replay
+    assert (index.read_bytes(), log.read_bytes()) == committed
+    rc, received = _run_cli(registry, runtime, "explore", "turn-context", "--goal-id", GOAL_ID,
+                            "--agent-id", AGENT_ID, cwd=project)
+    assert rc == 0, received
+    finding = received["graph"]["writeback_results"][0]
+    assert finding["measurements"] == pair
+    feedback = received["graph"]["measurement_feedback"][0]
+    assert feedback["best"]["candidate_ref"] == "candidate:baseline"
+    assert feedback["latest"]["measurement"]["candidate_ref"] == "candidate:alternative"
+    assert feedback["improvement"] == -3 and feedback["measured_count"] == 2
+    assert len(load_explore_result_events_strict(log, goal_id=GOAL_ID)) == 2
+
+    # The existing product reader consumes the same persisted finding, not a
+    # second measurement owner or a synthetic HTTP response.
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.registry_path, server.runtime_root = registry, runtime
+    server.runtime_root_override, server.verbose = None, False
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        base = f"http://127.0.0.1:{server.server_port}/api/chat/explore-results?goal_id={GOAL_ID}"
+        for suffix in ("", "&view=history"):
+            with urlopen(base + suffix) as response:
+                rows = json.load(response)["items"]
+            measured = next(row for row in rows if row.get("measurements"))
+            assert measured["measurements"] == pair
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
+    assert (index.read_bytes(), log.read_bytes()) == committed
+    source.write_text(json.dumps({**attachment, "measurements": [pair[0], {**pair[1], "value": 10}]}))
+    rc, conflict = _run_cli(registry, runtime, *args, cwd=project)
+    assert rc == 1, conflict
+    assert (index.read_bytes(), log.read_bytes()) == committed
+
+
+@pytest.mark.parametrize("measured", [False, True])
+def test_tied_finding_times_bound_latest_appends_and_corrections(measured):
+    # The production writer records whole seconds. Equal source times must not
+    # let insertion order keep the oldest result in a bounded newest-first view.
+    stamp = "2026-01-01T00:00:00Z"
+
+    def finding(index, *, at=stamp, **changes):
+        return build_explore_finding_event(
+            goal_id="research", finding_id=f"candidate-{index}", node_id="question",
+            title=f"Measured scope {index}", evidence_refs=["validation:counterexample-1"],
+            tags=["writeback-result"] if not measured else [], recorded_at=at,
+            **({"measurements": [measurement(str(index), index)]} if measured else {}), **changes,
+        )
+
+    events = [finding(index) for index in range(4)]
+    initial = build_explore_result_projection(events, goal_id="research", finding_limit=3)
+    assert [row["finding_id"] for row in initial["findings"]] == ["candidate-3", "candidate-2", "candidate-1"]
+    events.append(finding(0, summary="Corrected interpretation on the same source clock."))
+    original = deepcopy(events)
+    view = build_explore_result_projection(events, goal_id="research", finding_limit=3)
+    assert [row["finding_id"] for row in view["findings"]] == ["candidate-0", "candidate-3", "candidate-2"]
+    assert view["findings"][0]["update_count"] == 2
+    assert all(row["last_updated_at"] == stamp for row in view["findings"])
+    # Preserve chronology across distinct timestamps, even for a later append.
+    older = finding(4, at="2025-12-31T23:59:59Z")
+    dated = build_explore_result_projection([*events, older], goal_id="research", finding_limit=5)
+    assert dated["findings"][-1]["finding_id"] == "candidate-4"
+    assert events == original, "ordering is a projection; source timestamps and append history stay unchanged"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_cli_reuses_explicit_context_and_preserves_normalized_history(tmp_path, monkeypatch, provider):
+    from canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    source, runtime, _state = promoted_create_fixture(tmp_path, provider=provider)
+    config = json.loads(source.read_text())
+    config["goals"][0]["explore_graph"] = {"enabled": True}
+    source.write_text(json.dumps(config))
+    args = dict(registry_path=source, runtime_root=runtime, goal_id="goal-a", agent_id="agent-a")
+    command = [sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(source),
+               "--runtime-root", str(runtime), "explore", "finding", "--goal-id", "goal-a",
+               "--agent-id", "agent-a", "--node", "comparison", "--status", "tentative"]
+    shared = {key: measurement("first", 8)[key]
+              for key in ("comparison_scope", "input_revision", "evaluation_ref")}
+    conditions = tmp_path / "conditions.json"
+    conditions.write_text(json.dumps(shared))
+    observations = tmp_path / "observations.json"
+    log = explore_result_log_path(runtime, "goal-a")
+    for index, score in enumerate([8, 9, 6, None]):
+        row = {key: value for key, value in measurement(str(index), score).items() if key not in shared}
+        observations.write_text(json.dumps([row]))
+        captured = subprocess.run(command + ["--title", f"Measured candidate {index}",
+            "--finding-id", f"candidate-{index}", "--evidence-ref", row["evidence_ref"],
+            "--measurements-json", str(observations), "--measurement-context-json", str(conditions)],
+            capture_output=True, text=True)
+        assert captured.returncode == 0, captured.stdout + captured.stderr
+        events = load_explore_result_events_strict(log, goal_id="goal-a")
+        assert events[-1]["measurements"] == [measurement(str(index), score)]
+        assert "measurement_context" not in events[-1]
+        feedback = context(args)["graph"]["measurement_feedback"][0]
+        if index == 2:
+            assert feedback["improvement"] == -3
+            assert feedback["best"]["candidate_ref"] == "candidate:1"
+    assert feedback["latest"]["measurement"]["value"] is None
+    assert feedback["best"]["value"] == 9
+    assert feedback["measured_count"] == 3
+    assert feedback["unknown_count"] == 1
+    # Actual File/SQLite CLI writes may share the writer's whole-second clock.
+    # The bounded reader must agree with their append order without sleeps.
+    assert [row["finding_id"] for row in context(args)["graph"]["writeback_results"]] == [
+        "candidate-3", "candidate-2", "candidate-1",
+    ]
+    assert conditions.read_text() == json.dumps(shared), "recording cannot rewrite the caller's conditions"
+    healthy = log.read_bytes()
+    # Even an equal duplicate field must not silently override the shared source.
+    observations.write_text(json.dumps([{**row, "evaluation_ref": shared["evaluation_ref"]}]))
+    rejected = subprocess.run(command + ["--title", "Conflicting candidate", "--evidence-ref", row["evidence_ref"],
+        "--measurements-json", str(observations), "--measurement-context-json", str(conditions)],
+        capture_output=True, text=True)
+    assert rejected.returncode != 0
+    assert log.read_bytes() == healthy
+    rejected = subprocess.run(command + ["--title", "Missing observations",
+        "--measurement-context-json", str(conditions)], capture_output=True, text=True)
+    assert rejected.returncode != 0
+    assert log.read_bytes() == healthy
+    conditions.write_text(json.dumps({**shared, "evaluation_ref": "evaluator:changed"}))
+    observations.write_text(json.dumps([{**row, "value": 99,
+        "candidate_ref": "candidate:changed", "evidence_ref": "result:changed"}]))
+    changed = subprocess.run(command + ["--title", "Changed evaluation conditions",
+        "--finding-id", "changed-condition", "--evidence-ref", "result:changed",
+        "--measurements-json", str(observations), "--measurement-context-json", str(conditions)],
+        capture_output=True, text=True)
+    assert changed.returncode == 0, changed.stdout + changed.stderr
+    groups = context(args)["graph"]["measurement_feedback"]
+    assert len(groups) == 2
+    assert next(group for group in groups if group["evaluation_ref"] == "evaluator:v1")["best"]["value"] == 9
+    assert next(group for group in groups if group["evaluation_ref"] == "evaluator:changed")["improvement"] is None
+    assert log.read_bytes().startswith(healthy), "new conditions cannot rewrite earlier evidence"
+
+
+def test_context_attachment_replays_as_the_equivalent_complete_measurement(tmp_path):
+    args = fixture(tmp_path)
+    current = payload()
+    complete = measurement("one", 8)
+    conditions = {key: complete[key] for key in ("comparison_scope", "input_revision", "evaluation_ref")}
+    observation = {key: value for key, value in complete.items() if key not in conditions}
+    current["explore_result"]["measurement_context"] = conditions
+    current["explore_result"]["measurements"] = [observation]
+    prepared = prepare_result_attachment(current["explore_result"], **args)
+    first = deliver_result_attachment(payload=current, **args)
+    assert first["ok"], first
+    log = explore_result_log_path(args["runtime_root"], args["goal_id"])
+    original = log.read_bytes()
+    current["explore_result"].pop("measurement_context")
+    current["explore_result"]["measurements"] = [complete]
+    repeated = deliver_result_attachment(payload=current, **args)
+    assert repeated["ok"] and repeated["idempotent_replay"]
+    assert log.read_bytes() == original
+    assert prepared["measurements"] == [complete]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_published_example_compares_candidates_but_isolates_changed_conditions(tmp_path, monkeypatch, provider):
+    from canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture
+    from loopx.todos import add_goal_todo
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    source, runtime, _state = promoted_create_fixture(tmp_path, provider=provider)
+    config = json.loads(source.read_text())
+    config["goals"][0]["explore_graph"] = {"enabled": True}
+    source.write_text(json.dumps(config))
+    todo = add_goal_todo(registry_path=source, goal_id="goal-a", text="Compare measured candidates",
+                        role="agent", claimed_by="agent-a", agent_id="agent-a")
+    args = dict(registry_path=source, runtime_root=runtime,
+                goal_id="goal-a", agent_id="agent-a", todo_id=todo["todo_id"])
+    graph = context(args)["graph"]
+    example = graph["optional_measurement_example"]["measurements"][0]
+    template = graph["result_attachment_template"]
+    # Distinct candidate hashes and individual result receipts must not split
+    # a verified fixed-input/protocol comparison. Changed conditions still do.
+    variants = [(8, {}), (9, {}),
+                (99, {"input_revision": "dataset-v2"}),
+                (99, {"evaluation_ref": "evaluator:alternate-v2"})]
+    receipts = []
+    for index, (score, changed_condition) in enumerate(variants):
+        item = {**example, "metric": "quality", "unit": "points", "value": score,
+                "candidate_ref": f"candidate:{str(index) * 64}",
+                "evidence_ref": f"result:invocation-{index}", **changed_condition}
+        attachment = {**template, "question": "Which candidate improves measured quality?",
+                      "applicability": "Fixed task and resource budget; explicit input and evaluator revisions.",
+                      "input_revision": item["input_revision"], "status": "tentative",
+                      "observation": f"Candidate {index} scored {score}.",
+                      "interpretation": "Compare only matching evaluation conditions.",
+                      "evidence_refs": [item["evidence_ref"]], "measurements": [item]}
+        current = {**args, "turn_instance_id": f"turn-{index}"}
+        prepare_result_attachment(attachment, **current)
+        receipt = deliver_result_attachment(payload={
+            "explore_result": attachment, "appended": True, "dry_run": False,
+            "generated_at": f"2026-01-0{index + 1}T00:00:00Z",
+            "settlement_identity": {"effect_id": f"goal-a:agent-a:turn-{index}"},
+        }, **current)
+        assert receipt["ok"], receipt
+        receipts.append(receipt)
+
+    log = explore_result_log_path(args["runtime_root"], args["goal_id"])
+    before = log.read_bytes()
+    groups = context(args)["graph"]["measurement_feedback"]
+    assert len(groups) == 3
+    comparable = next(group for group in groups if group["measured_count"] == 2)
+    assert comparable["improvement"] == 1
+    assert comparable["previous_best"]["value"] == 8
+    assert comparable["best"]["value"] == 9
+    assert comparable["best"]["candidate_ref"] == f"candidate:{'1' * 64}"
+    assert comparable["best"]["evidence_ref"] == "result:invocation-1"
+    assert comparable["best"]["finding_id"] == receipts[1]["finding_id"]
+    assert all(group["improvement"] is None and group["previous_best"] is None
+               for group in groups if group is not comparable)
+    assert log.read_bytes() == before, "feedback cannot rewrite comparison provenance"
+
+
+def test_ordinary_capture_keeps_best_candidate_after_regression_and_pages(tmp_path):
+    args = fixture(tmp_path)
+    receipts = []
+    for index, score in enumerate([8, 9, 6, None], start=1):
+        current = {**args, "turn_instance_id": f"turn-{index}"}
+        result = payload()
+        result["settlement_identity"]["effect_id"] = f"research:worker:turn-{index}"
+        result["generated_at"] = f"2026-01-0{index}T00:00:00Z"
+        result["explore_result"]["status"] = "tentative"
+        result["explore_result"]["measurements"] = [measurement(str(index), score)]
+        prepare_result_attachment(result["explore_result"], **current)
+        receipt = deliver_result_attachment(payload=result, **current)
+        assert receipt["ok"], receipt
+        receipts.append(receipt)
+        repeated = deliver_result_attachment(payload=result, **current)
+        assert repeated["ok"] and repeated["idempotent_replay"]
+        feedback = context(args)["graph"]["measurement_feedback"][0]
+        assert feedback["latest"]["measurement"]["value"] == score
+        if index == 3:
+            assert feedback["improvement"] == -3
+            assert feedback["best"]["candidate_ref"] == "candidate:2"
+        if index == 4:
+            assert feedback["improvement"] is None and feedback["unknown_count"] == 1
+    assert feedback["best"]["value"] == 9
+    assert feedback["best"]["finding_id"] == receipts[1]["finding_id"]
+    assert feedback["best"]["evidence_ref"] == "validation:counterexample-1"
+    assert len(context(args)["graph"]["writeback_results"]) == 3
+    log = explore_result_log_path(args["runtime_root"], "research")
+    events = load_explore_result_events_strict(log, goal_id="research")
+    rows = [row for row in explore_history_rows(events, goal_id="research") if "measurements" in row]
+    assert [row["measurements"][0]["value"] for row in rows] == [8, 9, 6, None]
+    assert all(row["status"] == "tentative" for row in rows)
+    # The history best must survive even when the visible page contains only the latest result.
+    page = explore_turn_context(**{key: args[key] for key in
+        ("registry_path", "runtime_root", "goal_id", "agent_id")}, result_limit=1)
+    assert page["graph"]["measurement_feedback"][0]["best"]["value"] == 9
+
+
+@pytest.mark.parametrize("field,value", [("input_revision", "foreign-v2"),
+    ("evidence_ref", "validation:unrelated"), ("value", "9"), ("value", True)])
+def test_invalid_measurement_preflight_cannot_append_partial_results(tmp_path, field, value):
+    args = fixture(tmp_path)
+    attachment = deepcopy(payload()["explore_result"])
+    item = measurement("invalid", 9)
+    item[field] = value
+    attachment["measurements"] = [item]
+    with pytest.raises((ValueError, EffectRuntimeRejected)):
+        prepare_result_attachment(attachment, **args)
+    assert not explore_result_log_path(args["runtime_root"], "research").exists()
+
+
+def test_cli_capture_readback_and_malformed_history_recovery(tmp_path):
+    args = fixture(tmp_path)
+    document = tmp_path / "measurement.json"
+    document.write_text(json.dumps([measurement("cli", 0)]))
+    command = [sys.executable, "-m", "loopx.cli", "--format", "json", "--registry",
+        str(args["registry_path"]), "--runtime-root", str(args["runtime_root"]), "explore", "finding",
+        "--goal-id", "research", "--agent-id", "worker", "--node", "prefix-bound",
+        "--title", "Measured candidate", "--finding-id", "cli-score", "--status", "tentative",
+        "--evidence-ref", "validation:counterexample-1", "--measurements-json", str(document)]
+    captured = subprocess.run(command, capture_output=True, text=True)
+    assert captured.returncode == 0, captured.stdout + captured.stderr
+    assert context(args)["graph"]["measurement_feedback"][0]["best"]["value"] == 0
+    log = explore_result_log_path(args["runtime_root"], "research")
+    healthy = log.read_bytes()
+    row = json.loads(healthy)
+    row["measurements"][0]["value"] = "invented"
+    log.write_text(json.dumps(row) + "\n")
+    with pytest.raises(ValueError, match="invalid Explore result"):
+        context(args)
+    log.write_bytes(healthy)
+    assert context(args)["graph"]["measurement_feedback"][0]["best"]["value"] == 0
+    document.write_text(json.dumps([{**measurement("invalid", 9), "evidence_ref": "validation:unrelated"}]))
+    rejected = subprocess.run(command, capture_output=True, text=True)
+    assert rejected.returncode != 0
+    assert log.read_bytes() == healthy
+
+
+def test_disabled_explore_does_not_offer_score_feedback(tmp_path):
+    args = fixture(tmp_path, enabled=False)
+    assert context(args)["graph"] is None
+
+
+def test_cli_pages_every_measurement_group_and_rejects_changed_manual_evidence(tmp_path):
+    args = fixture(tmp_path)
+    for turn, score in [("earlier", 10), ("latest", 5)]:
+        current = {**args, "turn_instance_id": turn}
+        result = payload()
+        result["settlement_identity"]["effect_id"] = f"research:worker:{turn}"
+        result["explore_result"]["measurements"] = [
+            {**measurement(turn, score + index), "metric": f"quality-{index}"}
+            for index in range(8)
+        ]
+        prepare_result_attachment(result["explore_result"], **current)
+        assert deliver_result_attachment(payload=result, **current)["ok"]
+    log = explore_result_log_path(args["runtime_root"], "research")
+    healthy = log.read_bytes()
+    first = context(args)["graph"]
+    scope = {key: args[key] for key in ("registry_path", "runtime_root", "goal_id", "agent_id")}
+    expanded = explore_turn_context(**scope, result_node="prefix-bound", result_limit=20)["graph"]
+    assert len(expanded["measurement_feedback"]) == 8, "expanded reads must expose all comparable groups"
+    seen = list(first["measurement_feedback"])
+    command = first["measurement_feedback_page"]["next_command"]
+    while command:
+        read = subprocess.run([sys.executable, "-m", "loopx.cli", *command[1:]], capture_output=True, text=True)
+        assert read.returncode == 0, read.stdout + read.stderr
+        graph = json.loads(read.stdout)["graph"]
+        seen.extend(graph["measurement_feedback"])
+        command = graph["measurement_feedback_page"]["next_command"]
+    assert len(seen) == len({item["metric"] for item in seen}) == 8
+    assert all(item["best"]["value"] - item["latest"]["measurement"]["value"] == 5
+               and item["improvement"] == -5 for item in seen)
+    assert log.read_bytes() == healthy, "paging cannot mutate the source"
+    # Manual findings are not writeback-result rows, but must still invalidate
+    # a feedback continuation. Otherwise a new source could be skipped silently.
+    document = tmp_path / "manual-measurements.json"
+    document.write_text(json.dumps([{**measurement("manual", 99), "metric": "quality-7"}]))
+    captured = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json", "--registry",
+        str(args["registry_path"]), "--runtime-root", str(args["runtime_root"]), "explore", "finding",
+        "--goal-id", "research", "--agent-id", "worker", "--node", "prefix-bound", "--title", "Manual result",
+        "--finding-id", "manual-result", "--evidence-ref", "validation:counterexample-1",
+        "--measurements-json", str(document)], capture_output=True, text=True)
+    assert captured.returncode == 0, captured.stdout + captured.stderr
+    with pytest.raises(EffectRuntimeRejected, match="evidence changed"):
+        explore_turn_context(**scope, result_offset=3, result_revision=first["result_page"]["revision"])
+
+
+@pytest.mark.parametrize("clock", ["tied", "backfilled"])
+def test_recorded_measurement_order_is_independent_of_source_clock(tmp_path, clock):
+    args = fixture(tmp_path)
+    for index, score in enumerate([8, 9, 6], start=1):
+        current = {**args, "turn_instance_id": f"turn-{index}"}
+        result = payload()
+        result["settlement_identity"]["effect_id"] = f"research:worker:turn-{index}"
+        result["generated_at"] = ("2026-01-01T00:00:00Z" if clock == "tied"
+                                  else f"2026-01-0{4-index}T00:00:00Z")
+        result["explore_result"]["measurements"] = [measurement(str(index), score)]
+        prepare_result_attachment(result["explore_result"], **current)
+        assert deliver_result_attachment(payload=result, **current)["ok"]
+    feedback = context(args)["graph"]["measurement_feedback"][0]
+    assert feedback["latest"]["measurement"]["value"] == 6
+    assert feedback["best"]["value"] == 9
+    assert feedback["improvement"] == -3
+    # The ordering ordinal is derived from the source log, not another stored fact.
+    log = explore_result_log_path(args["runtime_root"], "research")
+    assert all("recorded_order" not in json.loads(line) for line in log.read_text().splitlines())

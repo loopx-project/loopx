@@ -1,7 +1,7 @@
 """Read-only shared Goal alignment over the selected Todo/lease authority.
 
-Promoted Goals carry a provider revision; legacy Markdown has no monotonic
-revision. Neither source fabricates an event sequence or an Agent frontier.
+Canonical Goals carry a provider revision. The reader never fabricates an
+event sequence or an Agent frontier.
 The historical sequence fields remain zero/unbound for persisted proposal
 compatibility; typed alignment and amendment admission decide what is provable.
 """
@@ -29,7 +29,6 @@ from .goal_frontier import (
 SHARED_GOAL_ALIGNMENT_EFFECT_METHOD = "goal.shared_goal_alignment.project"
 SHARED_GOAL_ALIGNMENT_REQUEST_SCHEMA_VERSION = "shared_goal_alignment_request_v0"
 SHARED_GOAL_ALIGNMENT_SCHEMA_VERSION = "shared_goal_alignment_v0"
-REVISION_BASIS_MARKDOWN_ACTIVE_STATE = "markdown_active_state"
 BASIS_SOURCE_UNBOUND = "unbound"
 DEFAULT_REGISTRY_RELATIVE_PATH = Path(".loopx") / "registry.json"
 
@@ -146,16 +145,8 @@ def _project_shared_goal_alignment(
         str(frontmatter.get("status") or "").strip() or None
     )
 
-    revision_basis = ("canonical_todo_snapshot" if source.canonical_basis is not None
-        else REVISION_BASIS_MARKDOWN_ACTIVE_STATE)
+    revision_basis = "canonical_todo_snapshot"
     basis_sequence = 0
-    # Bind the same typed work/lease facts sent to the reducer. Markdown has
-    # no monotonic revision, but a peer claim can change without updated_at.
-    # Compatibility prose, display order and read time are not work identity.
-    source_checksum = (
-        _canonical_digest(sorted(source.items, key=lambda item: str(item.get("todo_id") or "")))
-        if source.canonical_basis is None else None
-    )
 
     source_basis_digest = _canonical_digest(
         _source_basis_facts_envelope(
@@ -164,7 +155,7 @@ def _project_shared_goal_alignment(
             registered_agents=registered_agents,
             revision_basis=revision_basis,
             last_append_sequence=None,
-            source_checksum=source_checksum,
+            source_checksum=None,
             state_updated_at=state_updated_at,
             todo_basis=source.canonical_basis,
         )
@@ -174,7 +165,7 @@ def _project_shared_goal_alignment(
         "source_basis_digest": source_basis_digest,
         "revision_basis": revision_basis,
         "state_updated_at": state_updated_at,
-        **({"todo_basis": source.canonical_basis} if source.canonical_basis is not None else {}),
+        "todo_basis": source.canonical_basis,
     }
 
     frontier_basis = {"based_on_state_event_sequence": None,

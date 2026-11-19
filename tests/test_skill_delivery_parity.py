@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -84,6 +85,39 @@ class TestPackagedSkills:
 
     def test_required_skills_match_the_shipped_catalog(self):
         assert set(REQUIRED_HOST_SKILL_IDS) == {"loopx", *PACKAGED_HOST_SKILL_IDS}
+
+    def test_external_packaged_skills_satisfy_doctor_requirements(self, tmp_path):
+        from loopx.doctor import installed_skill_summary
+
+        primary = tmp_path / ".codex" / "skills"
+        external = tmp_path / ".agents" / "skills"
+        for skill_id in PACKAGED_HOST_SKILL_IDS:
+            shutil.copytree(REPO_ROOT / "skills" / skill_id, external / skill_id)
+
+        summary = installed_skill_summary((primary, external))
+        assert all(item["exists"] for item in summary.values())
+        assert all(item["managed_externally"] for item in summary.values())
+        assert all(item["required_phrases"] for item in summary.values()), summary
+        assert not primary.exists()
+
+    def test_doctor_rejects_benchmark_skill_missing_permission_requirements(self, tmp_path):
+        from loopx.doctor import installed_skill_summary
+
+        primary = tmp_path / ".codex" / "skills"
+        external = tmp_path / ".agents" / "skills"
+        for skill_id in PACKAGED_HOST_SKILL_IDS:
+            shutil.copytree(REPO_ROOT / "skills" / skill_id, external / skill_id)
+        benchmark = external / "loopx-benchmark" / "SKILL.md"
+        text = benchmark.read_text(encoding="utf-8")
+        permission_requirement = "any external provider binding, host permissions, and user gates."
+        assert permission_requirement in text
+        benchmark.write_text(text.replace(permission_requirement, "provider availability."), encoding="utf-8")
+
+        summary = installed_skill_summary((primary, external))
+        assert summary["loopx-benchmark"]["exists"]
+        assert summary["loopx-benchmark"]["managed_externally"]
+        assert not summary["loopx-benchmark"]["required_phrases"]
+        assert all(item["required_phrases"] for key, item in summary.items() if key != "loopx-benchmark")
 
 
 # -- Skill install readback lifecycle -----------------------------------------

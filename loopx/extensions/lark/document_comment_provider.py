@@ -17,13 +17,12 @@ import re
 import subprocess
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 from ...control_plane.content_digest import ENVELOPED_SHA256_PATTERN
-from ..external_connector_runtime import SAFE_TOKEN_PATTERN
 from ...file_lock import exclusive_file_lock
 from ..external_connector_provider import (
     build_external_connector_permission_requirement,
@@ -31,6 +30,7 @@ from ..external_connector_provider import (
     evaluate_external_connector_permissions,
 )
 from ..external_connector_runtime import (
+    SAFE_TOKEN_PATTERN,
     ExternalCapturePolicy,
     ExternalConnectorCapability,
     ExternalResponsePolicy,
@@ -127,7 +127,9 @@ def _default_runner(
         cwd=str(cwd) if cwd else None,
         timeout=timeout,
         capture_output=True,
-        text=True, encoding="utf-8", errors="replace",
+        text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     return {
@@ -287,14 +289,23 @@ def _encode_cursor(value: Mapping[str, Any]) -> str:
 def _epoch_rfc3339(value: object) -> str:
     if isinstance(value, bool):
         raise LarkDocumentCommentProviderError("comment_timestamp_invalid")
+    token = str(value).strip()
+    if not (token.isascii() and token.isdigit()):
+        raise LarkDocumentCommentProviderError("comment_timestamp_invalid")
+    precision = {13: 1_000, 16: 1_000_000}.get(len(token))
+    if precision is None:
+        precision = 1 if len(token) <= 10 else None
+    if precision is None:
+        raise LarkDocumentCommentProviderError("comment_timestamp_invalid")
     try:
-        numeric = int(str(value))
+        numeric = int(token)
     except (TypeError, ValueError) as exc:
         raise LarkDocumentCommentProviderError("comment_timestamp_invalid") from exc
-    if numeric > 10_000_000_000:
-        numeric //= 1000
+    seconds, remainder = divmod(numeric, precision)
     try:
-        parsed = datetime.fromtimestamp(numeric, tz=UTC)
+        parsed = datetime.fromtimestamp(seconds, tz=UTC) + timedelta(
+            microseconds=remainder * (1_000_000 // precision)
+        )
     except (OverflowError, OSError, ValueError) as exc:
         raise LarkDocumentCommentProviderError("comment_timestamp_invalid") from exc
     return parsed.isoformat().replace("+00:00", "Z")

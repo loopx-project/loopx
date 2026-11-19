@@ -30,6 +30,8 @@ def score(case, response):
         errors.append(f"expected_{case['expected']}_got_{observed}")
     if response.get("proposals") or response.get("protected_action"):
         errors.append("unrequested_action")
+    if response.get("context_handoff") and response.get("goal_draft"):
+        errors.append("competing_intents")
     if case["expected"] in {"draft", "handoff"} and response.get("gate"):
         errors.append("redundant_gate")
     if case.get("target"):

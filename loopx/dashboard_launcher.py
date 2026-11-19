@@ -50,32 +50,31 @@ def _probe_existing_chat(
     # Imported here rather than at module level: the launcher probes a port that
     # may hold no LoopX process at all, and the server module's import graph
     # costs ~110ms on this path.
-    from .chat_server import CHAT_CAPABILITIES_PATH
+    from .chat_server import CHAT_CAPABILITIES_PATH, CHAT_READINESS_PATH
 
-    try:
-        connection = http.client.HTTPConnection(
-            host,
-            port,
-            timeout=CHAT_PROBE_TIMEOUT_SECONDS,
-        )
+    paths = ([CHAT_CAPABILITIES_PATH] if goal_subagent_configuration_enabled is not None
+             else [CHAT_READINESS_PATH, CHAT_CAPABILITIES_PATH])
+    for path in paths:
         try:
-            connection.request(
-                "GET",
-                CHAT_CAPABILITIES_PATH,
-                headers={"Connection": "close"},
+            connection = http.client.HTTPConnection(
+                host, port, timeout=CHAT_PROBE_TIMEOUT_SECONDS,
             )
-            response = connection.getresponse()
-            payload = response.read(MAX_PROBE_RESPONSE_BYTES)
-            status = response.status
-        finally:
-            connection.close()
-    except (ConnectionRefusedError, TimeoutError):
-        # Some native Windows execution environments time out instead of
-        # returning WSAECONNREFUSED for an unused loopback port. Treat that as
-        # non-reusable and let the later server bind remain authoritative.
-        return "unavailable"
-    except (OSError, http.client.HTTPException):
-        return "foreign"
+            try:
+                connection.request("GET", path, headers={"Connection": "close"})
+                response = connection.getresponse()
+                payload = response.read(MAX_PROBE_RESPONSE_BYTES)
+                status = response.status
+            finally:
+                connection.close()
+        except (ConnectionRefusedError, TimeoutError):
+            # Some Windows hosts time out for an unused loopback port. The
+            # later server bind remains authoritative; this is not reuse.
+            return "unavailable"
+        except (OSError, http.client.HTTPException):
+            return "foreign"
+        if status == 404 and path == CHAT_READINESS_PATH:
+            continue  # Compatibility with an older installed Chat service.
+        break
     if status != 200:
         return "foreign"
     try:
@@ -84,11 +83,13 @@ def _probe_existing_chat(
         return "foreign"
     if not isinstance(capabilities, dict):
         return "foreign"
-    if (
-        capabilities.get("ok") is not True
-        or capabilities.get("schema_version") != EXPECTED_CHAT_SCHEMA_VERSION
-    ):
+    schema = capabilities.get("schema_version")
+    if capabilities.get("ok") is not True or schema not in {
+        EXPECTED_CHAT_SCHEMA_VERSION, "loopx_chat_readiness_v1",
+    } or schema == "loopx_chat_readiness_v1" and capabilities.get("state") != "ready":
         return "foreign"
+    if goal_subagent_configuration_enabled is not None and schema != EXPECTED_CHAT_SCHEMA_VERSION:
+        return "foreign"  # Readiness makes no capability/configuration claim.
     expected_identity = release_runtime_identity(dashboard_release_root())
     if capabilities.get("runtime_identity") != expected_identity:
         return "stale"

@@ -60,3 +60,16 @@ test("filesystem and unexpected failures do not expose private diagnostics", () 
     message: "Effect runtime handler failed unexpectedly",
   });
 });
+
+test("explicit request details preserve the legacy message within separate transport bounds", () => {
+  const payload = effectRuntimeErrorPayload(new EffectRuntimeRequestError("first failure", "invalid_request",
+    ["second\n failure", "x".repeat(300)]));
+  assert.deepEqual(payload, {kind: "request_rejected", code: "invalid_request", message: "first failure",
+    details: ["second failure", "x".repeat(240)]});
+  const crowded = effectRuntimeErrorPayload(new EffectRuntimeRequestError("first", "invalid_request", Array(129).fill("detail")));
+  assert.equal(crowded.details?.length, 128);
+  assert.equal(crowded.details?.at(-1), "2 additional validation details omitted");
+  // Only an explicitly typed request error can carry these details.
+  const unexpected = Object.assign(new Error("hidden"), {details: ["hidden detail"]});
+  assert.equal(effectRuntimeErrorPayload(unexpected).details, undefined);
+});

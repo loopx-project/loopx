@@ -61,7 +61,7 @@ export function captureArchivedTodoDependencies(value: unknown): JsonObject {
     const current = queue[cursor]!;
     const token = normalizedResume(current);
     const dependency = token && (token.startsWith("todo_done:") || token.startsWith("monitor_changed:"))
-      ? token.slice(token.indexOf(":") + 1) : null;
+      ? token.slice(token.indexOf(":") + 1).split("@", 1)[0] : null;
     const links = [...new Set([dependency, current.superseded_by,
       ...(Array.isArray(current.successor_todo_ids) ? current.successor_todo_ids : []),
       ...(inferred.get(String(current.todo_id)) ?? [])].filter((value): value is string => typeof value === "string"))];

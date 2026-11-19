@@ -1,24 +1,25 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
 
 from .. import compact_control_plane_policy
 from ..goals.goal_frontier import (
     build_autonomous_replan_recommendation,
     select_autonomous_replan_obligation,
 )
+from ..todos.user_gate import (
+    open_todo_count as _open_todo_count,
+    open_todo_notify_reason,
+)
 from ..work_items.delivery_outcome import DeliveryOutcome, normalize_delivery_outcome
 from ..work_items.work_lane_context import (
     build_work_lane_context_contract,
     latest_run_progress_scope,
 )
-from ..todos.user_gate import (
-    open_todo_count as _open_todo_count,
-    open_todo_notify_reason,
-)
 
+Payload = dict[str, object]
+PayloadView = Mapping[str, object]
 
 HEARTBEAT_READ_ONLY_MAP_ADAPTER_SUFFIX = "_read_only_map_v0"
 HEARTBEAT_HANDOFF_READINESS_COMPACT_FIELDS = (
@@ -44,15 +45,24 @@ HEARTBEAT_POST_HANDOFF_RUN_COMPACT_FIELDS = (
     "markdown_exists",
 )
 
+def _as_payload(value: object) -> Payload:
+    return {str(key): entry for key, entry in value.items()} if isinstance(value, Mapping) else {}
 
-def _supports_read_only_project_map(adapter_kind: Any) -> bool:
+
+def _non_negative_int(value: object) -> int:
+    if not value or not isinstance(value, (int, float, str)):
+        return 0
+    return max(0, int(value))
+
+
+def _supports_read_only_project_map(adapter_kind: object) -> bool:
     kind = str(adapter_kind or "").strip()
     return kind == "read_only_project_map_v0" or kind.endswith(
         HEARTBEAT_READ_ONLY_MAP_ADAPTER_SUFFIX
     )
 
 
-def _text_values(value: Any) -> list[str]:
+def _text_values(value: object) -> list[str]:
     if value is None:
         return []
     if isinstance(value, str):
@@ -65,16 +75,12 @@ def _text_values(value: Any) -> list[str]:
     return [str(value)]
 
 
-def _has_lifecycle_marker(*values: Any, marker: str) -> bool:
+def _has_lifecycle_marker(*values: object, marker: str) -> bool:
     target = marker.strip().lower()
-    for value in values:
-        for text in _text_values(value):
-            if text.strip().lower() == target:
-                return True
-    return False
+    return any(text.strip().lower() == target for value in values for text in _text_values(value))
 
 
-def _compact_latest_run(run: dict[str, Any]) -> dict[str, Any]:
+def _compact_latest_run(run: PayloadView) -> Payload:
     return {
         key: run.get(key)
         for key in HEARTBEAT_POST_HANDOFF_RUN_COMPACT_FIELDS
@@ -82,13 +88,14 @@ def _compact_latest_run(run: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _control_plane_post_handoff_observation_hint(item: dict[str, Any]) -> dict[str, Any] | None:
+def _handoff_readiness_latest_run(item: PayloadView) -> tuple[Payload, Payload]:
+    readiness = _as_payload(item.get("handoff_readiness"))
+    return readiness, _as_payload(readiness.get("post_handoff_latest_run"))
+
+
+def _control_plane_post_handoff_observation_hint(item: PayloadView) -> Payload | None:
     control_plane = compact_control_plane_policy(item.get("control_plane"))
-    self_repair = (
-        control_plane.get("self_repair")
-        if isinstance(control_plane.get("self_repair"), dict)
-        else {}
-    )
+    self_repair = _as_payload(control_plane.get("self_repair"))
     if self_repair.get("enabled") is not True:
         return None
     if str(item.get("adapter_kind") or "") != "harness_self_improvement":
@@ -96,16 +103,7 @@ def _control_plane_post_handoff_observation_hint(item: dict[str, Any]) -> dict[s
     if item.get("agent_command"):
         return None
 
-    handoff_readiness = (
-        item.get("handoff_readiness")
-        if isinstance(item.get("handoff_readiness"), dict)
-        else {}
-    )
-    latest_run = (
-        handoff_readiness.get("post_handoff_latest_run")
-        if isinstance(handoff_readiness.get("post_handoff_latest_run"), dict)
-        else {}
-    )
+    handoff_readiness, latest_run = _handoff_readiness_latest_run(item)
     if handoff_readiness.get("post_handoff_run_seen") is not True:
         return None
     if str(handoff_readiness.get("handoff_status") or "") != "post_handoff_run_seen":
@@ -133,7 +131,7 @@ def _control_plane_post_handoff_observation_hint(item: dict[str, Any]) -> dict[s
     }
 
 
-_BASE_RECOMMENDATION: dict[str, Any] = {
+_BASE_RECOMMENDATION: Payload = {
     "source": "quota.should-run",
     "recommended_mode": "skip",
     "notify": "DONT_NOTIFY",
@@ -143,7 +141,7 @@ _BASE_RECOMMENDATION: dict[str, Any] = {
     ),
 }
 
-_CAPABILITY_GATE_RECOMMENDATION_OVERRIDES: dict[str, dict[str, Any]] = {
+_CAPABILITY_GATE_RECOMMENDATION_OVERRIDES: dict[str, Payload] = {
     "repair_bridge": {
         "recommended_mode": "repair_capability_bridge",
         "notify": "DONT_NOTIFY",
@@ -167,21 +165,51 @@ _CAPABILITY_GATE_RECOMMENDATION_OVERRIDES: dict[str, dict[str, Any]] = {
     },
 }
 
+_GUARD_RECOMMENDATION_OVERRIDES: dict[str, Payload] = {
+    "workspace_guard": {
+        "recommended_mode": "repair_agent_workspace",
+        "notify": "DONT_NOTIFY",
+        "spend_policy": (
+            "do not append quota spend for workspace relocation; rerun quota "
+            "from the independent worktree before delivery"
+        ),
+    },
+    "automation_prompt_upgrade": {
+        "recommended_mode": "automation_prompt_upgrade",
+        "notify": "DONT_NOTIFY",
+        "spend_policy": (
+            "do not append quota spend for stale/unscoped automation; "
+            "rerun quota should-run from an identity-scoped prompt"
+        ),
+    },
+}
+
+
+def _apply_override(
+    refined: Payload,
+    override: PayloadView,
+    reason_source: PayloadView | None,
+) -> None:
+    refined.update(override)
+    refined["reason"] = (
+        reason_source.get("reason") if reason_source else None
+    ) or refined.get("reason")
+
 
 def refine_heartbeat_recommendation(
-    recommendation: dict[str, Any],
+    recommendation: PayloadView,
     *,
     should_run: bool,
-    capability_gate: dict[str, Any] | None,
-    capability_monitor_fallback: dict[str, Any] | None,
-    workspace_guard: dict[str, Any] | None,
-    automation_prompt_upgrade: dict[str, Any] | None,
+    capability_gate: PayloadView | None,
+    capability_monitor_fallback: PayloadView | None,
+    workspace_guard: PayloadView | None,
+    automation_prompt_upgrade: PayloadView | None,
     automation_prompt_upgrade_required: bool,
-    blocked_priority_fallback: dict[str, Any] | None,
-) -> dict[str, Any]:
+    blocked_priority_fallback: PayloadView | None,
+) -> Payload:
     """Apply the ordered execution-guard refinements to heartbeat guidance."""
 
-    refined = dict(recommendation)
+    refined: Payload = dict(recommendation)
     capability_action = (
         str(capability_gate.get("action") or "")
         if capability_gate and not capability_monitor_fallback
@@ -191,34 +219,20 @@ def refine_heartbeat_recommendation(
         capability_action
     )
     if capability_override:
-        refined.update(capability_override)
-        refined["reason"] = capability_gate.get("reason") or refined.get("reason")
+        _apply_override(refined, capability_override, capability_gate)
 
     if workspace_guard:
-        refined.update(
-            {
-                "recommended_mode": "repair_agent_workspace",
-                "notify": "DONT_NOTIFY",
-                "reason": workspace_guard.get("reason") or refined.get("reason"),
-                "spend_policy": (
-                    "do not append quota spend for workspace relocation; rerun quota "
-                    "from the independent worktree before delivery"
-                ),
-            }
+        _apply_override(
+            refined,
+            _GUARD_RECOMMENDATION_OVERRIDES["workspace_guard"],
+            workspace_guard,
         )
 
     if automation_prompt_upgrade_required:
-        upgrade = automation_prompt_upgrade or {}
-        refined.update(
-            {
-                "recommended_mode": "automation_prompt_upgrade",
-                "notify": "DONT_NOTIFY",
-                "reason": upgrade.get("reason") or refined.get("reason"),
-                "spend_policy": (
-                    "do not append quota spend for stale/unscoped automation; "
-                    "rerun quota should-run from an identity-scoped prompt"
-                ),
-            }
+        _apply_override(
+            refined,
+            _GUARD_RECOMMENDATION_OVERRIDES["automation_prompt_upgrade"],
+            automation_prompt_upgrade,
         )
 
     if blocked_priority_fallback and should_run:
@@ -234,39 +248,48 @@ def refine_heartbeat_recommendation(
 
 @dataclass(frozen=True)
 class _HeartbeatRecommendationFacts:
-    item: dict[str, Any]
+    item: Payload
     goal_id: str
     state: str
     should_run: bool
     status: str
     waiting_on: str
     adapter_kind: str
-    lifecycle_phase: Any
-    lifecycle_flags: Any
-    quota: dict[str, Any]
-    replan_obligation: dict[str, Any] | None
+    lifecycle_phase: object
+    lifecycle_flags: object
+    quota: Payload
+    replan_obligation: Payload | None
     has_user_todos: bool
     has_agent_todos: bool
-    work_lane_contract: dict[str, Any]
-    stall_self_repair: dict[str, Any] | None
+    work_lane_contract: Payload
+    stall_self_repair: Payload | None
 
 
-_HeartbeatRecommendationRule = Callable[
-    [_HeartbeatRecommendationFacts],
-    Any,
-]
+_HeartbeatRecommendationRule = Callable[[_HeartbeatRecommendationFacts], Payload | None]
 
 
-def _recommendation(*parts: dict[str, Any]) -> dict[str, Any]:
-    payload = dict(_BASE_RECOMMENDATION)
+def _recommendation(*parts: PayloadView) -> Payload:
+    payload: Payload = dict(_BASE_RECOMMENDATION)
     for part in parts:
         payload.update(part)
     return payload
 
 
-def build_action_selection_recovery_recommendation(
-    *, reason: str,
-) -> dict[str, Any]:
+def _follow_work_lane_recommendation(*parts: PayloadView, reason: str) -> Payload:
+    return _recommendation(
+        *parts,
+        {
+            "recommended_mode": "follow_work_lane_contract",
+            "spend_policy": (
+                "follow work_lane_contract.obligation; spend only after validated "
+                "advancement, concrete blocker writeback, or a material monitor transition"
+            ),
+            "reason": reason,
+        },
+    )
+
+
+def build_action_selection_recovery_recommendation(*, reason: str) -> Payload:
     """Project closed heartbeat guidance after a typed selection refusal."""
 
     return _recommendation(
@@ -281,9 +304,7 @@ def build_action_selection_recovery_recommendation(
     )
 
 
-def _stall_self_repair_rule(
-    facts: _HeartbeatRecommendationFacts,
-) -> dict[str, Any] | None:
+def _stall_self_repair_rule(facts: _HeartbeatRecommendationFacts) -> Payload | None:
     repair = facts.stall_self_repair
     if not repair or not repair.get("allowed"):
         return None
@@ -306,9 +327,7 @@ def _stall_self_repair_rule(
     )
 
 
-def _operator_gate_rule(
-    facts: _HeartbeatRecommendationFacts,
-) -> dict[str, Any] | None:
+def _operator_gate_rule(facts: _HeartbeatRecommendationFacts) -> Payload | None:
     if facts.state != "operator_gate":
         return None
     return _recommendation(
@@ -321,22 +340,14 @@ def _operator_gate_rule(
     )
 
 
-def _autonomous_replan_rule(
-    facts: _HeartbeatRecommendationFacts,
-) -> dict[str, Any] | None:
+def _autonomous_replan_rule(facts: _HeartbeatRecommendationFacts) -> Payload | None:
     obligation = facts.replan_obligation
-    if (
-        not facts.should_run
-        or not obligation
-        or not obligation.get("required")
-    ):
+    if not facts.should_run or not obligation or not obligation.get("required"):
         return None
     return _recommendation(build_autonomous_replan_recommendation(obligation))
 
 
-def _waiting_user_todo_rule(
-    facts: _HeartbeatRecommendationFacts,
-) -> dict[str, Any] | None:
+def _waiting_user_todo_rule(facts: _HeartbeatRecommendationFacts) -> Payload | None:
     if facts.state not in {"focus_wait", "waiting"} or not facts.has_user_todos:
         return None
     return _recommendation(
@@ -353,9 +364,7 @@ def _waiting_user_todo_rule(
     )
 
 
-def _outcome_floor_rule(
-    facts: _HeartbeatRecommendationFacts,
-) -> dict[str, Any] | None:
+def _outcome_floor_rule(facts: _HeartbeatRecommendationFacts) -> Payload | None:
     quota = facts.quota
     if facts.state != "focus_wait" or not quota.get("handoff_outcome_floor_block"):
         return None
@@ -374,6 +383,7 @@ def _outcome_floor_rule(
                 ),
             }
         )
+    reason = str(quota.get("reason") or "handoff outcome floor is not met")
     if quota.get("safe_bypass_allowed"):
         return _recommendation(
             {
@@ -384,9 +394,7 @@ def _outcome_floor_rule(
                     "ranker/cross-domain evidence artifact or concrete blocker writeback; "
                     "do not spend for another surface-only report"
                 ),
-                "reason": str(
-                    quota.get("reason") or "handoff outcome floor is not met"
-                ),
+                "reason": reason,
             }
         )
     return _recommendation(
@@ -397,14 +405,12 @@ def _outcome_floor_rule(
                 "do not append quota spend while reporting the handoff "
                 "outcome-floor blocker"
             ),
-            "reason": str(quota.get("reason") or "handoff outcome floor is not met"),
+            "reason": reason,
         }
     )
 
 
-def _quota_skip_rule(
-    facts: _HeartbeatRecommendationFacts,
-) -> dict[str, Any] | None:
+def _quota_skip_rule(facts: _HeartbeatRecommendationFacts) -> Payload | None:
     if facts.should_run:
         return None
     return _recommendation(
@@ -415,9 +421,7 @@ def _quota_skip_rule(
     )
 
 
-def _agent_command_rule(
-    facts: _HeartbeatRecommendationFacts,
-) -> dict[str, Any] | None:
+def _agent_command_rule(facts: _HeartbeatRecommendationFacts) -> Payload | None:
     command = facts.item.get("agent_command")
     if not command:
         return None
@@ -435,9 +439,7 @@ def _agent_command_rule(
     )
 
 
-def _monitor_lane_rule(
-    facts: _HeartbeatRecommendationFacts,
-) -> dict[str, Any] | None:
+def _monitor_lane_rule(facts: _HeartbeatRecommendationFacts) -> Payload | None:
     lane = facts.work_lane_contract
     if lane.get("lane") != "continuous_monitor":
         return None
@@ -459,22 +461,22 @@ def _monitor_lane_rule(
                     ),
                 }
             )
-        non_runnable_non_monitor_count = max(
-            0,
-            int(lane.get("non_runnable_non_monitor_count") or 0),
+        non_runnable_non_monitor_count = _non_negative_int(
+            lane.get("non_runnable_non_monitor_count")
         )
-        if non_runnable_non_monitor_count:
-            reason = (
+        reason = (
+            (
                 "no executable advancement todo is runnable; "
                 f"{non_runnable_non_monitor_count} non-monitor todo(s) are "
                 "blocked or otherwise non-executable, and the remaining "
                 "schedulable work is non-due monitor-class"
             )
-        else:
-            reason = (
+            if non_runnable_non_monitor_count
+            else (
                 "all visible open agent todos are monitor-class work with no "
                 "material transition to record"
             )
+        )
         return _recommendation(
             {
                 "recommended_mode": "monitor_quiet_until_material_transition",
@@ -488,41 +490,23 @@ def _monitor_lane_rule(
     if must_attempt_work is not True or facts.has_user_todos:
         return None
 
-    latest_run: dict[str, Any] = {}
-    handoff_readiness = (
-        facts.item.get("handoff_readiness")
-        if isinstance(facts.item.get("handoff_readiness"), dict)
-        else {}
-    )
-    latest_handoff_run = (
-        handoff_readiness.get("post_handoff_latest_run")
-        if isinstance(handoff_readiness.get("post_handoff_latest_run"), dict)
-        else {}
-    )
+    _, latest_handoff_run = _handoff_readiness_latest_run(facts.item)
+    latest_run: Payload = {}
     if latest_handoff_run:
         latest_run = _compact_latest_run(latest_handoff_run)
         latest_run["progress_scope"] = latest_run_progress_scope(latest_handoff_run)
-    payload = _recommendation(
-        {
-            "recommended_mode": "follow_work_lane_contract",
-            "spend_policy": (
-                "follow work_lane_contract.obligation; spend only after validated "
-                "advancement, concrete blocker writeback, or a material monitor transition"
-            ),
-            "reason": (
-                "work_lane_contract is the machine contract for "
-                "monitor-vs-advancement routing"
-            ),
-        }
+    payload = _follow_work_lane_recommendation(
+        reason=(
+            "work_lane_contract is the machine contract for "
+            "monitor-vs-advancement routing"
+        )
     )
     if latest_run:
         payload["latest_run"] = latest_run
     return payload
 
 
-def _first_read_only_map_rule(
-    facts: _HeartbeatRecommendationFacts,
-) -> dict[str, Any] | None:
+def _first_read_only_map_rule(facts: _HeartbeatRecommendationFacts) -> Payload | None:
     if facts.status != "connected_without_run" or not _supports_read_only_project_map(
         facts.adapter_kind
     ):
@@ -541,9 +525,7 @@ def _first_read_only_map_rule(
     )
 
 
-def _mapped_noop_rule(
-    facts: _HeartbeatRecommendationFacts,
-) -> dict[str, Any] | None:
+def _mapped_noop_rule(facts: _HeartbeatRecommendationFacts) -> Payload | None:
     mapped = facts.status == "read_only_project_map" or _has_lifecycle_marker(
         facts.lifecycle_phase,
         facts.lifecycle_flags,
@@ -573,38 +555,26 @@ def _mapped_noop_rule(
     )
 
 
-def _post_handoff_observation_rule(
-    facts: _HeartbeatRecommendationFacts,
-) -> dict[str, Any] | None:
+def _post_handoff_observation_rule(facts: _HeartbeatRecommendationFacts) -> Payload | None:
     post_handoff = _control_plane_post_handoff_observation_hint(facts.item)
     if not post_handoff or facts.has_user_todos:
         return None
-    latest_run = (
-        post_handoff.get("latest_run")
-        if isinstance(post_handoff.get("latest_run"), dict)
-        else {}
-    )
+    latest_run = _as_payload(post_handoff.get("latest_run"))
     progress_scope = latest_run_progress_scope(latest_run)
     if latest_run:
         latest_run.setdefault("progress_scope", progress_scope)
+        post_handoff["latest_run"] = latest_run
     active_observation = {
         key: value for key, value in post_handoff.items() if key != "stop_if_unchanged"
     }
     if facts.has_agent_todos and progress_scope == "dependency_observation":
-        return _recommendation(
+        return _follow_work_lane_recommendation(
             active_observation,
-            {
-                "recommended_mode": "follow_work_lane_contract",
-                "spend_policy": (
-                    "follow work_lane_contract.obligation; spend only after validated "
-                    "advancement, concrete blocker writeback, or a material monitor transition"
-                ),
-                "reason": (
-                    "latest post-handoff run was dependency observation; the work "
-                    "lane contract decides whether to advance backlog or record a "
-                    "material transition"
-                ),
-            },
+            reason=(
+                "latest post-handoff run was dependency observation; the work "
+                "lane contract decides whether to advance backlog or record a "
+                "material transition"
+            ),
         )
     if facts.has_agent_todos:
         return _recommendation(
@@ -626,9 +596,8 @@ def _post_handoff_observation_rule(
     return _recommendation(post_handoff)
 
 
-def _default_rule(
-    facts: _HeartbeatRecommendationFacts,
-) -> dict[str, Any] | None:
+def _default_rule(facts: _HeartbeatRecommendationFacts) -> Payload | None:
+    del facts
     return _recommendation(
         {
             "recommended_mode": "steering_audit_then_one_step",
@@ -661,73 +630,75 @@ _HEARTBEAT_RECOMMENDATION_RULES: tuple[_HeartbeatRecommendationRule, ...] = (
 
 
 def _build_recommendation_facts(
-    item: dict[str, Any],
+    item: PayloadView,
     *,
     goal_id: str,
     state: str,
     should_run: bool,
-    user_todo_summary: dict[str, Any] | None,
-    agent_todo_summary: dict[str, Any] | None,
-    work_lane_contract: dict[str, Any] | None,
-    stall_self_repair: dict[str, Any] | None,
-    replan_obligation: dict[str, Any] | None,
+    user_todo_summary: PayloadView | None,
+    agent_todo_summary: PayloadView | None,
+    work_lane_contract: PayloadView | None,
+    stall_self_repair: PayloadView | None,
+    replan_obligation: PayloadView | None,
     select_replan_obligation: bool,
     monitor_due_item_limit: int,
 ) -> _HeartbeatRecommendationFacts:
-    project_asset = (
-        item.get("project_asset")
-        if isinstance(item.get("project_asset"), dict)
-        else {}
-    )
+    item_payload = _as_payload(item)
+    project_asset = _as_payload(item_payload.get("project_asset"))
+    agent_summary = _as_payload(agent_todo_summary) if agent_todo_summary is not None else None
+    user_summary = _as_payload(user_todo_summary) if user_todo_summary is not None else None
     resolved_replan_obligation = (
-        replan_obligation
-        if isinstance(replan_obligation, dict)
-        else select_autonomous_replan_obligation(item, project_asset)
+        _as_payload(replan_obligation)
+        if isinstance(replan_obligation, Mapping)
+        else select_autonomous_replan_obligation(item_payload, project_asset)
         if select_replan_obligation
         else None
     )
     resolved_work_lane = (
-        work_lane_contract
-        or build_work_lane_context_contract(
-            item,
-            agent_todo_summary=agent_todo_summary,
-            monitor_due_item_limit=monitor_due_item_limit,
+        _as_payload(work_lane_contract)
+        if work_lane_contract
+        else (
+            build_work_lane_context_contract(
+                item_payload,
+                agent_todo_summary=agent_summary,
+                monitor_due_item_limit=monitor_due_item_limit,
+            )
+            or {}
         )
-        or {}
     )
     return _HeartbeatRecommendationFacts(
-        item=item,
+        item=item_payload,
         goal_id=goal_id,
         state=state,
         should_run=should_run,
-        status=str(item.get("status") or ""),
-        waiting_on=str(item.get("waiting_on") or ""),
-        adapter_kind=str(item.get("adapter_kind") or ""),
-        lifecycle_phase=item.get("lifecycle_phase"),
-        lifecycle_flags=item.get("lifecycle_flags"),
-        quota=item.get("quota") if isinstance(item.get("quota"), dict) else {},
+        status=str(item_payload.get("status") or ""),
+        waiting_on=str(item_payload.get("waiting_on") or ""),
+        adapter_kind=str(item_payload.get("adapter_kind") or ""),
+        lifecycle_phase=item_payload.get("lifecycle_phase"),
+        lifecycle_flags=item_payload.get("lifecycle_flags"),
+        quota=_as_payload(item_payload.get("quota")),
         replan_obligation=resolved_replan_obligation,
-        has_user_todos=_open_todo_count(user_todo_summary) > 0,
-        has_agent_todos=_open_todo_count(agent_todo_summary) > 0,
+        has_user_todos=_open_todo_count(user_summary) > 0,
+        has_agent_todos=_open_todo_count(agent_summary) > 0,
         work_lane_contract=resolved_work_lane,
-        stall_self_repair=stall_self_repair,
+        stall_self_repair=_as_payload(stall_self_repair) if stall_self_repair is not None else None,
     )
 
 
 def build_heartbeat_recommendation(
-    item: dict[str, Any],
+    item: PayloadView,
     *,
     goal_id: str,
     state: str,
     should_run: bool,
-    user_todo_summary: dict[str, Any] | None,
-    agent_todo_summary: dict[str, Any] | None,
-    work_lane_contract: dict[str, Any] | None = None,
-    stall_self_repair: dict[str, Any] | None = None,
-    replan_obligation: dict[str, Any] | None = None,
+    user_todo_summary: PayloadView | None,
+    agent_todo_summary: PayloadView | None,
+    work_lane_contract: PayloadView | None = None,
+    stall_self_repair: PayloadView | None = None,
+    replan_obligation: PayloadView | None = None,
     select_replan_obligation: bool = True,
     monitor_due_item_limit: int = 1,
-) -> dict[str, Any]:
+) -> Payload:
     facts = _build_recommendation_facts(
         item,
         goal_id=goal_id,

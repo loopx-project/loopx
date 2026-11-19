@@ -9,7 +9,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import subprocess
+import tempfile
 import time
 from contextlib import ExitStack, contextmanager
 from pathlib import Path, PurePosixPath
@@ -18,9 +20,11 @@ from typing import Any
 from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.control_plane.quota.settlement import read_heartbeat_settlement
 from loopx.hosts.research_checkpoint import (
-    _participant_id, native_binding_participant, research_participants, verify_research_participants,
+    _participant_id, native_binding_participant, verify_native_binding_participant,
+    research_participants, verify_research_participants,
 )
 from .checkpoint_handoff import CHECKPOINT_CAPTURE_SECONDS
+from .codex import explicit_turn_display
 
 
 def normalize_checkpoint_request_path(value: str) -> str:
@@ -41,7 +45,7 @@ def parse_checkpoint_request(raw: bytes) -> dict[str, Any]:
     """Validate the same explicit declaration before staging and before capture."""
     request = json.loads(raw)
     if (not isinstance(request, dict) or
-            set(request) - {"destination", "components", "point_metadata", "native_session", "evaluation_opportunity", "loopx_state", "trigger", "controller_handoff"} or
+            set(request) - {"destination", "components", "point_metadata", "native_session", "evaluation_opportunity", "loopx_state", "trigger", "controller_handoff", "settled_work_capture_once"} or
             not {"destination", "components", "point_metadata"}.issubset(request)):
         raise ValueError("checkpoint request requires destination, components and point_metadata")
     if "native_session" in request and type(request["native_session"]) is not bool:
@@ -53,15 +57,27 @@ def parse_checkpoint_request(raw: bytes) -> dict[str, Any]:
     if "controller_handoff" in request and type(request["controller_handoff"]) is not bool:
         raise ValueError("checkpoint controller_handoff must be an explicit boolean")
     if request.get("controller_handoff") and (
-            request.get("trigger") != "fresh_replan" or not request.get("native_session") or
+            not request.get("native_session") or
             not request.get("loopx_state") or not request.get("evaluation_opportunity")):
-        raise ValueError("controller handoff requires fresh_replan and all three state participants")
+        raise ValueError("controller handoff requires all three state participants")
     if "trigger" in request and request["trigger"] != "fresh_replan":
         raise ValueError("checkpoint trigger must be fresh_replan or omitted")
     if not isinstance(request["components"], list) or not request["components"]:
         raise ValueError("checkpoint requires explicit components")
     if not isinstance(request["point_metadata"], dict):
         raise ValueError("checkpoint point_metadata must be an object")
+    handoff = request.get("settled_work_capture_once")
+    if "settled_work_capture_once" in request:
+        if (request.get("trigger") != "fresh_replan" or not isinstance(handoff, dict)
+                or set(handoff) != {"destination", "purpose"}
+                or not isinstance(handoff["purpose"], str) or not handoff["purpose"].strip()):
+            raise ValueError("settled-work handoff requires fresh_replan plus destination and explicit purpose")
+        root = normalize_checkpoint_request_path(request["destination"])
+        target = normalize_checkpoint_request_path(handoff["destination"])
+        if PurePosixPath(target).parent != PurePosixPath(root):
+            raise ValueError("settled-work handoff must be a direct child of this trial's checkpoint root")
+        if "settled_work_handoff" in request["point_metadata"]:
+            raise ValueError("settled-work handoff metadata must not replace an operator field")
     return request
 
 
@@ -115,7 +131,72 @@ def _prior_replan_guard_seen(env: dict[str, str], current: Path, obligation_id: 
     return False
 
 
-def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: str) -> str:
+def _write_checkpoint_attempt(path: Path, value: dict[str, str]) -> bool:
+    """Retain a private first-attempt record, including interrupted writes."""
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        if path.is_symlink():
+            raise ValueError("completed capture attempt must not be a symlink")
+        return False
+    with os.fdopen(descriptor, "w") as stream:
+        json.dump(value, stream)
+        stream.flush()
+        os.fsync(stream.fileno())
+    for parent in (path.parent, path.parent.parent, path.parent.parent.parent):
+        directory = os.open(parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    return True
+
+
+def _completed_attempt_path(destination: Path) -> Path:
+    return destination.parent / ".completed-attempts" / (hashlib.sha256(destination.name.encode()).hexdigest() + ".json")
+
+
+def _mark_completed_capture_attempt(destination: Path, effect_id: str, request_sha256: str,
+                                    wake_root: Path, turn_id: str) -> bool:
+    """Use the original wake witness when the artifact-side index was unavailable.
+
+    A controller export lives outside this guest. The declared destination names
+    one point, including a missed or uncertain capture; later work cannot replace
+    it. These private Host records grant no work or restore authority.
+    """
+    if (not wake_root.is_absolute() or wake_root.resolve() != wake_root or
+            not turn_id or Path(turn_id).name != turn_id):
+        raise ValueError("completed capture requires its physical owned wake")
+    for prior in sorted(wake_root.glob("*/checkpoint-completed-request.json")):
+        if prior.resolve(strict=True) != prior:
+            raise ValueError("completed capture wake witness must be physical")
+        value = json.loads(prior.read_bytes())
+        if (not isinstance(value, dict) or
+                set(value) != {"destination", "settlement_effect_id", "request_sha256"} or
+                any(not isinstance(item, str) or not item for item in value.values())):
+            raise ValueError("completed capture wake witness is incomplete")
+        if prior.parent.name == turn_id or value["destination"] == str(destination):
+            return False
+    wake = wake_root / turn_id
+    wake.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if wake.resolve() != wake:
+        raise ValueError("completed capture wake must be physical")
+    value = {"destination": str(destination), "settlement_effect_id": effect_id,
+             "request_sha256": request_sha256}
+    # This existing wake log owner is independent of the optional artifact
+    # directory. Index permission recovery cannot erase the original attempt.
+    if not _write_checkpoint_attempt(wake / "checkpoint-completed-request.json", value):
+        return False
+    attempts = destination.parent / ".completed-attempts"
+    attempts.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if attempts.resolve() != attempts:
+        raise ValueError("completed capture attempt directory must be physical")
+    marker = _completed_attempt_path(destination)
+    return _write_checkpoint_attempt(marker, value)
+
+
+def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: str, *,
+                          guide_in_host: bool = False) -> str:
     """Preload the original guard once, then capture before invoking the model.
 
     The typed owner selects only an admitted replan identity. The prior wake's
@@ -133,28 +214,80 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         request, raw = {}, None
     if declaration_error is None and request.get("trigger") != "fresh_replan":
         return body
+    if declaration_error is None and request.get("settled_work_capture_once") is not None:
+        receipt["checkpoint_handoff"] = {"pending": True, "turn_id": receipt["turn_id"],
+            "destination": request["settled_work_capture_once"]["destination"],
+            "request_sha256": hashlib.sha256(raw).hexdigest()}
     if receipt.get("mode") != "heartbeat" or receipt.get("stage") != "execute":
         raise ValueError("fresh_replan checkpoint trigger requires a heartbeat execute wake")
     started = time.monotonic()
     guard_path = Path(env["LOOPX_WAKE_LOG_DIR"]) / receipt["turn_id"] / "checkpoint-start-guard.json"
-    command = [env["LOOPX_CLI"], "--format", "json", "--registry", env["LOOPX_REGISTRY"],
+    # Use the CLI's original-decision capture, including with TurnEnvelope off.
+    # The checkpoint selector needs the full source; the model consumes the
+    # ordinary CLI projection of those same bytes, never a second guard.
+    capture_root = Path(tempfile.mkdtemp(prefix="checkpoint-start-", dir=guard_path.parent))
+    command = [env["LOOPX_CLI"], "--cli-bin", env["LOOPX_CLI"], "--format", "json", "--registry", env["LOOPX_REGISTRY"],
                "--runtime-root", env["LOOPX_RUNTIME_ROOT"], "quota", "should-run",
                "--goal-id", env["LOOPX_GOAL_ID"], "--agent-id", env["LOOPX_AGENT_ID"],
                "--runtime-profile", "generic_cli", "--turn-instance-id", receipt["turn_id"],
                "--available-capability", "shell", "--available-capability", "filesystem_write"]
+    display = explicit_turn_display(env)
+    if display.complete_turn:
+        command.append("--complete-turn")
+    native_context = env.get("LOOPX_CONTEXT_DELIVERY") == "on" and bool(env.get("LOOPX_CODEX_CONTEXT_DIR"))
+    if native_context:
+        # The native reader selects full/delta after SessionStart. Ask the
+        # existing preparation route for the committed capture reference now.
+        capture_directory = capture_root / "decision-original"
+        command += ["--decision-output-dir", str(capture_directory), "--prepared-capture-reference",
+                    "--context-delivery", "on", "--codex-context-dir", env["LOOPX_CODEX_CONTEXT_DIR"],
+                    "--defer-context-presentation"]
+    else:
+        command += ["--decision-output-root", str(capture_root)]
     guard_run = subprocess.run(command, cwd=env["LOOPX_PROJECT"], env=env, capture_output=True,
                                text=True, timeout=120, check=True)
-    guard = json.loads(guard_run.stdout)
-    if not isinstance(guard, dict) or guard.get("ok") is not True:
+    projected = json.loads(guard_run.stdout)
+    captures = list(capture_root.glob("decision-*/decision.json"))
+    if len(captures) != 1:
+        raise ValueError("checkpoint requires exactly one captured original quota decision; do not replay the guard")
+    source_path = captures[0]
+    raw_guard = source_path.read_bytes()
+    guard_digest = hashlib.sha256(raw_guard).hexdigest() if native_context else None
+    guard = json.loads(raw_guard)
+    if (not isinstance(guard, dict) or guard.get("ok") is not True or
+            not isinstance(projected, dict) or projected.get("ok") is not True):
         raise ValueError("checkpoint requires a successful original quota guard")
+    if native_context and projected.get("capture_sha256") != guard_digest:
+        raise ValueError("checkpoint prepared capture differs from the original guard; do not replay the guard")
     # A previous preflight on this wake may already have allowed model work,
     # even if its optional attempt marker (or final receipt) could not be saved.
     # Such reentry can verify an existing point, but cannot capture a later one.
     preflight_seen = guard_path.exists()
-    guard_path.write_text(guard_run.stdout, encoding="utf-8")
+    guard_path.write_bytes(raw_guard)
     guard_path.chmod(0o600)
-    preloaded_body = (f"Host checkpoint preflight has already executed this wake's original quota guard once. "
-        f"Read the complete packet at {guard_path} before work, then follow its interaction_contract. "
+    if native_context:
+        from .context_delivery import preflight_context_instruction
+
+        assert guard_digest is not None
+        reading = preflight_context_instruction(env, source_path, guard_digest,
+            receipt["turn_id"], guide_in_host=guide_in_host)
+    else:
+        from loopx.command_invocation import loopx_cli_argv
+        from loopx.control_plane.runtime.document_io import atomic_write_state_text
+        from loopx.control_plane.turn_driver.decision_capture import (
+            CONTEXT_CAPTURE_PAGE_GUIDANCE, context_capture_read_command,
+        )
+
+        view_path = capture_root / "checkpoint-start-view.json"
+        view = guard_run.stdout
+        atomic_write_state_text(view_path, view, private=True)
+        reader = context_capture_read_command(view_path, hashlib.sha256(view.encode("utf-8")).hexdigest(),
+            page_bytes=8000, max_page_output_bytes=8000, reader_argv=loopx_cli_argv(env["LOOPX_CLI"]))
+        reading = ("Read the complete saved CLI view before work, then follow its interaction_contract "
+            "and replan review/writeback reads when present.\n```sh\n" + reader + "\n```\n"
+            + CONTEXT_CAPTURE_PAGE_GUIDANCE + " ")
+    preloaded_body = ("Host checkpoint preflight has already executed this wake's original quota guard once. "
+        + reading +
         "Do not repeat the initial guard below; use its selection or recovery command when required.\n\n" + body)
     receipt["checkpoint"] = {"captured": False, "research_point_qualified": False, "phase": "before_replan"}
     try:
@@ -230,13 +363,37 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
     return preloaded_body
 
 
+def _capture_declared_settled_handoff(env: dict[str, str], receipt: dict[str, Any]) -> None:
+    """One explicit handoff, not a periodic capture or a substitute replan point."""
+    pending = receipt.get("checkpoint_handoff")
+    if not isinstance(pending, dict) or pending.get("pending") is not True:
+        return
+    if not receipt.get("ok") or receipt.get("stage") != "execute" or receipt.get("budget_exhausted"):
+        return  # No eligible completed boundary; keep the request unconsumed.
+    result = {"captured": False, "research_point_qualified": False, "phase": "after_settled_work"}
+    completed = {k: v for k, v in receipt.items() if k not in {"checkpoint", "checkpoint_handoff"}}
+    capture_after_wake(env, completed, settled_handoff=pending)
+    result.update(completed["checkpoint"])
+    receipt["checkpoint_handoff"] = {"pending": False, **result}
+
+
+def _capture_destination(root: Path, value: str) -> Path:
+    destination = Path(value)
+    if not destination.is_absolute() or destination != destination.resolve() or destination.parent != root:
+        raise ValueError("checkpoint destination must be a normalized direct child of this trial's checkpoints directory")
+    return destination
+
+
 def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
                        supplied_request: tuple[dict[str, Any], bytes] | None = None,
                        pending_guard: Path | None = None,
-                       restore_gate: dict[str, Any] | None = None) -> None:
+                       restore_gate: dict[str, Any] | None = None,
+                       settled_handoff: dict[str, Any] | None = None) -> None:
     request_path = env.get("LOOPX_CHECKPOINT_REQUEST")
     if not request_path:
         return  # Feature-off path performs no additional read or write.
+    if supplied_request is None and settled_handoff is None:
+        _capture_declared_settled_handoff(env, receipt)
     if supplied_request is None and (receipt.get("checkpoint") or {}).get("phase") == "before_replan":
         return  # The after-wake hook cannot replace the pre-decision point.
     receipt["checkpoint"] = {"captured": False, "research_point_qualified": False}
@@ -245,22 +402,69 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
         receipt["checkpoint"]["reason"] = "wake_not_successful_work"
         return
     started = time.monotonic()
+    capture_started = time.time()
     try:
         phase_deadline = env.get("LOOPX_PHASE_DEADLINE_EPOCH")
-        window = CHECKPOINT_CAPTURE_SECONDS if supplied_request and supplied_request[0].get("controller_handoff") else 30
-        deadline = time.time() + window
+        original_deadline = None
         if phase_deadline is not None:
             original_deadline = float(phase_deadline)
             if not math.isfinite(original_deadline):
                 raise ValueError("checkpoint requires a finite original phase deadline")
-            deadline = min(deadline, original_deadline)
-        if deadline <= time.time():
+            if original_deadline <= capture_started:
+                receipt["checkpoint"]["reason"] = "capture_window_closed"
+                return
+        root = Path(env["LOOPX_WAKE_LOG_DIR"]).parent / "checkpoints"
+        observed = None
+        if settled_handoff is not None:
+            expected_hash = settled_handoff.get("request_sha256")
+            if (settled_handoff.get("turn_id") != receipt.get("turn_id")
+                    or not isinstance(expected_hash, str) or len(expected_hash) != 64):
+                raise ValueError("settled-work handoff request or original Turn changed")
+            destination = _capture_destination(root, settled_handoff["destination"])
+            if _completed_attempt_path(destination).exists():
+                receipt["checkpoint"]["reason"] = "destination_already_attempted_no_replay"
+                return
+            observed = read_heartbeat_settlement(
+                Path(env["LOOPX_RUNTIME_ROOT"]), goal_id=env["LOOPX_GOAL_ID"],
+                agent_id=env["LOOPX_AGENT_ID"], todo_id=None,
+                turn_instance_id=receipt["turn_id"], resolve_original_binding=True,
+                registry_path=Path(env["LOOPX_REGISTRY"]),
+            )
+            if observed is None or (observed.progress or {}).get("state") != "settled":
+                receipt["checkpoint"]["reason"] = "owned_turn_not_settled"
+                return
+            identity = observed.identity.value
+            if identity is None:
+                raise ValueError("checkpoint settlement identity is unavailable")
+            # Reserve the preflight's exact point before rereading a declaration
+            # that may have disappeared. The existing wake witness survives an
+            # unavailable artifact index; later work must not backfill this point.
+            if not _mark_completed_capture_attempt(destination, identity.effect_id, expected_hash,
+                    Path(env["LOOPX_WAKE_LOG_DIR"]), receipt["turn_id"]):
+                receipt["checkpoint"]["reason"] = "destination_already_attempted_no_replay"
+                return
+        if original_deadline is not None and original_deadline <= time.time():
             receipt["checkpoint"]["reason"] = "capture_window_closed"
             return
         if supplied_request is None:
             request, raw = read_checkpoint_request(request_path)
         else:
             request, raw = supplied_request
+        if settled_handoff is not None:
+            handoff = request["settled_work_capture_once"]
+            if (hashlib.sha256(raw).hexdigest() != expected_hash
+                    or handoff["destination"] != str(destination)):
+                raise ValueError("settled-work handoff request or original Turn changed")
+            request = {k: v for k, v in request.items() if k not in {"trigger", "settled_work_capture_once"}}
+            request.update(destination=handoff["destination"], point_metadata={**request["point_metadata"],
+                "settled_work_handoff": {"purpose": handoff["purpose"]}})
+        window = CHECKPOINT_CAPTURE_SECONDS if request.get("controller_handoff") else 30
+        deadline = capture_started + window
+        if original_deadline is not None:
+            deadline = min(deadline, original_deadline)
+        if deadline <= time.time():
+            receipt["checkpoint"]["reason"] = "capture_window_closed"
+            return
         if supplied_request is None:
             from .checkpoint_continuation import restored_capture_gate
             restore_gate = restored_capture_gate(env, full_history=not request.get("native_session", False))
@@ -271,25 +475,30 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
             receipt["checkpoint"]["reason"] = "pre_replan_hook_required"
             return
         # This is a private evidence artifact below the runner's log owner.
-        destination = Path(request["destination"])
-        root = Path(env["LOOPX_WAKE_LOG_DIR"]).parent / "checkpoints"
-        if not destination.is_absolute() or destination != destination.resolve() or destination.parent != root:
-            raise ValueError("checkpoint destination must be a normalized direct child of this trial's checkpoints directory")
+        destination = _capture_destination(root, request["destination"])
         if destination.exists():
             receipt["checkpoint"]["reason"] = "destination_already_present_no_replay"
             return
-        observed = read_heartbeat_settlement(
-            Path(env["LOOPX_RUNTIME_ROOT"]), goal_id=env["LOOPX_GOAL_ID"],
-            agent_id=env["LOOPX_AGENT_ID"], todo_id=None,
-            turn_instance_id=receipt["turn_id"], resolve_original_binding=True,
-            registry_path=Path(env["LOOPX_REGISTRY"]),
-        )
+        if observed is None:
+            observed = read_heartbeat_settlement(
+                Path(env["LOOPX_RUNTIME_ROOT"]), goal_id=env["LOOPX_GOAL_ID"],
+                agent_id=env["LOOPX_AGENT_ID"], todo_id=None,
+                turn_instance_id=receipt["turn_id"], resolve_original_binding=True,
+                registry_path=Path(env["LOOPX_REGISTRY"]),
+            )
         if observed is None or (observed.progress or {}).get("state") != "settled":
             receipt["checkpoint"]["reason"] = "owned_turn_not_settled"
             return
         identity = observed.identity.value
         if identity is None:
             raise ValueError("checkpoint settlement identity is unavailable")
+        request_sha256 = hashlib.sha256(raw).hexdigest()
+        if (settled_handoff is None and pending_guard is None
+                and (request.get("controller_handoff") or supplied_request is not None)):
+            if not _mark_completed_capture_attempt(destination, identity.effect_id, request_sha256,
+                    Path(env["LOOPX_WAKE_LOG_DIR"]), receipt["turn_id"]):
+                receipt["checkpoint"]["reason"] = "destination_already_attempted_no_replay"
+                return
         # Only this returned typed owner decision admits the capture boundary.
         # Point metadata remains evidence, never authority or scientific validity.
         metadata = {
@@ -297,7 +506,7 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
             "wake_turn_id": receipt["turn_id"],
             "settlement_effect_id": identity.effect_id,
             "session": receipt.get("session"),
-            "request_sha256": hashlib.sha256(raw).hexdigest(),
+            "request_sha256": request_sha256,
         }
         components = request["components"]
         if pending_guard is not None:
@@ -311,12 +520,13 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
             components, research = research_participants(env, components, metadata, destination, evidence, deadline)
         opportunity = None
         if request.get("evaluation_opportunity") and not request.get("controller_handoff"):
-            from .sforge_checkpoint import capture_opportunity
+            from . import sforge_json
+            from .sforge_checkpoint import capture_opportunity, RELEASED_FIELDS
 
             evidence = Path(env["LOOPX_WAKE_LOG_DIR"]) / receipt["turn_id"] / "checkpoint-opportunity.json"
             incumbent = evidence.with_name("checkpoint-incumbent.tar.gz")
             opportunity = capture_opportunity(env, timeout=max(.1, deadline - time.time()), incumbent_path=incumbent)
-            evidence.write_text(json.dumps(opportunity), encoding="utf-8")
+            evidence.write_text(sforge_json.dumps(opportunity, fields=RELEASED_FIELDS), encoding="utf-8")
             evidence.chmod(0o600)
             opportunity_id = _participant_id(components, "evaluation_opportunity")
             components = [*components, {"id": opportunity_id, "source_path": str(evidence)}]
@@ -335,11 +545,9 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
             if request.get("native_session"):
                 from loopx.hosts.codex_checkpoint import native_checkpoint_reader, native_session_checkpoint
                 from .checkpoint_continuation import restored_capture_history
-                from .codex import Execution
-                from .sessions import BenchmarkSessionWake
 
                 session = receipt.get("session") or {}
-                components, source_wake = native_binding_participant(env, components, metadata)
+                components, source_wake, registry_bytes = native_binding_participant(env, components, metadata)
                 native_options = restored_capture_history(env, restore_gate,
                     session_id=session.get("session_id", ""))
                 reader = readers.enter_context(native_checkpoint_reader(env, timeout=max(.1, deadline - time.time())))
@@ -374,11 +582,7 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
                                                       **native_options)
                 if confirmed != native:
                     raise ValueError("native checkpoint cursor or participant basis moved before sealing")
-                confirmed_wake = BenchmarkSessionWake(env, Execution(context="resume",
-                    sandbox=env.get("LOOPX_CODEX_SANDBOX", "danger-full-access")), {})
-                if ((confirmed_wake.session_id, confirmed_wake.goal_ref, confirmed_wake.digest) !=
-                        (source_wake.session_id, source_wake.goal_ref, source_wake.digest)):
-                    raise ValueError("native checkpoint source session binding moved before sealing")
+                verify_native_binding_participant(env, source_wake, registry_bytes)
             if request.get("loopx_state"):
                 verify_research_participants(env, components, metadata, research, probe["source_witness"], deadline)
             if opportunity is not None and opportunity["native_incumbent"] is not None:

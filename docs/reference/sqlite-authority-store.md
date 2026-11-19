@@ -182,6 +182,30 @@ Schema changes are explicit: unknown `user_version`, foreign tables or a
 different goal/incarnation fail closed. No automatic migration, identity
 rotation, corruption repair, or network-filesystem sharing is supported.
 
+### Cursor covering index
+
+New version-2 databases include a non-unique index over `commits(cursor)`.
+The existing explicit V1-to-V2 migration uses the same table builder and creates
+its index inside the migration transaction. The narrower index reduces the
+pages SQLite visits for the exact continuity count; the count remains dependent
+on retained history. Head, parent, digest, checkpoint and original-receipt proofs
+are unchanged. The index stores no new authority or operation receipt.
+
+Ordinary reads and writes do not add the index to existing version-2 databases.
+Those databases retain their current query plan and remain supported without a
+rebuild. This additive physical index leaves `user_version=2`, metadata and all
+logical rows unchanged; earlier V2 readers can read indexed databases, and the
+current reader accepts databases without the index. Reverting the binary does
+not require deleting it. Any existing-Goal rebuild still requires the existing
+explicit migration/recovery route and its authorization, rather than an implicit
+upgrade during a command.
+
+The index adds storage pages and write maintenance. Measure those costs with
+matched reads and writes, page/WAL traffic and complete CLI calls under the
+original declared profile. Keep unmeasured payload, headroom and elapsed rows
+explicit; a faster count alone does not qualify all of D2. Provider selection
+and migration permission do not change with this index.
+
 ## Read integrity
 
 Direct retries follow the [authority operation replay contract](authority-operation-replay.md):
@@ -613,21 +637,24 @@ the fixed-history measurement; CLI, traffic-window and lock-probe commits all
 extend past the fill target and are counted separately, so target-state rows
 keep their meaning.
 
-Status and quota CLI samples explicitly scan the checkout's complete `loopx/` directory by
-default. For comparisons between source revisions or installed releases, pass
-`--scan-root /path/to/fixed-public-source/loopx` to each run. Do not replace it
-with an empty or reduced fixture to meet a latency budget. The report records
-the selected root and per-axis before/after hashes, public-file counts and
-bytes from the production scan enumerator, outside the timed interval. Input
-drift fails the axis; missing or mismatched input evidence keeps the status budget
-row `missing`. Todo mutation has no scan option; its latency and independent store
-metrics remain usable. Hashes identify
-scan input, not scanner implementation or complete workload equivalence: keep
-the source/runtime, fixture, command mix and host conditions in the comparison.
-Untracked private-state contents are not read by the input probe. Synthetic
-CLI processes disable usage telemetry and preserve all normal boundary checks.
-Older reports without these input facts retain their measurements, but cannot
-establish matched status budget evidence through the current ledger.
+Status and quota CLI samples use the operational, scan-deferred entrypoints.
+They no longer accept `--scan-root`. The capacity runner removes its scan-root
+option and the input probe that only supported that retired argument. Its
+`cold_cli_scan` stays `null`, so the existing ledger leaves the historical
+scan-inclusive status budget `missing`; faster scan-free observations cannot
+qualify that frozen workload. Todo mutation and independent store metrics keep
+their existing criteria. Source/runtime, fixture, command mix and host
+conditions still belong in every comparison. Historical reports and failures
+are unchanged. Synthetic CLI processes disable usage telemetry and preserve
+normal execution-authority checks. Check outgoing content separately with
+`loopx check`.
+
+Status 与 quota 的 CLI 样本走推迟扫描的运行入口，不再接受 `--scan-root`。
+容量工具同步删除该参数及仅为它服务的输入探针，`cold_cli_scan` 保持 `null`，
+因此既有账本继续将历史“包含扫描”的状态性能资格标为 `missing`，不能用更快的
+无扫描观测通过冻结的旧工作负载。Todo 变更和存储指标的既有标准保持，比较仍需
+报告源码、运行时、fixture、命令组合和宿主条件；历史报告及失败结果不变。
+外发内容另用 `loopx check` 检查。
 
 Reports carry p50/p95/p99 and counts, parent-process RSS, application request
 JSON bytes and separate DB/WAL/SHM sizes at the target history. Resource-usage

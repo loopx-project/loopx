@@ -1,5 +1,6 @@
 """Real HTTP + SQLite/JSONL + a disposable Desktop-owner Unix protocol peer."""
 
+from contextlib import closing
 import importlib.util
 import json
 from pathlib import Path
@@ -45,6 +46,86 @@ def body(binding, text="Owner follow-up"):
     }
 
 
+def test_protocol_fixture_ignores_conflicting_ambient_runtime_roots(tmp_path, monkeypatch):
+    from loopx import paths
+
+    current, legacy = tmp_path / "current", tmp_path / "legacy"
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", current)
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", legacy)
+    ambient = []
+    for root in (current, legacy):
+        root.mkdir()
+        registry = paths.global_registry_path(root)
+        registry.write_text(json.dumps({"goals": []}))
+        ambient.append(registry)
+    assert paths.default_runtime_route()["status"] == "conflict"
+    before = {path: path.read_bytes() for path in ambient}
+    workspace = tmp_path / "isolated"
+    workspace.mkdir()
+    with fixture(workspace) as (request, _, _, inputs, _, _):
+        _, query = target(request)
+        status, result = request(query=query)
+        assert status == 200
+        assert any(row["text"] == "Original result" for row in result["messages"])
+        assert not inputs
+    assert {path: path.read_bytes() for path in ambient} == before
+
+
+def test_managed_directory_keeps_registered_identity_and_original_sessions(tmp_path):
+    with fixture(tmp_path) as (request, _, methods, inputs, registry, _):
+        store = request.server.chat_store
+        args = dict(goal_id="sample-goal", agent_id="codex", adapter_kind="codex_app_server",
+            managed_agent_id="worker", managed_workspace_path=str(tmp_path), channel_id="agent.worker")
+        first = store.create_session(**args, upstream_thread_id="managed-first")
+        second = store.create_session(**args, upstream_thread_id="managed-second")
+        legacy = store.create_session(goal_id="sample-goal", agent_id="codex", adapter_kind="codex_app_server", upstream_thread_id="unmapped")
+        store.append_message(first["session_id"], role="agent", text="First independent original")
+        store.append_message(second["session_id"], role="agent", text="Second independent original")
+        query = "?goal_id=sample-goal&managed_agent_id=worker"
+        before = list(methods)
+        status, listed = request(path="/api/chat/sessions", query=query)
+        assert status == 200
+        assert listed["goal_id"] == "sample-goal" and listed["managed_agent_id"] == "worker"
+        assert listed["goal_instance_id"] is None
+        assert {row["session_id"] for row in listed["sessions"]} == {first["session_id"], second["session_id"]}
+        assert all(row["managed_agent_id"] == "worker" and row["agent_id"] == "codex" for row in listed["sessions"])
+        assert request(path="/api/chat/sessions", query=query + "&agent_id=codex")[0] == 400
+        assert request(path="/api/chat/sessions", query=query + "&managed_agent_id=worker")[0] == 400
+        assert request(path="/api/chat/sessions", query="?goal_id=sample-goal&managed_agent_id=codex")[0] == 409
+        store.update_session(second["session_id"], status="closed")
+        assert [row["session_id"] for row in request(path="/api/chat/sessions", query=query)[1]["sessions"]] == [first["session_id"]]
+        value = json.loads(registry.read_text())
+        value["goals"][0]["goal_instance_id"] = "replacement-lifetime"
+        registry.write_text(json.dumps(value))
+        assert request(path="/api/chat/sessions", query=query)[1]["sessions"] == []
+        assert store.load_session(legacy["session_id"]) == legacy
+        assert store.messages(first["session_id"])[0]["text"] == "First independent original"
+        assert list(methods) == before and not inputs
+
+
+@pytest.mark.parametrize("fault", ["unregistered", "stopped", "workspace", "foreign-goal"])
+def test_managed_directory_refuses_changed_identity_without_host_work(tmp_path, fault):
+    with fixture(tmp_path) as (request, _, methods, inputs, registry, _):
+        store = request.server.chat_store
+        store.create_session(goal_id="sample-goal", agent_id="codex", adapter_kind="codex_app_server",
+            managed_agent_id="worker", managed_workspace_path=str(tmp_path), channel_id="agent.worker", upstream_thread_id="original")
+        value = json.loads(registry.read_text())
+        goal = value["goals"][0]
+        if fault == "unregistered":
+            goal["coordination"]["registered_agents"] = ["peer"]
+        if fault == "stopped":
+            goal["status"] = "stopped"
+        if fault == "workspace":
+            goal["repo"] = str(tmp_path / "different")
+        registry.write_text(json.dumps(value))
+        status, result = request(path="/api/chat/sessions", query=f"?goal_id={'foreign' if fault == 'foreign-goal' else 'sample-goal'}&managed_agent_id=worker")
+        if fault == "workspace":
+            assert status == 200 and result["sessions"] == []
+        else:
+            assert status == 409
+        assert not inputs and "thread-follower-start-turn" not in methods
+
+
 def opener_spy(monkeypatch, *, platform="darwin", failure=None):
     calls = []
 
@@ -67,6 +148,51 @@ def opener_spy(monkeypatch, *, platform="darwin", failure=None):
 
 def open_body(binding):
     return {key: binding[key] for key in ("goal_id", "agent_id", "binding_ref")}
+
+
+def test_multiple_original_sessions_keep_exact_history_input_and_receipts(tmp_path, monkeypatch):
+    calls = opener_spy(monkeypatch)
+    with fixture(tmp_path) as (request, original, _, inputs, registry, home):
+        first, first_query = target(request)
+        second_id = "22222222-2222-4222-8222-222222222222"
+        second = _peer.add_conversation(registry, home, agent_id="worker", thread_id=second_id, text="Separate investigation")
+        status, directory = request()
+        assert status == 200 and len(directory["agents"]) == 2
+        binding = {**directory["agents"][1], "goal_id": "sample-goal"}
+        query = f"?goal_id=sample-goal&agent_id=worker&binding_ref={binding['binding_ref']}"
+        assert request(query=first_query)[1]["messages"][1]["text"] == "Original result"
+        assert request(query=query)[1]["messages"][1]["text"] == "Result: Separate investigation"
+        # A second binding does not invalidate the original, nor can omission
+        # select one by registry order. Each operation retains its exact target.
+        assert request(query="?goal_id=sample-goal&agent_id=worker")[0] == 409
+        assert request("POST", body(binding, "Only second Session"), query="")[0] == 200
+        assert inputs[0]["conversationId"] == second_id
+        assert "Only second Session" in second.read_text()
+        assert "Only second Session" not in original.read_text()
+        assert request("POST", body(binding, "Only second Session"), query="")[0] == 200
+        assert len(inputs) == 1
+        assert request(query=first_query + "&operation_id=same-operation")[0] == 409
+        assert request("POST", open_body(binding), query="", path="/api/chat/codex-attached/open")[0] == 200
+        assert calls[0][0][-1] == f"codex://threads/{second_id}"
+        value = json.loads(registry.read_text())
+        value["goals"][0]["goal_instance_id"] = "replacement-lifetime"
+        registry.write_text(json.dumps(value))
+        assert request(query=query)[0] == 409
+        assert request(query=first_query)[0] == 409
+        assert len(inputs) == 1
+
+
+def test_conflicting_thread_owner_cannot_read_or_reply(tmp_path):
+    with fixture(tmp_path) as (request, _, _, inputs, registry, _):
+        first, query = target(request)
+        value = json.loads(registry.read_text())
+        coordination = value["goals"][0]["coordination"]
+        coordination["registered_agents"].append("other")
+        coordination["thread_agent_bindings"].append({"agent_id": "other", "host_surface": "codex-app", "thread_id": THREAD})
+        registry.write_text(json.dumps(value))
+        assert request(query=query)[0] == 409
+        assert request("POST", body(first), query="")[0] == 409
+        assert inputs == []
 
 
 def test_explicit_open_uses_bound_local_thread_without_executing(tmp_path, monkeypatch):
@@ -272,6 +398,114 @@ def test_original_history_incremental_append_and_idempotent_owner_input(
         )  # This id already caused an effect.
 
 
+@pytest.mark.parametrize("change", ["finish", "replace_rollout", "archive"])
+def test_model_readback_is_bound_to_the_same_open_original_turn(tmp_path, monkeypatch, change):
+    from loopx.control_plane import effect_runtime
+
+    with fixture(tmp_path) as (request, rollout, methods, inputs, _, home):
+        _, query = target(request)
+
+        def append(kind, **payload):
+            with rollout.open("a") as stream:
+                stream.write(
+                    json.dumps(
+                        {
+                            "type": kind,
+                            "timestamp": "2026-01-01T00:00:02Z",
+                            "payload": payload,
+                        }
+                    )
+                    + "\n"
+                )
+
+        def context(turn_id, model, effort):
+            append(
+                "turn_context",
+                turn_id=turn_id,
+                model=model,
+                effort=effort,
+                model_provider="openai",
+                approval_policy="private setting",
+            )
+
+        def read_model(snapshot):
+            return request(
+                query=f"{query}&turn_model=1&revision={snapshot['revision']}"
+            )
+
+        append("event_msg", type="task_started", turn_id="first")
+        context("first", "original-model-first", "high")
+        code, first = request(query=query)
+        assert code == 200 and first["activity"]["state"] == "turn_open"
+        assert "turn_model" not in first  # A failed optional read never holds history.
+        assert read_model(first) == (
+            200,
+            {
+                "ok": True,
+                "revision": first["revision"],
+                "turn_model": {
+                    "model": "original-model-first",
+                    "reasoning_effort": "high",
+                },
+            },
+        )
+
+        append("event_msg", type="task_complete", turn_id="first")
+        assert read_model(first)[1]["turn_model"] is None
+        code, idle = request(query=query)
+        assert code == 200 and idle["activity"]["state"] == "idle"
+        assert read_model(idle)[1]["turn_model"] is None
+
+        append("event_msg", type="task_started", turn_id="second")
+        context("first", "belongs-to-another-turn", "low")
+        _, missing = request(query=query)
+        assert missing["activity"]["state"] == "turn_open"
+        assert read_model(missing)[1]["turn_model"] is None
+
+        context("second", "original-model-second", "max")
+        _, second = request(query=query)
+        assert read_model(second)[1]["turn_model"] == {
+            "model": "original-model-second",
+            "reasoning_effort": "max",
+        }
+        assert request(query=query + "&turn_model=1")[0] == 409
+
+        context("second", "before-a-concurrent-source-change", "medium")
+        _, before_change = request(query=query)
+        underlying = effect_runtime.effect_runtime_result
+
+        def change_during_read(method, params, **options):
+            result = underlying(method, params, **options)
+            if method == "runtime.execution_identity.codex":
+                if change == "finish":
+                    append("event_msg", type="task_complete", turn_id="second")
+                else:
+                    with closing(sqlite3.connect(home / "state_5.sqlite")) as database, database:
+                        if change == "replace_rollout":
+                            replacement = rollout.with_name("replacement.jsonl")
+                            replacement.write_bytes(rollout.read_bytes())
+                            database.execute(
+                                "UPDATE threads SET rollout_path = ? WHERE id = ?",
+                                (str(replacement), THREAD),
+                            )
+                        else:
+                            database.execute("UPDATE threads SET archived = 1 WHERE id = ?", (THREAD,))
+            return result
+
+        monkeypatch.setattr(effect_runtime, "effect_runtime_result", change_during_read)
+        status, model = read_model(before_change)
+        assert status == 200 and model["turn_model"] is None
+        history_status, latest = request(query=query)
+        if change == "archive":
+            assert history_status == 503
+        else:
+            assert history_status == 200 and latest["revision"] != before_change["revision"]
+            assert latest["activity"]["state"] == ("idle" if change == "finish" else "turn_open")
+        if change != "finish":
+            assert rollout.is_file()  # The stale file itself was never retired.
+        assert not inputs and "thread-follower-start-turn" not in methods
+
+
 def test_uncertain_delivery_never_replays_the_effect(tmp_path, monkeypatch):
     with fixture(tmp_path, uncertain=True) as (
         request,
@@ -360,6 +594,7 @@ def test_owner_history_includes_tools_with_bounded_pages_and_offline_reading(
                     json.dumps(
                         {
                             "type": "response_item",
+                            "timestamp": "2026-01-01T00:00:02Z",
                             "payload": {
                                 "type": "function_call_output",
                                 "output": "tool-result" * 512,

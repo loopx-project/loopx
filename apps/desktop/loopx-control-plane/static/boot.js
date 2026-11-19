@@ -6,6 +6,20 @@ const pageStarted = performance.now();
 let lastTiming = null;
 let timingObservedAt = pageStarted;
 let bootState = null;
+let observedEnvironment = null;
+const runtimeRecoveryTitles = {
+  native_account_work_pending: "账号服务正在处理请求",
+  native_observer_provider_binding_required: "需要兼容的账号服务组件",
+  native_observer_provider_upgrade_required: "需要更新账号服务组件",
+  native_observer_requires_target_runtime: "需要兼容的账号服务运行时",
+  service_runtime_alignment_unavailable: "正在等待可用的运行时",
+  service_runtime_route_unverified: "正在核验系统服务",
+  service_runtime_alignment_failed: "正在恢复本地服务",
+  service_runtime_rollback_failed: "正在恢复原服务",
+};
+function serviceRecoveryPending(state) {
+  return state?.phase === "service_error" && Object.hasOwn(runtimeRecoveryTitles, state.details?.code);
+}
 function renderStartup(result) {
   const state = result?.state;
   bootState = state;
@@ -22,14 +36,31 @@ function renderStartup(result) {
     ready: "本地服务已就绪，正在打开工作区",
     service_error: "本地服务连接失败，正在等待重试",
   };
+  const serviceTitles = {
+    ...runtimeRecoveryTitles,
+    chat_work_pending: "管家正在处理请求，完成后自动连接",
+    chat_state_unverified: "正在核验管家任务状态，稍后自动重试",
+    chat_service_unverified: "正在确认管家服务切换，稍后自动重试",
+  };
   if (Object.hasOwn(titles, state?.phase)) {
-    status.textContent = titles[state.phase];
-    panel.dataset.state = "loading";
-    panel.setAttribute("aria-busy", "true");
+    status.textContent = state.phase === "service_error"
+      ? serviceTitles[state.details?.code] || titles.service_error
+      : titles[state.phase];
+    const waiting = serviceRecoveryPending(state);
+    panel.dataset.state = waiting ? "waiting" : "loading";
+    panel.setAttribute("aria-busy", String(!waiting));
   }
   updateStartupElapsed();
 }
 function updateStartupElapsed() {
+  if (serviceRecoveryPending(bootState)) {
+    const remaining = Math.max(0, (bootState.details.retry_after_ms ?? 0) - (performance.now() - timingObservedAt));
+    bootElapsed.textContent = remaining > 0 ? `${Math.ceil(remaining / 1000)} 秒后自动重试` : "正在重新连接";
+    bootDetail.textContent = ["native_observer_provider_binding_required", "native_observer_provider_upgrade_required", "native_observer_requires_target_runtime"].includes(bootState.details.code)
+      ? "现有服务保持运行。请展开「恢复与更新」查看所需组件；重复重启不会补齐组件。"
+      : "恢复后会自动打开工作区，无需手动操作。";
+    return;
+  }
   if (["error", "runtime_required"].includes(bootState?.phase)) {
     bootElapsed.textContent = "等待恢复";
     bootDetail.textContent = "启动已停止等待。可在下方恢复，不必反复重开 App。";
@@ -38,7 +69,9 @@ function updateStartupElapsed() {
   const elapsed = lastTiming === null ? performance.now() - pageStarted : lastTiming + performance.now() - timingObservedAt;
   const seconds = Math.floor(elapsed / 1000);
   bootElapsed.textContent = `${lastTiming === null ? "此页面已等待" : "启动已用时"} ${seconds} 秒`;
-  bootDetail.textContent = bootState?.phase === "installing_runtime"
+  bootDetail.textContent = bootState?.details?.code === "chat_work_pending"
+    ? "已有请求会继续执行，无需反复重开 App。"
+    : bootState?.phase === "installing_runtime"
     ? "正在准备最新可用组件，完成后会自动打开工作区。"
     : bootState?.phase === "service_error"
       ? "启动器会自动重试；可展开「恢复与更新」查看诊断。"
@@ -48,13 +81,13 @@ function updateStartupElapsed() {
 }
 setInterval(updateStartupElapsed, 1000);
 window.loopxBootFailed = (message) => {
-  if (bootState?.phase === "connecting") return;
+  if (bootState?.phase === "connecting" || serviceRecoveryPending(bootState)) return;
   panel.dataset.state = "error";
   panel.setAttribute("aria-busy", "false");
   status.textContent = message;
 };
 window.loopxBootRetrying = () => {
-  if (["error", "runtime_required"].includes(bootState?.phase)) return;
+  if (["error", "runtime_required"].includes(bootState?.phase) || serviceRecoveryPending(bootState)) return;
   panel.dataset.state = "loading";
   panel.setAttribute("aria-busy", "true");
   status.textContent = "正在重新连接本地控制面";
@@ -73,7 +106,7 @@ let channelInitialized = false;
 let runtimeExplicit = false;
 let bundledRepairAvailable = true;
 const updateWorkingPhases = ["checking","downloading","installing_app","installing_runtime","connecting"];
-document.querySelector("#retry").onclick = () => location.reload();
+document.querySelector("#retry").onclick = () => window.__TAURI__ ? void run("reconnect") : location.reload();
 channel.onchange = () => { channelInitialized = true; render({phase:"idle"}); };
 const labels = {
   idle: "检查当前通道，不会自动安装。",
@@ -91,6 +124,17 @@ const labels = {
   error: "更新未完成。请重试检查，或修复当前版本。Goal 数据不会被删除。",
 };
 const errors = {
+  native_account_work_pending: "账号服务仍有已接受的请求，完成后会自动重试。现有服务保持运行，请勿强退或重复发送。",
+  native_observer_provider_binding_required: "所选运行时未绑定当前账号服务组件，尚未切换服务。请通过原安装方式修复运行时与账号组件的绑定；现有服务保持运行。",
+  native_observer_provider_upgrade_required: "所选运行时的账号服务组件版本不兼容，尚未切换服务。请通过原安装方式更新账号组件；现有服务保持运行。",
+  native_observer_requires_target_runtime: "账号服务无法使用所选运行时，尚未切换服务。请通过原安装方式修复匹配的运行时；现有服务保持运行。",
+  service_runtime_alignment_unavailable: "当前运行时尚不支持服务版本对齐。App 会自动重新检测可用运行时；现有服务保持运行。",
+  service_runtime_route_unverified: "系统服务来源暂时无法验证。App 会自动复查，来源确认后继续连接；自定义配置保持不变。",
+  service_runtime_alignment_failed: "服务版本切换未完成，已尝试恢复原配置。App 会自动重试。",
+  service_runtime_rollback_failed: "原服务尚未恢复。App 会自动重试恢复，并保留诊断信息。",
+  chat_work_pending: "管家正在处理已有请求，完成后会自动切换服务并连接工作区。无需强退或重复发送。",
+  chat_state_unverified: "暂时无法核验管家服务的任务状态。连接会自动重试；请保留诊断信息。",
+  chat_service_unverified: "管家服务切换尚未确认。连接会自动重试；可保留诊断信息，或通过原安装方式更新 LoopX。",
   desktop_status_unavailable: "无法读取 App 诊断状态。请重启 App；若仍失败，请重新安装完整 App。",
   runtime_setup_required: "App 与本机运行时不匹配，或找不到安装身份。请修复当前版本，成功后重启。",
   runtime_bundle_missing: "App 缺少配套运行时文件。请重新下载完整 App。",
@@ -110,8 +154,12 @@ const errors = {
   update_feed_unavailable: "此通道的更新源尚未就绪或暂时不可用。可稍后重新检查。",
   update_feed_invalid: "更新源格式异常。请稍后重新检查。",
   update_platform_unavailable: "此通道尚无适用于本机的更新包。",
+  update_action_platform_unavailable: "当前平台暂不支持该恢复操作：Windows 版 App 仅提供更新检查与安装，修复与回滚暂不可用。",
   update_check_timeout: "检查更新超时。请稍后重试。",
-  update_network_failed: "无法连接更新服务器。请检查网络后重试。",
+  update_network_failed: "更新网络请求失败，尚未安装。请检查连接后重试。",
+  update_download_timeout: "更新包下载超时，尚未安装。请检查网络后重试。",
+  update_download_failed: "更新服务器未能提供安装包，尚未安装。请重新检查更新。",
+  update_signature_invalid: "更新包未通过签名校验，尚未安装。请重新检查更新。",
   update_download_or_signature_failed: "更新包下载或签名校验失败，尚未安装。请重新检查更新。",
   app_install_failed: "App 安装未能完成，本次更新未生效；已确认当前版本完好且运行时可用，可直接重启继续使用，或重新检查更新后再试。",
   app_install_incomplete: "App 安装中断，且无法确认当前版本是否完整，请勿直接重启。请在恢复与更新面板还原上一版本（或重新安装）后再试。",
@@ -120,11 +168,30 @@ const errors = {
   backup_failed: "App 备份无法保存或未通过完整性校验，替换已停止。请检查磁盘空间与权限，或重新安装完整 App。",
   rollback_failed: "恢复 App 未完成，请保持窗口打开。可重试恢复；若仍失败，请重新安装完整 App。",
 };
+// Fallback wording for states without a dedicated code must name the controls
+// this panel actually offers: where the bundled-runtime repair is unavailable
+// (the Windows release), it must not point at the disabled repair action or
+// the hidden rollback action.
+const unrepairedFallback = {
+  service_error: "运行时已安装，但服务尚未连接。可检查更新；连接仍会自动重试。",
+  runtime_required: "无法准备可用组件。可检查 App 更新；当前安装仍会保留。",
+  available: "有新版本可用，可更新 App。",
+  error: "更新未完成。请重试检查更新。Goal 数据不会被删除。",
+};
+function fallbackText(phase) {
+  if (!bundledRepairAvailable && Object.hasOwn(unrepairedFallback, phase)) {
+    return unrepairedFallback[phase];
+  }
+  return labels[phase] || "";
+}
 function codeText(code, phase) {
   if (runtimeExplicit && ["runtime_identity_unavailable", "runtime_selection_explicit"].includes(code)) {
     return "启动参数 LOOPX_BIN 固定了当前运行时。请通过该安装方式修复它，或移除、修正 LOOPX_BIN 后重新打开 App；清除记住的选择不会改变此参数。";
   }
   if (typeof code === "string" && /^runtime_install_exit_(\d+|signal)$/.test(code)) {
+    if (code === "runtime_install_exit_1" && observedEnvironment?.node_found === false) {
+      return "安装程序退出（1）；App 的启动环境未找到 Node.js。请启用受支持的 Node.js 后点击「修复当前版本」。";
+    }
     // Exit 2 from install-local.sh is its "no usable Python 3.11+" gate; the
     // same exit can technically be a usage error, so the wording stays
     // probabilistic and points at the repair action.
@@ -133,7 +200,7 @@ function codeText(code, phase) {
     }
     return `安装程序退出（${code.slice("runtime_install_exit_".length)}）。请复制诊断信息反馈；修复没有完成。`;
   }
-  return Object.hasOwn(errors, code) ? errors[code] : labels[phase] || "";
+  return Object.hasOwn(errors, code) ? errors[code] : fallbackText(phase);
 }
 function render(state) {
   if (!state?.phase) return state;
@@ -168,10 +235,14 @@ function safeEnvironment(result) {
     runtime_executable_found: flag(environment.runtime_executable_found),
     python3_found: flag(environment.python3_found),
     python3_version: text(environment.python3_version),
+    node_found: flag(environment.node_found),
+    node_version: text(environment.node_version),
   };
 }
 function renderDiagnostics(result) {
-  const failure = result.last_failure ?? result.state;
+  observedEnvironment = safeEnvironment(result);
+  const startupFailure = ["error", "runtime_required", "runtime_pairing_required", "service_error"].includes(result.startup_state?.phase) ? result.startup_state : null;
+  const failure = startupFailure ?? result.last_failure ?? result.state;
   const text = JSON.stringify({
     schema_version: "desktop_recovery_diagnostics_v2",
     failure_phase: ["error", "runtime_required", "runtime_pairing_required", "service_error"].includes(failure?.phase) ? failure.phase : null,
@@ -199,7 +270,7 @@ async function run(action) {
   // Match the phase the backend publishes for each action (rollback restores
   // the previous app; restart keeps the required-restart state) instead of
   // previewing a download that is not happening.
-  render({phase: action === "check" ? "checking" : action === "repair" || action === "align_runtime" ? "installing_runtime" : action === "forget_runtime_selection" ? "connecting" : action === "rollback" ? "installing_app" : action === "restart" ? "restart_required" : "downloading"});
+  render({phase: action === "check" ? "checking" : action === "repair" || action === "align_runtime" ? "installing_runtime" : action === "forget_runtime_selection" || action === "reconnect" ? "connecting" : action === "rollback" ? "installing_app" : action === "restart" ? "restart_required" : "downloading"});
   try {
     const result = await window.__TAURI__.core.invoke("desktop_update", {action,channel:channel.value});
     statusGeneration++;
@@ -242,8 +313,9 @@ async function refresh() {
     forgetSelection.hidden = result.runtime_selection?.explicit === true || (result.runtime_selection?.remembered !== true && !["runtime_selection_invalid", "runtime_selection_unavailable"].includes(result.state?.details?.code));
     renderDiagnostics(result);
     render(result.state);
-    renderStartup(result);
-    escalateFromSnapshot(result.state);
+    const startup = Object.hasOwn(result, "startup_state") ? result.startup_state : result.state;
+    renderStartup({...result, state:startup});
+    escalateFromSnapshot(startup);
   } catch {
     if (generation === statusGeneration && !actionInFlight) {
       renderDiagnostics({state:{phase:"error",details:{code:"desktop_status_unavailable"}}});
@@ -263,6 +335,7 @@ function escalateFromSnapshot(state) {
     document.querySelector(".recovery").open = true;
   } else {
     escalated = false;
+    if (serviceRecoveryPending(state)) return;
     panel.dataset.state = "loading";
     panel.setAttribute("aria-busy", "true");
     status.textContent = "正在重新连接本地控制面";

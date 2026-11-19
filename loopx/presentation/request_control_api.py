@@ -1,6 +1,9 @@
 """Source-owner request controls on the conversation that created the request."""
 from __future__ import annotations
 
+from collections.abc import Callable
+from copy import deepcopy
+import json
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -12,7 +15,7 @@ from ..control_plane.collaboration.goal_instance_scope import collaboration_goal
 from ..control_plane.collaboration.inbox import _entry, _read, _root
 from ..control_plane.collaboration.request_amendment import control_request
 from ..control_plane.collaboration.source_chat_observation import is_source_chat_host
-from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
+from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError, effect_runtime_request_scope
 from ..control_plane.goals.goal_ref_validation import exact_goal_ref
 from ..control_plane.projects.registry_codec import load_project_registry
 from ..capabilities.manager_context import target_authority
@@ -35,6 +38,28 @@ def _operator_payload(value: Any) -> Any:
     return value
 
 
+def bound_steward_inventory_scope(
+    controller: Any, *, manager_scope_resolver: Callable[[dict[str, Any]], list[str] | None],
+) -> Callable[[dict[str, Any]], list[str] | None]:
+    """Reuse one fresh native selection for Session validation and Goal scope.
+
+    The server supplies its ordinary binding resolver. A later custom resolver
+    keeps the compatibility path; no provider observation survives this call.
+    """
+    def read(session):
+        if controller.manager_scope_resolver is not manager_scope_resolver:
+            return None
+        bindings = controller.project_contexts.conversation_bindings
+        if bindings is None:
+            raise ValueError("bound steward authority is unavailable")
+        selected = bindings.session_context(session["steward_context"], session=session)
+        controller.project_contexts.runtime_context(session, selected)
+        return list(selected["context"]["goal_ids"])
+    return read
+
+
+
+
 class RequestControlMixin:
     server: Any
     path: str
@@ -47,6 +72,92 @@ class RequestControlMixin:
 
     def _read_json(self, *, max_bytes: int = 256 * 1024) -> dict[str, Any]:
         raise NotImplementedError
+
+    def _request_inventory_scope(self, session_id):
+        from ..capabilities.manager_context import evidence_goal_scope
+
+        controller = self.server.runtime_controller
+        session = self.server.chat_store.load_session(session_id)
+        if not session:
+            raise ValueError("original conversation is unavailable")
+        scope = conversation_scope(session)
+        if scope["kind"] not in {"owner_portfolio", "owner_goal"} and not scope.get("bound_steward"):
+            raise ValueError("request inventory requires an authorized steward conversation")
+        verified_goals = None
+        if session.get("steward_context") is not None:
+            read_scope = getattr(self.server, "request_inventory_scope_resolver", None)
+            verified_goals = read_scope(session) if read_scope is not None else None
+            if verified_goals is None:
+                controller.project_contexts.session_context(session)
+        selected = getattr(self.server, "selected_goal_id", None)
+        if selected and scope.get("goal_ids") != [selected]:
+            raise ValueError("request inventory is outside this Goal workspace")
+        if scope["private_conversation"]:
+            goals, core = scope["goal_ids"], None
+        else:
+            if controller.manager_scope_resolver is None:
+                raise ValueError("current steward read scope is unavailable")
+            goals = verified_goals if verified_goals is not None else controller.manager_scope_resolver(session)
+            if not isinstance(goals, list):
+                raise ValueError("current steward read scope is unavailable")
+            core = evidence_goal_scope(controller.coordination_runtime_root, session["channel_id"],
+                registry_path=self.server.registry_path) or []
+        return session, goals, core
+
+    @effect_runtime_request_scope()
+    def _request_inventory_read(self) -> None:
+        from ..control_plane.collaboration.conversation_inventory import read_conversation_requests
+
+        try:
+            query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+            if (set(query) - {"session_id", "view", "offset", "search", "limit", "include_work"} or "session_id" not in query
+                    or any(len(values) != 1 for values in query.values())):
+                raise ValueError("select one original conversation")
+            view = query.get("view", ["unfinished"])[0]
+            if view not in {"unfinished", "history"}:
+                raise ValueError("invalid request inventory view")
+            include_work = query.get("include_work", ["true"])[0]
+            if include_work not in {"true", "false"}:
+                raise ValueError("invalid linked work selection")
+            session, goals, core = self._request_inventory_scope(query["session_id"][0])
+            controller = self.server.runtime_controller
+            source_bases = {}
+            def source_basis(source):
+                # Reuse only the pure identity projection for identical host
+                # facts in this read. Keep all Session fields in the key so
+                # changed or newly supported inputs reach the typed owner.
+                sid = source["session_id"]
+                signature = json.dumps(source, sort_keys=True, separators=(",", ":"))
+                previous = source_bases.get(sid)
+                if previous is None or previous[0] != signature:
+                    previous = (signature, (conversation_scope(source), deepcopy(source.get("steward_context"))))
+                    source_bases[sid] = previous
+                return previous[1]
+            # Provider identity belongs to a source, not to every historical row.
+            # Keep this proof within one read and fence every observed source
+            # again before returning any content. Receipt/grant IO stays live.
+            sources = {session["session_id"]: (source_basis(session), goals, core)}
+            def validate_source(source):
+                sid = source["session_id"]
+                if sid not in sources:
+                    observed, permitted, evidence = self._request_inventory_scope(sid)
+                    if observed["channel_id"] != session["channel_id"] or permitted != goals:
+                        raise ValueError("original conversation authorization changed")
+                    sources[sid] = source_basis(observed), permitted, evidence
+                if source_basis(source) != sources[sid][0]:
+                    raise ValueError("original conversation authorization changed")
+            result = read_conversation_requests(controller.coordination_runtime_root, self.server.registry_path,
+                self.server.chat_store, session, goal_ids=goals, core_goal_ids=core,
+                validate_source_session=validate_source, history=view == "history", offset=int(query.get("offset", ["0"])[0]),
+                limit=int(query.get("limit", ["12"])[0]), search=query.get("search", [""])[0],
+                include_work=include_work == "true")
+            for sid, proof in sources.items():
+                current, current_goals, current_core = self._request_inventory_scope(sid)
+                if (source_basis(current), current_goals, current_core) != proof:
+                    raise ValueError("conversation authorization changed during read")
+            self._send_json(_operator_payload(result))
+        except (OSError, ValueError, TypeError, KeyError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
+            self._send_error(redact_local_paths(str(exc)), status=400, error_code="request_inventory_unavailable")
 
     def _request_control_source(self, body: dict[str, Any]) -> dict[str, Any]:
         if any(not isinstance(body.get(key), str) or not body[key] for key in _ROUTING):

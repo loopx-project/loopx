@@ -66,6 +66,24 @@ def append_message(path, role, text):
         )
 
 
+def add_conversation(registry, home, *, agent_id, thread_id, text):
+    """Add a separate saved host Session, without starting any executor."""
+    path = home / "sessions" / f"{thread_id}.jsonl"
+    path.write_text(json.dumps({"type": "session_meta", "payload": {"id": thread_id}}) + "\n")
+    append_message(path, "user", text)
+    append_message(path, "assistant", f"Result: {text}")
+    with path.open("a") as stream:
+        stream.write(json.dumps({"type": "event_msg", "timestamp": "2026-01-01T00:00:01Z", "payload": {"type": "task_complete"}}) + "\n")
+    with sqlite3.connect(home / "state_5.sqlite") as db:
+        db.execute("INSERT INTO threads VALUES(?,?,0)", (thread_id, str(path)))
+    value = json.loads(registry.read_text())
+    value["goals"][0]["coordination"]["thread_agent_bindings"].append(
+        {"agent_id": agent_id, "host_surface": "codex-app", "thread_id": thread_id}
+    )
+    registry.write_text(json.dumps(value))
+    return path
+
+
 @contextmanager
 def fixture(tmp_path, *, uncertain=False, goal_id="sample-goal"):
     if os.name != "posix":
@@ -76,6 +94,10 @@ def fixture(tmp_path, *, uncertain=False, goal_id="sample-goal"):
             (home / "sessions").mkdir(parents=True)
             (home / "ipc").mkdir(mode=0o700)
             rollout = home / "sessions" / "bound.jsonl"
+            rollout.write_text(
+                json.dumps({"type": "session_meta", "payload": {"id": THREAD}})
+                + "\n"
+            )
             append_message(rollout, "user", "Original request")
             append_message(rollout, "assistant", "Original result")
             with rollout.open("a") as stream:
@@ -102,9 +124,11 @@ def fixture(tmp_path, *, uncertain=False, goal_id="sample-goal"):
             registry.write_text(
                 json.dumps(
                     {
+                        "common_runtime_root": str(tmp_path / "runtime"),
                         "goals": [
                             {
                                 "id": goal_id,
+                                "status": "active",
                                 "repo": str(tmp_path),
                                 "coordination": {
                                     "registered_agents": ["worker"],
@@ -207,10 +231,15 @@ def fixture(tmp_path, *, uncertain=False, goal_id="sample-goal"):
                             elif message["method"] == "thread-follower-start-turn":
                                 inputs.append(message["params"])
                                 assert message["targetClientId"] == "original-owner"
+                                thread = message["params"]["turnStart"]["request"]["threadId"]
+                                assert message["params"]["conversationId"] == thread
+                                with sqlite3.connect(home / "state_5.sqlite") as db:
+                                    selected = db.execute("SELECT rollout_path FROM threads WHERE id=?", (thread,)).fetchone()
+                                assert selected is not None
                                 if uncertain:
                                     break
                                 append_message(
-                                    rollout,
+                                    Path(selected[0]),
                                     "user",
                                     message["params"]["turnStart"]["request"]["input"][
                                         0
@@ -260,6 +289,10 @@ def fixture(tmp_path, *, uncertain=False, goal_id="sample-goal"):
             server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
             server.registry_path = registry
             server.runtime_root = tmp_path / "runtime"
+            from loopx.chat_store import ChatSessionStore
+            from types import SimpleNamespace
+            server.chat_store = ChatSessionStore(server.runtime_root)
+            server.runtime_controller = SimpleNamespace(store=server.chat_store, registry_path=registry, close=lambda: None)
             server.verbose = False
             http_thread = threading.Thread(target=server.serve_forever, daemon=True)
             http_thread.start()

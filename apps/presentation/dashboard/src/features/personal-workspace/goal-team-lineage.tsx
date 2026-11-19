@@ -1,3 +1,4 @@
+import {ContextHelp} from "./context-help";
 import type {DelegationReadback} from "../../data/chat";
 import {GoalTeamAdoption} from "./goal-team-adoption";
 
@@ -19,7 +20,7 @@ export function GoalTeamLineage({result, zh, onInspect, sessionId, onObservation
       {result.current_use.blocking_input_ref ? <p>{zh ? "需核对的输入" : "Input to reconcile"}: <code>{result.current_use.blocking_input_ref}</code></p> : null}
       {result.current_use.path?.length ? <p>{result.current_use.path.join(" → ")}</p> : null}
       {result.current_use.blocking_operation_id ? <button type="button" onClick={() => onInspect(result.current_use!.blocking_operation_id!)}>{zh ? "查看阻断来源" : "Inspect blocking source"}</button> : null}
-      <p>{zh ? "修复来源或接收方输入后，重新读取证据；不会自动重跑已完成任务。" : "Repair the source or receiver input, then recheck evidence. Completed work is not automatically rerun."}</p>
+      <ContextHelp label={zh ? "来源恢复方式" : "Source recovery"}><p>{zh ? "修复来源或接收方输入后，重新读取证据；不会自动重跑已完成任务。" : "Repair the source or receiver input, then recheck evidence. Completed work is not automatically rerun."}</p></ContextHelp>
     </div> : null}
     {result.dependencies?.length ? <>
       <h4>{zh ? "请求中的版本依据" : "Versions in the request"}</h4>

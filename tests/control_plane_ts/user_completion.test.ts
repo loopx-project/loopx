@@ -39,8 +39,10 @@ test("an admitted deferred User gate still carries its explicit decision effects
 });
 
 for (const outcome of ["approve", "reject", "cancel"] as const) {
-  test(`${outcome} cannot revive terminal, deferred or archived work`, () => {
-    for (const change of [{status: "done", done: true}, {status: "deferred", done: true}, {archive_state: "archive"}]) {
+  test(`${outcome} cannot revive terminal, deferred, superseded or archived work`, () => {
+    for (const change of [{status: "done", done: true}, {status: "deferred", done: true},
+      {archive_state: "archive"}, {superseded_by: "todo_replacement"}, {done: true},
+      {status: "cancelled"}, {status: "canceled"}, {status: "superseded"}, {status: "pending"}]) {
       const plan = planUserCompletion(gate, [{...target, ...change}, gate], outcome);
       assert.deepEqual(plan.updates, {});
     }

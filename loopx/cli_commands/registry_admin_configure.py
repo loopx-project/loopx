@@ -7,6 +7,10 @@ from ..control_plane.goals.goal_vision_policy import (
     DEFAULT_EFFECTIVE_TURN_REPLAN_THRESHOLD,
     MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD,
 )
+from ..control_plane.work_items.progress_review_policy import (
+    PROGRESS_REVIEW_MODES,
+    PROGRESS_REVIEW_SIGNALS,
+)
 from ..orchestration import EXPLORE_HARNESS_PROFILES
 from .registry_admin_peer import (
     register_peer_runtime_arguments,
@@ -73,11 +77,19 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
     from argparse import BooleanOptionalAction
     configure_goal_parser.add_argument(
         "--execution-planning-horizon-goal", action=BooleanOptionalAction, default=None,
-        help="Include the full same-source Goal in preselection planning horizons. Default off; no selection or execution authority change.",
+        help="Include the original Goal in preselection planning horizons (default on). Explicitly disable for rollback or comparison; no selection or execution authority change.",
     )
     configure_goal_parser.add_argument(
         "--clear-execution-planning-horizon-goal", action="store_true",
         help="Remove the Goal horizon override and restore review-configuration inheritance.",
+    )
+    configure_goal_parser.add_argument(
+        "--execution-yardstick-enabled", action=BooleanOptionalAction, default=None,
+        help="Enable Yardstick measurement review for this Goal (default off). Requires available Explore evidence; does not enable Explore or authorize execution.",
+    )
+    configure_goal_parser.add_argument(
+        "--clear-execution-yardstick-enabled", action="store_true",
+        help="Remove the Goal Yardstick choice and restore the live device preference.",
     )
     from ..control_plane.work_items.stride_policy_codec import stride_strategy_options
     configure_goal_parser.add_argument(
@@ -149,7 +161,7 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
     )
     configure_goal_parser.add_argument(
         "--progress-review-mode",
-        choices=["off", "shadow", "assist"],
+        choices=PROGRESS_REVIEW_MODES,
         help=(
             "Optional scoped progress-review sentinel: shadow records typed drift "
             "receipts; assist lets consecutive drift receipts raise the existing "
@@ -158,7 +170,7 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
     )
     configure_goal_parser.add_argument(
         "--progress-review-signal",
-        choices=["noul", "choice"],
+        choices=PROGRESS_REVIEW_SIGNALS,
         help="Which receipt judgment pair counts as drift for this goal.",
     )
     configure_goal_parser.add_argument(
@@ -251,6 +263,10 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         "--clear-allowed-domains",
         action="store_true",
         help="Clear allowed child-agent domains.",
+    )
+    configure_goal_parser.add_argument(
+        "--clear-explore-configuration", action="store_true",
+        help="Remove Goal Explore overrides and inherit the live machine mode.",
     )
     configure_goal_parser.add_argument(
         "--explore-mode", choices=("off", "evidence", "planning"),

@@ -6,6 +6,7 @@ import json
 import shlex
 import subprocess
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import pytest
@@ -15,7 +16,6 @@ from loopx.bootstrap_command_pack import (
     GUIDED_COMMAND_PACK_PROJECTION_SCHEMA_VERSION,
     build_loopx_bootstrap_command_pack,
     build_start_goal_guided_packet,
-    render_start_goal_guided_markdown,
 )
 from loopx.capabilities.issue_fix.candidate_preflight import (
     build_issue_fix_candidate_preflight_packet,
@@ -26,7 +26,7 @@ from loopx.cli_commands.todo_argument_validation import (
     validate_shared_todo_options,
     validate_todo_add_options,
 )
-from loopx.control_plane import effect_runtime
+from loopx.control_plane import effect_program, effect_runtime
 from loopx.slash_commands import build_slash_command_catalog
 
 GOAL_ID = "guided-projection-goal"
@@ -40,17 +40,20 @@ def _isolate_ambient_ssh_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SSH_CLIENT", raising=False)
 
 
-def _write_connected_project(root: Path) -> Path:
+def _write_connected_project(root: Path, *, todos_body: str | None = None) -> Path:
     project = root / "project"
     state_file = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
     state_file.parent.mkdir(parents=True)
-    state_file.write_text("# Active Goal State\n", encoding="utf-8")
+    state_file.write_text("# Active Goal State\n" + (
+        f"## Objective\n{GOAL_TEXT}\n## Agent Todo\n{todos_body}\n"
+        if todos_body is not None else ""), encoding="utf-8")
     registry = project / ".loopx" / "registry.json"
     registry.parent.mkdir(parents=True)
     registry.write_text(
         json.dumps(
             {
                 "schema_version": "0.1",
+                "common_runtime_root": str(root / "runtime"),
                 "goals": [
                     {
                         "id": GOAL_ID,
@@ -69,6 +72,17 @@ def _write_connected_project(root: Path) -> Path:
         + "\n",
         encoding="utf-8",
     )
+    from canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
+    from loopx.control_plane.todos.todo_summary import canonical_todo_read_record, structured_todo_item
+
+    active, _, _ = parse_todo_source(state_file.read_text())
+    records = [canonical_todo_read_record(structured_todo_item(
+        item, role="agent", source_section="Agent Todo", text_limit=None,
+    )) for item in active["agent"]]
+    initialize_canonical_authority(root / "runtime", GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=records), state_path=state_file)
     return project
 
 
@@ -88,6 +102,10 @@ def _build(project: Path, *, include_detail: bool) -> dict[str, Any]:
 def _host_shadow_document(payload: dict[str, Any]) -> dict[str, Any]:
     command_pack = payload["command_pack"]
     transaction = payload["guided_transaction"]
+    recommendation = dict(payload["recommended_next_step"])
+    if "plan_prompt_ref" in recommendation:
+        assert "plan_prompt" not in recommendation
+        recommendation["plan_prompt"] = _resolve_pointer(payload, recommendation.pop("plan_prompt_ref"))
     return {
         "schema_version": payload["schema_version"],
         "project": payload["project"],
@@ -96,7 +114,7 @@ def _host_shadow_document(payload: dict[str, Any]) -> dict[str, Any]:
         "agent_id": payload["agent_id"],
         "host_surface": payload["host_surface"],
         "goal_text": payload["goal_text"],
-        "recommended_next_step": payload["recommended_next_step"],
+        "recommended_next_step": recommendation,
         "ordered_steps": transaction["ordered_steps"],
         "idempotency_policy": transaction["idempotency_policy"],
         "preserve_todos_policy": transaction["preserve_todos_policy"],
@@ -188,23 +206,52 @@ def _invoke_ark_start_goal_cli(
     return exit_code, payload
 
 
+def _invoke_start_goal_with_slash_arguments(
+    project: Path,
+    raw_arguments: str,
+    *,
+    extra_arguments: tuple[str, ...] = (),
+) -> tuple[int, dict[str, Any]]:
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main(
+            [
+                "--format",
+                "json",
+                "start-goal",
+                "--guided",
+                "--project",
+                str(project),
+                "--goal-id",
+                GOAL_ID,
+                "--host-surface",
+                "codex-app",
+                *extra_arguments,
+                f"--slash-command-arguments={raw_arguments}",
+            ]
+        )
+    payload = json.loads(output.getvalue())
+    assert isinstance(payload, dict)
+    return exit_code, payload
+
+
 def _block_effect_runtime_startup(
     monkeypatch: pytest.MonkeyPatch,
     *,
     diagnostic_code: str = "node_unavailable",
     message: str = "TypeScript Effect runtime could not serve the request",
 ) -> None:
-    def unavailable(*_args: object, **_kwargs: object) -> object:
-        raise effect_runtime.EffectRuntimeStartupError(
-            message,
-            diagnostic_code=diagnostic_code,
-        )
+    request = effect_program.effect_runtime_result
 
-    monkeypatch.setattr(
-        command_pack_module,
-        "effect_program_from_ordered_steps",
-        unavailable,
-    )
+    def unavailable(method, params, **kwargs):
+        if method == "effect.program_from_ordered_steps":
+            raise effect_runtime.EffectRuntimeStartupError(
+                message,
+                diagnostic_code=diagnostic_code,
+            )
+        return request(method, params, **kwargs)
+
+    monkeypatch.setattr(effect_program, "effect_runtime_result", unavailable)
 
 
 @pytest.mark.parametrize(
@@ -281,6 +328,90 @@ def test_cli_reports_effect_runtime_startup_failure_without_traceback(
         assert "loopx doctor --deep" not in action
         assert "reinstall" not in action
     assert "Traceback" not in raw_output
+
+
+@pytest.mark.parametrize(
+    "host_args",
+    [
+        ("--host-surface", "codex-app"),
+        (),
+        ("--host-surface", "codex-app", "--fine-grained", "--capability-route", "issue-fix"),
+    ],
+    ids=["guided_start", "host_selection_gate", "fine_issue_fix"],
+)
+def test_start_goal_markdown_reuses_the_rendered_message(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    host_args: tuple[str, ...],
+) -> None:
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    project = tmp_path / "project"
+    project.mkdir()
+    args = [
+        "--runtime-root", str(tmp_path / "runtime"),
+        "start-goal", "--guided", "--project", str(project),
+        "--goal-text", GOAL_TEXT, *host_args,
+    ]
+    render_requests: list[dict[str, Any]] = []
+    request = effect_program.effect_runtime_result
+
+    def count_render(method, params, **kwargs):
+        if method == "effect.program_from_ordered_steps":
+            render_requests.append(params)
+        return request(method, params, **kwargs)
+
+    monkeypatch.setattr(effect_program, "effect_runtime_result", count_render)
+
+    assert cli_main(["--format", "markdown", *args]) == 0
+    markdown = capsys.readouterr().out
+    assert len(render_requests) == 1
+
+    assert cli_main(["--format", "json", *args]) == 0
+    packet = json.loads(capsys.readouterr().out)
+    assert len(render_requests) == 2
+    assert markdown == packet["message"] + "\n"
+    assert render_requests[0] == render_requests[1]
+    assert render_requests[0]["include_raw"] is False
+    transaction = packet["guided_transaction"]
+    rpc_steps = render_requests[1]["ordered_steps"]
+    assert [step["id"] for step in rpc_steps] == [step["id"] for step in transaction["ordered_steps"]]
+    if not host_args:
+        gate = transaction["host_surface_selection_gate"]
+        assert gate["choices"][0]["rerun_command"] in markdown
+        assert all("choices" not in step for step in rpc_steps)
+        return
+
+    sources = {step["id"]: step for step in transaction["ordered_steps"]}
+    projected = {step["id"]: step for step in rpc_steps}
+    connect = sources["connect_if_needed"]["command"]
+    assert len(connect.splitlines()) > 1
+    assert projected["connect_if_needed"]["command"] == connect
+    planning = sources["plan_ranked_todos"]
+    assert "Goal requirements and Todos:" in planning["prompt"]
+    assert planning["goal_requirements"]["inspect_command"]
+    assert "goal_requirements" not in projected["plan_ranked_todos"]
+    assert projected["plan_ranked_todos"]["prompt"] == planning["prompt"].splitlines()[0]
+    assert "overall requirements: reuse existing or declare missing requirements" in markdown
+    if "--capability-route" in host_args:
+        assert "candidate_preflight" in sources["qualify_selected_capability"]
+        assert "candidate_preflight" not in projected["qualify_selected_capability"]
+        assert "preflight: refresh" in markdown
+
+
+def test_guided_markdown_keeps_a_present_command_with_an_empty_first_line() -> None:
+    step = MappingProxyType({
+        "id": "preview",
+        "kind": "read_only",
+        "purpose": "Read a saved preview",
+        "command": "\nRead only the original evidence.",
+        "command_template": "fallback must stay unused",
+    })
+    rendered = command_pack_module.render_start_goal_guided_markdown({
+        "guided_transaction": {"ordered_steps": [step]},
+    })
+    assert "1. `preview` (read_only): Read a saved preview\n   - ``\n" in rendered
+    assert "fallback must stay unused" not in rendered
 
 
 def test_cli_reports_effect_runtime_startup_failure_in_default_markdown(
@@ -424,14 +555,24 @@ def test_invalid_idle_timeout_remediation_reuses_typed_runtime_message(
 
 
 def test_default_projection_preserves_host_actions_and_json_anchors(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     project = _write_connected_project(tmp_path)
-    compact = _build(project, include_detail=False)
-    detailed = _build(project, include_detail=True)
+    code, compact = _invoke_start_goal_for_host(project, "codex-app")
+    detail_code, detailed = _invoke_start_goal_for_host(project, "codex-app", include_detail=True)
+    assert code == detail_code == 0
 
     assert set(compact) == set(detailed)
     assert _host_shadow_document(compact) == _host_shadow_document(detailed)
+    recommendation = compact["recommended_next_step"]
+    assert "plan_prompt" not in recommendation
+    assert recommendation["plan_prompt_ref"] == "#/command_pack/commands/goal_start_plan_prompt"
+    assert _resolve_pointer(compact, recommendation["plan_prompt_ref"]) == (
+        detailed["recommended_next_step"]["plan_prompt"]
+    )
+    assert "plan_prompt_ref" not in detailed["recommended_next_step"]
+    assert compact["message"] == detailed["message"]
     assert compact["command_pack_detail_included"] is False
     assert detailed["command_pack_detail_included"] is True
     assert compact["guided_transaction"]["ordered_steps"][-1]["id"] == (
@@ -618,7 +759,7 @@ def test_issue_fix_goal_projects_capability_guard_without_todo_fields(
     assert commands[route["admission_command_key"]].startswith(
         "loopx issue-fix feasibility "
     )
-    rendered = render_start_goal_guided_markdown(payload)
+    rendered = command_pack_module.render_start_goal_guided_markdown(payload)
     assert "authority: open public issue; source clues are evidence only" in rendered
     assert "discover: `gh issue list " in rendered
     assert (
@@ -911,9 +1052,10 @@ def test_projection_materially_reduces_repetition_without_hiding_measurement(
     compact_json = json.dumps(compact, ensure_ascii=False, sort_keys=True)
     detailed_json = json.dumps(detailed, ensure_ascii=False, sort_keys=True)
 
-    # Exact-readback guidance is useful common content in both projections;
-    # retain the duplicate-content checks below rather than remove that guidance.
-    assert len(compact_json) <= int(len(detailed_json) * 0.66)
+    # Both views carry one copy of the declaration/link recipe. Its roughly
+    # 700 common characters contribute about 240 characters to the ratio
+    # difference (34% of the added content). Keep the duplicate limits below.
+    assert len(compact_json) <= int(len(detailed_json) * 0.66) + 240
     compact_duplication = compact["packet_summary"]["duplication_measurement"]
     detailed_duplication = detailed["packet_summary"]["duplication_measurement"]
     assert compact_duplication["objective_content"]["duplicate_occurrences"] <= 11
@@ -1057,14 +1199,18 @@ def test_cli_codex_app_reuses_ambient_thread_binding(
     assert payload["guided_transaction"].get("blocked_by") is None
 
 
-def test_cli_trae_app_reuses_ambient_thread_binding(
-    tmp_path: Path, monkeypatch
+@pytest.mark.parametrize(
+    ("host_surface", "prompt_flag"),
+    (("trae_app", "--trae_app"), ("traex-cli", "--runtime-profile generic_cli")),
+)
+def test_cli_trae_hosts_reuse_ambient_thread_binding(
+    tmp_path: Path, monkeypatch, host_surface: str, prompt_flag: str
 ) -> None:
     project = _write_connected_project(tmp_path)
     registry_path = project / ".loopx" / "registry.json"
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["coordination"]["thread_agent_bindings"] = [
-        {"thread_id": "trae-thread", "host_surface": "trae_app", "agent_id": AGENT_ID}
+        {"thread_id": "trae-thread", "host_surface": host_surface, "agent_id": AGENT_ID}
     ]
     registry_path.write_text(json.dumps(registry, indent=2) + "\n", encoding="utf-8")
     monkeypatch.setenv("TRAECLI_THREAD_ID", "trae-thread")
@@ -1082,7 +1228,7 @@ def test_cli_trae_app_reuses_ambient_thread_binding(
                 "--goal-id",
                 GOAL_ID,
                 "--host-surface",
-                "trae_app",
+                host_surface,
                 "--goal-text",
                 GOAL_TEXT,
             ]
@@ -1093,9 +1239,77 @@ def test_cli_trae_app_reuses_ambient_thread_binding(
     assert payload["thread_id"] == "trae-thread"
     assert payload["agent_id"] == AGENT_ID
     assert payload["thread_agent_binding"]["status"] == "bound"
-    assert "--trae_app" in payload["command_pack"]["commands"][
+    assert payload["goal_text"] == GOAL_TEXT
+    assert prompt_flag in payload["command_pack"]["commands"][
         "heartbeat_prompt"
     ]
+
+
+@pytest.mark.parametrize(
+    ("ambient", "bound_host", "explicit", "conflict", "expected_gate"),
+    (
+        ("bound-thread", "traex-cli", None, False, None),
+        ("other-thread", "traex-cli", "bound-thread", False, None),
+        ("new-thread", "traex-cli", None, False, "fresh_agent_registration_required"),
+        (None, "traex-cli", None, False, "thread_binding_selection_required"),
+        ("bound-thread", "trae_app", None, False, "fresh_agent_registration_required"),
+        ("bound-thread", "traex-cli", None, True, "thread_binding_conflict"),
+    ),
+)
+def test_cli_traex_thread_continuity_preserves_identity_fences(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ambient: str | None,
+    bound_host: str,
+    explicit: str | None,
+    conflict: bool,
+    expected_gate: str | None,
+) -> None:
+    project = _write_connected_project(tmp_path)
+    registry_path = project / ".loopx" / "registry.json"
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    coordination = registry["goals"][0]["coordination"]
+    bindings = [
+        {"thread_id": "bound-thread", "host_surface": bound_host, "agent_id": AGENT_ID}
+    ]
+    if conflict:
+        coordination["registered_agents"].append("conflicting-agent")
+        bindings.append(
+            {"thread_id": "bound-thread", "host_surface": bound_host,
+             "agent_id": "conflicting-agent"}
+        )
+    coordination["thread_agent_bindings"] = bindings
+    registry_path.write_text(json.dumps(registry, indent=2) + "\n", encoding="utf-8")
+    before = registry_path.read_bytes()
+    # Another host's ambient id cannot fill a missing TraeX id.
+    monkeypatch.setenv("CODEX_THREAD_ID", "bound-thread")
+    if ambient is None:
+        monkeypatch.delenv("TRAECLI_THREAD_ID", raising=False)
+    else:
+        monkeypatch.setenv("TRAECLI_THREAD_ID", ambient)
+    argv = [
+        "--format", "json", "start-goal", "--guided", "--project", str(project),
+        "--goal-id", GOAL_ID, "--host-surface", "traex-cli", "--goal-text", GOAL_TEXT,
+    ]
+    if explicit is not None:
+        argv += ["--thread-id", explicit]
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main(argv)
+    assert exit_code == 0
+    payload = json.loads(output.getvalue())
+    assert payload["goal_text"] == GOAL_TEXT
+    assert payload.get("thread_id") == (explicit or ambient)
+    assert registry_path.read_bytes() == before
+    gate = payload["guided_transaction"].get("identity_selection_gate")
+    if expected_gate is None:
+        assert gate is None
+        assert payload["agent_id"] == AGENT_ID
+        assert payload["thread_agent_binding"]["status"] == "bound"
+    else:
+        assert gate["state"] == expected_gate
+        assert payload["agent_id"] is None
+        assert payload["guided_transaction"]["blocked_by"] == "agent_identity_selection"
 
 
 def test_start_goal_binds_selected_lane_before_todo_writeback(
@@ -1104,7 +1318,7 @@ def test_start_goal_binds_selected_lane_before_todo_writeback(
     project = _write_connected_project(tmp_path)
     source_registry = project / ".loopx" / "registry.json"
     runtime = tmp_path / "runtime"
-    runtime.mkdir()
+    runtime.mkdir(exist_ok=True)
     source_payload = json.loads(source_registry.read_text(encoding="utf-8"))
     source_payload["common_runtime_root"] = str(runtime)
     source_registry.write_text(
@@ -1177,7 +1391,7 @@ def test_fresh_agent_registration_preserves_guided_runtime_root(
     project = _write_connected_project(tmp_path)
     source_registry = project / ".loopx" / "registry.json"
     runtime = tmp_path / "runtime"
-    runtime.mkdir()
+    runtime.mkdir(exist_ok=True)
     source_payload = json.loads(source_registry.read_text(encoding="utf-8"))
     source_payload["common_runtime_root"] = str(runtime)
     source_payload["goals"][0]["coordination"]["registered_agents"] = []
@@ -1309,6 +1523,12 @@ def test_guided_state_commands_share_explicit_runtime_root(
     project = _write_connected_project(tmp_path)
     runtime = project / "explicit-runtime"
     runtime.mkdir()
+    from canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+
+    initialize_canonical_authority(runtime, GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=[]),
+        state_path=project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md")
 
     payload = build_start_goal_guided_packet(
         project=project,
@@ -1386,7 +1606,7 @@ def test_dsh_native_start_goal_binds_the_exact_same_session_lane(
     )
 
 
-def test_start_goal_with_unbound_thread_requires_existing_lane_selection(
+def test_start_goal_with_unbound_thread_defaults_to_fresh_agent_registration(
     tmp_path: Path,
 ) -> None:
     project = _write_connected_project(tmp_path)
@@ -1408,16 +1628,16 @@ def test_start_goal_with_unbound_thread_requires_existing_lane_selection(
 
     gate = payload["guided_transaction"]["identity_selection_gate"]
     assert payload["guided_transaction"]["blocked_by"] == "agent_identity_selection"
-    assert gate["state"] == "thread_binding_selection_required"
-    assert gate["default_action"] == "select_agent_identity"
-    assert gate["fresh_agent_registration"] is None
+    assert gate["state"] == "fresh_agent_registration_required"
+    assert gate["default_action"] == "register_fresh_agent"
+    assert gate["fresh_agent_registration"]["recommended"] is True
     assert all(
         choice["requires_explicit_takeover_intent"] is True
         for choice in gate["choices"]
     )
 
 
-def test_start_goal_unbound_thread_requires_lane_selection_even_for_single_registered_agent(
+def test_start_goal_unbound_thread_defaults_to_fresh_for_single_registered_agent(
     tmp_path: Path,
 ) -> None:
     project = _write_connected_project(tmp_path)
@@ -1436,10 +1656,31 @@ def test_start_goal_unbound_thread_requires_lane_selection_even_for_single_regis
     assert payload["agent_id"] is None
     assert payload["guided_transaction"]["blocked_by"] == "agent_identity_selection"
     gate = payload["guided_transaction"]["identity_selection_gate"]
-    assert gate["state"] == "thread_binding_selection_required"
-    assert gate["default_action"] == "select_agent_identity"
-    assert gate["fresh_agent_registration"] is None
+    assert gate["state"] == "fresh_agent_registration_required"
+    assert gate["default_action"] == "register_fresh_agent"
+    assert gate["fresh_agent_registration"]["recommended"] is True
     assert gate["choices"][0]["agent_id"] == AGENT_ID
+
+
+def test_start_goal_unbound_thread_preserves_explicit_existing_agent(
+    tmp_path: Path,
+) -> None:
+    project = _write_connected_project(tmp_path)
+
+    payload = build_start_goal_guided_packet(
+        project=project,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        thread_id="thread-explicit-existing",
+        cli_bin="loopx",
+        host_surface="codex-app",
+        goal_text=GOAL_TEXT,
+        available_capabilities=["network"],
+    )
+
+    assert payload["agent_id"] == AGENT_ID
+    assert payload["command_pack"]["host_loop_activation"]["activation_allowed"] is True
+    assert payload["guided_transaction"].get("identity_selection_gate") is None
 
 
 def test_start_goal_without_thread_id_requires_explicit_lane_selection(tmp_path: Path) -> None:
@@ -1464,7 +1705,7 @@ def test_start_goal_without_thread_id_requires_explicit_lane_selection(tmp_path:
     assert gate["choices"][0]["requires_explicit_takeover_intent"] is True
 
 
-def test_cli_codex_app_unbound_ambient_thread_requires_lane_selection(
+def test_cli_codex_app_unbound_ambient_thread_defaults_to_fresh_agent(
     tmp_path: Path, monkeypatch
 ) -> None:
     project = _write_connected_project(tmp_path)
@@ -1494,9 +1735,9 @@ def test_cli_codex_app_unbound_ambient_thread_requires_lane_selection(
     assert payload["thread_id"] == "thread-new-session"
     assert payload["agent_id"] is None
     gate = payload["guided_transaction"]["identity_selection_gate"]
-    assert gate["state"] == "thread_binding_selection_required"
-    assert gate["default_action"] == "select_agent_identity"
-    assert gate["fresh_agent_registration"] is None
+    assert gate["state"] == "fresh_agent_registration_required"
+    assert gate["default_action"] == "register_fresh_agent"
+    assert gate["fresh_agent_registration"]["recommended"] is True
     assert gate["choices"][0]["agent_id"] == AGENT_ID
 
 
@@ -1583,7 +1824,7 @@ def test_cli_codex_app_fails_closed_when_codex_thread_runs_over_ssh(
     assert "--codex-app" not in thin_prompt_command
 
 
-def test_cli_codex_app_ssh_unbound_ambient_thread_requires_lane_selection(
+def test_cli_codex_app_ssh_unbound_ambient_thread_defaults_to_fresh_agent(
     tmp_path: Path, monkeypatch
 ) -> None:
     project = _write_connected_project(tmp_path)
@@ -1613,9 +1854,9 @@ def test_cli_codex_app_ssh_unbound_ambient_thread_requires_lane_selection(
     assert payload["thread_id"] == "thread-ssh-new"
     assert payload["agent_id"] is None
     gate = payload["guided_transaction"]["identity_selection_gate"]
-    assert gate["state"] == "thread_binding_selection_required"
-    assert gate["default_action"] == "select_agent_identity"
-    assert gate["fresh_agent_registration"] is None
+    assert gate["state"] == "fresh_agent_registration_required"
+    assert gate["default_action"] == "register_fresh_agent"
+    assert gate["fresh_agent_registration"]["recommended"] is True
     assert gate["choices"][0]["agent_id"] == AGENT_ID
 
 
@@ -1686,6 +1927,98 @@ def test_start_goal_new_peer_explicitly_allows_fresh_registration(tmp_path: Path
     assert gate["fresh_agent_registration"]["recommended"] is True
 
 
+@pytest.mark.parametrize(
+    "raw_arguments",
+    [
+        f"--new-peer {GOAL_TEXT}",
+        f"--fine-grained --new-peer {GOAL_TEXT}",
+        f"--new-peer --capability-route issue-fix {GOAL_TEXT}",
+    ],
+)
+def test_cli_parses_new_peer_from_complete_slash_arguments(
+    tmp_path: Path,
+    raw_arguments: str,
+) -> None:
+    project = _write_connected_project(tmp_path)
+
+    exit_code, payload = _invoke_start_goal_with_slash_arguments(
+        project,
+        raw_arguments,
+    )
+
+    assert exit_code == 0
+    assert payload["goal_text"] == GOAL_TEXT
+    assert payload["new_peer"] is True
+    gate = payload["guided_transaction"]["identity_selection_gate"]
+    assert gate["default_action"] == "register_fresh_agent"
+    assert gate["fresh_agent_registration"]["recommended"] is True
+
+
+def test_cli_accepts_generated_independent_new_peer_with_raw_arguments(
+    tmp_path: Path,
+) -> None:
+    project = _write_connected_project(tmp_path)
+    registry_before = (project / ".loopx" / "registry.json").read_bytes()
+
+    exit_code, payload = _invoke_start_goal_with_slash_arguments(
+        project,
+        GOAL_TEXT,
+        extra_arguments=("--new-peer",),
+    )
+
+    assert exit_code == 0
+    assert payload["goal_text"] == GOAL_TEXT
+    assert payload["new_peer"] is True
+    gate = payload["guided_transaction"]["identity_selection_gate"]
+    assert gate["default_action"] == "register_fresh_agent"
+    assert gate["fresh_agent_registration"]["recommended"] is True
+    assert (project / ".loopx" / "registry.json").read_bytes() == registry_before
+
+
+def test_cli_rejects_duplicate_independent_and_raw_new_peer(
+    tmp_path: Path,
+) -> None:
+    project = _write_connected_project(tmp_path)
+
+    exit_code, payload = _invoke_start_goal_with_slash_arguments(
+        project,
+        f"--new-peer {GOAL_TEXT}",
+        extra_arguments=("--new-peer",),
+    )
+
+    assert exit_code == 2
+    assert payload["ok"] is False
+    assert "duplicate leading --new-peer switch" in payload["error"]
+
+
+@pytest.mark.parametrize(
+    ("raw_arguments", "expected_error"),
+    [
+        ("--new-peer", "must contain goal text after --new-peer"),
+        (
+            f"--new-peer --new-peer {GOAL_TEXT}",
+            "duplicate leading --new-peer switch",
+        ),
+        ("--new-peer-extra " + GOAL_TEXT, "malformed leading --new-peer"),
+    ],
+)
+def test_cli_rejects_ambiguous_new_peer_slash_arguments(
+    tmp_path: Path,
+    raw_arguments: str,
+    expected_error: str,
+) -> None:
+    project = _write_connected_project(tmp_path)
+
+    exit_code, payload = _invoke_start_goal_with_slash_arguments(
+        project,
+        raw_arguments,
+    )
+
+    assert exit_code == 2
+    assert payload["ok"] is False
+    assert expected_error in payload["error"]
+
+
 def test_projection_preserves_multi_goal_selection_actions(tmp_path: Path) -> None:
     project = _write_connected_project(tmp_path)
     registry_path = project / ".loopx" / "registry.json"
@@ -1740,6 +2073,47 @@ def test_projection_preserves_multi_goal_selection_actions(tmp_path: Path) -> No
     assert "--capability-route issue-fix" in compact["command_pack"][
         "detail_command"
     ]
+
+
+def test_guided_start_uses_one_registry_version_for_goal_selection(tmp_path: Path, monkeypatch) -> None:
+    project = _write_connected_project(tmp_path)
+    registry_path = project / ".loopx" / "registry.json"
+    single_goal = registry_path.read_bytes()
+    initial = json.loads(single_goal)
+    second_goal_id = "guided-projection-second-goal"
+    initial["goals"].append({**initial["goals"][0], "id": second_goal_id})
+    registry_path.write_text(json.dumps(initial), encoding="utf-8")
+    replacement = registry_path.with_name("registry.next")
+    replacement.write_bytes(single_goal)
+    load_registry = command_pack_module.load_registry
+
+    def replace_after_first_read(path, **kwargs):
+        document = load_registry(path, **kwargs)
+        if path == registry_path and replacement.exists():
+            replacement.replace(registry_path)
+        return document
+
+    monkeypatch.setattr(command_pack_module, "load_registry", replace_after_first_read)
+
+    def preview():
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            assert cli_main([
+                "--registry", str(registry_path), "--runtime-root", str(tmp_path / "runtime"),
+                "--format", "json", "start-goal", "--guided", "--project", str(project),
+                "--host-surface", "codex-app", "--thread-id", "snapshot-thread", "--goal-text", GOAL_TEXT,
+            ]) == 0
+        return json.loads(stdout.getvalue())
+
+    first = preview()
+    assert first["guided_transaction"]["blocked_by"] == "goal_selection"
+    assert [choice["goal_id"] for choice in first["goal_selection_gate"]["choices"]] == [GOAL_ID, second_goal_id]
+    assert first["agent_id"] is None
+    assert registry_path.read_bytes() == single_goal
+
+    next_preview = preview()
+    assert next_preview["goal_id"] == GOAL_ID
+    assert "goal_selection_gate" not in next_preview["guided_transaction"]
 
 
 def test_start_goal_keeps_the_requested_linked_worktree(
@@ -1839,33 +2213,58 @@ def test_cli_without_host_returns_read_only_host_selection_gate(
     tmp_path: Path,
 ) -> None:
     project = _write_connected_project(tmp_path)
-    output = io.StringIO()
-    with contextlib.redirect_stdout(output):
+    base_args = [
+        "--format",
+        "json",
+        "start-goal",
+        "--guided",
+        "--project",
+        str(project),
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--goal-text",
+        GOAL_TEXT,
+        "--capability-route",
+        "issue-fix",
+    ]
+
+    compact_output = io.StringIO()
+    with contextlib.redirect_stdout(compact_output):
         exit_code = cli_main(
-            [
-                "--format",
-                "json",
-                "start-goal",
-                "--guided",
-                "--project",
-                str(project),
-                "--goal-id",
-                GOAL_ID,
-                "--agent-id",
-                AGENT_ID,
-                "--goal-text",
-                GOAL_TEXT,
-                "--capability-route",
-                "issue-fix",
-            ]
+            base_args
         )
 
     assert exit_code == 0
-    payload = json.loads(output.getvalue())
+    payload = json.loads(compact_output.getvalue())
     assert payload["guided_transaction"]["blocked_by"] == "host_surface_selection"
     assert payload["safety_contract"]["writes_registry"] is False
     choices = payload["host_surface_selection_gate"]["choices"]
     assert [choice["host_surface"] for choice in choices] == [
+        "codex-app",
+        "trae_app",
+        "codex-app-ssh",
+        "codex-cli-tui",
+        "claude-code",
+        "shell",
+        "other-agent",
+    ]
+    gate = payload["host_surface_selection_gate"]
+    assert gate["choice_projection"] == "compact"
+    assert gate["omitted_choice_count"] == 14
+    assert "--include-command-pack-detail" in gate["full_choices_detail_command"]
+    assert payload["packet_summary"]["compatibility"]["compact_projection_default"] is True
+    assert "Choose Where This Agent Runs" in payload["message"]
+    assert "Need another host (14 more)?" in payload["message"]
+
+    detailed_output = io.StringIO()
+    with contextlib.redirect_stdout(detailed_output):
+        detailed_exit = cli_main([*base_args, "--include-command-pack-detail"])
+    assert detailed_exit == 0
+    detailed = json.loads(detailed_output.getvalue())
+    full_choices = detailed["host_surface_selection_gate"]["choices"]
+    assert [choice["host_surface"] for choice in full_choices] == [
         "codex-app",
         "trae_app",
         "codex-app-ssh",
@@ -1880,6 +2279,7 @@ def test_cli_without_host_returns_read_only_host_selection_gate(
         "cursor-agent",
         "zcode",
         "agy",
+        "antigravity-app",
         "kiro-cli",
         "deepseek-harness",
         "deepseek-harness-native",
@@ -1887,7 +2287,13 @@ def test_cli_without_host_returns_read_only_host_selection_gate(
         "shell",
         "other-agent",
     ]
-    ide = next(choice for choice in choices if choice["host_surface"] == "codex-ide-plugin")
+    assert detailed["host_surface_selection_gate"]["choice_projection"] == "complete"
+    assert detailed["host_surface_selection_gate"]["omitted_choice_count"] == 0
+    ide = next(
+        choice
+        for choice in full_choices
+        if choice["host_surface"] == "codex-ide-plugin"
+    )
     assert "--host-surface codex-ide-plugin" in ide["rerun_command"]
     assert "--capability-route issue-fix" in ide["rerun_command"]
 
@@ -2113,17 +2519,7 @@ def _write_connected_project_with_todos(
     *,
     todos_body: str,
 ) -> Path:
-    project = _write_connected_project(root)
-    state_file = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
-    state_file.write_text(
-        "# Active Goal State\n"
-        "## Objective\n"
-        f"{GOAL_TEXT}\n"
-        "## Agent Todo\n"
-        f"{todos_body}\n",
-        encoding="utf-8",
-    )
-    return project
+    return _write_connected_project(root, todos_body=todos_body)
 
 
 def _write_connected_project_with_runnable_agent_todo(root: Path) -> Path:
@@ -2162,7 +2558,7 @@ def test_guided_takeover_with_runnable_frontier_projects_todo_delta(
     # The takeover continues through the normal refresh/host-loop/quota tail.
     assert step_ids.index("apply_todo_delta") < step_ids.index("read_back_authored_todos") < step_ids.index("refresh_state")
     assert "quota_guard" in step_ids
-    rendered = render_start_goal_guided_markdown(payload)
+    rendered = command_pack_module.render_start_goal_guided_markdown(payload)
     assert "apply_todo_delta" in rendered
     assert "reuse" in rendered
     assert "todo_delta:" in rendered

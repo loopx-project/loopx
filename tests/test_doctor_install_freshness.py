@@ -41,8 +41,12 @@ class _FakeDistribution:
         assert name == "INSTALLER"
         return "pip"
 
-    def locate_file(self, _name: str) -> Path:
-        return self._root
+    def locate_file(self, name: str) -> Path:
+        if not name:
+            return self._root
+        item = self.files[0]
+        assert name == item.as_posix()
+        return item.locate()
 
 
 def _git(root: Path, *args: str) -> str:
@@ -526,3 +530,67 @@ def test_trusted_release_ref_matches_manifest_repository(tmp_path: Path) -> None
         )
         is None
     )
+
+
+@pytest.mark.parametrize(
+    ("remote_url", "github_host"),
+    [
+        ("https://github.com/example/project.git", True),
+        ("http://github.com/example/project", True),
+        ("git://github.com/example/project.git", True),
+        ("ssh://git@github.com:22/example/project.git", True),
+        ("git+ssh://git@github.com/example/project.git", True),
+        ("ssh+git://git@github.com/example/project.git", True),
+        ("git@github.com:example/project.git", True),
+        ("github.com:example/project", True),
+        ("https://GITHUB.COM/example/project.git", True),
+        ("https://notgithub.com/example/project.git", False),
+        ("git@notgithub.com:example/project.git", False),
+        ("https://example.invalid/github.com/example/project.git", False),
+        ("https://github.com.example.invalid/github.com/example/project.git", False),
+        ("https://github.com@example.invalid/github.com/example/project.git", False),
+        ("file:///tmp/github.com/example/project.git", False),
+        ("https://github.com/other/project?next=github.com/example/project.git", False),
+        ("https://github.com/other/project#github.com/example/project.git", False),
+        pytest.param("https://git\thub.com/example/project.git", False, id="embedded-tab"),
+        pytest.param("https://github.com:invalid/example/project.git", False, id="invalid-port"),
+        pytest.param("https://github.com:65536/example/project.git", False, id="out-of-range-port"),
+    ],
+)
+def test_only_exact_github_remote_hosts_supply_install_freshness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    remote_url: str, github_host: bool,
+) -> None:
+    # A hook or outer checkout must not select the synthetic repository's index.
+    for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"):
+        monkeypatch.delenv(key, raising=False)
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "loopx@example.invalid")
+    _git(tmp_path, "config", "user.name", "LoopX Test")
+    installed = _commit(tmp_path, "installed")
+    latest = _commit(tmp_path, "latest")
+    _git(tmp_path, "remote", "add", "origin", remote_url)
+    _git(tmp_path, "update-ref", "refs/remotes/origin/main", latest)
+
+    trusted = trusted_release_ref_for_root(
+        tmp_path, repository="example/project", ref="main",
+    )
+    if github_host:
+        assert trusted is not None
+        assert trusted["git_commit"] == latest
+        assert trusted["label"] == "example/project@main"
+    else:
+        assert trusted is None
+
+    relation = git_revision_relation(
+        tmp_path, installed_commit=installed, comparison_commit=latest,
+    )
+    freshness = _freshness(
+        tmp_path, installed_commit=installed, comparison_commit=latest,
+        revision_relation=relation,
+        freshness_commit=trusted["git_commit"] if trusted else None,
+        freshness_relation=relation if trusted else None,
+    )
+    assert freshness["status"] == ("stale" if github_host else "fresh")
+    assert freshness["requires_upgrade"] is github_host
+    assert freshness["freshness_source_git_commit"] == (latest if github_host else None)

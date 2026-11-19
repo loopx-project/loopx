@@ -22,6 +22,7 @@ from ..todos.contract import (
     TODO_TASK_CLASS_USER_GATE,
 )
 from .start_contract import goal_planner_contract
+from .acceptance import inspect_goal_acceptance
 from .start_goal_todo_delta import todo_authoring_steps
 
 
@@ -95,6 +96,10 @@ def build_task_planning_packet(
     )
     identity = {"goal_id": goal_id, "agent_id": agent_id, "text": text}
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+    acceptance = inspect_goal_acceptance(
+        registry_path=registry_path, goal_id=goal_id, agent_id=agent_id,
+        runtime_root=runtime_root_arg, include_work_details=False,
+    )
     return {
         "ok": True,
         "read_only": True,
@@ -104,6 +109,11 @@ def build_task_planning_packet(
         **identity,
         "input_digest": digest,
         "planner": goal_planner_contract(fine_grained=fine),
+        # Planning needs declarations and revision-bound work links, not private
+        # check commands or a second copy of every task's validation details.
+        "goal_acceptance": {key: acceptance[key] for key in (
+            "provider_revision", "source_authority", "goal_acceptance_contract", "planning_requirements",
+        )},
         "ordered_steps": steps,
         "existing_todos": todos,
         "runnable_todo_ids": [
@@ -131,7 +141,9 @@ def build_task_planning_packet(
         "task_body": (
             "Execute the LoopX task-planning checkpoint for this already registered Goal/Agent. "
             "Use the attached planner and ordered_steps, shared with /loopx. Read the exact text "
-            "and inspect the workspace as needed; make the approach and acceptance explicit "
+            "and inspect the workspace as needed; follow goal_requirements_guidance to "
+            "reuse existing requirements or declare missing sourced requirements through the existing outcome owner, "
+            "link actual work and read it back before ready. Make the approach explicit "
             "before writing task Todos through the routed public CLI. Compare all existing "
             "work and waits; reuse/update covered work and add only uncovered work. "
             "Do not create a planning/setup Todo, restart the Goal, complete task Todos, "

@@ -11,10 +11,12 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTRUCTIONS = ROOT / "AGENTS.md"
-# The default Codex project-doc budget is bytes, shared by discovered files.
-# This root must fit by itself; host overrides and ancestor files need their
-# own delivery checks. Passing this test does not certify model comprehension.
+# The default Codex project-doc budget is 32 KiB across discovered files, while
+# Antigravity caps individual rule files (AGENTS.md) at 24,000 bytes (24 KB).
+# This root must fit within both host limits by itself; host overrides and
+# ancestor files need their own delivery checks.
 DEFAULT_PROJECT_DOC_MAX_BYTES = 32 * 1024
+ANTIGRAVITY_RULE_FILE_MAX_BYTES = 24_000
 
 
 def _heading_anchors(path: Path) -> set[str]:
@@ -49,11 +51,15 @@ def _local_links(path: Path) -> list[tuple[Path, str]]:
 
 def test_root_instructions_fit_default_project_doc_loading() -> None:
     contents = INSTRUCTIONS.read_bytes()
-    loaded = contents[:DEFAULT_PROJECT_DOC_MAX_BYTES]
-    assert loaded == contents, (
-        f"Root instructions lose {len(contents) - len(loaded)} bytes at the "
-        "default loader boundary; route applicable detail to its existing owner."
-    )
+    for host_name, limit in (
+        ("Antigravity per-file rule cap", ANTIGRAVITY_RULE_FILE_MAX_BYTES),
+        ("Codex default project_doc_max_bytes", DEFAULT_PROJECT_DOC_MAX_BYTES),
+    ):
+        loaded = contents[:limit]
+        assert loaded == contents, (
+            f"Root instructions lose {len(contents) - len(loaded)} bytes at the "
+            f"{host_name} ({limit} bytes) boundary; route applicable detail to its existing owner."
+        )
 
 
 def test_root_instruction_routes_resolve_to_existing_files_and_sections() -> None:

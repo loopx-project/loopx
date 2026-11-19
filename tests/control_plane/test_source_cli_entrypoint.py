@@ -47,7 +47,10 @@ raise SystemExit(code)
     return subprocess.run(
         [sys.executable, "-c", script],
         cwd=REPO_ROOT,
-        env={**os.environ, "PYTHONPATH": str(REPO_ROOT), "LOOPX_USAGE_PING": "0", **(env or {})},
+        # This caller consumes machine JSON; keep the parent's model-facing
+        # context transport intact, with explicit native overrides still allowed.
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT), "LOOPX_USAGE_PING": "0",
+             "LOOPX_CONTEXT_DELIVERY": "off", **(env or {})},
         text=True,
         capture_output=True,
         check=False,
@@ -57,7 +60,7 @@ raise SystemExit(code)
 
 @pytest.mark.parametrize(
     "argv",
-    [["--version"], [], ["--help"], ["check", "--help"], ["status", "--help"],
+    [["--version"], ["version", "--format", "json"], [], ["--help"], ["check", "--help"], ["status", "--help"],
      ["diagnose", "--help"], ["review-packet", "--help"], ["quota", "--help"],
      ["todo", "--help"], ["delegation", "--help"], ["turn", "--help"],
      ["turn", "run-once", "--help"],
@@ -79,7 +82,7 @@ for owner in {UNRELATED_OWNERS!r}:
 
 @pytest.mark.parametrize(
     "argv",
-    [["version", "--format", "json"], ["status", "--unknown-option"],
+    [["status", "--unknown-option"],
      ["todo", "list"], ["quota", "unknown-command"], ["--format", "unknown", "status"],
      ["delegation", "inspect", "--unknown-option"], ["turn", "run-once", "--exec"],
      ["turn", "unknown-command"],
@@ -192,8 +195,9 @@ os.execv = replace_process
 
 
 @pytest.mark.parametrize("entry", ["module", "console"])
+@pytest.mark.parametrize("parent_context", ["on", "off"])
 def test_outer_controller_scope_preserves_reads_other_goals_and_recovery(
-    tmp_path: Path, entry: str,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: str, parent_context: str,
 ) -> None:
     from examples.control_plane.quota_plan_fixtures import (
         SCOPED_AGENT_ID, write_cli_fixture, write_codex_heartbeat_fixture,
@@ -203,6 +207,7 @@ def test_outer_controller_scope_preserves_reads_other_goals_and_recovery(
         load_scheduler_state,
     )
 
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", parent_context)
     registry, runtime, _project = write_cli_fixture(tmp_path / "fixture", scoped_agents=True)
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
     env = {"CODEX_HOME": str(tmp_path / "codex-home"), "CODEX_THREAD_ID": "",
@@ -254,9 +259,12 @@ def test_outer_controller_scope_preserves_reads_other_goals_and_recovery(
     future["state_file"] = ".codex/goals/future-independent/ACTIVE_GOAL_STATE.md"
     future_state = registry.parent.parent / future["state_file"]
     future_state.parent.mkdir(parents=True)
-    future_state.write_text("---\nstatus: active\n---\n\n# Future independent Goal\n")
+    future_state.write_text(
+        "---\nstatus: active\n---\n\n# Future independent Goal\n\n## Agent Todo\n")
     registered["goals"].append(future)
     registry.write_text(json.dumps(registered))
+    from canonical_authority_fixture import initialize_canonical_source_fixture
+    initialize_canonical_source_fixture(runtime, future["id"], state_path=future_state)
     for goal in ("full-speed", "future-independent"):
         accepted = run_entry(entry, selected_ack(goal), env=env)
         assert accepted.returncode == 0, accepted.stdout + accepted.stderr
@@ -277,6 +285,7 @@ def test_outer_controller_scope_preserves_reads_other_goals_and_recovery(
     assert json.loads(recovered.stdout)["scheduler_state_mutated"] is True
     assert load_scheduler_state(runtime, goal_id="needs-operator", agent_id=SCOPED_AGENT_ID,
                                 state_key=state_key) is not None
+    assert os.environ["LOOPX_CONTEXT_DELIVERY"] == parent_context
 
 
 def test_source_module_observes_usage_once_and_preserves_failure_result() -> None:
@@ -320,6 +329,8 @@ from pathlib import Path
 from loopx import usage_ping
 for key in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING", "LOOPX_USAGE_POLICY"):
     os.environ.pop(key, None)
+# Disposable telemetry state requires explicit qualification to numeric loopback.
+os.environ["LOOPX_USAGE_PING"] = "1"
 os.environ["LOOPX_USAGE_PING_ENDPOINT"] = "http://127.0.0.1:1/v1/ping"
 usage_ping.select_default_runtime_root = lambda: Path({str(state)!r})
 sent = []
@@ -354,7 +365,8 @@ def test_source_read_uses_canonical_authority_not_missing_markdown(
     module = run_entry("module", argv, assertions='assert "loopx.cli" not in sys.modules')
     console = run_entry("console", argv)
     assert module.returncode == console.returncode == 0, module.stderr + console.stderr
-    assert json.loads(module.stdout) == json.loads(console.stdout)
+    from canonical_authority_fixture import assert_todo_read_unchanged
+    assert_todo_read_unchanged(json.loads(module.stdout), json.loads(console.stdout))
     result = json.loads(module.stdout)
     assert result["authority_read"]["source_authority"] == f"{provider}_v0"
     assert result["authority_read"]["legacy_fallback_used"] is False

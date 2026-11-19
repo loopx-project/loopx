@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
-import {spawnSync} from "node:child_process";
 import test from "node:test";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import type {AuthorityStoreConformanceFactory} from "./authority_store_conformance.ts";
 import {productionScaleConsumerScopeFixture} from "./production_scale_coordination_fixture.ts";
-import {resolveTestPython} from "../../scripts/test-python.mjs";
-
-const PYTHON = resolveTestPython();
+import {runPythonReadConsumer} from "./python_read_consumer.ts";
 
 // The actual Python read consumer still hosts rendering; policy runs in TS.
 const CONSUMER = `
@@ -45,8 +42,7 @@ export function registerTodoConsumerScopeConformance(name: string, factory: Auth
       next_projection: projection, events: [], receipts: []})).status, "applied");
     const before = await store.loadAuthority(); assert.equal(before.status, "loaded");
     if (before.status !== "loaded") return;
-    const child = spawnSync(PYTHON, ["-c", CONSUMER], {encoding: "utf8", timeout: 90_000,
-      input: JSON.stringify({todos: before.head.todos, cases})});
+    const child = runPythonReadConsumer(CONSUMER, {todos: before.head.todos, cases});
     assert.equal(child.status, 0, child.stderr);
     const result = JSON.parse(child.stdout);
     const expected = ["todo_scope_explicit_action", "todo_scope_explicit_gate", "todo_scope_global"];

@@ -5,6 +5,24 @@ LoopX's optional Lark provider receives messages through a long-lived
 periodic heartbeat is a separate work trigger. Installation or a healthy
 listener alone does not qualify an interactive conversation.
 
+For a bounded latency investigation, the existing Chat service can opt into
+local JSON stage observations with `LOOPX_LARK_EVENT_TIMING=1`. Its normal stdout
+then records receive, lane/snapshot, admission, control-source read, Core
+recovery and outbound-source/delivery boundaries. Correlation is a SHA-256 of
+the local profile and provider message ID; neither input, source content,
+identity fields, credentials nor provider output is printed. The records are
+disabled by default and are not admission, success or delivery receipts.
+Diagnostic sink failures do not fail message handling. Remove the environment
+setting after collecting the bounded sample.
+
+Compare monotonic timestamps within the same process lifetime for elapsed
+time; wall timestamps only help correlate existing local evidence. `received`
+means that Python decoded the consumer frame, not the provider's send time.
+These observations cannot independently prove upstream queueing or clock
+agreement. A missing returned marker can indicate a failed or interrupted
+stage. Preserve canonical source, Stop target, provider readback and physical
+process evidence when testing the actual end-to-end Stop budget.
+
 For separate assistant and steward Apps, follow the
 [owner-controlled Bot handoff](owner-controlled-bots.md). App setup, live product
 qualification and optional state inheritance remain separate outcomes.

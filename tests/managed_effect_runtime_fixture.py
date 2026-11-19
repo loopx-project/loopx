@@ -1,6 +1,7 @@
 """Retire runtimes in a finished test's disposable namespace, via their owner."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import tempfile
 from uuid import uuid4
@@ -13,15 +14,29 @@ def capture_disposable_effect_runtimes(root: Path) -> list[tuple[Path, str]]:
         return []
     owned_root = root.resolve()
     captured = []
-    for locator in root.glob("**/loopx-effect-runtime-*/runtime-*.json"):
-        # Never follow a fixture's borrowed namespace or locator outside the
-        # test directory. Copied packages can legitimately own several revisions.
-        if locator.is_symlink() or not locator.resolve().is_relative_to(owned_root):
+
+    def tolerate_retirement(error: OSError) -> None:
+        if not isinstance(error, (FileNotFoundError, PermissionError)):
+            raise error
+
+    # Runtime retirement can remove a directory while this census traverses
+    # it. Walk skips that vanished branch and still captures surviving owners.
+    for directory, _, names in os.walk(root, onerror=tolerate_retirement):
+        folder = Path(directory)
+        if folder == root or not folder.name.startswith("loopx-effect-runtime-"):
             continue
-        try:
-            captured.append((locator, locator.read_text(encoding="utf-8")))
-        except (OSError, UnicodeError):
-            continue
+        for name in names:
+            if not name.startswith("runtime-") or not name.endswith(".json"):
+                continue
+            locator = folder / name
+            # Never follow a fixture's borrowed namespace or locator outside
+            # the test directory. Copied packages can own several revisions.
+            if locator.is_symlink() or not locator.resolve().is_relative_to(owned_root):
+                continue
+            try:
+                captured.append((locator, locator.read_text(encoding="utf-8")))
+            except (OSError, UnicodeError):
+                continue
     return captured
 
 

@@ -22,7 +22,7 @@ agents:
     override_timeout_sec: 5400
     kwargs:
       execution_mode: heartbeat
-      iteration_context: fresh
+      iteration_context: resume
       reasoning_effort: max
       goals: "false"
       web_search: disabled

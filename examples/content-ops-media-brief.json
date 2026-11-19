@@ -1,0 +1,17 @@
+{
+  "schema_version": "content_ops_media_plan_v0",
+  "title": "Return the evidence",
+  "width": 1280,
+  "height": 720,
+  "fps": 24,
+  "shots": [
+    {"id": "opening", "kind": "title", "seconds": 5, "title": "A result needs a return route.", "body": "Keep the original request visible.", "source_ref": "synthetic:handoff", "boundary": "Illustrated workflow; no live execution"},
+    {"id": "handoff", "kind": "diagram", "seconds": 7, "title": "Make the handoff complete.", "nodes": ["Intent", "Owner", "Work", "Evidence"], "source_ref": "synthetic:handoff", "boundary": "Mechanism illustration; no performance claim"}
+  ],
+  "assets": [],
+  "captions": [
+    {"start": 0, "end": 5, "text": "A result needs a return route.", "language": "en"},
+    {"start": 5, "end": 12, "text": "Keep context and acceptance with the work.", "language": "en"}
+  ],
+  "narration": {"mode": "silent"}
+}

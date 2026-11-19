@@ -2,7 +2,6 @@
 
 The private spool is the existing owner. Holds free active queue capacity but
 retain unresolved references; restart uses the *unchanged* reviewed cursor.
-Neither action acknowledges historical evidence or creates review authority.
 """
 
 from __future__ import annotations
@@ -261,7 +260,6 @@ def recover_capture_source(
 
     Rollback is permitted only while the affected scope and review/profile files
     still match the applied receipt. Other sources can progress independently.
-    This trusted local-host API is not a remote authorization endpoint.
     """
     action = RecoveryAction(action)
     if (action == RecoveryAction.ROLLBACK) != (recovery_id is not None):

@@ -84,19 +84,14 @@ try {
   await page.waitForFunction(() => [...document.querySelectorAll('.personal-goal-link')].find((el) => el.textContent.includes('ready project'))?.textContent.match(/加载|Loading/) === null);
   retryFails = false;
   revisionMismatch = true;
+  const beforeRevisionRetry = requested.filter((id) => id === "retry").length;
+  const revisionRead = page.waitForResponse((response) => new URL(response.url()).searchParams.get("goal_id") === "retry"
+    && requested.filter((id) => id === "retry").length >= beforeRevisionRetry + 2);
   await page.getByTestId("goal-status-loading").getByRole("button").click();
-  while (requested.filter((id) => id === "retry").length < 2) {
-    await new Promise((done) => setTimeout(done, 10));
-  }
+  await revisionRead;
   await page.getByTestId("goal-status-loading").getByRole("button").waitFor();
   revisionMismatch = false;
-  const clickedRevisionRetry = await page.evaluate(() => {
-    const button = document.querySelector('[data-testid="goal-status-loading"] button');
-    if (!button) return false;
-    button.click();
-    return true;
-  });
-  assert.equal(clickedRevisionRetry, true, "revision error should keep a manual retry button mounted");
+  await page.getByTestId("goal-status-loading").getByRole("button").click();
   await page.getByTestId("goal-status-loading").waitFor({ state: "hidden" });
   assert.ok(requested.filter((id) => id === "ready").length >= 2, "a transient service error should recover automatically");
   assert.ok(!requested.includes("archived"), "stopped history must not compete with the active first screen");
@@ -159,7 +154,7 @@ try {
     // different Goal still fails. Directory lifecycle identity is unchanged.
     await accessPage.locator(".personal-goal-link").filter({ hasText: "ready project" }).click();
     await accessPage.locator(".personal-goal-tabs").getByRole("button", { name: locale === "en" ? "Tasks" : "任务", exact: true }).click();
-    await accessPage.getByText(readyText, { exact: true }).waitFor();
+    await accessPage.locator('[data-goal-panel="tasks"]').getByText(readyText, { exact: true }).waitFor();
     const history = accessPage.getByTestId("completed-task-lane");
     await history.getByText(historyText, { exact: true }).waitFor();
     await accessPage.getByRole("button", { name: locale === "en" ? "List" : "列表", exact: true }).click();
@@ -170,7 +165,7 @@ try {
     readyText = "Review updated public evidence";
     historyText = "Updated completed public evidence";
     await accessPage.getByRole("button", { name: locale === "en" ? "Refresh status" : "刷新状态", exact: true }).click();
-    await accessPage.getByText(readyText, { exact: true }).waitFor({ timeout: 5_000 });
+    await accessPage.locator('[data-goal-panel="tasks"]').getByText(readyText, { exact: true }).waitFor({ timeout: 5_000 });
     await history.getByText(historyText, { exact: true }).waitFor();
     assert.equal(await history.getByText("Completed public evidence", { exact: true }).count(), 0);
     assert.equal(await expandHistory.getAttribute("aria-expanded"), "true", "refresh preserves list expansion");
@@ -187,8 +182,153 @@ try {
     assert.deepEqual(counts, { ready: 3, access: 4 }, "a failed re-read exposes its error instead of presenting the retained snapshot as current");
     await accessPage.close();
   }
+  // An active-first fallback is incomplete even when it contains no Goals.
+  // Loading or failed stopped history cannot disprove a bookmarked Goal.
+  for (const activeIds of [[], ["ready"]]) {
+    const archivePage = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+    archivePage.on("pageerror", (error) => errors.push(error.message));
+    let releaseArchive;
+    const archiveGate = new Promise((done) => { releaseArchive = done; });
+    let archiveFails = true;
+    let mutations = 0;
+    const scoped = (scope) => {
+      const ids = scope === "stopped" ? ["archived"] : activeIds;
+      const payload = snapshot("archived");
+      payload.run_history.goals = ids.flatMap((id) => snapshot(id).run_history.goals);
+      payload.attention_queue.items = [];
+      payload.todo_index.items = [];
+      payload.goal_projection = { schema_version: "loopx_goal_projection_scope_v0", scope,
+        complete: false, projected_goal_count: ids.length, registry_goal_count: activeIds.length + 1,
+        registry_revision: directory.registry_revision };
+      return payload;
+    };
+    await archivePage.route("**/status.json*", async (route) => {
+      const query = new URL(route.request().url()).searchParams;
+      if (query.has("view")) return route.fulfill({ status: 404 });
+      const scope = query.get("goal_activation");
+      assert.ok(scope === "active" || scope === "stopped");
+      if (scope === "stopped") {
+        await archiveGate;
+        if (archiveFails) return route.fulfill({ status: 503, json: { ok: false } });
+      }
+      return route.fulfill({ json: scoped(scope) });
+    });
+    await archivePage.route("**/api/**", (route) => {
+      if (route.request().method() !== "GET") mutations++;
+      return route.fulfill({ status: 503, json: { ok: false } });
+    });
+    try {
+      await archivePage.goto(`${origin}/chat/?goalId=archived&view=research`);
+      await archivePage.locator(".personal-stopped-goals").waitFor();
+      await archivePage.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      await archivePage.screenshot({ path: resolve(out, `stopped-loading-${activeIds.length}.png`) });
+      assert.equal(new URL(archivePage.url()).searchParams.get("goalId"), "archived", "pending history must preserve the deep link, including an empty active projection");
+      releaseArchive();
+      await archivePage.locator(".personal-stopped-goal-error button").waitFor();
+      assert.equal(new URL(archivePage.url()).searchParams.get("goalId"), "archived", "failed history is unknown, not an absent Goal");
+      archiveFails = false;
+      await archivePage.locator(".personal-stopped-goal-error button").click();
+      await archivePage.locator(".personal-channel-title h1").filter({ hasText: "archived project" }).waitFor();
+      assert.equal(new URL(archivePage.url()).searchParams.get("view"), "research");
+      assert.match(await archivePage.locator(".personal-channel-title h1").innerText(), /archived project/);
+      assert.match(await archivePage.locator('.personal-goal-tabs button[aria-current="page"]').innerText(), /研究|Research/);
+      await archivePage.screenshot({ path: resolve(out, `stopped-recovered-${activeIds.length}.png`) });
+      await archivePage.setViewportSize({ width: 390, height: 844 });
+      assert.ok(await archivePage.locator(".personal-channel-title h1").isVisible());
+      await archivePage.screenshot({ path: resolve(out, `stopped-recovered-${activeIds.length}-narrow.png`) });
+      await archivePage.setViewportSize({ width: 1440, height: 960 });
+      await archivePage.reload();
+      await archivePage.locator(".personal-channel-title h1").filter({ hasText: "archived project" }).waitFor();
+      assert.equal(new URL(archivePage.url()).searchParams.get("goalId"), "archived", "reload preserves the stopped Goal without activating it");
+      await archivePage.goto(`${origin}/chat/?goalId=absent&view=research`);
+      await archivePage.waitForURL((url) => !url.searchParams.get("goalId"));
+      assert.equal(mutations, 0, "bookmark recovery must remain read-only");
+    } finally {
+      releaseArchive();
+      await archivePage.close();
+    }
+  }
+  const researchPage = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+  researchPage.on("pageerror", (error) => errors.push(error.message));
+  const researchDirectory = { ...directory, goals: ["parent", "case-a", "case-b", "other"].map((id) => ({
+    id, display_name: `${id} project`, registry_member: true, activation_state: "active",
+    ...(id.startsWith("case-") ? { parent_goal_id: "parent" } : {}),
+  })) };
+  let releaseParent;
+  const parentGate = new Promise((done) => { releaseParent = done; });
+  let parentDenied = true;
+  let childDenied = true;
+  const exploreReads = [];
+  try {
+    await researchPage.route("**/status.json*", async (route) => {
+      const query = new URL(route.request().url()).searchParams;
+      if (query.has("view")) return route.fulfill({ json: researchDirectory });
+      const id = query.get("goal_id");
+      const row = researchDirectory.goals.find((goal) => goal.id === id);
+      assert.ok(row);
+      if (id === "parent") {
+        await parentGate;
+        if (parentDenied) return route.fulfill({ status: 403, json: { ok: false, error_code: "workspace_status_access_denied" } });
+      }
+      const status = snapshot(id);
+      Object.assign(status.run_history.goals[0], row);
+      return route.fulfill({ json: status });
+    });
+    await researchPage.route("**/api/**", (route) => route.fulfill({ status: 503, json: { ok: false } }));
+    await researchPage.route("**/api/chat/explore-results?*", (route) => {
+      const query = new URL(route.request().url()).searchParams;
+      const goal = query.get("goal_id"), view = query.get("view");
+      exploreReads.push({ goal, view, method: route.request().method() });
+      if (view === "history-timing" && ["case-a", "case-b"].includes(goal)) {
+        if (goal === "case-b" && childDenied) return route.fulfill({ status: 403, json: { ok: false } });
+        return route.fulfill({ json: { ok: true, goal_id: goal, source_namespace: null,
+          first_recorded_at: "2026-01-01T00:00:00Z", last_recorded_at: "2026-01-01T00:15:00Z",
+          untimed_record_count: 0, strategy_recorded_at: null } });
+      }
+      return route.fulfill({ status: 503, json: { ok: false } });
+    });
+    await researchPage.goto(`${origin}/chat/?goalId=parent&view=research`);
+    const cards = researchPage.locator(".research-child-goals button");
+    const caseButton = cards.filter({ hasText: "case-a project" });
+    const notice = researchPage.getByTestId("goal-status-loading");
+    await caseButton.waitFor();
+    await notice.waitFor();
+    assert.equal(await cards.count(), 2, "directory navigation must stay in the selected Goal hierarchy");
+    await researchPage.screenshot({ path: resolve(out, "research-parent-pending-desktop.png") });
+    await caseButton.locator('time[datetime="2026-01-01T00:15:00Z"]').waitFor();
+    assert.match(await caseButton.innerText(), /2026-01-01 08:00[\s\S]*2026-01-01 08:15/, "child clocks use their own dated records in Beijing time while the parent is pending");
+    const deniedChild = cards.filter({ hasText: "case-b project" });
+    await deniedChild.locator(".research-child-timing").filter({ hasText: /无法读取时间|Time unavailable/ }).waitFor();
+    assert.equal(await deniedChild.locator("time").count(), 0, "a denied child must not borrow another child's clock");
+    assert.ok(exploreReads.every(({ goal, view, method }) => goal.startsWith("case-") && view === "history-timing" && method === "GET"), "parent loading permits only independent child timing reads");
+    await researchPage.screenshot({ path: resolve(out, "research-child-timing-pending-desktop.png") });
+    await researchPage.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await researchPage.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await researchPage.screenshot({ path: resolve(out, "research-child-timing-pending-narrow.png") });
+    await caseButton.press("Enter");
+    await researchPage.waitForURL((url) => url.searchParams.get("goalId") === "case-a" && url.searchParams.get("view") === "research");
+    await researchPage.locator(".research-parent-goal").waitFor();
+    releaseParent();
+    await researchPage.locator(".research-parent-goal").click();
+    await notice.getByRole("button").waitFor();
+    await caseButton.waitFor();
+    await caseButton.locator('time[datetime="2026-01-01T00:15:00Z"]').waitFor();
+    assert.ok(exploreReads.every(({ goal, method }) => goal !== "parent" && method === "GET"), "a denied parent must not open its own research evidence");
+    await researchPage.screenshot({ path: resolve(out, "research-child-timing-denied-narrow.png") });
+    parentDenied = false;
+    childDenied = false;
+    await notice.getByRole("button").click();
+    await notice.waitFor({ state: "hidden" });
+    await researchPage.getByRole("button", {name: /^(刷新状态|Refresh status)$/}).click();
+    await caseButton.locator(".research-child-timing").waitFor();
+    await deniedChild.locator('time[datetime="2026-01-01T00:15:00Z"]').waitFor();
+    assert.equal(await cards.count(), 2);
+  } finally {
+    releaseParent();
+    await researchPage.close();
+  }
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ ok: true, directory_ms: directoryMs, peak_concurrent_requests: peak, checks: ["directory-before-slow-goal", "ready-peer-usable", "queue-progress", "isolated-failure", "registry-revision-fence", "retry", "service-restart-recovery", "lazy-stopped-goals", "access-no-auto-retry", "access-manual-recovery-preserves-peers", "full-refresh-observes-external-todo", "full-refresh-invalidates-completed-history", "failed-reread-replaces-stale-snapshot", "bilingual-access", "mobile", "no-render-errors"] }));
+  console.log(JSON.stringify({ ok: true, directory_ms: directoryMs, peak_concurrent_requests: peak, checks: ["directory-before-slow-goal", "ready-peer-usable", "queue-progress", "isolated-failure", "registry-revision-fence", "retry", "service-restart-recovery", "lazy-stopped-goals", "access-no-auto-retry", "access-manual-recovery-preserves-peers", "full-refresh-observes-external-todo", "full-refresh-invalidates-completed-history", "failed-reread-replaces-stale-snapshot", "stopped-deep-link-loading-error-retry-reload", "absent-goal-after-complete-read", "read-only-bookmark-recovery", "research-navigation-before-parent-snapshot", "research-child-timing-independent-of-parent", "research-child-timing-denial-and-recovery", "research-navigation-during-denial-and-recovery", "bilingual-access", "mobile", "no-render-errors"] }));
 } finally {
   releaseSlow();
   await cleanupBrowserSmoke({ browser, server, fixturePaths: [] });

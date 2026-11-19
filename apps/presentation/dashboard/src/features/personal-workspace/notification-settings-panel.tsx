@@ -1,5 +1,6 @@
+import {ContextHelp} from "./context-help";
 import { useEffect, useState } from "react";
-import { Bell, Check, Loader2, X } from "lucide-react";
+import { Bell, Check, CircleHelp, Loader2, X } from "lucide-react";
 
 import type {
   PersonalWorkspaceCallbacks,
@@ -29,7 +30,7 @@ export function GoalAutoNotifyToggle({
   onChanged: () => void;
   kind?: "human_gate" | "blocked_notice";
 }) {
-  const { t } = useWorkspaceI18n();
+  const { locale, t } = useWorkspaceI18n();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -63,7 +64,7 @@ export function GoalAutoNotifyToggle({
         <span>{t(kind === "blocked_notice" ? "notifications.blockedAutoNotify" : "notifications.autoNotify")}</span>
         {busy ? <Loader2 aria-hidden className="is-spinning" size={14} /> : null}
       </label>
-      {kind === "human_gate" ? <p className="personal-notification-hint">{t("notifications.stewardHint")}</p> : null}
+      {kind === "human_gate" ? <ContextHelp label={locale === "zh-CN" ? "管家通知范围" : "Steward notification scope"}><p className="personal-notification-hint">{t("notifications.stewardHint")}</p></ContextHelp> : null}
       {kind === "human_gate" && (notification?.stewardNoticeDelivery?.pending_count ?? 0) > 0 ? (
         <p className="personal-notification-error" role="status">{t("notifications.stewardPending", { count: notification!.stewardNoticeDelivery!.pending_count })}</p>
       ) : null}
@@ -85,7 +86,7 @@ function GoalNotificationRow({
   targets: NotificationTarget[];
   onChanged: () => void;
 }) {
-  const { t } = useWorkspaceI18n();
+  const { locale, t } = useWorkspaceI18n();
   const [bindState, setBindState] = useState<BindState>({ phase: "idle" });
   const [selectedTarget, setSelectedTarget] = useState(targets[0]?.target_name ?? "");
 
@@ -139,10 +140,10 @@ function GoalNotificationRow({
 
         </>
       ) : targets.length === 0 ? (
-        <p className="personal-notification-hint">
+        <ContextHelp label={locale === "zh-CN" ? "尚未配置通知目标" : "Notification targets not configured"} icon={CircleHelp}><p className="personal-notification-hint">
           {t("notifications.noTargets")}
           <code>loopx goal-channel target add</code>
-        </p>
+        </p></ContextHelp>
       ) : bindState.phase === "confirm" ? (
         <div className="personal-notification-confirm">
           <p>{t("notifications.bindConfirm", { goal: goal.title, target: bindState.target })}</p>

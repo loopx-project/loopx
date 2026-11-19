@@ -12,7 +12,9 @@ import sysconfig
 
 import pytest
 
-from canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+
+from canonical_authority_fixture import assert_todo_read_unchanged, isolate_sqlite_runtime, promoted_create_fixture
 from test_quota_authority_settlement_journey import _source
 import test_quota_settlement_cli as settlement
 
@@ -185,7 +187,7 @@ def test_handoff_mode_without_source_todo_writers(tmp_path, provider, without_so
     before = cli("todo", "list")
     change = ("handoff-mode", "set", "--mode", "hard_lease", "--operation-id", "original-mode")
     assert cli(*change, "--dry-run")["status"] == "planned"
-    assert cli("todo", "list") == before
+    assert_todo_read_unchanged(cli("todo", "list"), before)
     assert cli(*change)["changed"] is True
     assert cli("handoff-mode", "show", override=True)["handoff_mode"] == "hard_lease"
     assert cli("handoff-mode", "set", "--mode", "soft_claim", "--operation-id", "later-mode")["changed"] is True
@@ -193,11 +195,11 @@ def test_handoff_mode_without_source_todo_writers(tmp_path, provider, without_so
     replay = cli(*change)
     assert replay["status"] == "replayed" and replay["changed"] is False
     assert replay["handoff_mode"] == "hard_lease"
-    assert cli("todo", "list") == later
+    assert_todo_read_unchanged(cli("todo", "list"), later)
     assert cli("handoff-mode", "show")["handoff_mode"] == "soft_claim"
     mismatch = cli("handoff-mode", "set", "--mode", "soft_claim", "--operation-id", "original-mode", succeeds=False)
     assert mismatch["error_code"] == "coordination_operation_identity_mismatch"
-    assert cli("todo", "list") == later
+    assert_todo_read_unchanged(cli("todo", "list"), later)
     assert display.read_bytes() == original_display
 
     backend = runtime / "authority" / f"{provider}-v0"
@@ -211,7 +213,7 @@ def test_handoff_mode_without_source_todo_writers(tmp_path, provider, without_so
             assert not backend.exists() and display.read_bytes() == original_display
     finally:
         offline.rename(backend)
-    assert cli("todo", "list") == later
+    assert_todo_read_unchanged(cli("todo", "list"), later)
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -301,7 +303,7 @@ def test_leased_delivery_settlement_and_recovery_without_source_todo_writers(tmp
             cwd=project, capture_output=True, text=True, timeout=45,
         )
         assert (result.returncode == 0) is succeeds, result.stdout + result.stderr
-        return json.loads(result.stdout)
+        return read_cli_policy_payload(result.stdout, returncode=result.returncode)
 
     identity = ["--goal-id", settlement.GOAL_ID, "--agent-id", settlement.AGENT_ID,
                 "--todo-id", settlement.TODO_ID]

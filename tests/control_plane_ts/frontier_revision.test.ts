@@ -76,6 +76,45 @@ test("revision is order-independent and maintenance timestamps do not change mat
   assert.notEqual(project(rows).frontier_updated_at, project(changed).frontier_updated_at);
 });
 
+test("display metadata changes freshness but not the owned replan basis", () => {
+  const original = row("todo_a", "worker-a");
+  const initial = JSON.parse(original.serialized);
+  original.serialized = JSON.stringify({...initial, text: "Preserve the original requirement", title: "Original name", priority: "P1"});
+  const updated = {...original, updated: "2026-09-02T00:00:00Z",
+    serialized: JSON.stringify({...initial, text: "[P3] Preserve the original requirement", title: "New display name", priority: "P3"})};
+  const first = project([original], "worker-a"), changed = project([updated], "worker-a");
+  assert.notEqual(first.frontier_revision, changed.frontier_revision);
+  assert.equal(first.frontier_owned_identity, changed.frontier_owned_identity);
+  const observed = observe({rows: [original]}).observation as Record<string, unknown>;
+  const ack = {recorded: true, semantic_delta: {accepted: true, obligation_id: "replan-0123456789abcdef",
+    trigger_kinds: ["long_todo_chain"], trigger_checkpoints: [{kind: "long_todo_chain",
+      frontier_revision: observed.frontier_revision, frontier_owned_identity: observed.frontier_owned_identity}]}};
+  assert.deepEqual(observe({rows: [updated], ack}).decision,
+    {acknowledged: true, rearmed_after_obligation_id: null});
+  const candidate = {...updated,
+    serialized: JSON.stringify({...JSON.parse(updated.serialized), target_key: "experiment:authorized-probe-v2"})};
+  assert.notEqual(project([candidate], "worker-a").frontier_owned_identity, first.frontier_owned_identity);
+  assert.deepEqual(observe({rows: [candidate], ack}).decision,
+    {acknowledged: false, rearmed_after_obligation_id: "replan-0123456789abcdef"});
+});
+
+test("a canonical Todo body change cannot inherit the prior long-chain ACK", () => {
+  const original = row("todo_a", "worker-a");
+  original.serialized = JSON.stringify({...JSON.parse(original.serialized),
+    text: "Evaluate route A against the accepted cases", target_key: "experiment:route-comparison"});
+  const observed = observe({rows: [original]}).observation as Record<string, unknown>;
+  const ack = {recorded: true, semantic_delta: {accepted: true, obligation_id: "replan-0123456789abcdef",
+    trigger_kinds: ["long_todo_chain"], trigger_checkpoints: [{kind: "long_todo_chain",
+      frontier_revision: observed.frontier_revision, frontier_owned_identity: observed.frontier_owned_identity}]}};
+  const changed = {...original, updated: "2026-09-02T00:00:00Z",
+    serialized: JSON.stringify({...JSON.parse(original.serialized),
+      text: "Evaluate route B and prove equivalence to route A before rollout"})};
+  assert.notEqual(project([changed], "worker-a").frontier_owned_identity,
+    project([original], "worker-a").frontier_owned_identity);
+  assert.deepEqual(observe({rows: [changed], ack}).decision,
+    {acknowledged: false, rearmed_after_obligation_id: "replan-0123456789abcdef"});
+});
+
 test("excluded-only agents receive an explicit checkpoint instead of the unclaimed fallback", () => {
   const rows = [row("todo_a"), row("todo_b", null, ["worker-a"])];
   const index = projectAdvancementFrontier({schema_version: "todo_frontier_revision_request_v0",

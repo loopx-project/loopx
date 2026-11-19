@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ...control_plane.goals.goal_vision_policy import (
     DEFAULT_EFFECTIVE_TURN_REPLAN_THRESHOLD,
+    DEFAULT_PLANNING_HORIZON_GOAL,
     normalize_completed_todo_replan_threshold,
     normalize_effective_turn_replan_threshold,
 )
@@ -36,7 +37,7 @@ def normalize_replan_cadence_configuration(raw: Mapping[str, Any]) -> dict[str, 
             "count_unit": ReplanCadenceUnit.COMPLETED_TODOS.value,
             "count": normalize_completed_todo_replan_threshold(raw["completed_todos"]),
         }
-    if not {"count_unit", "count"} <= set(raw) or set(raw) - {"count_unit", "count", "stride_strategy", "planning_horizon_goal"}:
+    if not {"count_unit", "count"} <= set(raw) or set(raw) - {"count_unit", "count", "stride_strategy", "planning_horizon_goal", "yardstick_enabled"}:
         raise ValueError("review cadence requires count_unit and count")
     try:
         unit = ReplanCadenceUnit(raw["count_unit"])
@@ -57,6 +58,10 @@ def normalize_replan_cadence_configuration(raw: Mapping[str, Any]) -> dict[str, 
         if not isinstance(raw["planning_horizon_goal"], bool):
             raise ValueError("planning_horizon_goal must be a boolean")
         result["planning_horizon_goal"] = raw["planning_horizon_goal"]
+    if "yardstick_enabled" in raw:
+        if not isinstance(raw["yardstick_enabled"], bool):
+            raise ValueError("yardstick_enabled must be a boolean")
+        result["yardstick_enabled"] = raw["yardstick_enabled"]
     return result
 
 
@@ -80,6 +85,8 @@ def normalize_todo_replan_cadence_machine_defaults(
         expected.add("stride_strategy")
         if "planning_horizon_goal" in raw:
             expected.add("planning_horizon_goal")
+        if "yardstick_enabled" in raw:
+            expected.add("yardstick_enabled")
     if set(raw) != expected:
         raise ValueError("review configuration fields do not match its schema version")
     return {
@@ -102,6 +109,9 @@ def default_replan_cadence_configuration() -> dict[str, Any]:
     return {
         "count_unit": ReplanCadenceUnit.EFFECTIVE_TURNS.value,
         "count": DEFAULT_EFFECTIVE_TURN_REPLAN_THRESHOLD,
+        "planning_horizon_goal": DEFAULT_PLANNING_HORIZON_GOAL,
+        "stride_strategy": "evidence_conditioned_v1",
+        "yardstick_enabled": False,
     }
 
 
@@ -124,14 +134,13 @@ def todo_replan_cadence_machine_configuration_namespace() -> (
         description=(
             "Live review threshold for Goals without an explicit cadence override. "
             "Defaults to six settled work Turns; completed Todos remain an explicit option. "
-            "The optional versioned stride strategy is disabled by default; enabled fresh Vision reviews require a bounded structured proposal. "
+            "Evidence-conditioned stride is enabled by default; fresh Vision reviews require a bounded structured work-shape proposal. Explicit off and legacy saved configurations retain their meaning. "
             "It does not create "
             "turns, spend quota, or grant authority."
         ),
         default_configuration={
             "schema_version": TODO_REPLAN_CADENCE_MACHINE_DEFAULTS_V2,
             **default_replan_cadence_configuration(),
-            "stride_strategy": "off",
         },
     )
 
@@ -166,15 +175,18 @@ def apply_todo_replan_cadence_machine_default(
 
     projected = deepcopy(dict(goal))
     raw_profile = goal.get("execution_profile")
-    if isinstance(raw_profile, Mapping) and (
-        "replan_after_completed_todos" in raw_profile
-        or "replan_after_effective_turns" in raw_profile
-    ):
-        return projected
     cadence = _machine_default(machine_configuration)
     if cadence is None:
         cadence = default_replan_cadence_configuration()
     profile = dict(raw_profile) if isinstance(raw_profile, Mapping) else {}
+    # Yardstick is independent of the legacy cadence/stride override. Keep
+    # absence sparse and default-off; explicit false always wins inheritance.
+    if "yardstick_enabled" not in profile and cadence.get("yardstick_enabled") is True:
+        profile["yardstick_enabled"] = True
+    if "replan_after_completed_todos" in profile or "replan_after_effective_turns" in profile:
+        if profile != raw_profile:
+            projected["execution_profile"] = profile
+        return projected
     field = (
         "replan_after_effective_turns"
         if cadence["count_unit"] == ReplanCadenceUnit.EFFECTIVE_TURNS.value
@@ -195,10 +207,12 @@ def resolve_todo_replan_cadence_goal(
     """Resolve live cadence for raw-registry writeback callers, without writes.
 
     History already composes machine defaults before calling the history codec.
-    Explicit Goal cadence remains independent of device configuration IO.
+    Explicit cadence and Yardstick overrides remain independent. A cadence-only
+    Goal still reads the live device Yardstick preference; explicit choices
+    for both can skip device configuration IO.
     """
     profile = goal.get("execution_profile")
-    if isinstance(profile, Mapping) and (
+    if isinstance(profile, Mapping) and "yardstick_enabled" in profile and (
         "replan_after_effective_turns" in profile
         or "replan_after_completed_todos" in profile
     ):
@@ -209,6 +223,13 @@ def resolve_todo_replan_cadence_goal(
     machine = (
         read_machine_configuration(
             runtime_root, registry=build_builtin_machine_configuration_registry(),
+            namespace_ids=("todo_replan_cadence",),
         ) if runtime_root is not None else None
     )
     return apply_todo_replan_cadence_machine_default(goal, machine)
+
+
+def work_yardstick_enabled(goal: dict[str, Any], runtime_root: Path | None) -> bool:
+    """Independent opt-in resolved through the existing review configuration."""
+    resolved = resolve_todo_replan_cadence_goal(goal, runtime_root)
+    return (resolved.get("execution_profile") or {}).get("yardstick_enabled") is True

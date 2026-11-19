@@ -26,7 +26,7 @@ HOST_FAILURE_KINDS = frozenset(
 )
 HOST_RETRY_STRATEGY = "same_configuration"
 
-# These are scheduling hints, not an in-process sleep policy. The Turn journal
+# These are scheduling hints. The Turn journal
 # remains the authority for the attempt count and the outer controller decides
 # when to wake the exact same Turn again.
 _RETRY_POLICIES = {
@@ -125,6 +125,20 @@ def host_failure_retry_available(record: Mapping[str, Any]) -> bool:
         return False
     retry = dict(normalized["retry"])
     return int(normalized["attempt"]) < int(retry["max_attempts"])
+
+
+def explicit_host_failure_retry_available(record: Mapping[str, Any], *, retry_failed: bool) -> bool:
+    """Share the Turn Journal's explicit repair rule; no automatic retry change."""
+    from ..effect_runtime import effect_runtime_result
+
+    if type(retry_failed) is not bool:
+        raise ValueError("Host retry requires an explicit retry intent")
+    result = effect_runtime_result("host_failure.retry", {
+        "failure": normalize_host_failure_record(record), "retry_failed": retry_failed,
+    })
+    if not isinstance(result, dict) or type(result.get("allowed")) is not bool:
+        raise RuntimeError("Host retry decision is unavailable")
+    return result["allowed"]
 
 
 def record_host_failure(

@@ -17,13 +17,12 @@ from typing import Any
 from ..coordination.local_authority import read_canonical_todo_fields_if_promoted
 from ...history import load_registry
 from ...paths import resolve_runtime_root
-from ...control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from ...control_plane.todos.contract import (
     TODO_TASK_CLASS_ADVANCEMENT,
 )
 from ...control_plane.todos.todo_semantics import todo_item_is_actionable_open
 from ...project_prompt import render_cli_command_prefix, shell_arg
-from ...registry import registry_goals, resolve_state_file
+from ...registry import registry_goals
 
 GUIDED_TODO_DELTA_SCHEMA_VERSION = "loopx_guided_todo_delta_v0"
 
@@ -36,6 +35,7 @@ def existing_runnable_agent_frontier(
     resolved_goal_id: str,
     effective_agent_id: str | None,
     runtime_root_arg: str | None = None,
+    registry_payload: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]] | None:
     """Runnable advancement agent Todos already present in the goal's state.
 
@@ -44,16 +44,18 @@ def existing_runnable_agent_frontier(
     whose resume condition is satisfied (or absent) enter the frontier.
     Blocked, deferred, monitor, blocker, resume-blocked, or peer-claimed
     Todos never enter the frontier. Returns ``None`` whenever the frontier
-    cannot be proven (not connected, unknown goal, missing legacy state, or
-    nothing runnable), so callers keep the unconditional planning contract.
-    After cutover only canonical records count; provider unavailability raises
-    instead of being mistaken for an empty frontier. A missing display is safe
+    is not connected, the Goal is unknown, or nothing is runnable, so callers
+    keep the unconditional planning contract. Only canonical records count;
+    an unmigrated Goal or unavailable provider raises instead of being mistaken
+    for an empty frontier. A missing display is safe
     to ignore, not permission to reconstruct its non-Todo narrative.
+    When supplied, registry_payload is the decoded registry for this preview.
     """
     if inspection.get("connection_state") != "connected":
         return None
     registry_path = Path(str(inspection.get("registry") or ""))
-    registry_payload, _registry_error = _read_registry(registry_path)
+    if registry_payload is None:
+        registry_payload, _registry_error = _read_registry(registry_path)
     registry_goal = next(
         (
             goal
@@ -64,26 +66,12 @@ def existing_runnable_agent_frontier(
     )
     if registry_goal is None:
         return None
-    state_file = resolve_state_file(
-        Path(str(inspection.get("project") or "")),
-        registry_goal.get("state_file"),
-    )
     parsed = read_canonical_todo_fields_if_promoted(
         runtime_root=resolve_runtime_root(
             registry_payload or {}, runtime_root_arg, registry_path=registry_path,
         ),
         goal_id=resolved_goal_id,
     )
-    if parsed is None:
-        if state_file is None or not state_file.is_file():
-            return None
-        try:
-            state_text = state_file.read_text(encoding="utf-8")
-        except OSError:
-            return None
-        parsed = parse_active_state_todos(
-            state_text, goal=registry_goal, state_path=state_file, item_limit=None,
-        )
     agent_summary = parsed.get("agent_todos") if isinstance(parsed, dict) else None
     items = (
         agent_summary.get("items", []) if isinstance(agent_summary, dict) else []
@@ -148,6 +136,39 @@ def todo_authoring_steps(
         agent_id=agent_id,
         registry_path=registry_path,
     )
+    prefix = render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)
+    if registry_path is not None:
+        prefix += f" --registry {shell_arg(str(registry_path))}"
+    acceptance = f"{prefix} --format json goal-acceptance"
+    author = agent_id or "<agent-id>"
+    route = f"--goal-id {shell_arg(str(goal_id))} --agent-id {shell_arg(author)}"
+    # The planner supplies intent; goal-acceptance still validates each refinement.
+    requirement_authoring = {
+        "inspect_command": f"{acceptance} inspect {route}",
+        "refine_command_template": (
+            f"{acceptance} refine {route} --document '<agent-authored-file>' "
+            "--expected-provider-revision '<current-provider-revision>' "
+            "--operation-id '<stable-original-operation-id>' --execute"
+        ),
+        "declaration_document_template": {
+            "outcome_id": "<outcome-id>",
+            "owner_agent_id": author,
+            "objective": "<outcome-objective>",
+            "requirements": [
+                {"id": "<requirement-id>", "description": "<requirement-description>"}
+            ],
+            "source": {"ref": "<source-ref>", "summary": "<source-summary>"},
+        },
+        "link_document_template": {
+            "outcome_id": "<same-outcome-id>",
+            "todo_ids": ["<actual-todo-id>"],
+        },
+        "revision_guidance": (
+            "Use provider_revision from current acceptance or inspect. Preserve owner and objective "
+            "when refining an existing outcome. After Todo writes, inspect again before linking. "
+            "Give each refinement its own stable operation id. Retry it unchanged after response loss."
+        ),
+    }
     # This adapter already owns routed CLI templates for both planning entrypoints.
     readback = {
         "id": "read_back_authored_todos",
@@ -162,15 +183,20 @@ def todo_authoring_steps(
         "purpose": (
             "Read each authored/reused id: one match, todo_detail_projection.source_complete=true; "
             "compare .todo.text, status/claim. Excerpts cannot verify writes. "
-            "Missing/ambiguous/changed: reinspect before handoff. Readback grants no guard/lease authority."
+            "Read back the same overall requirements, provenance and work links too; "
+            "missing/ambiguous/changed: reinspect before handoff. Readback grants no guard/lease authority."
         ),
     }
+    readback["goal_requirements_readback"] = (
+        "Repeat goal_requirements.inspect_command from the planning checkpoint after linking."
+    )
     if not existing_runnable_frontier:
         return [
             {
                 "id": "plan_ranked_todos",
                 "kind": "model_checkpoint",
                 "prompt": plan_prompt,
+                "goal_requirements": requirement_authoring,
                 "purpose": (
                     "produce one public-safe, small, verifiable checkpoint Todo; keep "
                     "later options as evidence-linked planning notes"
@@ -197,6 +223,7 @@ def todo_authoring_steps(
             "id": "compare_planned_todos_with_frontier",
             "kind": "model_checkpoint",
             "prompt": plan_prompt,
+            "goal_requirements": requirement_authoring,
             "purpose": (
                 "compare the continuation with existing_runnable_frontier "
                 "by text/action_kind before any writeback"
@@ -231,7 +258,13 @@ def append_todo_delta_render_line(
     raw_step: Mapping[str, Any],
     step_lines: list[str],
 ) -> None:
-    """Render the Todo-delta decision rule compactly for the markdown packet."""
+    """Keep planning instructions reachable without repeating routed commands."""
+    requirements = raw_step.get("goal_requirements")
+    if isinstance(requirements, Mapping):
+        step_lines.append(
+            "   - overall requirements: reuse existing or declare missing requirements before Todos, link actual ids, then read back; "
+            "use this checkpoint's goal_requirements commands and document templates in the JSON detail packet."
+        )
     todo_delta = raw_step.get("todo_delta")
     if not isinstance(todo_delta, Mapping):
         return

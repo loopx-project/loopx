@@ -10,6 +10,7 @@ import {
 } from "../effect_runtime_errors.ts";
 import {
   atomicWriteJson,
+  atomicWriteText,
   claimFileMutationLock,
   mutationLockOwner,
   releaseFileMutationLock,
@@ -18,14 +19,14 @@ import {
 } from "../effect_runtime_io.ts";
 import { decideFirstPartyHostRuntime } from "../goals/first_party_host_runtime.ts";
 import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
-import { requireNonEmptyString as requiredString } from "../runtime_decode.ts";
+import { parseJsonSource, parsedSourceNumberTokens, requireNonEmptyString as requiredString,
+  sourceNumberTokens, type SourceNumbers } from "../runtime_decode.ts";
 import { preparedAttemptViolation } from "./turn_journal_attempt_contract.ts";
 import {
   interpretTurnJournalEffect,
   journalPhaseViolation,
   parseTurnJournalGoalBinding,
   supportedJournalStatuses,
-  transactionPhases,
   type TurnJournalGoalBinding,
 } from "./turn_journal.ts";
 
@@ -63,22 +64,34 @@ function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function stableValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stableValue);
+function rawNumber(token: string): unknown {
+  const rawJSON = (JSON as typeof JSON & {rawJSON?: (text: string) => unknown}).rawJSON;
+  if (!rawJSON) throw new EffectRuntimeRequestError("Turn journal number preservation requires JSON.rawJSON", "journal_snapshot_invalid");
+  return rawJSON(token);
+}
+
+function stableValue(value: unknown, numbers?: SourceNumbers): unknown {
   if (typeof value !== "object" || value === null) return value;
+  const child = (key: string, item: unknown): unknown => {
+    const token = numbers?.get(value)?.get(key);
+    return token === undefined ? stableValue(item, numbers) : rawNumber(token);
+  };
+  if (Array.isArray(value)) return value.map((item, index) => child(String(index), item));
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>)
       .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, child]) => [key, stableValue(child)]),
+      .map(([key, item]) => [key, child(key, item)]),
   );
 }
 
-function operationId(journal: JsonObject): string {
-  return `sha256:${sha256(JSON.stringify(stableValue(journal)))}`;
+function operationId(journal: JsonObject, numbers?: SourceNumbers): string {
+  return `sha256:${sha256(JSON.stringify(stableValue(journal, numbers)))}`;
 }
 
-function journalWithoutRecoveryAudit(journal: JsonObject): JsonObject {
+function journalWithoutRecoveryAudit(journal: JsonObject, numbers?: SourceNumbers): JsonObject {
   const projected = { ...journal };
+  const fields = numbers?.get(journal);
+  if (fields) numbers?.set(projected, fields);
   delete projected.recovery_audit;
   return projected;
 }
@@ -112,7 +125,7 @@ function samePrefix(left: readonly string[], right: readonly string[]): boolean 
   return left.length <= right.length && left.every((phase, index) => phase === right[index]);
 }
 
-function requireJournalState(journal: JsonObject): JournalState {
+function requireJournalState(journal: JsonObject, numbers?: SourceNumbers): JournalState {
   if (journal.schema_version !== "loopx_turn_journal_v0") {
     throw new EffectRuntimeRequestError(
       "Turn journal has an unsupported schema",
@@ -120,7 +133,10 @@ function requireJournalState(journal: JsonObject): JournalState {
     );
   }
   const plan = asObject(journal.plan);
-  const envelope = asObject(plan.turn_envelope);
+  // These are the caller's declared scope values, not evidence of permission;
+  // interpretation below independently validates the versioned source.
+  const envelope = plan.schema_version === "loopx_turn_plan_v1"
+    ? asObject(asObject(plan.work_contract).agent_identity) : asObject(plan.turn_envelope);
   const goalId = typeof journal.goal_id === "string" ? journal.goal_id : "";
   const agentId = typeof envelope.agent_id === "string" ? envelope.agent_id : "";
   const turnKey = typeof journal.turn_key === "string" ? journal.turn_key : "";
@@ -130,6 +146,7 @@ function requireJournalState(journal: JsonObject): JournalState {
     goal_id: goalId,
     agent_id: agentId,
     turn_key: turnKey,
+    source_number_tokens: parsedSourceNumberTokens(journal, numbers),
   });
   const context = effect.request.context;
   const effectId = journalEffectId(journal);
@@ -268,15 +285,17 @@ function requireJournalTransition(
   incoming: JsonObject,
   previous: JournalState,
   next: JournalState,
+  previousNumbers?: SourceNumbers,
+  nextNumbers?: SourceNumbers,
 ): void {
-  if (operationId(asObject(existing.plan)) !== operationId(asObject(incoming.plan))) {
+  if (operationId(asObject(existing.plan), previousNumbers) !== operationId(asObject(incoming.plan), nextNumbers)) {
     conflict("Turn journal transaction plan is immutable", "journal_plan_conflict");
   }
   if (terminalStatuses.has(previous.status)) {
     const auditOnly =
       previous.status === next.status &&
-      operationId(journalWithoutRecoveryAudit(existing)) ===
-        operationId(journalWithoutRecoveryAudit(incoming));
+      operationId(journalWithoutRecoveryAudit(existing, previousNumbers), previousNumbers) ===
+        operationId(journalWithoutRecoveryAudit(incoming, nextNumbers), nextNumbers);
     if (auditOnly) return;
     conflict("Terminal Turn journal tombstones are immutable");
   }
@@ -286,8 +305,8 @@ function requireJournalTransition(
   if (
     previous.status === next.status &&
     ["failed", "scheduler_action_required"].includes(previous.status) &&
-    operationId(journalWithoutRecoveryAudit(existing)) !==
-      operationId(journalWithoutRecoveryAudit(incoming))
+    operationId(journalWithoutRecoveryAudit(existing, previousNumbers), previousNumbers) !==
+      operationId(journalWithoutRecoveryAudit(incoming, nextNumbers), nextNumbers)
   ) {
     conflict("Settled Turn journal state only permits recovery-audit completion");
   }
@@ -318,7 +337,28 @@ export async function commitTurnJournal(
   if (!isAbsolute(path)) {
     throw new EffectRuntimeRequestError("Turn journal path must be absolute");
   }
-  const journal = asObject(params.journal);
+  const source = asObject(params.journal);
+  const tokens = sourceNumberTokens(source, params.source_number_tokens);
+  let originalJson: string | null = null;
+  if (tokens.length) {
+    const numbers = new WeakMap<object, Map<string, string>>();
+    for (const {path, token} of tokens) {
+      let parent: Record<string | number, unknown> = source;
+      for (const key of path.slice(0, -1)) parent = parent[key] as typeof parent;
+      const fields = numbers.get(parent) ?? new Map<string, string>();
+      fields.set(String(path.at(-1)), token);
+      numbers.set(parent, fields);
+    }
+    originalJson = JSON.stringify(source, function (key, value: unknown) {
+      const token = numbers.get(this)?.get(key);
+      return token === undefined ? value : rawNumber(token);
+    }, 2);
+  }
+  // Validate and publish the same isolated snapshot when source spellings are
+  // supplied. Native objects without metadata retain their historical path.
+  const parsed = originalJson === null ? null : parseJsonSource(originalJson);
+  const journal = parsed === null ? source : asObject(parsed.value);
+  const numbers = parsed?.numbers;
   const goalBinding = parseTurnJournalGoalBinding(journal);
   if (goalBinding.kind === "invalid") {
     throw new EffectRuntimeRequestError(
@@ -326,7 +366,7 @@ export async function commitTurnJournal(
       "journal_snapshot_invalid",
     );
   }
-  const incomingState = requireJournalState(journal);
+  const incomingState = requireJournalState(journal, numbers);
   const expectedEffectId = typeof params.expected_effect_id === "string"
     ? params.expected_effect_id.trim()
     : "";
@@ -336,14 +376,15 @@ export async function commitTurnJournal(
       "Turn journal does not carry the expected settlement effect",
     );
   }
-  const incomingOperationId = operationId(journal);
+  const incomingOperationId = operationId(journal, numbers);
   const commit = async (): Promise<JsonObject> =>
     await withFileMutationLock(path, async () => {
       let existing: JsonObject | null = null;
       try {
         const encoded = await readFile(path, "utf8");
-        existing = asObject(JSON.parse(encoded));
-        const existingState = requireJournalState(existing);
+        const previous = parseJsonSource(encoded);
+        existing = asObject(previous.value);
+        const existingState = requireJournalState(existing, previous.numbers);
         const existingEffectId = existingState.effectId;
         if (
           existingEffectId &&
@@ -354,7 +395,7 @@ export async function commitTurnJournal(
             "journal_effect_conflict",
           );
         }
-        if (operationId(existing) === incomingOperationId) {
+        if (operationId(existing, previous.numbers) === incomingOperationId) {
           return {
             ok: true,
             appended: false,
@@ -363,7 +404,7 @@ export async function commitTurnJournal(
             operation_id: incomingOperationId,
           };
         }
-        requireJournalTransition(existing, journal, existingState, incomingState);
+        requireJournalTransition(existing, journal, existingState, incomingState, previous.numbers, numbers);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
@@ -373,7 +414,8 @@ export async function commitTurnJournal(
       )) {
         conflict("A new Turn journal must begin in progress with no completed phases");
       }
-      await atomicWriteJson(path, journal);
+      if (originalJson === null) await atomicWriteJson(path, journal);
+      else await atomicWriteText(path, `${originalJson}\n`);
       return {
         ok: true,
         appended: true,

@@ -1,20 +1,49 @@
 import assert from "node:assert/strict";
+import {execFile} from "node:child_process";
 import {createHash} from "node:crypto";
-import {mkdtemp, writeFile, chmod, symlink, rm} from "node:fs/promises";
-import {tmpdir} from "node:os";
+import {mkdir, mkdtemp, writeFile, chmod, symlink, rm} from "node:fs/promises";
 import {join} from "node:path";
 import {test} from "node:test";
+import {promisify} from "node:util";
 import {
   openPrivateResponseSink, readPrivateJsonSnapshot, writePrivateResponse,
   MAX_LOCAL_SNAPSHOT_BYTES,
 } from "../../loopx/control_plane/effect_runtime_snapshot.ts";
+import {resolveTestPython} from "../../scripts/test-python.mjs";
+
+const python = process.platform === "win32" ? resolveTestPython() : null;
+if (python) process.env.LOOPX_EFFECT_RUNTIME_PYTHON_BIN = python;
+const execute = promisify(execFile);
+
+async function createFixtureDirectory() {
+  const local = join(process.cwd(), ".local");
+  await mkdir(local, {recursive: true});
+  return mkdtemp(join(local, "loopx-effect-"));
+}
+
+async function protectWindowsFixture(directory: string, path: string) {
+  if (!python) return;
+  const source = [
+    "import sys",
+    "from pathlib import Path",
+    "from loopx.control_plane.runtime.private_permissions import protect_private_path",
+    "protect_private_path(Path(sys.argv[1]), directory=True)",
+    "protect_private_path(Path(sys.argv[2]))",
+  ].join("\n");
+  await execute(python, ["-c", source, directory, path], {timeout: 10_000});
+}
+
+async function removeFixture(directory: string) {
+  await rm(directory, {recursive: true, force: true, maxRetries: 10, retryDelay: 100});
+}
 
 test("local snapshot accepts exact private bytes and rejects altered or unsafe references", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "loopx-effect-"));
+  const directory = await createFixtureDirectory();
   try {
     const path = join(directory, "params.json");
     const bytes = Buffer.from(JSON.stringify({context: "x".repeat(2_200_000)}));
     await writeFile(path, bytes, {mode: 0o600});
+    await protectWindowsFixture(directory, path);
     const ref = {path, byte_count: bytes.length,
       sha256: createHash("sha256").update(bytes).digest("hex")};
     assert.deepEqual(await readPrivateJsonSnapshot(ref), JSON.parse(bytes.toString()));
@@ -38,15 +67,16 @@ test("local snapshot accepts exact private bytes and rejects altered or unsafe r
         /snapshot unavailable or invalid/);
     }
   } finally {
-    await rm(directory, {recursive: true, force: true});
+    await removeFixture(directory);
   }
 });
 
 test("large response sink is private and digest-bound", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "loopx-effect-"));
+  const directory = await createFixtureDirectory();
   try {
     const path = join(directory, "response.json");
     await writeFile(path, "", {mode: 0o600});
+    await protectWindowsFixture(directory, path);
     const file = await openPrivateResponseSink(path);
     const bytes = Buffer.from(JSON.stringify({result: "a".repeat(2_200_000)}));
     try {
@@ -58,6 +88,6 @@ test("large response sink is private and digest-bound", async () => {
       await file.close();
     }
   } finally {
-    await rm(directory, {recursive: true, force: true});
+    await removeFixture(directory);
   }
 });

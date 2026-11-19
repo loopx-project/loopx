@@ -110,7 +110,7 @@ def main() -> int:
         )
     )
     with TemporaryDirectory(prefix="loopx-doubao-live-") as temp_dir:
-        temp_root = Path(temp_dir)
+        temp_root = Path(temp_dir).resolve()
 
         def qualify_selected_todo(run_id: str) -> dict[str, object]:
             run_digest = sha256(run_id.encode("utf-8")).hexdigest()[:16]

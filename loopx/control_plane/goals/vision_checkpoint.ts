@@ -1,6 +1,7 @@
-import type { JsonObject } from "../effect_program.ts";
+import {settlementIdentityPayload, type JsonObject, type SettlementIdentity} from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
-import { isBoundedBlockedRetry } from "../quota/settlement_phase.ts";
+import {jsonObject} from "../runtime_decode.ts";
+import { isAcceptedProgressWriteback, isBoundedBlockedRetry } from "../quota/settlement_phase.ts";
 import {
   DELIVERY_BOUNDARIES,
   type DeliveryBoundary,
@@ -12,6 +13,7 @@ import {
 } from "../work_items/delivery_outcome.ts";
 
 import {normalizeStrideDecision, STRIDE_DECISION_SCHEMA, RECORDED_STRIDE_SCHEMA, STRIDE_PROBE_LIMITS, STRIDE_AXIS_NAMES, STRIDE_PLAN_LIMIT, STRIDE_REASON_LIMIT, STRIDE_REVIEW_LIMIT} from "../work_items/stride_policy.ts";
+import lifecycle from "../goal_vision_lifecycle.json" with {type: "json"};
 
 export const VISION_REFRESH_REQUEST_SCHEMA = "loopx_vision_refresh_request_v0";
 export const VISION_REFRESH_PREPARED_SCHEMA_VERSION =
@@ -53,6 +55,11 @@ const GOAL_PATH_DELTA_OUTCOMES = [
   "stop",
   "wait",
 ] as const;
+const OUTCOME_CHECKPOINT_CONTINUATION_OUTCOMES = [
+  "continue",
+  "no_change",
+  "replan",
+] as const;
 const GOAL_PATH_DELTA_SCALAR_LIMITS = {
   prior_assumption: 320,
   observed_reality: 320,
@@ -75,7 +82,7 @@ export const VISION_MATERIAL_CLOSEOUT_HINT =
   "Checkpoint satisfied alone does not qualify the outcome.";
 
 /** Authoring hints share the validator's limits; they grant no transition authority. */
-export function visionAuthoringContract(): JsonObject {
+export function visionAuthoringContract(autonomousReplan = false): JsonObject {
   return {
     schema_version: GOAL_VISION_REPLAN_SCHEMA_VERSION,
     fields: {
@@ -92,15 +99,23 @@ export function visionAuthoringContract(): JsonObject {
       schema_version: GOAL_VISION_REPLAN_SCHEMA_VERSION, state: "vision_patch_proposed",
       vision_patch: {acceptance_summary: "Verified result; scoped work remains."},
       path_delta: {
-        outcome: "continue", prior_assumption: "Viable route.",
+        schema_version: GOAL_PATH_DELTA_SCHEMA_VERSION,
+        outcome: autonomousReplan ? "replan" : "continue", prior_assumption: "Viable route.",
         observed_reality: "Evidence supports the route.", retained: ["Route"],
         evidence_refs: ["evidence:verified-result"],
       },
     },
-    authoring_hint: "Replace example claims/refs with evidence; obey the live contract and total limit. " +
-      "For todo_delta, use retain:todo_<id> for existing work; supported verbs are activate, create, reopen, resume and retain. " +
-      "Replace todo_<id> with a verified Todo ID after normal authoring/readback. Entries record plans, not Todo mutations, claims or execution authority. " +
-      "For ordinary CLI writeback, pass the packet with --agent-vision-json <file>. " +
+    authoring_hint: "Adapt the example to observed evidence. Use its public-safe IDs or aliases in evidence_refs. " +
+      "Keep raw paths with the artifact. Follow the live contract and total limit. " +
+      "Use retain:todo_<id> for existing work in todo_delta. Verbs are activate, create, reopen, resume and retain. " +
+      "Use a verified Todo ID after normal authoring/readback. These entries describe plans and grant no Todo mutation, claim or execution authority. " +
+      "For ordinary CLI writeback, pass --agent-vision-json <file>. " +
+      (autonomousReplan
+        ? "JSON replaces the complete packet. For an existing Vision, the sparse minimal_example shows syntax. " +
+          "Use the current Agent's complete packet and full vision_patch. Read canonical status/history if unavailable. Never reconstruct intent from summaries. " +
+          "Edit only deliberately reviewed fields and supply a fresh path_delta. Keep the current state and all other fields. " +
+          "path_delta.retained text does not merge omitted fields. "
+        : "") +
       "checkpoint-context is only for recovery after the original committed Turn writeback; " +
       "follow its returned same-Turn recovery action, not a fresh-turn preflight.",
     total_text_limit: GOAL_VISION_TOTAL_LIMIT,
@@ -115,7 +130,19 @@ export function visionAuthoringContract(): JsonObject {
         ([field, [maxItems, maxChars]]) => [field, {item_type: "string", max_items: maxItems, max_item_chars: maxChars}],
       )),
     },
-    rule: "Material closeout: acceptance_summary + evidence-linked path_delta. Changed mainline: outcome=replan. vision_closed closes a stage, not Goal; no_followup: no scoped work.",
+    rule: "Material closeout: acceptance_summary + evidence-linked path_delta. " +
+      (autonomousReplan
+        ? `Autonomous review: changing ${GOAL_VISION_DURABLE_FIELDS.join(", ")} requires outcome=replan, even when the Goal objective stays unchanged. Retaining these fields permits continue/no_change. `
+        : "Changed mainline: outcome=replan. ") +
+      "vision_closed closes a stage, not Goal; no_followup: no scoped work.",
+    // Autonomous planning/Stride and settlement-only recovery carry their own
+    // decision guidance. Keep this reminder at the ordinary checkpoint entry.
+    ...(autonomousReplan ? {} : {
+      continuation_review: "For explicitly continuing/optimization objectives, candidate usability alone is not completion: before stop/no_followup, " +
+        "weigh acceptance gaps, plausible headroom and feasible next work's full marginal cost against accepted stops in an evidence-linked path_delta; " +
+        "continue/replan useful authorized work, preserve Stop, budget/permission limits and genuine waits, " +
+        "and never infer completion or invent work/pivots/successors from submission or unused budget alone.",
+    }),
   };
 }
 // Bounded typed fallback declarations survive prepare unchanged so the
@@ -171,7 +198,7 @@ const LABELED_CREDENTIAL_ASSIGNMENT = /\b(?:Bearer|token|password|secret)["']?\s
 // Python detector -- a raw remote location -- is deliberately not ported: it is
 // outside the internal-state policy, and the per-face URL decision is the
 // caller-migration work still open in #5136.
-const SECRET_LIKE_SHAPE = new RegExp("(?:\\bbearer\\s+[a-z0-9._~+/=-]{16,}|\\b(?:access|api|secret)[_-]?key[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]+|\\b(?:ak|sk)[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]+|(?<![a-z0-9_])(?:ak|sk)[-_=:][a-z0-9_=-]{10,}|\\bgh[pousr]_[a-z0-9]{16,}\\b|\\bgithub_pat_[a-z0-9_]{20,}|\\b(?:akia|asia)[a-z0-9]{16}\\b|\\bxox[baprs]-[a-z0-9-]{10,}|\\baiza[a-z0-9_-]{20,}|\\b(?:sk|rk)_(?:live|test)_[a-z0-9]{12,}|\\bnpm_[a-z0-9]{20,}|\\bpypi-[a-z0-9_-]{20,}|\\beyj[a-z0-9_-]{10,}\\.[a-z0-9_-]{10,}\\.[a-z0-9_-]{10,}\\b|\\b(?:access|refresh)[_-]?token[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,}|\\b(?:password|secret)[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,}|-{3,}\\s*BEGIN (?:[A-Z]+ )?PRIVATE KEY|\\btoken[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,})", "i");
+const SECRET_LIKE_SHAPE = new RegExp("(?:\\bbearer\\s+[a-z0-9._~+/=-]{16,}|\\b[a-z][a-z0-9+.-]*://[^/\\s:@`'\\\"<>]+:[^/\\s@`'\\\"<>]+@[^\\s`'\\\"<>]*|\\b(?:(?:aws[_-]?)?secret[_-]?access[_-]?key|(?:access|api|secret)[_-]?key)[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]+|\\b(?:ak|sk)[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]+|(?<![a-z0-9_])(?:ak|sk)[-_=:][a-z0-9_=-]{10,}|\\bgh[pousr]_[a-z0-9]{16,}\\b|\\bgithub_pat_[a-z0-9_]{20,}|\\b(?:akia|asia)[a-z0-9]{16}\\b|\\bxox[baprs]-[a-z0-9-]{10,}|\\baiza[a-z0-9_-]{20,}|\\b(?:sk|rk)_(?:live|test)_[a-z0-9]{12,}|\\bsk-(?:proj|svcacct|admin)-[a-z0-9_-]{20,}|\\bsk-ant-[a-z0-9_-]{20,}|\\bnpm_[a-z0-9]{20,}|\\bpypi-[a-z0-9_-]{20,}|\\beyj[a-z0-9_-]{10,}\\.[a-z0-9_-]{10,}\\.[a-z0-9_-]{10,}\\b|\\b(?:access|refresh)[_-]?token[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,}|\\b(?:password|secret)[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,}|-{3,}\\s*BEGIN (?:[A-Z]+ )?PRIVATE KEY[\\s\\S]*?(?:-{3,}\\s*END (?:[A-Z]+ )?PRIVATE KEY-{3,}|$)|\\btoken[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,})", "i");
 const LOCAL_PATH_SHAPE = new RegExp("(?<![:/A-Za-z0-9])(?:/(?:Users|home|Volumes|private|tmp|var|etc|opt|srv|mnt|root|data|workspace|workspaces)/[^\\s`'\\\"<>]+|[A-Za-z]:[\\\\/][^\\s`'\\\"<>]+|\\\\\\\\[A-Za-z0-9_.-]+\\\\[^\\s`'\\\"<>]+)", "i");
 export const CREDENTIAL_WORD_PATTERNS: RegExp[] = [/\bBearer\b/i, /\bpassword\b/i, /\bsecret\b/i];
 export const PRIVATE_TEXT_PATTERNS: RegExp[] = [
@@ -359,11 +386,40 @@ function visionBudgetError(
   return new EffectRuntimeRequestError(message, GOAL_VISION_BUDGET_ERROR);
 }
 
-function boundedPublicText(field: string, value: unknown, limit: number): string {
+// Only prepare collects recoverable budget failures. Other normalizer callers
+// retain fail-fast behavior, and malformed/private input still rejects directly.
+class VisionBudgetDiagnostics {
+  private failures: {error: EffectRuntimeRequestError; summary: string}[] = [];
+  completeUsage = true;
+
+  add(error: EffectRuntimeRequestError, summary = error.message): void {
+    this.failures.push({error, summary});
+  }
+
+  items<T>(field: string, items: T[], limit: number): T[] | null {
+    if (items.length <= limit) return items;
+    this.add(new EffectRuntimeRequestError(`${field} has ${items.length} items; limit is ${limit}`));
+    this.completeUsage = false;
+    // Preserve count-before-content rejection, without traversing unbounded
+    // input. finish() rejects before a diagnostic-only placeholder is used.
+    return null;
+  }
+
+  finish(): void {
+    const [first, ...rest] = this.failures;
+    if (!first) return;
+    if (!rest.length) throw first.error;
+    throw new EffectRuntimeRequestError(first.error.message, first.error.code,
+      rest.map(item => item.summary));
+  }
+}
+
+function boundedPublicText(field: string, value: unknown, limit: number,
+  diagnostics?: VisionBudgetDiagnostics): string {
   const text = compactText(value);
   validatePublicSafeText(`agent_vision.${field}`, text);
   if (text.length > limit) {
-    throw visionBudgetError(
+    const error = visionBudgetError(
       field,
       text.length,
       limit,
@@ -372,6 +428,8 @@ function boundedPublicText(field: string, value: unknown, limit: number): string
         Math.min(limit, VISION_BUDGET_SUGGESTION_LIMIT),
       ),
     );
+    if (!diagnostics) throw error;
+    diagnostics.add(error, `${field} uses ${text.length} chars; limit is ${limit}`);
   }
   return text;
 }
@@ -380,10 +438,11 @@ function packetText(
   packet: JsonObject,
   field: string,
   limit: number,
+  diagnostics?: VisionBudgetDiagnostics,
 ): string | null {
   const value = packet[field];
   if (value === null || value === undefined) return null;
-  return boundedPublicText(field, value, limit) || null;
+  return boundedPublicText(field, value, limit, diagnostics) || null;
 }
 
 function normalizeGoalVisionState(value: unknown): string {
@@ -398,6 +457,37 @@ function normalizeGoalVisionState(value: unknown): string {
   return GOAL_VISION_STATE_ALIASES[state] ?? state;
 }
 
+/** The existing lifecycle vocabulary is shared with the Python read model. */
+export function goalVisionStateIsOpen(value: unknown): boolean {
+  try { return !lifecycle.closed_states.includes(normalizeGoalVisionState(value)); }
+  catch { return false; }
+}
+
+/** Qualify an open Todo's evidence checkpoint without accepting its deliverable.
+ * Write-time callers supply the admitted identity and prepared Vision; spend
+ * callers first verify the exact durable receipt. Terminal validation remains
+ * with Todo completion. An unchanged reason alone is not new decision evidence. */
+export function qualifiesOpenTodoSemanticCheckpoint(value: unknown, identity: SettlementIdentity): boolean {
+  const run = jsonObject(value), checkpoint = jsonObject(run?.vision_checkpoint);
+  const persisted = jsonObject(run?.settlement_identity), vision = jsonObject(run?.agent_vision);
+  if (!isAcceptedProgressWriteback(run, identity) || run?.completion_todo_id != null ||
+      checkpoint?.delivery_boundary !== "semantic_closeout" || checkpoint.required !== true ||
+      checkpoint.decision !== "patched" || !persisted ||
+      Object.entries(settlementIdentityPayload(identity)).some(([key, value]) => persisted[key] !== value) ||
+      vision?.schema_version !== "goal_vision_replan_contract_v0" ||
+      // Compact run history omits this redundant Goal field; the exact run
+      // and settlement identity above still bind it. Present conflicts fail.
+      (vision.goal_id != null && vision.goal_id !== identity.goal_id) ||
+      vision.agent_id !== identity.agent_id || typeof vision.state !== "string" || !vision.state.trim() ||
+      !goalVisionStateIsOpen(vision.state)) return false;
+  const acceptance = jsonObject(vision.vision_patch)?.acceptance_summary;
+  let path;
+  try { [path] = normalizeGoalPathDelta(vision.path_delta); } catch { return false; }
+  return typeof acceptance === "string" && !!acceptance.trim() && !!path &&
+    (path.outcome === "continue" || path.outcome === "no_change") &&
+    Array.isArray(path.evidence_refs) && path.evidence_refs.length > 0;
+}
+
 function normalizeAdvancementPolicy(value: unknown): string {
   const candidate = compactText(value).toLowerCase().replaceAll("-", "_");
   if (!GOAL_VISION_ADVANCEMENT_POLICIES.some(policy => policy === candidate)) {
@@ -410,8 +500,19 @@ function normalizeAdvancementPolicy(value: unknown): string {
 
 // Reuse the same authoring rule when an optional capability references this
 // explicit packet; callers never recreate its validation or state vocabulary.
+export function normalizeGoalPathDeltaOutcome(value: unknown): string {
+  const outcome = compactText(value).toLowerCase().replaceAll("-", "_");
+  if (!(GOAL_PATH_DELTA_OUTCOMES as readonly string[]).includes(outcome)) {
+    throw new EffectRuntimeRequestError(
+      `agent_vision.path_delta.outcome must be one of: ${GOAL_PATH_DELTA_OUTCOMES.join(", ")}`,
+    );
+  }
+  return outcome;
+}
+
 export function normalizeGoalPathDelta(
   value: unknown,
+  diagnostics?: VisionBudgetDiagnostics,
 ): [JsonObject | null, Record<string, number>] {
   if (value === null || value === undefined) return [null, {}];
   const source = requiredObject(value, "agent_vision.path_delta");
@@ -420,12 +521,7 @@ export function normalizeGoalPathDelta(
       `agent_vision.path_delta.schema_version must be ${GOAL_PATH_DELTA_SCHEMA_VERSION}`,
     );
   }
-  const outcome = compactText(source.outcome).toLowerCase().replaceAll("-", "_");
-  if (!(GOAL_PATH_DELTA_OUTCOMES as readonly string[]).includes(outcome)) {
-    throw new EffectRuntimeRequestError(
-      `agent_vision.path_delta.outcome must be one of: ${GOAL_PATH_DELTA_OUTCOMES.join(", ")}`,
-    );
-  }
+  const outcome = normalizeGoalPathDeltaOutcome(source.outcome);
 
   const normalized: JsonObject = {
     schema_version: GOAL_PATH_DELTA_SCHEMA_VERSION,
@@ -437,7 +533,7 @@ export function normalizeGoalPathDelta(
   for (const [field, limit] of Object.entries(GOAL_PATH_DELTA_SCALAR_LIMITS)) {
     const rawValue = source[field];
     if (rawValue === null || rawValue === undefined) continue;
-    const text = boundedPublicText(`path_delta.${field}`, rawValue, limit);
+    const text = boundedPublicText(`path_delta.${field}`, rawValue, limit, diagnostics);
     if (!text) continue;
     normalized[field] = text;
     fieldUsage[`path_delta.${field}`] = text.length;
@@ -452,17 +548,23 @@ export function normalizeGoalPathDelta(
       );
     }
     const [maxItems, itemLimit] = limits;
-    if (rawItems.length > maxItems) {
+    if (rawItems.length > maxItems && !diagnostics) {
       throw new EffectRuntimeRequestError(
         `agent_vision.path_delta.${field} has ${rawItems.length} items; limit is ${maxItems}`,
       );
     }
     const items: string[] = [];
-    rawItems.forEach((item, index) => {
+    const checkedItems = diagnostics ? diagnostics.items(`agent_vision.path_delta.${field}`, rawItems, maxItems) : rawItems;
+    if (checkedItems === null) {
+      normalized[field] = [];
+      continue;
+    }
+    checkedItems.forEach((item, index) => {
       const text = boundedPublicText(
         `path_delta.${field}[${index}]`,
         item,
         itemLimit,
+        diagnostics,
       );
       if (!text) return;
       items.push(text);
@@ -486,6 +588,7 @@ export function normalizeGoalPathDelta(
 
 function normalizeFallbackDeclarations(
   value: unknown,
+  diagnostics?: VisionBudgetDiagnostics,
 ): [JsonObject[], Record<string, number>] | null {
   if (value === null || value === undefined) return null;
   if (!Array.isArray(value)) {
@@ -494,7 +597,7 @@ function normalizeFallbackDeclarations(
     );
   }
   if (value.length === 0) return null;
-  if (value.length > VISION_FALLBACK_DECLARATION_ENTRY_LIMIT) {
+  if (value.length > VISION_FALLBACK_DECLARATION_ENTRY_LIMIT && !diagnostics) {
     throw new EffectRuntimeRequestError(
       `agent_vision.fallback_declarations has ${value.length} items; limit is ${VISION_FALLBACK_DECLARATION_ENTRY_LIMIT}`,
     );
@@ -502,7 +605,10 @@ function normalizeFallbackDeclarations(
   const declarations: JsonObject[] = [];
   const seenIds = new Set<string>();
   const fieldUsage: Record<string, number> = {};
-  value.forEach((raw, index) => {
+  const checkedItems = diagnostics ? diagnostics.items("agent_vision.fallback_declarations", value,
+    VISION_FALLBACK_DECLARATION_ENTRY_LIMIT) : value;
+  if (checkedItems === null) return [[], {}];
+  checkedItems.forEach((raw, index) => {
     const entry = requiredObject(
       raw,
       `agent_vision.fallback_declarations[${index}]`,
@@ -511,6 +617,7 @@ function normalizeFallbackDeclarations(
       `fallback_declarations[${index}].declaration_id`,
       entry.declaration_id ?? null,
       VISION_FALLBACK_DECLARATION_ID_LIMIT,
+      diagnostics,
     );
     if (!declarationId) {
       throw new EffectRuntimeRequestError(
@@ -531,6 +638,7 @@ function normalizeFallbackDeclarations(
         `fallback_declarations[${index}].${field}`,
         entry[field],
         VISION_FALLBACK_DECLARATION_ID_LIMIT,
+        diagnostics,
       );
       if (!text) continue;
       declaration[field] = text;
@@ -630,10 +738,14 @@ function prepareVisionRefresh(request: VisionRefreshPrepareRequest): JsonObject 
 
   const visionPatch: JsonObject = {};
   const fieldUsage: Record<string, number> = {};
+  const diagnostics = new VisionBudgetDiagnostics();
   for (const [field, limit] of Object.entries(GOAL_VISION_FIELD_LIMITS)) {
-    let text = packetText(source, field, limit);
+    let text = packetText(source, field, limit, diagnostics);
     if (text === null) continue;
-    if (field === "advancement_policy") text = normalizeAdvancementPolicy(text);
+    // An over-budget enum already has its original field-level rejection.
+    // Decoding that same invalid value must not replace it with invalid_request;
+    // unrelated structural/privacy checks below still run normally.
+    if (field === "advancement_policy" && text.length <= limit) text = normalizeAdvancementPolicy(text);
     visionPatch[field] = text;
     fieldUsage[field] = text.length;
   }
@@ -643,37 +755,44 @@ function prepareVisionRefresh(request: VisionRefreshPrepareRequest): JsonObject 
     );
   }
 
-  const [pathDelta, pathDeltaUsage] = normalizeGoalPathDelta(updatePacket.path_delta);
+  const [pathDelta, pathDeltaUsage] = normalizeGoalPathDelta(updatePacket.path_delta, diagnostics);
+  const visionUsage = Object.values(fieldUsage).reduce((total, used) => total + used, 0);
   Object.assign(fieldUsage, pathDeltaUsage);
-  const [strideDecision, strideUsage] = normalizeStrideDecision(updatePacket.stride_decision, boundedPublicText);
+  const [strideDecision, strideUsage] = normalizeStrideDecision(updatePacket.stride_decision,
+    (field, value, limit) => boundedPublicText(field, value, limit, diagnostics));
   const allowedStridePaths = request.allow_terminal_stride_path
     ? ["continue", "no_change", "replan", "stop"]
     : ["continue", "no_change", "replan"];
-  if (strideDecision && (!pathDelta || !allowedStridePaths.includes(String(pathDelta.outcome)) ||
+  // An oversized list has not supplied a validated evidence set yet; report its
+  // count first rather than diagnosing the temporary placeholder as missing.
+  if (diagnostics.completeUsage && strideDecision && (!pathDelta || !allowedStridePaths.includes(String(pathDelta.outcome)) ||
       !Array.isArray(pathDelta.evidence_refs) || !pathDelta.evidence_refs.length)) {
     throw new EffectRuntimeRequestError("stride_decision requires an evidence-linked path decision");
   }
   Object.assign(fieldUsage, strideUsage);
   const [fallbackDeclarations, fallbackUsage] = normalizeFallbackDeclarations(
     updatePacket.fallback_declarations,
+    diagnostics,
   ) ?? [null, {}];
   Object.assign(fieldUsage, fallbackUsage);
   const totalUsage = Object.values(fieldUsage).reduce((total, used) => total + used, 0);
-  if (totalUsage > GOAL_VISION_TOTAL_LIMIT) {
-    throw visionBudgetError(
-      "total_agent_vision",
-      totalUsage,
-      GOAL_VISION_TOTAL_LIMIT,
-    );
+  if (diagnostics.completeUsage && totalUsage > GOAL_VISION_TOTAL_LIMIT) {
+    const sections = {vision_patch: visionUsage, path_delta: pathDeltaUsage,
+      stride_decision: strideUsage, fallback_declarations: fallbackUsage};
+    const usage = Object.entries(sections).map(([name, fields]) => name + "=" +
+      (typeof fields === "number" ? fields : Object.values(fields).reduce((total, used) => total + used, 0))).join(", ");
+    diagnostics.add(new EffectRuntimeRequestError(`${GOAL_VISION_BUDGET_ERROR}: total_agent_vision uses ${totalUsage} chars; ` +
+      `limit is ${GOAL_VISION_TOTAL_LIMIT}; usage: ${usage}; shorten counted text`, GOAL_VISION_BUDGET_ERROR));
   }
 
   const todoDelta: string[] = [];
   if (Array.isArray(updatePacket.todo_delta)) {
     for (const item of updatePacket.todo_delta.slice(0, VISION_TODO_DELTA_ENTRY_LIMIT)) {
-      const text = boundedPublicText("todo_delta", item, VISION_TODO_DELTA_TEXT_LIMIT);
+      const text = boundedPublicText("todo_delta", item, VISION_TODO_DELTA_TEXT_LIMIT, diagnostics);
       if (text) todoDelta.push(text);
     }
   }
+  diagnostics.finish();
   const rawValidation = typeof updatePacket.validation === "object" &&
       updatePacket.validation !== null && !Array.isArray(updatePacket.validation)
     ? updatePacket.validation as JsonObject
@@ -767,6 +886,25 @@ function existingVisionContinuityBasis(
     kind: "existing_vision_unchanged",
     vision_generated_at: generatedAt.trim(),
   };
+}
+
+function materialOutcomeCheckpointFailures(
+  vision: JsonObject,
+): string[] {
+  let closed = false;
+  try {
+    closed = lifecycle.closed_states.includes(normalizeGoalVisionState(vision.state));
+  } catch {
+    // Invalid lifecycle state is not evidence of a closed frontier.
+  }
+  if (closed) return [];
+
+  const path = optionalObject(vision.path_delta, "agent_vision.path_delta");
+  if (path === null) return [];
+  const outcome = compactText(path.outcome);
+  return (OUTCOME_CHECKPOINT_CONTINUATION_OUTCOMES as readonly string[]).includes(outcome)
+    ? []
+    : ["path_outcome_valid"];
 }
 
 function deliveryBoundary(value: unknown): DeliveryBoundary {
@@ -904,17 +1042,38 @@ export function buildVisionCheckpoint(value: unknown): JsonObject {
     trigger.kind !== "in_flight_continuation"
   );
   const required = requiredTriggers.length > 0 || unchanged !== null;
+  const materialCloseout = request.delivery_outcome !== "outcome_gap" && triggers.some((trigger) =>
+    trigger.kind === "material_delivery_outcome"
+  );
+  const patchedFailures = request.agent_vision !== null && materialCloseout
+    ? materialOutcomeCheckpointFailures(
+      request.agent_vision,
+    )
+    : [];
+  const unchangedBasis = unchanged !== null
+    ? existingVisionContinuityBasis(request.existing_agent_vision)
+    : null;
+  const unchangedFailures =
+    unchanged !== null && request.existing_agent_vision !== null && materialCloseout
+      ? materialOutcomeCheckpointFailures(
+        request.existing_agent_vision,
+      )
+      : [];
   let decision: VisionCheckpointDecision;
   let satisfied: boolean;
-  if (request.agent_vision !== null) {
+  let unqualifiedComponents: string[] = [];
+  if (request.agent_vision !== null && patchedFailures.length === 0) {
     decision = "patched";
     satisfied = true;
-  } else if (unchanged !== null && request.existing_agent_vision !== null) {
+  } else if (unchanged !== null && request.existing_agent_vision !== null && unchangedFailures.length === 0) {
     decision = "unchanged_with_reason";
     satisfied = true;
   } else if (unchanged !== null || required) {
     decision = "missing_required";
     satisfied = false;
+    unqualifiedComponents = patchedFailures.length > 0
+      ? patchedFailures
+      : unchangedFailures;
   } else {
     decision = "not_required";
     satisfied = true;
@@ -932,14 +1091,14 @@ export function buildVisionCheckpoint(value: unknown): JsonObject {
   if (request.agent_vision !== null) {
     checkpoint.agent_vision_state = request.agent_vision.state;
   }
+  if (unqualifiedComponents.length > 0) {
+    checkpoint.unqualified_components = unqualifiedComponents;
+  }
   if (unchanged !== null && request.existing_agent_vision !== null) {
     checkpoint.unchanged_reason = unchanged;
     checkpoint.agent_vision_state = request.existing_agent_vision.state;
-    const continuityBasis = existingVisionContinuityBasis(
-      request.existing_agent_vision,
-    );
-    if (continuityBasis !== null) {
-      checkpoint.continuity_basis = continuityBasis;
+    if (unchangedBasis !== null) {
+      checkpoint.continuity_basis = unchangedBasis;
     }
   } else if (unchanged !== null) {
     checkpoint.missing_baseline = true;

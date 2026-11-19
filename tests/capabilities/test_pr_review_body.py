@@ -107,6 +107,47 @@ def test_duplicate_sections_are_not_merged_into_a_passing_review():
     assert "duplicate_section:动机" in result["invalid_reasons"]
 
 
+def test_bilingual_headings_keep_canonical_evidence_sections_and_prose_floors():
+    from loopx.capabilities.pr_review_queue.review_body import review_section_text
+
+    body = review_body()
+    headings = [("动机", "Motivation"), ("改动思路", "Approach"), ("具体改动", "Changes"),
+                ("对主干的风险", "Risks"), ("我的整体评价", "Verdict")]
+    for chinese, english in headings:
+        body = body.replace(f"## {chinese}\n", f"## {chinese} / {english}\n")
+    original = check_review_body(review_body(), head_oid=HEAD, behavior_bearing=True)
+    translated = check_review_body(body, head_oid=HEAD, behavior_bearing=True)
+    assert translated == original
+    for chinese, _ in headings:
+        assert review_section_text(body, chinese) == review_section_text(review_body(), chinese)
+
+
+@pytest.mark.parametrize("heading", ["动机 / Other", "动机 / Motivation / Extra", "Motivation"])
+def test_bilingual_aliases_do_not_accept_arbitrary_or_english_only_headings(heading):
+    body = review_body().replace("## 动机\n", f"## {heading}\n")
+    result = check_review_body(body, head_oid=HEAD, behavior_bearing=True)
+    assert "missing_section:动机" in result["invalid_reasons"]
+
+
+def test_chinese_and_bilingual_alias_cannot_hide_duplicate_or_empty_sections():
+    result = check_review_body(review_body() + "\n## 动机 / Motivation\n重复。",
+                               head_oid=HEAD, behavior_bearing=True)
+    assert "duplicate_section:动机" in result["invalid_reasons"]
+    body = review_body()
+    start, end = body.index("## 对主干的风险"), body.index("## 我的整体评价")
+    body = body[:start] + "## 对主干的风险 / Risks\nFAIL\n" + body[end:]
+    result = check_review_body(body, head_oid=HEAD, behavior_bearing=True)
+    assert any(reason.startswith("section_too_short:对主干的风险")
+               for reason in result["invalid_reasons"])
+
+
+@pytest.mark.parametrize("wrapper", ["```\n{}\n```", "<!--\n{}\n-->"])
+def test_bilingual_heading_remains_hidden_in_code_or_comment(wrapper):
+    body = review_body().replace("## 动机\n", "## 动机 / Motivation\n")
+    result = check_review_body(wrapper.format(body), head_oid=HEAD, behavior_bearing=True)
+    assert "missing_section:动机" in result["invalid_reasons"]
+
+
 def test_multiple_english_verdict_lines_cannot_hide_a_contradiction():
     result = check_review_body(review_body() + "\nEnglish verdict: REQUEST_CHANGES", head_oid=HEAD,
                                behavior_bearing=True)

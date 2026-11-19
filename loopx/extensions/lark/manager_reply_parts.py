@@ -13,8 +13,8 @@ has the whole answer even when the caller never got to write its own receipt
 That case settles from the record instead of re-sending nothing forever.
 
 A send the provider accepted but did not read back leaves its provider locator
-in the same record. The next attempt verifies that locator before sending the
-part again, so an ambiguous send is reconciled instead of repeated.
+in the same record. The next attempt verifies that locator before sending
+any further part, so an ambiguous send is reconciled instead of repeated.
 
 A partly delivered answer also has to look partly delivered: once the sequence
 has stopped mid-answer three times, one bounded notice tells the reader how much
@@ -33,16 +33,8 @@ from .inbox_reply import (
     reply_lark_event_inbox,
     verify_lark_inbox_reply,
 )
-from .outbound import DEFAULT_LARK_TEXT_LIMIT, split_lark_outbound_text
+from .presentation.markdown_parts import split_lark_markdown_posts
 
-# An oversized answer is delivered as a bounded sequence rather than a flood:
-# past this many parts the answer keeps its leading parts and ends with a note
-# naming where the full text is already saved.
-MANAGER_REPLY_MAX_PARTS = 8
-MANAGER_REPLY_OVERFLOW_NOTE = (
-    "本条答复超过可投递长度，上面已按顺序发送前面的部分；"
-    "完整答复保存在 LoopX 管家会话中。"
-)
 PART_DELIVERY_COMPLETE_KEY = "delivery_parts_complete"
 PART_DELIVERY_VERIFIED_KEY = "delivery_parts_verified"
 PART_ATTEMPT_KEY = "delivery_part_attempt"
@@ -57,24 +49,15 @@ PART_DELIVERY_COMPLETION_UNVERIFIED = "reply_part_delivery_completion_unverified
 # provider hiccup never turns into a message the reader did not need.
 PART_STALL_NOTICE_MIN_STALLS = 3
 MANAGER_REPLY_STALL_NOTICE = (
-    "本条答复超过可发送长度，目前只发出了前面的 {sent}/{count} 段；"
+    "本条答复已拆分，目前已核验前面的 {sent}/{count} 段；"
     "完整答复保存在 LoopX 管家会话中，剩余分段会继续重试。"
 )
 
 
 def plan_manager_reply_parts(reply_text: str) -> tuple[list[str], bool]:
-    """Return the parts to deliver and whether the remainder was replaced."""
+    """Return complete rich parts; the legacy truncation flag is always false."""
 
-    parts = split_lark_outbound_text(
-        reply_text,
-        limit=DEFAULT_LARK_TEXT_LIMIT,
-        max_parts=MANAGER_REPLY_MAX_PARTS,
-        overflow_note=MANAGER_REPLY_OVERFLOW_NOTE,
-    )
-    truncated = len(parts) == MANAGER_REPLY_MAX_PARTS and (
-        MANAGER_REPLY_OVERFLOW_NOTE in parts[-1]
-    )
-    return parts, truncated
+    return split_lark_markdown_posts(reply_text, {"msg_type": "post", "uuid": "loopx-" + "0" * 32}), False
 
 
 def _reply_verified(reply: Mapping[str, Any]) -> bool:
@@ -142,7 +125,7 @@ def completed_part_delivery_receipt(
         "ok": True,
         "status": "sent_verified",
         "idempotency_key": key,
-        "content_format": "text",
+        "content_format": delivery_state.get("content_format", "text"),
         "external_write_performed": True,
         "verification_performed": True,
         "reply_verified": True,
@@ -239,13 +222,12 @@ def reconciled_part_reply(
     root: Path,
     config_path: Path,
     message_id: str,
+    reply_options: Mapping[str, Any] | None = None,
 ) -> Mapping[str, Any] | None:
     """Confirm a previously attempted part instead of sending it twice.
 
-    Returns the verification result when the provider still reports the part on
-    the channel, and ``None`` when there is nothing to reconcile or the provider
-    could not confirm it (the caller then sends the part, as before). The
-    verification performs no write of its own.
+    Return ``None`` only when no write was recorded. A known write stays pending
+    until readback confirms it; verification performs no write of its own.
     """
 
     attempt = recorded_part_attempt(delivery_state, index)
@@ -264,9 +246,11 @@ def reconciled_part_reply(
         text=parts[index],
         attempt=attempt,
         runner=reply_runner,
+        **dict(reply_options or {}),
     )
     if verified.get("reply_verified") is not True:
-        return None
+        # A known write with unavailable/mismatched readback is never unsent.
+        return verified
     return {**dict(verified), "part_reconciled": True}
 
 
@@ -278,6 +262,7 @@ def reconciled_stall_notice(
     root: Path,
     config_path: Path,
     message_id: str,
+    reply_options: Mapping[str, Any] | None = None,
 ) -> Mapping[str, Any] | None:
     """Confirm a previously sent stall notice instead of posting it twice.
 
@@ -299,19 +284,18 @@ def reconciled_stall_notice(
         text=notice,
         attempt=attempt,
         runner=reply_runner,
+        **{key: value for key, value in (reply_options or {}).items() if key != "before_send"},
     )
     if verified.get("reply_verified") is not True:
-        return None
+        return verified
     return {**dict(verified), "notice_reconciled": True}
 
 
 def plan_stalled_part_notice(delivery_state: Mapping[str, Any]) -> str | None:
     """The bounded notice a stalled sequence posts once, after real retries.
 
-    A reader who received the first parts of an over-limit answer currently
-    learns nothing more: the overflow note that says where the full answer lives
-    only travels with the last part, and the remaining parts are retried in the
-    background. This notice states what was delivered and where the rest is, and
+    A reader who received only the first parts needs to know the answer is
+    incomplete. This notice states what was delivered and where the rest is, and
     it waits for three stalled attempts so an ordinary hiccup stays quiet.
     """
 
@@ -343,6 +327,7 @@ def deliver_stall_notice(
     root: Path,
     config_path: Path,
     message_id: str,
+    reply_options: Mapping[str, Any] | None = None,
 ) -> Mapping[str, Any] | None:
     """Post the once-per-sequence stall notice, confirming a prior send first.
 
@@ -360,6 +345,7 @@ def deliver_stall_notice(
         root=root,
         config_path=config_path,
         message_id=message_id,
+        reply_options=reply_options,
     )
     if reconciled is not None:
         if reconciled.get("notice_reconciled") is not True:
@@ -372,6 +358,8 @@ def deliver_stall_notice(
         # here on, so the attempt that proved it is no longer needed.
         delivery_state.pop(PART_STALL_NOTICE_ATTEMPT_KEY, None)
         return reconciled
+    if delivery_state.get("delivery_part_stall_notice_started") is True:
+        return _locator_unavailable_result(reconciled_key="notice_reconciled")
     # The locator of the send being attempted now replaces any older one, so the
     # record always points at the most recent unconfirmed notice. This runs only
     # on the path that is about to call the provider, where the old record is
@@ -385,16 +373,24 @@ def deliver_stall_notice(
         delivery_state["updated_at"] = datetime.now(timezone.utc).isoformat()
         write_delivery(delivery_path, delivery_state)
 
-    return reply_lark_event_inbox(
+    delivery_state["delivery_part_stall_notice_started"] = True
+    write_delivery(delivery_path, delivery_state)
+    result = reply_lark_event_inbox(
         project=root,
         config_path=config_path,
         message_id=message_id,
         text=notice,
-        content_format="text",
+        content_format="markdown",
         execute=True,
         runner=reply_runner,
         delivery_attempt_recorder=record_attempt,
+        **dict(reply_options or {}),
     )
+    if (result.get("external_write_performed") is not True
+            and result.get("provider_write_attempted") is not True):
+        delivery_state.pop("delivery_part_stall_notice_started", None)
+    write_delivery(delivery_path, delivery_state)
+    return result
 
 
 def deliver_manager_reply_parts(
@@ -408,6 +404,7 @@ def deliver_manager_reply_parts(
     config_path: Path,
     message_id: str,
     content_format: str,
+    reply_options=None,
 ) -> Mapping[str, Any] | None:
     """Send the remaining parts in order, resuming from the recorded count.
 
@@ -439,7 +436,8 @@ def deliver_manager_reply_parts(
     delivery_state.update(
         delivery_part_count=len(parts),
         delivery_parts_sent=sent,
-        format_degraded=True,
+        format_degraded=content_format != "markdown",
+        content_format=content_format,
         updated_at=datetime.now(timezone.utc).isoformat(),
     )
     # A sequence that is still being sent is not a complete one, even when a
@@ -448,6 +446,7 @@ def deliver_manager_reply_parts(
     write_delivery(delivery_path, delivery_state)
     last: Mapping[str, Any] | None = None
     for index in range(sent, len(parts)):
+        options = dict(reply_options(index) if reply_options is not None else {})
         last = reconciled_part_reply(
             parts=parts,
             index=index,
@@ -456,8 +455,13 @@ def deliver_manager_reply_parts(
             root=root,
             config_path=config_path,
             message_id=message_id,
+            reply_options={key: value for key, value in options.items() if key != "before_send"},
         )
         if last is None:
+            if delivery_state.get("delivery_part_started") == index:
+                # A crash between a provider write and its locator is ambiguous.
+                # The original intent stays recoverable; do not post it again.
+                return None
             # The locator of the part being sent now replaces any older one, so
             # the record always points at the most recent unconfirmed attempt.
             delivery_state.pop(PART_ATTEMPT_KEY, None)
@@ -467,11 +471,14 @@ def deliver_manager_reply_parts(
                     "index": index,
                     "attempt": dict(attempt),
                 }
+                delivery_state.setdefault("delivery_part_attempts", {})[str(index)] = dict(attempt)
                 delivery_state["updated_at"] = datetime.now(
                     timezone.utc
                 ).isoformat()
                 write_delivery(delivery_path, delivery_state)
 
+            delivery_state["delivery_part_started"] = index
+            write_delivery(delivery_path, delivery_state)
             last = reply_lark_event_inbox(
                 project=root,
                 config_path=config_path,
@@ -484,7 +491,12 @@ def deliver_manager_reply_parts(
                 # Part delivery is the fallback for a body the provider itself
                 # cannot take; a part is never cut by the notification length.
                 short_message_limit=None,
+                **options,
             )
+            if last.get("external_write_performed") is not True and last.get("provider_write_attempted") is not True:
+                delivery_state.pop("delivery_part_started", None)
+            elif last.get("provider_write_attempted") is True:
+                delivery_state["delivery_write_attempted"] = True
         if not _part_accepted(last):
             delivery_state.update(
                 delivery_parts_sent=index,
@@ -494,6 +506,7 @@ def deliver_manager_reply_parts(
             write_delivery(delivery_path, delivery_state)
             return None
         delivery_state.pop(PART_ATTEMPT_KEY, None)
+        delivery_state.pop("delivery_part_started", None)
         delivery_state.update(
             delivery_parts_sent=index + 1,
             **(
@@ -518,21 +531,9 @@ def deliver_manager_reply_after_length_failure(
     config_path: Path,
     message_id: str,
 ) -> tuple[Mapping[str, Any] | None, str | None]:
-    """Deliver one over-limit manager answer as bounded parts.
+    """Deliver the complete answer as ordered rich posts, with recovery."""
 
-    Returns the last accepted reply, or ``None`` plus the reason to report when
-    a part was rejected. A sequence that stops with parts still unsent also tells
-    the reader what went out, once, after enough failed attempts. Plain text is
-    the only format a split can promise, so the caller has already degraded
-    presentation before calling this.
-    """
-
-    parts, truncated = plan_manager_reply_parts(reply_text)
-    if truncated:
-        delivery_state.update(
-            delivery_truncated=True,
-            delivery_source_char_count=len(reply_text),
-        )
+    parts, _ = plan_manager_reply_parts(reply_text)
     reply = deliver_manager_reply_parts(
         parts=parts,
         delivery_state=delivery_state,
@@ -542,7 +543,7 @@ def deliver_manager_reply_after_length_failure(
         root=root,
         config_path=config_path,
         message_id=message_id,
-        content_format="text",
+        content_format="markdown",
     )
     if reply is not None:
         return reply, None
@@ -591,7 +592,7 @@ def manager_part_delivery_pending_result(
         "delivery_part_count": delivery_state.get("delivery_part_count"),
         "delivery_parts_sent": delivery_state.get("delivery_parts_sent"),
         "delivery_notice_sent": delivery_state.get(PART_STALL_NOTICE_KEY) is True,
-        "format_degraded": True,
+        "format_degraded": delivery_state.get("content_format") != "markdown",
         "goal_id": goal_id,
         "inbox_config_ref": inbox_config_ref,
         "source_acknowledged": False,

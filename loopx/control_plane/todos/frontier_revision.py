@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import zlib
+from pathlib import Path
 from typing import Any
 
 # Refs #4447: the todo contract owns this vocabulary; import it instead of
@@ -20,39 +21,7 @@ from .todo_semantics import todo_item_is_actionable_open, todo_item_task_class
 TODO_FRONTIER_REVISION_SCHEMA_VERSION = "todo_frontier_revision_v0"
 TODO_FRONTIER_REVISION_INDEX_SCHEMA_VERSION = "todo_frontier_revision_index_v0"
 
-FRONTIER_REVISION_FIELDS = (
-    "todo_id",
-    "status",
-    "done",
-    "title",
-    "text",
-    "task_class",
-    "claimed_by",
-    "bound_agent",
-    "blocks_agent",
-    "excluded_agents",
-    "priority",
-    "action_kind",
-    "task_domain",
-    "task_repository",
-    "capability_binding_ref",
-    "required_capabilities",
-    "target_capabilities",
-    "target_key",
-    "continuation_policy",
-    "removed_continuation_policy",
-    "decision_scope",
-    "required_decision_scopes",
-    "decision_outcome",
-    "replan_obligation_id",
-    "unblocks_todo_id",
-    "depends_on_todo_id",
-    "depends_on_todo_ids",
-    "resume_when",
-    "no_followup",
-    "successor_todo_ids",
-    "completion_continuation",
-)
+FRONTIER_REVISION_FIELDS = tuple(json.loads(Path(__file__).with_name("read_legacy_codec.json").read_text(encoding="utf-8"))["frontier_fields"])
 
 
 def frontier_source_facts(

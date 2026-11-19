@@ -1,0 +1,433 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="1051.2pt" height="561.6pt" viewBox="0 0 1051.2 561.6" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.11.2, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 561.6
+L 1051.2 561.6
+L 1051.2 0
+L 0 0
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 178.704 463.32
+L 605.847438 463.32
+L 605.847438 109.512
+L 178.704 109.512
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_1">
+    <g id="xtick_1">
+     <g id="line2d_1">
+      <path d="M 178.704 463.32
+L 178.704 109.512
+" clip-path="url(#pd81db1c1d1)" style="fill: none; stroke: #e2e8f0; stroke-width: 0.7; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_2"/>
+     <g id="context-axis-0">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle" x="178.704" y="475.42" transform="rotate(-0 178.704 475.42)">0</text>
+     </g>
+    </g>
+    <g id="xtick_2">
+     <g id="line2d_3">
+      <path d="M 256.649883 463.32
+L 256.649883 109.512
+" clip-path="url(#pd81db1c1d1)" style="fill: none; stroke: #e2e8f0; stroke-width: 0.7; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_4"/>
+     <g id="context-axis-25">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle" x="256.649883" y="475.42" transform="rotate(-0 256.649883 475.42)">25</text>
+     </g>
+    </g>
+    <g id="xtick_3">
+     <g id="line2d_5">
+      <path d="M 334.595766 463.32
+L 334.595766 109.512
+" clip-path="url(#pd81db1c1d1)" style="fill: none; stroke: #e2e8f0; stroke-width: 0.7; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_6"/>
+     <g id="context-axis-50">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle" x="334.595766" y="475.42" transform="rotate(-0 334.595766 475.42)">50</text>
+     </g>
+    </g>
+    <g id="xtick_4">
+     <g id="line2d_7">
+      <path d="M 412.541648 463.32
+L 412.541648 109.512
+" clip-path="url(#pd81db1c1d1)" style="fill: none; stroke: #e2e8f0; stroke-width: 0.7; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_8"/>
+     <g id="context-axis-75">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle" x="412.541648" y="475.42" transform="rotate(-0 412.541648 475.42)">75</text>
+     </g>
+    </g>
+    <g id="xtick_5">
+     <g id="line2d_9">
+      <path d="M 490.487531 463.32
+L 490.487531 109.512
+" clip-path="url(#pd81db1c1d1)" style="fill: none; stroke: #e2e8f0; stroke-width: 0.7; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_10"/>
+     <g id="context-axis-100">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle" x="490.487531" y="475.42" transform="rotate(-0 490.487531 475.42)">100</text>
+     </g>
+    </g>
+    <g id="text_1">
+     <text style="font-size: 9.5px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #334155" x="392.275719" y="488.99" transform="rotate(-0 392.275719 488.99)">EdgeBench normalized score (/100, higher is better)</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_2">
+    <g id="ytick_1">
+     <g id="line2d_11"/>
+     <g id="text_2">
+      <text style="font-size: 9.5px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="175.204" y="142.278126" transform="rotate(-0 175.204 142.278126)">ANN · historical, time unverified</text>
+     </g>
+    </g>
+    <g id="ytick_2">
+     <g id="line2d_12"/>
+     <g id="text_3">
+      <text style="font-size: 9.5px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="175.204" y="179.333845" transform="rotate(-0 175.204 179.333845)">FFmpeg · shorter OFF</text>
+     </g>
+    </g>
+    <g id="ytick_3">
+     <g id="line2d_13"/>
+     <g id="text_4">
+      <text style="font-size: 9.5px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="175.204" y="216.389563" transform="rotate(-0 175.204 216.389563)">VLIW · shorter OFF</text>
+     </g>
+    </g>
+    <g id="ytick_4">
+     <g id="line2d_14"/>
+     <g id="text_5">
+      <text style="font-size: 9.5px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="175.204" y="253.445282" transform="rotate(-0 175.204 253.445282)">Grid · near 18h</text>
+     </g>
+    </g>
+    <g id="ytick_5">
+     <g id="line2d_15"/>
+     <g id="text_6">
+      <text style="font-size: 9.5px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="175.204" y="290.501" transform="rotate(-0 175.204 290.501)">Ad · shorter OFF</text>
+     </g>
+    </g>
+    <g id="ytick_6">
+     <g id="line2d_16"/>
+     <g id="text_7">
+      <text style="font-size: 9.5px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="175.204" y="327.556718" transform="rotate(-0 175.204 327.556718)">Rust · near 18h</text>
+     </g>
+    </g>
+    <g id="ytick_7">
+     <g id="line2d_17"/>
+     <g id="text_8">
+      <text style="font-size: 9.5px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="175.204" y="364.612437" transform="rotate(-0 175.204 364.612437)">OpenTTD · both under 18h</text>
+     </g>
+    </g>
+    <g id="ytick_8">
+     <g id="line2d_18"/>
+     <g id="text_9">
+      <text style="font-size: 9.5px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="175.204" y="401.668155" transform="rotate(-0 175.204 401.668155)">Codec · shorter OFF</text>
+     </g>
+    </g>
+    <g id="ytick_9">
+     <g id="line2d_19"/>
+     <g id="text_10">
+      <text style="font-size: 9.5px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="175.204" y="438.723874" transform="rotate(-0 175.204 438.723874)">Portfolio · near 18h</text>
+     </g>
+    </g>
+   </g>
+   <g id="context-bar-ANN-on">
+    <path d="M 178.704 125.594182
+L 313.30095 125.594182
+L 313.30095 137.452012
+L 178.704 137.452012
+z
+" clip-path="url(#pd81db1c1d1)" style="fill: #0f766e"/>
+   </g>
+   <g id="context-bar-FFmpeg-on">
+    <path d="M 178.704 162.6499
+L 229.119397 162.6499
+L 229.119397 174.50773
+L 178.704 174.50773
+z
+" clip-path="url(#pd81db1c1d1)" style="fill: #0f766e"/>
+   </g>
+   <g id="context-bar-VLIW-on">
+    <path d="M 178.704 199.705619
+L 481.913484 199.705619
+L 481.913484 211.563449
+L 178.704 211.563449
+z
+" clip-path="url(#pd81db1c1d1)" style="fill: #0f766e"/>
+   </g>
+   <g id="context-bar-Grid-on">
+    <path d="M 178.704 236.761337
+L 388.222533 236.761337
+L 388.222533 248.619167
+L 178.704 248.619167
+z
+" clip-path="url(#pd81db1c1d1)" style="fill: #0f766e"/>
+   </g>
+   <g id="context-bar-Ad-on">
+    <path d="M 178.704 273.817056
+L 425.94834 273.817056
+L 425.94834 285.674886
+L 178.704 285.674886
+z
+" clip-path="url(#pd81db1c1d1)" style="fill: #0f766e"/>
+   </g>
+   <g id="context-bar-Rust-on">
+    <path d="M 178.704 310.872774
+L 263.446764 310.872774
+L 263.446764 322.730604
+L 178.704 322.730604
+z
+" clip-path="url(#pd81db1c1d1)" style="fill: #0f766e"/>
+   </g>
+   <g id="context-bar-OpenTTD-on">
+    <path d="M 178.704 347.928493
+L 372.072146 347.928493
+L 372.072146 359.786323
+L 178.704 359.786323
+z
+" clip-path="url(#pd81db1c1d1)" style="fill: #0f766e"/>
+   </g>
+   <g id="context-bar-Codec-on">
+    <path d="M 178.704 384.984211
+L 393.491675 384.984211
+L 393.491675 396.842041
+L 178.704 396.842041
+z
+" clip-path="url(#pd81db1c1d1)" style="fill: #0f766e"/>
+   </g>
+   <g id="context-bar-Portfolio-on">
+    <path d="M 178.704 422.03993
+L 221.168917 422.03993
+L 221.168917 433.89776
+L 178.704 433.89776
+z
+" clip-path="url(#pd81db1c1d1)" style="fill: #0f766e"/>
+   </g>
+   <g id="context-bar-ANN-off">
+    <path d="M 178.704 138.93424
+L 208.822289 138.93424
+L 208.822289 150.79207
+L 178.704 150.79207
+z
+" clip-path="url(#pd81db1c1d1)" style="fill: #94a3b8"/>
+   </g>
+   <g id="context-bar-FFmpeg-off">
+    <path d="M 178.704 175.989959
+L 213.592577 175.989959
+L 213.592577 187.847789
+L 178.704 187.847789
+z
+" clip-path="url(#pd81db1c1d1)" style="fill: #94a3b8"/>
+   </g>
+   <g id="context-bar-VLIW-off">
+    <path d="M 178.704 213.045677
+L 471.219309 213.045677
+L 471.219309 224.903507
+L 178.704 224.903507
+z
+" clip-path="url(#pd81db1c1d1)" style="fill: #94a3b8"/>
+   </g>
+   <g id="context-bar-Grid-off">
+    <path d="M 178.704 250.101396
+L 380.89562 250.101396
+L 380.89562 261.959226
+L 178.704 261.959226
+z
+" clip-path="url(#pd81db1c1d1)" style="fill: #94a3b8"/>
+   </g>
+   <g id="context-bar-Ad-off">
+    <path d="M 178.704 287.157114
+L 422.92404 287.157114
+L 422.92404 299.014944
+L 178.704 299.014944
+z
+" clip-path="url(#pd81db1c1d1)" style="fill: #94a3b8"/>
+   </g>
+   <g id="context-bar-Rust-off">
+    <path d="M 178.704 324.212833
+L 263.446764 324.212833
+L 263.446764 336.070663
+L 178.704 336.070663
+z
+" clip-path="url(#pd81db1c1d1)" style="fill: #94a3b8"/>
+   </g>
+   <g id="context-bar-OpenTTD-off">
+    <path d="M 178.704 361.268551
+L 375.096446 361.268551
+L 375.096446 373.126381
+L 178.704 373.126381
+z
+" clip-path="url(#pd81db1c1d1)" style="fill: #94a3b8"/>
+   </g>
+   <g id="context-bar-Codec-off">
+    <path d="M 178.704 398.32427
+L 399.415562 398.32427
+L 399.415562 410.1821
+L 178.704 410.1821
+z
+" clip-path="url(#pd81db1c1d1)" style="fill: #94a3b8"/>
+   </g>
+   <g id="context-bar-Portfolio-off">
+    <path d="M 178.704 435.379988
+L 301.671425 435.379988
+L 301.671425 447.237818
+L 178.704 447.237818
+z
+" clip-path="url(#pd81db1c1d1)" style="fill: #94a3b8"/>
+   </g>
+   <g id="context-score-ANN">
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f766e" x="320.160188" y="141.361126" transform="rotate(-0 320.160188 141.361126)">43.17 / 9.66 (+33.51)</text>
+   </g>
+   <g id="context-score-FFmpeg">
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f766e" x="235.978635" y="178.416845" transform="rotate(-0 235.978635 178.416845)">16.17 / 11.19 (+4.98)</text>
+   </g>
+   <g id="context-score-VLIW">
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f766e" x="488.772722" y="215.472563" transform="rotate(-0 488.772722 215.472563)">97.25 / 93.82 (+3.43)</text>
+   </g>
+   <g id="context-score-Grid">
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f766e" x="395.081771" y="252.528282" transform="rotate(-0 395.081771 252.528282)">67.20 / 64.85 (+2.35)</text>
+   </g>
+   <g id="context-score-Ad">
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f766e" x="432.807578" y="289.584" transform="rotate(-0 432.807578 289.584)">79.30 / 78.33 (+0.97)</text>
+   </g>
+   <g id="context-score-Rust">
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #334155" x="270.306001" y="326.639718" transform="rotate(-0 270.306001 326.639718)">27.18 / 27.18 (+0.00)</text>
+   </g>
+   <g id="context-score-OpenTTD">
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #b45309" x="381.955684" y="363.695437" transform="rotate(-0 381.955684 363.695437)">62.02 / 62.99 (-0.97)</text>
+   </g>
+   <g id="context-score-Codec">
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #b45309" x="406.274799" y="400.751155" transform="rotate(-0 406.274799 400.751155)">68.89 / 70.79 (-1.90)</text>
+   </g>
+   <g id="context-score-Portfolio">
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #b45309" x="308.530662" y="437.806874" transform="rotate(-0 308.530662 437.806874)">13.62 / 39.44 (-25.82)</text>
+   </g>
+   <g id="text_11">
+    <text style="font-weight: 700; font-size: 11px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="178.704" y="95.512" transform="rotate(-0 178.704 95.512)">A. Nine normalized pairs (ON / OFF)</text>
+   </g>
+  </g>
+  <g id="axes_2">
+   <g id="context-native-borden">
+    <g id="patch_3">
+     <path d="M 664.451517 161.63316
+L 794.64408 161.63316
+Q 800.10408 161.63316 800.10408 156.17316
+L 800.10408 116.58816
+Q 800.10408 111.12816 794.64408 111.12816
+L 664.451517 111.12816
+Q 658.991517 111.12816 658.991517 116.58816
+L 658.991517 156.17316
+Q 658.991517 161.63316 664.451517 161.63316
+z
+" style="fill: #f0fdfa; stroke: #99f6e4; stroke-linejoin: miter"/>
+    </g>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(664.451517 126.46166)">Borden has no /100 score</text>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(664.451517 139.65666)">Borden (Native score): 80 / 45</text>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(664.451517 152.85166)">ON 18h02m / OFF 17h59m</text>
+   </g>
+   <g id="context-native-examples">
+    <g id="patch_4">
+     <path d="M 664.451517 280.01324
+L 833.674549 280.01324
+Q 839.134549 280.01324 839.134549 274.55324
+L 839.134549 208.57824
+Q 839.134549 203.11824 833.674549 203.11824
+L 664.451517 203.11824
+Q 658.991517 203.11824 658.991517 208.57824
+L 658.991517 274.55324
+Q 658.991517 280.01324 664.451517 280.01324
+z
+" style="fill: #f8fafc; stroke: #cbd5e1; stroke-linejoin: miter"/>
+    </g>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(664.451517 218.037974)">Examples (ANN OFF unverified)</text>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(664.451517 231.401467)">ANN (QPS): 7,159 / 3,746</text>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(664.451517 244.36399)">FFmpeg (Native score): 2.7086 / 1.9929</text>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(664.451517 257.622974)">VLIW (Cycles): 1,042 / 1,097</text>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(664.451517 270.986467)">Grid (Total cost): 2,197 / 2,311</text>
+   </g>
+   <g id="context-native-off">
+    <g id="patch_5">
+     <path d="M 664.451517 420.57912
+L 879.150377 420.57912
+Q 884.610377 420.57912 884.610377 415.11912
+L 884.610377 335.94912
+Q 884.610377 330.48912 879.150377 330.48912
+L 664.451517 330.48912
+Q 658.991517 330.48912 658.991517 335.94912
+L 658.991517 415.11912
+Q 658.991517 420.57912 664.451517 420.57912
+z
+" style="fill: #fffbeb; stroke: #fcd34d; stroke-linejoin: miter"/>
+    </g>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(664.451517 345.376862)">10 reported pairs: ON 7 / OFF 3</text>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(664.451517 358.571862)">4 near-18h pairs: ON 3 / OFF 1</text>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(664.451517 372.184893)">Tasks where OFF leads</text>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(664.451517 385.40762)">Portfolio (Score / 100): 13.62 / 39.44</text>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(664.451517 398.60262)">Codec (Native score): 68.89 / 70.79</text>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(664.451517 411.383854)">OpenTTD (Native score): 30,266,729 / 33,090,430</text>
+   </g>
+   <g id="text_12">
+    <text style="font-weight: 700; font-size: 11px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="660.863512" y="95.512" transform="rotate(-0 660.863512 95.512)">B. Native scores (ON / OFF)</text>
+   </g>
+  </g>
+  <g id="text_13">
+   <text style="font-weight: 700; font-size: 14.6px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #0f172a" x="525.6" y="37.828" transform="rotate(-0 525.6 37.828)">EdgeBench scores reported for Context ON and OFF</text>
+  </g>
+  <g id="text_14">
+   <text style="font-size: 10px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #475569" x="525.6" y="67.392" transform="rotate(-0 525.6 67.392)">4 pairs list runtimes near 18 hours. The other 6 include historical or incomplete runs.</text>
+  </g>
+  <g id="text_15">
+   <text style="font-size: 8.9px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #475569" x="31.536" y="545.8752" transform="rotate(-0 31.536 545.8752)">Snapshot 2026-11-12 22:40 CST. The public records cannot isolate the effect of Context Delivery.</text>
+  </g>
+  <g id="legend_1">
+   <g id="patch_6">
+    <path d="M 381.9975 506.1264
+L 401.1975 506.1264
+L 401.1975 499.4064
+L 381.9975 499.4064
+z
+" style="fill: #0f766e"/>
+   </g>
+   <g id="text_16">
+    <text style="font-size: 9.6px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="408.8775" y="506.1264" transform="rotate(-0 408.8775 506.1264)">Context ON</text>
+   </g>
+   <g id="patch_7">
+    <path d="M 480.552 506.1264
+L 499.752 506.1264
+L 499.752 499.4064
+L 480.552 499.4064
+z
+" style="fill: #94a3b8"/>
+   </g>
+   <g id="text_17">
+    <text style="font-size: 9.6px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="507.432" y="506.1264" transform="rotate(-0 507.432 506.1264)">Context OFF</text>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="pd81db1c1d1">
+   <rect x="178.704" y="109.512" width="427.143438" height="353.808"/>
+  </clipPath>
+ </defs>
+</svg>

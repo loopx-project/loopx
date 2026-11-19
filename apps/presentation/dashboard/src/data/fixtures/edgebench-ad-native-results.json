@@ -1,0 +1,1217 @@
+{
+  "goal_id": "edgebench-official-ad-analysis-20261011-04",
+  "display_name": "Ad placement · captured native results",
+  "events": [],
+  "provenance": {
+    "kind": "captured_read_only_analysis_api",
+    "captured_at": "2026-11-04T08:46:22.286770+00:00",
+    "source_run_id": "ad-official-native3600-integration-20261011-04",
+    "limitations": [
+      "Historical 11–12 October native run from an existing formally registered read-only analysis Goal; not the recent history fixture or a new solver run.",
+      "The original, Chinese and English analysis API responses and native citation responses are unchanged.",
+      "Six registered episodes have no saved analysis job or result. No model judgment or analysis usage is synthesized.",
+      "Initial, best and final native results are measured; retained result and adopted improvement remain unknown.",
+      "The selected analysis Goal has no Explore records. No solver history or relationship is reconstructed.",
+      "No authority store, execution state, raw session transcript, model process or solver is restored by this display fixture."
+    ]
+  },
+  "analysis_readbacks": {
+    "original": {
+      "request_path": "/api/chat/research-analysis?goal_id=edgebench-official-ad-analysis-20261011-04&pack_id=c0fbc1b0f66924887b50369bd496c8c31849814b66d9ec1480988918dd61db06",
+      "response_sha256": "56670c1183da44d227be9d15088698baca8bfe800a9bc87ac0e715f072f58c69",
+      "response": {
+        "ok": true,
+        "catalog": {
+          "ok": true,
+          "availability": "available",
+          "reason_code": null,
+          "default_pack_id": "c0fbc1b0f66924887b50369bd496c8c31849814b66d9ec1480988918dd61db06",
+          "packs": [
+            {
+              "pack_id": "c0fbc1b0f66924887b50369bd496c8c31849814b66d9ec1480988918dd61db06",
+              "title": "Ad Official · 18h · 原生反馈片段",
+              "scope": {
+                "goal_id": "edgebench-official-ad-analysis-20261011-04",
+                "case_id": "ad_placement_optimization",
+                "run_id": "ad-official-native3600-integration-20261011-04",
+                "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:3d04ccf7de4d4b536d35bed34f91c27846280b4aab3419c58d174654bbec19c4",
+                "window": "Original captured native session 2026-10-11T12:28:50.507Z to 2026-10-12T06:28:29.005Z; declared solver budget 18.00h. Analysis lifecycle created later."
+              },
+              "selection": {
+                "rule": "Deterministic six equal submission-order strata among native results with exact captured feedback observation; two preceding and up to two following bounded assistant narrative messages. Purposive native-feedback episodes, not an exhaustive research population. Full released report inventory supplied separately; temporal adjacency alone is not evidence adoption.",
+                "population_episodes": null,
+                "exhaustive": false
+              },
+              "episode_count": 6,
+              "source_count": 40,
+              "analysis_key": "6eaeaa2eed3cae8d30785b60129d72eae3a7dfaa510e38393a8313be514980a5",
+              "method_version": "research-episodes-v2",
+              "config": {
+                "model": "gpt-6.1-sol",
+                "effort": "max",
+                "service_tier": "fast"
+              },
+              "availability": "available",
+              "reason_code": null,
+              "native_outcomes": {
+                "artifact": "product-goal-sources/official/ad/native-outcomes.json",
+                "artifact_sha256": "7fe357894002389316d493d98d9bc4c642709da42299160840e64232d866ca26",
+                "projection": {
+                  "method": "source_bound_native_outcomes_v1",
+                  "scope": {
+                    "goal_id": "edgebench-official-ad-analysis-20261011-04",
+                    "case_id": "ad_placement_optimization",
+                    "run_id": "ad-official-native3600-integration-20261011-04",
+                    "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:3d04ccf7de4d4b536d35bed34f91c27846280b4aab3419c58d174654bbec19c4",
+                    "window": "Original captured native session 2026-10-11T12:28:50.507Z to 2026-10-12T06:28:29.005Z; declared solver budget 18.00h. Analysis lifecycle created later."
+                  },
+                  "start": "2026-10-11T12:28:50.507Z",
+                  "end": "2026-10-12T06:28:29.005Z",
+                  "complete": true,
+                  "metric": {
+                    "name": "Native task score",
+                    "unit": "raw",
+                    "higher_is_better": true
+                  },
+                  "sample_count": 16,
+                  "valid_count": 16,
+                  "initial": {
+                    "submission_index": 1,
+                    "result_id": "0f01f973558f",
+                    "candidate_ref": "agent-1",
+                    "submitted_at": "2026-10-11T12:53:51.989Z",
+                    "observed_at": "2026-10-11T12:56:06.845Z",
+                    "value": 49550815819,
+                    "citation": {
+                      "source_id": "released-native-inventory",
+                      "first_line": 1,
+                      "last_line": 1
+                    }
+                  },
+                  "best_valid": {
+                    "submission_index": 13,
+                    "result_id": "80bee97892b5",
+                    "candidate_ref": "agent-13",
+                    "submitted_at": "2026-10-12T01:34:30.830Z",
+                    "observed_at": "2026-10-12T01:36:57.526Z",
+                    "value": 49653326363,
+                    "citation": {
+                      "source_id": "released-native-inventory",
+                      "first_line": 13,
+                      "last_line": 13
+                    }
+                  },
+                  "retained": null,
+                  "final_valid": {
+                    "submission_index": 16,
+                    "result_id": "9be1f24ecc8b",
+                    "candidate_ref": "agent-16",
+                    "submitted_at": "2026-10-12T05:36:53.759Z",
+                    "observed_at": "2026-10-12T05:39:34.830Z",
+                    "value": 49650446168,
+                    "citation": {
+                      "source_id": "released-native-inventory",
+                      "first_line": 16,
+                      "last_line": 16
+                    }
+                  },
+                  "limitations": [
+                    "Provider-recorded measurements in the declared capture; not study countability or a causal effect.",
+                    "Validity and retained selection belong to the native provider, not model judgments or Todo status.",
+                    "Initial requires a complete prefix and a valid first submission; invalid or missing results are not zero.",
+                    "Submission order determines initial/final; delayed feedback does not make an older candidate current.",
+                    "Costs retain their own measured windows; no monetary, whole-study or per-result cost is inferred."
+                  ]
+                },
+                "applicability": "current",
+                "reason_code": null
+              }
+            }
+          ]
+        },
+        "pack": {
+          "ok": true,
+          "pack_id": "c0fbc1b0f66924887b50369bd496c8c31849814b66d9ec1480988918dd61db06",
+          "title": "Ad Official · 18h · 原生反馈片段",
+          "scope": {
+            "goal_id": "edgebench-official-ad-analysis-20261011-04",
+            "case_id": "ad_placement_optimization",
+            "run_id": "ad-official-native3600-integration-20261011-04",
+            "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:3d04ccf7de4d4b536d35bed34f91c27846280b4aab3419c58d174654bbec19c4",
+            "window": "Original captured native session 2026-10-11T12:28:50.507Z to 2026-10-12T06:28:29.005Z; declared solver budget 18.00h. Analysis lifecycle created later."
+          },
+          "selection": {
+            "rule": "Deterministic six equal submission-order strata among native results with exact captured feedback observation; two preceding and up to two following bounded assistant narrative messages. Purposive native-feedback episodes, not an exhaustive research population. Full released report inventory supplied separately; temporal adjacency alone is not evidence adoption.",
+            "population_episodes": null,
+            "exhaustive": false
+          },
+          "episode_count": 6,
+          "source_count": 40,
+          "analysis_key": "6eaeaa2eed3cae8d30785b60129d72eae3a7dfaa510e38393a8313be514980a5",
+          "method_version": "research-episodes-v2",
+          "config": {
+            "model": "gpt-6.1-sol",
+            "effort": "max",
+            "service_tier": "fast"
+          },
+          "availability": "available",
+          "reason_code": null,
+          "native_outcomes": {
+            "artifact": "product-goal-sources/official/ad/native-outcomes.json",
+            "artifact_sha256": "7fe357894002389316d493d98d9bc4c642709da42299160840e64232d866ca26",
+            "projection": {
+              "method": "source_bound_native_outcomes_v1",
+              "scope": {
+                "goal_id": "edgebench-official-ad-analysis-20261011-04",
+                "case_id": "ad_placement_optimization",
+                "run_id": "ad-official-native3600-integration-20261011-04",
+                "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:3d04ccf7de4d4b536d35bed34f91c27846280b4aab3419c58d174654bbec19c4",
+                "window": "Original captured native session 2026-10-11T12:28:50.507Z to 2026-10-12T06:28:29.005Z; declared solver budget 18.00h. Analysis lifecycle created later."
+              },
+              "start": "2026-10-11T12:28:50.507Z",
+              "end": "2026-10-12T06:28:29.005Z",
+              "complete": true,
+              "metric": {
+                "name": "Native task score",
+                "unit": "raw",
+                "higher_is_better": true
+              },
+              "sample_count": 16,
+              "valid_count": 16,
+              "initial": {
+                "submission_index": 1,
+                "result_id": "0f01f973558f",
+                "candidate_ref": "agent-1",
+                "submitted_at": "2026-10-11T12:53:51.989Z",
+                "observed_at": "2026-10-11T12:56:06.845Z",
+                "value": 49550815819,
+                "citation": {
+                  "source_id": "released-native-inventory",
+                  "first_line": 1,
+                  "last_line": 1
+                }
+              },
+              "best_valid": {
+                "submission_index": 13,
+                "result_id": "80bee97892b5",
+                "candidate_ref": "agent-13",
+                "submitted_at": "2026-10-12T01:34:30.830Z",
+                "observed_at": "2026-10-12T01:36:57.526Z",
+                "value": 49653326363,
+                "citation": {
+                  "source_id": "released-native-inventory",
+                  "first_line": 13,
+                  "last_line": 13
+                }
+              },
+              "retained": null,
+              "final_valid": {
+                "submission_index": 16,
+                "result_id": "9be1f24ecc8b",
+                "candidate_ref": "agent-16",
+                "submitted_at": "2026-10-12T05:36:53.759Z",
+                "observed_at": "2026-10-12T05:39:34.830Z",
+                "value": 49650446168,
+                "citation": {
+                  "source_id": "released-native-inventory",
+                  "first_line": 16,
+                  "last_line": 16
+                }
+              },
+              "limitations": [
+                "Provider-recorded measurements in the declared capture; not study countability or a causal effect.",
+                "Validity and retained selection belong to the native provider, not model judgments or Todo status.",
+                "Initial requires a complete prefix and a valid first submission; invalid or missing results are not zero.",
+                "Submission order determines initial/final; delayed feedback does not make an older candidate current.",
+                "Costs retain their own measured windows; no monetary, whole-study or per-result cost is inferred."
+              ]
+            },
+            "applicability": "current",
+            "reason_code": null
+          },
+          "objective": "分析原生 Official 研究如何推进原任务，区分事实、模型解释和独立验证。原始任务见 original-objective。此 Goal 是对真实原生轨迹的新分析生命周期；历史 Official 没有 LoopX 执行 Goal。保留历史 score_countable=false，只作诊断参考，不能和新恢复组作因果效果比较。原生结果及时间由原文件提供；未验证最终保留候选、贡献归因或货币成本，不可用 best 代替 retained。数值过程指标仅对声明样本适用。",
+          "episodes": [
+            {
+              "id": "native-feedback-1",
+              "question": "原生提交 agent-1 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-1",
+                "original-feedback-1",
+                "original-message-344",
+                "original-message-378",
+                "original-message-395",
+                "original-message-441"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-4",
+              "question": "原生提交 agent-4 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-4",
+                "original-feedback-4",
+                "original-message-2387",
+                "original-message-2432",
+                "original-message-2483",
+                "original-message-2505"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-7",
+              "question": "原生提交 agent-7 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-7",
+                "original-feedback-7",
+                "original-message-4393",
+                "original-message-4403",
+                "original-message-4437",
+                "original-message-4460"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-10",
+              "question": "原生提交 agent-10 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-10",
+                "original-feedback-10",
+                "original-message-7387",
+                "original-message-7405",
+                "original-message-7430",
+                "original-message-7447"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-13",
+              "question": "原生提交 agent-13 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-13",
+                "original-feedback-13",
+                "original-message-10489",
+                "original-message-10513",
+                "original-message-10523",
+                "original-message-10546"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-16",
+              "question": "原生提交 agent-16 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-16",
+                "original-feedback-16",
+                "original-message-14485",
+                "original-message-14504",
+                "original-message-14524",
+                "original-message-14540"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            }
+          ],
+          "job": null,
+          "result": null,
+          "applicability": "current"
+        },
+        "execution_enabled": false
+      }
+    },
+    "zh": {
+      "request_path": "/api/chat/research-analysis?goal_id=edgebench-official-ad-analysis-20261011-04&pack_id=c0fbc1b0f66924887b50369bd496c8c31849814b66d9ec1480988918dd61db06&output_language=zh",
+      "response_sha256": "08d1f35b52f9b58a867e104591a55f885e9c1076a510b9ca92d3e022785e9b6f",
+      "response": {
+        "ok": true,
+        "catalog": {
+          "ok": true,
+          "availability": "available",
+          "reason_code": null,
+          "default_pack_id": "c0fbc1b0f66924887b50369bd496c8c31849814b66d9ec1480988918dd61db06",
+          "packs": [
+            {
+              "pack_id": "c0fbc1b0f66924887b50369bd496c8c31849814b66d9ec1480988918dd61db06",
+              "title": "Ad Official · 18h · 原生反馈片段",
+              "scope": {
+                "goal_id": "edgebench-official-ad-analysis-20261011-04",
+                "case_id": "ad_placement_optimization",
+                "run_id": "ad-official-native3600-integration-20261011-04",
+                "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:3d04ccf7de4d4b536d35bed34f91c27846280b4aab3419c58d174654bbec19c4",
+                "window": "Original captured native session 2026-10-11T12:28:50.507Z to 2026-10-12T06:28:29.005Z; declared solver budget 18.00h. Analysis lifecycle created later."
+              },
+              "selection": {
+                "rule": "Deterministic six equal submission-order strata among native results with exact captured feedback observation; two preceding and up to two following bounded assistant narrative messages. Purposive native-feedback episodes, not an exhaustive research population. Full released report inventory supplied separately; temporal adjacency alone is not evidence adoption.",
+                "population_episodes": null,
+                "exhaustive": false
+              },
+              "episode_count": 6,
+              "source_count": 40,
+              "analysis_key": "bb5b6a4169f8f541f51b391fd07a2209790741702ce5f5c8ea09178480e9a161",
+              "method_version": "research-episodes-v2",
+              "config": {
+                "model": "gpt-6.1-sol",
+                "effort": "max",
+                "service_tier": "fast",
+                "output_language": "zh"
+              },
+              "availability": "available",
+              "reason_code": null,
+              "native_outcomes": {
+                "artifact": "product-goal-sources/official/ad/native-outcomes.json",
+                "artifact_sha256": "7fe357894002389316d493d98d9bc4c642709da42299160840e64232d866ca26",
+                "projection": {
+                  "method": "source_bound_native_outcomes_v1",
+                  "scope": {
+                    "goal_id": "edgebench-official-ad-analysis-20261011-04",
+                    "case_id": "ad_placement_optimization",
+                    "run_id": "ad-official-native3600-integration-20261011-04",
+                    "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:3d04ccf7de4d4b536d35bed34f91c27846280b4aab3419c58d174654bbec19c4",
+                    "window": "Original captured native session 2026-10-11T12:28:50.507Z to 2026-10-12T06:28:29.005Z; declared solver budget 18.00h. Analysis lifecycle created later."
+                  },
+                  "start": "2026-10-11T12:28:50.507Z",
+                  "end": "2026-10-12T06:28:29.005Z",
+                  "complete": true,
+                  "metric": {
+                    "name": "Native task score",
+                    "unit": "raw",
+                    "higher_is_better": true
+                  },
+                  "sample_count": 16,
+                  "valid_count": 16,
+                  "initial": {
+                    "submission_index": 1,
+                    "result_id": "0f01f973558f",
+                    "candidate_ref": "agent-1",
+                    "submitted_at": "2026-10-11T12:53:51.989Z",
+                    "observed_at": "2026-10-11T12:56:06.845Z",
+                    "value": 49550815819,
+                    "citation": {
+                      "source_id": "released-native-inventory",
+                      "first_line": 1,
+                      "last_line": 1
+                    }
+                  },
+                  "best_valid": {
+                    "submission_index": 13,
+                    "result_id": "80bee97892b5",
+                    "candidate_ref": "agent-13",
+                    "submitted_at": "2026-10-12T01:34:30.830Z",
+                    "observed_at": "2026-10-12T01:36:57.526Z",
+                    "value": 49653326363,
+                    "citation": {
+                      "source_id": "released-native-inventory",
+                      "first_line": 13,
+                      "last_line": 13
+                    }
+                  },
+                  "retained": null,
+                  "final_valid": {
+                    "submission_index": 16,
+                    "result_id": "9be1f24ecc8b",
+                    "candidate_ref": "agent-16",
+                    "submitted_at": "2026-10-12T05:36:53.759Z",
+                    "observed_at": "2026-10-12T05:39:34.830Z",
+                    "value": 49650446168,
+                    "citation": {
+                      "source_id": "released-native-inventory",
+                      "first_line": 16,
+                      "last_line": 16
+                    }
+                  },
+                  "limitations": [
+                    "Provider-recorded measurements in the declared capture; not study countability or a causal effect.",
+                    "Validity and retained selection belong to the native provider, not model judgments or Todo status.",
+                    "Initial requires a complete prefix and a valid first submission; invalid or missing results are not zero.",
+                    "Submission order determines initial/final; delayed feedback does not make an older candidate current.",
+                    "Costs retain their own measured windows; no monetary, whole-study or per-result cost is inferred."
+                  ]
+                },
+                "applicability": "current",
+                "reason_code": null
+              }
+            }
+          ]
+        },
+        "pack": {
+          "ok": true,
+          "pack_id": "c0fbc1b0f66924887b50369bd496c8c31849814b66d9ec1480988918dd61db06",
+          "title": "Ad Official · 18h · 原生反馈片段",
+          "scope": {
+            "goal_id": "edgebench-official-ad-analysis-20261011-04",
+            "case_id": "ad_placement_optimization",
+            "run_id": "ad-official-native3600-integration-20261011-04",
+            "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:3d04ccf7de4d4b536d35bed34f91c27846280b4aab3419c58d174654bbec19c4",
+            "window": "Original captured native session 2026-10-11T12:28:50.507Z to 2026-10-12T06:28:29.005Z; declared solver budget 18.00h. Analysis lifecycle created later."
+          },
+          "selection": {
+            "rule": "Deterministic six equal submission-order strata among native results with exact captured feedback observation; two preceding and up to two following bounded assistant narrative messages. Purposive native-feedback episodes, not an exhaustive research population. Full released report inventory supplied separately; temporal adjacency alone is not evidence adoption.",
+            "population_episodes": null,
+            "exhaustive": false
+          },
+          "episode_count": 6,
+          "source_count": 40,
+          "analysis_key": "bb5b6a4169f8f541f51b391fd07a2209790741702ce5f5c8ea09178480e9a161",
+          "method_version": "research-episodes-v2",
+          "config": {
+            "model": "gpt-6.1-sol",
+            "effort": "max",
+            "service_tier": "fast",
+            "output_language": "zh"
+          },
+          "availability": "available",
+          "reason_code": null,
+          "native_outcomes": {
+            "artifact": "product-goal-sources/official/ad/native-outcomes.json",
+            "artifact_sha256": "7fe357894002389316d493d98d9bc4c642709da42299160840e64232d866ca26",
+            "projection": {
+              "method": "source_bound_native_outcomes_v1",
+              "scope": {
+                "goal_id": "edgebench-official-ad-analysis-20261011-04",
+                "case_id": "ad_placement_optimization",
+                "run_id": "ad-official-native3600-integration-20261011-04",
+                "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:3d04ccf7de4d4b536d35bed34f91c27846280b4aab3419c58d174654bbec19c4",
+                "window": "Original captured native session 2026-10-11T12:28:50.507Z to 2026-10-12T06:28:29.005Z; declared solver budget 18.00h. Analysis lifecycle created later."
+              },
+              "start": "2026-10-11T12:28:50.507Z",
+              "end": "2026-10-12T06:28:29.005Z",
+              "complete": true,
+              "metric": {
+                "name": "Native task score",
+                "unit": "raw",
+                "higher_is_better": true
+              },
+              "sample_count": 16,
+              "valid_count": 16,
+              "initial": {
+                "submission_index": 1,
+                "result_id": "0f01f973558f",
+                "candidate_ref": "agent-1",
+                "submitted_at": "2026-10-11T12:53:51.989Z",
+                "observed_at": "2026-10-11T12:56:06.845Z",
+                "value": 49550815819,
+                "citation": {
+                  "source_id": "released-native-inventory",
+                  "first_line": 1,
+                  "last_line": 1
+                }
+              },
+              "best_valid": {
+                "submission_index": 13,
+                "result_id": "80bee97892b5",
+                "candidate_ref": "agent-13",
+                "submitted_at": "2026-10-12T01:34:30.830Z",
+                "observed_at": "2026-10-12T01:36:57.526Z",
+                "value": 49653326363,
+                "citation": {
+                  "source_id": "released-native-inventory",
+                  "first_line": 13,
+                  "last_line": 13
+                }
+              },
+              "retained": null,
+              "final_valid": {
+                "submission_index": 16,
+                "result_id": "9be1f24ecc8b",
+                "candidate_ref": "agent-16",
+                "submitted_at": "2026-10-12T05:36:53.759Z",
+                "observed_at": "2026-10-12T05:39:34.830Z",
+                "value": 49650446168,
+                "citation": {
+                  "source_id": "released-native-inventory",
+                  "first_line": 16,
+                  "last_line": 16
+                }
+              },
+              "limitations": [
+                "Provider-recorded measurements in the declared capture; not study countability or a causal effect.",
+                "Validity and retained selection belong to the native provider, not model judgments or Todo status.",
+                "Initial requires a complete prefix and a valid first submission; invalid or missing results are not zero.",
+                "Submission order determines initial/final; delayed feedback does not make an older candidate current.",
+                "Costs retain their own measured windows; no monetary, whole-study or per-result cost is inferred."
+              ]
+            },
+            "applicability": "current",
+            "reason_code": null
+          },
+          "objective": "分析原生 Official 研究如何推进原任务，区分事实、模型解释和独立验证。原始任务见 original-objective。此 Goal 是对真实原生轨迹的新分析生命周期；历史 Official 没有 LoopX 执行 Goal。保留历史 score_countable=false，只作诊断参考，不能和新恢复组作因果效果比较。原生结果及时间由原文件提供；未验证最终保留候选、贡献归因或货币成本，不可用 best 代替 retained。数值过程指标仅对声明样本适用。",
+          "episodes": [
+            {
+              "id": "native-feedback-1",
+              "question": "原生提交 agent-1 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-1",
+                "original-feedback-1",
+                "original-message-344",
+                "original-message-378",
+                "original-message-395",
+                "original-message-441"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-4",
+              "question": "原生提交 agent-4 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-4",
+                "original-feedback-4",
+                "original-message-2387",
+                "original-message-2432",
+                "original-message-2483",
+                "original-message-2505"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-7",
+              "question": "原生提交 agent-7 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-7",
+                "original-feedback-7",
+                "original-message-4393",
+                "original-message-4403",
+                "original-message-4437",
+                "original-message-4460"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-10",
+              "question": "原生提交 agent-10 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-10",
+                "original-feedback-10",
+                "original-message-7387",
+                "original-message-7405",
+                "original-message-7430",
+                "original-message-7447"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-13",
+              "question": "原生提交 agent-13 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-13",
+                "original-feedback-13",
+                "original-message-10489",
+                "original-message-10513",
+                "original-message-10523",
+                "original-message-10546"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-16",
+              "question": "原生提交 agent-16 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-16",
+                "original-feedback-16",
+                "original-message-14485",
+                "original-message-14504",
+                "original-message-14524",
+                "original-message-14540"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            }
+          ],
+          "job": null,
+          "result": null,
+          "applicability": "current"
+        },
+        "execution_enabled": false
+      }
+    },
+    "en": {
+      "request_path": "/api/chat/research-analysis?goal_id=edgebench-official-ad-analysis-20261011-04&pack_id=c0fbc1b0f66924887b50369bd496c8c31849814b66d9ec1480988918dd61db06&output_language=en",
+      "response_sha256": "d145136ee17d870ffbbcf89e45516b74302f71883fd82be92462f62faad263e7",
+      "response": {
+        "ok": true,
+        "catalog": {
+          "ok": true,
+          "availability": "available",
+          "reason_code": null,
+          "default_pack_id": "c0fbc1b0f66924887b50369bd496c8c31849814b66d9ec1480988918dd61db06",
+          "packs": [
+            {
+              "pack_id": "c0fbc1b0f66924887b50369bd496c8c31849814b66d9ec1480988918dd61db06",
+              "title": "Ad Official · 18h · 原生反馈片段",
+              "scope": {
+                "goal_id": "edgebench-official-ad-analysis-20261011-04",
+                "case_id": "ad_placement_optimization",
+                "run_id": "ad-official-native3600-integration-20261011-04",
+                "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:3d04ccf7de4d4b536d35bed34f91c27846280b4aab3419c58d174654bbec19c4",
+                "window": "Original captured native session 2026-10-11T12:28:50.507Z to 2026-10-12T06:28:29.005Z; declared solver budget 18.00h. Analysis lifecycle created later."
+              },
+              "selection": {
+                "rule": "Deterministic six equal submission-order strata among native results with exact captured feedback observation; two preceding and up to two following bounded assistant narrative messages. Purposive native-feedback episodes, not an exhaustive research population. Full released report inventory supplied separately; temporal adjacency alone is not evidence adoption.",
+                "population_episodes": null,
+                "exhaustive": false
+              },
+              "episode_count": 6,
+              "source_count": 40,
+              "analysis_key": "b47bda9123569d535da8fe09002f817da8c8844bf6367e65fb2eecd51f4f9d1f",
+              "method_version": "research-episodes-v2",
+              "config": {
+                "model": "gpt-6.1-sol",
+                "effort": "max",
+                "service_tier": "fast",
+                "output_language": "en"
+              },
+              "availability": "available",
+              "reason_code": null,
+              "native_outcomes": {
+                "artifact": "product-goal-sources/official/ad/native-outcomes.json",
+                "artifact_sha256": "7fe357894002389316d493d98d9bc4c642709da42299160840e64232d866ca26",
+                "projection": {
+                  "method": "source_bound_native_outcomes_v1",
+                  "scope": {
+                    "goal_id": "edgebench-official-ad-analysis-20261011-04",
+                    "case_id": "ad_placement_optimization",
+                    "run_id": "ad-official-native3600-integration-20261011-04",
+                    "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:3d04ccf7de4d4b536d35bed34f91c27846280b4aab3419c58d174654bbec19c4",
+                    "window": "Original captured native session 2026-10-11T12:28:50.507Z to 2026-10-12T06:28:29.005Z; declared solver budget 18.00h. Analysis lifecycle created later."
+                  },
+                  "start": "2026-10-11T12:28:50.507Z",
+                  "end": "2026-10-12T06:28:29.005Z",
+                  "complete": true,
+                  "metric": {
+                    "name": "Native task score",
+                    "unit": "raw",
+                    "higher_is_better": true
+                  },
+                  "sample_count": 16,
+                  "valid_count": 16,
+                  "initial": {
+                    "submission_index": 1,
+                    "result_id": "0f01f973558f",
+                    "candidate_ref": "agent-1",
+                    "submitted_at": "2026-10-11T12:53:51.989Z",
+                    "observed_at": "2026-10-11T12:56:06.845Z",
+                    "value": 49550815819,
+                    "citation": {
+                      "source_id": "released-native-inventory",
+                      "first_line": 1,
+                      "last_line": 1
+                    }
+                  },
+                  "best_valid": {
+                    "submission_index": 13,
+                    "result_id": "80bee97892b5",
+                    "candidate_ref": "agent-13",
+                    "submitted_at": "2026-10-12T01:34:30.830Z",
+                    "observed_at": "2026-10-12T01:36:57.526Z",
+                    "value": 49653326363,
+                    "citation": {
+                      "source_id": "released-native-inventory",
+                      "first_line": 13,
+                      "last_line": 13
+                    }
+                  },
+                  "retained": null,
+                  "final_valid": {
+                    "submission_index": 16,
+                    "result_id": "9be1f24ecc8b",
+                    "candidate_ref": "agent-16",
+                    "submitted_at": "2026-10-12T05:36:53.759Z",
+                    "observed_at": "2026-10-12T05:39:34.830Z",
+                    "value": 49650446168,
+                    "citation": {
+                      "source_id": "released-native-inventory",
+                      "first_line": 16,
+                      "last_line": 16
+                    }
+                  },
+                  "limitations": [
+                    "Provider-recorded measurements in the declared capture; not study countability or a causal effect.",
+                    "Validity and retained selection belong to the native provider, not model judgments or Todo status.",
+                    "Initial requires a complete prefix and a valid first submission; invalid or missing results are not zero.",
+                    "Submission order determines initial/final; delayed feedback does not make an older candidate current.",
+                    "Costs retain their own measured windows; no monetary, whole-study or per-result cost is inferred."
+                  ]
+                },
+                "applicability": "current",
+                "reason_code": null
+              }
+            }
+          ]
+        },
+        "pack": {
+          "ok": true,
+          "pack_id": "c0fbc1b0f66924887b50369bd496c8c31849814b66d9ec1480988918dd61db06",
+          "title": "Ad Official · 18h · 原生反馈片段",
+          "scope": {
+            "goal_id": "edgebench-official-ad-analysis-20261011-04",
+            "case_id": "ad_placement_optimization",
+            "run_id": "ad-official-native3600-integration-20261011-04",
+            "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:3d04ccf7de4d4b536d35bed34f91c27846280b4aab3419c58d174654bbec19c4",
+            "window": "Original captured native session 2026-10-11T12:28:50.507Z to 2026-10-12T06:28:29.005Z; declared solver budget 18.00h. Analysis lifecycle created later."
+          },
+          "selection": {
+            "rule": "Deterministic six equal submission-order strata among native results with exact captured feedback observation; two preceding and up to two following bounded assistant narrative messages. Purposive native-feedback episodes, not an exhaustive research population. Full released report inventory supplied separately; temporal adjacency alone is not evidence adoption.",
+            "population_episodes": null,
+            "exhaustive": false
+          },
+          "episode_count": 6,
+          "source_count": 40,
+          "analysis_key": "b47bda9123569d535da8fe09002f817da8c8844bf6367e65fb2eecd51f4f9d1f",
+          "method_version": "research-episodes-v2",
+          "config": {
+            "model": "gpt-6.1-sol",
+            "effort": "max",
+            "service_tier": "fast",
+            "output_language": "en"
+          },
+          "availability": "available",
+          "reason_code": null,
+          "native_outcomes": {
+            "artifact": "product-goal-sources/official/ad/native-outcomes.json",
+            "artifact_sha256": "7fe357894002389316d493d98d9bc4c642709da42299160840e64232d866ca26",
+            "projection": {
+              "method": "source_bound_native_outcomes_v1",
+              "scope": {
+                "goal_id": "edgebench-official-ad-analysis-20261011-04",
+                "case_id": "ad_placement_optimization",
+                "run_id": "ad-official-native3600-integration-20261011-04",
+                "revision": "b5023a765a39bdbfd01f8c7496378cfc84bcbbda:native-session-sha256:3d04ccf7de4d4b536d35bed34f91c27846280b4aab3419c58d174654bbec19c4",
+                "window": "Original captured native session 2026-10-11T12:28:50.507Z to 2026-10-12T06:28:29.005Z; declared solver budget 18.00h. Analysis lifecycle created later."
+              },
+              "start": "2026-10-11T12:28:50.507Z",
+              "end": "2026-10-12T06:28:29.005Z",
+              "complete": true,
+              "metric": {
+                "name": "Native task score",
+                "unit": "raw",
+                "higher_is_better": true
+              },
+              "sample_count": 16,
+              "valid_count": 16,
+              "initial": {
+                "submission_index": 1,
+                "result_id": "0f01f973558f",
+                "candidate_ref": "agent-1",
+                "submitted_at": "2026-10-11T12:53:51.989Z",
+                "observed_at": "2026-10-11T12:56:06.845Z",
+                "value": 49550815819,
+                "citation": {
+                  "source_id": "released-native-inventory",
+                  "first_line": 1,
+                  "last_line": 1
+                }
+              },
+              "best_valid": {
+                "submission_index": 13,
+                "result_id": "80bee97892b5",
+                "candidate_ref": "agent-13",
+                "submitted_at": "2026-10-12T01:34:30.830Z",
+                "observed_at": "2026-10-12T01:36:57.526Z",
+                "value": 49653326363,
+                "citation": {
+                  "source_id": "released-native-inventory",
+                  "first_line": 13,
+                  "last_line": 13
+                }
+              },
+              "retained": null,
+              "final_valid": {
+                "submission_index": 16,
+                "result_id": "9be1f24ecc8b",
+                "candidate_ref": "agent-16",
+                "submitted_at": "2026-10-12T05:36:53.759Z",
+                "observed_at": "2026-10-12T05:39:34.830Z",
+                "value": 49650446168,
+                "citation": {
+                  "source_id": "released-native-inventory",
+                  "first_line": 16,
+                  "last_line": 16
+                }
+              },
+              "limitations": [
+                "Provider-recorded measurements in the declared capture; not study countability or a causal effect.",
+                "Validity and retained selection belong to the native provider, not model judgments or Todo status.",
+                "Initial requires a complete prefix and a valid first submission; invalid or missing results are not zero.",
+                "Submission order determines initial/final; delayed feedback does not make an older candidate current.",
+                "Costs retain their own measured windows; no monetary, whole-study or per-result cost is inferred."
+              ]
+            },
+            "applicability": "current",
+            "reason_code": null
+          },
+          "objective": "分析原生 Official 研究如何推进原任务，区分事实、模型解释和独立验证。原始任务见 original-objective。此 Goal 是对真实原生轨迹的新分析生命周期；历史 Official 没有 LoopX 执行 Goal。保留历史 score_countable=false，只作诊断参考，不能和新恢复组作因果效果比较。原生结果及时间由原文件提供；未验证最终保留候选、贡献归因或货币成本，不可用 best 代替 retained。数值过程指标仅对声明样本适用。",
+          "episodes": [
+            {
+              "id": "native-feedback-1",
+              "question": "原生提交 agent-1 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-1",
+                "original-feedback-1",
+                "original-message-344",
+                "original-message-378",
+                "original-message-395",
+                "original-message-441"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-4",
+              "question": "原生提交 agent-4 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-4",
+                "original-feedback-4",
+                "original-message-2387",
+                "original-message-2432",
+                "original-message-2483",
+                "original-message-2505"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-7",
+              "question": "原生提交 agent-7 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-7",
+                "original-feedback-7",
+                "original-message-4393",
+                "original-message-4403",
+                "original-message-4437",
+                "original-message-4460"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-10",
+              "question": "原生提交 agent-10 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-10",
+                "original-feedback-10",
+                "original-message-7387",
+                "original-message-7405",
+                "original-message-7430",
+                "original-message-7447"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-13",
+              "question": "原生提交 agent-13 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-13",
+                "original-feedback-13",
+                "original-message-10489",
+                "original-message-10513",
+                "original-message-10523",
+                "original-message-10546"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            },
+            {
+              "id": "native-feedback-16",
+              "question": "原生提交 agent-16 的反馈实际检验了什么？前后原文支持哪些方法修改、保留或拒绝？未提供的实现、有效性或采用关系应标未知，不用相邻时间推断因果。",
+              "source_ids": [
+                "original-objective",
+                "original-runtime",
+                "released-native-inventory",
+                "native-report-16",
+                "original-feedback-16",
+                "original-message-14485",
+                "original-message-14504",
+                "original-message-14524",
+                "original-message-14540"
+              ],
+              "eligible_metrics": [
+                "goal_alignment",
+                "benefit_test",
+                "discrimination",
+                "information_gain",
+                "evidence_adoption",
+                "redundancy"
+              ]
+            }
+          ],
+          "job": null,
+          "result": null,
+          "applicability": "current"
+        },
+        "execution_enabled": false
+      }
+    }
+  },
+  "analysis_citations": [
+    {
+      "request_path": "/api/chat/research-analysis/citation?goal_id=edgebench-official-ad-analysis-20261011-04&pack_id=c0fbc1b0f66924887b50369bd496c8c31849814b66d9ec1480988918dd61db06&analysis_key=6eaeaa2eed3cae8d30785b60129d72eae3a7dfaa510e38393a8313be514980a5&source_id=released-native-inventory&first_line=1&last_line=1",
+      "response_sha256": "5d36f55807538f00c360d21fe8dbb5c4d7121efbcd5fcf45568e501b873833a0",
+      "response": {
+        "source_id": "released-native-inventory",
+        "artifact": "product-goal-sources/official/ad/native-observations.jsonl",
+        "first_line": 1,
+        "last_line": 1,
+        "text": "{\"submission_index\":1,\"result_id\":\"0f01f973558f\",\"candidate_ref\":\"agent-1\",\"valid\":true,\"value\":49550815819.0,\"submitted_at\":\"2026-10-11T12:53:51.989Z\",\"observed_at\":\"2026-10-11T12:56:06.845Z\",\"observed_at_meaning\":\"first captured completed native-submit command containing this exact submission id and score; not inferred feedback-release time\",\"report_artifact\":\"native-runs/runs/ad-official-native3600-integration-20261011-04/ad_placement_optimization/submissions/agent-1/report.json\",\"report_sha256\":\"262bf849bc739f1aa0465ab33becd52256904745e87a3b3f88f62145619e9714\",\"observation_artifact\":\"native-runs/runs/ad-official-native3600-integration-20261011-04/ad_placement_optimization/collected/native-sessions/sessions/2026/10/11/rollout-2026-10-11T12-28-45-01a12aef-c280-7042-a2fc-add2d305a19e.jsonl\",\"observation_artifact_sha256\":\"3d04ccf7de4d4b536d35bed34f91c27846280b4aab3419c58d174654bbec19c4\",\"observation_line\":379}",
+        "applicability": "current"
+      }
+    },
+    {
+      "request_path": "/api/chat/research-analysis/citation?goal_id=edgebench-official-ad-analysis-20261011-04&pack_id=c0fbc1b0f66924887b50369bd496c8c31849814b66d9ec1480988918dd61db06&analysis_key=6eaeaa2eed3cae8d30785b60129d72eae3a7dfaa510e38393a8313be514980a5&source_id=released-native-inventory&first_line=13&last_line=13",
+      "response_sha256": "bc8496f68021fe8373b80a686febc72ea0e3bf1b894bd0e7afbf51b1ea1454a6",
+      "response": {
+        "source_id": "released-native-inventory",
+        "artifact": "product-goal-sources/official/ad/native-observations.jsonl",
+        "first_line": 13,
+        "last_line": 13,
+        "text": "{\"submission_index\":13,\"result_id\":\"80bee97892b5\",\"candidate_ref\":\"agent-13\",\"valid\":true,\"value\":49653326363.0,\"submitted_at\":\"2026-10-12T01:34:30.830Z\",\"observed_at\":\"2026-10-12T01:36:57.526Z\",\"observed_at_meaning\":\"first captured completed native-submit command containing this exact submission id and score; not inferred feedback-release time\",\"report_artifact\":\"native-runs/runs/ad-official-native3600-integration-20261011-04/ad_placement_optimization/submissions/agent-13/report.json\",\"report_sha256\":\"1ff915107bfd3a25bdbb111ffa7eb44d0b78fd20a594dc34b773db99b25db3bb\",\"observation_artifact\":\"native-runs/runs/ad-official-native3600-integration-20261011-04/ad_placement_optimization/collected/native-sessions/sessions/2026/10/11/rollout-2026-10-11T12-28-45-01a12aef-c280-7042-a2fc-add2d305a19e.jsonl\",\"observation_artifact_sha256\":\"3d04ccf7de4d4b536d35bed34f91c27846280b4aab3419c58d174654bbec19c4\",\"observation_line\":10516}",
+        "applicability": "current"
+      }
+    },
+    {
+      "request_path": "/api/chat/research-analysis/citation?goal_id=edgebench-official-ad-analysis-20261011-04&pack_id=c0fbc1b0f66924887b50369bd496c8c31849814b66d9ec1480988918dd61db06&analysis_key=6eaeaa2eed3cae8d30785b60129d72eae3a7dfaa510e38393a8313be514980a5&source_id=released-native-inventory&first_line=16&last_line=16",
+      "response_sha256": "9cf78700c7d7691f64b4e69f9b389fec0dd0f622e165f386b3eaecf39eaf097c",
+      "response": {
+        "source_id": "released-native-inventory",
+        "artifact": "product-goal-sources/official/ad/native-observations.jsonl",
+        "first_line": 16,
+        "last_line": 16,
+        "text": "{\"submission_index\":16,\"result_id\":\"9be1f24ecc8b\",\"candidate_ref\":\"agent-16\",\"valid\":true,\"value\":49650446168.0,\"submitted_at\":\"2026-10-12T05:36:53.759Z\",\"observed_at\":\"2026-10-12T05:39:34.830Z\",\"observed_at_meaning\":\"first captured completed native-submit command containing this exact submission id and score; not inferred feedback-release time\",\"report_artifact\":\"native-runs/runs/ad-official-native3600-integration-20261011-04/ad_placement_optimization/submissions/agent-16/report.json\",\"report_sha256\":\"f8ad028fc2fe4d0441bb46fb0df6644d5d5eeacbf0b41d02c32c48ceae399a70\",\"observation_artifact\":\"native-runs/runs/ad-official-native3600-integration-20261011-04/ad_placement_optimization/collected/native-sessions/sessions/2026/10/11/rollout-2026-10-11T12-28-45-01a12aef-c280-7042-a2fc-add2d305a19e.jsonl\",\"observation_artifact_sha256\":\"3d04ccf7de4d4b536d35bed34f91c27846280b4aab3419c58d174654bbec19c4\",\"observation_line\":14520}",
+        "applicability": "current"
+      }
+    },
+    {
+      "request_path": "/api/chat/research-analysis/citation?goal_id=edgebench-official-ad-analysis-20261011-04&pack_id=c0fbc1b0f66924887b50369bd496c8c31849814b66d9ec1480988918dd61db06&analysis_key=bb5b6a4169f8f541f51b391fd07a2209790741702ce5f5c8ea09178480e9a161&source_id=released-native-inventory&first_line=1&last_line=1&output_language=zh",
+      "response_sha256": "5d36f55807538f00c360d21fe8dbb5c4d7121efbcd5fcf45568e501b873833a0",
+      "response": {
+        "source_id": "released-native-inventory",
+        "artifact": "product-goal-sources/official/ad/native-observations.jsonl",
+        "first_line": 1,
+        "last_line": 1,
+        "text": "{\"submission_index\":1,\"result_id\":\"0f01f973558f\",\"candidate_ref\":\"agent-1\",\"valid\":true,\"value\":49550815819.0,\"submitted_at\":\"2026-10-11T12:53:51.989Z\",\"observed_at\":\"2026-10-11T12:56:06.845Z\",\"observed_at_meaning\":\"first captured completed native-submit command containing this exact submission id and score; not inferred feedback-release time\",\"report_artifact\":\"native-runs/runs/ad-official-native3600-integration-20261011-04/ad_placement_optimization/submissions/agent-1/report.json\",\"report_sha256\":\"262bf849bc739f1aa0465ab33becd52256904745e87a3b3f88f62145619e9714\",\"observation_artifact\":\"native-runs/runs/ad-official-native3600-integration-20261011-04/ad_placement_optimization/collected/native-sessions/sessions/2026/10/11/rollout-2026-10-11T12-28-45-01a12aef-c280-7042-a2fc-add2d305a19e.jsonl\",\"observation_artifact_sha256\":\"3d04ccf7de4d4b536d35bed34f91c27846280b4aab3419c58d174654bbec19c4\",\"observation_line\":379}",
+        "applicability": "current"
+      }
+    },
+    {
+      "request_path": "/api/chat/research-analysis/citation?goal_id=edgebench-official-ad-analysis-20261011-04&pack_id=c0fbc1b0f66924887b50369bd496c8c31849814b66d9ec1480988918dd61db06&analysis_key=bb5b6a4169f8f541f51b391fd07a2209790741702ce5f5c8ea09178480e9a161&source_id=released-native-inventory&first_line=13&last_line=13&output_language=zh",
+      "response_sha256": "bc8496f68021fe8373b80a686febc72ea0e3bf1b894bd0e7afbf51b1ea1454a6",
+      "response": {
+        "source_id": "released-native-inventory",
+        "artifact": "product-goal-sources/official/ad/native-observations.jsonl",
+        "first_line": 13,
+        "last_line": 13,
+        "text": "{\"submission_index\":13,\"result_id\":\"80bee97892b5\",\"candidate_ref\":\"agent-13\",\"valid\":true,\"value\":49653326363.0,\"submitted_at\":\"2026-10-12T01:34:30.830Z\",\"observed_at\":\"2026-10-12T01:36:57.526Z\",\"observed_at_meaning\":\"first captured completed native-submit command containing this exact submission id and score; not inferred feedback-release time\",\"report_artifact\":\"native-runs/runs/ad-official-native3600-integration-20261011-04/ad_placement_optimization/submissions/agent-13/report.json\",\"report_sha256\":\"1ff915107bfd3a25bdbb111ffa7eb44d0b78fd20a594dc34b773db99b25db3bb\",\"observation_artifact\":\"native-runs/runs/ad-official-native3600-integration-20261011-04/ad_placement_optimization/collected/native-sessions/sessions/2026/10/11/rollout-2026-10-11T12-28-45-01a12aef-c280-7042-a2fc-add2d305a19e.jsonl\",\"observation_artifact_sha256\":\"3d04ccf7de4d4b536d35bed34f91c27846280b4aab3419c58d174654bbec19c4\",\"observation_line\":10516}",
+        "applicability": "current"
+      }
+    },
+    {
+      "request_path": "/api/chat/research-analysis/citation?goal_id=edgebench-official-ad-analysis-20261011-04&pack_id=c0fbc1b0f66924887b50369bd496c8c31849814b66d9ec1480988918dd61db06&analysis_key=bb5b6a4169f8f541f51b391fd07a2209790741702ce5f5c8ea09178480e9a161&source_id=released-native-inventory&first_line=16&last_line=16&output_language=zh",
+      "response_sha256": "9cf78700c7d7691f64b4e69f9b389fec0dd0f622e165f386b3eaecf39eaf097c",
+      "response": {
+        "source_id": "released-native-inventory",
+        "artifact": "product-goal-sources/official/ad/native-observations.jsonl",
+        "first_line": 16,
+        "last_line": 16,
+        "text": "{\"submission_index\":16,\"result_id\":\"9be1f24ecc8b\",\"candidate_ref\":\"agent-16\",\"valid\":true,\"value\":49650446168.0,\"submitted_at\":\"2026-10-12T05:36:53.759Z\",\"observed_at\":\"2026-10-12T05:39:34.830Z\",\"observed_at_meaning\":\"first captured completed native-submit command containing this exact submission id and score; not inferred feedback-release time\",\"report_artifact\":\"native-runs/runs/ad-official-native3600-integration-20261011-04/ad_placement_optimization/submissions/agent-16/report.json\",\"report_sha256\":\"f8ad028fc2fe4d0441bb46fb0df6644d5d5eeacbf0b41d02c32c48ceae399a70\",\"observation_artifact\":\"native-runs/runs/ad-official-native3600-integration-20261011-04/ad_placement_optimization/collected/native-sessions/sessions/2026/10/11/rollout-2026-10-11T12-28-45-01a12aef-c280-7042-a2fc-add2d305a19e.jsonl\",\"observation_artifact_sha256\":\"3d04ccf7de4d4b536d35bed34f91c27846280b4aab3419c58d174654bbec19c4\",\"observation_line\":14520}",
+        "applicability": "current"
+      }
+    },
+    {
+      "request_path": "/api/chat/research-analysis/citation?goal_id=edgebench-official-ad-analysis-20261011-04&pack_id=c0fbc1b0f66924887b50369bd496c8c31849814b66d9ec1480988918dd61db06&analysis_key=b47bda9123569d535da8fe09002f817da8c8844bf6367e65fb2eecd51f4f9d1f&source_id=released-native-inventory&first_line=1&last_line=1&output_language=en",
+      "response_sha256": "5d36f55807538f00c360d21fe8dbb5c4d7121efbcd5fcf45568e501b873833a0",
+      "response": {
+        "source_id": "released-native-inventory",
+        "artifact": "product-goal-sources/official/ad/native-observations.jsonl",
+        "first_line": 1,
+        "last_line": 1,
+        "text": "{\"submission_index\":1,\"result_id\":\"0f01f973558f\",\"candidate_ref\":\"agent-1\",\"valid\":true,\"value\":49550815819.0,\"submitted_at\":\"2026-10-11T12:53:51.989Z\",\"observed_at\":\"2026-10-11T12:56:06.845Z\",\"observed_at_meaning\":\"first captured completed native-submit command containing this exact submission id and score; not inferred feedback-release time\",\"report_artifact\":\"native-runs/runs/ad-official-native3600-integration-20261011-04/ad_placement_optimization/submissions/agent-1/report.json\",\"report_sha256\":\"262bf849bc739f1aa0465ab33becd52256904745e87a3b3f88f62145619e9714\",\"observation_artifact\":\"native-runs/runs/ad-official-native3600-integration-20261011-04/ad_placement_optimization/collected/native-sessions/sessions/2026/10/11/rollout-2026-10-11T12-28-45-01a12aef-c280-7042-a2fc-add2d305a19e.jsonl\",\"observation_artifact_sha256\":\"3d04ccf7de4d4b536d35bed34f91c27846280b4aab3419c58d174654bbec19c4\",\"observation_line\":379}",
+        "applicability": "current"
+      }
+    },
+    {
+      "request_path": "/api/chat/research-analysis/citation?goal_id=edgebench-official-ad-analysis-20261011-04&pack_id=c0fbc1b0f66924887b50369bd496c8c31849814b66d9ec1480988918dd61db06&analysis_key=b47bda9123569d535da8fe09002f817da8c8844bf6367e65fb2eecd51f4f9d1f&source_id=released-native-inventory&first_line=13&last_line=13&output_language=en",
+      "response_sha256": "bc8496f68021fe8373b80a686febc72ea0e3bf1b894bd0e7afbf51b1ea1454a6",
+      "response": {
+        "source_id": "released-native-inventory",
+        "artifact": "product-goal-sources/official/ad/native-observations.jsonl",
+        "first_line": 13,
+        "last_line": 13,
+        "text": "{\"submission_index\":13,\"result_id\":\"80bee97892b5\",\"candidate_ref\":\"agent-13\",\"valid\":true,\"value\":49653326363.0,\"submitted_at\":\"2026-10-12T01:34:30.830Z\",\"observed_at\":\"2026-10-12T01:36:57.526Z\",\"observed_at_meaning\":\"first captured completed native-submit command containing this exact submission id and score; not inferred feedback-release time\",\"report_artifact\":\"native-runs/runs/ad-official-native3600-integration-20261011-04/ad_placement_optimization/submissions/agent-13/report.json\",\"report_sha256\":\"1ff915107bfd3a25bdbb111ffa7eb44d0b78fd20a594dc34b773db99b25db3bb\",\"observation_artifact\":\"native-runs/runs/ad-official-native3600-integration-20261011-04/ad_placement_optimization/collected/native-sessions/sessions/2026/10/11/rollout-2026-10-11T12-28-45-01a12aef-c280-7042-a2fc-add2d305a19e.jsonl\",\"observation_artifact_sha256\":\"3d04ccf7de4d4b536d35bed34f91c27846280b4aab3419c58d174654bbec19c4\",\"observation_line\":10516}",
+        "applicability": "current"
+      }
+    },
+    {
+      "request_path": "/api/chat/research-analysis/citation?goal_id=edgebench-official-ad-analysis-20261011-04&pack_id=c0fbc1b0f66924887b50369bd496c8c31849814b66d9ec1480988918dd61db06&analysis_key=b47bda9123569d535da8fe09002f817da8c8844bf6367e65fb2eecd51f4f9d1f&source_id=released-native-inventory&first_line=16&last_line=16&output_language=en",
+      "response_sha256": "9cf78700c7d7691f64b4e69f9b389fec0dd0f622e165f386b3eaecf39eaf097c",
+      "response": {
+        "source_id": "released-native-inventory",
+        "artifact": "product-goal-sources/official/ad/native-observations.jsonl",
+        "first_line": 16,
+        "last_line": 16,
+        "text": "{\"submission_index\":16,\"result_id\":\"9be1f24ecc8b\",\"candidate_ref\":\"agent-16\",\"valid\":true,\"value\":49650446168.0,\"submitted_at\":\"2026-10-12T05:36:53.759Z\",\"observed_at\":\"2026-10-12T05:39:34.830Z\",\"observed_at_meaning\":\"first captured completed native-submit command containing this exact submission id and score; not inferred feedback-release time\",\"report_artifact\":\"native-runs/runs/ad-official-native3600-integration-20261011-04/ad_placement_optimization/submissions/agent-16/report.json\",\"report_sha256\":\"f8ad028fc2fe4d0441bb46fb0df6644d5d5eeacbf0b41d02c32c48ceae399a70\",\"observation_artifact\":\"native-runs/runs/ad-official-native3600-integration-20261011-04/ad_placement_optimization/collected/native-sessions/sessions/2026/10/11/rollout-2026-10-11T12-28-45-01a12aef-c280-7042-a2fc-add2d305a19e.jsonl\",\"observation_artifact_sha256\":\"3d04ccf7de4d4b536d35bed34f91c27846280b4aab3419c58d174654bbec19c4\",\"observation_line\":14520}",
+        "applicability": "current"
+      }
+    }
+  ]
+}

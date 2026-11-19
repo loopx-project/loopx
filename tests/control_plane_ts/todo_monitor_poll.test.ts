@@ -9,6 +9,7 @@ import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/a
 import {TODO_DOMAIN_ITEM_SCHEMA, TODO_DOMAIN_READ_RECORD_SCHEMA, TODO_DOMAIN_RECORD_CONTRACT} from "../../loopx/control_plane/coordination/coordination_state_contract.ts";
 import {executeCoordinationMonitorPoll} from "../../loopx/control_plane/coordination/todo_monitor_poll.ts";
 import {selectMonitorTodo} from "../../loopx/control_plane/scheduler/monitor_successor.ts";
+import {monitorScopeGeneration} from "../../loopx/control_plane/todos/monitor_scope.ts";
 
 async function seeded(overrides: JsonObject = {}, extras: JsonObject[] = []) {
   const store = new FileAuthorityStore(await mkdtemp(join(tmpdir(), "monitor-transaction-")), "goal-a");
@@ -52,6 +53,121 @@ test("monitor and independent successor commit together, preview is inert, recei
   assert.equal((await executeCoordinationMonitorPoll(store, {...request,
     intent: {...request.intent, next_agent_todo: "Different intent"}})).reason_code,
   "coordination_operation_identity_mismatch");
+});
+
+test("canonical poll requires current runtime capacity and the admitted wait before a fresh write", async () => {
+  const wait = "capacity_available:benchmark_runner";
+  const {store, request} = await seeded({resume_when: wait});
+  const before = await store.loadAuthority();
+  const admitted = {...request, admitted_resume_when: wait};
+  const missing = await executeCoordinationMonitorPoll(store, admitted);
+  assert.equal(missing.reason_code, "monitor_poll_rejected");
+  assert.ok(missing.no_effect);
+  const available = {available_capabilities: ["benchmark_runner"]};
+  const changed = await executeCoordinationMonitorPoll(store, {...admitted, ...available,
+    admitted_resume_when: "resume_at:1999-01-01T00:00:00Z"});
+  assert.equal(changed.reason_code, "monitor_poll_rejected");
+  assert.ok(changed.no_effect);
+  assert.deepEqual(await store.loadAuthority(), before);
+  assert.equal((await executeCoordinationMonitorPoll(store, {...admitted, ...available})).status, "applied");
+  assert.equal((await executeCoordinationMonitorPoll(store, request)).status, "replayed");
+});
+
+test("canonical monitor poll retains scoped generations across unrelated transitions", async () => {
+  const {store, request} = await seeded();
+  const first = await executeCoordinationMonitorPoll(store, {
+    ...request,
+    observation: {...request.observation, material_change_scope: "case-a/run-1"},
+  });
+  assert.equal(first.status, "applied", JSON.stringify(first));
+  // A second scope reporting the identical result_hash still advances its own
+  // scoped generation and can author its own successor.
+  const second = await executeCoordinationMonitorPoll(store, {
+    ...request,
+    operation_id: "poll-b",
+    intent: {...request.intent, next_agent_todo: "Deliver case-b result"},
+    observation: {
+      ...request.observation,
+      generated_at: "2026-09-01T01:00:00Z",
+      result_hash: request.observation.result_hash,
+      material_change_scope: "case-b/run-2",
+    },
+  });
+  assert.equal(second.status, "applied", JSON.stringify(second));
+  const after = await store.loadAuthority();
+  assert.equal(after.status, "loaded");
+  if (after.status !== "loaded") return;
+  const monitor = (after.head.todos as JsonObject[]).find(todo => todo.todo_id === "todo_monitor")!;
+  assert.equal(monitor.material_change_generation, 2);
+  assert.equal(monitorScopeGeneration(monitor.material_change_scope_generations, "case-a/run-1"), 1);
+  assert.equal(monitorScopeGeneration(monitor.material_change_scope_generations, "case-b/run-2"), 2);
+  assert.equal((second.writeback as JsonObject).material_change_scope, "case-b/run-2");
+  assert.equal((second.writeback as JsonObject).scoped_material_change_generation, 2);
+});
+
+test("explicit successor target reuses one compatible open Todo across material generations", async () => {
+  const {store, request} = await seeded();
+  const intent = {...request.intent, next_target_key: "deliver-watch-a"};
+  const first = await executeCoordinationMonitorPoll(store, {...request, intent});
+  assert.equal(first.status, "applied", JSON.stringify(first));
+  const firstWriteback = first.writeback as JsonObject;
+  const firstTodo = (firstWriteback.next_todos as JsonObject[])[0]!;
+  const secondRequest = {...request, operation_id: "poll-b", intent,
+    observation: {...request.observation, generated_at: "2026-09-01T01:00:00Z", result_hash: "result-b"}};
+  const second = await executeCoordinationMonitorPoll(store, secondRequest);
+  assert.equal(second.status, "applied", JSON.stringify(second));
+  const secondWriteback = second.writeback as JsonObject;
+  assert.equal(secondWriteback.material_change_generation, 2);
+  assert.equal((secondWriteback.next_todos as JsonObject[])[0]!.todo_id, firstTodo.todo_id);
+  assert.equal((secondWriteback.successor_receipts as JsonObject[])[0]!.todo_id, firstTodo.todo_id);
+  assert.deepEqual(
+    (secondWriteback.next_todos as JsonObject[]).map(todo => todo.todo_id),
+    (secondWriteback.successor_receipts as JsonObject[]).map(todo => todo.todo_id),
+  );
+  const after = await store.loadAuthority();
+  assert.equal(after.status, "loaded");
+  if (after.status !== "loaded") return;
+  assert.equal((after.head.todos as JsonObject[]).length, 2);
+  assert.equal((after.head.todos as JsonObject[]).filter(todo => todo.target_key === "deliver-watch-a").length, 1);
+  assert.equal((await executeCoordinationMonitorPoll(store, secondRequest)).status, "replayed");
+  assert.deepEqual(await store.loadAuthority(), after);
+});
+
+test("explicit successor target rejects incompatible text or route without updating the Monitor", async () => {
+  const {store, request} = await seeded();
+  const intent = {...request.intent, next_target_key: "deliver-watch-a"};
+  assert.equal((await executeCoordinationMonitorPoll(store, {...request, intent})).status, "applied");
+  const before = await store.loadAuthority();
+  for (const [operation_id, result_hash, intentChange, mismatch] of [
+    ["poll-text-conflict", "result-b", {next_agent_todo: "Deliver a different result"}, "text"],
+    ["poll-route-conflict", "result-c", {next_action_kind: "validate"}, "action_kind"],
+  ] as const) {
+    const result = await executeCoordinationMonitorPoll(store, {...request, operation_id,
+      observation: {...request.observation, generated_at: "2026-09-01T01:00:00Z", result_hash},
+      intent: {...intent, ...intentChange}});
+    assert.equal(result.status, "failed");
+    assert.equal(result.reason_code, "monitor_poll_rejected");
+    assert.match(String(result.reason), new RegExp(`role/target_key.*${mismatch}`));
+    assert.deepEqual(await store.loadAuthority(), before);
+    assert.equal((await store.readReceipt(operation_id)).status, "missing");
+  }
+});
+
+test("explicit successor target rejects ambiguous active identity without updating the Monitor", async () => {
+  const duplicate = (todo_id: string): JsonObject => ({schema_version: TODO_DOMAIN_ITEM_SCHEMA, todo_id,
+    role: "agent", status: "open", done: false, text: "Deliver the newly observed result",
+    archive_state: "active", task_class: "advancement_task", action_kind: "implementation",
+    continuation_policy: "independent_handoff", target_key: "deliver-watch-a",
+    unblocks_todo_id: "todo_monitor"});
+  const {store, request} = await seeded({}, [duplicate("todo_z_existing_a"), duplicate("todo_z_existing_b")]);
+  const before = await store.loadAuthority();
+  const result = await executeCoordinationMonitorPoll(store, {...request,
+    intent: {...request.intent, next_target_key: "deliver-watch-a"}});
+  assert.equal(result.status, "failed");
+  assert.equal(result.reason_code, "monitor_poll_rejected");
+  assert.match(String(result.reason), /multiple active Todos have the same role\/target_key/);
+  assert.deepEqual(await store.loadAuthority(), before);
+  assert.equal((await store.readReceipt(request.operation_id)).status, "missing");
 });
 
 test("receipt-only recovery preserves the original hash and never plans fresh work", async () => {

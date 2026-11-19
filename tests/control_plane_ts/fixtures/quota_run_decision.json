@@ -18,6 +18,7 @@
     "inbox_reply_due": false,
     "inbox_material_review_due": false,
     "terminal_no_followup": false,
+    "task_orchestration_lane_count": 0,
     "task_orchestration_contract": null
   },
   "base_result": {
@@ -31,7 +32,8 @@
     "reason": "eligible",
     "state": "eligible",
     "quota_patch": {},
-    "replan_decision_allowed": false
+    "replan_decision_allowed": false,
+    "goal_route_hint_override": null
   },
   "cases": [
     {
@@ -324,7 +326,14 @@
       },
       "expected": {
         "effective_action": "coordinate_task_bundle",
-        "reason": "the task coordinator may use admitted child lanes before its own worker-lane delivery"
+        "reason": "the task coordinator may use admitted child lanes before its own worker-lane delivery",
+        "goal_route_hint_override": {
+          "omit_current_agent_next_action": true,
+          "kind": "task_orchestration",
+          "route_decision": "coordinate_task_bundle",
+          "reason": "task-scoped coordinator may spawn admitted child lanes",
+          "peer_lane_count": 0
+        }
       }
     },
     {
@@ -337,7 +346,14 @@
       },
       "expected": {
         "effective_action": "coordinate_task_bundle",
-        "reason": "the explicitly selected task coordinator must activate or resume eligible peer lanes before doing its own worker-lane delivery"
+        "reason": "the explicitly selected task coordinator must activate or resume eligible peer lanes before doing its own worker-lane delivery",
+        "goal_route_hint_override": {
+          "omit_current_agent_next_action": true,
+          "kind": "task_orchestration",
+          "route_decision": "coordinate_task_bundle",
+          "reason": "task-scoped coordinator must activate/resume eligible peer lanes",
+          "peer_lane_count": 0
+        }
       }
     },
     {
@@ -361,7 +377,14 @@
       },
       "expected": {
         "effective_action": "operator_inbox_material_review_due",
-        "reason": "captured unaddressed operator-inbox material is pending bounded review"
+        "reason": "captured unaddressed operator-inbox material is pending bounded review",
+        "goal_route_hint_override": {
+          "omit_current_agent_next_action": true,
+          "kind": "task_orchestration",
+          "route_decision": "coordinate_task_bundle",
+          "reason": "task-scoped coordinator may spawn admitted child lanes",
+          "peer_lane_count": 0
+        }
       }
     },
     {

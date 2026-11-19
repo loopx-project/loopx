@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from loopx.control_plane import effect_runtime
+
 from loopx.control_plane.quota.spend_commit import (
     QuotaRunIndexConflict,
     build_quota_slot_spend_event,
@@ -206,6 +208,75 @@ def test_python_facade_serializes_concurrent_exact_effect_retries(
     assert sum(bool(result["idempotent_replay"]) for result in results) == 1
     index_path = Path(results[0]["index_path"])
     assert len(index_path.read_text(encoding="utf-8").splitlines()) == 1
+
+
+@pytest.mark.parametrize("context_size", [128, 1_100_000])
+def test_complete_spend_context_survives_preview_commit_and_replay(
+    tmp_path: Path, context_size: int,
+) -> None:
+    # Small and above-wire-budget callers have the same accounting semantics;
+    # diagnostics remain complete without becoming a second decision owner.
+    context = {"requirements": "x" * context_size, "tail": "完整🙂"}
+    preview = _preview(
+        effect_ref="wide-context#quota_spend",
+        before={**_decision(0), "context": context},
+        after={**_decision(1), "context": context},
+        evidence={"keep": "opaque caller evidence"},
+    )
+    projected = record_quota_slot_spend_from_preview(
+        preview, {"runtime_root": str(tmp_path)},
+        goal_id=GOAL_ID, execute=False, source="heartbeat",
+    )
+    assert projected["before"] == preview["before"]
+    assert projected["after"] == preview["after"]
+    assert projected["evidence"] == preview["evidence"]
+    assert projected["dry_run"] is True
+    assert not (tmp_path / "goals").exists()
+
+    written = _commit(tmp_path, preview)
+    assert written["appended"] is True
+    index_path = Path(written["index_path"])
+    original_rows = index_path.read_bytes()
+    record_path = Path(written["json_path"])
+    original_record = record_path.read_bytes()
+    assert json.loads(original_record)["quota_event"]["after"]["spent_slots"] == 1
+
+    replayed = _commit(tmp_path, preview)
+    assert replayed["appended"] is False
+    assert replayed["idempotent_replay"] is True
+    assert replayed["effect_id"] == written["effect_id"]
+    assert index_path.read_bytes() == original_rows
+    assert record_path.read_bytes() == original_record
+    assert len(original_rows.splitlines()) == 1
+
+
+def test_large_spend_preserves_validation_before_effects(tmp_path: Path) -> None:
+    preview = _preview(
+        before={**_decision(0), "context": "x" * 1_100_000},
+        after={**_decision(2), "context": "x" * 1_100_000},
+    )
+    with pytest.raises(ValueError, match="after.spent_slots"):
+        _commit(tmp_path, preview)
+    runs_dir = tmp_path / "goals" / GOAL_ID / "runs"
+    assert not (runs_dir / "index.jsonl").exists()
+    assert not (runs_dir / ".transactions").exists()
+
+
+def test_spend_snapshot_limit_rejects_before_commit(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    # Cross the inline threshold first so the private snapshot guard is used.
+    monkeypatch.setattr(effect_runtime, "MAX_REQUEST_BYTES", 1_000_000)
+    monkeypatch.setattr(effect_runtime, "MAX_LOCAL_SNAPSHOT_BYTES", 2_100_000)
+    preview = _preview(
+        before={**_decision(0), "context": "x" * 1_100_000},
+        after={**_decision(1), "context": "x" * 1_100_000},
+    )
+    with pytest.raises(ValueError, match="local snapshot is oversized"):
+        _commit(tmp_path, preview)
+    runs_dir = tmp_path / "goals" / GOAL_ID / "runs"
+    assert not (runs_dir / "index.jsonl").exists()
+    assert not (runs_dir / ".transactions").exists()
 
 
 def test_source_spend_rejects_stale_goal_before_any_write_and_stamps_successor(

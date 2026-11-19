@@ -106,6 +106,17 @@ def selection_gate_offers_surface(surface: str, cwd: Path) -> None:
     assert gate_result.returncode == 0, gate_result.stderr
     gate = json.loads(gate_result.stdout)["host_surface_selection_gate"]
     choices = {item["host_surface"]: item for item in gate["choices"]}
+    if surface not in choices:
+        detail_command = gate.get("full_choices_detail_command")
+        assert isinstance(detail_command, str), sorted(choices)
+        detail_tokens = shlex.split(detail_command)
+        assert detail_tokens[0] == "loopx"
+        detail_result = run_cli(*detail_tokens[1:], cwd=cwd)
+        assert detail_result.returncode == 0, detail_result.stderr
+        detail_gate = json.loads(detail_result.stdout)["host_surface_selection_gate"]
+        assert detail_gate["choice_projection"] == "complete"
+        choices = {item["host_surface"]: item for item in detail_gate["choices"]}
+
     assert surface in choices, sorted(choices)
 
     tokens = shlex.split(choices[surface]["rerun_command"])

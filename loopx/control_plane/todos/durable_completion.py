@@ -23,98 +23,18 @@ from .active_state_editing import (
     section_bounds,
     todo_blocks,
 )
-from .contract import (
-    TODO_STATUS_DONE,
-    normalize_todo_id,
-    normalize_todo_id_list,
-    normalize_todo_no_followup,
-    normalize_todo_status,
-)
-from .completion_state import (
-    TodoCompletionContinuation,
-    normalize_todo_completion_continuation,
-    normalize_todo_completion_recovery,
-)
-from .completion_fence import evaluate_todo_completion_fence
+from .contract import normalize_todo_id
+from ..effect_runtime import EffectRuntimeRejected
+from .goal_todo_projection import project_todo_read
 
 
 TodoCompletionProjectionSource = Literal["materialized"]
 
 
-def read_persisted_todo_record(
-    state_file: Path,
-    *,
-    todo_id: str,
-    registry_path: Path | None = None,
-    goal_id: str | None = None,
-    runtime_root: Path | None = None,
-) -> tuple[dict[str, Any], set[str]]:
-    """Read one durable Todo record and the goal-state Todo id universe.
-
-    Returns the parsed Todo record for ``todo_id`` together with the set of
-    Todo ids present in the persisted goal state. Like
-    ``complete_goal_todo``, the record is looked up in the active Markdown
-    blocks first and falls back to the event projection for event-sourced
-    goals. Raises ``ValueError`` when the Todo cannot be located in the
-    durable lifecycle, so the caller can fail closed instead of projecting a
-    fabricated continuation.
-    """
-    todo, existing_todo_ids, _projection_source = (
-        read_persisted_todo_record_with_source(
-            state_file,
-            todo_id=todo_id,
-            registry_path=registry_path,
-            goal_id=goal_id,
-            runtime_root=runtime_root,
-        )
-    )
-    return todo, existing_todo_ids
-
-
-def read_persisted_todo_record_with_source(
-    state_file: Path,
-    *,
-    todo_id: str,
-    registry_path: Path | None = None,
-    goal_id: str | None = None,
-    runtime_root: Path | None = None,
+def _read_legacy_todo_record(
+    state_file: Path, *, todo_id: str,
 ) -> tuple[dict[str, Any], set[str], TodoCompletionProjectionSource]:
-    """Read one durable Todo together with its authoritative projection source.
-
-    A promoted canonical provider is the primary persisted lifecycle. Markdown
-    and event projection remain the pre-promotion sources only; a stale
-    Markdown projection must never hide a canonical commit during Turn retry.
-    """
-
-    if runtime_root is not None and goal_id is not None:
-        from ..coordination.local_authority import (
-            read_canonical_todos_if_promoted,
-        )
-
-        canonical = read_canonical_todos_if_promoted(
-            runtime_root=runtime_root,
-            goal_id=goal_id,
-        )
-        if canonical is not None:
-            records = [
-                dict(item)
-                for item in canonical.get("todos", [])
-                if isinstance(item, Mapping)
-            ]
-            canonical_todo_ids = {
-                normalized
-                for item in records
-                if (normalized := normalize_todo_id(item.get("todo_id")))
-            }
-            normalized_todo_id = normalize_todo_id(todo_id) or todo_id
-            for item in records:
-                if normalize_todo_id(item.get("todo_id")) == normalized_todo_id:
-                    return item, canonical_todo_ids, "materialized"
-            raise ValueError(
-                f"durable completion todo_id {normalized_todo_id!r} was not found "
-                "in canonical provider state"
-            )
-
+    """Decode explicit legacy Markdown; canonical callers never enter this IO path."""
     lines = state_file.read_text(encoding="utf-8").splitlines()
     block: dict[str, Any] | None = None
     projection_source: TodoCompletionProjectionSource = "materialized"
@@ -140,32 +60,112 @@ def read_persisted_todo_record_with_source(
     return block, existing_todo_ids, projection_source
 
 
+def _completion_facts(todo: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve Python scalar/container text at the legacy format boundary."""
+    successors = todo.get("successor_todo_ids")
+    values = successors if isinstance(successors, (list, tuple, set)) else [successors]
+    return {
+        **{
+            key: str(todo.get(key) or "")
+            for key in (
+                "todo_id",
+                "status",
+                "completion_continuation",
+                "completion_recovery",
+            )
+        },
+        "no_followup": todo.get("no_followup")
+        if isinstance(todo.get("no_followup"), bool)
+        else str(todo.get("no_followup") or ""),
+        "successor_todo_ids": [str(value or "") for value in values],
+    }
+
+
+def _completion_request(**facts: Any) -> dict[str, Any]:
+    try:
+        result = project_todo_read({"kind": "completion_evidence", **facts})
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from None
+    if not isinstance(result, Mapping):
+        raise RuntimeError("TypeScript durable completion result must be an object")
+    if "canonical" in result:
+        from ..coordination.local_authority import validate_canonical_todo_read
+
+        validate_canonical_todo_read(
+            result["canonical"], goal_id=facts["source"]["goal_id"]
+        )
+    if "completion_error" in result:
+        raise ValueError(result["completion_error"])
+    completion = result.get("completion")
+    if not isinstance(completion, dict):
+        raise RuntimeError("TypeScript durable completion result must be an object")
+    return completion
+
+
+def _project_completion_view(
+    *,
+    todo: Mapping[str, Any],
+    expected_todo_id: str,
+    existing_todo_ids: Collection[str] | None,
+    operation: str,
+    completion_turn_key: str | None = None,
+    projection_source: str = "materialized",
+) -> dict[str, Any]:
+    fence_todo = {}
+    for key in ("no_followup", "completion_continuation", "completion_turn_key"):
+        value = todo.get(key)
+        fence_todo[key] = (
+            value
+            if value is None
+            or isinstance(value, str)
+            or (key == "no_followup" and isinstance(value, bool))
+            else str(value)
+        )
+    successors = todo.get("successor_todo_ids")
+    fence_todo.update(
+        status=str(todo.get("status") or "open"),
+        successor_todo_ids=(
+            list(successors) if isinstance(successors, (tuple, set)) else successors
+        ),
+    )
+    return _completion_request(
+        todo=_completion_facts(todo),
+        expected_todo_id=str(expected_todo_id or ""),
+        existing_todo_ids=list(existing_todo_ids)
+        if existing_todo_ids is not None
+        else None,
+        operation=operation,
+        completion_turn_key=completion_turn_key,
+        projection_source=projection_source,
+        fence_todo=fence_todo,
+    )
+
+
 def project_durable_completion_outcome(
     *,
     todo: Mapping[str, Any],
     expected_todo_id: str,
     existing_todo_ids: Collection[str] | None = None,
 ) -> dict[str, Any]:
-    """Project the typed completion continuation recorded by the Todo lifecycle.
-
-    ``todo`` is the durable Todo record re-read from persisted lifecycle state
-    after ``complete_goal_todo``. The outcome is one of:
-
-    - ``successor`` when the Todo durably declares ``successor_todo_ids``;
-      every declared successor must exist in the goal state
-      (``existing_todo_ids``) or projection fails closed;
-    - ``no_followup`` when the Todo durably records ``no_followup``;
-    - ``active_goal`` when that value is durably recorded.
-
-    Raises ``ValueError`` (fail closed) when the durable record contradicts
-    itself, omits its explicit completion continuation, declares a dangling
-    successor, does not match ``expected_todo_id``, or is not durably done.
-    """
-    return _project_durable_completion(
+    return _project_completion_view(
         todo=todo,
         expected_todo_id=expected_todo_id,
         existing_todo_ids=existing_todo_ids,
-        require_done=True,
+        operation="outcome",
+    )
+
+
+def project_durable_completion_intent(
+    *,
+    todo: Mapping[str, Any],
+    expected_todo_id: str,
+    existing_todo_ids: Collection[str] | None = None,
+) -> dict[str, Any]:
+    return _project_completion_view(
+        todo=todo,
+        expected_todo_id=expected_todo_id,
+        existing_todo_ids=existing_todo_ids,
+        operation="intent",
     )
 
 
@@ -177,155 +177,43 @@ def project_durable_terminal_completion_readback(
     projection_source: TodoCompletionProjectionSource,
     existing_todo_ids: Collection[str] | None = None,
 ) -> dict[str, Any]:
-    """Resolve terminal completion evidence under the canonical Turn fence.
-
-    A still-open Todo or a same-Turn terminal upgrade proves the terminal
-    effect absent.  A completed no-follow-up Todo proves the effect committed
-    only when its durable ``completion_turn_key`` matches the recovering Turn.
-    The TypeScript fence raises for missing, cross-Turn, or contradictory
-    completion identity so callers can map uncertainty to fail-closed recovery.
-    """
-
-    fence = evaluate_todo_completion_fence(
+    return _project_completion_view(
         todo=todo,
-        projection_source=projection_source,
+        expected_todo_id=expected_todo_id,
+        existing_todo_ids=existing_todo_ids,
+        operation="terminal",
         completion_turn_key=expected_completion_turn_key,
-        no_followup=True,
+        projection_source=projection_source,
     )
-    if fence["outcome"] == "continue":
-        if fence["reason"] == "same_turn_terminal_upgrade" or (
-            fence["reason"] == "not_terminal" and fence["status"] == "open"
-        ):
-            return {"kind": "absent"}
-        raise ValueError("durable terminal completion is not safely replayable")
-    if normalize_todo_status(todo.get("status")) != TODO_STATUS_DONE:
-        raise ValueError("durable terminal completion is not safely replayable")
-
-    completion = project_durable_completion_outcome(
-        todo=todo,
-        expected_todo_id=expected_todo_id,
-        existing_todo_ids=existing_todo_ids,
-    )
-    if completion.get("continuation") != TodoCompletionContinuation.NO_FOLLOWUP.value:
-        raise ValueError("durable terminal completion is not no-follow-up")
-    return {"kind": "committed", "completion": completion}
 
 
-def project_durable_completion_intent(
+def read_durable_completion_evidence(
+    state_file: Path,
     *,
-    todo: Mapping[str, Any],
-    expected_todo_id: str,
-    existing_todo_ids: Collection[str] | None = None,
+    todo_id: str,
+    operation: str,
+    registry_path: Path | None = None,
+    goal_id: str | None = None,
+    runtime_root: Path | None = None,
+    completion_turn_key: str | None = None,
 ) -> dict[str, Any]:
-    """Project the declared continuation before applying lifecycle closeout.
-
-    Turn settlement uses this read-only projection to distinguish an ordinary
-    completion from the terminal ``no_followup`` effect.  It validates the same
-    continuation invariants as :func:`project_durable_completion_outcome` but
-    deliberately accepts an open Todo so terminal mutation can be deferred
-    until matching writeback and spend receipts exist.
-    """
-
-    return _project_durable_completion(
+    """Read canonical evidence in one native transaction; decode legacy IO locally."""
+    if runtime_root is not None and goal_id is not None:
+        return _completion_request(
+            source={
+                "runtime_root": str(runtime_root.expanduser().resolve(strict=False)),
+                "goal_id": goal_id,
+            },
+            expected_todo_id=todo_id,
+            operation=operation,
+            completion_turn_key=completion_turn_key,
+        )
+    todo, existing, source = _read_legacy_todo_record(state_file, todo_id=todo_id)
+    return _project_completion_view(
         todo=todo,
-        expected_todo_id=expected_todo_id,
-        existing_todo_ids=existing_todo_ids,
-        require_done=False,
+        expected_todo_id=todo_id,
+        existing_todo_ids=existing,
+        operation=operation,
+        completion_turn_key=completion_turn_key,
+        projection_source=source,
     )
-
-
-def _project_durable_completion(
-    *,
-    todo: Mapping[str, Any],
-    expected_todo_id: str,
-    existing_todo_ids: Collection[str] | None,
-    require_done: bool,
-) -> dict[str, Any]:
-    normalized_expected_todo_id = normalize_todo_id(expected_todo_id)
-    if not normalized_expected_todo_id:
-        raise ValueError("durable completion requires a public Todo id")
-    durable_todo_id = normalize_todo_id(todo.get("todo_id"))
-    if durable_todo_id != normalized_expected_todo_id:
-        raise ValueError(
-            "durable completion todo_id does not match the selected Todo"
-        )
-    if require_done and normalize_todo_status(todo.get("status")) != TODO_STATUS_DONE:
-        raise ValueError(
-            "durable completion requires the selected Todo to be durably done"
-        )
-    successor_todo_ids = normalize_todo_id_list(todo.get("successor_todo_ids"))
-    no_followup = normalize_todo_no_followup(todo.get("no_followup"))
-    completion_continuation = normalize_todo_completion_continuation(
-        todo.get("completion_continuation")
-    )
-    raw_completion_recovery = todo.get("completion_recovery")
-    completion_recovery = normalize_todo_completion_recovery(
-        raw_completion_recovery
-    )
-    if raw_completion_recovery and completion_recovery is None:
-        raise ValueError("durable completion_recovery is invalid")
-    if require_done and completion_continuation is None:
-        raise ValueError(
-            "durable completion is missing completion_continuation; repair the "
-            "Todo with `loopx todo complete`"
-        )
-    if completion_continuation is None:
-        if no_followup is True:
-            completion_continuation = TodoCompletionContinuation.NO_FOLLOWUP.value
-        elif successor_todo_ids:
-            completion_continuation = TodoCompletionContinuation.SUCCESSOR.value
-        else:
-            completion_continuation = TodoCompletionContinuation.ACTIVE_GOAL.value
-    if no_followup is True:
-        if successor_todo_ids:
-            raise ValueError(
-                "durable completion records both no_followup and "
-                "successor_todo_ids"
-            )
-        if completion_continuation != TodoCompletionContinuation.NO_FOLLOWUP.value:
-            raise ValueError(
-                "durable completion_continuation contradicts no_followup"
-            )
-        return {
-            "todo_id": normalized_expected_todo_id,
-            "continuation": "no_followup",
-        }
-    if successor_todo_ids:
-        if completion_recovery is not None:
-            raise ValueError(
-                "durable completion_recovery requires a no_followup continuation"
-            )
-        if completion_continuation != TodoCompletionContinuation.SUCCESSOR.value:
-            raise ValueError(
-                "durable completion_continuation contradicts successor_todo_ids"
-            )
-        if existing_todo_ids is not None:
-            existing = set(existing_todo_ids)
-            missing_todo_ids = [
-                successor_todo_id
-                for successor_todo_id in successor_todo_ids
-                if successor_todo_id not in existing
-            ]
-            if missing_todo_ids:
-                raise ValueError(
-                    "durable completion declares missing successor Todo ids: "
-                    + ", ".join(missing_todo_ids)
-                )
-        return {
-            "todo_id": normalized_expected_todo_id,
-            "continuation": "successor",
-            "successor_todo_ids": successor_todo_ids,
-        }
-    if completion_continuation != TodoCompletionContinuation.ACTIVE_GOAL.value:
-        raise ValueError(
-            "durable completion_continuation requires matching no_followup or "
-            "successor_todo_ids"
-        )
-    if completion_recovery is not None:
-        raise ValueError(
-            "durable completion_recovery requires a no_followup continuation"
-        )
-    return {
-        "todo_id": normalized_expected_todo_id,
-        "continuation": "active_goal",
-    }

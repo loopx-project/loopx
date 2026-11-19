@@ -462,3 +462,177 @@ def test_private_peer_scope_requires_current_server_contract(tmp_path: Path):
     assert result.status == "unavailable"
     assert result.reason_code == "provider_server_version_incompatible"
     assert "server 0.4.17" in str(result.provider_version)
+
+
+def test_openviking_rejects_malformed_utf8_stdout():
+    def runner(command, **kwargs):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    with pytest.raises(UnicodeDecodeError):
+        OpenVikingContextProvider(runner=runner).retrieve(
+            namespace="reward_memory",
+            scope_ref="viking://user/default/resources",
+            query="test",
+            query_summary="test",
+            max_results=5,
+            timeout_seconds=5,
+            observed_at="2026-01-01T00:00:00Z",
+        )
+
+
+@pytest.mark.parametrize("server_version", ["0.5.0", "0.5.2"])
+@pytest.mark.parametrize(
+    "root",
+    [
+        "viking://~/memories",
+        "viking://user/default/memories",
+        "viking://user/default/peers/goal-one-pilot/memories",
+    ],
+)
+@pytest.mark.parametrize("lost_response", [False, True])
+def test_content_sync_compatible_write_reconciles_without_repeating(
+    tmp_path: Path,
+    server_version,
+    root,
+    lost_response,
+):
+    source = tmp_path / "record.json"
+    content = '{"lesson":"核对来源后再采用"}\n'
+    source.write_text(content, encoding="utf-8")
+    target = root + "/record.json"
+    stored = {}
+    writes = []
+
+    def runner(command, **kwargs):
+        operation = command[3] if command[1] == "--actor-peer-id" else command[1]
+        if operation == "--version":
+            output = "openviking 0.4.23"
+        elif operation == "version":
+            output = f"CLI: 0.4.23\nServer: {server_version}"
+        elif operation == "status":
+            output = "{}"
+        elif operation == "ls":
+            output = '{"items":[]}'
+        elif operation == "read":
+            return subprocess.CompletedProcess(
+                command,
+                0 if stored else 1,
+                json.dumps({"content": stored[target]}) if stored else "not found",
+            )
+        else:
+            assert operation == "write"
+            # Both servers accept omission. 0.5.2 forbids body.timeout;
+            # the CLI version alone does not describe the server protocol.
+            assert "--timeout" not in command
+            assert command[command.index("--mode") + 1] == "create"
+            assert "--wait" in command
+            assert 0 < kwargs["timeout"] < 30
+            writes.append(command)
+            stored[target] = content
+            if lost_response:
+                raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+            output = '{"status":"ok"}'
+        return subprocess.CompletedProcess(command, 0, output)
+
+    provider = OpenVikingContextProvider(actor_peer_id="goal-one-pilot", runner=runner)
+    arguments = dict(
+        namespace="reward_memory",
+        resources=[(str(source), target)],
+        timeout_seconds=30,
+        observed_at="2026-01-01T00:00:00Z",
+    )
+    preview = provider.sync(**arguments, execute=False)
+    assert preview.status == "preflight_ready" and not writes
+    first = provider.sync(**arguments, execute=True)
+    replay = provider.sync(**arguments, execute=True)
+    assert first.status == replay.status == "completed"
+    assert first.write_count == 1 and first.reconciliation_performed
+    assert replay.write_count == 0 and len(writes) == 1
+    stored[target] = "different revision"
+    conflict = provider.sync(**arguments, execute=True)
+    assert conflict.reason_code == "provider_sync_revision_conflict"
+    assert len(writes) == 1 and stored[target] == "different revision"
+
+
+@pytest.mark.parametrize("stall_at", ["--version", "read", "write"])
+def test_sync_deadline_is_shared_by_preflight_write_and_reconciliation(
+    tmp_path: Path,
+    monkeypatch,
+    stall_at,
+):
+    from loopx.capabilities.context_providers import openviking
+
+    clock = [100.0]
+    monkeypatch.setattr(openviking.time, "monotonic", lambda: clock[0])
+    source = tmp_path / "record.json"
+    source.write_text("{}\n", encoding="utf-8")
+    calls = []
+    stalled = False
+
+    def runner(command, **kwargs):
+        nonlocal stalled
+        operation = command[1]
+        calls.append(operation)
+        available = 105.0 - clock[0]
+        assert 0 < kwargs["timeout"] <= available
+        if operation == stall_at or stalled:
+            stalled = True
+            clock[0] += kwargs["timeout"]
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        clock[0] += min(0.4, kwargs["timeout"])
+        if operation == "--version":
+            return subprocess.CompletedProcess(command, 0, "openviking 0.4.23")
+        if operation == "status":
+            return subprocess.CompletedProcess(command, 0, "{}")
+        return subprocess.CompletedProcess(command, 1, "not found")
+
+    result = OpenVikingContextProvider(runner=runner).sync(
+        namespace="reward_memory",
+        resources=[(str(source), "viking://user/default/memories/record.json")],
+        timeout_seconds=5,
+        observed_at="2026-01-01T00:00:00Z",
+        execute=True,
+    )
+    assert clock[0] <= 105.0
+    assert calls.count("write") <= 1
+    if stall_at != "write":
+        assert "write" not in calls
+    else:
+        assert result.retry_disposition == "manual_reconcile"
+
+
+def test_resource_ingestion_keeps_server_timeout(tmp_path: Path):
+    source = tmp_path / "record.json"
+    source.write_text("{}\n", encoding="utf-8")
+    written = False
+
+    def runner(command, **kwargs):
+        nonlocal written
+        operation = command[1]
+        if operation == "--version":
+            output = "openviking 0.4.23"
+        elif operation == "status":
+            output = "{}"
+        elif operation == "read":
+            return subprocess.CompletedProcess(
+                command,
+                0 if written else 1,
+                '{"content":"{}"}' if written else "not found",
+            )
+        elif operation == "add-resource":
+            assert "--timeout" in command and "--wait" in command
+            written = True
+            output = "{}"
+        else:
+            assert operation in {"ls", "tree"}
+            output = '{"items":[]}'
+        return subprocess.CompletedProcess(command, 0, output)
+
+    result = OpenVikingContextProvider(runner=runner).sync(
+        namespace="decision_context",
+        resources=[(str(source), "viking://resources/example/record.json")],
+        timeout_seconds=30,
+        observed_at="2026-01-01T00:00:00Z",
+        execute=True,
+    )
+    assert result.status == "completed" and result.write_count == 1

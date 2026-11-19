@@ -12,6 +12,16 @@ from .readiness_observation import (
 
 
 SCHEMA_VERSION = "pull_request_merge_readiness_v0"
+_ADMIN_BYPASS_OVERRIDABLE_BLOCKERS = frozenset(
+    {
+        "github_review_decision_not_approved",
+        "repository_merge_state_blocked",
+        "status_checks_failed",
+        "status_checks_incomplete",
+        "status_checks_missing",
+        "status_checks_pending",
+    }
+)
 
 
 def _mapping(value: object) -> Mapping[str, Any]:
@@ -31,7 +41,7 @@ def build_merge_readiness(
     source: str,
     wait_for_ci: bool = True,
 ) -> dict[str, Any]:
-    """Return a read-only pre-merge gate without granting merge authority."""
+    """Report readiness; explicit admin bypass can cover policy holds, not evidence."""
 
     number = item.get("number")
     head_oid = _text(item.get("head_oid"))
@@ -97,6 +107,9 @@ def build_merge_readiness(
         blockers.append("repository_merge_state_blocked")
 
     blockers = list(dict.fromkeys(blockers))
+    admin_bypass_overrides_this_gate = not any(
+        blocker not in _ADMIN_BYPASS_OVERRIDABLE_BLOCKERS for blocker in blockers
+    )
     material_state = readiness_material_state(
         repository=repository,
         item=item,
@@ -131,7 +144,14 @@ def build_merge_readiness(
         "material_fingerprint": readiness_material_fingerprint(material_state),
         "authority": {
             "grants_merge_authority": False,
-            "admin_bypass_overrides_this_gate": False,
+            "admin_bypass_overrides_this_gate": admin_bypass_overrides_this_gate,
+            "admin_bypass_scope": "readiness_and_github_review_policy",
+            "admin_bypass_requires": [
+                "explicit_user_or_maintainer_merge_authorization",
+                "valid_exact_head_review_and_required_validation",
+                "complete_review_threads_without_unresolved_findings",
+                "open_unchanged_mergeable_head",
+            ],
             "required_timing": "immediately_before_merge",
             "head_change_action": "restart_review_and_rerun_gate",
         },

@@ -2,77 +2,17 @@
 import {createHash} from "node:crypto";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
-import {requireJsonObject, requireNonEmptyString, requireStringArray, requireStringLiteral} from "../runtime_decode.ts";
+import {jsonObject, requireJsonObject, requireNonEmptyString, requireStringArray, requireStringLiteral} from "../runtime_decode.ts";
+import {APPLICABILITY_LIMIT, EXPLORE_EXECUTION_FROM_FINDING_SCHEMA, EXPLORE_PATH_DELTA_ATTACHMENT_SCHEMA,
+  EXPLORE_RESULT_ATTACHMENT_SCHEMA, FINDING_EVIDENCE_SELECTION, QUESTION_LIMIT} from "./explore_context_delivery.ts";
 import {normalizeGoalPathDelta} from "../goals/vision_checkpoint.ts";
-
-export const EXPLORE_RESULT_ATTACHMENT_SCHEMA = "explore_result_attachment_v0";
-export const EXPLORE_PATH_DELTA_ATTACHMENT_SCHEMA = "explore_result_from_path_delta_v0";
-// The complete scoped finding fits the result-log owner: 160 revision + 200
-// applicability + 320 observation + 1200 interpretation + four labels < 2000.
-export const EXPLORE_WRITEBACK_SUMMARY_LIMIT = 2000;
-/** Shared point-of-use guidance; optional metadata never changes settlement. */
-export function exploreResultWritebackAffordance(): JsonObject {
-  return {
-    capability_id: "explore",
-    option: "--explore-result-json <result.json>",
-    inline_option: "--agent-vision-json <vision.json>",
-    inline_field: "explore_result",
-    attachment_schema: EXPLORE_RESULT_ATTACHMENT_SCHEMA,
-    required: false,
-    path_delta_attachment_schema: EXPLORE_PATH_DELTA_ATTACHMENT_SCHEMA,
-    path_delta_attachment_template: {
-      schema_version: EXPLORE_PATH_DELTA_ATTACHMENT_SCHEMA,
-      question: "", applicability: "", input_revision: "", status: "tentative",
-    },
-    linked_question_attachment_template: {
-      schema_version: EXPLORE_PATH_DELTA_ATTACHMENT_SCHEMA,
-      node_id: "<linked-question-id>", input_revision: "", status: "tentative",
-    },
-    optional_question_evolution_example: {
-      question_update: {status: "resolved"},
-      relations: [{to_node: "<existing-node-id>", edge_type: "depends_on",
-        summary: "<observed prerequisite; omit relations when none changed>"}],
-    },
-    guidance: [
-      "After validating reusable evidence, put explore_result in the vision JSON already submitted with --agent-vision-json.",
-      "For an open Todo under hard_lease, keep the active task lease through refresh-state and Explore graph/Todo-link delivery; release only after explore_result_delivery.ok=true.",
-      "If already released, re-enter the normal guard/claim/lease path before retrying.",
-      "A completed Todo under hard_lease permits only its existing additive evidence-link exception with the owner's retained released lease key and current version; this grants no new execution authority.",
-      "An exact replay of already-successful delivery is readback-only and needs no new lease; unfinished delivery still requires the applicable claim/lease proof.",
-      "Prefer path_delta_attachment_template when this same packet contains an evidence-linked path_delta: supply the question, applicability, tested input revision and explicit finding status.",
-      "For a new question, omit node_id: the hook derives its identity from the exact question and applicability, creates it and links this Todo; no explore node call is needed.",
-      "To add to a known question, reuse its returned node_id and canonical scope.",
-      "At a meaningful experimental conclusion or route change, reuse that question and optionally add question_update and relations in this same result; no separate cleanup turn is needed.",
-      "Use question_update.status=resolved only when the scoped question is answered (including a negative answer), dead_end only for an explicitly stopped route, or exploring/open for remaining work; blocked requires blocked_reason.",
-      "Keep the answer, scope limits and next discriminating check in the existing interpretation or path_delta; finding status never determines question status.",
-      "Relations point from this question to an existing same-Goal node and require an evidence-backed summary; temporal order alone establishes neither dependency nor benefit.",
-      "Only the question's recorded owner may evolve it. Omission preserves the existing question state; preserve its exact title and applicability, and reopen explicitly only when new evidence warrants it.",
-      "The hook reuses the complete observation and route decision.",
-      "For an existing question linked to this Todo, use linked_question_attachment_template: omit both question and applicability to reuse its canonical scope.",
-      "New or unlinked questions still require explicit scope; input_revision and status are never inferred.",
-      "If path_delta also references local files, explicitly select its opaque identifiers with optional evidence_refs; selected refs must occur in this same path_delta.",
-      "Without a selection, all refs must be opaque identifiers.",
-      "Otherwise fill attachment_template, inline or via --explore-result-json.",
-      "Matching sources coalesce; conflicts reject.",
-      "Routine work needs no attachment; do not invent findings.",
-      "Capture is optional, not a settlement obligation.",
-      "A stopped route does not imply refuted status, and a score alone does not prove refutation.",
-      "Keep raw logs local.",
-      "Observations allow 320 characters, interpretations 1200; the complete scoped summary is preserved within 2000 characters.",
-    ].join(" "),
-    // Blank evidence fields deliberately fail validation until the caller
-    // supplies observed facts. Goal/Agent/Todo/Turn bind in ordinary writeback;
-    // a source-code revision here would not establish the tested input revision.
-    attachment_template: {
-      schema_version: EXPLORE_RESULT_ATTACHMENT_SCHEMA,
-      question: "", applicability: "", input_revision: "",
-      observation: "", interpretation: "", status: "tentative", evidence_refs: [],
-    },
-  };
-}
+import {EXPLORE_EXECUTION_OBSERVATION_SCHEMA, normalizeExploreExecutionObservation} from "./explore_execution_observation.ts";
+import {isExploreEvidenceRef} from "./explore_evidence_ref.ts";
+import {normalizeWorkYardstickDecision} from "../work_items/yardstick_decision.ts";
+import {normalizeExploreMeasurements} from "./explore_measurements.ts";
 
 const FIELDS = ["schema_version", "node_id", "question", "applicability", "input_revision",
-  "observation", "interpretation", "status", "evidence_refs", "question_update", "relations"];
+  "observation", "interpretation", "status", "evidence_refs", "question_update", "relations", "execution_observation", "measurements", "measurement_context", "work_yardstick_decision"];
 // Reuse the persisted Explore node/edge vocabulary, distinct from finding status.
 const QUESTION_STATUSES = ["open", "exploring", "blocked", "resolved", "dead_end"] as const;
 const RELATION_TYPES = ["subtopic_of", "depends_on", "answers", "supports", "refutes", "leads_to"] as const;
@@ -127,6 +67,20 @@ function explicitNodeId(value: unknown): string {
   }
   return value.trim();
 }
+/** Expand an explicit same-finding binding before the canonical codec. */
+function normalizeAttachedExecution(value: unknown, inputRevision: unknown, refs: string[]): JsonObject {
+  const authored = jsonObject(value);
+  if (authored?.schema_version !== EXPLORE_EXECUTION_FROM_FINDING_SCHEMA) {
+    return normalizeExploreExecutionObservation({observation: value});
+  }
+  if (Object.hasOwn(authored, "input_revision")) {
+    throw new EffectRuntimeRequestError("execution observation cannot override its explicit finding input revision");
+  }
+  return normalizeExploreExecutionObservation({observation: {...authored,
+    schema_version: EXPLORE_EXECUTION_OBSERVATION_SCHEMA, input_revision: inputRevision,
+    evidence_refs: authored.evidence_refs === FINDING_EVIDENCE_SELECTION ? refs : authored.evidence_refs,
+  }});
+}
 function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope?: unknown): JsonObject {
   const row = requireJsonObject(value, "Explore result attachment");
   if (row.schema_version === EXPLORE_PATH_DELTA_ATTACHMENT_SCHEMA) {
@@ -136,23 +90,42 @@ function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope
     throw new EffectRuntimeRequestError("Explore result attachment contains unknown fields");
   }
   requireStringLiteral(row.schema_version, [EXPLORE_RESULT_ATTACHMENT_SCHEMA], "attachment schema");
-  const question = text(row.question, "question", 180);
-  const applicability = text(row.applicability, "applicability", 200);
+  const resolved = {...row, ...questionScope(row, linkedScope)};
+  const question = text(resolved.question, "question", QUESTION_LIMIT);
+  const applicability = text(resolved.applicability, "applicability", APPLICABILITY_LIMIT);
   // Identity is mechanical, never inferred evidence. Exact scoped text, not
   // revision/status/observation, binds successive results to the same question.
-  const node = Object.hasOwn(row, "node_id")
-    ? explicitNodeId(row.node_id)
+  const node = Object.hasOwn(resolved, "node_id")
+    ? explicitNodeId(resolved.node_id)
     : "question_" + createHash("sha256").update(JSON.stringify([question, applicability])).digest("hex");
   if (!Array.isArray(row.evidence_refs) || !row.evidence_refs.length || row.evidence_refs.length > 8) {
     throw new EffectRuntimeRequestError("evidence_refs requires one to eight opaque evidence identifiers");
   }
   const refs = row.evidence_refs.map(value => {
     const ref = text(value, "evidence_ref", 128);
-    if (!/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/.test(ref)) {
+    if (!isExploreEvidenceRef(ref)) {
       throw new EffectRuntimeRequestError("evidence_ref must be an opaque identifier, not file content");
     }
     return ref;
   });
+  const execution = Object.hasOwn(row, "execution_observation")
+    ? normalizeAttachedExecution(row.execution_observation, row.input_revision, refs) : null;
+  if (Object.hasOwn(row, "measurement_context") && !Object.hasOwn(row, "measurements")) {
+    throw new EffectRuntimeRequestError("measurement_context requires measurements");
+  }
+  const measurements = Object.hasOwn(row, "measurements")
+    // Transport also reconstructs already committed inputs before replay is
+    // identified. New writes bind measurements in their precommit event plan;
+    // a new ingestion intent repeats that check below, never during replay.
+    ? normalizeExploreMeasurements(row.measurements, row.measurement_context) : null;
+  if (measurements?.some(item => item.input_revision !== text(row.input_revision, "input_revision", 160)
+    || !refs.includes(item.evidence_ref))) {
+    throw new EffectRuntimeRequestError("measurements must retain this finding's input revision and evidence references");
+  }
+  if (execution && (execution.input_revision !== text(row.input_revision, "input_revision", 160)
+    || (execution.evidence_refs as string[]).some(ref => !refs.includes(ref)))) {
+    throw new EffectRuntimeRequestError("execution observation must retain this finding's input revision and evidence references");
+  }
   // Status reuses the existing finding vocabulary. The caller supplies the
   // interpretation; a failed prerequisite belongs in a tentative observation.
   return {schema_version: EXPLORE_RESULT_ATTACHMENT_SCHEMA, node_id: node,
@@ -161,11 +134,14 @@ function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope
     observation: text(row.observation, "observation", 320),
     interpretation: text(row.interpretation, "interpretation", 1200),
     status: requireStringLiteral(row.status, ["tentative", "confirmed", "refuted"], "finding status"),
-    evidence_refs: [...new Set(refs)], ...evolutionFields(row, node)};
+    evidence_refs: [...new Set(refs)], ...evolutionFields(row, node),
+    ...(execution ? {execution_observation: execution} : {}),
+    ...(measurements ? {measurements} : {}),
+    ...(row.work_yardstick_decision !== undefined ? {work_yardstick_decision: normalizeWorkYardstickDecision(row.work_yardstick_decision, refs)} : {})};
 }
 /** Explicit reference, not inferred evidence. Preserve every route item verbatim. */
 function attachmentFromPathDelta(row: JsonObject, visionPacket: unknown, linkedScope: unknown): JsonObject {
-  const fields = ["schema_version", "node_id", "question", "applicability", "input_revision", "status", "evidence_refs", "question_update", "relations"];
+  const fields = ["schema_version", "node_id", "question", "applicability", "input_revision", "status", "evidence_refs", "question_update", "relations", "execution_observation", "measurements", "measurement_context", "work_yardstick_decision"];
   if (Object.keys(row).some(key => !fields.includes(key))) {
     throw new EffectRuntimeRequestError("Explore path_delta attachment contains unknown fields");
   }
@@ -188,7 +164,7 @@ function attachmentFromPathDelta(row: JsonObject, visionPacket: unknown, linkedS
   return normalizeAttachment({...row, ...questionScope(row, linkedScope), schema_version: EXPLORE_RESULT_ATTACHMENT_SCHEMA,
     observation: delta.observed_reality, interpretation: decision, evidence_refs: refs});
 }
-/** Only an explicit reference to the claimed Todo's stored question can reuse scope. */
+/** Reuse only an unambiguous question linked by the claimed Todo. */
 function questionScope(row: JsonObject, value: unknown): JsonObject {
   const question = Object.hasOwn(row, "question"), applicability = Object.hasOwn(row, "applicability");
   if (question && applicability) return {};
@@ -196,15 +172,16 @@ function questionScope(row: JsonObject, value: unknown): JsonObject {
     throw new EffectRuntimeRequestError("Supply both question and applicability, or omit both for a linked question");
   }
   const scope = requireJsonObject(value, "Explore capture requires a canonical linked question scope");
-  const nodeId = explicitNodeId(row.node_id);
+  const nodeId = Object.hasOwn(row, "node_id") ? explicitNodeId(row.node_id) : null;
   const refs = requireStringArray(scope.requested_node_refs, "linked question refs");
   const nodes = Array.isArray(scope.nodes) ? scope.nodes.map(node => requireJsonObject(node, "linked question")) : [];
-  const matches = nodes.filter(node => node.node_id === nodeId && node.node_kind === "question");
-  if (!refs.includes(nodeId) || matches.length !== 1) {
-    throw new EffectRuntimeRequestError("Explore capture requires an existing question linked to this Todo");
+  const matches = nodes.filter(node => typeof node.node_id === "string" && refs.includes(node.node_id)
+    && node.node_kind === "question" && (nodeId === null || node.node_id === nodeId));
+  if (matches.length !== 1) {
+    throw new EffectRuntimeRequestError("Explore capture requires one existing question linked to this Todo; use its node_id when ambiguous");
   }
-  return {question: text(matches[0].title, "question", 180),
-    applicability: text(matches[0].summary, "applicability", 200)};
+  return {node_id: explicitNodeId(matches[0].node_id), question: text(matches[0].title, "question", QUESTION_LIMIT),
+    applicability: text(matches[0].summary, "applicability", APPLICABILITY_LIMIT)};
 }
 export function normalizeExploreResultAttachment(params: JsonObject): JsonObject {
   const result = normalizeAttachment(params.attachment, params.vision_packet, params.linked_scope);
@@ -263,6 +240,9 @@ export function planExploreQuestionEvolution(params: JsonObject): JsonObject {
 export function produceExploreResultIntent(params: JsonObject): JsonObject {
   const projection = requireJsonObject(params.projection, "writeback projection");
   const attachment = normalizeExploreResultAttachment({attachment: projection.explore_result});
+  if (attachment.measurements !== undefined) {
+    normalizeExploreMeasurements(attachment.measurements, undefined, attachment.execution_observation);
+  }
   const receipt = requireJsonObject(params.receipt, "writeback receipt");
   const source = text(receipt.event_id, "source receipt", 200);
   const key = createHash("sha256").update(source).digest("hex");

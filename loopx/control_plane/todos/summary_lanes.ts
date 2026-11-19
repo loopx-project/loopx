@@ -45,6 +45,11 @@ export function monitorIsDue(row: MonitorSchedule, now: number): boolean {
 export function monitorHasScheduleGap(row: MonitorSchedule, now: number): boolean {
   return monitorIsActive(row, now) && !row.watchOnly && row.dueAt === null;
 }
+export function todoIsActionableOpen(row: {done: boolean; status: string; hasResume: boolean;
+  resumeReady: boolean; acceptanceBlocked: boolean}): boolean {
+  return !row.done && row.status === "open" && (!row.hasResume || row.resumeReady) && !row.acceptanceBlocked;
+}
+
 function decodeRow(value: unknown, ordinal: number): Row {
   const row = requireJsonObject(value, `rows[${ordinal}]`);
   const status = requireStringLiteral(row.status, ["open", "blocked", "done", "deferred"], "status");
@@ -60,7 +65,8 @@ function decodeRow(value: unknown, ordinal: number): Row {
     throw new EffectRuntimeRequestError("Todo presentation sort coordinate is invalid");
   }
   return {ordinal, status, done, taskClass: requireStringLiteral(row.task_class, TASK_CLASSES, "task_class"),
-    actionable: status === "open" && (!hasResume || ready) && !requireBoolean(row.acceptance_blocked, "acceptance_blocked"),
+    actionable: todoIsActionableOpen({done, status, hasResume, resumeReady: ready,
+      acceptanceBlocked: requireBoolean(row.acceptance_blocked, "acceptance_blocked")}),
     claim: requireBoolean(row.claimed, "claimed"), resumeBlocked: hasResume && row.resume_ready === false,
     preferred: requireBoolean(row.preferred, "preferred"), ...decodeMonitorSchedule(row),
     sort: [finite(sort[0], "priority"), finite(sort[1], "index"), sort[2], sort[3]]};

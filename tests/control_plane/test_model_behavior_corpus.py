@@ -6,7 +6,9 @@ from pathlib import Path
 from typing import Any
 
 from loopx.control_plane.quota.turn_envelope import (
+    COMPLETE_TURN_DECISION_VERSION,
     build_turn_envelope,
+    compose_turn_decision,
     quota_action_signature_document,
     turn_envelope_action_signature_document,
 )
@@ -105,7 +107,7 @@ def _actor(request: Mapping[str, Any]) -> dict[str, Any]:
     packet = request["packet"]
     signature = (
         quota_action_signature_document(packet)
-        if arm == "full_packet"
+        if arm == "full_packet" or packet.get("schema_version") == COMPLETE_TURN_DECISION_VERSION
         else turn_envelope_action_signature_document(packet)
     )
     response_plan = dict(signature.get("response_plan") or {})
@@ -198,6 +200,38 @@ def test_corpus_covers_matrix_retained_counterfactual_and_ablation() -> None:
     assert "Implement one bounded public-safe slice" not in encoded
     assert "Inspect one actionable warning" not in encoded
     assert result["persistence_boundary"]["raw_packets_persisted"] is False
+
+
+def test_retained_complete_capture_reaches_both_arms_without_reprojection(monkeypatch) -> None:
+    packet = compose_turn_decision({**_full_packet(),
+        "supporting_evidence": {"exact_count": 9007199254740993, "ratio": 1.0}})
+    before = json.dumps(packet, sort_keys=True)
+
+    def retired_projection(*args, **kwargs):
+        raise AssertionError("an original complete source must not become a v0 candidate")
+
+    monkeypatch.setattr("loopx.control_plane.testing.model_behavior_corpus.build_turn_envelope", retired_projection)
+    corpus = build_model_behavior_corpus(packet,
+        retained_packets=[{"case_id": "retained-complete", "packet": packet}])
+    case = corpus["cases"][0]
+    assert json.dumps(case["full_packet"], sort_keys=True) == before
+    assert json.dumps(case["candidate_packet"], sort_keys=True) == before
+    result = run_model_behavior_corpus(corpus, actor=_actor, repeats=2, seed=7)
+    assert result["all_cases_passed"] is True
+    assert result["corpus_gate_passed"] is True
+    assert result["promotion_eligible"] is False
+    assert json.dumps(packet, sort_keys=True) == before
+
+
+def test_raw_quota_corpus_retains_its_existing_historical_control() -> None:
+    raw = _full_packet()
+    corpus = build_model_behavior_corpus(raw,
+        retained_packets=[{"case_id": "retained-raw", "packet": raw}])
+    case = corpus["cases"][0]
+    assert "schema_version" not in case["full_packet"]
+    assert case["candidate_packet"]["schema_version"] == "loopx_turn_envelope_v0"
+    result = run_model_behavior_corpus(corpus, actor=_actor, repeats=2, seed=7)
+    assert result["all_cases_passed"] is True
 
 
 def test_corpus_reports_hard_and_stochastic_drift_separately() -> None:

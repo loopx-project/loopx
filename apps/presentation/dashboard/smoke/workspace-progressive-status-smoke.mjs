@@ -10,7 +10,7 @@ await build({ configFile: false, logLevel: "silent", build: {
   lib: { entry: resolve("src/data/workspace-progressive-status.ts"), formats: ["es"], fileName: () => "loader.mjs" },
   rolldownOptions: { external: ["zod"] },
 } });
-const { loadWorkspaceGoalSnapshots, directoryStatusPayload, reusableGoalSnapshots, workspaceReadPlan } = await import(pathToFileURL(resolve(outDir, "loader.mjs")).href);
+const { loadWorkspaceGoalSnapshots, directoryStatusPayload, reusableGoalSnapshots, scopeWorkspaceDirectory, workspaceReadPlan } = await import(pathToFileURL(resolve(outDir, "loader.mjs")).href);
 const directory = { ok: true, schema_version: "loopx_workspace_directory_v1", registry_revision: "r1",
   goals: [{ id: "alpha", display_name: "Alpha", activation_state: "active", registry_member: true }] };
 
@@ -53,6 +53,21 @@ assert.deepEqual(partial.requestedDirectory.goals.map((goal) => goal.id), ["beta
 assert.deepEqual(workspaceReadPlan(null, earlier.directory, "missing").snapshots, {},
   "a different source cannot retain the previous source's data");
 const retentionChecks = 12;
+const related = (id, parent_goal_id) => ({ ...entry(id), parent_goal_id });
+const forest = { ...directory, goals: [entry("parent"), related("child", "parent"),
+  related("grandchild", "child"), entry("daily"), related("orphan", "missing"),
+  related("cycle-a", "cycle-b"), related("cycle-b", "cycle-a")] };
+const subtree = scopeWorkspaceDirectory(forest, "parent");
+assert.deepEqual(subtree.goals.map(g => g.id), ["parent", "child", "grandchild"],
+  "the read frontier uses the same actual recursive hierarchy as the view");
+assert.equal(subtree.registry_revision, forest.registry_revision, "the original source revision remains authoritative");
+assert.equal(scopeWorkspaceDirectory(forest), forest, "unscoped reading preserves the existing directory exactly");
+assert.deepEqual(scopeWorkspaceDirectory(forest, "missing").goals, [], "a missing root cannot expose an unrelated tree");
+assert.deepEqual(scopeWorkspaceDirectory(forest, "cycle-a").goals.map(g => g.id), ["cycle-a"],
+  "cyclic organization cannot pull another root into a subtree");
+const scopedRefresh = workspaceReadPlan({ directory: forest, snapshots: { daily: { private: true } } }, subtree);
+assert.deepEqual(scopedRefresh.snapshots, {}, "another subtree's retained state leaves the read model");
+assert.deepEqual(scopedRefresh.requestedDirectory.goals.map(g => g.id), ["parent", "child", "grandchild"]);
 const access = { error_code: "workspace_status_access_denied" };
 const original = { fetch, setTimeout, clearTimeout };
 const deadline = {};
@@ -87,7 +102,22 @@ async function check(name, respond, expected, attempts, verify = () => {}) {
 }
 const json = (body, status = 500) => Response.json(body, { status });
 try {
+  const readGoals = [];
+  globalThis.fetch = async (url) => {
+    const id = new URL(url).searchParams.get("goal_id");
+    readGoals.push(id);
+    return json({ ...directoryStatusPayload({ ...subtree, goals: subtree.goals.filter(g => g.id === id) }),
+      workspace_registry_revision: subtree.registry_revision }, 200);
+  };
+  const loaded = [];
+  await loadWorkspaceGoalSnapshots("http://status/status.json", "http://status", scopedRefresh.requestedDirectory,
+    (id, _payload, error) => { assert.equal(error, null); loaded.push(id); }, () => true, () => "daily");
+  assert.deepEqual(readGoals.sort(), ["child", "grandchild", "parent"],
+    "even an out-of-scope preferred Goal must not broaden actual state reads");
+  assert.equal(loaded.length, 3);
   await check("access", () => json(access), ["access"], 1);
+  await check("original source unavailable", () => json({ error_code: "goal_source_unavailable" }, 503), ["source"], 1);
+  await check("storage recovery does not retry without migration", () => json({ error_code: "canonical_authority_required" }, 503), ["authority"], 1);
   for (const body of [null, {}, [], { error_code: "future_code" }, { error_code: 5 }, { error: "permission denied" }]) {
     await check("unknown envelope", () => json(body), ["service"], 3);
   }

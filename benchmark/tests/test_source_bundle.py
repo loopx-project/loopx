@@ -5,7 +5,6 @@ import hashlib
 import json
 import subprocess
 import tarfile
-from pathlib import Path
 
 import pytest
 
@@ -94,3 +93,81 @@ def test_partial_archive_ignores_even_invalid_product_assets(prepared_source, tm
     archive_source(source, revision, output, ("apps",))
     with tarfile.open(output) as archive:
         assert all(name.startswith("apps") for name in archive.getnames())
+
+
+@pytest.mark.parametrize("case", [
+    "warm_stale", "warm_corrupt", "warm_valid", "cold_corrupt",
+    "warm_split_valid", "warm_split_missing",
+])
+def test_checkpoint_launcher_qualifies_source_before_native_activation(
+    prepared_source, tmp_path, monkeypatch, case,
+):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.edgebench import run
+
+    source, revision, bundle = prepared_source
+    if case == "warm_stale":
+        # A clean pinned checkout can still carry an older ignored delivery.
+        package = source / "apps/presentation/dashboard/package.json"
+        package.write_text('{"changed": true}')
+        subprocess.run(["git", "-C", str(source), "add", str(package)], check=True)
+        subprocess.run(["git", "-C", str(source), "commit", "-m", "new source"],
+                       check=True, capture_output=True)
+        revision = checked_revision(source)
+    elif case.endswith("corrupt"):
+        (bundle / "assets/main.js").write_text("corrupt")
+    monkeypatch.setenv("LOOPX_SRC_DIR", str(source))
+    monkeypatch.setenv("LOOPX_EXPECTED_COMMIT", revision)
+    monkeypatch.delenv("LOOPX_RUNNER_SRC_DIR", raising=False)
+    monkeypatch.delenv("LOOPX_EXPECTED_RUNNER_COMMIT", raising=False)
+    if case.startswith("warm_split"):
+        runner = tmp_path / "runner"
+        subprocess.run(["git", "clone", "--quiet", str(source), str(runner)], check=True)
+        if case == "warm_split_valid":
+            module = runner / "benchmark/runtime/worker.py"
+            module.parent.mkdir(parents=True)
+            module.write_text("# synthetic runner overlay\n")
+            for args in [("config", "user.name", "Fixture"),
+                         ("config", "user.email", "fixture@example.invalid"),
+                         ("add", "benchmark"), ("commit", "-m", "runner overlay")]:
+                subprocess.run(["git", "-C", str(runner), *args], check=True, capture_output=True)
+        monkeypatch.setenv("LOOPX_RUNNER_SRC_DIR", str(runner))
+        monkeypatch.setenv("LOOPX_EXPECTED_RUNNER_COMMIT", checked_revision(runner))
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.setattr(run, "load_benchmark", lambda *args: None)
+
+    class TaskBoundary(Exception):
+        pass
+
+    def materialize(*args):
+        raise TaskBoundary("passed source admission")
+
+    monkeypatch.setattr(run, "make_task_spec", materialize)
+    logs = tmp_path / "logs"
+    warm = case.startswith("warm")
+    argv = ["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(logs),
+            "--run-id", "receiver", "--worker", "heartbeat-explore" if warm else "official",
+            "--model", "fixture", "--effort", "high", "--judge-url", "http://localhost:1"]
+    if warm:
+        request = tmp_path / "request.json"
+        request.write_text(json.dumps({"destination": "/logs/agent/checkpoints", "point_metadata": {},
+            "components": [{"id": "code", "source_path": "/task"}], "trigger": "fresh_replan",
+            "native_session": True, "loopx_state": True, "evaluation_opportunity": True,
+            "controller_handoff": True}))
+        argv += ["--checkpoint-request", str(request),
+            "--checkpoint-controller-file", str(tmp_path / "controller.json"),
+            "--restore-checkpoint", str(tmp_path / "point"), "--restore-sha256", "a" * 64,
+            "--restore-config", str(tmp_path / "config.toml"), "--restore-goal", "retained-goal",
+            "--restore-agent", "retained-agent", "--restore-source-todo", "retained-todo"]
+    if case in {"warm_stale", "warm_corrupt", "warm_split_missing"}:
+        failure = subprocess.CalledProcessError if case == "warm_split_missing" else RuntimeError
+        with pytest.raises(failure):
+            run.main(argv)
+        assert not (logs / "runs/receiver").exists()
+        assert not list(logs.rglob("restored-phase-deadline"))
+    else:
+        # Ordinary controls keep their existing setup path. A valid warm
+        # delivery can continue to task preparation without a live judge.
+        with pytest.raises(TaskBoundary):
+            run.main(argv)

@@ -33,7 +33,7 @@ PR_REVIEW_CATALOG_ENTRY: dict[str, Any] = {
     ),
     "commands": [
         {
-            "command": "loopx pr-review --goal-id <goal-id> --repo <owner/repo> --check-merge-readiness NUMBER@HEAD_OID --format json",
+            "command": "loopx pr-review --repo <owner/repo> --check-merge-readiness NUMBER@HEAD_OID --format json",
             "purpose": "Fail closed on exact-head, approval-body, configured CI, thread, or merge-state drift immediately before merge.",
             "write_boundary": "reads live public GitHub state and writes one compact public-safe Goal observation; does not approve, merge, bypass policy, or grant merge authority",
         },

@@ -228,13 +228,16 @@ an execution fails; do not infer that a failure left legacy writers usable.
 
 ## Bounded capture proof transport
 
-A long Goal can exceed the existing 2 MiB RPC response budget before promotion:
+At the original 2 MiB RPC response budget, a long Goal could exceed it before promotion:
 sequence recovery used to return a full head and full projections for retained
 transactions. The `outbox_read` proof read model now keeps full lineage validation
 inside TypeScript, while returning progress, receipts, projection digests and
 partition markers. Sequence allocation requests no transaction rows; drain uses
 the compact rows. Existing full diagnostic reads retain their default contract.
-No transport limit, stored population or transaction validation is weakened.
+That proof-read change did not raise a transport limit, reduce the stored population
+or weaken transaction validation. The ordinary wire now uses the independently
+measured [shared 8 MiB budget](canonical-snapshot-pagination.md#shared-rpc-byte-budget);
+the original refusal remains historical evidence.
 A pending outbox still blocks promotion; use the existing bounded
 `authority-shadow drain --goal-id example-goal --budget-seconds 60` operation
 and inspect its result before retrying preview.

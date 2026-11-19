@@ -250,6 +250,7 @@ class ChatGoalLifecycleActionMixin:
         idempotent_reapply = (
             source_route_matches
             and current_state is target_state
+            and current.get("changed") is False
             and current_fingerprint != expected_fingerprint
         )
         if current_fingerprint != expected_fingerprint and not idempotent_reapply:

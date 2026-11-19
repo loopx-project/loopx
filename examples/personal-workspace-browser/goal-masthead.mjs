@@ -5,8 +5,8 @@ import { resolveTestPython } from "../../scripts/test-python.mjs";
 import { outputDir, repoRoot } from "./fixture.mjs";
 import { openWorkspacePage } from "./scenario-context.mjs";
 
-// The Goal masthead keeps identity, the stop control and six typed vitals on
-// every Goal view. Expected values follow the vital semantics, not the render:
+// The Goal masthead keeps identity and the stop control across Goal views;
+// six typed vitals belong to Overview. Expected values follow their semantics:
 // the fixture Goal reports the same 4087 completed advancement Todos as the
 // completed-history read, has three open and two deferred advancement Todos
 // plus a done monitor, two blocking decisions, a 7-day usage window and one
@@ -60,6 +60,16 @@ async function openGoal(page, name) {
   await page.getByTestId("goal-vitals").waitFor({ state: "visible", timeout: 15_000 });
 }
 
+async function readVitalHelp(page, cell) {
+  await cell.locator('..').locator('.context-help-trigger').focus();
+  const bubble = page.locator('.context-help-popover:popover-open');
+  await bubble.waitFor();
+  const text = await bubble.innerText();
+  await page.keyboard.press('Escape');
+  await bubble.waitFor({state:'hidden'});
+  return text;
+}
+
 async function vital(page, label) {
   const cell = page.getByTestId("goal-vitals").locator(".goal-vital").filter({ has: page.locator(".goal-vital-label", { hasText: label }) });
   return { cell, value: (await cell.locator(".goal-vital-value").innerText()).trim(), sub: (await cell.locator(".goal-vital-sub").allInnerTexts()).join(" ").trim() };
@@ -74,10 +84,22 @@ export const goalMastheadScenario = {
     const actionRequests = [];
     page.on("request", (request) => { if (new URL(request.url()).pathname.startsWith("/api/actions/")) actionRequests.push(request.url()); });
     try {
+      const pausedClock = await page.addStyleTag({content: "*, *::before, *::after {animation-play-state: paused !important;}"});
       await openGoal(page, title);
       assert.equal(await page.locator(".personal-channel-title h1").innerText(), title);
       assert.match(await page.locator(".goal-masthead-breadcrumb").innerText(), /工作台\s*Goals\s*Quarterly cash-flow study/);
       assert.equal(await page.getByTestId("goal-vitals").locator(".goal-vital").count(), 6, "At most six vitals");
+
+      // A native WebView may suspend its animation clock while an accessible
+      // navigation commits. The first frame must still contain the real values.
+      const firstFrame = await page.locator(".goal-vital-value").evaluateAll(values => values.map(value => {
+        let opacity = 1;
+        for (let node = value; node; node = node.parentElement) opacity *= Number(getComputedStyle(node).opacity);
+        return opacity;
+      }));
+      await page.screenshot({path: resolve(outputDir, "goal-masthead-paused-first-frame.png"), animations: "allow"});
+      assert(firstFrame.every(opacity => opacity === 1), "Authoritative Goal readings remain visible before the animation clock advances");
+      await pausedClock.evaluate(element => element.remove());
 
       const state = await vital(page, "状态");
       assert.equal(state.value, "等你", "A waiting decision leads the state, as in the Goal list");
@@ -125,15 +147,23 @@ export const goalMastheadScenario = {
       assert.equal(await openLane.locator("header > span").innerText(), "5", "The board lists the same open work the strip counts");
       await page.locator('[data-goal-panel="tasks"]').getByTestId("completed-task-lane").locator("header", { hasText: "4087" }).waitFor({ timeout: 10_000 });
       await page.locator(".personal-goal-tabs button", { hasText: "对话" }).click();
-      await page.getByTestId("goal-vitals").waitFor({ state: "visible" });
+      await page.locator('.personal-goal-tabs button[aria-current="page"]', { hasText: "对话" }).waitFor();
+      assert.equal(await page.getByTestId("goal-vitals").count(), 0, "Reading views do not repeat Overview statistics");
+      assert.equal(await page.locator(".personal-channel-title h1").innerText(), title, "Switching views retains Goal identity");
+      assert.equal(await page.locator(".goal-lifecycle-trigger").count(), 1, "The lifecycle control remains available outside Overview");
       assert.equal(actionRequests.length, 0, "Opening the Goal, switching views and focusing vitals sends no action request");
 
       await page.locator(".personal-goal-tabs button", { hasText: "概览" }).click();
+      await page.getByTestId("goal-vitals").waitFor({ state: "visible" });
       const stop = page.locator(".goal-lifecycle-trigger");
+      const pausedConfirmationClock = await page.addStyleTag({content: "*, *::before, *::after {animation-play-state: paused !important;}"});
       await stop.click();
       const dialog = page.getByRole("dialog", { name: "停止这个 Goal？" });
       await dialog.waitFor();
       assert.match(await dialog.innerText(), /已在运行的工具调用会执行完[\s\S]*只有恢复才能重新获得调度资格/);
+      assert.equal(await dialog.evaluate(element => Number(getComputedStyle(element).opacity)), 1,
+        "Permission and execution consequences remain readable with a suspended entrance clock");
+      await pausedConfirmationClock.evaluate(element => element.remove());
       await page.screenshot({ path: resolve(outputDir, "goal-masthead-stop-confirm.png"), animations: "disabled" });
       await page.keyboard.press("Escape");
       await dialog.waitFor({ state: "detached" });
@@ -156,7 +186,7 @@ export const goalMastheadScenario = {
       await page.getByTestId("goal-vitals").waitFor({ state: "visible", timeout: 15_000 });
       assert.equal(await page.locator(".personal-channel-title h1").innerText(), title, "The stopped Goal stays selected across reload");
       assert.equal((await vital(page, "状态")).value, "已停止", "Without an observed turn the Goal reads stopped");
-      assert.equal((await vital(page, "等你决定")).value, "0", "A stopped Goal leaves active attention");
+      assert.equal((await vital(page, "等你决定")).value, "暂无等待", "A stopped Goal with complete empty attention names the empty state");
 
       await page.locator(".goal-lifecycle-trigger", { hasText: "恢复" }).click();
       assert.equal(await page.getByRole("dialog", { name: "恢复这个 Goal？" }).count(), 0, "Resume uses the owner's reviewed preview, not a second confirmation");
@@ -171,10 +201,12 @@ export const goalMastheadScenario = {
       await page.screenshot({ path: resolve(outputDir, "goal-masthead-1024.png"), animations: "disabled" });
       await page.setViewportSize({ width: 390, height: 844 });
       await page.screenshot({ path: resolve(outputDir, "goal-masthead-phone.png"), animations: "disabled" });
-      await page.locator(".personal-goal-tabs button", { hasText: "对话" }).click();
-      await page.screenshot({ path: resolve(outputDir, "goal-masthead-phone-chat.png"), animations: "disabled" });
       const overflow = await page.getByTestId("goal-vitals").evaluate((strip) => strip.scrollWidth - strip.clientWidth);
       assert.ok(overflow <= 1, "The phone grid fits without horizontal scrolling");
+      await page.locator(".personal-goal-tabs button", { hasText: "对话" }).click();
+      await page.locator('.personal-goal-tabs button[aria-current="page"]', { hasText: "对话" }).waitFor();
+      assert.equal(await page.getByTestId("goal-vitals").count(), 0, "Phone reading views also omit Overview statistics");
+      await page.screenshot({ path: resolve(outputDir, "goal-masthead-phone-chat.png"), animations: "disabled" });
       assert.equal(session.errors.length, 0, session.errors.join(" | "));
       coverageEntries.push(...await session.close());
     } catch (error) {
@@ -188,9 +220,13 @@ export const goalMastheadScenario = {
       await openGoal(quiet.page, title);
       const agentTime = await vital(quiet.page, "Agent 用时");
       const cost = await vital(quiet.page, "成本");
-      assert.deepEqual([agentTime.value, cost.value, cost.sub], ["—", "—", "未采集"], "Absent usage is unknown, never $0.00");
+      assert.deepEqual([agentTime.value, cost.value, cost.sub], ["未采集", "未采集", ""], "Absent usage names the unmeasured state, never $0.00");
+      assert.deepEqual(await Promise.all([agentTime.cell, cost.cell].map(cell => cell.getAttribute("aria-disabled"))), ["true", "true"], "Unmeasured usage has no navigation affordance");
       const last = await vital(quiet.page, "最近活动");
-      assert.deepEqual([last.value, last.sub], ["—", "暂无观测到的活动"], "A claim or Todo write is not activity");
+      assert.deepEqual([last.value, last.sub], ["暂无观测到的活动", ""], "A claim or Todo write is not activity");
+      assert.equal(await last.cell.getAttribute("aria-disabled"), "true", "Missing activity has no navigation affordance");
+      assert.match(await readVitalHelp(quiet.page, cost.cell), /未采集/);
+      assert.match(await readVitalHelp(quiet.page, last.cell), /暂无观测到的活动/);
       assert.notEqual((await vital(quiet.page, "状态")).value, "执行中");
       await quiet.page.screenshot({ path: resolve(outputDir, "goal-masthead-unmeasured.png"), animations: "disabled" });
       await quiet.page.evaluate(() => localStorage.setItem("loopx-pw-locale", "en"));
@@ -204,20 +240,16 @@ export const goalMastheadScenario = {
       await quiet.close();
       throw error;
     }
-    // The real producer bounds the queue to 12 and its overview to three while
-    // retaining 21 open decisions. Pass its payload through the shipped parser
-    // and adapter, rather than manufacturing a complete three-item queue.
+    // The canonical producer supplies 21 open rows and a three-row overview.
+    // Use the real rows and counts for both complete and partial coverage.
     const fixtureEnv = { ...process.env, LOOPX_USAGE_PING: "0" };
     if (!["LOOPX_TEST_PYTHON", "LOOPX_PYTHON_BIN", "LOOPX_PYTHON"].some(key => process.env[key])) fixtureEnv.PYTHONPATH = repoRoot;
-    const native = JSON.parse(execFileSync(resolveTestPython(), [
-      resolve(repoRoot, "examples/personal-workspace-browser/goal-attention-fixture.py"),
-    ], { cwd: repoRoot, env: fixtureEnv, encoding: "utf8", timeout: 30_000 }));
     const nativeCase = (...args) => JSON.parse(execFileSync(resolveTestPython(), [
       resolve(repoRoot, "examples/personal-workspace-browser/goal-attention-fixture.py"), ...args,
     ], { cwd: repoRoot, env: fixtureEnv, encoding: "utf8", timeout: 30_000 }));
+    const native = nativeCase();
     const mixed = nativeCase("--mixed");
     const complete = nativeCase("--full");
-    const mixedComplete = nativeCase("--mixed", "--full");
     const optionalComplete = nativeCase("--optional", "--full");
     // Exercise source -> parser -> adapter -> digest -> packaged rendering.
     // Counts are removed from a real producer payload, not a prebuilt UI model.
@@ -259,7 +291,8 @@ export const goalMastheadScenario = {
             throw new Error(`${locale} ${mode}: expected ${expected}; observed ${await work.cell.innerText()}`, {cause: error});
           });
           if (mode === "unknown") {
-            await work.cell.getByText(locale === "en" ? "Total unknown" : "总数未知", {exact: true}).waitFor({state: "visible"});
+            const scope = await readVitalHelp(ui.page, work.cell);
+            assert.match(scope, locale === "en" ? /Total unknown/ : /总数未知/);
             assert.equal(await work.cell.locator(".goal-work-ribbon").count(), 0, "Unknown totals cannot imply a completion proportion");
             await ui.page.screenshot({ path: resolve(outputDir, `goal-work-unknown-${locale}.png`), animations: "disabled" });
           }
@@ -270,6 +303,7 @@ export const goalMastheadScenario = {
       } finally { coverageEntries.push(...await ui.close()); }
     }
     for (const locale of ["zh-CN", "en"]) for (const mode of ["mixed", "bounded", "optional", "complete", "mixed-complete", "empty", "unknown"]) {
+      const partial = !["complete", "mixed-complete", "optional"].includes(mode);
       const ui = await openWorkspacePage(browser, url, {
         collectCoverage,
         viewport: { width: locale === "en" ? 390 : 1512, height: 982 },
@@ -280,13 +314,19 @@ export const goalMastheadScenario = {
           api.transformStatus = (fixture) => {
             previous(fixture);
             const queue = fixture.attention_queue.items.find(item => item.goal_id === goalId);
-            const source = mode === "mixed" ? mixed : mode === "complete" ? complete
-              : mode === "mixed-complete" ? mixedComplete : mode === "optional" ? optionalComplete : native;
+            const source = mode === "mixed" || mode === "mixed-complete" ? mixed
+              : mode === "complete" ? complete : mode === "optional" ? optionalComplete : native;
             Object.assign(queue, structuredClone(source));
-            if (mode === "empty") {
-              queue.user_todos.items = [];
-              queue.project_asset.user_todos.items = [];
+            // A complete top-level queue wins even if the overview is bounded.
+            // For a partial queue retain only the producer's three listed IDs.
+            if (mode === "mixed" || mode === "unknown") {
+              const listed = new Set(queue.project_asset.user_todos.items.map(todo => todo.todo_id));
+              queue.user_todos.items = queue.user_todos.items.filter(todo => listed.has(todo.todo_id));
             }
+            if (mode === "bounded" || mode === "empty") {
+              queue.user_todos.items = [];
+            }
+            if (mode === "empty") queue.project_asset.user_todos.items = [];
             if (mode === "unknown") {
               delete queue.user_todos.open_count;
               delete queue.project_asset.user_todos.open;
@@ -299,12 +339,15 @@ export const goalMastheadScenario = {
         await openGoal(ui.page, title);
         const needs = await vital(ui.page, locale === "en" ? "Needs you" : "等你决定");
         const expected = mode === "complete" ? "21" : mode === "mixed-complete" ? "1" : mode === "optional" ? "0" : "—";
-        assert.equal(needs.value, expected, "Only complete classified rows qualify a blocking total; open User Todo totals do not classify hidden rows");
-        const partial = !["complete", "mixed-complete", "optional"].includes(mode);
-        if (partial) assert.match(needs.sub, locale === "en" ? /oldest unknown/ : /最早时间未知/);
+        assert.equal(needs.value, expected, `${locale} ${mode}: only complete classified rows qualify a blocking total`);
+        const coverageHelp = partial ? await readVitalHelp(ui.page, needs.cell) : "";
+        if (partial) assert.match(coverageHelp, locale === "en" ? /oldest unknown/ : /最早时间未知/);
         const listed = ["complete", "mixed-complete", "optional"].includes(mode) ? 21 : mode === "empty" ? 0 : 3;
-        if (partial) assert.match(needs.sub, new RegExp(`${listed} ${locale === "en" ? "listed" : "项"}`));
-        if (mode === "optional") assert.match(needs.sub, locale === "en" ? /21 optional/ : /21 项可选/);
+        if (partial) assert.match(coverageHelp, new RegExp(`${listed} ${locale === "en" ? "listed" : "项"}`));
+        if (mode === "optional" || mode === "mixed-complete") {
+          const optional = mode === "optional" ? 21 : 20;
+          assert.match(needs.sub, new RegExp(`${optional} ${locale === "en" ? "optional" : "项可选"}`));
+        }
         if (mode === "unknown") assert.doesNotMatch(needs.sub, /Nothing waiting|暂无等待/);
         await ui.page.getByRole("navigation", { name: /^(Goal 视图|Goal view)$/ }).getByRole("button", { name: /^(概览|Overview)$/ }).click();
         const rail = ui.page.locator(".goal-overview-attention");
@@ -312,7 +355,7 @@ export const goalMastheadScenario = {
           assert.equal(await rail.count(), 0, "No unlisted row is invented as a decision card; the vital retains unknown and its partial qualifier");
         } else {
           assert.equal(await rail.locator(".goal-overview-count").textContent(), expected, "Rail and strip share the same qualified count or unknown");
-          if (partial) assert.match(await rail.textContent(), locale === "en" ? /oldest unknown/ : /最早时间未知/);
+          if (partial) assert.doesNotMatch(await rail.innerText(), locale === "en" ? /oldest unknown/ : /最早时间未知/, "The same coverage explanation is not repeated under the decision list");
           await rail.locator(".goal-overview-more").waitFor({ state: "visible" });
         }
         await ui.page.screenshot({ path: resolve(outputDir, `goal-attention-${mode}-${locale}.png`), animations: "disabled" });

@@ -96,3 +96,84 @@ test("conflicting display fragments cannot certify a complete source", () => {
       {identity: "todo_same", task_class: "advancement_task", actionable: true}]});
   assert.equal(result.complete, false);
 });
+
+import {projectTodoContextPage, projectTodoSummaryDisplay} from "../../loopx/control_plane/todos/context_projection.ts";
+
+test("display source lanes preserve first identity, legacy coordinates and explicit readiness", () => {
+  const record = {active_next_action_items: [{todo_id: "todo_first", text: " First ", status: "open", resume_when: "todo_done:todo_gate"}],
+    items: [{todo_id: "todo_first", text: "Duplicate identity"}, {index: 7, text: " Legacy "},
+      {index: 7, text: "Legacy"}, {text: "Completed", done: true}, {text: "  "},
+      {todo_id: "todo_explicit", text: "Explicit wait", resume_when: "todo_done:todo_gate", resume_ready: false}],
+    blocker_items: [{todo_id: "todo_blocker", text: "Blocked", status: "blocked"}]};
+  const before = structuredClone(record);
+  const rows = projectTodoSummaryDisplay({source: {record}, handoff_gates: [{gate_state: "cleared_with_successor",
+    successor_todo_ids: ["todo_first", "todo_explicit"]}]});
+  assert.deepEqual(rows.map(row => row.text), ["First", "Blocked", "Legacy", "Explicit wait"]);
+  assert.equal(rows[0]!.resume_ready, true);
+  assert.deepEqual(rows[0]!.resume_condition, {schema_version: "todo_resume_condition_v0", resume_when: "todo_done:todo_gate",
+    satisfied: true, source: "handoff_gate_cleared_with_successor"});
+  assert.equal(rows[3]!.resume_ready, false);
+  assert.deepEqual(record, before);
+});
+
+test("planning keeps distinct domain states and terminal frontier evidence, without presentation-lane expansion", () => {
+  const record = {items: [{todo_id: "todo_open", text: "Open", depends_on_todo_ids: ["todo_dependency"]},
+      {todo_id: "todo_done", text: "Complete", status: "done", no_followup: true, note: "Evidence tail"},
+      {todo_id: "todo_x", text: "Legacy short id", status: "done"}],
+    deferred_items: [{todo_id: "todo_wait", text: "Wait", status: "deferred"}],
+    blocker_items: [{todo_id: "todo_open", text: "Duplicate"}],
+    monitor_open_items: [{todo_id: "todo_monitor", text: "Monitor", task_class: "continuous_monitor"}],
+    first_open_items: [{todo_id: "todo_display", text: "Only a display lane"}]};
+  const plain = projectTodoSummaryDisplay({source: {record}, include_terminal: false});
+  assert.deepEqual(plain.map(row => row.todo_id), ["todo_open", "todo_wait", "todo_monitor"]);
+  assert.equal(plain[0]!.depends_on_todo_ids, undefined);
+  const terminal = projectTodoSummaryDisplay({source: {record}, include_terminal: true});
+  assert.deepEqual(terminal.map(row => row.todo_id), ["todo_open", "todo_done", "todo_x", "todo_wait", "todo_monitor"]);
+  assert.deepEqual(terminal[0]!.depends_on_todo_ids, ["todo_dependency"]);
+  assert.equal(terminal[1]!.note, "Evidence tail");
+});
+
+test("summary source identity keeps raw IDs and strict legacy coordinates", () => {
+  const cases: {name: string; items: JsonObject[]; selected: number[]}[] = [
+    {name: "raw identities and anonymous collisions", items: [
+      {todo_id: "todo_same", index: 1, text: " First "},
+      {todo_id: "todo_same", index: 2, text: "Duplicate id"},
+      {todo_id: " todo_same ", index: 1, text: "Second spelling"},
+      {todo_id: "todo_a", index: 7, text: " Same "},
+      {todo_id: "todo_b", index: 7, text: "Same"},
+      {index: 7, text: "Same"}, {index: 8, text: " Legacy "},
+      {todo_id: "todo_c", index: 8, text: "Legacy"},
+      {index: 9, text: "Legacy"}], selected: [0, 2, 3, 4, 6, 8]},
+    {name: "strict coordinates", items: [
+      {index: 2, text: "Coordinate"}, {index: "2", text: "Coordinate"},
+      {text: "Missing"}, {index: null, text: "Missing"},
+      {index: NaN, text: "Nonfinite"}, {index: NaN, text: "Nonfinite"},
+      {index: 0, text: "Zero"}, {index: -0, text: "Zero"},
+      {index: 2, text: "Coordinate"}], selected: [0, 1, 2, 3, 4, 5, 6]},
+    {name: "truthy and falsy raw identities", items: [
+      {todo_id: 1, index: 1, text: "Number id"},
+      {todo_id: true, index: 2, text: "Boolean id"},
+      {todo_id: 1, index: 3, text: "Same number id"},
+      {todo_id: 0, index: 4, text: "Zero id"},
+      {todo_id: 0, index: 5, text: "Zero id"},
+      {todo_id: "todo_falsy", index: 6, text: "False id collision"},
+      {todo_id: false, index: 6, text: "False id collision"},
+      {todo_id: "", index: 7, text: "Empty id"},
+      {todo_id: null, index: 7, text: "Empty id"}], selected: [0, 1, 3, 4, 5, 7]},
+  ];
+  for (const {name, items, selected} of cases) {
+    const before = structuredClone(items), visited: number[] = [];
+    const source = {record: {items}};
+    const rows = projectTodoSummaryDisplay({source}, (_key, index) => visited.push(index));
+    assert.deepEqual(visited, selected, name);
+    assert.equal(rows.length, selected.length, name);
+    assert.deepEqual(projectTodoContextPage({summary_display: {source}}).items, rows, name);
+    assert.deepEqual(items, before, name);
+  }
+});
+
+test("flat summary items keep duplicate rows without source selection", () => {
+  const record = {todo_id: "todo_same", text: "Same row"};
+  const result = projectTodoContextPage({summary_display: {items: [{record}, {record}]}});
+  assert.equal((result.items as JsonObject[]).length, 2);
+});

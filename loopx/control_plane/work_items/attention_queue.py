@@ -7,6 +7,7 @@ from typing import AbstractSet, Any, Callable, Optional
 from .replan_history_codec import effective_turn_cadence_context
 
 from ..goals.legacy_event_source import RetiredTodoEventSourceError
+from ..coordination.local_authority import LocalCoordinationAuthorityUnavailable
 from ..effect_runtime import effect_runtime_result
 
 
@@ -49,6 +50,7 @@ class AttentionQueueContext:
     monitor_signal_waiting_on: str
     registry_path: Path | None = None
     external_progress_review_context: Optional[Callable[..., dict[str, Any] | None]] = None
+    tolerate_malformed_settlement_history: bool = False
 
 
 def merge_global_registry_findings(
@@ -156,6 +158,28 @@ def _active_state_goal_context(
     return fields, context.active_state_todo_attention_item(goal, fields, current_run)
 
 
+def _unavailable_todo_source_item(
+    goal: dict[str, Any],
+    error: RetiredTodoEventSourceError | LocalCoordinationAuthorityUnavailable,
+    context: AttentionQueueContext,
+) -> dict[str, Any]:
+    item = context.attention_item(
+        goal_id=str(goal.get("id") or ""),
+        status=(error.code if isinstance(error, LocalCoordinationAuthorityUnavailable)
+                else error.reason_code),
+        waiting_on="user_or_controller",
+        severity="high",
+        recommended_action=str(error),
+        source="active_state",
+    )
+    item["todo_source"] = "unavailable"
+    if isinstance(error, LocalCoordinationAuthorityUnavailable):
+        item["error_code"] = error.code
+        item["authority_read"] = error.payload
+    item["activation_state"] = str(goal.get("activation_state") or "active")
+    return item
+
+
 def build_attention_queue(
     *,
     contract: dict[str, Any],
@@ -166,6 +190,8 @@ def build_attention_queue(
     include_task_graph: bool = False,
     goal_id_filter: str | None = None,
     include_stopped_goal_context: bool = False,
+    include_goal_channel_projection: bool = True,
+    agent_lane_id: str | None = None,
 ) -> dict[str, Any]:
     """Build the executable attention queue or a stopped-Goal archive view.
 
@@ -205,26 +231,22 @@ def build_attention_queue(
                 active_state_fields, active_state_item = _active_state_goal_context(
                     goal, current_status_run, context, runtime_root,
                 )
-            except RetiredTodoEventSourceError as error:
+            except (RetiredTodoEventSourceError, LocalCoordinationAuthorityUnavailable) as error:
+                if isinstance(error, LocalCoordinationAuthorityUnavailable) and goal_id_filter:
+                    raise
                 # Refuse this source without hiding independent Goals or turning
                 # stale Todo/run projections into executable fallback work.
-                item = context.attention_item(
-                    goal_id=str(goal.get("id") or ""),
-                    status=error.reason_code,
-                    waiting_on="user_or_controller",
-                    severity="high",
-                    recommended_action=str(error),
-                    source="active_state",
-                )
-                item["todo_source"] = "unavailable"
-                item["activation_state"] = str(goal.get("activation_state") or "active")
-                history_items.append(item)
+                history_items.append(_unavailable_todo_source_item(goal, error, context))
                 continue
         if active_state_item and active_state_item.get("waiting_on") in {"controller", "user_or_controller"}:
             item = active_state_item
         else:
             item = context.goal_attention(goal)
-            if not item:
+            if not item or (
+                current_status_run is None
+                and item.get("status") == "unknown"
+                and active_state_item
+            ):
                 item = active_state_item
         if item:
             item, projection_warning = _reconcile_active_state_item(
@@ -315,7 +337,15 @@ def build_attention_queue(
                     next_action_projection_warning=context.next_action_projection_warning,
                     autonomous_replan_obligation_from_runs=context.autonomous_replan_obligation_from_runs,
                     external_progress_review=external_progress_review,
-                    effective_turn_cadence=effective_turn_cadence_context(goal, runtime_root, registry_path=context.registry_path),
+                    effective_turn_cadence=effective_turn_cadence_context(
+                        goal,
+                        runtime_root,
+                        registry_path=context.registry_path,
+                        tolerate_malformed_history=(
+                            context.tolerate_malformed_settlement_history
+                        ),
+                    ),
+                    agent_lane_id=agent_lane_id,
                 )
                 item["quota"] = context.quota_status(
                     goal,
@@ -365,12 +395,13 @@ def build_attention_queue(
                 )
                 if task_graph_projection:
                     item["task_graph_projection"] = task_graph_projection
-            context.attach_goal_channel_projection(
-                item,
-                goal=goal,
-                goal_latest_runs=goal_latest_runs,
-                runtime_root=runtime_root,
-            )
+            if include_goal_channel_projection:
+                context.attach_goal_channel_projection(
+                    item,
+                    goal=goal,
+                    goal_latest_runs=goal_latest_runs,
+                    runtime_root=runtime_root,
+                )
             history_items.append(item)
 
     merge_global_registry_findings(

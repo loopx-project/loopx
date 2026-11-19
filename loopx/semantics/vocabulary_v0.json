@@ -13,7 +13,7 @@
   "formal_model": {
     "schema_version": "loopx_semantic_formal_model_v0",
     "universes": {
-      "vocabularies": "V: registered vocabulary identifiers; Producers(V) ⊆ V is exactly the subset declaring a producers key (including compatibility-only entries with an empty list). Kernel(V) ⊆ Producers(V). Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 22 cross_runtime vocabularies outside Producers(V) are unverified.",
+      "vocabularies": "V: registered vocabulary identifiers; Producers(V) ⊆ V is exactly the subset declaring a producers key (including compatibility-only entries with an empty list). Kernel(V) ⊆ Producers(V). Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 23 cross_runtime vocabularies outside Producers(V) are unverified.",
       "values": "U(v): ambient runtime values; S(v): registered admitted values",
       "sites": "L: source locations that define, produce, consume, interpret, pass through, project, or persist values",
       "scopes": "Scope: global or bounded_context(context_id); ScopeDeclarations are the forked names the registry declares as bounded contexts",
@@ -73,25 +73,25 @@
     "invariants": [
       {
         "id": "F1_producer_closedness",
-        "statement": "∀v ∈ Producers(V): Produced_scan(v) ⊆ S(v) ⊆ U(v), where Produced_scan(v) is the production the fixed forms observe inside the code-owned scan reach. Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 22 cross_runtime vocabularies outside Producers(V) are unverified. Production outside the scan reach is unverified rather than proven closed.",
+        "statement": "∀v ∈ Producers(V): Produced_scan(v) ⊆ S(v) ⊆ U(v), where Produced_scan(v) is the production the fixed forms observe inside the code-owned scan reach. Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 23 cross_runtime vocabularies outside Producers(V) are unverified. Production outside the scan reach is unverified rather than proven closed.",
         "enforcement": "m0_5",
         "evidence": "bounded production-form AST scan over the PRODUCER_ROOTS/PRODUCER_FILES reach in loopx/semantics/production.py; check_producers visits only vocabularies that declare producers, and validate_production claims no whole-program closedness; unresolved dynamic sites are reported, not treated as proven safe",
         "domain": {
           "quantifies_over": "vocabularies[producers].producers",
           "verified": 6,
-          "registered": 28,
+          "registered": 29,
           "evidence_bound": "producer_scan_reach"
         }
       },
       {
         "id": "F2_canonical_value_liveness",
-        "statement": "∀v ∈ Producers(V): Canonical(v) ⊆ Produced_scan(v) ∪ CompatibilityOnly(v). Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 22 cross_runtime vocabularies outside Producers(V) are unverified. Liveness outside the walked set is not proven.",
+        "statement": "∀v ∈ Producers(V): Canonical(v) ⊆ Produced_scan(v) ∪ CompatibilityOnly(v). Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 23 cross_runtime vocabularies outside Producers(V) are unverified. Liveness outside the walked set is not proven.",
         "enforcement": "m0_5",
         "evidence": "every value of a vocabulary in Producers(V) has a producer recognised inside the scan reach, an executable input witness, or an explicit compatibility-only reason; a value whose only producer lies outside the reach would be reported as dead, not silently accepted",
         "domain": {
           "quantifies_over": "vocabularies[producers].producers",
           "verified": 6,
-          "registered": 28,
+          "registered": 29,
           "evidence_bound": "producer_scan_reach"
         }
       },
@@ -103,7 +103,7 @@
         "domain": {
           "quantifies_over": "vocabularies[*]",
           "verified": 0,
-          "registered": 28,
+          "registered": 29,
           "evidence_bound": "inventory_only"
         }
       },
@@ -170,8 +170,8 @@
     }
   },
   "coverage_floor": {
-    "vocabularies": 28,
-    "owner_symbols": 54,
+    "vocabularies": 29,
+    "owner_symbols": 56,
     "literal_scan_fields": 1,
     "projections": 1,
     "relations": 9,
@@ -264,23 +264,23 @@
       "value_notes": {
         "ready_for_host": "should_run with delivery_allowed and must_attempt set, and an effective action that is neither a replan nor a repair class. Projects to run_now, so a Host may be engaged.",
         "capability_action_required": "should_run whose effective action is governed_capability_intent and whose capability-intent projection matches the envelope goal and agent and names a command. A capability action runs before any Host; a malformed intent yields contract_error instead.",
-        "repair_required": "should_run whose effective action is an explicit typed REPAIR_ACTIONS member. Projects to repair; unregistered strings and spelling alone grant no repair authority.",
-        "replan_required": "should_run whose effective action is in REPLAN_ACTIONS: autonomous_replan, autonomous_replan_required or successor_replan_required. Projects to replan.",
+        "repair_required": "should_run whose effective action is classified as repair_required by the typed TURN_ACTION_ROUTES owner. Projects to repair; unregistered strings and spelling alone grant no repair authority.",
+        "replan_required": "should_run whose effective action is classified as replan_required by TURN_ACTION_ROUTES: autonomous_replan, autonomous_replan_required or successor_replan_required. Projects to replan.",
         "user_action_required": "Not should_run, and the envelope user slot marks an action required. Projects to the disposition of the same name.",
         "wait": "Not should_run, no user action required, and the action allows a quiet no-op. Projects to wait.",
         "blocked": "should_run without delivery_allowed or must_attempt, or not should_run with neither a user action nor a quiet no-op. Projects to wait, so a blocked lane waits rather than failing.",
         "contract_error": "A wrong envelope schema version, an action signature whose source and envelope hashes do not match, or a malformed capability intent. It is the one route with no disposition: the controller rejects instead of dispositioning."
       },
       "producers": [
+        "loopx/control_plane/quota/turn_envelope.ts::turnEnvelopeRoute",
+        "loopx/control_plane/quota/turn_envelope.ts::admittedTurnRoute",
         "loopx/control_plane/turn_driver/driver.py::_typed_route",
-        "loopx/control_plane/turn_driver/driver.py::unregistered_route",
-        "loopx/control_plane/turn_driver/driver.py::build_loopx_turn_plan",
-        "loopx/control_plane/turn_driver/loop_controller.py::_envelope_route"
+        "loopx/control_plane/turn_driver/driver.py::build_loopx_turn_plan"
       ],
       "return_producers": [
+        "loopx/control_plane/quota/turn_envelope.ts::turnEnvelopeRoute",
+        "loopx/control_plane/quota/turn_envelope.ts::admittedTurnRoute",
         "loopx/control_plane/turn_driver/driver.py::_typed_route",
-        "loopx/control_plane/turn_driver/driver.py::unregistered_route",
-        "loopx/control_plane/turn_driver/loop_controller.py::_envelope_route",
         "loopx/control_plane/turn_driver/driver.py::build_loopx_turn_plan"
       ],
       "return_paths": {
@@ -288,7 +288,8 @@
           "route",
           "kind"
         ]
-      }
+      },
+      "input_producer": "loopx/control_plane/turn_driver/driver.py::_typed_route"
     },
     "loop_disposition": {
       "meaning": "Pure controller verdict for the outer loop after combining the last Turn receipt with the fresh route.",
@@ -319,18 +320,13 @@
         "terminal": "A terminal action with no prior receipt, or a validated completion declaring the no_followup continuation."
       },
       "producers": [
-        "loopx/control_plane/turn_driver/loop_controller.py::_replan_disposition",
         "loopx/control_plane/turn_driver/loop_controller.py::decide_loop_disposition",
         "loopx/control_plane/turn_driver/turn_contract_generated.py::project_turn_route"
       ],
       "return_producers": [
         "loopx/control_plane/turn_driver/turn_contract_generated.py::project_turn_route"
       ],
-      "call_producers": {
-        "loopx/control_plane/turn_driver/loop_controller.py::_disposition": [
-          "disposition"
-        ]
-      },
+      "call_producers": {},
       "input_producer": "loopx/control_plane/turn_driver/loop_controller.py::decide_loop_disposition"
     },
     "agent_scope_frontier_action": {
@@ -349,12 +345,13 @@
       ],
       "value_notes": {
         "agent_scope_exhausted": "The current agent has no projected current or unclaimed advancement candidate and no other visible advancement work, despite a goal-level advancement lane. It stays active but quiet until LoopX projects a candidate or a peer transfers work.",
-        "agent_scope_wait": "The current agent has no current or unclaimed advancement candidate and the blocking handoff work is claimed by another agent. It stays active but quiet until that agent finishes, the work is reassigned, or a concrete candidate exists.",
+        "agent_scope_wait": "The current agent has no runnable current or unclaimed candidate and is waiting on a pending successor condition, explicitly blocked work, or another agent's blocking handoff. It stays active but quiet until the condition, ownership or available work changes.",
         "reassignment_required": "The current agent has no current or unclaimed advancement candidate while visible advancement work is claimed by another agent. That work needs finishing, reassignment, or a concrete current-agent candidate before delivery.",
         "successor_replan_required": "The successor lane must replan before this lane advances. It is produced by the selected-candidate priority, monitor blocked resume, deferred resume, route continuation and cleared handoff frontiers, and with must_attempt the scheduler treats it as active work rather than a wait."
       },
       "producers": [
         "loopx/control_plane/agents/agent_scope.py::_blocked_successor_wait_frontier",
+        "loopx/control_plane/agents/agent_scope.py::_blocked_todo_wait_frontier",
         "loopx/control_plane/agents/agent_scope.py::_blocking_handoff_frontier",
         "loopx/control_plane/agents/agent_scope.py::_cleared_handoff_frontier",
         "loopx/control_plane/agents/agent_scope.py::_deferred_resume_frontier",
@@ -480,7 +477,7 @@
         "terminal_no_followup": "The Goal is terminal with no follow-up. The controller reads it as the terminal_action partition, so with no prior receipt the disposition is terminal, and the scheduler stops.",
         "throttled_skip": "Existing result of quotaEffectiveAction; previously missed because the literal scan did not inspect declared return functions.",
         "todo_decision_scope_projection_repair": "A Todo user-gate scope is missing from the decision-scope projection; trigger user_gate_scope_projection_drift.",
-        "unsettled_host_turn_recovery": "A host Turn is unsettled and must be recovered before anything else: the selected Todo and action portfolio are dropped, should_run is set, and normal, recovery and self-repair delivery are all refused."
+        "unsettled_host_turn_recovery": "A host Turn is unsettled and must be recovered before anything else: the selected Todo and action portfolio are dropped, and normal, recovery and self-repair delivery are refused. Three unchanged admissions for the same owed identity exhaust the allowance; the typed recovery owner then projects blocked_wait until receipt progress or explicit owner resume, without erasing the original debt."
       },
       "producers": [
         "loopx/control_plane/work_items/action_selection_contract.py::build_action_selection_recovery_fields",
@@ -539,6 +536,29 @@
         "terminal_closeout": "The conditional fourth step, planned only when a Todo binding exists and executed as its own single-phase transaction outside the main phase list. It requires the closeout to be required and the turn result to be validated_completion, and readback accepts it only against an event declaring no followup; requesting it without those, or supplying it unrequested, fails as terminal_closeout_rejected."
       }
     },
+    "host_adapter_settlement_step_kind": {
+      "meaning": "Ordered provider steps of one host-adapter settlement plan. The TypeScript owner authors the plan and the Python transport validates the plan it receives against the same sequence, so the two runtimes must carry the same order. Distinct from settlement_step_kind: that vocabulary names the turn settlement phases, whose validation phase is never executed, while every kind here is a command the host adapter runs.",
+      "tier": "cross_runtime",
+      "status": "canonical",
+      "owners": {
+        "python": "loopx/control_plane/host_adapter_settlement.py::HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE",
+        "typescript": "loopx/control_plane/turn_driver/host_todo_completion.ts::HOST_ADAPTER_SETTLEMENT_STEP_KINDS"
+      },
+      "values": [
+        "guard",
+        "lifecycle_completion",
+        "durable_writeback",
+        "quota_spend",
+        "terminal_closeout"
+      ],
+      "value_notes": {
+        "guard": "The admission step: it runs the real quota should-run command with the turn instance id, and its continue_when decides whether the later steps run at all.",
+        "lifecycle_completion": "The completion step: it runs the Todo completion arguments before anything is written back.",
+        "durable_writeback": "The writeback step: it persists the completed work, conditioned on the completion result.",
+        "quota_spend": "The quota step: it debits the slot, conditioned on the writeback result, and accepts an idempotent replay of an already committed spend.",
+        "terminal_closeout": "The optional last step, emitted only when the Todo needs a terminal closeout; it carries no continue_when because nothing follows it."
+      }
+    },
     "settlement_binding_kind": {
       "meaning": "How a settlement step binds to its receipt.",
       "tier": "cross_runtime",
@@ -550,6 +570,7 @@
       "values": [
         "todo",
         "autonomous_replan",
+        "request",
         "unbound"
       ],
       "input_producer": "loopx/control_plane/effect_program.ts::settlementIdentity",
@@ -559,7 +580,8 @@
       "value_notes": {
         "todo": "Chosen by settlementIdentity when the todo id is non-blank after trimming; supplying both a todo id and a replan obligation id throws before this point. It fixes the effect id to the goal, agent, todo and turn instance form, and is re-derived when a persisted identity payload is decoded.",
         "autonomous_replan": "Chosen when the todo id is blank and the replan obligation id is non-blank after trimming, so the turn settles a replan obligation rather than a selected Todo. The effect id gains an explicit autonomous_replan segment instead of a Todo segment.",
-        "unbound": "Chosen when both ids are blank, naming a goal, agent and turn with no work-item binding at all. It is reachable mainly because some constructors pass an empty string rather than validating, and every validating entry path refuses it; readback also reports it as failure detail to describe a heartbeat receipt that carries neither binding."
+        "request": "Chosen for an already admitted original request with its id, revision, content digest and operator execution-scope digest. Its canonical subject hash binds the effect and native Turn lineage; this identity grants no execution authority and creates no Todo or replan obligation.",
+        "unbound": "Chosen when no Todo, replan or request subject is present, naming a goal, agent and turn with no work-item binding. Validating execution paths refuse it; readback reports it for a heartbeat receipt carrying no binding."
       }
     },
     "settlement_failure_kind": {
@@ -1148,8 +1170,8 @@
           "typescript_migration_surface": 1
         },
         "goal_boundary": {
-          "python_module_budget": 30,
-          "typescript_module_budget": 2,
+          "python_module_budget": 29,
+          "typescript_module_budget": 3,
           "python_migration_surface": 16,
           "typescript_migration_surface": 1
         },
@@ -1165,19 +1187,19 @@
   "dual_runtime_twins": {
     "meaning": "Same-basename .py/.ts module pairs under the control plane. The TypeScript migration RFC is replacement-first, so this count may only fall.",
     "root": "loopx/control_plane",
-    "module_budget": 43
+    "module_budget": 45
   },
   "inventory_ratchets": {
     "meaning": "Counts read from the generated inventory. A same-runtime fork is one constant name with one value defined in two or more modules of the same runtime; a conflicting value is one name with different values. Both the number of affected names and the number of definitions are budgets, so a third spelling of an already-conflicting name is still a regression.",
-    "same_runtime_forks": 2,
-    "same_runtime_fork_definitions": 5,
+    "same_runtime_forks": 1,
+    "same_runtime_fork_definitions": 3,
     "conflicting_values": 16,
-    "conflicting_definitions": 54,
+    "conflicting_definitions": 52,
     "schema_version_same_runtime_forks": 0,
     "multi_value_twins": 8,
     "multi_value_forks": 2,
     "multi_value_fork_definitions": 6,
-    "same_runtime_forks_semantic": 2,
+    "same_runtime_forks_semantic": 1,
     "conflicting_values_semantic": 0,
     "multi_value_meaning": "Enums, named closed sets, Literal aliases, and TypeScript as-const arrays are vocabulary exactly as a NAME = \"value\" constant is, so they get the same collision rule. One name defined in two modules with identical values is a twin; with different values it is a fork. The semantic multi-value-fork budget excludes only names declared in scope_declarations.",
     "multi_value_forks_note": "The 4 counted forks include SOURCE_SURFACES, whose four definitions are four CLI commands each listing its own data sources; that is bounded-context reuse of one name, not drift. It stays in the budget until M0.5 adds a scope field (RFC Section 5) and must not be removed by renaming.",
@@ -1191,7 +1213,7 @@
       "contexts": [
         {
           "id": "global_risks",
-          "owner": "loopx/global_risks.py::SOURCE_SURFACES"
+          "owner": "loopx/control_plane/presentation/global_risk_read.ts::SOURCE_SURFACES"
         },
         {
           "id": "global_todos",

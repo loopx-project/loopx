@@ -67,7 +67,7 @@ export const goalSuggestionsScenario = {
       const summary = tools.locator("> summary");
       await summary.waitFor({ state: "visible", timeout: 15_000 });
       await page.screenshot({ path: resolve(outputDir, "goal-suggestions-collapsed.png"), animations: "disabled" });
-      assert.match(await summary.innerText(), /快捷提问 · 先处理 \d+ 项等你决定的事项/, "The collapsed summary carries the first suggestion");
+      assert.equal(await summary.getAttribute("aria-label"), "添加附件与快捷操作", "One compact entry contains the Goal actions");
       await summary.click();
       const row = page.getByTestId("goal-suggestions");
       await row.waitFor({ state: "visible" });
@@ -79,13 +79,17 @@ export const goalSuggestionsScenario = {
       assert.match(await stewardRow.innerText(), /询问下一步[\s\S]*看阻塞[\s\S]*查证据/, "The shipped steward prompt row stays below");
       await page.screenshot({ path: resolve(outputDir, "goal-suggestions-row.png"), animations: "disabled" });
 
-      // Decisions: acting in place opens the overview with its owner rail.
+      // Decisions open the owner rail as a modal; return through its close control.
       await row.locator('button[data-suggestion="open_decisions"]').click();
       await page.getByTestId("goal-vitals").waitFor({ state: "visible" });
       const overview = page.locator(".goal-overview, [data-testid=\"goal-overview\"]").first();
       await overview.waitFor({ state: "visible", timeout: 10_000 });
-      assert.match(await page.locator("main, .personal-channel-body, body").first().innerText(), new RegExp(gateText.slice(0, 20)), "The overview shows the waiting decision");
+      const decisions = page.getByRole("dialog", { name: "全部工作", exact: true });
+      await decisions.waitFor({ state: "visible" });
+      assert.match(await decisions.innerText(), new RegExp(gateText), "The decision rail shows the waiting decision");
       await page.screenshot({ path: resolve(outputDir, "goal-suggestions-decisions.png"), animations: "disabled" });
+      await decisions.getByRole("button", { name: "关闭全部工作", exact: true }).click();
+      await decisions.waitFor({ state: "hidden" });
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "对话", exact: true }).click();
       await summary.waitFor({ state: "visible", timeout: 15_000 });
       if (!(await row.isVisible())) await summary.click();
@@ -110,7 +114,7 @@ export const goalSuggestionsScenario = {
         await stopped.locator(".personal-goal-link").click();
         await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "对话", exact: true }).click();
         await summary.waitFor({ state: "visible" });
-        assert.equal((await summary.innerText()).trim(), "快捷提问", "A stopped Goal shows no derived suggestion");
+        assert.equal(await summary.getAttribute("aria-label"), "添加附件与快捷操作");
         await summary.click();
         assert.equal(await page.getByTestId("goal-suggestions").count(), 0);
         await page.locator(".personal-quick-prompts").first().waitFor({ state: "visible" });
@@ -126,7 +130,10 @@ export const goalSuggestionsScenario = {
         await other.getByTestId("goal-vitals").waitFor({ state: "visible", timeout: 15_000 });
         const vitals = (await other.getByTestId("goal-vitals").innerText()).replace(/\s+/g, " ");
         assert.match(vitals, /0 等你决定|可选/, `the lane shows the item as optional: ${vitals}`);
-        assert.match(vitals, /已列出 5 项中的 0 项/, `the lane shows the partial listing truthfully: ${vitals}; listed: ${(await other.locator(".goal-overview").innerText().catch(() => "")).replace(/\s+/g, " ").slice(0, 400)}`);
+        // The work vital marks its unknown total; its help carries the partial counts.
+        await other.getByTestId("goal-vitals").getByRole("button", { name: "工作 · 总数未知", exact: true }).focus();
+        await other.getByRole("tooltip").getByText(/已列出 5 项中的 0 项/).waitFor();
+        await other.keyboard.press("Escape");
         await other.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "对话", exact: true }).click();
         const otherSummary = other.locator(".personal-composer-tools > summary");
         await otherSummary.waitFor({ state: "visible", timeout: 15_000 });

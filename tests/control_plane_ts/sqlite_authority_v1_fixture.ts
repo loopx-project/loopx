@@ -138,7 +138,7 @@ export function createSqliteAuthorityStoreV1(
 }
 
 /** Bytes of one V1 database, used to prove a migration left it untouched. */
-export function sqliteAuthorityV1Digest(path: string, goalId: string): string {
+export function sqliteAuthorityV1Digest(path: string, _goalId: string): string {
   const {driver: sqlite} = sqliteAuthorityRuntime();
   const db = new sqlite.DatabaseSync(path, {readOnly: true});
   try {

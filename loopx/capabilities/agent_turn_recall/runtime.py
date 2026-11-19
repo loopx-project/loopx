@@ -17,7 +17,6 @@ from ..reward_memory.experiment import (
     resolve_reward_memory_experiment,
     resolve_reward_memory_surface_config,
 )
-from ..reward_memory.read_authority import build_reward_memory_surface_read_authority_checkpoints
 from .core import (
     AGENT_TURN_RECALL_SCHEMA_VERSION,
     AGENT_TURN_RECALL_SURFACE_ID,
@@ -150,6 +149,8 @@ def resolve_reward_memory_turn_session_ref(
 def reward_memory_turn_read_authority_checkpoints(
     config: Mapping[str, Any], goal_id: str
 ) -> dict[str, dict[str, Any]]:
+    from ..reward_memory.read_authority import build_reward_memory_surface_read_authority_checkpoints
+
     return build_reward_memory_surface_read_authority_checkpoints(
         config, AGENT_TURN_RECALL_SURFACE_ID,
         verified=True, source_ref=f"registry:{goal_id}:reward-memory",

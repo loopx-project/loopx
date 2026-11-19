@@ -11,8 +11,36 @@ from loopx.control_plane.testing.canary_harness import write_fixture_registry, r
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
 
-from loopx.control_plane.todos.resume_planning import project_todo_resume_planning
+from loopx.control_plane.todos.resume_planning import (
+    build_referenced_todo_resume_planning_request,
+    build_todo_resume_planning_request,
+    project_todo_resume_planning,
+)
+from loopx.control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from loopx.control_plane.todos.quota_summary import select_quota_todo_summary
+
+
+def _quota_goal(tmp_path, monkeypatch, todos, provider):
+    """Todo cutover retains the separately declared Goal definition source."""
+    runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
+    prose = "---\nstatus: active\n---\n# Goal\n## Objective\nBuild a checked change.\n\n"
+    state.write_text(prose + "## Agent Todo\n" + todos, encoding="utf-8")
+    write_fixture_registry(
+        project=tmp_path, runtime_root=runtime, registry_path=registry,
+        goal_id="goal-a", domain="resume-planning", adapter_kind="generic_project_goal_v0",
+        state_file=str(state), registered_agents=["agent-a", "agent-b"], quota_allowed_slots=None,
+    )
+    if provider is not None:
+        if provider == "sqlite":
+            isolate_sqlite_runtime(tmp_path, monkeypatch)
+        goal = json.loads(registry.read_text())["goals"][0]
+        fields = parse_active_state_todos(state.read_text(), goal=goal, item_limit=None)
+        projection = build_todo_runtime_shadow_projection(
+            goal_id="goal-a", todos=fields["agent_todos"]["items"], handoff_mode="soft_claim",
+        )
+        initialize_canonical_authority(runtime, "goal-a", projection, state_path=state, provider=provider)
+        state.write_text(prose, encoding="utf-8")
+    return runtime, registry, state
 
 
 def waiting(todo_id: str, **fields: object) -> dict:
@@ -28,6 +56,53 @@ def waiting(todo_id: str, **fields: object) -> dict:
 
 def ids(items: list[dict]) -> list[str]:
     return [item["todo_id"] for item in items]
+
+
+@pytest.mark.parametrize("copy_rows", [False, True], ids=["shared-object", "equal-copies"])
+def test_referenced_request_deduplicates_lanes_without_pruning_payload_facts(copy_rows) -> None:
+    row = waiting(
+        "todo_shared",
+        content_revision="sha256:synthetic-full-projection",
+    )
+    request = build_referenced_todo_resume_planning_request({
+        "items": [row],
+        "first_open_items": [deepcopy(row) if copy_rows else row],
+        "deferred_items": [deepcopy(row) if copy_rows else row],
+    })
+
+    assert request["schema_version"] == "todo_resume_planning_request_v1"
+    assert len(request["records"]) == 1
+    assert request["sources"]["items"] == [0]
+    assert request["sources"]["first_open_items"] == [0]
+    assert request["sources"]["deferred_items"] == [0]
+    assert request["records"][0]["payload"]["content_revision"] == row["content_revision"]
+
+
+def test_referenced_projection_keeps_conflicting_same_id_source_facts() -> None:
+    source = {"items": [waiting("todo_shared")],
+              "first_open_items": [waiting("todo_shared", claimed_by="agent-b")],
+              "deferred_items": [waiting("todo_shared", status="deferred")]}
+    request = build_referenced_todo_resume_planning_request(source, agent_id="agent-a")
+    assert len(request["records"]) == 3
+    assert effect_runtime_result("todo.resume_planning.project", request) == effect_runtime_result(
+        "todo.resume_planning.project", build_todo_resume_planning_request(source, agent_id="agent-a"))
+
+
+@pytest.mark.parametrize("reference", [-1, 1, True, 0.5, "0"])
+def test_referenced_projection_rejects_malformed_or_out_of_range_references(reference) -> None:
+    request = build_referenced_todo_resume_planning_request({"items": [waiting("todo_shared")]})
+    request["sources"]["items"] = [reference]
+    with pytest.raises(EffectRuntimeRejected, match="record reference"):
+        effect_runtime_result("todo.resume_planning.project", request)
+
+
+@pytest.mark.parametrize("schema", [["todo_resume_planning_request_v0"],
+                                  ["todo_resume_planning_request_v1"], None, "unsupported"])
+def test_resume_planning_rejects_coercible_or_unknown_schema_versions(schema) -> None:
+    request = build_referenced_todo_resume_planning_request({})
+    request["schema_version"] = schema
+    with pytest.raises(EffectRuntimeRejected, match="schema mismatch"):
+        effect_runtime_result("todo.resume_planning.project", request)
 
 
 def test_claim_priority_and_exclusion_are_independent_of_display_priority() -> None:
@@ -100,30 +175,29 @@ def test_invalid_deferred_condition_cannot_reuse_a_stale_ready_flag() -> None:
     assert row["resume_ready"] is True  # Diagnosis is a projection, not an edit.
 
 
-@pytest.mark.parametrize("promoted", [False, True])
+@pytest.mark.parametrize("provider", [None, "file", "sqlite"])
 @pytest.mark.parametrize("kind", ["todo_done", "monitor_changed"])
-def test_public_quota_distinguishes_monitor_repair_from_generation_wait(tmp_path: Path, promoted: bool, kind: str) -> None:
-    runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
-    state.write_text(
-        "---\nstatus: active\n---\n# Goal\n## Objective\nBuild a checked change.\n\n## Agent Todo\n"
+def test_public_quota_distinguishes_monitor_repair_from_generation_wait(
+    tmp_path: Path, monkeypatch, provider: str | None, kind: str,
+) -> None:
+    runtime, registry, state = _quota_goal(
+        tmp_path, monkeypatch,
         "- [ ] [P1] Continue after observation.\n"
         f"  <!-- loopx:todo todo_id=todo_waiting role=agent task_class=advancement_task status=open claimed_by=agent-a resume_when={kind}:todo_monitor resume_monitor_generation=3 -->\n"
         "- [ ] [P2] Observe dependency.\n"
         "  <!-- loopx:todo todo_id=todo_monitor role=agent task_class=continuous_monitor status=open claimed_by=agent-a material_change_generation=3 cadence=1d next_due_at=2099-01-01T00:00:00Z -->\n",
-        encoding="utf-8",
+        provider,
     )
-    write_fixture_registry(project=tmp_path, runtime_root=runtime, registry_path=registry,
-        goal_id="goal-a", domain="resume-planning", adapter_kind="generic_project_goal_v0",
-        state_file=str(state), registered_agents=["agent-a", "agent-b"], quota_allowed_slots=None)
-    if promoted:
-        goal = json.loads(registry.read_text())["goals"][0]
-        fields = parse_active_state_todos(state.read_text(), goal=goal, item_limit=None)
-        projection = build_todo_runtime_shadow_projection(goal_id="goal-a", todos=fields["agent_todos"]["items"], handoff_mode="soft_claim")
-        initialize_canonical_authority(runtime, "goal-a", projection, state_path=state)
-        state.unlink()
-    before = state.read_bytes() if state.exists() else None
+    before = state.read_bytes()
+    assert (b"## Agent Todo" in before) == (provider is None)
     code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
-        "--include-detail", "agent-todos", "--scan-path", str(tmp_path), registry_path=registry, runtime_root=runtime)
+        "--include-detail", "agent-todos",  registry_path=registry, runtime_root=runtime)
+    if provider is None:
+        assert code == 1 and packet["error_code"] == "canonical_authority_required", packet
+        assert packet["should_run"] is False
+        assert state.read_bytes() == before
+        assert not (runtime / "goals/goal-a/runs").exists()
+        return
     assert code == 0, packet
     summary = packet["agent_todo_summary"]
     condition = summary["resume_blocked_items"][0]["resume_condition"]
@@ -136,7 +210,7 @@ def test_public_quota_distinguishes_monitor_repair_from_generation_wait(tmp_path
         assert not summary.get("monitor_blocked_resume_count")
         assert condition["baseline_generation"] == 3
         assert condition["material_change_generation"] == 3
-    assert (state.read_bytes() if state.exists() else None) == before
+    assert state.read_bytes() == before
 
 
 def test_ready_deferred_lanes_keep_full_counts_before_truncation() -> None:
@@ -181,7 +255,13 @@ def test_public_quota_replans_completion_cycles_without_reassigning_work(
             state_path=state, provider=provider)
     before = state.read_bytes()
     code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
-        "--include-detail", "agent-todos", "--scan-path", str(tmp_path), registry_path=registry, runtime_root=runtime)
+        "--include-detail", "agent-todos",  registry_path=registry, runtime_root=runtime)
+    if provider == "legacy":
+        assert code == 1 and packet["error_code"] == "canonical_authority_required", packet
+        assert packet["should_run"] is False
+        assert state.read_bytes() == before
+        assert not (runtime / "goals/goal-a/runs").exists()
+        return
     assert code == 0, packet
     summary = packet["agent_todo_summary"]
     blocked = next(row for row in summary["resume_blocked_items"] if row["todo_id"] == "todo_alpha")
@@ -211,9 +291,9 @@ def test_quota_composes_capacity_and_visibility_in_one_request_per_source(monkey
     original = quota_selection.effect_runtime_result
     calls = []
 
-    def record(method, params):
+    def record(method, params, **kwargs):
         calls.append(method)
-        return original(method, params)
+        return original(method, params, **kwargs)
 
     monkeypatch.setattr(quota_selection, "effect_runtime_result", record)
     summary = select_quota_todo_summary(
@@ -237,39 +317,66 @@ def test_unavailable_typed_owner_does_not_fall_back_to_python_selection(monkeypa
         project_todo_resume_planning(source)
 
 
-@pytest.mark.parametrize("promoted", [False, True])
+@pytest.mark.parametrize("provider", [None, "file", "sqlite"])
 def test_public_quota_capacity_wait_uses_provider_after_cutover_without_display_write(
-    tmp_path: Path, promoted: bool,
+    tmp_path: Path, monkeypatch, provider: str | None,
 ) -> None:
-    runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
-    state.write_text(
-        "---\nstatus: active\n---\n# Goal\n## Objective\nBuild a checked change.\n\n"
-        "## Agent Todo\n- [ ] [P1] Continue when compiler capacity returns.\n"
+    runtime, registry, state = _quota_goal(
+        tmp_path, monkeypatch,
+        "- [ ] [P1] Continue when compiler capacity returns.\n"
         "  <!-- loopx:todo todo_id=todo_capacity role=agent task_class=advancement_task "
         "status=deferred claimed_by=agent-a resume_when=capacity_available:compiler -->\n",
-        encoding="utf-8",
+        provider,
     )
-    write_fixture_registry(
-        project=tmp_path, runtime_root=runtime, registry_path=registry,
-        goal_id="goal-a", domain="resume-planning", adapter_kind="generic_project_goal_v0",
-        state_file=str(state), registered_agents=["agent-a", "agent-b"], quota_allowed_slots=None,
-    )
-    if promoted:
-        goal = json.loads(registry.read_text())["goals"][0]
-        fields = parse_active_state_todos(state.read_text(), goal=goal, item_limit=None)
-        projection = build_todo_runtime_shadow_projection(
-            goal_id="goal-a", todos=fields["agent_todos"]["items"], handoff_mode="soft_claim",
-        )
-        initialize_canonical_authority(runtime, "goal-a", projection, state_path=state)
-        state.unlink()
-    before = state.read_bytes() if state.exists() else None
+    before = state.read_bytes()
+    assert (b"## Agent Todo" in before) == (provider is None)
     for capabilities, count in [((), 0), (("--available-capability", "compiler"), 1)]:
         code, packet = run_json_cli_result(
             "quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
-            "--scan-path", str(tmp_path), *capabilities, registry_path=registry, runtime_root=runtime,
+             *capabilities, registry_path=registry, runtime_root=runtime,
         )
+        if provider is None:
+            assert code == 1 and packet["error_code"] == "canonical_authority_required", packet
+            assert packet["should_run"] is False
+            assert state.read_bytes() == before
+            continue
         assert code == 0, packet
         assert packet["agent_todo_summary"]["current_agent_deferred_resume_count"] == count
         if count:
             assert packet["effective_action"] == "successor_replan_required"
-        assert (state.read_bytes() if state.exists() else None) == before
+        assert state.read_bytes() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_canonical_todos_do_not_replace_a_missing_declared_goal_source(tmp_path, monkeypatch, provider):
+    runtime, registry, state = _quota_goal(
+        tmp_path, monkeypatch,
+        "- [ ] [P1] Advance the checked work.\n"
+        "  <!-- loopx:todo todo_id=todo_work role=agent task_class=advancement_task status=open claimed_by=agent-a -->\n",
+        provider,
+    )
+    prose = state.read_bytes()
+    assert b"## Agent Todo" not in prose
+    state.unlink()
+
+    code, packet = run_json_cli_result(
+        "quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
+        registry_path=registry, runtime_root=runtime,
+    )
+
+    assert code == 1
+    assert packet["status"] == "state_file_missing"
+    assert packet["should_run"] is False
+    assert packet["normal_delivery_allowed"] is False
+    assert packet["agent_todo_summary"]["open_count"] == 1
+    assert not state.exists()
+
+    state.write_bytes(prose)
+    code, packet = run_json_cli_result(
+        "quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
+        registry_path=registry, runtime_root=runtime,
+    )
+    assert code == 0, packet
+    assert packet["status_health_ok"] is True
+    assert packet["agent_todo_summary"]["open_count"] == 1
+    assert state.read_bytes() == prose

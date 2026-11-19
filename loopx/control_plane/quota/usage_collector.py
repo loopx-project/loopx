@@ -21,15 +21,23 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Mapping, MutableMapping
+from typing import Any, Literal, Mapping, MutableMapping, TypedDict
 
 
 RUN_USAGE_SCHEMA_VERSION = "run_usage_v0"
 _MEASUREMENT_KINDS = frozenset({"absolute", "delta"})
-_REQUIRED_TOKEN_FIELDS = ("input_tokens", "output_tokens")
-_OPTIONAL_INT_FIELDS = ("cache_tokens", "duration_ms")
-_OPTIONAL_FLOAT_FIELDS = ("cost_usd",)
+_REQUIRED_TOKEN_FIELDS: tuple[Literal["input_tokens", "output_tokens"], ...] = ("input_tokens", "output_tokens")
+_OPTIONAL_INT_FIELDS: tuple[Literal["cache_tokens", "duration_ms"], ...] = ("cache_tokens", "duration_ms")
+_OPTIONAL_FLOAT_FIELDS: tuple[Literal["cost_usd"], ...] = ("cost_usd",)
 _LABEL_FIELDS = ("provider", "model")
+
+
+class _SnapshotCounters(TypedDict):
+    input_tokens: int | None
+    output_tokens: int | None
+    cache_tokens: int | None
+    cost_usd: float | None
+    duration_ms: int | None
 
 
 class UsageRowError(ValueError):
@@ -106,7 +114,7 @@ def _require_snapshot_id(value: Any) -> str:
     return text
 
 
-def _snapshot_counters(snapshot: Mapping[str, Any], *, label: str) -> dict[str, int | float | None]:
+def _snapshot_counters(snapshot: Mapping[str, Any], *, label: str) -> _SnapshotCounters:
     if not isinstance(snapshot, Mapping):
         raise UsageRowError(f"{label} must be a mapping")
     return {
@@ -192,7 +200,7 @@ def build_compact_usage_row(
     provider_label = _require_label(provider, field="provider")
     model_label = _require_label(model, field="model")
 
-    current = {
+    current: _SnapshotCounters = {
         "input_tokens": _require_non_negative_int(input_tokens, field="input_tokens"),
         "output_tokens": _require_non_negative_int(output_tokens, field="output_tokens"),
         "cache_tokens": _optional_non_negative_int(cache_tokens, field="cache_tokens"),
@@ -208,7 +216,7 @@ def build_compact_usage_row(
             # A reused, corrupt, or out-of-order identity carrying different
             # numbers must fail closed instead of silently zeroing real usage.
             prior = _snapshot_counters(previous_snapshot, label="previous_snapshot")
-            mismatched = sorted(
+            mismatched: list[str] = sorted(
                 field
                 for field in (*_REQUIRED_TOKEN_FIELDS, *_OPTIONAL_INT_FIELDS, *_OPTIONAL_FLOAT_FIELDS)
                 if current[field] != prior[field]

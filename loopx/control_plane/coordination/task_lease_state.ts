@@ -7,7 +7,10 @@ import {normalizeTodoAgent} from "./todo_agents.ts";
 import {leaseOwnerRejection} from "../work_items/task_lease_eligibility.ts";
 import {leaseVersion, leaseEpoch, leaseInteger, leaseIsActive, normalizeOwner,
   normalizeIdempotencyKey, TASK_LEASE_SCHEMA_VERSION, type LeaseRecord, type TodoFact} from "../work_items/task_lease_acquire.ts";
-import type {AcquireDecisionInput} from "../work_items/task_lease_acquire_decision.ts";
+import {
+  comparisonWriteScopes,
+  type AcquireDecisionInput,
+} from "../work_items/task_lease_acquire_decision.ts";
 import {normalizeTodoRepository} from "../todos/work_requirements.ts";
 import {leaseWriteRepository} from "../work_items/task_lease_repository.ts";
 
@@ -65,7 +68,7 @@ export function canonicalTaskLeaseAcquireFacts(index: ReturnType<typeof indexCoo
     const active = leaseIsActive(candidate, now);
     return [{todo_id: id, owner: String(candidate.owner), active,
       effective: active && leaseOwnerRejection(canonicalLeaseTodoFact(index.todos.get(id)), String(candidate.owner), registered) === null,
-      write_scopes: (candidate.write_scopes ?? []) as string[], write_repository: leaseWriteRepository(candidate.write_repository), write_workspace: leaseWorkspace(candidate.write_workspace)}];
+      write_scopes: comparisonWriteScopes((candidate.write_scopes ?? []) as string[]), write_repository: leaseWriteRepository(candidate.write_repository), write_workspace: leaseWorkspace(candidate.write_workspace)}];
   });
   return {todo, lease, other_leases, current};
 }

@@ -5,6 +5,7 @@ import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.ts";
 import {EffectiveAction} from "../quota/effective_action.generated.ts";
 import {isCanonicalTodoId} from "../todos/identity.ts";
+import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "./execution_preparation.ts";
 
 interface AgentAdmissionFacts {must_attempt: boolean; delivery_allowed: boolean | null}
 interface SelectionAdmission {selected_todo_id: string | null; admitted: boolean}
@@ -32,13 +33,29 @@ export function currentActionSelectionAdmission(
   const pending = selected.selection_binding === "pending_action_selection";
   const delivery = pending && packet.normal_delivery_allowed === true
     && agent.must_attempt && agent.delivery_allowed === true;
+  const fallback = jsonObject(jsonObject(packet.scoped_user_gate_fallback)?.selected_executable);
+  const scopedDelivery = pending && qualification.state === "qualified"
+    && selectionTodoId(qualification.requested_todo_id) === requestedTodoId
+    && selectionTodoId(fallback?.todo_id) === selectedId
+    && packet.safe_bypass_allowed === true && packet.safe_bypass_kind === "scoped_user_gate_fallback"
+    && agent.must_attempt && agent.delivery_allowed === true;
   const workspaceRepair = pending && packet.workspace_repair_allowed === true
     && packet.effective_action === EffectiveAction.AGENT_WORKSPACE_REPAIR
+    && agent.must_attempt && agent.delivery_allowed === false;
+  const preparation = jsonObject(packet.execution_preparation);
+  // Binding qualified work may precede its ordinary claim.
+  const preparationOnly = pending && qualification.state === "qualified"
+    && selectionTodoId(qualification.requested_todo_id) === requestedTodoId
+    && preparation?.schema_version === EXECUTION_PREPARATION_SCHEMA_VERSION
+    && preparation.state === "claim_required"
+    && selectionTodoId(preparation.todo_id) === selectedId
+    && preparation.delivery_allowed === false && packet.normal_delivery_allowed === false
     && agent.must_attempt && agent.delivery_allowed === false;
   const currentWork = !pending && agent.must_attempt;
   return {selected_todo_id: selectedId,
     admitted: selectedId !== null && selectedId === requestedTodoId
-      && packet.ok === true && packet.should_run === true && (delivery || workspaceRepair || currentWork)};
+      && packet.ok === true && packet.should_run === true
+      && (delivery || scopedDelivery || workspaceRepair || preparationOnly || currentWork)};
 }
 
 export function actionSelectionNeedsRecovery(packet: JsonObject, agent: AgentAdmissionFacts): boolean {

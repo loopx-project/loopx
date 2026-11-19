@@ -77,6 +77,8 @@ export function replanCadenceEditorDefaults(effective: unknown, fallback: unknow
   const live = configurationObject(replanCadenceEditorValue(effective));
   if (Object.hasOwn(live, "count_unit")) defaults.count_unit = live.count_unit;
   if (Object.hasOwn(live, "count")) defaults.count = live.count;
+  if (Object.hasOwn(live, "planning_horizon_goal")) defaults.planning_horizon_goal = live.planning_horizon_goal;
+  if (Object.hasOwn(live, "yardstick_enabled")) defaults.yardstick_enabled = live.yardstick_enabled;
   // Strategy omission keeps the existing default-off meaning.
   return defaults;
 }
@@ -100,16 +102,32 @@ export function hasReplanCadenceOverride(value: unknown): boolean {
 export function goalReplanCadenceWriteValue(
   draft: Record<string, unknown>,
   cadenceOverride: boolean,
+  horizonOverride = Object.hasOwn(draft, "planning_horizon_goal"),
+  yardstickOverride = Object.hasOwn(draft, "yardstick_enabled"),
 ): Record<string, unknown> {
   const value = { ...draft };
   if (!cadenceOverride) {
     delete value.count_unit;
     delete value.count;
   }
+  if (!horizonOverride) delete value.planning_horizon_goal;
+  if (!yardstickOverride) delete value.yardstick_enabled;
   return value;
 }
 
-/** A v0 storage selector did not enable creation; opening Settings must not. */
+/** Sparse Goal settings display live inherited fields without pinning them. */
+export function goalExploreEditorValue(current: unknown, effective: unknown): Record<string, unknown> {
+  return {...configurationObject(effective), ...configurationObject(current)};
+}
+
+/** Only a stored or deliberately edited mode becomes a Goal override. */
+export function goalExploreWriteValue(draft: Record<string, unknown>, modeOverride: boolean): Record<string, unknown> {
+  const value = {...draft};
+  if (!modeOverride) delete value.mode;
+  return value;
+}
+
+/**  opening Settings must not. */
 export function goalStorageEditorValue(value: unknown): unknown {
   const record = configurationObject(value);
   return record.schema_version === "loopx_goal_storage_defaults_v0"

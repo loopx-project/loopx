@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 from contextlib import nullcontext
+from importlib import import_module as _import_module
 
 from .file_lock import exclusive_cross_runtime_file_lock
-from .control_plane.coordination.legacy_writer_fence import require_prose_state_write_allowed
-from .control_plane.runtime.document_io import atomic_write_state_text
 
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 from .control_plane.runtime.time import chronology_key
 from .history import append_run_index_record, load_index, load_registry
@@ -21,6 +21,30 @@ from .public_safe_text import (
 )
 from .registry import registry_goals, resolve_state_file
 from .control_plane.actor_identity import normalize_owner_controller_actor
+
+
+_MUTATION_ADAPTERS = {
+    "require_prose_state_write_allowed": "loopx.control_plane.coordination.legacy_writer_fence",
+    "atomic_write_state_text": "loopx.control_plane.runtime.document_io",
+}
+
+
+def __getattr__(name: str) -> Any:
+    owner = _MUTATION_ADAPTERS.get(name)
+    if owner is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(_import_module(owner), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_MUTATION_ADAPTERS))
+
+
+def _mutation_adapter(name: str) -> Any:
+    # Preserve the released module-level patch points and original objects.
+    return globals()[name] if name in globals() else __getattr__(name)
 
 
 GOAL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -165,7 +189,7 @@ def compact_reward(
     validate_public_safe_text("decision", decision)
     validate_public_safe_text("reason_summary", reason_summary)
     validate_public_safe_text("follow_up", follow_up)
-    payload = {
+    payload: dict[str, Any] = {
         "recorded_at": recorded_at or now_utc(),
         "decision": decision,
         "reward": reward,
@@ -273,7 +297,7 @@ def build_reward_coordination(
     follow_up = reward.get("follow_up")
     if follow_up:
         summary = f"{summary} follow_up：{follow_up}"
-    lesson = reward.get("lesson") if isinstance(reward.get("lesson"), dict) else {}
+    lesson = cast(dict[str, Any], reward.get("lesson")) if isinstance(reward.get("lesson"), dict) else {}
     if lesson:
         summary = (
             f"{summary} lesson[{lesson.get('kind')}]: "
@@ -412,6 +436,10 @@ def append_human_reward(
     state_file_override: Path | None = None,
     write_active_state_summary: bool = False,
 ) -> dict[str, Any]:
+    # Resolve before registry reads or any append. An unavailable adapter must
+    # fail before the reward index can commit; TS still owns the write check.
+    _mutation_adapter("require_prose_state_write_allowed")
+    _mutation_adapter("atomic_write_state_text")
     actor = normalize_owner_controller_actor(actor_kind, required=not dry_run)
     validate_goal_id(goal_id)
     registry = load_registry(registry_path)
@@ -456,7 +484,7 @@ def append_human_reward(
         dry_run=dry_run,
     )
     project_agent_visibility = (
-        coordination.get("project_agent_visibility")
+        cast(dict[str, Any], coordination.get("project_agent_visibility"))
         if isinstance(coordination.get("project_agent_visibility"), dict)
         else {}
     )
@@ -485,7 +513,7 @@ def append_human_reward(
                     original, str(active_state_update["entry"]),
                     updated_at=str(reward.get("recorded_at") or now_local()),
                 )
-                require_prose_state_write_allowed(
+                _mutation_adapter("require_prose_state_write_allowed")(
                     registry_path=registry_path, runtime_root=runtime_root, goal_id=goal_id,
                     state_path=state_file_to_write, original_text=original, planned_text=planned,
                 )
@@ -494,7 +522,7 @@ def append_human_reward(
             append_run_index_record(index_path, index_record)
             if state_file_to_write and state_text_to_write is not None:
                 try:
-                    atomic_write_state_text(state_file_to_write, state_text_to_write)
+                    _mutation_adapter("atomic_write_state_text")(state_file_to_write, state_text_to_write)
                 except OSError as error:
                     raise HumanRewardSummaryWriteError(str(error)) from error
                 active_state_update["written"] = True
@@ -554,10 +582,10 @@ def render_reward_markdown(payload: dict[str, Any]) -> str:
         lines.append(f"- error: {payload.get('error')}")
         return "\n".join(lines)
 
-    selected = payload.get("selected_run") if isinstance(payload.get("selected_run"), dict) else {}
-    reward = payload.get("human_reward") if isinstance(payload.get("human_reward"), dict) else {}
-    state_update = payload.get("active_state_update") if isinstance(payload.get("active_state_update"), dict) else {}
-    visibility = payload.get("project_agent_visibility") if isinstance(payload.get("project_agent_visibility"), dict) else {}
+    selected = cast(dict[str, Any], payload.get("selected_run")) if isinstance(payload.get("selected_run"), dict) else {}
+    reward = cast(dict[str, Any], payload.get("human_reward")) if isinstance(payload.get("human_reward"), dict) else {}
+    state_update = cast(dict[str, Any], payload.get("active_state_update")) if isinstance(payload.get("active_state_update"), dict) else {}
+    visibility = cast(dict[str, Any], payload.get("project_agent_visibility")) if isinstance(payload.get("project_agent_visibility"), dict) else {}
     lines.extend(
         [
             "",
@@ -587,12 +615,12 @@ def render_reward_markdown(payload: dict[str, Any]) -> str:
     )
     if reward.get("follow_up"):
         lines.append(f"- follow_up: {reward.get('follow_up')}")
-    lesson = reward.get("lesson") if isinstance(reward.get("lesson"), dict) else {}
+    lesson = cast(dict[str, Any], reward.get("lesson")) if isinstance(reward.get("lesson"), dict) else {}
     if lesson:
         lines.append(f"- lesson_kind: `{lesson.get('kind')}`")
         lines.append(f"- lesson_summary: {lesson.get('summary')}")
         for field in ("avoid", "prefer"):
-            values = lesson.get(field) if isinstance(lesson.get(field), list) else []
+            values = cast(list[Any], lesson.get(field)) if isinstance(lesson.get(field), list) else []
             if values:
                 lines.append(f"- lesson_{field}: {', '.join(str(value) for value in values[:5])}")
     if payload.get("active_state_summary"):
@@ -621,3 +649,7 @@ def render_reward_markdown(payload: dict[str, Any]) -> str:
             ]
         )
     return "\n".join(lines)
+
+
+# Keep the historical star-import surface, including the deferred adapters.
+__all__ = [name for name in globals() if not name.startswith("_")] + list(_MUTATION_ADAPTERS)

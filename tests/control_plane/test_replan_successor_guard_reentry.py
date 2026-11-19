@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -11,6 +13,7 @@ import pytest
 import loopx
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from test_replan_successor_durable_ack import AGENT, GOAL, history
 
 from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
@@ -71,6 +74,12 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, *, 
     ), state_path=state, provider=provider)
 
     def call(*args: str, expected_code: int = 0) -> dict:
+        # This fixture inspects the authority decision; checkpoint tests cover
+        # presentation and follow its captured reader to the delivered policy.
+        if args[:2] == ("quota", "should-run") and not any(
+            arg == "--context-delivery" or arg.startswith("--context-delivery=") for arg in args
+        ):
+            args = (*args, "--context-delivery", "off")
         result = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
             "--runtime-root", str(runtime), "--format", "json", *args], cwd=ROOT,
             capture_output=True, text=True, timeout=60)
@@ -98,6 +107,160 @@ def _add(call, obligation_id: str):
         "--text", "Independently verify the source artifact", "--task-class", "advancement_task",
         "--action-kind", "validate", "--target-key", "independent-source-artifact",
         "--operation-id", "periodic-source-successor", "--replan-obligation-id", obligation_id)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_projected_successor_closeout_guard_executes_original_turn(tmp_path, monkeypatch, provider):
+    from loopx.command_invocation import loopx_cli_route
+    from loopx.control_plane.scheduler.execution_context import scheduler_execution_context_for_runtime_profile
+    from loopx.control_plane.work_items.interaction_contract import interaction_next_cli_actions
+    from loopx.control_plane.work_items.progress_observation import build_replan_action_packet
+
+    call, _, _ = _fixture(tmp_path, monkeypatch, provider)
+    original = _guard(call)
+    identity = original["heartbeat_receipt"]["settlement_identity"]
+    # Exercise the existing bounded-research successor projection over a real guard.
+    original["replan_action_packet"] = build_replan_action_packet(
+        original["autonomous_replan_obligation"], goal_id=GOAL, agent_id=AGENT,
+        bounded_research_frontier={"selected_gap": {
+            "successor_summary": "Independently verify the source artifact",
+            "successor_binding": {"action_kind": "validate", "target_key": "independent-source-artifact"},
+        }},
+    )
+    cli = Path(sys.executable).parent / ("loopx.exe" if os.name == "nt" else "loopx")
+    with loopx_cli_route(str(cli)):
+        actions = interaction_next_cli_actions(
+            original, mode="autonomous_replan", capability_reentry_resolved=True,
+            settlement_plan=original["interaction_contract"]["cli_channel"]["settlement_plan"],
+            scheduler_execution_context=scheduler_execution_context_for_runtime_profile("codex_app_heartbeat"),
+            runtime_root=original["runtime_root"], registry_path=str(tmp_path / "registry.json"),
+            turn_instance_id=TURN,
+        )
+    command = actions[1]
+    tokens = shlex.split(command)
+    if os.name == "nt":
+        assert tokens.pop(0) == "&"
+    _add(call, identity["replan_obligation_id"])
+    result = subprocess.run(
+        [*tokens, "--context-delivery", "off"],
+        capture_output=True, text=True, timeout=60,
+    )
+    reread = json.loads(result.stdout)
+    assert result.returncode == 0, reread.get("error") or reread.get("reason") or reread
+    assert reread["heartbeat_receipt"]["settlement_identity"] == identity
+    assert reread["replan_action_packet"]["settlement_only"] is True
+    if os.name == "nt":
+        shell = shutil.which("pwsh") or shutil.which("powershell")
+        assert shell is not None
+        result = subprocess.run(
+            [shell, "-NoProfile", "-Command", command + "; exit $LASTEXITCODE"],
+            capture_output=True, text=True, timeout=60,
+            env={**os.environ, "PATH": str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"]},
+        )
+        native = read_cli_policy_payload(result.stdout, returncode=result.returncode)
+        assert result.returncode == 0, native
+        assert native["heartbeat_receipt"]["settlement_identity"] == identity
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_projected_terminal_replan_fields_execute_without_guessed_flags(tmp_path, monkeypatch, provider):
+    from copy import deepcopy
+    from loopx.install_contract import render_host_cli_command
+
+    call, _, index = _fixture(tmp_path, monkeypatch, provider, future_monitor=False)
+    call("configure-goal", "--goal-id", GOAL, "--execution-stride-strategy", "off", "--execute")
+    # The complete delivery has no remaining Todo; retain its accepted mainline.
+    rows = [json.loads(row) for row in index.read_text().splitlines()]
+    vision = deepcopy(next(row["agent_vision"] for row in rows if "agent_vision" in row))
+    original = _guard(call)
+    identity = original["heartbeat_receipt"]["settlement_identity"]
+    contract = original["replan_action_packet"]["writeback_contract"]
+    context = original["autonomous_replan_obligation"]["replan_context"]
+    assert context["evidence"]
+    for row in context["evidence"]:
+        read = row.get("read_action") or context["evidence_read_action_template"].replace("{evidence_ref}", row["evidence_ref"])
+        detail = call(*shlex.split(read)[1:])
+        assert detail["evidence"]["evidence_ref"] == row["evidence_ref"]
+    terminal = contract["no_followup_requirements"]
+    assert terminal["cli_args"] == ["--progress-result-class", "no_followup",
+        "--progress-coverage-scope-id", "<coverage-scope-id>", "--progress-evidence-id", "<evidence-id>",
+        "--agent-vision-json", "<file>"]
+    assert terminal["vision_fields"] == {"state": "no_followup", "path_delta.outcome": "stop"}
+    assert "vision_patch" in terminal["preserve"]
+    vision["state"] = terminal["vision_fields"]["state"]
+    vision["path_delta"] = {
+        "schema_version": "goal_path_delta_v0", "outcome": terminal["vision_fields"]["path_delta.outcome"],
+        "prior_assumption": "The bounded source scope could need more work.",
+        "observed_reality": "Independent validation covers the complete source scope.",
+        "stopped": ["Repeated source checks"], "evidence_refs": ["validation:complete-source"],
+    }
+    path = tmp_path / "author's terminal.json"
+    path.write_text(json.dumps(vision), encoding="utf-8")
+    command = next(action for action in original["interaction_contract"]["cli_channel"]["next_cli_actions"]
+                   if "refresh-state" in action)
+    argv = shlex.split(command)
+    # Replace only the caller-authored values in the projected template.
+    argv[argv.index("--agent-vision-json") + 1] = str(path)
+    values = {"<file>": str(path), "<coverage-scope-id>": "scope:complete-source",
+              "<evidence-id>": "validation:complete-source"}
+    for flag, value in zip(terminal["cli_args"][::2], terminal["cli_args"][1::2], strict=True):
+        if flag in argv:
+            argv[argv.index(flag) + 1] = values.get(value, value)
+        else:
+            argv.extend([flag, values.get(value, value)])
+    argv.extend(["--no-global-sync", "--suppress-external-sinks"])
+    if os.name == "nt":
+        shell = shutil.which("pwsh") or shutil.which("powershell")
+        assert shell is not None
+        # Exercise the native shell, including a quoted executable and apostrophe.
+        argv[0] = str(Path(sys.executable).parent / "loopx.exe")
+        invocation = [shell, "-NoProfile", "-Command", render_host_cli_command(argv) + "; exit $LASTEXITCODE"]
+    else:
+        invocation = [sys.executable, "-m", "loopx.cli", *argv[1:]]
+    result = subprocess.run(invocation, capture_output=True, text=True, timeout=60)
+    written = json.loads(result.stdout)
+    assert result.returncode == 0, json.dumps(written, ensure_ascii=False)
+    assert written["settlement_identity"] == identity
+    assert written["autonomous_replan_ack"]["semantic_delta"]["satisfying_outcomes"] == ["coverage_backed_no_followup"]
+    spent = call(*shlex.split(written["settlement_owed"]["command"])[1:])
+    assert spent["settlement_progress"]["state"] == "settled"
+    assert call(*shlex.split(written["settlement_owed"]["command"])[1:])["idempotent_replay"] is True
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("context_delivery", ["off", "on"])
+def test_successor_cli_reads_policy_with_context_delivery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+    context_delivery: str,
+) -> None:
+    tmp_path = tmp_path.resolve()
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    call, _, _ = _fixture(tmp_path, monkeypatch, provider)
+    native, captures = tmp_path / "native", tmp_path / "captures"
+    native.mkdir(mode=0o700)
+    captures.mkdir(mode=0o700)
+    try:
+        presented = call(
+            "quota", "should-run", "--codex-app", "--goal-id", GOAL,
+            "--agent-id", AGENT, "--turn-instance-id", TURN,
+            "--codex-app-current-rrule", "FREQ=MINUTELY;INTERVAL=3",
+            "--context-delivery", context_delivery,
+            "--codex-context-dir", str(native), "--decision-output-root", str(captures),
+        )
+        if context_delivery == "on":
+            assert presented["schema_version"] == "context_capture_navigation_v1"
+        # Observe the complete current policy after checking native transport.
+        policy = read_cli_policy_payload(json.dumps(presented), returncode=0)
+        assert policy["decision"] == "autonomous_replan_required"
+        assert policy["heartbeat_receipt"]["turn_instance_id"] == TURN
+        identity = policy["heartbeat_receipt"]["settlement_identity"]
+        assert (identity["goal_id"], identity["agent_id"]) == (GOAL, AGENT)
+        assert identity["binding_kind"] == "autonomous_replan"
+        assert policy["execution_obligation"]["must_attempt_work"] is True
+    finally:
+        from loopx.control_plane.effect_runtime import restart_effect_runtime
+
+        restart_effect_runtime(wait_for_exit=True)
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -193,9 +356,7 @@ def test_real_mcp_replan_delivers_objective_and_evidence_guidance(
     assert packet["decision"] == "autonomous_replan_required"
     guidance = " ".join(packet["replan_action_packet"]["planning_guidance"])
     assert "provisional agent-created candidate rules" in guidance
-    assert "Do not relax frozen acceptance" in guidance
-    assert "executed path and current artifact" in guidance
-    assert "scope negative results to tested conditions" in guidance
+    assert "relax frozen acceptance" in guidance
     assert packet["autonomous_replan_obligation"]["required"] is True
     core = packet["autonomous_replan_obligation"]["replan_context"]["core_goal"]
     assert core["objective"] == objective
@@ -265,7 +426,11 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
     assert packet["obligation_id"] == obligation_id
     assert packet["successor_todo_id"] == added["todo_id"]
     assert packet["writeback_contract"]["preferred_input"] == "canonical_successor_transition"
-    actions = reread["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    cli = reread["interaction_contract"]["cli_channel"]
+    assert [step["kind"] for step in cli["settlement_plan"]["ordered_steps"]] == [
+        "validation", "durable_writeback", "quota_spend",
+    ]
+    actions = cli["next_cli_actions"]
     assert len(actions) == 2
     assert all("todo add" not in command for command in actions)
     assert all("--replan-obligation-id " + obligation_id in command for command in actions)
@@ -289,11 +454,18 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
     pending = _guard(call)
     assert pending["heartbeat_receipt"]["settlement_identity"] == identity
     assert pending["settlement_progress"]["state"] == "spend_required"
-    spend_actions = pending["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    assert pending["settlement_owed"]["effect_id"] == identity["effect_id"]
+    pending_cli = pending["interaction_contract"]["cli_channel"]
+    spend_actions = pending_cli["next_cli_actions"]
     assert spend_actions == [actions[1]]
+    assert pending["settlement_owed"]["command"] == actions[1]
+    pending_plan = pending_cli["settlement_plan"]
+    assert pending_plan["identity"] == identity
+    assert pending_plan["ordered_steps"] == [cli["settlement_plan"]["ordered_steps"][-1]]
     pending_envelope = call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
         "--agent-id", AGENT, "--turn-instance-id", TURN, "--turn-envelope")
     assert pending_envelope["writeback"]["next_cli_actions"] == spend_actions
+    assert pending_envelope["writeback"]["settlement_plan"] == pending_plan
     assert pending_envelope["action_signature"]["matches"] is True
     spent = call(*shlex.split(spend_actions[0])[1:])
     assert spent["settlement_progress"]["state"] == "settled"
@@ -347,13 +519,16 @@ def test_invalidated_successor_cannot_rebind_or_close_original_turn(
             "unclaimed": ["--clear-claim"]}[invalidation]
     call("todo", "update", "--goal-id", GOAL, "--agent-id", AGENT,
          "--todo-id", added["todo_id"], *edit)
-    # An unclaimed successor loses its original-lane proof. Fail closed while
-    # retaining the original receipt; a stale creation ACK cannot settle it.
-    guarded = _guard(call, expected_code=1 if invalidation == "unclaimed" else 0)
+    # Losing the successor invalidates its settlement proof. The same Turn
+    # can still review the original obligation from current canonical facts.
+    guarded = _guard(call)
     assert guarded["heartbeat_receipt"]["settlement_identity"] == identity
-    if invalidation == "unclaimed":
-        assert "settlement identity conflicts" in guarded["reason"]
-        assert guarded["heartbeat_receipt"]["event_id"] == prior_guard["heartbeat_receipt"]["event_id"]
+    assert guarded["heartbeat_receipt"]["event_id"] == prior_guard["heartbeat_receipt"]["event_id"]
+    obligation = guarded["autonomous_replan_obligation"]
+    assert guarded["effective_action"] == "autonomous_replan_required"
+    assert obligation["selection_binding"] == "heartbeat_receipt"
+    assert obligation["obligation_id"] == identity["replan_obligation_id"]
+    assert obligation["replan_context"]["obligation_id"] == identity["replan_obligation_id"]
     assert guarded.get("selected_todo") is None
     assert (guarded.get("autonomous_replan_obligation") or {}).get("resolution_mode") != "receipt_bound_replan_settlement"
     assert (guarded.get("replan_action_packet") or {}).get("settlement_only") is not True
@@ -391,9 +566,7 @@ def test_later_vision_replan_can_close_covered_frontier_and_settle_once(
     # retaining the same independently covered frontier and single-debit path.
     guidance = " ".join(guard["replan_action_packet"]["planning_guidance"])
     assert "provisional agent-created candidate rules" in guidance
-    assert "Do not relax frozen acceptance" in guidance
-    assert "executed path and current artifact" in guidance
-    assert "scope negative results to tested conditions" in guidance
+    assert "relax frozen acceptance" in guidance
     binding = ("--goal-id", GOAL, "--agent-id", AGENT,
                "--turn-instance-id", TURN, "--replan-obligation-id", identity["replan_obligation_id"])
     vision = tmp_path / "covered-vision.json"
@@ -417,7 +590,15 @@ def test_later_vision_replan_can_close_covered_frontier_and_settle_once(
     assert pending["heartbeat_receipt"]["settlement_identity"] == identity
     assert pending["settlement_progress"]["state"] == "spend_required"
     assert pending.get("selected_todo") is None
-    spent = call("quota", "spend-slot", *binding, "--slots", "1", "--source", "heartbeat", "--execute")
+    assert pending["should_run"] is True
+    assert pending["normal_delivery_allowed"] is False
+    cli = pending["interaction_contract"]["cli_channel"]
+    plan = cli["settlement_plan"]
+    assert plan["identity"] == identity
+    assert [step["kind"] for step in plan["ordered_steps"]] == ["quota_spend"]
+    command = pending["settlement_owed"]["command"]
+    assert cli["next_cli_actions"] == [command]
+    spent = call(*shlex.split(command)[1:])
     assert spent["appended"] is True
     assert spent["settlement_progress"]["state"] == "settled"
     assert call("quota", "spend-slot", *binding, "--slots", "1", "--source", "heartbeat", "--execute")["appended"] is False

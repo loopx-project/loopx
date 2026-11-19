@@ -298,6 +298,19 @@ canonical acceptance 与当前 Todo 精确详情读取。普通产品 heartbeat 
 R1/R4/R5 与 S11，本 RFC 不隐式开启新的 acceptance policy。下一完整切片应让既有
 结构化 criterion 穿过任务切换和重启，在同一 owner 拒绝覆盖丢失并使过期证据失效。
 
+**支撑成果检查点：** [默认成果细化](goal-outcome-refinement-v0.zh-CN.md) 在同一验收
+归属内提出累计要求与有据 Agent 自查，复用内联工作上下文和既有 frontier replan。
+默认能力不新增开关，旧开关仍只控制可执行检查。自查不能绕过已配置检查，也不能
+结清根 Goal。本切片覆盖只增要求、File／SQLite 恢复和可执行研究续行一致性；
+一般替代、全局收口、跨 Agent 转交及 S11 模型／benchmark 采用仍未完成。这是
+明确披露的默认指导变化，不代表完整 R4 合同已取得资格。
+
+[Goal 契约演化提案](goal-contract-evolution-v0.zh-CN.md)在这些既有 owner 下组合
+当前目标修订与支撑要求演化。绑定来源的变更集保留原始意图和版本历史，逐效果
+检查权限，原子发布相互关联的变化，并识别受影响 peer，不等待全员屏障。记录
+存储及有界决策上下文服从该语义边界。当前本机模板提交仍较窄；本提案不启用
+通用替代，也不证明模型使用。其 E1–E9、M1–M3 细化既有 R4/R5 验收工作。
+
 ### 3.8 失效证据与受影响消费者
 
 恢复和工作切换须保留 §3.7 中不同观察的含义。当前 `work_context.complete` 表示
@@ -934,6 +947,11 @@ Goal 回执及 fence。不能删除 control 字段或只回滚其中一个 owner
 Acceptance 与 operational-objective commit 不是第一个 runtime 切片；它们需要真实
 需求证据和单独评审的 automated policy/verifier contract。Permission 扩张或越出
 root intent 不能自动 commit，除非 Goal 创建时已经精确委托该 class。
+
+新增提案中的[当前执行目标切片](goal-outcome-refinement-v0.zh-CN.md#current-operating-objective)
+用 owner 显式应用与各 Agent 独立采用处理过期声明，不开启根意图、验收或权限的
+自动修改。既有不可变 work-template intent 及其 revision 语义不变；执行目标
+历史使用独立版本合同，不把旧 `intent_basis` 回执追认为新权威。
 
 ## 11. 验证矩阵
 

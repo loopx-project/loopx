@@ -43,6 +43,40 @@ The core repository intentionally avoids domain logic. A data experiment goal,
 a note-maintenance goal, and a harness self-improvement goal should share the
 same runtime and contract, but use different adapters.
 
+## Source content, knowledge and accepted constraints
+
+Repository knowledge and retrieved memory may evolve. A source path, familiar
+filename or `bootstrap --goal-doc` declaration does not make its contents an
+immutable contract, enable architecture scanning, or authorize new obligations.
+Memory providers own retrieval and revision/freshness; existing acceptance and
+authority owners decide which constraints apply. Repository memory and semantic
+preference adapters remain advisory under their existing application contracts.
+
+For an explicitly pinned local source, the existing private Goal registry may
+include `sha256` beside `path` in `authority_sources`. This is the SHA-256 of the
+accepted **file bytes**, distinct from a redacted source-reference hash or the
+registry witness. `loopx check` and the status health collector verify only such
+pins, using the existing Goal diagnostic scope. Changed, missing or unreadable
+content is reported without changing documents, registry locks or memory.
+Unpinned sources retain their previous behavior. Bootstrap never generates a
+pin or discovers authority from specification filenames.
+
+To recover, restore the accepted file bytes, or separately review the source
+change and update its explicit private registry pin under the existing registry
+write authority. Rerun `loopx check` and read back Goal health. Current document
+text, an Agent note or recalled memory cannot approve that update. This bounded
+integrity adapter does not parse source policy, infer approval, freeze knowledge,
+or introduce another memory provider or a new approval workflow.
+
+中文：仓库知识与召回记忆可以持续更新。文件名、来源路径或 `--goal-doc` 声明不会
+自动把正文升级为不可变合同，也不启用架构扫描。检索与新鲜度由既有 memory provider
+负责；哪些约束生效仍归既有验收和权限 owner。只有在私有 Goal registry 的
+`authority_sources` 中显式为 `path` 设置文件字节 `sha256` 时，check/status 才校验该
+固定版本；它与来源引用的脱敏哈希、registry witness 不同。普通来源行为不变，
+bootstrap 不自动加锁或发现权限。校验不修改文件、记忆或摘要。恢复时还原已接受的
+字节，或在既有写入权限下单独评审来源变更并更新 pin，再回读健康状态；当前正文、
+Agent 声明和记忆不能自行批准换锁。此边界不新增 memory provider、源码政策或审批流。
+
 ## Control Plane As Effect Interpreter
 
 The six layers are not only storage surfaces. Together they interpret one

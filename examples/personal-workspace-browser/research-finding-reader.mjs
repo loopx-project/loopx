@@ -1,0 +1,257 @@
+import assert from "node:assert/strict";
+import {execFileSync} from "node:child_process";
+import {mkdtemp, readFile, rm} from "node:fs/promises";
+import {tmpdir} from "node:os";
+import {resolve} from "node:path";
+import {resolveTestPython} from "../../scripts/test-python.mjs";
+import {outputDir, repoRoot} from "./fixture.mjs";
+import {analysisReadback, startHistoryOwner} from "./research-history.mjs";
+
+// Public synthetic documents through the production history HTTP/SQLite owner.
+// No model, solver, scientific score or live Goal is involved.
+export function writeFindingReaderFixture(path) {
+  execFileSync(resolveTestPython(), ["-c", `
+import json, sys
+from pathlib import Path
+from loopx.capabilities.explore.result_log import build_explore_node_event, build_explore_finding_event
+goal='synthetic-finding-reading'
+profile=dict(metric='quality',unit='points',higher_is_better=True,comparison_scope='validation:fixed',input_revision='inputs-v1',evaluation_ref='evaluator:outcome-v1')
+capture=dict(binding=dict(goal_id=goal,agent_id='synthetic-researcher',todo_id='todo_comparison',turn_instance_id='turn-comparison'),
+    decision=dict(schema_version='work_yardstick_decision_v0',target=dict(summary='在相同成本下提高可验证质量',scope='固定输入与原有正确性约束',acceptance_ref='acceptance:quality-v1'),
+    authoritative=profile,proxy={**profile,'metric':'screening','evaluation_ref':'evaluator:local-v1'},counterevidence_refs=['result:synthetic-19'],prior_finding_id=None,
+    next_action=dict(method_id='method:direct-check',reason='代理顺序与实际结果相反；下一次直接核对成果指标',cost_bound='一次独立检查，不绕过正确性要求')))
+events=[build_explore_node_event(goal_id=goal,node_id='question',title='合成研究：质量、延迟和未知成本应如何一起判断？',recorded_at='2026-01-01T00:00:00Z')]
+for index in range(20):
+    status='refuted' if index%7==0 else 'tentative' if index%4==0 else 'confirmed'
+    observation=f'观测 {index+1}：质量下降而延迟改善，仍不能据此断言完整收益。'
+    observation+=' 保留失败候选与完整成本未知；下一步需要在相同条件下核对。'*3
+    outcome='replan' if index%3==0 else 'wait' if index%3==2 else 'continue'
+    change=f'第 {index+1} 轮：'+['核对相同输入下的成本，补齐缺失观测后再判断收益。', '保留已确认的质量回退，转向检查输入差异。', '等待独立测量；当前证据仍不足以确定下一步。'][index%3]
+    summary=f'Input revision: input:{"a"*64} Applicability: 固定合成样本；不是生产评测。 Observation: {observation} Interpretation: Outcome: {outcome} changed: - {change} stopped: - 不把局部改善当整体收益 retained: - 保留负结果与原始版本'
+    events.append(build_explore_finding_event(goal_id=goal,node_id='question',finding_id=f'finding-{index}',
+        title=f'比较 {index+1}：质量、延迟与采用版本的核对 · quality, latency and retained candidate',
+        status=status,summary=summary,evidence_refs=['result:synthetic-'+str(index)],recorded_at=f'2026-01-01T{index+1:02}:00:00Z',
+        **(dict(agent_id='synthetic-researcher',work_yardstick=capture) if index==19 else {})))
+events.append(build_explore_node_event(goal_id=goal,node_id='blocked',title='来源暂不可用的研究问题',status='blocked',blocked_reason='无法读取评测来源，当前结果未知。',recorded_at='2026-01-02T00:00:00Z'))
+events.append(build_explore_node_event(goal_id=goal,node_id='single',title='仅有一条结论的问题',recorded_at='2026-01-02T01:00:00Z'))
+events.append(build_explore_finding_event(goal_id=goal,node_id='single',finding_id='single-finding',title='原始观测',summary='一条完整的原始结论。',status='tentative',recorded_at='2026-01-02T01:00:00Z'))
+for index in range(4):
+    node=f'independent-{index}'
+    events.append(build_explore_node_event(goal_id=goal,node_id=node,title='合成研究：质量、延迟和未知成本应如何一起判断？',recorded_at='2026-01-01T00:00:00Z'))
+    events.append(build_explore_finding_event(goal_id=goal,node_id=node,finding_id=f'other-{index}',title='同名独立问题的记录',status='refuted',
+        summary='Input revision: synthetic Applicability: independent sample Observation: no valid comparison Interpretation: Outcome: stop stopped: - 当前样本无法支持比较结论',recorded_at=f'2026-01-01T00:{index+1:02}:00Z'))
+Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成研究 · 结论阅读','events':events},ensure_ascii=False))
+`, path], {cwd: repoRoot});
+}
+
+export const researchFindingReaderScenario = {
+  id: "research-finding-reader",
+  async run({browser, collectCoverage}) {
+    const temporary = await mkdtemp(resolve(tmpdir(), "loopx-finding-reading-"));
+    let owner, page;
+    try {
+      const fixture = resolve(temporary, "capture.json");
+      writeFindingReaderFixture(fixture);
+      const capture = JSON.parse(await readFile(fixture, "utf8"));
+      const eventId = id => capture.events.find(event => event.event_kind === "finding" && event.result_id === id).event_id;
+      owner = await startHistoryOwner(fixture);
+      page = await browser.newPage({viewport: {width: 1440, height: 900}, hasTouch: true});
+      if (collectCoverage) await page.coverage.startJSCoverage({resetOnNavigation: false});
+      const url = new URL("/chat/?goalId=synthetic-finding-reading&view=research&research_goal=synthetic-finding-reading&research_node=question&statusUrl=%2Fstatus.json", owner.base).href;
+      await page.goto(url, {waitUntil: "domcontentloaded"});
+      const history = page.locator(".research-history");
+      const reader = history.locator(".research-history-detail");
+      const article = reader.locator(".research-recorded-finding");
+      const picker = reader.getByRole("combobox", {name: "选择问题结论", exact: true});
+      await picker.waitFor();
+      assert.equal(await page.getByText("开启研究模式", {exact: true}).count(), 0, "The read-only capture does not expose a configuration action");
+      assert.equal(await picker.locator("option").count(), 20, "Every finding remains directly selectable");
+      assert.equal(await article.count(), 1, "A dense question presents one full document, not twenty stacked documents");
+      assert.equal(await picker.inputValue(), eventId("finding-19"));
+      await page.waitForURL(/research_finding=finding-19/);
+      assert.match(await reader.locator(".research-finding-exceptions").innerText(), /已反驳 3.*暂定结论 4/);
+      assert.equal(await history.locator(".research-history-canvas").isVisible(), false, "The selected text leads; history is available on demand");
+      await page.screenshot({path: resolve(outputDir, "research-finding-reader-desktop.png"), animations: "disabled"});
+      await page.locator(".personal-channel-scroll").evaluate(element => element.scrollTop = 0);
+      await page.screenshot({path: resolve(outputDir, "research-finding-reader-first-viewport.png"), animations: "disabled"});
+
+      const yardstick = article.locator(".work-yardstick-readback");
+      assert.equal(await yardstick.count(), 1, "The production SQLite history retains the optional decision");
+      assert.equal(await yardstick.evaluate(element => element.open), false, "Detailed scope does not crowd the first viewport");
+      await yardstick.locator(":scope > summary").click();
+      assert.match(await yardstick.innerText(), /代理顺序与实际结果相反.*下一次直接核对成果指标/s);
+      assert.match(await yardstick.innerText(), /evaluator:outcome-v1.*evaluator:local-v1/s);
+      assert.match(await yardstick.innerText(), /result:synthetic-19.*todo_comparison/s);
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({width, height: 900});
+        await yardstick.scrollIntoViewIfNeeded();
+        assert((await reader.evaluate(element => element.scrollWidth - element.clientWidth)) <= 1, "Scoped decision fits the reading width");
+        await page.screenshot({path: resolve(outputDir, `work-yardstick-readback-${width}.png`), animations: "disabled"});
+      }
+      await yardstick.locator(":scope > summary").click();
+      await page.setViewportSize({width: 1440, height: 900});
+
+      await picker.selectOption(eventId("finding-0"));
+      assert.match(await article.innerText(), /已反驳/);
+      assert.match(await article.innerText(), /观测 1：质量下降而延迟改善/);
+      const completeObservation = await article.locator(".research-finding-sections dd").first().innerText();
+      assert.equal(completeObservation.split("保留失败候选").length - 1, 3, "Selected long prose is complete");
+      await page.reload({waitUntil: "domcontentloaded"});
+      await picker.waitFor();
+      assert.equal(await picker.inputValue(), eventId("finding-0"), "Reload keeps the exact finding, not the latest one");
+      await reader.getByRole("button", {name: "下一条结论", exact: true}).click();
+      assert.equal(await picker.inputValue(), eventId("finding-1"));
+      await page.goBack();
+      await page.waitForFunction(() => new URL(location.href).searchParams.get("research_finding") === "finding-0");
+      assert.equal(await picker.inputValue(), eventId("finding-0"), "Back restores the prior finding");
+
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({width, height: 900});
+        const sources = article.locator(".research-finding-sources");
+        await sources.locator(":scope > summary").click();
+        const original = sources.locator(":scope > details");
+        if (!(await original.evaluate(element => element.open))) await original.locator(":scope > summary").click();
+        assert.match(await sources.innerText(), /Input revision: input:a{64}/, "The writer's complete original remains reachable");
+        assert.match(await sources.innerText(), /result:synthetic-0/);
+        const geometry = await reader.evaluate(element => ({font: parseFloat(getComputedStyle(element.querySelector(".research-finding-sections dd")).fontSize),
+          sourceFont: parseFloat(getComputedStyle(element.querySelector(".research-finding-sources code")).fontSize), overflow: element.scrollWidth - element.clientWidth, maxHeight: getComputedStyle(element).maxHeight}));
+        assert(geometry.font >= 16 && geometry.sourceFont >= 14 && geometry.overflow <= 1 && geometry.maxHeight === "none", "Expanded content is normal reading text without clipping or a fixed-height text wall");
+        await page.screenshot({path: resolve(outputDir, `research-finding-reader-detail-${width}.png`), animations: "disabled"});
+        await sources.locator(":scope > summary").click();
+      }
+      await reader.getByRole("button", {name: "下一条结论", exact: true}).focus();
+      await page.keyboard.press("Enter");
+      assert.equal(await picker.inputValue(), eventId("finding-1"), "The complete collection works by keyboard");
+      await reader.getByRole("button", {name: "上一条结论", exact: true}).tap();
+      assert.equal(await picker.inputValue(), eventId("finding-0"));
+      await reader.getByRole("button", {name: "下一条结论", exact: true}).tap();
+      assert.equal(await picker.inputValue(), eventId("finding-1"), "Narrow touch navigation keeps the selected record identity");
+      await page.screenshot({path: resolve(outputDir, "research-finding-reader-phone.png"), animations: "disabled"});
+      await history.locator(".research-history-context > summary").click();
+      assert.equal(await history.locator(".research-history-canvas").isVisible(), true);
+      await reader.getByRole("button", {name: "回到全图", exact: true}).click();
+      assert.equal(await reader.count(), 0, "Returning restores the original full history");
+      assert.equal(new URL(page.url()).searchParams.has("research_finding"), false);
+
+      // A decision is an exact historical finding, even when twenty decisions
+      // belong to one question. Opening it must not substitute the latest one.
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({width, height: 900});
+        const group = history.locator(".research-trail-question").first();
+        assert.equal(await group.locator("h4").innerText(), "合成研究：质量、延迟和未知成本应如何一起判断？");
+        assert.match(await group.locator("header").innerText(), /20 条决策记录.*已反驳 3.*暂定结论 4/s);
+        const decisions = group.locator(".research-trail-list button");
+        // Returning from an older finding expands its question to that exact
+        // decision; research-history owns the default three-record view.
+        if (width === 1440) assert.ok(await decisions.evaluateAll(nodes => nodes.some(node => node === document.activeElement
+          && /比较 2：/.test(node.getAttribute("aria-label") ?? ""))), "Returning keeps the decision just read in view and focused");
+        await group.scrollIntoViewIfNeeded();
+        await page.screenshot({path: resolve(outputDir, `research-decision-groups-${width}.png`), animations: "disabled"});
+        const older = decisions.nth(1);
+        assert.match(await older.getAttribute("aria-label"), /比较 19：/);
+        await older.focus();
+        await page.keyboard.press("Enter");
+        await picker.waitFor();
+        assert.equal(await picker.inputValue(), eventId("finding-18"), "An older decision opens its own finding, not the question's latest one");
+        assert.match(await article.innerText(), /观测 19：/);
+        const heading = await article.getByRole("heading").boundingBox();
+        const viewport = await page.locator(".personal-channel-scroll").boundingBox();
+        assert(heading && viewport && heading.y >= viewport.y && heading.y + heading.height <= 900,
+          `Opening a long finding starts with its heading visible at ${width}px`);
+        await page.screenshot({path: resolve(outputDir, `research-decision-reader-${width}.png`), animations: "disabled"});
+        await page.reload({waitUntil: "domcontentloaded"});
+        await picker.waitFor();
+        assert.equal(await picker.inputValue(), eventId("finding-18"), "Reload retains the decision's exact finding");
+        await reader.press("Escape");
+
+        await group.getByRole("button", {name: /显示更早记录/}).click();
+        const expandedCount = await decisions.count();
+        const earlier = decisions.nth(7);
+        assert.match(await earlier.getAttribute("aria-label"), /比较 13：/);
+        assert((await group.evaluate(element => element.scrollWidth - element.clientWidth)) <= 1, "Grouped records fit narrow screens");
+        await page.screenshot({path: resolve(outputDir, `research-decision-expanded-${width}.png`), animations: "disabled"});
+        await earlier.tap();
+        await picker.waitFor();
+        assert.equal(await picker.inputValue(), eventId("finding-12"));
+        assert.match(await article.innerText(), /观测 13：/);
+        await reader.press("Escape");
+        await reader.waitFor({state: "detached"});
+        assert.equal(await decisions.count(), expandedCount, "Returning keeps the expanded decision collection");
+        assert(await earlier.evaluate(element => element === document.activeElement), "Escape returns keyboard focus to the exact decision");
+        await page.goBack();
+        await picker.waitFor();
+        assert.equal(await picker.inputValue(), eventId("finding-12"), "Back restores the chosen historical decision");
+        await reader.press("Escape");
+      }
+
+      const questionGroups = history.locator(".research-trail-question");
+      assert.equal(await questionGroups.count(), 3, "Default paging counts questions, not raw decisions");
+      assert.equal(await questionGroups.nth(0).locator("h4").innerText(), await questionGroups.nth(1).locator("h4").innerText(),
+        "Identical titles from different question IDs remain separate groups");
+      await history.getByRole("button", {name: /显示更多问题/}).click();
+      assert.equal(await questionGroups.count(), 5, "Every independent question remains reachable");
+      assert.match(await questionGroups.last().innerText(), /1 条决策记录.*已反驳 1.*停止/s);
+      await history.getByRole("button", {name: /^中段 ·/}).click();
+      assert.equal(await questionGroups.count(), 1, "Time filtering applies before grouping");
+      assert.match(await questionGroups.first().locator("header").innerText(), /8 条决策记录/);
+      await history.getByRole("button", {name: "全部时段", exact: true}).click();
+
+      await page.goto(url.replace("research_node=question", "research_node=blocked"));
+      await reader.waitFor();
+      assert.match(await reader.innerText(), /无法读取评测来源，当前结果未知/);
+      assert.equal(await article.count(), 0, "No finding is invented for an unavailable source");
+      await page.goto(url + "&research_finding=absent");
+      await picker.waitFor();
+      assert.equal(await article.count(), 0, "An unknown explicit finding does not silently open a different record");
+      assert.match(await reader.innerText(), /找不到所选结论/);
+      await picker.selectOption(eventId("finding-4"));
+      assert.match(await article.innerText(), /暂定结论/);
+      await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "en"));
+      await page.reload({waitUntil: "domcontentloaded"});
+      await reader.getByRole("combobox", {name: "Choose a question finding", exact: true}).waitFor();
+      assert.match(await article.innerText(), /Tentative/);
+      assert.match(await article.innerText(), /观测 5/, "Changing interface language reads the original; it does not rewrite it");
+      await page.goto(url.replace("research_node=question", "research_node=single"));
+      await reader.waitFor();
+      assert.equal(await article.count(), 1);
+      assert.equal(await reader.getByRole("combobox").count(), 0, "A single finding needs no selector or disabled navigation");
+      assert.match(await article.innerText(), /一条完整的原始结论/);
+      // Analysis remains scoped by its existing pack owner, not the open node.
+      // This presentation-only read fixture must expose the actual chosen scope
+      // before its action, even while whole-history metrics are collapsed.
+      let analysisWrites = 0;
+      await page.route("**/api/chat/research-analysis?*", route => {
+        if (route.request().method() !== "GET") {analysisWrites++; return route.abort();}
+        const selected = new URL(route.request().url()).searchParams.get("pack_id")?.[0] ?? "a";
+        const snapshot = analysisReadback(selected); snapshot.pack.result = null; snapshot.pack.job = null;
+        snapshot.pack.config.output_language = new URL(route.request().url()).searchParams.get("output_language");
+        return route.fulfill({json: snapshot});
+      });
+      await page.goto(url);
+      const scope = history.locator(".research-analysis-scope");
+      await scope.filter({hasText: /^Analysis scope · Synthetic analysis A$/}).waitFor();
+      assert.equal(await history.locator(".research-history-context").evaluate(element => element.open), false);
+      await history.locator(".research-history-context > summary").click();
+      await history.getByRole("combobox", {name: "Evaluation scope", exact: true}).selectOption("b".repeat(64));
+      await scope.filter({hasText: /^Analysis scope · Synthetic analysis B$/}).waitFor();
+      assert(await scope.evaluate(element => element.scrollWidth <= element.clientWidth + 1), "The chosen analysis scope remains readable in a narrow focused view");
+      await history.locator(".research-history-context > summary").click();
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({width, height: 900});
+        await page.locator(".personal-channel-scroll").evaluate(element => element.scrollTop = 0);
+        await page.screenshot({path: resolve(outputDir, `research-finding-reader-scope-${width}.png`), animations: "disabled"});
+      }
+      assert.equal(analysisWrites, 0, "Reading and choosing the displayed scope cannot dispatch analysis");
+      const readback = await (await page.request.get(`${owner.base}/fixture/readback`)).json();
+      assert(readback.source_unchanged && readback.mutation_attempts === 0, "Reading, switching and recovery have no execution or source-write effect");
+      return {coverageEntries: collectCoverage ? await page.coverage.stopJSCoverage() : [], note: "real-owner dense/small/unavailable finding selection, complete original, negative states and exact reload/Back focus"};
+    } catch (error) {
+      if (page && !page.isClosed()) await page.screenshot({path: resolve(outputDir, "research-finding-reader-failed.png")});
+      throw error;
+    } finally {
+      await page?.close();
+      await owner?.close();
+      await rm(temporary, {recursive: true, force: true});
+    }
+  },
+};

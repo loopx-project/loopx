@@ -130,8 +130,20 @@ only when the current contract permits final scope closeout. Ordinary completion
 retains `active_goal` continuation without creating
 an artificial successor. Its command has the condition
 `todo_deliverable_complete`; required validation is never conditional or waived.
-Qualified `in_flight_continuation` leaves unfinished work open and omits ordinary
-completion rather than pretending the deliverable passed.
+Qualified `in_flight_continuation` leaves unfinished work open with its original
+declaration. Its plan retains the conditional completion command: execute it only
+when the original deliverable independently passes acceptance. Completed work or
+a changed route uses `semantic_closeout` with an evidence-linked vision decision
+on the same Turn; no fresh guard or binding is needed. Projecting a command does
+not execute it or establish acceptance.
+
+Successful Turn-bound ordinary completion returns verified settlement progress
+and, while writeback remains due, the existing same-identity settlement plan and
+next writeback command. That material-closeout plan includes the shared vision
+authoring schema; callers need not reconstruct identities or guess a JSON
+format after completion. CLI Markdown shows the verified progress and next
+writeback command; JSON carries the full plan and authoring schema. This grants
+no new execution or terminal authority.
 
 The shared Todo summary keeps missing-successor diagnostics and counts, but its
 warning is review guidance, not an obligation to create a successor or terminate
@@ -140,6 +152,16 @@ frontier; continue existing work or replan while scope remains. An empty queue
 alone does not certify final scope closeout. Graph validation, empty-frontier
 replan and terminal proof remain governed by their existing typed rules. This
 guidance change is shared by CLI, status and quota readback.
+
+When a captured replan creates a successor, use the writeback reader's
+`successor_binding_args` on `todo add --replan-obligation-id ...`. The original
+Turn and Goal incarnation are checked before creation. The creation receipt
+returns that Turn's settlement plan instead of an immediate stop action; finish
+its validation/writeback/accounting before ending. The successor remains open
+and needs a later admission for execution. No guard reentry is required.
+An unbound legacy add retains its existing end-of-heartbeat receipt; it does not
+invent an original Turn. This binding is an authoring affordance, not a new
+requirement to create successor work.
 
 If final closeout is attempted before writeback/accounting, CLI JSON and Markdown
 return that same recovery plan. Supplied registry/runtime, project/state routes

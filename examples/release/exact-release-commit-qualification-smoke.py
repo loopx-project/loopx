@@ -59,6 +59,7 @@ def summary(qualification_id: str) -> dict[str, object]:
             "install_passed": True,
             "upgrade_passed": True,
             "host_passed": True,
+            "packaged_frontend_passed": True,
         },
         "public_boundary": {"scanned_path_count": 1, "violation_count": 0},
         "doubao_actual_default": {

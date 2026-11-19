@@ -13,13 +13,15 @@ export interface NativeChildReportAdmission extends JsonObject {
 }
 
 /** Consume committed admission facts, not a whitelist of current status labels.
- * Identity and phase must first be verified by the settlement readback owner. */
+ * Identity, phase and any semantic replan obligation must first be verified by
+ * the settlement readback owner. */
 export function nativeChildReportAdmission(
   guardDetails: JsonObject,
   guardStatus: unknown,
   effectId: string,
   phase: ReceiptBoundReplayPhase,
   closeoutStarted: boolean,
+  semanticReplanObligationId: string | null = null,
 ): NativeChildReportAdmission {
   const projectionAbsent = ["must_attempt_work", "delivery_allowed", "quiet_noop_allowed"]
     .every((field) => !Object.hasOwn(guardDetails, field));
@@ -29,9 +31,12 @@ export function nativeChildReportAdmission(
     (guardStatus === "normal_run" || guardStatus === "turn_run_once") &&
     (guardDetails.ok === undefined || guardDetails.ok === true) &&
     (guardDetails.should_run === undefined || guardDetails.should_run === true);
+  const workRouteAdmitted = guardDetails.delivery_allowed === true ||
+    (guardDetails.delivery_allowed === false && guardDetails.interaction_mode === "autonomous_replan" &&
+      semanticReplanObligationId !== null);
   const admitted = legacyAdmission || (
     guardDetails.ok === true && guardDetails.should_run === true &&
-    guardDetails.must_attempt_work === true && guardDetails.delivery_allowed === true &&
+    guardDetails.must_attempt_work === true && workRouteAdmitted &&
     guardDetails.quiet_noop_allowed === false
   );
   const open = phase === "open" && !closeoutStarted;

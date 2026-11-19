@@ -10,6 +10,8 @@ type ReviewState = "PENDING" | "COMMENTED" | "APPROVED" | "CHANGES_REQUESTED" | 
 type Opinion = {id: number; login: string; state: ReviewState; head: string; time: number};
 type Review = Opinion & {submittedAt: string | null; url: string};
 const states = new Set<ReviewState>(["PENDING", "COMMENTED", "APPROVED", "CHANGES_REQUESTED", "DISMISSED"]);
+// GitHub associations, not a reviewer-name allowlist or evidence of approval.
+const repositoryReviewers = new Set(["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"]);
 function fail(message: string): never { throw new EffectRuntimeRequestError(message); }
 function oid(value: unknown): string {
   const result = requireNonEmptyString(value, "review commit").toLowerCase();
@@ -30,6 +32,40 @@ function effectiveOpinions<T extends Opinion>(reviews: readonly T[], author: str
   return [...latest.values()];
 }
 
+/** Submitted review activity covers duplicate work, independently of whether
+ * its body earns a qualified approval. Comments here are formal review events;
+ * issue comments do not enter this history. Dismissal retires only that actor. */
+function independentReview(reviews: readonly (Opinion & {source: JsonObject})[],
+  complete: boolean, author: string | null, head: string): JsonObject | undefined {
+  if (!complete || !author) return;
+  const latest = new Map<string, Opinion & {source: JsonObject}>();
+  const seen = new Set<number>();
+  for (const row of reviews) {
+    const source = row.source;
+    const id = source.review_id;
+    if (typeof id !== "number" || !Number.isSafeInteger(id) || id <= 0 || seen.has(id)
+      || !row.login || row.login !== row.login.trim()) return;
+    seen.add(id);
+    if (row.state === "PENDING") continue;
+    const submitted = typeof source.submitted_at === "string" ? parseIsoTimestamp(source.submitted_at) : null;
+    if (!submitted || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(row.head)) return;
+    const candidate = {...row, id, time: submitted.getTime()};
+    const previous = latest.get(row.login);
+    if (!previous || candidate.time > previous.time || candidate.time === previous.time && id > previous.id) {
+      latest.set(row.login, candidate);
+    }
+  }
+  const selected = [...latest.values()].filter(row => row.login !== author && row.head === head
+    && row.state !== "DISMISSED" && row.source.is_bot === false
+    && typeof row.source.association === "string" && repositoryReviewers.has(row.source.association)
+    && typeof row.source.url === "string"
+    && row.source.url.trim()).sort((a, b) => b.time - a.time || b.id - a.id)[0];
+  if (selected) return {reviewer: selected.login, association: selected.source.association,
+    state: selected.state, head_oid: head, review_id: selected.id, url: selected.source.url,
+    submitted_at: selected.source.submitted_at, source_complete: true,
+    grants_approval: false, grants_merge_authority: false};
+}
+
 /** Bodies are qualified by the adapter; history precedence has one typed owner.
  * Queue indices are local positions, never GitHub review identifiers. */
 export function selectPrReviewConclusion(value: unknown): JsonObject {
@@ -37,7 +73,7 @@ export function selectPrReviewConclusion(value: unknown): JsonObject {
   if (!Array.isArray(request.reviews) || !request.reviews.length) return fail("review history must be nonempty");
   const history = request.reviews;
   const conclusions = new Map<number, JsonObject>();
-  const reviews: Opinion[] = history.map((value, index) => {
+  const reviews = history.map((value, index) => {
     const row = requireJsonObject(value, "review opinion");
     const state = row.state as ReviewState;
     if (!states.has(state)) return fail("unknown GitHub review state");
@@ -46,7 +82,7 @@ export function selectPrReviewConclusion(value: unknown): JsonObject {
     // The adapter supplies newest-first rows; equal-time ties retain its order.
     const id = history.length - index;
     conclusions.set(id, requireJsonObject(row.conclusion, "qualified review conclusion"));
-    return {id, login: row.login.toLowerCase(), state, head: row.head.toLowerCase(), time: row.time};
+    return {id, login: row.login.toLowerCase(), state, head: row.head.toLowerCase(), time: row.time, source: row};
   });
   const author = typeof request.author === "string" ? request.author.toLowerCase() : null;
   const head = requireNonEmptyString(request.head, "current head").toLowerCase();
@@ -58,7 +94,8 @@ export function selectPrReviewConclusion(value: unknown): JsonObject {
     || conclusions.get(row.id)!.valid === true && conclusions.get(row.id)!.verdict === "REQUEST_CHANGES"))
     ?? effective.find(row => row.head === head && conclusions.get(row.id)!.valid === true)
     ?? effective[0] ?? reviews[0];
-  return {index: history.length - selected.id};
+  const independent = independentReview(reviews, request.reviews_complete === true, author, head);
+  return {index: history.length - selected.id, ...(independent ? {independent_review: independent} : {})};
 }
 
 export function planPrReviewApprovalCloseout(value: unknown): JsonObject {

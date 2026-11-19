@@ -70,6 +70,8 @@ COORDINATION_STATE_CONTRACT: Final = _freeze({'schema_version': 'loopx_coordinat
                                  'consecutive_no_change',
                                  'material_change',
                                  'material_change_generation',
+                                 'material_change_scope',
+                                 'material_change_scope_generations',
                                  'max_no_change_before_replan',
                                  'monitor_effect_id',
                                  'note',

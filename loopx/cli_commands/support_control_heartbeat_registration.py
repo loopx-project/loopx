@@ -93,6 +93,11 @@ def register_heartbeat_control_commands(
         ),
     )
     heartbeat_prompt_parser.add_argument(
+        "--antigravity_app",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    heartbeat_prompt_parser.add_argument(
         "--visible-goal-host",
         choices=["traex-cli"],
         help=(
@@ -109,6 +114,7 @@ def register_heartbeat_control_commands(
             "codex_app_ssh",
             "codex_cli",
             "trae_app",
+            "antigravity_app",
             "generic_cli",
             "claude_code",
             "kunluncode",
@@ -159,18 +165,44 @@ def register_heartbeat_control_commands(
 
     heartbeat_prompt_parser.add_argument(
         "--decision-output-root",
-        help="Save full local decisions without changing the display; requires thin mode and an explicit host-owned Turn ID.",
+        help="Save full local decisions without changing the display; requires thin mode and an explicit host-owned Turn ID, "
+             "or codex-context-root with the normal per-wake LOOPX_TURN binding.",
     )
 
-    heartbeat_prompt_parser.add_argument(
+    turn_view = heartbeat_prompt_parser.add_mutually_exclusive_group()
+    turn_view.add_argument(
         "--turn-envelope",
         action="store_true",
-        help="Explicitly use the short TurnEnvelope dispatcher; requires --decision-output-root. Capture alone keeps the ordinary full decision.",
+        help="Compatibility input for saved thin prompts with --decision-output-root. "
+             "Generated guards use the complete v1 work contract.",
     )
+    turn_view.add_argument("--complete-turn", action="store_true",
+        help="Compatibility input for saved thin host-owned prompts. "
+             "Generated guards use the complete v1 work contract.")
 
     heartbeat_prompt_parser.add_argument(
         "--decision-handoff-socket",
         help="Retain the explicit private Host handoff on generated guards; requires --decision-output-root.",
+    )
+
+    from ..control_plane.turn_driver.codex_context import CONTEXT_DELIVERY_SETTINGS, DELTA_DELIVERY_SETTINGS
+
+    heartbeat_prompt_parser.add_argument("--context-delivery", choices=CONTEXT_DELIVERY_SETTINGS,
+        help="Auto presents context progressively across hosts, with independent Delta on supported continuity hosts. Off alone keeps full delivery. Pair off with --delta-delivery auto to compare complete documents. Legacy on uses existing declarations: "
+             "Codex App heartbeat/resume/recovery (--codex-app), or the Codex benchmark heartbeat worker "
+             "(generic_cli plus its explicit heartbeat worker settings). On rejects missing, contradictory or unsupported modes. "
+             "Enabled supported calls choose private context/capture paths automatically unless overridden. A directory alone never enables it; declarations are not retention proof.")
+    heartbeat_prompt_parser.add_argument("--delta-delivery", choices=DELTA_DELIVERY_SETTINGS,
+        help="Independently disable cross-Turn Delta or inherit supported-host automatic reuse. This choice is independent of progressive presentation.")
+    context_location = heartbeat_prompt_parser.add_mutually_exclusive_group()
+    context_location.add_argument(
+        "--codex-context-dir",
+        help="Carry the opt-in native context directory into guards; the enabled capture root is automatic unless overridden. Does not install hooks or enable tracing.",
+    )
+    context_location.add_argument(
+        "--codex-context-root",
+        help="Carry a shared private native context root into guards, isolated per native session; "
+             "the enabled capture root is automatic unless overridden. Use quota context-config to render native setup.",
     )
 
     heartbeat_prequota_parser = subparsers.add_parser(

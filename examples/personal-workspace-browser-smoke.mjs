@@ -1,6 +1,12 @@
 #!/usr/bin/env node
+import {managedAgentSessionsScenario} from "./personal-workspace-browser/managed-agent-sessions.mjs";
+import {reportDownloadScenario} from "./personal-workspace-browser/report-download.mjs";
 import { selectScenarioShard } from "./personal-workspace-browser/shard.mjs";
-import {roomWorkScenario} from "./personal-workspace-browser/room-work.mjs";
+import {completedHistoryIsolationScenario} from "./personal-workspace-browser/completed-history-isolation.mjs";
+import {researchWorkerReadbackScenario} from "./personal-workspace-browser/research-worker-readback.mjs";
+import {researchSourceRecoveryScenario} from "./personal-workspace-browser/research-source-recovery.ts";
+import {researchTurnCostsScenario} from "./personal-workspace-browser/research-turn-costs.mjs";
+import {researchToolContextScenario} from "./personal-workspace-browser/research-tool-context.mjs";
 import { zcodeGoalScenario } from "./personal-workspace-browser/zcode-goal.mjs";
 import {goalWorkspaceCreateScenario} from "./personal-workspace-browser/goal-workspace-create.mjs";
 import {agentModelSelectionScenario} from "./personal-workspace-browser/agent-model-selection.mjs";
@@ -24,13 +30,17 @@ import {goalHierarchyScenario} from "./personal-workspace-browser/goal-hierarchy
 import {configurationBackupScenario} from "./personal-workspace-browser/configuration-backup.mjs";
 import {attentionUserActionScenario} from "./personal-workspace-browser/attention-user-action.mjs";
 import {prReviewAgentOrderScenario} from "./personal-workspace-browser/pr-review-agent-order.mjs";
+import {conversationDocumentRequestScenario} from "./personal-workspace-browser/conversation-document-request.mjs";
 import {conversationImageRequestScenario} from "./personal-workspace-browser/conversation-image-request.mjs";
 import {externalEvidenceReadbackScenario} from "./personal-workspace-browser/external-evidence-readback.mjs";
 import {exploreCompositionOwnerScenario} from "./personal-workspace-browser/explore-composition-owner.mjs";
 // Isolated browser acceptance scenarios for the personal Agent workspace.
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   launchBrowser,
@@ -67,7 +77,15 @@ import { teamEvidenceScenario } from "./personal-workspace-browser/team-evidence
 import { taskInspectorReturnScenario } from "./personal-workspace-browser/task-inspector-return.mjs";
 import { managedGoalResultsScenario } from "./personal-workspace-browser/managed-goal-results.mjs";
 import { researchResultsScenario } from "./personal-workspace-browser/research-results.mjs";
+import { researchModeScenario } from "./personal-workspace-browser/research-mode.mjs";
 import { researchHistoryScenario } from "./personal-workspace-browser/research-history.mjs";
+import { researchRealBenchmarkScenario } from "./personal-workspace-browser/research-real-benchmark.mjs";
+import { researchFindingReaderScenario } from "./personal-workspace-browser/research-finding-reader.mjs";
+import { researchRecordSearchScenario } from "./personal-workspace-browser/research-record-search.mjs";
+import { researchRouteReadingScenario } from "./personal-workspace-browser/research-route-reading.mjs";
+import { researchDisplayLanguageScenario } from "./personal-workspace-browser/research-display-language.mjs";
+import { researchMeasurementsScenario } from "./personal-workspace-browser/research-measurements.mjs";
+import { researchNativeReadingScenario } from "./personal-workspace-browser/research-native-reading.mjs";
 import { loopxModeScenario } from "./personal-workspace-browser/loopx-mode.mjs";
 import { progressiveLoadingScenario } from "./personal-workspace-browser/progressive-loading.mjs";
 import { stewardJourneyScenario } from "./personal-workspace-browser/steward-journey.mjs";
@@ -89,6 +107,7 @@ import { goalShowcaseScenario } from "./personal-workspace-browser/goal-showcase
 import { stewardGroupTriggerScenario } from "./personal-workspace-browser/steward-group-trigger.mjs";
 
 import { goalDraftScenario } from "./personal-workspace-browser/goal-draft.mjs";
+import { goalDraftLiveScenario } from "./personal-workspace-browser/goal-draft-live.mjs";
 import { larkCliMissingScenario } from "./personal-workspace-browser/lark-cli-missing.mjs";
 import { executionServiceOfflineScenario } from "./personal-workspace-browser/execution-service-offline.mjs";
 
@@ -96,6 +115,7 @@ import { conversationStartupScenario } from "./personal-workspace-browser/conver
 import { chatTodoProposalScenario } from "./personal-workspace-browser/chat-todo-proposal.mjs";
 
 const scenarioCatalog = [conversationStartupScenario,goalDraftScenario, capabilityScopeScenario, stewardGroupTriggerScenario, conversationInputScenario, goalActivityScenario, conversationActivityScenario, navigationSortingScenario, automationCadenceScenario, chatRecoveryScenario, composerSessionAdmissionScenario, attachedHostFollowUpScenario, conversationReturnContinuityScenario, conversationHistoryRecoveryScenario, answerPresentationScenario, loopxModeScenario, teamEvidenceScenario, managedGoalResultsScenario, typedActionsScenario, teamPlanScenario, stewardJourneyScenario, executionChipScenario, stewardModelSettingsScenario, progressiveLoadingScenario, workspaceLocaleScenario, newestDraftScenario, larkCliMissingScenario, executionServiceOfflineScenario, chatTodoProposalScenario];
+scenarioCatalog.push(reportDownloadScenario);
 scenarioCatalog.push(confirmedOperationsScenario);
 scenarioCatalog.push(proposalReadbackScopeScenario);
 scenarioCatalog.push(goalDeletionScenario);
@@ -103,6 +123,7 @@ scenarioCatalog.push(conversationImageRequestScenario);
 scenarioCatalog.push(workspaceViewRecoveryScenario);
 scenarioCatalog.push(monitorReadbackScenario);
 scenarioCatalog.push(blockedReasonReadbackScenario);
+scenarioCatalog.push(researchWorkerReadbackScenario);
 scenarioCatalog.push(turnStepsScenario);
 scenarioCatalog.push(goalWorkMapScenario);
 scenarioCatalog.push(goalMastheadScenario);
@@ -117,10 +138,20 @@ scenarioCatalog.push(configurationBackupScenario);
 scenarioCatalog.push(exploreCompositionOwnerScenario);
 scenarioCatalog.push(attentionUserActionScenario);
 scenarioCatalog.push(researchResultsScenario);
+scenarioCatalog.push(researchRealBenchmarkScenario);
+scenarioCatalog.push(researchSourceRecoveryScenario);
 scenarioCatalog.push(researchHistoryScenario);
+scenarioCatalog.push(researchMeasurementsScenario);
+scenarioCatalog.push(researchToolContextScenario, researchTurnCostsScenario);
+scenarioCatalog.push(researchNativeReadingScenario);
+scenarioCatalog.push(researchFindingReaderScenario);
+scenarioCatalog.push(researchRecordSearchScenario);
+scenarioCatalog.push(researchRouteReadingScenario);
+scenarioCatalog.push(researchDisplayLanguageScenario);
 scenarioCatalog.push(prReviewAgentOrderScenario);
 scenarioCatalog.push(taskInspectorReturnScenario);
 scenarioCatalog.push(replanCadenceScenario);
+scenarioCatalog.push(researchModeScenario);
 scenarioCatalog.push(zcodeGoalScenario);
 scenarioCatalog.push(goalWorkspaceM2Scenario);
 scenarioCatalog.push(goalWorkspaceCreateScenario);
@@ -134,16 +165,29 @@ scenarioCatalog.push(runtimeReadinessLiveScenario);
 scenarioCatalog.push(attentionNotificationsScenario);
 scenarioCatalog.push(attentionNotificationsLiveScenario);
 scenarioCatalog.push(firstGoalHomeLiveScenario);
+scenarioCatalog.push(goalDraftLiveScenario);
 scenarioCatalog.push(goalSuggestionsScenario);
 scenarioCatalog.push(goalSuggestionsLiveScenario);
-const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
+scenarioCatalog.push(managedAgentSessionsScenario);
+scenarioCatalog.push(conversationDocumentRequestScenario);
+scenarioCatalog.push(completedHistoryIsolationScenario);
 scenarioCatalog.push(agentModelSelectionScenario);
-scenarioCatalog.push(roomWorkScenario);
-const scenarios = requestedScenario
-  ? scenarioCatalog.filter((scenario) => scenario.id === requestedScenario)
-  : selectScenarioShard(scenarioCatalog, process.env.LOOPX_PERSONAL_WORKSPACE_SHARD);
+export { scenarioCatalog };
+
+export function requireBackendReadback(scenario, result) {
+  if (scenario.requiresBackendReadback && result.backendReadbackVerified !== true) {
+    throw new Error(`Required backend readback did not execute: ${scenario.id}`);
+  }
+}
 
 async function main() {
+  const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
+  const scenarios = requestedScenario
+    ? scenarioCatalog.filter((scenario) => scenario.id === requestedScenario)
+    : selectScenarioShard(scenarioCatalog, process.env.LOOPX_PERSONAL_WORKSPACE_SHARD);
+  const releaseSourcesSha256 = process.env.LOOPX_RELEASE_SOURCES_FILE
+    ? createHash("sha256").update(await readFile(process.env.LOOPX_RELEASE_SOURCES_FILE)).digest("hex")
+    : undefined;
   if (collectCoverage && packaged) {
     throw new Error("Source coverage requires the development smoke with source maps");
   }
@@ -171,10 +215,13 @@ async function main() {
           ? browser
           : { newPage: (options = {}) => browser.newPage({ locale: "zh-CN", ...options }) };
         const result = await scenario.run({ browser: scenarioBrowser, collectCoverage, url });
+        requireBackendReadback(scenario, result);
         coverageEntries.push(...result.coverageEntries);
         results[scenario.id] = {
           status: "PASS",
           note: result.note,
+          ...(scenario.requiresBackendReadback ? {backend_readback_verified: true} : {}),
+          ...(result.measurements ? {measurements: result.measurements} : {}),
           duration_ms: Date.now() - startedAt,
         };
       } catch (error) {
@@ -188,7 +235,7 @@ async function main() {
         console.log(`scenario-end=${scenario.id} duration_ms=${Date.now() - startedAt}`);
         await writeFile(
           resolve(outputDir, "acceptance-results.json"),
-          `${JSON.stringify({ shard: process.env.LOOPX_PERSONAL_WORKSPACE_SHARD, catalog_count: scenarioCatalog.length, selected: scenarios.map(scenario => scenario.id), scenarios: results }, null, 2)}\n`,
+          `${JSON.stringify({ shard: process.env.LOOPX_PERSONAL_WORKSPACE_SHARD, catalog_count: scenarioCatalog.length, release_sources_sha256: releaseSourcesSha256, selected: scenarios.map(scenario => scenario.id), scenarios: results }, null, 2)}\n`,
           "utf8",
         );
       }
@@ -211,4 +258,18 @@ async function main() {
   }
 }
 
-await main();
+// The release gate imports the same catalog without starting a server/browser.
+function isDirectEntry() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url));
+  } catch (error) {
+    // Imports from stdin or a virtual launcher can have no filesystem entry.
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return false;
+    throw error;
+  }
+}
+
+if (isDirectEntry()) {
+  await main();
+}

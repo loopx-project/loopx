@@ -222,7 +222,12 @@ def read_bounded_material_file(path: Path, max_bytes: int) -> tuple[Path, bytes,
         after = os.fstat(handle.fileno())
         resolved = path.resolve()
         current = resolved.stat()
-        identity_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+        identity_fields: tuple[str, ...] = ("st_dev", "st_ino", "st_size", "st_mtime_ns")
+        # Tolerate Windows ctime skew only with a volume and file index in every observation.
+        if os.name != "nt" or not all(
+            observed.st_dev and observed.st_ino for observed in (before, after, current)
+        ):
+            identity_fields += ("st_ctime_ns",)
         identity = tuple(getattr(before, field) for field in identity_fields)
         if len(content) != before.st_size or any(
             tuple(getattr(observed, field) for field in identity_fields) != identity

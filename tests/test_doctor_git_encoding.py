@@ -77,12 +77,17 @@ def test_trusted_release_preserves_unicode_remote_and_ref(git_repo, gbk_host):
 
 
 @pytest.fixture
-def git_output(monkeypatch, gbk_host):
+def git_output(monkeypatch, gbk_host, tmp_path):
     def install(*, returncode=0, fail_at=None):
         calls = []
+        (tmp_path / ".git").mkdir(exist_ok=True)
 
         def run(command, **kwargs):
             args = command[3:]
+            if args == ["rev-parse", "--show-toplevel"]:
+                return SimpleNamespace(
+                    returncode=0, stdout=str(tmp_path) + "\n", stderr=""
+                )
             calls.append(args)
             code = (
                 returncode[len(calls) - 1]
@@ -108,10 +113,39 @@ def git_output(monkeypatch, gbk_host):
                 f"sys.exit({code})"
             )
             return subprocess.run(
-                [sys.executable, "-c", script], check=kwargs.pop("check"), **kwargs
+                [sys.executable, "-c", script],
+                check=kwargs.pop("check", False),
+                **kwargs,
             )
 
-        monkeypatch.setattr(doctor_git, "subprocess", SimpleNamespace(run=run))
+        class FakeProcess:
+            """The fake ``run`` above already finished the query synchronously."""
+
+            def __init__(self, command, **kwargs):
+                kwargs.pop("start_new_session", None)
+                result = run(command, **kwargs)
+                self.args = command
+                self.returncode = result.returncode
+                self.stdout = getattr(result, "stdout", "")
+                self.stderr = getattr(result, "stderr", "")
+
+            def communicate(self, timeout=None):
+                return self.stdout, self.stderr
+
+            def wait(self, timeout=None):
+                return self.returncode
+
+            def poll(self):
+                return self.returncode
+
+            def kill(self):
+                return None
+
+        monkeypatch.setattr(
+            doctor_git,
+            "subprocess",
+            SimpleNamespace(run=run, Popen=FakeProcess, PIPE=subprocess.PIPE),
+        )
         return calls
 
     return install

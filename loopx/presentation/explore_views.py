@@ -16,6 +16,8 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from ..capabilities.explore.result_log import explore_mermaid_node_id
+
 EXPLORE_PRESENTATION_BUNDLE_VERSION = "loopx_explore_presentation_bundle_v0"
 EXPLORE_PRESENTATION_ASSESSMENT_VERSION = "loopx_explore_presentation_assessment_v0"
 EXPLORE_CANONICAL_VIEW_VERSION = "loopx_explore_canonical_view_v0"
@@ -291,10 +293,6 @@ def _node_depths(node_ids: set[str], parents: Mapping[str, str]) -> dict[str, in
         node_id: max(0, len(_lineage(node_id, parents, node_ids)) - 1)
         for node_id in node_ids
     }
-
-
-def _mermaid_id(value: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_]", "_", str(value))
 
 
 def _mermaid_label(value: str, *, limit: int = 60) -> str:
@@ -580,7 +578,7 @@ def build_vertical_explore_mermaid(
                     detail_limit=112,
                 )
             )
-            mermaid_id = _mermaid_id(node_id)
+            mermaid_id = explore_mermaid_node_id(node_id)
             chain.append(mermaid_id)
             lines.append(
                 f'            {mermaid_id}["{label}"]:::{_MERMAID_STATUS_CLASS.get(status, "open")}'
@@ -680,9 +678,9 @@ def build_vertical_explore_mermaid(
                     )
                 )
                 stage_lines.append(
-                    f'            {_mermaid_id(node_id)}["{label}"]:::{_MERMAID_STATUS_CLASS.get(status, "open")}'
+                    f'            {explore_mermaid_node_id(node_id)}["{label}"]:::{_MERMAID_STATUS_CLASS.get(status, "open")}'
                 )
-                lane_chain.append(_mermaid_id(node_id))
+                lane_chain.append(explore_mermaid_node_id(node_id))
             if len(lane_chain) > 1:
                 stage_lines.append(f"            {' ~~~ '.join(lane_chain)}")
             stage_lines.append("        end")
@@ -692,7 +690,7 @@ def build_vertical_explore_mermaid(
             target = str(edge.get("to_node") or "")
             label = _mermaid_label(str(edge.get("edge_type") or ""))
             stage_lines.append(
-                f"    {_mermaid_id(source)} -->|{label}| {_mermaid_id(target)}"
+                f"    {explore_mermaid_node_id(source)} -->|{label}| {explore_mermaid_node_id(target)}"
             )
         stage_lines.append(
             f"    style {role}_stage_{group_index} fill:#ffffff,stroke:#90a4ae,stroke-width:2px"
@@ -800,7 +798,7 @@ def build_vertical_explore_mermaid(
         if source not in shown_ids or target not in shown_ids:
             continue
         label = _mermaid_label(str(edge.get("edge_type") or ""))
-        lines.append(f"    {_mermaid_id(source)} -->|{label}| {_mermaid_id(target)}")
+        lines.append(f"    {explore_mermaid_node_id(source)} -->|{label}| {explore_mermaid_node_id(target)}")
     lines.append(
         f"    style {role}_timeline fill:#ffffff,stroke:#90a4ae,stroke-width:2px"
     )

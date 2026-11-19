@@ -223,6 +223,13 @@ eligible time, `--cadence` is the retry interval, `--monitor-target-key` is the
 stable idempotency key, and optional `--expires-at` is the hard stop after
 which the monitor must not catch up.
 
+When a monitor supplies `--cadence` and omits `--next-due-at`, the create
+transaction derives the first due time once. Retry the original `todo add`
+with the same `--operation-id` to recover its result. Changing an explicit
+due time under that operation ID is a conflict.
+If an older cadence-only create reports a conflict after a lost response,
+read its saved result with `todo receipt --goal-id GOAL --operation-id ID`.
+
 Public Todo updates validate the effective waiting state, not just newly supplied
 `resume_when`. Changing a Monitor-waiting Todo's status/task class or successor
 list must preserve the open advancement-task/independent-successor contract.
@@ -293,7 +300,41 @@ use `--clear-blocks-agent --global-gate`. Merely clearing scope in a multi-agent
 Goal is rejected; it must not turn an ambiguous gate into a global one.
 
 When a user gate only blocks one concrete action, add the blocked todo id with
-`unblocks_todo_id=<todo_id>`. When multiple todos share the same broad
+`unblocks_todo_id=<todo_id>`. If the gate was created first, its registered bound
+agent can attach the initial link while the gate is open:
+
+```bash
+loopx todo update --goal-id <goal-id> --role user --todo-id <gate-id> \
+  --agent-id <bound-agent> --unblocks-todo-id <agent-todo-id>
+```
+
+This is an administrative provider-CAS edit, including in `hard_lease`; it does
+not claim work or approve the gate. Optional note/evidence/reason may accompany
+the link. The target must already exist as an Agent Todo in the same provider
+snapshot and Goal, with `claimed_by` matching the gate's `bound_agent` /
+`blocks_agent`. It must be active, open or blocked, not done or superseded;
+completed/cancelled, archived and deferred work cannot receive this first link.
+The link must also describe one decision: a gate with a `decision_scope` only
+accepts a target whose `required_decision_scopes` include a scope it covers, and
+a gate without one only accepts a target that requires no scoped decision (a
+plain dependency link). A missing match is never read as a dependency.
+A target may declare no resume condition, or exactly `todo_done:<this gate>`. Any
+other condition (`todo_done:<other-id>`, `monitor_changed:<id>` even with this
+gate's id, `resume_at:<time>` or `capacity_available:<capability>`) waits for
+something approving this gate cannot satisfy, so it cannot receive this first link.
+Preview and write reject missing, inactive or out-of-scope targets without
+writing or consuming the first-link opportunity or operation ID; the same gate
+and operation ID can then be used for a valid target. Existing links, gate scope,
+actor bindings and explicit or unreleased lease proofs retain their ordinary
+admission. Complete the linked
+gate with the actual decision and evidence to consume the target's covered
+decision scopes.
+`todo_done:<gate-id>` checks dependency readiness only; it does not consume those
+scopes. If an unlinked gate was already completed, reconcile its decision through
+an explicit linked gate using the original owner evidence rather than treating
+dependency completion as approval.
+
+When multiple todos share the same broad
 `action_kind`, use the schema-backed decision-scope fields instead of relying
 on title/body token overlap:
 
@@ -475,6 +516,13 @@ Deferred todos may carry a machine-readable resume condition with
   material-change generation. The transition binds the monitor's current
   generation as a baseline, so unchanged polls, note edits, and replay of the
   same material result do not wake the todo.
+- `resume_when=monitor_changed:<monitor_todo_id>@<scope>`: the same fence,
+  narrowed to one public-safe case/run or other caller-owned scope. Record the
+  corresponding transition with `quota monitor-poll --material-change
+  --material-change-scope <scope>`. Unrelated scoped transitions may advance
+  the monitor's global generation without waking this Todo. LoopX retains up
+  to 128 distinct scope generations per Monitor and refuses a new scope after
+  that bound instead of evicting evidence for an existing wait.
 - `resume_when=resume_at:<timezone-aware-rfc3339-timestamp>`: the todo becomes
   ready at or after one exact instant. A timezone is mandatory; authoring
   normalizes equivalent offsets to UTC. Before that instant the todo remains a
@@ -497,6 +545,9 @@ On a material observation, use `quota monitor-poll --material-change
 `resume_when=monitor_changed:<monitor_todo_id>` with that independent Todo via
 `--successor-todo-id`. The resume condition—not `status=blocked`—keeps the
 waiting Todo out of runnable selection until the monitor generation advances.
+When one Monitor covers multiple cases or runs, add
+`--material-change-scope <case/run>` and use the matching
+`monitor_changed:<monitor_todo_id>@<case/run>` condition.
 Relevant command results expose the compact
 `monitor_advancement_authoring_v0` contract so an Agent can recover this
 sequence without parsing documentation prose.
@@ -546,6 +597,15 @@ loopx todo claim \
   --agent-id codex-main-control
 ```
 
+The command shown by quota for an ordinary managed claim uses `--thin`.
+The JSON receipt keeps the claim operation ID, next actions and projection
+status. When the display is current and has omitted fields, read the per-Todo
+details with `projection_outbox.detail_command`, a preview pinned to the
+reported provider revision. Run it before the revision advances; if it has advanced,
+read the current Todo or projection rather than claiming again. Explicit
+claims without `--thin` keep their full output. Pending or failed projections
+still return their recovery diagnostics inline.
+
 Old projects that do not yet have `coordination.registered_agents` are
 intentionally blocked when an agent tries to claim work. The CLI error includes
 the `register-agent --agent-id <agent-id> --execute` command so the agent or
@@ -591,6 +651,27 @@ Todo, in either personal or Goal report scope; it does not replace shared prose.
 `--next-action-basis` optionally rejects an edit planned from an older source
 read. If the basis is stale, read the current task/step and retry; if no eligible
 task is available, resolve its existing lifecycle or routing boundary first.
+A later explicit `--recommended-action` from that same Agent retires reuse of
+its older bound step. The selected Todo and its authority remain unchanged;
+another Agent's guidance does not retire the step, and ordinary derived progress
+observations preserve it. Write a fresh `--next-action` if a new task-bound step
+is needed after the explicit guidance.
+
+The same Agent's explicit retirement also remains part of the Next Action read
+fence. The typed owner hashes its existing journal source identity, so a delayed
+initial basis cannot become valid again, and repeated wording still names distinct
+committed decisions. This is an ephemeral source-facts fence, not a new persisted
+step or an execution grant; a fresh read can establish the next valid step.
+Full and retained history preserve that same decision and source identity beyond
+the recent display window. Status and quota reads therefore provide the same
+current basis for the next step write.
+
+同一 Agent 的显式步骤退休也参与 Next Action 读取依据。typed owner 对已有 journal
+来源身份计算摘要，旧的初始依据不能再次有效；即使指导文字重复，独立提交的决策也不
+混为同一依据。这不是新增持久化步骤或执行权限，新读取仍可合法写入下一步。
+完整历史与保留历史在最近展示窗口之外也保留同一决策及其来源身份，status 与 quota
+读取因而为下一步写入提供一致的当前依据。
+
 Native Turn host `next_action` remains follow-up guidance in its durable result,
 not this explicit task-step edit: completion or repair may leave no runnable
 current task. See [Next Action writeback](quota-allocation.md) for attribution,
@@ -868,6 +949,34 @@ fails closed with a typed `validation_blocked_completion` receipt instead of
 committing `done`. Todos without a declared command keep the unchanged fast
 path.
 
+Completion requests sharing a runtime root serialize validation for the same
+Todo, including requests from different completion entry points. If validation
+is still running, retry the original request once the first attempt finishes.
+If the terminal response is lost, use the reported `todo receipt` command or
+retry the same reviewed Chat proposal to recover the original operation. A
+committed completion replays its receipt without rerunning the validator. A
+missing receipt alone cannot determine whether the original writer has stopped.
+
+On POSIX, the supervisor retains the same execution lock until it stops the
+validator's process group, including when the caller exits or the validator
+leader exits with redirected descendants still running. The retry can then
+check the original completion receipt. This
+covers the caller's exit and descendants in the same process group. Windows
+continues to serialize while the caller is alive. Keep validation commands safe
+to retry. A command that already ran before a missing terminal commit may need
+to run again.
+
+共享运行时目录的完成请求按 Todo 串行执行校验，跨完成入口也使用同一把锁。校验进行
+中，可在首个请求结束后重试原操作。终态提交响应丢失时，使用返回的 `todo receipt`
+命令查询原操作，或重试同一已审核的 Chat 提案。已提交的操作直接重放回执，无需再次
+执行校验。未查到回执时，原写入仍可能在进行。
+
+在 POSIX 上，监督进程保留同一把执行锁，直到原校验进程组停止；调用方退出，或
+校验主进程退出而重定向输出的子进程仍运行时，也要完成清理。之后可重试原操作并
+检查完成回执。该机制覆盖调用方退出和同一
+进程组内的子进程。Windows 在调用方存活期间继续串行校验。校验命令应可安全
+重试。若命令已运行但终态尚未提交，重试时可能再次执行。
+
 ### Bind the first completion validator / 首次绑定完成验证
 
 An active, open canonical Todo imported without a completion validator can use
@@ -931,6 +1040,37 @@ loopx todo update \
   --reason "<public-safe deferred rationale>"
 ```
 
+For a known future eligibility time, continue useful independent work first.
+When only the timed wait remains, save recoverable progress and defer the Todo
+using the timestamp supplied by the current contract or observed service:
+
+```bash
+loopx todo update \
+  --goal-id <goal-id> \
+  --todo-id <todo_id> \
+  --agent-id <registered-agent> \
+  --status deferred \
+  --resume-when resume_at:<timezone-aware-rfc3339-timestamp> \
+  --reason "Await the observed eligibility time"
+```
+
+The ordinary lifecycle update retires the applicable execution; no separate
+lease operation is needed. Settle any validated work already performed under
+the original Turn identity, then return control to the host scheduler. Waiting
+alone is not progress or a reason to spend a slot. Do not keep a model invocation
+alive with repeated sleeps, clock reads, or unchanged progress messages. The
+scheduler can recheck current state without waking the model while the wait is
+pending. At the due time, follow the projected resume/replan and fresh admission;
+the timestamp does not itself authorize execution, reset a service cooldown,
+extend a budget, or override an explicit stop. Unknown-time observations retain
+their projected monitor contract; do not invent a retry time or successor.
+
+已知恢复时间且没有可推进的独立工作时，保存进展，通过普通 Todo 更新设置
+`deferred` 和 `resume_at`，按原 Turn 身份完成已有工作的结算，再交还宿主调度器。
+不需要单独管理租约，也不应让模型反复睡眠、读时钟或播报无变化的进度。等待本身不
+算成果、不扣额；到期只触发生命周期恢复判断，仍须按当前准入、预算和停止条件执行。
+未知时间的外部反馈沿用已有 monitor 合同，不臆造时钟或后继任务。
+
 When an open advancement slice is waiting for a monitor observation, keep it
 visible and atomically bind both the wait and an independent runnable
 successor:
@@ -940,7 +1080,7 @@ loopx todo update \
   --goal-id <goal-id> \
   --todo-id <waiting_todo_id> \
   --agent-id <registered-agent> \
-  --resume-when monitor_changed:<monitor_todo_id> \
+  --resume-when monitor_changed:<monitor_todo_id>@<case/run-scope> \
   --successor-todo-id <runnable_successor_todo_id> \
   --reason "<public-safe external-wait rationale>"
 ```
@@ -1362,3 +1502,16 @@ inventory，不依赖摘要条数或 Markdown。补 evidence 不会重新设置�
 显式执行 proof 仍严格校验。Monitor 规划/观察、ownership、routing、capability 与终态
 操作不在此 intent 内。缺失 display 不阻止 canonical 更新；提交后的正常投影恢复
 托管 Todo 展示。不支持的操作不会回退 Markdown，也不自动切换 provider 或 promotion。
+
+### Scoped User context source reads
+
+Inline work context obtains its scoped open User Todos in one canonical query.
+The existing typed reader filters scope and status before restoring complete
+selected bodies from that same snapshot. Its internal `full_text` read option
+changes presentation only; ordinary CLI inventories remain bounded, and exact
+reads, authority failures and execution admission retain their existing rules.
+It does not cache an earlier revision or grant permission from a read.
+
+内联工作上下文从同一份 canonical 快照筛选当前 Agent 的开放 User Todo，并恢复完整
+正文，避免清单之后再逐条重读。内部 `full_text` 仅影响正文展示；普通 CLI 清单仍有界，
+不缓存旧版本，也不改变精确读取、权限拒绝或执行准入规则。

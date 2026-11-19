@@ -1,6 +1,7 @@
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import type { TurnStep } from "../../data/turn-steps";
 import type { ChatProject, CollaborationReadback, LoopXModeSettings } from "../../data/chat-model";
+import type { BoundConversationTarget, ChatSessionSummary, BoundConversationSource, ChatReplyContext, ManagedConversationTarget } from "../../data/chat";
 import type { TeamPlanAppliedOutcome } from "./team-plan-preview";
 import type { ActionReviewPlan } from "../../../../../../loopx/control_plane/presentation/action_review_plan.js";
 import type { GoalAcceptanceObservation } from "../../data/goal-acceptance-observation";
@@ -112,6 +113,12 @@ export type WorkspaceConversationDirectory = {
   selectedRef: string | null;
   /** null returns the conversation to the steward scope. */
   onSelect: (projectRef: string | null) => void;
+  onOpenOriginal?: (target: BoundConversationTarget) => void;
+  /** Local manager entry discovery blocks sending, never Goal navigation. */
+  entryGate?: {unavailable: boolean; ownerLoginUnavailable?: boolean; retry: () => void};
+  bound?: { target: BoundConversationTarget; session?: ChatSessionSummary; source?: BoundConversationSource;
+    error?: string; retry: () => void };
+  managed?: {target: import("../../data/chat").ManagedConversationTarget; session?: import("../../data/chat").ChatSessionSummary; error?: string; retry: () => void};
 };
 
 export type WorkspaceTodo = WorkspaceAgentTodo & {
@@ -158,11 +165,21 @@ export type WorkspaceGoalSubagentConfiguration = {
 };
 
 export type WorkspaceGoal = {
+  sourceAccess?: {namespace: string; label: string; readOnly: true; original_goal_id?: string};
+  sourceStrategy?: {recordedAt: string; summary: string; observation?: string};
   /** Registry organization in this status source; not Agent ownership or execution dependency. */
   parentGoalId?: string | null;
   /** Bounded, safe text from this Goal's declared source document. */
   objective?: string | null;
   acceptanceObservation?: GoalAcceptanceObservation | null;
+  /** Driver readback only; it never changes Goal activation or grants work. */
+  workerObservations?: {
+    read_status: "read" | "stale" | "unreadable";
+    rows: Array<{
+      agent_id: string; status: "replan_paused" | "replan_outcome_unknown";
+      obligation_id: string; turn_instance_id: string | null; observed_at: string;
+    }>;
+  } | null;
   loadState?: "loading" | "error";
   loadError?: WorkspaceLoadError;
   activationState: "active" | "stopped";
@@ -195,6 +212,9 @@ export type WorkspaceGoal = {
   latestActivity?: string;
   needsYou?: string | null;
   needsYouBlocking?: boolean;
+  /** Exact full-source capability-action count and bounded display rows. */
+  reportReviewAttention?: WorkspaceAttention[];
+  reportReviewCount?: number;
   attentionSummary?: DigestAttentionSummary;
   nextSentence: string;
   repository?: WorkspaceRepositoryContext;
@@ -292,7 +312,7 @@ export type WorkspaceOutput = {
 };
 
 export type WorkspaceChannel = "manager" | "attention" | "running" | "outputs";
-export type WorkspaceGoalTab = "overview" | "chat" | "tasks" | "files";
+export type WorkspaceGoalTab = "overview" | "chat" | "tasks" | "research" | "files";
 
 export type WorkspaceScheduleKind = "heartbeat" | "monitor";
 
@@ -324,7 +344,11 @@ export type WorkspaceSchedule = {
 export type WorkspaceActionPreview = {
   /** Exact Todo target from the stored action, used only for display joins. */
   todoId?: string;
+  /** Stored Todo operation for result wording; never grants execution authority. */
+  todoOperation?: string;
   reviewPlan?: ActionReviewPlan;
+  /** Creation receipt address; unavailable identity never falls back to a new Goal Session. */
+  createdManagedSession?: {target?: ManagedConversationTarget; invalid?: true};
   actionKind:
     | "goal.create"
     | "goal.update"
@@ -377,11 +401,16 @@ export type WorkspaceActionPreview = {
 };
 
 export type WorkspaceMessage = {
+  queueInputCancelled?: true;
+  /** A native queue receipt, not an assistant answer or active execution. */
+  queued?: boolean;
+  replyContext?: ChatReplyContext;
   createdAt?: string;
   goalDraft?: GoalDraft | null;
   activity?: string[];
   steps?: TurnStep[];
   collaboration?: CollaborationReadback;
+  collaborations?: CollaborationReadback[];
   agentLabel?: string;
   attachments?: WorkspaceImageAttachment[];
   id: string;
@@ -407,6 +436,7 @@ export type WorkspaceReturnDelivery = {
   request_revision?: number | null;
 };
 
+// Existing attachment wire shape; MIME distinguishes images and UTF-8 documents.
 export type WorkspaceImageAttachment = {
   dataUrl: string;
   id: string;
@@ -514,7 +544,7 @@ export type WorkspaceDrawerSelection =
   | { item: WorkspaceRun; kind: "run" }
   | { item: WorkspaceOutput; kind: "output" }
   | { item: WorkspaceActionPreview; kind: "proposal" }
-  | { goalId?: string; kind: "settings"; tab?: "appearance" | "capabilities" | "language" | "lark" | "machine" | "steward" | "conversation" }
+  | { goalId?: string; kind: "settings"; scope?: "machine" | "goal"; tab?: "appearance" | "capabilities" | "language" | "lark" | "machine" | "provider" | "steward" | "conversation" | "cadence" | "ownership" | "background" }
   | {
       item: WorkspaceSchedule;
       kind: "schedule";
@@ -554,7 +584,8 @@ export type PersonalWorkspaceCallbacks = {
   onInterruptConversationTurn?: (contextId: string, turnId: string) => Promise<void>;
   onSteerConversationTurn?: (contextId: string, turnId: string, message: string, ingressId: string) => Promise<void>;
   onQueueConversationTurn?: (contextId: string, sessionId: string, message: string, ingressId: string, attachments?: WorkspaceImageAttachment[]) => Promise<void>;
-  onOpenGoal?: (goalId: string) => void | Promise<void>;
+  onObserveConversationQueue?: (contextId: string, sessionId: string) => Promise<void>;
+  onOpenGoal?: (goalId: string, managedSession?: ManagedConversationTarget) => void | Promise<void>;
   onOpenGoalView?: (tab: WorkspaceGoalTab) => void;
   onOpenRunSession?: (run: WorkspaceRun) => void | Promise<void>;
   onOpenOutput?: (output: WorkspaceOutput) => void;
@@ -605,13 +636,14 @@ export type PersonalWorkspaceCallbacks = {
   onStartLoopX?: (operation: "start" | "resume", agentId: string, goalId: string,
     settings?: LoopXModeSettings) => void;
   onSelectAgent?: (agentId: string) => void;
-  onSelectAgentModel?: (agentId: string, modelId: string) => void;
-  onSelectAgentReasoningEffort?: (agentId: string, effort: string) => void;
+  onSelectAgentModel?: (agentId: string, modelId: string) => void | Promise<void>;
+  onSelectAgentReasoningEffort?: (agentId: string, effort: string) => void | Promise<void>;
   onSelectChannel?: (channel: WorkspaceChannel) => void;
-  onSelectGoal?: (goalId: string | null, view: WorkspaceGoalTab) => void;
+  onSelectGoal?: (goalId: string | null, view: WorkspaceGoalTab, managedSession?: ManagedConversationTarget) => void;
   onSelectTodo?: (todoId: string | null) => void;
   onSelectView?: (view: WorkspaceGoalTab) => void;
-  onSelectWorkAgent?: (agentId: string | null) => void;
+  onSelectWorkAgent?: (agentId: string | null, sessionId?: string) => void;
+  onSelectWorkSession?: (sessionId: string, replace?: boolean) => void;
   onOpenNotificationSettings?: (goalId?: string) => void;
   onFetchNotificationTargets?: () => Promise<Array<{ enabled: boolean; provider: string; target_name: string }>>;
   onSetupGoalChannel?: (options: { execute: boolean; goalId: string; target: string }) => Promise<{ ok: boolean; blocker?: string; public_summary?: string; status?: string }>;

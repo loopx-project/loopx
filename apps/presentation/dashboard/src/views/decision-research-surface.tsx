@@ -1,3 +1,4 @@
+import {ContextHelp} from "../features/personal-workspace/context-help";
 import { CircleAlert, Clock3, FileSearch, ShieldCheck } from "lucide-react";
 
 import type { PresentationSurface, RunGoal } from "../data/status";
@@ -51,7 +52,7 @@ function StateBadge({ value }: { value: string }) {
 
 function TextList({ empty, items }: { empty: string; items: string[] }) {
   if (!items.length) {
-    return <p className="text-sm text-slate-500 dark:text-zinc-400">{empty}</p>;
+    return <ContextHelp label={empty}><p>{empty}</p></ContextHelp>;
   }
   return (
     <ul className="space-y-2 text-sm leading-6 text-slate-700 dark:text-zinc-300">
@@ -96,12 +97,8 @@ function ProvenanceCard({ surface, projection, zh }: {
             <StateBadge value={surface.state} />
             <Badge variant="neutral">{surface.visibility}</Badge>
           </div>
-          <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-zinc-300">
-            {zh ? "已发布研究的原始时间与来源引用；刷新页面不延长复核期限。"
-              : "Original publication times and source reference. Refreshing does not extend the review deadline."}
-          </p>
+          <ContextHelp icon={FileSearch} label={zh ? "研究来源与复核期限" : "Research source and review deadline"}><p>{zh ? "已发布研究的原始时间与来源引用；刷新页面不延长复核期限。" : "Original publication times and source reference. Refreshing does not extend the review deadline."}</p></ContextHelp>
         </div>
-        <FileSearch className="h-5 w-5 text-slate-400 dark:text-zinc-500" />
       </CardHeader>
       <CardContent>
         <dl className="grid gap-3 text-sm sm:grid-cols-2">
@@ -163,11 +160,7 @@ export function SourcePeriodMetricsCard({
       <CardHeader>
         <div>
           <CardTitle>Source-period evidence</CardTitle>
-          <p className="mt-2 text-sm text-slate-500 dark:text-zinc-400">
-            Period completeness, calculation basis, and upstream lineage stay
-            explicit. Missing values are not zero, and these rows never grant
-            ready status.
-          </p>
+          <ContextHelp label="Source-period evidence basis"><p>Period completeness, calculation basis, and upstream lineage stay explicit. Missing values are not zero, and these rows never grant ready status.</p></ContextHelp>
         </div>
         <Badge variant="neutral">{metrics.length}</Badge>
       </CardHeader>
@@ -281,10 +274,7 @@ export function SpotMarketIdentityCard({
       <CardHeader>
         <div>
           <CardTitle>Spot identity joins</CardTitle>
-          <p className="mt-2 text-sm text-slate-500 dark:text-zinc-400">
-            Contexts match pair names and assets resolve by explicit index.
-            Array position and naming canonicality never establish backing.
-          </p>
+          <ContextHelp label="Spot identity basis"><p>Contexts match pair names and assets resolve by explicit index. Array position and naming canonicality never establish backing.</p></ContextHelp>
         </div>
         <Badge variant="neutral">{identity.markets.length}</Badge>
       </CardHeader>

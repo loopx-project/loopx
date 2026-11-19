@@ -3,6 +3,8 @@ import { EffectRuntimeRequestError } from "./effect_runtime_errors.ts";
 import { isStringLiteral, type JsonObject } from "./runtime_decode.ts";
 import { decodeInteractionContract } from "./work_items/interaction_contract.ts";
 import { EffectiveAction } from "./quota/effective_action.generated.ts";
+import {BARE_SHA256_PATTERN} from "./content_digest.ts";
+import {canonicalAuthoritySha256} from "./coordination/authority_store_codec.ts";
 
 export {
   RECEIPT_BOUND_MONITOR_PHASES,
@@ -107,6 +109,7 @@ export const TURN_PROVIDER_STEP_KINDS = SETTLEMENT_STEP_KINDS.filter(
 export const SETTLEMENT_BINDING_KINDS = [
   "todo",
   "autonomous_replan",
+  "request",
   "unbound",
 ] as const;
 export type SettlementBindingKind = (typeof SETTLEMENT_BINDING_KINDS)[number];
@@ -133,6 +136,29 @@ export interface SettlementIdentityInput {
   todo_id?: string | null;
   turn_instance_id: string;
   replan_obligation_id?: string | null;
+  request_subject?: ExecutionRequestSubject | null;
+}
+
+/** Identity of already admitted work, never an execution or permission grant. */
+export interface ExecutionRequestSubject extends JsonObject {
+  request_id: string;
+  request_revision: number;
+  request_digest: string;
+  execution_scope_sha256: string;
+}
+
+export function executionRequestSubject(value: unknown): ExecutionRequestSubject | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "object" || Array.isArray(value))
+    throw new EffectRuntimeRequestError("request subject must be an object");
+  const subject = value as JsonObject;
+  const digests = ["request_id", "request_digest", "execution_scope_sha256"];
+  if (Object.keys(subject).length !== 4 || !digests.every(key =>
+    typeof subject[key] === "string" && BARE_SHA256_PATTERN.test(subject[key] as string))
+    || !Number.isSafeInteger(subject.request_revision) || Number(subject.request_revision) < 1)
+    throw new EffectRuntimeRequestError("request subject requires exact request/revision/digest/scope identity");
+  return {request_id: subject.request_id as string, request_revision: subject.request_revision as number,
+    request_digest: subject.request_digest as string, execution_scope_sha256: subject.execution_scope_sha256 as string};
 }
 
 export type SettlementIdentity = Readonly<{
@@ -140,9 +166,11 @@ export type SettlementIdentity = Readonly<{
   agent_id: string;
   turn_instance_id: string;
   effect_id: string;
+  request_subject?: ExecutionRequestSubject | null;
 } & (
   | { binding_kind: "todo"; binding_id: string; todo_id: string; replan_obligation_id: null }
   | { binding_kind: "autonomous_replan"; binding_id: string; todo_id: null; replan_obligation_id: string }
+  | { binding_kind: "request"; binding_id: string; todo_id: null; replan_obligation_id: null }
   | { binding_kind: "unbound"; binding_id: ""; todo_id: null; replan_obligation_id: null }
 )>;
 
@@ -185,6 +213,8 @@ export interface SettlementStep {
   idempotency_key_ref: string;
   expected_receipt: string;
   command_template?: string;
+  /** Same admitted writeback, with the existing semantic boundary selected. */
+  semantic_closeout_command_template?: string;
   command_condition?: "todo_deliverable_complete";
   vision_authoring?: JsonObject;
   conditional?: true;
@@ -268,6 +298,7 @@ function requireFailureKind(value: unknown): SettlementFailureKind {
 export function effectProgramFromOrderedSteps(
   orderedSteps: unknown,
   executionMode: unknown = null,
+  includeRaw = true,
 ): EffectProgram {
   const steps: EffectStep[] = [];
   if (Array.isArray(orderedSteps)) {
@@ -287,7 +318,7 @@ export function effectProgramFromOrderedSteps(
         kind: nullableTruthyString(step.kind),
         command: nullableTruthyString(commandValue),
         purpose: nullableTruthyString(step.purpose),
-        raw: { ...step },
+        raw: includeRaw ? { ...step } : {},
       });
     }
   }
@@ -295,6 +326,18 @@ export function effectProgramFromOrderedSteps(
     steps,
     execution_mode: nullableTruthyString(executionMode),
   };
+}
+
+/** The retired summary format is not an execution or signature input.
+ * Presence (including empty/null) is explicit unsupported input, never a cue
+ * to strip a signed dimension and reinterpret the remaining record.
+ */
+export function assertSupportedQuotaPacket(packet: JsonObject): void {
+  for (const source of [packet, asObject(packet.contract_capsule)]) {
+    if (Object.hasOwn(source, "protocol_action_packet")) {
+      throw new EffectRuntimeRequestError("unsupported format: protocol_action_packet; use a fresh typed quota decision");
+    }
+  }
 }
 
 export function interpretQuotaShouldRunPacket(
@@ -306,6 +349,7 @@ export function interpretQuotaShouldRunPacket(
   } = {},
 ): EffectTurn<JsonObject, string> {
   const packet = asObject(packetValue);
+  assertSupportedQuotaPacket(packet);
   const interaction = decodeInteractionContract(packet.interaction_contract);
   assertActionSelectionConsistency(packet, interaction);
   const lane = asObject(packet.work_lane_contract);
@@ -315,7 +359,6 @@ export function interpretQuotaShouldRunPacket(
   const failureHint = asObject(codexApp.failure_hint);
   const cliChannel = asObject(interaction.cli_channel);
   const gate = asObject(packet.capability_gate);
-  const protocol = asObject(packet.protocol_action_packet);
   const actionPortfolio = asObject(packet.action_portfolio);
   const planningHorizon = asObject(packet.planning_horizon);
   return {
@@ -344,7 +387,7 @@ export function interpretQuotaShouldRunPacket(
         Object.keys(actionPortfolio).length > 0 ? actionPortfolio : null,
       planning_horizon:
         Object.keys(planningHorizon).length > 0 ? planningHorizon : null,
-      protocol_summary: nullableTruthyString(protocol.summary),
+      protocol_summary: null,
     },
     next_effect: {
       cli_actions: stringArray(cliChannel.next_cli_actions),
@@ -427,15 +470,18 @@ export function settlementIdentity(
   const todoId = truthyString(input.todo_id).trim() || null;
   const replanObligationId =
     truthyString(input.replan_obligation_id).trim() || null;
-  if (todoId && replanObligationId) {
+  const requestSubject = executionRequestSubject(input.request_subject);
+  if ([todoId, replanObligationId, requestSubject].filter(Boolean).length > 1) {
     throw new EffectRuntimeRequestError(
-      "settlement identity cannot bind both todo_id and replan_obligation_id",
+      requestSubject ? "settlement identity requires one Todo, replan obligation or request subject"
+        : "settlement identity cannot bind both todo_id and replan_obligation_id",
     );
   }
   const common = {
     goal_id: input.goal_id,
     agent_id: input.agent_id,
     turn_instance_id: input.turn_instance_id,
+    ...(requestSubject ? {request_subject: requestSubject} : {}),
   };
   if (todoId) {
     return {
@@ -457,6 +503,12 @@ export function settlementIdentity(
       effect_id: `${input.goal_id}:${input.agent_id}:autonomous_replan:${replanObligationId}:${input.turn_instance_id}`,
     };
   }
+  if (requestSubject) {
+    const bindingId = canonicalAuthoritySha256(requestSubject);
+    return {...common, todo_id: null, replan_obligation_id: null,
+      binding_kind: "request", binding_id: bindingId,
+      effect_id: `${input.goal_id}:${input.agent_id}:request:${bindingId}:${input.turn_instance_id}`};
+  }
   return {
     ...common,
     todo_id: null,
@@ -471,7 +523,7 @@ export function settlementIdentityPayload(
   identityValue: SettlementIdentityInput,
 ): JsonObject {
   const identity = settlementIdentity(identityValue);
-  if (identity.todo_id || !identity.replan_obligation_id) {
+  if (identity.todo_id || identity.binding_kind === "unbound") {
     return {
       schema_version: SETTLEMENT_IDENTITY_SCHEMA_VERSION,
       effect_id: identity.effect_id,
@@ -489,7 +541,8 @@ export function settlementIdentityPayload(
     turn_instance_id: identity.turn_instance_id,
     binding_kind: identity.binding_kind,
     binding_id: identity.binding_id,
-    replan_obligation_id: identity.replan_obligation_id,
+    ...(identity.request_subject ? {request_subject: identity.request_subject}
+      : {replan_obligation_id: identity.replan_obligation_id}),
   };
 }
 
@@ -608,6 +661,7 @@ export function settlementStepPayload(step: SettlementStep): JsonObject {
     expected_receipt: step.expected_receipt,
   };
   if (step.command_template) payload.command_template = step.command_template;
+  if (step.semantic_closeout_command_template) payload.semantic_closeout_command_template = step.semantic_closeout_command_template;
   if (step.command_condition) payload.command_condition = step.command_condition;
   if (step.conditional) payload.conditional = true;
   if (step.vision_authoring) payload.vision_authoring = step.vision_authoring;
@@ -696,7 +750,10 @@ export function settlementIdentityFromPlan(
   const replanObligationId = truthyString(
     identityObject.replan_obligation_id,
   ).trim();
-  if (todoId && replanObligationId) {
+  let requestSubject: ExecutionRequestSubject | null;
+  try { requestSubject = executionRequestSubject(identityObject.request_subject); }
+  catch (error) { return settlementFailed({kind: "invalid_identity", step_kind: "validation", reason: (error as Error).message}); }
+  if ([todoId, replanObligationId, requestSubject].filter(Boolean).length > 1) {
     return settlementFailed({
       kind: "invalid_identity",
       step_kind: "validation",
@@ -710,6 +767,7 @@ export function settlementIdentityFromPlan(
     todo_id: todoId || null,
     turn_instance_id: turnInstanceId,
     replan_obligation_id: replanObligationId || null,
+    request_subject: requestSubject,
   });
   // Unbound identities remain useful for non-executable plans, never settlement.
   if (built.binding_kind === "unbound") {

@@ -14,8 +14,10 @@ changing the default quota path.
 
 One qualification case runs the same actor against two public-safe inputs:
 
-1. `full_packet`: the current full `quota should-run` decision;
-2. `candidate_packet`: the candidate `loopx_turn_envelope_v0` projection.
+1. `full_packet`: the full `quota should-run` decision or an explicitly supplied
+   complete `loopx_turn_envelope_v1` source;
+2. `candidate_packet`: a `loopx_turn_envelope_v0` projection or a complete v1
+   source from that same decision.
 
 Both arms share `qualification_id` and `actor_ref`. Before either actor call,
 the pair runner verifies that the candidate's action signature matches and its
@@ -23,7 +25,20 @@ the pair runner verifies that the candidate's action signature matches and its
 unrelated candidate from producing a false equivalence result. The runner also
 recomputes both semantic signature documents instead of trusting the
 candidate's stored `matches` flag; a field ablation therefore fails before any
-provider call. The comparator then checks these hard behavior dimensions:
+provider call. A complete source instead passes the production version,
+content-integrity and source-integrity reader. A raw full packet is composed
+through the existing owner for comparison; a captured v1 full packet retains
+its recorded host and settlement binding without recomposition. The pair must
+match the entire composed source, including unknown fields and exact numeric
+values, as well as its action semantics. Invalid new versions never fall back
+to the historical reader.
+
+Schema and confidentiality checks for **both** arms finish before the first
+actor call, regardless of arm order. A private or malformed second input must
+not consume a first provider call. The validated requests are then used by the
+existing actor/result/receipt path. These checks qualify packet fidelity and
+the no-write boundary; they do not prove model understanding or task outcomes.
+The comparator checks these hard behavior dimensions:
 
 - decision: execute, wait, ask the user, or stop;
 - selected todo;
@@ -106,7 +121,11 @@ matches.
 
 The store is never populated automatically. It contains no model response,
 conversation, credential metadata, or candidate packet; a current candidate is
-rebuilt in memory when the case is loaded into a corpus. Store receipts expose
+rebuilt in memory when the case is loaded into a corpus. Raw quota cases retain
+the existing v0 candidate by default. An explicitly retained complete capture
+stays complete in both arms, preserving its original binding. This support
+does not change the actual-default portfolio, frozen state matrix, scenario
+scoring, live-run permissions or promotion requirements. Store receipts expose
 only case id, digest, created/idempotent status, and count, never the packet or
 local path.
 
@@ -160,6 +179,14 @@ response-contract metadata are validated locally but are not repeated in the
 model prompt. The actor disables provider deep thinking for this deterministic
 extraction task and reserves 4096 output tokens so the bounded semantic
 contract is not constrained by the former 1200-token response budget.
+
+The adapter selects field-reading instructions from the validated packet
+schema, independently of the experimental arm label. A complete v1 source uses
+the full-source `interaction_contract`, `agent_identity`, `selected_todo`,
+`goal_boundary` and `scheduler_hint` paths even in `candidate_packet`; a v0
+projection retains its historical paths. The original packet reaches the
+provider unchanged, without an adapter-generated action projection or answer
+key.
 
 The model must derive `selected_todo_id` from the canonical selected-todo field:
 top-level `selected_todo.todo_id` in a full packet or
@@ -301,6 +328,49 @@ target. The terminal-settlement scenario requires the model to validate a real
 fixture artifact, then follow the quota-projected `durable_writeback ->
 quota_spend -> terminal_closeout` sequence under one stable effect identity; a
 premature no-follow-up or spend-before-writeback fails.
+The plan's conditional ordinary Todo completion may run during validation,
+before writeback and spend. The actor requires the original Goal/Agent/Todo/Turn
+arguments and its committed validation receipt; ordinary completion does not
+qualify terminal closeout. `--no-follow-up` still requires both matching
+writeback and spend receipts. Later receipts advance the original Turn's plan;
+they do not discard its identity-bound command templates. This follows the shared
+[quota-bound completion contract](../canonical-terminal-review.md#quota-bound-cli-completion)
+without changing the portfolio, repeats, contrasts or settlement order.
+The terminal actor observes the complete disposable fixture before a refresh
+command. An exit-one JSON rejection with `ok=false` and `appended=false` is
+returned to the same model only when an independent file/metadata comparison
+also finds the fixture unchanged. This covers ordinary vision-input correction
+as well as the typed pure progress-input decoder; error wording is not an
+admission rule. Complete vision JSON is structurally checked by the existing
+typed owner before refresh acquires a history lock. Inline patches still use
+current history, and state-dependent validation remains in the normal writer.
+File replacement, same-byte rewrites, permissions, added or
+removed files, unsupported nodes and symlinks fail closed. These observations
+apply to this isolated synthetic fixture, not production rollback or external
+effect recovery.
+The model may correct its input within the original ten-call budget. Rejected
+calls remain counted and commit no settlement step; the actor never retries a
+command or restarts a scenario automatically. Other non-zero results, changed
+fixture state and identity, route or ordering violations still fail immediately.
+The shared CLI transport retains the process exit code and transient stdout;
+even valid committed-receipt JSON cannot bypass a non-zero failure. A false
+`appended` field alone cannot authorize recovery or spend. Raw stdout, fixture
+contents and fingerprints are never copied into durable qualification receipts.
+After the proof is read, a terminal actor may author a project draft in
+`.scratch/` using the existing OS-isolated shell. Original fixture inputs and
+authority stores remain protected; private host data and external networking
+are unavailable. LoopX mutations still use one direct, identity-bound CLI call
+at a time; the draft shell cannot invoke LoopX. The original ten-call limit and
+all committed receipt checks remain. Explicit foreign routes fail rather than
+being repaired. After the initial quota guard, completion, writeback and spend
+must retain the fixture Turn. The initial guard's host Turn reference is rebound
+by the existing CLI bridge; it is not a foreign-Turn refusal test. Failure
+receipts retain fixture-owned codes rather than echoing CLI errors or
+model-authored JSON.
+The shared plan also names the existing scope-input requirements for typed
+`no_followup` and `exploration_exhausted` observations. A Todo's completion is
+not itself evidence that a coverage scope is exhausted; the CLI still rejects
+missing coverage inputs before writeback.
 
 For selected-Todo and terminal qualification,
 a standalone `cat` may read up to eight workspace-confined files, optionally

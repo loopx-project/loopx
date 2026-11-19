@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shlex
 import tempfile
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterable
 
 from harbor.agents.installed.base import with_prompt_template
@@ -17,10 +18,12 @@ from harbor.models.trajectories import FinalMetrics, Trajectory
 from harbor.utils.trajectory_utils import format_trajectory_json
 
 from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_strategy
+from loopx.control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL
 
 from .codex_offline import MODEL_CATALOG_REMOTE, CodexOffline, stage_portable_python
 from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, turn_envelope_receipt
-from .layout import _ROOT, _SRC, _CONTROL, _CODEX_HOME
+from .layout import _ROOT, _SRC, _CONTROL, _CODEX_HOME, _REGISTRY, _LOOPX_RUNTIME
+from .scheduler import phase_work_reserve
 
 
 _PYTHON = f"{_ROOT}/python"
@@ -30,8 +33,6 @@ _PROFILE_HOME = f"{_PROFILE}/home"
 _SHARED_CODEX_HOME = f"{_PROFILE}/codex-home"
 _SHARED_SKILLS = f"{_SHARED_CODEX_HOME}/skills"
 _CLI = f"{_PROFILE}/bin/loopx"
-_REGISTRY = f"{_CONTROL}/registry.json"
-_LOOPX_RUNTIME = f"{_ROOT}/state/runtime"
 _SCHEDULER_STATE = f"{_CONTROL}/scheduler-state.json"
 _TASK_DOC = f"{_CONTROL}/task.md"
 _BASH_ENV = f"{_CONTROL}/bash-env"
@@ -42,11 +43,13 @@ _AGENT_ID = "benchmark-agent"
 
 
 # Non-LoopX workers stage only these paths; keep this list closed over the
-# loopx-internal import closure of native_codex_goal.py (see the import test).
+# native Host and process-cleanup imports (see the staged-source test).
 NATIVE_GOAL_SOURCE_PATHS = (
     "benchmark/runtime",
     "loopx/capabilities/benchmark_toolkit/native_codex_goal.py",
+    "loopx/capabilities/benchmark_toolkit/native_codex_process.py",
     "loopx/control_plane/turn_driver/codex_stdio.py",
+    "loopx/extensions/process_runtime.py",
 )
 
 
@@ -57,7 +60,7 @@ class BenchmarkCodex(CodexOffline):
         self,
         *args,
         execution_mode="heartbeat",
-        iteration_context="fresh",
+        iteration_context=None,
         codex_sandbox="danger-full-access",
         validation_command=None,
         turn_timeout_sec=None,
@@ -71,30 +74,51 @@ class BenchmarkCodex(CodexOffline):
         task_entry=None,
         planning_timeout_sec=None,
         turn_envelope=False,
+        context_delivery=None,
+        native_child_limit=None,
+        provider_request_admission=False,
         native_goal_continue=False,
         task_objective=None,
+        execution_observation=None,
         goal_id=_GOAL_ID,
         agent_id=_AGENT_ID,
         defer_codex_home=False,
+        complete_turn=False,
         **kwargs,
     ):
+        if "research_loop" in kwargs:
+            raise ValueError(
+                "research_loop has been removed; remove it from the adapter kwargs. "
+                "Use ordinary Goal/Todo planning, choose stride_strategy independently, "
+                "and select execution_observation='local_probe' only when needed."
+            )
         if isinstance(validation_command, str):
             raise ValueError("validation_command must be an argv list, not shell text")
         self.execution = Execution(
             execution_mode,
             iteration_context,
             codex_sandbox,
-            float(scheduler_timeout_sec) - 160 if turn_timeout_sec is None else float(turn_timeout_sec),
+            None if turn_timeout_sec is None else float(turn_timeout_sec),
             validation_command if validation_command is not None else (),
             task_entry,
             turn_envelope,
+            context_delivery,
+            native_child_limit,
+            complete_turn=complete_turn,
         )
+        if type(provider_request_admission) is not bool:
+            raise ValueError("provider_request_admission must be a boolean opt-in")
+        if provider_request_admission and self.execution.mode != "heartbeat":
+            raise ValueError("provider_request_admission requires heartbeat execution")
+        self.provider_request_admission = provider_request_admission
         if planning_timeout_sec is not None:
             raise ValueError(
                 "Remove planning_timeout_sec; planning shares scheduler_timeout_sec with execution"
             )
         self.scheduler_timeout = int(scheduler_timeout_sec)
-        if self.scheduler_timeout <= self.execution.timeout_seconds + 150:
+        if self.scheduler_timeout <= 0:
+            raise ValueError("scheduler timeout must be positive")
+        if self.execution.timeout_seconds is not None and self.scheduler_timeout <= self.execution.timeout_seconds + 150:
             raise ValueError(
                 "scheduler timeout must exceed turn timeout plus cleanup allowance"
             )
@@ -121,7 +145,15 @@ class BenchmarkCodex(CodexOffline):
                 raise ValueError("planning_horizon_goal must be a boolean")
             if not self.execution.uses_loopx:
                 raise ValueError("planning_horizon_goal requires a LoopX execution mode")
-        self.planning_horizon_goal = planning_horizon_goal
+        self.planning_horizon_goal = (
+            DEFAULT_PLANNING_HORIZON_GOAL if planning_horizon_goal is None and self.execution.uses_loopx
+            else planning_horizon_goal
+        )
+        from .research_probe import resolve_execution_observation
+
+        self.execution_observation = resolve_execution_observation(execution_observation)
+        if self.execution_observation is not None and self.execution.mode != "heartbeat":
+            raise ValueError("execution_observation requires heartbeat execution")
         self.checkpoint_request_path = None
         self._checkpoint_declaration = None
         if checkpoint_request is not None:
@@ -129,6 +161,10 @@ class BenchmarkCodex(CodexOffline):
                 raise ValueError("checkpoint_request requires its staged guest path")
             from .checkpoint import parse_checkpoint_request
             self._checkpoint_declaration = parse_checkpoint_request(checkpoint_request)
+            if self._checkpoint_declaration.get("trigger") == "fresh_replan":
+                expected = PurePosixPath(_WAKE_LOG_DIR).parent / "checkpoints"
+                if PurePosixPath(self._checkpoint_declaration["destination"]) != expected:
+                    raise ValueError(f"fresh_replan destination must be {expected} in the worker")
         if checkpoint_request_path is not None:
             if self.execution.mode not in {"heartbeat", "turn"}:
                 raise ValueError("checkpoint_request_path requires a settled-work worker")
@@ -147,12 +183,21 @@ class BenchmarkCodex(CodexOffline):
         if task_objective is not None and (not isinstance(task_objective, str)
                                           or not task_objective.strip()):
             raise ValueError("Task objective must be a non-empty string")
-        self.task_objective = (task_objective if task_objective is not None else
-                              "Complete the current benchmark task through validated LoopX Todos.")
+        self.task_objective = task_objective
         super().__init__(*args, **kwargs)
+        if self.provider_request_admission:
+            if not (self._get_env("OPENAI_BASE_URL") or "").strip() or not (
+                self._get_env("OPENAI_API_KEY") or ""
+            ).strip():
+                raise ValueError("provider_request_admission requires a custom provider URL and API key")
+            if (self._get_env("CODEX_WIRE_API") or "responses") != "responses":
+                raise ValueError("provider_request_admission requires the Responses wire API")
 
     def _turn_envelope_receipt(self) -> dict:
-        return turn_envelope_receipt(explicit=self.execution.turn_envelope)
+        return {**turn_envelope_receipt(explicit=self.execution.turn_envelope, complete=self.execution.complete_turn),
+                **({"native_child_limit": self.execution.native_child_limit}
+                   if self.execution.native_child_limit is not None else {}),
+                **({"context_delivery": "on"} if self.execution.context_delivery != "off" else {})}
 
     def _planning_receipt(self) -> dict:
         return {"native_goal_continue": True} if self.native_goal_continue else {}
@@ -186,6 +231,10 @@ class BenchmarkCodex(CodexOffline):
             source, runner, os.environ.get("LOOPX_EXPECTED_COMMIT"),
             os.environ.get("LOOPX_EXPECTED_RUNNER_COMMIT"),
         )
+        if self.execution_observation is not None:
+            from .source import require_candidate_content
+
+            require_candidate_content(source, head)
         self._runner_commit = runner_head
         with tempfile.TemporaryDirectory(prefix="benchmark-source-") as directory:
             archive = Path(directory) / "source.tar"
@@ -204,6 +253,27 @@ class BenchmarkCodex(CodexOffline):
                     f"tar -xf {_ROOT}/runner.tar -C {_SRC} && rm {_ROOT}/runner.tar"
                 ), timeout_sec=180)
         return head
+
+    async def _install_research_entrypoint(self, environment, name: str, module: str,
+                                           help_flag: str, failure: str) -> None:
+        # Keep the task cwd without importing executable code or dependencies
+        # from the task workspace or user site.
+        entrypoint = f"{_SRC}/benchmark/runtime/{module}"
+        bootstrap = (
+            "import runpy\nimport sys\n"
+            f"sys.path.insert(0, {_SRC!r})\n"
+            f"runpy.run_path({entrypoint!r}, run_name='__main__')\n"
+        )
+        launcher = shlex.join([f"{_PYTHON}/bin/python3", "-I", "-c", bootstrap])
+        wrapper = f"#!/bin/sh\nexec {launcher} \"$@\"\n"
+        executable = shlex.quote(f"{_PROFILE}/bin/{name}")
+        installed = await self.exec_as_agent(
+            environment, env=self._profile_env(), timeout_sec=30,
+            command=f"test ! -L {executable} && printf %s {shlex.quote(wrapper)} > {executable} && "
+                    f"chmod 0755 {executable} && {executable} --help",
+        )
+        if installed.return_code or help_flag not in (installed.stdout or ""):
+            raise RuntimeError(failure)
 
     def _profile_env(self) -> dict[str, str]:
         return {
@@ -327,6 +397,11 @@ class BenchmarkCodex(CodexOffline):
                 raise RuntimeError("LoopX doctor returned invalid JSON") from exc
             if doctor_payload.get("ok") is not True:
                 raise RuntimeError(f"LoopX doctor failed: {doctor_payload}")
+            if self.execution_observation is not None:
+                await self._install_research_entrypoint(
+                    environment, "loopx-research-probe", "research_probe.py", "--candidate-file",
+                    "Local execution probe is unavailable to the benchmark worker",
+                )
 
         receipt = {
             "loopx_commit": actual_commit,
@@ -335,8 +410,11 @@ class BenchmarkCodex(CodexOffline):
             "execution_mode": self.execution.mode,
             "iteration_context": self.execution.context,
             "task_entry": self.execution.task_entry,
+            **({"execution_observation": self.execution_observation}
+               if self.execution_observation is not None else {}),
             **self._turn_envelope_receipt(),
             **self._planning_receipt(),
+            **({"provider_request_admission": "on"} if self.provider_request_admission else {}),
             "home_scope": "trial",
             "loopx_usage_ping_enabled": False,
             "login_shell_node_path": _BASH_ENV,
@@ -431,8 +509,18 @@ class BenchmarkCodex(CodexOffline):
         )
         if pending.return_code == 0:
             raise RuntimeError("Resolve the pending Turn before entering another task phase")
+        # Check explicitly requested capacity before replacing any task document.
+        registry_exists = (await self._registry_exists(environment)
+                           if self.execution.native_child_limit is not None else None)
+        if registry_exists:
+            retained = await self._loopx(
+                environment, ["configure-goal", "--goal-id", self.goal_id], cwd=cwd,
+            )
+            self._verify_native_child_configuration(retained.get("after") or retained.get("before") or {})
         await self._write_task_document(environment, instruction)
-        if not await self._registry_exists(environment):
+        if registry_exists is None:
+            registry_exists = await self._registry_exists(environment)
+        if not registry_exists:
             await self._loopx(
                 environment,
                 [
@@ -442,7 +530,8 @@ class BenchmarkCodex(CodexOffline):
                     "--goal-id",
                     self.goal_id,
                     "--objective",
-                    self.task_objective,
+                    # Phase feedback can replace task.md, but not the original Goal.
+                    self.task_objective or instruction.strip(),
                     "--goal-doc",
                     _TASK_DOC,
                     "--adapter-kind",
@@ -452,6 +541,8 @@ class BenchmarkCodex(CodexOffline):
                     "--write-scope",
                     "**",
                     "--no-global-sync",
+                    *(["--spawn-allowed", "--max-children", str(self.execution.native_child_limit)]
+                      if self.execution.native_child_limit is not None else []),
                 ],
                 cwd=cwd,
             )
@@ -497,23 +588,38 @@ class BenchmarkCodex(CodexOffline):
         if self.execution.task_entry == "seeded-todo":
             await self._seed_phase(environment, cwd=cwd)
 
+        await self._verify_phase_configuration(environment, cwd=cwd)
+
+    async def _verify_phase_configuration(self, environment: BaseEnvironment, *, cwd: str) -> None:
+        """Read the treatment without reconfiguring a restored Goal or its queue."""
+        key, _, expected = self._replan_configuration()
         cadence = await self._loopx(
             environment, ["configure-goal", "--goal-id", self.goal_id], cwd=cwd,
         )
         configured_state = cadence.get("after") or cadence.get("before") or {}
+        self._verify_native_child_configuration(configured_state)
         configured = configured_state.get("execution_profile", {}).get(key)
         if configured != expected:
             raise RuntimeError(
                 f"replan cadence readback mismatch for {key}: expected {expected}, got {configured!r}"
             )
-        actual_horizon = configured_state.get("execution_profile", {}).get("planning_horizon_goal", False)
-        if actual_horizon != (self.planning_horizon_goal or False):
+        actual_horizon = configured_state.get("execution_profile", {}).get("planning_horizon_goal")
+        if type(actual_horizon) is not bool or actual_horizon != self.planning_horizon_goal:
             raise RuntimeError("planning_horizon_goal readback mismatch")
         strategy = configured_state.get("execution_profile", {}).get("stride_strategy", "off")
         if strategy != (self.stride_strategy or "off"):
             raise RuntimeError(
                 f"stride strategy readback mismatch: expected {self.stride_strategy or 'off'}, got {strategy!r}"
             )
+
+    def _verify_native_child_configuration(self, configured_state: dict) -> None:
+        if self.execution.native_child_limit is None:
+            return
+        orchestration = configured_state.get("orchestration") or {}
+        if (orchestration.get("mode") != "multi_subagent"
+                or orchestration.get("spawn_allowed") is not True
+                or orchestration.get("max_children") != self.execution.native_child_limit):
+            raise RuntimeError("Native child authorization differs from the existing Goal; use a new trial")
 
     async def _seed_phase(self, environment: BaseEnvironment, *, cwd: str) -> None:
         text = (
@@ -582,16 +688,27 @@ class BenchmarkCodex(CodexOffline):
                 "LOOPX_SHARED_SKILLS": _SHARED_SKILLS,
                 "LOOPX_EXECUTION_MODE": self.execution.mode,
                 "LOOPX_TASK_ENTRY": self.execution.task_entry,
+                **({"LOOPX_EXECUTION_OBSERVATION": self.execution_observation}
+                   if self.execution_observation is not None else {}),
                 **({"LOOPX_CHECKPOINT_REQUEST": self.checkpoint_request_path}
                    if self.checkpoint_request_path is not None else {}),
                 **({"LOOPX_TURN_ENVELOPE": "1"} if self.execution.turn_envelope else {}),
+                "LOOPX_COMPLETE_TURN": "1" if self.execution.complete_turn else "0",
+                "LOOPX_CONTEXT_DELIVERY": self.execution.context_delivery,
+                # A trial's explicit None must not inherit a container opt-in.
+                "LOOPX_NATIVE_CHILD_LIMIT": (
+                    str(self.execution.native_child_limit)
+                    if self.execution.native_child_limit is not None else ""
+                ),
+                **({"LOOPX_PROVIDER_REQUEST_ADMISSION": "on"} if self.provider_request_admission else {}),
                 **({"LOOPX_NATIVE_GOAL_CONTINUE": "1"} if self.native_goal_continue else {}),
                 "LOOPX_ITERATION_CONTEXT": self.execution.context,
                 "LOOPX_CODEX_SANDBOX": self.execution.sandbox,
                 "LOOPX_VALIDATION_COMMAND_JSON": json.dumps(
                     self.execution.validation_command
                 ),
-                "LOOPX_CODEX_TURN_TIMEOUT_SEC": str(self.execution.timeout_seconds),
+                **({"LOOPX_CODEX_TURN_TIMEOUT_SEC": str(self.execution.timeout_seconds)}
+                   if self.execution.timeout_seconds is not None else {}),
                 "CODEX_BIN": "/usr/local/bin/codex",
                 "MODEL_NAME": (self.model_name or "").split("/", 1)[-1],
                 "REASONING_EFFORT": str(
@@ -626,26 +743,37 @@ class BenchmarkCodex(CodexOffline):
 
     @staticmethod
     def _totals(trajectories: Iterable[Trajectory]) -> dict[str, int | float | None]:
-        prompt = completion = cached = 0
-        costs: list[float] = []
-        for trajectory in trajectories:
-            metrics = trajectory.final_metrics
-            if metrics is None:
-                continue
-            prompt += metrics.total_prompt_tokens or 0
-            completion += metrics.total_completion_tokens or 0
-            cached += metrics.total_cached_tokens or 0
-            if metrics.total_cost_usd is not None:
-                costs.append(metrics.total_cost_usd)
-        return {
-            "prompt": prompt,
-            "completion": completion,
-            "cached": cached,
-            "cost": sum(costs) if costs else None,
+        # These are Harbor's converted session metrics, not a proof of raw-log
+        # or billing coverage. A partial field must never become a run total.
+        metrics = [trajectory.final_metrics for trajectory in trajectories]
+        fields = {
+            "prompt": "total_prompt_tokens",
+            "completion": "total_completion_tokens",
+            "cached": "total_cached_tokens",
+            "cost": "total_cost_usd",
         }
+        totals: dict[str, int | float | None] = {}
+        for key, field in fields.items():
+            values = [getattr(metric, field, None) for metric in metrics]
+            if not values or any(
+                type(value) not in ((int, float) if key == "cost" else (int,))
+                or value < 0
+                or (isinstance(value, float) and not math.isfinite(value))
+                for value in values
+            ):
+                totals[key] = None
+                continue
+            total = sum(values)
+            totals[key] = (
+                None if isinstance(total, float) and not math.isfinite(total) else total
+            )
+        return totals
 
-    def _write_aggregate_trajectory(self) -> list[Trajectory]:
-        trajectories = self._session_trajectories([self.logs_dir])
+    def _write_aggregate_trajectory(
+        self, trajectories: list[Trajectory] | None = None
+    ) -> list[Trajectory]:
+        if trajectories is None:
+            trajectories = self._session_trajectories([self.logs_dir])
         if not trajectories:
             return []
         steps = []
@@ -661,9 +789,9 @@ class BenchmarkCodex(CodexOffline):
             agent=trajectories[0].agent,
             steps=steps,
             final_metrics=FinalMetrics(
-                total_prompt_tokens=totals["prompt"] or None,
-                total_completion_tokens=totals["completion"] or None,
-                total_cached_tokens=totals["cached"] or None,
+                total_prompt_tokens=totals["prompt"],
+                total_completion_tokens=totals["completion"],
+                total_cached_tokens=totals["cached"],
                 total_cost_usd=totals["cost"],
                 total_steps=len(steps),
                 extra={"native_sessions": len(trajectories)},
@@ -677,33 +805,38 @@ class BenchmarkCodex(CodexOffline):
     def _populate_context(
         self, context: AgentContext, before: dict | None = None
     ) -> None:
-        totals = self._totals(self._session_trajectories([self.logs_dir]))
-        before = before or {}
-        context.n_input_tokens = int(totals["prompt"] or 0) - int(
-            before.get("prompt") or 0
-        )
-        context.n_output_tokens = int(totals["completion"] or 0) - int(
-            before.get("completion") or 0
-        )
-        context.n_cache_tokens = int(totals["cached"] or 0) - int(
-            before.get("cached") or 0
-        )
-        context.cost_usd = (
-            totals["cost"] - (before.get("cost") or 0)
-            if totals["cost"] is not None
-            else None
-        )
+        trajectories = self._session_trajectories([self.logs_dir])
+        totals = self._totals(trajectories)
+
+        def delta(key: str) -> int | float | None:
+            current = totals[key]
+            # Only an absent pre-phase observation means cumulative reporting.
+            # A present but incomplete baseline cannot establish a phase delta.
+            previous = 0 if before is None else before.get(key)
+            if current is None or previous is None or current < previous:
+                return None
+            return current - previous
+
+        def token_delta(key: str) -> int | None:
+            value = delta(key)
+            return value if type(value) is int else None
+
+        context.n_input_tokens = token_delta("prompt")
+        context.n_output_tokens = token_delta("completion")
+        context.n_cache_tokens = token_delta("cached")
+        context.cost_usd = delta("cost")
         context.metadata = {
             "execution_mode": self.execution.mode,
             "iteration_context": self.execution.context,
             "task_entry": self.execution.task_entry,
             **self._turn_envelope_receipt(),
             **self._planning_receipt(),
+            **({"provider_request_admission": "on"} if self.provider_request_admission else {}),
             "home_scope": "trial",
             **self._replan_receipt(),
             "benchmark_phase": self._phase_number,
         }
-        self._write_aggregate_trajectory()
+        self._write_aggregate_trajectory(trajectories)
 
     def populate_context_post_run(self, context: AgentContext) -> None:
         self._populate_context(context)
@@ -727,6 +860,10 @@ class BenchmarkCodex(CodexOffline):
             )
 
         before = self._totals(self._session_trajectories([self.logs_dir]))
+        # A genuinely empty pre-phase log set has no prior session usage. An
+        # existing rollout that Harbor cannot convert is not a zero baseline.
+        if not any(self.logs_dir.glob("sessions/**/*.jsonl")):
+            before = None
         try:
             if self.execution.uses_loopx:
                 await self._prepare_phase(environment, instruction, cwd=cwd)
@@ -737,7 +874,7 @@ class BenchmarkCodex(CodexOffline):
             if self.execution.task_entry == "loopx-planned":
                 result_path = f"{_CONTROL}/planning-phase-{self._phase_number:03d}.json"
                 remaining = int(deadline - time.monotonic())
-                if remaining <= 160:
+                if remaining <= phase_work_reserve(self.execution.mode):
                     raise TimeoutError("Task budget exhausted before planning")
                 await self.exec_as_agent(
                     environment,
@@ -760,18 +897,20 @@ class BenchmarkCodex(CodexOffline):
                 if entry["status"] == "blocked":
                     return
             remaining = int(deadline - time.monotonic())
-            if remaining <= 160:
+            reserve = phase_work_reserve(self.execution.mode)
+            if remaining <= reserve:
                 raise TimeoutError("Task budget exhausted before execution handoff")
-            # Planning consumes the phase budget, including when the host later resumes.
-            # Keep ten seconds for scheduler startup before the worker checks
-            # its execution window plus the existing 150-second settlement reserve.
-            host_timeout = min(self.execution.timeout_seconds, remaining - 160)
-            env["LOOPX_CODEX_TURN_TIMEOUT_SEC"] = str(host_timeout)
+            # Planning, admission and work share one absolute phase clock.
+            host_timeout = remaining - reserve
+            if self.execution.timeout_seconds is not None:
+                host_timeout = min(self.execution.timeout_seconds, host_timeout)
+                env["LOOPX_CODEX_TURN_TIMEOUT_SEC"] = str(host_timeout)
             from .scheduler import worker_command
 
             command = worker_command(
                 env, python=f"{_PYTHON}/bin/python3", source=_SRC,
                 state_file=_SCHEDULER_STATE, host_timeout=host_timeout,
+                resume_budget_stop=self._phase_number > 1,
             )
             phase_log = f"/logs/agent/worker-phase-{self._phase_number:03d}.log"
             shell = (

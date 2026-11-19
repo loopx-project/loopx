@@ -18,7 +18,7 @@ from loopx.capabilities.explore.result_log import (
     explore_result_log_path,
 )
 from loopx.configure_goal import configure_goal
-from loopx.chat_goal_configuration_api import _goal_capability_options
+from loopx.chat.goal_configuration_api import _goal_capability_options
 from loopx.control_plane.effect_runtime import (
     effect_runtime_result,
     EffectRuntimeRejected,
@@ -30,7 +30,7 @@ from loopx.explore_graph import compact_explore_graph_policy
 from loopx.todos import add_goal_todo
 
 
-def registry(tmp_path, *, graph=False, planning=False):
+def registry(tmp_path, *, graph=False, planning=False, provider="file"):
     path = tmp_path / "registry.json"
     (tmp_path / "goal.md").write_text("# Goal\n\n## Agent Todos\n")
     path.write_text(
@@ -49,7 +49,7 @@ def registry(tmp_path, *, graph=False, planning=False):
                             "registered_agents": ["worker"],
                             "storage_target": {
                                 "schema_version": "loopx_new_goal_storage_target_v1",
-                                "provider": "file",
+                                "provider": provider,
                                 "handoff_mode": "soft_claim",
                             },
                         },
@@ -195,6 +195,7 @@ def test_disabled_hook_keeps_packet_and_does_not_read_evidence(tmp_path, monkeyp
     monkeypatch.setattr(
         "loopx.capabilities.explore.turn_context.load_explore_result_events_strict", unexpected
     )
+    monkeypatch.setattr("loopx.capabilities.explore.turn_context.list_goal_todos", unexpected)
     assert (
         extend_turn_start_dispatch(
             original,
@@ -202,6 +203,7 @@ def test_disabled_hook_keeps_packet_and_does_not_read_evidence(tmp_path, monkeyp
             runtime_root=tmp_path / "runtime",
             goal_id="research",
             agent_id="worker",
+            todo_id="todo_missing",
         )
         is original
     )
@@ -211,6 +213,7 @@ def test_disabled_hook_keeps_packet_and_does_not_read_evidence(tmp_path, monkeyp
             runtime_root=tmp_path / "runtime",
             goal_id="research",
             agent_id="worker",
+            todo_id="todo_missing",
         )["graph"]
         is None
     )
@@ -477,6 +480,43 @@ def test_real_cli_recent_context_includes_revisited_old_node(tmp_path):
     canonical = json.loads(summary.stdout)
     assert canonical["ok"] is True
     assert [row["node_id"] for row in canonical["nodes"]] == [f"route-{i}" for i in range(5)]
+    assert log.read_bytes() == before
+
+
+def test_cli_recent_evidence_orders_instants_across_timezone_offsets(tmp_path):
+    path = registry(tmp_path, graph=True)
+    root = tmp_path / "runtime"
+    log = explore_result_log_path(root, "research")
+    # Written in time order, but their ISO strings sort in the opposite order.
+    timestamps = ["2026-01-02T08:00:00+08:00", "2026-01-02T00:01:00Z",
+                  "2026-01-01T19:02:00-05:00", "2026-01-02T00:03:00.000001Z"]
+    for index, timestamp in enumerate(timestamps):
+        append_explore_result_event(log, build_explore_node_event(
+            goal_id="research", node_id=f"route-{index}", title=f"Route {index}",
+            status="exploring", recorded_at=timestamp,
+        ))
+        append_explore_result_event(log, build_explore_finding_event(
+            goal_id="research", node_id=f"route-{index}", finding_id=f"result-{index}",
+            title=f"Observation {index}", recorded_at=timestamp, tags=["writeback-result"],
+            supersedes="result-0" if index == 3 else None,
+        ))
+    before = log.read_bytes()
+    prefix = [sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(path),
+              "--runtime-root", str(root), "explore"]
+    def read(command):
+        result = subprocess.run(prefix + command, capture_output=True, text=True, check=True)
+        return json.loads(result.stdout)
+
+    summary = read(["summary", "--goal-id", "research", "--finding-limit", "1"])
+    assert [row["node_id"] for row in summary["nodes"]] == [f"route-{i}" for i in range(4)]
+    assert [row["finding_id"] for row in summary["findings"]] == ["result-3"]
+    assert summary["findings"][0]["supersedes"] == "result-0"
+    full = read(["summary", "--goal-id", "research", "--finding-limit", "10"])
+    assert [row["finding_id"] for row in full["findings"]] == [f"result-{i}" for i in reversed(range(4))]
+    assert full["counts"]["finding_count"] == 4  # Corrections retain historical evidence.
+    context = read(["turn-context", "--goal-id", "research", "--agent-id", "worker"])["graph"]
+    assert [row["node_id"] for row in context["recent_nodes"]] == ["route-3", "route-2", "route-1"]
+    assert [row["finding_id"] for row in context["writeback_results"]] == ["result-3", "result-2", "result-1"]
     assert log.read_bytes() == before
 
 

@@ -32,6 +32,7 @@ def install_conversation_transports(server: Any, *, observe_default: Callable[[s
         server.runtime_controller.project_contexts.conversation_bindings = ChatConversationBindings(
             root=server.chat_store.root, project_contexts=server.runtime_controller.project_contexts,
             observe=observe_default, observe_group=observe_group)
+        server.runtime_controller.project_contexts.conversation_bindings.controller = server.runtime_controller
         return
     transports = []
     try:
@@ -42,6 +43,7 @@ def install_conversation_transports(server: Any, *, observe_default: Callable[[s
         bindings = ChatConversationBindings(root=server.chat_store.root,
             project_contexts=server.runtime_controller.project_contexts, observe=server.conversation_transports.observe,
             observe_group=observe_group)
+        bindings.controller = server.runtime_controller
         server.runtime_controller.project_contexts.conversation_bindings = bindings
         server.conversation_transports.bindings = bindings
     except Exception:

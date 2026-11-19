@@ -20,6 +20,7 @@ from .effect_runtime import (
     EffectRuntimeRejected,
     EffectRuntimeRemoteError,
     EffectRuntimeStartupError,
+    effect_runtime_projection_result,
     effect_runtime_result,
 )
 from .coordination.coordination_state_contract_generated import (
@@ -69,11 +70,38 @@ _POST_WRITEBACK_TRANSACTION_PARAMS_MAX_BYTES = 1_750_000
 
 InteractionProjectionProducer = Callable[[], Mapping[str, Any]]
 TurnStartProducer = Callable[[], Mapping[str, Any]]
+# Invocation-owned read composition after selection; no persisted policy or
+# provider authority is created by supplying this adapter.
+TurnStartContextProjector = Callable[
+    [Mapping[str, Any], Mapping[str, Any] | None], dict[str, Any] | None
+]
 PostWritebackProducer = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 
 
 class PostWritebackSourceRejected(ValueError):
     """The typed runtime rejected deterministic source construction."""
+
+
+@dataclass(frozen=True, slots=True)
+class TurnContextHookRegistration:
+    """Configured provider IO after governing selection, before host input.
+
+    Registration bounds IO/results; it grants no provider or task authority.
+    """
+
+    hook_id: str
+    capability_id: str
+    readback_slots: tuple[str, ...]
+    producer: Callable[[], Mapping[str, Any]]
+    max_result_bytes: int = 64 * 1024
+
+    def contract(self) -> dict[str, Any]:
+        return {
+            "hook_id": self.hook_id,
+            "capability_id": self.capability_id,
+            "readback_slots": list(self.readback_slots),
+            "max_result_bytes": self.max_result_bytes,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +198,178 @@ class PostWritebackHookRegistration:
         }
 
 
+def turn_context_source(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Use the host envelope or the native quota identity, without new authority."""
+    if "work_contract" in payload:
+        from .quota.turn_envelope import turn_plan_host_source
+        from .quota.turn_envelope import complete_turn_host_source
+
+        source = complete_turn_host_source(turn_plan_host_source(payload), operation="plan_work")
+        assert source is not None
+        return source
+    envelope = payload.get("turn_envelope")
+    if isinstance(envelope, Mapping):
+        return envelope
+    if "schema_version" in payload or "contract_binding" in payload:
+        from .quota.turn_envelope import quota_capability_automation_source
+
+        # A declared native contract must pass the same complete-source owner
+        # as participation. Never reinterpret a damaged version as raw quota.
+        source = quota_capability_automation_source(payload)
+        if isinstance(payload.get("heartbeat_receipt"), Mapping):
+            return {**payload, "agent_id": source.get("agent_id")}
+        return {"goal_id": source.get("goal_id"), "agent_id": source.get("agent_id")}
+    agent_id = payload.get("agent_id")
+    identity = payload.get("agent_identity")
+    if isinstance(identity, Mapping):
+        scoped_agent = identity.get("agent_id")
+        if agent_id and scoped_agent and agent_id != scoped_agent:
+            raise ValueError("context source has conflicting Agent identities")
+        agent_id = agent_id or scoped_agent
+    if isinstance(payload.get("heartbeat_receipt"), Mapping):
+        # Keep the native source for the typed quota signature owner. Identity
+        # alone cannot invalidate context when the admitted authority changes;
+        # Python does not decode the quota boundary here.
+        return {**payload, "agent_id": agent_id}
+    return {"goal_id": payload.get("goal_id"), "agent_id": agent_id}
+
+
+def _turn_context_binding_source(
+    payload: Mapping[str, Any], *, from_journal: bool = False,
+) -> Mapping[str, Any]:
+    from .quota.turn_envelope import (
+        COMPLETE_TURN_PLAN_SCHEMA_VERSION,
+        complete_turn_host_source,
+        turn_plan_host_source,
+    )
+
+    if payload.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION:
+        source = complete_turn_host_source(
+            turn_plan_host_source(payload), operation="host_context_binding",
+            recorded_capability_result=from_journal,
+        )
+        assert source is not None
+        return source
+    return turn_context_source(payload)
+
+
+def dispatch_turn_context_hooks(
+    payload: dict[str, Any],
+    registrations: Sequence[TurnContextHookRegistration],
+) -> None:
+    contributions: list[dict[str, Any]] = []
+    failures: list[dict[str, str]] = []
+    seen_hooks: set[str] = set()
+    seen_slots: set[str] = set()
+    for registration in registrations:
+        try:
+            if registration.hook_id in seen_hooks or seen_slots.intersection(
+                registration.readback_slots
+            ):
+                raise ValueError("duplicate context registration")
+            seen_hooks.add(registration.hook_id)
+            seen_slots.update(registration.readback_slots)
+            effect_runtime_result(
+                "capability_hook.turn_context.validate_registration",
+                {
+                    "registration": registration.contract(),
+                },
+            )
+            if any(key in payload for key in registration.readback_slots):
+                raise ValueError("context readback slot already contributed")
+            result = registration.producer()
+            readback_only = (
+                result.get("context_fields") == {}
+                and result.get("instructions") == []
+                and result.get("result_fields") == {}
+            )
+            if readback_only:
+                binding: dict[str, Any] = {"readback_only": True}
+            else:
+                source = _turn_context_binding_source(payload)
+                binding = {"source": source}
+                if isinstance(source.get("heartbeat_receipt"), Mapping):
+                    from .quota.turn_envelope import pack_turn_source
+
+                    transport = pack_turn_source(source)
+                    if transport is not None:
+                        binding = {"source_transport": transport}
+            contribution = effect_runtime_result(
+                "capability_hook.turn_context.validate",
+                {
+                    "registration": registration.contract(),
+                    "result": result,
+                    **binding,
+                },
+            )
+            readback = contribution.pop("readback")
+            payload.update(readback)
+            if (
+                contribution["context_fields"]
+                or contribution["instructions"]
+                or contribution["result_fields"]
+            ):
+                contributions.append(contribution)
+        except Exception:  # Optional context failures never gate business work.
+            failures.append(
+                {"hook_id": registration.hook_id, "error_code": "context_hook_failed"}
+            )
+    if contributions:
+        payload["turn_context_contributions"] = contributions
+    if failures:
+        payload["turn_context_hook_failures"] = failures
+
+
+def project_turn_context(
+    payload: Mapping[str, Any], *, from_journal: bool = False,
+) -> dict[str, Any]:
+    contributions = payload.get("turn_context_contributions")
+    if not isinstance(contributions, list) or not contributions:
+        return {}
+    readback: dict[str, Any] = {}
+    for item in contributions:
+        if not isinstance(item, Mapping):
+            continue
+        slots = item.get("readback_slots")
+        if isinstance(slots, (list, tuple)):
+            readback.update({key: payload.get(key) for key in slots if isinstance(key, str)})
+    try:
+        projected = effect_runtime_projection_result("capability_hook.turn_context.project", {
+            "contributions": contributions,
+            "source": _turn_context_binding_source(payload, from_journal=from_journal),
+            "readback": readback,
+        })
+    except Exception:  # Optional context transport cannot gate the underlying work.
+        return {}
+    return projected if isinstance(projected, dict) else {}
+
+
+def host_context_projection(request: Mapping[str, Any]) -> dict[str, Any]:
+    fields = request.get("capability_context_fields") or ()
+    projection = {key: request[key] for key in fields if key in request}
+    if (
+        projection
+        or request.get("capability_instructions")
+        or request.get("capability_result_fields")
+    ):
+        projection["capability_instructions"] = list(
+            request.get("capability_instructions") or ()
+        )
+        projection["capability_result_fields"] = dict(
+            request.get("capability_result_fields") or {}
+        )
+    return projection
+
+
+def capability_result_fields(request: Mapping[str, Any] | None) -> dict[str, Any]:
+    value = (
+        request.get("capability_result_fields")
+        if isinstance(request, Mapping)
+        else None
+    )
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
 def dispatch_interaction_projection_hooks(
     registrations: Sequence[InteractionProjectionHookRegistration] | None,
 ) -> dict[str, Any]:
@@ -247,6 +447,7 @@ def dispatch_turn_start_hooks(
     contexts: list[dict[str, Any]] = []
     seen_hook_ids: set[str] = set()
     seen_required_read_commands: set[str] = set()
+    uncertain_local_effects = False
     ordered = sorted(registrations or (), key=lambda item: item.hook_id)
     for registration in ordered:
         if registration.hook_id in seen_hook_ids:
@@ -267,6 +468,7 @@ def dispatch_turn_start_hooks(
             result = dict(registration.producer())
         except Exception:  # noqa: BLE001 - capability failures are isolated.
             failures.append(_hook_failure(registration, error_code="producer_failed"))
+            uncertain_local_effects |= bool(registration.requested_write_scope)
             continue
         try:
             normalized = effect_runtime_result(
@@ -278,11 +480,13 @@ def dispatch_turn_start_hooks(
             )
         except (EffectRuntimeRejected, RuntimeError, TypeError, ValueError):
             failures.append(_hook_failure(registration, error_code="contract_rejected"))
+            uncertain_local_effects |= bool(registration.requested_write_scope)
             continue
         if not isinstance(normalized, Mapping):
             failures.append(
                 _hook_failure(registration, error_code="runtime_result_invalid")
             )
+            uncertain_local_effects |= bool(registration.requested_write_scope)
             continue
         results.append(dict(normalized))
         if normalized.get("agent_read_required") is True and isinstance(
@@ -317,6 +521,7 @@ def dispatch_turn_start_hooks(
         "results": results,
         "required_reads": required_reads,
         "failures": failures,
+        **({"uncertain_local_effects": True} if uncertain_local_effects else {}),
         **({"contexts": contexts} if contexts else {}),
     }
 

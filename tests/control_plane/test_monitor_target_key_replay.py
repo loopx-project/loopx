@@ -332,7 +332,8 @@ def test_target_only_auxiliary_recovery_preserves_advancement_binding(
         operation_id='synthetic-auxiliary')
     turn = 'synthetic-auxiliary-turn'
     rc, guard = _cli(registry, runtime, 'quota', 'should-run', '--goal-id', GOAL,
-        '--agent-id', AGENT, '--runtime-profile', 'generic_cli', '--turn-instance-id', turn)
+        '--agent-id', AGENT, '--runtime-profile', 'generic_cli', '--turn-instance-id', turn,
+        '--context-delivery', 'off')
     assert rc == 0 and guard['work_lane_contract']['lane'] == 'advancement_task', guard
     bound = guard['heartbeat_receipt']['settlement_identity']['todo_id']
     assert bound != other['todo_id'] and bound != monitor

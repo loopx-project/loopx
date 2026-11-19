@@ -135,6 +135,14 @@ export type AuthorityStoreLoadResult =
   | { status: "missing" }
   | AuthorityStoreReadFailure;
 
+/** Same identity/load failure precedence as separate reads. A provider may
+ * bind both observations to one read transaction; this never proves the
+ * pathname still refers to that incarnation after the transaction closes. */
+export interface AuthorityStoreSnapshotResult {
+  identity: AuthorityStoreIdentityResult;
+  authority: AuthorityStoreLoadResult;
+}
+
 export type AuthorityStoreCommitResult =
   | { status: "applied"; provider_revision: string; cursor: string }
   | {
@@ -154,6 +162,13 @@ export type AuthorityStoreReceiptResult =
     receipts: readonly JsonObject[];
   }
   | { status: "missing" }
+  | AuthorityStoreReadFailure;
+
+/** Receipt presence or absence and incarnation observed in one read snapshot.
+ * A separate storeIdentity() call cannot bind negative receipt evidence. */
+export type AuthorityStoreReceiptSnapshotResult =
+  | {status: "snapshot"; store_identity: string;
+      receipt: Extract<AuthorityStoreReceiptResult, {status: "found" | "missing"}>}
   | AuthorityStoreReadFailure;
 
 /** Results retain caller order, including duplicate IDs and missing receipts.
@@ -182,11 +197,25 @@ export interface AuthorityStore {
   readonly providerKind?: AuthorityStoreProviderKind;
   storeIdentity(): Promise<AuthorityStoreIdentityResult>;
   loadAuthority(): Promise<AuthorityStoreLoadResult>;
+  /** Optional read acceleration. Callers retain their independent final
+   * incarnation check. It grants no creation or write authority. */
+  readAuthoritySnapshot?(): Promise<AuthorityStoreSnapshotResult>;
   commitAuthority(commit: AuthorityStoreCommit): Promise<AuthorityStoreCommitResult>;
   readReceipt(operationId: string): Promise<AuthorityStoreReceiptResult>;
+  /** Optional atomic observation for callers pinned to an admitted incarnation. */
+  readReceiptSnapshot?(operationId: string): Promise<AuthorityStoreReceiptSnapshotResult>;
   /** Optional bounded acceleration; never a weaker receipt verification path. */
   readReceipts?(operationIds: readonly string[]): Promise<AuthorityStoreReceiptBatchResult>;
   scanCommitted(afterCursor: string | null, limit: number): Promise<AuthorityStoreScanResult>;
+}
+
+export async function readAuthoritySnapshot(store: AuthorityStore): Promise<AuthorityStoreSnapshotResult> {
+  if (store.readAuthoritySnapshot !== undefined) return store.readAuthoritySnapshot();
+  const identity = await store.storeIdentity();
+  // Unavailable identity still needs the legacy absence probe; failed identity
+  // must keep its precedence without attempting a second provider operation.
+  const authority = identity.status === "failed" ? identity : await store.loadAuthority();
+  return {identity, authority};
 }
 
 export async function readAuthorityReceipts(store: AuthorityStore,

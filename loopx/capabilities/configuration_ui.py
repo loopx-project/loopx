@@ -5,7 +5,7 @@ from copy import deepcopy
 from typing import Any
 
 from ..configuration_transaction import configuration_payload_revision
-from ..control_plane.goals.goal_vision_policy import MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD
+from ..control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL, MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD
 from ..control_plane.work_items.stride_policy_codec import stride_strategy_options
 
 from .progress_review.policy import (
@@ -83,14 +83,31 @@ def capability_configuration_editor(
     # The steward namespace owns its closed vocabulary, so the editor offers the
     # same values instead of restating them: a form cannot submit an executor or
     # effort the owning namespace would reject.
-    steward_endpoints, steward_efforts = _steward_executor_editor_options()
-    from .native_chat.machine_defaults import codex_profile_options
+    steward_endpoints, steward_efforts = (
+        _steward_executor_editor_options()
+        if capability_id in ("codex_chat", "steward_executor") else ([], [])
+    )
+    codex_profiles: list[str] = []
+    if capability_id == "codex_chat":
+        from .native_chat.machine_defaults import codex_profile_options
+
+        codex_profiles = codex_profile_options()
     definitions: dict[str, dict[str, Any]] = {
+        "context_delivery": {
+            "supported_scopes": ["machine"], "writable_scopes": ["machine"],
+            "fields": [
+                _field("mode", "Context presentation", "select",
+                    options=("off", "on"), required=True,
+                    description="Present current requirements before expandable supporting material on every host. Off keeps complete inline delivery."),
+                _field("delta_delivery", "Cross-Turn Delta", "select", options=("off", "auto"), required=True,
+                    description="Auto reuses exact saved captures only on supported continuity hosts. Off leaves progressive presentation enabled. Neither choice proves retained model input."),
+            ],
+        },
         "codex_chat": {
             "supported_scopes": ["machine"], "writable_scopes": ["machine"],
             "fields": [
                 _field("codex_profile", "Codex configuration profile", "select", nullable=True,
-                       options=codex_profile_options(), description="Existing native account/configuration home; credentials are not copied."),
+                       options=codex_profiles, description="Existing native account/configuration home; credentials are not copied."),
                 _field("model", "Conversation model", "text", nullable=True,
                        description="For example gpt-6.1-sol. Blank inherits this Codex profile's default."),
                 _field("reasoning_effort", "Reasoning effort", "select", nullable=True,
@@ -130,10 +147,12 @@ def capability_configuration_editor(
                        maximum=MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD, required=True,
                        description="Effective Turns: 1–6; completed Todos: 1–5. Effective Turns require accepted work settlement. Retries and observation-only polls do not count."),
                 _field("planning_horizon_goal", "Show Goal in planning horizon", "boolean",
-                       description="Default off. Include the full original Goal and acceptance before choosing work; replan Goal reading, stride and execution authority are unchanged."),
+                       description="Default on. Include the original Goal and acceptance before choosing work. Advanced opt-out for rollback or comparisons; does not change replan, stride or execution authority."),
                 _field("stride_strategy", "Stride strategy", "select",
                        options=list(stride_strategy_options()),
                        description="Off retains ordinary review. Evidence-conditioned v1 independently reviews work-slice size, route changes and validation scope; fresh Vision path reviews require a structured proposal, without automatic execution."),
+                _field("yardstick_enabled", "Review measurement criteria", "boolean",
+                       description="Default off. Use available Explore evidence to review measurement scope and feedback before choosing work. Requires Explore evidence; does not enable it or authorize execution."),
             ],
         },
         "periodic_report": {
@@ -141,6 +160,8 @@ def capability_configuration_editor(
             "writable_scopes": ["machine", "goal"],
             "fields": [
                 _field("enabled", "Enabled", "boolean"),
+                _field("review_required", "Request owner review", "boolean",
+                       description="For an original managed Session report, also put each edition in App results and keep a Home reminder until the owner handles its review."),
                 _field(
                     "profile_preset",
                     "Profile preset",
@@ -308,8 +329,8 @@ def capability_configuration_editor(
             "fields": [_field("enabled", "Enabled", "boolean")],
         },
         "explore_harness": {
-            "supported_scopes": ["goal"],
-            "writable_scopes": ["goal"],
+            "supported_scopes": ["machine", "goal"],
+            "writable_scopes": ["machine", "goal"],
             "fields": [
                 _field("mode", "Exploration mode", "select", options=("off", "evidence", "planning"),
                        description="Evidence only, or evidence with planning. Spawn authority is separate."),
@@ -566,6 +587,11 @@ def _machine_catalog_entry(
             explore_harness_profiles=explore_harness_profiles,
         ),
     }
+    if capability_id == "explore_harness":
+        # Machine preference owns only the mode; profiles and research scope
+        # stay on each Goal. Reuse the existing mode field and generic editor.
+        editor = entry["configuration_editor"]
+        editor["fields"] = [field for field in editor["fields"] if field["key"] == "mode"]
     if isinstance(namespace.get("current"), Mapping):
         entry["machine_current"] = deepcopy(namespace["current"])
     if isinstance(namespace.get("configuration_template"), Mapping):
@@ -603,10 +629,13 @@ def _merge_goal_feature(
     for field in ("default", "current", "documentation", "context_contribution"):
         if isinstance(feature.get(field), Mapping):
             entry[field] = deepcopy(feature[field])
+    previous_editor = entry.get("configuration_editor")
     entry["configuration_editor"] = capability_configuration_editor(
         capability_id,
         explore_harness_profiles=feature.get("profiles") or explore_harness_profiles,
     )
+    if capability_id == "explore_harness" and "default" not in feature and previous_editor:
+        entry["configuration_editor"] = previous_editor
     if capability_id == "reward_memory":
         for field in entry["configuration_editor"]["fields"]:
             if field["key"] == "agent_id":
@@ -635,7 +664,7 @@ def _attach_effective_configuration(entry: dict[str, Any]) -> None:
         entry["capability_id"] == "todo_replan_cadence"
         and goal_override is not None
         and bool(goal_override)
-        and set(goal_override) <= {"stride_strategy", "planning_horizon_goal"}
+        and set(goal_override) <= {"stride_strategy", "planning_horizon_goal", "yardstick_enabled"}
     ):
         from .todo_replan_cadence.machine_defaults import (
             cadence_configuration_value,
@@ -654,6 +683,42 @@ def _attach_effective_configuration(entry: dict[str, Any]) -> None:
             **goal_override,
         }
         entry["effective_value_policy"] = "goal_stride_over_live_review_cadence"
+    if entry["capability_id"] == "todo_replan_cadence":
+        # Resolve the new default in the read model, including legacy machine
+        # values and atomic Goal cadence overrides. Keep stored/current values
+        # sparse: reading Settings must never pin or migrate an override.
+        goal_override = None if goal_override is None else {
+            "planning_horizon_goal": DEFAULT_PLANNING_HORIZON_GOAL,
+            "yardstick_enabled": (machine_default or {}).get("yardstick_enabled", False),
+            **goal_override}
+        machine_default = None if machine_default is None else {
+            "planning_horizon_goal": DEFAULT_PLANNING_HORIZON_GOAL,
+            "yardstick_enabled": False, **machine_default}
+    if entry["capability_id"] == "explore_harness":
+        from .explore.machine_defaults import resolve_explore_configuration
+        from ..explore_graph import plan_explore_configuration
+
+        raw = dict(goal_override or {})
+        graph = {}
+        if "mode" in raw:
+            planned = plan_explore_configuration({}, {"mode": raw.pop("mode")})
+            graph["enabled"] = planned["evidence_enabled"]
+            raw["enabled"] = planned["planning_enabled"]
+        resolved = resolve_explore_configuration(
+            {"explore_graph": graph, "spawn_policy": {"explore_harness": raw}},
+            machine_default.get("mode") if machine_default is not None else None,
+        )
+        value = resolved["configuration"]
+        source = resolved["mode_source"]
+        entry["effective_configuration"] = {
+            "schema_version": CAPABILITY_CONFIGURATION_RESOLUTION_SCHEMA,
+            "capability_id": "explore_harness", "configuration": value,
+            "source": source, "inherited": source == "machine_default",
+            "goal_override_present": goal_override is not None,
+            "machine_default_present": machine_default is not None,
+            "effective_revision": configuration_payload_revision({"source": source, "configuration": value}),
+        }
+        return
     entry["effective_configuration"] = resolve_capability_configuration(
         str(entry["capability_id"]),
         goal_override=goal_override,

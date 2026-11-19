@@ -13,8 +13,9 @@ import pytest
 from loopx.cli import main
 from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.hosts.research_checkpoint import canonical_context, research_context, verify_context_sources, adopt_todo_context, _encoded
-from canonical_authority_fixture import isolate_sqlite_runtime
+from canonical_authority_fixture import assert_todo_read_unchanged, isolate_sqlite_runtime
 from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 
 
 @pytest.fixture(autouse=True)
@@ -45,7 +46,7 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
             code = main([*prefix,*args])
             output = capsys.readouterr().out
             assert code == 0, output
-            return json.loads(output)
+            return read_cli_policy_payload(output, returncode=code)
         run('bootstrap','--project',str(workspace),'--goal-id',name,'--objective','Investigate synthetic candidates.',
             '--adapter-kind','read_only_project_map_v0','--adapter-status','connected-read-only','--write-scope','**','--no-global-sync')
         run('configure-goal','--goal-id',name,'--registered-agent',agent,'--agent-work-mode',agent+'=active',
@@ -96,7 +97,7 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
         session_scope='agent',session_id='branch-session',session_profile_digest='synthetic-profile')
     # This owner-focused fixture substitutes only native history verification.
     # The real Host + CLI + canonical context journey lives in test_native_checkpoint.
-    monkeypatch.setattr('loopx.hosts.research_checkpoint._context_session', lambda *_: 'branch-session')
+    monkeypatch.setattr('loopx.hosts.research_checkpoint._context_session', lambda *_, **__: 'branch-session')
     before=run('todo','list','--goal-id','branch','--todo-id',destination_todo)
     args=dict(source_todo_id=source_todo,todo_id=destination_todo,operation_id='context-adoption',
         expected_revision=before['authority_read']['provider_revision'],lease_key='branch-lease',lease_version=1)
@@ -227,7 +228,7 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
     assert 'source-revision:'+source_context['snapshot']['provider_revision'] in inspected['evidence_refs']
     assert 'Candidate 3 failed' in Path(result['artifact']).read_text()
     assert 'Candidate 999' not in Path(result['artifact']).read_text()
-    assert source_run('todo','list','--goal-id','source','--todo-id',source_todo)==source_before
+    assert_todo_read_unchanged(source_run('todo','list','--goal-id','source','--todo-id',source_todo),source_before)
     assert run('task-lease','inspect','--goal-id','branch','--todo-id',destination_todo)['lease']==lease['lease']
     if with_knowledge and lost_response is None:
         _ordinary_review_and_work(run, workspace, tmp_path, destination_todo, digest, monkeypatch)
@@ -238,7 +239,7 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
     if with_knowledge:
         assert replay['explore_knowledge']['appended_event_count'] == 0
         assert log.read_bytes() == imported_bytes
-    assert run('todo','list','--goal-id','branch','--todo-id',destination_todo)==after
+    assert_todo_read_unchanged(run('todo','list','--goal-id','branch','--todo-id',destination_todo),after)
     with pytest.raises(ValueError,match='execution authority changed'):
         adopt_todo_context(env,unit,digest,**{**args,'lease_version':999})
     with pytest.raises(ValueError,match='already has context'):
@@ -258,7 +259,7 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
     moved=run('todo','list','--goal-id','branch','--todo-id',destination_todo)
     with pytest.raises(ValueError,match='continuation rejected'):
         adopt_todo_context(env,unit,digest,**args)
-    assert run('todo','list','--goal-id','branch','--todo-id',destination_todo)==moved
+    assert_todo_read_unchanged(run('todo','list','--goal-id','branch','--todo-id',destination_todo),moved)
 
 
 def _ordinary_review_and_work(run, workspace, tmp_path, todo, digest, monkeypatch, work=None):
@@ -283,14 +284,14 @@ def _ordinary_review_and_work(run, workspace, tmp_path, todo, digest, monkeypatc
             'observed_reality': 'The current ordinary Goal reads the inherited rejected candidate.',
             'retained': ['Candidate 3 is rejected; keep candidate 7.'], 'evidence_refs': ['checkpoint:' + digest]}}
     initial = run('quota', 'should-run', *actor, '--todo-id', todo, '--turn-instance-id', 'ordinary-preparation',
-        '--runtime-profile', 'generic_cli', '--available-capability', 'shell')
+        '--runtime-profile', 'generic_cli', '--context-delivery', 'off', '--available-capability', 'shell')
     assert initial['interaction_contract']['agent_channel']['delivery_allowed']
     settle('ordinary-preparation', vision)
     review = run('quota', 'should-run', *actor, '--turn-instance-id', 'ordinary-review',
-        '--runtime-profile', 'generic_cli', '--available-capability', 'shell')
+        '--runtime-profile', 'generic_cli', '--context-delivery', 'off', '--available-capability', 'shell')
     assert review['interaction_contract']['mode'] == 'autonomous_replan'
     review = run('quota', 'should-run', *actor, '--todo-id', todo, '--turn-instance-id', 'ordinary-review',
-        '--runtime-profile', 'generic_cli', '--available-capability', 'shell')
+        '--runtime-profile', 'generic_cli', '--context-delivery', 'off', '--available-capability', 'shell')
     control = review['replan_action_packet']['stride_control']
     assert any(row['finding_id'] == 'negative-3' for row in control['explore_basis']['finding_refs'])
     decision = json.loads(json.dumps(control['minimal_example']))
@@ -321,7 +322,7 @@ def _ordinary_review_and_work(run, workspace, tmp_path, todo, digest, monkeypatc
     assert actual_decision['explore_review']['considered_refs'] == ['negative-3']
     # The accepted decision is read from canonical history, not the submitted JSON.
     following = run('quota', 'should-run', *actor, '--todo-id', todo, '--turn-instance-id', 'ordinary-experiment',
-        '--runtime-profile', 'generic_cli', '--available-capability', 'shell')
+        '--runtime-profile', 'generic_cli', '--context-delivery', 'off', '--available-capability', 'shell')
     assert following['interaction_contract']['agent_channel']['delivery_allowed']
     # Source history and operational observations are never used as current work.
     result_path = workspace / 'complete-experiment.json'

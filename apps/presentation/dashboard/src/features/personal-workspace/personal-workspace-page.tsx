@@ -1,22 +1,29 @@
+import {DocumentAttachment, isTextDocument} from "./document-attachment";
+import {appStewardUnavailableMessage} from "./app-steward-entry";
+import {AlertCircle, Bot, CalendarClock, CircleHelp, FileText, MessageCircleQuestion, Paperclip, Plus, RefreshCw, Send, Square, X} from "lucide-react";
+import {ContextHelp} from "./context-help";
+import {readSettingsRoute, writeSettingsRoute} from "./workspace-settings-route";
+import {hasConfiguredGoalChecks} from "../../data/goal-acceptance-observation";
 import {useDeliveryReview} from "./delivery-review-state";
 import {useGoalWorkspaceDigest} from "./goal-masthead";
-import { goalCreateRequest, goalCreationAgentId } from "./goal-create-request";
-import { todoCompletionPreviewFeedback, todoCompletionProofRequired } from "./todo-completion-feedback";
+import { goalCreateRequest, goalCreationAgentId, goalDraftReady } from "./goal-create-request";
+import { goalCreatedManagedSession } from "./goal-created-session";
+import { completedActionFeedback, todoCompletionPreviewFeedback, todoCompletionProofRequired } from "./todo-completion-feedback";
 import { readSteeringRequest, retainSteeringRequest, retireSteeringRequest, legacySteeringRequests, restoreLegacySteeringRequest } from "./steering-recovery";
-import { useConversationInputState } from "./use-conversation-input-state";
+import { conversationInputKey, useConversationInputState } from "./use-conversation-input-state";
 import { composerKeyAction } from "./composer-keyboard";
 import type { ConversationHistoryStatus } from "../../data/use-conversation-history";
-import { GoalDraftCard } from "./goal-draft-card";
+import { useConversationQueue } from "../../data/use-conversation-queue";
+import { ConversationQueue } from "./conversation-queue";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
-import { CollaborationCard } from "./collaboration-card";
+import {ConversationRequests, OriginalProjectRequests} from "./conversation-requests";
 import {
   compileActionReviewPlan,
   isStaleActionFailure,
 } from "../../../../../../loopx/control_plane/presentation/action_review_plan.js";
 import { refreshAttention } from "./attention-details";
 import { teamPlanAssignments, teamPlanAppliedLine, teamPlanAppliedOutcome, teamPlanFields, teamPlanGoalId, teamPlanLaneCount, teamPlanReceiptGapLanes, teamPlanTodoIds } from "./team-plan-preview";
-import { Suspense, lazy, useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type ReactNode } from "react";
-import { AlertCircle, Bot, CalendarClock, FileText, ListPlus, MessageCircleQuestion, Paperclip, Plus, RefreshCw, Send, X } from "lucide-react";
+import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type ReactNode } from "react";
 
 import {
   applyTypedAction,
@@ -33,34 +40,37 @@ import {
   setupGoalChannel,
   stewardPrompts,
   transitionTypedAction,
+  listTypedActions,
   typedActionProposalSchema,
   type GoalRepositoryContext,
   type LarkGoalConnection,
   type ManagerChannelBinding,
   type ManagerRuntimeSessionReadback,
+  type ManagedConversationTarget,
   type TypedActionProposal, agentBackendLabel } from "../../data/chat";
 import { useTypedActionReadback, useTypedActionProposalReadback } from "../../data/use-typed-action-readback";
 
 import { ChannelHeader } from "./channel-header";
+import { ComposerActions, ComposerRuntimeControls } from "./composer-controls";
 import { GoalLoopXMode } from "./goal-loopx-mode";
 import { GoalTeamResults } from "./goal-team-results";
-import {GoalExploreResults} from "./goal-explore-results";
 import { GoalManagedResults } from "./goal-managed-results";
 import { GoalResearchResults, type GoalResearchApi } from "./goal-research-results";
 import { sendLoopXMessage, type LoopXModeSnapshot } from "../../data/chat";
-import { MessageActivity } from "./message-activity";
 import { ChannelTimeline } from "./channel-timeline";
 import { ContextDrawer } from "./context-drawer";
 import { monitorScheduleReadback } from "./monitor-readback";
 import {GoalAgentWorkPage} from "./goal-agent-work-page";
 import { GoalSidebar } from "./goal-sidebar";
 import { GoalTasksView } from "./goal-tasks-view";
+import { GoalResearchMode } from "./goal-research-mode";
+import { GoalResearchWorkbench } from "./goal-research-workbench";
 import { GoalOverview, goalOverviewAttentionId } from "./goal-overview";
 import { GoalVitals, GoalVitalsSkeleton, type GoalVitalRegion } from "./goal-masthead";
 import { GoalWorkspacePanels } from "./goal-workspace-panels";
-import { localizedGoalState, localizedSessionStatus, useWorkspaceI18n, type WorkspaceTranslate } from "./i18n";
-import { MarkdownText } from "./markdown";
-import { ReturnDeliveryStatus } from "./return-delivery-status";
+import {GoalWorkBrowseProvider, readGoalWorkBrowse, type GoalWorkBrowseState} from "./goal-work-browse";
+import { localizedSessionStatus, useWorkspaceI18n, type WorkspaceTranslate } from "./i18n";
+import {returnedAnswerStart} from "./message-reading";
 import type {
   PersonalWorkspaceCallbacks,
   WorkspaceAgentOption,
@@ -87,6 +97,9 @@ import { GoalActivityChip, GoalIdentityMark } from "./goal-activity-view";
 import { ManagerBrief } from "./manager-brief";
 // Loaded on demand: settings and their editors are a separate chunk that
 // arrives when the owner first opens Settings, not on every workspace visit.
+const ContentProductionResults = lazy(() => import("./content-production-results").then(module => ({default: module.ContentProductionResults})));
+const GoalReportReviews = lazy(() => import("./goal-report-reviews").then(module => ({default: module.GoalReportReviews})));
+
 const WorkspaceSettingsPage = lazy(() => import("./workspace-settings-page").then((module) => ({ default: module.WorkspaceSettingsPage })));
 import { UsageStatisticsNotice } from "./usage-statistics-notice";
 import { readWorkspaceTheme, writeWorkspaceTheme, type WorkspaceTheme } from "./workspace-theme";
@@ -106,6 +119,8 @@ import { deriveRuntimeReadiness, runtimeRequirement, runtimeSetupGuideUrl, type 
 import { buildSeenMarker, compareSeenMarker, readSeenMarker, seenMarkerStorage, seenMarkerStorageKey, writeSeenMarker, type SeenMarkerInput, type SinceYouLookedDelta } from "./since-you-looked";
 import { deriveGoalSuggestions, type GoalSuggestion } from "./goal-suggestions";
 import { projectGoalAcceptanceCriteria } from "../../data/goal-acceptance-observation";
+import { WorkspaceCommandPalette } from "./workspace-command-palette";
+import { workspaceCommandEntries } from "./workspace-command-entries";
 import { WorkspaceShell } from "./workspace-shell";
 import type { StatusSourceControl } from "./status-source-switcher";
 import "./personal-workspace.css";
@@ -114,7 +129,7 @@ function dedupeProposals(proposals: WorkspaceActionPreview[]): WorkspaceActionPr
   const latest = new Map<string, WorkspaceActionPreview>();
   proposals.forEach((proposal) => {
     const subject = proposal.fields.find((field) => field.key === "todo_id")?.value ?? "";
-    const key = proposal.actionKind === "operation.execute" ? proposal.previewId
+    const key = proposal.actionKind === "operation.execute" || proposal.reviewPlan?.taskExecution ? proposal.previewId
       : [proposal.actionKind, proposal.goalId ?? "", subject, proposal.title].join(":");
     // Two records can describe the same draft; keep the newest by its stored
     // time rather than whichever one this list happened to end with, since a
@@ -161,6 +176,8 @@ function RuntimeReadinessNotice({ readiness, rechecking, onRecheck }: { readines
 
 function ManagerHomeBoard({
   goals,
+  attention,
+  onSelectAttention,
   onSelectGoal,
   onRetry,
   onRetrySource,
@@ -173,9 +190,10 @@ function ManagerHomeBoard({
   systemHealth,
   operations,
   onSelectOperation,
-  onViewAllOperations,
 }: {
   goals: WorkspaceGoal[];
+  attention: WorkspaceAttention[];
+  onSelectAttention: (item: WorkspaceAttention) => void;
   onSelectGoal: (goalId: string) => void;
   onRetry?: () => void;
   /** Re-read the whole source after its latest read failed. */
@@ -189,7 +207,6 @@ function ManagerHomeBoard({
   systemHealth?: WorkspaceSystemHealth;
   operations: WorkspaceActionPreview[];
   onSelectOperation: (proposal: WorkspaceActionPreview) => void;
-  onViewAllOperations: () => void;
 }) {
   const { locale, t } = useWorkspaceI18n();
   const currentGoals = goals.filter((goal) => goal.activationState === "active");
@@ -279,8 +296,9 @@ function ManagerHomeBoard({
           <button className="min-h-11 rounded-md border px-3 py-2 text-sm" onClick={onRetry} type="button">{t("startup.retryFailed")}</button></div> : null}
         {currentGoals.filter((goal) => goal.loadState).map(goalCard)}
       </section> : null}
-      {currentGoals.some((goal) => !goal.loadState) ? <ManagerBrief goals={goals} onSelectGoal={onSelectGoal}
-        operations={operations} onSelectOperation={onSelectOperation} onViewAllOperations={onViewAllOperations} /> : null}
+      {goals.some((goal) => !goal.loadState) ? <ManagerBrief goals={goals} onSelectGoal={onSelectGoal}
+        attention={attention} onSelectAttention={onSelectAttention}
+        operations={operations} onSelectOperation={onSelectOperation} /> : null}
       {onboarding?.kind === "no_goals" && goals.length === 0 ? null : <h2 className="personal-home-section-title">{t("home.allGoals")}</h2>}
       <div className="personal-home-lanes">
         {activeHomeLanes.filter((lane) => active[lane.key].length > 0).map((lane) => (
@@ -309,6 +327,8 @@ function GoalOutputsView({
   goalId,
   localResults,
   researchApi,
+  production,
+  reviewMaterials,
 }: {
   active: boolean;
   items: Array<Extract<WorkspaceTimelineItem, { kind: "output" }>>;
@@ -318,6 +338,8 @@ function GoalOutputsView({
   goalId: string;
   localResults: boolean;
   researchApi?: GoalResearchApi;
+  production?: ReactNode;
+  reviewMaterials?: ReactNode;
 }) {
   const { locale, t } = useWorkspaceI18n();
   const [teamSnapshot, setTeamSnapshot] = useState<LoopXModeSnapshot | null>(null);
@@ -343,8 +365,9 @@ function GoalOutputsView({
     && teamSnapshot?.settings.agent_id && teamSnapshot?.settings.execution_config);
   return (
     <>
-      <section className="personal-object-list personal-files-list" data-testid="personal-goal-outputs">
-        <header><strong>{t("files.title")}</strong>{!teamConfigured ? <span>{items.length}</span> : null}</header>
+      {reviewMaterials}
+      {items.length > 0 || reportState?.loading || reportState?.error || !production ? <section className="personal-object-list personal-files-list" data-testid="personal-goal-outputs">
+        <header><strong>{t("files.title")}</strong>{!teamConfigured && !production ? <span>{items.length}</span> : null}</header>
         {reportState?.loading ? (
           <p className="personal-object-list-state" role="status"><RefreshCw className="is-spinning" size={14} />{t("files.loadingReports")}</p>
         ) : null}
@@ -367,106 +390,15 @@ function GoalOutputsView({
             ].filter(Boolean).join(" · ")}</small>
           </button>
         ))}
-        {localResults ? <GoalManagedResults goalId={goalId} zh={locale === "zh-CN"} /> : null}
-      </section>
-      {active && localResults ? <GoalExploreResults key={goalId} goalId={goalId} zh={locale === "zh-CN"} /> : null}
-      {active && researchApi ? <GoalResearchResults key={`${goalId}:${researchApi.indexUrl}:${researchApi.detailUrl}`} goalId={goalId} api={researchApi} zh={locale === "zh-CN"} /> : null}
+        {localResults && !production ? <GoalManagedResults goalId={goalId} zh={locale === "zh-CN"} catalogOnly /> : null}
+      </section> : null}
+      {production}
+      {production && localResults ? <GoalManagedResults goalId={goalId} zh={locale === "zh-CN"} hideEmpty catalogOnly /> : null}
+      {active && researchApi ? <GoalResearchResults key={`${goalId}:${researchApi.indexUrl}:${researchApi.detailUrl}`} goalId={goalId} api={researchApi} zh={locale === "zh-CN"} catalogOnly /> : null}
       {active && teamSessionId && !teamSnapshot && !teamError ? <p className="personal-object-list-state" role="status">{t("files.checkingTeam")}</p> : null}
       {active && teamSessionId && teamError ? <p className="personal-object-list-state is-error" role="alert">{t("files.teamLoadFailed")} <button type="button" onClick={() => setTeamRefresh(value => value + 1)}>{t("startup.retry")}</button></p> : null}
-      {active && teamConfigured && teamSessionId ? <GoalTeamResults sessionId={teamSessionId} zh={locale === "zh-CN"} refreshKey={JSON.stringify(teamSnapshot?.deliveries ?? [])} /> : null}
+      {active && teamConfigured && teamSessionId ? <GoalTeamResults sessionId={teamSessionId} zh={locale === "zh-CN"} refreshKey={JSON.stringify(teamSnapshot?.deliveries ?? [])} catalogOnly /> : null}
     </>
-  );
-}
-
-function ManagerConversationTray({
-  agentLabel,
-  messages,
-  onClose,
-  onDraftTask,
-  onReviewGoalDraft,
-  onSuggestReply,
-  onOpenConversation,
-  onInterruptTurn,
-  onAdjustTurn,
-  onCancelPreparation,
-  title,
-}: {
-  agentLabel?: string;
-  messages: Array<Extract<WorkspaceTimelineItem, { kind: "message" }>['message']>;
-  onClose?: () => void;
-  onDraftTask?: (text: string) => void;
-  onReviewGoalDraft?: (draft: GoalDraft, edit?: boolean, draftId?: string) => Promise<void>;
-  onSuggestReply?: (text: string) => void;
-  onOpenConversation: () => void;
-  onInterruptTurn?: (turnId: string) => Promise<void>;
-  onAdjustTurn?: (turnId: string) => void;
-  onCancelPreparation?: () => void;
-  title?: string;
-}) {
-  const { t } = useWorkspaceI18n();
-  const latestUserIndex = messages.reduce((latest, message, index) => message.role === "user" ? index : latest, 0);
-  const latestExchange = messages.slice(Math.max(0, latestUserIndex));
-  const visibleMessages = latestExchange.slice(-3);
-  const latestAssistantMessage = visibleMessages.filter((item) => item.role === "assistant" && !item.pending).at(-1);
-
-  useEffect(() => {
-    if (!onClose) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
-
-  return (
-    <aside aria-label={t("conversation.receipt")} className="personal-manager-conversation-tray">
-      <header>
-        <span>
-          <Bot size={16} />
-          <strong>{title ?? t("conversation.title")}</strong>
-          <small>{messages.at(-1)?.pending ? t("conversation.replying") : t("common.recently")}</small>
-        </span>
-        <div className="personal-manager-conversation-actions">
-          {onDraftTask && latestAssistantMessage ? (
-            <button
-              className="personal-manager-conversation-btn"
-              onClick={() => onDraftTask(latestAssistantMessage.text)}
-              title={t("conversation.convertHint")}
-              type="button"
-            >
-              <ListPlus size={13} />
-              <span>{t("conversation.toTask")}</span>
-            </button>
-          ) : null}
-          <button className="personal-manager-conversation-link" onClick={onOpenConversation} type="button">{t("conversation.full")}</button>
-          {onClose ? (
-            <button
-              aria-label={t("conversation.close")}
-              className="personal-manager-conversation-close"
-              onClick={onClose}
-              title={t("conversation.close")}
-              type="button"
-            >
-              <X size={14} />
-            </button>
-          ) : null}
-        </div>
-      </header>
-      <div aria-live="polite" className="personal-manager-conversation-messages">
-        {visibleMessages.map((message) => (
-          <article className={`is-${message.role}`} key={message.id}>
-            <strong>{message.role === "user" ? t("common.you") : message.agentLabel ?? agentLabel ?? t("header.manager")}</strong>
-            <div className="personal-manager-conversation-bubble">
-              {message.role === "user" ? <p>{message.text}</p> : <MarkdownText text={message.text} />}
-              {message.role === "assistant" ? <MessageActivity message={message} onInterruptTurn={onInterruptTurn} onAdjustTurn={onAdjustTurn} onCancelPreparation={onCancelPreparation} /> : null}
-              {message.role === "assistant" && !message.pending && message.goalDraft ? <GoalDraftCard draftId={`${message.sourceSessionId ?? ""}:${message.id}`} draft={message.goalDraft} onReview={onReviewGoalDraft} onSuggest={onSuggestReply}/> : null}
-              <CollaborationCard request={message.collaboration} />
-              <ReturnDeliveryStatus delivery={message.returnDelivery} />
-            </div>
-          </article>
-        ))}
-      </div>
-    </aside>
   );
 }
 
@@ -646,6 +578,7 @@ function proposalFields(parameters: Record<string, unknown>, t: WorkspaceTransla
   };
   const priority = ["title", "objective", "completion_criteria", "execution_boundary", "permission", "agent_id", "workspace_ref", "initial_todos", "heartbeat", "stop_condition", "goal_id"];
   return Object.entries(parameters)
+    .filter(([key]) => key !== "start_execution")
     .sort(([left], [right]) => {
       const leftIndex = priority.indexOf(left);
       const rightIndex = priority.indexOf(right);
@@ -781,13 +714,18 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
   return {
     actionKind: proposal.action_kind,
     todoId: typeof proposal.normalized_parameters.todo_id === "string" ? proposal.normalized_parameters.todo_id : undefined,
+    todoOperation: proposal.action_kind === "todo.update" && typeof proposal.normalized_parameters.operation === "string"
+      ? proposal.normalized_parameters.operation : undefined,
     reviewPlan,
+    createdManagedSession: goalCreatedManagedSession(proposal),
     fields: proposal.action_kind === "operation.execute"
       ? operationProposalFields(proposal, reviewPlan, t)
       : proposal.action_kind === "team.plan"
       ? teamPlanFields(proposal.normalized_parameters, t)
       : decision ? []
-      : proposalFields(proposal.normalized_parameters, t, proposal.workspace_binding).filter(field => !reviewPlan.creationProgress?.goalId
+      : proposalFields(proposal.normalized_parameters, t, proposal.workspace_binding)
+        .filter(field => !(reviewPlan.creationExecution && ["permission", "title", "heartbeat", "stop_condition", "initial_todos", "goal_id"].includes(field.key)))
+        .filter(field => !reviewPlan.creationProgress?.goalId
         || proposal.status === "applied"
         || ["objective", "completion_criteria", "execution_boundary", "permission", "workspace_ref"].includes(field.key)),
     goalId: typeof proposal.normalized_parameters.goal_id === "string" ? proposal.normalized_parameters.goal_id : undefined,
@@ -809,7 +747,7 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
         : proposal.status === "applied" ? t("proposal.teamPlan.assignedHint") : t("proposal.impact.teamPlan")
       : decision ? proposal.status === "applied" ? "" : t(`proposal.impact.gate.${decision}`)
       : proposal.action_kind === "goal.create"
-      ? t("proposal.impact.goalCreate")
+      ? t(reviewPlan.creationExecution ? "proposal.impact.goalCreateExecution" : "proposal.impact.goalCreate")
       : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "stop"
         ? t("proposal.impact.lifecycleStop")
         : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "delete"
@@ -851,7 +789,7 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
         ? t("proposal.primary.operationGroup") : t("proposal.primary.operationDeliveryPending")
       : proposal.action_kind === "team.plan" ? t(proposal.status === "applied" ? "proposal.teamPlan.viewResult" : "proposal.primary.teamPlan")
       : decision ? t(`proposal.primary.gate.${decision}`)
-      : proposal.action_kind === "goal.create" ? t("proposal.primary.goalCreate")
+      : proposal.action_kind === "goal.create" ? t(reviewPlan.creationExecution ? "proposal.primary.goalCreate" : "proposal.primary.goalCreateOnly")
       : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "stop"
         ? t("proposal.primary.lifecycleStop")
         : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "delete"
@@ -880,13 +818,22 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
 }
 
 const acceptedImageTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+const documentMime = (file: File) => /\.md$/i.test(file.name) ? "text/markdown" : /\.txt$/i.test(file.name) ? "text/plain" : null;
 const maxImageAttachmentBytes = 5 * 1024 * 1024;
 const maxImageAttachmentCount = 4;
 // Project refs are alphanumeric, so this value can never name a workspace.
 const stewardScopeValue = "@steward";
 const maxImageAttachmentTotalBytes = 12 * 1024 * 1024;
 
-function readImageAttachment(file: File, t: WorkspaceTranslate): Promise<WorkspaceImageAttachment> {
+async function readImageAttachment(file: File, t: WorkspaceTranslate): Promise<WorkspaceImageAttachment> {
+  const mime = documentMime(file);
+  if (mime) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const text = new TextDecoder("utf-8", {fatal: true, ignoreBOM: true}).decode(bytes);
+    if (text.includes("\0")) throw new Error("UTF-8 text required; binary files are not supported.");
+    const dataUrl = `data:${mime};base64,${btoa(Array.from(bytes, byte => String.fromCharCode(byte)).join(""))}`;
+    return {dataUrl, id: crypto.randomUUID(), mimeType: mime, name: file.name, size: bytes.length};
+  }
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error(t("composer.imageReadError", { name: file.name })));
@@ -906,18 +853,22 @@ export function PersonalWorkspacePage({
   conversationSupportsSteering = false,
   conversationSessionId,
   conversationHistoryState,
+  conversationMessageFocus,
+  observedConversationRunning = false,
+  workBrowseSearch,
+  onWorkBrowseChange,
   agents = [{ agentId: "codex", available: true, capability: "代码与项目执行", label: "Codex" }],
   callbacks = {},
   goalArchiveLoadState = { error: null, phase: "ready" },
   selectedView: controlledView,
   selectedTodoId: routedTodoId,
   selectedWorkAgentId,
+  selectedWorkSessionId,
   managerChannelBinding,
   managerRuntime,
   model,
   researchApi,
-  readOnly = false,
-  typedActionsRevision = 0,
+  readOnly: sourceReadOnly = false,
   selectedAgentId: controlledAgentId,
   selectedAgentModelId,
   selectedAgentModelReadback,
@@ -938,12 +889,17 @@ export function PersonalWorkspacePage({
   conversationSupportsSteering?: boolean;
   conversationSessionId?: string;
   conversationHistoryState?: ConversationHistoryStatus;
+  conversationMessageFocus?: {sessionId: string; messageId: string};
+  observedConversationRunning?: boolean;
+  workBrowseSearch?: Record<string, unknown>;
+  onWorkBrowseChange?: (patch: Partial<GoalWorkBrowseState>, source: string, replace?: boolean) => void;
   agents?: WorkspaceAgentOption[];
   callbacks?: PersonalWorkspaceCallbacks;
   goalArchiveLoadState?: WorkspaceGoalArchiveLoadState;
   selectedView?: WorkspaceGoalTab;
   selectedTodoId?: string | null;
   selectedWorkAgentId?: string | null;
+  selectedWorkSessionId?: string;
   managerChannelBinding?: ManagerChannelBinding | null;
   managerRuntime?: ManagerRuntimeSessionReadback | null;
   model: WorkspaceModel;
@@ -963,22 +919,39 @@ export function PersonalWorkspacePage({
 }) {
   const { locale, t } = useWorkspaceI18n();
   const [localGoalId, setLocalGoalId] = useState<string | null>(controlledGoalId ?? null);
+  const sourceGoal = model.goals.find(goal => goal.goalId === (controlledGoalId === undefined ? localGoalId : controlledGoalId));
+  const directoryReadSourceUrl = statusSourceControl?.activeSource.kind === "runtime"
+    && statusSourceControl.connectionState !== "loading" && statusSourceControl.connectionState !== "error"
+    ? statusSourceControl.activeSource.statusUrl : undefined;
+  const researchReadSourceUrl = sourceGoal?.sourceAccess
+    ? `/status.json?source_namespace=${sourceGoal.sourceAccess.namespace}` : directoryReadSourceUrl;
+  const readOnly = sourceReadOnly || sourceGoal?.sourceAccess?.readOnly === true;
+  const hostReadOnly = statusSourceControl?.activeSource.readOnly ?? sourceReadOnly;
   const [localAgentId, setLocalAgentId] = useState(controlledAgentId ?? agents.find((agent) => agent.available)?.agentId ?? "codex");
   const selectionScope = `${statusSourceControl?.activeSource.statusUrl ?? "/status.json"}:${controlledGoalId === undefined ? localGoalId : controlledGoalId}`;
-  const [selectionState, setSelectionState] = useState<{scope: string; value: WorkspaceDrawerSelection | null} | null>(null);
+  const runtimeSourceUnavailable = statusSourceControl?.activeSource.kind === "runtime"
+    && statusSourceControl.connectionState === "error";
+  const [selectionState, setSelectionState] = useState<{scope: string; value: WorkspaceDrawerSelection | null} | null>(
+    () => ({scope: selectionScope, value: readSettingsRoute(new URL(window.location.href))}));
   const selection = selectionState?.scope === selectionScope ? selectionState.value : null;
   const currentSelectionScope = useRef({scope: selectionScope, generation: 0});
   if (currentSelectionScope.current.scope !== selectionScope) {
     currentSelectionScope.current = {scope: selectionScope, generation: currentSelectionScope.current.generation + 1};
   }
   const selectionGeneration = currentSelectionScope.current.generation;
+  const selectionRevision = useRef(0);
   function setSelection(value: WorkspaceDrawerSelection | null) {
     if (currentSelectionScope.current.generation !== selectionGeneration) return;
+    selectionRevision.current += 1;
     setSelectionState({scope: selectionScope, value});
     const todoId = value?.kind === "todo" ? value.item.todoId : null;
     if (todoId !== (routedTodoId ?? null)) callbacks.onSelectTodo?.(todoId);
   }
   const restoredTodoRoute = useRef("");
+  const paletteContext = `${selectionScope}:${sourceGoal?.sourceAccess?.namespace ?? ""}`;
+  const paletteUnavailable = statusSourceControl?.connectionState === "error";
+  const [paletteScope, setPaletteScope] = useState<string | null>(null);
+  useEffect(() => setPaletteScope(null), [paletteContext]);
   const [railScope, setRailScope] = useState<string | null>(null);
   const [taskInspectorExpanded, setTaskInspectorExpanded] = useState(false);
   const [activeSessionRun, setActiveSessionRun] = useState<WorkspaceRun | null>(null);
@@ -986,6 +959,7 @@ export function PersonalWorkspacePage({
   const [localView, setLocalView] = useState<WorkspaceGoalTab>("overview");
   const selectedGoalTab = controlledView ?? localView;
   const agentWorkActive = Boolean(controlledGoalId === undefined ? localGoalId : controlledGoalId) && selectedGoalTab === "chat" && selectedWorkAgentId != null;
+  const managedWorkActive = agentWorkActive && selectedWorkSessionId?.startsWith("managed:") === true;
   const workReturn = useRef<{scope: string; agentId: string} | null>(null);
   useEffect(() => {
     if (agentWorkActive) {workReturn.current = {scope: selectionScope, agentId: selectedWorkAgentId!}; return;}
@@ -1000,17 +974,24 @@ export function PersonalWorkspacePage({
     return () => cancelAnimationFrame(frame);
   }, [agentWorkActive, selectionScope, selectedWorkAgentId, selectedGoalTab]);
   const selectedWorkspaceRef = workspaceConversations?.selectedRef ?? null;
+  const originalConversation = workspaceConversations?.bound;
+  const originalSourceUnresolved = Boolean(originalConversation && !originalConversation.session);
+  const originalTitle = originalConversation?.source?.project_title
+    ?? (locale === "zh-CN" ? "原会话" : "Original conversation");
   const selectedWorkspaceProject = workspaceConversations?.projects?.find((project) => project.project_ref === selectedWorkspaceRef) ?? null;
   // A workspace scope exists only inside the steward conversation tab.
   const managerChatOpen = selectedWorkspaceRef !== null || selectedGoalTab === "chat";
   const workspaceUnavailable = selectedWorkspaceRef !== null && workspaceConversations?.projects != null && !selectedWorkspaceProject;
   const workspaceTitle = selectedWorkspaceRef ? selectedWorkspaceProject?.title ?? t("workspace.unknownTitle") : null;
   function setSelectedGoalTab(view: WorkspaceGoalTab) {
+    if (view === "chat" && originalConversation && workspaceConversations?.onOpenOriginal) {
+      workspaceConversations.onOpenOriginal(originalConversation.target);
+      return;
+    }
     setLocalView(view);
     callbacks.onSelectView?.(view);
   }
-  const [managerConversationReceiptVisible, setManagerConversationReceiptVisible] = useState(false);
-  const [goalConversationReceiptVisible, setGoalConversationReceiptVisible] = useState(false);
+  const [selectedReportReview, setSelectedReportReview] = useState<{goalId: string; todoId: string} | null>(null);
   const [actionDraft, setActionDraft] = useState<WorkspaceActionDraft | null>(null);
   const [loopxMode, setLoopxMode] = useState<LoopXModeSnapshot | null>(null);
   const [loopxDelivery, setLoopxDelivery] = useState<"queue" | "inbox" | "steer">("queue");
@@ -1042,6 +1023,8 @@ export function PersonalWorkspacePage({
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const channelScrollRef = useRef<HTMLDivElement>(null);
   const followConversationRef = useRef(true);
+  const readReturnRef = useRef<string | undefined>(undefined);
+  const conversationScrollTopRef = useRef(0);
   const [showLatestMessage, setShowLatestMessage] = useState(false);
   const settingsReturnFocusRef = useRef<HTMLElement | null>(null);
   const settingsFromModelMenuRef = useRef(false);
@@ -1053,6 +1036,7 @@ export function PersonalWorkspacePage({
   const actionReadback = useTypedActionReadback(readOnly, selectedGoalId);
   const selectedAgentId = controlledAgentId ?? localAgentId;
   const goalAgentId = goalCreationAgentId(selectedAgentId, agents);
+  const goalDraftPreparations = useRef(new Map<string, Promise<WorkspaceActionPreview>>());
   // Only execution runtimes count: the read-only status projection answers
   // questions but runs nothing, and the loading placeholder is not a fact.
   const runtimeReadiness = useMemo(() => deriveRuntimeReadiness(agents
@@ -1074,57 +1058,122 @@ export function PersonalWorkspacePage({
     setRecheckingRuntimes(true);
     callbacks.onRecheckRuntimes();
   }
-  const conversationKey = selectedWorkspaceRef
+  const conversationKey = workspaceConversations?.managed ? conversationContextKey({kind: "managed", ...workspaceConversations.managed.target}) : originalConversation ? conversationContextKey({ kind: "bound", ...originalConversation.target }) : selectedWorkspaceRef
     ? conversationContextKey({ kind: "project", projectRef: selectedWorkspaceRef })
     : selectedGoalId ?? "manager";
-  const composerDraftKey = `${conversationKey}:${selectedAgentId}`;
+  const composerDraftKey = conversationInputKey(conversationKey, selectedAgentId, managedWorkActive || Boolean(originalConversation));
+  const [modelSettingsSaving, setModelSettingsSaving] = useState<Record<string, boolean>>({});
+  async function saveModelSettings(change: () => void | Promise<void>) {
+    const key = composerDraftKey;
+    setModelSettingsSaving(current => ({...current, [key]: true}));
+    try { await change(); }
+    finally { setModelSettingsSaving(current => { const next = {...current}; delete next[key]; return next; }); }
+  }
   const { composer, setComposer, restoreFailedSubmission,
     sending, setSending, steering, setSteering, actionFeedback, setActionFeedback,
     imageAttachments, setImageAttachments, imageAttachmentError, setImageAttachmentError,
     loopxMessageReceipt, setLoopxMessageReceipt, isCurrentConversation,
-  } = useConversationInputState(composerDraftKey);
+    retainedDrafts, restoreRetainedDraft,
+  } = useConversationInputState(composerDraftKey, Boolean(originalConversation));
   useEffect(() => {
     const input = composerRef.current;
     if (!input) return;
-    input.style.height = "auto";
-    input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+    const resize = () => {
+      input.style.height = "auto";
+      input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+    };
+    resize();
+    let width = input.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (input.clientWidth === width) return;
+      width = input.clientWidth;
+      resize();
+    });
+    observer.observe(input);
+    return () => observer.disconnect();
   }, [composer, selectedGoalId, managerChatOpen]);
   async function reviewGoalDraft(draft: GoalDraft, edit = false, draftId = "") {
     // Source message + reviewed contents survive retry without merging distinct requests.
-    if (!edit && !draft.question && draft.completion_criteria.trim()) {
-      const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(
-        JSON.stringify([draftId, draft, goalAgentId, locale])));
-      const operationId = Array.from(new Uint8Array(bytes), value => value.toString(16).padStart(2, "0")).join("");
-      await createPreview(goalCreateRequest({ objective: draft.objective,
-        completion: draft.completion_criteria, boundary: draft.execution_boundary,
-        permission: "read_only", agentId: goalAgentId, contextGoalId: null, operationId }, t));
-      return;
+    if (!edit && goalDraftReady(draft)) {
+      // Keep existing locale-scoped operation ids compatible, but discover
+      // both languages so changing presentation cannot duplicate a Goal.
+      const operationIds = await Promise.all((["zh-CN", "en"] as const).map(async language => {
+        const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(
+          JSON.stringify([draftId, draft, goalAgentId, language])));
+        return Array.from(new Uint8Array(bytes), value => value.toString(16).padStart(2, "0")).join("");
+      }));
+      const operationId = operationIds[locale === "zh-CN" ? 0 : 1];
+      const preparationKey = JSON.stringify([selectionScope, draftId, draft, goalAgentId]);
+      const pendingPreparation = goalDraftPreparations.current.get(preparationKey);
+      if (pendingPreparation) return await pendingPreparation;
+      const preparation = (async () => {
+        // A reload or language change reads the original operation before
+        // preparing anything. Cached data cannot certify a failed read.
+        const readback = await listTypedActions({contextKind: "manager"});
+        const recorded = readback.find(proposal => proposal.action_kind === "goal.create"
+          && operationIds.some(id => proposal.idempotency_key === `workspace-goal.create-${id}`
+            && proposal.normalized_parameters.goal_id === `goal-${id}`));
+        if (recorded) return workspaceProposal(recorded, t);
+        return await createPreview(goalCreateRequest({ objective: draft.objective,
+          completion: draft.completion_criteria, boundary: draft.execution_boundary,
+          permission: "read_only", agentId: goalAgentId, contextGoalId: null, operationId,
+          startExecution: agents.find(agent => agent.agentId === goalAgentId)?.adapterKind === "codex_app_server" }, t), { select: false });
+      })();
+      goalDraftPreparations.current.set(preparationKey, preparation);
+      try { return await preparation; }
+      finally { goalDraftPreparations.current.delete(preparationKey); }
     }
     setActionDraft({ kind: "goal", goalId: null, goalTitle: "", agentId: goalAgentId,
       text: draft.objective, completionCriteria: draft.completion_criteria,
       executionBoundary: draft.execution_boundary, permission: "read_only" });
+  }
+  async function confirmGoalDraft(proposal: WorkspaceActionPreview) {
+    if (readOnly) throw new Error(t("source.readOnlyWriteError"));
+    if (proposal.actionKind !== "goal.create") throw new Error(t("actionReview.targetChanged"));
+    const current = proposals[proposal.previewId] ?? proposal;
+    if (!current.reviewPlan?.canApply) {
+      setSelection({ item: current, kind: "proposal" });
+      return current;
+    }
+    return await applyProposal(current, { presentation: "inline" });
   }
   function suggestReply(text: string) {
     setComposer(composer ? `${composer}\n${text}` : text);
     composerRef.current?.focus();
   }
   // A draft for another Goal waits until that Goal's composer is the visible one.
-  const [composerPrefill, setComposerPrefill] = useState<{ goalId: string; text: string } | null>(null);
+  const [composerPrefill, setComposerPrefill] = useState<{ goalId: string; text: string; workAgentId?: string; workSessionId?: string; statusUrl?: string } | null>(null);
   useEffect(() => {
     if (!composerPrefill || composerPrefill.goalId !== selectedGoalId) return;
+    if (composerPrefill.statusUrl && composerPrefill.statusUrl !== (statusSourceControl?.activeSource.statusUrl ?? "/status.json")) {
+      setComposerPrefill(null); return;
+    }
+    if (composerPrefill.workAgentId && (selectedWorkAgentId !== composerPrefill.workAgentId || !selectedWorkSessionId)) return;
+    if (composerPrefill.workSessionId && (selectedWorkSessionId !== composerPrefill.workSessionId
+        || !workspaceConversations?.managed || `managed:${workspaceConversations.managed.target.sessionId}` !== composerPrefill.workSessionId)) return;
     setComposerPrefill(null);
     suggestReply(composerPrefill.text);
-  }, [composerPrefill, selectedGoalId]);
+  }, [composerPrefill, selectedGoalId, selectedWorkAgentId, selectedWorkSessionId, conversationKey, statusSourceControl?.activeSource.statusUrl]);
   function draftAttentionMessage(attention: WorkspaceAttention, intent: "reply" | "explain") {
     // A display summary is not a usable reply context: it may cut through a URL.
     const task = attention.details?.requestText ?? attention.text;
     const key = intent === "reply" ? "drawer.attentionReplyPrefill"
       : attention.details?.interaction === "decision" ? "drawer.decisionExplainPrefill" : "drawer.attentionExplainPrefill";
+    const reportAgent = attention.details?.reportReview ? attention.details.createdBy ?? attention.details.boundAgent : null;
     if (attention.goalId !== selectedGoalId) selectGoal(attention.goalId, "chat");
-    openGoalConversation();
+    if (reportAgent && callbacks.onSelectWorkAgent) {
+      setLocalView("chat"); setActiveSessionRun(null);
+      callbacks.onSelectWorkAgent(reportAgent,
+        attention.details?.reportSessionId ? `managed:${attention.details.reportSessionId}` : undefined);
+    } else openGoalConversation();
     setSelection(null);
     const reference = attention.details?.todoIdentified ? `\n\nTodo: ${attention.todoId}` : "";
-    setComposerPrefill({ goalId: attention.goalId, text: t(key, { task }) + reference });
+    setComposerPrefill({ goalId: attention.goalId, text: t(key, { task }) + reference,
+      ...(reportAgent && callbacks.onSelectWorkAgent ? {
+        workAgentId: reportAgent,
+        workSessionId: attention.details?.reportSessionId ? `managed:${attention.details.reportSessionId}` : undefined,
+        statusUrl: statusSourceControl?.activeSource.statusUrl ?? "/status.json",
+      } : {}) });
   }
   // The steward prompt set is owned by the client model; the quick-prompt row
   // reuses it so one affordance answers "what now / what blocks / what is proven".
@@ -1155,14 +1204,38 @@ export function PersonalWorkspacePage({
     [workspaceGoals],
   );
   const selectedGoal = workspaceGoals.find((goal) => goal.goalId === selectedGoalId) ?? null;
+  const workBrowseSource = researchReadSourceUrl ?? statusSourceControl?.activeSource.statusUrl ?? "/status.json";
+  const workBrowseKey = JSON.stringify([workBrowseSource, selectedGoalId]);
+  const routedWorkBrowse = readGoalWorkBrowse(workBrowseSearch ?? {}, selectedGoalId ?? "", workBrowseSource);
+  const [localWorkBrowse, setLocalWorkBrowse] = useState({scope: workBrowseKey, value: routedWorkBrowse});
+  const workBrowse = onWorkBrowseChange ? routedWorkBrowse
+    : localWorkBrowse.scope === workBrowseKey ? localWorkBrowse.value : routedWorkBrowse;
+  const changeWorkBrowse = (patch: Partial<GoalWorkBrowseState>, replace?: boolean) => {
+    if (onWorkBrowseChange) onWorkBrowseChange(patch, workBrowseSource, replace);
+    else setLocalWorkBrowse({scope: workBrowseKey, value: {...workBrowse, ...patch}});
+  };
   const rootUnavailable = Boolean(rootGoalId && !selectedGoal);
   function openSettings(target: Extract<WorkspaceDrawerSelection, { kind: "settings" }>, returnToModel = false) {
     settingsReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     settingsFromModelMenuRef.current = returnToModel;
     setMobileSidebarOpen(false);
+    writeSettingsRoute(target);
     setSelection(target);
   }
+  useEffect(() => {
+    const restore = () => {
+      const target = readSettingsRoute(new URL(window.location.href));
+      selectionRevision.current += 1;
+      // Task history has its own route reader. Leaving settings may clear its
+      // selection, but an unrelated history event must not clear a restored task.
+      setSelectionState(current => target ? {scope: currentSelectionScope.current.scope, value: target}
+        : current?.value?.kind === "settings" ? null : current);
+    };
+    window.addEventListener("popstate", restore);
+    return () => window.removeEventListener("popstate", restore);
+  }, []);
   function closeSettings() {
+    writeSettingsRoute(null, true);
     setSelection(null);
     window.requestAnimationFrame(() => {
       const target = settingsFromModelMenuRef.current
@@ -1172,7 +1245,8 @@ export function PersonalWorkspacePage({
       else document.querySelector<HTMLElement>(".personal-mobile-menu")?.focus({ preventScroll: true });
     });
   }
-  const settingsOpen = selection?.kind === "settings";
+  // Device settings belong to this host, even while a linked Goal is read-only.
+  const settingsOpen = selection?.kind === "settings" && !hostReadOnly;
   const managerProjectionId = selectedGoalId;
   const items = useMemo(() => {
     const heartbeatSchedules: WorkspaceTimelineItem[] = Object.values(proposals)
@@ -1255,22 +1329,6 @@ export function PersonalWorkspacePage({
     () => items.flatMap((item) => item.kind === "message" ? [item.message] : []),
     [items],
   );
-  const goalMessages = useMemo(
-    () => selectedGoal ? items.flatMap((item) => item.kind === "message" ? [item.message] : []) : [],
-    [items, selectedGoal],
-  );
-  useEffect(() => {
-    if (selectedGoal || managerChatOpen) return;
-    if (managerMessages.some((message) => message.pending)) {
-      setManagerConversationReceiptVisible(true);
-    }
-  }, [managerChatOpen, managerMessages, selectedGoal]);
-  useEffect(() => {
-    if (!selectedGoal || selectedGoalTab === "chat") return;
-    if (goalMessages.some((message) => message.pending)) {
-      setGoalConversationReceiptVisible(true);
-    }
-  }, [goalMessages, selectedGoal, selectedGoalTab]);
   // One composer; ordinary sends queue, while Command+Enter explicitly steers.
   const composingRef = useRef(false);
   useEffect(() => { composingRef.current = false; }, [composerDraftKey]);
@@ -1281,13 +1339,46 @@ export function PersonalWorkspacePage({
   const conversationTurnRunning = !loopxDeliveryOpen && !conversationQueuesFollowUps && Boolean(runningMessage);
   const steeringTurnId = conversationTurnRunning && conversationSupportsSteering && !readOnly
     && callbacks.onSteerConversationTurn ? runningMessage?.sourceTurnId : undefined;
-  const queueTurnId = conversationTurnRunning && !readOnly && callbacks.onQueueConversationTurn
+  const queueTurnId = !loopxDeliveryOpen && !readOnly && callbacks.onQueueConversationTurn
     ? runningMessage?.sourceTurnId : undefined;
-  const legacyDrafts = conversationSessionId ? legacySteeringRequests(conversationSessionId) : [];
+  const interruptTurnId = !readOnly && callbacks.onInterruptConversationTurn
+    ? runningMessage?.sourceTurnId : undefined;
+  const conversationQueue = useConversationQueue({
+    sessionId: !readOnly && !workspaceConversations?.entryGate ? conversationSessionId : undefined,
+    scope: `${statusSourceControl?.activeSource.statusUrl ?? "/status.json"}:${conversationKey}`,
+    active: Boolean(runningMessage || selectedAgentModelReadback?.active_turn_id),
+    refreshKey: `${managerMessages.length}:${Boolean(managerMessages.at(-1)?.pending)}:${steering}`,
+  });
+  const queueTurns = conversationQueue.readReady ? conversationQueue.turns : undefined;
+  const queuedTurnKeys = useMemo(() => queueTurns && new Set(queueTurns.map(turn =>
+    JSON.stringify([conversationSessionId, turn.turn_id]))), [queueTurns, conversationSessionId]);
+  const observedQueue = useRef<{scope: string; snapshot: string} | null>(null);
+  useEffect(() => {
+    const turnId = conversationQueue.activeTurnId;
+    if (!conversationSessionId || !conversationQueue.readReady || !callbacks.onObserveConversationQueue) return;
+    const scope = JSON.stringify([statusSourceControl?.activeSource.statusUrl, conversationKey, conversationSessionId]);
+    const snapshot = JSON.stringify([turnId, conversationQueue.turns.map(turn => turn.turn_id)]);
+    const previous = observedQueue.current;
+    if (previous?.scope === scope && previous.snapshot === snapshot) return;
+    observedQueue.current = {scope, snapshot};
+    if (previous?.scope !== scope && (!turnId || turnId === runningMessage?.sourceTurnId)) return;
+    // A queued Turn can start and finish between polls after reconnect. Its
+    // disappearance still requires original history, even with no live Turn.
+    void callbacks.onObserveConversationQueue(conversationKey, conversationSessionId).catch(() => {
+      if (observedQueue.current?.scope === scope && observedQueue.current.snapshot === snapshot) {
+        observedQueue.current = {scope, snapshot: ""};
+      }
+    });
+  }, [conversationQueue.activeTurnId, conversationQueue.turns, conversationQueue.readReady, conversationSessionId, runningMessage?.sourceTurnId,
+    callbacks.onObserveConversationQueue, conversationKey, statusSourceControl?.activeSource.statusUrl]);
+  const legacyDrafts = conversationSessionId ? legacySteeringRequests(conversationSessionId, composerDraftKey) : [];
   function restoreLegacyDraft(key: string) {
     if (composer.trim() || !conversationSessionId) return;
     const restored = restoreLegacySteeringRequest(composerDraftKey, key, conversationSessionId);
-    if (restored) setComposer(restored.text);
+    if (restored) {
+      setComposer(restored.text);
+      if (restored.delivery === "queue" && !imageAttachments.length) setImageAttachments(restored.attachments ?? []);
+    }
   }
   useEffect(() => {
     if (!conversationSessionId) return;
@@ -1303,8 +1394,10 @@ export function PersonalWorkspacePage({
   const retainedSteering = readSteeringRequest(composerDraftKey);
   const retryingSteering = retainedSteering && retainedSteering.sessionId === conversationSessionId
     && retainedSteering.text.trim() === composer.trim() ? retainedSteering : undefined;
-  const composerBlocked = steering || (!(retryingSteering || queueTurnId) && (sending || conversationTurnRunning));
-  const quickPromptBlocked = steering || sending || conversationTurnRunning;
+  const composerBlocked = Boolean(workspaceConversations?.entryGate) || steering || (!(retryingSteering || queueTurnId) && (sending || conversationTurnRunning));
+  const historyBlocksSend = Boolean(conversationHistoryState?.sendBlocked
+    || (originalConversation && conversationHistoryState?.phase === "unavailable"));
+  const quickPromptBlocked = Boolean(workspaceConversations?.entryGate) || Boolean(originalConversation && !originalConversation.session?.resumable) || steering || sending || conversationTurnRunning;
   // The Goal overview is for reading; its composer folds to one line until asked for.
   const [overviewComposerOpen, setOverviewComposerOpen] = useState(false);
   useEffect(() => setOverviewComposerOpen(false), [selectedGoalId, selectedGoalTab]);
@@ -1314,7 +1407,7 @@ export function PersonalWorkspacePage({
     composerRef.current?.focus();
     composerRef.current?.scrollIntoView({ block: "nearest" });
   }
-  const composerCollapsed = Boolean(selectedGoal) && selectedGoalTab === "overview" && !overviewComposerOpen
+  const composerCollapsed = Boolean(selectedGoal) && selectedGoalTab !== "chat" && !overviewComposerOpen
     && !composer.trim() && !actionDraft && !imageAttachments.length && !imageAttachmentError && !sending && !conversationTurnRunning;
   const managerChatItems = useMemo(
     () => items.filter((item) => item.kind === "message"
@@ -1322,30 +1415,148 @@ export function PersonalWorkspacePage({
         || managerChannelProposalIds.includes(item.proposal.previewId)))),
     [items, managerSessionProposalIds, managerChannelProposalIds],
   );
-  const conversationOpen = !agentWorkActive && (selectedGoal ? selectedGoalTab === "chat" : managerChatOpen);
-  const conversationMessages = selectedGoal ? goalMessages : managerMessages;
-  const latestMessage = conversationMessages.at(-1);
+  const boundManagerChat = Boolean(selectedWorkspaceRef || originalConversation);
+  const managerTimelineItems = useMemo(() => boundManagerChat
+    ? managerChatItems.filter(item => item.kind === "message") : managerChatItems, [boundManagerChat, managerChatItems]);
+  const managedTimelineItems = useMemo(() => visibleTimelineItems.filter(item => item.kind === "message"), [visibleTimelineItems]);
+  const managerTimelineUnavailable = Boolean(originalConversation && (originalSourceUnresolved
+    || (conversationHistoryState && conversationHistoryState.phase !== "ready")));
+  const managerTimelineTitle = managerTimelineUnavailable
+    ? originalConversation?.error || conversationHistoryState?.phase === "unavailable" || conversationHistoryState?.phase === "partial"
+      ? (locale === "zh-CN" ? "原会话暂不可用" : "Original conversation unavailable")
+      : (locale === "zh-CN" ? "正在读取原会话…" : "Reading the original conversation…")
+    : workspaceTitle;
+  const managerTimelineDescription = managerTimelineUnavailable ? "" : t("workspace.empty");
+  const managerTimelineEmpty = useMemo(() => managerTimelineTitle
+    ? {title: managerTimelineTitle, description: managerTimelineDescription} : undefined,
+    [managerTimelineTitle, managerTimelineDescription]);
+  const timelineKey = `${selectionScope}:${conversationKey}:${selectedAgentId}`;
+
+  // Draft edits do not change history. A retained history action still calls
+  // the latest committed handler in its own conversation.
+  const currentTimelineActions = useRef<typeof nextTimelineActions>(null);
+  const timelineActionTarget = agentWorkActive ? conversationKey : selectedGoal?.goalId ?? conversationKey;
+  const canCancelTimelineTurn = !readOnly && Boolean(callbacks.onCancelConversationPreparation);
+  const canInterruptTimelineTurn = !readOnly && Boolean(callbacks.onInterruptConversationTurn);
+  const goalDraftTargetChanged = t("actionReview.targetChanged");
+  const nextTimelineActions = {
+    key: timelineKey,
+    select: setSelection,
+    review: readOnly ? undefined : reviewGoalDraft,
+    apply: readOnly ? undefined : confirmGoalDraft,
+    suggest: readOnly ? undefined : suggestReply,
+    adjust: focusTurnComposer,
+    cancel: canCancelTimelineTurn ? () => callbacks.onCancelConversationPreparation?.(timelineActionTarget) : undefined,
+    interrupt: canInterruptTimelineTurn ? (turnId: string) => callbacks.onInterruptConversationTurn?.(timelineActionTarget, turnId) : undefined,
+    openEvidence: (goalId: string) => { selectGoal(goalId, "chat"); },
+  };
+  useLayoutEffect(() => { currentTimelineActions.current = nextTimelineActions; });
+  const timelineActions = useMemo(() => {
+    const current = () => currentTimelineActions.current?.key === timelineKey ? currentTimelineActions.current : null;
+    return {
+      onSelect: (value: WorkspaceDrawerSelection) => current()?.select(value),
+      onReviewGoalDraft: async (...args: Parameters<typeof reviewGoalDraft>) => current()?.review?.(...args),
+      onApplyGoalDraft: async (proposal: WorkspaceActionPreview) => {
+        const apply = current()?.apply;
+        if (!apply) throw new Error(goalDraftTargetChanged);
+        return apply(proposal);
+      },
+      onSuggestReply: (text: string) => current()?.suggest?.(text),
+      onAdjustTurn: (turnId: string) => current()?.adjust(turnId),
+      onCancelPreparation: () => current()?.cancel?.(),
+      onInterruptTurn: async (turnId: string) => { await current()?.interrupt?.(turnId); },
+      onOpenGoalEvidence: (goalId: string) => current()?.openEvidence(goalId),
+    };
+  }, [timelineKey, goalDraftTargetChanged]);
+  const conversationOpen = (!agentWorkActive || managedWorkActive) && (selectedGoal ? selectedGoalTab === "chat" : managerChatOpen);
+  const boundHistory = Boolean(originalConversation);
+  const onReadTimelineMessage = useCallback(() => { followConversationRef.current = false; }, []);
+  const historyPositionScope = JSON.stringify([selectionScope, conversationKey, selectedAgentId,
+    conversationMessageFocus?.sessionId, conversationMessageFocus?.messageId]);
+  const [positionedHistoryScope, setPositionedHistoryScope] = useState<string | null>(null);
+  const timelineReading = {
+    queuedTurnKeys,
+    messageFocus: conversationMessageFocus,
+    historyPhase: conversationHistoryState?.phase,
+    historyPositionReady: !boundHistory || (conversationOpen && positionedHistoryScope === historyPositionScope),
+    onRetryHistory: conversationHistoryState?.retry,
+    onReadMessage: onReadTimelineMessage,
+  };
+  const latestMessage = managerMessages.at(-1);
   const latestMessageTextLength = latestMessage?.text.length ?? 0;
   function scrollToLatestMessage() {
     followConversationRef.current = true;
     setShowLatestMessage(false);
     const scroller = channelScrollRef.current;
-    if (scroller) scroller.scrollTop = scroller.scrollHeight;
+    if (scroller) {
+      readReturnRef.current = returnedAnswerStart(scroller)?.key;
+      scroller.scrollTop = scroller.scrollHeight;
+      conversationScrollTopRef.current = scroller.scrollTop;
+    }
   }
-  useEffect(() => {
-    followConversationRef.current = true;
+  function readReturnedAnswer() {
+    const scroller = channelScrollRef.current;
+    const start = scroller ? returnedAnswerStart(scroller) : null;
+    if (!scroller || !start || start.key === readReturnRef.current) return false;
+    readReturnRef.current = start.key;
+    followConversationRef.current = false;
+    scroller.scrollTop = start.top;
+    conversationScrollTopRef.current = scroller.scrollTop;
     setShowLatestMessage(false);
-  }, [conversationKey, selectedAgentId, conversationOpen]);
+    return true;
+  }
+  useLayoutEffect(() => {
+    readReturnRef.current = undefined;
+    followConversationRef.current = !conversationMessageFocus;
+    conversationScrollTopRef.current = channelScrollRef.current?.scrollTop ?? 0;
+    setPositionedHistoryScope(null);
+    setShowLatestMessage(false);
+    if (conversationOpen && !conversationMessageFocus) readReturnedAnswer();
+  }, [historyPositionScope, conversationOpen]);
+  useLayoutEffect(() => {
+    if (!boundHistory || !conversationOpen || !managerMessages.length || conversationHistoryState?.phase === "loading"
+      || positionedHistoryScope === historyPositionScope) return;
+    // Linked images have no src until the scroll anchor is in place. Native
+    // lazy loading can otherwise start fetching at the top before we move.
+    if (followConversationRef.current && !readReturnedAnswer()) scrollToLatestMessage();
+    setPositionedHistoryScope(historyPositionScope);
+  }, [boundHistory, conversationOpen, managerMessages.length, conversationHistoryState?.phase, historyPositionScope, positionedHistoryScope]);
   useEffect(() => {
-    if (!conversationOpen || !followConversationRef.current) return;
-    const frame = window.requestAnimationFrame(scrollToLatestMessage);
-    return () => window.cancelAnimationFrame(frame);
-  }, [conversationOpen, conversationKey, selectedAgentId, conversationMessages.length,
+    if (!conversationOpen) return;
+    let frame = 0;
+    const follow = () => {
+      if (!followConversationRef.current) return;
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        if (!followConversationRef.current) return;
+        if (!readReturnedAnswer()) scrollToLatestMessage();
+      });
+    };
+    follow();
+    // Images, expanded replies and a resized window can change the viewport
+    // without a new message. Keep following only while the reader is at the end.
+    const observer = new ResizeObserver(follow);
+    const scroller = channelScrollRef.current;
+    const readQuote = (event: Event) => {
+      const details = event.target;
+      if (!(details instanceof HTMLDetailsElement) || !details.open || !details.classList.contains("conversation-reply-context")) return;
+      followConversationRef.current = false;
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => details.querySelector("summary")?.scrollIntoView({block: "nearest"}));
+    };
+    if (scroller) {
+      scroller.addEventListener("toggle", readQuote, true);
+      observer.observe(scroller);
+      scroller.querySelectorAll(".personal-channel-timeline").forEach(element => observer.observe(element));
+    }
+    return () => {observer.disconnect(); scroller?.removeEventListener("toggle", readQuote, true); window.cancelAnimationFrame(frame);};
+  }, [conversationOpen, conversationKey, selectedAgentId, managerMessages.length,
     latestMessageTextLength, latestMessage?.pending, latestMessage?.activity?.length, latestMessage?.steps]);
   useEffect(() => {
     const route = `${selectionScope}:${routedTodoId ?? ""}`;
     if (restoredTodoRoute.current === route || !selectedGoal || selectedGoal.loadState) return;
     restoredTodoRoute.current = route;
+    selectionRevision.current += 1;
     if (!routedTodoId) {
       setSelectionState(current => current?.value?.kind === "todo" ? null : current);
       return;
@@ -1364,7 +1575,7 @@ export function PersonalWorkspacePage({
       goalId: selectedGoal.goalId, goalTitle: selectedGoal.title, ownerLabel: item.claimedBy}}});
   }, [selectionScope, routedTodoId, selectedGoal, readOnly, locale, selectionState]);
   const workspaceReview = useDeliveryReview(selectedGoal, model.userTodos, !readOnly && !settingsOpen
-    && (selectedGoalTab === "overview" || selectedGoalTab === "tasks") && !selectedGoal?.loadState, selectionScope);
+    && (selectedGoalTab === "overview" || selectedGoalTab === "tasks" || selectedGoalTab === "files") && !selectedGoal?.loadState, selectionScope);
   const workspaceDigest = useGoalWorkspaceDigest(selectedGoal, model.userTodos, items,
     workspaceReview.usable ? workspaceReview.snapshot?.goal_map : null);
   // "Since you looked" (RFC goal-workspace-surface §5.7): compare the current
@@ -1457,7 +1668,7 @@ export function PersonalWorkspacePage({
       digest: workspaceDigest,
       todos: selectedGoal.agentTodos.map((todo) => ({ todoId: todo.todoId, text: todo.text })),
       execution: selectedGoal.execution ? { kind: selectedGoal.execution.kind } : null,
-      criteria: contract?.enabled ? projectGoalAcceptanceCriteria(contract) : null,
+      criteria: hasConfiguredGoalChecks(contract) ? projectGoalAcceptanceCriteria(contract) : null,
     });
   }, [selectedGoal, workspaceDigest]);
   function goalSuggestionLabel(suggestion: GoalSuggestion): string {
@@ -1516,6 +1727,10 @@ export function PersonalWorkspacePage({
     );
     return currentRun ? { item: currentRun.run, kind: "run" } : selection;
   }, [items, selection, proposals, workspaceGoals, model.attentionHistory, model.userTodos, readOnly]);
+  // Home can inspect a linked Goal's request without selecting that Goal first.
+  // Preserve the request owner's source boundary in the shared drawer.
+  const drawerReadOnly = readOnly || workspaceGoals.some(goal => goal.goalId === drawerSelection?.item.goalId
+    && goal.sourceAccess?.readOnly === true);
 
   const creationProposalId = drawerSelection?.kind === "proposal"
     && drawerSelection.item.actionKind === "goal.create"
@@ -1607,10 +1822,16 @@ export function PersonalWorkspacePage({
       .filter((proposal) => ["preview_ready", "gated", "deferred", "applying"].includes(proposal.status)
         || compileActionReviewPlan(proposal).retryOriginal === true
         || (proposal.action_kind === "team.plan" && proposal.status === "applied")
+        || (proposal.action_kind === "todo.create" && proposal.status === "applied")
+        || goalCreatedManagedSession(proposal) !== undefined
         // Terminal operations replace cached gated cards, including in an
         // already-open drawer. They never authorize local execution.
         || proposal.action_kind === "operation.execute")
-      .map((proposal) => workspaceProposal(proposal, t));
+      .map((proposal) => workspaceProposal(proposal, t))
+      // Keep a launch receipt reachable after a reload; plain creation does
+      // not have a Turn to revisit.
+      .filter(proposal => proposal.actionKind !== "todo.create" || proposal.status !== "applied"
+        || Boolean(proposal.reviewPlan?.taskExecution));
     const restored = Object.fromEntries(restoreable.map((proposal) => [proposal.previewId, proposal]));
     const previousIds = restoredProposalIdsRef.current;
     restoredProposalIdsRef.current = new Set(Object.keys(restored));
@@ -1641,7 +1862,9 @@ export function PersonalWorkspacePage({
     // The card belongs to the conversation on screen when the request started
     // (this render's selectedGoalId), even if its answer lands after the owner
     // moved elsewhere.
-    if (readOnly) throw new Error(t("source.readOnlyWriteError"));
+    if (readOnly || workspaceGoals.some(goal => goal.goalId === request.normalizedParameters.goal_id
+      && goal.sourceAccess?.readOnly === true)) throw new Error(t("source.readOnlyWriteError"));
+    const originatingSelection = selectionRevision.current;
     let local: WorkspaceActionPreview;
     try {
       local = callbacks.onPreviewAction
@@ -1703,9 +1926,15 @@ export function PersonalWorkspacePage({
         workspaceCandidates,
       };
     }
+    if (request.actionKind === "todo.update" && callbacks.onPreviewAction) {
+      local = { ...local, todoOperation: typeof request.normalizedParameters.operation === "string"
+        ? request.normalizedParameters.operation : undefined };
+    }
     rememberSessionProposal(local.previewId, selectedGoalId);
     setProposals((current) => ({ ...current, [local.previewId]: local }));
-    if (options.select !== false && isCurrentConversation()) setSelection({ item: local, kind: "proposal" });
+    if (options.select !== false && isCurrentConversation() && selectionRevision.current === originatingSelection) {
+      setSelection({ item: local, kind: "proposal" });
+    }
     return local;
   }
 
@@ -1914,6 +2143,14 @@ export function PersonalWorkspacePage({
     const applying = { ...proposal, reviewPlan: proposal.reviewPlan ? { ...proposal.reviewPlan, interaction: "pending" as const, reason: "apply_pending" as const, canApply: false as const } : undefined, status: "applying" as const };
     setProposals((current) => ({ ...current, [proposal.previewId]: applying }));
     if (showDrawer) setSelection({ item: applying, kind: "proposal" });
+    let applyingSelection = selectionRevision.current;
+    const stillSelected = () => selectionRevision.current === applyingSelection
+      && currentSelectionScope.current.generation === selectionGeneration;
+    const selectReceipt = (item: WorkspaceActionPreview) => {
+      if (!stillSelected()) return;
+      setSelection({item, kind: "proposal"});
+      applyingSelection = selectionRevision.current;
+    };
     if (lifecycleChange && !lifecycleChange.optimisticApplied) {
       callbacks.onGoalActivationStateChange?.(lifecycleChange.goalId, lifecycleChange.next);
     }
@@ -1922,11 +2159,11 @@ export function PersonalWorkspacePage({
         await callbacks.onApplyProposal(proposal);
         const applied = { ...proposal, status: "applied" as const };
         setProposals((current) => ({ ...current, [proposal.previewId]: applied }));
-        if (showDrawer) setSelection({ item: applied, kind: "proposal" });
-        setActionFeedback(t("feedback.completed", { title: proposal.title }));
+        if (showDrawer) selectReceipt(applied);
+        setActionFeedback(completedActionFeedback(applied, t));
         if (proposal.actionKind === "goal.lifecycle") {
           if (proposal.lifecycleOperation === "delete" || (proposal.lifecycleOperation === "stop" && !options.keepGoalSelected)) {
-            selectGoal(null);
+            if (stillSelected()) selectGoal(null);
           }
           if (proposal.lifecycleOperation === "delete" && proposal.goalId) {
             callbacks.onGoalDeleted?.(proposal.goalId);
@@ -1951,12 +2188,12 @@ export function PersonalWorkspacePage({
       await actionReadback.acceptProposal(result.proposal);
       const applied = workspaceProposal(result.proposal, t);
       setProposals((current) => ({ ...current, [proposal.previewId]: applied }));
-      if (showDrawer) setSelection({ item: applied, kind: "proposal" });
+      if (showDrawer) selectReceipt(applied);
       if (applied.reviewPlan?.interaction !== "completed") {
         if (lifecycleChange) {
           callbacks.onGoalActivationStateChange?.(lifecycleChange.goalId, lifecycleChange.previous);
         }
-        if (options.presentation !== "inline") setSelection({ item: applied, kind: "proposal" });
+        if (options.presentation !== "inline") selectReceipt(applied);
         setActionFeedback(
           result.proposal.status === "stale"
             ? t("feedback.stale")
@@ -1966,14 +2203,14 @@ export function PersonalWorkspacePage({
         );
         return applied;
       }
-      setActionFeedback(t("feedback.completed", { title: applied.title }));
+      setActionFeedback(completedActionFeedback(applied, t));
       // Keep the success receipt visible for reviewed actions. Direct actions
       // surface the same result through the persistent feedback receipt.
       if (applied.actionKind === "todo.create" || applied.actionKind === "goal.create") {
         await callbacks.onRefresh?.();
       }
       if (applied.actionKind === "goal.lifecycle" && (applied.lifecycleOperation === "delete" || (applied.lifecycleOperation === "stop" && !options.keepGoalSelected))) {
-        selectGoal(null);
+        if (stillSelected()) selectGoal(null);
       }
       if (applied.actionKind === "goal.lifecycle" && applied.lifecycleOperation === "delete" && applied.goalId) {
         callbacks.onGoalDeleted?.(applied.goalId);
@@ -2006,13 +2243,13 @@ export function PersonalWorkspacePage({
           status: "gated" as const,
         };
         setProposals((current) => ({ ...current, [proposal.previewId]: gated }));
-        // A newly discovered authority gate always deserves review, including
-        // when the action started on the direct path.
-        if (options.presentation !== "inline") setSelection({ item: gated, kind: "proposal" });
+        // A newly discovered authority gate always deserves review. Preserve
+        // its receipt and feedback without replacing a newer selection.
+        if (options.presentation !== "inline") selectReceipt(gated);
         setActionFeedback(t("feedback.gateRequired", { summary: gated.gate.summary }));
         if (proposal.actionKind === "goal.create" && proposal.goalId) {
           callbacks.onRefresh?.();
-          selectGoal(proposal.goalId);
+          if (stillSelected()) selectGoal(proposal.goalId);
         }
         return gated;
       }
@@ -2023,23 +2260,24 @@ export function PersonalWorkspacePage({
       const returned = error instanceof ChatApiError
         ? typedActionProposalSchema.safeParse(error.payload.proposal) : null;
       let stored = returned?.success ? returned.data : undefined;
-      if (!stored && ["team.plan", "goal.create", "todo.update"].includes(proposal.actionKind) && !readbackMismatch) {
+      const scopedReadback = ["team.plan", "goal.create", "todo.update", "todo.create"].includes(proposal.actionKind);
+      if (!stored && scopedReadback && !readbackMismatch) {
         const readback = await actionReadback.refetch();
         // Query errors retain cached data; it cannot certify this attempt.
         if (readback.isSuccess) stored = readback.data?.find(item => item.proposal_id === proposal.previewId);
       }
       if (stored?.proposal_id === proposal.previewId && stored.action_kind === proposal.actionKind
         && matchesTodoTarget(stored)
-        && (!["team.plan", "goal.create", "todo.update"].includes(proposal.actionKind) || stored.normalized_parameters.goal_id === proposal.goalId)) {
+        && (!scopedReadback || stored.normalized_parameters.goal_id === proposal.goalId)) {
         await actionReadback.acceptProposal(stored);
         const observed = workspaceProposal(stored, t);
         const reconciled = { ...observed, errorMessage: observed.status === "error"
           ? error instanceof Error ? error.message : String(error) : undefined };
         setProposals(current => ({ ...current, [proposal.previewId]: reconciled }));
-        if (options.presentation !== "inline") setSelection({ item: reconciled, kind: "proposal" });
+        if (options.presentation !== "inline") selectReceipt(reconciled);
         if (observed.reviewPlan?.creationProgress?.goalId) void callbacks.onRefresh?.();
         setActionFeedback(stored.status === "stale" ? t("feedback.stale")
-          : observed.reviewPlan?.interaction === "completed" ? t("feedback.completed", { title: observed.title })
+          : observed.reviewPlan?.interaction === "completed" ? completedActionFeedback(observed, t)
           : t("feedback.executionFailed", { error: error instanceof Error ? error.message : String(error) }));
         return reconciled;
       }
@@ -2052,7 +2290,7 @@ export function PersonalWorkspacePage({
         status: (stale ? "stale" : "error") as "stale" | "error",
       };
       setProposals((current) => ({ ...current, [proposal.previewId]: failed }));
-      if (options.presentation !== "inline") setSelection({ item: failed, kind: "proposal" });
+      if (options.presentation !== "inline") selectReceipt(failed);
       setActionFeedback(t("feedback.executionFailed", { error: failed.errorMessage }));
       return failed;
     }
@@ -2061,7 +2299,6 @@ export function PersonalWorkspacePage({
   function openGoalConversation() {
     setSelectedGoalTab("chat");
     setActiveSessionRun(null);
-    setGoalConversationReceiptVisible(false);
     window.requestAnimationFrame(() => {
       const replies = channelScrollRef.current?.querySelectorAll<HTMLElement>(".personal-message.is-assistant");
       replies?.item(replies.length - 1)?.scrollIntoView({ block: "start" });
@@ -2077,8 +2314,8 @@ export function PersonalWorkspacePage({
       setActiveSessionRun(run);
       setSelection(null);
     },
-    onOpenGoal: (goalId) => {
-      selectGoal(goalId);
+    onOpenGoal: (goalId, managedSession) => {
+      selectGoal(goalId, managedSession ? "chat" : "overview", managedSession);
       void reconcileStatus([goalId]);
     },
     onOpenGoalView: (tab) => {
@@ -2203,21 +2440,26 @@ export function PersonalWorkspacePage({
       });
     },
   };
-  const effectiveDrawerCallbacks: PersonalWorkspaceCallbacks = readOnly ? {
+  const effectiveDrawerCallbacks: PersonalWorkspaceCallbacks = drawerReadOnly ? {
     onOpenGoal: drawerCallbacks.onOpenGoal,
     onOpenGoalView: drawerCallbacks.onOpenGoalView,
     onOpenOutput: drawerCallbacks.onOpenOutput,
   } : drawerCallbacks;
 
-  function selectGoal(goalId: string | null, view: WorkspaceGoalTab = "overview") {
+  function selectGoal(goalId: string | null, view: WorkspaceGoalTab = "overview", managedSession?: ManagedConversationTarget) {
     setLocalGoalId(goalId);
-    setManagerConversationReceiptVisible(false);
-    setGoalConversationReceiptVisible(false);
     setActiveSessionRun(null);
     setSelection(null);
     setLocalView(view);
     setMobileSidebarOpen(false);
-    callbacks.onSelectGoal?.(goalId, view);
+    callbacks.onSelectGoal?.(goalId, view, managedSession);
+  }
+
+  function openAttention(item: WorkspaceAttention) {
+    if (item.details?.reportReview) {
+      setSelectedReportReview({goalId: item.goalId, todoId: item.todoId});
+      selectGoal(item.goalId, "files");
+    } else setSelection({kind: "attention", item});
   }
 
   function selectAgent(agentId: string) {
@@ -2271,15 +2513,29 @@ export function PersonalWorkspacePage({
   }, [pendingNotificationItem, selectedGoalId]);
   function openAttentionFromNotification(item: WorkspaceAttention) {
     window.focus();
+    if (item.details?.reportReview) {openAttention(item); return;}
     if (item.goalId === selectedGoalId) { setSelection({ kind: "attention", item }); return; }
     setPendingNotificationItem(item);
     selectGoal(item.goalId, "overview");
   }
 
   async function sendMessage(messageOverride?: string, intent: "send" | "steer" = "send") {
+    if (modelSettingsSaving[composerDraftKey]) return;
     const pendingImages = messageOverride ? [] : imageAttachments;
     const message = (messageOverride ?? composer).trim() || (pendingImages.length ? t("composer.imageAnalysisPrompt") : "");
-    if (!message || composerBlocked || conversationHistoryState?.sendBlocked) return;
+    if (!message || composerBlocked || workspaceUnavailable || (originalConversation && !originalConversation.session?.resumable) || (workspaceConversations?.managed && !workspaceConversations.managed.session?.resumable) || historyBlocksSend) return;
+    // A retained uncertain request must be durably recovered before any new
+    // dispatch. Restoring its text alone cannot turn it into a fresh send.
+    if (conversationSessionId && !readSteeringRequest(composerDraftKey)) {
+      const legacy = legacySteeringRequests(conversationSessionId, composerDraftKey)[0];
+      if (legacy) {
+        restoreLegacySteeringRequest(composerDraftKey, legacy[0], conversationSessionId);
+        if (!readSteeringRequest(composerDraftKey)) {
+          setActionFeedback(t("feedback.steeringStorageUnavailable"));
+          return;
+        }
+      }
+    }
     const previousSteering = readSteeringRequest(composerDraftKey);
     const retry = previousSteering && previousSteering.sessionId === conversationSessionId && previousSteering.text.trim() === message
       ? previousSteering : undefined;
@@ -2290,7 +2546,7 @@ export function PersonalWorkspacePage({
     const queue = retry?.delivery === "queue" || (!retry && intent === "send" && Boolean(queueTurnId));
     if (queue && conversationSessionId && callbacks.onQueueConversationTurn) {
       if (retry && JSON.stringify(pendingImages) !== JSON.stringify(retry.attachments ?? [])) {
-        setImageAttachmentError(locale === "zh-CN" ? "待确认消息的图片不能替换；原请求与当前图片已保留。" : "Unconfirmed images cannot be replaced. Original request and current images retained.");
+        setImageAttachmentError(locale === "zh-CN" ? "待确认消息的附件不能替换；原请求与当前附件已保留。" : "Unconfirmed attachments cannot be replaced. Original request and current attachments retained.");
         return;
       }
       const request = retry ?? { sessionId: conversationSessionId, turnId: queueTurnId!, text: message,
@@ -2309,7 +2565,6 @@ export function PersonalWorkspacePage({
           const acceptedImages = new Set(request.attachments?.map(image => image.id));
           setImageAttachments(current => current.filter(image => !acceptedImages.has(image.id)));
         }
-        setActionFeedback(locale === "zh-CN" ? "已排队，将在当前回合结束后处理。" : "Queued for the next turn.");
       } catch (error) {
         if (error instanceof ChatApiError && error.payload.delivery_state === "not_delivered") retireSteeringRequest(composerDraftKey, request.id);
         setActionFeedback(error instanceof Error ? error.message : t("feedback.sendGenericError"));
@@ -2318,7 +2573,7 @@ export function PersonalWorkspacePage({
     }
     if ((retry || (intent === "steer" && steeringTurnId)) && conversationSessionId && callbacks.onSteerConversationTurn) {
       if (pendingImages.length) {
-        setImageAttachmentError(locale === "zh-CN" ? "本轮追加指令暂不支持图片，图片和草稿已保留。" : "This turn accepts text instructions only. Images and draft retained.");
+        setImageAttachmentError(locale === "zh-CN" ? "本轮追加指令暂不支持附件，附件和草稿已保留。" : "This turn accepts text instructions only. Attachments and draft retained.");
         return;
       }
       const request = retry ?? { sessionId: conversationSessionId, turnId: steeringTurnId!, text: message, id: crypto.randomUUID() };
@@ -2344,7 +2599,7 @@ export function PersonalWorkspacePage({
       } finally { setSteering(false); }
       return;
     }
-    if (intent === "steer" && conversationTurnRunning) {
+    if (intent === "steer" && (conversationTurnRunning || queueTurnId)) {
       setActionFeedback(locale === "zh-CN" ? "此执行器不支持本轮纠偏；可按 Enter 排队，草稿已保留。" : "This executor cannot steer this turn. Press Enter to queue; draft retained.");
       return;
     }
@@ -2373,8 +2628,6 @@ export function PersonalWorkspacePage({
     setImageAttachmentError(null);
     setSending(true);
     try {
-      if (!selectedGoalId) setManagerConversationReceiptVisible(true);
-      else if (selectedGoalTab !== "chat") setGoalConversationReceiptVisible(true);
       const previews = await callbacks.onSendMessage?.(message, selectedAgentId, conversationKey, pendingImages.length ? pendingImages : undefined);
       if (previews?.candidates?.length) {
         const drafted = await Promise.allSettled(previews.candidates.map((request) => createPreview(request, { select: false })));
@@ -2386,22 +2639,27 @@ export function PersonalWorkspacePage({
       if (!messageOverride) {
         restoreFailedSubmission(message, pendingImages);
       }
-      const errorMessage = error instanceof Error ? error.message : t("feedback.sendGenericError");
+      const errorMessage = error instanceof ChatApiError && error.payload.error_code === "unsupported_configuration"
+        ? (locale === "zh-CN" ? "请在模型菜单调整配置后重试。" : "Adjust the model menu and retry.")
+        : error instanceof Error ? error.message : t("feedback.sendGenericError");
       setActionFeedback(t("feedback.sendFailed", { error: errorMessage }));
     } finally {
       setSending(false);
     }
   }
 
-  const selectedAgentLabel = agents.find((agent) => agent.agentId === selectedAgentId)?.label ?? selectedAgentId;
 
 
   async function selectImages(files: FileList | readonly File[] | null) {
     if (!files?.length) return;
     const available = maxImageAttachmentCount - imageAttachments.length;
     const selected = Array.from(files).slice(0, Math.max(0, available));
-    const invalid = selected.find((file) => !acceptedImageTypes.has(file.type));
+    const invalid = selected.find((file) => !acceptedImageTypes.has(file.type) && !documentMime(file));
     const oversized = selected.find((file) => file.size > maxImageAttachmentBytes);
+    if (selected.some(file => documentMime(file) && file.size > 48_000)) {
+      setImageAttachmentError(locale === "zh-CN" ? "文本文件和消息共用 64KB 限额，请缩小文件。" : "Documents and message share a 64KB limit. Choose a smaller file.");
+      return;
+    }
     if (available <= 0) {
       setImageAttachmentError(t("composer.imageCountError", { count: maxImageAttachmentCount }));
       return;
@@ -2420,6 +2678,13 @@ export function PersonalWorkspacePage({
     }
     try {
       const loaded = await Promise.all(selected.map((file) => readImageAttachment(file, t)));
+      const envelope = {message: composer, attachments: [...imageAttachments, ...loaded].map(file => ({
+        name: file.name, size: file.size, id: file.id, mime_type: file.mimeType,
+        ...(isTextDocument(file.mimeType) ? {data_url: file.dataUrl} : {}),
+      }))};
+      if (new TextEncoder().encode(JSON.stringify(envelope)).length > 63_000) {
+        throw new Error(locale === "zh-CN" ? "文本文件和消息共用 64KB 限额，请缩小文件。" : "Documents and message share a 64KB limit. Choose a smaller file.");
+      }
       setImageAttachments((current) => [...current, ...loaded].slice(0, maxImageAttachmentCount));
       setImageAttachmentError(files.length > selected.length ? t("composer.imageCountError", { count: maxImageAttachmentCount }) : null);
     } catch (error) {
@@ -2478,21 +2743,27 @@ export function PersonalWorkspacePage({
     }, 1800);
   }
 
+  const settingsTarget = selection?.kind === "settings" ? selection : null;
   const settingsPage = settingsOpen ? (
     <Suspense fallback={<p className="personal-lazy-loading" role="status">{t("common.loading")}</p>}>
       <WorkspaceSettingsPage
-        callbacks={effectiveDrawerCallbacks}
-        focusGoalConnection={Boolean(selection?.kind === "settings" && selection.goalId)}
+        scope={settingsTarget?.scope ?? (settingsTarget?.goalId ? "goal" : "machine")}
+        onNavigate={target => {writeSettingsRoute(target); setSelection(target);}}
+        onOpenOriginalConversation={!readOnly && !rootGoalId && workspaceConversations?.onOpenOriginal ? target => {
+          closeSettings(); workspaceConversations.onOpenOriginal!(target);
+        } : undefined}
+        callbacks={drawerCallbacks}
+        focusGoalConnection={Boolean(settingsTarget?.goalId && settingsTarget.tab === "lark")}
         goalNotifications={model.goalNotifications ?? []}
         goals={workspaceGoals}
-        initialGoalId={selection?.kind === "settings" ? selection.goalId ?? selectedGoalId : selectedGoalId}
-        initialTab={selection?.kind === "settings" ? selection.tab ?? (selectedGoalId ? "lark" : "steward") : "steward"}
+        initialGoalId={settingsTarget?.goalId}
+        initialTab={settingsTarget?.tab ?? (settingsTarget?.goalId ? "capabilities" : "steward")}
         onChanged={() => void refreshSettingsState()}
         onClose={closeSettings}
         onThemeChange={updateTheme}
         theme={theme}
-        attentionNotifications={readOnly ? undefined : { enabled: attentionNotificationsEnabled, support: attentionNotificationSupportState }}
-        onAttentionNotificationsChange={readOnly ? undefined : updateAttentionNotifications}
+        attentionNotifications={hostReadOnly ? undefined : { enabled: attentionNotificationsEnabled, support: attentionNotificationSupportState }}
+        onAttentionNotificationsChange={hostReadOnly ? undefined : updateAttentionNotifications}
       />
     </Suspense>
   ) : null;
@@ -2577,15 +2848,7 @@ export function PersonalWorkspacePage({
     }
   }, [attentionKeySignature, attentionNotificationsActive, attentionNotificationSupportState, t]);
 
-  const composerSuggestions = !selectedWorkspaceRef && (!conversationOpen || !conversationMessages.length) ? <details className="personal-composer-tools" key={conversationKey} onKeyDown={(event) => {
-    if (event.key !== "Escape") return;
-    event.currentTarget.open = false;
-    event.currentTarget.querySelector("summary")?.focus();
-  }}>
-              <summary>{selectedGoal && goalSuggestions.length
-                ? t("suggestions.summary", { first: goalSuggestionLabel(goalSuggestions[0]) })
-                : locale === "zh-CN" ? "快捷提问" : "Suggestions"}</summary>
-            <div className="personal-composer-tools-panel">
+  const composerSuggestions = (!originalConversation || !managerChatOpen) && !selectedWorkspaceRef && (!conversationOpen || !managerMessages.length) ? <div className="personal-composer-tools-panel">
             {selectedGoal && goalSuggestions.length ? (
               <div aria-label={t("suggestions.row")} className="personal-goal-suggestions" data-testid="goal-suggestions" role="group">
                 {goalSuggestions.map((suggestion) => (
@@ -2610,9 +2873,9 @@ export function PersonalWorkspacePage({
               </div>
             )}
             </div>
-            </details> : null;
+             : null;
   const taskBoard = (active: boolean) => selectedGoal ? (<GoalTasksView digest={workspaceDigest}
-                    historyEnabled={!readOnly} historyActive={active}
+                    historyEnabled={!readOnly || Boolean(selectedGoal.sourceAccess)} historyActive={active}
                     historyRefreshRevision={historyRefreshRevision}
                     goal={selectedGoal}
                     items={items}
@@ -2635,14 +2898,52 @@ export function PersonalWorkspacePage({
                     teamSessionId={!readOnly && selectedAgentId === "codex" ? conversationSessionId : undefined}
                     goalId={selectedGoal.goalId}
             localResults={!readOnly && active}
+            reviewMaterials={!readOnly && active ? <Suspense fallback={<p role="status">{locale === "zh-CN" ? "正在读取审阅材料…" : "Loading review materials…"}</p>}>
+              <GoalReportReviews key={JSON.stringify([seenStatusSource, selectedGoal.goalId])} goalId={selectedGoal.goalId} sourceId={seenStatusSource}
+                zh={locale === "zh-CN"} callbacks={effectiveDrawerCallbacks}
+                focusTodoId={selectedReportReview?.goalId === selectedGoal.goalId ? selectedReportReview.todoId : undefined}
+                onSelectionChange={(todoId) => setSelectedReportReview(todoId ? {goalId: selectedGoal.goalId, todoId} : null)}
+                refreshKey={JSON.stringify(model.userTodos.filter(item => item.goalId === selectedGoal.goalId))}/>
+            </Suspense> : undefined}
             researchApi={researchApi}
+            production={active && !readOnly && selectedGoalTab === "files" ? <Suspense fallback={<p role="status">{locale === "zh-CN" ? "正在读取作品…" : "Loading artifacts…"}</p>}>
+              <ContentProductionResults key={selectedGoal.goalId} goalId={selectedGoal.goalId} review={workspaceReview}
+                onOpenConversation={() => {setSelectedGoalTab("chat"); requestAnimationFrame(() => composerRef.current?.focus());}} />
+            </Suspense> : undefined}
                   />) : null;
+  const goalStatusNotice = selectedGoal?.loadState ? (
+    <section className="personal-manager-greeting" role="status" data-testid="goal-status-loading">
+      <div><strong>{t(selectedGoal.loadState === "error" ? "startup.goalError" : "startup.goalLoading")}</strong>
+      <p>{t(selectedGoal.loadError ? `startup.error.${selectedGoal.loadError}` : "startup.independent")}</p>
+      {selectedGoal.loadState === "error" ? selectedGoal.loadError === "authority" && !readOnly ?
+        <button className="min-h-11 rounded-md border px-3 py-2 text-sm" type="button" onClick={() => openSettings({goalId: selectedGoal.goalId, kind: "settings", tab: "ownership"})}>{t("startup.storageSettings")}</button>
+        : <button className="min-h-11 rounded-md border px-3 py-2 text-sm" type="button" onClick={() => void callbacks.onRefresh?.("missing")}>{t("startup.retry")}</button> : null}</div>
+    </section>
+  ) : null;
+  const researchPanel = selectedGoal && (!readOnly || researchReadSourceUrl)
+    ? <GoalResearchWorkbench goalId={selectedGoal.goalId} goals={workspaceGoals} onSelectGoal={id => selectGoal(id, "research")}
+        onOpenTasks={() => setSelectedGoalTab("tasks")} active={!settingsOpen && selectedGoalTab === "research"}
+        zh={locale === "zh-CN"} refreshRevision={historyRefreshRevision} readSourceUrl={researchReadSourceUrl}
+        directoryReadSourceUrl={directoryReadSourceUrl} statusNotice={goalStatusNotice} />
+    : goalStatusNotice ?? <ContextHelp label={locale === "zh-CN" ? "来源无研究读取入口" : "Research source unavailable"} icon={CircleHelp}><p role="status">{locale === "zh-CN" ? "此来源尚未提供研究记录的读取入口。" : "This source does not provide a research history endpoint."}</p></ContextHelp>;
   return (
     <>
     <div hidden={settingsOpen}>
     <WorkspaceShell
+      overlay={<WorkspaceCommandPalette key={paletteContext} open={paletteScope === paletteContext}
+        enabled={!settingsOpen && !mobileSidebarOpen} readOnly={readOnly} unavailable={paletteUnavailable}
+        onOpen={() => setPaletteScope(paletteContext)} onClose={() => setPaletteScope(null)}
+        entries={workspaceCommandEntries({ goals: workspaceGoals, goalId: selectedGoalId, readOnly,
+          userTodos: model.userTodos, sourceId: seenStatusSource,
+          unavailable: paletteUnavailable, items: items.filter(item => item.kind !== "proposal"
+            || (!actionReadback.isError && actionReadback.data?.some(current => current.proposal_id === item.proposal.previewId))) })}
+        onSelect={entry => {
+          if (entry.destination.kind === "goal") selectGoal(entry.destination.goalId);
+          else setSelection(entry.destination.selection);
+        }} />}
       notice={serviceNotice}
-      drawer={drawerSelection ? <ContextDrawer agents={agents} attentionHistory={model.attentionHistory ?? model.userTodos} onSelectAttention={(item) => setSelection({ kind: "attention", item })} callbacks={effectiveDrawerCallbacks} goalNotifications={model.goalNotifications ?? []} goals={workspaceGoals} inspectorExpanded={taskInspectorExpanded} larkConnections={readOnly ? [] : larkConnections}
+      drawer={drawerSelection ? <ContextDrawer agents={agents} attentionHistory={model.attentionHistory ?? model.userTodos} onSelectAttention={(item) => setSelection({ kind: "attention", item })}
+        callbacks={effectiveDrawerCallbacks} goalNotifications={model.goalNotifications ?? []} goals={workspaceGoals} inspectorExpanded={taskInspectorExpanded} larkConnections={drawerReadOnly ? [] : larkConnections}
         todoReadbackUnavailable={drawerSelection.kind === "todo" && !workspaceGoals.some((goal) =>
           goal.goalId === drawerSelection.item.goalId && !goal.loadState && (drawerSelection.item.detailMode !== undefined || drawerSelection.item.done
             || goal.agentTodos.some((todo) => todo.todoId === drawerSelection.item.todoId)))}
@@ -2654,7 +2955,8 @@ export function PersonalWorkspacePage({
         onRetryProposalReadback={() => void (creationProposalId ? proposalReadback.refetch() : actionReadback.refetch())} onClose={() => {
         if (drawerSelection.kind === "proposal"
           && ["applied", "rejected"].includes(drawerSelection.item.status)
-          && !(drawerSelection.item.status === "applied" && ["heartbeat.bind", "team.plan"].includes(drawerSelection.item.actionKind))) {
+          && !(drawerSelection.item.status === "applied" && (drawerSelection.item.reviewPlan?.taskExecution
+            || ["heartbeat.bind", "team.plan"].includes(drawerSelection.item.actionKind)))) {
           setProposals((current) => {
             const next = { ...current };
             delete next[drawerSelection.item.previewId];
@@ -2663,7 +2965,7 @@ export function PersonalWorkspacePage({
         }
         setTaskInspectorExpanded(false);
         setSelection(null);
-      }} onToggleInspectorSize={() => setTaskInspectorExpanded((current) => !current)} readOnly={readOnly} runs={items.flatMap((item) => item.kind === "run" ? [item.run] : [])} selection={drawerSelection} /> : null}
+      }} onToggleInspectorSize={() => setTaskInspectorExpanded((current) => !current)} readOnly={drawerReadOnly} runs={items.flatMap((item) => item.kind === "run" ? [item.run] : [])} selection={drawerSelection} /> : null}
       drawerMode={drawerSelection?.kind === "todo" ? (taskInspectorExpanded ? "inspector-full" : "inspector") : "panel"}
       drawerOpen={drawerSelection !== null}
       mobileSidebarOpen={mobileSidebarOpen}
@@ -2673,10 +2975,18 @@ export function PersonalWorkspacePage({
         <div className="personal-channel">
           <div>
           <ChannelHeader
+            requestInventory={!readOnly && !rootUnavailable && !runtimeSourceUnavailable && originalConversation
+              && (originalConversation.source?.context_kind === "project" || originalConversation.error)
+              ? <OriginalProjectRequests key={originalConversation.target.sessionId} sessionId={originalConversation.target.sessionId} refreshKey={`${managerMessages.length}:${Boolean(managerMessages.at(-1)?.pending)}`}/>
+              : !workspaceConversations?.entryGate && !readOnly && !rootUnavailable && !runtimeSourceUnavailable && !selectedGoalId && !selectedWorkspaceRef
+              && (!originalConversation || originalConversation.source?.context_kind === "steward") ? <ConversationRequests
+                key={originalConversation?.session?.session_id ?? "owner"} sessionId={conversationSessionId} ownerFallback={!originalConversation}
+                refreshKey={`${managerMessages.length}:${managerMessages.at(-1)?.id ?? ""}:${Boolean(managerMessages.at(-1)?.pending)}`}/> : undefined}
+            originalConversationTitle={workspaceConversations?.entryGate ? (locale === "zh-CN" ? "管家来源未核验" : "Steward source unverified") : originalConversation ? `${originalConversation.source?.app_ref ?? "Lark"} · ${originalTitle}` : undefined}
             agents={agents}
             scopeUnavailable={rootUnavailable}
             agentWorkActive={agentWorkActive}
-            conversationScope={workspaceConversations && (workspaceConversations.projects?.length || workspaceConversations.readFailed || selectedWorkspaceRef) ? {
+            conversationScope={!workspaceConversations?.entryGate && !originalConversation && workspaceConversations && (workspaceConversations.projects?.length || workspaceConversations.readFailed || selectedWorkspaceRef) ? {
               onChange: (value) => {
                 setActiveSessionRun(null);
                 workspaceConversations.onSelect(value === stewardScopeValue ? null : value);
@@ -2690,6 +3000,7 @@ export function PersonalWorkspacePage({
               value: selectedWorkspaceRef ?? stewardScopeValue,
             } : null}
             workspaceGrantLabel={selectedWorkspaceRef ? t(workspaceUnavailable ? "workspace.grantRevoked" : selectedWorkspaceProject?.grant === "workspace_write" ? "workspace.grantWrite" : "workspace.grantRead") : null}
+            conversationRunning={Boolean(observedConversationRunning || (runningMessage && !runningMessage.queued) || loopxDeliveryOpen)}
             managerChatOpen={managerChatOpen}
             managerChannelBinding={managerChannelBinding}
             managerRuntime={managerRuntime}
@@ -2699,34 +3010,26 @@ export function PersonalWorkspacePage({
             onOpenGoalDetails={selectedGoal ? () => setSelection({ kind: "goal", item: selectedGoal }) : undefined}
             onOpenGoalCapabilities={selectedGoal && !readOnly ? () => openSettings({ goalId: selectedGoal.goalId, kind: "settings", tab: "capabilities" }) : undefined}
             onOpenManagerSettings={!readOnly ? () => openSettings({ kind: "settings", tab: "steward" }) : undefined}
-            onOpenConversationSettings={!readOnly ? () => openSettings({kind: "settings", tab: "conversation"}, true) : undefined}
-            onRefresh={callbacks.onRefresh ? () => void refreshWorkspace() : undefined}
+            onRefresh={callbacks.onRefresh && !runtimeSourceUnavailable ? () => void refreshWorkspace() : undefined}
             onOpenNavigation={() => setMobileSidebarOpen(true)}
-            onOpenManagerChat={() => {
-              setManagerConversationReceiptVisible(false);
-              setSelectedGoalTab("chat");
-            }}
+            onOpenManagerChat={() => setSelectedGoalTab("chat")}
             onSelectGoalTab={(tab) => {
               if (tab === "chat") openGoalConversation();
               else setSelectedGoalTab(tab);
             }}
             onSelectAgent={selectAgent}
-            onSelectAgentModel={(modelId) => callbacks.onSelectAgentModel?.(selectedAgentId, modelId)}
-            onSelectAgentReasoningEffort={(effort) => callbacks.onSelectAgentReasoningEffort?.(selectedAgentId, effort)}
             onReturnManagerHome={() => {
-              if (selectedWorkspaceRef) workspaceConversations?.onSelect(null);
+              if (selectedWorkspaceRef || originalConversation) workspaceConversations?.onSelect(null);
               setSelectedGoalTab("overview");
-              setManagerConversationReceiptVisible(false);
               window.requestAnimationFrame(() => channelScrollRef.current?.scrollTo({ behavior: "smooth", top: 0 }));
             }}
             selectedAgentId={selectedAgentId}
-            selectedAgentModelId={selectedAgentModelId}
-            selectedAgentModelReadback={selectedAgentModelReadback}
-            selectedAgentReasoningEffort={selectedAgentReasoningEffort}
             refreshState={refreshState}
-            readOnlySourceLabel={readOnly ? statusSourceControl?.activeSource.label : undefined}
-            selectedGoal={selectedGoal}
+            readOnlySourceLabel={readOnly ? sourceGoal?.sourceAccess?.label ?? statusSourceControl?.activeSource.label : undefined}
+            selectedGoal={runtimeSourceUnavailable ? null : selectedGoal}
             selectedGoalTab={selectedGoalTab}
+            composerVisible={!composerCollapsed}
+            researchControl={selectedGoal && !selectedGoal.loadState && !readOnly && !runtimeSourceUnavailable && selectedGoalTab === "research" ? <GoalResearchMode key={selectionScope} goalId={selectedGoal.goalId} zh={locale === "zh-CN"} refreshRevision={historyRefreshRevision} onSettings={() => openSettings({goalId: selectedGoal.goalId, kind: "settings", tab: "capabilities"})}/> : undefined}
             goalLifecycleBusy={selectedGoal ? lifecycleBusyGoalIds.has(selectedGoal.goalId) : false}
             onOpenWorkspace={() => selectGoal(null)}
             onRequestGoalLifecycle={selectedGoal && (!readOnly || callbacks.onExecuteGoalLifecycle)
@@ -2734,24 +3037,34 @@ export function PersonalWorkspacePage({
               : undefined}
             resumeReviewed={!callbacks.onExecuteGoalLifecycle}
           />
-          {selectedGoal && !selectedGoal.loadState && !agentWorkActive ? <GoalVitals digest={workspaceDigest} goal={selectedGoal} items={items} userTodos={model.userTodos} onFocusRegion={focusGoalRegion} />
-            : selectedGoal?.loadState === "loading" ? <GoalVitalsSkeleton /> : null}
+          {runtimeSourceUnavailable ? <section className="personal-runtime-source-error" role="alert">
+            <div><strong>{t("source.runtimeUnavailable", {source: statusSourceControl.activeSource.label})}</strong>
+              {statusSourceControl.errorMessage ? <details><summary>{t("source.failureDetails")}</summary><p>{statusSourceControl.errorMessage}</p></details> : null}</div>
+            {callbacks.onRefresh ? <button disabled={refreshState === "loading"} type="button" onClick={() => void refreshWorkspace()}>{t("startup.retry")}</button> : null}
+          </section> : null}
+          {!runtimeSourceUnavailable && selectedGoal && !selectedGoal.loadState && !agentWorkActive && selectedGoalTab === "overview" ? <GoalVitals digest={workspaceDigest} goal={selectedGoal} items={items} userTodos={model.userTodos} onFocusRegion={focusGoalRegion} />
+            : !runtimeSourceUnavailable && selectedGoal?.loadState === "loading" && selectedGoalTab === "overview" ? <GoalVitalsSkeleton /> : null}
           {!readOnly ? <UsageStatisticsNotice onDetails={() => openSettings({ kind: "settings", tab: "machine" })} /> : null}
           </div>
-            {selectedGoalId && selectedGoalTab === "chat" && !agentWorkActive && !readOnly && selectedAgentId === "codex" && callbacks.onStartLoopX ? <GoalLoopXMode
+            {selectedGoalId && selectedGoalTab === "chat" && (!agentWorkActive || managedWorkActive) && !readOnly && selectedAgentId === "codex" && (managedWorkActive ? callbacks.onObserveConversationQueue : callbacks.onStartLoopX) ? <GoalLoopXMode
+              managed={managedWorkActive && workspaceConversations?.managed ? {target: workspaceConversations.managed.target,
+                onObserve: async () => {await callbacks.onObserveConversationQueue!(conversationKey, workspaceConversations.managed!.target.sessionId);}} : undefined}
               onPrepare={() => callbacks.onPrepareLoopX!(selectedAgentId, selectedGoalId)}
               key={`${selectedGoalId}:${selectedAgentId}`} sessionId={conversationSessionId} onChange={setLoopxMode}
               onExecute={(operation, settings) => callbacks.onStartLoopX?.(operation, selectedAgentId, selectedGoalId, settings)}
             /> : null}
-          <div className="personal-channel-scroll" data-agent-work={agentWorkActive || undefined} data-active-goal-view={selectedGoal ? selectedGoalTab : undefined} ref={channelScrollRef}
+          <div className="personal-channel-scroll" data-agent-work={agentWorkActive && !managedWorkActive || undefined} data-active-goal-view={selectedGoal ? selectedGoalTab : undefined} ref={channelScrollRef}
             onScroll={(event) => {
               if (!conversationOpen) return;
               const { scrollHeight, scrollTop, clientHeight } = event.currentTarget;
               const nearBottom = scrollHeight - scrollTop - clientHeight < 64;
-              followConversationRef.current = nearBottom;
+              // Growing content or a shorter viewport is not a reader moving up.
+              if (nearBottom) followConversationRef.current = true;
+              else if (scrollTop < conversationScrollTopRef.current) followConversationRef.current = false;
+              conversationScrollTopRef.current = scrollTop;
               setShowLatestMessage(!nearBottom);
             }}>
-            {!rootUnavailable ? <>
+            {!rootUnavailable && !runtimeSourceUnavailable ? <>
             {selectedGoalId && selectedGoalTab === "chat" && !agentWorkActive && callbacks.onSelectWorkAgent ? <section className="attached-agent-conversations"><button type="button" className="attached-conversation-entry" onClick={() => callbacks.onSelectWorkAgent?.("")}>{locale === "zh-CN" ? "Agent 工作记录" : "Agent work conversations"}</button></section> : null}
             {selectedGoalId && selectedGoalTab === "chat" && !agentWorkActive && !readOnly && selectedAgentId === "codex" && conversationSessionId && loopxMode?.settings.execution_config && loopxMode.settings.agent_id ? <GoalTeamResults
               key={`${conversationSessionId}:${loopxMode.settings.agent_id}:${loopxMode.settings.execution_config}`}
@@ -2774,27 +3087,33 @@ export function PersonalWorkspacePage({
               </section>
             ) : null}
             {selectedGoal && !selectedGoal.loadState && readOnly && routedTodoId
-              && !selectedGoal.agentTodos.some(todo => todo.todoId === routedTodoId) ? <p className="goal-overview-source-note" role="status">
+              && !selectedGoal.agentTodos.some(todo => todo.todoId === routedTodoId) ? <ContextHelp label={locale === "zh-CN" ? "链接任务未读到" : "Linked task unavailable"} icon={CircleHelp}><p className="goal-overview-source-note" role="status">
                 {locale === "zh-CN" ? "链接中的任务未出现在此来源的当前快照中；暂时无法查看其详情。" : "The linked task is not in this source’s current snapshot; its details are unavailable."}
-              </p> : null}
-            {selectedGoal?.loadState ? (
-              <section className="personal-manager-greeting" role="status" data-testid="goal-status-loading">
-                <div><strong>{t(selectedGoal.loadState === "error" ? "startup.goalError" : "startup.goalLoading")}</strong>
-                <p>{t(selectedGoal.loadError ? `startup.error.${selectedGoal.loadError}` : "startup.independent")}</p>
-                {selectedGoal.loadState === "error" ? <button className="min-h-11 rounded-md border px-3 py-2 text-sm" type="button" onClick={() => void callbacks.onRefresh?.("missing")}>{t("startup.retry")}</button> : null}</div>
-              </section>
-            ) : selectedGoal ? (
-              <GoalWorkspacePanels key={`${statusSourceControl?.activeSource.statusUrl ?? "/status.json"}:${selectedGoal.goalId}`}
-                activeTab={selectedGoalTab} scrollRef={channelScrollRef} panels={{
+              </p></ContextHelp> : null}
+            {selectedGoal && (!goalStatusNotice || selectedGoalTab === "research") ? (
+              <GoalWorkBrowseProvider key={workBrowseKey} value={workBrowse} onChange={changeWorkBrowse}>
+              <GoalWorkspacePanels
+                activeTab={selectedGoalTab} scrollRef={channelScrollRef} panels={goalStatusNotice ? {
+                  overview: null, tasks: null, research: researchPanel, files: null, chat: null,
+                } : {
                   overview: <GoalOverview sinceYouLooked={sinceYouLooked?.goalId === selectedGoal.goalId ? sinceYouLooked.delta : null} onMarkSeen={markSeen} onOpenAgentConversation={callbacks.onSelectWorkAgent} railOpen={railScope === selectionScope} onCloseRail={() => setRailScope(null)} digest={workspaceDigest} review={workspaceReview} active={!settingsOpen && selectedGoalTab === "overview"} goal={selectedGoal} items={items} userTodos={model.userTodos} readOnly={readOnly}
                     onOpenDetails={() => setSelection({ kind: "goal", item: selectedGoal })} onSelect={setSelection} onView={setSelectedGoalTab}
                     selectedTodoId={drawerSelection?.kind === "todo" ? drawerSelection.item.todoId : null}
-                    board={taskBoard(!settingsOpen && selectedGoalTab === "overview")} results={goalResults(!settingsOpen && selectedGoalTab === "overview")}
-                    historyRefreshRevision={historyRefreshRevision} readSourceUrl={statusSourceControl?.activeSource.kind === "runtime" ? statusSourceControl.activeSource.statusUrl : undefined} proposals={proposals} onPreview={createPreview} />,
+                    board={taskBoard(!settingsOpen && selectedGoalTab === "overview")}
+                    historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={createPreview} />,
                   tasks: taskBoard(!settingsOpen && selectedGoalTab === "tasks"),
+                  research: researchPanel,
                   files: goalResults(selectedGoalTab === "files" && !settingsOpen),
                   chat: agentWorkActive ? <GoalAgentWorkPage key={`${selectionScope}:${selectedWorkAgentId}`} goal={selectedGoal} agentId={selectedWorkAgentId!} readOnly={readOnly}
-                    onSelect={id => callbacks.onSelectWorkAgent?.(id)} onClose={() => callbacks.onSelectWorkAgent?.(null)}/> : (<>
+                    sessionId={selectedWorkSessionId} onSession={(id, replace) => callbacks.onSelectWorkSession?.(id, replace)}
+                    onRetryManagedSession={workspaceConversations?.managed?.retry}
+                    onSelect={id => callbacks.onSelectWorkAgent?.(id)} onClose={() => callbacks.onSelectWorkAgent?.(null)}>
+                    {workspaceConversations?.managed?.error ? <p role="alert">{workspaceConversations.managed.error} <button type="button" onClick={workspaceConversations.managed.retry}>{t("history.retry")}</button></p> : null}
+                    <ChannelTimeline key={timelineKey} {...timelineReading} readOnly={readOnly} items={managedTimelineItems} onSelect={timelineActions.onSelect} selectedGoal={selectedGoal}
+                      onAdjustTurn={steeringTurnId ? timelineActions.onAdjustTurn : undefined}
+                      onCancelPreparation={canCancelTimelineTurn ? timelineActions.onCancelPreparation : undefined}
+                      onInterruptTurn={canInterruptTimelineTurn ? timelineActions.onInterruptTurn : undefined}/>
+                  </GoalAgentWorkPage> : (<>
                     {selectedGoal && activeSessionRun?.goalId === selectedGoal.goalId ? (
                       <SessionRecordHeader
                         onClose={() => setActiveSessionRun(null)}
@@ -2802,36 +3121,57 @@ export function PersonalWorkspacePage({
                         run={activeSessionRun}
                       />
                     ) : null}
-                    <ChannelTimeline onReviewGoalDraft={readOnly ? undefined : reviewGoalDraft} onSuggestReply={readOnly ? undefined : suggestReply} items={visibleTimelineItems} onSelect={setSelection} selectedGoal={selectedGoal}
-                      onAdjustTurn={steeringTurnId ? focusTurnComposer : undefined}
-                      onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation
-                        ? () => callbacks.onCancelConversationPreparation!(selectedGoal.goalId) : undefined}
-                      onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn
-                        ? (turnId) => callbacks.onInterruptConversationTurn!(selectedGoal.goalId, turnId)
-                        : undefined} />
+                    <ChannelTimeline key={timelineKey} {...timelineReading} readOnly={readOnly}
+                      goalDraftPreparationContext={`${goalAgentId}:${locale}`}
+                      onReviewGoalDraft={readOnly ? undefined : timelineActions.onReviewGoalDraft}
+                      onApplyGoalDraft={readOnly ? undefined : timelineActions.onApplyGoalDraft}
+                      onSuggestReply={readOnly ? undefined : timelineActions.onSuggestReply}
+                      items={visibleTimelineItems} onSelect={timelineActions.onSelect} selectedGoal={selectedGoal}
+                      onAdjustTurn={steeringTurnId ? timelineActions.onAdjustTurn : undefined}
+                      onCancelPreparation={canCancelTimelineTurn ? timelineActions.onCancelPreparation : undefined}
+                      onInterruptTurn={canInterruptTimelineTurn ? timelineActions.onInterruptTurn : undefined} />
                   </>),
                 }} />
-            ) : !managerChatOpen ? (
-              <ManagerHomeBoard goals={workspaceGoals} onRetry={() => void callbacks.onRefresh?.("missing")} onRetrySource={() => void refreshWorkspace()} onSelectGoal={selectGoal} systemHealth={model.systemHealth}
+              </GoalWorkBrowseProvider>
+            ) : goalStatusNotice ?? (!managerChatOpen ? (
+              <ManagerHomeBoard goals={workspaceGoals} attention={model.userTodos} onSelectAttention={openAttention}
+                onRetry={() => void callbacks.onRefresh?.("missing")} onRetrySource={() => void refreshWorkspace()} onSelectGoal={selectGoal} systemHealth={model.systemHealth}
                 onboarding={model.onboarding} onRequestGoalCreate={readOnly ? undefined : requestGoalCreate} onSuggestRequest={readOnly ? undefined : suggestReply}
-                runtimeReadiness={readOnly ? undefined : runtimeReadiness} recheckingRuntimes={recheckingRuntimes} onRecheckRuntimes={callbacks.onRecheckRuntimes ? recheckRuntimes : undefined}
-                operations={actionReadback.isError ? [] : homeOperations} onSelectOperation={proposal => setSelection({kind: "proposal", item: proposal})}
-                onViewAllOperations={() => setSelectedGoalTab("chat")} />
+                runtimeReadiness={readOnly || originalSourceUnresolved ? undefined : runtimeReadiness}
+                recheckingRuntimes={recheckingRuntimes} onRecheckRuntimes={callbacks.onRecheckRuntimes ? recheckRuntimes : undefined}
+                operations={actionReadback.isError ? [] : homeOperations} onSelectOperation={proposal => setSelection({kind: "proposal", item: proposal})} />
             ) : (
-              <ChannelTimeline emptyState={workspaceTitle ? { title: workspaceTitle, description: t("workspace.empty") } : undefined} onReviewGoalDraft={readOnly ? undefined : reviewGoalDraft} onSuggestReply={readOnly ? undefined : suggestReply}
-                items={selectedWorkspaceRef ? managerChatItems.filter((item) => item.kind === "message") : managerChatItems}
-                onSelect={setSelection} selectedGoal={null} showManagerTeamResults={!selectedWorkspaceRef}
-                onAdjustTurn={steeringTurnId ? focusTurnComposer : undefined}
-                onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation
-                  ? () => callbacks.onCancelConversationPreparation!(conversationKey) : undefined}
-                onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn
-                  ? (turnId) => callbacks.onInterruptConversationTurn!(conversationKey, turnId)
-                  : undefined}
-                onOpenGoalEvidence={(goalId) => { selectGoal(goalId, "chat"); }} />
-            )}
+              <ChannelTimeline key={timelineKey} {...timelineReading} readOnly={readOnly} emptyState={managerTimelineEmpty}
+                goalDraftPreparationContext={`${goalAgentId}:${locale}`}
+                onReviewGoalDraft={readOnly ? undefined : timelineActions.onReviewGoalDraft}
+                onApplyGoalDraft={readOnly ? undefined : timelineActions.onApplyGoalDraft}
+                onSuggestReply={readOnly ? undefined : timelineActions.onSuggestReply}
+                items={managerTimelineItems} onSelect={timelineActions.onSelect} selectedGoal={null} showManagerTeamResults={!boundManagerChat}
+                onAdjustTurn={steeringTurnId ? timelineActions.onAdjustTurn : undefined}
+                onCancelPreparation={canCancelTimelineTurn ? timelineActions.onCancelPreparation : undefined}
+                onInterruptTurn={canInterruptTimelineTurn ? timelineActions.onInterruptTurn : undefined}
+                onOpenGoalEvidence={timelineActions.onOpenGoalEvidence} />
+            ))}
             </> : null}
           </div>
-          {!rootUnavailable ? <div className="personal-composer-wrap" hidden={agentWorkActive}>
+          {!rootUnavailable ? <div className="personal-composer-wrap" hidden={agentWorkActive && !managedWorkActive}>
+            {workspaceConversations?.entryGate ? <div className="personal-history-notice" role={workspaceConversations.entryGate.unavailable ? "alert" : "status"}>
+              <span>{workspaceConversations.entryGate.unavailable
+                ? appStewardUnavailableMessage(workspaceConversations.entryGate.ownerLoginUnavailable === true, locale === "zh-CN")
+                : (locale === "zh-CN" ? "正在核验管家会话…" : "Verifying the steward conversation…")}</span>
+              {workspaceConversations.entryGate.unavailable ? <>
+                <button type="button" onClick={workspaceConversations.entryGate.retry}>{t("history.retry")}</button>
+                <button type="button" onClick={() => openSettings({kind: "settings", tab: "lark"}, true)}>{locale === "zh-CN" ? "会话设置" : "Conversation settings"}</button>
+              </> : null}
+            </div> : null}
+            {originalConversation && !originalConversation.session?.resumable ? <div className="personal-history-notice" role={originalConversation.error ? "alert" : "status"}>
+              <span>{originalConversation.session
+                ? (locale === "zh-CN" ? "可以回看原记录；此执行器暂不支持继续原会话。" : "Original history is available; this executor cannot continue its Session.")
+                : originalConversation.error
+                ? (locale === "zh-CN" ? "原会话暂不可用。请检查飞书连接后重试。" : "Original conversation unavailable. Check the Lark connection and retry.")
+                : (locale === "zh-CN" ? "正在核验原会话…" : "Verifying the original conversation…")}</span>
+              {originalConversation.error ? <button type="button" onClick={originalConversation.retry}>{t("history.retry")}</button> : null}
+            </div> : null}
             {!readOnly && actionReadback.isError ? <div className="personal-history-notice" role="status" data-testid="personal-action-readback-error">
               <span>{t("proposal.readbackUnavailable")}</span><button type="button" disabled={actionReadback.isFetching}
                 onClick={() => void actionReadback.refetch()}>{t("proposal.readbackRetry")}</button>
@@ -2840,9 +3180,9 @@ export function PersonalWorkspacePage({
               <span>{t("workspace.unavailable")}</span>
             </div> : null}
             {conversationHistoryState && conversationHistoryState.phase !== "ready" ? (
-              <div className="personal-history-notice" role="status">
+              <div className={conversationHistoryState.phase === "loading" ? "sr-only" : "personal-history-notice"} role="status">
                 <div><span>{t(`history.${conversationHistoryState.phase}`)}</span>
-                  {conversationHistoryState.sendBlocked && conversationHistoryState.phase !== "loading"
+                  {historyBlocksSend && conversationHistoryState.phase !== "loading"
                     ? <span>{t("history.currentSessionRecovering")}</span> : null}</div>
                 {conversationHistoryState.phase !== "loading" ? <button type="button"
                   disabled={conversationHistoryState.reading} onClick={conversationHistoryState.retry}>
@@ -2850,38 +3190,11 @@ export function PersonalWorkspacePage({
                 </button> : null}
               </div>
             ) : null}
-            {loopxMode?.session_id === conversationSessionId && loopxMode?.enabled && loopxMode.active_turn_id ? <label className="goal-loopx-message-mode">{locale === "zh-CN" ? "消息处理" : "Message delivery"}<select aria-label={locale === "zh-CN" ? "消息处理方式" : "Message delivery mode"} value={loopxDelivery} onChange={event => setLoopxDelivery(event.target.value as typeof loopxDelivery)}><option value="queue">{locale === "zh-CN" ? "下一轮处理" : "Next turn"}</option><option value="inbox">{locale === "zh-CN" ? "放入收件箱" : "Inbox"}</option><option value="steer">{locale === "zh-CN" ? "立即纠偏" : "Steer now"}</option></select><span role="status">{loopxMessageReceipt}</span></label> : null}
+
+            {loopxMessageReceipt ? <p className="personal-composer-status" role="status">{loopxMessageReceipt}</p> : null}
             {readOnly ? (
-              <div className="personal-read-only-notice"><strong>{t("source.readOnlyNoticeTitle")}</strong><span>{t("source.readOnlyNoticeDescription")}</span></div>
+              sourceGoal?.sourceAccess ? null : <div className="personal-read-only-notice"><strong>{t("source.readOnlyNoticeTitle")}</strong><ContextHelp label={t("source.readOnlyNoticeTitle")}><p>{t("source.readOnlyNoticeDescription")}</p></ContextHelp></div>
             ) : <>
-            {!selectedGoal && !managerChatOpen && managerConversationReceiptVisible && managerMessages.length ? (
-              <ManagerConversationTray onReviewGoalDraft={reviewGoalDraft} onSuggestReply={suggestReply}
-                onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation ? () => callbacks.onCancelConversationPreparation!("manager") : undefined}
-                onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn ? (turnId) => callbacks.onInterruptConversationTurn!("manager", turnId) : undefined}
-                onAdjustTurn={steeringTurnId ? focusTurnComposer : undefined}
-                messages={managerMessages}
-                onClose={() => setManagerConversationReceiptVisible(false)}
-                onOpenConversation={() => {
-                  setManagerConversationReceiptVisible(false);
-                  setSelectedGoalTab("chat");
-                }} />
-            ) : null}
-            {selectedGoal && selectedGoalTab !== "chat" && goalConversationReceiptVisible && goalMessages.length ? (
-              <ManagerConversationTray onReviewGoalDraft={reviewGoalDraft} onSuggestReply={suggestReply}
-                agentLabel={selectedAgentLabel}
-                onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation ? () => callbacks.onCancelConversationPreparation!(selectedGoal.goalId) : undefined}
-                onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn ? (turnId) => callbacks.onInterruptConversationTurn!(selectedGoal.goalId, turnId) : undefined}
-                onAdjustTurn={steeringTurnId ? focusTurnComposer : undefined}
-                messages={goalMessages}
-                onClose={() => setGoalConversationReceiptVisible(false)}
-                onDraftTask={selectedGoalTab === "tasks" ? (reply) => {
-                  const taskDraft = reply.trim();
-                  setActionDraft({ kind: "todo", text: taskDraft, goalId: selectedGoalId, goalTitle: selectedGoal.title, agentId: selectedAgentId });
-                } : undefined}
-                onOpenConversation={openGoalConversation}
-                title={`${selectedGoal.title} · ${selectedAgentLabel}`}
-              />
-            ) : null}
             {actionFeedback ? (
               <div className="personal-action-feedback" role="status">
                 <span>{actionFeedback}</span>
@@ -2898,10 +3211,12 @@ export function PersonalWorkspacePage({
                 <MessageCircleQuestion aria-hidden size={15} /><span>{t("composer.goalPrompt")}</span>
               </button>
             </> : null}
-            {composerSuggestions}
+            {composerCollapsed && composerSuggestions ? <ComposerActions>{composerSuggestions}</ComposerActions> : null}
             </div>
             {!composerCollapsed ? <>
-            {actionDraft ? <WorkspaceActionForm draft={actionDraft} workspaceGoals={workspaceGoals} workspaceProjects={workspaceConversations?.projects ?? []} onClose={() => setActionDraft(null)} onPreview={async (request) => {
+            {actionDraft ? <WorkspaceActionForm draft={actionDraft} workspaceGoals={workspaceGoals} workspaceProjects={workspaceConversations?.projects ?? []}
+              startExecution={agents.find(agent => agent.agentId === actionDraft.agentId)?.adapterKind === "codex_app_server"}
+              onClose={() => setActionDraft(null)} onPreview={async (request) => {
               const proposal = await createPreview(request, { select: false });
               if (proposal.gate?.kind === "workspace_unavailable") {
                 throw new Error(proposal.gate.summary);
@@ -2911,12 +3226,12 @@ export function PersonalWorkspacePage({
             }} /> : null}
             {imageAttachments.length ? <div className="personal-composer-images" aria-label={t("composer.imagesPending")}>{imageAttachments.map((attachment) => (
               <figure key={attachment.id}>
-                <img alt={attachment.name} src={attachment.dataUrl} />
+                <>{isTextDocument(attachment.mimeType) ? <DocumentAttachment {...attachment} zh={locale === "zh-CN"}/> : <img alt={attachment.name} src={attachment.dataUrl} />}</>
                 <button aria-label={t("composer.sentImageAlt", { name: attachment.name })} onClick={() => setImageAttachments((current) => current.filter((item) => item.id !== attachment.id))} type="button"><X size={13} /></button>
               </figure>
             ))}</div> : null}
             {imageAttachmentError ? <p className="personal-composer-error" role="alert">{imageAttachmentError}</p> : null}
-            {!readOnly && (selectedGoal || managerChatOpen) && (runtimeReadiness.kind === "none_available" || runtimeReadiness.kind === "selected_unavailable") ? (
+            {!readOnly && !originalSourceUnresolved && (selectedGoal || managerChatOpen) && (runtimeReadiness.kind === "none_available" || runtimeReadiness.kind === "selected_unavailable") ? (
               <p className="personal-composer-status personal-runtime-readiness-line" data-testid="runtime-readiness-line" role="status">
                 <span>{runtimeReadiness.kind === "none_available" ? t(agents.some((agent) => agent.adapterKind === "status_projection" && agent.available)
                   ? "readiness.selectedUnavailableReadonly" : "readiness.selectedUnavailableNone") : t("readiness.selectedUnavailable", { label: runtimeReadiness.selected.label })}</span>
@@ -2924,13 +3239,20 @@ export function PersonalWorkspacePage({
                 <a href={runtimeSetupGuideUrl} rel="noreferrer" target="_blank">{t("readiness.guide")}</a>
               </p>
             ) : null}
+            {retainedDrafts.length ? <details className="personal-legacy-steering-drafts">
+              <summary>{locale === "zh-CN" ? `保留的草稿 · ${retainedDrafts.length}` : `Retained message drafts · ${retainedDrafts.length}`}</summary>
+              {retainedDrafts.map(([key, draft]) => <div key={key}><p>{draft.composer}</p>
+                <button type="button" disabled={Boolean(composer) || Boolean(imageAttachments.length) || sending || steering || Boolean(retainedSteering)} onClick={() => restoreRetainedDraft(key)}>
+                  {locale === "zh-CN" ? "恢复到输入框" : "Restore to composer"}
+                </button></div>)}
+            </details> : null}
             {legacyDrafts.length ? <details className="personal-legacy-steering-drafts">
-            <summary>{locale === "zh-CN" ? `旧版保留的调整草稿 · ${legacyDrafts.length}` : `Retained drafts · ${legacyDrafts.length}`}</summary>
+            <summary>{locale === "zh-CN" ? `待确认的投递 · ${legacyDrafts.length}` : `Unconfirmed deliveries · ${legacyDrafts.length}`}</summary>
             {legacyDrafts.map(([key, request]) => <div key={key}><p>{request.text}</p>
               <button type="button" disabled={Boolean(composer.trim()) || Boolean(retainedSteering && retainedSteering.id !== request.id)} onClick={() => restoreLegacyDraft(key)}>
                 {locale === "zh-CN" ? "恢复到输入框" : "Restore to composer"}
               </button></div>)}
-            <small>{locale === "zh-CN" ? "先处理待确认指令并清空输入框后恢复；重试仍发往原回合。" : "Resolve pending instructions and clear the composer to restore. Retries keep their original turn."}</small>
+            <small>{locale === "zh-CN" ? "清空输入框后恢复；重试保留原请求。" : "Clear the composer to restore. Retries keep the original request."}</small>
           </details> : null}
           {retainedSteering && retainedSteering.sessionId === conversationSessionId && !retryingSteering && !composer.trim() ? <button type="button"
             onClick={() => { setComposer(retainedSteering.text); if (retainedSteering.delivery === "queue") setImageAttachments(retainedSteering.attachments ?? []); }}>
@@ -2939,35 +3261,27 @@ export function PersonalWorkspacePage({
           {retryingSteering && retryingSteering.turnId !== steeringTurnId ? <p className="personal-composer-status" role="status">{locale === "zh-CN"
             ? "上次投递尚未确认，发送将重试原请求。"
             : "The previous delivery is unconfirmed. Send retries the original request."}</p> : null}
-          {conversationTurnRunning ? <p className="personal-composer-status" role="status">{queueTurnId
-              ? (locale === "zh-CN" ? "本轮进行中 · 新消息将在下一轮处理" : "Turn in progress · new messages queue for the next turn")
-              : t("composer.turnRunning")}</p> : null}
+          {conversationSessionId ? <ConversationQueue sessionId={conversationSessionId}
+            readReady={conversationQueue.readReady}
+            onInputChanged={() => {conversationQueue.retry(); conversationHistoryState?.retry();}}
+            targetTurnId={steeringTurnId} turns={conversationQueue.turns} error={conversationQueue.error} onRetry={conversationQueue.retry}/> : null}
             <div
               className="personal-channel-composer"
               onDragOver={(event) => {
-                if ([...event.dataTransfer.items].some((item) => item.kind === "file" && item.type.startsWith("image/"))) {
+                if ([...event.dataTransfer.items].some((item) => item.kind === "file")) {
                   event.preventDefault();
                 }
               }}
               onDrop={(event) => {
-                const images = [...event.dataTransfer.files].filter((file) => file.type.startsWith("image/"));
+                const images = [...event.dataTransfer.files];
                 if (!images.length) return;
                 event.preventDefault();
                 void selectImages(images);
               }}
             >
-              <button
-                aria-label={t("composer.addImage")}
-                className="personal-composer-attach"
-                disabled={steering || (sending && !queueTurnId) || imageAttachments.length >= maxImageAttachmentCount}
-                onClick={() => imageInputRef.current?.click()}
-                title={t("composer.attachImageHint")}
-                type="button"
-              >
-                <Paperclip size={17} />
-              </button>
-              <input accept="image/png,image/jpeg,image/webp,image/gif" aria-label={t("composer.imagePicker")} className="personal-composer-file-input" disabled={steering || (sending && !queueTurnId) || imageAttachments.length >= maxImageAttachmentCount} multiple onChange={(event) => void selectImages(event.target.files)} ref={imageInputRef} type="file" />
+              <input accept="image/png,image/jpeg,image/webp,image/gif,.md,.txt" aria-label={t("composer.imagePicker")} className="personal-composer-file-input" disabled={Boolean(workspaceConversations?.entryGate) || steering || (sending && !queueTurnId) || imageAttachments.length >= maxImageAttachmentCount} multiple onChange={(event) => void selectImages(event.target.files)} ref={imageInputRef} type="file" />
               <textarea
+                disabled={Boolean(workspaceConversations?.entryGate)}
                 id="personal-conversation-composer"
                 aria-label={t("composer.sendMessage")}
                 onChange={(event) => setComposer(event.target.value)}
@@ -2984,18 +3298,52 @@ export function PersonalWorkspacePage({
                 onPaste={handleComposerPaste}
                 placeholder={locale === "zh-CN" ? "输入消息…" : "Write a message…"}
                 ref={composerRef}
-                autoFocus={overviewComposerOpen && selectedGoalTab === "overview"}
+                autoFocus={overviewComposerOpen && selectedGoalTab !== "chat"}
                 rows={1}
                 value={composer}
               />
-              <button aria-label={t("composer.send")} disabled={(!composer.trim() && imageAttachments.length === 0) || composerBlocked || workspaceUnavailable || conversationHistoryState?.sendBlocked} onClick={() => void sendMessage()} title={t("composer.sendMessageHint")} type="button"><Send size={18} /></button>
-            </div>
-            {conversationOpen ? <div className="personal-composer-hint">{steering
+              <div className="personal-composer-toolbar">
+                <div className="personal-composer-tool-start">
+                  <ComposerActions>
+              <button
+                aria-label={t("composer.addImage")}
+                className="personal-composer-attach"
+                disabled={Boolean(workspaceConversations?.entryGate) || steering || (sending && !queueTurnId) || imageAttachments.length >= maxImageAttachmentCount}
+                onClick={() => imageInputRef.current?.click()}
+                title={t("composer.attachImageHint")}
+                type="button"
+              >
+                <Paperclip size={17} /><span>{t("composer.addImage")}</span>
+              </button>
+                    {composerSuggestions}
+                  </ComposerActions>
+            <ContextHelp label={locale === "zh-CN" ? "消息快捷键" : "Message shortcuts"} icon={CircleHelp}><p>{steering
               ? (locale === "zh-CN" ? "正在发送…" : "Sending…")
               : queueTurnId ? (locale === "zh-CN" ? `Enter 排队 · Shift+Enter 换行${steeringTurnId ? " · Command+Enter 调整本轮" : ""}` : `Enter to queue · Shift+Enter for a new line${steeringTurnId ? " · Command+Enter to steer" : ""}`)
               : sending && !steeringTurnId
               ? (locale === "zh-CN" ? "正在回复 · 可以先保留后续消息草稿" : "Reply in progress · you can draft a follow-up message")
-              : (locale === "zh-CN" ? "Enter 发送 · Shift+Enter 换行" : "Enter to send · Shift+Enter for a new line")}</div> : null}
+              : (locale === "zh-CN" ? "Enter 发送 · Shift+Enter 换行" : "Enter to send · Shift+Enter for a new line")}</p></ContextHelp>
+                </div>
+            {loopxMode?.session_id === conversationSessionId && loopxMode?.enabled && loopxMode.active_turn_id ? <label className="goal-loopx-message-mode"><select aria-label={locale === "zh-CN" ? "消息处理方式" : "Message delivery mode"} value={loopxDelivery} onChange={event => setLoopxDelivery(event.target.value as typeof loopxDelivery)}><option value="queue">{locale === "zh-CN" ? "下一轮处理" : "Next turn"}</option><option value="inbox">{locale === "zh-CN" ? "放入收件箱" : "Inbox"}</option><option value="steer">{locale === "zh-CN" ? "立即纠偏" : "Steer now"}</option></select></label> : null}
+                {(selectedGoal || selectedWorkspaceRef || originalConversation) ? <ComposerRuntimeControls
+                  key={`${conversationKey}:${selectedAgentId}`} agents={agents} agentId={selectedAgentId}
+                  goalId={selectedGoal?.goalId} original={Boolean(originalConversation || managedWorkActive)}
+                  model={selectedAgentModelId} effort={selectedAgentReasoningEffort} readback={selectedAgentModelReadback}
+                  onAgent={selectAgent} onModel={model => saveModelSettings(() => callbacks.onSelectAgentModel?.(selectedAgentId, model))}
+                  onEffort={effort => saveModelSettings(() => callbacks.onSelectAgentReasoningEffort?.(selectedAgentId, effort))}
+                  onDefaults={selectedGoal && !originalConversation ? () => openSettings({kind: "settings", tab: "conversation"}, true) : undefined}
+                /> : null}
+              {interruptTurnId && callbacks.onInterruptConversationTurn ? <button className="personal-composer-stop"
+                data-turn-id={interruptTurnId}
+                aria-label={locale === "zh-CN" ? "停止当前回合" : "Stop current turn"} type="button"
+                onClick={() => void callbacks.onInterruptConversationTurn!(conversationKey, interruptTurnId).catch(cause =>
+                  setActionFeedback(cause instanceof Error ? cause.message : (locale === "zh-CN" ? "停止失败，请查看当前回合。" : "Stop failed. Check the current turn.")))}>
+                <Square size={16}/>
+              </button> : null}
+              <button className="personal-composer-send" aria-label={t("composer.send")} disabled={modelSettingsSaving[composerDraftKey] || (!composer.trim() && imageAttachments.length === 0) || composerBlocked || workspaceUnavailable || (originalConversation && !originalConversation.session?.resumable) || (workspaceConversations?.managed && !workspaceConversations.managed.session?.resumable) || historyBlocksSend} onClick={() => void sendMessage()} title={t("composer.sendMessageHint")} type="button"><Send size={18} /></button>
+              </div>
+            </div>
+
             </> : null}
             </>}
           </div> : null}
@@ -3018,8 +3366,10 @@ export function PersonalWorkspacePage({
           onRetryGoalArchive={callbacks.onRetryGoalArchive || callbacks.onRefresh
             ? () => void (callbacks.onRetryGoalArchive ?? callbacks.onRefresh)?.()
             : undefined}
-          onOpenSettings={readOnly ? undefined : () => openSettings({ kind: "settings" })}
-          onSelectGoal={selectGoal}
+          onOpenCommands={() => {setMobileSidebarOpen(false); setPaletteScope(paletteContext);}}
+          onOpenSettings={hostReadOnly ? undefined : () => openSettings({ kind: "settings" })}
+          onSelectGoal={(goalId) => selectGoal(goalId,
+            goalId && selectedGoalId && selectedGoalTab === "research" ? "research" : "overview")}
           selectedGoalId={selectedGoalId}
           statusSourceControl={statusSourceControl}
         />

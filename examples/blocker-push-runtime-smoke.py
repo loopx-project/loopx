@@ -19,6 +19,10 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tests.control_plane.cli_output_fixture import read_cli_context_for_oracle  # noqa: E402
 GOAL_ID = "focus-wait-owner-blocker"
 USER_TODO = "Provide new owner evidence, a clean baseline, or external eval before delivery resumes."
 
@@ -52,6 +56,8 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
                 "",
                 "- Stay quiet until owner evidence changes.",
                 "",
+                "## Agent Todo",
+                "",
             ]
         )
         + "\n",
@@ -60,7 +66,7 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
     registry.write_text(
         json.dumps(
             {
-                "runtime_root": str(runtime_root),
+                "common_runtime_root": str(runtime_root),
                 "goals": [
                     {
                         "id": GOAL_ID,
@@ -87,6 +93,8 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
         encoding="utf-8",
     )
     append_state_refreshed_run(runtime_root)
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+    import_fixture_authority(registry, GOAL_ID, provider="sqlite")
     return registry, runtime_root, project, state_file
 
 
@@ -139,7 +147,8 @@ def run_cli(registry: Path, runtime_root: Path, *args: str) -> dict:
         text=True,
         capture_output=True,
     )
-    return json.loads(result.stdout)
+    body, _ = read_cli_context_for_oracle(result.stdout)
+    return json.loads(body)
 
 
 def main() -> int:
@@ -147,7 +156,7 @@ def main() -> int:
         root = Path(tmp)
         registry, runtime_root, project, state_file = write_fixture(root)
 
-        status_payload = run_cli(registry, runtime_root, "status", "--scan-root", str(project))
+        status_payload = run_cli(registry, runtime_root, "status", )
         items = status_payload["attention_queue"]["items"]
         assert len(items) == 1, items
         item = items[0]
@@ -170,8 +179,6 @@ def main() -> int:
             "should-run",
             "--goal-id",
             GOAL_ID,
-            "--scan-root",
-            str(project),
         )
         assert decision["decision"] == "skip", decision
         assert decision["should_run"] is False, decision
@@ -211,14 +218,14 @@ def main() -> int:
         assert "state=operator_gate" not in compact_prompt, prompt
         assert "Normal turns use CLI `interaction_contract`" in compact_prompt, prompt
         assert "`user_channel.notify` controls OUTPUT only" in compact_prompt, prompt
-        assert "NOTIFY=show; DONT_NOTIFY=no output" in compact_prompt, prompt
+        assert "NOTIFY=show; DONT_NOTIFY: no chat text. Return any required host quiet result in full" in compact_prompt, prompt
         assert "Due/peer work is not a user prompt" in compact_prompt, prompt
         assert "Missing NOTIFY action: user Todo unprojected" in compact_prompt, prompt
         # The bootstrap rule is shared from heartbeat.rules after #4201; assert the
         # current compact sentence instead of the retired per-shell phrasing.
         assert "reuse the value on retries" in compact_prompt, prompt
         assert "obey projected replan/stop, never wake counts" in compact_prompt, prompt
-        assert "re-enter guard." in compact_prompt, prompt
+        assert "re-enter as instructed, do/verify authorized work." in compact_prompt, prompt
         assert "2 stalls->replan" not in compact_prompt, prompt
         assert "Exact monitor settlement=no refresh/spend" in compact_prompt, prompt
         assert "Admitted work: settlement_plan even if artifacts unchanged" in compact_prompt, prompt

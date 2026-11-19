@@ -51,6 +51,9 @@ todos, quota, soft claims, compact run events, source warnings, and an explicit
 truth contract. It is not a write API. Dashboards may render it as a channel
 card or timeline, but project truth still comes from the registry, active
 state, quota guard, and append-only run history.
+Decision reads (`loopx quota ...` and Turn decisions) omit this row field and
+the top-level `promotion_gate`; only display consumers read them, and their
+status projection cache entries are keyed separately from `loopx status`.
 
 Rows may also include an optional `task_graph_projection` object with
 `schema_version=task_graph_projection_v0`. The default `status` hot path omits
@@ -161,12 +164,12 @@ dashboard surfaces should prefer it over exposing raw `orchestration_mode` plus
 loopx --format json status > goal-status.json
 ```
 
-By default, `status` scans the LoopX install root for public/private
-contract health. Use narrow scan paths only when you intentionally want the
-status export to check a specific public-safe project surface:
+`status` reads execution and contract health with public-boundary scanning
+deferred. It does not accept scan-selection options. Check outgoing content
+explicitly; a deferred scan does not certify public safety:
 
 ```bash
-loopx --format json status \
+loopx --format json check \
   --scan-path README.md \
   --scan-path docs/ \
   --scan-path examples/
@@ -280,6 +283,20 @@ For spend accounting, status derives `spent_slots` from compact
 `quota_slot_spent` runtime events in the current quota window. The registry
 remains the policy source for compute share and window size, not the spend
 ledger.
+An indexed quota event whose artifact cannot be read back is a ledger
+integrity failure, not a spend of zero: status reports it through
+`quota.unreadable_event_count` (with `quota.unreadable_event_reasons` naming
+the cause), keeps the quota state at `blocked_health`, and blocks automatic
+agent turns until the artifact is readable again.
+An indexed quota event that reads back but does not name a known event type,
+or that names a known type without the fields that type requires, is the same
+integrity failure: the reason is `event_invalid`, and the event is never read
+as a zero spend. A readable event that names a known type and spends zero
+slots is a legal zero contribution, not an unreadable one.
+The legacy `from loopx.quota import quota_slot_contribution` export stays an
+identity alias of `loopx.control_plane.quota.ledger_readback.quota_slot_contribution`;
+it reports the contribution of one readable event only, and it is not the
+surface that carries the unreadable count.
 `quota_slot_spent` is status-neutral accounting: it must remain visible in run
 history for quota audit, but status and attention queues should use the latest
 non-accounting run as the current work state.
@@ -688,6 +705,20 @@ the live quota-backed queue item for the same `goal_id` when one exists, under
 `global_registry_shadow_findings`, so stale source shadows do not become a second
 quota health blocker while the fact remains visible in `global_registry.findings`.
 
+A Goal can therefore have both a health finding and a live read-model item in
+`attention_queue.items`. Match the required projection as well as `goal_id`:
+the first row for a Goal is not necessarily its Todo or Goal-channel view.
+When the declared Goal document is missing, available canonical Todo, lease and
+acceptance observations remain readable; the `state_file_missing` finding still
+blocks automatic delivery. Readback never reconstructs the document or replaces
+its intent and stop conditions. Restoring the document permits a fresh admission
+check; provider failure still refuses stale display fallback.
+
+同一个 Goal 可以同时有健康告警和权威状态的只读投影。读取 Todo 或 Goal channel
+时须同时匹配 `goal_id` 和所需投影字段，不能假定第一行就是该视图。Goal 文档缺失时，
+可用的 canonical Todo、lease 和验收仍可回读，但不授予自动执行，也不重建文档；恢复
+文档后重新准入，provider 不可用时继续拒绝旧显示数据回退。
+
 ## Contract Health
 
 `contract.ok=false` means the UI should show a blocking health state before
@@ -941,10 +972,12 @@ Item fields:
   `project_asset.user_todos` projection keeps legacy `next` / `next_index`
   fields and may also include up to three unfinished `items` for thin workers
   that need more than the first open todo.
-- `agent_todos`: optional checkbox summary parsed from `## Agent Todo`,
-  `## Codex Todo`, or `## Project Agent Todo`. Agent-facing consumers may use
-  it to choose implementation work after gates and quota allow execution; it is
-  not a user approval signal. Status, quota, and review-packet projections
+- `agent_todos`: checkbox summary parsed from `## Agent Todo`,
+  `## Codex Todo`, or `## Project Agent Todo`. The section may be empty, but a
+  readable legacy state must include its heading; absence is
+  `state_incomplete`. Agent-facing consumers may use it to choose
+  implementation work after gates and quota allow execution; it is not a user
+  approval signal. Status, quota, and review-packet projections
   should preserve up to three unfinished agent todo items so short heartbeats do
   not confuse "first visible item" with the whole backlog. Todo summaries also
   expose `first_executable_items` for advancement-class work and
@@ -1106,6 +1139,14 @@ as controller work: register the goal if it is active, or archive the runtime
 record if it is old. Watch-only legacy records remain visible in run history
 without entering the queue.
 
+`status=state_incomplete` is emitted when a legacy Markdown active state is
+readable but lacks its required `## Agent Todo` heading (or an accepted alias).
+The item carries `state_incomplete` with the missing sections and repair
+guidance. The same condition makes `loopx todo list` return `ok=false` with
+`error_code=state_incomplete`; consumers must not interpret its zero Todos as a
+goal with no open work. Canonical provider authority is unaffected because this
+check applies only to the legacy Markdown fallback.
+
 `status=state_refreshed` is emitted for registered goals when the latest compact
 run came from `loopx refresh-state`. Dashboard consumers should show it
 as Codex-ready work: the controller state changed, and the next agent turn
@@ -1146,6 +1187,15 @@ goal-level refresh in a multi-agent goal must use a registered peer with
 `--progress-scope goal`.
 Use agent-lane scope for a peer-local recommendation that should not replace the
 durable goal route.
+
+`connected_without_run` means a connected Goal has no recorded runs. When all
+recorded runs are agent-lane notes or status-neutral events, `latest_status_run`
+remains null; this does not mean the Goal never ran. Attention uses the current
+authoritative active-state Todo projection when available, otherwise it retains
+`unknown`. The full-history `unique_runs` count preserves this distinction when
+the displayed `latest_runs` window is empty. Neither history nor an open Todo
+proves a host is currently executing; Agent execution state still requires its
+separate lane, worker and lease facts.
 
 If a peer self-merged slice materially advanced the public product or case
 path, that peer or another registered peer should also write a project-level
@@ -1292,7 +1342,12 @@ the legal choice boundary separate from the displayed suggestions;
 `suggestions_exhaustive=false` makes that distinction machine-readable.
 `selection_policy.decision_owner=agent` and
 `recommendation_role=default_not_binding` make the priority order advisory at
-this boundary rather than silently binding the first Todo.
+this boundary rather than silently binding the first Todo. A ready deferred
+higher-priority successor remains planning context, but neither removes an
+otherwise eligible open alternative nor vetoes its explicit selection. Default
+successor-replan recommendations remain available; the selected deferred Todo's
+own resume condition still applies. See the
+[planning-horizon decision boundary](reference/protocols/quota-planning-horizon-v0.md#agent-decision-authority).
 
 Version 2 adds the optional `continuation_hint` field to each
 `suggested_actions[]` item so an agent can see the candidate's next execution
@@ -1321,8 +1376,11 @@ capability-ready Todo. That request is a pending selection, not a committed
 receipt identity. Quota first re-runs current lane arbitration and eligibility;
 a newly due hard-priority monitor, blocking user gate, or other preemption
 defers the request and keeps the receipt identity-less. A qualified request does
-not need to have appeared in the bounded suggestions. Only the upgraded response
-restores delivery and its settlement plan. If there is only one admitted action,
+not need to have appeared in the bounded suggestions. A qualified selection with
+a missing hard lease binds the same Todo/Turn for preparation only: delivery stays
+denied and the only action is the ordinary claim. The same-Turn guard must observe
+`execution_preparation.state=ready` before restoring delivery and its settlement
+plan. If there is only one admitted action,
 no portfolio selection phase is added.
 
 When selected work has meaningful typed lineage, waiting, sibling, or
@@ -1348,6 +1406,37 @@ exposes the larger bounded `todo_planning_inventory_detail_v0` projection;
 completeness counters remain authoritative for omissions. Consumers that need
 the complete open source follow `detail_refs.full_todo_list` rather than
 assuming either bounded projection is exhaustive.
+
+After a new Turn has selected one Todo, `quota should-run` also checks that
+Todo's canonical hard lease. `execution_preparation_v0` is `ready` only for a
+matching active lease. A missing, released, or expired lease produces
+`claim_required` with one ordinary managed claim and
+`host_execution_allowed=true`; a capable Host may execute it before launching
+the model, then must rerun the guard and observe the same Todo as `ready`.
+The read-only guard never acquires authority itself, and the claim still
+atomically rechecks current ownership, write scopes, physical workspace and
+lease generation. Foreign ownership, conflicting leases, or unreadable
+canonical authority fail closed. Explicit action selection must bind one Todo
+before preparation. Receipt-bound recovery rechecks that same Todo and Turn, so
+the post-claim guard can prove `ready` without replacing their identities. Hosts
+without this integration expose only the claim command for
+the Agent to execute, avoiding unrelated context reads or delivery work first.
+
+For enabled native Codex App/SSH context delivery, the existing trusted
+`SessionStart` / `PostToolUse` lifecycle hook is a capable Host executor. The
+private session journal retains only the exact projected claim identity beside
+the immutable guard capture, including the absolute authority route that
+produced it. The hook uses that retained route even when its process runs from
+another project; it never rediscovers Goal authority from the hook cwd. The
+hook accepts only
+`host_execution_allowed=true`, executes the ordinary managed claim, reruns the
+guard for the same Todo and receipt-bound Turn, and injects a compact `ready`
+receipt before the next model step. A successful receipt suppresses repeated
+preparation for that capture; session resume rechecks it because the lease may
+have expired while the model was absent. Malformed, foreign, moved-workspace,
+timed-out, or failed preparation preserves the original explicit claim/recheck
+fallback and never erases context-recovery output. Context delivery remains an
+opt-in transport; it does not make a read-only guard itself acquire authority.
 
 Correctly typed future work is handled earlier. A higher-priority
 `continuous_monitor` with a valid future `next_due_at` is not executable; quota
@@ -1867,11 +1956,22 @@ still observe every row by default. This is a caller filesystem optimization,
 independent of the Todo authority provider, not an index cache or a limit on
 decision history.
 
+An artifact that cannot be observed because its filesystem lookup fails (for
+example an overlong filename, permission denial or I/O error) has its existing
+availability flag set to `false`. This means availability was not confirmed,
+not that deletion was proven. The Run and its semantic evidence remain visible;
+the read does not rewrite the index or retain a negative result across requests.
+Errors reading the index itself still propagate.
+
 文件存在性是每次读取对返回记录的实时观测，不信任索引中保存的布尔值。先用完整索引
 完成去重、额度和语义历史归约，再检查近期记录、最新状态、Agent 窗口及保留语义证据
 的文件；即使 `--limit 0`，旧愿景、用户纠偏和有效阻塞重试也不会因此丢失。索引不变时，
 文件创建／删除仍在下次读取生效；底层完整索引接口默认保留逐条检查行为。这不改变
 File／SQLite 等 Todo provider 的权威，也不限制决策历史。
+
+若文件查询因文件名过长、权限不足或 I/O 错误而失败，对应可用性标记为 `false`，
+表示未确认可用，而非已证实删除。Run 及其语义证据仍保留；读取不会改写索引，
+也不会跨请求缓存失败结果。读取索引本身的错误仍会向上传递。
 
 On the `status`, `quota should-run`, and `history` read paths, relative
 `common_runtime_root` values, relative `--runtime-root` overrides, and relative
@@ -2299,6 +2399,13 @@ coverage; legacy runtime goals are extra. An unknown `--goal-id` is reported as
 the consumer rule are in the
 [projection envelope contract](reference/contracts/projection-envelope-contract.md).
 
+An unreadable optional cache (including invalid UTF-8 or malformed JSON) is a
+cache miss with `miss_reason=unreadable`, not a status-collection failure.
+`status` and `quota should-run` collect live source facts instead. Reading does
+not repair or delete the damaged cache; `--write-projection-cache` explicitly
+replaces it with the newly collected projection. Canonical source errors still
+retain their normal diagnostics and admission rules.
+
 ## Decision Freshness Summary
 
 `decision_freshness_summary` is an optional checkpointed-decision projection over
@@ -2374,7 +2481,12 @@ context without new usage cannot relabel that snapshot. A snapshot without a
 preceding model context is rejected. This binding does not allocate cumulative
 session usage across models. The session must be bound explicitly; there is no
 automatic session discovery, because guessing a concurrent session risks
-attributing one session's spend to another run. A host that measures usage
+attributing one session's spend to another run. The first `session_meta` must
+identify the session before any cumulative usage is accepted. Missing ids or
+conflicting later ids refuse the booking instead of rebinding earlier counters.
+Repeated metadata for the same id preserves the first session clock, so it
+cannot change an already-booked snapshot's duration on replay.
+A host that measures usage
 itself can instead pass one finished per-run
 measurement with `--usage-json`. Without either flag, usage stays unknown.
 
@@ -2395,6 +2507,13 @@ producer boundary, and the run index append is the single commit point: each
 session's delta basis is reconstructed from its own already-booked rows
 (telescoping absolute + delta sums per session id), not from a second state
 file, so a crash or retry can never leave the basis behind the ledger.
+The basis reader streams the complete retained index instead of buffering its
+whole text and split lines. Its record buffer scales with the largest index
+record; it still retains the selected session's row identities for duplicate
+suppression. Missing indexes mean no prior booking. Corrupt JSON or an IO
+failure, including a failure after an earlier valid row, refuses the booking
+without publishing a partial usage row. This changes neither retention nor
+the booking lock and adds no cache or second ledger.
 Baselines are per session and each observation is bound to
 `usage.source_snapshot_id`, so interleaved sessions never rebase against each
 other: a returning session books only its own increment instead of re-booking
@@ -2453,6 +2572,17 @@ The summary currently reports:
   clamped against the spend it names. A spend whose `quota_event` cannot be
   read contributes no slot, and a void that targets a spend outside the window
   does not reduce that window.
+- `unreadable_event_count_24h` / `unreadable_event_count_7d`: optional; omitted
+  when no unreadable event was observed. When present, they count indexed quota
+  events (`quota_slot_spent` / `quota_slot_voided`) in that sample whose
+  artifact cannot be read back, or whose slot count is missing or unparseable.
+  The real slot count is unknown, so these events are counted instead of being
+  silently read as a zero spend (an explicitly written `slots: 0` stays a legal
+  zero, not an unreadable event), and the
+  quota projection fails closed while the count is non-zero. The counters only
+  appear when they describe a real integrity failure, so a healthy summary
+  keeps its original shape and the agent-facing status output stays inside its
+  growth budget.
 - `automation_run_count_24h` / `automation_run_count_7d`: quota spend events
   whose compact `quota_event.source` is `heartbeat`, `automation`, or `cron`.
   If the compact run index does not retain a source, `quota_slot_spent` is
@@ -2713,3 +2843,37 @@ The public examples under `examples/` are sanitized and can be used for demos.
 - Consumers should handle missing `run_history` as unavailable.
 - Consumers should treat `contract.ok=false` as a stronger signal than an empty
   attention queue.
+## Explicit Todo queue overview
+
+`loopx todo list --goal-id <goal-id> --summary` selects the versioned
+`todo_list_summary_v0` overview. It leaves ordinary list output and the existing
+`--thin` view unchanged. The overview is available in JSON and Markdown and
+helps a reader choose which Todo to inspect; it is not execution admission.
+
+The view reuses the canonical Todo query's role, status, Agent scope and stable
+ordering. It shows at most eight records per role (sixteen for both roles).
+`--limit` may lower that per-role cap. Agent-scoped hot reads retain their
+existing omission of done records; explicit status/role reads retain their
+existing selection. Blocked/deferred work and Monitors do not become runnable
+merely because they appear in the overview.
+
+One `todos` array contains `todo_id`, `role`, `title`, `status`, `priority`,
+`claimed_by` and `title_truncated`. Titles are bounded to 180 Unicode code
+points; canonical identities are retained. Markdown marks truncated titles
+with `*`. `todo list --goal-id <goal-id> --todo-id <todo-id>` restores complete
+requirements through the existing exact-read owner. `--summary` is mutually
+exclusive with `--thin` and `--todo-id`.
+
+`todo_count` and `matched_todo_count` cover the complete query match before
+display limits, `returned_todo_count` is the number displayed, and
+`omitted_todo_count` is their difference. `todo_list_summary_projection`
+declares the version, per-role/text limits and full-detail routes. The compact
+`authority_read` retains provider identity/revision/cursor and the canonical
+read/fallback facts. The existing `projection_envelope` distinguishes complete
+source coverage from display truncation. An unavailable source remains an
+error, never a successful empty queue.
+
+The new `todo_list_summary` output-budget variant has separate JSON/Markdown
+ceilings. Existing default and thin budgets remain unchanged. App and Lark
+callers keep their current full/exact views; this opt-in CLI projection does
+not switch consumers, create writes, or replace quota/lease/acceptance checks.

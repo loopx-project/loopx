@@ -12,8 +12,8 @@ from typing import Any
 
 from .chat_manager import manager_model_config
 from .capabilities.steward_executor import load_effective_steward_executor_defaults
-from .chat_manager_details import read_manager_goal_details
-from .chat_manager_history import read_manager_delivery_history
+from .chat.manager_details import read_manager_goal_details
+from .chat.manager_history import read_manager_delivery_history
 from .capabilities.manager_context.inspection import agent_work_summary
 from .history import decode_registry_snapshot
 from .goal_portfolio import build_goal_portfolio, lifecycle_readback_unavailable
@@ -488,7 +488,11 @@ def manager_authorization_scope_is_current(
         or not isinstance(expected_scope_id, str)
     ):
         return False
-    current = scope_resolver(session)
+    try:
+        current = scope_resolver(session)
+    except (OSError, ValueError, KeyError, TypeError):
+        # Losing the source or its audience proof holds the existing scope.
+        return False
     return (
         isinstance(current, list)
         and manager_authorization_scope_id_for_registry(
@@ -510,6 +514,7 @@ def manager_turn_context(
     requested_goal_ids: list[str] | None = None,
     include_stopped: bool = False,
     include_details: bool = True,
+    read_goal_status: bool = True,
     evidence_window_days: int | None = None,
     remote_evidence: bool = False,
     remote_runner=None,
@@ -518,6 +523,7 @@ def manager_turn_context(
 ) -> dict[str, Any]:
     conversation = conversation_scope(session)
     local_goal = conversation["kind"] == "owner_goal"
+    include_details = include_details and read_goal_status
     if evidence_window_days is None:
         evidence_window_days, days_source, days_reason = resolve_evidence_window_days()
     elif (
@@ -585,6 +591,7 @@ def manager_turn_context(
         include_goal_lifecycle=True,
         include_goal_attention=True,
         include_goal_instance_id=True,
+        read_status=read_goal_status,
     )
     labels: dict[str, str] = {}
     try:
@@ -743,6 +750,8 @@ def collect_manager_turn_context(
     scope_resolver: Callable[[dict[str, Any]], list[str] | None] | None = None,
     *,
     include_details: bool = True,
+    include_stopped: bool = False,
+    read_goal_status: bool = True,
     remote_evidence: bool = False,
     remote_runner=None,
 ) -> dict[str, Any]:
@@ -752,6 +761,8 @@ def collect_manager_turn_context(
             session,
             runtime_root,
             include_details=include_details,
+            include_stopped=include_stopped,
+            read_goal_status=read_goal_status,
             remote_evidence=remote_evidence,
             remote_runner=remote_runner,
         )
@@ -797,6 +808,14 @@ def collect_manager_turn_context(
             )
         )
 
+    from .capabilities.manager_context.ssh_evidence import grants
+
+    inline_remote = bool(
+        remote_evidence
+        and grants(runtime_root, str(session.get("channel_id") or ""))
+    )
+    bound_steward = conversation_scope(session).get("bound_steward") is True
+
     for attempt in range(2):
         context = manager_turn_context(
             registry_path,
@@ -804,6 +823,8 @@ def collect_manager_turn_context(
             runtime_root,
             authorized_goal_ids=before,
             include_details=include_details,
+            include_stopped=include_stopped,
+            read_goal_status=read_goal_status,
             remote_evidence=remote_evidence,
             remote_runner=remote_runner,
             # Source reads and the Turn owner check the same exact authority.
@@ -821,11 +842,30 @@ def collect_manager_turn_context(
             else None
         )
         if before != after or before_scope_id != after_scope_id:
+            if (
+                attempt == 0
+                and not inline_remote
+                and bound_steward
+                and registry_path is not None
+                and before is not None
+                and after is not None
+                and after_scope_id is not None
+                and set(before).issubset(set(after))
+                and manager_authorization_scope_id_for_registry(
+                    registry_path,
+                    before,
+                    runtime_root=runtime_root,
+                    channel_id=session.get("channel_id"),
+                )
+                == before_scope_id
+            ):
+                before, before_scope_id = after, after_scope_id
+                continue
             return unavailable_manager_context("external_authorization_changed")
         # Recollect local, on-demand context once under the original scope.
         # Inline remote collection owns one dial/Turn budget, including failed
         # reads; recollecting it would restart that budget.
-        if (attempt == 0 and not remote_evidence and before_scope_id is not None
+        if (attempt == 0 and not inline_remote and before_scope_id is not None
                 and context.get("warnings") == ["external_authorization_changed"]):
             continue
         break

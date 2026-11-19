@@ -78,6 +78,8 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, tod
     ), state_path=state, provider=provider)
 
     def call(*args: str, expected_code: int = 0) -> dict:
+        if args[:2] == ("quota", "should-run"):
+            args = (*args, "--context-delivery", "off")
         result = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
             "--runtime-root", str(runtime), "--format", "json", *args], cwd=ROOT,
             capture_output=True, text=True, timeout=60)
@@ -114,6 +116,123 @@ def _admitted_guard(call, todo_bound: bool) -> dict:
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_visible_goal_begin_turn_binds_identityless_replan_when_successor_is_selected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+) -> None:
+    call, runtime, _ = _fixture(tmp_path, monkeypatch, provider, True)
+    guard = call(
+        "quota", "should-run", "--runtime-profile", "codex_app_ssh_goal",
+        "--goal-id", GOAL, "--agent-id", AGENT, "--begin-turn",
+    )
+    receipt = guard["heartbeat_receipt"]
+    assert receipt["settlement_binding_owed"] is True
+    assert "settlement_identity" not in receipt
+    assert guard["interaction_contract"]["cli_channel"]["selection_required"] is True
+    obligation = receipt["semantic_replan_obligation_id"]
+    turn = receipt["turn_instance_id"]
+
+    from loopx.control_plane.quota.heartbeat_receipt import (
+        bind_replan_successor_heartbeat_receipt,
+        find_heartbeat_receipt,
+        heartbeat_receipt_view,
+    )
+
+    with pytest.raises(ValueError, match="semantic replan guard conflicts"):
+        bind_replan_successor_heartbeat_receipt(
+            runtime,
+            goal_id=GOAL,
+            agent_id=AGENT,
+            turn_instance_id=turn,
+            replan_obligation_id="replan-0000000000000000",
+        )
+
+    successor = call(
+        "todo", "add", "--goal-id", GOAL, "--role", "agent",
+        "--claimed-by", AGENT, "--text", "Validate the selected replan route.",
+        "--task-class", "advancement_task", "--action-kind", "validate",
+        "--target-key", "selected-replan-route", "--operation-id",
+        "visible-goal-replan-successor", "--replan-obligation-id", obligation,
+        "--turn-instance-id", turn,
+    )
+    assert successor["todo_id"].startswith("todo_")
+
+    persisted = find_heartbeat_receipt(
+        runtime, goal_id=GOAL, agent_id=AGENT, turn_instance_id=turn,
+    )
+    assert persisted is not None
+    upgraded = heartbeat_receipt_view(
+        persisted, turn_instance_id=turn, status="replayed",
+    )
+    identity = upgraded["settlement_identity"]
+    assert identity["binding_kind"] == "autonomous_replan"
+    assert identity["replan_obligation_id"] == obligation
+    assert upgraded["semantic_replan_obligation_id"] == obligation
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_replan_successor_dry_run_does_not_bind_the_original_turn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+) -> None:
+    call, runtime, _ = _fixture(tmp_path, monkeypatch, provider, True)
+    guard = call(
+        "quota", "should-run", "--runtime-profile", "codex_app_ssh_goal",
+        "--goal-id", GOAL, "--agent-id", AGENT, "--begin-turn",
+    )
+    receipt = guard["heartbeat_receipt"]
+    obligation = receipt["semantic_replan_obligation_id"]
+    turn = receipt["turn_instance_id"]
+    log_path = rollout_event_log_path(runtime, GOAL)
+    before = load_rollout_events(log_path)
+
+    preview = call(
+        "todo", "add", "--goal-id", GOAL, "--role", "agent",
+        "--claimed-by", AGENT, "--text", "Preview the selected replan route.",
+        "--task-class", "advancement_task", "--action-kind", "validate",
+        "--target-key", "selected-replan-route", "--operation-id",
+        "visible-goal-replan-preview", "--replan-obligation-id", obligation,
+        "--turn-instance-id", turn, "--dry-run",
+    )
+
+    assert preview["dry_run"] is True
+    assert preview["replan_transition"]["recorded"] is False
+    assert load_rollout_events(log_path) == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_replan_successor_validation_failure_does_not_bind_the_original_turn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+) -> None:
+    call, runtime, _ = _fixture(tmp_path, monkeypatch, provider, True)
+    guard = call(
+        "quota", "should-run", "--runtime-profile", "codex_app_ssh_goal",
+        "--goal-id", GOAL, "--agent-id", AGENT, "--begin-turn",
+    )
+    receipt = guard["heartbeat_receipt"]
+    obligation = receipt["semantic_replan_obligation_id"]
+    turn = receipt["turn_instance_id"]
+    log_path = rollout_event_log_path(runtime, GOAL)
+    before = load_rollout_events(log_path)
+
+    call(
+        "todo", "add", "--goal-id", GOAL, "--role", "agent",
+        "--claimed-by", AGENT, "--text", "Invalid deferred successor.",
+        "--task-class", "advancement_task", "--action-kind", "validate",
+        "--target-key", "selected-replan-route", "--operation-id",
+        "visible-goal-replan-invalid", "--replan-obligation-id", obligation,
+        "--turn-instance-id", turn, "--status", "deferred",
+        expected_code=1,
+    )
+
+    assert load_rollout_events(log_path) == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("todo_bound", [True, False])
 def test_legal_replan_reports_native_child_without_settling_parent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, todo_bound: bool,
@@ -124,7 +243,9 @@ def test_legal_replan_reports_native_child_without_settling_parent(
     identity = guard["heartbeat_receipt"]["settlement_identity"]
     assert identity.get("todo_id") == (TODO if todo_bound else None)
     assert bool(identity.get("replan_obligation_id")) is not todo_bound
-    assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    assert guard["interaction_contract"]["agent_channel"]["must_attempt"] is True
+    assert guard["heartbeat_receipt"]["semantic_replan_obligation_id"]
     original_index = index.read_bytes()
     base = ("native-child", "--goal-id", GOAL, "--agent-id", AGENT,
             "--turn-instance-id", TURN)

@@ -1,6 +1,22 @@
 import assert from "node:assert/strict";
 
-import { changeStewardExecutorDraft, goalReplanCadenceEditorValue, goalReplanCadenceWriteValue, hasReplanCadenceOverride, goalStorageEditorValue, parseEditableCapabilityJson, projectEditableCapabilityConfiguration, replanCadenceEditorDefaults } from "../src/data/capability-configuration.js";
+import { changeStewardExecutorDraft, goalExploreEditorValue, goalExploreWriteValue, goalReplanCadenceEditorValue, goalReplanCadenceWriteValue, hasReplanCadenceOverride, goalStorageEditorValue, parseEditableCapabilityJson, projectEditableCapabilityConfiguration, replanCadenceEditorDefaults } from "../src/data/capability-configuration.js";
+
+const exploreEditor = {fields: [{key: "mode"}, {key: "profile"}, {key: "composition_mode"}, {key: "composition_scope_id", nullable: true}]};
+const exploreEffective = {mode: "planning", profile: "generic", composition_mode: "disabled", composition_scope_id: null};
+for (const current of [{profile: "adaptive-resilient"}, {composition_mode: "explicit_only", composition_scope_id: "bounded-scope"}]) {
+  const draft = projectEditableCapabilityConfiguration(exploreEditor, goalExploreEditorValue(current, exploreEffective));
+  assert.equal(draft.mode, "planning", "sparse Goal overrides display the live inherited mode");
+  assert.equal(Object.hasOwn(goalExploreWriteValue({...draft, profile: "generic"}, false), "mode"), false,
+    "saving another field must not pin the inherited mode");
+  assert.equal(goalExploreWriteValue({...draft, mode: "off"}, true).mode, "off", "an explicit off choice remains writable");
+  const json = parseEditableCapabilityJson(exploreEditor, JSON.stringify(goalExploreWriteValue(draft, false)))!;
+  assert.equal(Object.hasOwn(json, "mode"), false, "form to JSON preserves inheritance intent");
+  assert.equal(projectEditableCapabilityConfiguration(exploreEditor, json, exploreEffective).mode, "planning",
+    "sparse JSON returning to the form displays the effective mode");
+}
+assert.equal(goalExploreEditorValue({mode: "evidence"}, exploreEffective).mode, "evidence",
+  "stored explicit modes win even when device preferences change");
 
 const codexDraft = { executor_endpoint: "codex", executor_model: "gpt-fixture", executor_reasoning_effort: "high", selection_policy: "preferred" };
 const managedDraft = changeStewardExecutorDraft(codexDraft, "executor_endpoint", "dsh");
@@ -41,6 +57,15 @@ assert.deepEqual(replanCadenceEditorDefaults(
   { count_unit: "completed_todos", count: 4, stride_strategy: "off" },
   "legacy effective intervals retain their own unit and count");
 const inheritedReview = { count_unit: "effective_turns", count: 3, stride_strategy: "off" };
+assert.deepEqual(goalReplanCadenceWriteValue({...inheritedReview, planning_horizon_goal: true}, false, false),
+  {stride_strategy: "off"}, "displaying the default Goal context does not create an override");
+for (const enabled of [true, false]) {
+  assert.deepEqual(goalReplanCadenceWriteValue({...inheritedReview, planning_horizon_goal: enabled}, false, true),
+    {stride_strategy: "off", planning_horizon_goal: enabled}, "explicit horizon choices survive a form save");
+}
+assert.equal(replanCadenceEditorDefaults({...inheritedReview, planning_horizon_goal: false},
+  {...cadenceDefault, planning_horizon_goal: true}).planning_horizon_goal, false,
+  "a sparse Goal form displays the effective machine opt-out");
 assert.deepEqual(goalReplanCadenceEditorValue({ stride_strategy: "evidence_conditioned_v1" }, inheritedReview),
   { ...inheritedReview, stride_strategy: "evidence_conditioned_v1" },
   "strategy-only Goal settings display the live review interval");
@@ -146,3 +171,21 @@ assert.deepEqual(
   { wait_for_ci: false, review_priority: "other-developers-first" },
   "an explicit Goal CI opt-out must survive default projection and omit envelope fields",
 );
+
+// Capability defaults may enable Stride without changing saved legacy choices.
+const enabledStrideDefault = {...cadenceDefault, stride_strategy: "evidence_conditioned_v1"};
+assert.deepEqual(goalReplanCadenceEditorValue(null, enabledStrideDefault), enabledStrideDefault);
+assert.equal(goalReplanCadenceEditorValue({stride_strategy: "off"}, enabledStrideDefault).stride_strategy, "off");
+assert.equal(goalReplanCadenceEditorValue({count_unit: "effective_turns", count: 3}, enabledStrideDefault).stride_strategy, "off");
+assert.equal(projectEditableCapabilityConfiguration(cadenceEditor, {}, enabledStrideDefault).stride_strategy, "evidence_conditioned_v1");
+
+// Independent Yardstick inheritance must not be pinned by editing the interval.
+const yardstickEffective = {...inheritedReview, yardstick_enabled: true};
+assert.equal(goalReplanCadenceEditorValue({count_unit: "effective_turns", count: 2}, yardstickEffective).yardstick_enabled, true);
+assert.deepEqual(goalReplanCadenceWriteValue({...yardstickEffective, count: 2}, true, false, false),
+  {...inheritedReview, count: 2}, "an unchanged inherited measurement choice stays live");
+for (const enabled of [true, false]) {
+  assert.deepEqual(goalReplanCadenceWriteValue({...yardstickEffective, yardstick_enabled: enabled}, false, false, true),
+    {stride_strategy: "off", yardstick_enabled: enabled}, "explicit measurement opt-in and opt-out survive form saving");
+}
+assert.equal(replanCadenceEditorDefaults(yardstickEffective, {...cadenceDefault, yardstick_enabled: false}).yardstick_enabled, true);

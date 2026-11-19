@@ -229,7 +229,7 @@ def test_acp_restart_records_provider_restored_settings_instead_of_failing(tmp_p
 def test_codex_catalog_failure_is_retryable_without_inventing_current_model(tmp_path, monkeypatch):
     runtime = ChatRuntimeController(store=ChatSessionStore(tmp_path / "runtime"), codex_bin="fixture")
     monkeypatch.setattr(runtime, "capabilities", lambda: [{"agent_id": "codex", "available": True}])
-    monkeypatch.setattr("loopx.chat_runtime.codex_model_options", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("loopx.chat_providers.codex_model_options", lambda *_args, **_kwargs: None)
     try:
         with pytest.raises(CodexChatAgentError) as error:
             runtime.inspect_agent_model_options("codex", work_dir=tmp_path)

@@ -1,6 +1,10 @@
 /** Read-only Codex session adapter for benchmark-toolkit, separate from model judgments. */
 import {EffectRuntimeRequestError} from '../effect_runtime_errors.ts';
-import type {TrajectorySolverUsage} from './trajectory_assessment_types.ts';
+import type {TrajectoryPartialTurnUsage, TrajectorySolverUsage} from './trajectory_assessment_types.ts';
+import {isIdentifiedTurnAbort, reconcileTrajectoryRequests, summarizeTrajectoryLoopXInput} from './trajectory_request_usage.ts';
+import {estimateTrajectoryLoopXInput} from './trajectory_input_usage.ts';
+import {summarizeTrajectoryToolContext} from './trajectory_tool_context.ts';
+import {summarizeTrajectoryLoopXRequests} from './trajectory_loopx_requests.ts';
 
 const fail = (message: string): never => { throw new EffectRuntimeRequestError(`trajectory usage: ${message}`); };
 const counterKeys = ['input_tokens', 'cached_input_tokens', 'output_tokens'] as const;
@@ -17,12 +21,27 @@ const time = (v: unknown): number => {
   if (typeof v !== 'string' || !/^\d{4}-\d\d-\d\dT.*(?:Z|[+-]\d\d:\d\d)$/.test(v) || !Number.isFinite(Date.parse(v))) return fail('timestamp must include timezone');
   return Date.parse(v);
 };
+type ActiveTurn = {turn_id: string; start: string; start_ms: number; first_line: number; baseline: Counters; samples: number};
+
+function partialTurn(turn: ActiveTurn, observedThrough: string, lastLine: number, total: Counters): TrajectoryPartialTurnUsage {
+  const usage = subtract(total, turn.baseline);
+  if (usage.cached_input_tokens > usage.input_tokens) return fail('invalid delta cache accounting');
+  return {turn_id: turn.turn_id, start: turn.start, observed_through: observedThrough,
+    first_line: turn.first_line, last_line: lastLine, counter_observations: turn.samples,
+    usage: turn.samples ? {...usage, uncached_input_tokens: usage.input_tokens - usage.cached_input_tokens} : null};
+}
+
 export function summarizeTrajectoryCodexUsage(params: Record<string, unknown>): TrajectorySolverUsage {
   if (!Array.isArray(params.events) || typeof params.session_id !== 'string' || !params.session_id) return fail('session events and expected identity required');
+  if (params.include_incomplete !== undefined && typeof params.include_incomplete !== 'boolean') return fail('include_incomplete must be boolean');
+  const observed = params.include_incomplete === true;
   const rows = params.events;
+  let start = '', terminalThrough = '', observedThrough = '', observedLine = 0;
   let sessionSeen = false, previousTime = -Infinity, previous = zero(), samples = 0;
-  let active: {turn_id: string; start: string; start_ms: number; first_line: number; baseline: Counters; samples: number} | null = null;
-  const turns: Array<{turn_id: string; start: string; end: string; first_line: number; last_line: number; elapsed_seconds: number; usage: Counters & {uncached_input_tokens: number}}> = [];
+  let active: ActiveTurn | null = null, interruptedSeconds = 0;
+  const turns: TrajectorySolverUsage['turns'] = [];
+  const interruptedTurns: TrajectoryPartialTurnUsage[] = [];
+  const started = new Set<string>();
   let previousLine = 0;
   for (const event of rows) {
     if (!event || typeof event !== 'object' || Array.isArray(event)) return fail('invalid event');
@@ -35,13 +54,25 @@ export function summarizeTrajectoryCodexUsage(params: Record<string, unknown>): 
       continue;
     }
     if (!sessionSeen) return fail('session header missing');
-    if (event.type !== 'event_msg' || !['task_started', 'task_complete', 'token_count'].includes(p?.type)) continue;
+    if (event.type !== 'event_msg') continue;
+    const interrupted = isIdentifiedTurnAbort(p);
+    if (!interrupted && !['task_started', 'task_complete', 'token_count'].includes(p?.type)) continue;
     const stamp = time(event.timestamp);
     if (stamp < previousTime) return fail('out-of-order events');
     previousTime = stamp;
+    observedThrough = event.timestamp; observedLine = event.line;
     if (p.type === 'task_started') {
-      if (active || typeof p.turn_id !== 'string' || !p.turn_id || turns.some(t => t.turn_id === p.turn_id)) return fail('duplicate or overlapping Turn');
+      if (active || typeof p.turn_id !== 'string' || !p.turn_id || started.has(p.turn_id)) return fail('duplicate or overlapping Turn');
+      start ||= event.timestamp;
+      started.add(p.turn_id);
       active = {turn_id: p.turn_id, start: event.timestamp, start_ms: stamp, first_line: event.line, baseline: {...previous}, samples: 0};
+    } else if (interrupted) {
+      if (!active || p.turn_id !== active.turn_id) return fail('unmatched aborted Turn');
+      if (!observed) return fail('capture includes an aborted Turn; use observed usage');
+      interruptedTurns.push(partialTurn(active, observedThrough, observedLine, previous));
+      interruptedSeconds += (stamp - active.start_ms) / 1000;
+      terminalThrough = event.timestamp;
+      active = null;
     } else if (p.type === 'token_count' && p.info) {
       if (!active) return fail('usage outside a captured Turn');
       const total = counters(p.info.total_token_usage), last = counters(p.info.last_token_usage);
@@ -59,17 +90,38 @@ export function summarizeTrajectoryCodexUsage(params: Record<string, unknown>): 
       turns.push({turn_id: active.turn_id, start: active.start, end: event.timestamp, first_line: active.first_line,
         last_line: event.line, elapsed_seconds: (stamp - active.start_ms) / 1000,
         usage: {...usage, uncached_input_tokens: usage.input_tokens - usage.cached_input_tokens}});
+      terminalThrough = event.timestamp;
       active = null;
     }
   }
-  if (active || !turns.length) return fail('capture must end after a completed Turn');
-  return {session_id: params.session_id, method: 'codex_complete_session_counters_v1',
-    start: turns[0].start, end: turns.at(-1)!.end, completed_turns: turns.length, counter_observations: samples,
+  if (!observed && (active || !turns.length)) return fail('capture must end after a completed Turn');
+  if (!samples) return fail('no measured usage in captured session');
+  const incomplete = active ? partialTurn(active, observedThrough, observedLine, previous) : null;
+  const end = active ? observedThrough : terminalThrough;
+  const requestCoverage = reconcileTrajectoryRequests(rows, params.session_id);
+  const loopxInput = summarizeTrajectoryLoopXInput(rows, params.session_id, requestCoverage)
+    ?? estimateTrajectoryLoopXInput(params.loopx_input_trace, params.session_id, params.input_goal_id, rows, requestCoverage);
+  const toolContext = summarizeTrajectoryToolContext(params.tool_context);
+  const loopxRequests = toolContext?.status === 'unavailable'
+    ? {method: 'codex_ordered_loopx_requests_v1' as const, status: 'unavailable' as const, reason: toolContext.reason}
+    : summarizeTrajectoryLoopXRequests(rows, params.tool_context, requestCoverage);
+  return {session_id: params.session_id, method: observed ? 'codex_observed_session_counters_v1' : 'codex_complete_session_counters_v1',
+    ...(requestCoverage ? {request_coverage: requestCoverage} : {}),
+    ...(loopxInput ? {loopx_input: loopxInput} : {}),
+    ...(toolContext ? {tool_context: toolContext} : {}),
+    ...(loopxRequests ? {loopx_requests: loopxRequests} : {}),
+    ...(observed ? {incomplete_turn: incomplete} : {}),
+    ...(interruptedTurns.length ? {interrupted_turns: interruptedTurns} : {}),
+    start, end, completed_turns: turns.length, counter_observations: samples,
     input_tokens: previous.input_tokens, cached_input_tokens: previous.cached_input_tokens,
     uncached_input_tokens: previous.input_tokens - previous.cached_input_tokens, output_tokens: previous.output_tokens,
-    elapsed_seconds: (time(turns.at(-1)!.end) - time(turns[0].start)) / 1000,
-    turn_elapsed_seconds: turns.reduce((sum, t) => sum + t.elapsed_seconds, 0), turns,
-    limitations: ['Complete captured session only; donor/prefix study costs and evaluator costs are not included.',
+    elapsed_seconds: (time(end) - time(start)) / 1000,
+    turn_elapsed_seconds: turns.reduce((sum, t) => sum + t.elapsed_seconds, interruptedSeconds)
+      + (active ? (time(end) - active.start_ms) / 1000 : 0), turns,
+    limitations: [observed
+      ? 'Observed counters only, including any unfinished final Turn; unpersisted requests and later usage remain unknown. No termination or complete cost is inferred.'
+      : 'Complete captured session only; donor/prefix study costs and evaluator costs are not included.',
+      ...(observed ? ['Donor/prefix study costs and evaluator costs are not included.'] : []),
       'Input includes cached input. Output includes any reasoning tokens. No dollar or generation-time estimate.',
       'Elapsed time includes tools and orchestration; it does not measure CPU time or avoidable overhead.',
       'Registered operator binding identifies the case; this does not independently prove run provenance.']};

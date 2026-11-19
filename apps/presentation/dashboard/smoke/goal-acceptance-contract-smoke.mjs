@@ -7,9 +7,9 @@ const withContract = value => ({ ...snapshot, acceptance: { ...acceptance, goal_
 const before = structuredClone(contract);
 for (const copy of Object.values(deliveryReviewCopy)) {
   const baseline = deliveryReviewMarkdown(parseDeliveryReview(snapshot, snapshot.goal_id), copy);
-  for (const value of [undefined, { enabled: false }, { ...verifiedContract("accepted"), enabled: false }]) {
+  for (const value of [undefined, {}, { enabled: false }, { ...verifiedContract("accepted"), enabled: false }]) {
     assert.equal(deliveryReviewMarkdown(parseDeliveryReview(withContract(value), snapshot.goal_id), copy), baseline,
-      "Missing/disabled contract must preserve baseline export even with retained success data");
+      "Absent checks or retained inactive snapshots must preserve baseline export even with retained success data");
   }
   for (const status of ["unverified", "failed", "stale", "accepted", "partial", "held"]) {
     const source = withContract(verifiedContract(status));
@@ -31,6 +31,9 @@ for (const copy of Object.values(deliveryReviewCopy)) {
     scope: { kind: "selected_work", todo_ids: ["todo_confirmed"] } }), snapshot.goal_id);
   assert.ok(deliveryReviewMarkdown(selected, copy).includes(copy.contract.selectedWork));
   assert.ok(deliveryReviewMarkdown(parseDeliveryReview(withContract(contract), snapshot.goal_id), copy).includes(copy.contract.allWork));
+  const goalOnly = parseDeliveryReview(withContract({ ...contract,
+    scope: { kind: "goal" }, tasks: [], held_todo_ids: [] }), snapshot.goal_id);
+  assert.ok(deliveryReviewMarkdown(goalOnly, copy).includes(copy.contract.goalOnly));
   const empty = parseDeliveryReview(withContract({ ...contract, criteria: [], tasks: [] }), snapshot.goal_id);
   assert.ok(deliveryReviewMarkdown(empty, copy).includes(copy.contract.noTasks));
   assert.ok(deliveryReviewMarkdown(empty, copy).includes(copy.contract.noCriteria));
@@ -67,8 +70,15 @@ assert.throws(() => parseDeliveryReview({ ...withContract(contract), acceptance:
 const next = parseDeliveryReview(withContract({ ...contract, revision: 8, digest: "b".repeat(64) }), snapshot.goal_id);
 assert.equal(next.acceptance.goal_acceptance_contract.revision, 8);
 assert.notEqual(next.acceptance.goal_acceptance_contract.digest, contract.digest);
+for (const value of [{}, contract, {enabled: false}, {...contract, enabled: false}]) {
+  const source = {goal_ref: {goal_id: snapshot.goal_id, goal_instance_id: "release-instance"}, lifecycle_state: "active"};
+  const retained = parseDeliveryReview(withContract({...value, ...source}), snapshot.goal_id).acceptance.goal_acceptance_contract;
+  assert.deepEqual(retained.goal_ref, source.goal_ref, "Configured, default and retained disabled checks preserve the owning Goal lifetime");
+  assert.equal(retained.lifecycle_state, source.lifecycle_state);
+  if (value.enabled === false) assert.equal(retained.criteria, undefined, "Retained ownership does not re-enable legacy checks");
+}
 assert.deepEqual(contract, before, "Rendering must not mutate the supplied contract");
-console.log("Goal acceptance contract API/export: off parity, association/verification distinction, source/revision and negative cases passed");
+console.log("Goal acceptance contract API/export: default absence, association/verification distinction, source/revision and negative cases passed");
 
 const {goalAcceptanceDisplayStatus, projectGoalAcceptanceCriteria} = await import("../node_modules/.cache/delivery-review/data/goal-acceptance-observation.js");
 for (const [observation, expected] of Object.entries({current: "accepted", stale: "stale", failed: "failed", recorded: "unverified", unavailable: "unverified"})) {

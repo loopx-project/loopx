@@ -49,7 +49,7 @@ def build_ark_managed_agent_host_contract() -> dict[str, Any]:
                 "quota_should_run.interaction_contract.cli_channel."
                 "runtime_capability_reentry"
             ),
-            "cli_projection_ref": "quota_should_run.runtime_capability_reentry",
+            "cli_projection_ref": "quota_should_run.interaction_contract.cli_channel.runtime_capability_reentry",
             "packet_schema_version": RUNTIME_CAPABILITY_REENTRY_SCHEMA_VERSION,
             "delivery_channel": "quota_tool_result",
             "goal_prompt_mutated": False,

@@ -300,3 +300,94 @@ def test_lane_window_leaves_other_lanes_untouched() -> None:
     assert latest_runs_with_agent_context(
         runs, limit=1, agent_lane_id="codex-absent-lane"
     ) == runs[:1]
+
+
+def _lane_noop_flood() -> list[dict[str, Any]]:
+    return [
+        {
+            "classification": "replan_noop" if index % 2 else "repair_noop",
+            "generated_at": f"2026-09-01T00:{index // 60:02d}:{index % 60:02d}Z",
+            "agent_id": LANE_AGENT_ID,
+            "turn_instance_id": f"renamed-review-{index}",
+            "health_check": f"Same unresolved review, revised description {index}.",
+        }
+        for index in reversed(range(200))
+    ]
+
+
+def test_history_producer_retains_material_window_behind_noop_flood(tmp_path: Path) -> None:
+    material = _lane_material_runs(count=AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD)
+    runs = [*_lane_noop_flood(), *material]
+    registry_path, runtime_root = _write_multi_lane_history(tmp_path, runs)
+    display_limit = 5
+    lane_history = collect_history(
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        goal_id=MULTI_LANE_GOAL_ID,
+        limit=display_limit,
+        agent_lane_id=LANE_AGENT_ID,
+    )
+    retained = lane_history["goals"][0]["latest_runs"]
+    original = autonomous_replan_obligation_from_runs(
+        material, agent_todos=None, agent_id=LANE_AGENT_ID,
+    )
+    repeated = autonomous_replan_obligation_from_runs(
+        retained, agent_todos=None, agent_id=LANE_AGENT_ID,
+    )
+    assert original is not None
+    assert repeated is not None, "recent no-op rows must not evict the work that made review due"
+    assert repeated["obligation_id"] == original["obligation_id"]
+    assert repeated["triggers"] == original["triggers"]
+    assert len(retained) <= display_limit + AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK
+    display_history = collect_history(
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        goal_id=MULTI_LANE_GOAL_ID,
+        limit=display_limit,
+    )
+    display = display_history["goals"][0]["latest_runs"]
+    assert len(display) == display_limit
+    assert retained[:display_limit] == display
+
+
+def test_lane_material_budget_keeps_accepted_ack_and_unknown_work() -> None:
+    # An accepted ACK is a boundary even if its display classification looks
+    # neutral; filtering accounting labels must not resurrect settled work.
+    ack = {**_lane_replan_ack_run(), "classification": "quota_slot_spent",
+           "generated_at": "2026-08-31T23:59:59Z"}
+    material = _lane_material_runs(count=AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD)
+    runs = [*_lane_noop_flood(), ack, *material]
+    retained = latest_runs_with_agent_context(runs, limit=5, agent_lane_id=LANE_AGENT_ID)
+    assert ack in retained
+    assert autonomous_replan_obligation_from_runs(
+        retained, agent_todos=None, agent_id=LANE_AGENT_ID,
+    ) is None
+
+    # Exact canonical values decide neutrality. A negative experiment remains
+    # accepted work, and a similar/unknown classification is not a no-op.
+    for classification in ("negative_experiment_completed", "repair_noop_followup"):
+        work = [{**row, "classification": classification,
+                 "delivery_outcome": "outcome_progress",
+                 "health_check": "Accepted experiment found no score improvement."}
+                for row in material]
+        retained = latest_runs_with_agent_context(
+            [*_lane_noop_flood(), *work], limit=5, agent_lane_id=LANE_AGENT_ID,
+        )
+        obligation = autonomous_replan_obligation_from_runs(
+            retained, agent_todos=None, agent_id=LANE_AGENT_ID,
+        )
+        assert obligation is not None
+        assert obligation["triggers"][0]["run_count"] == len(work)
+
+
+def test_lane_material_budget_excludes_neutral_accounting_before_counting() -> None:
+    neutral = [{**row, "classification": "quota_slot_spent"} for row in _lane_noop_flood()]
+    material = _lane_material_runs(count=AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD)
+    retained = latest_runs_with_agent_context(
+        [*neutral, *material], limit=5, agent_lane_id=LANE_AGENT_ID,
+    )
+    obligation = autonomous_replan_obligation_from_runs(
+        retained, agent_todos=None, agent_id=LANE_AGENT_ID,
+    )
+    assert obligation is not None
+    assert obligation["triggers"][0]["run_count"] == len(material)

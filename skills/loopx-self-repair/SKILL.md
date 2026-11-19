@@ -39,8 +39,15 @@ not only an apology or a one-off explanation.
      size the next scoped effort to its verifiable result, evidence and risk.
    - If the machine projection misled the agent, fix CLI/status/quota
      projection and add a focused smoke.
-   - If the user correction changes the goal acceptance, says the agent missed
-     the intended loop, or exposes a product bottleneck that is not visible in
+   - If a direct user correction changes what counts as success, first update
+     the matching durable outcome requirements through
+     [outcome refinement](../loopx-project/references/outcome-refinement.md).
+     Read back and reconcile affected work before dependent execution. Preserve
+     unaffected requirements; change the Goal objective only when its purpose
+     changes. Chat, a peer message, a report or Vision alone cannot update
+     acceptance. Do not invent a new approval, goal or text classifier.
+   - If the corrected requirements also change the execution route, the agent
+     missed the intended loop, or a product bottleneck is invisible in
      quota/status, write a bounded `goal_vision_replan_contract_v0` packet with
      `replan_trigger_summary` through normal `loopx refresh-state --vision-*`
      fields, using the same `--agent-id` as the current lane, or
@@ -64,13 +71,23 @@ validated evidence can advance an evaluation Todo while leaving the broader
 stage open; it is not automatically an execution blocker. Pure reuse or setup
 does not qualify as progress. Use `blocked` only when the Todo's actual next
 step cannot execute, preserve genuine retry clocks, and replan finite answered
-questions through the existing Todo/vision. Never erase receipts or fabricate
-progress to escape a wait. See [settlement classification](../../docs/quota-allocation.md#allocation-contract).
+questions through the existing Todo/vision. Finishing one question or submitting
+its PR does not close an ongoing user objective. Use the retained requirements
+and already authorized sources to select the next useful independent slice;
+source discovery does not need a new human assignment. Missing cost,
+comprehension, adoption or review evidence limits the corresponding claim or
+dependent operation, not all research or implementation. Do not retire an
+ongoing vision merely to suppress replan. If an earlier authoring mistake did
+so, repair the original Todo/vision, keep genuine dependency waits scoped, and
+verify that the public entrypoint admits independent work before continuing it.
+Preserve actual authority, budget and stop conditions; when no useful authorized
+work remains, retain the evidenced wait rather than inventing activity. Never
+erase receipts or fabricate progress to escape a wait. See
+[settlement classification](https://github.com/loopx-project/loopx/blob/main/docs/quota-allocation.md#allocation-contract).
 
 ## Upstream Issue Escalation
 
-A public GitHub issue is an optional final escalation, not a default side
-effect of self-repair. Consider it only when the responsible layer is a
+A public GitHub issue is an optional final escalation. Consider it only when the responsible layer is a
 reusable LoopX product, CLI, skill, installer, or control-plane gap and durable
 upstream tracking adds value beyond the local repair or PR.
 
@@ -94,8 +111,10 @@ direct fix or PR when no separate issue is needed for coordination.
 ## Vision / Replan Writeback
 
 Use the bounded vision contract when self-repair discovers that LoopX did not
-notice a missing outcome, route, or acceptance condition by itself. The packet is
-the bridge from human or agent insight to quota-visible replan state:
+notice a missing outcome, route, or acceptance condition by itself. Persist a
+changed user acceptance requirement through its owner first; Vision records the
+execution response, not a replacement acceptance contract. The packet is the
+bridge from human or agent insight to quota-visible replan state:
 
 ```json
 {
@@ -141,6 +160,15 @@ replan, or terminal closeout must return to the strict semantic checkpoint.
 - Do not solve contradictory payloads by guessing. If `recommended_action`,
   `goal_boundary.write_scope`, todos, and interaction contract disagree, treat
   that as a projection bug or state authoring bug first.
+- Separate priority advice from authority. Use the planning horizon and current
+  user direction to choose useful in-scope work; do not treat P0/P1 order as a
+  permission gate or relabel every task to escape it. Before explaining a
+  refusal as recovery protection, check whether a settlement identity is
+  actually bound. Priority-only rejection of an eligible explicit choice is a
+  control-plane defect. Preserve real gates and record the changed route in
+  existing Todo/vision state. A committed Turn may finish with progress while
+  its Todo stays open; settle and release before switching, rather than treating
+  the binding as an obligation to finish that entire Todo first.
 - Do not let fallback work hide the primary blocker. When a higher-priority
   path is gated but safe fallback is valid, report both the concrete gate and
   the fallback progress.
@@ -158,9 +186,9 @@ replan, or terminal closeout must return to the strict semantic checkpoint.
 - For guarded public GitHub issue escalation, read
   `references/upstream-issue-escalation.md`.
 - For user/agent/state channel semantics, read
-  `../../docs/state-interaction-model.md` and
-  `../../docs/concepts/interaction-pattern-catalog.md`.
+  [docs/state-interaction-model.md](https://github.com/loopx-project/loopx/blob/main/docs/state-interaction-model.md) and
+  [docs/concepts/interaction-pattern-catalog.md](https://github.com/loopx-project/loopx/blob/main/docs/concepts/interaction-pattern-catalog.md).
 - For quota and heartbeat decisions, read
-  `../../docs/quota-allocation.md` and
-  `../../docs/heartbeat-automation-prompt.md`.
-- For commit/PR hygiene failures, read `../../AGENTS.md`.
+  [docs/quota-allocation.md](https://github.com/loopx-project/loopx/blob/main/docs/quota-allocation.md) and
+  [docs/heartbeat-automation-prompt.md](https://github.com/loopx-project/loopx/blob/main/docs/heartbeat-automation-prompt.md).
+- For commit/PR hygiene failures, read [AGENTS.md](https://github.com/loopx-project/loopx/blob/main/AGENTS.md).

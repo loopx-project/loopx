@@ -24,7 +24,7 @@ HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION = (
     "loopx_host_todo_completion_reduction_v0"
 )
 _RUNTIME_METHOD = "turn.host_todo_completion.evaluate"
-_STEP_KINDS = (
+HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE = (
     "guard",
     "lifecycle_completion",
     "durable_writeback",
@@ -279,7 +279,7 @@ def _decode_provider_steps(value: Any) -> tuple[_ProviderStep, ...]:
         or len(raw_steps) not in {4, 5}
     ):
         raise RuntimeError("TypeScript host provider plan shape mismatch")
-    expected = _STEP_KINDS[: len(raw_steps)]
+    expected = HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE[: len(raw_steps)]
     steps: list[_ProviderStep] = []
     for index, raw in enumerate(raw_steps):
         if not isinstance(raw, Mapping) or raw.get("step_kind") != expected[index]:
@@ -374,8 +374,17 @@ def _run_provider_plan(
 ) -> list[dict[str, str]]:
     outcomes: list[dict[str, str]] = []
     for step in steps:
+        args = list(step.args)
+        if step.step_kind == "quota_spend":
+            # Forward the source from the preceding identity-checked writeback.
+            # The quota command still verifies the requested debit.
+            writeback = json.loads(outcomes[-1]["output"])
+            source = _path_value(writeback, ["settlement_progress", "quota_spend_source"])
+            if not isinstance(source, str) or "--source" in args:
+                raise RuntimeError("TypeScript host provider spend source shape mismatch")
+            args.extend(("--source", source))
         output = run_cli(
-            list(step.args),
+            args,
             legacy_args=(list(step.legacy_args) if step.legacy_args else None),
         )
         outcomes.append({"step_kind": step.step_kind, "output": output})

@@ -3,9 +3,9 @@ name: PostgreSQL Integration
 # The Python Tests coverage job runs without PostgreSQL, so the provider-backed
 # integration suites skip there. This workflow qualifies the same commit against
 # a disposable PostgreSQL server: the ladder row reports `unverified` when the
-# URL is missing and the service suite is asserted by name, so a silent skip
-# cannot pass. Two real-server suites take about half a minute; the job stays
-# well below the repository's average CI job duration.
+# URL is missing and the service suites are asserted by name, so a silent skip
+# cannot pass. Remote commands additionally exercise TLS clients, a restricted
+# database role, response loss and service restart.
 
 on:
   pull_request:
@@ -13,6 +13,7 @@ on:
       - ".github/workflows/postgresql-integration.yml"
       - "loopx/control_plane/**"
       - "tests/control_plane_ts/**"
+      - "examples/coordination/remote-authority-*.ts"
       - "package.json"
       - "package-lock.json"
   workflow_dispatch:
@@ -23,6 +24,7 @@ on:
       - ".github/workflows/postgresql-integration.yml"
       - "loopx/control_plane/**"
       - "tests/control_plane_ts/**"
+      - "examples/coordination/remote-authority-*.ts"
       - "package.json"
       - "package-lock.json"
 
@@ -95,6 +97,14 @@ jobs:
           npm run test:postgresql-authority-service 2>&1 | tee postgresql-service-admission.log
           grep -Fq "PostgreSQL service admits an authorized tenant and rotates a restored incarnation" postgresql-service-admission.log
 
+      - name: Qualify authenticated remote task commands
+        env:
+          LOOPX_TEST_POSTGRES_URL: postgresql://loopx:loopx@127.0.0.1:5432/loopx_store
+        run: |
+          set -euo pipefail
+          npm run test:remote-authority 2>&1 | tee remote-authority.log
+          grep -Fq "lost response and server restart recover the exact receipt" remote-authority.log
+
       - name: Upload bounded PostgreSQL qualification evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -103,5 +113,6 @@ jobs:
           path: |
             postgresql-conformance-report.json
             postgresql-service-admission.log
+            remote-authority.log
           if-no-files-found: ignore
           retention-days: 7

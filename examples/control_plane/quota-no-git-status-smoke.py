@@ -15,6 +15,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from tests.control_plane.cli_output_fixture import read_cli_context_for_oracle  # noqa: E402
+
 from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
 
 GOAL_ID = "no-git-quota-fixture"
@@ -88,7 +90,8 @@ def run_cli(registry_path: Path, *args: str, env: dict[str, str] | None = None) 
         text=True,
         capture_output=True,
     )
-    return json.loads(result.stdout)
+    body, _ = read_cli_context_for_oracle(result.stdout)
+    return json.loads(body)
 
 
 def main() -> int:

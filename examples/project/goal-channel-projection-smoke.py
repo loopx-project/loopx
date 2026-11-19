@@ -143,7 +143,11 @@ def test_basic_projection() -> None:
     assert payload["decision_frame"]["quiet_noop_allowed"] is False, payload
     assert payload["quota"]["state"] == "eligible", payload
     assert payload["agent_todos"][0]["claimed_by"] == "codex-side-bypass", payload
-    assert payload["active_leases"][0]["status"] == "soft_claim", payload
+    # A display-only sample cannot manufacture canonical ownership.
+    assert payload["active_leases"] == [], payload
+    assert payload["coordination_observation"]["status"] == "unavailable", payload
+    assert payload["coordination_authority"] == {"state": "unavailable"}, payload
+    assert payload["truth_contract"]["write_authority"] == "none", payload
     assert (
         payload["source_refs"]["latest_run_generated_at"]
         == "2026-06-20T00:01:00Z"

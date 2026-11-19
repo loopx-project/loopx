@@ -1,3 +1,6 @@
+import {EffectiveAction} from "../../loopx/control_plane/quota/effective_action.generated.ts";
+import instructionCases from "./fixtures/primary_action_instruction_selection.json" with {type: "json"};
+import {projectInteractionReadsAndGuidance} from "../../loopx/control_plane/quota/turn_envelope.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
@@ -6,12 +9,34 @@ import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import { interpretQuotaShouldRunPacket } from "../../loopx/control_plane/effect_program.ts";
 import {
   decodeInteractionContract,
+  selectedWorkTodo,
+  selectedWorkTodoId,
+  projectInteractionExecution,
+  INTERACTION_EXECUTION_FACTS_SCHEMA_VERSION,
   projectInteractionRequiredReads,
   projectInteractionWorkContext,
+  assertGoalContextDelivered,
   projectBlockedSuccessorWaitObservation,
   type AgentInteractionChannel,
 } from "../../loopx/control_plane/work_items/interaction_contract.ts";
 import { evaluateTodoResumeConditions } from "../../loopx/control_plane/todos/resume_condition.ts";
+
+test("shared selection keeps current typed identity separate from historical decoding", () => {
+  const selected = {todo_id: "fallback", future: {keep: true}};
+  const packet = {selected_todo: selected, task_orchestration_contract: {
+    schema_version: "task_orchestration_contract_v2", mode: "adaptive", primary_todo_id: " primary "}};
+  assert.deepEqual(selectedWorkTodo(packet),
+    {todo_id: "primary", source: "task_orchestration_contract.primary_todo_id"});
+  assert.equal(selectedWorkTodoId(packet), "primary");
+  assert.deepEqual(selectedWorkTodo(packet, "\uFEFFprimary\uFEFF"),
+    {todo_id: "\uFEFFprimary\uFEFF", source: "task_orchestration_contract.primary_todo_id"});
+  assert.strictEqual(selectedWorkTodo(packet, ""), selected);
+  const numeric = {...packet, task_orchestration_contract: {...packet.task_orchestration_contract, primary_todo_id: 7}};
+  assert.strictEqual(selectedWorkTodo(numeric), selected);
+  assert.equal(selectedWorkTodoId(numeric), "fallback");
+  assert.deepEqual(selectedWorkTodo(numeric, "7"),
+    {todo_id: "7", source: "task_orchestration_contract.primary_todo_id"});
+});
 
 test("only a positively qualified unbound scheduled wait can omit observation", () => {
   const todo = {todo_id: "todo_scheduled", status: "deferred", role: "agent",
@@ -36,6 +61,7 @@ test("only a positively qualified unbound scheduled wait can omit observation", 
     {heartbeat_receipt: {status: "unknown"}},
     {heartbeat_receipt: "invalid"},
     {agent_id: "agent-foreign"},
+    ...[0, 2, "1"].map(pending_resume_count => ({vision_wait_state: {...wait, pending_resume_count}})),
     {vision_wait_state: {...wait, waiting_todo_count: 2}},
     {vision_wait_state: {...wait, selected_todo_status: "done"}},
     {vision_wait_state: {...wait, resume_condition: {...condition, satisfied: true}}},
@@ -49,6 +75,65 @@ test("only a positively qualified unbound scheduled wait can omit observation", 
   ]) assert.deepEqual(projectBlockedSuccessorWaitObservation({...request, ...patch}), {required: true});
   assert.deepEqual(projectBlockedSuccessorWaitObservation({...request, effective_action: "normal_run"}), {required: false});
 });
+
+for (const kind of ["todo_done", "monitor_changed"]) {
+  test(`only a known pending ${kind} source can omit unbound successor observation`, () => {
+    const todo = {todo_id: "todo_waiting", status: "open", role: "agent",
+      task_class: "advancement_task", resume_when: `${kind}:todo_dependency`, resume_monitor_generation: 3};
+    const source = {todo_id: "todo_dependency", status: "open", role: "agent",
+      task_class: kind === "todo_done" ? "advancement_task" : "continuous_monitor",
+      archive_state: "active", material_change_generation: 3,
+      next_due_at: "2099-01-01T00:00:00Z", expires_at: "2100-01-01T00:00:00Z"};
+    const evaluate = (sources: JsonObject[]) => (evaluateTodoResumeConditions({
+      schema_version: "todo_resume_evaluation_request_v0", items: [todo], source_items: sources,
+      evaluated_at: "2026-09-01T00:00:00Z",
+    }).conditions as JsonObject[])[0].condition as JsonObject;
+    const condition = evaluate([source]);
+    const wait = {schema_version: "goal_vision_wait_state_v0", state: "waiting",
+      reason_code: "exact_blocked_successor", automatic_resume: true, agent_id: "agent-a", waiting_todo_count: 1,
+      selected_todo_id: todo.todo_id, selected_todo_status: "open", selected_todo_claimed_by: "agent-a",
+      resume_when: todo.resume_when, resume_monitor_generation: todo.resume_monitor_generation,
+      resume_condition: condition};
+    const request = {effective_action: "agent_scope_wait", agent_id: "agent-a", vision_wait_state: wait};
+    const before = structuredClone(request);
+    for (const heartbeat_receipt of [undefined, {status: "committed"}, {status: "replayed"}]) {
+      assert.deepEqual(projectBlockedSuccessorWaitObservation({...request, heartbeat_receipt}), {required: false});
+    }
+    assert.deepEqual(request, before);
+    const proofFields = kind === "todo_done"
+      ? ["target_status", "target_task_class", "target_archive_state", "target_todo_id"]
+      : ["target_status", "target_task_class", "baseline_generation", "material_change_generation", "target_todo_id",
+        "target_archive_state", "target_next_due_at", "target_expires_at", "evaluated_at", "clock_provider"];
+    const incomplete = proofFields.map(field => {
+      const copy = {...condition};
+      delete copy[field];
+      return {vision_wait_state: {...wait, resume_condition: copy}};
+    });
+    for (const patch of [
+      ...incomplete,
+      {vision_wait_state: {...wait, resume_condition: evaluate([])}},
+      {vision_wait_state: {...wait, resume_condition: evaluate([{...source, status: "done"}])}},
+      {vision_wait_state: {...wait, resume_condition: {...condition, target_todo_id: "todo_waiting"}}},
+      {vision_wait_state: {...wait, selected_todo_claimed_by: "other-agent"}},
+      {vision_wait_state: {...wait, waiting_todo_count: 2}},
+      {heartbeat_receipt: {status: "committed", settlement_identity: {todo_id: todo.todo_id}}},
+      {heartbeat_receipt: {status: "replayed", pending_action_selection: {}}},
+      {heartbeat_receipt: {status: "pending"}},
+      {agent_id: "other-agent"},
+      ...(kind === "monitor_changed" ? [
+        {vision_wait_state: {...wait, resume_monitor_generation: undefined}},
+        {vision_wait_state: {...wait, resume_monitor_generation: 2}},
+        {vision_wait_state: {...wait, resume_condition: evaluate([{...source, material_change_generation: 4}])}},
+        {vision_wait_state: {...wait, resume_condition: evaluate([{...source, next_due_at: undefined}])}},
+        {vision_wait_state: {...wait, resume_condition: evaluate([{...source, expires_at: "2026-01-01T00:00:00Z"}])}},
+        {vision_wait_state: {...wait, resume_condition: evaluate([{...source, expires_at: source.next_due_at}])}},
+        {vision_wait_state: {...wait, resume_condition: evaluate([{...source, archive_state: "archived"}])}},
+      ] : []),
+    ]) {
+      assert.deepEqual(projectBlockedSuccessorWaitObservation({...request, ...patch}), {required: true}, JSON.stringify(patch));
+    }
+  });
+}
 
 // The host-facing type cannot represent delivery without an agent attempt.
 // @ts-expect-error delivery requires must_attempt=true
@@ -76,10 +161,65 @@ function readFacts(): JsonObject {
   }, required_reads: [{command: "read-existing-evidence", source: "existing"}],
     goal_id: "goal-requirements", goal_state_file: "/tmp/goal source/state's requirements.md",
     command_prefix: "loopx --registry '/tmp/goal source/registry.json' --runtime-root '/tmp/goal source/runtime'",
-    goal_acceptance_enabled: true, should_run: true, delivery_allowed: true, selection_required: false,
+    goal_acceptance_checks_present: true, should_run: true, delivery_allowed: true, selection_required: false,
     has_replan: false, settlement_only: false, effective_action: "normal_run",
     selected_todo: {todo_id: "todo_selected"}};
 }
+
+test("legacy commands follow admitted current work without creating execution or owner gates", () => {
+  const recommendation = {recommended_mode: "run_agent_command", command: "loopx synthetic-command",
+    agent_must_attempt: true, notify: "DONT_NOTIFY", spend_policy: "after the old command", detail: {retained: true}};
+  const facts: JsonObject = {...readFacts(), heartbeat_recommendation: recommendation,
+    primary_action: "Inspect current work", notify: "DONT_NOTIFY", spend_policy: "after validated writeback"};
+  const before = structuredClone(facts);
+  const cases: JsonObject[] = [
+    {}, // Exact selected Todo supersedes the unbound Goal command.
+    {selected_todo: {}, selection_required: true},
+    {selected_todo: {}, should_run: false, delivery_allowed: false},
+    {selected_todo: {}, has_replan: true},
+    {selected_todo: {}, settlement_only: true},
+    {selected_todo: {}, task_orchestration_contract: {
+      schema_version: "task_orchestration_contract_v2", mode: "adaptive", primary_todo_id: "todo_primary"}},
+  ];
+  for (const patch of cases) {
+    const result = projectInteractionReadsAndGuidance({...facts, ...patch});
+    const projected = result.heartbeat_recommendation as JsonObject;
+    assert.equal(Object.hasOwn(projected, "command"), false);
+    assert.equal(projected.recommended_mode, "bounded_delivery");
+    assert.equal(projected.reason, facts.primary_action);
+    assert.equal(projected.spend_policy, facts.spend_policy);
+    assert.deepEqual(projected.detail, recommendation.detail);
+  }
+  for (const mode of ["skip", "user_gate", "monitor_due", "monitor_quiet_skip", "autonomous_replan", "agent_workspace_repair",
+    "heartbeat_settled_skip", "terminal_no_followup", "governed_capability_intent"]) {
+    const arbitrationFacts = facts.arbitration_facts as JsonObject;
+    const result = projectInteractionReadsAndGuidance({...facts, selected_todo: {},
+      arbitration_facts: {...arbitrationFacts, mode,
+        agent_channel: {present: true, must_attempt: false, delivery_allowed: false, quiet_noop_allowed: true}}});
+    const projected = result.heartbeat_recommendation as JsonObject;
+    assert.equal(Object.hasOwn(projected, "command"), false);
+    assert.equal(projected.recommended_mode, mode);
+    assert.equal(projected.agent_must_attempt, false);
+  }
+  const legacy = projectInteractionReadsAndGuidance({...facts, selected_todo: {}});
+  assert.deepEqual(legacy.heartbeat_recommendation, recommendation);
+  const first = projectInteractionReadsAndGuidance(facts).heartbeat_recommendation;
+  const later = projectInteractionReadsAndGuidance({...facts, heartbeat_recommendation: first,
+    selection_required: true, primary_action: "Select current work", spend_policy: "no spend",
+    arbitration_facts: {...facts.arbitration_facts as JsonObject, mode: "skip",
+      agent_channel: {present: true, must_attempt: false, delivery_allowed: false, quiet_noop_allowed: true}}});
+  assert.equal((later.heartbeat_recommendation as JsonObject).agent_must_attempt, false);
+  assert.equal((later.heartbeat_recommendation as JsonObject).reason, "Select current work");
+  assert.equal((later.heartbeat_recommendation as JsonObject).spend_policy, "no spend");
+  const plain = projectInteractionReadsAndGuidance(readFacts());
+  assert.equal(Object.hasOwn(plain, "heartbeat_recommendation"), false);
+  assert.deepEqual(facts, before);
+});
+
+test("command-free projection preserves required-read validation precedence", () => {
+  assert.throws(() => projectInteractionReadsAndGuidance({...readFacts(),
+    required_reads: null, arbitration_facts: null}), /required_reads must be an array/);
+});
 
 test("only participating hooks add unavailable context; generic guidance has no preference recipe", () => {
   const request = {required_reads: [], source_results: []};
@@ -113,6 +253,73 @@ test("shared reads retain all Goal sources before exact current work and existin
   assert.deepEqual(projectInteractionRequiredReads(facts).required_reads, reads);
 });
 
+test("one Goal acceptance read retains every applicable objective and acceptance obligation", () => {
+  const objectiveClauses = [
+    "revision/digest",
+    "own objective_work_digest",
+    "adoption",
+    "Preserve root acceptance, permissions and stops",
+  ];
+  const outcomeClauses = [
+    "cumulative requirements",
+    "switching work",
+    "Agent review",
+    "Scoped acceptance never replaces Goal intent",
+    "fresh guard",
+  ];
+  const checkClauses = [
+    "non-goals",
+    "criteria",
+    "scope/revision",
+    "Scoped acceptance does not replace Goal intent",
+    "fresh guard",
+  ];
+  const cases = [
+    {goal_objective_present: false, goal_outcomes_present: true, checks: false, clauses: outcomeClauses},
+    {goal_objective_present: false, goal_outcomes_present: false, checks: true, clauses: checkClauses},
+    {goal_objective_present: true, goal_outcomes_present: true, checks: false,
+      clauses: [...objectiveClauses, ...outcomeClauses]},
+    {goal_objective_present: true, goal_outcomes_present: false, checks: true,
+      clauses: [...objectiveClauses, ...checkClauses]},
+  ];
+  for (const current of cases) {
+    const facts: JsonObject = {...readFacts(), goal_state_file: null, selected_todo: null,
+      goal_objective_present: current.goal_objective_present,
+      goal_outcomes_present: current.goal_outcomes_present,
+      goal_acceptance_checks_present: current.checks};
+    const projected = projectInteractionRequiredReads(facts);
+    const reads = projected.required_reads as JsonObject[];
+    const acceptanceReads = reads.filter(read => read.source === "goal_acceptance");
+    assert.equal(acceptanceReads.length, 1, JSON.stringify(current));
+    const reason = String(acceptanceReads[0]!.reason);
+    for (const clause of current.clauses) assert.ok(reason.includes(clause), `${clause}: ${reason}`);
+
+    const replay = projectInteractionRequiredReads({...facts, required_reads: reads});
+    assert.deepEqual(replay.required_reads, reads, "repeated projection must not duplicate guidance");
+
+    const inline = projectInteractionWorkContext({
+      required_reads: acceptanceReads,
+      source_results: [{command: acceptanceReads[0]!.command, content: {
+        goal_acceptance_contract: {goal_objective: {revision: 1}, criteria: [{id: "check"}]},
+      }}],
+    });
+    assert.deepEqual(inline.required_reads, []);
+    const source = ((inline.work_context as JsonObject).sources as JsonObject[])[0]!;
+    assert.equal(source.reason, reason);
+  }
+
+  const facts: JsonObject = {...readFacts(), goal_state_file: null, selected_todo: null,
+    goal_objective_present: true, goal_outcomes_present: false, goal_acceptance_checks_present: true};
+  const inspect = `${String(facts.command_prefix)} --format json goal-acceptance inspect --goal-id goal-requirements`;
+  const existing = {command: inspect, source: "goal_acceptance", reason: "Retain this existing acceptance obligation."};
+  const merged = (projectInteractionRequiredReads({...facts, required_reads: [existing]}).required_reads as JsonObject[]);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0]!.command, inspect);
+  assert.ok(String(merged[0]!.reason).startsWith(existing.reason));
+  assert.ok(String(merged[0]!.reason).includes(checkClauses[0]));
+  assert.ok(String(merged[0]!.reason).includes(objectiveClauses[0]));
+});
+
 test("shared requirement reads use final admission and add no work on non-delivery lanes", () => {
   for (const patch of [{should_run: false}, {delivery_allowed: false}, {selection_required: true},
     {settlement_only: true, has_replan: true}, {goal_id: null}, {effective_action: "governed_capability_intent"}]) {
@@ -124,8 +331,21 @@ test("shared requirement reads use final admission and add no work on non-delive
     ["existing", "goal_state", "goal_acceptance"]);
 });
 
+test("semantic replan retains Goal reads while ordinary delivery is forbidden", () => {
+  const facts: JsonObject = {...readFacts(), has_replan: true, delivery_allowed: false};
+  const projected = projectInteractionRequiredReads(facts);
+  const reads = projected.required_reads as JsonObject[];
+  assert.deepEqual(reads.map(read => read.source), ["existing", "goal_state", "goal_acceptance"]);
+  assert.match(String(reads[1]!.reason), /(?:full|complete) Goal intent, acceptance(?: and|,) stops/);
+  assert.equal(projected.delivery_allowed, undefined, "context cannot grant work authority");
+  for (const patch of [{should_run: false}, {selection_required: true}, {settlement_only: true}]) {
+    assert.deepEqual(projectInteractionRequiredReads({...facts, ...patch}).required_reads,
+      facts.required_reads, JSON.stringify(patch));
+  }
+});
+
 test("shared reads follow adaptive primary and never fabricate a missing Goal source", () => {
-  const facts: JsonObject = {...readFacts(), goal_state_file: null, goal_acceptance_enabled: false,
+  const facts: JsonObject = {...readFacts(), goal_state_file: null, goal_acceptance_checks_present: false,
     task_orchestration_contract: {schema_version: "task_orchestration_contract_v2", mode: "adaptive", primary_todo_id: "todo_primary"}};
   const reads = projectInteractionRequiredReads(facts).required_reads as JsonObject[];
   assert.deepEqual(reads.map(read => read.source), ["existing", "selected_todo"]);
@@ -182,6 +402,33 @@ test("inline context fulfills every source without truncating acceptance or inve
   assert.deepEqual(request, before);
 });
 
+test("scoped User context retains every record and source proof without a record-format dictionary", () => {
+  const gate = {todo_id: "todo_owner", text: "Stop before deployment.", role: "user",
+    global_gate: true, blocks_agent: "agent-a", resume_condition: {kind: "manual"},
+    unknown_future_field: {retained: true}};
+  for (const todos of [[], [gate]]) {
+    const model = {schema_version: "loopx_todo_canonical_read_record_v0", todo_count: 9,
+      records_sha256: "source-snapshot", contract_fields: ["text", "global_gate", "unknown_future_field"],
+      unknown_metadata: {complete: false}};
+    const users = {source: "sqlite_authority", todos, authority_read: {
+      source_authority: "sqlite_v0", provider_revision: "sqlite:snapshot:9", cursor: "9",
+      decision_read_from_provider: true, legacy_fallback_used: false, todo_read_model: model}};
+    const original = structuredClone(users);
+    const projected = projectInteractionWorkContext({required_reads: [], source_results: [], user_todos: users});
+    const context = projected.work_context as JsonObject;
+    const {contract_fields: _dictionary, ...metadata} = model;
+    assert.deepEqual(context.user_todos, {...users, authority_read: {...users.authority_read, todo_read_model: metadata}});
+    assert.equal(context.complete, true);
+    assert.equal(projected.delivery_allowed, undefined);
+    assert.deepEqual(users, original);
+    for (const patch of [{schema_version: "unknown_record_schema"}, {contract_fields: ["text", 1]}]) {
+      const unknown = {...users, authority_read: {...users.authority_read, todo_read_model: {...model, ...patch}}};
+      const result = projectInteractionWorkContext({required_reads: [], source_results: [], user_todos: unknown});
+      assert.deepEqual((result.work_context as JsonObject).user_todos, unknown);
+    }
+  }
+});
+
 test("failed, ambiguous or changed work never fulfills a pre-work read", () => {
   const read = {command: "read-todo", source: "selected_todo"};
   for (const result of [{error_code: "unavailable"}, {content: {matched: false, todo: null}},
@@ -225,6 +472,7 @@ test("selected Todo references its admitted body only after an exact detail read
   const context = projected.work_context as JsonObject;
   assert.equal(context.complete, true);
   assert.equal(context.selected_todo_ref, "selected_todo");
+  assert.equal(context.selected_todo_text_verified, true);
   const sources = context.sources as JsonObject[];
   assert.equal(sources.length, 1);
   assert.equal(sources[0].source, "selected_todo");
@@ -254,6 +502,7 @@ test("bounded selected text validates its full source snapshot and preserves exa
   const context = projected.work_context as JsonObject;
   assert.equal(context.complete, true);
   assert.equal(context.selected_todo_ref, undefined);
+  assert.equal(context.selected_todo_text_verified, true);
   const source = (context.sources as JsonObject[])[0];
   const sourceContent = source.content as JsonObject;
   assert.equal((sourceContent.todo as JsonObject).text, body);
@@ -263,6 +512,7 @@ test("bounded selected text validates its full source snapshot and preserves exa
     source_results: [{command: read.command, content: {matched: true,
       todo: {...task, text: body + " Updated after selection."}}}]});
   assert.equal((changed.work_context as JsonObject).complete, false);
+  assert.equal((changed.work_context as JsonObject).selected_todo_text_verified, undefined);
   assert.deepEqual(changed.required_reads, [read]);
 });
 
@@ -399,4 +649,116 @@ test("an inline unfinished agenda cannot fulfill the full Inbox read", () => {
   const context = result.work_context as JsonObject;
   assert.equal(context.complete, true);
   assert.deepEqual((context.sources as JsonObject[])[0].content, content);
+});
+
+
+test("declared outcomes remain required reads without enabled checks after a work switch", () => {
+  const facts = {...readFacts(), goal_acceptance_checks_present: false, goal_outcomes_present: true, selected_todo: {todo_id: "todo_other"}};
+  const reads = projectInteractionRequiredReads(facts).required_reads as JsonObject[];
+  const acceptance = reads.find(read => read.source === "goal_acceptance");
+  assert.ok(acceptance);
+  assert.match(String(acceptance.reason), /cumulative requirements/);
+  const off = projectInteractionRequiredReads({...facts, goal_outcomes_present: false}).required_reads as JsonObject[];
+  assert.ok(!off.some(read => read.source === "goal_acceptance"));
+});
+
+test("full original Goal delivery fulfills its read without excluding legacy text", () => {
+  const text = "Original intent\nUnknown section\n停止条件：不得发布。\n";
+  const read = {source: "goal_state", command: "cat -- goal.md", ordering: "before_work"};
+  const content = {state_file: "goal.md", text, full_source: true,
+    revision: `sha256:${createHash("sha256").update(text, "utf8").digest("hex")}`};
+  const project = (value: JsonObject | null) => projectInteractionWorkContext({
+    required_reads: [read], require_full_goal_source: true,
+    source_results: value ? [{command: read.command, content: value}] : [],
+  });
+  const fulfilled = project(content);
+  assert.equal(fulfilled.source_delivery_profile, "complete_goal_v1");
+  assert.deepEqual(fulfilled.required_reads, []);
+  assert.equal((fulfilled.work_context as JsonObject).complete, true);
+  const [source] = (fulfilled.work_context as JsonObject).sources as JsonObject[];
+  assert.deepEqual(source.content, content);
+  for (const invalid of [null, {state_file: "goal.md", revision: content.revision},
+    {...content, text: "Original intent\n"}, {...content, full_source: false},
+    {...content, excluded_todo_regions: []}, {...content, read_complete: false}]) {
+    assert.throws(() => project(invalid), /Goal source/);
+  }
+  assert.throws(() => assertGoalContextDelivered({required_reads: [read]}), /Goal source/);
+  assert.throws(() => assertGoalContextDelivered({required_reads: [],
+    work_context: {sources: [{source: "goal_state", content: {...content, read_complete: false}}]}}), /Goal source/);
+});
+
+test("Goal narrative fulfillment needs complete source and ordered region lineage", () => {
+  const read = {source: "goal_state", command: "cat -- goal.md"};
+  const region = {role: "agent", start_line: 4, end_line: 8, revision: `sha256:${"b".repeat(64)}`};
+  const content = {state_file: "goal.md", text: "Keep original goal and final stops.\n",
+    revision: `sha256:${"a".repeat(64)}`, excluded_todo_regions: [region]};
+  const project = (value: JsonObject) => projectInteractionWorkContext({
+    required_reads: [read], source_results: [{command: read.command, content: value}],
+  });
+  const fulfilled = project(content);
+  assert.deepEqual(fulfilled.required_reads, []);
+  const [source] = (fulfilled.work_context as JsonObject).sources as JsonObject[];
+  const {reason, ...captured} = source;
+  assert.deepEqual(captured, {...read, content});
+  assert.match(String(reason), /all text outside explicitly generated Todo regions inline/);
+  assert.match(String(reason), /full-file revision and excluded-region lineage/);
+  assert.match(String(reason), /exact canonical Todo reads own task state\/claims/);
+  for (const invalid of [
+    {...content, text: null}, {...content, revision: "invalid"}, {...content, state_file: ""},
+    {...content, excluded_todo_regions: []},
+    {...content, excluded_todo_regions: [{...region, role: "objective"}]},
+    {...content, excluded_todo_regions: [{...region, start_line: 0}]},
+    {...content, excluded_todo_regions: [{...region, end_line: 3}]},
+    {...content, excluded_todo_regions: [{...region, revision: "invalid"}]},
+    {...content, excluded_todo_regions: [region, region]},
+  ]) {
+    const rejected = project(invalid);
+    assert.deepEqual(rejected.required_reads, [read]);
+    assert.equal((rejected.work_context as JsonObject).complete, false);
+    assert.deepEqual((rejected.work_context as JsonObject).sources ?? [], []);
+  }
+  assert.deepEqual(project({text: content.text}).required_reads, [read]);
+  const receipt = {start_line: 2, end_line: 2, revision: `sha256:${"c".repeat(64)}`};
+  assert.deepEqual(project({...content, excluded_monitor_receipts: [receipt]}).required_reads, []);
+  assert.deepEqual(project({...content, excluded_monitor_receipts: {count: 2, line_ranges: [[2, 3]]}}).required_reads, []);
+  for (const invalid of [[], [receipt, receipt], [{...receipt, start_line: 0, end_line: 0}],
+    [{...receipt, end_line: 3}], [{...receipt, start_line: 5, end_line: 5}],
+    [{...receipt, revision: "invalid"}], {count: 0, line_ranges: []},
+    {count: 1, line_ranges: [[2, 3]]}, {count: 3, line_ranges: [[2, 4]]},
+    {count: 2, line_ranges: [[2, 2], [2, 2]]}, {count: 2, line_ranges: [[3, 2]]},
+    {count: 1, line_ranges: [[0, 0]]}, {count: 1, line_ranges: [[2, 2]], unknown: true}]) {
+    const rejected = project({...content, excluded_monitor_receipts: invalid});
+    assert.deepEqual(rejected.required_reads, [read]);
+    assert.equal((rejected.work_context as JsonObject).complete, false);
+  }
+});
+
+test("current typed instructions flow into legacy guidance after mode refinement", () => {
+  for (const [effectiveAction, replanRequired, expectedMode] of [
+    [EffectiveAction.MONITOR_QUIET_SKIP, false, "monitor_quiet_skip"],
+    [EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED, true, "autonomous_replan"],
+    [EffectiveAction.AGENT_WORKSPACE_REPAIR, false, "agent_workspace_repair"],
+    [EffectiveAction.CAPABILITY_BRIDGE_REPAIR, false, "capability_bridge_repair"],
+  ] as const) {
+    const decision = projectInteractionExecution({schema_version: INTERACTION_EXECUTION_FACTS_SCHEMA_VERSION,
+      effective_action: effectiveAction, state: "eligible", canonical_execution: {must_attempt_work: true, delivery_allowed: false},
+      user_required: false, scoped_user_gate_fallback: false, user_gate_notification_suppressed: false,
+      notify_user_on_gate: false, notify_user_on_open_todo: false, stop_if_unchanged: false,
+      blocked_successor_wait_observation: false, observation_required: false, replan_required: replanRequired,
+      agent_scope_frontier_actions: [], selection_packet: {}, primary_action_facts: instructionCases[0].facts});
+    assert.equal(decision.mode, expectedMode);
+    const facts = readFacts(), arbitration = facts.arbitration_facts as JsonObject;
+    const result = projectInteractionReadsAndGuidance({...facts, selected_todo: {},
+      primary_action: decision.primary_action!, spend_policy: "after current validation", notify: "DONT_NOTIFY",
+      heartbeat_recommendation: {recommended_mode: "run_agent_command", command: "loopx synthetic-command"},
+      arbitration_facts: {...arbitration, mode: decision.mode,
+        agent_channel: {present: true, must_attempt: decision.must_attempt,
+          delivery_allowed: decision.delivery_allowed, quiet_noop_allowed: decision.quiet_noop_allowed}}});
+    const guidance = result.heartbeat_recommendation as JsonObject;
+    assert.equal(guidance.reason, decision.primary_action);
+    assert.equal(guidance.recommended_mode, expectedMode);
+    assert.equal(guidance.agent_must_attempt, decision.must_attempt);
+    assert.equal(guidance.spend_policy, "after current validation");
+    assert.equal(Object.hasOwn(guidance, "command"), false);
+  }
 });

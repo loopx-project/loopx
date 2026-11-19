@@ -724,6 +724,117 @@ def test_host_result_requires_bounded_public_material_fields(field: str) -> None
     assert "unsupported host result fields" in " ".join(validation["errors"])
 
 
+@pytest.mark.parametrize("kind", [
+    "validated_progress", "validated_completion", "repair_required", "replan_required",
+])
+@pytest.mark.parametrize("outcome", ["surface_only", "outcome_gap"])
+def test_new_material_host_result_requires_qualifying_settlement(kind: str, outcome: str) -> None:
+    plan = _plan()
+    result = {**_host_result(plan), "result_kind": kind, "delivery_outcome": outcome}
+
+    validation = validate_loopx_turn_host_result(
+        plan, result, completion_lifecycle_configured=True,
+    )
+
+    assert validation["ok"] is False
+    assert outcome in " ".join(validation["errors"])
+    assert validation["result"]["delivery_outcome"] == outcome
+
+
+def _continued_vision(*, outcome: str = "continue") -> dict[str, object]:
+    return {
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "active",
+        "vision_patch": {
+            "acceptance_summary": "Independently validate the fixture result and recovery.",
+        },
+        "path_delta": {
+            "schema_version": "goal_path_delta_v0",
+            "outcome": outcome,
+            "prior_assumption": "The fixture result had not been independently checked.",
+            "observed_reality": "The fixture produced new checkable result evidence.",
+            "retained": ["Keep the original fixture acceptance and execution route."],
+            "evidence_refs": ["fixture:result-checkpoint"],
+        },
+    }
+
+
+@pytest.mark.parametrize("kind", ["validated_progress", "validated_completion"])
+@pytest.mark.parametrize("outcome", ["continue", "no_change"])
+@pytest.mark.parametrize("from_journal", [False, True])
+def test_unchanged_route_can_record_fresh_result_checkpoint(
+    kind: str, outcome: str, from_journal: bool,
+) -> None:
+    plan = _plan()
+    result = _host_result(plan, kind=kind)
+    result.pop("vision_unchanged_reason")
+    result["path_delta_mode"] = "unchanged"
+    packet = _continued_vision(outcome=outcome)
+    result["agent_vision" if from_journal else "agent_vision_json"] = (
+        packet if from_journal else json.dumps(packet)
+    )
+
+    validation = validate_loopx_turn_host_result(
+        plan, result, from_journal=from_journal, completion_lifecycle_configured=True,
+    )
+
+    assert validation["ok"] is True, validation["errors"]
+    assert validation["result"]["result_kind"] == kind
+    assert validation["result"]["agent_vision"]["path_delta"] == packet["path_delta"]
+
+
+@pytest.mark.parametrize("outcome", ["replan", "wait", "ask_human", "stop"])
+@pytest.mark.parametrize("from_journal", [False, True])
+def test_unchanged_checkpoint_cannot_hide_route_or_stop_decisions(
+    outcome: str, from_journal: bool,
+) -> None:
+    plan = _plan()
+    result = _host_result(plan)
+    result.pop("vision_unchanged_reason")
+    packet = _continued_vision(outcome=outcome)
+    result.update(path_delta_mode="unchanged")
+    result["agent_vision" if from_journal else "agent_vision_json"] = (
+        packet if from_journal else json.dumps(packet)
+    )
+
+    validation = validate_loopx_turn_host_result(plan, result, from_journal=from_journal)
+
+    assert validation["ok"] is False
+    assert "outcome must be continue or no_change" in " ".join(validation["errors"])
+
+
+@pytest.mark.parametrize("defect, expected_error", [
+    ("unchanged_reason", "fresh agent_vision cannot also declare"),
+    ("missing_path_delta", "unchanged agent_vision_json requires goal_path_delta_v0"),
+    ("implicit_mode", "outcome must be replan"),
+    ("completion_replan", "requires result_kind replan_required"),
+])
+def test_fresh_checkpoint_preserves_explicit_and_legacy_boundaries(
+    defect: str, expected_error: str,
+) -> None:
+    plan = _plan()
+    result = _host_result(plan, kind="validated_completion")
+    packet = _continued_vision()
+    result["path_delta_mode"] = "unchanged"
+    if defect != "unchanged_reason":
+        result.pop("vision_unchanged_reason")
+    if defect == "missing_path_delta":
+        packet.pop("path_delta")
+    elif defect == "implicit_mode":
+        result.pop("path_delta_mode")
+    elif defect == "completion_replan":
+        result["path_delta_mode"] = "material_replan"
+        packet = _continued_vision(outcome="replan")
+    result["agent_vision_json"] = json.dumps(packet)
+
+    validation = validate_loopx_turn_host_result(
+        plan, result, completion_lifecycle_configured=True,
+    )
+
+    assert validation["ok"] is False
+    assert expected_error in " ".join(validation["errors"])
+
+
 @pytest.mark.parametrize("packet, expected_error", [
     (None, "cached agent_vision must be a JSON object"),
     ([], "cached agent_vision must be a JSON object"),
@@ -1389,7 +1500,7 @@ def test_reserved_managed_start_recovers_after_death_before_the_attempt_record(
     journal_writes = turn_executor._write_journal
 
     def die_before_attempt_record(path: Path, journal: dict[str, object]) -> None:
-        if "host_attempt_count" in journal:
+        if journal.get("host_attempt_count", 0) > 0:
             raise RuntimeError("simulated process death before the attempt record")
         journal_writes(path, journal)
 
@@ -1401,7 +1512,7 @@ def test_reserved_managed_start_recovers_after_death_before_the_attempt_record(
     monkeypatch.setattr(turn_executor, "_write_journal", journal_writes)
 
     journal = _journal(runtime_root)
-    assert "host_attempt_count" not in journal
+    assert journal["host_attempt_count"] == 0
     assert journal["admission"]["reserved"] is True
     assert [
         (row["state"], row["request_id"]) for row in _cadence_starts(runtime_root)
@@ -1869,9 +1980,11 @@ def test_run_once_commits_once_and_replays_without_duplicate_effects(
     assert resumed["route"] == stored["plan"]["route"]
 
 
+@pytest.mark.parametrize("saved_outcome", ["outcome_progress", "surface_only", "outcome_gap"])
 def test_provider_can_commit_before_its_journal_checkpoint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    saved_outcome: str,
 ) -> None:
     plan = _plan()
     calls = {"writeback": 0, "spend": 0, "scheduler": 0}
@@ -1927,6 +2040,33 @@ def test_provider_can_commit_before_its_journal_checkpoint(
     assert prepared["effect_ref"] in provider_records
 
     monkeypatch.setattr(turn_executor, "_write_journal", write_journal)
+    # Model metadata accepted by a historical producer. A new candidate gate
+    # cannot erase this unresolved provider commit or replace its saved result.
+    journal["host_result"]["delivery_outcome"] = saved_outcome
+    write_journal(
+        turn_journal_path(
+            tmp_path / "runtime", goal_id="fixture-goal", turn_key=journal["turn_key"],
+        ),
+        journal,
+    )
+    unresolved = run_loopx_turn_once(
+        plan,
+        host_runner=lambda _request: pytest.fail("host must not run during recovery"),
+        project=tmp_path,
+        runtime_root=tmp_path / "runtime",
+        goal_id="fixture-goal",
+        timeout_seconds=5,
+        execute=True,
+        task_validator=_passing_validator,
+        writeback=writeback,
+        writeback_resolver=lambda _effect_ref: {"kind": "unknown", "reason": "provider unavailable"},
+        spend=spend,
+        scheduler=scheduler,
+    )
+    assert unresolved["result_kind"] == "writeback_failed"
+    assert unresolved["receipt"]["failed_phase"] == "durable_writeback"
+    assert _journal(tmp_path / "runtime")["effect_attempts"]["durable_writeback"] == prepared
+    assert calls == {"writeback": 1, "spend": 0, "scheduler": 0}
     resumed = run_loopx_turn_once(
         plan,
         host_runner=lambda _request: pytest.fail("host must not run during recovery"),
@@ -1941,6 +2081,7 @@ def test_provider_can_commit_before_its_journal_checkpoint(
             "kind": "committed",
             "payload": provider_records[effect_ref],
         },
+        retry_failed=True,
         spend=spend,
         scheduler=scheduler,
     )
@@ -1948,6 +2089,7 @@ def test_provider_can_commit_before_its_journal_checkpoint(
     assert resumed["status"] == "committed"
     assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}
     assert "effect_attempts" not in _journal(tmp_path / "runtime")
+    assert _journal(tmp_path / "runtime")["host_result"]["delivery_outcome"] == saved_outcome
 
 
 def test_recreation_waits_for_admitted_provider_checkpoint(
@@ -3410,8 +3552,9 @@ def test_run_once_blocks_drifted_settlement_identity_before_any_provider(
     assert all(count == 0 for count in calls.values())
 
 
+@pytest.mark.parametrize("fresh_checkpoint", [False, True])
 def test_run_once_recovers_saved_host_result_from_validation_without_host_retry(
-    tmp_path: Path,
+    tmp_path: Path, fresh_checkpoint: bool,
 ) -> None:
     plan = _plan()
     calls = {"host": 0, "validation": 0, "writeback": 0, "spend": 0, "scheduler": 0}
@@ -3419,7 +3562,11 @@ def test_run_once_recovers_saved_host_result_from_validation_without_host_retry(
 
     def host(_request: dict[str, object]) -> dict[str, object]:
         calls["host"] += 1
-        return _host_result(plan)
+        result = _host_result(plan)
+        if fresh_checkpoint:
+            result.pop("vision_unchanged_reason")
+            result.update(path_delta_mode="unchanged", agent_vision_json=json.dumps(_continued_vision()))
+        return result
 
     def interrupted_validation(
         _plan: dict[str, object],
@@ -3458,6 +3605,12 @@ def test_run_once_recovers_saved_host_result_from_validation_without_host_retry(
     assert inspected["recovery_decision"]["can_continue"] is True
     assert inspected["recovery_decision"]["resume_from"] == "validation"
     assert inspected["recovery_decision"]["reinvoke_host"] is False
+    if fresh_checkpoint:
+        saved = json.loads(turn_journal_path(
+            tmp_path / "runtime", goal_id="fixture-goal",
+            turn_key=str(transaction["turn_key"]),
+        ).read_text())
+        assert saved["host_result"]["agent_vision"]["path_delta"]["outcome"] == "continue"
 
     recovered = run_loopx_turn_once(
         plan,
@@ -4208,9 +4361,11 @@ def test_real_host_duration_is_observed_but_settlement_replay_is_not(
 
     machine = tmp_path / "machine"
     monkeypatch.setattr(usage_ping, "select_default_runtime_root", lambda: machine)
-    for name in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING", "LOOPX_USAGE_POLICY"):
+    for name in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_POLICY"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LOOPX_USAGE_PING_ENDPOINT", "http://127.0.0.1:1/v1/ping")
+    # Opt in to the existing loopback qualification for temporary state.
+    monkeypatch.setenv("LOOPX_USAGE_PING", "1")
     usage_ping.control("enable")
     plan = _plan()
     host_file = tmp_path / "host.py"

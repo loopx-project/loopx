@@ -76,7 +76,7 @@ def main() -> None:
             nested_calls: list[str] = []
 
             @singleflight_issue_fix_material_sync(
-                lambda _path, _goal_id: config_path
+                lambda _path, _goal_id, _runtime_override: config_path
             )
             def nested_material(**_kwargs):
                 nested_calls.append("material")

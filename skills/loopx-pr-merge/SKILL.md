@@ -34,21 +34,33 @@ authorized: a diff read, green CI, or pull-request metadata is not a substitute.
    remote reviewed head. The source-checkout `loopx canary premerge` includes
    the same direct blocking check. A failed check holds merge regardless of CI
    waiting or authorized admin bypass. Working-tree changes cannot satisfy it.
-4. Immediately before the merge, run `loopx --format json pr-review --goal-id
-   GOAL --repo OWNER/REPO --check-merge-readiness NUMBER@HEAD_OID`. Merge only
-   when it returns `ready=true` for that unchanged head; this records the
-   compact Goal readiness observation consumed by future review queues.
+4. Record the readiness result immediately before merge: run `loopx --format
+   json pr-review --repo OWNER/REPO --check-merge-readiness NUMBER@HEAD_OID`.
+   `ready=true` permits the normal merge path. With explicit maintainer
+   authorization, admin bypass may override a readiness or GitHub policy hold.
+   The bypass does not replace valid exact-head review,
+   required validation, complete review threads without unresolved findings, an
+   open unchanged mergeable head, or the separately granted merge authority.
+   For Goal-managed work, pass `--goal-id GOAL` to retain its configured CI
+   policy and record the compact readiness observation. Standalone work needs
+   no Goal, registration or binding; its readiness check performs no Goal write.
 
-A rebase or head update restarts review, and admin bypass never overrides this
-gate: it needs explicit owner authorization and never substitutes for the
-evidence.
+A rebase or head update restarts review and readiness qualification.
 
 ## Configured CI Waiting
 
-Pass `--goal-id GOAL` for managed merges and follow resolved `wait_for_ci`.
-The default is true. When false, do not query, poll, or wait for CI; complete
-required local validation and exact-head review/thread checks. GitHub `BLOCKED`
-then reports separately authorized admin bypass, never permission to merge.
+Pass `--registry` (when running outside the primary repo root, such as a
+worktree) and `--goal-id GOAL` for managed merges and follow resolved
+`wait_for_ci`. Omitting `--registry` or `--goal-id` silently falls back to the
+unconfigured default (`wait_for_ci=true`) and reports false CI waits. When
+`wait_for_ci=false` (`ci_policy=not_consulted`), never query, poll, or wait for
+CI; complete required local validation (`canary premerge`, targeted tests,
+`check_rfc_bilingual.py` when RFCs change) and exact-head review/thread checks,
+and run eligible self-merges or maintainer-authorized merges immediately with
+`--match-head-commit HEAD_OID --admin` when branch protection holds only on
+author-owned `COMMENTED` approvals or unconsulted status checks. GitHub
+`BLOCKED` alone never grants merge authority; it only documents why admin bypass
+applies once readiness and authorization both hold.
 
 ## Decision Workflow
 
@@ -73,6 +85,56 @@ then reports separately authorized admin bypass, never permission to merge.
 5. After the merge, sync the local default branch, leave unrelated dirty
    worktree state alone, and update LoopX todo or evidence when the work is
    tracked.
+
+## Self-Merge Eligibility And Benchmark Exceptions
+
+Control-plane, runtime and product surfaces require explicit maintainer merge
+authorization. This includes behavior in `loopx/**`, `apps/**` or `packages/**`,
+permissions or authority, persisted state/receipts, quota/scheduler/todo rules,
+and CLI/API contracts. Propose and review the exact head, pass required
+validation, and run readiness for that unchanged head. An explicit maintainer
+authorization may then use admin bypass when readiness remains false for a
+readiness or GitHub policy hold. Small diffs, green CI or published reviews do
+not grant merge authority. Unclear affected boundaries use the same
+authorization rule; without it, leave the merge to the maintainer. Bypass never
+replaces exact-head review, validation, thread/finding resolution or merge
+authority.
+
+Maintainers may self-merge single-purpose, low-risk public-doc, contributor
+metadata, test, example or narrow-cleanup PRs when all these conditions hold:
+
+- none of the protected behavior surfaces above is changed;
+- the diff is easy to review and required checks/focused smokes passed;
+- its exact head has the published review, and
+  `uv run --extra test loopx pr-review --check-merge-readiness NUMBER@HEAD_OID`
+  returned `ready=true` for that unchanged head (always pass `--registry` and
+  `--goal-id GOAL` for already Goal-managed work so `wait_for_ci=false` is
+  honored without waiting on remote CI; standalone delivery requires no Goal);
+- no private state, raw benchmark evidence, credentials, local paths or
+  generated logs are included;
+- no runtime behavior, benchmark adapter, permission, destructive Git or public
+  evidence-policy change requires separate review.
+
+The existing benchmark exceptions retain these boundaries:
+
+- Small seam/refactor PRs (as in #145) may add/clarify a reusable adapter or
+  control-plane contract with focused public smokes; they do not launch jobs or
+  change existing scoring/runner behavior, and exclude temporary probes, raw
+  evidence, private state, credentials, local paths and generated logs.
+- After owner authorization, public benchmark helper/runtime, status observation,
+  reducer/closeout or developer-workflow PRs may self-merge when focused smokes
+  or compile checks pass and public/private scans are clean. They must not alter
+  scoring, task semantics, leaderboard/submission behavior, permission boundaries
+  or launch jobs.
+
+Before any non-trivial self-merge, run
+`uv run --extra test loopx canary premerge --from-git-diff --git-diff-base "$PR_BASE_REF"`
+or equivalent risk-based validation. The PR comment names changed surfaces,
+checks, failures/skips, manual holds and why coverage is sufficient. One
+hand-picked smoke is insufficient for runtime, quota/status, scheduler, todo,
+install, dashboard, benchmark-boundary or public/private evidence changes.
+After merging, sync local `main`, preserve unrelated untracked artifacts and
+continue the next safe project batch.
 
 ## Product And Architecture Judgment
 

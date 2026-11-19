@@ -63,8 +63,11 @@ def _pending_events(
 ) -> list[dict[str, Any]]:
     processed_path = inbox / "processed.json"
     processed: set[str] = set()
-    if processed_path.is_file():
+    try:
         processed_payload = _read_mapping(processed_path)
+    except FileNotFoundError:
+        pass
+    else:
         if (
             processed_payload.get("schema_version")
             != source_contract.processed_schema_version

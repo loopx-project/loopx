@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { goalAcceptanceDisplayStatus, goalAcceptanceObservationSchema, projectGoalAcceptanceCriteria, type GoalAcceptanceContract } from "./goal-acceptance-observation.js";
+import { hasConfiguredGoalChecks, type GoalAcceptanceChecks, goalAcceptanceDisplayStatus, goalAcceptanceObservationSchema, projectGoalAcceptanceCriteria } from "./goal-acceptance-observation.js";
 
 // Consumer validation only; freshness and coverage remain kernel decisions.
 const projectionEnvelopeSchema = z.object({
@@ -137,14 +137,14 @@ export function reviewNodeColumn(node: ReviewNode) {
   return ["gate", "gate_summary", "lease"].includes(node.kind) ? 0 : node.kind === "deliverable" ? 1 : 2;
 }
 
-type EnabledContract = Extract<GoalAcceptanceContract, { enabled: true }>;
-type ContractExportLabels = Record<"title" | "boundary" | "scope" | "selectedWork" | "allWork" | "source" | "revision" | "digest" | "objective" | "criteria"
+type ConfiguredContract = GoalAcceptanceChecks;
+type ContractExportLabels = Record<"title" | "boundary" | "scope" | "goalOnly" | "selectedWork" | "allWork" | "source" | "revision" | "digest" | "objective" | "criteria"
   | "nonGoals" | "tasks" | "verification" | "unknown" | "noTasks" | "noCriteria" | "notApplicable"
   | "heldTasks" | "receipt" | "receiptNote" | "operation" | "verificationScope" | "allCriteria" | "passed" | "failed" | "exitCode"
   | "oracleChecker" | "oracleSourceDigest" | "oracleCheckedAt" | "oracleInputVersions" | "oracleOutputVersions", string> & {
-  taskState: Record<EnabledContract["tasks"][number]["state"], string>;
-  verificationState: Record<EnabledContract["status"], string>;
-  oracleState: Record<NonNullable<EnabledContract["criteria"][number]["oracle"]>["state"], string>;
+  taskState: Record<ConfiguredContract["tasks"][number]["state"], string>;
+  verificationState: Record<ConfiguredContract["status"], string>;
+  oracleState: Record<NonNullable<ConfiguredContract["criteria"][number]["oracle"]>["state"], string>;
 };
 export type ReviewExportLabels = {
   contract: ContractExportLabels;
@@ -223,10 +223,20 @@ export function deliveryReviewMarkdown(snapshot: DeliveryReviewSnapshot, labels:
       `${labels.next}: ${line(acceptance.next_action)} (${line(acceptance.next_action_source)})`);
   }
   const contract = acceptance?.goal_acceptance_contract;
-  if (contract?.enabled === true) {
+  for (const outcome of contract?.outcome_requirements?.outcomes ?? []) {
+    rows.push("", `### ${line(outcome.objective)}`);
+    for (const requirement of outcome.requirements) {
+      const review = requirement.agent_review;
+      rows.push(`- ${line(requirement.description)} · checks: ${requirement.status}`);
+      if (review) rows.push(`  Agent review: ${review.conclusion}; basis_current=${review.basis_current}; not independent verification`,
+        `  ${line(review.note)}`, ...review.evidence_refs.map(ref => `  evidence: ${line(ref)}`));
+    }
+    rows.push(...outcome.work.map(work => `- ${line(work.todo_id)}: ${line(work.status)}`));
+  }
+  if (hasConfiguredGoalChecks(contract)) {
     const copy = labels.contract;
     rows.push("", `## ${copy.title}`, "", copy.boundary,
-      `${copy.scope}: ${contract.scope?.kind === "selected_work" ? copy.selectedWork : copy.allWork}`,
+      `${copy.scope}: ${contract.scope?.kind === "goal" ? copy.goalOnly : contract.scope?.kind === "selected_work" ? copy.selectedWork : copy.allWork}`,
       `${copy.source}: ${line(snapshot.goal_id)}`, `${copy.revision}: ${contract.revision}`, `${copy.digest}: ${line(contract.digest)}`,
       "", `### ${copy.objective}`, line(contract.objective || copy.unknown), "", `### ${copy.criteria}`);
     if (contract.non_goals.length) rows.push(`${copy.nonGoals}: ${line(contract.non_goals.join("; "))}`);
@@ -236,8 +246,8 @@ export function deliveryReviewMarkdown(snapshot: DeliveryReviewSnapshot, labels:
       if (criterion.oracle) rows.push(`  ${copy.oracleChecker}: ${line(criterion.oracle.source_id)} · ${copy.oracleState[criterion.oracle.state]}`,
         `  ${copy.oracleSourceDigest}: ${line(criterion.oracle.source_digest)}`);
     }
-    rows.push("", `### ${copy.tasks}`);
-    if (!contract.tasks.length) rows.push(copy.noTasks);
+    if (contract.tasks.length || contract.scope?.kind !== "goal") rows.push("", `### ${copy.tasks}`);
+    if (!contract.tasks.length && contract.scope?.kind !== "goal") rows.push(copy.noTasks);
     for (const task of contract.tasks) {
       rows.push(`- ${line(task.todo_id)}: ${copy.taskState[task.state]}`,
         `  ${copy.criteria}: ${line(task.criterion_ids.join(", ") || copy.unknown)}`);

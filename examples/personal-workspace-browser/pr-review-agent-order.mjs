@@ -51,7 +51,7 @@ export const prReviewAgentOrderScenario = {
       const {page} = context;
       await page.getByRole("button", {name: "设置", exact: true}).click();
       await page.locator(".personal-settings-tabs").getByRole("button", {name: "能力中心", exact: true}).click();
-      await page.getByRole("radio", {name: "单个 Goal", exact: true}).check();
+      await page.getByRole("radio", {name: "Goal 设置", exact: true}).check();
       await page.getByRole("combobox", {name: "目标 Goal", exact: true}).selectOption("product-release");
       await page.getByRole("navigation", {name: "Goal 能力目录"}).getByRole("button", {name: /Pull-request Review/}).click();
       const detail = page.locator(".personal-capability-detail");

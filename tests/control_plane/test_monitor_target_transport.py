@@ -9,14 +9,26 @@ import pytest
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 from test_monitor_followthrough_contract import AGENT_ID, GOAL_ID, _write_fixture
-from loopx.control_plane.coordination.local_authority import (
-    LocalCoordinationAuthorityUnavailable, read_canonical_todos_if_promoted,
-)
+from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.effect_runtime import EffectRuntimeRejected, MAX_REQUEST_BYTES
 from loopx.control_plane.quota.monitor_poll import resolve_due_monitor_candidate
 from loopx.control_plane.scheduler import monitor_poll_writeback, monitor_todo
-from loopx.control_plane.testing.canary_harness import run_json_cli
+from loopx.control_plane.testing.canary_harness import run_json_cli, run_json_cli_result
+from loopx.control_plane.turn_driver.decision_capture import (
+    read_context_capture_file,
+    read_context_read_reference,
+)
+
+
+def _read_guard_capture(payload):
+    source = payload.get("captured_decision") or payload.get("recovery")
+    if source is None:
+        return payload
+    if "reference_file" in source:
+        _, source = read_context_read_reference(source["reference_file"])
+    _, _, decision = read_context_capture_file(source["path"], source["sha256"], private=True)
+    return decision
 
 
 def _monitor(**fields):
@@ -31,12 +43,13 @@ def _monitor(**fields):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("target_repetitions", [1, 40_000, 120_000])
+@pytest.mark.parametrize("target_repetitions", [1, 40_000, 120_000, 360_000])
 def test_real_large_authority_returns_complete_target(tmp_path, monkeypatch, provider, target_repetitions):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, runtime, state = _write_fixture(tmp_path, canonical=False)
+    goal_source = state.read_text(encoding="utf-8")
     note = "Measured evidence 演示 " * target_repetitions
-    if target_repetitions == 120_000:
+    if target_repetitions == 360_000:
         assert len(note.encode()) > MAX_REQUEST_BYTES
     target = _monitor(note=note, evidence="source:retained-result",
                       required_capabilities=["network"], resume_when="todo_done:todo_input",
@@ -49,22 +62,16 @@ def test_real_large_authority_returns_complete_target(tmp_path, monkeypatch, pro
         for i in range(320)
     ] + [target]
     items[0]["todo_id"] = "todo_input"
-    assert len(json.dumps(items, ensure_ascii=False).encode()) > MAX_REQUEST_BYTES
+    assert len(json.dumps(items, ensure_ascii=False).encode()) > 2 * 1024 * 1024
     projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=items,
                                                       handoff_mode="soft_claim")
     initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
     state.unlink()  # No legacy Markdown fallback can satisfy the lookup.
 
-    # The canonical source has its own per-record page ceiling. Keep that
-    # refusal; this transport repair must not loosen it or call it "not due".
-    if target_repetitions == 120_000:
-        with pytest.raises(LocalCoordinationAuthorityUnavailable) as error:
-            resolve_due_monitor_candidate(registry_path=registry, runtime_root=runtime,
-                goal_id=GOAL_ID, todo_id=target["todo_id"], target_key=None)
-        assert error.value.code == "canonical_snapshot_record_too_large"
-        assert not state.exists()
-        return
-
+    # The largest record exceeds the current ordinary wire and is complete: the
+    # canonical adapter reads through the opt-in private-file entrypoint
+    # (62 MiB), which never truncates a record or substitutes display Markdown.
+    # The wire-only page endpoint keeps its own per-page refusal.
     selected = monitor_poll_writeback.resolve_monitor_todo_item(
         registry_path=registry, runtime_root=runtime, goal_id=GOAL_ID,
         todo_id=target["todo_id"], target_key=target["target_key"],
@@ -84,7 +91,19 @@ def test_real_large_authority_returns_complete_target(tmp_path, monkeypatch, pro
                  "--turn-instance-id", "monitor-large-history"]
         guard = ["quota", "should-run", *scope,
                  "--available-capability", "network"]
-        admitted = run_json_cli(*guard, registry_path=registry, runtime_root=runtime)
+        before_missing = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
+        returncode, missing = run_json_cli_result(*guard, registry_path=registry, runtime_root=runtime)
+        assert returncode != 0 and missing["ok"] is False
+        missing = _read_guard_capture(missing)
+        assert missing["state"] == "blocked_health" and missing["should_run"] is False
+        assert not state.exists()
+        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)["todos"] == before_missing["todos"]
+
+        # Restore Goal intent only; the empty source cannot supply the 321 Todos.
+        # Recovery must reuse the original Turn before the Monitor may execute.
+        state.write_text(goal_source, encoding="utf-8")
+        admitted = _read_guard_capture(run_json_cli(*guard, registry_path=registry, runtime_root=runtime))
+        assert admitted["should_run"] is True
         assert admitted["selected_todo"]["todo_id"] == target["todo_id"]
         poll = ["quota", "monitor-poll", *scope, "--todo-id", target["todo_id"],
                 "--target-key", target["target_key"], "--result-hash", "observed-v2",
@@ -93,7 +112,7 @@ def test_real_large_authority_returns_complete_target(tmp_path, monkeypatch, pro
         assert first["turn_continuation"]["current_turn_settled"] is True
         replay = run_json_cli(*poll, registry_path=registry, runtime_root=runtime)
         assert replay["replayed"] is True and replay["appended"] is False
-        closed = run_json_cli(*guard, registry_path=registry, runtime_root=runtime)
+        closed = _read_guard_capture(run_json_cli(*guard, registry_path=registry, runtime_root=runtime))
         assert closed["effective_action"] == "heartbeat_settled_skip"
         canonical = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
         assert canonical["source_authority"] == ("sqlite_v0" if provider == "sqlite" else "file_v0")

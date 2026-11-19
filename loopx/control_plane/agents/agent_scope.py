@@ -7,10 +7,11 @@ from typing import Any, TypeGuard
 from .agent_scope_frontier import (
     AGENT_LANE_FRONTIER_HINT_SCHEMA_VERSION,
     AgentLaneFrontierHintDecision,
-    AgentScopeFrontierAction,
-    agent_scope_frontier_action as _agent_scope_frontier_action,
+    AgentScopeFrontierAction as AgentScopeFrontierAction,
+    agent_scope_frontier_action as _frontier_action,
     build_agent_scope_frontier_payload,
 )
+
 from ..todos.decision_scope import select_scoped_gate_fallback
 from ..work_items.work_lane import (
     work_lane_contract_is_due_monitor_attempt,
@@ -34,12 +35,15 @@ from ..todos.todo_semantics import (
     todo_item_is_deferred,
     todo_item_task_class,
     todo_presentation_sort_key,
+    todo_scoped_runnable_advancement_count,
 )
 from ..todos.summary_item import compact_todo_summary_item, compact_todo_summary_items
 from ..todos.user_gate import (
     open_todo_count as _open_todo_count,
     open_user_gate_todo_items as _open_user_gate_todo_items,
 )
+
+_agent_scope_frontier_action = _frontier_action
 
 _ACTION_SCOPE_STOPWORDS = {
     "a",
@@ -216,6 +220,8 @@ def _scoped_user_gate_fallback(
     capability_gate: dict[str, Any] | None = None,
     allow_unrelated_gate: bool = False,
     monitor_debt_backoff_active: bool = False,
+    requested_todo_id: str | None = None,
+    requested_candidate: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     gates = _open_user_gate_todo_items(user_todo_summary)
     if not gates or not isinstance(agent_todo_summary, dict):
@@ -257,6 +263,10 @@ def _scoped_user_gate_fallback(
             *ready_deferred_candidates,
         ]
     executable_items = [item for item in executable_items if isinstance(item, dict)]
+    # Exact selection was qualified from the complete inventory. Display lanes
+    # may omit it; transport the original row so gate metadata is not lost.
+    if requested_candidate is not None:
+        executable_items = [requested_candidate, *executable_items]
     claim_scope = (
         agent_todo_summary.get("claim_scope")
         if isinstance(agent_todo_summary.get("claim_scope"), dict)
@@ -265,6 +275,7 @@ def _scoped_user_gate_fallback(
     selection = select_scoped_gate_fallback(
         gates, executable_items, agent_id=claim_scope.get("agent_id") if claim_scope else None,
         allow_unrelated_gate=allow_unrelated_gate, monitor_debt_backoff_active=monitor_debt_backoff_active,
+        requested_todo_id=requested_todo_id,
     )
     if selection is None:
         return None
@@ -396,6 +407,11 @@ def _agent_scoped_user_todo_override(
                 "the open user gate is scoped to another agent via blocks_agent or "
                 "claimed_by; this agent still has an executable in-scope todo"
             ),
+            "item_patch": {
+                "status": "active_state_agent_todo",
+                "waiting_on": "codex",
+                "recommended_action": selected_action,
+            },
         }
     other_action_count = _open_todo_count(
         {
@@ -623,6 +639,15 @@ def _agent_lane_frontier_hint(
         AgentScopeFrontierAction.AGENT_SCOPE_WAIT,
         AgentScopeFrontierAction.REASSIGNMENT_REQUIRED,
     }:
+        blocked_todo_id = _first_compact_todo_id(frontier.get("blocked_todo_wait_candidates"))
+        if blocked_todo_id:
+            return build_hint(
+                AgentLaneFrontierHintDecision.QUIET_NOOP_BLOCKER,
+                source="agent_scope_frontier",
+                reason_code="current_agent_blocker",
+                target_todo_id=blocked_todo_id,
+                quiet_noop_allowed=True,
+            )
         blocked_successor_todo_id = _first_compact_todo_id(
             frontier.get("blocked_successor_wait_candidates")
         )
@@ -681,7 +706,7 @@ def _agent_lane_frontier_hint(
 def _agent_scope_deferred_resume_candidates(
     agent_todo_summary: dict[str, Any],
     *,
-    agent_id: str,
+    agent_id: str | None,
 ) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     for key in (
@@ -1082,13 +1107,33 @@ def _deferred_resume_frontier(
     )
 
 
+def _blocked_todo_wait_frontier(
+    context: _AgentScopeNoCandidateContext,
+) -> dict[str, Any] | None:
+    planning = project_todo_resume_planning(context.summary, agent_id=context.agent_id)
+    blocked_items = planning.get("blocked_wait_items")
+    if blocked_items:
+        return build_agent_scope_frontier_payload(
+            agent_id=context.agent_id,
+            action=AgentScopeFrontierAction.AGENT_SCOPE_WAIT,
+            quiet_noop_allowed=True,
+            spend_policy="no quota spend while scoped work is blocked",
+            reason=f"current agent {context.agent_id} has blocked work and no runnable candidate",
+            recommended_action=(
+                "Wait for the blocker to be resolved or its resume condition to become ready; "
+                "recheck when the Todo state or available work changes."
+            ),
+            candidate_counts={**context.candidate_counts, "blocked_todo_wait_count": len(blocked_items)},
+            extra_fields={"blocked_todo_wait_candidates": blocked_items[:3]},
+        )
+    return None
+
+
 def _blocked_successor_wait_frontier(
     context: _AgentScopeNoCandidateContext,
 ) -> dict[str, Any] | None:
-    candidates = project_todo_resume_planning(
-        context.summary,
-        agent_id=context.agent_id,
-    )["blocked_successor_items"]
+    planning = project_todo_resume_planning(context.summary, agent_id=context.agent_id)
+    candidates = planning["blocked_successor_items"]
     if not candidates:
         return None
     first = candidates[0]
@@ -1113,7 +1158,11 @@ def _blocked_successor_wait_frontier(
             **context.candidate_counts,
             "blocked_successor_wait_count": len(candidates),
         },
-        extra_fields={"blocked_successor_wait_candidates": candidates[:3]},
+        extra_fields={
+            "blocked_successor_wait_candidates": candidates[:3],
+            **({"automatic_resume_todo": planning["automatic_resume_todo"]}
+               if "automatic_resume_todo" in planning else {}),
+        },
     )
 
 
@@ -1340,6 +1389,7 @@ _AGENT_SCOPE_NO_CANDIDATE_RULES = (
     _blocking_handoff_frontier,
     _cleared_handoff_frontier,
     _other_agent_or_exhausted_frontier,
+    _blocked_todo_wait_frontier,
 )
 
 
@@ -1350,6 +1400,7 @@ def _agent_scope_no_candidate_frontier(
     agent_lane_next_action: dict[str, Any] | None,
     work_lane_contract: dict[str, Any] | None,
     candidate_should_run: bool,
+    vision_wait_state: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if not candidate_should_run or not _agent_identity_has_scoped_lane(agent_identity):
         return None
@@ -1359,6 +1410,11 @@ def _agent_scope_no_candidate_frontier(
     if work_lane_contract_is_due_monitor_attempt(work_lane_contract):
         return None
     if isinstance(agent_lane_next_action, dict):
+        # Eligibility and real delivery gates have already been qualified by
+        # the typed action-selection owner. Priority ranks the default route;
+        # it must not replace an explicitly selected eligible Todo.
+        if agent_lane_next_action.get("selected_by") == "agent_action_selection":
+            return None
         return _selected_candidate_priority_frontier(
             agent_id=agent_id,
             summary=agent_todo_summary,
@@ -1371,6 +1427,12 @@ def _agent_scope_no_candidate_frontier(
         agent_todo_summary,
         agent_id=agent_id,
     )
+    if vision_wait_state and todo_scoped_runnable_advancement_count(
+        agent_todo_summary, agent_id=agent_id,
+    ) == 0:
+        # A committed retry keeps its unfinished commitment while selection
+        # proves there is no runnable work. Preserve the exact wait route.
+        current_count = unclaimed_count = 0
     if current_count > 0 or unclaimed_count > 0:
         return None
     context = _AgentScopeNoCandidateContext(

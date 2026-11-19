@@ -21,9 +21,11 @@ import os
 import sys
 import tempfile
 import threading
+from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
@@ -38,10 +40,31 @@ MARKER_VALUE = "loopx-turn-dsh-real-e2e-step-1"
 ADAPTER = REPO_ROOT / "scripts" / "dsh_turn_host_adapter.py"
 
 
+@contextlib.contextmanager
+def _isolated_machine_profile(root: Path, endpoint: str) -> Iterator[None]:
+    """Keep the real managed-host credential owner inside this local fixture."""
+    from loopx import paths
+    from loopx.control_plane.operator_provider import write_operator_provider
+
+    machine = root / "machine-owner"
+    with (
+        patch.object(paths, "DEFAULT_RUNTIME_ROOT", machine),
+        patch.object(paths, "LEGACY_RUNTIME_ROOT", root / "absent-legacy-machine"),
+    ):
+        write_operator_provider(
+            runtime_root=machine,
+            api_key="dsh-real-e2e-mock-key",
+            base_url=endpoint,
+        )
+        yield
+
+
 def _write_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
     project = root / "project"
     runtime = root / "runtime"
-    workspace = root / "workspace"
+    # The native host and accountable writeback share the actual local Goal
+    # workspace; a separate sibling is not a producing-worktree receipt.
+    workspace = project
     runtime.mkdir(parents=True)
     workspace.mkdir(parents=True)
     (workspace / "docs").mkdir()
@@ -113,6 +136,10 @@ def _write_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
         + "\n",
         encoding="utf-8",
     )
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+
+    for goal in json.loads(registry.read_text())["goals"]:
+        import_fixture_authority(registry, goal["id"], provider="sqlite")
     return project, runtime, workspace, registry
 
 
@@ -217,7 +244,8 @@ def _base_argv(
         str(workspace),
     ]
     if host == "generic-cli":
-        argv.extend(["--host-command-json", host_command])
+        argv.extend(["--host-adapter-request-schema", "loopx_turn_host_request_v1",
+                     "--host-command-json", host_command])
     else:
         argv.extend(
             [
@@ -235,8 +263,6 @@ def _base_argv(
             json.dumps(_validator_command()),
             "--validation-failure-kind",
             "repair_required",
-            "--scan-root",
-            str(registry.parent.parent),
             "--no-global-sync",
             "--timeout-seconds",
             str(timeout_seconds),
@@ -277,6 +303,8 @@ def main() -> int:
         {
             "result_kind": "validated_progress",
             "classification": "real_dsh_mock_llm",
+            "work_evidence": [f"artifact:{MARKER_NAME}"],
+            "validation_evidence": ["fixture:independent-marker-validator"],
             "summary": "Real dsh runtime returned a typed result through the mock LLM.",
             "recommended_action": "Review the real dsh e2e marker.",
             "next_action": "Inspect the marker and replay idempotently.",
@@ -327,7 +355,10 @@ def main() -> int:
         os.environ["DEEPSEEK_API_KEY"] = "dsh-real-e2e-mock-key"
         for key in ("DSH_CWD", "DSH_HOME", "DSH_SESSION_ROOT"):
             os.environ.pop(key, None)
-        with tempfile.TemporaryDirectory(prefix="loopx-turn-dsh-real-e2e-") as directory:
+        with (
+            tempfile.TemporaryDirectory(prefix="loopx-turn-dsh-real-e2e-") as directory,
+            _isolated_machine_profile(Path(directory), base_url),
+        ):
             root = Path(directory)
             project, runtime, workspace, registry = _write_fixture(root)
             session_root = root / "sessions"
@@ -345,7 +376,8 @@ def main() -> int:
                 host=args.host,
                 timeout_seconds=args.timeout_seconds,
             )
-            exit_code, payload = _run_cli([*base, "--execute"])
+            with contextlib.chdir(workspace):
+                exit_code, payload = _run_cli([*base, "--execute"])
 
             marker_valid = (
                 marker_path.is_file()
@@ -358,9 +390,10 @@ def main() -> int:
                 replay_base = list(base)
                 idx = replay_base.index("--turn-instance-id")
                 del replay_base[idx : idx + 2]
-                replay_exit_code, replay = _run_cli(
-                    [*replay_base, "--resume-turn-key", turn_key, "--execute"]
-                )
+                with contextlib.chdir(workspace):
+                    replay_exit_code, replay = _run_cli(
+                        [*replay_base, "--resume-turn-key", turn_key, "--execute"]
+                    )
 
             summary = {
                 "schema_version": "loopx_turn_dsh_real_e2e_v1",

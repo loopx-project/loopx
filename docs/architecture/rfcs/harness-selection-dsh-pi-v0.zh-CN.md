@@ -556,7 +556,10 @@ binding。本阶段交付分配边界及可用性 fallback，不从对话 prose 
 
 [Peer directory](../../reference/protocols/peer-agent-directory-and-observation-v0.md) 供 manager 与 peer 共用。`loopx agent-directory --goal-id <goal> [--agent-id <caller>]` 复用 management projection，本地最多 24 行并报告省略数；没有分页、presence provider 或 lease epoch。传入未注册 caller 得到 scope gap。本地 CLI membership 检查不认证远端 caller；未来远端入口必须从可验证 binding 派生身份。
 
-每 lane 通过 `loopx shared-goal-alignment --goal-id <goal> --agent-id <agent>` 回读，仍限 Stage 1/2 source-facts 语义，计划 receipt 不投影完整状态。[三层合同](../../reference/protocols/multi-agent-three-layer-minimality-v0.md) 与[可见 launcher](../../reference/protocols/multi-agent-visible-launcher-v0.md) 保留独立归属：用户意图、preset 流程、kernel 声明按 Goal/Agent/Todo 身份连接，不再建 runner、pane owner、vision budget 或 evidence loop。选择执行器和保存凭据都不授予这些效果。
+每 lane 通过 `loopx shared-goal-alignment --goal-id <goal> --agent-id <agent>` 回读，仍限 Stage 1/2 source-facts 语义，计划 receipt 不投影完整状态。[三层合同](https://github.com/loopx-project/loopx/blob/910ff3bca5c8ff5ee52bd691ae924cc37dbaf05f/docs/reference/protocols/multi-agent-three-layer-minimality-v0.md) 与[可见 launcher](https://github.com/loopx-project/loopx/blob/910ff3bca5c8ff5ee52bd691ae924cc37dbaf05f/docs/reference/protocols/multi-agent-visible-launcher-v0.md) 保留独立归属：用户意图、preset 流程、kernel 声明按 Goal/Agent/Todo 身份连接，不再建 runner、pane owner、vision budget 或 evidence loop。选择执行器和保存凭据都不授予这些效果。
+
+> 旧 tmux multi-agent 与 auto-research 演示已退役；上述演示合同链接固定到退役前版本，
+> 仅用于解释历史设计，不是当前执行入口或共享运行时的归属。
 
 ## 按里程碑看管家通道的就绪度（2026-09-16）
 
@@ -595,3 +598,19 @@ lane 的接收者解析、报告可先用的目标级里程碑——仍然开放
 profile、权限状态、第二执行器或工作权威，因此更丰富的回答契约不得扩大通道可读或
 可改的范围；本文也不提升任何一行的状态——M1-M4 接入里程碑与跨前端投影行仍归
 [Agent 会话执行模式](./agent-session-execution-modes-v0.zh-CN.md)。
+
+
+### 精确绑定的手动诊断读取
+
+`status --expected-binding '<JSON>' --as-of <timestamp> --max-observation-age-ms <integer>`
+在现有 goal 参数上固定 `provider_id`、`observer_id`、`session_id` 和 `run_identity`。
+后者使用 observer stats 的现有完整字段：`worker_id`、`model_id`、`task_id`、
+`environment_id`、`tools_id`、`budget_id`、`adapter_revision`、`observer_revision`。
+缺少或未知字段、非法 identity token 会拒绝输出。
+
+调用方必须给出明确评价时间及非负观测年龄上限。其他 session/treatment、
+完整性不合法、缺少观测、未来观测或超过年龄上限都会令 `binding.eligible=false`，
+并令 stage 为 `unknown`，而不是过滤掉其他运行后误称健康。eligible 只表示该绑定的
+观测可采用，不表示任务成功。不指定绑定时保留原有历史读取格式。读取仍然手动、
+只读且不限制 ledger 大小；不授权自动轮询，不替代面板必需的 owner-reviewed 读取预算，
+也不证明 C0/C1 live qualification。

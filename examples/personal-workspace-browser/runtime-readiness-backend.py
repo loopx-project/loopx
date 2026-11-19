@@ -25,8 +25,11 @@ from loopx.control_plane.effect_runtime import restart_effect_runtime  # noqa: E
 bins = root / "bin"
 bins.mkdir(parents=True, exist_ok=True)
 (root / "project").mkdir(exist_ok=True)
-for variable in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+for variable in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ANTIGRAVITY_CSRF_TOKEN"):
     os.environ.pop(variable, None)
+# Isolate native discovery just as the explicit CLI paths isolate Codex and
+# Claude. With no credential this loopback endpoint is never contacted.
+os.environ["ANTIGRAVITY_LS_URL"] = "http://127.0.0.1:1"
 os.environ["LOOPX_USAGE_PING"] = "0"
 os.environ["DO_NOT_TRACK"] = "1"
 if "--with-goal" in sys.argv[2:]:

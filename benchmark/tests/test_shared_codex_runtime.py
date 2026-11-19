@@ -8,12 +8,14 @@ import subprocess
 import sys
 import time
 import tomllib
+from contextlib import contextmanager
 from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
 
 from benchmark.runtime.codex import Execution, prepare_codex_home
+from benchmark.runtime import worker
 from benchmark.runtime.worker import run_once, turn_command
 
 
@@ -52,6 +54,27 @@ def settings(tmp_path, **changes):
 def test_invalid_execution_rejected_before_host(kwargs):
     with pytest.raises(ValueError):
         Execution(**kwargs)
+
+
+@pytest.mark.parametrize("mode", ["plain", "native-goal", "heartbeat", "turn", "loopx-goal"])
+def test_mode_default_context_preserves_explicit_fresh_and_transport_opt_ins(tmp_path, mode):
+    extra = {"validation_command": ("true",)} if mode == "turn" else {}
+    expected = "resume" if mode in {"heartbeat", "turn"} else "fresh"
+    implicit = Execution(mode=mode, **extra)
+    assert implicit.context == expected
+    assert implicit.context_delivery == ("on" if mode == "heartbeat" else "off")
+    assert implicit.turn_envelope is False
+    assert Execution(mode=mode, context_delivery="off", **extra).context_delivery == "off"
+    assert Execution(mode=mode, context="fresh", **extra).context == "fresh"
+    if expected == "fresh":
+        with pytest.raises(ValueError, match="resume requires"):
+            Execution(mode=mode, context="resume", **extra)
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture",
+                           execution_mode=mode, **extra)
+    assert agent.execution.context == expected
+    assert agent._worker_env(cwd="/task")["LOOPX_ITERATION_CONTEXT"] == expected
 
 
 def test_trial_home_preserves_sessions_and_fixes_nonconversation_inputs(tmp_path):
@@ -131,6 +154,8 @@ sys.stdin.read()
     binary.chmod(0o755)
     return dict(os.environ) | {
         "LOOPX_EXECUTION_MODE": "plain",
+        # This executable models legacy sessions, not native hook discovery.
+        "LOOPX_CONTEXT_DELIVERY": "off",
         "LOOPX_PROJECT": str(tmp_path),
         "LOOPX_TASK_DOC": str(task),
         "LOOPX_CODEX_HOME": str(tmp_path / "home"),
@@ -141,6 +166,19 @@ sys.stdin.read()
         "OPENAI_BASE_URL": "http://localhost:8123/v1",
         "OPENAI_API_KEY": "fixture-key",
     }
+
+
+def test_resumed_worker_builds_native_command_without_collaboration_server(tmp_path):
+    env = worker_env(tmp_path)
+    execution = Execution(context_delivery="off")
+    session = SimpleNamespace(session_id="retained-session")
+
+    command = worker.native_command(env, execution, "execute", tmp_path, session)
+
+    assert command[:2] == [env["CODEX_BIN"], "exec"]
+    assert "resume" in command
+    assert command[-2:] == [session.session_id, "-"]
+    assert not any(argument.startswith("mcp_servers.") for argument in command)
 
 
 def test_non_heartbeat_wakes_do_not_import_checkpoint_control_plane(tmp_path, monkeypatch):
@@ -171,11 +209,18 @@ def test_native_goal_staged_source_is_importable_without_loopx_control_plane(tmp
     result = subprocess.run(
         [sys.executable, "-I", "-S", "-c",
          f"import sys; sys.path.insert(0, {str(staged)!r}); "
-         "import loopx.capabilities.benchmark_toolkit.native_codex_goal as m; print(m.__name__)"],
+         "import loopx.capabilities.benchmark_toolkit.native_codex_goal as goal; "
+         "import loopx.capabilities.benchmark_toolkit.native_codex_process as process; "
+         "from loopx.extensions.process_runtime import _darwin_owned_group_has_exited; "
+         "import benchmark.runtime.codex_readiness; "
+         "print(goal.__name__, process.__name__)"],
         cwd=tmp_path, env={"PATH": os.environ["PATH"]}, capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "loopx.capabilities.benchmark_toolkit.native_codex_goal"
+    assert result.stdout.strip() == (
+        "loopx.capabilities.benchmark_toolkit.native_codex_goal "
+        "loopx.capabilities.benchmark_toolkit.native_codex_process"
+    )
 
 
 def test_native_goal_rounds_graceful_deadline_and_opt_in_continuation():
@@ -187,16 +232,25 @@ def test_native_goal_rounds_graceful_deadline_and_opt_in_continuation():
     # Default: one Goal that declares completion ends the worker (no continuation).
     calls = []
     def one_round(suffix, timeout):
-        calls.append((suffix, timeout)); tick(100); return "complete"
+        calls.append((suffix, timeout))
+        tick(100)
+        return "complete"
     assert native_goal_rounds(one_round, budget_seconds=1000, continue_after_complete=False, clock=lambda: clock[0]) == (1, "complete")
     assert calls == [("", 1000)]
     # Opt-in: completed Goals are followed by continuation Goals until the reserve.
-    clock[0] = 0; calls.clear()
+    clock[0] = 0
+    calls.clear()
     def completing(suffix, timeout):
-        calls.append(suffix[:40]); tick(400); return "complete"
+        calls.append(suffix)
+        tick(400)
+        return "complete"
     rounds, outcome = native_goal_rounds(completing, budget_seconds=1000, continue_after_complete=True, clock=lambda: clock[0], reserve_seconds=300)
     assert (rounds, outcome) == (2, "complete")
     assert calls[0] == "" and calls[1].startswith("\n\nContinuation 1")
+    assert "600 seconds remain" in calls[1]
+    assert "original task under its existing requirements and evaluation rules" in calls[1]
+    assert "not by a prior improvement claim" in calls[1]
+    assert "submit only if it improves" not in calls[1]
     # A Goal still active at the budget edge is normal exhaustion, not a failure.
     clock[0] = 0
     def never_ends(suffix, timeout):
@@ -204,7 +258,7 @@ def test_native_goal_rounds_graceful_deadline_and_opt_in_continuation():
     assert native_goal_rounds(never_ends, budget_seconds=1000, continue_after_complete=True, clock=lambda: clock[0]) == (1, "budget_exhausted")
     # A non-complete terminal status stops without continuation.
     clock[0] = 0
-    assert native_goal_rounds(lambda s, t: "cancelled", budget_seconds=1000, continue_after_complete=True, clock=lambda: clock[0]) == (1, "stopped")
+    assert native_goal_rounds(lambda s, t: "cancelled", budget_seconds=1000, continue_after_complete=True, clock=lambda: clock[0]) == (1, "cancelled")
 
 
 def test_fresh_wakes_share_environment_without_resuming_or_duplicate_session_copies(
@@ -229,6 +283,106 @@ def test_process_failure_is_not_reported_as_success(tmp_path):
     receipt = run_once(env)
     assert receipt["ok"] is False
     assert receipt["return_code"] == 7
+
+
+@pytest.mark.parametrize("code,expected", [("insufficient_quota", "quota_exhausted"),
+                                           ("model_at_capacity", "provider_capacity"),
+                                           ("unrecognized", "unknown")])
+def test_heartbeat_real_native_process_preserves_content_free_host_failure(tmp_path, monkeypatch, code, expected):
+    import benchmark.runtime.worker as worker
+    from tests.control_plane.test_benchmark_current_admission import _environment
+
+    env, _project, _runtime, _source, _state = _environment(tmp_path, monkeypatch, "sqlite")
+    monkeypatch.setattr(worker, "heartbeat_body", lambda *a, **kw: "synthetic work")
+    event = {"type": "turn.failed", "error": {"code": code, "message": "PRIVATE-SENTINEL"}}
+    Path(env["CODEX_BIN"]).write_text(
+        f"#!{sys.executable}\nimport json,sys\n"
+        "print(json.dumps({'type':'thread.started','thread_id':'session-a'}))\n"
+        f"print(json.dumps({event!r}))\n"
+        "sys.stdin.read();sys.exit(1)\n")
+    receipt = run_once(env)
+    assert receipt["ok"] is False and receipt["return_code"] == 1
+    assert receipt["host_failure"]["kind"] == expected
+    assert "PRIVATE-SENTINEL" not in json.dumps(receipt)
+
+
+def test_host_retry_session_mismatch_refuses_native_process(tmp_path, monkeypatch):
+    import benchmark.runtime.worker as worker
+    import benchmark.runtime.sessions as sessions
+
+    env = worker_env(tmp_path)
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    env.update(LOOPX_EXECUTION_MODE="heartbeat", LOOPX_SHARED_SKILLS=str(skills),
+               LOOPX_HOST_RETRY_SESSION_ID="original-session")
+    monkeypatch.setattr(worker, "heartbeat_body", lambda *a, **kw: "synthetic work")
+    class Session:
+        session_id = "replacement-session"
+        def __init__(self, *a):
+            pass
+        def observe(self, path):
+            assert not path.exists()
+    monkeypatch.setattr(sessions, "BenchmarkSessionWake", Session)
+    with pytest.raises(ValueError, match="original Codex session"):
+        run_once(env)
+    assert not list((tmp_path / "logs/wakes").glob("*/stdout.jsonl"))
+
+
+@pytest.mark.parametrize("context", ["fresh", "resume"])
+def test_native_heartbeat_retry_uses_real_session_owner(tmp_path, monkeypatch, context):
+    from tests.control_plane.test_benchmark_current_admission import _environment
+    import benchmark.runtime.worker as worker
+
+    env, _project, _runtime, _source, _state = _environment(tmp_path, monkeypatch, "sqlite")
+    env["LOOPX_ITERATION_CONTEXT"] = context
+    # This fake executable models session retries, not native hook discovery.
+    env["LOOPX_CONTEXT_DELIVERY"] = "off"
+    monkeypatch.setattr(worker, "heartbeat_body", lambda *a, **kw: "synthetic work")
+    arguments = tmp_path / "native-calls.jsonl"
+    Path(env["CODEX_BIN"]).write_text(f"#!{sys.executable}\n" + f"""
+import json,pathlib,sys
+with pathlib.Path({str(arguments)!r}).open('a') as log:
+    log.write(json.dumps(sys.argv[1:])+'\\n')
+print(json.dumps({{'type':'thread.started','thread_id':'original-native'}}))
+resuming = 'resume' in sys.argv
+print(json.dumps({{'type':'turn.completed'}} if resuming else
+                 {{'type':'turn.failed','error':{{'code':'model_at_capacity'}}}}))
+sys.stdin.read()
+sys.exit(0 if resuming else 1)
+""")
+    first = run_once(env)
+    assert first["host_failure"]["kind"] == "provider_capacity"
+    assert first["session"]["session_id"] == "original-native"
+    second = run_once({**env, "LOOPX_HOST_RETRY_SESSION_ID": "original-native"})
+    assert second["ok"] and second["session"]["action"] == "resume"
+    calls = [json.loads(line) for line in arguments.read_text().splitlines()]
+    assert "resume" not in calls[0]
+    assert calls[1][calls[1].index("resume") + 1:].count("original-native") == 1
+    # A valid but different expected binding cannot fork or invoke the Host.
+    with pytest.raises(ValueError, match="original Codex session"):
+        run_once({**env, "LOOPX_HOST_RETRY_SESSION_ID": "different-native"})
+    assert len(arguments.read_text().splitlines()) == 2
+
+
+@pytest.mark.parametrize("tail", ['{"type":', '[]', '\ufffd', 'x' * 1_048_577])
+def test_partial_native_exchange_stays_unknown_even_after_transient_error(tmp_path, tail):
+    from benchmark.runtime.worker import heartbeat_host_failure
+    event = {"type": "turn.failed", "error": {"code": "model_at_capacity"}}
+    (tmp_path / "stdout.jsonl").write_text(json.dumps(event) + "\n" + tail)
+    (tmp_path / "stderr.log").write_text("")
+    failure = heartbeat_host_failure(tmp_path, {"ok": False})
+    assert failure["kind"] == "unknown" and failure["retryable"] is False
+
+
+def test_native_scheduler_enables_host_failure_guard_only_on_heartbeat():
+    from benchmark.runtime.scheduler import worker_command
+    base = {"LOOPX_CLI": "loopx", "LOOPX_REGISTRY": "/synthetic/registry.json",
+            "LOOPX_RUNTIME_ROOT": "/synthetic/runtime", "LOOPX_GOAL_ID": "goal",
+            "LOOPX_AGENT_ID": "agent"}
+    for mode in ["plain", "native-goal", "turn", "heartbeat"]:
+        args = worker_command({**base, "LOOPX_EXECUTION_MODE": mode}, python="python",
+                              source="/synthetic/source", state_file="/synthetic/state.json", host_timeout=100)
+        assert ("--wake-host-failure" in args) is (mode == "heartbeat")
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX worker resource inheritance")
@@ -274,7 +428,7 @@ raise SystemExit(worker.main())
     assert retained.read_bytes() == b"existing participant must remain exact"
 
 
-def test_timeout_keeps_receipt_and_reaps_child(tmp_path):
+def test_timeout_keeps_receipt_and_reaps_child(tmp_path, monkeypatch):
     env = worker_env(tmp_path)
     env["LOOPX_CODEX_TURN_TIMEOUT_SEC"] = "1"
     Path(env["CODEX_BIN"]).write_text(
@@ -285,10 +439,25 @@ pathlib.Path("pid").write_text(str(os.getpid()))
 time.sleep(60)
 """
     )
+    child_pids = []
+    original_child_process = worker.child_process
+
+    @contextmanager
+    def observe_child(*args, **kwargs):
+        with original_child_process(*args, **kwargs) as process:
+            # Observe the real OS launch even if the one-second deadline fires
+            # before this child can write its fixture file under parallel load.
+            child_pids.append(process.pid)
+            yield process
+
+    monkeypatch.setattr(worker, "child_process", observe_child)
     receipt = run_once(env)
     assert receipt["timed_out"] and not receipt["ok"]
+    assert len(child_pids) == 1
+    if (tmp_path / "pid").exists():
+        assert int((tmp_path / "pid").read_text()) == child_pids[0]
     with pytest.raises(ProcessLookupError):
-        os.kill(int((tmp_path / "pid").read_text()), 0)
+        os.kill(child_pids[0], 0)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX scheduler cancellation")
@@ -435,6 +604,23 @@ sys.exit(1 if first else 0)
     assert not run_once(env)["ok"]
     pending = tmp_path / "runtime/benchmark-pending-turn.json"
     assert pending.exists()
+    original = pending.read_bytes()
+    from loopx.file_lock import try_exclusive_file_lock
+
+    with try_exclusive_file_lock(pending) as lock:
+        assert lock is not None
+        with pytest.raises(RuntimeError, match="Another benchmark wake"):
+            run_once(env)
+    assert pending.read_bytes() == original
+    # Old unbound markers cannot establish which validator checked the work.
+    unbound = json.loads(original)
+    del unbound["validation_argv_sha256"]
+    pending.write_text(json.dumps(unbound))
+    with pytest.raises(ValueError, match="original validation command"):
+        run_once(env)
+    assert json.loads(pending.read_text()) == unbound
+    assert len((tmp_path / "calls.jsonl").read_text().splitlines()) == 1
+    pending.write_bytes(original)
     assert run_once(env)["ok"]
     assert not pending.exists()
     assert run_once(env)["ok"]
@@ -491,6 +677,48 @@ def test_baseline_and_treatment_use_same_harbor_entry(tmp_path):
         assert agent.replan_after_turns == (6 if agent.execution.uses_loopx else None)
 
 
+@pytest.mark.parametrize("option,mode,provider_env", [
+    ("on", "heartbeat", {}),
+    (1, "heartbeat", {}),
+    (None, "heartbeat", {}),
+    (True, "plain", {}),
+    (True, "native-goal", {}),
+    (True, "loopx-goal", {}),
+    (True, "turn", {}),
+    (True, "heartbeat", {"OPENAI_BASE_URL": ""}),
+    (True, "heartbeat", {"OPENAI_API_KEY": ""}),
+    (True, "heartbeat", {"CODEX_WIRE_API": "chat"}),
+])
+def test_harbor_provider_request_admission_rejects_unsupported_activation(
+    tmp_path, option, mode, provider_env,
+):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+
+    with pytest.raises(ValueError, match="provider_request_admission"):
+        BenchmarkCodex(
+            logs_dir=tmp_path, model_name="fixture", execution_mode=mode,
+            provider_request_admission=option,
+            extra_env={"OPENAI_BASE_URL": "https://provider.invalid/v1",
+                       "OPENAI_API_KEY": "synthetic-provider-key",
+                       "CODEX_WIRE_API": "responses", **provider_env},
+            **({"validation_command": ["true"]} if mode == "turn" else {}),
+        )
+
+
+def test_harbor_provider_request_admission_off_ignores_ambient_activation(tmp_path, monkeypatch):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+
+    monkeypatch.setenv("LOOPX_PROVIDER_REQUEST_ADMISSION", "on")
+    kwargs = dict(logs_dir=tmp_path, model_name="fixture",
+                  extra_env={"OPENAI_BASE_URL": "", "OPENAI_API_KEY": "", "CODEX_WIRE_API": "chat"})
+    implicit = BenchmarkCodex(**kwargs)
+    explicit = BenchmarkCodex(**kwargs, provider_request_admission=False)
+    assert implicit._worker_env(cwd="/task") == explicit._worker_env(cwd="/task")
+    assert "LOOPX_PROVIDER_REQUEST_ADMISSION" not in implicit._worker_env(cwd="/task")
+
+
 def test_checkpoint_request_is_explicit_and_reaches_the_existing_worker_env(tmp_path, monkeypatch):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex
@@ -504,6 +732,26 @@ def test_checkpoint_request_is_explicit_and_reaches_the_existing_worker_env(tmp_
                      {"checkpoint_request_path": "relative"}, {"checkpoint_request_path": "/control/../request.json"}):
         with pytest.raises(ValueError, match="checkpoint_request_path"):
             BenchmarkCodex(logs_dir=tmp_path / "invalid", model_name="openai/fixture", **settings)
+
+
+@pytest.mark.parametrize("destination", [
+    "/opt/loopx-benchmark/checkpoints", "/logs/checkpoints", "relative/checkpoints",
+])
+def test_fresh_replan_destination_rejected_before_native_setup(tmp_path, monkeypatch, destination):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex, CodexOffline
+
+    def unexpected_setup(*args, **kwargs):
+        pytest.fail("Invalid capture configuration reached native setup")
+
+    monkeypatch.setattr(CodexOffline, "__init__", unexpected_setup)
+    request = {"destination": destination,
+        "components": [{"id": "workspace", "source_path": "/task"}],
+        "point_metadata": {}, "trigger": "fresh_replan"}
+    with pytest.raises(ValueError, match="fresh_replan destination"):
+        BenchmarkCodex(logs_dir=tmp_path, model_name="fixture",
+            checkpoint_request_path="/control/request.json",
+            checkpoint_request=json.dumps(request).encode())
 
 
 @pytest.mark.parametrize("existing", [False, True])
@@ -532,7 +780,7 @@ def test_seeded_phase_bootstrap_records_default_turns_or_explicit_cadence(tmp_pa
         # launching a model or mutating any active project.
         build_parser().parse_args(args)
         calls.append(args)
-        return {"todo_id": "todo_fixture", "after": {"execution_profile": {field: value}}}
+        return {"todo_id": "todo_fixture", "after": {"execution_profile": {field: value, "planning_horizon_goal": True}}}
 
     monkeypatch.setattr(agent, "_write_task_document", write_task)
     monkeypatch.setattr(agent, "_registry_exists", registry_exists)
@@ -549,7 +797,8 @@ def test_seeded_phase_bootstrap_records_default_turns_or_explicit_cadence(tmp_pa
     configured = [args for args in calls if option in args]
     assert configured and all(args[args.index(option) + 1] == str(value)
                               for args in configured)
-    assert agent._replan_receipt() == {field: value}
+    assert agent._replan_receipt() == {field: value, "planning_horizon_goal": True}
+    assert all("--execution-planning-horizon-goal" in args for args in configured)
 
 
 def test_requested_stride_requires_configuration_readback_before_execution(tmp_path, monkeypatch):
@@ -567,7 +816,7 @@ def test_requested_stride_requires_configuration_readback_before_execution(tmp_p
 
     async def wrong_strategy(*args, **kwargs):
         return {"after": {"execution_profile": {
-            "replan_after_effective_turns": 6, "stride_strategy": "off",
+            "replan_after_effective_turns": 6, "stride_strategy": "off", "planning_horizon_goal": True,
         }}}
 
     monkeypatch.setattr(agent, "_registry_exists", prepared)
@@ -654,7 +903,8 @@ def test_harbor_default_execution_budget_tracks_total_trial(tmp_path, total):
     from benchmark.runtime.harbor import BenchmarkCodex
     agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture",
                            scheduler_timeout_sec=total)
-    assert agent.execution.timeout_seconds == total - 160
+    assert agent.execution.timeout_seconds is None
+    assert "LOOPX_CODEX_TURN_TIMEOUT_SEC" not in agent._worker_env(cwd="/task")
     assert agent.scheduler_timeout == total
 
 
@@ -672,12 +922,15 @@ def test_default_execution_has_no_independent_turn_deadline(tmp_path):
     (False, "fresh_replan", None),
     (True, "fresh_replan", "explicit"),
 ])
-def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path, monkeypatch, enabled, trigger, expected):
+@pytest.mark.parametrize("context_delivery", ["off", "on"])
+@pytest.mark.parametrize("provider_request_admission", [False, True])
+def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path, monkeypatch, enabled, trigger, expected, context_delivery, provider_request_admission):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex, CodexOffline
     from benchmark.runtime.checkpoint_wake import CheckpointWake
     wake_root = tmp_path / "wakes"
     wake_root.mkdir()
+    monkeypatch.setattr("benchmark.runtime.harbor._WAKE_LOG_DIR", str(wake_root))
     request = tmp_path / "request.json"
     checkpoint_args = {}
     if trigger is not None:
@@ -689,7 +942,12 @@ def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path,
         request.write_text(json.dumps(declaration))
         checkpoint_args = {"checkpoint_request_path": str(request),
                            "checkpoint_request": request.read_bytes()}
+    provider_env = {"OPENAI_BASE_URL": "https://provider.invalid/v1",
+                    "OPENAI_API_KEY": "synthetic-provider-key", "CODEX_WIRE_API": "responses"}
     agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", turn_envelope=enabled,
+                           context_delivery=context_delivery,
+                           provider_request_admission=provider_request_admission,
+                           extra_env=provider_env,
                            **checkpoint_args)
     with CheckpointWake({"LOOPX_WAKE_LOG_DIR": str(wake_root),
             **({"LOOPX_CHECKPOINT_REQUEST": str(request)} if trigger else {})},
@@ -715,7 +973,7 @@ def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path,
     monkeypatch.setattr(agent, "_stage_source", stage)
     monkeypatch.setattr(agent, "exec_as_root", execute)
     monkeypatch.setattr(agent, "exec_as_agent", execute)
-    monkeypatch.setattr(agent, "_get_env", lambda key: None)
+    monkeypatch.setattr(agent, "_get_env", provider_env.get)
     async def task_exec(**kwargs):
         assert kwargs == {"command": 'printf "%s" "$PATH"', "timeout_sec": 30}
         return SimpleNamespace(stdout="/task/toolchain:/usr/bin:/bin", return_code=0)
@@ -733,8 +991,63 @@ def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path,
     assert agent._worker_env(cwd="/task")["LOOPX_USAGE_PING"] == "0"
     assert ("turn_envelope" in receipt) is (expected is not None)
     assert receipt.get("turn_envelope_source") == expected
+    assert receipt.get("context_delivery") == (context_delivery if context_delivery != "off" else None)
+    assert agent._worker_env(cwd="/task")["LOOPX_CONTEXT_DELIVERY"] == context_delivery
+    assert receipt.get("provider_request_admission") == ("on" if provider_request_admission else None)
+    worker_env = agent._worker_env(cwd="/task")
+    assert worker_env.get("LOOPX_PROVIDER_REQUEST_ADMISSION") == ("on" if provider_request_admission else None)
+    assert worker_env["OPENAI_BASE_URL"] == provider_env["OPENAI_BASE_URL"]
+    assert worker_env["OPENAI_API_KEY"] == provider_env["OPENAI_API_KEY"]
+    assert provider_env["OPENAI_API_KEY"] not in json.dumps(receipt)
     if expected:
         assert receipt["turn_envelope"] is True
+
+
+@pytest.mark.parametrize("stage", ["plan", "execute"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_short_wake_rejects_c1_before_host_preparation(tmp_path, monkeypatch, stage, provider):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, _heartbeat_receipt_count, _write_fixture,
+    )
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path, provider=provider)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    original_state = state.read_bytes()
+    wakes = tmp_path / "wakes"
+    home = tmp_path / "codex-home"
+    source = Path(__file__).resolve().parents[2]
+    env = dict(
+        os.environ,
+        PYTHONPATH=str(source), LOOPX_PYTHON=sys.executable, LOOPX_USAGE_PING="0",
+        LOOPX_CLI=str(Path(sys.executable).parent / "loopx"),
+        LOOPX_PROJECT=str(project), LOOPX_REGISTRY=str(registry), LOOPX_RUNTIME_ROOT=str(runtime),
+        LOOPX_GOAL_ID=GOAL_ID, LOOPX_AGENT_ID=AGENT_ID, LOOPX_WAKE_LOG_DIR=str(wakes),
+        LOOPX_CODEX_HOME=str(home), LOOPX_EXECUTION_MODE="heartbeat",
+        LOOPX_SHARED_SKILLS=str(tmp_path / "shared-skills"),
+        LOOPX_TASK_STAGE=stage, LOOPX_TURN_ENVELOPE="1", LOOPX_CONTEXT_DELIVERY="off",
+        MODEL_NAME="fixture", REASONING_EFFORT="low",
+    )
+
+    def unexpected_host_preparation(*args, **kwargs):
+        pytest.fail("A C1 response cannot start the Short envelope arm")
+
+    monkeypatch.setattr(worker, "prepare_codex_home", unexpected_host_preparation)
+    with pytest.raises(ValueError, match="Short envelope requires"):
+        run_once(env)
+    receipt_path, = wakes.glob("*/receipt.json")
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["ok"] is False and receipt["host_invoked"] is False
+    assert receipt["quota_input_contract"] == {
+        "expected_schema_version": "loopx_turn_envelope_v0",
+        "observed_schema_version": "loopx_turn_envelope_v1",
+        "eligible": False,
+    }
+    assert "turn_envelope_source" not in receipt
+    assert _heartbeat_receipt_count(runtime, receipt["turn_id"]) == 0
+    assert state.read_bytes() == original_state
+    assert not home.exists()
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -742,13 +1055,34 @@ def test_wake_receipt_preserves_opt_out(tmp_path, monkeypatch, enabled):
     from benchmark.tests.test_resume_sessions import resume_env
     env = resume_env(tmp_path, monkeypatch)
     env["LOOPX_TURN_ENVELOPE"] = "1" if enabled else "0"
+    original_run = subprocess.run
+    previews = []
+
+    def legacy_preview(argv, **kwargs):
+        if argv[0] != "loopx" or "--dry-run" not in argv:
+            return original_run(argv, **kwargs)
+        previews.append(argv)
+        return subprocess.CompletedProcess(argv, 0, json.dumps({
+            "ok": True, "schema_version": "loopx_turn_envelope_v0",
+        }), "")
+
+    monkeypatch.setattr(worker.subprocess, "run", legacy_preview)
     receipt = run_once(env)
     assert receipt["ok"], receipt
     assert ("turn_envelope" in receipt) is enabled
     assert ("turn_envelope_source" in receipt) is enabled
+    assert ("quota_input_contract" in receipt) is enabled
+    assert len(previews) == int(enabled)
     if enabled:
         assert receipt["turn_envelope"] is True
         assert receipt["turn_envelope_source"] == "explicit"
+        assert receipt["quota_input_contract"] == {
+            "expected_schema_version": "loopx_turn_envelope_v0",
+            "observed_schema_version": "loopx_turn_envelope_v0",
+            "eligible": True,
+        }
+        assert "should-run" in previews[0] and "--turn-envelope" in previews[0]
+        assert "--turn-instance-id" not in previews[0] and "--decision-output-root" not in previews[0]
 
 
 @pytest.mark.parametrize("observed", [
@@ -955,7 +1289,7 @@ raise SystemExit(1)
             extra_env={"FAKE_DIE": "1"})
 
 
-@pytest.mark.parametrize("requested,actual", [(True, False), (False, True), (None, True)])
+@pytest.mark.parametrize("requested,actual", [(True, False), (False, True), (None, False), (None, None), (None, 1)])
 def test_horizon_setting_must_match_restored_goal_before_work(tmp_path, monkeypatch, requested, actual):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex
@@ -984,3 +1318,221 @@ def test_horizon_setting_rejects_non_boolean_and_non_loopx_mode(tmp_path, settin
     from benchmark.runtime.harbor import BenchmarkCodex
     with pytest.raises(ValueError, match="planning_horizon_goal"):
         BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", **settings)
+
+
+@pytest.mark.parametrize("mode", ["plain", "native-goal", "turn", "loopx-goal"])
+def test_native_context_opt_in_is_only_a_heartbeat_treatment(mode):
+    with pytest.raises(ValueError, match="context_delivery"):
+        Execution(mode=mode, context_delivery="on")
+    with pytest.raises(ValueError, match="context_delivery"):
+        Execution(context_delivery="1")
+
+
+@pytest.mark.parametrize("declared_mode", [None, "heartbeat"])
+def test_context_preflight_defaults_on_and_exports_resolved_heartbeat_mode(tmp_path, monkeypatch, declared_mode):
+    from benchmark.tests.test_resume_sessions import resume_env
+    from loopx.control_plane.turn_driver.codex_context import context_delivery_activation
+
+    env = resume_env(tmp_path, monkeypatch)
+    if declared_mode is None:
+        env.pop("LOOPX_EXECUTION_MODE")
+    env.pop("LOOPX_CONTEXT_DELIVERY", None)
+    monkeypatch.setattr("benchmark.runtime.context_delivery.prepare_context_delivery", lambda *args: None)
+
+    def preflight(current, *_args, **_kwargs):
+        activation = context_delivery_activation("on", runtime_profile="generic_cli",
+            benchmark_mode=current.get("LOOPX_EXECUTION_MODE"))
+        assert activation["scenario"] == "codex_benchmark_heartbeat"
+        assert current["LOOPX_CONTEXT_DELIVERY"] == "on"
+        return "Current Todo input."
+
+    monkeypatch.setattr("benchmark.runtime.worker.heartbeat_body", preflight)
+    result = run_once(env)
+    assert result["ok"] and result["session"]["session_id"]
+    assert env.get("LOOPX_EXECUTION_MODE") == declared_mode
+
+
+def test_context_transport_unavailable_preserves_ordinary_worker(tmp_path, monkeypatch):
+    from benchmark.tests.test_resume_sessions import resume_env
+    env = resume_env(tmp_path, monkeypatch)
+    env["LOOPX_CONTEXT_DELIVERY"] = "on"
+    def unavailable(env, home):
+        env["LOOPX_CODEX_CONTEXT_DIR"] = "not-ready"
+        env["CODEX_ROLLOUT_TRACE_ROOT"] = "not-ready"
+        raise ValueError("unsupported native host")
+    monkeypatch.setattr("benchmark.runtime.context_delivery.prepare_context_delivery", unavailable)
+    result = run_once(env)
+    assert result["ok"], result
+    assert result["context_delivery"] and result["context_transport"]["available"] is False
+    assert result["session"]["session_id"]
+
+
+def test_context_transport_off_never_installs_or_trusts_ambient_args(tmp_path, monkeypatch):
+    from benchmark.tests.test_resume_sessions import resume_env
+    env = resume_env(tmp_path, monkeypatch)
+    env["LOOPX_CODEX_CONTEXT_DIR"] = "ambient-not-authority"
+    env["LOOPX_CODEX_CONTEXT_TRUST_ARGS"] = '["--invalid-untrusted-override"]'
+    def unexpected(*args):
+        pytest.fail("disabled transport must not stage hooks or diagnostics")
+    monkeypatch.setattr("benchmark.runtime.context_delivery.prepare_context_delivery", unexpected)
+    result = run_once(env)
+    assert result["ok"] and "context_delivery" not in result and "context_transport" not in result
+    assert not (Path(env["LOOPX_CODEX_HOME"]) / "hooks.json").exists()
+
+
+@pytest.mark.parametrize("setting,mode", [("off", 0o664), ("on", 0o600)])
+@pytest.mark.skipif(os.name != "posix", reason="Native POSIX file creation permissions")
+def test_context_native_writer_is_private_without_changing_off_umask(tmp_path, setting, mode):
+    from benchmark.runtime import worker
+
+    original = os.umask(0o002)
+    try:
+        command = [sys.executable, "-c", "from pathlib import Path; Path('native-history').write_bytes(b'fixture')"]
+        with worker.child_process(command, env={**os.environ, "LOOPX_PROJECT": str(tmp_path),
+                "LOOPX_CONTEXT_DELIVERY": setting}, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
+            child.communicate(timeout=10)
+            assert child.returncode == 0
+        assert (tmp_path / "native-history").stat().st_mode & 0o777 == mode
+        assert os.umask(0o002) == 0o002
+    finally:
+        os.umask(original)
+
+
+def test_context_selection_is_fixed_by_trial_home(tmp_path):
+    args = settings(tmp_path, execution=Execution(mode="heartbeat", context_delivery="on"))
+    prepare_codex_home(**args)
+    with pytest.raises(ValueError, match="settings changed"):
+        prepare_codex_home(**(args | {"execution": Execution(mode="heartbeat", context_delivery="off")}))
+
+
+@pytest.mark.parametrize("kind", ["public_directory", "symlink_directory", "existing_hooks"])
+def test_context_setup_preserves_unsafe_or_unowned_inputs(tmp_path, kind):
+    from benchmark.runtime.context_delivery import prepare_context_delivery
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {"LOOPX_CLI": "loopx", "LOOPX_GOAL_ID": "fixture", "LOOPX_AGENT_ID": "agent"}
+    if kind == "existing_hooks":
+        protected = home / "hooks.json"
+        protected.write_text('{"operator": "unchanged"}')
+    else:
+        protected = home / "loopx-context"
+        if kind == "public_directory":
+            protected.mkdir(mode=0o755)
+            protected.chmod(0o755)
+        else:
+            target = tmp_path / "outside"
+            target.mkdir()
+            protected.symlink_to(target, target_is_directory=True)
+    before = protected.read_bytes() if protected.is_file() else protected.lstat().st_mode
+    with pytest.raises(ValueError, match="private|changed within"):
+        prepare_context_delivery(env, home)
+    assert (protected.read_bytes() if protected.is_file() else protected.lstat().st_mode) == before
+    assert "LOOPX_CODEX_CONTEXT_TRUST_ARGS" not in env
+
+
+@pytest.mark.parametrize("provider", ["openai", "operator-provider"])
+@pytest.mark.parametrize("mutation", [None, "additional_generated_handler", "missing", "extra",
+    "duplicate_handler", "duplicate_key", "event", "command", "matcher", "timeout", "async",
+    "async_number", "type", "disabled", "missing_enabled", "source", "missing_key", "missing_hash",
+    "malformed_key", "malformed_hash", "changed_file"])
+def test_context_discovery_keeps_solver_configuration_and_unrelated_hooks(tmp_path, monkeypatch, provider, mutation):
+    from contextlib import contextmanager
+    from benchmark.runtime.context_delivery import prepare_context_delivery
+    from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport
+
+    home = tmp_path / "home"
+    home.mkdir()
+    config = home / "config.toml"
+    original_config = (f'model_provider={json.dumps(provider)}\n'
+        + '[features]\nplugins=true\nremote_plugin=true\nplugin_sharing=true\n').encode()
+    config.write_bytes(original_config)
+    methods, commands, discovered = [], [], []
+    if mutation == "additional_generated_handler":
+        from loopx.control_plane.turn_driver import codex_context
+        original = codex_context.codex_context_configuration
+        def extended(*args, **kwargs):
+            configuration = original(*args, **kwargs)
+            configuration["hooks"]["PostToolUse"][0]["hooks"].append(
+                {"type": "command", "command": "fixture-other-handler", "timeout": 15, "async": True})
+            return configuration
+        monkeypatch.setattr(codex_context, "codex_context_configuration", extended)
+
+    @contextmanager
+    def discovery(argv, **kwargs):
+        commands.append(argv)
+        def request(method, params):
+            methods.append(method)
+            if method == "initialize":
+                return {}
+            assert method == "hooks/list", "discovery must not start model work"
+            path = home / "hooks.json"
+            configured = json.loads(path.read_text())["hooks"]
+            events = {"SessionStart": "sessionStart", "PreCompact": "preCompact", "PostCompact": "postCompact",
+                      "PostToolUse": "postToolUse", "Interrupt": "interrupt"}
+            assert set(configured) == set(events)
+            own = [{"sourcePath": str(path.resolve()), "eventName": events[event],
+                    "handlerType": handler["type"], "command": handler["command"],
+                    "timeoutSec": handler["timeout"], "matcher": group.get("matcher"),
+                    "async": handler.get("async", False), "enabled": True}
+                   for event, groups in configured.items() for group in groups for handler in group["hooks"]]
+            for i, hook in enumerate(own):
+                hook.update(key=f"own-{i}", currentHash=f"native-hash-{i}")
+            discovered.extend(dict(hook) for hook in own)
+            if mutation == "missing":
+                own.pop()
+            elif mutation == "extra":
+                own.append(own[-1] | {"key": "extra"})
+            elif mutation == "duplicate_handler":
+                own[-1] = own[0] | {"key": own[-1]["key"]}
+            elif mutation == "duplicate_key":
+                own[-1]["key"] = own[0]["key"]
+            elif mutation == "changed_file":
+                path.write_text('{}')
+            else:
+                changes = {"event": ("eventName", "preToolUse"), "command": ("command", "other"),
+                    "matcher": ("matcher", "Bash"), "timeout": ("timeoutSec", 999), "async": ("async", True),
+                    "async_number": ("async", 0), "type": ("handlerType", "prompt"), "disabled": ("enabled", False),
+                    "missing_enabled": ("enabled", None), "source": ("sourcePath", str(tmp_path / "wrong.json")),
+                    "missing_key": ("key", None), "missing_hash": ("currentHash", None),
+                    "malformed_key": ("key", 1), "malformed_hash": ("currentHash", [])}
+                if mutation in changes:
+                    field, value = changes[mutation]
+                    own[0][field] = value
+            # Native discovery has its own ordering, unrelated to config order.
+            return {"data": [{"hooks": [*reversed(own), {"sourcePath": str(tmp_path / "other-hooks.json"),
+                "key": "unrelated", "currentHash": "never-trust-this"}]}]}
+        yield SimpleNamespace(request=request, notify=lambda *args: None)
+
+    monkeypatch.setattr(StdioNativeGoalTransport, "spawn", discovery)
+    env = {"LOOPX_CLI": "fixture-loopx", "LOOPX_GOAL_ID": "fixture", "LOOPX_AGENT_ID": "agent",
+           "CODEX_BIN": "native-codex", "LOOPX_PROJECT": str(tmp_path)}
+    if mutation in {None, "additional_generated_handler"}:
+        prepare_context_delivery(env, home)
+    else:
+        with pytest.raises(ValueError, match="exact trial context hooks|trust identity"):
+            prepare_context_delivery(env, home)
+        assert "LOOPX_CODEX_CONTEXT_TRUST_ARGS" not in env
+        assert config.read_bytes() == original_config
+        return
+    assert methods == ["initialize", "hooks/list"]
+    assignments = {commands[0][i + 1] for i, value in enumerate(commands[0]) if value == "-c"}
+    assert assignments == {"features.plugins=false", "features.remote_plugin=false", "features.plugin_sharing=false"}
+    trusted = json.loads(env["LOOPX_CODEX_CONTEXT_TRUST_ARGS"])
+    assert all(hook["key"] in trusted[1] and hook["currentHash"] in trusted[1] for hook in discovered)
+    assert "unrelated" not in trusted[1] and "never-trust-this" not in trusted[1]
+    assert all("features.plugins" not in value and "features.remote_plugin" not in value
+               and "features.plugin_sharing" not in value for value in trusted)
+    assert config.read_bytes() == original_config
+    overrides = {trusted[i + 1].split("=", 1)[0]: trusted[i + 1].split("=", 1)[1]
+                 for i, value in enumerate(trusted) if value == "-c"}
+    assert not any(key.startswith("model_provider") for key in overrides)
+    assert overrides["tool_output_token_limit"] == "20000"
+    assert json.loads(overrides["shell_environment_policy.set.LOOPX_CONTEXT_PAGE_OUTPUT_BYTES"]) == "64000"
+    assert "CODEX_ROLLOUT_TRACE_ROOT" not in env
+    assert not (home / "context-traces").exists()
+
+
+@pytest.mark.parametrize("value", [True, False, "1", "codex_benchmark_heartbeat", "codex_app_heartbeat", "all"])
+def test_context_benchmark_setting_rejects_broad_or_other_host_activation(value):
+    with pytest.raises(ValueError, match="context_delivery"):
+        Execution(context_delivery=value)

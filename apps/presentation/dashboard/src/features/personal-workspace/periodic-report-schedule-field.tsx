@@ -14,11 +14,12 @@ export function withReportScheduleTimezone(
   return result;
 }
 
-export function PeriodicReportScheduleField({ id, value, timezone, onChange }: Readonly<{
+export function PeriodicReportScheduleField({ id, value, timezone, onChange, calendarRequired = false }: Readonly<{
   id: string;
   value: unknown;
   timezone: string;
   onChange?: (value: Schedule | null) => void;
+  calendarRequired?: boolean;
 }>) {
   const { locale } = useWorkspaceI18n();
   const zh = locale === "zh-CN";
@@ -29,6 +30,8 @@ export function PeriodicReportScheduleField({ id, value, timezone, onChange }: R
   const inRange = (value: string | undefined, maximum: number) => value !== undefined
     && /^\d+$/.test(value) && Number(value) <= maximum;
   const supported = !schedule || (schedule.schema_version === "periodic_report_schedule_v0"
+    && Object.keys(schedule).every((key) => ["schema_version", "schedule_id", "rrule", "timezone", "start_date"].includes(key))
+    && (schedule.start_date === undefined || (typeof schedule.start_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(schedule.start_date)))
     && ["DAILY", "WEEKLY"].includes(rule.FREQ)
     && schedule.timezone === timezone
     && fields.every((part) => part.length === 2 && ["FREQ", "BYDAY", "BYHOUR", "BYMINUTE", "INTERVAL"].includes(part[0]))
@@ -38,7 +41,7 @@ export function PeriodicReportScheduleField({ id, value, timezone, onChange }: R
     && (!rule.INTERVAL || rule.INTERVAL === "1"));
   const labels = zh ? ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
     : ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-  function change(patch: Record<string, string>) {
+  function change(patch: Record<string, string>, startDate = typeof schedule?.start_date === "string" ? schedule.start_date : "") {
     const next = { FREQ: "WEEKLY", BYDAY: "MO", BYHOUR: "9", BYMINUTE: "0", ...rule, ...patch };
     onChange?.({
       schema_version: "periodic_report_schedule_v0",
@@ -46,15 +49,16 @@ export function PeriodicReportScheduleField({ id, value, timezone, onChange }: R
       timezone,
       rrule: [`FREQ=${next.FREQ}`, ...(next.FREQ === "WEEKLY" ? [`BYDAY=${next.BYDAY}`] : []),
         `BYHOUR=${next.BYHOUR}`, `BYMINUTE=${next.BYMINUTE}`].join(";"),
+      ...(startDate ? { start_date: startDate } : {}),
     });
   }
   return <div className="personal-report-schedule">
     <label className="is-boolean" htmlFor={id}>
-      <span>{zh ? "按日历汇报" : "Calendar reports"}</span>
-      <input id={id} type="checkbox" role="switch" checked={Boolean(schedule)} disabled={!onChange}
+      <span>{calendarRequired ? (zh ? "按日历汇报（必选）" : "Calendar reports (required)") : (zh ? "按日历汇报" : "Calendar reports")}</span>
+      <input id={id} type="checkbox" role="switch" checked={Boolean(schedule)} disabled={!onChange || calendarRequired}
         onChange={(event) => event.target.checked ? change({}) : onChange?.(null)} />
     </label>
-    {!schedule ? <p>{zh ? "未设置日历计划；保持阶段结束时汇报。" : "No calendar schedule; report at validated stage boundaries."}</p> : <>
+    {!schedule ? <p>{calendarRequired ? (zh ? "请配置必选的汇报日历。" : "Configure the required report calendar.") : (zh ? "未设置日历计划；保持阶段结束时汇报。" : "No calendar schedule; report at validated stage boundaries.")}</p> : <>
       {!supported ? <p role="alert">{zh ? "此计划需在 JSON 模式中编辑；当前内容已保留。" : "Edit this schedule in JSON mode; its current value is preserved."}</p> : <>
         <label htmlFor={`${id}-frequency`}><span>{zh ? "频率" : "Frequency"}</span>
           <select id={`${id}-frequency`} value={rule.FREQ} disabled={!onChange} onChange={(event) => change({ FREQ: event.target.value })}>
@@ -74,6 +78,11 @@ export function PeriodicReportScheduleField({ id, value, timezone, onChange }: R
               const [hour, minute] = event.target.value.split(":");
               change({ BYHOUR: hour, BYMINUTE: minute });
             }} />
+        </label>
+        <label htmlFor={`${id}-start-date`}><span>{zh ? "首次汇报日期（可选）" : "First report date (optional)"}</span>
+          <input id={`${id}-start-date`} type="date" disabled={!onChange}
+            value={typeof schedule.start_date === "string" ? schedule.start_date : ""}
+            onChange={(event) => change({}, event.target.value)} />
         </label>
       </>}
       <p>{zh ? "由现有唤醒检查到期计划；实际送达以回执为准。" : "Existing wakes check the schedule; delivery is confirmed by its receipt."}</p>

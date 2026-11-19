@@ -354,7 +354,6 @@ for (const provider of providers) {
     });
     assert.deepEqual((migrated.head.goal_acceptance as JsonObject).owner_goal_ref, goalA);
     assert.deepEqual(projectGoalAcceptance(migrated.head, goal), {
-      enabled: false,
       lifecycle_state: "active",
       goal_ref: goalB,
     });
@@ -399,7 +398,7 @@ for (const provider of providers) {
       goal_ref: goalA,
     });
     assert.deepEqual((bound.head.goal_acceptance as JsonObject).owner_goal_ref, goalA);
-    assert.equal((bound.head.goal_acceptance as JsonObject).schema_version, "loopx_goal_acceptance_v1");
+    assert.equal((bound.head.goal_acceptance as JsonObject).schema_version, "loopx_goal_acceptance_v2");
     assert.equal(acceptanceWorkGuard(bound.head, goal, "todo_first")?.allowed, true);
     assert.equal(projectGoalAcceptance(bound.head, goal).status, "accepted",
       "migration preserves A's verification as A history");
@@ -438,7 +437,6 @@ for (const provider of providers) {
     const replayWhileRetiring = await configureGoalAcceptance(store, legacyConfigure);
     assert.equal(replayWhileRetiring.status, "replayed");
     assert.deepEqual(replayWhileRetiring.goal_acceptance_contract, {
-      enabled: false,
       lifecycle_state: "retiring",
       goal_ref: goalA,
     });
@@ -450,7 +448,6 @@ for (const provider of providers) {
     })).status, "applied");
     const replaced = await head(store);
     assert.deepEqual(projectGoalAcceptance(replaced.head, goal), {
-      enabled: false,
       lifecycle_state: "active",
       goal_ref: goalB,
     });
@@ -458,7 +455,6 @@ for (const provider of providers) {
     const historicalReplay = await configureGoalAcceptance(store, legacyConfigure);
     assert.equal(historicalReplay.status, "replayed");
     assert.deepEqual(historicalReplay.goal_acceptance_contract, {
-      enabled: false,
       lifecycle_state: "active",
       goal_ref: goalB,
     });
@@ -486,6 +482,34 @@ for (const provider of providers) {
     assert.deepEqual((replacementHead.head.goal_acceptance as JsonObject).owner_goal_ref, goalB);
     assert.equal((replacementHead.head.goal_acceptance as JsonObject).revision, 1);
     assert.equal(acceptanceWorkGuard(replacementHead.head, goal, "todo_first")?.allowed, true);
+  });
+  test(`${provider}: Goal-only checks preserve local work and require independent verification`, options, async t => {
+    const store = await fixture(t, provider); await seed(store);
+    const doc = {...document(), scope: {kind: "goal"}, bindings: []};
+    assert.throws(() => normalizeGoalAcceptanceDocument({...doc, bindings: document().bindings}), /outside/);
+    const request = await configureRequest(store, {document: doc});
+    assert.equal((await configureGoalAcceptance(store, request)).status, "applied");
+    const before = (await head(store)).head;
+    assert.equal(projectGoalAcceptance(before, goal).status, "unverified");
+    assert.deepEqual(projectGoalAcceptance(before, goal).tasks, []);
+    for (const id of ["todo_first", "todo_second"]) {
+      assert.equal(acceptanceWorkGuard(before, goal, id), null);
+      assert.equal(acceptanceCompletionRequirements(before, goal, id), null);
+    }
+    await update(store, "todo_first", {done: true, status: "done", completion_continuation: "no_followup"});
+    assert.equal(projectGoalAcceptance((await head(store)).head, goal).status, "unverified",
+      "local completion cannot certify a Goal check");
+    const failed = await verifyRequest(store, {results: [
+      {criterion_id: "outcome", passed: false, exit_code: 1},
+      {criterion_id: "prerequisite", passed: true, exit_code: 0},
+    ]});
+    assert.equal((await commitGoalAcceptanceVerification(store, failed)).status, "applied");
+    assert.equal(projectGoalAcceptance((await head(store)).head, goal).status, "failed");
+    assert.equal((await commitGoalAcceptanceVerification(store, await verifyRequest(store))).status, "applied");
+    assert.equal(projectGoalAcceptance((await head(store)).head, goal).status, "accepted");
+    await update(store, "todo_new", todoFixtureRecord(todo("todo_new"), "native"));
+    assert.equal(acceptanceWorkGuard((await head(store)).head, goal, "todo_new"), null);
+    assert.equal(projectGoalAcceptance((await head(store)).head, goal).status, "accepted");
   });
   test(`${provider}: selected work isolates admission and verification without weakening its own guard`, options, async t => {
     const store = await fixture(t, provider); await seed(store);
@@ -562,10 +586,10 @@ for (const provider of providers) {
       actor_agent_id: "agent-a"})), /trusted owner/);
     assert.deepEqual(await head(store), before);
   });
-  test(`${provider}: default off, owner configure, private inspection and public held work`, options, async t => {
+  test(`${provider}: default review, owner check configuration, private inspection and public held work`, options, async t => {
     const store = await fixture(t, provider); await seed(store);
     const before = await head(store);
-    assert.deepEqual(projectGoalAcceptance(before.head, goal), {enabled: false});
+    assert.deepEqual(projectGoalAcceptance(before.head, goal), {});
     assert.equal(acceptanceWorkGuard(before.head, goal, "todo_first"), null);
     assert.equal(acceptanceCompletionRequirements(before.head, goal, "todo_first"), null);
     assert.deepEqual(await head(store), before);
@@ -588,6 +612,7 @@ for (const provider of providers) {
     assert.deepEqual(await head(store), after, "task-scoped planning has no provider write");
     assert.equal(((inspection.contract as JsonObject).criteria as JsonObject[])[0].validation_timeout_seconds, 5);
     assert.ok((inspection.tasks as JsonObject[]).every(task => typeof task.todo_semantic_digest === "string"));
+    assert.ok((inspection.tasks as JsonObject[]).every(task => typeof task.todo_id === "string"));
     const projection = projectGoalAcceptance(after.head, goal);
     assert.equal(projection.status, "held");
     assert.deepEqual(projection.held_todo_ids, ["todo_second"]);
@@ -643,11 +668,11 @@ for (const provider of providers) {
     const disable = await configureRequest(store, {document: null, disable: true});
     await assert.rejects(() => configureGoalAcceptance(store, {...disable, actor_agent_id: "agent"}));
     assert.equal((await configureGoalAcceptance(store, disable)).status, "applied");
-    assert.deepEqual(projectGoalAcceptance((await head(store)).head, goal), {enabled: false});
+    assert.deepEqual(projectGoalAcceptance((await head(store)).head, goal), {});
     assert.equal((await configureGoalAcceptance(store, winner)).status, "replayed");
     assert.equal(acceptanceWorkGuard((await head(store)).head, goal, "todo_first"), null);
     assert.equal((await configureGoalAcceptance(store, await configureRequest(store))).status, "applied");
-    assert.equal(projectGoalAcceptance((await head(store)).head, goal).revision, 2);
+    assert.equal(projectGoalAcceptance((await head(store)).head, goal).revision, 3);
     assert.equal((await store.readReceipt(String(winner.operation_id))).status, "found");
     assert.equal((await store.readReceipt(String(disable.operation_id))).status, "found");
   });
@@ -871,7 +896,7 @@ test("normalization is deterministic and digest includes work declarations but e
     assert.notEqual(goalAcceptanceTodoDigest({...original, ...patch}), goalAcceptanceTodoDigest(original));
   }
   assert.throws(() => projectGoalAcceptance({...originalHead(), goal_acceptance: null}, goal), /object/);
-  assert.deepEqual(projectGoalAcceptance({}, goal), {enabled: false}, "feature off preserves legacy callers without a read model");
+  assert.deepEqual(projectGoalAcceptance({}, goal), {}, "no configured checks preserves callers without a read model");
 });
 
 test("work fingerprints ignore row permutations without weakening canonical read-model validation", () => {
@@ -897,17 +922,27 @@ for (const provider of ["file", "sqlite"] as const) {
     const store = await openLocalAuthorityStore(root, goal); await seed(store);
     const before = await inspectLocalGoalAcceptance({runtime_root: root, goal_id: goal});
     assert.equal(before.status, "loaded");
-    assert.deepEqual(before.goal_acceptance_contract, {enabled: false});
+    assert.deepEqual(before.goal_acceptance_contract, {});
     const request = {...await configureRequest(store), runtime_root: root};
     assert.equal((await commitLocalGoalAcceptance(request)).status, "applied");
     const inspect = await inspectLocalGoalAcceptance({runtime_root: root, goal_id: goal, todo_id: "todo_first"});
     assert.equal(inspect.source_authority, `${provider}_v0`);
     assert.equal((inspect.tasks as JsonObject[]).length, 1);
     assert.equal((inspect.todo as JsonObject).todo_id, "todo_first");
+    const context = await inspectLocalGoalAcceptance({runtime_root: root, goal_id: goal,
+      todo_id: "todo_first", include_work_details: false});
+    const {todo: _todo, completion_requirements: _completion, ...basis} = inspect;
+    assert.deepEqual(context, basis, "context omits work details before the RPC, preserving the entire acceptance basis");
+    assert.equal((await inspectLocalGoalAcceptance({runtime_root: root, goal_id: goal,
+      todo_id: "todo_first", include_work_details: "false"})).status, "failed");
     const heldDoc = {...document(), bindings: [{todo_id: "todo_first", criterion_ids: ["prerequisite"]}]};
     assert.equal((await commitLocalGoalAcceptance({...await configureRequest(store, {document: heldDoc}), runtime_root: root})).status, "applied");
     assert.equal((await inspectLocalGoalAcceptance({runtime_root: root, goal_id: goal, todo_id: "todo_second"})).reason_code,
       "goal_acceptance_unbound", "canonical task diagnosis survives the private effect adapter");
+    const unboundContext = await inspectLocalGoalAcceptance({runtime_root: root, goal_id: goal,
+      todo_id: "todo_second", include_work_details: false});
+    assert.equal((unboundContext.tasks as JsonObject[])[0].state, "unbound");
+    assert.equal((unboundContext.goal_acceptance_contract as JsonObject).status, "held");
     await update(store, "todo_first", {text: "Changed owner-bound work"});
     assert.equal((await inspectLocalGoalAcceptance({runtime_root: root, goal_id: goal, todo_id: "todo_first"})).reason_code,
       "goal_acceptance_stale");
@@ -945,7 +980,8 @@ test("legacy omitted scope preserves document bytes, bindings and global admissi
     bindings: doc.bindings.map(binding => ({...binding, revision: 1, confirmed_by: "owner",
       todo_semantic_digest: goalAcceptanceTodoDigest(records.find(row => row.todo_id === binding.todo_id)!)}))};
   const value = authorityProjectionFixture(goal, records, [], "native", {goal_acceptance: state});
-  assert.deepEqual(readGoalAcceptance(value, goal), state);
+  const {enabled: _legacyFlag, ...declaration} = state;
+  assert.deepEqual(readGoalAcceptance(value, goal), {...declaration, schema_version: "loopx_goal_acceptance_v2", owner_goal_ref: null});
   assert.equal(acceptanceWorkGuard(value, goal, "todo_first")?.allowed, true);
   assert.equal(acceptanceWorkGuard(value, goal, "todo_new")?.state, "unbound");
 });

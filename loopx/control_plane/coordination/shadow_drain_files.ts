@@ -1,7 +1,7 @@
 /** Filesystem effects for native drain. Receipt proof, not a cursor or filename,
  * authorizes cleanup. All callers hold the shadow maintenance guard. */
 import {spawn, type ChildProcessWithoutNullStreams} from "node:child_process";
-import {createInterface} from "node:readline";
+import {createInterface, type Interface as ReadlineInterface} from "node:readline";
 import {lstat, readFile, readdir, unlink} from "node:fs/promises";
 import {join} from "node:path";
 import {fileURLToPath} from "node:url";
@@ -94,6 +94,7 @@ export async function reclaimDrainFiles(files: [string, string][], afterUnlink?:
 export class DrainKernelLockHost {
   private readonly python: string;
   private child: ChildProcessWithoutNullStreams | null = null;
+  private rl: ReadlineInterface | null = null;
   private replies: AsyncIterator<string> | null = null;
   private exited: Promise<void> | null = null;
   constructor(python: string) {this.python = python;}
@@ -107,7 +108,8 @@ export class DrainKernelLockHost {
       this.child.on("error", () => {}); // The closed reply stream reports an unavailable host.
       this.child.stdin.on("error", () => {});
       this.child.stderr.resume();
-      this.replies = createInterface({input: this.child.stdout})[Symbol.asyncIterator]();
+      this.rl = createInterface({input: this.child.stdout});
+      this.replies = this.rl[Symbol.asyncIterator]();
     }
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -119,6 +121,9 @@ export class DrainKernelLockHost {
       ]);
       if (reply === "failed") throw new ShadowLineageError("shadow_lock_host_unavailable");
       return reply;
+    } catch {
+      await this.close();
+      throw new ShadowLineageError("shadow_lock_host_unavailable");
     } finally {clearTimeout(timer);}
   }
 
@@ -127,13 +132,31 @@ export class DrainKernelLockHost {
     if (state !== "held") throw new ShadowLineageError(state === "busy" ? "primary_writer_busy" : "shadow_lock_host_unavailable");
     try {return await operation();}
     finally {
-      if (await this.command("release") !== "released") throw new ShadowLineageError("shadow_lock_host_unavailable");
+      if (await this.command("release") !== "released") {
+        throw new ShadowLineageError("shadow_lock_host_unavailable");
+      }
     }
   }
 
   async close(): Promise<void> {
-    if (this.child) {
-      this.child.stdin.end(); this.child.kill(); await this.exited;
+    const child = this.child;
+    const exited = this.exited;
+    this.rl?.close();
+    this.rl = null;
+    this.replies = null;
+    if (child) {
+      try { child.stdin.end(); } catch {}
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+      const killTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      }, 1000);
+      try {await exited;} finally {
+        clearTimeout(killTimer);
+        if (this.child === child) {
+          this.child = null;
+          this.exited = null;
+        }
+      }
     }
   }
 }

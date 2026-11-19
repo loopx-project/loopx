@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 from collections.abc import Callable
 from pathlib import Path
 
+from ..command_invocation import loopx_cli_argv
 from ..control_plane.work_items.local_lease_record import TaskLeaseError
 from ..control_plane.work_items.task_lease import (
     inspect_task_lease,
@@ -40,16 +42,24 @@ def render_task_lease_markdown(payload: dict[str, object]) -> str:
         lines.append(f"- error_code: `{payload.get('error_code')}`")
     inspection = payload.get("inspection")
     if isinstance(inspection, dict):
-        import shlex
-        lines.append(f"- inspect current state: `{shlex.join(['loopx', *inspection['cli_args']])}`")
+        lines.append(f"- inspect current state: `{shlex.join([loopx_cli_argv()[0], *inspection['cli_args']])}`")
         lines.append(f"- {inspection['reason']}")
     recovery = payload.get("recovery")
     if isinstance(recovery, dict) and payload.get("error_code") == "canonical_authority_required":
         lines.append(f"- recovery: `{recovery['action']}`")
         lines.append(f"- backup_required: `{recovery['backup_required']}`")
+    elif isinstance(recovery, dict) and recovery.get("action") == "inspect_own_conflicting_lease":
+        lines.append(f"- recovery: `{recovery['action']}`")
+        inspect_step = recovery.get("inspect")
+        if isinstance(inspect_step, dict) and isinstance(inspect_step.get("cli_args"), list):
+            lines.append(f"- inspect own conflicting lease: `{shlex.join([loopx_cli_argv()[0], *inspect_step['cli_args']])}`")
+        release_step = recovery.get("release")
+        if isinstance(release_step, dict) and isinstance(release_step.get("cli_args"), list):
+            lines.append(f"- release own conflicting lease: `{shlex.join([loopx_cli_argv()[0], *release_step['cli_args']])}`")
+        if recovery.get("reason"):
+            lines.append(f"- {recovery['reason']}")
     elif isinstance(recovery, dict):
-        import shlex
-        lines.append(f"- repair: `{shlex.join(['loopx', *recovery['cli_args']])}`")
+        lines.append(f"- repair: `{shlex.join([loopx_cli_argv()[0], *recovery['cli_args']])}`")
         lines.append(f"- supply: `{', '.join(recovery['requires_flags']) or 'none'}`")
         lines.append(f"- remove: `{', '.join(recovery['remove_flags']) or 'none'}`")
         lines.append(f"- {recovery['reason']}")
@@ -114,7 +124,11 @@ def register_task_lease_command(
     parser.add_argument("--goal-id", required=True, help="Goal id that owns the todo.")
     parser.add_argument("--todo-id", required=True, help="Structured todo id such as todo_ab12cd34ef56.")
     parser.add_argument("--owner", help="Registered public-safe agent id that owns the lease.")
-    parser.add_argument("--idempotency-key", help="Public-safe token used for idempotent retries and CAS.")
+    parser.add_argument("--idempotency-key", help=(
+        "Public-safe execution key chosen for acquire. Renew/transfer/release reuse the original key "
+        "of this lease generation, not a new per-operation token. "
+        "Transfer's receiver key uses --new-idempotency-key."
+    ))
     parser.add_argument("--new-owner", help="For transfer, target registered public-safe agent id.")
     parser.add_argument("--new-idempotency-key", help="For transfer, target idempotency key.")
     parser.add_argument("--transfer-claim", action="store_true",
@@ -254,11 +268,18 @@ def handle_task_lease_command(
         }
     if payload.get("ok") is not True:
         # Presentation only: retain every native refusal and explicit proof.
-        # An exact read is useful for both grammar and semantic failures; it
-        # neither chooses another owner nor retries a mutation with new proof.
-        inspection_args = [f"--registry={registry_path}", "--format", "json"]
+        # An exact read is useful for both grammar and semantic failures.
+
+        route_args = [*loopx_cli_argv()[1:], f"--registry={registry_path}", "--format", "json"]
         if runtime_root_arg is not None:
-            inspection_args.append(f"--runtime-root={runtime_root_arg}")
+            route_args.append(f"--runtime-root={runtime_root_arg}")
+        recovery = payload.get("recovery")
+        if isinstance(recovery, dict) and recovery.get("action") == "inspect_own_conflicting_lease":
+            for name in ("inspect", "release"):
+                step = recovery.get(name)
+                if isinstance(step, dict) and isinstance(step.get("cli_args"), list):
+                    step["cli_args"] = [*route_args, *step["cli_args"]]
+        inspection_args = [*route_args]
         inspection_args.extend(["task-lease", "inspect", f"--goal-id={args.goal_id}", f"--todo-id={args.todo_id}"])
         payload["inspection"] = {"cli_args": inspection_args,
             "reason": "Read the current holder, state and version. Keep the original execution identity on retries; another holder requires an explicit handover, not borrowed proof.",

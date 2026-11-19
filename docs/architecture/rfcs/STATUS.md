@@ -18,7 +18,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 
 [中文版](STATUS.zh-CN.md) is the semantic mirror of this file.
 
-## Accepted (44)
+## Accepted (52)
 
 | RFC | Header status | Supersedes / closes | Ledger |
 | --- | --- | --- | --- |
@@ -31,29 +31,35 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Capable Agent Manager and Semantic Work Handoff (v0)](capable-manager-semantic-handoff-v0.md) | Accepted | [Personal Follow-through independent proposal](personal-follow-through-v0.md) | [2 entries](ledger/capable-manager-semantic-handoff-v0/) |
 | [RFC: Complete State Recovery and Controlled Reactivation (v0)](complete-state-recovery-v0.md) | Accepted | none | — |
 | [RFC: Composable State Machines and Recovery Verification (v0)](composable-state-machines-recovery-verification-v0.md) | Accepted | none | — |
+| [RFC: Router–Controller–Worker Architecture and One Governed Work Contract (v0)](controller-executor-unified-contract-v0.md) | Accepted | none | [5 entries](ledger/controller-executor-unified-contract-v0/) |
 | [Explicit Todo continuation: Stage A](cross-session-memory-substrate-v0.md) | Accepted | none | — |
 | [RFC: LoopX Desktop Execution Frontends v0](desktop-execution-frontends-v0.md) | Accepted | none | — |
 | [RFC: External Evidence Research Capability v0](external-evidence-research-capability-v0.md) | Accepted | none | [3 entries](ledger/external-evidence-research-capability-v0/) |
 | [RFC: Frontier Science Research Program v0](frontier-science-research-program-v0.md) | Accepted | none | — |
 | [RFC: Goal Artifact Lifecycle Projection (milestone / guard / next-transition) v0](goal-artifact-lifecycle-projection-v0.md) | Accepted | none | — |
 | [RFC: Goal Channel Collaboration v0](goal-channel-collaboration-v0.md) | Accepted | none | — |
+| [RFC: Goal contract evolution and bounded working context (v0)](goal-contract-evolution-v0.md) | Accepted | none | — |
 | [RFC: Goal Direction Baseline (v0)](goal-direction-baseline-v0.md) | Accepted | none | — |
 | [Design follow-up: Goal continuity across restart and replacement](goal-immutability-coherence-defense-v0.md) | Accepted | none | — |
 | [Goal Instance Identity and Orphan Recovery (v0)](goal-instance-identity-and-orphan-recovery-v0.md) | Accepted | none | — |
+| [RFC: Persistent Goal outcome refinement (v0)](goal-outcome-refinement-v0.md) | Accepted | none | — |
 | [RFC: Goal-scoped Capability Portfolio and Connector Lifecycle (v0)](goal-scoped-capability-portfolio-v0.md) | Accepted | none | — |
 | [RFC: Per-Goal Usage, Token, and Cost Surfacing v0](goal-usage-token-cost-v0.md) | Accepted | none | — |
 | [RFC: Goal Workspace Surface v0](goal-workspace-surface-v0.md) | Accepted | none | — |
 | [DSH / Pi: L1 Observation and Managed Runtime Selection](harness-selection-dsh-pi-v0.md) | Accepted | none | — |
 | [RFC: Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.md) | Accepted | none | — |
+| [RFC: Recoverable History Working Sets and Bounded Context-Policy Extensions, Informed by billion-context (v0)](history-working-set-context-policy-v0.md) | Accepted | none | — |
 | [RFC: Human Attention Wishlist v0](human-attention-wishlist-v0.md) | Accepted | none | — |
 | [RFC: Human-confirmed domain operations (v0)](human-confirmed-domain-operations-v0.md) | Accepted | none | — |
 | [RFC: Intelligent Review and Dynamic Presentation Surfaces v0](intelligent-review-presentation-surfaces-v0.md) | Accepted | none | — |
+| [RFC: LoopX × LayerFS — Engineering Exploration and Evaluation (v0)](layerfs-engineering-exploration-evaluation-v0.md) | Accepted | none | — |
 | [RFC: Live Team Workspace v0](live-team-workspace-v0.md) | Accepted | none | — |
 | [RFC: Long-Horizon Harness Benchmark and Research Program v0](long-horizon-harness-benchmark-research-program-v0.md) | Accepted | none | — |
 | [RFC: Long-Running Agent Reliability Diagnostics and Governed Delivery v0](long-running-agent-reliability-diagnostics-governed-delivery-v0.md) | Accepted | none | — |
-| [LoopX Overall Roadmap v0: Product, Collaboration, Technology and Delivery](loopx-overall-roadmap-v0.md) | Accepted | none | [1 entry](ledger/loopx-overall-roadmap-v0/) |
+| [LoopX Overall Roadmap v0: Product, Collaboration, Technology and Delivery](loopx-overall-roadmap-v0.md) | Accepted | none | [4 entries](ledger/loopx-overall-roadmap-v0/) |
 | [Manager runtime profile v0](manager-runtime-profile-v0.md) | Accepted | none | — |
-| [RFC: Monorepo Distribution Split (v0)](monorepo-distribution-split-v0.md) | Accepted | none | — |
+| [RFC: Mechanism Convergence and the Experience Reuse Loop (v0)](mechanism-convergence-and-learning-loop-v0.md) | Accepted | none | — |
+| [RFC: Monorepo Distribution and Small-Kernel Runtime Composition (v0)](monorepo-distribution-split-v0.md) | Accepted | none | — |
 | [RFC: Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.md) | Accepted | none | — |
 | [RFC: Agent Judgment and Optional Independent Assessment — Jev as a Candidate (v0)](optional-semantic-assistance-jev-v0.md) | Accepted | none | — |
 | [RFC: Post-Outcome Memory Utility Attribution v0](post-outcome-memory-utility-attribution-v0.md) | Accepted | none | — |
@@ -61,11 +67,13 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Provider-Neutral Post-Writeback Capability Hooks v0](provider-neutral-post-writeback-capability-hooks-v0.md) | Accepted | none | — |
 | [RFC: Provider-Neutral Turn-Start Inbox Hook v0](provider-neutral-turn-start-inbox-hook-v0.md) | Accepted | none | — |
 | [RFC: Research Exploration Control Plane v0](research-exploration-control-plane-v0.md) | Accepted | none | — |
+| [Preserve the selected runtime during rollback](self-update-explicit-runtime-route-v0.md) | Accepted | none | — |
 | [RFC: Semantic Vocabulary Convergence and Commit-Time Drift Checks (v0)](semantic-vocabulary-convergence-v0.md) | Accepted | none | [7 entries](ledger/semantic-vocabulary-convergence-v0/) |
 | [RFC: Shared Goal Alignment and Governed Amendment Protocol (v0)](shared-goal-alignment-and-governed-amendment-v0.md) | Accepted | none | [2 entries](ledger/shared-goal-alignment-and-governed-amendment-v0/) |
 | [RFC: LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)](shared-goal-authority-state-provider-v0.md) | Accepted | none | [24 entries](ledger/shared-goal-authority-state-provider-v0/) |
 | [RFC: Single-Owner Local Daemon (v0)](single-owner-local-daemon-v0.md) | Accepted | none | — |
-| [RFC: TypeScript Control-Plane Migration Direction v0](typescript-control-plane-migration-v0.md) | Accepted | none | [15 entries](ledger/typescript-control-plane-migration-v0/) |
+| [RFC: Joint Target, Yardstick and Stride Decisions (v0)](target-yardstick-stride-decisions-v0.md) | Accepted | none | — |
+| [RFC: TypeScript Control-Plane Migration Direction v0](typescript-control-plane-migration-v0.md) | Accepted | none | [27 entries](ledger/typescript-control-plane-migration-v0/) |
 
 ## Superseded (1)
 
@@ -73,6 +81,8 @@ appendix may keep dated history, but no dated log heading may precede it.
 | --- | --- | --- | --- |
 | [RFC: Personal Follow-through (v0)](personal-follow-through-v0.md) | Superseded | none; superseded by [Capable Agent Manager and Semantic Work Handoff](capable-manager-semantic-handoff-v0.md) | [1 entry](ledger/personal-follow-through-v0/) |
 
-## Retired (0)
+## Retired (1)
 
-_none_
+| RFC | Header status | Supersedes / closes | Ledger |
+| --- | --- | --- | --- |
+| [RFC: Sparse Working Memory at Context Compaction (v0)](sparse-compaction-working-memory-v0.md) | Retired | none | [2 entries](ledger/sparse-compaction-working-memory-v0/) |

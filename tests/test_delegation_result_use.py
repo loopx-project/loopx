@@ -163,7 +163,8 @@ def accepted_chain(root, runner):
     def linked_request(source, workspace):
         artifact = source["artifacts"][0]
         path = workspace / "declared-input.json"
-        path.write_text(artifact["text"])
+        # A receiver must retain the accepted bytes, including line endings.
+        path.write_bytes(artifact["text"].encode("utf-8"))
         return {**brief(), "inputs": [{"ref": path.name, "description": "Exact accepted source",
             "sha256": artifact["sha256"], "delegation": {"operation_id": source["operation_id"],
             "ref": artifact["ref"], "relation": "uses"}}]}

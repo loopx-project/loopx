@@ -376,12 +376,16 @@ test("concurrent cold reads share only the same exact-byte proof and recover aft
   const corrupt = JSON.parse(valid); corrupt.committed[0].provider_revision = "corrupt";
   await writeFile(store.path, JSON.stringify(corrupt));
   assert.ok((await Promise.all(readers.map(s => s.loadAuthority()))).every(r => r.status === "failed"));
-  assert.equal(CountingStore.validations, 2);
+  // Only overlapping proofs coalesce. A slower file read may enter after a
+  // rejection has already been evicted and must then validate again.
+  const rejectedValidations = CountingStore.validations;
+  assert.ok(rejectedValidations > 1, "changed corrupt bytes require a new proof");
   assert.equal((await readers[0]!.loadAuthority()).status, "failed");
-  assert.equal(CountingStore.validations, 3, "a rejected promise must not remain in the in-flight registry");
+  assert.equal(CountingStore.validations, rejectedValidations + 1,
+    "a rejected promise must not remain in the in-flight registry");
   await writeFile(store.path, valid + "\n\n");
   assert.equal((await readers[0]!.loadAuthority()).status, "loaded");
-  assert.equal(CountingStore.validations, 4);
+  assert.equal(CountingStore.validations, rejectedValidations + 2);
 });
 
 test("alternating File stores reuse their own exact-byte proofs across handles", async t => {

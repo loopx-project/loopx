@@ -8,6 +8,9 @@ from ..quota.effective_action import EffectiveAction
 from ..quota.should_run import build_quota_should_run
 from ..work_items.interaction_contract import build_interaction_contract
 from ..quota.turn_envelope import quota_action_signature_document
+from ..scheduler.execution_context import (
+    GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
+)
 from .quota_fixtures import quota_status_payload, quota_todo_item
 
 
@@ -74,6 +77,7 @@ def accepted_replan_successor_scenario_source() -> dict[str, Any]:
         accepted_replan_successor_status(),
         goal_id=ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID,
         agent_id=ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID,
+        scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
     )
 
 
@@ -178,6 +182,7 @@ def planning_horizon_strategic_context_scenario_source() -> dict[str, Any]:
         planning_horizon_strategic_context_status(),
         goal_id=ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID,
         agent_id=ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID,
+        scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
     )
 
 
@@ -271,6 +276,7 @@ def future_primary_fallback_scenario_source() -> dict[str, Any]:
         status,
         goal_id=ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID,
         agent_id=ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID,
+        scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
     )
 
 
@@ -324,6 +330,7 @@ def external_wait_fallback_scenario_source() -> dict[str, Any]:
         status,
         goal_id=ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID,
         agent_id=ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID,
+        scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
     )
 
 

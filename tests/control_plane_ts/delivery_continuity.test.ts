@@ -69,6 +69,25 @@ test("one routing transaction releases to fallback or no selection", () => {
   });
 });
 
+test("explicit closeout or replan releases continuity without completing the Todo", () => {
+  for (const facts of [
+    {previous_delivery_boundary: "semantic_closeout"},
+    {previous_path_delta: {schema_version: "goal_path_delta_v0", outcome: "replan",
+      prior_assumption: "The experiment might help", observed_reality: "Scoped experiment answered",
+      changed: ["Select remaining work"], evidence_refs: ["evidence:result"]}},
+  ]) {
+    assert.equal(route(facts).selection, "fallback");
+    // Fresh eligibility still rejects a blocked successor.
+    assert.equal(route({...facts, fallback_todo: null}).selection, "none");
+    const bound = route({...facts, preemptions: ["heartbeat_receipt"]});
+    assert.equal(bound.continuity?.reason, "heartbeat_receipt");
+  }
+  assert.equal(route({previous_path_delta: {outcome: "continue",
+    prior_assumption: "The implementation is unfinished", observed_reality: "Validated partial progress",
+    evidence_refs: ["evidence:progress"]}}).selection, "continuity");
+  assert.throws(() => route({previous_path_delta: {outcome: "finished"}}));
+});
+
 test("an initially selected open advancement Todo settles as in flight", () => {
   const result = route({
     previous_todo_id: null,

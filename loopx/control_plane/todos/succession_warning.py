@@ -263,7 +263,8 @@ def evaluate_succession(items: list[dict[str, Any]], lineage: list[dict[str, Any
 
 def public_todo_summary(summary: dict[str, Any]) -> dict[str, Any]:
     """Drop the internal full-graph handoff once a consumer has selected rows."""
-    return {**summary, "items": [
+    from .summary_item import preserve_canonical_todo_source
+    return preserve_canonical_todo_source(summary, {**summary, "items": [
         dict(item) if isinstance(item, dict) else item
         for item in summary.get("items") or []
-    ]}
+    ]})

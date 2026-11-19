@@ -14,7 +14,13 @@ from canonical_authority_fixture import initialize_canonical_authority, isolate_
 from loopx.control_plane.coordination.canonical_snapshot import read_canonical_snapshot
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.effect_runtime import effect_runtime_result, restart_effect_runtime
-from loopx.control_plane.scheduler.state import APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY, load_scheduler_state
+from loopx.control_plane.goals.activation import build_goal_activation
+from loopx.control_plane.scheduler.state import (
+    APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+    build_scheduler_state,
+    load_scheduler_state,
+    write_scheduler_state,
+)
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
 
@@ -64,7 +70,9 @@ def make_scheduler_fixture(
     registry = root / "registry.json"
     registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
         "id": GOAL, "status": status, "repo": str(project), "state_file": state.name,
-        "activation_state": "stopped" if scenario == "stopped" else "active",
+        **({"activation": build_goal_activation(
+            state="stopped", updated_at="2026-01-01T00:00:00Z", reason="Fixture stop",
+        )} if scenario == "stopped" else {}),
         "domain": "synthetic-scheduler",
         "adapter": {"kind": "fixture_connected_delivery_v0", "status": "connected-delivery"},
         "quota": {"compute": 0.0 if scenario == "paused" else 1.0, "window_hours": 24},
@@ -76,8 +84,8 @@ def make_scheduler_fixture(
         handoff_mode="soft_claim", leases=[],
     ), state_path=state, provider=provider)
     context = ["--host-surface", "codex_app"] if scenario == "invalid_context" else ["--codex-app"]
-    guard = ["quota", "should-run", *context, "--goal-id", GOAL, "--agent-id", AGENT,
-             "--turn-instance-id", TURN, "--scan-path", str(project)]
+    guard = ["quota", "should-run", "--context-delivery", "off", *context, "--goal-id", GOAL, "--agent-id", AGENT,
+             "--turn-instance-id", TURN, ]
     return {"project": project, "runtime": runtime, "registry": registry,
             "state": state, "guard": guard}
 
@@ -97,6 +105,16 @@ def scheduler_authority_snapshot(fixture: dict) -> dict:
         goal_id=GOAL, include_leases=True, projection_readback=None, timeout=20)
     assert result["status"] == "loaded", result
     return result
+
+
+def _write_host_rrule(automation: Path, minutes: int) -> None:
+    automation.parent.mkdir(parents=True, exist_ok=True)
+    automation.write_text(
+        'version = 1\nid = "fixture"\nkind = "heartbeat"\nstatus = "ACTIVE"\n'
+        f'name = "Synthetic scheduler"\nprompt = "Advance `{GOAL}` from active state. Agent: `{AGENT}`."\n'
+        f'rrule = "FREQ=MINUTELY;INTERVAL={minutes}"\n'
+        'target_thread_id = "synthetic-thread"\n',
+    )
 
 
 def _assert_no_private_arbitration(value: object) -> None:
@@ -129,6 +147,7 @@ def test_quota_cli_keeps_scheduler_authority_without_premature_effects(
         authority = scheduler_authority_snapshot(fixture)
         packet = call_scheduler_cli(fixture, *fixture["guard"])
         hint = packet["scheduler_hint"]
+        assert "codex_app" not in hint
         assert packet["interaction_contract"]["mode"] == mode, packet
         assert (hint["schema_version"], hint["action"], hint["cadence_class"], hint["reason_code"]) == (
             "scheduler_hint_v0", action, cadence, reason,
@@ -150,12 +169,12 @@ def test_quota_cli_keeps_scheduler_authority_without_premature_effects(
             assert not index.exists()
         if scenario == "invalid_context":
             assert hint["execution_phase"]["disposition"] == "contract_error"
-            assert hint["codex_app"]["apply"] == "none"
+            assert hint["app_automation"]["apply"] == "none"
             assert hint["consistency_error"]["source"] == "scheduler_execution_context"
         elif scenario in {"paused", "stopped"}:
             assert packet["should_run"] is False
-            assert hint["codex_app"]["ack_required"] is False
-            assert "recommended_rrule" not in hint["codex_app"]
+            assert hint["app_automation"]["ack_required"] is False
+            assert "recommended_rrule" not in hint["app_automation"]
         if scenario == "active":
             assert packet["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO
             refresh = call_scheduler_cli(fixture, "refresh-state", "--goal-id", GOAL,
@@ -210,19 +229,16 @@ def test_deadline_clamp_generated_ack_commits_and_replays(
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setenv("CODEX_THREAD_ID", "synthetic-thread")
     automation = codex_home / "automations" / "fixture" / "automation.toml"
-    automation.parent.mkdir(parents=True)
 
     def host_rrule(minutes: int) -> None:
-        automation.write_text(
-            'version = 1\nid = "fixture"\nkind = "heartbeat"\nstatus = "ACTIVE"\n'
-            f'name = "Synthetic scheduler"\nprompt = "Advance `{GOAL}` from active state. Agent: `{AGENT}`."\n'
-            f'rrule = "FREQ=MINUTELY;INTERVAL={minutes}"\n'
-            'target_thread_id = "synthetic-thread"\n',
-        )
+        _write_host_rrule(automation, minutes)
 
     try:
         host_rrule(30)
-        packet = call_scheduler_cli(fixture, *fixture["guard"])
+        packet = call_scheduler_cli(
+            fixture, *fixture["guard"], "--include-detail", "agent-todos",
+            "--include-detail", "user-todos", "--include-detail", "scheduler",
+        )
         authority = scheduler_authority_snapshot(fixture)
         # Establish valid earlier ACKs through the native commit owner. Only
         # the synthetic projection clock moves; the monitor facts stay fixed.
@@ -291,5 +307,81 @@ def test_deadline_clamp_generated_ack_commits_and_replays(
         assert not {"refresh_state", "quota_spend"}.intersection(
             event["event_kind"] for event in events
         )
+    finally:
+        restart_effect_runtime(wait_for_exit=True)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_elapsed_quiet_backoff_reads_host_and_resets_for_native_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    fixture = make_scheduler_fixture(tmp_path, provider, "monitor")
+    codex_home = tmp_path / "codex-home"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CODEX_THREAD_ID", "synthetic-thread")
+    automation = codex_home / "automations" / "fixture" / "automation.toml"
+    _write_host_rrule(automation, 30)
+    try:
+        packet = call_scheduler_cli(fixture, *fixture["guard"])
+        authority = scheduler_authority_snapshot(fixture)
+        # The existing 30-minute state belongs to the profile actually
+        # projected by the CLI. Seed that identity in the disposable store.
+        proposed = packet["scheduler_hint"]["app_automation"]
+        backoff = proposed["stateful_backoff"]
+        assert proposed["example_progression_minutes"] == [15, 30, 60]
+        scope = {"goal_id": GOAL, "agent_id": AGENT,
+                 "state_key": APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY}
+        state = build_scheduler_state(
+            **scope,
+            reset_token=backoff["reset_token"],
+            identity_signature=backoff["identity_signature"],
+            progression_index=1,
+            progression_minutes=[15, 30, 60],
+            last_applied_rrule="FREQ=MINUTELY;INTERVAL=30",
+            updated_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+        )
+        write_scheduler_state(fixture["runtime"], state, **scope)
+
+        guard = [*fixture["guard"], "--turn-instance-id", TURN + "-elapsed"]
+        elapsed = call_scheduler_cli(fixture, *guard)
+        assert elapsed["interaction_contract"]["user_channel"]["notify"] == "DONT_NOTIFY"
+        assert elapsed["interaction_contract"]["agent_channel"]["must_attempt"] is False
+        app = elapsed["scheduler_hint"]["app_automation"]
+        assert app["recommended_interval_minutes"] == 60
+        assert app["stateful_backoff"]["host_observation"]["current_rrule"] == (
+            "FREQ=MINUTELY;INTERVAL=30"
+        )
+        _write_host_rrule(automation, 60)
+        ack_args = app["ack_hint"]["cli_args"]
+        ack = call_scheduler_cli(fixture, *ack_args)
+        assert ack["ok"] is True, ack
+        assert ack["scheduler_commit"]["state"]["progression_index"] == 2
+        restart_effect_runtime(wait_for_exit=True)
+        replay = call_scheduler_cli(fixture, *ack_args)
+        assert replay["scheduler_commit"]["replayed"] is True
+        assert replay["scheduler_commit"]["written"] is False
+        held = call_scheduler_cli(
+            fixture, *fixture["guard"], "--turn-instance-id", TURN + "-early",
+        )
+        assert held["scheduler_hint"]["app_automation"]["apply"] == "none_already_applied"
+        assert scheduler_authority_snapshot(fixture) == authority
+        events = load_rollout_events(rollout_event_log_path(fixture["runtime"], GOAL))
+        assert not {"refresh_state", "quota_spend"}.intersection(
+            event["event_kind"] for event in events
+        )
+
+        added = call_scheduler_cli(
+            fixture, "todo", "add", "--goal-id", GOAL, "--role", "agent",
+            "--claimed-by", AGENT, "--text", "Validate the newly available source.",
+            "--task-class", "advancement_task", "--action-kind", "validate",
+            "--operation-id", "source-became-actionable",
+        )
+        fresh = call_scheduler_cli(
+            fixture, *fixture["guard"], "--turn-instance-id", TURN + "-work",
+        )
+        assert fresh["selected_todo"]["todo_id"] == added["todo_id"]
+        assert fresh["scheduler_hint"]["action"] == "run_now"
+        assert fresh["scheduler_hint"]["app_automation"]["recommended_interval_minutes"] == 3
     finally:
         restart_effect_runtime(wait_for_exit=True)

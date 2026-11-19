@@ -83,6 +83,104 @@ function sourceJournal(
   return snapshot;
 }
 
+test("sparse journal numbers survive publication, replay and existing guards", async () => {
+  const root = await mkdtemp(join(tmpdir(), "loopx-journal-source-"));
+  const path = join(root, "turn.json");
+  try {
+    const snapshot = {...journal(), source: [1, -0, 2 ** 60], literal: "1.0 and 1152921504606846977"};
+    const source_number_tokens = [
+      [["source", 0], "1.0"], [["source", 1], "-0.0"], [["source", 2], "1152921504606846977"],
+    ];
+    const written = await commitTurnJournal({path, journal: snapshot, source_number_tokens, expected_effect_id: effectId()});
+    assert.equal(written.appended, true);
+    const encoded = await readFile(path, "utf8");
+    assert.match(encoded, /1\.0,\n\s+-0\.0,\n\s+1152921504606846977/);
+    assert.equal(JSON.parse(encoded).literal, snapshot.literal);
+    assert.ok(!encoded.includes("source_number_tokens"));
+    const replay = await commitTurnJournal({path, journal: snapshot, source_number_tokens});
+    assert.equal(replay.replayed, true);
+    assert.equal(replay.operation_id, written.operation_id);
+    await assert.rejects(commitTurnJournal({path, journal: journal("committed", phases)}),
+      /skip transaction checkpoints/);
+    await assert.rejects(commitTurnJournal({path: join(root, "scoped.json"),
+      journal: sourceJournal(instanceA, turnKey), source_number_tokens: []}), /require source admission/);
+    await assert.rejects(commitTurnJournal({path, journal: snapshot, source_number_tokens, expected_effect_id: "other-effect"}),
+      /expected settlement effect/);
+    assert.equal(await readFile(path, "utf8"), encoded);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+for (const tokens of [null, {}, [[[], "1"]], [[["missing"], "1"]],
+  [[["source"], "2"]], [[["source"], "NaN"]], [[["source"], "01"]],
+  [[["source"], "1"], [["source"], "1.0"]], [[["literal"], "1"]],
+  [[["rows", "0"], "1.0"]], [[["source"], "-0.0"]]]) {
+  test(`journal rejects invalid numeric metadata without writing: ${JSON.stringify(tokens)}`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "loopx-journal-invalid-"));
+    const path = join(root, "turn.json");
+    try {
+      await assert.rejects(commitTurnJournal({path,
+        journal: {...journal(), source: 1, literal: "1", rows: [1]}, source_number_tokens: tokens}),
+      /context source number token/);
+      await assert.rejects(readFile(path), {code: "ENOENT"});
+    } finally {
+      await rm(root, {recursive: true, force: true});
+    }
+  });
+}
+
+test("ordinary object journals retain native bytes and operation identity with no numeric metadata", async () => {
+  const root = await mkdtemp(join(tmpdir(), "loopx-journal-native-"));
+  try {
+    const snapshot = journal(), path = join(root, "turn.json");
+    const initial = await commitTurnJournal({path, journal: snapshot});
+    const replay = await commitTurnJournal({path, journal: snapshot, source_number_tokens: []});
+    assert.equal(await readFile(path, "utf8"), JSON.stringify(snapshot, null, 2) + "\n");
+    assert.equal(replay.operation_id, initial.operation_id);
+    assert.equal(replay.replayed, true);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("numeric source differences are not mistaken for replay or immutable-plan equality", async () => {
+  const root = await mkdtemp(join(tmpdir(), "loopx-journal-number-identity-"));
+  try {
+    const snapshot = journal(), path = join(root, "turn.json");
+    (snapshot.plan as Record<string, unknown>).measurement = 1;
+    const initial = await commitTurnJournal({path, journal: snapshot,
+      source_number_tokens: [[["plan", "measurement"], "1.0"]]});
+    await assert.rejects(commitTurnJournal({path, journal: snapshot}), /plan is immutable/);
+    const before = await readFile(path, "utf8");
+    assert.match(before, /"measurement": 1\.0/);
+    const changed = {...snapshot, measurement: 1};
+    const next = await commitTurnJournal({path, journal: changed,
+      source_number_tokens: [[["plan", "measurement"], "1.0"], [["measurement"], "1.0"]]});
+    assert.equal(next.appended, true);
+    assert.notEqual(next.operation_id, initial.operation_id);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("missing raw-number support fails before writing and leaves ordinary objects available", async () => {
+  const root = await mkdtemp(join(tmpdir(), "loopx-journal-number-support-"));
+  const descriptor = Object.getOwnPropertyDescriptor(JSON, "rawJSON");
+  try {
+    Object.defineProperty(JSON, "rawJSON", {value: undefined, configurable: true});
+    const path = join(root, "source.json");
+    await assert.rejects(commitTurnJournal({path, journal: {...journal(), value: 1},
+      source_number_tokens: [[["value"], "1.0"]]}), /requires JSON.rawJSON/);
+    await assert.rejects(readFile(path), {code: "ENOENT"});
+    assert.equal((await commitTurnJournal({path: join(root, "native.json"), journal: journal()})).ok, true);
+  } finally {
+    if (descriptor) Object.defineProperty(JSON, "rawJSON", descriptor);
+    else Reflect.deleteProperty(JSON, "rawJSON");
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 function sourceGuardPath(registryPath: string, goalId: string): string {
   const alias = createHash("sha256").update(goalId, "utf8").digest("hex");
   return join(

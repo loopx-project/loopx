@@ -50,7 +50,7 @@ def test_supersede_existing_future_monitor_settles_only_original_turn(
     binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,
                "--turn-instance-id", cli.TURN_ID)
     guard_args = ("quota", "should-run", "--codex-app", "--goal-id", cli.GOAL_ID,
-                  "--scan-path", str(project), *binding,
+                   *binding,
                   "--available-capability", "shell", "--available-capability", "filesystem_write")
     code, guard = run(*guard_args)
     assert code == 0, guard
@@ -87,7 +87,7 @@ def test_supersede_existing_future_monitor_settles_only_original_turn(
     code, refreshed = run(*refresh_args)
     assert code == 0, refreshed
     spend_args = ("quota", "spend-slot", "--goal-id", cli.GOAL_ID, *binding,
-                  "--slots", "1", "--source", "heartbeat", "--execute", "--scan-path", str(project))
+                  "--slots", "1", "--source", "heartbeat", "--execute", )
     code, spent = run(*spend_args)
     assert code == 0, spent
     assert spent["settlement_progress"]["state"] == "settled"
@@ -132,7 +132,7 @@ def test_supersede_foreign_turn_rejects_before_canonical_mutation(
     code, guard = run(
         "quota", "should-run", "--codex-app", "--goal-id", cli.GOAL_ID,
         "--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,
-        "--turn-instance-id", cli.TURN_ID, "--scan-path", str(project),
+        "--turn-instance-id", cli.TURN_ID,
         "--available-capability", "shell", "--available-capability", "filesystem_write",
     )
     assert code == 0, guard

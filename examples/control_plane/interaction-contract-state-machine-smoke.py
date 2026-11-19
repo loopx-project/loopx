@@ -291,7 +291,7 @@ def _assert_cross_layer_case(
     assert contract["agent_channel"]["quiet_noop_allowed"] is quiet, (name, contract)
     assert contract["cli_channel"]["spend_after_validation"] is spend, (name, contract)
     assert scheduler_hint["action"] == scheduler, (name, scheduler_hint)
-    assert scheduler_hint["codex_app"]["recommended_interval_minutes"] == interval, (
+    assert scheduler_hint["app_automation"]["recommended_interval_minutes"] == interval, (
         name,
         scheduler_hint,
     )

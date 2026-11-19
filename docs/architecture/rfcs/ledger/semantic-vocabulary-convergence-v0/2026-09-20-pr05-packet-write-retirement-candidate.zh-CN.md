@@ -1,5 +1,9 @@
 # PR-05：protocol action packet 写入退休
 
+> PR-05 历史检查点：下文描述当时的 writer 退休及其兼容 reader。
+> #7161 随后取消 reader 兼容并删除当时的验证脚本；当前行为以所链接的
+> 协议决定为准。原有历史证据和记录保持，不把旧测试结果改写为当前资格。
+
 对应 [#4794](https://github.com/loopx-project/loopx/pull/4794)、
 [#4447](https://github.com/loopx-project/loopx/issues/4447)。
 [协议决定](../../../../reference/protocols/protocol-action-packet-decision-v0.md)

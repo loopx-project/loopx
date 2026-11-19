@@ -1,0 +1,586 @@
+diff --git a/docker_environment.py b/docker_environment.py
+--- a/docker_environment.py
++++ b/docker_environment.py
+@@ -1,4 +1,5 @@
+ """Private Docker transport for the existing shared benchmark installer."""
++import asyncio
+ import io
+ from pathlib import Path
+ import shlex
+@@ -15,6 +16,25 @@
+         self.security_bootstrap = security_bootstrap
+         self.sealed = sealed
+
++    @staticmethod
++    async def _run(argv, *, timeout, data=None):
++        process = await asyncio.create_subprocess_exec(
++            *argv, stdin=asyncio.subprocess.PIPE if data is not None else None,
++            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
++        try:
++            stdout, stderr = await asyncio.wait_for(process.communicate(data), timeout)
++        except (TimeoutError, asyncio.CancelledError) as error:
++            if process.returncode is None:
++                try:
++                    process.kill()
++                except ProcessLookupError:
++                    pass
++            await process.wait()
++            if isinstance(error, TimeoutError):
++                raise subprocess.TimeoutExpired(argv, timeout) from error
++            raise
++        return SimpleNamespace(returncode=process.returncode, stdout=stdout, stderr=stderr)
++
+     async def exec(self, command, *, user=None, env=None, cwd=None, timeout_sec=None):
+         effective_user = self.default_user if self.sealed else user or self.default_user
+         argv = ['docker', 'exec', '--user', effective_user]
+@@ -29,19 +49,32 @@
+         else:
+             argv += [self.name, '/usr/bin/python3', '-c', self.security_bootstrap,
+                      '/bin/bash', '-c', command]
+-        result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout_sec or 300)
++        result = await self._run(argv, timeout=timeout_sec or 300)
++        stdout, stderr = result.stdout.decode(), result.stderr.decode()
+         if result.returncode:
+-            print('environment command exit', result.returncode, 'user', user,
+-                  'command', command[:200], 'stderr', result.stderr[-1200:], flush=True)
+-        return SimpleNamespace(return_code=result.returncode, stdout=result.stdout, stderr=result.stderr)
++            print('environment command exit', result.returncode, flush=True)
++        return SimpleNamespace(return_code=result.returncode, stdout=stdout, stderr=stderr)
+
+     async def upload_file(self, source, target):
+-        if self.sealed:
+-            code = 'import pathlib,sys; p=pathlib.Path(sys.argv[1]); p.write_bytes(sys.stdin.buffer.read()); p.chmod(0o644)'
+-            result = subprocess.run(['docker', 'exec', '-i', '--user', self.default_user,
++        writable = await self.exec('test -w ' + shlex.quote(str(Path(target).parent)))
++        if self.sealed or writable.return_code == 0:
++            mode = 0o644 if self.sealed else Path(source).stat().st_mode & 0o777
++            code = '''import os,pathlib,sys,tempfile
++p = pathlib.Path(sys.argv[1])
++descriptor, temporary = tempfile.mkstemp(dir=p.parent, prefix='.'+p.name+'-')
++try:
++    with os.fdopen(descriptor, 'wb') as output:
++        output.write(sys.stdin.buffer.read())
++        output.flush()
++        os.fchmod(output.fileno(), int(sys.argv[2]))
++        os.fsync(output.fileno())
++    os.replace(temporary, p)
++finally:
++    pathlib.Path(temporary).unlink(missing_ok=True)
++'''
++            result = await self._run(['docker', 'exec', '-i', '--user', self.default_user,
+                  self.name, '/usr/bin/python3', '-c', self.security_bootstrap,
+-                 '/usr/bin/python3', '-c', code, target], input=Path(source).read_bytes(),
+-                 capture_output=True, timeout=120)
++                 '/usr/bin/python3', '-c', code, target, str(mode)], data=Path(source).read_bytes(), timeout=120)
+             if result.returncode:
+                 raise RuntimeError(result.stderr.decode(errors='replace')[-1500:])
+             return
+@@ -54,15 +87,18 @@
+                 info.uname = info.gname = ''
+                 return info
+             archive.add(source, arcname=Path(target).name, filter=owned)
+-        result = subprocess.run(['docker', 'cp', '-', self.name + ':' + str(Path(target).parent)],
+-                                input=stream.getvalue(), capture_output=True, timeout=120)
++        result = await self._run(['docker', 'cp', '-', self.name + ':' + str(Path(target).parent)],
++                                 data=stream.getvalue(), timeout=120)
+         if result.returncode:
+             raise RuntimeError(result.stderr.decode(errors='replace')[-1500:])
+
+     async def upload_dir(self, source, target):
+-        result = await self.exec('mkdir -p ' + shlex.quote(target), user='root')
++        result = await self.exec('mkdir -p ' + shlex.quote(target))
++        if result.return_code and not self.sealed:
++            result = await self.exec('mkdir -p ' + shlex.quote(target), user='root')
+         if result.return_code:
+             raise RuntimeError(result.stderr)
++        writable = await self.exec('test -w ' + shlex.quote(target))
+         stream = io.BytesIO()
+         with tarfile.open(fileobj=stream, mode='w') as archive:
+             def owned(info):
+@@ -70,7 +106,15 @@
+                 info.uname = info.gname = ''
+                 return info
+             archive.add(source, arcname='.', filter=owned)
+-        result = subprocess.run(['docker', 'cp', '-', self.name + ':' + target],
+-                                input=stream.getvalue(), capture_output=True, timeout=240)
++        if self.sealed or writable.return_code == 0:
++            # docker cp cannot reliably populate tmpfs mounts. Extract in the
++            # container's mount namespace, keeping the unprivileged owner.
++            result = await self._run(['docker', 'exec', '-i', '--user', self.default_user,
++                     self.name, '/usr/bin/python3', '-c', self.security_bootstrap,
++                     '/bin/tar', '-xpf', '-', '--no-same-owner', '-C', target],
++                     data=stream.getvalue(), timeout=240)
++        else:
++            result = await self._run(['docker', 'cp', '-', self.name + ':' + target],
++                                     data=stream.getvalue(), timeout=240)
+         if result.returncode:
+             raise RuntimeError(result.stderr.decode(errors='replace')[-1500:])
+diff --git a/frontier_submit.py b/frontier_submit.py
+--- a/frontier_submit.py
++++ b/frontier_submit.py
+@@ -14,6 +14,7 @@
+ import stat
+ import sys
+ import tarfile
++import tempfile
+ import time
+ from urllib.parse import urlsplit
+
+@@ -33,12 +34,14 @@
+     pass
+
+
+-def validate_tar(path: Path) -> tuple[int, str]:
++def validate_tar(path: Path, *, max_bytes: int | None = None) -> tuple[int, str]:
+     if not path.is_absolute():
+         raise SubmitError("archive path must be absolute")
+     metadata = path.lstat()
+     if not stat.S_ISREG(metadata.st_mode) or metadata.st_size <= 0:
+         raise SubmitError("archive must be a nonempty regular file")
++    if max_bytes is not None and metadata.st_size > max_bytes:
++        raise SubmitError(f"archive exceeds the task's {max_bytes}-byte submission limit")
+     digest = hashlib.sha256()
+     with path.open("rb") as source:
+         for chunk in iter(lambda: source.read(1024 * 1024), b""):
+@@ -98,6 +101,13 @@
+         self.host = parsed.hostname
+         self.port = parsed.port or 80
+         self.auth = token()
++        configured = os.environ.get("FRONTIER_MAX_PAYLOAD_BYTES")
++        try:
++            self.max_payload_bytes = int(configured) if configured is not None else None
++            if self.max_payload_bytes is not None and self.max_payload_bytes < 1:
++                raise ValueError
++        except ValueError:
++            raise SubmitError("FRONTIER_MAX_PAYLOAD_BYTES must be a positive integer") from None
+
+     def request(self, method: str, path: str, *, body: bytes = b"", headers: dict[str, str] | None = None) -> dict[str, object]:
+         request_headers = {"Authorization": f"Bearer {self.auth}"}
+@@ -137,7 +147,7 @@
+
+
+ def upload(client: Client, operation: str, path: Path) -> tuple[str, str]:
+-    size, digest = validate_tar(path)
++    size, digest = validate_tar(path, max_bytes=client.max_payload_bytes)
+     value = client.request("POST", "/v1/payloads", body=path.read_bytes(), headers={
+         "Content-Type": "application/x-tar", "Content-Length": str(size),
+         "X-Content-SHA256": digest, "X-Frontier-Purpose": operation,
+@@ -217,7 +227,8 @@
+     })
+     runtime = view.get("remaining_runtime_s")
+     remaining = view.get("remaining_checkpoint_submissions")
+-    if (type(runtime) is not int or runtime < 0 or "remaining_checkpoint_submissions" not in view
++    if ("remaining_runtime_s" not in view or (runtime is not None and (type(runtime) is not int or runtime < 0))
++            or "remaining_checkpoint_submissions" not in view
+             or (remaining is not None and (type(remaining) is not int or remaining < 0))):
+         raise SubmitError("Driver store-final response has invalid remaining runtime or submission count")
+     return {"schema_version": SCHEMA, "operation": "store-final", "state": "stored",
+@@ -236,11 +247,27 @@
+         raise SubmitError("Driver submission response is invalid")
+     result = {"schema_version": SCHEMA, "operation": "final", "state": "accepted",
+               "payload_id": payload_id, "verification_id": verification_id}
+-    FINAL_RECEIPT.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+-    descriptor = os.open(FINAL_RECEIPT, flags, 0o600)
+-    with os.fdopen(descriptor, "wb") as destination:
+-        destination.write(canonical(result)); destination.flush(); os.fsync(destination.fileno())
++    if "accepted_at" in view:
++        result["accepted_at"] = view["accepted_at"]
++    temporary = None
++    try:
++        FINAL_RECEIPT.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
++        descriptor, temporary = tempfile.mkstemp(dir=FINAL_RECEIPT.parent, prefix=".final-")
++        with os.fdopen(descriptor, "wb") as destination:
++            destination.write(canonical(result))
++            destination.flush()
++            os.fsync(destination.fileno())
++        os.replace(temporary, FINAL_RECEIPT)
++    except OSError:
++        # Remote acceptance is the authority even when this local cache fails.
++        # Repeating final with the same tar replays the remote intent and repairs it.
++        result["receipt_pending_recovery"] = True
++    finally:
++        if temporary is not None:
++            try:
++                Path(temporary).unlink(missing_ok=True)
++            except OSError:
++                pass
+     return result
+
+
+diff --git a/submission_bridge.py b/submission_bridge.py
+--- a/submission_bridge.py
++++ b/submission_bridge.py
+@@ -3,15 +3,33 @@
+ This is a single-host experiment adapter, not the upstream Management/Driver
+ implementation. Every accepted train request uses its real verifier output.
+ """
++from __future__ import annotations
++
++import copy
++from dataclasses import asdict
+ import hashlib
+ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+ import json
++import logging
++import os
+ from pathlib import Path
++import re
+ import secrets
+ import threading
++import tempfile
+ import time
++from typing import TYPE_CHECKING
+ import uuid
+
++if TYPE_CHECKING:
++    from trial_limits import TrialLimits
++
++
++_RECOVERY_METADATA = ('version', 'arm', 'trial_limits')
++TRAIN_CANCELLED = {
++    'code': 'verification_cancelled', 'message': 'The answering phase has closed.', 'retryable': False,
++}
++
+
+ class Rejected(Exception):
+     def __init__(self, status, reason):
+@@ -19,8 +37,9 @@
+
+
+ class Trial:
+-    def __init__(self, root, arm, queue):
++    def __init__(self, root, arm, queue, *, limits: TrialLimits | None = None):
+         self.root, self.arm, self.queue = Path(root), arm, queue
++        self.limits = limits
+         self.token = secrets.token_hex(32)
+         self.lock = threading.RLock()
+         self.deadline = None
+@@ -34,35 +53,199 @@
+         self.final = None
+         self.final_at = None
+         self.rejected_requests = 0
++        self._pending_requeued = False
++        self.root.mkdir(parents=True, mode=0o700, exist_ok=True)
++        if self.root.stat().st_mode & 0o077:
++            raise ValueError('trial directory must be owner-only')
+         (self.root/'payloads').mkdir(parents=True, mode=0o700, exist_ok=True)
++        self.recovery_path = self.root/'trial-recovery.json'
++        if self.recovery_path.exists():
++            self._restore()
++        elif (self.root/'submission-state.json').exists():
++            raise ValueError('v1 observation is not a recoverable trial; use a new directory')
+
+     def snapshot(self):
+         return {'arm': self.arm, 'phase': self.phase, 'deadline': self.deadline,
+                 'train_calls': self.train_calls, 'train_wall_seconds': self.train_wall_seconds,
+                 'saved_payload': self.saved, 'final_payload': self.final,
++                'final_at': self.final_at,
+                 'jobs': {k: {x: v[x] for x in ['mode', 'state', 'payload_id']}
+                          for k, v in self.jobs.items()},
+                 'rejected_requests': self.rejected_requests}
+
++    def _recovery(self):
++        record = {'version': 2, 'arm': self.arm, **{key: copy.deepcopy(getattr(self, key))
++                for key in ('token', 'deadline', 'phase', 'payloads', 'jobs', 'idempotency',
++                            'train_calls', 'train_wall_seconds', 'saved', 'final',
++                            'final_at', 'rejected_requests')}}
++        if self.limits is not None:
++            record['trial_limits'] = asdict(self.limits)
++        return record
++
++    def _restore_state(self, record):
++        for key, value in record.items():
++            if key not in _RECOVERY_METADATA:
++                setattr(self, key, value)
++
++    def _restore(self):
++        path = self.recovery_path
++        if path.is_symlink() or path.stat().st_mode & 0o077:
++            raise ValueError('recovery record must be an owner-only regular file')
++        record = json.loads(path.read_text())
++        if record.get('version') != 2 or record.get('arm') != self.arm:
++            raise ValueError('recovery identity mismatch')
++        expected = self._recovery()
++        if record.get('trial_limits') != expected.get('trial_limits'):
++            raise ValueError('recovery trial limits mismatch')
++        if set(record) != set(expected):
++            raise ValueError('incomplete recovery record')
++        if self.limits is not None and record['phase'] != 'prepared':
++            self.limits.answering_remaining(record['deadline'], time.time())
++        for identifier, payload in record['payloads'].items():
++            digest = payload['sha256']
++            if (not re.fullmatch(r'sha256:[0-9a-f]{64}', digest)
++                    or payload['purpose'] not in ('train', 'final')
++                    or identifier != 'payload_'+digest.removeprefix('sha256:')+'_'+payload['purpose']):
++                raise ValueError('recovery payload identity mismatch')
++            source = self.root/'payloads'/(identifier+'.tar')
++            if source.is_symlink() or 'sha256:'+hashlib.sha256(source.read_bytes()).hexdigest() != digest:
++                raise ValueError('recovery payload bytes mismatch')
++            payload['path'] = str(source)
++        self._restore_state(record)
++        # Never replay an uncertain native evaluation or refund its opportunity.
++        # The controller must reconcile its original worker/result separately.
++        for job in self.jobs.values():
++            if job['state'] == 'running':
++                job.update(state='failed', failure={'code': 'controller_recovery_required',
++                           'message': 'Reconcile the original native worker and result.',
++                           'retryable': False})
++
++    @staticmethod
++    def _write(path, value):
++        descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix='.'+path.name+'-')
++        try:
++            with os.fdopen(descriptor, 'w') as output:
++                json.dump(value, output, indent=2, allow_nan=False)
++                output.flush()
++                os.fsync(output.fileno())
++            os.replace(temporary, path)
++        finally:
++            try:
++                Path(temporary).unlink(missing_ok=True)
++            except OSError:
++                pass
++
+     def persist(self):
+-        p = self.root/'submission-state.json'
+-        temporary = p.with_suffix('.pending')
+-        temporary.write_text(json.dumps(self.snapshot(), indent=2))
+-        temporary.replace(p)
++        with self.lock:
++            self._write(self.recovery_path, self._recovery())
++            try:
++                self._write(self.root/'submission-state.json', self.snapshot())
++            except OSError:
++                # An observation failure cannot undo an accepted durable intent.
++                logging.getLogger(__name__).warning('recovery committed; inspection projection unavailable')
++
++    def requeue_pending(self):
++        """Call once after controller recovery, with the old scorer stopped."""
++        with self.lock:
++            if self._pending_requeued:
++                return
++            if self._needs_reconciliation():
++                raise Rejected(409, 'original native work requires reconciliation')
++            self.persist()
++            for identifier, job in self.jobs.items():
++                if job['state'] == 'queued' and job['mode'] == 'train':
++                    self.queue.put((self, identifier))
++            self._pending_requeued = True
++
++    def _needs_reconciliation(self):
++        return any(job.get('failure', {}).get('code') == 'controller_recovery_required'
++                   for job in self.jobs.values())
+
+-    def start(self, seconds):
++    def start(self, seconds=None, *, started_at=None):
+         with self.lock:
+             assert self.phase == 'prepared'
+-            self.deadline = time.time()+seconds
++            now = time.time() if started_at is None else started_at
++            if self.limits is None:
++                if seconds is None:
++                    raise ValueError('legacy trial requires an answering duration')
++                deadline = now + seconds
++            else:
++                if seconds is not None:
++                    raise ValueError('answering duration is already set by the trial limits')
++                deadline = self.limits.answering_deadline(now)
++            before = self._recovery()
++            self.deadline = deadline
+             self.phase = 'solving'
+-            self.persist()
++            try:
++                self.persist()
++            except OSError:
++                self._restore_state(before)
++                raise
++
++    @property
++    def payload_limit(self):
++        return 524288 if self.limits is None else self.limits.max_payload_bytes
++
++    @property
++    def train_call_limit(self):
++        return 100 if self.limits is None else self.limits.max_train_calls
++
++    def answering_remaining(self):
++        now = time.time()
++        if self.limits is not None:
++            return self.limits.answering_remaining(self.deadline, now)
++        return 0 if self.deadline is None else max(0, self.deadline - now)
++
++    def is_finished(self):
++        with self.lock:
++            return self.phase != 'solving' or self.answering_remaining() == 0
+
+     def admit(self):
+-        if self.phase != 'solving' or self.deadline is None or time.time() >= self.deadline:
++        if self.is_finished():
+             raise Rejected(409, 'answering phase is closed')
+
++    def train_timeout(self):
++        if self.limits is None:
++            raise RuntimeError('Train timeout requires configured trial limits')
++        return self.limits.train_timeout(spent=self.train_wall_seconds,
++                                         deadline=self.deadline, now=time.time())
++
++    def close_answering(self, *, cancelled):
++        """Close submissions after the controller has quiesced the Train worker."""
++        with self.lock:
++            if self.limits is None:
++                raise RuntimeError('answering closeout requires configured trial limits')
++            if self.phase not in ('solving', 'final_selected'):
++                raise RuntimeError('answering already closed')
++            final_jobs = [job for job in self.jobs.values() if job['mode'] == 'eval']
++            if len(final_jobs) > 1 or (self.final is None) != (not final_jobs):
++                raise RuntimeError('answering closeout requires a unique final selection')
++            if self._needs_reconciliation() or any(
++                job['mode'] == 'train' and job['state'] == 'running' for job in self.jobs.values()
++            ):
++                raise RuntimeError('original Train work must be reconciled before closeout')
++            before = self._recovery()
++            for job in self.jobs.values():
++                if job['mode'] == 'train' and job['state'] == 'queued':
++                    job.update(state='failed', failure=TRAIN_CANCELLED)
++            selected = self.limits.final_payload(explicit=self.final, saved=self.saved, cancelled=cancelled)
++            final = final_jobs[0] if final_jobs else None
++            if selected is not None and final is None:
++                verification = 'verification_'+uuid.uuid4().hex
++                self.final, self.final_at = selected, time.time()
++                final = {'verification_id': verification, 'payload_id': selected,
++                         'mode': 'eval', 'state': 'queued', 'metrics': {}}
++                self.jobs[verification] = final
++            self.phase = 'cancelled' if cancelled else 'closed'
++            try:
++                self.persist()
++            except OSError:
++                self._restore_state(before)
++                raise
++            return final if selected is not None else None
++
+     def view(self, job):
+-        return {**job, 'remaining_train_calls': max(0, 100-self.train_calls)}
++        return {**job, 'remaining_train_calls': max(0, self.train_call_limit-self.train_calls)}
+
+     def request(self, method, path, body, headers):
+         with self.lock:
+@@ -73,10 +256,18 @@
+                 if old != fingerprint:
+                     raise Rejected(409, 'idempotency key is bound to different bytes')
+                 return status, response
+-            status, result = self._request(method, path, body, headers)
+-            if key:
+-                self.idempotency[key] = (fingerprint, status, result)
+-            self.persist()
++            before = self._recovery()
++            try:
++                status, result = self._request(method, path, body, headers)
++                if key:
++                    self.idempotency[key] = (fingerprint, status, copy.deepcopy(result))
++                self.persist()
++            except BaseException:
++                self._restore_state(before)
++                raise
++            # Admission and the replay response are durable before worker handoff.
++            if method == 'POST' and path == '/v1/verifier-train':
++                self.queue.put((self, result['verification_id']))
+             return status, result
+
+     def _request(self, method, path, body, headers):
+@@ -88,7 +279,7 @@
+             return 200, self.view(job)
+         self.admit()
+         if method == 'POST' and path == '/v1/payloads':
+-            if not 0 < len(body) <= 524288:
++            if not 0 < len(body) <= self.payload_limit:
+                 raise Rejected(413, 'task submission size limit exceeded')
+             digest = 'sha256:'+hashlib.sha256(body).hexdigest()
+             if headers.get('X-Content-SHA256') != digest:
+@@ -99,7 +290,20 @@
+             identifier = 'payload_'+digest.split(':')[1]+'_'+purpose
+             if identifier not in self.payloads:
+                 target = self.root/'payloads'/(identifier+'.tar')
+-                target.write_bytes(body)
++                if target.is_symlink() or target.exists():
++                    if target.is_symlink() or target.read_bytes() != body:
++                        raise Rejected(409, 'existing payload bytes mismatch')
++                else:
++                    descriptor, temporary = tempfile.mkstemp(dir=target.parent, prefix='.payload-')
++                    try:
++                        with os.fdopen(descriptor, 'wb') as output:
++                            output.write(body)
++                            output.flush()
++                            os.fchmod(output.fileno(), 0o444)
++                            os.fsync(output.fileno())
++                        os.replace(temporary, target)
++                    finally:
++                        Path(temporary).unlink(missing_ok=True)
+                 # The enclosing host directory remains private; the native
+                 # unprivileged verifier receives this one file read-only.
+                 target.chmod(0o444)
+@@ -112,24 +316,31 @@
+         except (ValueError, KeyError, TypeError):
+             raise Rejected(400, 'unknown trial payload') from None
+         if method == 'POST' and path == '/v1/verifier-train':
++            if self._needs_reconciliation():
++                raise Rejected(409, 'original native work requires reconciliation')
+             if payload['purpose'] != 'train':
+                 raise Rejected(400, 'payload purpose mismatch')
+-            if self.train_calls >= 100 or self.train_wall_seconds >= 180000:
++            out_of_time = self.train_wall_seconds >= 180000 if self.limits is None else self.train_timeout() < 1
++            if self.train_calls >= self.train_call_limit or out_of_time:
+                 raise Rejected(429, 'authored train budget exhausted')
++            if self.limits is not None and any(
++                job['mode'] == 'train' and job['state'] in ('queued', 'running') for job in self.jobs.values()
++            ):
++                raise Rejected(429, 'a Train verification is already active')
+             verification = 'verification_'+uuid.uuid4().hex
+             job = {'verification_id': verification, 'payload_id': identifier,
+                    'mode': 'train', 'state': 'queued', 'metrics': {}}
+             self.jobs[verification] = job
+             self.train_calls += 1
+-            self.queue.put((self, verification))
+             return 202, self.view(job)
+         if method == 'POST' and path == '/v1/submissions/checkpoint':
+             if payload['purpose'] != 'final':
+                 raise Rejected(400, 'payload purpose mismatch')
+             # The latest explicitly chosen immutable snapshot wins. A rejected
+             # replacement never reaches this mutation.
++            remaining = self.answering_remaining()
+             self.saved = identifier
+-            return 200, {'remaining_runtime_s': max(0, int(self.deadline-time.time())),
++            return 200, {'remaining_runtime_s': None if remaining is None else int(remaining),
+                          'remaining_checkpoint_submissions': None}
+         if method == 'POST' and path == '/v1/submissions':
+             if payload['purpose'] != 'final':
+@@ -139,7 +350,7 @@
+             self.phase = 'final_selected'
+             self.jobs[verification] = {'verification_id': verification,
+                 'payload_id': identifier, 'mode': 'eval', 'state': 'queued', 'metrics': {}}
+-            return 202, {'verification_id': verification}
++            return 202, {'verification_id': verification, 'accepted_at': self.final_at}
+         raise Rejected(404, 'unsupported operation')
+
+
+@@ -168,7 +379,8 @@
+             if trial is None:
+                 raise Rejected(401, 'trial capability required')
+             length = int(self.headers.get('Content-Length', 0))
+-            if length < 0 or length > 524288:
++            limit = trial.payload_limit if self.path == '/v1/payloads' else 524288
++            if length < 0 or length > limit:
+                 raise Rejected(413, 'task submission size limit exceeded')
+             body = self.rfile.read(length)
+             if len(body) != length:
+@@ -178,7 +390,9 @@
+             status, result = error.status, {'error': error.reason}
+             if trial:
+                 trial.rejected_requests += 1
+-        except (ValueError, OSError):
++        except OSError:
++            status, result = 503, {'error': 'trial state commit unavailable'}
++        except ValueError:
+             status, result = 400, {'error': 'malformed request'}
+         raw = json.dumps(result, separators=(',', ':'), allow_nan=False).encode()
+         self.send_response(status)

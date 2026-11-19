@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from loopx.chat import CHAT_RESPONSE_EXAMPLE_SUFFIX
 from loopx.chat_agent import CodexChatAgentSession
 from loopx.chat_runtime import ChatRuntimeController
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
@@ -20,9 +21,13 @@ from test_native_steward_private import steward  # noqa: F401
 
 
 def install_transport_failure(fake, *, failures=1, info=None, item_type="userMessage", unreadable=False,
-                              readback_info=None, fail_each_request=False):
+                              readback_info=None, fail_each_request=False, error_message=None,
+                              readback_message=None, user_only=False):
     """A native stdio peer, including paginated terminal/item control RPCs."""
     info = info if info is not None else {"responseStreamDisconnected": {"httpStatusCode": None}}
+    error_payload = {"codexErrorInfo": info}
+    if error_message is not None:
+        error_payload["message"] = error_message
     source = fake.read_text().replace("turn_status = {}", "turn_status = {}\ntransport_errors = {}\ntransport_failures = 0\ntransport_attempts = {}")
     count = 'transport_attempts.get(json.dumps(request["params"]["input"]), 0)' if fail_each_request else "transport_failures"
     source = source.replace('        if "typed terminal failure"',
@@ -31,12 +36,15 @@ def install_transport_failure(fake, *, failures=1, info=None, item_type="userMes
         '            transport_failures += 1\n'
         '            transport_attempts[json.dumps(request["params"]["input"])] = ' + count + ' + 1\n'
         '            turn_status[active_turn] = "failed"\n'
-        '            transport_errors[active_turn] = {"codexErrorInfo": ' + repr(info) + '}\n'
+        '            transport_errors[active_turn] = ' + repr(error_payload) + '\n'
         '            print(json.dumps({"method": "turn/completed", "params": {"threadId": "durable-thread", '
         '"turn": {"id": active_turn, "status": "failed", "error": transport_errors[active_turn]}}}), flush=True)\n'
         '            continue\n'
         '        if "typed terminal failure"')
     error = repr({"codexErrorInfo": readback_info}) if readback_info is not None else "transport_errors.get(turn_id)"
+    if readback_message is not None:
+        error = repr({"codexErrorInfo": info if readback_info is None else readback_info,
+                      "message": readback_message})
     source = source.replace('{"id": turn_id, "status": status}',
         '{"id": turn_id, "status": status, "error": ' + error + '}')
     source = source.replace('    elif method in {"thread/items/list", "thread/backgroundTerminals/list"}:',
@@ -44,7 +52,8 @@ def install_transport_failure(fake, *, failures=1, info=None, item_type="userMes
         '        selected = request["params"]["turnId"]\n'
         '        cursor = request["params"].get("cursor")\n'
         '        result = {"data": [{"turnId": selected, "item": {"id": "answer" if cursor else "request", '
-        '"type": "reasoning" if cursor else ' + repr(item_type) + '}}], "nextCursor": None if cursor else "second"}\n'
+        '"type": "reasoning" if cursor else ' + repr(item_type) + '}}], "nextCursor": None if cursor or '
+        + repr(user_only) + ' else "second"}\n'
         + ('        result.pop("data")\n' if unreadable else '')
         + '    elif method in {"thread/backgroundTerminals/list"}:')
     fake.write_text(source)
@@ -61,6 +70,17 @@ def install_transport_failure(fake, *, failures=1, info=None, item_type="userMes
     ({"info": "serverOverloaded", "readback_info": "other"}, 1, "failed"),
     ({"info": "server overloaded"}, 1, "failed"),
     ({"info": "other"}, 1, "failed"), ({"info": "cyberPolicy"}, 1, "failed"),
+    ({"info": "other", "error_message": "workspace routing discovery timed out", "user_only": True}, 2, "completed"),
+    ({"info": "other", "error_message": "workspace routing discovery timed out", "user_only": True, "failures": 3}, 4, "completed"),
+    ({"info": "other", "error_message": "workspace routing discovery timed out", "user_only": True, "failures": 4}, 4, "failed"),
+    ({"info": "other", "error_message": "workspace routing discovery timed out"}, 1, "failed"),
+    ({"info": "other", "error_message": "workspace routing discovery timed out", "user_only": True, "item_type": "commandExecution"}, 1, "failed"),
+    ({"info": "other", "error_message": "prefix workspace routing discovery timed out", "user_only": True}, 1, "failed"),
+    ({"info": "other", "error_message": "workspace routing discovery timed out private detail", "user_only": True}, 1, "failed"),
+    ({"info": "other", "error_message": "workspace routing discovery timed out", "readback_message": "a different error", "user_only": True}, 1, "failed"),
+    ({"info": "cyberPolicy", "error_message": "workspace routing discovery timed out", "user_only": True}, 1, "failed"),
+    ({"info": "usageLimitExceeded", "error_message": "workspace routing discovery timed out", "user_only": True}, 1, "failed"),
+    ({"info": "other", "error_message": "workspace routing discovery timed out", "user_only": True, "unreadable": True}, 1, "failed"),
     ({"info": "usageLimitExceeded"}, 1, "failed"), ({"info": "unauthorized"}, 1, "failed"),
     ({"item_type": "commandExecution"}, 1, "failed"), ({"unreadable": True}, 1, "failed"),
     ({"readback_info": {"responseStreamDisconnected": {"httpStatusCode": 503}}}, 1, "failed"),
@@ -76,7 +96,9 @@ def test_core_recovers_bounded_effect_free_transient_attempts_without_reacceptin
     body = {"message": "transport recovery", "client_turn_id": "original-request"}
     accepted = request(f"/api/chat/sessions/{sid}/turns", body)[1]
     tid = accepted["turn_id"]
-    completed = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+    # Four native attempts include paginated readback and durable Core IO.
+    # The retry count and unchanged original input below are the oracle.
+    completed = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=30)
     assert completed["status"] == expected_status
     duplicate = request(f"/api/chat/sessions/{sid}/turns", body)[1]
     assert duplicate["turn_id"] == tid and not duplicate["created"]
@@ -91,6 +113,10 @@ def test_core_recovers_bounded_effect_free_transient_attempts_without_reacceptin
     planned = [row for row in store.events_after(sid, tid, None) if row["kind"] == "transport.retry_planned"]
     assert len(planned) == expected_starts - 1
     if planned:
+        if failure.get("info") == "other":
+            assert all(row["payload"]["readback"]["pre_execution_routing_timeout"] is True for row in planned)
+            assert all(row["payload"]["readback"]["item_count"] == 1 for row in planned)
+        assert "workspace routing discovery timed out" not in json.dumps(planned)
         assert planned[0]["payload"]["upstream_turn_id"] == "durable-turn-1"
         assert [row["payload"]["attempt"] for row in planned] == list(range(1, len(planned) + 1))
         assert completed["upstream_turn_id"] == f"durable-turn-{expected_starts}"
@@ -106,7 +132,7 @@ def test_core_recovers_bounded_effect_free_transient_attempts_without_reacceptin
 
 
 @pytest.mark.parametrize("profile", ["restricted", "trusted_owner"])
-@pytest.mark.parametrize("info", [None, "serverOverloaded"])
+@pytest.mark.parametrize("info", [None, "serverOverloaded", "other"])
 def test_steward_transport_retry_preserves_input_and_next_request_refreshes_context(
     steward, monkeypatch, profile, info,  # noqa: F811
 ):
@@ -114,7 +140,8 @@ def test_steward_transport_retry_preserves_input_and_next_request_refreshes_cont
 
     store, runtime, provider, transport, binding, capture, workspace = steward
     fake = Path(runtime.codex_bin)
-    install_transport_failure(fake, info=info)
+    install_transport_failure(fake, info=info, user_only=info == "other",
+        error_message="workspace routing discovery timed out" if info == "other" else None)
     apply_profile(store.root.parent, profile)
     monkeypatch.setattr(runtime.closed, "wait", lambda _: False)
 
@@ -141,15 +168,29 @@ def test_steward_transport_retry_preserves_input_and_next_request_refreshes_cont
     assert [row["text"] for row in store.messages(first["session_id"]) if row["role"] == "user"] == [
         "transport recovery", "Read fresh evidence for this next request.",
     ]
+    assert transport.reconcile() == 2
+    for source in [first, second]:
+        record = json.loads((transport.root / f"{source['request_ref']}.json").read_text())
+        terminal = record["deliveries"]["terminal"]
+        actual = provider.messages[terminal["attempt"]["message_ref"]]
+        wire = json.loads(actual["body"]["content"])
+        assert terminal["verified"] and record["status"] == "delivered"
+        assert actual["sender"]["id"] == provider.profile_apps["steward-app"]
+        assert actual["chat_id"] == record["event"]["chat_id"]
+        assert wire["zh_cn"]["content"][0][0]["text"] == terminal["text"]
+        assert terminal["text"] == store.load_turn(source["session_id"], source["turn_id"])["response"]["message"]
+    writes = list(provider.writes)
+    assert transport.reconcile() == 0 and provider.writes == writes
 
 
 @pytest.mark.parametrize("change", ["grant", "scope"])
-@pytest.mark.parametrize("info", [None, "serverOverloaded"])
+@pytest.mark.parametrize("info", [None, "serverOverloaded", "other"])
 def test_steward_transport_retry_still_stops_when_authority_changes(steward, monkeypatch, change, info):  # noqa: F811
     from test_native_steward_runtime import apply_profile
 
     store, runtime, provider, transport, binding, capture, workspace = steward
-    install_transport_failure(Path(runtime.codex_bin), info=info)
+    install_transport_failure(Path(runtime.codex_bin), info=info, user_only=info == "other",
+        error_message="workspace routing discovery timed out" if info == "other" else None)
     apply_profile(store.root.parent, "trusted_owner")
 
     def during_backoff(_):
@@ -198,10 +239,11 @@ def test_real_backoff_keeps_fifo_queue_and_gives_each_request_its_bounded_retry(
 
 
 @pytest.mark.parametrize("change", ["stop", "grant", "model", "session", "claim"])
-@pytest.mark.parametrize("info", [None, "serverOverloaded"])
+@pytest.mark.parametrize("info", [None, "serverOverloaded", "other"])
 def test_transport_backoff_observes_stop_and_authority_or_configuration_changes(ordinary, monkeypatch, change, info):  # noqa: F811
     store, runtime, contexts, request, capture, fake, workspace = ordinary
-    install_transport_failure(fake, info=info)
+    install_transport_failure(fake, info=info, user_only=info == "other",
+        error_message="workspace routing discovery timed out" if info == "other" else None)
     sid = request("/api/chat/sessions", {"context_kind": "project",
                   "project_ref": contexts.available()[0]["project_ref"]})[1]["session_id"]
 
@@ -232,10 +274,11 @@ def test_transport_backoff_observes_stop_and_authority_or_configuration_changes(
     runtime.close()
 
 
-@pytest.mark.parametrize("info", [None, "serverOverloaded"])
+@pytest.mark.parametrize("info", [None, "serverOverloaded", "other"])
 def test_crash_after_retry_reservation_never_replays_the_uncertain_native_attempt(ordinary, monkeypatch, info):  # noqa: F811
     store, runtime, contexts, request, capture, fake, workspace = ordinary
-    install_transport_failure(fake, info=info)
+    install_transport_failure(fake, info=info, user_only=info == "other",
+        error_message="workspace routing discovery timed out" if info == "other" else None)
     sid = request("/api/chat/sessions", {"context_kind": "project",
                   "project_ref": contexts.available()[0]["project_ref"]})[1]["session_id"]
     dispatch = {}
@@ -357,11 +400,16 @@ def test_steering_updates_the_existing_task_without_replaying_start_prompt(
     initial_text = starts[0]["input"][0]["text"]
     assert "LoopX context (supporting context only):" in initial_text
     assert "Inspect a bounded task." in initial_text
-    assert initial_text.endswith("Current user message: wait for steer")
+    assert initial_text.endswith("Current user message:\nwait for steer" + CHAT_RESPONSE_EXAMPLE_SUFFIX)
     updates = [row["params"] for row in writes if row.get("method") == "turn/steer"]
+    captured = store.steering_receipt(session_id, "adjust-one")["native_steering"]
+    assert captured["local_turn_id"] == turn_id and captured["turn_id"] == upstream_turn_id
+    assert captured["thread_id"] == session.thread_id
+    assert isinstance(captured["client_message_id"], str) and captured["client_message_id"]
     assert updates == [{
         "threadId": session.thread_id,
         "expectedTurnId": upstream_turn_id,
+        "clientUserMessageId": captured["client_message_id"],
         "input": [{"type": "text", "text": correction.strip()}],
     }]
     users = [row["text"] for row in store.messages(session_id) if row["role"] == "user"]
@@ -390,6 +438,27 @@ def test_http_steering_deduplicates_and_never_retargets(conversation):
     assert store.load_session(session_id)["active_turn_id"] == second
     assert len([row for row in store.messages(session_id) if row["text"] == "Check the dependency first."]) == 1
     runtime.interrupt_turn(session_id=session_id, turn_id=second)
+
+
+def test_http_steering_never_resends_after_its_receipt_becomes_unreadable(conversation, monkeypatch):
+    store, runtime, session_id, start, post = conversation
+    writes = []
+    original_write = CodexChatAgentSession._write
+
+    def record_write(self, payload):
+        writes.append(json.loads(json.dumps(payload)))
+        return original_write(self, payload)
+
+    monkeypatch.setattr(CodexChatAgentSession, "_write", record_write)
+    turn_id = start("unreadable-receipt")
+    assert post(turn_id)[0] == 200
+    receipt_path = store._ingress_path(session_id, "adjust-one")
+    receipt_path.write_text('{"schema_version": ', encoding="utf-8")
+    status, body = post(turn_id)
+    assert status == 409 and body["delivery_state"] == "unresolved"
+    assert receipt_path.read_text(encoding="utf-8") == '{"schema_version": ', "damaged evidence is preserved"
+    assert len([row for row in writes if row.get("method") == "turn/steer"]) == 1
+    runtime.interrupt_turn(session_id=session_id, turn_id=turn_id)
 
 
 @pytest.mark.parametrize("text,extra", [("", {}), (123, {}), ("x" * 12001, {}), ("hello", {"unexpected": True})])
@@ -442,3 +511,46 @@ def test_legacy_unbound_ingress_stays_compatible(conversation):
     assert created and turn["turn_id"] == turn_id
     duplicate, created = runtime.steer_active_turn(session_id=session_id, client_ingress_id="legacy", message="Keep the task.")
     assert not created and duplicate["turn_id"] == turn_id
+
+
+def test_http_steering_replays_a_padded_ingress_id_without_resending(conversation, monkeypatch):
+    store, runtime, session_id, start, post = conversation
+    writes = []
+    original_write = CodexChatAgentSession._write
+
+    def record_write(self, payload):
+        writes.append(json.loads(json.dumps(payload)))
+        return original_write(self, payload)
+
+    monkeypatch.setattr(CodexChatAgentSession, "_write", record_write)
+    turn_id = start("padded-ingress-id")
+    first_status, first = post(turn_id, identity=" adjust-padded ")
+    replay_status, replay = post(turn_id, identity=" adjust-padded ")
+    assert first_status == 200 and replay_status == 200, (first, replay)
+    assert replay.get("created") is False
+    assert len([row for row in writes if row.get("method") == "turn/steer"]) == 1
+    runtime.interrupt_turn(session_id=session_id, turn_id=turn_id)
+
+
+def test_http_steering_never_resends_over_a_dangling_receipt_link(conversation, monkeypatch):
+    store, runtime, session_id, start, post = conversation
+    writes = []
+    original_write = CodexChatAgentSession._write
+
+    def record_write(self, payload):
+        writes.append(json.loads(json.dumps(payload)))
+        return original_write(self, payload)
+
+    monkeypatch.setattr(CodexChatAgentSession, "_write", record_write)
+    turn_id = start("dangling-receipt-link")
+    assert post(turn_id)[0] == 200
+    receipt_path = store._ingress_path(session_id, "adjust-one")
+    moved = receipt_path.with_name("moved-away.json")
+    receipt_path.rename(moved)
+    receipt_path.symlink_to(moved.name)
+    moved.unlink()
+    status, body = post(turn_id)
+    assert status == 409 and body["delivery_state"] == "unresolved"
+    assert receipt_path.is_symlink(), "the existing entry is preserved"
+    assert len([row for row in writes if row.get("method") == "turn/steer"]) == 1
+    runtime.interrupt_turn(session_id=session_id, turn_id=turn_id)

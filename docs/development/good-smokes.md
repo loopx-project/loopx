@@ -84,9 +84,9 @@ contract. Before removing or combining a smoke:
 6. rerun the focused entries plus fleet or catalog checks to prove that the
    inventory has no coverage gap.
 
-名称相似或 setup 相同，并不能证明两个 smoke 保护同一合同。删除或合并前，应分别写明
+名称相似或 setup 相同。删除或合并前，应分别写明
 不变量、公开入口、反例、运行频率和定向 profile；把完全相同内容和直接嵌套执行当作
-审阅候选，而不是自动删除指令。可以复用 canary harness 中的 fixture 或 subprocess
+审阅候选。可以复用 canary harness 中的 fixture 或 subprocess
 setup，但不要因此合并不同的语义断言。去掉 smoke 调用另一个 smoke 的 wrapper，让每
 个合同只运行一次且仍可独立选择，最后重跑聚焦入口以及 fleet/catalog 检查，确认清单
 没有覆盖缺口。
@@ -124,7 +124,7 @@ a dated research note, candidate ranking packet, temporary run review, or
 transitional benchmark decision. Keep that information in the research document
 and cover shared invariants with a data-driven aggregate smoke.
 
-Smoke 超过约 500 行时，应重新检查它是否混合了多个测试；这不是自动删除或失败阈值。
+Smoke 超过约 500 行时，应重新检查它是否混合了多个测试；
 将可复用行为放回产品 owner，使 smoke 保持轻量；较小测试无法覆盖真实端到端 adapter
 合同时，仍可保留大型 integration smoke。不要用一次性 smoke 固化过期研究笔记、候选
 排名、临时运行评估或阶段性 benchmark 决策的精确文案；这些信息留在研究文档，共有
@@ -139,14 +139,14 @@ Add active benchmark smokes only for stable toolkit behavior; experiment-specifi
 validation belongs with the research workspace. Benchmark-native runners,
 adapters, ledgers, scoring reducers and dated packets stay outside the active
 product surface. Follow [archive placement](../../benchmark/README.md#archive-placement):
-retired implementations and dated packets belong under `deprecate/benchmark-legacy/`;
+retired implementations and dated packets stay in Git history, outside the working tree;
 only the explicitly qualified immutable snapshots may remain under `benchmark/`.
 Neither archive category enters active CI benchmark execution.
 
 保留公开/私有边界，以及已交付 provider-neutral toolkit 权限和完整性 smoke。
 新增 active benchmark smoke 只保护稳定 toolkit 行为，实验专属验证归研究工作区。
 Benchmark-native runner、adapter、ledger、scoring reducer 和过期 packet 不进入活跃
-产品面；退役实现和过期 packet 归 `deprecate/benchmark-legacy/`，满足规范条件的不可变
+产品面；退役实现和过期 packet 留在 Git 历史中，不保留在工作树；满足规范条件的不可变
 快照才可留在 `benchmark/`。两类归档都不参与 active CI benchmark 执行。
 
 ## Public-Safe Fixtures / 公开安全 Fixture
@@ -160,6 +160,19 @@ provider behavior.
 使用临时仓库、fake transport、合成记录和紧凑 receipt。确定性地清理进程与临时状态，
 不要把 stdout/stderr tail 提交进 fixture。Fake provider 可以验证序列化、脱敏和
 fail-closed，但不能证明真实 provider 行为合格。
+
+Standalone smoke subprocesses must force `LOOPX_USAGE_PING=0` after merging
+caller overrides, including environments rebuilt from an allowlist. Temporary
+HOME/state paths are also fenced by the [shared telemetry owner](../reference/usage-ping.md#disclosure-and-precedence).
+For custom scratch roots, retain the declared temp root or persist an explicit
+disabled setting before removing environment markers. Telemetry-specific tests
+opt in only to numeric loopback collectors and qualify every channel with a
+zero-request negative case and a sending positive control.
+
+独立 smoke 在合并调用方环境后必须强制关闭遥测，重建最小环境也不例外。
+共用 owner 额外防护临时 HOME/状态路径；自定义 scratch 应保留声明的临时根，
+或先持久关闭再移除环境标记。遥测专项测试只向数字回环地址显式开启，
+用全通道零请求反例和实际发送正例共同验收。
 
 Follow [Public/private boundaries](../public-private-boundary.md) whenever a
 smoke touches benchmark, host, agent, or external-system data.

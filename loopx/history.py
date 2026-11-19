@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import hashlib
 import json
 from contextlib import nullcontext
@@ -8,7 +10,6 @@ from dataclasses import dataclass
 from heapq import merge
 from itertools import chain, islice
 from pathlib import Path
-from typing import Any
 
 from .file_lock import exclusive_run_index_lock
 from .control_plane.presentation.goal_metadata import goal_parent_fields
@@ -20,15 +21,17 @@ from .control_plane.goals.activation import (
     normalize_goal_activation_state,
 )
 from .control_plane.goals.legacy_event_source import LEGACY_TODO_EVENT_SOURCE_FIELDS
+from .control_plane.goals.path_resolution import resolve_goal_local_path
 from .control_plane.progress_scope import AGENT_LANE_PROGRESS_SCOPE
 from .control_plane.quota.monitor_poll import QUOTA_MONITOR_POLL_CLASSIFICATION
+from .control_plane.quota.host_poll_receipts import read_host_worker_observations
 from .control_plane.quota.ledger_readback import (
     QUOTA_SLOT_SPENT_CLASSIFICATION,
     QUOTA_SLOT_VOIDED_CLASSIFICATION,
 )
 from .control_plane.projects.registry_codec import (
     decode_registry_snapshot as decode_registry_snapshot,
-    load_registry,
+    load_registry as load_registry,
 )
 from .control_plane.runtime.run_artifacts import (
     next_run_artifact_paths,
@@ -56,13 +59,16 @@ from .control_plane.runtime.time import chronology_key, now_local_iso
 from .doctor import PROMOTION_READINESS_CLASSIFICATIONS
 from .execution_profile import compact_execution_profile
 from .explore_graph import compact_explore_graph_policy
-from .paths import registry_project_root, resolve_runtime_root
+from .paths import (
+    registry_project_root,
+    resolve_runtime_root,
+    validate_goal_id_path_segment as validate_goal_id_path_segment,
+)
 from .presentation.markdown import (
     markdown_code,
     markdown_table_row,
     markdown_table_separator,
 )
-from .quota import goal_quota_with_spend_ledger
 from .registry import registry_goals
 
 STATUS_NEUTRAL_CLASSIFICATIONS = {
@@ -89,6 +95,43 @@ def goal_registry_digest(goal: Mapping[str, Any]) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def host_worker_goal_observation_digest(goal: dict[str, Any], *, registry_path: Path) -> str | None:
+    """Bind a driver observation to its actual source Goal, not sync metadata.
+
+    A global row must still match the existing sanitizer/merge projection of
+    that source. Sync timestamps and consumed merge directives are incidental;
+    changed source routes, Goal lifetimes or configuration must not reuse the
+    old observation. This readback check never changes execution admission.
+    """
+    from .global_registry import preserve_attention_override, sanitize_goal_for_global
+
+    try:
+        selected_registry = registry_path.expanduser().resolve()
+        source_route = goal.get("source_registry")
+        source_registry, source_goal = selected_registry, goal
+        if source_route:
+            if not isinstance(source_route, str) or not Path(source_route).is_absolute():
+                return None
+            source_registry = Path(source_route).expanduser().resolve()
+            if source_registry != selected_registry:
+                candidates = [row for row in registry_goals(load_registry(source_registry))
+                              if row.get("id") == goal.get("id")]
+                if len(candidates) != 1:
+                    return None
+                source_goal = candidates[0]
+                # A global row has one owning source. Do not accept an
+                # unverified chain of projections as that source.
+                if source_goal.get("source_registry"):
+                    return None
+                expected = preserve_attention_override({}, sanitize_goal_for_global(
+                    source_goal, source_registry=source_registry, synced_at=""))
+                if preserve_attention_override({}, {**goal, "synced_at": ""}) != expected:
+                    return None
+        return goal_registry_digest({"source_registry": str(source_registry), "goal": source_goal})
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +188,9 @@ class RunIndexSnapshot:
     records: list[dict[str, Any]]
     raw_count: int
     digest: str | None
+    invalid_count: int = 0
+    # Rows that are not text at all, so even their goal and kind are unknown.
+    undecodable_count: int = 0
 
 
 def now_local() -> str:
@@ -224,17 +270,6 @@ def write_reserved_run_artifacts(
         append_run_index_record(index_path, index_record, allow_nan=False)
 
 
-def validate_goal_id_path_segment(goal_id: str) -> str:
-    value = str(goal_id or "").strip()
-    if not value:
-        raise ValueError("goal id is required")
-    if value in {".", ".."} or "/" in value or "\\" in value:
-        raise ValueError("goal id must be a single path segment")
-    if Path(value).name != value:
-        raise ValueError("goal id must not include path traversal")
-    return value
-
-
 def discover_goal_ids(
     runtime_root: Path,
     registry: dict[str, Any],
@@ -259,7 +294,13 @@ def _indexed_artifact_exists(value: Any, *, artifact_root: Path | None) -> bool:
     path = Path(text).expanduser()
     if not path.is_absolute() and artifact_root is not None:
         path = artifact_root / path
-    return path.exists()
+    try:
+        return path.exists()
+    except OSError:
+        # Availability is a best-effort observation, not run-index authority.
+        # Match pathlib's Python 3.14 behavior on older supported interpreters:
+        # inaccessible or invalid artifact paths must not hide durable history.
+        return False
 
 
 def _observe_run_artifacts(
@@ -280,11 +321,21 @@ def load_index_snapshot(
     *,
     artifact_root: Path | None = None,
     include_artifact_status: bool = True,
+    tolerate_undecodable: bool = False,
+    skip_invalid_encoding: bool = False,
 ) -> RunIndexSnapshot:
     """Decode the complete index; derived artifact status is optional internally.
 
     Full readers keep fresh status by default. History collection defers only
     filesystem observation until its complete semantic selection is known.
+    A row cut inside a multibyte character is not text, so a caller cannot tell
+    whether it was a spend, a Vision or a replan ack. By default that raises, so
+    a reader that gates a write or an admission never proceeds on a list with a
+    hole in it. A reader that reports the damage itself passes
+    ``tolerate_undecodable=True`` and reads ``undecodable_count``.
+    An incomplete internal presentation may instead pass
+    ``skip_invalid_encoding=True`` and consume ``invalid_count``. Strict readers
+    still receive the decoding error.
     """
     try:
         stream = path.open("rb")
@@ -294,20 +345,35 @@ def load_index_snapshot(
     records: list[dict[str, Any]] = []
     positions: dict[tuple[str, str, str], int] = {}
     raw_count = 0
+    invalid_count = 0
+    undecodable_count = 0
     digest = hashlib.sha256()
 
     with stream:
         for encoded_line in stream:
             digest.update(encoded_line)
-            line = encoded_line.decode("utf-8")
+            try:
+                line = encoded_line.decode("utf-8")
+            except UnicodeDecodeError:
+                if not (tolerate_undecodable or skip_invalid_encoding):
+                    raise
+                # A write torn inside a multibyte character leaves bytes that
+                # are not text. The caller asked to see the damage as a count.
+                raw_count += 1
+                invalid_count += 1
+                if tolerate_undecodable:
+                    undecodable_count += 1
+                continue
             if not line.strip():
                 continue
             raw_count += 1
             try:
                 item = json.loads(line)
             except json.JSONDecodeError:
+                invalid_count += 1
                 continue
             if not isinstance(item, dict):
+                invalid_count += 1
                 continue
 
             key = (
@@ -330,6 +396,8 @@ def load_index_snapshot(
         records=records,
         raw_count=raw_count,
         digest=f"sha256:{digest.hexdigest()}",
+        invalid_count=invalid_count,
+        undecodable_count=undecodable_count,
     )
 
 
@@ -363,22 +431,24 @@ def collect_history(
     agent_lane_id: str | None = None,
     scoped_agent_id: str | None = None,
     registry: dict[str, Any] | None = None,
+    tolerate_undecodable: bool = False,
 ) -> dict[str, Any]:
     from .capabilities.machine_configuration.builtins import (
-        build_builtin_machine_configuration_registry,
+        read_builtin_goal_machine_configuration,
         project_goal_with_builtin_machine_configuration,
     )
-    from .capabilities.machine_configuration.store import read_machine_configuration
+    from .quota import goal_quota_with_spend_ledger, quota_with_unreadable_index_rows
 
     if registry is None:
         registry = load_registry(registry_path)
-    machine_configuration = read_machine_configuration(
-        runtime_root,
-        registry=build_builtin_machine_configuration_registry(),
-    )
+    machine_configuration = read_builtin_goal_machine_configuration(runtime_root)
     registry_goal_rows = registry_goals(registry)
     registry_goal_digests = {
         str(goal.get("id")): goal_registry_digest(goal)
+        for goal in registry_goal_rows
+    }
+    registry_goal_meta = {
+        str(goal.get("id")): goal
         for goal in registry_goal_rows
     }
     goal_meta = {
@@ -416,6 +486,7 @@ def collect_history(
         index_snapshot = load_index_snapshot(
             index_path,
             include_artifact_status=False,
+            tolerate_undecodable=tolerate_undecodable,
         )
         runs = index_snapshot.records
         raw_count = index_snapshot.raw_count
@@ -451,13 +522,23 @@ def collect_history(
             )
         )
 
-        adapter = meta.get("adapter") if isinstance(meta.get("adapter"), dict) else {}
+        adapter = cast(dict[str, Any], meta.get("adapter")) if isinstance(meta.get("adapter"), dict) else {}
         quota = goal_quota_with_spend_ledger(meta, goal_runs) if registry_member else None
-        goal_record = {
+        if quota is not None and index_snapshot.undecodable_count:
+            # The undecodable rows may be the spend or void events the projection
+            # just summed without them; report that instead of an exact count.
+            quota = quota_with_unreadable_index_rows(quota, index_snapshot.undecodable_count)
+        goal_record: dict[str, Any] = {
             "id": current_goal_id,
             **goal_parent_fields(meta),
             "activation_state": activation_state.value,
             "registry_goal_digest": registry_goal_digests.get(current_goal_id),
+            "host_worker_observations": read_host_worker_observations(
+                meta, resolve_goal_local_path(meta.get("state_file"), meta, fallback_base=registry_path.parent),
+                registry_goal_digest=registry_goal_digests[current_goal_id], runtime_root=runtime_root,
+                source_goal_observation_digest=lambda: host_worker_goal_observation_digest(
+                    registry_goal_meta[current_goal_id], registry_path=registry_path),
+            ) if registry_member else None,
             "display_name": meta.get("display_name") if registry_member else None,
             "domain": meta.get("domain"),
             "status": meta.get("status") if registry_member else "legacy-runtime",
@@ -467,12 +548,12 @@ def collect_history(
             "legacy_runtime_goal": not registry_member,
             "adapter_kind": adapter.get("kind"),
             "adapter_status": adapter.get("status"),
-            "coordination": meta.get("coordination") if isinstance(meta.get("coordination"), dict) else None,
+            "coordination": cast(dict[str, Any], meta.get("coordination")) if isinstance(meta.get("coordination"), dict) else None,
             "explore_graph": compact_explore_graph_policy(meta.get("explore_graph"), (meta.get("spawn_policy") or {}).get("explore_harness")) if meta.get("explore_graph") is not None or (meta.get("spawn_policy") or {}).get("explore_harness") else None,
-            "spawn_policy": meta.get("spawn_policy") if isinstance(meta.get("spawn_policy"), dict) else None,
+            "spawn_policy": cast(dict[str, Any], meta.get("spawn_policy")) if isinstance(meta.get("spawn_policy"), dict) else None,
             "execution_profile": compact_execution_profile(meta.get("execution_profile")) if registry_member else None,
             "control_plane": compact_control_plane_policy(meta.get("control_plane")) if registry_member else None,
-            "guards": meta.get("guards") if isinstance(meta.get("guards"), list) else [],
+            "guards": cast(list[Any], meta.get("guards")) if isinstance(meta.get("guards"), list) else [],
             "next_probe": meta.get("next_probe") if registry_member else None,
             "authority_registry": goal_authority_registry_summary(meta) if registry_member else None,
             "quota": quota,
@@ -480,6 +561,13 @@ def collect_history(
             "index_digest": index_snapshot.digest,
             "index_exists": index_path.exists(),
             "raw_index_records": raw_count,
+            # Rows that are not text were skipped, not read: say so for every Goal,
+            # including a runtime-only one that has no quota projection to carry it.
+            **(
+                {"unreadable_index_rows": index_snapshot.undecodable_count}
+                if index_snapshot.undecodable_count
+                else {}
+            ),
             "unique_runs": len(runs),
             "latest_status_run": latest_status_run(runs),
             "latest_runs": latest_runs_with_agent_context(
@@ -979,6 +1067,16 @@ def render_history_markdown(payload: dict[str, Any]) -> str:
         f"- goal_filter: `{payload.get('goal_filter')}`",
         f"- goals: `{payload.get('goal_count')}`",
         f"- unique_runs: `{payload.get('run_count')}`",
+    ]
+    unreadable = sum(
+        int(goal.get("unreadable_index_rows") or 0) for goal in payload.get("goals") or []
+    )
+    if unreadable:
+        lines.append(
+            f"- WARNING unreadable_index_rows: `{unreadable}` "
+            "(rows that could not be decoded were skipped; the listing below is incomplete)"
+        )
+    lines += [
         "",
         markdown_table_row(["generated_at", "goal", "classification", "files", "action"]),
         markdown_table_separator(5),
@@ -1006,6 +1104,11 @@ def render_history_markdown(payload: dict[str, Any]) -> str:
             f"index_exists=`{goal.get('index_exists')}`, "
             f"records=`{goal.get('raw_index_records')}`, "
             f"unique_runs=`{goal.get('unique_runs')}`"
+            + (
+                f", unreadable_index_rows=`{goal.get('unreadable_index_rows')}`"
+                if goal.get("unreadable_index_rows")
+                else ""
+            )
         )
     return "\n".join(lines)
 

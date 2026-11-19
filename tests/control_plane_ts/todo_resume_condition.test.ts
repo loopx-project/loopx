@@ -11,7 +11,11 @@ import {
   diagnoseTodoResumeCondition,
   normalizeTodoResumeWhen,
   planTodoExternalWaitTransition,
+  resumeConditionHasKnownPendingTarget,
 } from "../../loopx/control_plane/todos/resume_condition.ts";
+import {
+  monitorChangeScopeDigest,
+} from "../../loopx/control_plane/todos/monitor_scope.ts";
 
 function todo(
   todoId: string,
@@ -35,6 +39,10 @@ test("resume syntax is normalized by the typed Todo boundary", () => {
   }), "monitor_changed:todo_watch001");
   assert.equal(normalizeTodoResumeWhen({
     schema_version: TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION,
+    resume_when: " Monitor_Changed:TODO_WATCH001@CASE-A/RUN-7 ",
+  }), "monitor_changed:todo_watch001@case-a/run-7");
+  assert.equal(normalizeTodoResumeWhen({
+    schema_version: TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION,
     resume_when: "note_contains:approved",
   }), null);
   assert.equal(normalizeTodoResumeWhen({
@@ -52,6 +60,28 @@ test("resume syntax is normalized by the typed Todo boundary", () => {
     schema_version: TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION,
     resume_when,
   }), null, resume_when);
+});
+
+test("an active blocked completion target is a known pending dependency", () => {
+  const waiting = todo("todo_waiting", "deferred", "advancement_task", {
+    resume_when: "todo_done:todo_dependency",
+  });
+  const evaluate = (source: Record<string, unknown>[]) => (evaluateTodoResumeConditions({
+    schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
+    items: [waiting], source_items: source,
+  }).conditions as Array<{condition: Record<string, unknown>}>)[0].condition;
+  for (const status of ["open", "deferred", "blocked"]) {
+    const condition = evaluate([todo("todo_dependency", status, "advancement_task", {
+      archive_state: "active", claimed_by: "agent-peer",
+    })]);
+    assert.equal(condition.satisfied, false);
+    assert.equal(resumeConditionHasKnownPendingTarget(condition, waiting), true, status);
+  }
+  for (const source of [
+    [], [todo("todo_dependency", "done")], [todo("todo_dependency", "unknown")],
+    [todo("todo_dependency", "blocked", "advancement_task", {archive_state: "archived"})],
+    [todo("todo_dependency", "blocked", "continuous_monitor")],
+  ]) assert.equal(resumeConditionHasKnownPendingTarget(evaluate(source), waiting), false);
 });
 
 test("resume_at emits one stable due receipt across repeated ticks and restart", () => {
@@ -90,6 +120,40 @@ test("resume_at emits one stable due receipt across repeated ticks and restart",
     source_items: [],
     rollout_events: [],
   }), /evaluated_at must be a timezone-aware RFC3339 timestamp/);
+});
+
+test("receipt clock precision preserves the last microsecond before due", () => {
+  for (const date of ["1969-12-31", "2030-01-01"]) {
+    const resume_when = `resume_at:${date}T08:00:00.123456+08:00`;
+    const item = todo("todo_scheduled", "open", "advancement_task", {resume_when});
+    const evaluate = (fraction: string) => {
+      const result = evaluateTodoResumeConditions({
+        schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
+        items: [item], source_items: [], evaluated_at: `${date}T00:00:00.${fraction}Z`,
+      });
+      return (result.conditions as Array<{condition: Record<string, unknown>}>)[0].condition;
+    };
+    assert.equal(normalizeTodoResumeWhen({
+      schema_version: TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION, resume_when,
+    }), `resume_at:${date}T00:00:00.123456Z`);
+    const before = evaluate("123455");
+    assert.equal(before.satisfied, false);
+    assert.equal(before.scheduled_for, `${date}T00:00:00.123456Z`);
+    assert.equal(before.evaluated_at, `${date}T00:00:00.123455Z`);
+    assert.equal(before.resume_receipt, null);
+    assert.equal(resumeConditionHasKnownPendingTarget(before, item), true);
+    const due = evaluate("123456");
+    assert.equal(due.satisfied, true);
+    assert.equal(resumeConditionHasKnownPendingTarget(due, item), false);
+    assert.deepEqual(due.resume_receipt, evaluate("123457").resume_receipt);
+  }
+  for (const fraction of ["123", "123000", "123450", "000001"]) {
+    const canonical = fraction === "123000" ? "123" : fraction.replace(/0+$/, "");
+    assert.equal(normalizeTodoResumeWhen({
+      schema_version: TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION,
+      resume_when: `resume_at:2030-01-01T00:00:00.${fraction}Z`,
+    }), `resume_at:2030-01-01T00:00:00.${canonical}Z`);
+  }
 });
 
 test("live monitor completion is invalid, but historical completion remains satisfied", () => {
@@ -273,6 +337,58 @@ test("monitor resume is generation-fenced and fail-closed without a baseline", (
   assert.equal(conditions[1].satisfied, false);
   assert.equal(conditions[1].invalid_state, "baseline_generation_missing");
   assert.equal(conditions[1].availability_reason, "resume_condition_invalid");
+});
+
+test("scoped monitor resume ignores unrelated material transitions", () => {
+  const scope = "case-a/run-1";
+  const digest = monitorChangeScopeDigest(scope);
+  const waiting = todo("todo_scoped_wait", "open", "advancement_task", {
+    resume_when: `monitor_changed:todo_watch001@${scope}`,
+    resume_monitor_generation: 3,
+  });
+  const evaluate = (scopedGeneration: number, globalGeneration: number) => {
+    const result = evaluateTodoResumeConditions({
+      schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
+      items: [waiting],
+      source_items: [todo("todo_watch001", "open", "continuous_monitor", {
+        material_change_generation: globalGeneration,
+        material_change_scope_generations: `${digest}:${scopedGeneration}`,
+      })],
+    });
+    return (result.conditions as Array<{condition: Record<string, unknown>}>)[0].condition;
+  };
+  const unrelated = evaluate(3, 11);
+  assert.equal(unrelated.satisfied, false);
+  assert.equal(unrelated.material_change_generation, 11);
+  assert.equal(unrelated.scoped_material_change_generation, 3);
+  assert.equal(unrelated.monitor_change_scope, scope);
+  assert.equal(resumeConditionHasKnownPendingTarget(unrelated, waiting), true);
+  const matched = evaluate(12, 12);
+  assert.equal(matched.satisfied, true);
+  assert.equal(matched.scoped_material_change_generation, 12);
+});
+
+test("scoped external wait captures its own scope generation", () => {
+  const scope = "case-a/run-1";
+  const result = planTodoExternalWaitTransition({
+    schema_version: TODO_EXTERNAL_WAIT_REQUEST_SCHEMA_VERSION,
+    todo_id: "todo_waiting001",
+    resume_when: `monitor_changed:todo_watch001@${scope}`,
+    successor_todo_ids: ["todo_fallback001"],
+    items: [
+      todo("todo_waiting001", "open"),
+      todo("todo_watch001", "open", "continuous_monitor", {
+        material_change_generation: 9,
+        material_change_scope_generations: `${monitorChangeScopeDigest(scope)}:4`,
+      }),
+      todo("todo_fallback001", "open"),
+    ],
+  });
+  assert.equal(result.baseline_generation, 4);
+  assert.deepEqual(result.metadata_updates, {
+    resume_when: `monitor_changed:todo_watch001@${scope}`,
+    resume_monitor_generation: 4,
+  });
 });
 
 test("external wait atomically binds a monitor baseline and runnable successor", () => {

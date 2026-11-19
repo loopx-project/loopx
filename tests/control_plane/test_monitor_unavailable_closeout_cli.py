@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from loopx.cli import main as cli_main
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from test_quota_settlement_cli import (
@@ -51,17 +52,28 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
         subprocess.run(["git", "init", str(project)], capture_output=True, check=True)
 
     def cli(*args: str) -> tuple[int, dict]:
+        if args[:2] == ("quota", "should-run"):
+            args = (*args, "--context-delivery", "off")
         with monkeypatch.context() as context:
             context.chdir(project)
             rc = cli_main(["--registry", str(registry), "--runtime-root", str(runtime),
                            "--format", "json", *args])
-            return rc, json.loads(capsys.readouterr().out)
+            return rc, read_cli_policy_payload(capsys.readouterr().out, returncode=rc)
 
-    rc, listed = cli("todo", "list", "--goal-id", GOAL_ID)
-    assert rc == 0, listed
+    if provider == "markdown":
+        before = state.read_bytes()
+        rc, refused = cli("todo", "list", "--goal-id", GOAL_ID)
+        assert rc == 1 and refused["error_code"] == "canonical_authority_required", refused
+        assert refused["write_admitted"] is False
+        assert refused["legacy_fallback_used"] is False
+        assert state.read_bytes() == before
+        assert _classification_count(runtime, "monitor_observation_unavailable") == 0
+        assert _spend_run_count(runtime) == 0
+        return
+    source_todos = read_fixture_todos(state)
     if provider != "markdown":
         initialize_canonical_authority(runtime, GOAL_ID, build_todo_runtime_shadow_projection(
-            goal_id=GOAL_ID, todos=listed["todos"], handoff_mode="hard_lease", leases=[],
+            goal_id=GOAL_ID, todos=source_todos, handoff_mode="hard_lease", leases=[],
         ), state_path=state, provider=provider)
     original_turn = f"unavailable-original-{provider}"
     binding = ("--agent-id", AGENT_ID, "--todo-id", MONITOR_ID,
@@ -76,9 +88,6 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
     assert rc == 0 and guard["should_run"] is True, guard
     assert guard["work_lane_contract"]["obligation"] == "attempt_due_monitor"
     assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == MONITOR_ID
-    plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
-    writeback_step = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
-    assert "observation is unavailable" in writeback_step["precondition"]
     lease_args: tuple[str, ...] = ()
     if provider != "markdown":
         rc, lease = cli("task-lease", "acquire", "--goal-id", GOAL_ID, "--todo-id", MONITOR_ID,
@@ -86,6 +95,12 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
         assert rc == 0 and lease["acquired"] is True, lease
         lease_args = ("--task-lease-idempotency-key", f"unavailable-{provider}",
                       "--task-lease-expected-version", str(lease["lease"]["version"]))
+    rc, bound = cli("quota", "should-run", "--goal-id", GOAL_ID, "--codex-app", *binding, *capabilities)
+    assert rc == 0, bound
+    assert bound["heartbeat_receipt"]["settlement_identity"] == guard["heartbeat_receipt"]["settlement_identity"]
+    plan = bound["interaction_contract"]["cli_channel"]["settlement_plan"]
+    writeback_step = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
+    assert "observation is unavailable" in writeback_step["precondition"]
     rc, before = cli("todo", "list", "--goal-id", GOAL_ID, "--todo-id", MONITOR_ID)
     assert rc == 0, before
     fields = {k: before["todo"].get(k) for k in OBSERVATION_FIELDS}
@@ -223,7 +238,7 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
         monitor = next(todo for todo in after_late["todos"] if todo["todo_id"] == MONITOR_ID)
         assert {k: monitor.get(k) for k in OBSERVATION_FIELDS} == fields
         assert {todo["todo_id"] for todo in after_late["todos"]} == {
-            todo["todo_id"] for todo in listed["todos"]
+            todo["todo_id"] for todo in source_todos
         }
         assert _classification_count(runtime, "monitor_observation_unavailable") == 1
         assert _classification_count(runtime, "quota_monitor_poll") == 0
@@ -310,7 +325,7 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
 def test_unavailable_closeout_does_not_accept_missing_evidence_or_wrong_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], invalid: str,
 ) -> None:
-    project, runtime, registry = _write_fixture(tmp_path)
+    project, runtime, registry = _write_fixture(tmp_path, provider="sqlite")
     # This guard binds an advancement. A caller cannot close another Monitor
     # or omit the typed evidence required by the existing settlement owner.
     def cli(*args: str) -> tuple[int, dict]:
@@ -318,7 +333,7 @@ def test_unavailable_closeout_does_not_accept_missing_evidence_or_wrong_identity
             context.chdir(project)
             rc = cli_main(["--registry", str(registry), "--runtime-root", str(runtime),
                            "--format", "json", *args])
-            return rc, json.loads(capsys.readouterr().out)
+            return rc, read_cli_policy_payload(capsys.readouterr().out, returncode=rc)
 
     binding = ("--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "invalid-monitor")
     rc, guard = cli("quota", "should-run", "--goal-id", GOAL_ID, "--codex-app", *binding)

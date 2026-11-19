@@ -10,7 +10,7 @@ from loopx.capabilities.goal_inspection import (
     inspect_goal_capabilities,
     render_goal_capabilities,
 )
-from loopx.chat_goal_configuration_api import GoalConfigurationRequestMixin
+from loopx.chat.goal_configuration_api import GoalConfigurationRequestMixin
 from loopx.cli import main
 
 
@@ -304,7 +304,9 @@ def test_live_machine_defaults_and_goal_override_keep_dashboard_revision(tmp_pat
     )
     overridden = inspect()
     assert cadence(overridden)["source"] == "goal_override"
-    assert cadence(overridden)["configuration"] == {"count_unit": "completed_todos", "count": 3}
+    assert cadence(overridden)["configuration"] == {
+        "count_unit": "completed_todos", "count": 3, "planning_horizon_goal": True, "yardstick_enabled": False,
+    }
     assert overridden["revision"] != inherited["revision"]
     assert overridden == SettingsHandler(
         registry, runtime_root

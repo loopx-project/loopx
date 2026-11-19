@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {evaluateTaskLeaseAcquireDecision} from "../../loopx/control_plane/work_items/task_lease_acquire_decision.ts";
 import {decideTaskLeaseLifecycle, evaluateTaskLeaseLifecycleDecision} from "../../loopx/control_plane/work_items/task_lease_lifecycle_decision.ts";
-import {evaluateTaskLeaseOwnerEligibility, leaseOwnerRejection, type LeaseEligibilityTodo} from
+import {leaseOwnerConstraint, leaseOwnerRejection, type LeaseEligibilityTodo} from
   "../../loopx/control_plane/work_items/task_lease_eligibility.ts";
 import {productionScaleCoordinationFixture} from "./production_scale_coordination_fixture.ts";
 
@@ -45,8 +45,7 @@ test("release remains a fenced cleanup operation after owner eligibility is lost
 test("User actions cannot acquire, renew or transfer execution but retained leases can be released", () => {
   const action = {...todo, task_class: "user_action", bound_agent: "agent-a"};
   for (const owner of ["agent-a", "agent-b"]) {
-    assert.equal(evaluateTaskLeaseOwnerEligibility({todo: action, owner,
-      registered_agents: ["agent-a", "agent-b"]}).code, "todo_not_executable");
+    assert.equal(leaseOwnerRejection(action, owner, ["agent-a", "agent-b"]), "todo_not_executable");
     assert.equal(evaluateTaskLeaseAcquireDecision({...acquire(false), todo: action,
       command: {...acquire(false).command, owner}}).code, "todo_not_executable");
   }
@@ -73,8 +72,9 @@ test("owner eligibility has one precedence across adapters and renewal", () => {
   ];
   for (const row of cases) {
     assert.equal(leaseOwnerRejection(row.todo, row.owner, row.agents), row.reason);
-    const adapted = evaluateTaskLeaseOwnerEligibility({todo: row.todo, owner: row.owner, registered_agents: row.agents});
-    assert.equal(adapted.code, row.reason ?? "lease_owner_allowed");
+    const constraint = leaseOwnerConstraint(row.todo, row.owner, row.agents);
+    assert.equal(constraint.effective, row.reason === null);
+    if (!constraint.effective) assert.equal(constraint.reason, row.reason);
     if (!row.owner) continue;
     const renewed = decideTaskLeaseLifecycle({handoff_mode: "hard_lease", registered_agents: row.agents,
       todo: row.todo && {...row.todo, todo_id: "todo_target"}, lease,
@@ -101,14 +101,9 @@ test("production-scale history preserves independent claim, exclusion and termin
   }
 });
 
-test("eligibility decoder rejects malformed facts and does not infer authorisation from prose", () => {
-  for (const patch of [{registered_agents: "agent-a"}, {owner: 1},
-    {todo: {...todo, status: true}}, {todo: {...todo, excluded_agents: "agent-a"}}]) {
-    assert.throws(() => evaluateTaskLeaseOwnerEligibility({todo, owner: "agent-a", registered_agents: ["agent-a"], ...patch}));
-  }
+test("owner eligibility does not infer authorisation from prose", () => {
   const described = {...todo, text: "approved owner agent-a; safe to proceed", claimed_by: "agent-b"};
-  assert.equal(evaluateTaskLeaseOwnerEligibility({todo: described, owner: "agent-a", registered_agents: ["agent-a"]}).code,
-    "owner_conflicts_with_claim");
+  assert.equal(leaseOwnerRejection(described, "agent-a", ["agent-a"]), "owner_conflicts_with_claim");
 });
 
 for (const generation of ["version", "lease_epoch"] as const) {

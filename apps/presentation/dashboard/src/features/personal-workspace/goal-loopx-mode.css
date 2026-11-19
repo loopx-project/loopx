@@ -122,7 +122,8 @@ li[data-check="blocked"] .goal-team-check-pill { border-color: transparent; back
 .goal-team-comparison select { min-height: 44px; padding: 8px; background: var(--pw-surface, #fff); color: inherit; border: 1px solid var(--pw-line, #ebebeb); border-radius: 6px; }
 @media (max-width: 640px) { .goal-team-comparison-grid { grid-template-columns: 1fr; } }
 
-.goal-team-artifact > header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 16px; }
+.goal-team-artifact > header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
+.goal-team-artifact-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .goal-team-artifact > header h4 { font-size: var(--text-caption); line-height: var(--leading-caption); color: var(--pw-muted); font-weight: 500; }
 .goal-team-report { padding: 24px; background: var(--pw-surface, #fff); color: var(--pw-text, #171717); overflow-wrap: anywhere; }
 .goal-team-report .personal-md { font-size: var(--text-lead); line-height: var(--leading-prose); gap: 20px; }

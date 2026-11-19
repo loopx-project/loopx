@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from itertools import product
+import os
 from pathlib import Path
 import subprocess
 from typing import Any
@@ -68,6 +69,22 @@ def test_explicit_scan_file_keeps_unsupported_suffix(tmp_path: Path) -> None:
         ("credential", "tok" + "en=literal"),
         ("credential", "pass" + "word=literal"),
         ("credential", "Author" + "ization: literal"),
+        # Provider tokens carry their issuer in the prefix instead of a label.
+        # Every shape the canonical owner matches needs a prefilter literal, or
+        # the rule is silently skipped for that whole issuer family.
+        ("credential", "ghp_" + "16C7e42F292c6912E7710c838347Ae178B4a"),
+        ("credential", "ghs_" + "16C7e42F292c6912E7710c838347Ae178B4a"),
+        ("credential", "github_pat_" + "11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz0123456789"),
+        ("credential", "AS" + "IA1234567890ABCDEF"),
+        ("credential", "xoxb-" + "123456789012-abcdefghijkl"),
+        ("credential", "AIza" + "SyD-1234567890abcdefghijklmnopqrstu"),
+        ("credential", "sk_live_" + "abcdefghijklmnopqrst"),
+        ("credential", "sk_test_" + "abcdefghijklmnopqrst"),
+        ("credential", "rk_live_" + "abcdefghijklmnopqrst"),
+        ("credential", "rk_test_" + "abcdefghijklmnopqrst"),
+        ("credential", "npm_" + "abcdefghijklmnopqrstuvwxyz"),
+        ("credential", "pypi-" + "abcdefghijklmnopqrst"),
+        ("credential", "eyJ" + "hbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.dozjgNryP4J3jVmNHl0w5N_XgL0n3"),
         ("local_private_path", "/" + "Users/alice/Documents/example.md"),
         ("local_private_path", "/" + "Users/alice/code-reading/example.md"),
         ("local_private_path", "/ext" + "_data/example.md"),
@@ -281,3 +298,28 @@ def test_windows_paths_outside_the_private_roots_stay_public(tmp_path: Path) -> 
     (tmp_path / "sample.md").write_text(line + "\n", encoding="utf-8")
 
     assert contract.scan_public_boundary([tmp_path])["ok"] is True
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX allows CR in a filename")
+def test_pruned_scan_root_keeps_a_carriage_return_tracked_name(tmp_path: Path) -> None:
+    """A CR inside a tracked name survives the Git-side enumeration.
+
+    Pruned roots such as a virtualenv are enumerated from Git alone, so a
+    pathname the text-mode read tore apart would leave the public-boundary
+    scan without any other way to notice the file.
+    """
+
+    repo = tmp_path / "repo"
+    scan_root = repo / "venv"
+    scan_root.mkdir(parents=True)
+    (scan_root / "pyvenv.cfg").write_text("home = /usr/bin\n", encoding="utf-8")
+    name = "carriage\rreturn.py"
+    (scan_root / name).write_text("x = 1\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "add", "-f", "--", "venv/pyvenv.cfg", f"venv/{name}"],
+        check=True,
+    )
+
+    assert contract._tracked_scan_files(scan_root) == [scan_root / name]
+    assert contract.iter_scan_files(scan_root) == [scan_root / name]

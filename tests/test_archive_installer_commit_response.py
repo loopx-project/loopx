@@ -94,6 +94,7 @@ def test_invalid_commit_override_precedes_temp_directory_failure(tmp_path):
     source = Path(__file__).resolve().parents[1]
     env = {k: v for k, v in os.environ.items() if not k.startswith("LOOPX_")}
     env.update(
+        LOOPX_BUILD_FROM_SOURCE="1",
         TMPDIR=str(tmp_path / "missing"),
         LOOPX_PYTHON=sys.executable,
         LOOPX_RESOLVED_SOURCE_GIT_COMMIT="not-a-full-sha",
@@ -173,6 +174,7 @@ def test_commit_response_uses_file_transport_and_cleans_up(tmp_path, valid, ref_
     receipt = tmp_path / "receipt"
     env = {k: v for k, v in os.environ.items() if not k.startswith("LOOPX_")}
     env.update(
+        LOOPX_BUILD_FROM_SOURCE="1",
         PATH=f"{binary}{os.pathsep}{env['PATH']}",
         TMPDIR=str(scratch),
         LOOPX_PYTHON=sys.executable,
@@ -247,6 +249,7 @@ def test_archive_download_recovers_after_attempt_timeout(
     receipt = tmp_path / "receipt"
     env = {k: v for k, v in os.environ.items() if not k.startswith("LOOPX_")}
     env.update(
+        LOOPX_BUILD_FROM_SOURCE="1",
         TMPDIR=str(scratch),
         LOOPX_PYTHON=sys.executable,
         LOOPX_ARCHIVE_URL=f"http://127.0.0.1:{server.server_port}/archive.tar.gz",
@@ -302,6 +305,7 @@ def test_archive_timeout_failure_never_extracts_partial_file(tmp_path, resume_st
     scratch.mkdir()
     env = {k: v for k, v in os.environ.items() if not k.startswith("LOOPX_")}
     env.update(
+        LOOPX_BUILD_FROM_SOURCE="1",
         PATH=f"{binary}{os.pathsep}{env['PATH']}",
         TMPDIR=str(scratch),
         LOOPX_PYTHON=sys.executable,
@@ -352,6 +356,7 @@ def test_complete_corrupt_archive_is_rejected_before_extraction(tmp_path):
     marker = tmp_path / "extracted"
     env = {k: v for k, v in os.environ.items() if not k.startswith("LOOPX_")}
     env.update(
+        LOOPX_BUILD_FROM_SOURCE="1",
         PATH=f"{binary}{os.pathsep}{env['PATH']}", TMPDIR=str(scratch),
         LOOPX_PYTHON=sys.executable, LOOPX_ARCHIVE_URL=archive.as_uri(),
         TEST_TAR_MARKER=str(marker),

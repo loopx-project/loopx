@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Smoke-test that todo/quota CLI groups live outside loopx/cli.py."""
+"""Smoke-test todo/quota help and structured validation errors."""
 
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -11,17 +12,13 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CLI_PATH = REPO_ROOT / "loopx" / "cli.py"
-CLI_RUNTIME_PATH = REPO_ROOT / "loopx" / "cli_runtime.py"
-INIT_PATH = REPO_ROOT / "loopx" / "cli_commands" / "__init__.py"
-TODO_MODULE = REPO_ROOT / "loopx" / "cli_commands" / "todo.py"
-QUOTA_MODULE = REPO_ROOT / "loopx" / "cli_commands" / "quota.py"
 
 
 def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-m", "loopx.cli", *args],
         cwd=REPO_ROOT,
+        env={**os.environ, "LOOPX_USAGE_PING": "0"},
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -33,36 +30,6 @@ def assert_contains(text: str, needle: str, label: str) -> None:
     # Help wrapping can split words at hyphens; only whitespace is incidental here.
     if "".join(needle.split()) not in "".join(text.split()):
         raise AssertionError(f"{label} missing {needle!r}")
-
-
-def assert_source_shape() -> None:
-    cli_text = CLI_PATH.read_text(encoding="utf-8")
-    runtime_text = CLI_RUNTIME_PATH.read_text(encoding="utf-8")
-    init_text = INIT_PATH.read_text(encoding="utf-8")
-    todo_text = TODO_MODULE.read_text(encoding="utf-8")
-    quota_text = QUOTA_MODULE.read_text(encoding="utf-8")
-
-    assert_contains(init_text, "register_todo_command", "__init__")
-    assert_contains(init_text, "handle_todo_command", "__init__")
-    assert_contains(init_text, "register_quota_command", "__init__")
-    assert_contains(init_text, "handle_quota_command", "__init__")
-    assert "todo_parser = sub.add_parser" not in cli_text
-    assert "quota_parser = sub.add_parser" not in cli_text
-    assert_contains(
-        cli_text,
-        "register_todo_command(sub, add_subcommand_format)",
-        "cli.py",
-    )
-    assert_contains(cli_text, "register_quota_command(sub)", "cli.py")
-    assert_contains(cli_text, "dispatch_common_command(", "cli.py")
-    assert "handle_todo_command(" not in cli_text
-    assert "handle_quota_command(" not in cli_text
-    assert_contains(runtime_text, "handle_todo_command(", "cli_runtime.py")
-    assert_contains(runtime_text, "handle_quota_command(", "cli_runtime.py")
-    assert_contains(todo_text, "render_todo_markdown", "todo module")
-    assert_contains(todo_text, "append_cli_rollout_event", "todo module")
-    assert_contains(quota_text, "render_quota_should_run_markdown", "quota module")
-    assert_contains(quota_text, "append_cli_rollout_event", "quota module")
 
 
 def assert_help_surfaces() -> None:
@@ -172,11 +139,34 @@ def assert_todo_markdown_error_payload() -> None:
     assert_contains(result.stdout, "- error: todo add requires --role", "todo markdown error")
 
 
+def assert_history_reader_route() -> None:
+    with tempfile.TemporaryDirectory(prefix="loopx-cli-history-smoke-") as tmp:
+        script = f"""
+import contextlib
+import io
+import json
+import sys
+from loopx.entrypoint import main
+output = io.StringIO()
+with contextlib.redirect_stdout(output):
+    result = main(["--registry", {str(Path(tmp) / 'absent.json')!r},
+                   "--format", "json", "history", "--agent-id", "fixture-agent"])
+assert result == 1
+assert json.loads(output.getvalue()) == {{"ok": False,
+    "error": "--agent-id requires --goal-id without a history action"}}
+for module in ("loopx.cli", "loopx.chat_server", "loopx.cli_commands.benchmark_dispatch"):
+    assert module not in sys.modules, module
+"""
+        result = subprocess.run([sys.executable, "-c", script], cwd=REPO_ROOT,
+                                text=True, capture_output=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def main() -> int:
-    assert_source_shape()
     assert_help_surfaces()
     assert_todo_error_payload()
     assert_todo_markdown_error_payload()
+    assert_history_reader_route()
     print("cli-control-plane-command-modularization-smoke: ok")
     return 0
 

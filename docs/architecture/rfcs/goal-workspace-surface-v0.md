@@ -438,6 +438,19 @@ encoded it as `supports` with `materialized_from=node_parent_id`; it is not
 scientific supporting evidence. Explicit source relationships retain their basis,
 without being promoted to independent verification.
 
+The history reader's recorded-evidence search filters the complete loaded
+snapshot before display pagination, including historical revisions, original
+text, source references and run/result identifiers. Literal terms and recorded
+status narrow the list without turning an older observation into the latest
+finding. Validated translations may be displayed, while matching still uses original
+text and each result retains full original text and provenance. Display-language
+toggles preserve the query. An
+interrupted load identifies partial coverage; failed refresh retains the previous
+snapshot with a stale-read warning and retry. This is a read-only S5/S11 discovery
+slice, not evidence of subsequent Agent adoption or scientific benefit. Packaged
+browser qualification uses the native paged history owner with synthetic records;
+installed native WebView and Lark search remain unqualified.
+
 **Layer 2 — requested Agent analysis.** This is the product consumer of the
 benchmark research owner's deep trajectory evaluation, not a second judge
 built into the frontend. Reuse its analysis method and versioned result
@@ -664,6 +677,100 @@ show an unavailable notice without querying local owners.
 M3, W2/W3, installed behavior and real L1/G1 delivery/original-route return retain their existing owners.
 This candidate does not close those qualification gates.
 
+**Prospective V10 rendering qualification (2026-11-09).**
+The original all-samples 1-second gate remains the criterion for its historical
+results. Subsequent loaded-lens qualification repeats each of the same five
+directed transitions three times on the complete 200-item fixture, starting each
+repeat on Board. Every transition's median must be below 1 second; every sample
+must be below the existing 2-second page-usability ceiling. Three repetitions
+are the smallest odd sample count that separates one moderate outlier from a
+repeated slowdown. Report all 15 click-to-visible samples, the five medians,
+maximum and count above the 1-second target before asserting the budget.
+Playwright action waiting and browser scheduling are included; this is local
+rendering qualification, not pure backend latency or a kernel regression verdict.
+The bounded isolated-overage allowance applies to both a real page delay and
+host scheduling overhead; a median cannot identify their cause. Browser long-task
+entries are reported alongside each measured window when supported, with an
+explicit unavailable signal otherwise. They are diagnostic evidence, not proof
+that an unexplained Linux overrun was host noise. A single real page stall below
+2 seconds may pass this prospective rule; the above-target sample remains visible.
+Every lens retains all 200 items, and classification, selection, no-effect and
+error checks remain independent of timing. Initial rendering and expansion retain
+their existing 2-second checks. Historical failures are not reclassified by this
+rule; cross-host, installed, live-team, full-cost and unrelated CI qualification
+still require their own evidence.
+
+Coverage-instrumented CI retains the same 1-second product target as a reported
+diagnostic, but does not use that target as its repeated-transition ceiling.
+Exact-head CI on 2026-11-10 retained all 200 items, completed initial rendering
+and expansion below 2 seconds, and kept every loaded-lens sample below 1.321
+seconds; two of five medians were about 1.229 and 1.305 seconds while browser
+long tasks were recorded in the same windows. For subsequent instrumented runs,
+each transition median must therefore remain below 1.5 seconds and every sample
+below the unchanged 2-second page-usability ceiling. The result still reports
+all samples and the count above the 1-second target. Ordinary, non-instrumented
+qualification continues to require medians below 1 second. This prospective
+coverage boundary neither changes historical verdicts nor establishes
+cross-host or installed performance.
+
+Remaining-work expansion binds each keyboard activation to the current summary
+locator. A re-render can retire a separately focused node before a later global
+Enter command reaches it. The verifier must still expose all 200 items within
+the existing expansion budget. This qualifies the browser driver's target
+selection; product focus recovery and the causes of earlier partial inventories
+retain their separate evidence requirements.
+
+Coverage-enabled source runs now qualify the complete M2 journey without V8
+coverage first, enforcing the ordinary below-1-second transition medians, all
+15 loaded-lens samples, and the unchanged initial-render and expansion limits.
+When coverage is requested, a second complete journey collects coverage and
+reports both timing sets while retaining classification, selection, no-effect,
+error and remote-source checks. A failed uninstrumented gate stops the run
+before coverage can supply a replacement result. Acceptance retains
+`renderQualification` and `coverageDiagnostics`; ordinary and packaged runs
+execute only the uninstrumented qualification. This changes neither the
+workload nor the numerical budgets and does not reclassify earlier failures.
+
+**Checkpoint 2026-11-12 (source-coverage execution).**
+The source lane now executes the real disposable first-Goal and runtime-readiness
+backends rather than returning packaged-only PASS receipts. Explicitly required
+backend journeys fail before PASS when their readback did not complete. Other
+scenario coverage boundaries remain valid. Existing GET/HEAD socket recovery
+includes EPIPE within the same three-attempt bound; HTTP writes stay single-attempt.
+Research-record search checks bind help dismissal to its current keyboard trigger
+and require the selected query to survive dismissal.
+
+On immutable source `eedfc5e24`, local macOS/Node26 qualification passes all
+86 scenarios across three non-overlapping 29/29/28 partitions with a common
+catalog and source tree, verified backend-readback markers and nonempty merged
+coverage. The passing partitions take 1,943.74 seconds; earlier failed runs,
+setup and repair remain separate records. This is validation cost, with no
+complete model/service/human cost comparison.
+
+The matched 200-item M2 pair retains all 15 samples and long-task windows.
+Ordinary medians are 225.77/172.99/310.77/128.45/146.52 ms, maximum 366.08 ms;
+coverage medians are 328.21/371.20/332.49/174.73/173.02 ms, maximum 421.22 ms.
+Both have zero samples above the 1-second target. Full-suite coverage M2 also
+passes: medians 325.35/270.28/326.59/164.22/166.47 ms, maximum 463.88 ms.
+The real 1,200 ms repeated Board delay is correctly rejected by ordinary
+qualification (slow median 1491.77 ms, maximum 1519.98 ms; all 15
+samples/windows retained). Existing strict-boundary and missing-sample tests
+pass without a budget change.
+
+The failed source partitions and historical frozen failures retain their original
+status. This is named local source qualification, not Linux CI, an installed-host
+upgrade, model task completion, kernel attribution or full-cost acceptance. V10
+thresholds and the remaining real-team/product milestones retain their owners.
+
+**Follow-up: source coverage for research-record search.**
+The original search scenario opened the compiled bundle in both lanes. Its
+assertions could pass while the source coverage reporter dropped all of its
+scripts. The source lane now opens Vite and forwards data requests to the
+same disposable paged-history owner used by the packaged lane. A PASS
+requires native history reads without mutation; source coverage also requires
+execution of the instrumented research-record browser module. This narrows
+the coverage gap without changing the historical V10 timing results.
+
 **Checkpoint 2026-10-11 (M1 proposed at `6c3c0c104` in [#6191](https://github.com/loopx-project/loopx/pull/6191), subsequently merged).**
 Verified subset: V1 reducer fixtures written from Section 5.3, mutation checks
 and the packaged page on synthetic status; V2 strip and Board sharing the work
@@ -746,6 +853,54 @@ candidate. This is not another scorer or automatic solver feedback. Captured
 solver usage and the current analysis attempt's receipt stay separate; full-study
 cost and causal benefit remain unknown. No first-viewport/hero/CTA change is
 introduced; six uncalibrated process judgments retain their existing role.
+
+**Checkpoint 2026-10-18 (shared Goal source reading, proposed).** Source IO
+now lives below presentation in `control_plane/status/goal_source.py`, reusing
+native status, strict Explore validation and the shared history projection.
+Local/SSH connection and host/container environment compose independently;
+prepared scope selects one original Goal or all registered Goals. App, CLI and
+Agents share source description, Goal listing, status and paged-history reads.
+The thin workspace adapter retains existing UI endpoints. Configuration-derived
+source identity binds requests, cursors and selection. Source manifests require
+one explicit connection/environment/scope model. A failed source is visible in the main
+view on narrow screens, cached contents are withheld and retry keeps that source.
+Disposable native-host and real local-container reads, HTTP isolation/recovery
+and packaged desktop/narrow journeys are verified; SSH composition has command
+tests, not a live remote-host/container qualification. One local reader process
+serves multiple source listeners and invokes native IO on cache misses; no CPU or
+IO saving is established. This is a read-only increment: no management grant,
+new execution Goal/registry, automatic analysis-pack binding or V12 completion.
+
+
+**Command palette proposal (S5 / M4 keyboard slice).** Quick navigation (⌘K /
+Ctrl-K or the sidebar entry) searches Goals and the current loaded Goal's Todos,
+projected results and existing reviewable previews. It reuses selection, task
+deep links and drawers; search and navigation create no action preview, Agent
+request, quota spend or validation run. Source/Goal changes invalidate the
+palette; read-only sources expose no action previews. This bounded slice does
+not complete M4: the full keyboard map, new action preparation, dark/live-motion
+qualification and installed/live-team evidence retain their existing owners.
+V6/V9 evidence is the focused command-entry test and packaged command-palette
+browser smoke, including a disposable real Todo/status owner and read recovery.
+
+**Checkpoint 2026-10-28 (integrated reading and task continuity, proposed).**
+The home brief distinguishes loaded native attention items, affected Goals,
+delivered confirmations and operations still awaiting delivery. Each native item
+opens its own request; linked-source requests retain their read-only boundary.
+On a narrow overview, blocking attention precedes the long objective in both
+visual and DOM order. Overview and Tasks share query, owner, state and view
+choices through the existing route, scoped to the exact source and Goal;
+refresh and Back preserve the native selected Todo and expose hidden selection.
+
+Files lists native result identities before reading a selected body. Managed,
+team and research readers retain their own version checks, paging and failures;
+returning restores the original row. Report headings and the table of contents
+share stable anchors, while return restores the exact original Session/Message.
+Only older stable long messages use complete-block excerpts; current output
+stays expanded. These presentation changes retain existing authority and do not
+complete M4, target authoring, provider/runtime qualification or installed-App
+acceptance. The PR records packaged synthetic browser evidence and isolated real
+Todo-owner write/recovery evidence separately from fixture settings/result reads.
 
 ## 12. Open decisions
 

@@ -17,6 +17,11 @@ from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
 
+from benchmark.edgebench.source import bootstrap
+
+if __name__ == "__main__":
+    bootstrap(keep_log_arg=False)
+
 from fastapi import File, Form, HTTPException, Query, UploadFile
 from sforge.harness.config import load_config
 from sforge.harness.judge_server import (

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from ...public_safe_text import CATEGORY_CREDENTIAL, classify_private_text
+from ...hosts.codex_rollout_file import open_rollout
 
 WINDOW_BYTES = 2 * 1024 * 1024
 RECORD_BYTES = 8 * 1024 * 1024
@@ -206,7 +207,7 @@ def read_messages(
         raise ValueError("Choose one history direction")
     if any(position is not None and position < 0 for position in (before, after)):
         raise ValueError("History position must be nonnegative")
-    with path.open("rb") as stream:
+    with open_rollout(path) as stream:
         stamp = os.fstat(stream.fileno())
         size = stamp.st_size
         source = source_ref(stamp)
@@ -273,7 +274,7 @@ def read_content(
 ) -> dict[str, Any]:
     if entry_id < 0 or offset < 0:
         raise ValueError("Content position must be nonnegative")
-    with path.open("rb") as stream:
+    with open_rollout(path) as stream:
         stamp = os.fstat(stream.fileno())
         if source_ref(stamp) != expected_source or entry_id >= stamp.st_size:
             raise ValueError("History source changed")

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ...control_plane.goals.acceptance_readback import configured_checks
+
 import re
 from typing import Any
 
@@ -35,10 +37,25 @@ def append_goal_acceptance_observation_markdown(
                     f"{markdown_scalar(gap.get('evidence_required') or gap.get('reason') or 'unknown')}"
                 )
         contract = as_dict(observation.get("goal_acceptance_contract"))
-        if contract.get("enabled") is not True:
-            return
         if observation.get("goal_id") != goal.get("id"):
             lines.append("  - Goal acceptance contract: source unavailable; acceptance unknown")
+            return
+        for outcome in as_list(as_dict(contract.get("outcome_requirements")).get("outcomes")):
+            if not isinstance(outcome, dict):
+                continue
+            lines.append(f"  - outcome: {_contract_text(outcome.get('objective'))}")
+            for requirement in as_list(outcome.get("requirements")):
+                if not isinstance(requirement, dict):
+                    continue
+                review = as_dict(requirement.get("agent_review"))
+                lines.append(f"    - {_contract_text(requirement.get('description'))}: checks={_contract_text(requirement.get('status'))}; "
+                    f"Agent review={_contract_text(review.get('conclusion', 'unreviewed'))}; basis_current={review.get('basis_current', False)}")
+                for ref in as_list(review.get("evidence_refs")):
+                    lines.append(f"      - evidence: {_contract_text(ref)}")
+            for work in as_list(outcome.get("work")):
+                if isinstance(work, dict):
+                    lines.append(f"    - work: {_contract_text(work.get('todo_id'))} ({_contract_text(work.get('status'))})")
+        if configured_checks(contract) is None:
             return
         task_states = {
             "ready": "task association confirmed",

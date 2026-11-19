@@ -1,11 +1,12 @@
 import { ChevronUp, Download, RefreshCw, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useWorkspaceI18n } from "./i18n";
+import { observeTransfer, transferText, type TransferSample } from "./update-progress";
 
 type Phase = "idle" | "runtime_required" | "runtime_pairing_required" | "connecting" | "service_error" | "checking" | "available" | "up_to_date" | "downloading" | "installing_app" | "installing_runtime" | "restart_required" | "ready" | "error";
-type UpdateState = { phase: Phase; details?: { version?: string; channel?: string; received?: number; total?: number; code?: string } };
+type UpdateState = { phase: Phase; details?: { version?: string; channel?: string; received?: number; total?: number; code?: string; background?: boolean; prepared?: boolean } };
 type RuntimeSelection = { explicit?: boolean; remembered?: boolean; bundled_repair_available?: boolean };
-type UpdateStatus = { state: UpdateState | null; app_version: string; rollback_available?: boolean; runtime_selection?: RuntimeSelection };
+type UpdateStatus = { state: UpdateState | null; app_version: string; platform?: string; rollback_available?: boolean; runtime_selection?: RuntimeSelection };
 type DesktopWindow = Window & { __TAURI__?: { core: { invoke: <T>(command: string, args?: Record<string, string>) => Promise<T> } } };
 const workingPhases: Phase[] = ["checking", "connecting", "downloading", "installing_app", "installing_runtime"];
 
@@ -21,8 +22,12 @@ const updateErrors: Record<string, [string, string]> = {
   update_feed_unavailable: ["此通道的更新源尚未就绪或暂时不可用。可稍后重新检查，当前版本仍可继续使用。", "This channel's update feed is not ready or temporarily unavailable. Check again later; you can keep using this version."],
   update_feed_invalid: ["更新源格式异常。请稍后重新检查。", "The update feed is invalid. Check again later."],
   update_platform_unavailable: ["此通道尚无适用于本机的更新包。", "This channel has no update package for this platform."],
+  update_action_platform_unavailable: ["当前平台暂不支持该恢复操作：Windows 版 App 仅提供更新检查与安装。", "This recovery action is unavailable on this platform; the Windows App supports update checks and installation only."],
   update_check_timeout: ["检查更新超时。请稍后重试。", "The update check timed out. Try again later."],
-  update_network_failed: ["无法连接更新服务器。请检查网络后重试。", "Cannot reach the update server. Check your connection and retry."],
+  update_network_failed: ["更新网络请求失败，尚未安装。请检查连接后重试。", "The update request failed; nothing was installed. Check your connection and retry."],
+  update_download_timeout: ["更新包下载超时，尚未安装。请检查网络后重试。", "The update download timed out; nothing was installed. Check your connection and retry."],
+  update_download_failed: ["更新服务器未能提供安装包，尚未安装。请重新检查更新。", "The update server did not provide the package; nothing was installed. Check for updates again."],
+  update_signature_invalid: ["更新包未通过签名校验，尚未安装。请重新检查更新。", "The update package failed signature verification; nothing was installed. Check for updates again."],
   update_download_or_signature_failed: ["更新包下载或签名校验失败，尚未安装。请重新检查更新。", "Download or signature verification failed; the update was not installed. Check for updates again."],
 };
 function failedUpdate(error: unknown, fallback = "update_failed"): UpdateState {
@@ -35,19 +40,34 @@ export function DesktopUpdate() {
   const [open, setOpen] = useState(false);
   const panel = useRef<HTMLElement>(null);
   const [channel, setChannel] = useState("stable");
+  const [platform, setPlatform] = useState("");
   const [state, setState] = useState<UpdateState>({ phase: "idle" });
   const [version, setVersion] = useState("");
   const [rollbackAvailable, setRollbackAvailable] = useState(false);
   const [runtimeSelection, setRuntimeSelection] = useState<RuntimeSelection>();
   const busy = useRef(false);
+  const [transfer, setTransfer] = useState<TransferSample | null>(null);
+  const [now, setNow] = useState(Date.now);
   const statusGeneration = useRef(0);
+  const selectedChannel = useRef<string | null>(null);
   const invoke = (window as DesktopWindow).__TAURI__?.core.invoke;
-  const working = workingPhases.includes(state.phase);
+  const observing = workingPhases.includes(state.phase);
+  const working = observing && state.details?.background !== true;
   const repairAvailable = runtimeSelection?.explicit !== true && runtimeSelection?.bundled_repair_available !== false;
   const restoreInPlace = state.phase === "error" && state.details?.code === "app_install_incomplete" && rollbackAvailable;
 
+  useEffect(() => {
+    setTransfer((previous) => observeTransfer(previous, state.phase, state.details?.received, Date.now()));
+  }, [state.phase, state.details?.received]);
+  useEffect(() => {
+    if (!observing) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [observing]);
+
   function readStatus(value: UpdateStatus, includeState = true) {
     setVersion(value.app_version);
+    setPlatform(value.platform ?? "");
     setRollbackAvailable(value.rollback_available === true);
     setRuntimeSelection(value.runtime_selection);
     if (includeState && value.state?.phase) setState(value.state);
@@ -55,7 +75,9 @@ export function DesktopUpdate() {
 
   function commitStatus(value: UpdateStatus, generation: number, includeState = true) {
     if (generation !== statusGeneration.current) return false;
-    const stateIsCurrent = includeState && (!busy.current || !value.state?.phase || workingPhases.includes(value.state.phase));
+    const reportedChannel = value.state?.details?.channel;
+    const channelIsCurrent = selectedChannel.current === null || !reportedChannel || reportedChannel === selectedChannel.current;
+    const stateIsCurrent = includeState && channelIsCurrent && (!busy.current || !value.state?.phase || (workingPhases.includes(value.state.phase) && value.state.details?.background !== true));
     readStatus(value, stateIsCurrent);
     return true;
   }
@@ -75,6 +97,7 @@ export function DesktopUpdate() {
     void invoke<UpdateStatus>("desktop_update_status").then((value) => {
       if (!alive || !commitStatus(value, generation)) return;
       const selected = value.state?.details?.channel ?? (value.app_version.includes("-main.") ? "main" : "stable");
+      selectedChannel.current = selected;
       setChannel(selected);
       if (!value.state?.phase) {
         const actionGeneration = ++statusGeneration.current;
@@ -91,7 +114,7 @@ export function DesktopUpdate() {
   }, [invoke]);
 
   useEffect(() => {
-    if (!invoke || !working) return;
+    if (!invoke || !observing) return;
     const timer = window.setInterval(() => {
       const generation = ++statusGeneration.current;
       void invoke<UpdateStatus>("desktop_update_status").then((value) => {
@@ -99,11 +122,12 @@ export function DesktopUpdate() {
       }).catch(() => {});
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [invoke, working]);
+  }, [invoke, observing]);
 
   async function run(action: "check" | "apply" | "repair" | "restart" | "rollback" | "forget_runtime_selection") {
     if (!invoke || busy.current) return;
     busy.current = true;
+    selectedChannel.current = channel;
     statusGeneration.current++;
     setState({ phase: action === "check" ? "checking" : action === "repair" ? "installing_runtime" : action === "rollback" ? "installing_app" : action === "restart" ? "restart_required" : action === "forget_runtime_selection" ? "connecting" : "downloading" });
     try {
@@ -131,16 +155,35 @@ export function DesktopUpdate() {
       }
     }
   }
+  // Where this App cannot reinstall its bundled runtime (the Windows release,
+  // or a separately managed runtime), the copy must not name the disabled
+  // repair action or promise a combined App-and-runtime update.
+  const phaseMessage = (repaired: string, unrepaired: string) => (repairAvailable ? repaired : unrepaired);
+  // The feed publishes Windows NSIS updates on the main preview channel only
+  // (stable and MSI installs keep the manual installer path), so the idle copy
+  // must scope the launch-time promise to that channel instead of the host OS
+  // alone. Read the host OS from the native status projection.
+  const idleMessage = () => {
+    if (platform === "windows") {
+      return channel === "main"
+        ? (zh ? "main 预览版会在启动时检查并安装已签名的 Windows NSIS 更新；也可在此手动检查或安装。" : "The Windows main preview checks for and installs signed NSIS updates at launch. You can also check or install here.")
+        : (zh ? "Windows 稳定版与 MSI 安装需手动运行新的签名安装包；App 内自动更新目前只在 main 预览通道提供（NSIS）。" : "Windows stable and MSI installs update by running a newer signed installer; in-App automatic updates currently ship on the main preview channel (NSIS).");
+    }
+    if (platform === "macos") {
+      return zh ? "启动直接打开本地工作区，更新在后台准备。可在此更新并重启。" : "Open the local workspace immediately. Updates prepare in the background; update and restart here when ready.";
+    }
+    return zh ? "更新会跟随所选通道；请检查更新以确认本机是否有可用安装包。" : "Updates follow the selected channel; check for updates to see whether this machine has an installer.";
+  };
   const message: Record<Phase, string> = {
-    service_error: zh ? "运行时已安装，但服务尚未连接。可重试更新、修复或恢复上版。" : "Runtime installed, but services are unavailable. Retry updates, repair, or restore the previous version.",
+    service_error: phaseMessage(zh ? "运行时已安装，但服务尚未连接。可重试更新、修复或恢复上版。" : "Runtime installed, but services are unavailable. Retry updates, repair, or restore the previous version.", zh ? "运行时已安装，但服务尚未连接。可检查更新；连接仍会自动重试。" : "Runtime installed, but services are unavailable. Check for updates; the connection keeps retrying."),
     runtime_pairing_required: zh ? "旧版启动器未能自动选择可用组件。请检查 App 更新，或通过恢复入口重新连接。" : "The older launcher could not select a usable runtime. Check for an App update or reconnect through recovery.",
-    idle: zh ? "App 启动时会检查并安装当前通道的可用更新；也可在此手动检查。" : "On launch, the App checks and installs available updates on its current channel. You can also check here.",
-    runtime_required: zh ? "请完成匹配组件安装，或检查 App 更新。" : "Install matching components or check for an App update.",
+    idle: idleMessage(),
+    runtime_required: phaseMessage(zh ? "请完成匹配组件安装，或检查 App 更新。" : "Install matching components or check for an App update.", zh ? "无法准备可用组件。可检查 App 更新；当前安装仍会保留。" : "Components are unavailable. Check for an App update; the current installation is kept."),
     connecting: zh ? "正在连接本地服务…" : "Connecting to local services…",
-    checking: zh ? "正在检查更新…" : "Checking for updates…",
-    available: zh ? "新版本已就绪，一次更新 App 与匹配的运行时。" : "Update the App and its matching runtime together.",
+    checking: state.details?.background ? (zh ? "正在后台检查更新，当前版本可继续使用。" : "Checking in the background. Keep using this version.") : (zh ? "正在检查更新…" : "Checking for updates…"),
+    available: state.details?.prepared ? (zh ? "更新已下载并通过签名校验，可更新并重启。" : "Update downloaded and signature verified. Update and restart when ready.") : phaseMessage(zh ? "新版本已就绪，一次更新 App 与匹配的运行时。" : "Update the App and its matching runtime together.", zh ? "有新版本可用，可更新 App。" : "A new version is available; the App can be updated."),
     up_to_date: zh ? "当前通道暂无更新。" : "No newer update on this channel.",
-    downloading: zh ? "正在下载并校验签名…" : "Downloading and verifying signature…",
+    downloading: state.details?.background ? (zh ? "正在后台下载并校验签名，当前版本可继续使用。" : "Downloading and verifying in the background. Keep using this version.") : (zh ? "正在下载并校验签名…" : "Downloading and verifying signature…"),
     installing_app: zh ? "正在安装 App，请保持窗口打开。" : "Installing the App. Keep this window open.",
     installing_runtime: zh ? "正在安装匹配的运行时，请稍候…" : "Installing the matching runtime…",
     restart_required: zh ? "重启后将自动完成运行时安装与服务连接。" : "Restart to finish runtime installation and reconnect services.",
@@ -149,7 +192,7 @@ export function DesktopUpdate() {
       ? (zh ? "更新未完成。请重试；启动失败可尝试修复当前版本。" : "Update incomplete. Retry; repair this version if startup fails.")
       : (zh ? "更新未完成。请重新检查更新；若仍失败，请重新安装完整 App。" : "Update incomplete. Check for updates again; if it still fails, reinstall the complete App.")),
   };
-  const label = state.phase === "connecting" ? (zh ? "正在连接…" : "Connecting…") : working ? (zh ? "正在更新…" : "Updating…") : state.phase === "available" ? (zh ? "有可用更新" : "Update available") : state.phase === "restart_required" ? (zh ? "重启完成更新" : "Restart to finish") : state.phase === "error" ? (zh ? "更新需重试" : "Retry update") : (zh ? "更新 LoopX" : "Update LoopX");
+  const label = state.phase === "connecting" ? (zh ? "正在连接…" : "Connecting…") : observing ? (state.details?.background ? (zh ? "后台更新中" : "Preparing update") : (zh ? "正在更新…" : "Updating…")) : state.phase === "available" ? (state.details?.prepared ? (zh ? "更新已准备" : "Update prepared") : (zh ? "有可用更新" : "Update available")) : state.phase === "restart_required" ? (zh ? "重启完成更新" : "Restart to finish") : state.phase === "error" ? (zh ? "更新需重试" : "Retry update") : (zh ? "更新 LoopX" : "Update LoopX");
   return <div className="personal-desktop-update">
     <button className="personal-update-trigger" type="button" aria-expanded={open} aria-controls="desktop-update-panel" onClick={(event) => {
       panel.current?.style.setProperty("bottom", `${window.innerHeight - event.currentTarget.getBoundingClientRect().top + 8}px`);
@@ -162,8 +205,9 @@ export function DesktopUpdate() {
       <header><strong>{zh ? "LoopX 更新" : "LoopX updates"}</strong><button type="button" aria-label={zh ? "关闭更新面板" : "Close updates"} onClick={() => panel.current?.hidePopover()}><X size={16} aria-hidden="true" /></button></header>
       <small>{version} · {channel === "main" ? (zh ? "main 预览版" : "main preview") : (zh ? "稳定版" : "Stable")}</small>
       {state.details?.version ? <p>{zh ? "目标版本：" : "Target: "}{state.details.version}</p> : null}
-      <p role="status" aria-live="polite">{working ? <RefreshCw className="is-spinning" size={14} aria-hidden="true" /> : null}{message[state.phase]}</p>
+      <p role="status" aria-live="polite">{observing ? <RefreshCw className="is-spinning" size={14} aria-hidden="true" /> : null}{message[state.phase]}</p>
       {state.phase === "downloading" && state.details?.total ? <progress aria-label={zh ? "下载进度" : "Download progress"} max={state.details.total} value={state.details.received ?? 0} /> : null}
+      {state.phase === "downloading" && transfer ? <p className="personal-update-transfer" role="status">{transferText(transfer, state.details?.total, now, zh)}</p> : null}
       {invoke ? <div className="personal-update-actions">
         {state.phase === "restart_required" ? <button type="button" onClick={() => void run("restart")}>{zh ? "重启完成更新" : "Restart to finish"}</button> : <>
           {restoreInPlace ? <button type="button" onClick={() => void run("rollback")}>{zh ? "恢复上个版本" : "Restore previous version"}</button> : null}
@@ -173,12 +217,17 @@ export function DesktopUpdate() {
       </div> : <p>{zh ? "请在 LoopX App 中更新；浏览器自身无需安装包。" : "Update from the LoopX App; the browser needs no installer."}</p>}
       <details><summary>{zh ? "高级选项" : "Advanced options"}</summary>
       <label>{zh ? "更新通道" : "Update channel"}
-        <select disabled={working || state.phase === "restart_required"} value={channel} onChange={(event) => { setChannel(event.target.value); setState({ phase: "idle" }); }}>
+        <select disabled={working || state.phase === "restart_required"} value={channel} onChange={(event) => {
+          statusGeneration.current++;
+          selectedChannel.current = event.target.value;
+          setChannel(event.target.value);
+          setState({ phase: "idle" });
+        }}>
           <option value="stable">{zh ? "稳定版（推荐）" : "Stable (recommended)"}</option>
           <option value="main">{zh ? "main 预览版" : "main preview"}</option>
         </select>
       </label>
-      <p>{zh ? "App 与匹配的 CLI 一起更新，服务可能短暂断开。不删除 Goal 数据。" : "Updates the App and matching CLI. Services may briefly disconnect. Goal data is not deleted."}</p>
+      <p>{repairAvailable ? (zh ? "App 与匹配的 CLI 一起更新，服务可能短暂断开。不删除 Goal 数据。" : "Updates the App and matching CLI. Services may briefly disconnect. Goal data is not deleted.") : (zh ? "仅更新 App；服务可能短暂断开。不删除 Goal 数据。" : "Updates the App only. Services may briefly disconnect. Goal data is not deleted.")}</p>
       {invoke ? <>
         <p>{runtimeSelection?.explicit === true ? updateErrors.runtime_selection_explicit[zh ? 0 : 1] : repairAvailable ? (zh ? "启动失败时，可重装当前 App 随附的运行时。" : "If startup fails, reinstall this App's bundled runtime.") : (zh ? "当前 App 无法重装运行时。请恢复上个版本或重新安装完整 App；单独管理的运行时请通过原安装方式维护。" : "This App cannot reinstall the runtime. Restore the previous version or reinstall the complete App; maintain separately managed runtimes through their installer.")}</p>
         <button disabled={working || state.phase === "restart_required" || !repairAvailable} type="button" onClick={() => void run("repair")}>{zh ? "修复当前版本" : "Repair this version"}</button>

@@ -159,3 +159,57 @@ def test_changed_window_is_rejected(tmp_path, key, value):
     window[key] = value
     with pytest.raises(ValueError):
         validate_cadence_window(window)
+
+
+def starting(subscription, date):
+    changed = deepcopy(subscription)
+    changed["schedule"]["start_date"] = date
+    changed["effective_revision"] = "sha256:" + "c" * 64
+    return changed
+
+
+def test_future_start_does_not_admit_or_consume_window(tmp_path):
+    subscription = starting(config(), "2026-09-18")
+    early = admit(tmp_path, subscription=subscription)
+    assert early == {"status": "not_due", "mutated": False, "window": None,
+                     "next_due_at": "2026-09-18T18:00:00Z"}
+    assert read_cadence_journal(runtime_root=tmp_path, goal_id="example") is None
+    assert not list(tmp_path.rglob("*.json"))
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        due = list(pool.map(lambda _: admit(tmp_path, "2026-09-18T18:00:00+00:00", subscription), range(4)))
+    assert sum(item["mutated"] for item in due) == 1
+    assert len({item["window"]["window_id"] for item in due}) == 1
+    assert due[0]["window"]["start_at"] == "2026-09-11T18:00:00Z"
+    assert due[0]["window"]["due_at"] == "2026-09-18T18:00:00Z"
+    assert admit(tmp_path, "2026-09-18T18:15:00+00:00", subscription)["mutated"] is False
+
+
+def test_future_edit_retains_pending_and_prepared_history(tmp_path):
+    from loopx.capabilities.periodic_report.pending_intent import _attempt_dir
+    first = admit(tmp_path)
+    original = (tmp_path / "goals/example/periodic_reports/cadence.json").read_bytes()
+    later = starting(config(), "2026-09-18")
+    assert admit(tmp_path, subscription=later)["status"] == "not_due"
+    assert (tmp_path / "goals/example/periodic_reports/cadence.json").read_bytes() == original
+    _attempt_dir(tmp_path, "example", cadence_intent(first["window"])).mkdir(parents=True)
+    held = admit(tmp_path, subscription=later)
+    assert held["status"] == "configuration_changed" and held["window"] == first["window"]
+    assert (tmp_path / "goals/example/periodic_reports/cadence.json").read_bytes() == original
+
+
+def test_clock_rollback_keeps_already_admitted_identity(tmp_path):
+    subscription = starting(config(), "2026-09-18")
+    first = admit(tmp_path, "2026-09-18T18:00:00+00:00", subscription)
+    rollback = admit(tmp_path, "2026-09-11T18:00:00+00:00", subscription)
+    assert rollback["window"] == first["window"] and rollback["mutated"] is False
+    assert rollback["status"] == "pending"
+
+
+def test_future_start_does_not_hide_corrupt_journal_or_allow_forged_early_window(tmp_path):
+    old = admit(tmp_path)["window"]
+    forged = {**old, "schedule": {**old["schedule"], "start_date": "2026-09-18"}}
+    with pytest.raises(ValueError, match="boundaries"):
+        validate_cadence_window(forged)
+    (tmp_path / "goals/example/periodic_reports/cadence.json").write_text("{}")
+    with pytest.raises(ValueError, match="journal contract"):
+        admit(tmp_path, subscription=starting(config(), "2026-09-18"))

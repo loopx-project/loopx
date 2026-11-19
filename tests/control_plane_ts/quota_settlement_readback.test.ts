@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 
-import { settlementIdentity } from "../../loopx/control_plane/effect_program.ts";
+import { settlementIdentity, settlementIdentityPayload } from "../../loopx/control_plane/effect_program.ts";
 import {
   createEffectRuntimeHandlers,
   dispatchEffectRuntimeMethod,
@@ -27,6 +27,7 @@ import {
   projectSemanticReplanGuard,
   QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
   readQuotaSettlement,
+  readQuotaSettlementFromSnapshot,
   readQuotaSettlementSnapshot,
 } from "../../loopx/control_plane/quota/settlement_readback.ts";
 import {
@@ -34,6 +35,11 @@ import {
   preflightPriorHostTurnCloseout,
 } from "../../loopx/control_plane/quota/unsettled_host_turn_recovery.ts";
 import { requireJsonObject } from "../../loopx/control_plane/runtime_decode.ts";
+import {
+  AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION,
+  AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID,
+  AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION,
+} from "../../loopx/control_plane/work_items/replan_semantics.ts";
 
 const goalId = "settlement-goal";
 const agentId = "codex-settlement";
@@ -85,6 +91,47 @@ test("capability guard survives scalar receipt transport and rejects missing sco
   assert.throws(() => projectSemanticReplanGuard({...details, semantic_replan_obligation_id: ""}), /selected obligation/);
   assert.throws(() => projectSemanticReplanGuard({...details, semantic_replan_gap_id: ""}), /capability guard is malformed/);
   assert.throws(() => projectSemanticReplanGuard({...details, semantic_replan_frontier_revision: undefined}), /capability guard is malformed/);
+});
+
+test("recorded review source retains its stop clause under the exact selected guard", () => {
+  const details = {semantic_replan_obligation_id: "replan-0000000000000001",
+    semantic_replan_review_kind: "goal_outcome_uncovered",
+    semantic_replan_review_stop_condition: "Stop at owner-only decisions."};
+  assert.deepEqual(projectSemanticReplanGuard(details).selected_review_source, {
+    kind: details.semantic_replan_review_kind, stop_condition: details.semantic_replan_review_stop_condition});
+  const digest = createHash("sha256").update(details.semantic_replan_review_stop_condition, "utf8").digest("hex");
+  assert.deepEqual(projectSemanticReplanGuard({semantic_replan_obligation_id: details.semantic_replan_obligation_id,
+    semantic_replan_review_kind: details.semantic_replan_review_kind,
+    semantic_replan_review_stop_condition_sha256: digest}).selected_review_source, {
+    kind: details.semantic_replan_review_kind, stop_condition_sha256: digest});
+  assert.deepEqual(projectSemanticReplanGuard({...details,
+    semantic_replan_review_stop_condition_sha256: digest}).selected_review_source, {
+    kind: details.semantic_replan_review_kind,
+    stop_condition: details.semantic_replan_review_stop_condition,
+    stop_condition_sha256: digest});
+  const defaultDigest = createHash("sha256").update(
+    AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION, "utf8").digest("hex");
+  assert.deepEqual(projectSemanticReplanGuard({
+    semantic_replan_obligation_id: details.semantic_replan_obligation_id,
+    semantic_replan_review_kind: "periodic_review_due",
+    semantic_replan_review_stop_condition: AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION,
+    semantic_replan_review_stop_condition_sha256: defaultDigest,
+    semantic_replan_review_stop_contract_id: AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID,
+  }).selected_review_source, {
+    kind: "periodic_review_due",
+    stop_condition: AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION,
+    stop_condition_sha256: defaultDigest,
+    stop_contract_id: AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID,
+  });
+  for (const patch of [{semantic_replan_obligation_id: ""},
+    {semantic_replan_obligation_id: undefined}, {semantic_replan_review_kind: undefined},
+    {semantic_replan_review_stop_condition: undefined}, {semantic_replan_review_stop_condition: "s".repeat(241)},
+    {semantic_replan_review_stop_condition_sha256: "bad"},
+    {semantic_replan_review_stop_condition_sha256: "0".repeat(64)},
+    {semantic_replan_review_stop_contract_id: AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID},
+    {semantic_replan_capability_id: "explore"}]) {
+    assert.throws(() => projectSemanticReplanGuard({...details, ...patch}));
+  }
 });
 
 test("capability retirement verifies its exact receipt and never erases a committed debit", async () => {
@@ -183,6 +230,14 @@ test("a service-qualified blocked replan closes only its exact Turn without debi
     assert.equal((accepted.progress as any).closeout_kind, "typed_blocked_writeback_no_spend");
     assert.equal((accepted.spend as any).payload.ok, false);
     assert.equal((accepted.terminal_closeout as any).payload.ok, false);
+    const history = async (runs: unknown[]) => (await readQuotaSettlement({
+      schema_version: "loopx_quota_history_qualification_request_v0", runs,
+    })).accepted_indexes;
+    assert.deepEqual(await history([base, {...base, administrative_blocked_replan: true,
+      autonomous_replan_ack: null}]), [0]);
+    const compactCheckpoint = {...checkpoint} as Record<string, unknown>;
+    delete compactCheckpoint.delivery_boundary;
+    assert.deepEqual(await history([{...base, vision_checkpoint: compactCheckpoint}]), [0]);
     await writeFile(index, JSON.stringify({...base, autonomous_replan_ack: {...ack,
       semantic_delta: {...semantic, satisfying_outcomes: ["fresh_vision_path_outcome"]}}}) + "\n");
     assert.equal((await read()).replay_phase, "settled");
@@ -202,6 +257,7 @@ test("a service-qualified blocked replan closes only its exact Turn without debi
         {triggers: []}].map(patch => ({...base, vision_checkpoint: {...checkpoint, ...patch}})),
     ];
     for (const changed of invalid) {
+      assert.deepEqual(await history([changed]), []);
       await writeFile(index, JSON.stringify(changed) + "\n");
       assert.notEqual((await read()).replay_phase, "settled");
     }
@@ -439,6 +495,204 @@ function request(runtimeRoot: string, overrides: Record<string, unknown> = {}) {
   };
 }
 
+test("pending closeout survives maintenance and reads one original receipt snapshot", async t => {
+  for (const entry of [
+    {state: "writeback_required"},
+    {writeback: true, state: "spend_required"},
+    {writeback: true, spend: true, remove: "quota_spend", state: "spend_receipt_required"},
+    {writeback: true, spend: true, state: null},
+    {monitor: true, state: null},
+    {guard: false, state: null},
+    {legacy: true, state: null},
+  ]) await t.test(entry.state ?? "no debt", async () => {
+    const root = await fixture(entry);
+    try {
+      const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
+      const index = join(root, "goals", goalId, "runs", "index.jsonl");
+      const events = (await readFile(log, "utf8")).trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
+      for (const event of events) if (event.event_kind === "quota_should_run") Object.assign(event.details, {
+        closeout_required: entry.legacy !== true, ok: true, should_run: true,
+        must_attempt_work: true, delivery_allowed: true, quiet_noop_allowed: false,
+      });
+      await writeFile(log, events.filter(event => event.event_kind !== entry.remove).map(event => JSON.stringify(event)).join("\n") + "\n");
+      await appendFile(index, JSON.stringify({goal_id: goalId, agent_id: agentId,
+        classification: "local_upgrade_status_updated", delivery_outcome: "surface_only"}) + "\n");
+      const input = request(root, {pending_closeout: true, turn_instance_id: null, todo_id: null});
+      const snapshot = await readQuotaSettlementSnapshot(root, goalId);
+      const result = readQuotaSettlementFromSnapshot(input, snapshot);
+      assert.equal(result.found, entry.state !== null);
+      if (entry.state !== null) {
+        assert.deepEqual((result.identity as any).result.value, settlementIdentityPayload(identity));
+        assert.equal((result.progress as any).state, entry.state);
+        const mismatch = readQuotaSettlementFromSnapshot({...input, todo_id: "todo_foreign"}, snapshot);
+        assert.equal((mismatch.identity as any).payload.ok, false);
+        assert.match((mismatch.identity as any).result.failure.reason, /binding differs/);
+      }
+      assert.equal(readQuotaSettlementFromSnapshot({...input, agent_id: "another-agent"}, snapshot).found, false);
+      assert.deepEqual(await readQuotaSettlement(input), result);
+      // Candidate selection and exact readback use the already acquired snapshot.
+      await writeFile(log, "corrupt live history\n");
+      assert.deepEqual(readQuotaSettlementFromSnapshot(input, snapshot), result);
+      await assert.rejects(readQuotaSettlement(input), /malformed/);
+    } finally {await rm(root, {recursive: true, force: true});}
+  });
+});
+
+test("explicit pending recovery requires admitted work or verified partial settlement", async t => {
+  const denied = {ok: true, should_run: true, must_attempt_work: false,
+    delivery_allowed: false, quiet_noop_allowed: true};
+  for (const entry of [
+    {name: "claim required", guard: denied, state: null},
+    {name: "incomplete modern admission", guard: {ok: true, should_run: true, delivery_allowed: true}, state: null},
+    {name: "unknown legacy admission", guard: {}, state: null},
+    {name: "verified writeback", guard: denied, writeback: true, state: "spend_required"},
+    {name: "verified debit", guard: denied, spend: true, state: "writeback_required"},
+  ]) await t.test(entry.name, async () => {
+    const root = await fixture({writeback: entry.writeback, spend: entry.spend});
+    try {
+      const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
+      const events = (await readFile(log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+      Object.assign(events[0].details, entry.guard);
+      const contents = events.map(event => JSON.stringify(event)).join("\n") + "\n";
+      await writeFile(log, contents);
+      const input = request(root, {pending_closeout: true});
+      const snapshot = await readQuotaSettlementSnapshot(root, goalId);
+      const result = readQuotaSettlementFromSnapshot(input, snapshot);
+      assert.equal(result.found, entry.state !== null);
+      if (entry.state !== null) {
+        assert.deepEqual((result.identity as any).result.value, settlementIdentityPayload(identity));
+        assert.equal((result.progress as any).state, entry.state);
+      }
+      // A denied guard must not hide a conflicting caller binding.
+      const mismatch = readQuotaSettlementFromSnapshot({...input, todo_id: "todo_foreign"}, snapshot);
+      assert.equal((mismatch.identity as any).result.failure.kind, "identity_mismatch");
+      assert.equal(await readFile(log, "utf8"), contents);
+    } finally {await rm(root, {recursive: true, force: true});}
+  });
+});
+
+test("pending closeout recovers positively admitted replan work without creating a preflight obligation", async () => {
+  const root = await fixture();
+  try {
+    const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
+    const events = (await readFile(log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    const obligation = "replan-0000000000000001";
+    const bound = settlementIdentity({goal_id: goalId, agent_id: agentId, todo_id: null,
+      replan_obligation_id: obligation, turn_instance_id: turnId});
+    const admitted = {closeout_required: false, replan_obligation_id: obligation,
+      semantic_replan_obligation_id: obligation, settlement_effect_id: bound.effect_id,
+      ok: true, should_run: true, must_attempt_work: true, delivery_allowed: false,
+      quiet_noop_allowed: false, interaction_mode: "autonomous_replan"};
+    const writeGuard = async (details: Record<string, unknown>) => {
+      events[0].details = details;
+      await writeFile(log, events.map(event => JSON.stringify(event)).join("\n") + "\n");
+    };
+    await writeGuard(admitted);
+    const input = request(root, {pending_closeout: true, turn_instance_id: null, todo_id: null});
+    for (const query of [input, {...input, replan_obligation_id: obligation},
+      {...input, turn_instance_id: turnId},
+      {...input, turn_instance_id: turnId, replan_obligation_id: obligation}]) {
+      const readback = await readQuotaSettlement(query);
+      assert.equal(readback.found, true);
+      assert.deepEqual((readback.identity as any).result.value, settlementIdentityPayload(bound));
+    }
+    assert.equal((await readQuotaSettlement({...input, agent_id: "another-agent"})).found, false);
+    const mismatched = await readQuotaSettlement({...input, replan_obligation_id: "replan-0000000000000002"});
+    assert.equal((mismatched.identity as any).result.failure.kind, "identity_mismatch");
+    const preflight = await preflightPriorHostTurnCloseout({
+      ...input, schema_version: PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
+    });
+    assert.equal(preflight.reason, "no_prior_turn_requires_closeout");
+
+    for (const patch of [{should_run: false}, {must_attempt_work: undefined}, {quiet_noop_allowed: true},
+      {interaction_mode: "control_plane_self_repair"}, {semantic_replan_obligation_id: "replan-0000000000000002"},
+      {settlement_effect_id: undefined}, {replan_obligation_id: undefined, settlement_effect_id: undefined}]) {
+      await writeGuard({...admitted, ...patch});
+      assert.equal((await readQuotaSettlement(input)).found, false, JSON.stringify(patch));
+      const explicit = await readQuotaSettlement({...input, turn_instance_id: turnId});
+      assert.ok(explicit.found === false || (explicit.identity as any).payload.ok === false,
+        `explicit recovery must not admit ${JSON.stringify(patch)}`);
+    }
+    await writeGuard({...admitted, settlement_effect_id: "another-effect"});
+    const wrongEffect = await readQuotaSettlement(input);
+    assert.equal((wrongEffect.identity as any).result.failure.kind, "identity_mismatch");
+
+    for (const patch of [{infer_turn_instance_id: true}, {allow_unbound_binding: true},
+      {refresh_retry: {}}, {heartbeat_reentry_guard: {}}, {spend_precheck: true}]) {
+      await assert.rejects(readQuotaSettlement({...input, ...patch}), /read-only receipt recovery/);
+    }
+    await assert.rejects(readQuotaSettlement({...input, pending_closeout: "yes"}), /must be a boolean/);
+    await assert.rejects(readQuotaSettlement({...input, agent_id: null}), /explicit Agent/);
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test("receipt upgrade admission stays on the admitted Goal instance", async () => {
+  const currentRef = {goal_id: goalId, goal_instance_id: instanceA};
+  const root = await fixture({goalRef: currentRef});
+  try {
+    const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
+    const current = JSON.parse((await readFile(log, "utf8")).trim()) as Record<string, unknown>;
+    const details = current.details as Record<string, unknown>;
+    const retiredTodo = "todo_retired_instance";
+    const retiredIdentity = settlementIdentity({
+      goal_id: goalId, agent_id: agentId, todo_id: retiredTodo, turn_instance_id: turnId,
+    });
+    const retired = {
+      ...current, event_id: "event-retired", recorded_at: "2026-01-01T00:00:00Z",
+      goal_ref: {goal_id: goalId, goal_instance_id: instanceB},
+      details: {todo_id: retiredTodo, settlement_effect_id: retiredIdentity.effect_id},
+    };
+    const admitted = {
+      ...current, event_id: "event-admitted", recorded_at: "2026-02-01T00:00:00Z",
+    };
+    const upgraded = {
+      ...current, event_id: "event-upgraded", recorded_at: "2026-02-01T02:00:00Z",
+      causality: {source_event_id: "event-admitted", caused_by: "event-admitted"},
+      details: {...details, settlement_receipt_revision: "review_guard_upgrade"},
+    };
+    await writeFile(log, [retired, admitted, upgraded].map(event => JSON.stringify(event)).join("\n") + "\n");
+    await withSourceAdmission(root, instanceA, instanceA, async binding => {
+      const result = await readQuotaSettlement(request(root, binding));
+      assert.equal(result.found, true);
+      assert.equal(result.admission_recorded_at, "2026-02-01T00:00:00Z");
+      assert.equal(result.admission_event_id, "event-admitted");
+      const receipt = result.heartbeat_receipt as {event_id: string, recorded_at: string};
+      assert.equal(receipt.event_id, "event-upgraded");
+      assert.equal(receipt.recorded_at, "2026-02-01T02:00:00Z");
+    });
+    const sameBinding = {
+      ...retired,
+      details: {todo_id: todoId, settlement_effect_id: identity.effect_id},
+    };
+    await writeFile(log, [sameBinding, admitted, upgraded].map(event => JSON.stringify(event)).join("\n") + "\n");
+    await withSourceAdmission(root, instanceA, instanceA, async binding => {
+      const result = await readQuotaSettlement(request(root, binding));
+      assert.equal(result.admission_recorded_at, admitted.recorded_at);
+      assert.equal(result.admission_event_id, "event-admitted");
+    });
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("pending closeout cannot adopt another Goal instance's receipts", async () => {
+  const root = await fixture({goalRef: {goal_id: goalId, goal_instance_id: instanceA}});
+  try {
+    const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
+    const event = JSON.parse((await readFile(log, "utf8")).trim());
+    event.details.closeout_required = true;
+    await writeFile(log, JSON.stringify(event) + "\n");
+    for (const turn of [null, turnId]) {
+      await withSourceAdmission(root, instanceB, instanceB, async binding => {
+        const result = await readQuotaSettlement(request(root, {...binding, pending_closeout: true,
+          turn_instance_id: turn, todo_id: null}));
+        if (turn === null) assert.equal(result.found, false);
+        else assert.equal((result.identity as any).payload.ok, false);
+      });
+    }
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
 function sourceGuardPath(registryPath: string): string {
   const digest = createHash("sha256").update(goalId, "utf8").digest("hex");
   return join(
@@ -535,6 +789,57 @@ test("scoped supersede settles only its exact Turn and never terminal acceptance
   });
 });
 
+test("only the tolerant readback route survives a damaged audit row", async () => {
+  const root = await fixture({writeback: true, spend: true});
+  try {
+    const clean = await readQuotaSettlement(request(root));
+    const path = join(root, "goals", goalId, "rollout-event-log.jsonl");
+    await appendFile(path, Buffer.concat([
+      Buffer.from('{"schema_version":"loopx_rollout_event_v0","event_kind":"quota_should_run","goal_id":"'),
+      Buffer.from(goalId),
+      Buffer.from('","agent_id":"'),
+      Buffer.from(agentId),
+      Buffer.from('","run_id":"later-turn","summary":"'),
+      Buffer.from([0xff]),
+      Buffer.from('"}\n'),
+    ]));
+    await assert.rejects(readQuotaSettlement(request(root)), {
+      code: "malformed_settlement_state",
+    });
+    const tolerant = await readQuotaSettlement(request(root, {
+      tolerate_malformed_history: true,
+    }));
+    assert.deepEqual(tolerant, clean,
+      "a damaged row must not change the settlement facts a valid return can read");
+  } finally { await rm(root, {recursive: true, force: true}); }
+});
+
+test("tolerant settlement readback ignores an unterminated receipt", async () => {
+  const root = await fixture();
+  try {
+    const path = join(root, "goals", goalId, "rollout-event-log.jsonl");
+    const committed = await readQuotaSettlement(request(root));
+    assert.equal(committed.found, true);
+    const committedBytes = await readFile(path);
+    assert.ok(committedBytes.at(-1) === 0x0a);
+    await writeFile(path, committedBytes.subarray(0, -1));
+    const strictUncommitted = await readQuotaSettlement(request(root));
+    const tolerantUncommitted = await readQuotaSettlement(request(root, {
+      tolerate_malformed_history: true,
+    }));
+    assert.deepEqual(tolerantUncommitted, strictUncommitted,
+      "both reads ignore a receipt whose writer did not reach the newline");
+    await appendFile(path, "\n");
+    const strictCommitted = await readQuotaSettlement(request(root));
+    const tolerantCommitted = await readQuotaSettlement(request(root, {
+      tolerate_malformed_history: true,
+    }));
+    assert.deepEqual(tolerantCommitted, strictCommitted);
+    assert.deepEqual(strictCommitted, committed,
+      "the ordinary append commit exposes the receipt again");
+  } finally { await rm(root, {recursive: true, force: true}); }
+});
+
 test("settlement progress requires both effects and exact receipts", async t => {
   const cases = [
     { guard: false, state: "identity_required", next: "validation" },
@@ -557,6 +862,32 @@ test("settlement progress requires both effects and exact receipts", async t => 
         schema_version: "quota_settlement_progress_v0", state: entry.state,
         next_step: entry.next, quota_spend_source: "heartbeat",
       });
+      assert.deepEqual(await readQuotaSettlement(request(root, {include_record_bodies: true})), result);
+      const controls = await readQuotaSettlement(request(root, {include_record_bodies: false}));
+      const expected = {...result};
+      if (entry.state === "settled") {
+        assert.ok(result.writeback_run && result.spend_run && result.heartbeat_receipt);
+        for (const field of ["writeback_run", "spend_run", "heartbeat_receipt",
+          "writeback_event", "spend_event", "completion_event"]) expected[field] = null;
+        for (const field of ["writeback", "spend", "delivery", "settlement"]) {
+          const original = result[field] as {result: {value: unknown}};
+          assert.ok(original.result.value, "Complete reads retain their original Run body");
+          expected[field] = {...original, result: {...original.result, value: null}};
+        }
+      }
+      assert.deepEqual(controls, expected, "Pending recovery and all controls/receipts retain complete parity");
+      const precheck = await readQuotaSettlement(request(root, {spend_precheck: true}));
+      const settlement = requireJsonObject(result.settlement, "full settlement bundle");
+      const outcome = requireJsonObject(settlement.result, "full settlement result");
+      assert.deepEqual(precheck, {
+        schema_version: result.schema_version,
+        found: true,
+        identity: result.identity,
+        settlement: {...settlement, result: {...outcome, value: null}},
+        progress: result.progress,
+        spend_run_present: entry.spend === true,
+      });
+      await assert.rejects(readQuotaSettlement(request(root, {include_record_bodies: "false"})), /must be a boolean/);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 });
@@ -976,6 +1307,35 @@ test("monitor closeout requires the exact committed effect, not a matching obser
   }
 });
 
+test("a prior committed monitor poll never blocks a later unbound Turn rebind", async () => {
+  const priorTurn = "turn-prior-monitor";
+  const currentTurn = "turn-current-work";
+  const prior = await fixture({monitor: true, turnId: priorTurn});
+  const current = await fixture({guardUnbound: true, turnId: currentTurn});
+  try {
+    const priorLog = join(prior, "goals", goalId, "rollout-event-log.jsonl");
+    const priorEvents = (await readFile(priorLog, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    priorEvents[0].details.closeout_required = true;
+    await writeFile(
+      priorLog,
+      `${priorEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
+    );
+    await appendHistory(prior, current);
+    const result = await readQuotaSettlement(request(prior, {
+      turn_instance_id: currentTurn,
+    }));
+    const failure = (result.identity as any).result.failure;
+    assert.equal(failure.kind, "receipt_unbound");
+    assert.equal(failure.details.owed_prior_turn, undefined);
+  } finally {
+    await rm(prior, {recursive: true, force: true});
+    await rm(current, {recursive: true, force: true});
+  }
+});
+
 test("refresh recovery admission never survives a failed Turn identity", async () => {
   const root = await fixture({ guard: false, writeback: true });
   try {
@@ -1231,6 +1591,35 @@ test("keeps the same-turn rebind when no earlier Turn owes a closeout", async t 
   }
 });
 
+test("an unterminated prior guard is not an owed closeout before or after repair", async () => {
+  const root = await fixture({turnId: priorTurnId});
+  try {
+    const eventsPath = join(root, "goals", goalId, "rollout-event-log.jsonl");
+    const original = JSON.parse((await readFile(eventsPath, "utf8")).trim());
+    original.details.closeout_required = true;
+    // The guard writer stopped short of its committing newline.
+    await writeFile(eventsPath, JSON.stringify(original));
+    const preflightRequest = {
+      schema_version: PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
+      runtime_root: root, goal_id: goalId, agent_id: agentId,
+      exclude_turn_instance_id: turnId,
+    };
+    const before = await preflightPriorHostTurnCloseout(preflightRequest);
+    assert.equal(before.status, "none");
+    // The next writer drops that tail before appending an unrelated row.
+    let later = {...original, event_id: "event-later", run_id: "later-turn",
+      details: {}} as Record<string, unknown>;
+    await writeFile(eventsPath, `${JSON.stringify(later)}\n`);
+    const after = await preflightPriorHostTurnCloseout(preflightRequest);
+    assert.equal(after.status, "none");
+    // A row that reached its newline is still a real owed closeout.
+    await appendFile(eventsPath, `${JSON.stringify(original)}\n`);
+    const committed = await preflightPriorHostTurnCloseout(preflightRequest);
+    assert.equal(committed.status, "candidate");
+    assert.equal((committed.candidate as Record<string, unknown>).prior_turn_instance_id, priorTurnId);
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
 test("an unbound earlier Turn never reports a later Turn as its owed predecessor", async () => {
   const root = await fixture({guardUnbound: true});
   try {
@@ -1294,7 +1683,7 @@ test("still reports a receipt bound to another work item as a mismatch", async (
   assert.equal(failure.details, undefined);
 });
 
-test("rejects non-ENOENT settlement readback I/O failures", async (t) => {
+test("rejects non-ENOENT settlement readback I/O failures", async () => {
   const runtimeRoot = await fixture();
   const indexPath = join(runtimeRoot, "goals", goalId, "runs", "index.jsonl");
   await rm(indexPath);
@@ -1328,7 +1717,7 @@ test("recovers legacy quota commit rows by exact effect ref", async () => {
   assert.equal((result.spend as any).result.failure.kind, "receipt_missing");
 });
 
-test("rejects a writeback run persisted under another goal", async (t) => {
+test("rejects a writeback run persisted under another goal", async () => {
   const runtimeRoot = await fixture();
   await appendFile(
     join(runtimeRoot, "goals", goalId, "runs", "index.jsonl"),
@@ -1491,7 +1880,8 @@ test("does not pair a spend row with malformed persisted settlement identity", a
   }
 });
 
-test("causal no-spend closeout retains exact receipt identity and historical debits", async () => {
+for (const kind of ["causal", "lifecycle"]) {
+test(`${kind} no-spend closeout retains exact receipt identity and historical debits`, async () => {
   const target = { todo_id: "todo_dependency", role: "agent", status: "open",
     task_class: "continuous_monitor", material_change_generation: 2 };
   const waiting = { todo_id: todoId, role: "agent", status: "open",
@@ -1504,7 +1894,9 @@ test("causal no-spend closeout retains exact receipt identity and historical deb
   const condition = (evaluated.conditions as Record<string, unknown>[])[0].condition;
   const proof = prepareBlockedWait({ schema_version: BLOCKED_WAIT_REQUEST_SCHEMA,
     todo_id: todoId, observed_at: "2026-09-24T10:00:00Z",
-    todos: [{ ...waiting, resume_condition: condition }, target] });
+    todos: kind === "lifecycle" ? [{todo_id: todoId, role: "agent", status: "blocked", done: false,
+      task_class: "advancement_task", archive_state: "active"}]
+      : [{ ...waiting, resume_condition: condition }, target] });
   const options = { writeback: true, writebackOutcome: "outcome_gap", blockedRetry: proof,
     progressObservation: { schema_version: "typed_progress_observation_v0",
       result_class: "blocked", work_item_id: todoId,
@@ -1515,7 +1907,7 @@ test("causal no-spend closeout retains exact receipt identity and historical deb
     assert.equal((result.progress as any).state, "settled");
     assert.equal((result.progress as any).closeout_kind, "typed_blocked_writeback_no_spend");
     assert.equal(result.replay_phase, "settled");
-    // Frozen historical facts stay closed after a later dependency observation.
+    // Frozen historical facts stay closed after a later observation.
     await appendFile(join(runtime, "goals", goalId, "runs", "index.jsonl"),
       `${JSON.stringify({ classification: "quota_monitor_poll", goal_id: goalId,
         agent_id: agentId, todo_id: target.todo_id, turn_instance_id: "later-turn",
@@ -1541,7 +1933,8 @@ test("causal no-spend closeout retains exact receipt identity and historical deb
   const missingWriteback = await fixture(options);
   const spent = await fixture({ ...options, spend: true });
   const malformed = await fixture({ ...options, blockedRetry: { ...proof,
-    waiting_todo: { ...waiting, resume_monitor_generation: 3 } } });
+    ...(kind === "lifecycle" ? {blocked_todo: {...proof.blocked_todo as object, status: "done"}}
+      : {waiting_todo: { ...waiting, resume_monitor_generation: 3 }}) } });
   try {
     assert.notEqual((await readQuotaSettlement(request(missing))).replay_phase, "settled");
     const log = join(missingWriteback, "goals", goalId, "rollout-event-log.jsonl");
@@ -1555,6 +1948,37 @@ test("causal no-spend closeout retains exact receipt identity and historical deb
   } finally {
     await Promise.all([missing, missingWriteback, spent, malformed].map(path =>
       rm(path, { recursive: true, force: true })));
+  }
+});
+}
+
+test("a rolled calendar retry does not close the Turn without a spend", async () => {
+  const runtime = await fixture({
+    writeback: true,
+    writebackOutcome: "outcome_gap",
+    blockedRetry: {
+      schema_version: "quota_blocked_retry_v0",
+      source: "todo",
+      todo_id: todoId,
+      resume_when: "resume_at:2026-02-30T10:05:00Z",
+      observed_at: "2026-02-30T10:00:00Z",
+      due_at: "2026-02-30T10:05:00Z",
+    },
+    progressObservation: {
+      schema_version: "typed_progress_observation_v0",
+      result_class: "blocked",
+      work_item_id: todoId,
+      blocker_id: "blocker-runtime-boundary",
+      evidence_ids: ["evidence-runtime-boundary"],
+    },
+  });
+  try {
+    const result = await readQuotaSettlement(request(runtime));
+    assert.notEqual((result.progress as {closeout_kind?: string}).closeout_kind,
+      "typed_blocked_writeback_no_spend");
+    assert.notEqual(result.replay_phase, "settled");
+  } finally {
+    await rm(runtime, {recursive: true, force: true});
   }
 });
 
@@ -1702,6 +2126,44 @@ test("rejects a guard bound to another Todo", async () => {
     (result.identity as any).result.failure.reason,
     /does not match the original quota guard/,
   );
+});
+
+test("a retained Todo selects its original replan guard without rebinding it", async () => {
+  const obligation = "replan-0000000000000001";
+  const bound = settlementIdentity({
+    goal_id: goalId,
+    agent_id: agentId,
+    todo_id: null,
+    replan_obligation_id: obligation,
+    turn_instance_id: turnId,
+  });
+  const runtimeRoot = await fixture();
+  try {
+    const log = join(runtimeRoot, "goals", goalId, "rollout-event-log.jsonl");
+    const events = (await readFile(log, "utf8")).trim().split("\n")
+      .map(line => JSON.parse(line));
+    Object.assign(events[0].details, {
+      todo_id: "",
+      replan_obligation_id: obligation,
+      settlement_effect_id: bound.effect_id,
+      pending_action_selection_todo_id: todoId,
+      semantic_replan_obligation_id: obligation,
+    });
+    await writeFile(log, events.map(event => JSON.stringify(event)).join("\n") + "\n");
+
+    const result = await readQuotaSettlement(request(runtimeRoot, {
+      resolve_original_binding: true,
+    }));
+    assert.deepEqual((result.identity as any).result.value, settlementIdentityPayload(bound));
+
+    const mismatch = await readQuotaSettlement(request(runtimeRoot, {
+      todo_id: "todo_other",
+      resolve_original_binding: true,
+    }));
+    assert.equal((mismatch.identity as any).result.failure.kind, "identity_mismatch");
+  } finally {
+    await rm(runtimeRoot, {recursive: true, force: true});
+  }
 });
 
 test("rejects dual Todo and replan bindings before reading settlement facts", async () => {
@@ -1957,6 +2419,95 @@ test("effective cadence scopes settlement and ACKs to its admitted Goal instance
   }
 });
 
+test("agent cadence does not interpret another agent's malformed semantic receipt", async () => {
+  const { projectSettledReplanHistory } = await import(
+    "../../loopx/control_plane/work_items/replan_history_settlement.ts");
+  const root = await fixture({writeback: true, spend: true, completion: true});
+  const peer = "codex-peer";
+  const peerTurn = "peer-turn";
+  const peerIdentity = settlementIdentity({goal_id: goalId, agent_id: peer,
+    todo_id: todoId, turn_instance_id: peerTurn});
+  const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
+  const row = (agent: string, turn: string) => ({agent_id: agent, public_agent_id: agent,
+    monitor_agent_id: agent, turn_id: turn, classification: "state_refreshed",
+    generated_at: "2026-01-01T00:00:00Z", observed_at: 1,
+    accepted_ack: false, progress: null, monitor: {}});
+  const cadence = {schema_version: "replan_history_request_v0", operation: "periodic",
+    agent_id: agentId, monitor_agent_id: agentId, neutral_classifications: [],
+    stall_threshold: 2, periodic_threshold: 1, monitor_threshold: 6,
+    streak_threshold: 5, monitor_schema: "dead_monitor_repeat_v0",
+    todos: {monitors: [], advancements: [], resume: null},
+    settlement_source: {runtime_root: root, goal_id: goalId},
+    runs: [row(peer, peerTurn), row(agentId, turnId)]};
+  try {
+    const baseline = await projectSettledReplanHistory({...cadence, runs: cadence.runs.slice(1)});
+    assert.equal(requireJsonObject(baseline.trigger, "trigger").run_count, 1);
+    await appendFile(log, JSON.stringify({schema_version: "loopx_rollout_event_v0",
+      event_id: "malformed-peer-review", event_kind: "quota_should_run",
+      goal_id: goalId, agent_id: peer, run_id: peerTurn, details: {
+        todo_id: todoId, settlement_effect_id: peerIdentity.effect_id,
+        semantic_replan_obligation_id: "replan-0000000000000001",
+        semantic_replan_review_kind: "periodic_review_due",
+        semantic_replan_review_stop_condition: null,
+      }}) + "\n");
+    const originalLog = await readFile(log, "utf8");
+    assert.deepEqual(await projectSettledReplanHistory(cadence), baseline);
+    assert.equal((await projectSettledReplanHistory({...cadence,
+      runs: cadence.runs.slice(0, 1)})).trigger, null, "peer work cannot qualify this agent");
+    await assert.rejects(projectSettledReplanHistory({...cadence, agent_id: peer}),
+      /receipt review stop condition/, "the affected agent still sees its own invalid receipt");
+    await assert.rejects(projectSettledReplanHistory({...cadence, agent_id: null}),
+      /receipt review stop condition/, "unscoped history still validates every contributing agent");
+    await assert.rejects(projectSettledReplanHistory({...cadence, agent_id: 42}),
+      /agent_id/, "invalid scope must not silently become unscoped");
+    assert.equal(await readFile(log, "utf8"), originalLog, "readback cannot repair historical receipts");
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("tolerant replan history ignores an unterminated settlement receipt", async () => {
+  const { projectSettledReplanHistory } = await import(
+    "../../loopx/control_plane/work_items/replan_history_settlement.ts");
+  const root = await fixture({writeback: true, spend: true, completion: true});
+  const path = join(root, "goals", goalId, "rollout-event-log.jsonl");
+  const request = {
+    schema_version: "replan_history_request_v0", operation: "periodic",
+    agent_id: agentId, monitor_agent_id: agentId, neutral_classifications: [],
+    stall_threshold: 2, periodic_threshold: 1, monitor_threshold: 6,
+    streak_threshold: 5, monitor_schema: "dead_monitor_repeat_v0",
+    todos: {monitors: [], advancements: [], resume: null},
+    settlement_source: {runtime_root: root, goal_id: goalId,
+      tolerate_malformed_history: true},
+    runs: [{agent_id: agentId, public_agent_id: agentId,
+      monitor_agent_id: agentId, turn_id: turnId,
+      classification: "state_refreshed", generated_at: "2026-01-01T00:00:00Z",
+      observed_at: 1, accepted_ack: false, progress: null, monitor: {}}],
+  };
+  try {
+    const committed = await projectSettledReplanHistory(request);
+    assert.equal(requireJsonObject(committed.trigger, "trigger").run_count, 1);
+    const committedBytes = await readFile(path);
+    assert.ok(committedBytes.at(-1) === 0x0a);
+    await appendFile(path, Buffer.concat([
+      Buffer.from('{"schema_version":"loopx_rollout_event_v0","event_kind":"quota_should_run","goal_id":"'),
+      Buffer.from(goalId),
+      Buffer.from('","agent_id":"unrelated","run_id":"later-turn","summary":"'),
+      Buffer.from([0xff]),
+      Buffer.from('"}\n'),
+    ]));
+    assert.deepEqual(await projectSettledReplanHistory(request), committed,
+      "a damaged unrelated record stays outside the committed receipt view");
+    await writeFile(path, committedBytes.subarray(0, -1));
+    const uncommitted = await projectSettledReplanHistory(request);
+    assert.equal(uncommitted.trigger, null,
+      "an unterminated spend receipt cannot qualify settlement history");
+    await appendFile(path, "\n");
+    assert.deepEqual(await projectSettledReplanHistory(request), committed,
+      "the append commit restores the same settlement history");
+  } finally { await rm(root, {recursive: true, force: true}); }
+});
+
 test("effective cadence skips settlement read without a matching should-run receipt", async () => {
   const { projectSettledReplanHistory } = await import(
     "../../loopx/control_plane/work_items/replan_history_settlement.ts");
@@ -2032,3 +2583,59 @@ test(
     );
   },
 );
+
+test("history retry qualification preserves its original aware clock and exact expiry", async () => {
+  const run = {todo_id: "todo_pending001", turn_instance_id: "turn-pending",
+    delivery_outcome: "outcome_gap", progress_observation: {result_class: "blocked"},
+    blocked_retry: {schema_version: "quota_blocked_retry_v0", source: "turn_settlement",
+      todo_id: "todo_pending001", observed_at: "2026-01-01T00:00:00.000001Z",
+      due_at: "2026-01-01T00:05:00.000001Z", resume_when: "resume_at:2026-01-01T00:05:00.000001Z"}};
+  const read = (runs: unknown[], observed_at: unknown) => readQuotaSettlement({
+    schema_version: "loopx_quota_history_qualification_request_v0", runs, observed_at,
+  });
+  assert.deepEqual((await read([run], "2026-01-01T00:05:00Z")).active_retry_indexes, [0]);
+  assert.deepEqual((await read([run], "2026-01-01T00:05:00.000001Z")).active_retry_indexes, []);
+  assert.deepEqual((await read([run], "2026-01-01T08:05:00+08:00")).active_retry_indexes, [0]);
+  for (const clock of [undefined, null, "2026-01-01T00:01:00", "2026-01-01", "2026-02-30T00:01:00Z",
+    "2026-01-01T00:01:00z"]) {
+    assert.deepEqual((await read([run], clock)).active_retry_indexes, []);
+  }
+  for (const patch of [{source: "todo"}, {todo_id: "todo_other001"}, {resume_when: null},
+    {observed_at: "2026-01-01T00:00:00"}, {due_at: "2026-02-30T00:05:00Z"}]) {
+    const bad = {...run, blocked_retry: {...run.blocked_retry, ...patch}};
+    assert.deepEqual((await read([bad], "2026-01-01T00:01:00Z")).active_retry_indexes, []);
+  }
+  for (const patch of [{delivery_outcome: "outcome_progress"}, {progress_observation: null},
+    {todo_id: null}, {turn_instance_id: null}, {turn_instance_id: {}},
+    {turn_instance_id: true}, {turn_instance_id: 1}, {turn_instance_id: " "}]) {
+    assert.deepEqual((await read([{...run, ...patch}], "2026-01-01T00:01:00Z")).active_retry_indexes, []);
+  }
+  // Historical Python datetime inputs retain ISO-week dates and offset seconds.
+  const legacy = {...run, blocked_retry: {...run.blocked_retry,
+    observed_at: "2026-W01-4T00:00:00+00:00:01", due_at: "2026-W01-4T00:05:00+00:00:01",
+    resume_when: "resume_at:2026-W01-4T00:05:00+00:00:01"}};
+  assert.deepEqual((await read([legacy], "2026-01-01T00:01:00Z")).active_retry_indexes, [0]);
+  const legacySeparator = {...run, blocked_retry: {...run.blocked_retry,
+    observed_at: "2026-01-01z00:00:00Z", due_at: "2026-01-01z00:05:00Z",
+    resume_when: "resume_at:2026-01-01z00:05:00Z"}};
+  assert.deepEqual((await read([legacySeparator], "2026-01-01T00:01:00Z")).active_retry_indexes, [0]);
+  // Aware Python comparisons need not normalize the instant into a UTC datetime.
+  for (const start of ["0001-01-01T00:00:00+08:00", "9999-12-31T23:00:00-08:00"]) {
+    const due = start.replace(":00:00", ":05:00"), now = start.replace(":00:00", ":01:00");
+    const edge = {...run, blocked_retry: {...run.blocked_retry,
+      observed_at: start, due_at: due, resume_when: `resume_at:${due}`}};
+    assert.deepEqual((await read([edge], now)).active_retry_indexes, [0]);
+    assert.deepEqual((await read([edge], due)).active_retry_indexes, []);
+  }
+  for (const [observed_at, due_at, expected] of [
+    ["2026-01-01T00:00:00Z", "2026-01-01T00:01:00Z", [0]],
+    ["2026-01-01T00:00:00Z", "2026-01-01T00:30:00Z", [0]],
+    ["2026-01-01T00:00:00.000001Z", "2026-01-01T00:01:00Z", []],
+    ["2026-01-01T00:00:00Z", "2026-01-01T00:30:00.000001Z", []],
+  ] as const) {
+    const bounded = {...run, blocked_retry: {...run.blocked_retry, observed_at, due_at,
+      resume_when: `resume_at:${due_at}`}};
+    assert.deepEqual((await read([bounded], "2026-01-01T00:00:30Z")).active_retry_indexes, expected);
+  }
+  await assert.rejects(read([run], 123), /observation clock/);
+});

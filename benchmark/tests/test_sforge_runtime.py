@@ -77,7 +77,8 @@ def test_scheduler_modes_do_not_add_an_outer_loop_to_native_goal():
     ("official", True), ("single", False), ("native-goal", False),
     ("heartbeat-resume", False), ("heartbeat-explore", False),
 ])
-def test_only_official_delegates_continuation_to_sforge(profile, resumes, monkeypatch):
+def test_only_official_delegates_continuation_and_stop_hook_to_sforge(
+        profile, resumes, monkeypatch):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from sforge.harness.config import SForgeConfig
@@ -86,12 +87,39 @@ def test_only_official_delegates_continuation_to_sforge(profile, resumes, monkey
     worker = SForgeWorker(SForgeConfig(agent_model="fixture-model", agent_effort="xhigh"),
                           profile=profile, cwd="/task")
     assert (worker.resume_cmd is not None) is resumes
+    assert (worker.stop_hook is not None) is (profile == "official")
     assert worker.timeout_seconds == 64800
     assert worker.task_entry == ("loopx-planned" if profile.startswith("heartbeat-") else "seeded-todo")
     if profile in {"official", "single"}:
         command = worker.format_run_cmd("/task.md", internet=False)
         assert 'model_reasoning_effort="xhigh"' in command
         assert 'web_search="disabled"' in command
+
+
+@pytest.mark.parametrize("profile", [
+    "official", "single", "native-goal", "heartbeat-resume", "heartbeat-explore",
+])
+def test_runtime_protocol_attests_only_official_stop_hook(profile, monkeypatch):
+    from types import SimpleNamespace
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    run_agent = pytest.importorskip("sforge.harness.run_agent")
+    runtime_protocol = getattr(run_agent, "_runtime_protocol", None)
+    if runtime_protocol is None:
+        pytest.skip("SForge provider does not expose the signed runtime protocol builder")
+    from benchmark.runtime.sforge import SForgeWorker
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/private-credential")
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture-model", agent_effort="xhigh"),
+                          profile=profile, cwd="/task")
+    protocol = runtime_protocol(
+        agent=worker, backend=SimpleNamespace(backend_name="docker"),
+        model="fixture-model", effective_timeout=64800, eval_interval=300,
+        disable_stop_hook=False, disable_auto_eval=False,
+        disable_auto_resume=False, internet=False, max_submissions=None,
+        submission_cooldown=3600,
+    )
+    assert protocol["stop_hook_enabled"] is (profile == "official")
 
 
 def test_invalid_worker_inputs_fail_before_install(monkeypatch):
@@ -102,8 +130,8 @@ def test_invalid_worker_inputs_fail_before_install(monkeypatch):
     config = SForgeConfig(agent_model="fixture-model", agent_effort="xhigh")
     with pytest.raises(ValueError, match="Unknown"):
         SForgeWorker(config, profile="unknown", cwd="/task")
-    with pytest.raises(ValueError, match="160s"):
-        SForgeWorker(config, profile="single", cwd="/task", timeout_seconds=160)
+    with pytest.raises(ValueError, match="positive"):
+        SForgeWorker(config, profile="single", cwd="/task", timeout_seconds=0)
     monkeypatch.delenv("CODEX_AUTH_JSON_PATH", raising=False)
     with pytest.raises(ValueError, match="credential"):
         SForgeWorker(config, profile="single", cwd="/task")
@@ -170,7 +198,8 @@ def test_official_installer_binds_staged_catalog_without_leaking_host_path(tmp_p
         if source.name == "config.toml":
             observed.update(tomllib.loads(source.read_text()))
     backend = SimpleNamespace(copy_to_container=copy,
-        exec_run=lambda *args, **kwargs: SimpleNamespace(exit_code=0))
+        exec_run=lambda *args, **kwargs: SimpleNamespace(
+            exit_code=0, output="http://example.invalid/v1"))
     worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="max",
         agent_api_base_url="http://example.invalid/v1", agent_api_key="fixture"),
         profile="official", cwd="/task")
@@ -225,7 +254,8 @@ def test_best_only_install_requires_ordinary_worker_hook_readback(tmp_path, monk
 
 
 @pytest.mark.parametrize("capture_path", [None, "/control/checkpoint-request.json"])
-def test_checkpoint_request_reaches_sforge_worker_without_changing_default_profile(tmp_path, monkeypatch, capture_path):
+@pytest.mark.parametrize("context_delivery", ["off", "on"])
+def test_checkpoint_request_reaches_sforge_worker_without_changing_default_profile(tmp_path, monkeypatch, capture_path, context_delivery):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from sforge.harness.config import SForgeConfig
@@ -235,7 +265,8 @@ def test_checkpoint_request_reaches_sforge_worker_without_changing_default_profi
         pass  # Exercise the real adapter handoff without starting a trial.
     monkeypatch.setattr(BenchmarkCodex, "install", installed)
     config = SForgeConfig(agent_model="fixture", agent_effort="xhigh")
-    worker = SForgeWorker(config, profile="heartbeat-explore", cwd="/task", checkpoint_request_path=capture_path)
+    worker = SForgeWorker(config, profile="heartbeat-explore", cwd="/task", checkpoint_request_path=capture_path,
+                         context_delivery=context_delivery)
     worker.install_stop_hook(None, None, tmp_path, None)
     env = worker.runtime._worker_env(cwd="/task")
     profile = json.loads((tmp_path / "worker-profile.json").read_text())
@@ -246,6 +277,8 @@ def test_checkpoint_request_reaches_sforge_worker_without_changing_default_profi
     assert "turn_envelope" not in profile
     assert "turn_envelope_source" not in profile
     assert "LOOPX_TURN_ENVELOPE" not in env
+    assert env["LOOPX_CONTEXT_DELIVERY"] == context_delivery
+    assert profile.get("context_delivery") == (context_delivery if context_delivery != "off" else None)
     assert profile.get("checkpoint_capture_enabled") is (True if capture_path else None)
     with pytest.raises(ValueError, match="checkpoint_request_path"):
         SForgeWorker(config, profile="official", cwd="/task", checkpoint_request_path="/control/request.json")
@@ -348,13 +381,13 @@ def test_native_goal_continue_is_a_native_goal_opt_in(tmp_path, monkeypatch, ena
     assert profile.get("native_goal_continue") is (True if enabled else None)
     with pytest.raises(ValueError, match="native-goal"):
         SForgeWorker(config, profile="heartbeat-resume", cwd="/task", native_goal_continue=True)
-    with pytest.raises(ValueError, match="boolean"):
+    with pytest.raises(ValueError, match="native_goal_continue"):
         SForgeWorker(config, profile="native-goal", cwd="/task", native_goal_continue="1")
 
 
 @pytest.mark.parametrize("profile,total,expected", [
-    ("native-goal", 64800, 64640), ("native-goal", 1800, 1640),
-    ("heartbeat-resume", 64800, 64640), ("heartbeat-explore", 64800, 64640),
+    ("native-goal", 64800, 64800), ("native-goal", 1800, 1800),
+    ("heartbeat-resume", 140, 140), ("heartbeat-explore", 64800, 64800),
 ])
 @pytest.mark.parametrize("turns", [None, 3])
 def test_native_goal_and_heartbeat_use_trial_budget_without_independent_wake_limit(
@@ -377,12 +410,13 @@ def test_native_goal_and_heartbeat_use_trial_budget_without_independent_wake_lim
                           replan_after_turns=turns)
     worker.install_stop_hook(None, None, tmp_path, None)
     env = worker.runtime._worker_env(cwd="/task")
-    assert float(env["LOOPX_CODEX_TURN_TIMEOUT_SEC"]) == expected
+    assert "LOOPX_CODEX_TURN_TIMEOUT_SEC" not in env
     assert worker.runtime.scheduler_timeout == total
     expected_cadence = ({"replan_after_effective_turns": turns or 6}
                         if profile.startswith("heartbeat-") else
                         {"replan_after_completed_todos": 3})
-    assert worker.runtime._replan_receipt() == expected_cadence
+    assert worker.runtime._replan_receipt() == {**expected_cadence,
+        **({"planning_horizon_goal": True} if profile.startswith("heartbeat-") else {})}
     receipt = json.loads((tmp_path / "worker-profile.json").read_text())
     if profile.startswith("heartbeat-"):
         assert all(receipt.get(k) == v for k, v in expected_cadence.items())
@@ -396,24 +430,30 @@ def test_native_goal_and_heartbeat_use_trial_budget_without_independent_wake_lim
             "/python", "-m", "benchmark.runtime.worker"]
 
 
-def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path, monkeypatch):
+@pytest.mark.parametrize("research_sidecar", [False, True])
+def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path, monkeypatch, research_sidecar):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
     backend = object.__new__(RecordingDockerBackend)
+    backend.research_sidecar = research_sidecar
     backend.checkpoint = None
     backend.log_dir = tmp_path / "artifacts"
     backend.feedback = None
     copied, cleaned = [], []
-    def archive(handle, remote):
+    def archive(remote):
         copied.append(str(remote))
         payload = io.BytesIO()
+        event = json.dumps({"type": "event_msg", "payload": {"type": "task_complete",
+            "error": {"message": "PRIVATE-SENTINEL", "codex_error_info": {
+                "response_too_many_failed_attempts": {"http_status_code": 429}}}}}).encode() + b"\n"
         with tarfile.open(fileobj=payload, mode="w") as bundle:
-            member = tarfile.TarInfo("session.jsonl")
-            member.size = 2
-            bundle.addfile(member, io.BytesIO(b"{}"))
-        return payload.getvalue()
-    monkeypatch.setattr(backend, "copy_from_container", archive)
+            member = tarfile.TarInfo("sessions/fixture/session.jsonl")
+            member.size = len(event)
+            bundle.addfile(member, io.BytesIO(event))
+        return iter([payload.getvalue()]), {}
+    from types import SimpleNamespace
+    monkeypatch.setattr(backend, "_raw", lambda handle: SimpleNamespace(get_archive=archive))
     monkeypatch.setattr(DockerBackend, "cleanup_container",
                         lambda self, handle, logger: cleaned.append(handle))
     backend.cleanup_container("fixture-container")
@@ -422,9 +462,47 @@ def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path,
     assert "/home/agent/.codex" not in copied
     assert "/opt/loopx-benchmark/codex-home" not in copied
     assert all("auth.json" not in path for path in copied)
+    assert ("/tmp/loopx-benchmark-research" in copied) is research_sidecar
     assert cleaned == ["fixture-container"]
     assert all(row["collected"] for row in json.loads(
         (backend.log_dir / "artifact-collection.json").read_text()))
+    assert backend.provider_failure_receipt == {
+        "schema_version": "codex_terminal_provider_failure_v0",
+        "kind": "response_too_many_failed_attempts",
+        "http_status_code": 429,
+    }
+    assert "PRIVATE-SENTINEL" not in json.dumps(backend.provider_failure_receipt)
+
+
+def test_provider_observation_failure_cannot_skip_native_cleanup(tmp_path, monkeypatch):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
+    backend = object.__new__(RecordingDockerBackend)
+    backend.research_sidecar = False
+    backend.checkpoint = None
+    backend.log_dir = tmp_path / "artifacts"
+    backend.feedback = None
+    backend.provider_failure_receipt = None
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w"):
+        pass
+    from types import SimpleNamespace
+    monkeypatch.setattr(backend, "_raw", lambda handle: SimpleNamespace(
+        get_archive=lambda remote: (iter([payload.getvalue()]), {})))
+    monkeypatch.setattr("benchmark.runtime.sforge_backend.observe_terminal_provider_failure",
+                        lambda *args: (_ for _ in ()).throw(TypeError("unknown event shape")))
+    cleaned = []
+    monkeypatch.setattr(DockerBackend, "cleanup_container",
+                        lambda self, handle, logger: cleaned.append(handle))
+
+    backend.cleanup_container("fixture-container")
+
+    assert cleaned == ["fixture-container"]
+    assert backend.provider_failure_receipt is None
+    observations = json.loads((backend.log_dir / "artifact-collection.json").read_text())
+    assert {"artifact": "provider-failure-observation", "collected": False,
+            "error_kind": "TypeError"} in observations
 
 
 @pytest.mark.parametrize("fail", [False, True])
@@ -455,6 +533,7 @@ def test_blind_policy_removes_judge_route_and_credentials_native_is_unchanged(mo
     pytest.importorskip("harbor")
     from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend, AllowedEndpoint
     backend = object.__new__(RecordingDockerBackend)
+    backend.research_sidecar = False
     backend.checkpoint = None
     backend.auth_ips = []
     backend.blind_api_endpoint = None
@@ -463,6 +542,7 @@ def test_blind_policy_removes_judge_route_and_credentials_native_is_unchanged(mo
     monkeypatch.setattr(DockerBackend, "create_network_isolation",
                         lambda self, handle, allowed_endpoints, logger: allowed_endpoints)
     env = {"SFORGE_TOKEN": "fixture", "SFORGE_JUDGE_URL": "http://judge:8080",
+           "SFORGE_FEEDBACK_URL": "http://judge:8080/api/v1/feedback/fixture",
            "HTTPS_PROXY": "http://api-proxy:9090", "SFORGE_PATCH_DIR": "/task"}
     assert backend._agent_environment(env) is env
     assert backend.create_network_isolation(None, [judge, api], None) == [judge, api]
@@ -545,6 +625,8 @@ def test_native_terminal_handoff_is_readable_by_visualizer(tmp_path, timed_out):
     result = RunResult(best_score=0.0, best_pass_rate=1.0, best_round="auto-1",
                        total_rounds=1, auto_submissions=1, runtime_seconds=12.0,
                        timed_out=timed_out)
+    if hasattr(result, "grading_status"):
+        result.grading_status = "complete"
     _write_native_final_result(trial, result, status="terminal", agent="codex",
                               task="case", run_id="run", model="model", effort="xhigh")
     final = json.loads((trial / "final_result.json").read_text())
@@ -574,7 +656,7 @@ def test_planned_sforge_entry_rejects_unsupported_profiles(profile, monkeypatch)
     from sforge.harness.config import SForgeConfig
     from benchmark.runtime.sforge import SForgeWorker
     monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/private-credential")
-    with pytest.raises(ValueError, match="heartbeat profile"):
+    with pytest.raises(ValueError, match="loopx-planned"):
         SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
                      profile=profile, cwd="/task", task_entry="loopx-planned")
 
@@ -594,7 +676,8 @@ def test_sforge_command_preserves_native_timing_and_planning_boundary(tmp_path, 
                           profile="heartbeat-explore", cwd="/task", task_entry=entry, planning_horizon_goal=horizon)
     worker.install_stop_hook(None, None, tmp_path, None)
     assert worker.runtime.execution.task_entry == entry
-    assert worker.runtime.planning_horizon_goal is horizon
+    expected_horizon = True if horizon is None else horizon
+    assert worker.runtime.planning_horizon_goal is expected_horizon
     assert worker.runtime.execution.turn_envelope is False
     worker.prepared = True  # Bootstrap is separately covered through real CLI fixtures.
     first = worker.format_run_cmd("/task.md")
@@ -602,15 +685,15 @@ def test_sforge_command_preserves_native_timing_and_planning_boundary(tmp_path, 
     assert first == resumed
     assert ("benchmark.runtime.sforge_entry" in first) is (entry == "loopx-planned")
     assert "test -f /opt/loopx-benchmark/control/phase-deadline ||" in first
+    assert first.index("-m benchmark.runtime.codex_readiness") < first.index("test -f /opt/loopx-benchmark/control/phase-deadline ||")
     assert first.index("export LOOPX_PHASE_DEADLINE_EPOCH") < first.index("timeout --signal")
     profile = json.loads((tmp_path / "worker-profile.json").read_text())
     assert profile["task_entry"] == entry
-    assert profile.get("planning_horizon_goal") is horizon
-    assert ("planning_horizon_goal" in profile) is (horizon is not None)
+    assert profile["planning_horizon_goal"] is expected_horizon
 @pytest.mark.parametrize('profile', ['heartbeat-resume', 'heartbeat-explore'])
-@pytest.mark.parametrize('enabled', [False, True])
+@pytest.mark.parametrize('enabled,complete', [(False, False), (True, False), (False, True)])
 @pytest.mark.parametrize('cadence', [None, 2, 6])
-def test_envelope_treatment_reaches_shared_worker_and_receipts(tmp_path, monkeypatch, profile, enabled, cadence):
+def test_envelope_treatment_reaches_shared_worker_and_receipts(tmp_path, monkeypatch, profile, enabled, complete, cadence):
     pytest.importorskip('sforge')
     pytest.importorskip('harbor')
     from sforge.harness.config import SForgeConfig
@@ -620,21 +703,25 @@ def test_envelope_treatment_reaches_shared_worker_and_receipts(tmp_path, monkeyp
         pass  # Transport only; the real renderer/guard test runs without a solver.
     monkeypatch.setattr(BenchmarkCodex, 'install', installed)
     worker = SForgeWorker(SForgeConfig(agent_model='fixture', agent_effort='xhigh'),
-                          profile=profile, cwd='/task', turn_envelope=enabled,
+                          profile=profile, cwd='/task', turn_envelope=enabled, complete_turn=complete,
                           replan_after_turns=cadence)
     worker.install_stop_hook(None, None, tmp_path, None)
     env = worker.runtime._worker_env(cwd='/task')
     assert env.get('LOOPX_TURN_ENVELOPE') == ('1' if enabled else None)
     assert worker.runtime.execution.turn_envelope is enabled
+    assert env['LOOPX_COMPLETE_TURN'] == ('1' if complete else '0')
+    assert worker.runtime.execution.complete_turn is complete
     assert worker.runtime.replan_after_turns == (cadence or 6)
     receipt = json.loads((tmp_path / 'worker-profile.json').read_text())
     assert receipt['outer_resume'] is False
+    assert receipt.get('complete_turn') is (True if complete else None)
     assert receipt.get('turn_envelope') is (True if enabled else None)
     if not enabled:
         assert 'turn_envelope' not in receipt
     from types import SimpleNamespace
     context = SimpleNamespace()
     worker.runtime._populate_context(context)
+    assert context.metadata.get('complete_turn') is (True if complete else None)
     assert context.metadata.get('turn_envelope') is (True if enabled else None)
     if not enabled:
         assert 'turn_envelope' not in context.metadata
@@ -649,13 +736,143 @@ def test_envelope_rejects_incompatible_sforge_worker(profile):
     pytest.importorskip('harbor')
     from sforge.harness.config import SForgeConfig
     from benchmark.runtime.sforge import SForgeWorker
-    with pytest.raises(ValueError, match='heartbeat worker'):
+    with pytest.raises(ValueError, match='turn_envelope'):
         SForgeWorker(SForgeConfig(agent_model='fixture', agent_effort='xhigh'),
                      profile=profile, cwd='/task', turn_envelope=True)
 
 
+@pytest.mark.parametrize("profile", ["heartbeat-resume", "heartbeat-explore"])
+@pytest.mark.parametrize("delivery", ["off", "on"])
+@pytest.mark.parametrize("checkpoint_preflight", [False, True])
+def test_complete_worker_reaches_original_ready_guard_without_a_model(
+        tmp_path, monkeypatch, profile, delivery, checkpoint_preflight):
+    """Actual adapter → worker → renderer → CLI → typed source; no model/API call."""
+    import os
+    import shlex
+    import subprocess
+    import sys
+    from pathlib import Path
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex
+    from benchmark.runtime.worker import heartbeat_body
+    from loopx.control_plane.turn_driver import codex_context
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    from tests.control_plane.test_quota_settlement_cli import (
+        _write_fixture, _initialize_fixture_authority, _run_cli, _heartbeat_receipt_count,
+        GOAL_ID, AGENT_ID, TODO_ID,
+    )
+
+    project, runtime, registry = _write_fixture(tmp_path)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    requested = "Continue useful authorized work for at least 120 seconds while feasible."
+    state.write_text(state.read_text().replace("Settle one standard Codex App delivery.", requested))
+    _initialize_fixture_authority(project, runtime, provider="sqlite", handoff_mode="hard_lease")
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID]
+    assert _run_cli(registry, runtime, "todo", "claim", *binding, "--claimed-by", AGENT_ID, cwd=project)[0] == 0
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/unread-fixture-credential")
+    async def installed(self, environment):
+        pass  # No provider login, install, native session or model is requested.
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    agent = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+        profile=profile, cwd=str(project), complete_turn=True, context_delivery=delivery)
+    agent.install_stop_hook(None, None, tmp_path, None)
+    env = agent.runtime._worker_env(cwd=str(project))
+    assert env["LOOPX_COMPLETE_TURN"] == "1" and env["LOOPX_CONTEXT_DELIVERY"] == delivery
+    source = Path(__file__).resolve().parents[2]
+    turn = "original-complete-turn"
+    wake = tmp_path / "wakes" / turn
+    wake.mkdir(parents=True)
+    journal = tmp_path / "native-context"
+    journal.mkdir(mode=0o700)
+    monkeypatch.setenv("CODEX_THREAD_ID", "complete-fixture-session")
+    event = {"session_id": "complete-fixture-session", "cwd": str(project),
+        "hook_event_name": "SessionStart", "source": "startup"}
+    codex_context.codex_context_hook(str(journal), event)
+    env.update(PYTHONPATH=str(source), PATH=os.environ["PATH"], LOOPX_PYTHON=sys.executable,
+        LOOPX_CLI=str(source / "scripts/loopx"), LOOPX_PROJECT=str(project), LOOPX_REGISTRY=str(registry),
+        LOOPX_RUNTIME_ROOT=str(runtime), LOOPX_GOAL_ID=GOAL_ID, LOOPX_AGENT_ID=AGENT_ID,
+        LOOPX_WAKE_LOG_DIR=str(tmp_path / "wakes"), LOOPX_CODEX_CONTEXT_DIR=str(journal),
+        CODEX_THREAD_ID=event["session_id"], LOOPX_PHASE_DEADLINE_EPOCH="9876543210.125")
+    body = heartbeat_body(env, turn, native_goal=False)
+    block = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
+    assert block.count("--complete-turn") == 1 and "--turn-envelope" not in block
+    if checkpoint_preflight:
+        from benchmark.runtime.checkpoint import capture_before_replan
+
+        request = tmp_path / "checkpoint-request.json"
+        request.write_text(json.dumps({"destination": str(tmp_path / "checkpoints"),
+            "trigger": "fresh_replan", "native_session": True, "loopx_state": True,
+            "evaluation_opportunity": True, "controller_handoff": True,
+            "components": [{"id": "workspace", "source_path": str(project)}], "point_metadata": {}}))
+        env["LOOPX_CHECKPOINT_REQUEST"] = str(request)
+        receipt = {"turn_id": turn, "mode": "heartbeat", "stage": "execute"}
+        body = capture_before_replan(env, receipt, body)
+        assert receipt["checkpoint"]["reason"] == "no_fresh_replan"
+        assert "Do not repeat the initial guard below" in body
+        original, = wake.glob("checkpoint-start-*/decision-*/decision.json")
+        assert (wake / "checkpoint-start-guard.json").read_bytes() == original.read_bytes()
+        if delivery == "off":
+            view, = wake.glob("checkpoint-start-*/checkpoint-start-view.json")
+            assert str(view) in body
+            packet = json.loads(view.read_text())
+        else:
+            block = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
+            assert "context-project" in block and "should-run" not in block
+            packet = json.loads(subprocess.run(shlex.split(block), cwd=project, env=env,
+                capture_output=True, text=True, check=True).stdout)
+            assert "content" in packet
+    else:
+        result = subprocess.run(["bash", "-c", block + " --todo-id " + TODO_ID], cwd=project,
+            env=env, capture_output=True, text=True, check=True)
+        packet = json.loads(result.stdout)
+        original, = (wake / "decisions").rglob("decision.json")
+    saved = original.read_bytes()
+    complete = json.loads(saved)
+    assert_complete_turn_decision(complete)
+    assert complete["schema_version"] == "loopx_turn_envelope_v1"
+    cli = complete["interaction_contract"]["cli_channel"]
+    assert cli["execution_preparation"]["state"] == "ready"
+    assert cli["settlement_plan"]["identity"] == complete["heartbeat_receipt"]["settlement_identity"]
+    assert cli["settlement_plan"]["identity"]["turn_instance_id"] == turn
+    assert cli["settlement_plan"]["schema_version"] == "quota_settlement_plan_v2"
+    assert len(cli["next_cli_actions"]) == 1 and "--settle-turn --settlement-receipt" in cli["next_cli_actions"][0]
+    assert requested in saved.decode() and "9876543210.125" not in body + saved.decode()
+    if delivery == "off":
+        assert packet == complete
+    else:
+        page = packet if checkpoint_preflight else json.loads(subprocess.run(
+            shlex.split(packet["recovery"]["command"]), cwd=project, env=env,
+            capture_output=True, text=True, check=True).stdout)
+        while True:
+            assert page["ok"]
+            codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostToolUse",
+                "tool_use_id": f"page-{page['offset']}", "tool_response": json.dumps(page)})
+            command = page.get("next_command")
+            if not command:
+                break
+            page = json.loads(subprocess.run(shlex.split(command), cwd=project, env=env,
+                capture_output=True, text=True, check=True).stdout)
+        if checkpoint_preflight:
+            # Selected initial facts do not certify a complete delta baseline.
+            # Follow the same published full recovery for this byte oracle.
+            command = packet["navigation"]["recovery"]["command"]
+            while command:
+                page = json.loads(subprocess.run(shlex.split(command), cwd=project, env=env,
+                    capture_output=True, text=True, check=True).stdout)
+                assert page["ok"]
+                codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostToolUse",
+                    "tool_use_id": f"full-page-{page['offset']}", "tool_response": json.dumps(page)})
+                command = page.get("next_command")
+        assert codex_context._state(journal)["candidate"]["basis"] == "native_hook_assumption"
+    assert _heartbeat_receipt_count(runtime, turn) == 1
+    assert original.read_bytes() == saved
+
+
 @pytest.mark.parametrize("profile,options", [
     ("native-goal", ["--turn-envelope"]),
+    ("native-goal", ["--context-delivery"]),
     ("official", ["--replan-after-turns", "3"]),
     ("single", ["--replan-after-todos", "3"]),
     ("native-goal", ["--replan-after-todos", "3"]),
@@ -668,6 +885,7 @@ def test_envelope_rejects_incompatible_sforge_worker(profile):
     ("native-goal", ["--checkpoint-request", "missing.json"]),
     ("heartbeat-explore", ["--checkpoint-retention-policy", "policy.json"]),
     ("heartbeat-explore", ["--no-checkpoint-retention"]),
+    ("heartbeat-explore", ["--checkpoint-export-root", "/unused-export"]),
     ("heartbeat-explore", ["--no-checkpoint-retention", "--checkpoint-retention-policy", "policy.json"]),
 ])
 def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_path, profile, options):
@@ -704,7 +922,8 @@ def test_controller_handoff_cannot_be_partially_enabled(tmp_path, missing):
     assert error.value.code == 2 and not (tmp_path / "runs").exists()
 
 
-def test_checkpoint_supervisor_is_bound_to_container_and_only_solver_execution(tmp_path, monkeypatch):
+@pytest.mark.parametrize("host_callback", [False, True])
+def test_checkpoint_supervisor_is_bound_to_container_and_only_solver_execution(tmp_path, monkeypatch, host_callback):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from types import SimpleNamespace
@@ -717,7 +936,21 @@ def test_checkpoint_supervisor_is_bound_to_container_and_only_solver_execution(t
                                     oauth_proxy=True, checkpoint=controller, client=SimpleNamespace())
     handle = SimpleNamespace(raw="exact-container")
     monkeypatch.setattr(DockerBackend, "create_container", lambda *a, **kw: handle)
-    backend.create_container("image", "name", environment={"SFORGE_TOKEN": "synthetic"})
+    def current_provider(*, host_registration_callback=None):
+        pass
+    def legacy_provider():
+        pass
+    provider = current_provider if host_callback else legacy_provider
+    options = backend.registration_options(provider)
+    env = {"SFORGE_FEEDBACK_URL": "http://judge/api/v1/feedback/synthetic-relay"}
+    if host_callback:
+        options["host_registration_callback"]("synthetic")
+    else:
+        assert options == {}
+        env["SFORGE_TOKEN"] = "synthetic"
+    original_env = dict(env)
+    backend.create_container("image", "name", environment=env)
+    assert env == original_env, "binding must not inject the host token into worker env"
     backend.execution_command = "solver"
     monkeypatch.setattr(DockerBackend, "exec_run_with_timeout", lambda *a, **kw:
         SimpleNamespace(exit_code=0, timed_out=False, elapsed_seconds=1))
@@ -725,6 +958,30 @@ def test_checkpoint_supervisor_is_bound_to_container_and_only_solver_execution(t
     assert calls == [("bind", "synthetic")]
     backend.exec_run_with_timeout(handle, ["/bin/bash", "-c", "solver"])
     assert calls == [("bind", "synthetic"), ("start", "exact-container"), ("close",)]
+    with pytest.raises(ValueError, match="one native host registration"):
+        backend.bind_registration("another-registration")
+
+
+def test_host_registration_is_opt_in_shared_and_requires_nonempty_token(tmp_path):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from types import SimpleNamespace
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend
+    backend = RecordingDockerBackend(log_dir=tmp_path, logger=None, oauth_proxy=True,
+                                     client=SimpleNamespace())
+    def provider(*, host_registration_callback=None):
+        pass
+    assert backend.registration_options(provider) == {}, "ordinary official runs retain native behavior"
+    calls = []
+    backend.feedback = SimpleNamespace(bind=lambda env: calls.append(("feedback", env["SFORGE_TOKEN"])))
+    backend.checkpoint = SimpleNamespace(bind=lambda env: calls.append(("checkpoint", env["SFORGE_TOKEN"])))
+    callback = backend.registration_options(provider)["host_registration_callback"]
+    for invalid in (None, "", 1, {}):
+        with pytest.raises(ValueError):
+            callback(invalid)
+    assert calls == [] and not backend.registration_bound
+    callback("synthetic")
+    assert calls == [("feedback", "synthetic"), ("checkpoint", "synthetic")]
 
 
 @pytest.mark.parametrize("protect_fails", [False, True])
@@ -813,7 +1070,8 @@ def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(
         work=SimpleNamespace(agent_query="fixture task"),
         judge=SimpleNamespace(selection="score_first", score_direction="maximize")))
     monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
-    monkeypatch.setattr(run, "RecordingDockerBackend", lambda **k: SimpleNamespace(image_exists=lambda image: True))
+    monkeypatch.setattr(run, "RecordingDockerBackend", lambda **k: SimpleNamespace(
+        observe_local_images=lambda **keys: {}, registration_options=lambda provider: {}))
     def stop_before_solver(**kwargs):
         # Exercise the real adapter at the CLI handoff, including both context
         # modes. SForge must not resume an exited LoopX scheduler.
@@ -823,13 +1081,14 @@ def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(
         assert kwargs["eval_interval"] == interval
         agent = kwargs["agent"]
         horizon = (True if "--planning-horizon-goal" in cadence_args else
-                   False if "--no-planning-horizon-goal" in cadence_args else None)
+                   False if "--no-planning-horizon-goal" in cadence_args else True)
         assert agent.planning_horizon_goal is horizon
         assert "total trial budget" not in agent.workspace_instructions
         assert agent.task_objective == "fixture task"
         assert agent.task_objective in agent.feedback_prompt
         assert agent.task_objective not in agent.workspace_instructions
-        assert "Continue researching" in agent.workspace_instructions
+        assert "The task defines candidate validity and acceptance" in agent.workspace_instructions
+        assert "continue seeking useful improvements" in agent.workspace_instructions
         assert agent.feedback_prompt.startswith(agent.workspace_instructions)
         raise RuntimeError("synthetic launch failure")
     monkeypatch.setattr(run, "run_agent", stop_before_solver)
@@ -846,9 +1105,8 @@ def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(
     assert receipt["eval_interval"] == interval
     assert receipt[field] == count
     horizon = (True if "--planning-horizon-goal" in cadence_args else
-               False if "--no-planning-horizon-goal" in cadence_args else None)
-    assert receipt.get("planning_horizon_goal") is horizon
-    assert ("planning_horizon_goal" in receipt) is (horizon is not None)
+               False if "--no-planning-horizon-goal" in cadence_args else True)
+    assert receipt["planning_horizon_goal"] is horizon
     other = ("replan_after_completed_todos" if field == "replan_after_effective_turns"
              else "replan_after_effective_turns")
     assert other not in receipt
@@ -937,7 +1195,7 @@ def test_sforge_explicit_todo_cadence_reaches_worker_and_receipt(tmp_path, monke
                           profile=profile, cwd="/task", replan_after_todos=3)
     worker.install_stop_hook(None, None, tmp_path, None)
     assert worker.replan_after_turns is None
-    assert worker.runtime._replan_receipt() == {"replan_after_completed_todos": 3}
+    assert worker.runtime._replan_receipt() == {"replan_after_completed_todos": 3, "planning_horizon_goal": True}
     receipt = json.loads((tmp_path / "worker-profile.json").read_text())
     assert receipt["replan_after_completed_todos"] == 3
     assert "replan_after_effective_turns" not in receipt
@@ -957,7 +1215,7 @@ def test_sforge_planning_has_no_independent_cap_or_extra_trial_budget(tmp_path, 
         profile=profile, cwd="/task", timeout_seconds=1800)
     worker.install_stop_hook(None, None, tmp_path, None)
     assert worker.runtime.scheduler_timeout == 1800
-    assert worker.turn_timeout == 1640
+    assert worker.turn_timeout == 1800
     receipt = json.loads((tmp_path / "worker-profile.json").read_text())
     assert receipt["planning_timeout_seconds"] is None
     assert receipt["timeout_seconds"] == 1800
@@ -973,6 +1231,7 @@ def test_recorded_solver_exit_does_not_take_status_from_output(tmp_path, monkeyp
     from types import SimpleNamespace
     from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
     backend = object.__new__(RecordingDockerBackend)
+    backend.research_sidecar = False
     backend.checkpoint = None
     backend.log_dir = tmp_path / "collected"
     backend.blind_api_endpoint = None
@@ -1071,7 +1330,8 @@ def test_custom_provider_uses_environment_credential_without_copying_login(tmp_p
     copied = {}
     def copy(handle, source, target):
         copied[str(target)] = source.read_text()
-    backend = SimpleNamespace(exec_run=lambda *a, **k: SimpleNamespace(exit_code=0),
+    backend = SimpleNamespace(exec_run=lambda *a, **k: SimpleNamespace(
+                                  exit_code=0, output=config.agent_api_base_url),
                               copy_to_container=copy)
     config = SForgeConfig(agent_model='fixture', agent_effort='xhigh',
                          agent_api_base_url='http://127.0.0.1:9876/v1',
@@ -1095,10 +1355,130 @@ def test_custom_provider_uses_environment_credential_without_copying_login(tmp_p
         worker.prepared = True
     command = worker.format_run_cmd('/task/prompt.md')
     assert config.agent_api_key not in command
+    assert "benchmark.runtime.codex_readiness" not in command
     assert all(config.agent_api_key not in contents for contents in copied.values())
     config.agent_api_key = None
     with pytest.raises(ValueError, match='API credential'):
         SForgeWorker(config, profile=profile, cwd='/task')
+
+
+@pytest.mark.parametrize('profile,provider_request_admission', [
+    ('official', False), ('native-goal', False),
+    ('heartbeat-resume', False), ('heartbeat-resume', True), ('heartbeat-explore', True),
+])
+def test_custom_provider_preserves_sforge_runtime_gateway(tmp_path, monkeypatch, profile, provider_request_admission):
+    pytest.importorskip('sforge')
+    pytest.importorskip('harbor')
+    import tomllib
+    from types import SimpleNamespace
+    from sforge.harness.agent.codex import CodexAgent
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, CodexOffline, BenchmarkCodex
+
+    provider_url = 'https://provider.invalid/v1'
+    provider_key = 'synthetic-provider-secret'
+    runtime_url = 'http://host.docker.internal:43123'
+    monkeypatch.setenv('CODEX_AUTH_JSON_PATH', str(tmp_path / 'must-not-read-auth.json'))
+    monkeypatch.setenv('OPENAI_API_KEY', provider_key)
+    monkeypatch.setenv('OPENAI_BASE_URL', provider_url)
+    monkeypatch.setenv('CODEX_WIRE_API', 'responses')
+    monkeypatch.setenv('LOOPX_PROVIDER_REQUEST_ADMISSION', 'on')
+
+    async def installed(self, environment):
+        pass
+
+    monkeypatch.setattr(CodexOffline, 'install', installed)
+    monkeypatch.setattr(BenchmarkCodex, 'install', installed)
+    monkeypatch.setattr(CodexAgent, 'install_stop_hook', lambda *args: None)
+    copied = {}
+
+    def execute(handle, command, **kwargs):
+        output = runtime_url if isinstance(command, list) and 'OPENAI_BASE_URL' in command[-1] else ''
+        return SimpleNamespace(exit_code=0, output=output)
+
+    def copy(handle, source, target):
+        copied[str(target)] = source.read_text()
+
+    backend = SimpleNamespace(exec_run=execute, copy_to_container=copy)
+    config = SForgeConfig(
+        agent_model='fixture', agent_effort='xhigh',
+        agent_api_base_url=provider_url, agent_api_key=provider_key,
+    )
+    worker = SForgeWorker(config, profile=profile, cwd='/task',
+                          provider_request_admission=provider_request_admission)
+    worker.install_stop_hook(backend, None, tmp_path, None)
+
+    if profile == 'official':
+        settings = tomllib.loads(copied['/home/agent/.codex/config.toml'])
+        assert settings['model_providers']['harbor']['base_url'] == runtime_url
+    else:
+        env = worker.runtime._worker_env(cwd='/task')
+        assert env['OPENAI_BASE_URL'] == runtime_url
+        assert env['OPENAI_API_KEY'] == 'runtime-managed-credential'
+        assert env.get('LOOPX_PROVIDER_REQUEST_ADMISSION') == ('on' if provider_request_admission else None)
+        worker.prepared = True
+    assert config.agent_api_base_url == provider_url
+    receipt = (tmp_path / 'worker-profile.json').read_text()
+    assert json.loads(receipt).get('provider_request_admission') == ('on' if provider_request_admission else None)
+    assert provider_key not in receipt
+    command = worker.format_run_cmd('/task/prompt.md')
+    assert provider_url not in command
+    assert provider_key not in command
+    assert all(provider_url not in contents for contents in copied.values())
+    assert all(provider_key not in contents for contents in copied.values())
+
+
+@pytest.mark.parametrize('option,profile,base_url,api_key,wire_api', [
+    ('on', 'heartbeat-resume', 'https://provider.invalid/v1', 'synthetic-key', 'responses'),
+    (1, 'heartbeat-resume', 'https://provider.invalid/v1', 'synthetic-key', 'responses'),
+    (None, 'heartbeat-resume', 'https://provider.invalid/v1', 'synthetic-key', 'responses'),
+    (True, 'official', 'https://provider.invalid/v1', 'synthetic-key', 'responses'),
+    (True, 'single', 'https://provider.invalid/v1', 'synthetic-key', 'responses'),
+    (True, 'native-goal', 'https://provider.invalid/v1', 'synthetic-key', 'responses'),
+    (True, 'heartbeat-resume', None, 'synthetic-key', 'responses'),
+    (True, 'heartbeat-resume', 'https://provider.invalid/v1', None, 'responses'),
+    (True, 'heartbeat-resume', 'https://provider.invalid/v1', 'synthetic-key', 'chat'),
+])
+def test_sforge_provider_request_admission_rejects_unsupported_activation(
+    tmp_path, monkeypatch, option, profile, base_url, api_key, wire_api,
+):
+    pytest.importorskip('sforge')
+    pytest.importorskip('harbor')
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker
+
+    monkeypatch.setenv('CODEX_AUTH_JSON_PATH', str(tmp_path / 'unused-login.json'))
+    monkeypatch.setenv('CODEX_WIRE_API', wire_api)
+    config = SForgeConfig(agent_model='fixture', agent_effort='xhigh',
+                         agent_api_base_url=base_url, agent_api_key=api_key)
+    with pytest.raises(ValueError, match='provider_request_admission'):
+        SForgeWorker(config, profile=profile, cwd='/task', provider_request_admission=option)
+
+
+@pytest.mark.parametrize('profile,base_url,wire_api', [
+    ('official', 'https://provider.invalid/v1', 'responses'),
+    ('single', 'https://provider.invalid/v1', 'responses'),
+    ('native-goal', 'https://provider.invalid/v1', 'responses'),
+    ('heartbeat-resume', '', 'responses'),
+    ('heartbeat-resume', 'https://provider.invalid/v1', 'chat'),
+])
+def test_edgebench_request_admission_preflight_creates_no_attempt(
+    tmp_path, monkeypatch, capsys, profile, base_url, wire_api,
+):
+    pytest.importorskip('sforge')
+    pytest.importorskip('harbor')
+    from benchmark.edgebench.run import main
+
+    monkeypatch.setenv('OPENAI_BASE_URL', base_url)
+    monkeypatch.setenv('OPENAI_API_KEY', 'synthetic-provider-key')
+    monkeypatch.setenv('CODEX_WIRE_API', wire_api)
+    with pytest.raises(SystemExit, match='2'):
+        main(['--task', 'fixture', '--tasks-dir', str(tmp_path), '--log-dir', str(tmp_path),
+              '--run-id', 'unsupported-admission', '--worker', profile, '--model', 'fixture',
+              '--effort', 'xhigh', '--judge-url', 'http://127.0.0.1:9999',
+              '--provider-request-admission'])
+    assert '--provider-request-admission requires' in capsys.readouterr().err
+    assert not (tmp_path / 'runs').exists()
 
 
 def test_custom_provider_without_key_fails_before_creating_attempt(tmp_path, monkeypatch):
@@ -1114,8 +1494,13 @@ def test_custom_provider_without_key_fails_before_creating_attempt(tmp_path, mon
     assert not (tmp_path / 'runs').exists()
 
 
-@pytest.mark.parametrize('custom', [False, True])
-def test_edgebench_cli_forwards_only_explicit_provider_pair(tmp_path, monkeypatch, custom):
+@pytest.mark.parametrize('custom,profile,provider_request_admission', [
+    (False, 'official', False), (True, 'official', False),
+    (True, 'heartbeat-resume', False), (True, 'heartbeat-resume', True),
+])
+@pytest.mark.parametrize('bridge', [False, True], ids=['docker-default', 'docker-bridge'])
+def test_edgebench_cli_merges_sforge_env_with_explicit_runner_config(
+        tmp_path, monkeypatch, custom, profile, bridge, provider_request_admission):
     pytest.importorskip('sforge')
     pytest.importorskip('harbor')
     from types import SimpleNamespace
@@ -1124,6 +1509,14 @@ def test_edgebench_cli_forwards_only_explicit_provider_pair(tmp_path, monkeypatc
     monkeypatch.setenv('LOOPX_EXPECTED_COMMIT', 'fixture')
     monkeypatch.setenv('CODEX_AUTH_JSON_PATH', '/synthetic-login')
     monkeypatch.setenv('OPENAI_API_KEY', 'synthetic-provider-secret')
+    monkeypatch.setenv('CODEX_WIRE_API', 'responses')
+    attestation_key = tmp_path / 'runtime-attestation.key'
+    attestation_key.write_text('synthetic-attestation-key')
+    monkeypatch.setenv('SFORGE_RUNTIME_ATTESTATION_KEY_FILE', str(attestation_key))
+    monkeypatch.setenv('SFORGE_RUNNER_SOURCE_REVISION', 'a' * 40)
+    monkeypatch.setenv('SFORGE_WORK_CPU_LIMIT', '9')
+    monkeypatch.setenv('SFORGE_AGENT_API_BASE_URL', 'https://env-provider.invalid/v1')
+    monkeypatch.setenv('SFORGE_AGENT_API_KEY', 'unexpected-env-secret')
     if custom:
         monkeypatch.setenv('OPENAI_BASE_URL', 'http://127.0.0.1:9876/v1')
     else:
@@ -1135,31 +1528,50 @@ def test_edgebench_cli_forwards_only_explicit_provider_pair(tmp_path, monkeypatc
         cwd='/task', work_image_key='work', judge_image_key='judge', internet=False,
         game_mode=False, submit_paths=['solver.py'], work=SimpleNamespace(agent_query='fixture task'),
         judge=SimpleNamespace(selection='score_first', score_direction='maximize')))
+    images = {
+        'work': {'image_id': 'sha256:' + 'a' * 64, 'logical_size_bytes': 100},
+        'judge': {'image_id': 'sha256:' + 'b' * 64, 'logical_size_bytes': 200},
+    }
     def backend(**kwargs):
         assert kwargs['oauth_proxy'] is custom
-        return SimpleNamespace(image_exists=lambda image: True)
+        assert kwargs.get('docker_host_bridge', False) is bridge
+        return SimpleNamespace(observe_local_images=lambda **keys: images,
+                               registration_options=lambda provider: {})
     monkeypatch.setattr(run, 'RecordingDockerBackend', backend)
     def stop_before_solver(**kwargs):
         config = kwargs['config']
         assert config.agent_api_base_url == ('http://127.0.0.1:9876/v1' if custom else None)
         assert config.agent_api_key == ('synthetic-provider-secret' if custom else None)
+        assert config.runtime_attestation_key_file == attestation_key
+        assert config.runner_source_revision == 'a' * 40
+        assert config.work_cpu_limit == 4
+        assert kwargs['agent'].provider_request_admission is provider_request_admission
         raise RuntimeError('synthetic launch boundary')
     monkeypatch.setattr(run, 'run_agent', stop_before_solver)
+    args = ['--task', 'fixture', '--tasks-dir', str(tmp_path), '--log-dir', str(tmp_path),
+            '--run-id', 'route', '--worker', profile, '--model', 'fixture',
+            '--effort', 'xhigh', '--judge-url', 'http://127.0.0.1:9999']
+    if provider_request_admission:
+        args += ['--provider-request-admission']
+    if bridge:
+        args += ['--docker-host-bridge']
     with pytest.raises(RuntimeError, match='synthetic launch boundary'):
-        run.main(['--task', 'fixture', '--tasks-dir', str(tmp_path), '--log-dir', str(tmp_path),
-                  '--run-id', 'route', '--worker', 'official', '--model', 'fixture',
-                  '--effort', 'xhigh', '--judge-url', 'http://127.0.0.1:9999'])
+        run.main(args)
     receipt = (tmp_path / 'runs/route/fixture/runtime-receipt.json').read_text()
     assert 'synthetic-provider-secret' not in receipt
+    assert json.loads(receipt)['local_docker_images'] == images
+    assert json.loads(receipt).get('provider_request_admission') == ('on' if provider_request_admission else None)
+    assert json.loads(receipt).get('docker_host_bridge', False) is bridge
 
 
 @pytest.mark.parametrize("capture", [False, True])
-def test_native_checkpoint_storage_guidance_reaches_both_prompt_surfaces(tmp_path, monkeypatch, capture):
+@pytest.mark.parametrize("context_delivery", [None, "off", "on"])
+def test_native_checkpoint_storage_guidance_reaches_both_prompt_surfaces(tmp_path, monkeypatch, capture, context_delivery):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from types import SimpleNamespace
     from benchmark.edgebench import run
-    from benchmark.edgebench.prompts import native_task_prompt, native_task_instructions
+    from benchmark.edgebench.prompts import research_artifact_instructions, native_task_instructions
 
     monkeypatch.setenv("LOOPX_SRC_DIR", str(tmp_path))
     monkeypatch.setenv("LOOPX_EXPECTED_COMMIT", "fixture")
@@ -1171,23 +1583,28 @@ def test_native_checkpoint_storage_guidance_reaches_both_prompt_surfaces(tmp_pat
         cwd="/task", work_image_key="work", judge_image_key="judge", internet=False,
         game_mode=False, submit_paths=["solver.py"], work=SimpleNamespace(agent_query="Original acceptance."),
         judge=SimpleNamespace(selection="score_first", score_direction="maximize")))
-    monkeypatch.setattr(run, "RecordingDockerBackend", lambda **k: SimpleNamespace(image_exists=lambda image: True))
+    monkeypatch.setattr(run, "RecordingDockerBackend", lambda **k: SimpleNamespace(
+        observe_local_images=lambda **keys: {}, registration_options=lambda provider: {}))
+    expected_delivery = "on" if context_delivery is None else context_delivery
     def before_solver(**kwargs):
         worker = kwargs["agent"]
+        assert worker.context_delivery == expected_delivery
         assert worker.task_objective == "Original acceptance."
         assert worker.feedback_prompt.startswith(worker.workspace_instructions)
         assert worker.feedback_prompt.endswith("---\n\nOriginal acceptance.\n")
-        assert ("### Durable Research Artifacts" in worker.workspace_instructions) is capture
-        if not capture:
-            policy = dict(submission_cooldown=3600, eval_interval=0, internet=False,
-                          selection="score_first", score_direction="maximize")
-            assert worker.workspace_instructions == native_task_instructions(["solver.py"], **policy)
-            assert worker.feedback_prompt == native_task_prompt("Original acceptance.", ["solver.py"], **policy)
+        assert worker.research_sidecar is True
+        assert ("verified continuation restores" in worker.workspace_instructions) is capture
+        policy = dict(submission_cooldown=3600, eval_interval=0, internet=False,
+                      selection="score_first", score_direction="maximize")
+        assert worker.workspace_instructions == (native_task_instructions(["solver.py"], **policy)
+            + research_artifact_instructions(checkpoint=capture))
         raise RuntimeError("validated before model execution")
     monkeypatch.setattr(run, "run_agent", before_solver)
     args = ["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
             "--run-id", "storage", "--worker", "heartbeat-explore", "--model", "fixture",
             "--effort", "xhigh", "--judge-url", "http://127.0.0.1:9999", "--feedback", "native"]
+    if context_delivery is not None:
+        args += ["--context-delivery", context_delivery]
     if capture:
         declaration = tmp_path / "request.json"
         declaration.write_text(json.dumps({"destination": "/logs/agent/checkpoints",
@@ -1195,3 +1612,159 @@ def test_native_checkpoint_storage_guidance_reaches_both_prompt_surfaces(tmp_pat
         args += ["--checkpoint-request", str(declaration)]
     with pytest.raises(RuntimeError, match="validated before model execution"):
         run.main(args)
+    receipt = json.loads((tmp_path / "runs/storage/fixture/runtime-receipt.json").read_text())
+    assert receipt.get("context_delivery") == (expected_delivery if expected_delivery != "off" else None)
+
+
+@pytest.mark.parametrize(("profile", "selected", "compare"), [
+    ("heartbeat-explore", False, False), ("heartbeat-explore", True, False), ("native-goal", True, False),
+    ("heartbeat-explore", True, True), ("heartbeat-explore", False, True),
+])
+def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp_path, monkeypatch, capsys,
+                                                                              profile, selected, compare):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from types import SimpleNamespace
+    from benchmark.edgebench import run
+    from benchmark.runtime.harbor import BenchmarkCodex
+    from benchmark.runtime.sforge import SForgeWorker
+
+    producer = "local_probe" if selected else None
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.setenv("LOOPX_SRC_DIR", str(tmp_path))
+    monkeypatch.setenv("LOOPX_EXPECTED_COMMIT", "fixture")
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-unused-credential")
+    (tmp_path / "fixture.json").write_text("{}")
+    (tmp_path / "BENCHMARK.yaml").write_text("id: fixture\n")
+    monkeypatch.setattr(run, "source_pins", lambda *a: ("fixture", "fixture"))
+    monkeypatch.setattr("benchmark.runtime.source.require_candidate_content", lambda *a, **k: None)
+    monkeypatch.setattr(run, "active_source_receipt", lambda *a, **k: {"commit": "b" * 40})
+    monkeypatch.setattr(run, "load_benchmark", lambda *a: None)
+    monkeypatch.setattr(run, "make_task_spec", lambda *a: SimpleNamespace(
+        task_id="fixture", cwd="/task", work_image_key="work", judge_image_key="judge", internet=False,
+        game_mode=False, submit_paths=["solver.py"], work=SimpleNamespace(agent_query="Original acceptance."),
+        judge=SimpleNamespace(selection="score_first", score_direction="maximize")))
+    backend = SimpleNamespace(observe_local_images=lambda **keys: {},
+                              registration_options=lambda provider: {},
+                              exec_run=lambda *a, **k: SimpleNamespace(exit_code=0))
+    monkeypatch.setattr(run, "RecordingDockerBackend", lambda **k: backend)
+
+    async def install_at_transport_boundary(self, environment):
+        assert environment.default_user == "agent"
+        assert self.execution_observation == producer
+        assert self._worker_env(cwd="/task").get("LOOPX_EXECUTION_OBSERVATION") == producer
+
+    installed_tools = []
+
+    async def install_entrypoint(self, environment, name, module, help_flag, failure):
+        assert environment.default_user == "agent"
+        installed_tools.append((name, module, help_flag))
+        installed.append(name)
+
+    monkeypatch.setattr(BenchmarkCodex, "install", install_at_transport_boundary)
+    installed = []
+    scopes = []
+    monkeypatch.setattr(BenchmarkCodex, "_install_research_entrypoint", install_entrypoint)
+    monkeypatch.setattr(SForgeWorker, "_install_native_result_scope",
+                        lambda self, backend, handle: scopes.append(self.native_result_scope))
+    trial = tmp_path / "runs" / "probe" / "fixture"
+
+    def stop_before_model(**kwargs):
+        worker = kwargs["agent"]
+        worker.install_stop_hook(backend, None, trial, None)
+        profile_receipt = json.loads((trial / "worker-profile.json").read_text())
+        assert profile_receipt.get("execution_observation") == producer
+        assert profile_receipt.get("native_result_comparison") is (True if compare else None)
+        assert installed_tools == ([
+            ("loopx-bind-native-candidate", "sforge_candidate_binding.py", "--generated-file")
+        ] if selected or compare else [])
+        assert ("does not require a local probe or a new submission" in worker.feedback_prompt) is selected
+        assert ("content refs do not cover modes" in worker.workspace_instructions) is selected
+        raise RuntimeError("isolated install boundary")
+
+    monkeypatch.setattr(run, "run_agent", stop_before_model)
+    args = ["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
+            "--run-id", "probe", "--worker", profile, "--model", "fixture",
+            "--effort", "xhigh", "--judge-url", "http://127.0.0.1:9999"]
+    if selected:
+        args += ["--execution-observation", producer]
+    if compare:
+        args += ["--native-result-comparison"]
+    if profile == "native-goal":
+        with pytest.raises(SystemExit, match="2"):
+            run.main(args)
+        assert "--execution-observation requires a heartbeat worker" in capsys.readouterr().err
+        assert not trial.exists()
+        return
+    with pytest.raises(RuntimeError, match="isolated install boundary"):
+        run.main(args)
+    receipt = json.loads((trial / "runtime-receipt.json").read_text())
+    assert receipt.get("execution_observation") == producer
+    assert receipt.get("native_result_comparison") is (True if compare else None)
+    assert installed == (["loopx-bind-native-candidate"] if selected or compare else [])
+    assert bool(scopes) is compare
+    if compare:
+        scope, = scopes
+        assert scope["run"] == "probe" and scope["task"] == "fixture"
+        import hashlib
+        assert scope["benchmark_sha256"] == hashlib.sha256(
+            (tmp_path / "BENCHMARK.yaml").read_bytes()).hexdigest()
+        assert "scorer_commit" not in scope
+
+
+def test_capture_preflight_requires_the_common_product_api_without_overlay(tmp_path):
+    from benchmark.runtime.source import require_candidate_content
+
+    product, runner = tmp_path / "product", tmp_path / "runner"
+    old, runner_rev = repository(product, "product"), repository(runner, "runner")
+    # Feature off retains the same split pins; capture explicitly rejects the missing API.
+    assert source_pins(product, runner, old, runner_rev) == (old, runner_rev)
+    with pytest.raises(ValueError, match="product pin containing Explore candidate_content"):
+        require_candidate_content(product, old)
+    module = product / "loopx/capabilities/explore/candidate_content.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("def candidate_snapshot(paths, workspace): pass\n"
+                      "def candidate_manifest_sha256(files): pass\n")
+    subprocess.run(["git", "-C", str(product), "add", str(module)], check=True)
+    subprocess.run(["git", "-C", str(product), "commit", "-qm", "capture API"], check=True)
+    new = subprocess.check_output(["git", "-C", str(product), "rev-parse", "HEAD"], text=True).strip()
+    require_candidate_content(product, new)
+    assert (product / "loopx/product.py").read_text() == "product"
+    with pytest.raises(ValueError):
+        require_candidate_content(product, old)
+
+
+def test_formal_preflight_requires_the_existing_product_writeback_and_cli(tmp_path):
+    from pathlib import Path
+    from benchmark.runtime.source import require_candidate_content
+
+    product = tmp_path / "product"
+    repository(product, "product")
+    root = Path(__file__).resolve().parents[2]
+    def copy_and_commit(paths):
+        for name in paths:
+            target = product / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((root / name).read_bytes())
+        subprocess.run(["git", "-C", str(product), "add", *paths], check=True)
+        subprocess.run(["git", "-C", str(product), "commit", "-qm", "product API"], check=True)
+        return subprocess.check_output(["git", "-C", str(product), "rev-parse", "HEAD"], text=True).strip()
+    content = copy_and_commit(["loopx/capabilities/explore/candidate_content.py"])
+    require_candidate_content(product, content)
+    with pytest.raises(ValueError, match="Explore work finding"):
+        require_candidate_content(product, content, work_finding=True)
+    direct_only = copy_and_commit(["loopx/capabilities/explore/result_writeback.py"])
+    with pytest.raises(ValueError, match="Explore work finding CLI"):
+        require_candidate_content(product, direct_only, work_finding=True)
+    complete = copy_and_commit(["loopx/cli_commands/explore.py"])
+    require_candidate_content(product, complete, work_finding=True)
+    # The earlier API shape alone does not establish guarded commit semantics.
+    old_writer = product / "loopx/capabilities/explore/result_writeback.py"
+    old_writer.write_text("def record_work_finding(): pass\n")
+    subprocess.run(["git", "-C", str(product), "add", str(old_writer)], check=True)
+    subprocess.run(["git", "-C", str(product), "commit", "-qm", "Earlier unguarded product API"], check=True)
+    unguarded = subprocess.check_output(["git", "-C", str(product), "rev-parse", "HEAD"], text=True).strip()
+    with pytest.raises(ValueError, match="Explore work finding commit guard"):
+        require_candidate_content(product, unguarded, work_finding=True)
+    # Capture-only remains compatible with the earlier product; source pins are never rewritten.
+    require_candidate_content(product, content)

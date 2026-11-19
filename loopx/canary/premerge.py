@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from ..contract import scan_public_boundary
 from .planner import REPO_ROOT, resolve_canary_catalog_path
-from .runner import build_canary_smoke_suite_run
+from .runner import MAINTAINABILITY_RATCHET_SCRIPT, build_canary_smoke_suite_run, check_output_tail
 
 
 PREMERGE_GATE_SCHEMA_VERSION = "loopx_premerge_validation_gate_v0"
@@ -16,6 +16,15 @@ PREMERGE_VALIDATION_SUMMARY_SCHEMA_VERSION = "premerge_validation_summary_v0"
 ProgressCallback = Callable[[dict[str, Any]], None]
 
 PREMERGE_TIERS = {"quick", "standard", "deep"}
+
+# These paths need the existing exact-head visual/publication review. This is
+# local premerge coverage classification, not a public-boundary allowlist:
+# every matching file keeps the overall merge gate held, including media-only
+# changes. SVG remains text-scanned. Unknown binary formats still fail closed.
+_VISUAL_REVIEW_SUFFIXES = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tif", ".tiff", ".avif",
+    ".mp4", ".webm", ".mov",
+})
 
 CONTROL_PLANE_TOKENS = (
     "loopx/control_plane/",
@@ -86,11 +95,6 @@ CHANGE_QUALITY_TOKENS = (
     "tests/capabilities/test_change_quality.py",
     "examples/change-quality-qualification-smoke.py",
 )
-INHERITED_BASELINE_COMMANDS = (
-    "control-plane-maintainability-ratchet-smoke.py",
-)
-
-
 def _synthetic_smoke_suite_run(
     *,
     suite: str,
@@ -153,6 +157,34 @@ def _empty_smoke_suite_run(
     )
 
 
+def _visual_review_paths(changed_files: list[str], repo_root: Path) -> list[str]:
+    visual_paths = []
+    for path in _dedupe(changed_files):
+        target = repo_root / path
+        suffix = target.suffix.lower()
+        if suffix not in _VISUAL_REVIEW_SUFFIXES or not target.is_file() or target.is_symlink():
+            continue
+        if suffix in {".mp4", ".mov", ".webm"}:
+            # Preserve image routing; new video types need a container header, not just a suffix.
+            try:
+                with target.open("rb") as stream:
+                    header = stream.read(16)
+                file_size = target.stat().st_size
+            except OSError:
+                continue  # Unreadable inputs stay in the fail-closed text scan.
+            if suffix == ".webm":
+                if not header.startswith(b"\x1a\x45\xdf\xa3"):
+                    continue
+            elif (
+                len(header) < 16
+                or header[4:8] != b"ftyp"
+                or not 16 <= int.from_bytes(header[:4], "big") <= file_size
+            ):
+                continue
+        visual_paths.append(path)
+    return visual_paths
+
+
 def _public_boundary_changed_files_run(
     *,
     changed_files: list[str],
@@ -160,10 +192,12 @@ def _public_boundary_changed_files_run(
     timeout_seconds: float,
     repo_root: Path = REPO_ROOT,
 ) -> dict[str, Any]:
+    visual_paths = _visual_review_paths(changed_files, repo_root)
+    visual_files = {(repo_root / path).resolve() for path in visual_paths}
     existing_paths = [
         (repo_root / path).resolve()
         for path in _dedupe(changed_files)
-        if (repo_root / path).exists()
+        if (repo_root / path).exists() and (repo_root / path).resolve() not in visual_files
     ]
     display_paths: list[str] = []
     for path in existing_paths:
@@ -178,7 +212,10 @@ def _public_boundary_changed_files_run(
         "source": "premerge_public_boundary",
         "tier": "default",
         "command": " ".join(display_argv),
-        "reason": "scans changed public-boundary files for private material",
+        "reason": (
+            "scans changed text for private material; binary media require visual review"
+            if visual_paths else "scans changed public-boundary files for private material"
+        ),
         "normalized": {
             "ok": True,
             "display_argv": display_argv,
@@ -191,10 +228,13 @@ def _public_boundary_changed_files_run(
         if not existing_paths:
             check.update(
                 {
-                    "status": "skipped_no_existing_files",
+                    "status": "skipped_no_text_files" if visual_paths else "skipped_no_existing_files",
                     "ok": True,
                     "duration_seconds": 0.0,
-                    "stdout_tail": "no existing changed public-boundary files to scan",
+                    "stdout_tail": (
+                        "no changed text files; binary media require visual review"
+                        if visual_paths else "no existing changed public-boundary files to scan"
+                    ),
                 }
             )
         else:
@@ -205,21 +245,26 @@ def _public_boundary_changed_files_run(
             unreadable_directories = [
                 str(item) for item in boundary.get("unreadable_directories") or []
             ]
+            unreadable_files = [str(item) for item in boundary.get("unreadable_files") or []]
+            missing_roots = [str(item) for item in boundary.get("missing_scan_roots") or []]
+            warnings = [str(item) for item in boundary.get("warnings") or []]
+            complete_ok = bool(boundary.get("ok")) and not (
+                unreadable_directories or unreadable_files or missing_roots
+            )
+            label = "completed with warnings" if warnings else "clean"
             check.update(
                 {
-                    "status": (
-                        "passed"
-                        if boundary.get("ok") and not unreadable_directories
-                        else "failed"
-                    ),
-                    "ok": bool(boundary.get("ok")) and not unreadable_directories,
+                    "status": "passed" if complete_ok else "failed",
+                    "ok": complete_ok,
                     "duration_seconds": round(time.monotonic() - started, 3),
                     "stdout_tail": (
-                        f"public boundary scan clean: {boundary.get('scanned_files')} files"
-                        if boundary.get("ok") and not unreadable_directories
+                        f"public boundary scan {label}: {boundary.get('scanned_files')} files"
+                        if complete_ok
                         else ""
                     ),
-                    "stderr_tail": "\n".join(hits + unreadable_directories)[-800:],
+                    "stderr_tail": "\n".join(dict.fromkeys(
+                        hits + warnings + unreadable_files + unreadable_directories + missing_roots
+                    ))[-800:],
                     "boundary": {
                         "scanned_files": boundary.get("scanned_files"),
                         "skipped_private_state_files": boundary.get("skipped_private_state_files"),
@@ -235,6 +280,11 @@ def _public_boundary_changed_files_run(
         timeout_seconds=timeout_seconds,
         selected_checks=[check],
         note=(
+            "Premerge public-boundary validation scans the changed public text files "
+            "directly. The full fresh-directory contract smoke remains available "
+            "through the canary catalog/profile suites. Binary media require the "
+            "existing exact-head visual review; text success does not qualify them."
+            if visual_paths else
             "Premerge public-boundary validation scans the changed public files "
             "directly. The full fresh-directory contract smoke remains available "
             "through the canary catalog/profile suites."
@@ -246,6 +296,8 @@ def _public_boundary_changed_files_run(
         "changed_files": list(changed_files),
         "scan_paths": display_paths,
     }
+    if visual_paths:
+        payload["selection_inputs"]["visual_review_paths"] = visual_paths
     return payload
 
 
@@ -266,14 +318,14 @@ def _path_matches(path: str, tokens: tuple[str, ...]) -> bool:
 
 
 def _dedupe(values: list[str]) -> list[str]:
+    """Deduplicate path identities without rewriting Git-provided values."""
     seen: set[str] = set()
     deduped: list[str] = []
     for value in values:
-        normalized = _norm_path(value)
-        if not normalized or normalized in seen:
+        if not value or value in seen:
             continue
-        seen.add(normalized)
-        deduped.append(normalized)
+        seen.add(value)
+        deduped.append(value)
     return deduped
 
 
@@ -311,8 +363,22 @@ def classify_premerge_surfaces(
         mark("extension_runtime", "extension-runtime")
     if any(_path_matches(path, DOC_CONTENT_TOKENS) for path in files):
         mark("docs_project_content", "docs-project-content-ops")
-    if any(_path_matches(path, PUBLIC_BOUNDARY_TOKENS) for path in files):
+    if any(
+        _path_matches(path, PUBLIC_BOUNDARY_TOKENS)
+        or Path(path).suffix.lower() in _VISUAL_REVIEW_SUFFIXES
+        for path in files
+    ):
         mark("public_boundary")
+    for path in _visual_review_paths(files, repo_root):
+        manual_holds.append({
+            "kind": "visual_evidence",
+            "path": path,
+            "reason": (
+                f"{path}: binary media is outside text-scan coverage; inspect content, "
+                "metadata and source for private material in the existing exact-head "
+                "PR review. This hold is not a passing privacy check or merge authority."
+            ),
+        })
     if any(_path_matches(path, BENCHMARK_SENSITIVE_TOKENS) for path in files):
         mark("benchmark_sensitive")
         manual_holds.append(
@@ -420,8 +486,8 @@ def _run_gate_check(
                 "status": "timed_out",
                 "returncode": None,
                 "duration_seconds": round(time.monotonic() - started, 3),
-                "stdout_tail": (exc.stdout or "")[-800:] if isinstance(exc.stdout, str) else "",
-                "stderr_tail": (exc.stderr or "")[-800:] if isinstance(exc.stderr, str) else "",
+                "stdout_tail": check_output_tail(exc.stdout),
+                "stderr_tail": check_output_tail(exc.stderr),
             }
         )
         if progress_callback:
@@ -446,8 +512,8 @@ def _run_gate_check(
             "status": "passed" if completed.returncode == 0 else "failed",
             "returncode": completed.returncode,
             "duration_seconds": round(time.monotonic() - started, 3),
-            "stdout_tail": completed.stdout[-800:],
-            "stderr_tail": completed.stderr[-800:],
+            "stdout_tail": check_output_tail(completed.stdout),
+            "stderr_tail": check_output_tail(completed.stderr),
         }
     )
     if progress_callback:
@@ -783,7 +849,7 @@ def downgrade_inherited_baseline_failures(
     *,
     changed_files: list[str],
 ) -> dict[str, Any] | None:
-    """Downgrade known repo-baseline failures when they do not mention changed files."""
+    """Apply the baseline exception only to attributable findings in a completed report."""
 
     if not isinstance(run, dict):
         return run
@@ -796,16 +862,21 @@ def downgrade_inherited_baseline_failures(
 
     changed_any = False
     for check in run.get("selected_checks", []):
-        if not isinstance(check, dict) or check.get("ok"):
+        if not isinstance(check, dict) or check.get("ok") or check.get("status") != "failed":
             continue
-        command = str(check.get("command") or "")
-        if not any(token in command for token in INHERITED_BASELINE_COMMANDS):
+        if check.get("returncode") != 1 or check.get("tracked_side_effects"):
             continue
-        evidence = "\n".join(
-            str(check.get(key) or "")
-            for key in ("stdout_tail", "stderr_tail")
-        )
-        if any(needle and needle in evidence for needle in changed_mentions):
+        normalized = check.get("normalized")
+        if not isinstance(normalized, dict) or normalized.get("script") != MAINTAINABILITY_RATCHET_SCRIPT:
+            continue
+        # The runner derives these paths from the complete JSON report before
+        # clipping display output. A traceback or incomplete report has none.
+        paths = check.get("maintainability_failure_paths")
+        if not isinstance(paths, list) or not paths or not all(isinstance(path, str) and path.strip() for path in paths):
+            continue
+        finding_paths = {_norm_path(path) for path in paths}
+        finding_mentions = finding_paths | {Path(path).name for path in finding_paths if Path(path).suffix}
+        if not changed_mentions.isdisjoint(finding_mentions):
             continue
         check.update(
             {
@@ -813,7 +884,7 @@ def downgrade_inherited_baseline_failures(
                 "status": "advisory_inherited_failure",
                 "inherited_baseline_failure": True,
                 "advisory_reason": (
-                    "known baseline smoke failure did not mention changed files; "
+                    "completed maintainability findings did not involve changed files; "
                     "record it in the PR comment but do not block this diff"
                 ),
             }
@@ -849,6 +920,7 @@ def build_premerge_validation_gate(
     catalog_path: Path | None = None,
 ) -> dict[str, Any]:
     target_repo_root = (repo_root or REPO_ROOT).resolve()
+    base_ref = (base_ref or "origin/main").strip() or "origin/main"
     files = _dedupe(list(changed_files or []))
     if files:
         catalog_path = resolve_canary_catalog_path(catalog_path, repo_root=target_repo_root)
@@ -917,6 +989,7 @@ def build_premerge_validation_gate(
             timeout_seconds=timeout_seconds,
             fail_fast=fail_fast,
             progress_callback=catalog_progress if execute else None,
+            cli_output_base_ref=base_ref,
         )
         _emit_section_progress(
             catalog_progress,
@@ -973,6 +1046,7 @@ def build_premerge_validation_gate(
             timeout_seconds=timeout_seconds,
             fail_fast=fail_fast,
             progress_callback=risk_progress if execute else None,
+            cli_output_base_ref=base_ref,
         )
         _emit_section_progress(
             risk_progress,
@@ -1037,7 +1111,7 @@ def build_premerge_validation_gate(
         "ok": ok,
         "schema_version": PREMERGE_GATE_SCHEMA_VERSION,
         "repo_root": str(target_repo_root),
-        "base_ref": (base_ref or "origin/main").strip() or "origin/main",
+        "base_ref": base_ref,
         "tier": tier if tier in PREMERGE_TIERS else "standard",
         "dry_run": not execute,
         "executes_checks": execute,

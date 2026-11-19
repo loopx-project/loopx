@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
+
 
 from ..goal_vision_read_model import latest_agent_vision_from_runs as latest_agent_vision_from_runs
 
@@ -20,12 +21,12 @@ def _run_history_goal(
     goal_id: str,
 ) -> dict[str, Any] | None:
     run_history = (
-        status_payload.get("run_history")
+        cast(dict[str, Any], status_payload.get("run_history"))
         if isinstance(status_payload.get("run_history"), dict)
         else {}
     )
     goals = (
-        run_history.get("goals") if isinstance(run_history.get("goals"), list) else []
+        cast(list[Any], run_history.get("goals")) if isinstance(run_history.get("goals"), list) else []
     )
     return next(
         (
@@ -153,10 +154,10 @@ def _latest_missing_vision_checkpoint_from_runs(
             "goal_id": goal_id,
             "agent_id": checkpoint_agent_id or agent_id,
             "decision": checkpoint.get("decision"),
-            "triggers": checkpoint.get("triggers")
+            "triggers": cast(list[Any], checkpoint.get("triggers"))
             if isinstance(checkpoint.get("triggers"), list)
             else [],
-            "required_resolution": checkpoint.get("required_resolution")
+            "required_resolution": cast(list[Any], checkpoint.get("required_resolution"))
             if isinstance(checkpoint.get("required_resolution"), list)
             else [],
             "missing_baseline": checkpoint.get("missing_baseline") is True,
@@ -231,6 +232,38 @@ def latest_autonomous_replan_ack_from_status_payload(
     )
 
 
+def receipt_bound_replan_ack_history(
+    status_payload: dict[str, Any],
+    *,
+    goal_id: str,
+    agent_id: str | None,
+    neutral_classifications: set[str],
+    receipt_bound_replan_obligation_id: str | None,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]] | None]:
+    """Choose the ACK history a receipt-bound review may use.
+
+    A supplied candidate list is the whole owned history, including when it
+    is empty. Without that list, the status snapshot's newest ACK remains
+    the existing fallback.
+    """
+
+    latest = latest_autonomous_replan_ack_from_status_payload(
+        status_payload,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        neutral_classifications=neutral_classifications,
+    )
+    supplied = (
+        status_payload.get("receipt_bound_replan_ack_candidates")
+        if receipt_bound_replan_obligation_id
+        else None
+    )
+    if not isinstance(supplied, list):
+        return latest, None
+    owned = [candidate for candidate in supplied if isinstance(candidate, dict)]
+    return (owned[0] if owned else None), owned
+
+
 def latest_replan_ack_feedback_from_status_payload(
     status_payload: dict[str, Any],
     *,
@@ -266,11 +299,11 @@ def latest_lane_recommendation_from_status(
     status_payload: dict[str, Any], *, goal_id: str, agent_id: str,
 ) -> dict[str, Any] | None:
     """Reuse the retained recommendation receipt beyond the recent-run window."""
+    from ...work_items.recommendation_source_io import latest_bound_recommendation
+
     present, context = _semantic_agent_context_for_goal(
         status_payload, goal_id=goal_id, agent_id=agent_id)
     if present:
         row = context.get("latest_lane_step_run") if isinstance(context, dict) else None
-        resolution = row.get("recommended_action_resolution") if isinstance(row, dict) else None
-        return resolution if isinstance(resolution, dict) else None
-    from ...work_items.recommendation_source_io import latest_bound_recommendation
+        return latest_bound_recommendation([row], agent_id) if isinstance(row, dict) else None
     return latest_bound_recommendation(_latest_runs_for_goal(status_payload, goal_id=goal_id), agent_id)

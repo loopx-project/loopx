@@ -76,6 +76,28 @@ export const conversationImageRequestScenario = {
         assert.ok(box && box.y >= 0 && box.y + box.height <= 982, "Sending keeps the current reply in view");
         assert.equal(api.durableWriteCount, 0, "Reading operations and sending a chat message cannot execute an operation");
         await page.screenshot({path: resolve(outputDir, `conversation-image-${width}.png`), animations: "disabled"});
+        // A shorter window must keep the current reply readable without a new
+        // message/stream event. Layout changes are not a request to read history.
+        await page.setViewportSize({width, height: 600});
+        try {
+          await page.waitForFunction(() => {
+            const scroll = document.querySelector(".personal-channel-scroll");
+            return scroll && scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 2;
+          }, undefined, {timeout: 3000});
+        } finally {
+          await page.screenshot({path: resolve(outputDir, `conversation-image-resized-${width}.png`), animations: "disabled"});
+        }
+        const transcript = page.locator(".personal-channel-scroll");
+        assert.ok(await transcript.evaluate(element => element.scrollHeight > element.clientHeight + 100),
+          "The fixture must have older history outside the viewport");
+        await transcript.evaluate(element => {element.scrollTop = 0;});
+        await page.getByRole("button", {name: "回到最新消息 ↓", exact: true}).waitFor();
+        await page.setViewportSize({width, height: 720});
+        await page.evaluate(() => new Promise(resolveFrame => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))));
+        assert.equal(await transcript.evaluate(element => element.scrollTop), 0,
+          "Resizing while reading older history must not pull the reader to the newest reply");
+        await page.getByRole("button", {name: "回到最新消息 ↓", exact: true}).click();
+        await page.setViewportSize({width, height: 982});
         // A confirmed pre-admission rejection retains the exact draft/image.
         await page.route("**/api/chat/sessions/*/turns", route => route.fulfill({status: 400, json: {
           ok: false, error: "Synthetic invalid attachment", turn_replay_safe: true, delivery_state: "not_delivered",
@@ -83,7 +105,7 @@ export const conversationImageRequestScenario = {
         await page.locator('input[type="file"]').setInputFiles({name: "retry.png", mimeType: "image/png", buffer: bytes});
         await composer.fill("保留这张图，修改后再发。");
         await page.getByRole("button", {name: "发送", exact: true}).click();
-        await page.locator(".personal-message.is-assistant").last().getByText(/请求未提交；草稿和图片已保留/).waitFor();
+        await page.locator(".personal-message.is-assistant").last().getByText(/请求未提交；草稿和附件已保留/).waitFor();
         assert.equal(await composer.inputValue(), "保留这张图，修改后再发。");
         assert.equal(await page.locator(".personal-composer-images img").count(), 1);
         assert.equal(sent.length, 1, "Rejected request must not replay itself");

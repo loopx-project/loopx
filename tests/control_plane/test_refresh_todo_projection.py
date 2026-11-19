@@ -3,10 +3,6 @@
 import json
 
 import pytest
-from canonical_authority_fixture import (
-    initialize_canonical_authority,
-    isolate_sqlite_runtime,
-)
 from tests.control_plane import test_refresh_external_delivery as refresh_fixtures
 from loopx.control_plane.coordination.local_authority import (
     read_canonical_todos_if_promoted,
@@ -162,29 +158,20 @@ def test_legacy_and_rejected_refresh_do_not_open_projection(
     assert state.read_bytes() == before
 
 
-@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("session", ["file", "sqlite"], indirect=True)
 def test_cli_same_turn_replay_recovers_projection_without_duplicate_writeback(
-    session, monkeypatch, tmp_path, provider
+    session, monkeypatch
 ):
-    from loopx.control_plane.coordination.runtime_shadow import (
-        build_runtime_shadow_source_snapshot,
-    )
     from loopx.control_plane.todos import provider_projection
     from tests.control_plane.test_quota_settlement_cli import GOAL_ID
 
     project, runtime, registry, args, run, journal, index = session
-    isolate_sqlite_runtime(tmp_path, monkeypatch)
     initial = run(args)
     assert initial["appended"]
     data = json.loads(registry.read_text())
     goal = data["goals"][0]
     state = project / goal["state_file"]
-    projection, _ = build_runtime_shadow_source_snapshot(
-        goal=goal, runtime_root=runtime, state_path=state, registry_path=registry
-    )
-    seeded = initialize_canonical_authority(
-        runtime, GOAL_ID, projection, state_path=state, provider=provider
-    )
+    seeded = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
     before = index.read_bytes(), journal.read_bytes()
     original = state.read_text()
     state.write_text("# Existing narrative\n\n## Agent Todo\n")
@@ -202,7 +189,7 @@ def test_cli_same_turn_replay_recovers_projection_without_duplicate_writeback(
     assert recovered["idempotent_replay"] and not recovered["appended"]
     assert recovered["projection_delivery"] == "delivered"
     assert "Existing narrative" in state.read_text()
-    assert projection["todos"][0]["todo_id"] in state.read_text()
+    assert seeded["todos"][0]["todo_id"] in state.read_text()
     stable = run(args)
     assert stable["projection_delivery"] == "current"
     assert (index.read_bytes(), journal.read_bytes()) == before

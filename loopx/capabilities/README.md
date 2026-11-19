@@ -49,7 +49,7 @@ loopx capability inspect --goal-id <goal> --agent-id <registered-agent> \
 This explicit, read-only cold path returns the same effective configuration,
 source and revision as Goal settings. Supplying both Agent and phase also calls
 the existing bounded TS coordinator-context owner. Its output is projected
-guidance, not proof of delivery, adoption or utility. Without them, context is
+guidance. Without them, context is
 `not_requested`; a requested empty result is `no_contribution`, not “all
 capabilities disabled”. Provider errors remain errors. The read does not enable
 features, start workers, recall private memories, write state or spend quota.
@@ -64,10 +64,9 @@ full catalog to every Turn or add a second adoption switch.
 
 这是显式、只读的冷路径，与 Goal 设置复用相同的有效配置、来源和版本。只有同时
 给出 Agent 与阶段才读取既有 TS 上下文投影；未请求为 `not_requested`，空结果为
-`no_contribution`，不等于“所有能力关闭”。投影指导不证明已经投递、采纳或有效，
-服务异常不会伪装成关闭。此入口不启用能力、不启动 worker、不召回私有记忆、
-不写状态或扣额。目录仅覆盖配置能力，不是完整 provider 清单；实际可用性和执行
-回执仍读各能力原入口。配置与上下文是独立读数，不是执行快照；设置复用调用端
+`no_contribution`。此入口不启用能力、不启动 worker、不召回私有记忆、
+不写状态或扣额。目录仅覆盖配置能力；实际可用性和执行
+回执仍读各能力原入口。配置与上下文是独立读数；设置复用调用端
 机器默认值，委派观察读取 Goal 原运行时（或显式 `--runtime-root`）。不要每轮灌入
 完整目录，也不要增加第二个采用开关。
 
@@ -87,6 +86,7 @@ availability and maturity in the installed release.
 | Review a changing public PR queue against exact-head evidence and typed completion rules | [Pull Request Review](pr_review_queue/README.md) |
 | Detect source-head drift and safely rebuild a local stack of already reviewed branches | [Integration Branch](integration_branch/README.md) |
 | Gate local repository changes by a typed schedule and retain blocked unmerged work across restarts | [Repository Change Window](repository_change_window/README.md) |
+| Verify that declared legacy symbols and paths are genuinely retired by a refactoring change | [Anti-Entropy Governance](anti_entropy/README.md) |
 
 ### Research And Decision Continuity
 
@@ -156,8 +156,7 @@ Start from the caller outcome, not from an extension name. A built-in provider
 may already implement the capability. When an optional implementation is
 needed, inspect its declared permissions and readiness, then use the explicit
 install, doctor, enable, disable, upgrade, and rollback lifecycle documented in
-[Extensions and Capabilities](../../docs/reference/extensions.md). Installing an
-extension does not grant new authority.
+[Extensions and Capabilities](../../docs/reference/extensions.md).
 
 ## Architecture Rule: Domain Lanes, Not Kernel Columns
 

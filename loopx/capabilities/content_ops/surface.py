@@ -8,6 +8,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from loopx.control_plane.runtime.time import now_utc_iso
 
 from .connector_packets import (
     source_item_and_trial_from_private_gate_packet,
@@ -1461,7 +1462,7 @@ def build_content_ops_chatview_report_packet(
     connector_url: str = "https://chatview.zaynjarvis.com/",
     source_item_id: str = "source_chatview_metadata_signal_001",
     owner_label: str = "ChatView owner",
-    generated_at: str | None = "2026-06-23T00:00:00Z",
+    generated_at: str | None = None,
 ) -> dict[str, Any]:
     """Build a public-safe ChatView report that remains aggregation-compatible."""
 
@@ -1509,7 +1510,7 @@ def build_content_ops_chatview_report_packet(
 
     report = {
         "schema_version": CONTENT_OPS_CHATVIEW_CONNECTOR_REPORT_SCHEMA_VERSION,
-        "generated_at": generated_at,
+        "generated_at": generated_at if generated_at is not None else now_utc_iso(),
         "connector_url": normalised_url,
         "operator_card": operator_card,
         "observed_shape": {
@@ -1558,7 +1559,7 @@ def build_content_ops_surface_from_connector_packets(
     public_handle_packets: Sequence[Mapping[str, Any]],
     private_connector_gate_packets: Sequence[Mapping[str, Any]],
     surface_id: str = "content_ops_connector_packet_aggregation",
-    generated_at: str | None = "2026-06-23T00:00:00Z",
+    generated_at: str | None = None,
 ) -> dict[str, Any]:
     """Aggregate connector packets into a compact content-ops state surface."""
 
@@ -1709,7 +1710,7 @@ def build_content_ops_surface_from_connector_packets(
     return {
         "schema_version": CONTENT_OPS_SURFACE_SCHEMA_VERSION,
         "surface_id": surface_id,
-        "generated_at": generated_at,
+        "generated_at": generated_at if generated_at is not None else now_utc_iso(),
         "mode": "compact_state_surface",
         "source_items": source_items,
         "angle_candidates": angle_candidates,
@@ -1742,7 +1743,7 @@ def build_content_ops_packet_aggregation_packet(
     public_handle_packets: Sequence[Mapping[str, Any]],
     private_connector_gate_packets: Sequence[Mapping[str, Any]],
     surface_id: str = "content_ops_connector_packet_aggregation",
-    generated_at: str | None = "2026-06-23T00:00:00Z",
+    generated_at: str | None = None,
 ) -> dict[str, Any]:
     surface = build_content_ops_surface_from_connector_packets(
         public_handle_packets=public_handle_packets,
@@ -1794,10 +1795,12 @@ def build_content_ops_walkthrough_artifact_packet(
     api_path_counts: Mapping[str, Any] | None = None,
     private_preview_item_count: int = 0,
     theme_signals: Sequence[str] | None = None,
-    generated_at: str | None = "2026-06-23T00:00:00Z",
+    generated_at: str | None = None,
 ) -> dict[str, Any]:
     """Build the public-safe operator artifact for the content-ops chain."""
 
+    if generated_at is None:
+        generated_at = now_utc_iso()
     preview_count = _non_negative_int(
         private_preview_item_count,
         "private_preview_item_count",

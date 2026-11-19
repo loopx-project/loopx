@@ -46,6 +46,15 @@ Keep source-document exports, private references, and unreviewed media outside
 the public tree. Follow `docs/development/design.md` and obtain first-screen
 review before changing the Blog or its homepage entry.
 
+The context-byte and Stride/Yardstick figures use the published aggregate cells
+in `public/blog/data/long-horizon-audit.json`. Their source revision, separate
+wake cohorts, rounded denominator and unreconciled outcomes stay explicit;
+these figures do not establish a new experiment or a causal benefit. Regenerate
+both locale SVGs with `uv run --with matplotlib python
+apps/presentation/site/scripts/generate-long-horizon-audit.py` from the repository
+root, then run `node examples/blog-bilingual-index-smoke.mjs`. Matplotlib is an
+optional authoring dependency; the static pages need no Python runtime.
+
 ### Editorial responsibilities and reading routes
 
 Keep the chronological catalog, and offer question-based routes alongside it.

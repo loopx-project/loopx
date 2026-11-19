@@ -94,3 +94,26 @@ test("canonical acquire checks the durable fence before opening a provider", asy
   assert.equal(result.legacy_fallback_used, false);
   assert.equal(opened, 0);
 });
+
+test("canonical acquire rejects noncanonical write scopes before opening a provider", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "loopx-lease-acquire-scope-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const runtimeRoot = join(root, "runtime");
+  let opened = 0;
+
+  const result = await executeTaskLeaseAcquire(
+    {...request(runtimeRoot, TASK_LEASE_CANONICAL_ACQUIRE_REQUEST_SCHEMA), write_scopes: ["src\\main.ts"]},
+    {
+      authorityProvider: {
+        createStore: () => {
+          opened += 1;
+          throw new Error("provider must remain closed");
+        },
+      },
+    },
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error_code, "invalid_write_scopes");
+  assert.equal(opened, 0);
+});

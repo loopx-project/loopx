@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
+import {settlementIdentityPayload, type JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import type {AuthorityStore} from "../../loopx/control_plane/coordination/authority_store.ts";
 import {
   canonicalAuthorityObject,
@@ -17,6 +17,62 @@ import {localTodoCompletionIdentity} from "../../loopx/control_plane/todos/compl
 import type {AuthorityStoreConformanceFactory} from "./authority_store_conformance.ts";
 
 export function registerTerminalReentryConformance(provider: string, factory: AuthorityStoreConformanceFactory): void {
+  test(`${provider}: historical lifecycle receipt recovers its verified quota binding without rewriting history`, async t => {
+    const {store} = await factory(t);
+    const binding = settlementIdentityPayload({goal_id: "goal-a", agent_id: "agent-a",
+      todo_id: "todo_historical", turn_instance_id: "original-turn"});
+    const todo: JsonObject = {schema_version: "todo_item_v0", todo_id: "todo_historical",
+      role: "agent", status: "done", done: true, archive_state: "active", source_section: "Agent Todo",
+      text: "Preserve an accepted outcome", claimed_by: "agent-a", last_actor_agent_id: "agent-a",
+      completed_at: "2026-09-01T00:00:00Z", completion_turn_key: binding.effect_id,
+      completion_continuation: "active_goal", evidence: "Original accepted evidence"};
+    await store.commitAuthority({operation_id: "import-historical", expected_provider_revision: null,
+      next_projection: authorityProjectionFixture("goal-a", [todo], [], "legacy", {handoff_mode: "hard_lease"}),
+      events: [], receipts: []});
+    const request: CoordinationTodoTerminalLifecycleInput = {
+      goal_id: "goal-a", todo_id: "todo_historical", expected_role: "agent", command: "complete",
+      operation_identity: {kind: "explicit", operation_id: "legacy-adapter"},
+      actor_agent_id: "agent-a", registered_agents: ["agent-a"], lifecycle_grants: [],
+      authority_reason: null, decision_outcome: null, lease_idempotency_key: null, lease_expected_version: null,
+      allow_user_gate_auto_acquire: false, requested_no_followup: true,
+      requested_completion_turn_key: String(binding.effect_id), requested_completion_identity_source: "lifecycle_reentry",
+      linked_successor_todo_ids: [], successor_intents: [], note: null, evidence: null, reason: null,
+      clear_claim: false, validation_declaration: null, validation_receipt: null, completion_policy_request: null,
+      dry_run: false, now: new Date("2026-09-07T07:00:00Z"),
+    };
+    // Model the old serializer's omission at its original commit, never by
+    // editing an already accepted provider head, receipt or history record.
+    const legacyWriter = new Proxy(store, {get(target, name) {
+      if (name === "commitAuthority") return async (...args: Parameters<AuthorityStore["commitAuthority"]>) => {
+        const commit = structuredClone(args[0]);
+        for (const receipt of commit.receipts) {
+          const result = receipt.result as JsonObject | undefined;
+          if (result) delete result.settlement_identity;
+        }
+        return target.commitAuthority(commit);
+      };
+      const member = Reflect.get(target, name);
+      return typeof member === "function" ? member.bind(target) : member;
+    }});
+    const verified = async (input: CoordinationTodoTerminalLifecycleInput) => {
+      assert.equal(input.requested_completion_turn_key, binding.effect_id);
+      return binding;
+    };
+    const original = await execute(legacyWriter, request, async () => true, null, verified);
+    assert.equal(original.status, "applied", JSON.stringify(original));
+    assert.equal(original.settlement_identity, undefined);
+    const receiptId = String((original.original_receipt as JsonObject).operation_id);
+    const before = {head: await store.loadAuthority(), receipt: await store.readReceipt(receiptId)};
+    const recovered = await execute(store, request, async () => true, null, verified);
+    assert.equal(recovered.status, "replayed", JSON.stringify(recovered));
+    assert.deepEqual(recovered.settlement_identity, binding);
+    assert.deepEqual({head: await store.loadAuthority(), receipt: await store.readReceipt(receiptId)}, before);
+    const denied = await execute(store, request, async () => true, null, async () => {
+      throw new Error("Original settlement is unavailable");
+    });
+    assert.equal(denied.status, "failed");
+    assert.deepEqual({head: await store.loadAuthority(), receipt: await store.readReceipt(receiptId)}, before);
+  });
   for (const schema of ["legacy", "native"] as const) {
     for (const policyClaim of [null, "agent-a"]) {
       test(`${provider}: imported untyped completion repairs once before terminal closeout (${schema}, claim=${policyClaim})`, async t => {

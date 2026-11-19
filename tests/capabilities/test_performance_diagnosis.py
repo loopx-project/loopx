@@ -12,7 +12,7 @@ from loopx.capabilities.performance_diagnosis import cli
 
 
 def command(tmp_path: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json", *args],
+    return subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--format", "json", *args],
                           env={**os.environ, "TMPDIR": str(tmp_path)}, text=True,
                           capture_output=True, timeout=45)
 

@@ -12,6 +12,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 GOAL_ID = "status-quota-review-parity"
 OTHER_GOAL_ID = "status-quota-review-parity-other"
@@ -169,7 +171,7 @@ def assert_quota_parity(payload: dict) -> None:
     scheduler = payload["scheduler_hint"]
     assert scheduler["action"] == "run_now", scheduler
     assert scheduler["cadence_class"] == "active_work", scheduler
-    codex_app = scheduler["codex_app"]
+    codex_app = scheduler["app_automation"]
     assert codex_app["recommended_rrule"] == "FREQ=MINUTELY;INTERVAL=3", scheduler
     assert codex_app["recommended_interval_minutes"] == 3, scheduler
     assert codex_app["no_spend_for_cadence_change"] is True, scheduler
@@ -200,6 +202,13 @@ def main() -> int:
         (project / "PUBLIC.md").write_text("# Public fixture\n", encoding="utf-8")
         registry_path = write_registry(project, runtime)
         agent_worktree = create_agent_worktree(project, root)
+        from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
+
+        for goal_id in (GOAL_ID, OTHER_GOAL_ID):
+            initialize_canonical_source_fixture(
+                runtime, goal_id,
+                state_path=project / f".codex/goals/{goal_id}/ACTIVE_GOAL_STATE.md",
+            )
 
         status = run_cli(
             registry_path,
@@ -210,8 +219,6 @@ def main() -> int:
             GOAL_ID,
             "--available-capability",
             "material_lifecycle",
-            "--scan-path",
-            str(project / "PUBLIC.md"),
         )
         quota = run_cli(
             registry_path,
@@ -219,6 +226,8 @@ def main() -> int:
             agent_worktree,
             "quota",
             "should-run",
+            "--context-delivery",
+            "off",
             "--goal-id",
             GOAL_ID,
             "--agent-id",
@@ -226,8 +235,6 @@ def main() -> int:
             "--available-capability",
             "material_lifecycle",
             "--codex-app",
-            "--scan-path",
-            str(project / "PUBLIC.md"),
         )
         handoff = run_cli(
             registry_path,
@@ -238,8 +245,6 @@ def main() -> int:
             GOAL_ID,
             "--available-capability",
             "material_lifecycle",
-            "--scan-root",
-            str(project),
             "--handoff-only",
         )
 

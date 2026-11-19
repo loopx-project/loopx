@@ -1,0 +1,58 @@
+{
+  "schema_version": "content_ops_media_plan_v0",
+  "title": "A scoped artifact round trip",
+  "width": 640,
+  "height": 360,
+  "fps": 12,
+  "shots": [
+    {
+      "id": "intent", "kind": "title", "seconds": 1,
+      "title": "One request. Scoped work.",
+      "source_ref": "synthetic:artifact-route",
+      "boundary": "Mechanism illustration; not an execution trace"
+    },
+    {
+      "id": "route", "kind": "blender", "seconds": 3,
+      "title": "Artifacts travel. Authority stays scoped.",
+      "source_ref": "synthetic:artifact-route",
+      "boundary": "Illustrated movement does not prove adoption or acceptance",
+      "scene": {
+        "camera": {"position": [6, -10, 7], "end_position": [3, -11, 7], "target": [0, 0, 0.6], "ortho_scale": 7.5},
+        "objects": [
+          {"id": "requester", "shape": "box", "position": [-2, 0, 0], "scale": [1.3, 1.4, 0.3], "color": [0.04, 0.24, 0.8]},
+          {"id": "worker", "shape": "box", "position": [0, 0, 0], "scale": [1.3, 1.4, 0.3], "color": [0.42, 0.12, 0.72]},
+          {"id": "reviewer", "shape": "box", "position": [2, 0, 0], "scale": [1.3, 1.4, 0.3], "color": [0.02, 0.52, 0.4]},
+          {"id": "artifact", "shape": "sphere", "position": [-2, 0, 0.8], "scale": [0.4, 0.4, 0.4], "color": [0.98, 0.45, 0.025], "metallic": 0.4, "roughness": 0.25,
+            "keyframes": [
+              {"frame": 1, "position": [-2, 0, 0.8]},
+              {"frame": 10, "position": [0, 0, 0.8]},
+              {"frame": 19, "position": [2, 0, 0.8]},
+              {"frame": 28, "position": [0, 0, 0.8]},
+              {"frame": 36, "position": [-2, 0, 0.8]}
+            ]}
+        ],
+        "connections": [
+          {"from": "requester", "to": "worker", "color": [0.12, 0.4, 0.9]},
+          {"from": "worker", "to": "reviewer", "color": [0.12, 0.4, 0.9]}
+        ],
+        "lights": [
+          {"position": [-3, -4, 8], "energy": 900, "size": 7},
+          {"position": [4, 2, 6], "energy": 700, "size": 5}
+        ]
+      }
+    },
+    {
+      "id": "evidence", "kind": "title", "seconds": 1,
+      "title": "Return evidence to the requester.",
+      "source_ref": "synthetic:artifact-route",
+      "boundary": "A returned file still needs independent acceptance"
+    }
+  ],
+  "captions": [
+    {"start": 0, "end": 1, "text": "One request. Scoped work.", "language": "en"},
+    {"start": 1, "end": 2.5, "text": "Requester, worker, reviewer: left to right.", "language": "en"},
+    {"start": 2.5, "end": 4, "text": "The artifact returns. Authority stays scoped.", "language": "en"},
+    {"start": 4, "end": 5, "text": "Return evidence for independent acceptance.", "language": "en"}
+  ],
+  "narration": {"mode": "silent"}
+}

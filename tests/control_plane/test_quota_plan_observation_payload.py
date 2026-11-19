@@ -76,7 +76,7 @@ def test_real_cli_compact_and_full_detail_preserve_canonical_todos(tmp_path, mon
     def call(mode, *details):
         process = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
             "--runtime-root", str(runtime), "--format", "json", "quota", mode, "--goal-id", "example",
-            "--scan-root", str(tmp_path), *details], cwd=REPO, text=True, capture_output=True, timeout=60)
+             *details], cwd=REPO, text=True, capture_output=True, timeout=60)
         value = json.loads(process.stdout)
         assert process.returncode == 0, value
         return value

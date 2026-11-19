@@ -1,0 +1,27 @@
+{
+  "delivery_statuses": [
+    "admitted",
+    "delivered",
+    "explicit_unverified",
+    "queued",
+    "retry_pending",
+    "superseded",
+    "verification_required"
+  ],
+  "delivery_errors": [
+    "delivery_state_unreadable",
+    "initial_delivery_receipt_unavailable",
+    "manager_return_payload_conflict",
+    "original_route_or_return_delivery_unavailable",
+    "original_route_unavailable",
+    "provider_delivery_intent_conflict",
+    "provider_delivery_mismatch",
+    "provider_delivery_unverified",
+    "provider_locator_unavailable",
+    "provider_message_missing",
+    "provider_verification_unavailable",
+    "provider_verifier_unavailable",
+    "return_authorization_unavailable",
+    "return_transport_unavailable"
+  ]
+}

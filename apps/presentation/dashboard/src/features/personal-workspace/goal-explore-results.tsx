@@ -1,60 +1,148 @@
+import {WorkYardstickReadback} from "./work-yardstick-readback";
+import {exploreFindingCopy} from "./explore-finding-copy";
 import {useEffect, useRef, useState} from "react";
-import {RefreshCw} from "lucide-react";
-import {fetchExploreResults, type ExploreResultPage} from "../../data/chat";
+import {AlertTriangle, ChevronRight, RefreshCw} from "lucide-react";
+import {fetchExploreResults, readTodoRequest, type ExploreResultPage} from "../../data/chat";
+import {parseExploreFindingSections} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
+import {ExploreMeasurements} from "./explore-measurements";
+import {ContextHelp} from "./context-help";
+import "./goal-explore-results.css";
 
-/** Read-only saved evidence, including history when Explore has been disabled. */
-export function GoalExploreResults({goalId, zh}: {goalId: string; zh: boolean}) {
+function LinkedFindingTask({goalId, todo, statuses, zh, readSourceUrl}: {
+  goalId: string; todo: ExploreResultPage["items"][number]["linked_todos"][number]; statuses: Record<string, string>; zh: boolean; readSourceUrl?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [revision, setRevision] = useState(0);
+  const [detail, setDetail] = useState<Awaited<ReturnType<typeof readTodoRequest>> | null>(null);
+  const [error, setError] = useState(false);
+  useEffect(() => {
+    if (!expanded) return;
+    const controller = new AbortController();
+    setDetail(null); setError(false);
+    void readTodoRequest(goalId, todo.todo_id, controller.signal, undefined, readSourceUrl).then(value => {
+      if (!controller.signal.aborted) setDetail(value);
+    }, () => {if (!controller.signal.aborted) setError(true);});
+    return () => controller.abort();
+  }, [expanded, revision, goalId, todo.todo_id, readSourceUrl]);
+  return <details onToggle={event => {
+    setExpanded(event.currentTarget.open); setDetail(null); setError(false);
+  }}>
+    <summary><ChevronRight size={16} aria-hidden/><span><strong>{todo.text}</strong>
+      <small>{statuses[detail?.status ?? todo.status] ?? detail?.status ?? todo.status} · {todo.claimed_by || "—"}</small></span></summary>
+    {expanded ? detail ? <><p className="explore-finding-raw">{detail.text}</p><code>{todo.todo_id}</code></>
+      : error ? <div role="alert"><p>{zh ? "无法读取完整任务。" : "Cannot read the complete task."}</p>
+        <button type="button" onClick={() => setRevision(value => value + 1)}>{zh ? "重试" : "Retry"}</button></div>
+      : <p role="status">{zh ? "正在读取完整任务…" : "Reading the complete task…"}</p> : null}
+  </details>;
+}
+
+/** Saved evidence remains readable after Explore is disabled. No execution here. */
+export function GoalExploreResults({goalId, originalGoalId = goalId, zh, active = true, readSourceUrl}: {goalId: string; originalGoalId?: string; zh: boolean; active?: boolean; readSourceUrl?: string}) {
   const [page, setPage] = useState<ExploreResultPage | null>(null);
   const [selectedId, setSelectedId] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [cursor, setCursor] = useState<string>();
+  const [revision, setRevision] = useState(0);
+  const [busy, setBusy] = useState(true);
   const [error, setError] = useState(false);
-  const generation = useRef(0);
   const reader = useRef<HTMLDivElement>(null);
+  const loadedQuery = useRef("");
   useEffect(() => {
-    void load();
-    return () => {generation.current++;};
-  }, [goalId]);
-  async function load(cursor?: string) {
-    const current = ++generation.current;
-    setBusy(true); setError(false); setPage(null); setSelectedId("");
-    try {
-      const next = await fetchExploreResults(goalId, cursor);
-      if (current !== generation.current) return;
-      setPage(next); setSelectedId(next.items[0]?.finding_id ?? "");
-    } catch {
-      if (current === generation.current) setError(true);
-    } finally {if (current === generation.current) setBusy(false);}
-  }
+    if (!active) return;
+    const queryKey = JSON.stringify([goalId, originalGoalId, readSourceUrl, cursor, revision]);
+    if (loadedQuery.current === queryKey) return;
+    let current = true;
+    setBusy(true); setError(false); setPage(null);
+    void fetchExploreResults(goalId, cursor, readSourceUrl, originalGoalId).then(next => {
+      if (!current) return;
+      loadedQuery.current = queryKey;
+      setPage(next); setSelectedId(id => next.items.some(item => item.finding_id === id) ? id : next.items[0]?.finding_id ?? "");
+    }, () => {if (current) setError(true);}).finally(() => {if (current) setBusy(false);});
+    return () => {current = false;};
+  }, [goalId, originalGoalId, cursor, revision, active, readSourceUrl]);
   const selected = page?.items.find(item => item.finding_id === selectedId);
+  const sections = selected ? parseExploreFindingSections(selected.summary) : null;
+  const findingCopy = exploreFindingCopy(zh);
+  const statuses: Record<string, string> = zh
+    ? {...findingCopy.labels, open: "未完成", done: "已完成", blocked: "受阻", deferred: "已延后"}
+    : {...findingCopy.labels, open: "Open", done: "Done", blocked: "Blocked", deferred: "Deferred"};
+  const outcomes: Record<string, string> = zh
+    ? {replan: "转向", continue: "继续", stop: "停止", wait: "等待", no_change: "无变化", ask_human: "请人决定"}
+    : {replan: "Replan", continue: "Continue", stop: "Stop", wait: "Wait", no_change: "No change", ask_human: "Ask human"};
+  const time = (value: string) => Number.isFinite(Date.parse(value))
+    ? new Intl.DateTimeFormat(zh ? "zh-CN" : "en", {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"}).format(new Date(value)) : value;
+  const selectFinding = (id: string, focusReader = false) => {
+    setSelectedId(id);
+    if (focusReader) window.requestAnimationFrame(() => {reader.current?.focus({preventScroll: true}); reader.current?.scrollIntoView({block: "nearest"});});
+  };
+  const refresh = () => {
+    // A failed later page can have an expired snapshot. Restart its read scope
+    // rather than trapping the reader in retries of an unusable cursor.
+    if (error) setCursor(undefined);
+    setRevision(value => value + 1);
+  };
   return <section className="goal-team-results goal-explore-results" aria-label={zh ? "Explore 证据" : "Explore evidence"} aria-busy={busy}>
-    <header><div><h3>{zh ? "Explore 证据" : "Explore evidence"}</h3>
-      <p>{zh ? "已保存的观察与结论，包括历史记录。保存不代表已验证或被后续决策采用。" : "Saved observations and conclusions, including history. Saving does not establish validation or adoption by later decisions."}</p></div>
-      <button style={{flexShrink: 0, whiteSpace: "nowrap"}} type="button" disabled={busy} onClick={() => void load()}><RefreshCw size={14} aria-hidden="true"/>{zh ? "刷新" : "Refresh"}</button></header>
+    <header><div className="explore-reader-heading"><h3>{zh ? "已保存的结论" : "Saved findings"}</h3>
+      <ContextHelp label={zh ? "结论与关联说明" : "About findings and links"}>
+        <p>{zh ? "来源记录的观察与结论，保存不代表已经验证或被后续决策采用。关联任务是原记录的显式关联。" : "Source-recorded observations and conclusions. Saving does not establish validation or adoption. Linked tasks are explicit source relationships."}</p>
+        <p>{findingCopy.meaning}</p>
+      </ContextHelp></div>
+      <button type="button" disabled={busy} aria-label={zh ? "刷新证据" : "Refresh evidence"} onClick={refresh}><RefreshCw size={16} aria-hidden/></button></header>
     {busy ? <p role="status">{zh ? "正在读取证据…" : "Reading evidence…"}</p> : null}
-    {error ? <p role="alert">{zh ? "无法核验此页证据；旧内容已清除。请刷新重试。" : "Cannot verify this evidence page; previous content was cleared. Refresh to retry."}</p> : null}
+    {error ? <p role="alert">{zh ? "无法读取此页证据。刷新可从首页重新读取。" : "Cannot read this evidence page. Refresh to restart from the first page."}</p> : null}
     {page && !page.items.length ? <p>{zh ? "尚无已保存的结论。" : "No saved findings yet."}</p> : null}
     {page && page.items.length > 0 ? <div className="goal-team-results-layout">
-      <nav className="goal-team-result-list" aria-label={zh ? "选择结论" : "Choose a finding"}>
+      <div className="explore-finding-navigation">
+        <div className="explore-finding-picker">
+          <select aria-label={zh ? "选择结论" : "Choose a finding"} value={selectedId} onChange={event => selectFinding(event.target.value)}>
+            {page.items.map((item, index) => <option key={item.finding_id} value={item.finding_id}>{index + 1}. {item.finding} · {statuses[item.status] ?? item.status} · {time(item.last_updated_at)}</option>)}
+          </select>
+        </div>
+        <nav className="goal-team-result-list" aria-label={zh ? "选择结论" : "Choose a finding"}>
         {page.items.map(item => <button type="button" key={item.finding_id} aria-pressed={selectedId === item.finding_id}
-          onClick={() => {setSelectedId(item.finding_id); window.requestAnimationFrame(() => reader.current?.focus());}}>
-          <span><strong>{item.finding}</strong><small>{item.status} · {item.last_updated_at}</small></span>
+          onClick={() => selectFinding(item.finding_id, true)}>
+          <span><strong>{item.finding}</strong><small>{statuses[item.status] ?? item.status} · <time dateTime={item.last_updated_at} title={item.last_updated_at}>{time(item.last_updated_at)}</time></small></span>
         </button>)}
-        {page.next_cursor ? <button type="button" onClick={() => void load(page.next_cursor!)}>{zh ? "下一页" : "Next page"}</button> : null}
-      </nav>
-      {selected ? <div ref={reader} tabIndex={-1} className="goal-team-result-reader" style={{overflowWrap: "anywhere"}}>
+        </nav>
+        <nav className="explore-finding-pagination" aria-label={zh ? "结论分页" : "Finding pages"}>
+          <span>{zh ? `本页 ${page.items.length} / 共 ${page.total} 条` : `${page.items.length} on page / ${page.total} total`}</span>
+          <div>{cursor ? <button type="button" onClick={() => setCursor(undefined)}>{zh ? "回到首页" : "First page"}</button> : null}
+          {page.next_cursor ? <button type="button" onClick={() => setCursor(page.next_cursor!)}>{zh ? "下一页" : "Next page"}</button> : null}</div>
+        </nav>
+      </div>
+      {selected ? <div ref={reader} tabIndex={-1} className="goal-team-result-reader" key={selected.finding_id}>
         <h4>{selected.question || selected.finding}</h4>
-        {selected.scope ? <p>{zh ? "问题范围" : "Question scope"}: {selected.scope}</p> : null}
-        <p style={{whiteSpace: "pre-wrap", overflowWrap: "anywhere"}}>{selected.summary}</p>
-        <p>{zh ? "记录状态" : "Recorded status"}: {selected.status}</p>
-        <p>{zh ? "记录者" : "Recorded by"}: {selected.agent_id || "—"}</p>
-        <p>{zh ? "来源引用" : "Source references"}: {selected.evidence_refs.length ? selected.evidence_refs.join(" · ") : "—"}</p>
-        <h4>{zh ? "关联任务" : "Linked tasks"}</h4>
-        <p>{zh ? "来自当前及已完成任务的显式关联，不代表后续决策已采用此结论。" : "Explicit links from current and completed tasks; they do not establish adoption by later decisions."}</p>
-        {selected.linked_todos.length ? <ul>{selected.linked_todos.map(todo => <li key={todo.todo_id}>
-          <p>{todo.text}</p><small>{todo.status} · {todo.claimed_by || "—"}</small>
-        </li>)}</ul> : <p>{zh ? "当前及已完成任务中未找到关联。" : "No links found in current or completed tasks."}</p>}
-        <details><summary>{zh ? "记录标识" : "Record identifiers"}</summary>
-          <small>{selected.finding_id} · {selected.node_id}<br/>{selected.linked_todos.map(todo => todo.todo_id).join(" · ")}</small>
+        <span className="explore-reader-status">{statuses[selected.status] ?? selected.status} · <time dateTime={selected.last_updated_at}>{time(selected.last_updated_at)}</time></span>
+        {selected.measurement_error ? <div className="explore-reader-heading explore-measurement-warning" role="note">
+          <span>{zh ? "测量归属有冲突，未参与比较。" : "Measurements excluded: conflicting attribution."}</span>
+          <ContextHelp icon={AlertTriangle} label={zh ? "测量冲突与更正" : "Measurement conflict and correction"}>
+            <p>{selected.measurement_error}</p>
+            <p>{zh ? "请记录者追加执行与测量归属一致的更正结论；原记录仍保留在历史中。" : "Ask the recorder to append a corrected finding with matching execution and measurement references. The original stays in history."}</p>
+          </ContextHelp>
+        </div> : selected.measurements ? <ExploreMeasurements measurements={selected.measurements} zh={zh}/> : null}
+        {sections ? <div className="explore-finding-prose">
+          <section><h5>{zh ? "观察" : "Observation"}</h5><p>{sections.observation}</p></section>
+          {sections.interpretation && !sections.decision ? <section><h5>{zh ? "解读" : "Interpretation"}</h5><p>{sections.interpretation}</p></section> : null}
+          {sections.decision ? <section><h5>{zh ? "决策" : "Decision"} · {outcomes[sections.decision.outcome] ?? sections.decision.outcome}</h5>
+            {(["changed", "stopped", "retained"] as const).map(key => sections.decision![key].length ? <div key={key}>
+              <h6>{({changed: zh ? "变化" : "Changed", stopped: zh ? "停止" : "Stopped", retained: zh ? "保留" : "Retained"})[key]}</h6>
+              <ul>{sections.decision![key].map((text, index) => <li key={index}>{text}</li>)}</ul>
+            </div> : null)}</section> : null}
+        </div> : <p className="explore-finding-raw">{selected.summary}</p>}
+        {selected.work_yardstick ? <WorkYardstickReadback capture={selected.work_yardstick} zh={zh}/> : null}
+        <details className="explore-reader-details"><summary>{zh ? "来源与范围" : "Sources and scope"}</summary>
+          <dl><dt>{zh ? "记录时间" : "Recorded at"}</dt><dd><time dateTime={selected.last_updated_at}>{selected.last_updated_at}</time></dd>
+            <dt>{zh ? "记录者" : "Recorded by"}</dt><dd>{selected.agent_id || "—"}</dd>
+            {selected.scope ? <><dt>{zh ? "问题范围" : "Question scope"}</dt><dd>{selected.scope}</dd></> : null}
+            {sections ? <><dt>{zh ? "适用范围" : "Applicability"}</dt><dd>{sections.applicability}</dd><dt>{zh ? "输入版本" : "Input revision"}</dt><dd>{sections.inputRevision}</dd></> : null}
+            <dt>{zh ? "来源引用" : "Source references"}</dt><dd>{selected.evidence_refs.length ? <ul>{selected.evidence_refs.map((ref, index) => <li key={index}><code>{ref}</code></li>)}</ul> : "—"}</dd>
+            <dt>{zh ? "记录标识" : "Record identifiers"}</dt><dd><code>{selected.finding_id} · {selected.node_id}</code></dd></dl>
+          {sections ? <details><summary>{zh ? "完整原文" : "Full original text"}</summary><p className="explore-finding-raw">{selected.summary}</p></details> : null}
+        </details>
+        <details className="explore-reader-details"><summary>{zh ? "关联任务" : "Linked tasks"} · {selected.linked_todos_available === false ? "—" : selected.linked_todos.length}</summary>
+          {selected.linked_todos_available === false ? <p>{zh ? "此来源暂不提供完整的任务关联读取。" : "Complete task associations are not available from this source."}</p> : selected.linked_todos.length ? <ul className="explore-linked-tasks">{selected.linked_todos.map(todo => <li key={todo.todo_id}>
+            <LinkedFindingTask key={JSON.stringify([goalId, readSourceUrl, todo.todo_id])} goalId={goalId} todo={todo}
+              statuses={statuses} zh={zh} readSourceUrl={readSourceUrl}/>
+          </li>)}</ul> : <p>{zh ? "当前及已完成任务中未找到关联。" : "No links found in current or completed tasks."}</p>}
         </details>
       </div> : null}
     </div> : null}

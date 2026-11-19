@@ -1,10 +1,12 @@
 """A restored fork needs a current, settled semantic decision before recapture."""
 import copy
+import hashlib
+import json
 
 import pytest
 
 from loopx.control_plane.effect_program import SettlementIdentity
-from loopx.control_plane.effect_runtime import effect_runtime_result
+from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError, effect_runtime_result
 
 
 def test_nonrestored_conversation_has_no_completed_checkpoint_review(tmp_path):
@@ -78,7 +80,255 @@ def test_readonly_participant_capture_and_limited_basis_read(tmp_path):
     basis = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "read_basis", "root": str(unit),
         "expected_sha256": captured["sha256"]})
     assert basis["integrity_verified"] is False and basis["execution_authority_granted"] is False
-    from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError
     with pytest.raises(EffectRuntimeRemoteError):
         effect_runtime_result("runtime.checkpoint_artifacts", {"action": "verify", "root": str(unit),
             "expected_sha256": captured["sha256"]})
+
+
+@pytest.mark.parametrize("location", ["root", "operator"])
+@pytest.mark.parametrize("note", [None, {}, False, [], 0, ""])
+def test_empty_replan_annotations_keep_the_ordinary_restore_path(tmp_path, monkeypatch, location, note):
+    from types import SimpleNamespace
+    from benchmark.runtime.checkpoint import parse_checkpoint_request
+    from benchmark.runtime.checkpoint_continuation import restored_capture_gate, restored_checkpoint_review
+    from benchmark.runtime.checkpoint_session_refresh import prepare_session_refresh
+
+    source = tmp_path / "code"
+    source.write_text("retained work")
+    unit = tmp_path / "point"
+    request = parse_checkpoint_request(json.dumps({
+        "destination": str(unit), "components": [{"id": "code", "source_path": str(source)}],
+        "point_metadata": {"replan": note},
+    }).encode())
+    metadata = {"loopx_state": {"goal_id": "checkpoint-source", "agent_id": "worker"},
+                "operator_metadata": request["point_metadata"]}
+    if location == "root":
+        metadata["replan"] = metadata["operator_metadata"].pop("replan")
+    components = request["components"]
+    probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components})
+    captured = effect_runtime_result("runtime.checkpoint_artifacts", {
+        "action": "capture", "components": components, "destination": str(unit),
+        "point_metadata": metadata, "expected_source_sha256": probe["source_sha256"],
+    }, retry_safe=False)
+    assert effect_runtime_result("runtime.checkpoint_artifacts", {
+        "action": "verify", "root": str(unit), "expected_sha256": captured["sha256"],
+    })["integrity_verified"]
+    before = {path.relative_to(unit): path.read_bytes() for path in unit.rglob("*") if path.is_file()}
+    binding = {"session_id": "retained-session", "checkpoint_artifact_sha256": captured["sha256"],
+               "checkpoint_artifact_root": str(unit)}
+    env = {"LOOPX_RUNTIME_ROOT": str(tmp_path / "runtime"), "LOOPX_GOAL_ID": "checkpoint-source",
+           "LOOPX_AGENT_ID": "worker", "LOOPX_WAKE_LOG_DIR": str(tmp_path / "wakes")}
+    monkeypatch.setattr("benchmark.runtime.checkpoint_continuation.load_codex_cli_session",
+                        lambda *args, **kwargs: binding)
+    monkeypatch.setattr("benchmark.runtime.sessions.BenchmarkSessionWake",
+                        lambda *args: SimpleNamespace(session_id=binding["session_id"]))
+    review = restored_checkpoint_review(env)
+    gate = restored_capture_gate(env)
+    assert review["semantic_review_accepted"] is False
+    assert gate["capture_allowed"] is False  # Ordinary recovery still requires a current settled review.
+    assert review["instructions"] == gate["instructions"]
+    assert "This source has no retained pending replan packet." in gate["instructions"]
+    declaration = tmp_path / "warm-start.json"
+    declaration.write_text(json.dumps({
+        "root": str(unit), "sha256": captured["sha256"], "fresh_replan": True,
+        "goal_id": "checkpoint-source", "agent_id": "worker",
+    }))
+    resets = []
+    session = SimpleNamespace(session_id=binding["session_id"], binding=binding,
+                              prepare_checkpoint_refresh=lambda *args, **kwargs: resets.append((args, kwargs)))
+    with pytest.raises(ValueError, match="fresh replan requires the original pending decision boundary"):
+        prepare_session_refresh({**env, "LOOPX_WARM_START": str(declaration),
+                                 "LOOPX_ITERATION_CONTEXT": "resume"}, session, tmp_path)
+    assert resets == []  # Empty advice cannot authorize a fresh pending-replan treatment.
+    basis = effect_runtime_result("runtime.checkpoint_artifacts", {
+        "action": "read_basis", "root": str(unit), "expected_sha256": captured["sha256"],
+        "include_pending_replan": True,
+    })
+    assert basis["pending_replan"] is None and basis["execution_authority_granted"] is False
+    assert {path.relative_to(unit): path.read_bytes() for path in unit.rglob("*") if path.is_file()} == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_sealed_pending_basis_reuses_original_guard_and_rejects_replacements(tmp_path, monkeypatch, provider):
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+    from benchmark.runtime.checkpoint_continuation import restored_checkpoint_review
+    from benchmark.runtime.checkpoint_session_refresh import prepare_session_refresh
+    from types import SimpleNamespace
+    from test_replan_successor_guard_reentry import AGENT, GOAL, TURN, _fixture
+
+    call, runtime, _ = _fixture(tmp_path, monkeypatch, provider)
+    original = call("quota", "should-run", "--runtime-profile", "generic_cli", "--goal-id", GOAL,
+        "--agent-id", AGENT, "--turn-instance-id", TURN,
+        "--decision-output-dir", str(tmp_path / "original"))
+    assert original["effective_action"] == "autonomous_replan_required"
+    retained = tmp_path / "original" / "decision.json"
+    source_bytes = retained.read_bytes()
+    source = json.loads(source_bytes)
+    identity = source["heartbeat_receipt"]["settlement_identity"]
+    runs = runtime / "goals" / GOAL / "runs" / "index.jsonl"
+    original_runs = runs.read_bytes()
+    pending = {"capture": True, "obligation_id": identity["replan_obligation_id"],
+               "settlement_effect_id": identity["effect_id"], "execution_authority_granted": False}
+    complete = compose_turn_decision({**source, "future_observation": {"exact": 2**53 + 1, "decimal": 1.0}})
+    packet = tmp_path / "held-decision.json"
+    packet.touch(mode=0o600)
+    evidence = [{"id": "held_decision", "source_path": str(packet)}]
+
+    def seal(name, payload, *, wanted=pending, decision_digest=None, operator_fallback=False):
+        raw = json.dumps(payload, ensure_ascii=False).encode()
+        packet.write_bytes(raw)
+        digest = hashlib.sha256(raw).hexdigest()
+        request = {"action": "capture", "components": evidence, "destination": str(tmp_path / name),
+            "point_metadata": {"held_decision_component_id": "held_decision", "loopx_state": {
+                "goal_id": GOAL, "agent_id": AGENT}, "replan": wanted, "decision_sha256": decision_digest or digest},
+            "expected_source_sha256": effect_runtime_result("runtime.checkpoint_artifacts", {
+                "action": "probe", "components": evidence})["source_sha256"]}
+        if operator_fallback:
+            request["point_metadata"].update(replan=False, operator_metadata={"replan": wanted})
+        sealed = effect_runtime_result("runtime.checkpoint_artifacts", request, retry_safe=False)
+        return {"action": "read_basis", "root": request["destination"], "expected_sha256": sealed["sha256"],
+            "include_pending_replan": True}, digest
+
+    for name, payload in (("historical", source), ("complete", complete), ("operator-fallback", source)):
+        request, digest = seal(name, payload, operator_fallback=name == "operator-fallback")
+        selected = effect_runtime_result("runtime.checkpoint_artifacts", request)
+        assert selected["pending_replan"] == {"intent": pending, "decision_sha256": digest,
+            "decision_path": str(tmp_path / name / "components" / "held_decision")}
+        assert not selected["integrity_verified"] and not selected["execution_authority_granted"]
+
+        # Exercise both actual receivers with a sealed source and an already
+        # admitted native binding. Only the external native transport is fake.
+        binding = {"session_id": "synthetic-session", "checkpoint_artifact_sha256": request["expected_sha256"],
+                   "checkpoint_artifact_root": request["root"]}
+        declaration = tmp_path / "warm-start.json"
+        declaration.write_text(json.dumps({"root": request["root"], "sha256": request["expected_sha256"],
+            "goal_id": GOAL, "agent_id": AGENT, "fresh_replan": True}))
+        partial = tmp_path / "context-refresh" / "pre-replan.json"
+        partial.parent.mkdir(exist_ok=True)
+        partial.touch()  # Recovery of a lost external reply must not re-admit.
+        env = {"LOOPX_RUNTIME_ROOT": str(runtime), "LOOPX_GOAL_ID": GOAL, "LOOPX_AGENT_ID": AGENT,
+               "LOOPX_WARM_START": str(declaration), "LOOPX_ITERATION_CONTEXT": "resume",
+               "LOOPX_WAKE_LOG_DIR": str(tmp_path / "wakes")}
+        observations = []
+        session = SimpleNamespace(**binding, binding=binding, prepare_checkpoint_refresh=lambda *args, **kw:
+                                 observations.append((args, kw)))
+        with monkeypatch.context() as m:
+            m.setattr("benchmark.runtime.checkpoint_continuation.load_codex_cli_session", lambda *a, **kw: binding)
+            m.setattr("benchmark.runtime.sessions.BenchmarkSessionWake", lambda *a: session)
+            notice = prepare_session_refresh(env, session, tmp_path)
+            assert "BEFORE a pending replan" in notice and observations == [(
+                (None, partial, tmp_path / "stdout.jsonl"),
+                {"pre_replan_basis": {"pending_replan": pending, "decision_sha256": digest}},
+            )]
+            review = restored_checkpoint_review(env)
+            assert not review["semantic_review_accepted"]
+            assert selected["pending_replan"]["decision_path"] in review["instructions"]
+
+    for name, payload, wanted, expected in (
+        ("tampered", {**complete, "future_observation": {"exact": 2**53}}, pending, "integrity mismatch"),
+        ("unknown", {**complete, "schema_version": "unknown"}, pending, "unsupported complete Turn decision version"),
+        ("wrong-intent", source, {**pending, "obligation_id": "replan-" + "b" * 16}, "binding differs"),
+        ("missing-intent", source, None, "checkpoint pending replan must be an object"),
+        ("empty-intent", source, {}, "checkpoint pending replan must be an object"),
+        ("false-intent", source, False, "checkpoint pending replan must be an object"),
+    ):
+        request, _ = seal(name, payload, wanted=wanted)
+        with pytest.raises(EffectRuntimeRemoteError, match=expected):
+            effect_runtime_result("runtime.checkpoint_artifacts", request)
+
+    request, _ = seal("wrong-member", source, decision_digest="a" * 64)
+    with pytest.raises(EffectRuntimeRemoteError, match="packet digest differs"):
+        effect_runtime_result("runtime.checkpoint_artifacts", request)
+    request, _ = seal("replaced-member", source)
+    member = tmp_path / "replaced-member" / "components" / "held_decision"
+    saved = member.read_bytes()
+    member.write_bytes(b" " + saved[1:])  # Same size as the sealed file.
+    with pytest.raises(EffectRuntimeRemoteError, match="packet digest differs"):
+        effect_runtime_result("runtime.checkpoint_artifacts", request)
+    assert retained.read_bytes() == source_bytes
+    assert runs.read_bytes() == original_runs
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("cited", [False, True])
+def test_successor_review_needs_checkpoint_linked_settlement(tmp_path, monkeypatch, provider, cited):
+    """A legal successor can close out without losing the recovery-specific review.
+
+    Exercise real CLI authoring, canonical storage and settlement. The native
+    conversation completion check is a separate Host gate, not established here.
+    """
+    import json
+    import shlex
+    import subprocess
+
+    from test_replan_successor_guard_reentry import _fixture, GOAL, AGENT, TURN
+    from loopx.control_plane.quota.settlement import read_heartbeat_settlement
+
+    call, runtime, _ = _fixture(tmp_path, monkeypatch, provider)
+    original = call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
+        "--agent-id", AGENT, "--turn-instance-id", TURN,
+        "--codex-app-current-rrule", "FREQ=MINUTELY;INTERVAL=3",
+        "--decision-output-dir", str(tmp_path / "decision"))
+    read = subprocess.run(shlex.split(original["replan_action_packet"]["writeback"]),
+        capture_output=True, text=True, check=True)
+    writer = json.loads(read.stdout)
+    successor_binding = shlex.split(writer["writeback_contract"]["successor_binding_args"])
+    obligation = original["heartbeat_receipt"]["settlement_identity"]["replan_obligation_id"]
+    before_todos = call("todo", "list", "--goal-id", GOAL)["todos"]
+    rejected = call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
+        "--text", "Must not persist without the original Turn", "--task-class", "advancement_task",
+        "--action-kind", "validate", "--target-key", "rejected-source",
+        "--replan-obligation-id", obligation, "--turn-instance-id", "unadmitted-turn", expected_code=1)
+    assert rejected["ok"] is False
+    assert call("todo", "list", "--goal-id", GOAL)["todos"] == before_todos
+    successor = call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
+        "--text", "Independently verify the source artifact", "--task-class", "advancement_task",
+        "--action-kind", "validate", "--target-key", "independent-source-artifact",
+        "--replan-obligation-id", obligation, *successor_binding)
+    assert "host_action" not in successor  # No premature stop before original settlement.
+    assert successor["settlement_identity"] == original["heartbeat_receipt"]["settlement_identity"]
+    # Follow only the returned receipt; no fresh guard or successor admission.
+    steps = successor["settlement_plan"]["ordered_steps"]
+    actions = [step["command_template"] for step in steps if step["kind"] in {"durable_writeback", "quota_spend"}]
+    from loopx.control_plane.todos.markdown import render_todo_markdown
+    rendered = render_todo_markdown(successor)
+    assert successor["instruction"] in rendered
+    assert all(command in rendered for command in actions)
+    actions[0] = actions[0].replace("<validated_progress>", "source_review").replace("<scale>", "single_surface").replace("<outcome>", "outcome_progress")
+    sha = "a" * 64
+
+    def capture():
+        observed = read_heartbeat_settlement(runtime, goal_id=GOAL, agent_id=AGENT,
+            todo_id=None, turn_instance_id=TURN, resolve_original_binding=True,
+            registry_path=tmp_path / "registry.json")
+        return effect_runtime_result("runtime.checkpoint_artifacts", {
+            "action": "restore_capture", "checkpoint_sha256": sha,
+            "goal_id": GOAL, "agent_id": AGENT, "current_obligation_id": None,
+            "review": {"identity": observed.identity.value.as_dict(),
+                "progress": observed.progress, "writeback_run": observed.writeback_run,
+                "semantic_replan_guard": observed.semantic_replan_guard}})
+
+    assert capture()["capture_allowed"] is False
+    packet = {"schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Retained checkpoint evidence supports the next source audit."},
+        "path_delta": {"outcome": "continue", "prior_assumption": "The retained source needs review.",
+            "observed_reality": "Reviewed source evidence supports the independently validated successor.",
+            "retained": ["Original acceptance and remaining evaluation opportunity"],
+            "evidence_refs": ["checkpoint:" + sha if cited else "evidence:source-review"]}}
+    vision = tmp_path / "checkpoint-review.json"
+    vision.write_text(json.dumps(packet))
+    refresh_args = (*shlex.split(actions[0])[1:], "--agent-vision-json", str(vision),
+                    "--no-global-sync", "--suppress-external-sinks")
+    if cited:
+        settled = call(*refresh_args, "--settle-turn")
+        assert settled["settlement_progress"]["state"] == "settled"
+    else:
+        call(*refresh_args)
+        assert capture()["capture_allowed"] is False  # Writeback alone is not settled.
+        call(*shlex.split(actions[1])[1:])
+    assert capture()["capture_allowed"] is cited
+    # Retrying the original debit repairs/replays its receipt, never starts the successor.
+    call(*shlex.split(actions[1])[1:])
+    assert capture()["capture_allowed"] is cited
+    assert call("todo", "list", "--goal-id", GOAL,
+                "--todo-id", successor["todo_id"])["todo"]["status"] == "open"

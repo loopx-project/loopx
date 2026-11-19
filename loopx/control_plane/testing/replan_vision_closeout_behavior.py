@@ -10,7 +10,7 @@ import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Callable
 
-from .model_tool_behavior import argument_value, loopx_command_tokens
+from .model_tool_behavior import QuotaToolContext, argument_value, loopx_command_tokens
 from .model_behavior_qualification import model_behavior_semantic_contract_from_packet
 from ..quota.effective_action import EffectiveAction
 
@@ -33,22 +33,27 @@ class VisionHostAdmissionRejected(ValueError):
 VISION_HOST_INSTRUCTION = (
     "You are an agent working in an isolated LoopX project. Follow the heartbeat "
     "and current control-plane packet. "
-    "Call exactly one shell tool per response, and wait for its output before "
-    "choosing another call. Never batch the quota guard with a workspace read. "
-    "Use the shell normally to inspect evidence, "
-    "author your decision and execute the real CLI writeback and settlement. "
-    "The ordered interaction_contract.cli_channel.next_cli_actions are templates, "
-    "not literal commands: first read the named source, start the decision file "
-    "from vision_authoring.minimal_example. Add path_delta.outcome, "
-    "prior_assumption, observed_reality, one retained/changed/stopped item and "
-    "observed evidence_refs. Keep every prose string under 80 characters; cite "
-    "the source instead of pasting it. Omit other optional fields unless the "
-    "evidence requires them, and check the projected vision_authoring limits "
-    "before the first refresh-state. Replace the first "
-    "action's path placeholder with your file path. Correct a failed action "
-    "using its error instead of repeating it unchanged. After a successful "
-    "writeback, execute the returned settlement_owed.command once in the same "
-    "turn and verify the settlement readback."
+    "Call exactly one shell tool per response and wait for its output. Run the "
+    "quota guard by itself. For capture navigation, select /autonomous_replan_obligation, "
+    "/replan_action_packet and /interaction_contract/cli_channel using the supplied reader. "
+    "Follow the projected review command and review.next.writeback when present. "
+    "Read the work source named by the current uncovered frontier. "
+    "The staged writeback reply supplies writeback_contract.vision_authoring.fields "
+    "and writeback.next_cli_actions. For inline delivery use the original action "
+    "packet's authoring contract and interaction_contract.cli_channel.next_cli_actions. "
+    "Once you have the source and contract, author one project JSON draft in one shell call. "
+    "Use the supplied Vision schema version and a proposed vision_patch with acceptance_summary. "
+    "Write path_delta using its schema, outcome, prior_assumption, observed_reality, "
+    "one retained, changed or stopped item, and the evidence_id or source_ref actually read. "
+    "If required_fields includes agent_vision.stride_decision, use stride_control.minimal_example "
+    "for its shape and bind independent axes and minimum_evidence to this same source. "
+    "Keep prose strings under 80 characters and cite the observed source. "
+    "Add optional fields only when the evidence requires them. "
+    "Fill the projected refresh-state action with the draft path and keep the original Turn and obligation binding. "
+    "Run that CLI action directly so its exit status and output reach you. "
+    "Use a failed action's returned reason to read or revise the specific missing "
+    "field before retrying. After a successful writeback, execute the returned "
+    "settlement_owed.command once in the same Turn and verify the settlement readback."
 )
 
 VISION_EXEC_TOOL_DESCRIPTION = (
@@ -72,6 +77,7 @@ def required_vision_scenario_contract(
         "selected_todo_id": None,
         "user_action_required": False,
         "must_attempt_work": True,
+        "delivery_allowed": False,
         "quiet_noop_allowed": False,
     }
     if any(contract.get(field) != value for field, value in required.items()):
@@ -179,10 +185,10 @@ def dispatch_vision_closeout(
     if state.vision_closeout is None:
         raise ValueError("vision_closeout_spend_before_writeback")
     output = execute(command, fixture=state.fixture, turn_instance_id=state.turn_instance_id)
-    replay = json.loads(execute(state.fixture.quota_guard_command, fixture=state.fixture,
-                                turn_instance_id=state.turn_instance_id))
-    following = json.loads(execute(state.fixture.quota_guard_command, fixture=state.fixture,
-                                   turn_instance_id=f"{state.turn_instance_id}-readback"))
+    replay = QuotaToolContext.from_output(execute(state.fixture.quota_guard_command, fixture=state.fixture,
+                                turn_instance_id=state.turn_instance_id)).packet
+    following = QuotaToolContext.from_output(execute(state.fixture.quota_guard_command, fixture=state.fixture,
+                                   turn_instance_id=f"{state.turn_instance_id}-readback")).packet
     spends = [row for row in _rows(state) if row.get("classification") == "quota_slot_spent"]
     if replay.get("effective_action") != EffectiveAction.HEARTBEAT_SETTLED_SKIP.value or len(spends) != 1:
         raise ValueError("vision_closeout_settlement_readback_failed")

@@ -1,5 +1,10 @@
 # PR-05: retirement of protocol action packet writes
 
+> Historical PR-05 checkpoint. The observations below describe writer retirement
+> and its then-supported readers. Reader compatibility and the dated verifier
+> were subsequently retired in #7161; the linked protocol decision owns current
+> behavior. Earlier evidence and original historical records are preserved.
+
 Refs [#4794](https://github.com/loopx-project/loopx/pull/4794),
 [#4447](https://github.com/loopx-project/loopx/issues/4447). The
 [protocol decision](../../../../reference/protocols/protocol-action-packet-decision-v0.md)

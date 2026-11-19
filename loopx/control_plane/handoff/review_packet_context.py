@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..goals.acceptance_readback import configured_checks
 from ..runtime.public_safety import compact_text
 
 
@@ -193,7 +194,7 @@ def project_agent_replan_context(
         (item or {}).get("goal_acceptance_contract"), asset.get("goal_acceptance_contract"),
         ((item or {}).get("agent_todos") or {}).get("goal_acceptance_contract"),
         (asset.get("agent_todos") or {}).get("goal_acceptance_contract"),
-    ) if isinstance(candidate, dict) and candidate.get("enabled") is True), None)
+    ) if configured_checks(candidate) is not None), None)
     return project_replan_context(goal_id=goal_id, agent_id=agent_id, runs=(), source_status=status_payload,
                                   goal_acceptance_contract=acceptance)
 

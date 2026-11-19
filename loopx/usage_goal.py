@@ -1,6 +1,6 @@
 """Best-effort Host observation transport; TS owns union, limits and consent.
 
-Not an execution controller. Only confirmed 60-second prefixes survive a crash;
+Only confirmed 60-second prefixes survive a crash;
 there is no open interval that a later process can extrapolate indefinitely.
 """
 from __future__ import annotations
@@ -20,6 +20,9 @@ from . import usage_ping
 
 @contextmanager
 def observe_goal_execution(runtime_root: Path, goal_id: str, *, host: str = "unknown") -> Iterator[None]:
+    if usage_ping._environment_suppressed():
+        yield
+        return
     stop = threading.Event()
     publish = None
     try:
@@ -28,10 +31,7 @@ def observe_goal_execution(runtime_root: Path, goal_id: str, *, host: str = "unk
         path = usage_ping.state_path()
         state = json.loads(path.read_text(encoding="utf-8"))
         generation = state.get("generation")
-        if (goal_id and generation and state.get("consent") != "disabled"
-                and os.environ.get("LOOPX_USAGE_PING") != "0"
-                and os.environ.get("DO_NOT_TRACK") != "1"
-                and os.environ.get("CI") != "true"):
+        if goal_id and generation and state.get("consent") != "disabled":
             key = hashlib.sha256(json.dumps([generation, str(runtime_root.resolve()), goal_id]).encode()).hexdigest()
             wall = time.time_ns() // 1_000_000
             origin = time.monotonic()
@@ -101,17 +101,20 @@ def observe_quota_cycle(*, registry_path: Path, runtime_root: Path, goal_id: str
                         at: int, host: str) -> None:
     """Detach binding discovery and session metadata lookup from quota latency."""
     try:
+        if usage_ping._environment_suppressed():
+            return
         import sys
         state = json.loads(usage_ping.state_path().read_text(encoding="utf-8"))
         if state.get("consent") == "disabled" or not state.get("generation"):
-            return
-        if os.environ.get("LOOPX_USAGE_PING") == "0" or os.environ.get("DO_NOT_TRACK") == "1" or os.environ.get("CI") == "true":
             return
         usage_ping._detach({"registry": str(registry_path), "runtime": str(runtime_root),
                            "goal": goal_id, "agent": agent_id, "turn": turn_id,
                            "phase": phase, "at": at, "host": host,
                            "path": str(usage_ping.state_path()), "generation": state["generation"]},
-                          command=[sys.executable, "-m", "loopx.usage_goal"])
+                          # Detachment uses the OS temp directory as cwd. Its
+                          # unrelated loopx cache/package must not shadow this
+                          # interpreter's installed observer, including editable installs.
+                          command=[sys.executable, "-P", "-m", "loopx.usage_goal"])
     except Exception:
         pass
 
@@ -152,6 +155,8 @@ def _bound_codex_session(registry_path: Path, goal_id: str, agent_id: str | None
 
 
 def _dispatch_cycle(request) -> None:
+    if usage_ping._environment_suppressed():
+        return
     path = Path(request["path"])
     state = json.loads(path.read_text(encoding="utf-8"))
     if state.get("consent") == "disabled" or state.get("generation") != request["generation"]:

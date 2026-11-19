@@ -15,6 +15,7 @@ from loopx.control_plane.quota.decision_summary import (
     QuotaRunDecision,
     resolve_quota_run_decision,
 )
+from loopx.control_plane.quota.task_orchestration import apply_task_route_hint_override
 
 
 def _resolve(**overrides: Any) -> QuotaRunDecision:
@@ -176,6 +177,36 @@ def test_task_orchestration_refines_normal_run_action() -> None:
     assert decision.should_run is True
     assert decision.normal_delivery_allowed is True
     assert decision.effective_action == "coordinate_task_bundle"
+    assert decision.goal_route_hint_override == {
+        "omit_current_agent_next_action": True,
+        "kind": "task_orchestration",
+        "route_decision": "coordinate_task_bundle",
+        "reason": "task-scoped coordinator must activate/resume eligible peer lanes",
+        "peer_lane_count": 0,
+    }
+    decision = _resolve(task_orchestration_contract={"execution_state": "ready", "mode": "adaptive",
+        "eligible_child_lanes": [{}, {}]})
+    assert decision.goal_route_hint_override["peer_lane_count"] == 2
+
+
+def test_goal_route_hint_applies_only_the_typed_owner_patch() -> None:
+    hint = {"kind": "agent_lane_synthesis", "current_agent_next_action": {"todo_id": "todo-a"},
+        "has_durable_next_action": True}
+    patched = apply_task_route_hint_override(hint, {
+        "omit_current_agent_next_action": True,
+        "kind": "task_orchestration",
+        "route_decision": "coordinate_task_bundle",
+        "reason": "task-scoped coordinator may spawn admitted child lanes",
+        "peer_lane_count": 2,
+    })
+    assert patched == {
+        "kind": "task_orchestration",
+        "route_decision": "coordinate_task_bundle",
+        "reason": "task-scoped coordinator may spawn admitted child lanes",
+        "peer_lane_count": 2,
+        "has_durable_next_action": True,
+    }
+    assert hint["current_agent_next_action"] == {"todo_id": "todo-a"}
 
 
 @pytest.mark.parametrize(

@@ -112,64 +112,6 @@ async function chipText(page) {
   return (await page.locator(".personal-execution-chip").innerText()).replace(/\s+/g, " ").trim();
 }
 
-const pickerSelector = "div.personal-agent-select button.personal-select-trigger";
-
-async function readPickerLabel(page) {
-  return (await page.locator(pickerSelector).innerText()).replace(/\s+/g, " ").trim();
-}
-
-// What the page resolved, phrased so a failed CI run is diagnosable without a
-// local reproduction: the declared endpoint, the adapters the page actually
-// received and the label it rendered are the three facts that decide the label.
-async function pickerResolution(page) {
-  const capabilities = await page.evaluate(async () => {
-    try {
-      const response = await fetch("/api/chat/capabilities");
-      const body = await response.json();
-      return {
-        status: response.status,
-        declaredEndpoint: body.manager?.channel_binding?.executor_endpoint ?? null,
-        adapters: (body.adapters ?? []).map(
-          (adapter) => `${adapter.agent_id}:${adapter.available ? "available" : "unavailable"}`,
-        ),
-      };
-    } catch (error) {
-      return { status: "unavailable", declaredEndpoint: null, adapters: [], error: String(error) };
-    }
-  });
-  return [
-    `label=${await readPickerLabel(page)}`,
-    `declared=${capabilities.declaredEndpoint ?? "<none>"}`,
-    `adapters=[${capabilities.adapters.join(", ")}]`,
-    `capabilities=${capabilities.status}${capabilities.error ? ` (${capabilities.error})` : ""}`,
-  ].join(" ");
-}
-
-// The picker resolves from the same capabilities response that carries the
-// channel binding, and the execution chip only renders once that binding
-// lands. A single read therefore asserts on a state the page never promised was
-// settled, and it can still hold the pre-fetch Codex fallback. Wait for the
-// declared value instead, and name what the page really resolved if the wait
-// runs out.
-async function waitForPickerLabel(page, settled, timeoutMs = 15_000) {
-  const deadline = Date.now() + timeoutMs;
-  let label = await readPickerLabel(page);
-  while (!settled(label) && Date.now() < deadline) {
-    await page.waitForTimeout(100);
-    label = await readPickerLabel(page);
-  }
-  if (settled(label)) {
-    return label;
-  }
-  const resolution = await pickerResolution(page);
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: false,
-    path: resolve(outputDir, "execution-chip-picker-unresolved.png"),
-  });
-  throw new Error(`Chat runtime picker never settled: ${resolution}`);
-}
-
 async function assertHairlineRow(page, maxHeight) {
   const headerBox = await page.locator(".personal-channel-header").boundingBox();
   const chip = page.locator(".personal-execution-chip");
@@ -289,6 +231,9 @@ export const executionChipScenario = {
         path: resolve(outputDir, "execution-chip-dsh-budget-desktop.png") });
       await managed.page.setViewportSize({ width: 390, height: 844 });
       await assertHairlineRow(managed.page, 44);
+      if (!await managed.page.getByText("选择：锁定 · 由本机配置锁定", { exact: false }).isVisible()) {
+        throw new Error("Expanded runtime details were hidden by the narrow subtitle styles");
+      }
       const budget = managed.page.locator(".personal-execution-chip-budget");
       if (!await budget.isVisible()) throw new Error("Mobile header lost the output budget");
       const box = await budget.boundingBox();
@@ -320,10 +265,8 @@ export const executionChipScenario = {
       } finally { coverageEntries.push(...await english.close()); }
     }
 
-    // The chat-runtime picker has to report the same resolution as the chip: a
-    // managed host declared for this machine is what will answer, so neither
-    // the header trigger nor the composer may keep advertising the CLI the
-    // machine merely happens to have installed.
+    // The machine-owned steward binding is the only executor/model control.
+    // A discovered CLI and stale browser preference cannot override that owner.
     const managedHostAdapters = [{
       adapter_kind: "deepseek_harness_segment",
       agent_id: "dsh",
@@ -336,35 +279,27 @@ export const executionChipScenario = {
     const stewardPicker = await openWorkspacePage(browser, url, {
       apiOptions: { managerChannelBinding: selectedManagedBinding, runtimeAgents: managedHostAdapters },
       collectCoverage,
+      beforeGoto: async (_api, page) => page.addInitScript(() => {
+        localStorage.setItem("loopx.personal-agent-selection.v1", JSON.stringify({ manager: "codex" }));
+      }),
     });
     try {
-      const pickerLabel = await waitForPickerLabel(
-        stewardPicker.page,
-        (label) => label.includes("DeepSeek Harness (managed)"),
-      );
-      if (pickerLabel.includes("Codex")) {
-        throw new Error(`Chat runtime picker advertised a discovered CLI as the steward: ${pickerLabel}`);
+      await stewardPicker.page.locator(".personal-execution-chip").waitFor({ state: "visible" });
+      if (!(await chipText(stewardPicker.page)).includes("dsh")) {
+        throw new Error("The steward chip lost its machine-owned endpoint");
       }
+      if (await stewardPicker.page.getByRole("combobox", { name: "选择聊天 Runtime" }).count()
+          || await stewardPicker.page.locator(".personal-chat-model-menu").count()) {
+        throw new Error("The steward offered duplicate Goal executor/model controls");
+      }
+      const saved = await stewardPicker.page.evaluate(() =>
+        JSON.parse(localStorage.getItem("loopx.personal-agent-selection.v1") ?? "{}"));
+      if (saved.manager) throw new Error("A legacy browser executor still overrides steward settings");
       if (await stewardPicker.page.locator(".personal-channel-composer > span").count()) {
         throw new Error("Composer repeated the executor already identified by the runtime picker");
       }
     } finally {
       coverageEntries.push(...await stewardPicker.close());
-    }
-
-    // A machine that declares no steward executor keeps the shipped default,
-    // so the parity above is a resolution the control plane asked for and not
-    // a new hard-coded preference.
-    const undeclaredSteward = await openWorkspacePage(browser, url, {
-      apiOptions: { runtimeAgents: managedHostAdapters },
-      collectCoverage,
-    });
-    try {
-      // The shipped default is the settled value a machine with no declared
-      // steward executor must keep.
-      await waitForPickerLabel(undeclaredSteward.page, (label) => label === "Chat Codex");
-    } finally {
-      coverageEntries.push(...await undeclaredSteward.close());
     }
 
     // A managed host that cannot launch here names the missing fact, and never
@@ -477,7 +412,7 @@ export const executionChipScenario = {
     }
     return {
       coverageEntries,
-      note: "execution chip reports the selected executor, the credential it is billed to and the resolved model, names the steward channel's shipped default without claiming a credential branch, keeps a configured credential from moving it, keeps the chat-runtime picker on the executor the machine declares for the steward, names why a selected managed host cannot launch, and stays absent without a binding",
+      note: "execution chip reports the selected executor, the credential it is billed to and the resolved model, names the steward channel's shipped default without claiming a credential branch, keeps a configured credential from moving it, keeps the machine binding as the single steward executor/model control, names why a selected managed host cannot launch, and stays absent without a binding",
     };
   },
 };

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import sys
 
@@ -97,6 +98,63 @@ def test_actual_source_request_correction_cancel_and_same_operation_recovery(sou
     assert cancelled["view"]["terminal_effects"] == []
 
 
+def test_native_inbox_preserves_unconsumed_results_across_corrections(source_goal):
+    from loopx.capabilities.manager_context.roundtrip import report
+    from loopx.control_plane.collaboration.peers import consume_return, read_inbox
+    from loopx.control_plane.collaboration.turn_context_observation import read_delegation_turn_context
+    from loopx.control_plane.testing.canary_harness import run_json_cli_result
+
+    f = source_goal
+    root, registry, goal = f["runtime"], f["registry"], f["ref"]["goal_id"]
+    rid = _request(f)["request_id"]
+    acknowledge(root, goal, "agent-a", rid, "adopt", "Check the original evidence", registry=registry)
+    report(root, goal, "agent-a", rid, "conclusion", "Original checked result", registry=registry)
+    view = _control(f, rid, "inspect")["view"]
+    revised = _control(f, rid, "revise", {"operation_id": "correct-return", **_basis(view),
+        "brief": {**BRIEF, "purpose": "Check the corrected contract"}, "reason": "The requirement changed"})["view"]
+    acknowledge(root, goal, "agent-a", rid, "adopt", "Check the corrected evidence", registry=registry,
+        request_revision=2, request_revision_digest=revised["revision_digest"])
+    result = report(root, goal, "agent-a", rid, "conclusion", "Corrected checked result", registry=registry, request_revision=2)
+    newer = [result["result_key"]]
+    for update in ("independent-check", "review-complete"):
+        newer.append(report(root, goal, "agent-a", rid, "conclusion", f"Corrected result: {update}",
+            registry=registry, request_revision=2, update_id=update)["result_key"])
+    returned = read_inbox(root, registry, goal, "agent-b",
+        turn_instance_id="turn-corrected-results")["peer_returns"]["items"]
+    assert {item.get("result_key", "conclusion") for item in returned} == {"conclusion", *newer}
+    for key in newer:
+        consume_return(root, goal, "agent-b", rid, registry=registry, result_key=key,
+            turn_instance_id="turn-corrected-results", disposition="accepted")
+    before = {p.relative_to(_root(root)): p.read_bytes() for p in _root(root).rglob("*.json")}
+    # Consecutive native Inbox reads must retain the same original result
+    # obligation without executing, re-delivering or consuming anything.
+    for _ in range(2):
+        code, packet = run_json_cli_result("manager-inbox", "read", "--goal-id", goal,
+            "--agent-id", "agent-b",
+            registry_path=registry, runtime_root=root)
+        assert code == 0, packet
+        agenda = packet["unfinished_delegations"]
+        assert agenda["outgoing_count"] == 1, agenda
+        attention = agenda["return_attention"]
+        assert attention["count"] == 1 and attention["omitted_count"] == 0
+        assert attention["items"][0]["request_id"] == rid
+        assert attention["items"][0]["step"] == "consume_peer_result"
+        row = agenda["items"][0]
+        assert row["request_id"] == rid and row["request_revision"] == 2
+        assert row["purpose"] == "Check the corrected contract"
+        assert row["step"] == "consume_peer_result" and row["unconsumed_return_count"] == 1
+        old = next(item for item in row["returns"] if item["result_key"] == "conclusion")
+        assert old["request_revision"] == 1 and old["consumed"] is False
+        assert old in attention["items"][0]["returns"]
+    assert {p.relative_to(_root(root)): p.read_bytes() for p in _root(root).rglob("*.json")} == before
+    consume_return(root, goal, "agent-b", rid, registry=registry,
+        turn_instance_id="turn-corrected-results", disposition="accepted")
+    for actor in ("agent-a", "agent-b"):
+        agenda = read_delegation_turn_context(root, registry, goal, actor)["unfinished_delegations"]
+        assert agenda["items"] == []
+        assert agenda["return_attention"] == {"count": 0, "items": [], "omitted_count": 0}
+
+
 def test_request_control_refuses_wrong_actor_namespace_and_untrusted_effect_facts(source_goal, tmp_path):
     f = source_goal
     rid = _request(f)["request_id"]
@@ -111,6 +169,60 @@ def test_request_control_refuses_wrong_actor_namespace_and_untrusted_effect_fact
         _control(f, rid, "settle", {"reservation_digest": "a" * 64})
     with pytest.raises(ValueError, match="invalid controlled request"):
         _control(f, "../not-a-request", "inspect")
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_stateless_quota_opening_prioritizes_peer_return_over_large_write_scope(tmp_path, provider):
+    from loopx.capabilities.manager_context.roundtrip import report
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TODO_ID, _initialize_fixture_authority, _run_cli, _write_fixture,
+    )
+
+    project, runtime, registry = _write_fixture(tmp_path)
+    config = json.loads(registry.read_text())
+    goal = config["goals"][0]
+    goal["status"] = "active"
+    state = project / goal["state_file"]
+    state.write_text(state.read_text().replace("status: active-read-only", "status: active", 1))
+    peer = "result-provider"
+    goal["coordination"]["registered_agents"].append(peer)
+    scope = [f"modules/component-{index:03d}/experiments/artifact-encodings/public-validation/**"
+             for index in range(290)]
+    goal["coordination"]["write_scope"] = scope
+    registry.write_text(json.dumps(config))
+    _initialize_fixture_authority(project, runtime, provider=provider)
+
+    rid = peer_request(runtime, registry, GOAL_ID, AGENT_ID, peer, "request-check", BRIEF)["request_id"]
+    acknowledge(runtime, GOAL_ID, peer, rid, "adopt", "Check the evidence", registry=registry)
+    report(runtime, GOAL_ID, peer, rid, "conclusion", "Evidence checked", registry=registry)
+    code, view = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--turn-instance-id", "stateless-peer-open", "--context-delivery", "on",
+        "--max-page-output-bytes", "12000", cwd=project, raw_guard=False)
+    assert code == 0 and "first_read_command" in view, view
+
+    def read(command):
+        words = shlex.split(command)
+        code, page = _run_cli(registry, runtime, *words[words.index("quota"):], cwd=project)
+        assert code == 0 and page["ok"], page
+        return page
+
+    page = read(view["first_read_command"])
+    first = page["content"]
+    assert not page["eof"] and len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 12000
+    assert rid in first and 'return_attention"' in first
+    assert "required_reads" in first and "manager-inbox read" in first
+    chunks = [first]
+    while not page["eof"]:
+        page = read(page["next_command"])
+        chunks.append(page["content"])
+    selections = {item["pointer"]: item["value"] for item in json.loads("".join(chunks))["selections"]}
+    agenda = next(value for path, value in selections.items() if path.endswith("/unfinished_delegations")
+                  or path.endswith("/unfinished_delegations/return_attention"))
+    attention = agenda.get("return_attention", agenda)
+    assert attention["count"] == 1 and attention["items"][0]["request_id"] == rid
+    assert attention["items"][0]["returns"][0]["result_key"] == "conclusion"
+    assert selections["/goal_boundary"]["write_scope"] == scope
 
 
 def test_real_request_reservation_goal_commit_and_terminal_linkage(source_goal, tmp_path, capsys, monkeypatch):
@@ -495,8 +607,14 @@ def test_turn_agenda_follows_current_request_revision_and_cancellation(source_go
     assert current["request_id"] == rid and current["request_revision"] == 2
     assert current["purpose"] == "Inspect the corrected current contract"
     assert current["step"] == "assess_request"
-    assert "returns" not in current  # The old answer does not settle revised work.
-    assert agenda("agent-b")["items"][0]["step"] == "await_peer_result"
+    assert current["receipt_state"] == "pending"  # The old answer does not settle revised work.
+    assert current["returns"] == [{"result_key": "conclusion", "request_revision": 1,
+        "status": "queued", "consumed": False}]
+    assert current["pending_return_count"] == current["unconsumed_return_count"] == 1
+    outgoing = agenda("agent-b")["items"][0]
+    assert outgoing["step"] == "consume_peer_result"
+    assert outgoing["request_revision"] == 2 and outgoing["receipt_state"] == "pending"
+    assert outgoing["returns"] == current["returns"]
     _control(f, rid, "cancel", {"operation_id": "agenda-cancel", **_basis(revised), "reason": "Stop current request"})
     assert agenda("agent-a")["items"] == []
     assert agenda("agent-b")["items"] == []

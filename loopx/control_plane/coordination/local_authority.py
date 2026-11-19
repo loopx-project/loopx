@@ -1,23 +1,27 @@
 """Python adapter for provider-first local coordination reads.
 
 TypeScript remains the semantic owner of canonical projection validation.  The
-Python CLI only detects whether cutover is engaged, invokes that owner, and
-fails closed instead of consulting the legacy Markdown projection.
+Python CLI invokes that owner for admission and snapshot validation, and fails
+closed instead of consulting the legacy Markdown projection.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from typing import Any, NoReturn, cast
+
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, NoReturn
 from uuid import uuid4
 
 from ...agent_registry import registered_agent_ids_from_registry
+from ...command_invocation import loopx_cli_argv
+from ..agents.workspace_guard import _git_worktree_root
 from .authority_source_capture import authority_registry_source
 from ..runtime.time import now_local_iso as now_local
 from ..effect_runtime import (
     CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
+    EffectRuntimeResponseAmbiguous,
     effect_runtime_result,
 )
 from .coordination_state_contract import (
@@ -33,8 +37,9 @@ LOCAL_COORDINATION_TODO_LIST_TIMEOUT_SECONDS = 15.0
 LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA = (
     "loopx_local_coordination_todo_claim_request_v1"
 )
-LOCAL_COORDINATION_TODO_CLAIM_GUARDED_REQUEST_SCHEMA = "loopx_local_coordination_todo_claim_request_v2"
-LOCAL_COORDINATION_TODO_CLAIM_TIMED_REQUEST_SCHEMA = "loopx_local_coordination_todo_claim_request_v3"
+LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA = "loopx_local_coordination_todo_claim_request_v2"
+LOCAL_COORDINATION_TODO_CLAIM_GUARDED_REQUEST_SCHEMA = "loopx_local_coordination_todo_claim_request_v3"
+LOCAL_COORDINATION_TODO_CLAIM_TIMED_REQUEST_SCHEMA = "loopx_local_coordination_todo_claim_request_v4"
 LOCAL_COORDINATION_TODO_CLAIM_METHOD = "coordination.local_authority.todo_claim"
 
 
@@ -42,7 +47,7 @@ LOCAL_AUTHORITY_SOURCES = ("file_v0", "sqlite_v0", "postgresql_v0")
 
 
 class LocalCoordinationAuthorityUnavailable(RuntimeError):
-    """Canonical coordination state cannot safely answer a post-cutover read."""
+    """Canonical coordination state cannot safely answer an ordinary read."""
 
     def __init__(self, message: str, *, code: str, payload: Mapping[str, Any]) -> None:
         super().__init__(message)
@@ -70,7 +75,7 @@ class LocalCoordinationAuthorityRejection(
 
 
 class CanonicalAuthorityRequired(LocalCoordinationAuthorityRejection):
-    """A normal write targeted a Goal that has not completed authority migration."""
+    """An ordinary operation targeted a Goal before authority migration."""
 
     def __init__(
         self,
@@ -80,8 +85,6 @@ class CanonicalAuthorityRequired(LocalCoordinationAuthorityRejection):
         payload: Mapping[str, Any] | None = None,
     ) -> None:
         evidence = {
-            "goal_id": goal_id,
-            "operation": operation,
             "write_admitted": False,
             "decision_read_from_provider": False,
             "legacy_fallback_used": False,
@@ -90,12 +93,41 @@ class CanonicalAuthorityRequired(LocalCoordinationAuthorityRejection):
                 "backup_required": True,
             },
             **dict(payload or {}),
+            "goal_id": goal_id,
+            "operation": operation,
         }
         super().__init__(
             "Canonical authority is required; back up and migrate this Goal before retrying",
             code="canonical_authority_required",
             payload=evidence,
         )
+
+
+def ambiguous_todo_write(
+    error: EffectRuntimeResponseAmbiguous,
+    *,
+    registry_path: Path,
+    runtime_root: str,
+    goal_id: str,
+    todo_id: str,
+    operation_id: str,
+) -> LocalCoordinationAuthorityUnavailable:
+    """Return an exact, read-only lookup for an unverifiable write response."""
+    return LocalCoordinationAuthorityUnavailable(
+        f"{error}. A missing receipt does not prove the original writer has stopped",
+        code=error.diagnostic_code,
+        payload={
+            "goal_id": goal_id,
+            "todo_id": todo_id,
+            "operation_id": operation_id,
+            "recovery_command": [
+                *loopx_cli_argv(), "--format", "json",
+                "--registry", str(registry_path.expanduser().resolve()),
+                "--runtime-root", runtime_root, "todo", "receipt",
+                "--goal-id", goal_id, "--operation-id", operation_id,
+            ],
+        },
+    )
 
 
 def raise_canonical_write_failure(
@@ -143,6 +175,12 @@ def local_authority_is_promoted(*, runtime_root: Path, goal_id: str) -> bool:
     return True
 
 
+def claim_worktree_candidate() -> Path | None:
+    """Locate the caller; the TS lease owner still verifies physical isolation."""
+    worktree = _git_worktree_root(Path.cwd())
+    return worktree if worktree is not None and (worktree / ".git").is_file() else None
+
+
 def claim_canonical_todo_if_promoted(
     *,
     registry_path: Path,
@@ -157,6 +195,7 @@ def claim_canonical_todo_if_promoted(
     expected_provider_revision: str | None = None,
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
+    manage_execution: bool = False,
     project: Path | None = None,
     state_file: Path | None = None,
     registry_sources: list[dict[str, str]] | None = None,
@@ -165,12 +204,18 @@ def claim_canonical_todo_if_promoted(
     """Route a claim to the canonical TypeScript transaction owner."""
     with authority_registry_source(registry_path) as registry_source:
         registered = registered_agent_ids_from_registry(registry_path, goal_id)
+    # This is only a candidate location. The lease owner observes physical
+    # isolation and the current canonical scopes before granting execution.
+    worktree = claim_worktree_candidate() if manage_execution else None
     result = effect_runtime_result(
         LOCAL_COORDINATION_TODO_CLAIM_METHOD,
         {
-            "schema_version": (LOCAL_COORDINATION_TODO_CLAIM_TIMED_REQUEST_SCHEMA if admit_before is not None else
+            "schema_version": (
+                LOCAL_COORDINATION_TODO_CLAIM_TIMED_REQUEST_SCHEMA if admit_before is not None else
+                LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA if manage_execution else
                 LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA
-                if registry_sources is None else LOCAL_COORDINATION_TODO_CLAIM_GUARDED_REQUEST_SCHEMA),
+                if registry_sources is None else LOCAL_COORDINATION_TODO_CLAIM_GUARDED_REQUEST_SCHEMA
+            ),
             "runtime_root": str(runtime_root.expanduser().resolve(strict=False)),
             "goal_id": goal_id,
             "todo_id": todo_id,
@@ -186,6 +231,8 @@ def claim_canonical_todo_if_promoted(
                 if operation_id is not None
                 else f"todo-claim:{goal_id}:{todo_id}:{uuid4().hex}"
             ),
+            **({"manage_execution": True} if manage_execution else {}),
+            **({"write_worktree": str(worktree)} if worktree is not None else {}),
             **({"expected_provider_revision": expected_provider_revision}
                if expected_provider_revision is not None else {}),
             "lease_request": (
@@ -256,24 +303,131 @@ def claim_canonical_todo_if_promoted(
 def read_canonical_todos_if_promoted(
     *, runtime_root: Path, goal_id: str, include_leases: bool = False,
     projection_readback: Mapping[str, Any] | None = None,
-) -> dict[str, Any] | None:
-    """Return canonical Todos after cutover, or ``None`` before cutover.
+    include_summary: bool = False, rollout_events: Any = None, available_capabilities: Any = None,
+    include_contract_rows: bool = False,
+    lease_todo_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    """Read canonical Todos or fail with the native migration/recovery cause.
 
-    Presence of the durable writer fence is the mode switch. Once present,
-    every malformed, missing, or unavailable provider response is terminal for
-    this read; callers must never recover by reading Markdown.
+    The historical import name no longer permits pre-cutover Markdown reads.
+    Explicit migration captures use the dedicated source inspection owner.
+    Status may request diagnostic facts in place of complete records.
+    A lease selection validates the same provider snapshot and returns only
+    matching leases. It cannot supply a Todo summary or confirm a writeback.
+    """
+    if lease_todo_ids is not None and (
+        not include_leases or include_summary or projection_readback is not None
+    ):
+        raise ValueError("lease selection requires leases without a Todo summary or projection readback")
+
+    contract_fields = None
+    if include_contract_rows:
+        if not include_summary or include_leases or projection_readback is not None:
+            raise ValueError("compact Todo contract rows require a read-only canonical summary")
+        from ..todos.authoring_scope import TODO_CONTRACT_DIAGNOSTIC_FIELDS
+
+        contract_fields = TODO_CONTRACT_DIAGNOSTIC_FIELDS
+    projected = None
+    if include_summary:
+        from ..todos.goal_todo_projection import project_todo_read
+        from ..runtime.time import now_utc
+
+        now = now_utc()
+        projected = project_todo_read({"kind": "canonical_fields",
+            **({"canonical_contract_fields": list(contract_fields)} if contract_fields is not None else {}),
+            "source": {"runtime_root": str(runtime_root.expanduser().resolve(strict=False)), "goal_id": goal_id,
+                "include_leases": include_leases, "projection_readback": dict(projection_readback) if projection_readback is not None else None},
+            "rollout_events": list(rollout_events or []),
+            "rollout_event_source": getattr(rollout_events, "source", None),
+            "available_capabilities": sorted({str(value).strip().lower() for value in available_capabilities if str(value).strip()}) if available_capabilities is not None else None,
+            "observed_at": now.timestamp(), "evaluated_at": now.isoformat()})
+        result = projected["canonical"]
+    else:
+        result = read_canonical_snapshot(
+            rpc=effect_runtime_result,
+            runtime_root=str(runtime_root.expanduser().resolve(strict=False)),
+            goal_id=goal_id, include_leases=include_leases,
+            projection_readback=projection_readback,
+            timeout=LOCAL_COORDINATION_TODO_LIST_TIMEOUT_SECONDS,
+            lease_todo_ids=lease_todo_ids,
+        )
+    payload = validate_canonical_todo_read(result, goal_id=goal_id, include_leases=include_leases,
+        projection_readback=projection_readback, contract_fields=contract_fields,
+        lease_only=lease_todo_ids is not None)
+    if projected is not None and "fields" in projected:
+        from ..todos.goal_todo_projection import restore_todo_field_evaluations
+        payload["_todo_fields"] = restore_todo_field_evaluations(projected)
+    return payload
+
+
+class CanonicalTodoSnapshot:
+    """One status request's summary and contract facts, isolated from its consumers.
+
+    Only identical no-lease, no-writeback reads participate. This is not a TTL
+    cache or a transaction spanning Goals, registry, Markdown or rollout events.
+    The first validated read (or authority failure) is retained per runtime/Goal;
+    the next request must construct a new instance. Mutation/admission callers
+    keep using fresh reads and the provider's transaction checks.
     """
 
-    if not local_authority_is_promoted(runtime_root=runtime_root, goal_id=goal_id):
-        return None
+    def __init__(
+        self, *, runtime_root_for_goal: Callable[[str], Path] | None = None,
+    ) -> None:
+        self._runtime_root_for_goal = runtime_root_for_goal
+        self._routes: dict[str, Path | LocalCoordinationAuthorityUnavailable] = {}
+        self._reads: dict[
+            tuple[Path, str], dict[str, Any] | LocalCoordinationAuthorityUnavailable
+        ] = {}
 
-    result = read_canonical_snapshot(
-        rpc=effect_runtime_result,
-        runtime_root=str(runtime_root.expanduser().resolve(strict=False)),
-        goal_id=goal_id, include_leases=include_leases,
-        projection_readback=projection_readback,
-        timeout=LOCAL_COORDINATION_TODO_LIST_TIMEOUT_SECONDS,
-    )
+    def read(self, *, runtime_root: Path, goal_id: str) -> dict[str, Any]:
+        if self._runtime_root_for_goal is not None:
+            if goal_id not in self._routes:
+                try:
+                    self._routes[goal_id] = self._runtime_root_for_goal(goal_id)
+                except LocalCoordinationAuthorityUnavailable as error:
+                    self._routes[goal_id] = error
+            route = self._routes[goal_id]
+            if isinstance(route, LocalCoordinationAuthorityUnavailable):
+                raise LocalCoordinationAuthorityUnavailable(
+                    str(route), code=route.code, payload=deepcopy(route.payload),
+                )
+            runtime_root = route
+        key = (runtime_root.expanduser().resolve(strict=False), goal_id)
+        if key not in self._reads:
+            try:
+                from ..todos.resume_condition import TodoResumeRolloutEvents
+                self._reads[key] = read_canonical_todos_if_promoted(
+                    runtime_root=key[0], goal_id=goal_id, include_summary=True,
+                    include_contract_rows=True,
+                    rollout_events=TodoResumeRolloutEvents([], runtime_root=key[0], goal_id=goal_id),
+                )
+            except LocalCoordinationAuthorityUnavailable as error:
+                # A failed first read cannot become a successful attention view
+                # later in the same request, contradicting contract diagnostics.
+                self._reads[key] = LocalCoordinationAuthorityUnavailable(
+                    str(error), code=error.code, payload=deepcopy(error.payload),
+                )
+        result = self._reads[key]
+        if isinstance(result, LocalCoordinationAuthorityUnavailable):
+            raise LocalCoordinationAuthorityUnavailable(
+                str(result), code=result.code, payload=deepcopy(result.payload),
+            )
+        # Summary enrichment mutates nested records. Never share those mutations
+        # with contract checks, another role, or the retained snapshot itself.
+        return deepcopy(result)
+
+
+def validate_canonical_todo_read(
+    result: Any, *, goal_id: str, include_leases: bool = False,
+    projection_readback: Mapping[str, Any] | None = None,
+    contract_fields: tuple[str, ...] | None = None,
+    lease_only: bool = False,
+) -> dict[str, Any]:
+    """Decode a native source result without adding another provider read.
+
+    A lease-only response still describes the validated full Todo source in
+    its read model. Its transport population contains zero Todo rows.
+    """
     if not isinstance(result, Mapping):
         raise LocalCoordinationAuthorityUnavailable(
             "local coordination authority returned an invalid Todo list",
@@ -281,7 +435,13 @@ def read_canonical_todos_if_promoted(
             payload={"source_authority": "file_v0"},
         )
     payload = dict(result)
-    todos = payload.get("todos")
+    if payload.get("reason_code") == "canonical_authority_required":
+        raise CanonicalAuthorityRequired(
+            goal_id=goal_id, operation="todo_read", payload=payload,
+        )
+    rows_key = "todo_contract_rows" if contract_fields is not None else "todos"
+    expected_fields = set(contract_fields) if contract_fields is not None else None
+    todos = payload.get(rows_key)
     todo_read_model = payload.get("todo_read_model")
     if (
         payload.get("status") != "loaded"
@@ -290,13 +450,18 @@ def read_canonical_todos_if_promoted(
         or payload.get("legacy_fallback_used") is not False
         or not isinstance(todos, list)
         or any(not isinstance(item, Mapping) for item in todos)
+        or (
+            expected_fields is not None
+            and ("todos" in payload or "todo_ids" in payload
+                 or any(item.keys() != expected_fields for item in todos))
+        )
         or not isinstance(todo_read_model, Mapping)
         or todo_read_model.get("schema_version")
         not in {
             TODO_CANONICAL_READ_RECORD_SCHEMA_VERSION,
             TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION,
         }
-        or todo_read_model.get("todo_count") != len(todos)
+        or (bool(todos) if lease_only else todo_read_model.get("todo_count") != len(todos))
     ):
         raise LocalCoordinationAuthorityUnavailable(
             str(payload.get("reason") or "canonical Todo authority is unavailable"),
@@ -305,7 +470,7 @@ def read_canonical_todos_if_promoted(
             ),
             payload=payload,
         )
-    payload["todos"] = [dict(item) for item in todos]
+    payload[rows_key] = [dict(item) for item in todos]
     if include_leases and (
         not isinstance(payload.get("leases"), list)
         or any(not isinstance(item, Mapping) for item in payload["leases"])
@@ -330,61 +495,20 @@ def read_canonical_todos_if_promoted(
     return payload
 
 
-class CanonicalTodoSnapshot:
-    """One read-only request's complete Todo inputs, isolated from its consumers.
-
-    Only identical no-lease, no-writeback reads participate. This is not a TTL
-    cache or a transaction spanning Goals, registry, Markdown or rollout events.
-    The first validated read (or authority failure) is retained per runtime/Goal;
-    the next request must construct a new instance. Mutation/admission callers
-    keep using fresh reads and the provider's transaction checks.
-    """
-
-    def __init__(self) -> None:
-        self._reads: dict[
-            tuple[Path, str], dict[str, Any] | None | LocalCoordinationAuthorityUnavailable
-        ] = {}
-
-    def read(self, *, runtime_root: Path, goal_id: str) -> dict[str, Any] | None:
-        key = (runtime_root.expanduser().resolve(strict=False), goal_id)
-        if key not in self._reads:
-            try:
-                self._reads[key] = read_canonical_todos_if_promoted(
-                    runtime_root=key[0], goal_id=goal_id,
-                )
-            except LocalCoordinationAuthorityUnavailable as error:
-                # A failed first read cannot become a successful attention view
-                # later in the same request, contradicting contract diagnostics.
-                self._reads[key] = LocalCoordinationAuthorityUnavailable(
-                    str(error), code=error.code, payload=deepcopy(error.payload),
-                )
-        result = self._reads[key]
-        if isinstance(result, LocalCoordinationAuthorityUnavailable):
-            raise LocalCoordinationAuthorityUnavailable(
-                str(result), code=result.code, payload=deepcopy(result.payload),
-            )
-        # Summary enrichment mutates nested records. Never share those mutations
-        # with contract checks, another role, or the retained snapshot itself.
-        return deepcopy(result)
-
-
 def read_canonical_todo_fields_if_promoted(
     *, runtime_root: Path, goal_id: str,
     rollout_events: list[dict[str, Any]] | None = None,
-) -> dict[str, Any] | None:
-    """Read one unbounded planning snapshot; None alone permits legacy parsing.
+) -> dict[str, Any]:
+    """Read one complete canonical planning snapshot, including empty state.
 
     Empty canonical state is authoritative. Provider failures propagate; this
     read neither repairs Markdown nor grants mutation/promotion authority.
     Callers pass the same fields to all decisions in one planning operation.
     """
-    canonical = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id)
-    return (
-        canonical_todo_summary_fields(canonical["todos"], rollout_events=rollout_events,
-            goal_acceptance_contract=canonical.get("goal_acceptance_contract"),
-            goal_acceptance_work_guards=canonical.get("goal_acceptance_work_guards"))
-        if canonical is not None else None
-    )
+    canonical = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id,
+        include_summary=True, rollout_events=rollout_events)
+    return cast(dict[str, Any], canonical["_todo_fields"])
+
 
 
 def canonical_todo_summary_fields(
@@ -395,69 +519,12 @@ def canonical_todo_summary_fields(
     goal_acceptance_contract: dict[str, Any] | None = None,
     goal_acceptance_work_guards: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Adapt canonical records into the existing Todo summary read model."""
+    from ..todos.goal_todo_projection import canonical_todo_fields
 
-    from ..todos.active_state_editing import TODO_SECTION_HEADINGS
-    from ..todos.standing_decision import build_standing_decision_authority
-    from ..todos.todo_summary import compact_todo_group, count_advancement_todos
-
-    # Read standing decisions before assigning presentation-only indexes, and
-    # include retained history so archiving a revocation cannot revive approval.
-    standing_authority = build_standing_decision_authority(
-        [item for item in todos if item.get("role") == "user"], canonical_records=True,
-    )
-    archived_ids = {
-        item["todo_id"]
-        for item in todos
-        if item.get("archive_state") == "archive"
-    }
-    todos = canonical_todo_items(todos)
-    # These are native authority decisions, not persisted Todo fields. Keep the
-    # records visible while every summary/selection uses the same work guard.
-    if goal_acceptance_contract and goal_acceptance_contract.get("enabled") is True:
-        guards = goal_acceptance_work_guards or {}
-        todos = [{**item, "goal_acceptance_guard": guards[item["todo_id"]]}
-            if item.get("todo_id") in guards else item for item in todos]
-    fields: dict[str, Any] = {}
-    for role in ("user", "agent"):
-        items = [
-            item
-            for item in todos
-            if ("user" if item.get("role") == "user" else "agent") == role
-            and item.get("todo_id") not in archived_ids
-        ]
-        summary = compact_todo_group(
-            items,
-            source_section=TODO_SECTION_HEADINGS[role],
-            role=role,
-            include_empty_source=True,
-            resume_source_items=todos,
-            rollout_events=rollout_events,
-            available_capabilities=available_capabilities,
-            item_limit=None,
-        )
-        if summary:
-            if role == "agent":
-                if goal_acceptance_contract and goal_acceptance_contract.get("enabled") is True:
-                    summary["goal_acceptance_contract"] = goal_acceptance_contract
-                archived_done = count_advancement_todos(
-                    [
-                        item
-                        for item in todos
-                        if item.get("todo_id") in archived_ids
-                        and item.get("done") is True
-                    ]
-                )
-                if archived_done:
-                    summary["archived_advancement_done_count"] = archived_done
-                    summary["advancement_done_count"] = (
-                        int(summary.get("advancement_done_count") or 0) + archived_done
-                    )
-            fields[f"{role}_todos"] = summary
-        if role == "user":
-            if standing_authority:
-                fields["standing_decision_authority"] = standing_authority
-    return fields
+    return canonical_todo_fields(todos, rollout_events=rollout_events,
+        available_capabilities=available_capabilities,
+        goal_acceptance_contract=goal_acceptance_contract,
+        goal_acceptance_work_guards=goal_acceptance_work_guards)
 
 
 def canonical_todo_items(todos: list[dict[str, Any]]) -> list[dict[str, Any]]:

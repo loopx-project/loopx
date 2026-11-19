@@ -11,6 +11,9 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
+
 GOAL_ID = "explore-configure-fixture"
 
 
@@ -86,7 +89,9 @@ def write_fixture(root: Path) -> tuple[Path, Path]:
         + "\n",
         encoding="utf-8",
     )
-    return registry, root / "runtime"
+    runtime_root = root / "runtime"
+    import_fixture_authority(registry, GOAL_ID)
+    return registry, runtime_root
 
 
 def goal(registry: Path) -> dict:

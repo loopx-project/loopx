@@ -160,6 +160,9 @@ def read_checkpoint_context(
         identity = readback.identity.value
         with _source_guard(root, goal_id, path):
             result = _resolve(root, phase="read", identity=identity.as_dict(), prior=readback.writeback_run,
+                writeback_committed=readback.writeback.failure is None,
+                quota_spend_committed=readback.spend_run is not None or readback.spend_event is not None,
+                semantic_replan_guard=readback.semantic_replan_guard,
                 read_context_id=uuid4().hex, dependency_todo_ids=dependency_todo_ids or [],
                 facts=_local_source_facts(root, registry_path, path, identity, goal_ref))
             receipt = result.pop("receipt")

@@ -15,6 +15,7 @@ import pytest
 
 from loopx import windows_install
 from loopx.skill_install_readback import PACKAGED_HOST_SKILL_IDS
+from loopx.control_plane.runtime.file_paths import windows_extended_path
 
 
 def _run_loopx(
@@ -34,6 +35,35 @@ def _run_loopx(
         env=env,
         timeout=180,
     )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows long-path copy")
+@pytest.mark.parametrize("long_side", ["source", "target"])
+def test_release_copy_preserves_files_beyond_max_path(tmp_path: Path, long_side: str) -> None:
+    source, target = tmp_path / "source", tmp_path / "release"
+    suffix = Path("install-" + "a" * 70) / ("b" * 70) / ("c" * 70)
+    if long_side == "source":
+        source /= suffix
+    else:
+        target /= suffix
+    content = b"release bytes\r\n\x1a\x00\xff"
+    guide = windows_extended_path(source / "docs" / "guide.txt")
+    guide.parent.mkdir(parents=True)
+    guide.write_bytes(content)
+    readme = windows_extended_path(source / "README.md")
+    readme.write_bytes("# 安装记录 🚀\n".encode("utf-8"))
+    ignored = guide.parent / "node_modules" / "generated.txt"
+    ignored.parent.mkdir()
+    ignored.write_bytes(b"excluded dependency")
+    longest = (source if long_side == "source" else target) / "docs" / "guide.txt"
+    assert len(str(longest)) > 260
+
+    windows_install._copy_release(source, target)
+
+    assert windows_extended_path(target / "docs" / "guide.txt").read_bytes() == content
+    assert windows_extended_path(target / "README.md").read_bytes() == readme.read_bytes()
+    assert not windows_extended_path(target / "docs" / "node_modules").exists()
+    assert guide.read_bytes() == content
 
 
 def _windows_user_path(pwsh: str) -> str:

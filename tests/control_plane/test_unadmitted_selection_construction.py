@@ -138,6 +138,7 @@ def test_recovery_never_constructs_settlement_or_executable_primary_action(monke
     [command] = cli["next_cli_actions"]
     assert contract["agent_channel"]["primary_action"] == command
     argv = shlex.split(command)
+    assert argv[0] == "loopx" and "--cli-bin" not in argv
     for flag, value in {"--registry": "/registry with spaces.json", "--runtime-root": "/runtime with spaces",
                         "--goal-id": "selection-fixture", "--agent-id": "fixture-agent",
                         "--turn-instance-id": "selection-turn", "--available-capability": "shell"}.items():
@@ -243,7 +244,7 @@ def test_null_legacy_permission_does_not_grant_work_or_delivery(field):
 def test_malformed_legacy_boolean_cannot_become_canonical_permission(field, value):
     source = _source("qualified")
     source["execution_obligation"][field] = value
-    with pytest.raises(ValueError, match="must be a boolean"):
+    with pytest.raises(EffectRuntimeRejected, match="must be a boolean"):
         interaction_contract.build_interaction_contract(source)
 
 

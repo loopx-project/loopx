@@ -21,12 +21,14 @@ loopx project-skill install \
   --execute
 ```
 
-Use `--surface claude-code` or `--surface opencode` for those hosts; repeat the
-flag to install multiple host-native copies in one transaction. Managed copies
-live under `.agents/skills/`, `.claude/skills/`, or `.opencode/skills/` and are
-upgraded or removed through the same CLI. Project-local discovery does not
-itself activate material-store writes; the selected execution owner still
-needs explicit Material Lifecycle source authority.
+Use `--surface antigravity`, `--surface claude-code`, `--surface kiro-cli`,
+`--surface opencode`, or `--surface pi` for those hosts; repeat the flag to
+install multiple host-native copies in one transaction. Managed copies live
+under `.agents/skills/`, `.agent/skills/`, `.claude/skills/`, `.kiro/skills/`,
+`.opencode/skills/`, or `.pi/skills/` and are upgraded or removed through the
+same CLI. Project-local discovery does not itself activate material-store
+writes; the selected execution owner still needs explicit Material Lifecycle
+source authority.
 
 ## Activation Gate
 
@@ -34,8 +36,12 @@ Before changing a material store:
 
 1. Resolve the current project and execution owner. For a Goal route, use the
    existing registered agent/active Todo. For an ordinary project route,
-   resolve the current Core project context and accepted request; do not run
-   `start-goal` or create a dummy Goal merely to obtain material metadata.
+   resolve the current Core project context and accepted request from the
+   active native turn of the calling verified local owner host (`Codex`,
+   `Antigravity`, `Claude Code`, `OpenCode`, `Kiro CLI`, etc.) or an authorized
+   native Bot turn under the same Core workspace write grant; never run
+   `start-goal`, invent a dummy Goal merely to obtain material metadata, or
+   borrow another host's turn or session identity.
 2. Run `loopx project-skill status --project . --skill loopx-material` and
    confirm the required host surfaces are current.
 3. Require explicit activation: either the selected Goal Todo targets
@@ -45,9 +51,10 @@ Before changing a material store:
    not activation.
 4. Confirm the Goal boundary or Core project write grant covers the exact
    private adapter/authority paths. The project source verifier must bind the
-   current caller, audience, store/profile and owner gate, including expiry
-   and revocation. Ref names never grant access; enforce the authorization
-   fence within staging/publication as well as preflight checks.
+   calling verified local owner host's active native turn (or authorized native
+   Bot turn), audience, store/profile and owner gate, including expiry and
+   revocation. Ref names never grant access; enforce the authorization fence
+   within staging/publication as well as preflight checks.
 5. Run `loopx material-lifecycle architecture --format json` and preserve its
    default-off, owner-gated, provider-neutral boundaries. The project source
    route supports inventory, candidate intake/rollback, rerank packets,
@@ -171,6 +178,32 @@ Rerank from revision-bound Decision Context evidence.
   Preserve all other relative order and use its exact interval bounds in the
   existing proposal. Recompute that preview before apply; do not relax the
   constraints of a historical proposal.
+- For multi-item shortlist rebalancing, use `plan_material_wave_rerank` (or
+  `loopx material-lifecycle plan-wave-rerank --input <path-or-->`) over the
+  complete ranked set before building `material_rerank_proposal_v0`, enforcing
+  all three ranking quality rules:
+  1. **Horizon-wave and effort-band stratification**: order annotated materials
+     across `imminent_gate`, `active_sprint`, `foundational_track`, and
+     `orthogonal_backlog` with cost-adjusted VOI (`quick_slice` `/1.0`,
+     `focused_study` `/2.0`, `deep_monograph` `/6.0`). Automatically stratify
+     unsliced `deep_monograph` items (`scoped_slice_ready=False`) declared in
+     `imminent_gate` or `active_sprint` into `foundational_track` so multi-week
+     courses or monographs never block quick high-VOI slices unless an explicit
+     bounded chapter/section slice is ready.
+  2. **Load-bearing primary-over-secondary audit before rerank**: verify
+     `required_load_bearing_refs` are already ingested and ranked before
+     planning a rerank (settle candidate intake first when any load-bearing
+     primary is missing or `rank=None`), enforce topological primary-over-secondary
+     precedence (`primary_source_refs` strictly ahead of secondary commentary),
+     and keep active-deliverable load-bearing primaries
+     (`blocks_active_deliverable=True`, `evidence_role="load_bearing_primary"`)
+     inside `top_window_size`.
+  3. **Orthogonal-signal Top-Window cap**: cap `orthogonal_backlog` and
+     `orthogonal_signal` items inside `1..top_window_size` via
+     `max_orthogonal_in_top_window` (default `0`) whenever non-orthogonal
+     ranked items remain below `top_window_size`, shifting excess general-trend
+     items cleanly to the start of `ranked_backlog` while keeping untouched
+     backlog items in their exact original relative order.
 - Use `material_rerank_receipt_chunks` when a transition affects more than 100
   refs. Build all existing receipts before CAS and persist all after readback;
   verify complete coverage under the same proposal, revisions and owner gate.

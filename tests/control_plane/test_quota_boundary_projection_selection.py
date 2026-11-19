@@ -302,7 +302,7 @@ def test_workspace_guard_keeps_alternative_todo_selection_available(
 
 
 @pytest.mark.parametrize("other_agent_gate", [False, True])
-def test_deferred_selection_does_not_guard_an_unselected_default(
+def test_explicit_eligible_selection_checks_only_its_workspace_guard(
     monkeypatch: pytest.MonkeyPatch,
     other_agent_gate: bool,
 ) -> None:
@@ -365,12 +365,11 @@ def test_deferred_selection_does_not_guard_an_unselected_default(
             SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE
         ),
     )
-    assert packet["action_selection_qualification"]["reason"] == (
-        "ready_deferred_successor_priority_preemption"
-    )
-    assert packet["normal_delivery_allowed"] is False
+    assert packet["action_selection_qualification"]["state"] == "qualified"
+    assert packet["selected_todo"]["todo_id"] == alternative["todo_id"]
+    assert packet["normal_delivery_allowed"] is True
     assert "workspace_guard" not in packet
-    assert guarded_ids == []
+    assert guarded_ids == [alternative["todo_id"]]
 
 
 def test_boundary_projection_preserves_a_guarded_continuation_selection() -> None:

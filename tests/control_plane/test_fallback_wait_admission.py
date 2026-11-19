@@ -8,12 +8,17 @@ from pathlib import Path
 import pytest
 
 from loopx.cli import main as cli_main
+from loopx.control_plane.coordination.local_authority_shadow_projection import ProjectionValueError
 from loopx.control_plane.goals.goal_vision import normalize_goal_vision_packet
 from loopx.control_plane.goals.goal_frontier import fallback_source
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import (
+    initialize_canonical_authority, initialize_canonical_source_fixture,
+    isolate_sqlite_runtime, read_fixture_todos,
+)
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.todos.todo_summary import TODO_ITEM_SCHEMA_VERSION
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 
 GOAL_ID = "fallback-wait-capacity-fixture"
 AGENT_ID = "worker"
@@ -90,6 +95,7 @@ def _write_fixture(
     unrelated_deferred_count: int,
     fallback_present: bool = True,
     prerequisite_status: str = "open",
+    provider: str | None = "sqlite",
 ) -> list[str]:
     state_file = tmp_path / "ACTIVE_GOAL_STATE.md"
     state_file.write_text(
@@ -147,6 +153,8 @@ def _write_fixture(
         )
         + "\n"
     )
+    if provider is not None:
+        initialize_canonical_source_fixture(runtime, GOAL_ID, state_path=state_file, provider=provider)
     return [
         "--format",
         "json",
@@ -178,17 +186,18 @@ def test_real_cli_wait_admission_is_stable_across_compact_lane_capacity(
     )
 
     assert cli_main(args) == 0
-    result = json.loads(capsys.readouterr().out)
+    result = read_cli_policy_payload(capsys.readouterr().out, returncode=0)
     assert result["should_run"] is False
     assert result["execution_obligation"]["must_attempt_work"] is False
     assert "fallback_gaps" not in result["goal_frontier_projection"]
     if unrelated_deferred_count:
-        assert (
-            result["agent_todo_summary"]["payload_compaction"]["omitted_lanes"][
-                "deferred_items"
-            ]
-            > 0
-        )
+        summary = result["agent_todo_summary"]
+        visible_ids = {item["todo_id"] for item in summary["deferred_items"]}
+        # Exercise a fallback outside the display window, independent of which
+        # projection layer bounds the lane or reports its omitted rows.
+        assert summary["deferred_count"] == unrelated_deferred_count + 2
+        assert len(visible_ids) < summary["deferred_count"]
+        assert FALLBACK_TODO_ID not in visible_ids
     assert (
         result["scheduler_hint"]["goal_runtime_continuation"]["disposition"]
         == "defer"
@@ -206,7 +215,7 @@ def test_real_cli_missing_declared_fallback_projects_true_unresolved_gap(
     )
 
     assert cli_main(args) == 0
-    result = json.loads(capsys.readouterr().out)
+    result = read_cli_policy_payload(capsys.readouterr().out, returncode=0)
     gap = result["goal_frontier_projection"]["fallback_gaps"][0]
     assert gap["kind"] == "vision_fallback_unresolved"
     assert gap["unresolved_todo_ids"] == [FALLBACK_TODO_ID]
@@ -231,7 +240,7 @@ def test_real_cli_authority_read_failure_projects_uncertainty(
     )
 
     assert cli_main(args) == 0
-    result = json.loads(capsys.readouterr().out)
+    result = read_cli_policy_payload(capsys.readouterr().out, returncode=0)
     gap = result["goal_frontier_projection"]["fallback_gaps"][0]
     assert gap["kind"] == "vision_fallback_lookup_uncertain"
     assert gap["lookup_uncertain_todo_ids"] == [FALLBACK_TODO_ID]
@@ -249,7 +258,7 @@ def test_real_cli_uses_dependency_state_from_exact_canonical_read(
     )
 
     assert cli_main(args) == 0
-    result = json.loads(capsys.readouterr().out)
+    result = read_cli_policy_payload(capsys.readouterr().out, returncode=0)
     assert result["should_run"] is True
     assert result["selected_todo"]["todo_id"] in {
         PRIMARY_TODO_ID,
@@ -265,7 +274,7 @@ def test_real_cli_reads_only_direct_fallback_dependencies(
     monkeypatch: pytest.MonkeyPatch,
     depth: int,
 ) -> None:
-    args = _write_fixture(tmp_path, unrelated_deferred_count=20)
+    args = _write_fixture(tmp_path, unrelated_deferred_count=20, provider=None)
     state_file = tmp_path / "ACTIVE_GOAL_STATE.md"
     state = state_file.read_text()
     if depth:
@@ -281,6 +290,9 @@ def test_real_cli_reads_only_direct_fallback_dependencies(
             f"resume_when=todo_done:todo_chain_{index + 1} -->\n"
         )
     state_file.write_text(state)
+    initialize_canonical_source_fixture(
+        tmp_path / "runtime", GOAL_ID, state_path=state_file, provider="sqlite",
+    )
     reads: list[str] = []
     original_read = fallback_source.read_fallback_source_snapshot
 
@@ -299,7 +311,7 @@ def test_real_cli_reads_only_direct_fallback_dependencies(
 
     monkeypatch.setattr(fallback_source, "effect_runtime_result", record_projection)
     assert cli_main(args) == 0
-    result = json.loads(capsys.readouterr().out)
+    result = read_cli_policy_payload(capsys.readouterr().out, returncode=0)
     assert result["should_run"] is False
     assert "fallback_gaps" not in result["goal_frontier_projection"]
     # The direct prerequisite is deferred regardless of its own dependency.
@@ -324,7 +336,7 @@ def test_real_cli_malformed_authority_snapshot_is_uncertain(
 
     monkeypatch.setattr(fallback_source, "read_fallback_source_snapshot", mismatched_read)
     assert cli_main(args) == 0
-    result = json.loads(capsys.readouterr().out)
+    result = read_cli_policy_payload(capsys.readouterr().out, returncode=0)
     gap = result["goal_frontier_projection"]["fallback_gaps"][0]
     assert gap["kind"] == "vision_fallback_lookup_uncertain"
     assert gap["lookup_uncertain_todo_ids"] == [FALLBACK_TODO_ID]
@@ -348,7 +360,7 @@ def test_real_cli_without_declarations_does_not_read_fallback_authority(
 
     monkeypatch.setattr(fallback_source, "read_fallback_source_snapshot", unexpected_read)
     assert cli_main(args) == 0
-    result = json.loads(capsys.readouterr().out)
+    result = read_cli_policy_payload(capsys.readouterr().out, returncode=0)
     assert result["should_run"] is False
     assert "fallback_gaps" not in result["goal_frontier_projection"]
 
@@ -371,7 +383,7 @@ def test_real_cli_fallback_monitor_wait_requires_generation_condition(
     generation: int | None,
     expected_gap: str | None,
 ) -> None:
-    args = _write_fixture(tmp_path, unrelated_deferred_count=0)
+    args = _write_fixture(tmp_path, unrelated_deferred_count=0, provider=None)
     state_file = tmp_path / "ACTIVE_GOAL_STATE.md"
     generation_metadata = (
         f" resume_monitor_generation={generation}" if generation is not None else ""
@@ -391,9 +403,12 @@ def test_real_cli_fallback_monitor_wait_requires_generation_condition(
         "material_change_generation=3 -->\n"
     )
     state_file.write_text(state)
+    initialize_canonical_source_fixture(
+        tmp_path / "runtime", GOAL_ID, state_path=state_file, provider="sqlite",
+    )
 
     assert cli_main(args) == 0
-    result = json.loads(capsys.readouterr().out)
+    result = read_cli_policy_payload(capsys.readouterr().out, returncode=0)
     gaps = result["goal_frontier_projection"].get("fallback_gaps", [])
     if expected_gap is None:
         assert gaps == []
@@ -403,12 +418,12 @@ def test_real_cli_fallback_monitor_wait_requires_generation_condition(
 
 
 @pytest.mark.parametrize("duplicate_id", [FALLBACK_TODO_ID, PREREQUISITE_TODO_ID])
-def test_real_cli_ambiguous_canonical_fallback_read_is_uncertain(
+def test_duplicate_authored_fallback_is_rejected_before_canonical_creation(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     duplicate_id: str,
 ) -> None:
-    args = _write_fixture(tmp_path, unrelated_deferred_count=0)
+    args = _write_fixture(tmp_path, unrelated_deferred_count=0, provider=None)
     state_file = tmp_path / "ACTIVE_GOAL_STATE.md"
     state_file.write_text(
         state_file.read_text()
@@ -416,13 +431,19 @@ def test_real_cli_ambiguous_canonical_fallback_read_is_uncertain(
         + f"  <!-- loopx:todo todo_id={duplicate_id} status=open -->\n"
     )
 
-    # The canonical succession gate rejects duplicate identities before a
-    # frontier can be projected. Do not fabricate fallback advice from it.
+    before = state_file.read_bytes()
+    with pytest.raises(ProjectionValueError, match="duplicate todos identity"):
+        initialize_canonical_source_fixture(
+            tmp_path / "runtime", GOAL_ID, state_path=state_file, provider="sqlite",
+        )
+    assert state_file.read_bytes() == before
+    # Invalid authored input never becomes authority. The actual CLI cannot
+    # fabricate fallback advice from the uninitialized source afterward.
     assert cli_main(args) == 1
-    result = json.loads(capsys.readouterr().out)
+    result = read_cli_policy_payload(capsys.readouterr().out, returncode=1)
     assert result["should_run"] is False
     assert result["state"] == "blocked_health"
-    assert "duplicate succession identity" in result["verbose_debug"]["error"]
+    assert "canonical_authority_required" in json.dumps(result)
     assert "goal_frontier_projection" not in result
 
 
@@ -437,12 +458,10 @@ def test_real_provider_cli_uses_one_snapshot_including_archived_dependency(
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
     args = _write_fixture(tmp_path, unrelated_deferred_count=20,
-                          prerequisite_status=dependency_status)
+                          prerequisite_status=dependency_status, provider=None)
     state_file = tmp_path / "ACTIVE_GOAL_STATE.md"
     runtime_root = tmp_path / "runtime"
-    rows = fallback_source.read_fallback_source_snapshot(
-        registry_path=tmp_path / "registry.json", runtime_root=runtime_root, goal_id=GOAL_ID,
-    )
+    rows = read_fixture_todos(state_file)
     for row in rows:
         row["schema_version"] = TODO_ITEM_SCHEMA_VERSION
     if dependency_status == "done":
@@ -457,6 +476,7 @@ def test_real_provider_cli_uses_one_snapshot_including_archived_dependency(
     before = read_canonical_todos_if_promoted(
         runtime_root=runtime_root, goal_id=GOAL_ID,
     )
+    goal_source = state_file.read_bytes()
     if display == "missing":
         state_file.unlink()
     else:
@@ -471,8 +491,16 @@ def test_real_provider_cli_uses_one_snapshot_including_archived_dependency(
         return snapshot
 
     monkeypatch.setattr(fallback_source, "read_fallback_source_snapshot", read_once)
-    assert cli_main(args) == 0
-    result = json.loads(capsys.readouterr().out)
+    code = cli_main(args)
+    result = read_cli_policy_payload(capsys.readouterr().out, returncode=code)
+    # Canonical Todos survive display loss; they do not replace the Goal's
+    # intent and stop conditions. A missing Goal source must still deny work.
+    assert code == (1 if display == "missing" else 0), result
+    if display == "missing":
+        assert result["state"] == "blocked_health"
+        assert result["should_run"] is False
+        assert result["normal_delivery_allowed"] is False
+        assert result["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
     assert "fallback_gaps" not in result["goal_frontier_projection"]
     assert snapshots == [len(rows)]
     after = read_canonical_todos_if_promoted(
@@ -480,3 +508,16 @@ def test_real_provider_cli_uses_one_snapshot_including_archived_dependency(
     )
     assert before == after
     assert (state_file.read_bytes() if state_file.exists() else None) == saved_display
+
+    if display == "missing":
+        state_file.write_bytes(goal_source)
+        snapshots.clear()
+        assert cli_main(args) == 0
+        recovered = read_cli_policy_payload(capsys.readouterr().out, returncode=0)
+        assert recovered["status_health_ok"] is True
+        assert "fallback_gaps" not in recovered["goal_frontier_projection"]
+        assert snapshots == [len(rows)]
+        assert read_canonical_todos_if_promoted(
+            runtime_root=runtime_root, goal_id=GOAL_ID,
+        ) == before
+        assert state_file.read_bytes() == goal_source

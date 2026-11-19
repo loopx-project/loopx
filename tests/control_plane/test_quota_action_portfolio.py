@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 
 import pytest
 
@@ -47,6 +48,14 @@ def test_accepted_replan_promotes_the_new_route_and_keeps_explicit_choice() -> N
         envelope["action"]["action_portfolio"]["primary"]["todo_id"]
         == "todo_replan_successor"
     )
+    from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
+
+    authority = extract_turn_authority({"turn_envelope": envelope})
+    prompt = render_prompt(authority)
+    delivered, _ = json.JSONDecoder().raw_decode(prompt.split("Turn authority JSON:\n", 1)[1])
+    assert delivered["action"]["action_portfolio"] == portfolio
+    assert delivered["action"]["action_portfolio"]["selection_policy"]["recommendation_role"] == "default_not_binding"
+    assert delivered["selected_todo"]["todo_id"] == "todo_replan_successor"
     chosen = build_quota_should_run(
         status,
         goal_id=REPLAN_GOAL,
@@ -252,38 +261,10 @@ def test_sticky_primary_exposes_bounded_agent_selection_on_every_hot_path() -> N
     assert compact["action_portfolio"]["selection_policy"] == (
         portfolio["selection_policy"]
     )
-    compact_suggestions = compact["action_portfolio"]["suggested_actions"]
-    assert compact_suggestions == [
-        {
-            "todo_id": PRIMARY_ID,
-            "selection_role": "recommended",
-            "priority": "P0",
-            "action_kind": "monitor",
-            "text": "[P0] Run the Monday-only primary operation after its window opens.",
-            "continuation_hint": "Do not poll before the scheduled primary window.",
-        },
-        {
-            "todo_id": FALLBACK_ID,
-            "selection_role": "alternative",
-            "priority": "P2",
-            "text": "[P2] Advance the independent fallback slice.",
-            "continuation_hint": (
-                "Start from the independent fallback validation boundary."
-            ),
-        },
-    ]
-    assert compact["action_portfolio"]["suggested_action_details"] == {
-        "schema_version": "quota_cli_action_portfolio_compaction_v1",
-        "inlined_fields": [
-            "todo_id",
-            "selection_role",
-            "priority",
-            "action_kind",
-            "text",
-            "continuation_hint",
-        ],
-        "ref": "$.agent_todo_summary.first_executable_items",
-    }
+    # A selectable alternative's full requirements and text remain decision
+    # context, rather than a 180-character view with a partial summary pointer.
+    assert compact["action_portfolio"] == portfolio
+    assert compact["capability_gate"] == packet["capability_gate"]
     compact_candidates = compact["agent_todo_summary"]["first_executable_items"]
     assert compact_candidates[1]["required_capabilities"] == ["fallback_runner"]
     assert compact_candidates[1]["required_write_scopes"] == [

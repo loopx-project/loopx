@@ -12,6 +12,10 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tests.control_plane.cli_output_fixture import read_cli_context_for_oracle  # noqa: E402
 OLD_GOAL_ID = "goal-harness-meta"
 NEW_GOAL_ID = "loopx-meta"
 OTHER_GOAL_ID = "agent-harness-side-bypass"
@@ -26,7 +30,8 @@ def run_loopx(*args: str, cwd: Path, env: dict[str, str]) -> dict:
         capture_output=True,
         text=True,
     )
-    return json.loads(result.stdout)
+    body, _ = read_cli_context_for_oracle(result.stdout)
+    return json.loads(body)
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -49,12 +54,13 @@ def main() -> int:
         legacy_state.parent.mkdir(parents=True)
         legacy_state.write_text(
             "# Goal Harness State\n\n"
-            "Next: run goal-harness quota should-run for goal-harness-meta.\n",
+            "Next: run goal-harness quota should-run for goal-harness-meta.\n\n"
+            "## Agent Todo\n",
             encoding="utf-8",
         )
         other_legacy_state = legacy_project / ".local" / "goals" / OTHER_GOAL_ID / "ACTIVE_GOAL_STATE.md"
         other_legacy_state.parent.mkdir(parents=True)
-        other_legacy_state.write_text("# Other State\n", encoding="utf-8")
+        other_legacy_state.write_text("# Other State\n\n## Agent Todo\n", encoding="utf-8")
         legacy_run_dir = legacy_runtime / "goals" / OLD_GOAL_ID / "runs"
         legacy_run_dir.mkdir(parents=True)
         write_json(
@@ -203,6 +209,10 @@ def main() -> int:
         migrated_run_payload = json.loads(migrated_run.read_text(encoding="utf-8"))
         assert migrated_run_payload["goal_id"] == NEW_GOAL_ID, migrated_run_payload
         assert "goal-harness" not in migrated_run_payload["recommended_action"], migrated_run_payload
+
+        from loopx.control_plane.testing.canary_harness import import_fixture_authority
+        # Path migration preserves source data; authority conversion is explicit.
+        import_fixture_authority(target_registry, NEW_GOAL_ID, provider="sqlite")
 
         status = run_loopx(
             "--registry",

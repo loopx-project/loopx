@@ -74,8 +74,7 @@ Goal and device configuration before downgrading to a version without this field
 The scheduling policy reads back the effective union. `owner_authored` is derived
 queue membership; the legacy `authenticated_developer_owned` lane id is retained.
 `author_owned` still means the author is the actual signed-in reviewer, including
-GitHub's formal self-review restriction. Neither list membership nor the repository
-namespace infers organization membership, trust, authentication or merge authority.
+GitHub's formal self-review restriction.
 Forward visits non-owners first; reverse inverts that same whole actionable queue.
 
 默认仅当前登录的审阅账号计入 owner。可在能力中心的设备默认值或单个 Goal 中填写
@@ -136,8 +135,7 @@ normalization; empty link labels and formatting alone do not count. Formatted
 visible wording remains accepted without imposing a new prose style.
 
 架构判断进入既有比例评估：逐项说明核心保证、可选策略、provider IO 和投影的
-owner、默认范围及失败恢复，再决定当前 PR 交付边界。关闭态兼容通过不代表
-默认策略合理，最新 bug 修好也不消除已声明的必要架构收敛。必须现在修复或仍有
+owner、默认范围及失败恢复，再决定当前 PR 交付边界。必须现在修复或仍有
 关键未知时不能批准；未经接受的偏好保留为非阻塞建议。公开正文须带出决定性理由
 和本阶段结果，允许可独立验证的前置阶段，不要求补完全部父级 roadmap。
 两个公开字段归一化后须有可见文字；空链接或格式符号不能代替说明，正常格式文字仍可通过。
@@ -235,8 +233,7 @@ configured preference or an invented exact build. This is a reviewer publication
 error, not a PR-author finding. Inventory-only and fixture scans do not read host
 metadata. Offline saved-packet checking proves consistency only. The bounded
 reader may retain recorded identity with `active_turn_verified=false` when the
-opening event is outside its window; neither metadata nor this marker proves
-backend weights, review independence, host delivery, liveness or merge authority.
+opening event is outside its window.
 
 The same body validator is used for published review readback and merge readiness.
 Behavior-bearing reviews also fill the existing
@@ -245,7 +242,9 @@ even when fields, commands and enums are unchanged. Changed instructions need
 clause comparisons and passed real-caller counterfactuals covering ordering,
 evidence, modality, scope, continuation and stop conditions. Missing evidence or
 semantic drift blocks approval; an intentional change needs its authorization
-basis. Unchanged text may use a reasoned `not_applicable`. This is part of the
+basis, declared as `fields_by_verdict.intentional_change_validated` in the same
+assessment contract. `equivalent` adds no authorization field; a reasoned
+`not_applicable` needs only the common fields. This is part of the
 existing evidence judgment, not a new receipt or automatic meaning detector.
 Character budgets are cost guards: a justified increase is preferable to
 discarding useful control-plane meaning. Model comprehension remains unverified
@@ -265,8 +264,7 @@ ordering and explicit post-merge audit selection remain unchanged.
 The [historical review corpus](../../../examples/fixtures/pr-review-history/README.md)
 exercises these checks with substantial public reviews and exact-commit source
 excerpts. Model probes receive code and bounded observations without the review
-or expected verdict. Historical validation reports stay explicitly historical;
-neither a long body nor a recorded approval supplies present-day evidence.
+or expected verdict. Historical validation reports stay explicitly historical.
 
 Codex agents should use the dedicated `loopx-pr-review` skill for this slash
 command. Do not route `/loopx-pr-review` through the broader `loopx-project`
@@ -277,7 +275,7 @@ workflow or the merge-focused `loopx-pr-merge` skill.
 | Command | CLI reference | Intent |
 | --- | --- | --- |
 | `/loopx-pr-review` | `loopx pr-review [--repo owner/repo] [--target-exact-head NUMBER@HEAD_OID] [--state open\|merged\|all] [--review-order forward\|reverse] [--since ISO] [--fresh-audit-exact-head NUMBER@HEAD_OID]` | Review a small explicit batch with repeatable `--target-exact-head`, or list a lifecycle queue when no target is supplied. Both paths provide concrete main-regression analysis and the five-block review contract. Forward visits other authors first; reverse inverts the entire actionable queue. Saved Agent settings apply automatically. `--fresh-audit-exact-head` separately forces new evidence for an unchanged concluded head. |
-| pre-merge readback | `loopx pr-review --goal-id GOAL --repo owner/repo --check-merge-readiness NUMBER@HEAD_OID` | Immediately before merge, fail closed unless the remote PR is still open at the reviewed head, its standalone conclusion approves that head, all checks are successful or skipped, review-thread pagination is complete with no unresolved thread, and merge state is compatible. The Goal-scoped command records a compact public-safe readiness observation; this read grants no merge authority. |
+| pre-merge readback | `loopx pr-review [--goal-id GOAL] --repo owner/repo --check-merge-readiness NUMBER@HEAD_OID` | Immediately before merge, fail closed unless the remote PR is still open at the reviewed head, its standalone conclusion approves that head, all checks are successful or skipped, review-thread pagination is complete with no unresolved thread, and merge state is compatible. Standalone checks require no Goal and write no Goal state. Add `--goal-id GOAL` for existing Goal-managed work to retain its CI policy and record a compact public-safe observation; this read grants no merge authority. |
 
 The slash command must run the CLI first. Agentloop must not reconstruct the
 review window by manually calling `gh pr view` / `gh pr list` for every PR. The
@@ -342,8 +340,7 @@ additional closeout, publication or merge authority.
 GitHub 文件 API 达到 3000 项上限时，调用方当前 checkout 中已有的精确 Git 对象
 可用于恢复更大 PR 的文件清单。必须核对 origin 仓库、唯一 merge base 与精确 head，
 仅折叠 API 明确确认的 rename，并让文件数和全 diff 增删量与远端 metadata 一致。
-分页前及恢复后校验 head、base 和总量。保留 API 已知行的统计值；恢复行的 Git 来源
-不等于已完成 review。Git 二进制行不贡献文本行数，未被 API 观测的逐行统计保留 null，
+分页前及恢复后校验 head、base 和总量。保留 API 已知行的统计值；Git 二进制行不贡献文本行数，未被 API 观测的逐行统计保留 null，
 不会假定为 API 的 0/0。不会自动抓取对象、切分支或执行外部 diff/textconv；缺对象、
 统计格式损坏、rename 歧义、总量不符或版本变化继续明确返回 incomplete。没有精确快照
 的 approval closeout 仍要求完整 API 读回，不扩大撤回 review 或合并权限。
@@ -509,8 +506,7 @@ Follow [author submission](../../../AGENTS.md#author-submission-and-review-entry
 for completed proposals: missing review or held CI/merge qualification must not
 prevent an authorized author from marking the PR ready. Read back the unchanged
 head and regenerate the packet after that transition. Reviewer action authority
-and exact-head merge qualification remain separate; this rule grants neither a
-reviewer permission to change another author's Draft nor permission to merge.
+and exact-head merge qualification remain separate.
 
 It emits a
 `pull_request_review_todo_preview_v0` bound to its exact head. The preview may
@@ -620,8 +616,7 @@ require another repository to use LoopX's S/G/R identifiers.
 
 Reuse `problem_context.observable_outcome`, `walkthroughs` and
 `validation_matrix` instead of writing another evidence report. Small diffs are
-not fragmentation; a new field or sent message is not proof of a promised
-end-to-end user journey. For collaboration, follow the required dependency,
+not fragmentation; For collaboration, follow the required dependency,
 receiver adoption, artifact acceptance and return through real callers.
 Independent prerequisites and characterization remain valid when their boundary
 and real successor are justified. Do not reward larger diffs or fabricated
@@ -638,8 +633,7 @@ evidence and do not pad. Invoking review uses the installed capability policy.
 ### Reviewer provenance and specification basis
 
 Policy revision 14 makes two publication requirements mandatory for every new
-result; neither changes queue selection, merge authority or how already
-published GitHub reviews are recognized (`check_review_body` is unchanged).
+result.
 
 - `result.reviewer` (`reviewer_declaration`) names `actor_kind`
   (`model_agent` or `human_operator`) and `declaration_source`
@@ -709,7 +703,7 @@ Use this repair map when a check fails:
 
 A blocker must connect the exact-head change to an existing obligation and a
 replayable failure or missing required validation. An untraceable dynamic value
-alone is an `advisory`, not `not_yet_proven` and not proof of safety. Removing a
+alone is an `advisory`. Removing a
 persisted value without required old-state readback is `not_yet_proven`; a failed
 required projection check is `violated`. Neither can be downgraded to advisory
 to bypass CI or a concrete blocking finding. Do not turn future or advisory RFC
@@ -741,7 +735,7 @@ being replaced by confident prose.
 `repository_reuse` starts unverified in every applicable plan. Its conclusions
 are `reused`, `separation_justified`, `no_existing_candidate`,
 `unjustified_duplication`, or `not_yet_proven`. A negative search must name its
-scope and limitations; an empty candidate list is not proof of absence.
+scope and limitations.
 Unjustified duplication or missing evidence requires a request-changes
 conclusion, including missing state derivation, producer/trigger or completeness
 proof in `state_model_assessment`. The same existing gate applies; there is no
@@ -771,13 +765,26 @@ starts with `/loopx-pr-review`, words such as `open`, `closed`, `merged`,
 skip the review. Downgrade only for explicit opt-out phrases such as `只统计`,
 `只列出`, `stats only`, `list only`, `不要 review`, or `不用分析`.
 
-The published review is a full-PR bilingual review: one complete Chinese
-five-block review covering every changed surface, key symbol, positive and
-negative path, and validation, plus one concise English machine verdict
+The published review is a full-PR review primarily in Chinese: five complete
+sections covering every changed surface, key symbol, positive and negative path,
+and validation, plus one concise English machine verdict
 (`APPROVE`, `REQUEST_CHANGES`, or the author-owned `COMMENTED` fallback). The
-Chinese review carries the depth and evidence; the English verdict carries the
-machine-readable state and validation summary. A findings-only or blocker-only
-body is not a complete PR review.
+body carries the depth and evidence; the English verdict carries the
+machine-readable state and validation summary. Prefer `动机 / Motivation`,
+`改动思路 / Approach`, `具体改动 / Changes`, `对主干的风险 / Risks` and
+`我的整体评价 / Verdict`. These map to the same Chinese canonical section ids;
+existing headings and evidence floors remain valid. Older installed parsers use
+the canonical Chinese headings; the body's primary language stays Chinese.
+
+Use connected Chinese prose for the main narrative, problem analysis, evidence
+and conclusion. Keep finding titles informative and short; optional
+Problem / Evidence / Impact / Fix labels introduce Chinese explanations. Retain
+accurate English technical terms, symbols and commands where useful, explaining
+unfamiliar terms once. Mark validation PASS / FAIL / UNVERIFIED, using compact
+tables for actual comparisons. Do not expand English labels into long English
+passages, duplicate the analysis in both languages, impose a language ratio or
+delete evidence to make the text shorter. This is writing guidance, not a new
+language gate. A findings-only or blocker-only body is incomplete.
 
 The opening `动机` must stand alone for a reader unfamiliar with the repository:
 who encounters the problem, one triggering task and concrete before/after
@@ -825,6 +832,15 @@ all five Chinese sections plus a line-starting `English verdict: APPROVE` or
 state transition, author-owned conclusions use `COMMENTED` plus one exact title:
 `Approval conclusion (author-owned PR; GitHub blocks formal self-approval)` or
 `Request changes conclusion (author-owned PR; GitHub blocks formal self-review)`.
+The saved-result check and published-review readback apply the same literal,
+visible title rule. A near match, the opposite verdict's title, a hidden comment
+or a fenced example cannot supply that conclusion. Independent reviews retain
+their formal-state requirements. These checks establish publication consistency.
+
+提交前的结果检查与发布后的读回使用同一条可见的精确标题规则。近似标题、
+相反结论的标题、隐藏注释或代码块示例均不能代替作者结论；独立评审仍遵循
+原正式状态要求。这只校验发布一致性。
+
 The compact result is versioned as `pull_request_review_conclusion_v0` and
 reports a typed verdict and invalid-reason codes. Queue selection and approval
 closeout share the typed owner for each reviewer's latest submitted opinion.
@@ -833,14 +849,45 @@ A reviewer's newer formal opinion retires their own previous opinion, including
 when it is dismissed or lacks the required body. Current-head requests for
 changes remain visible even without that format, and ordinary comments or
 pending reviews cannot restore a retired approval. A changed head still requires
-fresh evidence. This corrects default queue/readiness classification; it neither
-relaxes body qualification nor grants dismissal or merge authority.
+fresh evidence. This corrects default queue/readiness classification.
 
 队列与 closeout 复用同一 TypeScript 历史选择规则：另一评审者的简短批准不会
 遮住完整的精确 head 批准；同一评审者的新正式意见会替换自己的旧意见，撤回或
 格式不完整也不会复活旧批准。当前 head 的阻塞意见保留，普通评论及待提交评审
 不改变已有正式意见，head 变化仍需新证据。本修复改变默认队列和 readiness
 分类，不放宽正文校验，也不授予撤回评审或合并权限。
+
+The default queue also avoids duplicating a submitted independent review. A
+complete, paginated GitHub history can establish `independent_review` when a
+non-author, non-bot account with `OWNER`, `MEMBER`, `COLLABORATOR` or `CONTRIBUTOR`
+association submitted `COMMENTED`, `APPROVED` or `CHANGES_REQUESTED` on the current
+head. These are formal review events, including inline-only reviews, not issue
+comments. The typed history owner uses each reviewer's latest submitted event;
+pending reviews do not erase prior activity, and dismissal retires that actor's
+coverage. Missing actor/association metadata, incomplete reads or a new head
+cannot establish coverage. The live provider rechecks head/base after history.
+
+Covered rows remain in inventory with the reviewer, review URL/state and exact
+head, a null action, null plan/template and no evidence commands. Read that
+record once and continue the queue; the contributor need not write this agent's
+bilingual format. This is work coverage, not a qualified approval or merge
+permission. Existing dissent, strict approval-body qualification, closeout,
+validation and merge-readiness gates remain. An explicit authorized
+`--fresh-audit-exact-head NUMBER@HEAD_OID` can request new evidence despite
+coverage. No reviewer-name whitelist, new configuration or automatic write is
+introduced.
+
+默认队列也跳过已有独立评审覆盖的重复全文审查：完整分页的 GitHub 记录证明，
+当前提交已由非作者、非机器人且身份为 OWNER、MEMBER、COLLABORATOR 或
+CONTRIBUTOR 的账号提交 COMMENTED、APPROVED 或 CHANGES_REQUESTED。这里指正式
+review（包括只有行内意见的评审），不包括普通 issue 评论。复用同一 TypeScript
+历史 owner，按每个评审者最近的已提交记录判断；待提交不会抹去旧记录，撤销只
+撤回该账号的覆盖。身份未知、来源不完整或换头时不跳过，读取后还须核对 head/base。
+载荷的 `independent_review` 给出评审者、原记录链接、状态和精确提交；该行仍在
+inventory，但不生成可执行计划或证据命令。第三方无需使用本 agent 的双语格式。
+原批准正文、closeout、验证
+和 merge-readiness 门保留。明确要求重新取证时，沿原精确头 fresh-audit 入口执行。
+不新增人名白名单、配置或自动外部写入。
 
 After a published exact-head `APPROVE` is read back, the capability-owned
 `review_execution_contract.approval_closeout` requires effective-review
@@ -876,10 +923,15 @@ update is not required merely because GitHub reports `BEHIND`: the gate also
 reads GitHub's independent `mergeable` result and permits a conflict-free
 `MERGEABLE` head when every other check passes. `CONFLICTING` or `DIRTY` still
 requires repair; `BEHIND` with missing or unknown mergeability remains unverified.
-Branch protection may still require a separately authorized admin bypass. An admin
-bypass may satisfy GitHub's author-owned
-self-review limitation, but it never overrides this capability gate or supplies
-user merge authority.
+Branch protection may still require a separately authorized admin bypass. An
+explicit maintainer admin bypass may override a `ready=false` readiness or
+GitHub policy hold, including GitHub's author-owned self-review limitation. It
+does not make missing exact-head review, required validation, unresolved review
+threads or findings, a changed head, or an unmergeable conflict optional, and
+it never supplies merge authority by itself.
+The `admin_bypass_overrides_this_gate` authority field describes whether every
+blocker on this exact observation is in that override scope; it is false when
+non-bypassable review, thread, head, or mergeability evidence is missing.
 
 `pull_request_merge_readiness_observation_v0` is the Goal-scoped scheduling
 receipt for that gate. It persists only the exact-head material fingerprint and
@@ -1205,9 +1257,14 @@ The packet should let a reviewer move through PRs in order:
 7. Treat `metadata_risk_hint` only as queue-ordering metadata. It must not be
    copied as the final risk judgement.
 8. Recheck the exact head, then decide `approve`, `request changes`, `defer`, or
-   `merge after checks`. Immediately before merge, require
-   `loopx pr-review --goal-id GOAL --check-merge-readiness NUMBER@HEAD_OID` to
-   return `ready=true`.
+   `merge after checks`. Immediately before merge, run
+   `loopx pr-review --check-merge-readiness NUMBER@HEAD_OID` and record its
+   result. Add `--goal-id GOAL` only for already Goal-managed work; standalone
+   delivery requires no registration or binding. `ready=true` permits the
+   normal path. Explicit maintainer authorization may use admin bypass to
+   override a `ready=false` readiness or GitHub policy hold, but never missing
+   exact-head review, required validation, unresolved findings or threads, a
+   changed head, an unmergeable conflict, or absent merge authority.
 
 A response that only lists `Open` and `Merged` PRs, scale, and recommended next
 order is incomplete for `/loopx-pr-review`; it should continue into the
@@ -1237,10 +1294,12 @@ A first implementation is acceptable when:
 - `--fresh-audit-exact-head NUMBER@HEAD_OID` is the only packet-level way to
   turn an unchanged valid conclusion into an actionable fresh audit, and
   malformed, absent, or already-actionable targets fail closed;
-- Goal-scoped `--goal-id GOAL --check-merge-readiness NUMBER@HEAD_OID` rejects head drift, stale review
+- `--check-merge-readiness NUMBER@HEAD_OID` works without a Goal or Goal writes
+  and rejects head drift, stale review
   prose, non-approval conclusions, red/pending/unknown checks, incomplete or
-  unresolved review-thread evidence, and incompatible merge state, then records
-  the compact observation used to suppress only unchanged requalification;
+  unresolved review-thread evidence, and incompatible merge state; adding
+  `--goal-id GOAL` retains Goal policy and records the compact observation used
+  to suppress only unchanged requalification;
 - the default limit is 100, and exhaustive requests only proceed when
   `result_completeness.complete=true`; truncated packets provide a larger
   `recommended_limit` for the next read;
@@ -1292,18 +1351,25 @@ A first implementation is acceptable when:
 `pull_request_review.wait_for_ci` defaults to `true`. Machine defaults use the
 existing capability editor. A Goal may override the complete review namespace;
 clearing that override restores live machine defaults. Local required validation
-and exact-head review/thread gates apply in both modes. Attribute a red required
-check before selecting the review verdict: an unchanged failure reproduced on
-the immutable base and exact head, or an independently evidenced external
-outage, is not a reason to request code changes on an unrelated PR when its
-changed invariant has separate passing coverage. Record the red check and its
-owner; approval does not make a blocked merge ready. A new, worsened or
-unattributed current failure remains a review blocker. Policy revision 18 scopes
-the matrix to the reviewed head. Keep relevant older failures in existing
+and exact-head review/thread gates apply in both modes. CI completion, success
+and exhaustive failure attribution are not approval prerequisites. Unknown,
+failed, skipped, cancelled or pending remote jobs remain diagnostic rows with
+`required=false` when independent current evidence establishes the affected
+invariants. Preserve an unknown cause as `unresolved`; do not invent baseline or
+infrastructure attribution, demand CI logs solely to approve, or require the PR
+to repair unrelated jobs. A confirmed `pr_regression` blocks approval even if
+its row is marked diagnostic. Missing necessary review evidence and material
+instability remain blockers: name the current invariant and smallest decisive
+check instead of using “CI evidence unknown” as the finding.
+
+Claim that failed **required review validation** is unrelated only with the
+same failure reproduced on the immutable base and exact head, or independent
+evidence of an external outage, and separate passing coverage of the changed
+invariant. Record the red check and its owner; approval does not make a blocked
+merge ready. An unresolved required review validation still blocks approval.
+The matrix assesses the reviewed head. Keep relevant older failures in existing
 result/evidence text with their source and explain why current independent
-evidence covers the exposed invariant and conditions. An unknown historical
-cause alone is not a veto, nor does current passing evidence prove that cause
-was fixed. A selected green rerun cannot dismiss material intermittency or a
+evidence covers the exposed invariant and conditions. A selected green rerun cannot dismiss material intermittency or a
 missing negative case: record the current gap as failed/unverified and name
 the smallest discriminating check. An explicit accepted contract may still
 require causal attribution. No new result schema, review-dismissal authority or
@@ -1314,7 +1380,7 @@ available CI and retain the configured merge gate, but do not require every
 remote job to finish or succeed before approving independently verified code.
 `repository_required_checks` records decisive repository validation for the
 review; each matrix row's `required` flag means review evidence, not GitHub
-branch protection. Record merely pending remote jobs as diagnostic rows with
+branch protection. Record remote CI observations as diagnostic rows with
 `required=false` when current independent coverage establishes their relevant
 invariants. If a queued job is the only decisive coverage, leave that invariant
 required and unverified. Pending CI alone never justifies `REQUEST_CHANGES`;
@@ -1345,7 +1411,7 @@ its existing values, and a new namespace uses capability defaults.
 可确认生效；清除完整目标覆盖后恢复机器默认。目标覆盖是完整 namespace（包括
 审阅优先级），部分修改保留既有目标值，新覆盖使用 capability 默认值。关闭时不
 查询、轮询或等待 CI；本地必需验证、当前提交评审、评论及权限检查仍然适用。
-GitHub `BLOCKED` 只提示另需管理员授权，不授予合并权限。
+GitHub `BLOCKED` 只提示另需管理员授权。
 
 ## Repository experience for opted-in review Agents
 
@@ -1354,8 +1420,7 @@ advice in actionable review packets. Enable the registered Agent, automatic
 recall and the explicit `pull_request_review.review` surface in its existing
 configuration. See [operation, readback and disable](experiences/README.md).
 The [#5944 comparison](experiences/pr-5944-review-frame.md) is the first stored
-case. Historical verdicts are outside retrieval; packet delivery proves neither
-adoption nor utility. Base/off paths, queue selection and review authority retain
+case. Historical verdicts are outside retrieval; Base/off paths, queue selection and review authority retain
 their existing contracts; the native file reader writes no provider.
 
 已开启的 review Agent 可通过现有 Reward Memory 实验，在可执行 review packet 中

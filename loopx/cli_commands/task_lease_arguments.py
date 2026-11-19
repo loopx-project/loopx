@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 from pathlib import Path
+
+from ..command_invocation import cli_option_args, loopx_cli_argv
 
 
 LEASE_OPTION_FIELDS = (
@@ -27,13 +30,6 @@ def _present(value: object) -> bool:
     return value is not None and value is not False and value != "" and value != []
 
 
-def _option_args(flag: str, value: object) -> list[str]:
-    text = str(value)
-    # A legal value may look like an option. Bind it explicitly so argparse
-    # cannot reinterpret the repair's identity, route or repeated scope.
-    return [f"{flag}={text}"] if text.startswith("-") else [flag, text]
-
-
 class TaskLeaseArgumentError(ValueError):
     def __init__(self, *, missing: list[str], unsupported: list[str]) -> None:
         self.missing = missing
@@ -47,12 +43,13 @@ class TaskLeaseArgumentError(ValueError):
 
     def recovery(self, args: argparse.Namespace, *, registry_path: Path,
                  runtime_root_arg: str | None) -> dict[str, object]:
-        cli_args = [*_option_args("--registry", registry_path), "--format", "json"]
+        route = loopx_cli_argv()
+        cli_args = [*route[1:], *cli_option_args("--registry", registry_path), "--format", "json"]
         if runtime_root_arg is not None:
-            cli_args.extend(_option_args("--runtime-root", runtime_root_arg))
+            cli_args.extend(cli_option_args("--runtime-root", runtime_root_arg))
         action = args.task_lease_command
-        cli_args.extend(["task-lease", action, *_option_args("--goal-id", args.goal_id),
-                         *_option_args("--todo-id", args.todo_id)])
+        cli_args.extend(["task-lease", action, *cli_option_args("--goal-id", args.goal_id),
+                         *cli_option_args("--todo-id", args.todo_id)])
         for flag, field in LEASE_OPTION_FIELDS:
             value = getattr(args, field, None)
             if field not in LEASE_ACTION_FIELDS[action] or not _present(value):
@@ -61,9 +58,9 @@ class TaskLeaseArgumentError(ValueError):
                 cli_args.append(flag)
             else:
                 for item in value if isinstance(value, list) else [value]:
-                    cli_args.extend(_option_args(flag, item))
+                    cli_args.extend(cli_option_args(flag, item))
         return {
-            "command": f"loopx task-lease {action}", "cli_args": cli_args,
+            "command": shlex.join([*route, "task-lease", action]), "cli_args": cli_args,
             "requires_flags": self.missing, "remove_flags": self.unsupported,
             "reason": "Review removed flags and supply missing values, then retry. "
                       "Identities and CAS are preserved; canonical lease checks still apply. "

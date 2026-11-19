@@ -11,11 +11,11 @@ import hashlib
 from datetime import UTC, datetime
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 from uuid import uuid4
 
 from ...agent_registry import load_goal_from_registry, registered_agent_ids_for_goal
-from ...paths import effective_runtime_root
+from ..runtime.runtime_projection_route import resolve_goal_source_runtime_route
 from ..coordination.local_authority import local_authority_is_promoted
 from ..effect_runtime import (
     CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
@@ -27,22 +27,60 @@ from ..todos.completion_validation import (
 )
 from .goal_ref_validation import exact_goal_ref
 from .acceptance_oracle_io import oracle_versions, run_snapshot_oracle
+from .activation import goal_is_stopped
 
 
 _INSPECT_METHOD = "goal.acceptance.inspect"
+
+
+class GoalAcceptanceRejected(ValueError):
+    """Carry owner-qualified detail through the existing CLI error boundary."""
+
+    def __init__(self, code: str, detail: str) -> None:
+        super().__init__(code)
+        self.code = code
+        self.payload = {"error_detail": detail}
+
+
+class GoalAcceptanceRoute(TypedDict):
+    registry_path: Path
+    runtime_root: str
+    goal_id: str
+
+
+def goal_acceptance_route(
+    registry_path: Path, goal_id: str, runtime_root: str | None = None,
+) -> GoalAcceptanceRoute:
+    """Route a presentation request; its runtime owns the proposal store.
+
+    Keep the service runtime for a directly served project, but never let the
+    global App's conversation store override a Goal's declared source runtime.
+    """
+    source = resolve_goal_source_runtime_route(registry_path=registry_path, goal_id=goal_id)
+    root = source["source_runtime_root"]
+    if runtime_root is not None and not source["routed_to_source_registry"]:
+        root = runtime_root
+    return {"registry_path": Path(source["source_registry"]),
+            "runtime_root": root, "goal_id": goal_id}
+
 
 def _routing(
     registry_path: Path,
     goal_id: str,
     runtime_root: str | None,
     agent_id: str | None = None,
-) -> dict[str, Any]:
+) -> tuple[Path, dict[str, Any], dict[str, Any]]:
+    # A direct CLI override remains an explicit diagnostic/recovery route.
+    source = resolve_goal_source_runtime_route(
+        registry_path=registry_path, goal_id=goal_id, runtime_root_override=runtime_root,
+    )
+    registry_path = Path(source["source_registry"])
     goal = load_goal_from_registry(registry_path, goal_id)
     if goal is None:
         raise ValueError("Goal acceptance requires a registered Goal")
     if agent_id is not None and agent_id not in registered_agent_ids_for_goal(goal):
         raise ValueError("Goal acceptance caller must be a registered Agent")
-    root = effective_runtime_root(registry_path, runtime_root)
+    root = Path(source["source_runtime_root"])
     if not local_authority_is_promoted(runtime_root=root, goal_id=goal_id):
         raise ValueError(
             "Goal acceptance requires an existing canonical authority; activation never promotes a provider"
@@ -54,7 +92,7 @@ def _routing(
     goal_instance_id = goal.get("goal_instance_id")
     if goal_instance_id is not None:
         route["goal_ref"] = exact_goal_ref(goal_id, goal_instance_id)
-    return route
+    return registry_path, goal, route
 
 
 def _result(
@@ -75,13 +113,17 @@ def _result(
         "planned",
         "no_change",
     }:
-        raise ValueError(
-            str(
-                value.get("reason_code")
-                or value.get("reason")
-                or "Goal acceptance authority is unavailable"
-            )
+        reason = str(
+            value.get("reason_code")
+            or value.get("reason")
+            or "Goal acceptance authority is unavailable"
         )
+        detail = value.get("error_detail")
+        if isinstance(value.get("reason_code"), str) and isinstance(detail, str) and detail:
+            # This field is emitted only for typed, fixed-rule validation.
+            # Never promote the generic reason, which can contain private IO.
+            raise GoalAcceptanceRejected(reason, detail)
+        raise ValueError(reason)
     return value
 
 
@@ -109,6 +151,45 @@ def transition_goal_acceptance_lifecycle(
     )
 
 
+def refine_goal_outcome(
+    *, registry_path: Path, goal_id: str, refinement: dict[str, Any],
+    expected_provider_revision: str, operation_id: str, agent_id: str | None = None,
+    runtime_root: str | None = None, execute: bool = False,
+    reviewed_work_update: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Record scoped planning intent, never configure validators or attest success."""
+    registry_path, goal, route = _routing(registry_path, goal_id, runtime_root, agent_id)
+    if "owner_agent_id" in refinement and refinement["owner_agent_id"] not in registered_agent_ids_for_goal(goal):
+        raise ValueError("Outcome owner must be a registered Agent")
+    # Registration eligibility is independent of the typed activation gate.
+    if goal.get("status", "active") not in {"active", "ready"} or goal_is_stopped(goal):
+        raise ValueError("Outcome refinement requires an active Goal")
+    return _result("goal.acceptance.refine", {**route, "actor_agent_id": agent_id,
+        "expected_provider_revision": expected_provider_revision, "operation_id": operation_id,
+        "refinement": refinement, "dry_run": not execute,
+        **({"reviewed_work_update": reviewed_work_update} if reviewed_work_update is not None else {}),
+    }, timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS)
+
+
+def update_goal_objective(
+    *, registry_path: Path, goal_id: str, document: dict[str, Any], operation: str,
+    expected_provider_revision: str, operation_id: str, agent_id: str | None = None,
+    runtime_root: str | None = None, execute: bool = False, review_objective_digest: str | None = None,
+) -> dict[str, Any]:
+    """Adapt explicit owner revisions or a registered Agent's own adoption."""
+    from ..work_items.replan_context_codec import goal_context_facts
+
+    registry_path, goal, route = _routing(registry_path, goal_id, runtime_root, agent_id)
+    if goal.get("status", "active") not in {"active", "ready"} or goal_is_stopped(goal):
+        raise ValueError("Objective updates require an active Goal")
+    return _result("goal.acceptance.objective", {**route, "actor_agent_id": agent_id,
+        "expected_provider_revision": expected_provider_revision, "operation_id": operation_id,
+        "operation": operation, "document": document, "dry_run": not execute,
+        **({"review_objective_digest": review_objective_digest} if review_objective_digest is not None else {}),
+        "source_objective": goal_context_facts({"registry": str(registry_path)}, goal_id, None),
+        "registered_agents": registered_agent_ids_for_goal(goal)}, timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS)
+
+
 def inspect_goal_acceptance(
     *,
     registry_path: Path,
@@ -116,35 +197,81 @@ def inspect_goal_acceptance(
     runtime_root: str | None = None,
     agent_id: str | None = None,
     todo_id: str | None = None,
+    include_work_details: bool = True,
+    context_agent_id: str | None = None,
     delivery_workspace: Mapping[str, Any] | None = None,
     validation_workspace_path: Path | None = None,
 ) -> dict[str, Any]:
     """Read one canonical basis; command declarations stay inside the host."""
+    registry_path, goal, route = _routing(registry_path, goal_id, runtime_root, agent_id)
     basis = _result(
         _INSPECT_METHOD,
-        {**_routing(registry_path, goal_id, runtime_root, agent_id),
-         **({"todo_id": todo_id} if todo_id is not None else {})},
+        {**route, "registered_agents": registered_agent_ids_for_goal(goal),
+         **({"agent_id": agent_id} if agent_id is not None else {}),
+         **({"todo_id": todo_id} if todo_id is not None else {}),
+         **({"context_agent_id": context_agent_id} if context_agent_id is not None else {}),
+         **({"include_work_details": False} if not include_work_details else {})},
     )
+    from copy import deepcopy
+    captured_contract = deepcopy(basis["goal_acceptance_contract"]) if "outcome_context" in basis else None
+    basis["goal_acceptance_contract"] = observe_goal_acceptance_oracles(
+        registry_path=registry_path, goal_id=goal_id,
+        contract=basis["goal_acceptance_contract"], criteria=(basis.get("contract") or {}).get("criteria", []),
+        task_repository=(basis.get("todo") or {}).get("task_repository"),
+        delivery_workspace=delivery_workspace, validation_workspace_path=validation_workspace_path)
+    if captured_contract is not None and basis["goal_acceptance_contract"] != captured_contract:
+        # The optional navigation binds the exact owner's observation. Do not
+        # reuse it after host-side oracle readback changes those facts.
+        basis.pop("outcome_context", None)
+    return basis
+
+
+def observe_goal_acceptance_oracles(
+    *, registry_path: Path | None, goal_id: str, contract: dict[str, Any],
+    criteria: list[dict[str, Any]], task_repository: str | None = None,
+    delivery_workspace: Mapping[str, Any] | None = None,
+    validation_workspace_path: Path | None = None,
+) -> dict[str, Any]:
+    """Observe pinned refs supplied by one canonical read, without another read.
+
+    Inspect and status share this host IO. The caller retains the same snapshot
+    for Todos, checks and observation inputs; TS still classifies the evidence.
+    """
     observations = []
-    for criterion in (basis.get("contract") or {}).get("criteria", []):
+    for criterion in criteria:
         oracle = criterion.get("oracle")
         if oracle is None:
             continue
-        workspace, failure = _resolve_completion_validation_workspace(
-            registry_path=registry_path, goal_id=goal_id,
-            task_repository=(basis.get("todo") or {}).get("task_repository"),
-            delivery_workspace=delivery_workspace, validation_workspace_path=validation_workspace_path,
-            label=criterion["id"],
-        )
+        workspace, failure = (None, True) if registry_path is None else _resolve_completion_validation_workspace(
+            registry_path=registry_path, goal_id=goal_id, task_repository=task_repository,
+            delivery_workspace=delivery_workspace, validation_workspace_path=validation_workspace_path, label=criterion["id"])
         versions = None if failure else oracle_versions(workspace, oracle)
         observations.append({"criterion_id": criterion["id"], "available": versions is not None,
             "source_current": _acceptance_pins_match(criterion["validation_files"], workspace),
             **(versions or {})})
-    if observations:
-        basis["goal_acceptance_contract"] = effect_runtime_result("goal.acceptance.oracle.observe", {
-            "contract": basis["goal_acceptance_contract"], "observations": observations,
-        })
-    return basis
+    return effect_runtime_result("goal.acceptance.oracle.observe", {
+        "contract": contract, "observations": observations,
+    }) if observations else contract
+
+
+def observe_canonical_goal_acceptance(
+    canonical: dict[str, Any], *, registry_path: Path | None, goal_id: str,
+) -> dict[str, Any] | None:
+    """Add current host observations to this exact canonical planning read.
+
+    The private basis only carries configured oracle refs. The original source
+    snapshot and its provider identity remain unchanged for historical replay.
+    """
+    acceptance = canonical.get("goal_acceptance_contract")
+    oracle_basis = canonical.get("goal_acceptance_oracle_observation_basis")
+    if oracle_basis is None:
+        return acceptance
+    if not isinstance(acceptance, dict) or not isinstance(oracle_basis, dict) or any(
+        oracle_basis.get(key) != acceptance.get(key) for key in ("revision", "digest")
+    ) or not isinstance(oracle_basis.get("criteria"), list):
+        raise ValueError("oracle observation basis does not match the canonical acceptance snapshot")
+    return observe_goal_acceptance_oracles(registry_path=registry_path, goal_id=goal_id,
+        contract=acceptance, criteria=oracle_basis["criteria"])
 
 
 def _criterion_effects(criteria: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -160,20 +287,6 @@ def _criterion_effects(criteria: list[dict[str, Any]]) -> list[dict[str, Any]]:
         }
         for row in criteria
     ]
-
-
-def goal_task_validation_files_current(
-    *, registry_path: Path, runtime_root: str, goal_id: str, agent_id: str, todo_id: str,
-) -> bool:
-    """Check declared validator assets without executing output validation."""
-    route = {**_routing(registry_path, goal_id, runtime_root, agent_id), "todo_id": todo_id}
-    basis = _result(_INSPECT_METHOD, route).get("completion_requirements")
-    if not isinstance(basis, dict) or not basis.get("criteria"):
-        return False
-    return validation_effect_files_current(
-        effects=_criterion_effects(basis["criteria"]), registry_path=registry_path,
-        goal_id=goal_id,
-    )
 
 
 def validation_effect_files_current(
@@ -200,28 +313,6 @@ def validation_effect_files_current(
     return True
 
 
-def validate_goal_task_acceptance(
-    *, registry_path: Path, runtime_root: str, goal_id: str, agent_id: str, todo_id: str,
-) -> dict[str, Any]:
-    """Read-only Turn validator for a task's current owner-pinned criteria.
-
-    Completion still runs its own fresh validation and atomic TS commit. This
-    entrypoint cannot accept supplied commands, pass flags or saved receipts.
-    """
-    route = {**_routing(registry_path, goal_id, runtime_root, agent_id), "todo_id": todo_id}
-    basis = _result(_INSPECT_METHOD, route).get("completion_requirements")
-    if not isinstance(basis, dict) or not basis.get("criteria"):
-        raise ValueError("delegated task requires enabled owner-bound acceptance")
-    results = run_goal_acceptance_effects(
-        effects=_criterion_effects(basis["criteria"]),
-        registry_path=registry_path, goal_id=goal_id,
-    )
-    current = _result(_INSPECT_METHOD, route).get("completion_requirements")
-    if current != basis:
-        raise ValueError("delegated task acceptance changed during validation")
-    return {"passed": all(row["passed"] for row in results), "results": results}
-
-
 def configure_goal_acceptance(
     *,
     registry_path: Path,
@@ -232,11 +323,10 @@ def configure_goal_acceptance(
     agent_id: str | None = None,
     operation_id: str | None = None,
     execute: bool = False,
-    disable: bool = False,
     review_context_digest: str | None = None,
 ) -> dict[str, Any]:
     """Explicit local-owner configuration; Agent tool callers have no writer."""
-    route = _routing(registry_path, goal_id, runtime_root, agent_id)
+    registry_path, _, route = _routing(registry_path, goal_id, runtime_root, agent_id)
     return _result(
         "goal.acceptance.configure",
         {
@@ -244,7 +334,6 @@ def configure_goal_acceptance(
             "actor_agent_id": agent_id,
             "expected_provider_revision": expected_provider_revision,
             "document": document,
-            "disable": disable,
             "dry_run": not execute,
             "operation_id": operation_id or f"goal-acceptance:{uuid4().hex}",
             **({"review_context_digest": review_context_digest} if review_context_digest is not None else {}),
@@ -393,7 +482,9 @@ def run_goal_acceptance_validation_effect(
     return receipt
 
 
-def public_goal_acceptance(value: dict[str, Any]) -> dict[str, Any]:
+def public_goal_acceptance(
+    value: dict[str, Any], *, include_contract: bool = True,
+) -> dict[str, Any]:
     """Expose projections and revision tokens, never executable declarations."""
     keys = (
         "status",
@@ -404,9 +495,14 @@ def public_goal_acceptance(value: dict[str, Any]) -> dict[str, Any]:
         "dry_run",
         "operation_id",
         "goal_acceptance_contract",
+        "objective_work_digest",
+        "goal_objective_guard",
         "reason_code",
     )
-    return {"ok": True, **{key: value[key] for key in keys if key in value}}
+    return {"ok": True, **{
+        key: value[key] for key in keys
+        if key in value and (include_contract or key != "goal_acceptance_contract")
+    }}
 
 
 def verify_goal_acceptance(
@@ -420,13 +516,13 @@ def verify_goal_acceptance(
     operation_id: str | None = None,
 ) -> dict[str, Any]:
     """Run the configured acceptance checks against a frozen canonical basis."""
-    route = _routing(registry_path, goal_id, runtime_root, agent_id)
+    registry_path, _, route = _routing(registry_path, goal_id, runtime_root, agent_id)
     basis = inspect_goal_acceptance(registry_path=registry_path, goal_id=goal_id, runtime_root=runtime_root, agent_id=agent_id)
     if expected_provider_revision is not None and basis["provider_revision"] != expected_provider_revision:
         raise ValueError("Acceptance changed; reload the current contract before checking.")
     contract = basis.get("contract")
     if contract is None:
-        raise ValueError("Goal acceptance is not enabled")
+        raise ValueError("No executable checks are configured")
     if not isinstance(contract, dict):
         raise TypeError("Goal acceptance contract shape is invalid")
     criteria = contract.get("criteria")

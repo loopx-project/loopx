@@ -352,10 +352,12 @@ def main() -> None:
             with urllib.request.urlopen(f"{base_url}/chat/", timeout=4) as response:
                 html = response.read().decode("utf-8")
             assert "LoopX 个人 Agent 工作区" in html, html
-            stylesheet_match = re.search(r'href="(/chat/assets/[^"]+\.css)"', html)
-            assert stylesheet_match, html
-            with urllib.request.urlopen(f"{base_url}{stylesheet_match.group(1)}", timeout=4) as response:
-                stylesheet = response.read().decode("utf-8")
+            stylesheets = re.findall(r'href="(/chat/assets/[^"]+\.css)"', html)
+            assert stylesheets, html
+            stylesheet = ""
+            for asset in stylesheets:
+                with urllib.request.urlopen(f"{base_url}{asset}", timeout=4) as response:
+                    stylesheet += response.read().decode("utf-8")
             assert ".personal-workspace" in stylesheet, "packaged workspace stylesheet is incomplete"
 
             code, targets_payload = request_json(f"{base_url}/api/chat/goal-channel/targets")

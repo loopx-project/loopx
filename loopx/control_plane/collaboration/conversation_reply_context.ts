@@ -3,6 +3,46 @@ import type {JsonObject} from "../effect_program.ts";
 type ReplyContextStatus = "unavailable" | "available" | "truncated" | "empty"
   | "message_mismatch" | "conversation_mismatch";
 
+function isHighSurrogate(value: number): boolean {
+  return value >= 0xD800 && value <= 0xDBFF;
+}
+
+function isLowSurrogate(value: number): boolean {
+  return value >= 0xDC00 && value <= 0xDFFF;
+}
+
+function safePrefixEnd(content: string, end: number): number {
+  return end > 0 && end < content.length
+    && isHighSurrogate(content.charCodeAt(end - 1))
+    && isLowSurrogate(content.charCodeAt(end)) ? end - 1 : end;
+}
+
+function safeSuffixStart(content: string, start: number): number {
+  return start > 0 && start < content.length
+    && isLowSurrogate(content.charCodeAt(start))
+    && isHighSurrogate(content.charCodeAt(start - 1)) ? start + 1 : start;
+}
+
+/** Count the middle elision marker within the unchanged content budget. */
+function truncateContent(content: string, cap: number): string {
+  if (content.length <= cap) return content;
+  let omitted = content.length - cap;
+  while (true) {
+    const marker = `\n…[middle ${omitted} chars omitted]…\n`;
+    const available = cap - marker.length;
+    if (available < 2) return content.slice(0, safePrefixEnd(content, cap));
+    const headTarget = Math.floor(available / 2), tailTarget = available - headTarget;
+    const headEnd = safePrefixEnd(content, headTarget);
+    const tailStart = safeSuffixStart(content, content.length - tailTarget);
+    const nextOmitted = content.length - headEnd - (content.length - tailStart);
+    if (nextOmitted !== omitted) {
+      omitted = nextOmitted;
+      continue;
+    }
+    return content.slice(0, headEnd) + marker + content.slice(tailStart);
+  }
+}
+
 /** A quoted message is a scoped observation, never a turn or operation grant. */
 function projectParent(input: JsonObject): JsonObject {
   const parent = input.parent_id;
@@ -16,7 +56,7 @@ function projectParent(input: JsonObject): JsonObject {
       && observation.conversation_id === input.conversation_id) {
     if (observation.message_id === parent && parent !== input.message_id) {
       if (typeof observation.content === "string" && observation.content.trim()) {
-        content = observation.content.slice(0, 4000);
+        content = truncateContent(observation.content, 4000);
         status = observation.content.length > 4000 || observation.content_truncated === true
           ? "truncated" : "available";
       } else status = "empty";
@@ -80,7 +120,7 @@ function projectThread(input: JsonObject): JsonObject {
   let remaining = 12000;
   for (const m of preceding) {
     if (selected.length === 12 || remaining === 0) break;
-    const row = (length: number): ThreadMessage => ({...m, content: m.content.slice(0, length),
+    const row = (length: number): ThreadMessage => ({...m, content: truncateContent(m.content, length),
       content_truncated: m.content_truncated || length < m.content.length});
     if (JSON.stringify(row(0)).length + 1 > remaining) break;
     let low = 0, high = Math.min(4000, m.content.length);

@@ -7,6 +7,7 @@ from typing import Any, Protocol
 
 from ..runtime.public_safety import LOCAL_PATH_SURFACE_PATTERN
 from .model_behavior_qualification import (
+    _ACTOR_RESULT_FIELDS,
     _reason_codes,
     _reject_private_or_secret_material,
     _token,
@@ -68,7 +69,6 @@ _DECISION_FIELDS = {
     "semantic_contract",
     "reason_codes",
 }
-_RESULT_FIELDS = {"schema_version", "actor_ref", "decision", "tool_calls"}
 _ENTRY_ROUTES = {
     "connect_if_needed",
     "select_agent_identity",
@@ -446,7 +446,7 @@ def normalize_onboarding_model_behavior_actor_result(
 ) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
         raise ValueError("actor result must be an object")
-    unknown = sorted(set(raw) - _RESULT_FIELDS)
+    unknown = sorted(set(raw) - _ACTOR_RESULT_FIELDS)
     if unknown:
         raise ValueError(f"unknown actor result field(s): {', '.join(unknown)}")
     if raw.get("schema_version") != ONBOARDING_MODEL_BEHAVIOR_RESULT_SCHEMA_VERSION:

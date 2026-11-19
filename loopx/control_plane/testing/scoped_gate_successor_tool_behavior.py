@@ -19,6 +19,8 @@ from .doubao_model_behavior_actor import (
     _direct_ark_transport,
 )
 from .model_tool_behavior import (
+    QuotaToolContext,
+    is_context_read_command,
     DoubaoExecToolClient,
     QUOTA_FIRST_TOOL_INSTRUCTION,
     digest_text,
@@ -57,9 +59,12 @@ SCOPED_GATE_FINALIZATION_MESSAGE = (
     "writeback, spend, or state changes that were not executed."
 )
 SCOPED_GATE_READ_RETRY_MESSAGE = (
-    "The hermetic host rejected this read shape without executing it. Retry with "
-    "one bounded read-only command inside the current workspace using pwd, ls, "
-    "find, rg --files, cat, head, or sed."
+    "The hermetic host rejected this read shape without executing it; the "
+    "selected Todo action has not completed. Follow the latest quota result: "
+    "finish any still-required context read, then perform the selected Todo's "
+    "bounded read. When selected_todo.text names one relative file, use "
+    "`cat <that exact path>`; do not rediscover the workspace or inspect state. "
+    "The rejection grants no additional read scope or tool budget."
 )
 
 
@@ -131,7 +136,7 @@ def _build_scoped_gate_fixture(root: Path) -> _SelectedTodoToolFixture:
         "## Completed Work Archive\n\n"
         "- [x] [P0] Complete the quality prerequisite.\n"
         "  <!-- loopx:todo "
-        f"todo_id={SCOPED_GATE_PREREQUISITE_TODO_ID} status=done "
+        f"todo_id={SCOPED_GATE_PREREQUISITE_TODO_ID} role=agent status=done "
         "task_class=advancement_task priority=P0 -->\n",
         encoding="utf-8",
     )
@@ -168,6 +173,12 @@ def _build_scoped_gate_fixture(root: Path) -> _SelectedTodoToolFixture:
         registry_path.parent.mkdir(parents=True, exist_ok=True)
         registry_path.write_text(registry_text + "\n", encoding="utf-8")
 
+    from .canary_harness import import_fixture_authority
+
+    import_fixture_authority(
+        global_registry_path, SELECTED_TODO_TOOL_FIXTURE_GOAL_ID, provider="sqlite",
+    )
+
     prompt = build_heartbeat_prompt(
         goal_id=SELECTED_TODO_TOOL_FIXTURE_GOAL_ID,
         thin=True,
@@ -175,6 +186,7 @@ def _build_scoped_gate_fixture(root: Path) -> _SelectedTodoToolFixture:
         registered_agents=[SELECTED_TODO_TOOL_FIXTURE_AGENT_ID],
         available_capabilities=["shell", "filesystem_read"],
         runtime_profile="codex_app_heartbeat",
+        registry_path=os.path.relpath(global_registry_path, project_root),
     )
     quota_guard_command = str(prompt["quota_guard_command"])
     if quota_guard_command not in str(prompt["task_body"]):
@@ -286,6 +298,7 @@ def _receipt(
         **dict(contract or {}),
         "observed_tool_sequence": [step["kind"] for step in steps],
         "tool_call_count": len(steps),
+        "tool_call_limit": SCOPED_GATE_SUCCESSOR_TOOL_BEHAVIOR_MAX_CALLS,
         "non_blocking_notice_surfaced": notice_surfaced,
         "selected_action_matched_todo": selected_action_executed,
         "tool_call_receipts": steps,
@@ -372,6 +385,7 @@ class DoubaoScopedGateSuccessorToolBehaviorActor:
         ]
         steps: list[dict[str, Any]] = []
         quota_observed = False
+        quota_context: QuotaToolContext | None = None
         notice_surfaced = False
         selected_action_executed = False
         contract: dict[str, Any] | None = None
@@ -394,38 +408,9 @@ class DoubaoScopedGateSuccessorToolBehaviorActor:
             )
 
         for _ in range(SCOPED_GATE_SUCCESSOR_TOOL_BEHAVIOR_MAX_CALLS):
-            if selected_action_executed:
-                messages.append(
-                    {
-                        "role": "system",
-                        "content": SCOPED_GATE_FINALIZATION_MESSAGE,
-                    }
-                )
-                final_content = self._client.next_final_content(messages)
-                notice_surfaced = _notice_intent(final_content)
-                return receipt(
-                    passed=notice_surfaced,
-                    failure_code=(
-                        None
-                        if notice_surfaced
-                        else "non_blocking_notice_not_surfaced"
-                    ),
-                )
             assistant_step = self._client.next_step(messages)
             tool_call = assistant_step.tool_call
             if tool_call is None:
-                if selected_action_executed:
-                    notice_surfaced = _notice_intent(
-                        assistant_step.assistant_content
-                    )
-                    return receipt(
-                        passed=notice_surfaced,
-                        failure_code=(
-                            None
-                            if notice_surfaced
-                            else "non_blocking_notice_not_surfaced"
-                        ),
-                    )
                 return receipt(
                     passed=False,
                     failure_code=(
@@ -442,6 +427,8 @@ class DoubaoScopedGateSuccessorToolBehaviorActor:
                 fixture=fixture,
                 quota_observed=quota_observed,
             )
+            if is_context_read_command(tool_call.command):
+                kind, tool_output = "context_read", None
             if (
                 kind == "unexpected_command"
                 and rejected_read_count == 0
@@ -495,14 +482,22 @@ class DoubaoScopedGateSuccessorToolBehaviorActor:
                             "--turn-instance-id": turn_instance_id,
                         },
                     )
-                    quota_packet = json.loads(tool_output)
-                    contract = _scoped_gate_quota_contract(quota_packet)
+                    quota_context = QuotaToolContext.from_output(tool_output)
+                    contract = _scoped_gate_quota_contract(quota_context.packet)
                     quota_observed = True
                 except (RuntimeError, ValueError, json.JSONDecodeError):
                     return receipt(
                         passed=False,
                         failure_code="quota_execution_failed",
                     )
+            elif kind == "context_read":
+                try:
+                    if quota_context is None:
+                        raise ValueError("context read before quota")
+                    tool_output = quota_context.read(tool_call.command,
+                        source_root=fixture.source_root, project_root=fixture.project_root)
+                except (OSError, RuntimeError, ValueError):
+                    return receipt(passed=False, failure_code="context_read_failed")
             elif kind == "workspace_read":
                 try:
                     tool_output = _execute_workspace_read(
@@ -528,5 +523,14 @@ class DoubaoScopedGateSuccessorToolBehaviorActor:
                     },
                 ]
             )
+            if selected_action_executed:
+                # Finalization has no tools and is owed even when the selected
+                # read used the last permitted tool call.
+                messages.append({"role": "system", "content": SCOPED_GATE_FINALIZATION_MESSAGE})
+                notice_surfaced = _notice_intent(self._client.next_final_content(messages))
+                return receipt(
+                    passed=notice_surfaced,
+                    failure_code=None if notice_surfaced else "non_blocking_notice_not_surfaced",
+                )
 
         return receipt(passed=False, failure_code="tool_call_budget_exhausted")

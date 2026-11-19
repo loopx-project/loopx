@@ -13,10 +13,12 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -62,7 +64,10 @@ def run_cli(registry_path: Path, *args: str) -> dict[str, Any]:
         *args,
     ]
     buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
+    # This smoke reads machine JSON and asserts the inline decision fields; the
+    # model-facing capture transport replaces that body with a reader reference,
+    # so opt out in-process the way the canary harness does in argv.
+    with patch.dict(os.environ, {"LOOPX_CONTEXT_DELIVERY": "off"}), contextlib.redirect_stdout(buf):
         code = loopx_cli_main(argv)
     raw = buf.getvalue().strip()
     payload: dict[str, Any] = json.loads(raw) if raw else {}
@@ -121,7 +126,7 @@ def assert_mainstream_cli_turn(provider: str) -> None:
         project, registry_path, state_file = write_project_fixture(Path(tmp))
         import_fixture_authority(registry_path, GOAL_ID, provider=provider)
 
-        status = run_cli(registry_path, "status", "--scan-root", str(project))
+        status = run_cli(registry_path, "status", )
         assert status.get("ok") is True, status
 
         added = run_cli(
@@ -166,8 +171,6 @@ def assert_mainstream_cli_turn(provider: str) -> None:
             "generic_cli",
             "--todo-id", todo_id,
             "--turn-instance-id", TURN_ID,
-            "--scan-path",
-            str(project),
         )
         assert guard.get("should_run") is True, guard
         assert guard.get("state") == "eligible", guard
@@ -252,8 +255,6 @@ def assert_mainstream_cli_turn(provider: str) -> None:
             "--source",
             "heartbeat",
             "--execute",
-            "--scan-path",
-            str(project),
         )
         assert spent.get("ok") is True, spent
         assert spent.get("appended") is True, spent
@@ -271,7 +272,7 @@ def assert_mainstream_cli_turn(provider: str) -> None:
             registry_path, "quota", "spend-slot", "--goal-id", GOAL_ID,
             "--agent-id", AGENT_ID, "--todo-id", todo_id,
             "--turn-instance-id", TURN_ID, "--slots", "1", "--source", "heartbeat",
-            "--execute", "--scan-path", str(project),
+            "--execute",
         )
         assert replay["appended"] is False and replay["idempotent_replay"] is True, replay
 

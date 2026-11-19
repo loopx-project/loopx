@@ -1,101 +1,76 @@
-# Protocol Action Packet Migration Contract
+# Protocol Action Packet Retirement Contract
 
-## Release Boundary
+## Boundary and consumer upgrade
 
-[PR #4794](https://github.com/loopx-project/loopx/pull/4794) retires
-`protocol_action_packet` from freshly constructed quota decisions. The cutover
-is the first official LoopX release whose source contains this change; source
-and prerelease builds containing it use the same behavior. Published v1.1.0
-artifacts are not changed or silently backported. The release tag identifies
-that source boundary; this PR does not create a release or choose its date.
+[PR #4794](https://github.com/loopx-project/loopx/pull/4794) stopped emitting
+`protocol_action_packet` in fresh full quota decisions, including normal,
+paused, live required-read/capability-intent and unsettled-host recovery paths.
+[PR #7161](https://github.com/loopx-project/loopx/pull/7161) ends the retained
+reader compatibility. This is an intentional breaking input-format change,
+not a new projection flag. Source builds containing this change reject the old
+format; the first official release containing it establishes the release
+boundary. This proposal neither publishes nor installs that release.
 
-The change applies to normal quota, paused quota, live required-read and
-capability-intent projection, and unsettled-host recovery, including full JSON
-and Markdown output. It is independent of the opt-in TurnEnvelope view. There
-is no new runtime flag, replacement summary field, or second decision owner.
-The existing Envelope and signature schema identifiers stay at v0: the packet
-was already optional to their readers. New signatures omit its capsule witness;
-they need not equal signatures of older packet-bearing outputs.
-
-## Supported Consumers and Upgrade Order
-
-The supported consumer set for this migration is explicit:
-
-| Consumer | New output | Stored v0 input |
+| Consumer | Current supported input | Retired input |
 | --- | --- | --- |
-| Bundled quota CLI and Markdown renderer | Read `interaction_contract`, `work_lane_contract`, `scheduler_hint` and exact CLI actions; no legacy summary line | Continue displaying the packet when a stored decision contains it |
-| TypeScript Effect reader and Python bridge | `protocol_summary=null`; typed obligations and next effects remain authoritative | Keep the supplied summary as an observation, never as execution authority |
-| Python/TypeScript TurnEnvelope builders/readers | No `contract_capsule.protocol_action_packet`; other signed dimensions remain | Preserve verified reconstruction, residue and opaque-summary fallback |
-| Bundled host authority extraction | Verify the canonical document and hashes before accepting the action | Verify the stored document and hashes without rebuilding its source |
+| Quota CLI, full/compact projection and Markdown | Typed interaction, lane and scheduler contracts; exact actions | Reject any top-level `protocol_action_packet` before optional projection/fallback |
+| TypeScript Effect reader and Python bridge | Same typed quota contracts; quota `protocol_summary=null` | Reject old packet before interpreting execution facts |
+| TurnEnvelope builder, signature reader and capture binding | Packet-free decision/capsule and existing signature dimensions | Reject old packet or capsule witness before conversion, hashing or rebinding |
+| Bundled Host authority extraction | Verify modern canonical document and original hashes | Reject old witness; never drop it to make a signature pass |
 
-Upgrade readers before changing producers. LoopX v1.1.0 is the tested rollback
-reader baseline and already accepts missing packets. A client that requires
-this field or parses its summary must migrate to the typed contracts above
-before adopting the new producer, or remain on v1.1.0 until adapted. Such a
-client is not automatically covered by this migration's compatibility claim.
-No compatibility promise is made for unidentified external clients, changed
-private forks, or older executable releases that have not been qualified.
+Presence is decisive, including an empty object, null or malformed value. The
+error is `unsupported format: protocol_action_packet` and directs the caller
+to obtain a fresh typed quota decision. There is no automatic legacy fallback,
+owner question, new admission gate or silent migration. Clients still emitting
+this field must upgrade to the existing typed contracts before using these
+readers. Unidentified external clients are not implicitly qualified.
 
-## Historical Format Support
+This retires a specific optional format, not all v0 protocols. Packet-free
+TurnEnvelope v0 records keep their original signature interpretation. Identity,
+permissions, leases, required reads, settlement/replay and exactly-once effects
+retain their own checks. The shared Effect observation field `protocol_summary`
+stays because the distinct turn-result family uses it; quota always yields null.
 
-Support is bounded by format rather than record age: valid
-`protocol_action_packet_v0` observations and their existing v0 Envelope/capsule
-representation remain readable while the v0 reader contract is supported.
-There is no scheduled removal of these readers in this migration. A future
-breaking protocol revision must separately declare its reader-removal and data
-migration policy; this writer removal cannot authorize it. Storage retention
-policies and execution-time identity/permission checks remain independent.
+## Removed machinery and retained history
 
-Keep `protocol_action_packet_fields()`, ordered summary reconstruction,
-`verified_with_residue`, and `unverified_retain_summary`. Do not rewrite stored
-records, regenerate their signatures, or replace an opaque historical summary
-with today's action text. Missing/mismatched signatures and changed signed
-fields still fail host admission. Successful historical readback does not
-re-authorize a stale task or bypass fresh receipt, lease or capability checks.
+Ordered legacy field selection/rendering, reconstruction, transport inputs,
+residue and opaque-summary fallback are removed from production. No historical
+packet, witness, receipt or signature is rewritten, stripped or re-signed.
+Keeping original history does not require accepting it as current execution
+input. Historical artifacts can be inspected with a compatible isolated older
+reader; that does not authorize replay against live current state.
 
-## Qualification and Rollback
+The former v1.1.0 acceptance verifier is retired with its compatibility promise.
+The frozen synthetic v1.1.0 records from source `607c11d75` remain byte-for-byte
+unchanged: tests now require explicit rejection of the packet-bearing records
+and exact original signature/Host acceptance for the packet-free record.
+Historical test results remain evidence of the earlier supported contract,
+not current reader qualification.
 
-The committed historical fixture is produced by actual v1.1.0 source
-`607c11d75`, with synthetic public-safe input. Its stored envelopes and signature
-hashes are immutable test inputs: current readers must accept valid examples
-and reject tampering without regenerating the expected signature. The ordinary
-compatibility fixtures additionally cover absent, v0, opaque and residue forms,
-quiet waits and user gates. These examples qualify the specified formats and
-readers, not an unknown production archive.
-
-The repeatable version check exercises eight fresh packet-free decisions
-(normal, paused, operator gate and exhausted, each ordinary/settled) plus the
-four frozen release records through actual v1.1.0 reader/host code. It checks
-canonical source/envelope agreement, host admission and unchanged input records:
+## Qualification and recovery
 
 ```bash
-# Prepare this pinned checkout and its Node dependencies once; no live state is used.
-git worktree add --detach ../loopx-v1.1.0 v1.1.0
-npm ci --prefix ../loopx-v1.1.0 --ignore-scripts
-uv run --extra test python scripts/verify_protocol_packet_migration.py --reader-checkout ../loopx-v1.1.0
-uv run --extra test python -m pytest tests/control_plane/test_protocol_packet_history.py tests/control_plane/test_protocol_packet_retirement_cli.py
+uv run --extra test python -m pytest tests/control_plane/test_protocol_packet_history.py tests/control_plane/test_protocol_packet_retirement_cli.py tests/test_turn_envelope.py
+node --no-warnings --experimental-sqlite --experimental-strip-types --test tests/control_plane_ts/protocol_action_packet_compat.test.ts tests/control_plane_ts/turn_envelope.test.ts
 ```
 
-The verifier rejects a different or modified reader revision; it does not fetch
-or install anything itself. Source/envelope canonical documents and host
-admission must agree.
-An installed wheel is checked for packaged TS/JSON resources, the real bridge,
-normal/paused output and signed host admission. Real CLI replay and the combined
-required-read/capability-intent path are regression tests in this PR.
+Qualification covers the real Python-to-TypeScript bridge, CLI projection and
+Markdown, signed Host extraction, capture binding and modern replay. Missing,
+mismatched or forged signatures and changed action/spend dimensions still fail;
+input objects and the frozen fixture remain unchanged. Real File/SQLite CLI and
+installed disposable wheel checks qualify their tested boundaries, not a live
+installation or complete private archive.
 
-For rollback, stop starting new host turns, retain all runtime records unchanged,
-and switch producer and reader together to the tagged v1.1.0 baseline. That
-producer emits the old packet again; the old reader continues to accept the
-packet-free records covered above. This is rollback of this field migration,
-not certification that v1.1.0 can undo unrelated protocol or storage changes.
-Reverting the writer-removal commit is also possible after resolving intervening
-code changes; it must not rewrite stored signatures or receipts.
+On unsupported input, preserve the original artifact and reacquire a current
+quota decision through the normal entrypoint. Do not remove the retired field
+or recompute old signatures. Code rollback requires a matching previously
+qualified producer/reader pair and independent storage compatibility checks;
+this format contract does not certify a whole-store downgrade to v1.1.0.
 
-## Operating Boundary
+## Operating boundary
 
-Routine quota/status/heartbeat routing stays deterministic and makes no model
-or external-provider call to replace the summary. Cold summarizer experiments
-remain explicit, isolated and sidecar-only; they must not persist raw stderr,
-private session traces or credentials. No other legacy field is retired by
-this contract. PR approval accepts this scoped migration; normal maintainer
-merge/release controls remain, and #4447 has its own remaining obligations.
+Quota/status/heartbeat routing remains deterministic, without a model or
+external-provider call to replace the summary. Historical cold-path comparison
+examples are synthetic experiments, not supported execution readers or current
+quota-size evidence. No other legacy format is removed. Maintainer review,
+merge and release authority remain separate from this source proposal.

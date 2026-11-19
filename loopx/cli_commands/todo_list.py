@@ -5,7 +5,6 @@ import argparse
 from collections.abc import Callable
 from pathlib import Path
 
-from ..control_plane.effect_runtime import effect_runtime_result
 from ..control_plane.todos.list_readback import list_goal_todos
 from ..control_plane.todos.markdown import render_todo_markdown
 from .todo_argument_validation import (
@@ -39,9 +38,12 @@ def handle_todo_list_command(
             agent_id=args.agent_id,
             limit=args.todo_limit,
             thin=bool(args.todo_thin),
+            **({"summary": True} if getattr(args, "todo_summary", False) else {}),
+            **({"include_archived": True} if getattr(args, "include_archived", False) else {}),
             project=Path(args.project).expanduser() if args.project else None,
             state_file=Path(args.state_file).expanduser() if args.state_file else None,
             runtime_root_arg=runtime_root_arg,
+            json_references=(format_name or str(getattr(args, "format", None) or "markdown")) == "json",
         )
     except Exception as exc:
         from ..usage_ping import capture_failure
@@ -55,18 +57,5 @@ def handle_todo_list_command(
         append_cli_rollout_event=append_cli_rollout_event,
     )
     output_format = format_name or str(getattr(args, "format", None) or "markdown")
-    if (payload.get("ok") and not args.todo_id and not args.todo_thin
-            and output_format == "json"):
-        try:
-            payload = effect_runtime_result(
-                "todo.context.page", {"list_payload": payload},
-                large_local_snapshot=True,
-            )
-        except Exception as exc:
-            from ..usage_ping import capture_failure
-            capture_failure(exc)
-            payload = todo_error_payload(
-                args, exc, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
-            )
     print_payload(payload, output_format, render_todo_markdown)
     return 0 if payload.get("ok") else 1

@@ -1,4 +1,4 @@
-.TH LOOPX 1 "" "LoopX 2.0.0a1" "User Commands"
+.TH LOOPX 1 "" "LoopX 2.4.0" "User Commands"
 .SH NAME
 loopx \- control-plane helper for long-running agent work
 .SH SYNOPSIS
@@ -6,6 +6,7 @@ loopx \- control-plane helper for long-running agent work
 [\fB\-\-registry\fR \fIPATH\fR]
 [\fB\-\-runtime\-root\fR \fIPATH\fR]
 [\fB\-\-format\fR \fImarkdown|json\fR]
+[\fB\-\-cli\-bin\fR \fIPROGRAM\fR]
 \fICOMMAND\fR
 [\fIARGS\fR]
 .br
@@ -66,6 +67,9 @@ Show goals, gates, attention queue, and next action.
 \fBloopx dashboard\fR
 Start the local dashboard, status service, and Agent Chat service with one command.
 .TP
+\fBloopx dsh\-launch [dsh args...]\fR
+Launch DeepSeek Harness with this machine's stored provider credential and no secret in argv or output.
+.TP
 \fBloopx chat \-\-goal\-id <goal\-id>\fR
 Open Goal Studio, ask the read\-only Agent for a bounded Todo, and approve its preview before writeback.
 .TP
@@ -101,9 +105,6 @@ Preview an explicit local\-state path migration or receipt\-bound rollback; stop
 .TP
 \fBloopx todo \-\-help\fR
 Show todo lifecycle commands.
-.TP
-\fBloopx task\-lease \-\-help\fR
-Acquire, renew, transfer, release, or inspect a hard per\-todo lease.
 .TP
 \fBloopx coordination\-shadow \-\-help\fR
 Inspect, bootstrap, or revision\-fenced rollback the default\-off Stage 2C file shadow.
@@ -164,12 +165,6 @@ Remove one exact host thread binding without unregistering its agent or peer ses
 \fBloopx codex\-cli\-bootstrap\-message\fR
 Generate the visible Codex CLI TUI setup message.
 .TP
-\fBloopx codex\-cli\-tui\-bootstrap\-smoke\-bundle\fR
-Generate a transcript\-free Codex CLI first\-run smoke bundle.
-.TP
-\fBloopx codex\-cli\-visible\-attach\-acceptance\fR
-Check public\-safe visible Codex CLI attach evidence.
-.TP
 \fBloopx heartbeat\-prompt\fR
 Generate a guarded heartbeat automation body.
 .TP
@@ -185,8 +180,8 @@ Preview, append, or read supervisor proposals and host execution receipts.
 \fBloopx upgrade\-plan\fR
 Plan default heartbeat upgrade propagation.
 .TP
-\fBloopx update [check|plan|apply]\fR
-Inspect installation ownership, then explicitly apply archive updates.
+\fBloopx update [check|plan|apply] / loopx upgrade\fR
+Inspect installation ownership, then explicitly apply archive updates, or run one command that upgrades the CLI and the installed macOS App.
 .TP
 \fBloopx project\-skill \-\-help\fR
 Install, inspect, or remove release\-owned skills in selected project agent hosts.
@@ -194,6 +189,9 @@ Install, inspect, or remove release\-owned skills in selected project agent host
 \fBloopx workflow\-skills\fR
 Inspect, install, or remove packaged user\-level LoopX workflow skills.
 .SH MAINTAINER AND ADAPTER COMMANDS
+.TP
+\fBloopx task\-lease \-\-help\fR
+Host/adapter execution ownership protocol; ordinary task work uses todo claim and update.
 .TP
 \fBloopx check\fR
 Run contract and public/private boundary checks.
@@ -255,17 +253,11 @@ Compose provider\-neutral bounded review packets and bind exact decisions.
 \fBloopx periodic\-report\fR
 Resolve a portable weekly profile, evaluate report triggers, and compose provider\-neutral run receipts.
 .TP
-\fBloopx auto\-research\fR
-Project public\-safe research frontiers.
-.TP
 \fBloopx deepresearch\fR
 Run a bounded, citation\-auditable research ledger and report workflow.
 .TP
 \fBloopx agent\-turn\-recall\fR
 Prepare goal\-scoped memory guidance for one admitted autonomous agent turn.
-.TP
-\fBloopx multi\-agent\fR
-Launch visible role\-scoped Codex TUI agents.
 .TP
 \fBloopx canary\fR
 Plan or run catalog\-informed smoke profiles.

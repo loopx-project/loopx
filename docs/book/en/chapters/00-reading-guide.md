@@ -142,8 +142,7 @@ Operators need not run source tests first; prospective contributors can use
 Command categories remain explicit. **Runnable** requires the stated version, inputs, and authorization.
 **Based on the official scaffold** follows the existing teaching package without inventing a runtime.
 **Simplified for explanation** tables, labels, and data shapes must not be pasted into production
-configuration. Record preview, execution, readback, and test results separately; supplying a command is
-not evidence that it ran successfully.
+configuration.
 
 ## Four questions for an accountable explanation {#judgment-standard}
 
@@ -166,7 +165,7 @@ independent T2 work remains legal. Follow the reasoning in
 
 This is an editorial and learning standard, not a new schema, runtime obligation, or approval gate. When
 information is insufficient, name what cannot yet be concluded, the missing evidence, and who can confirm
-it. Do not guess to fill a table. Refusal is not the end goal either: reassess when conditions are repaired,
+it. Do not guess to fill a table. reassess when conditions are repaired,
 preserve work that already happened, and find the next legal action.
 
 ## How to read the evidence
@@ -178,7 +177,7 @@ preserve work that already happened, and find the next legal action.
 | Teaching scenario or advice | Explains a tradeoff; it is not a historical incident or machine-enforced rule |
 | Tests and smokes | Establish only exercised inputs and assertions; matching headings/tables, existing paths, and successful builds do not establish semantic correctness |
 
-During revision, prioritize operational guarantees and bilingual obligation sentences. Narrow unsupported claims and retire obsolete models from current paths. Retaining an old word count is not a reason to keep teaching retired behavior.
+During revision, prioritize operational guarantees and bilingual obligation sentences. Narrow unsupported claims and retire obsolete models from current paths.
 
 ## Sources of authority
 
@@ -199,8 +198,8 @@ Do not bypass a newer permission or lifecycle check just to make an older exampl
 
 ## Version baseline
 
-This book targets LoopX release `v2.0.0a1`. Local command examples were checked against
-the public `loopx 2.0.0a1` CLI and protocol surface. It requires Python 3.11+ and Node.js 22.22.3+.
+This book targets LoopX release `v2.4.0`. Local command examples were checked against
+the public `loopx 2.4.0` CLI and protocol surface. It requires Python 3.11+ and Node.js 22.22.3+.
 LoopX starts and reuses its managed, idle-exiting TypeScript Effect runtime automatically; users do not
 operate that runtime as a manual daemon.
 
@@ -257,7 +256,7 @@ If you read an earlier edition of the Dev Book, recalibrate these five areas fir
 | Area | Shipped in `v0.5.4` | Continue with |
 | --- | --- | --- |
 | Control Plane | Complete Turn/Host Todo settlement, quota commit, task-lease lifecycle, Vision refresh, and scheduler-heartbeat transactions have typed TypeScript owners; Python facades still carry migration-time boundaries | [Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/) |
-| Operator surface | Personal Workspace exposes Goal, Task, Chat, and read-only status-source entrypoints; the UI is not a new source of truth | [Dashboard README](https://github.com/huangruiteng/loopx/blob/v0.5.4/apps/presentation/dashboard/README.md) |
+| Operator surface | Personal Workspace exposes Goal, Task, Chat, and read-only status-source entrypoints; the UI is not a new source of truth | [Dashboard README](https://github.com/loopx-project/loopx/blob/v0.5.4/apps/presentation/dashboard/README.md) |
 | Host runtime | Codex, Claude Code, OpenCode, Pi, KunlunCode, DeepSeek Harness, and custom runners have distinct activation and stop contracts | [Runtime Connector Catalog](/loopx/docs/integrations/runtime-connector-catalog/) |
 | Capability and Provider | A Capability is defined by a package-owned catalog entry, a real command, and durable validation; a Provider or Extension does not inherit Kernel authority | [Capability Catalog](/loopx/docs/capabilities/) |
 | Shared authority | File, NoKV, and PostgreSQL providers remain staged candidates; installing a Provider does not change the default local authority | [Shared Authority RFC](/loopx/docs/architecture/rfcs/shared-goal-authority-state-provider-v0/) |

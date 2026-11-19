@@ -540,13 +540,13 @@ async function checkSessionHistoryRecoveryContract() {
   globalThis.fetch = (async (input) => {
     const url = String(input);
     requests.push(url);
-    const body = url.includes("?")
+    const body = new URL(url, "http://localhost").pathname === "/api/chat/sessions"
       ? {
           ok: true,
           schema_version: "loopx_chat_session_list_v1",
           sessions: [failed.session, ready.session],
         }
-      : url.endsWith("session-failed")
+      : new URL(url, "http://localhost").pathname.endsWith("session-failed")
         ? failed
         : ready;
     return new Response(JSON.stringify(body), {
@@ -569,6 +569,24 @@ async function checkSessionHistoryRecoveryContract() {
         === "message-old,message-new",
       "messages from multiple local sessions should retain chronological order",
     );
+    const tied = historySnapshot("session-tied", "ready", [
+      { message_id: "z-request", turn_id: null, role: "user", text: "Original question", created_at: "2026-08-10T02:00:00Z" },
+      { message_id: "a-answer", turn_id: null, role: "agent", text: "完整正文".repeat(3000), created_at: "2026-08-10T02:00:00Z" },
+      { message_id: "m-repeat", turn_id: null, role: "user", text: "Original question", created_at: "2026-08-10T02:00:00Z" },
+    ]);
+    const sameIdElsewhere = historySnapshot("session-other", "ready", [
+      { ...tied.messages[0], text: "Other session" },
+    ]);
+    const ordered = mergeChatSessionMessages([tied, sameIdElsewhere, tied]);
+    check(ordered.filter(row => row.session_id === "session-tied").map(row => row.message_id).join(",")
+      === "z-request,a-answer,m-repeat", "Timestamp ties must retain the original Session's append order, not random ID order");
+    check(ordered.find(row => row.message_id === "a-answer")?.text === tied.messages[1].text,
+      "History ordering must retain the full long answer");
+    check(ordered.length === 4 && ordered.filter(row => row.text === "Original question").length === 2,
+      "Deduplicate only exact stored identities; repeated bodies and colliding cross-session IDs remain");
+    check(mergeChatSessionMessages([sameIdElsewhere, tied]).map(row => `${row.session_id}:${row.message_id}`).join("|")
+      === ordered.map(row => `${row.session_id}:${row.message_id}`).join("|"), "Equal-time cross-session ordering is stable across read completion order");
+
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -658,8 +676,66 @@ async function checkActiveTurnStreamRecoveryContract() {
   }
 }
 
+async function checkPagedHistoryContract() {
+  const originalFetch = globalThis.fetch;
+  const rows = Array.from({length: 451}, (_, index) => ({
+    message_id: `original-${index}`, turn_id: null, role: index % 2 ? "agent" : "user",
+    text: index === 201 ? "完整正文".repeat(3000) : "Deliberately repeated text",
+    created_at: "2026-08-10T02:00:00Z",
+    ...(index === 201 ? {attachments: [{id: "original-image", name: "original.png", mime_type: "image/png", size: 1, data_url: "data:image/png;base64,AA=="}]} : {}),
+  }));
+  const original = historySnapshot("paged-original", "ready", rows);
+  let failure = "", reads: string[] = [], sourceReads = 0;
+  const bindingId = "a".repeat(24);
+  globalThis.fetch = (async (input, init) => {
+    check(!init?.method || init.method === "GET", "History paging must not execute work");
+    const url = new URL(String(input), "http://localhost");
+    if (url.pathname === "/api/chat/sessions") {
+      sourceReads += 1;
+      return Response.json({ok: true, schema_version: "loopx_chat_session_list_v1",
+        conversation_binding_id: failure === "revoked" && sourceReads > 1 ? "b".repeat(24) : bindingId, sessions: [original.session]});
+    }
+    const cursor = url.searchParams.get("message_cursor");
+    reads.push(cursor ?? "first");
+    const offset = cursor === "page-200" ? 200 : cursor === "page-400" ? 400 : 0;
+    if (offset && failure === "transport") return Response.json({error: "interrupted page"}, {status: 503});
+    const messages = rows.slice(offset, offset + 200);
+    const next = offset === 0 ? "page-200" : offset === 200 ? "page-400" : null;
+    return Response.json({...original, messages,
+      session: {...original.session, ...(offset && failure === "identity" ? {channel_id: "another-channel"} : {})},
+      message_page: {schema_version: "loopx_chat_message_page_v1", offset: offset && failure === "offset" ? 0 : offset,
+        total: offset && failure === "total" ? 452 : rows.length,
+        snapshot_sha256: offset && failure === "digest" ? "b".repeat(64) : "a".repeat(64),
+        next_cursor: offset && failure === "cursor" ? cursor : next}});
+  }) as typeof fetch;
+  try {
+    const history = await fetchChatHistory({channelId: "manager"});
+    check(history.messages.length === rows.length && history.unavailableSessionIds.length === 0,
+      "The default history owner must drain all original pages before claiming a complete snapshot");
+    check(reads.join(",") === "first,page-200,page-400", "Read the original advancing cursors exactly once");
+    check(JSON.stringify(history.snapshots[0].messages) === JSON.stringify(rows),
+      "Page boundaries must retain append order, repeated bodies, full long text and attachments");
+    for (failure of ["transport", "identity", "offset", "total", "digest", "cursor"]) {
+      reads = [];
+      const incomplete = await fetchChatHistory({channelId: "manager"});
+      check(incomplete.messages.length === 0 && incomplete.unavailableSessionIds[0] === original.session.session_id,
+        `An interrupted or inconsistent ${failure} page must not become a complete history`);
+      check(reads.length === 2, "A failed cursor must stop the read, without a loop or replay");
+    }
+    failure = "";
+    check((await fetchChatHistory({channelId: "manager"})).messages.length === rows.length,
+      "Retry must recover the full original snapshot after a partial-page failure");
+    failure = "revoked"; sourceReads = 0;
+    let refused = false;
+    try { await fetchChatHistory({channelId: "manager", bound: {bindingId, sessionId: original.session.session_id}}); }
+    catch { refused = true; }
+    check(refused && sourceReads === 2, "Recheck the original source after all pages; a revoked binding cannot publish the old read");
+  } finally { globalThis.fetch = originalFetch; }
+}
+
 void checkSessionCloseContract()
   .then(checkSessionHistoryRecoveryContract)
+  .then(checkPagedHistoryContract)
   .then(checkActiveTurnStreamRecoveryContract)
   .then(() => console.log("chat-route-smoke: ok"))
   .catch((error) => {

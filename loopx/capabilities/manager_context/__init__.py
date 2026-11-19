@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from pathlib import Path
 import re
-import shlex
 
+from ...command_invocation import loopx_cli_argv
 from ...file_lock import exclusive_file_lock
+from ...install_contract import render_host_cli_command
+from ...control_plane.collaboration import conversation_scope
 from ...control_plane.collaboration.source_grant_observation import (
     POLICY_SCHEMA as POLICY_SCHEMA,
     registered_context_recipients,
     source_context_authority,
     source_context_target_authority,
 )
+from ...control_plane.collaboration.source_policy_fence import source_policy_fence
 from ...control_plane.collaboration.goal_instance_scope import (
     collaboration_goal_scope,
     decide_collaboration_lifecycle,
@@ -78,7 +82,7 @@ def register_ingress(
         source_message=normalize_source_context(message if source_message is None else source_message),
     )
     if origin is not None:
-        if origin != "web":
+        if origin not in {"web", "native_loopx"}:
             raise ValueError("unsupported local ingress origin")
         value["origin"] = origin
     path = (
@@ -114,7 +118,13 @@ def deliver(
 ) -> dict:
     request = normalize_request(request)
     target = {key: request[key] for key in ("goal_id", "agent_id")}
-    with collaboration_goal_scope(
+    # Share the configuration writer's fence through inbox/route publication.
+    # Order: source policy -> Goal lifetime -> request; local owner stays independent.
+    scope = conversation_scope(session, origin=turn.get("origin", "unknown"))
+    with (
+        source_policy_fence(_root(runtime_root) / "policy.json")
+        if scope["kind"] == "external_audience" else nullcontext()
+    ), collaboration_goal_scope(
         registry_path,
         goal_id=request["goal_id"],
         agents=(request["agent_id"],),
@@ -218,7 +228,7 @@ def deliver(
 
 
 def turn_start_hook(
-    runtime_root: Path, registry_path: Path, goal_id: str, agent_id: str
+    runtime_root: Path, registry_path: Path, goal_id: str, agent_id: str, *, model_read: bool = False
 ):
     from ...control_plane.capability_hooks import (
         TurnStartHookRegistration,
@@ -230,25 +240,26 @@ def turn_start_hook(
     def produce():
         nonlocal snapshot
         try:
-            from ...control_plane.collaboration.turn_context_observation import read_delegation_turn_context
+            from ...control_plane.collaboration.inbox import read_inbox_transaction
+            from ...control_plane.collaboration.inbox import _pending_result
 
-            snapshot = read_delegation_turn_context(runtime_root, registry_path, goal_id, agent_id,
-                read_command=command)
-            agenda = snapshot["unfinished_delegations"]
             with collaboration_goal_scope(
-                registry_path,
-                goal_id=goal_id,
-                agents=(agent_id,),
+                registry_path, goal_id=goal_id, agents=(agent_id,),
             ) as goal_scope:
-                inbox = pending(
-                    runtime_root,
-                    goal_id,
-                    agent_id,
-                    scope=goal_scope,
-                )
+                observed = read_inbox_transaction(runtime_root, {
+                    "operation": "turn_start", "goal_id": goal_id, "agent_id": agent_id,
+                    "read_command": command,
+                }, scope=goal_scope)
+                observed.update(goal_id=goal_id, agent_id=agent_id)
+                inbox = _pending_result(runtime_root, observed, goal_scope, None)
+            snapshot = observed["context"]
+            agenda = snapshot["unfinished_delegations"]
             count = (
                 max(len(inbox["items"]), agenda["incoming_count"])
                 + max(len(inbox.get("peer_returns", {}).get("items", [])), agenda["outgoing_count"])
+                + len(inbox.get("native_child_results", {}).get("items", []))
+                + int(inbox.get("native_child_results", {}).get("unavailable_count", 0))
+                + int(inbox.get("native_child_results", {}).get("scan_complete") is False)
                 + len(inbox.get("operation_handoffs", []))
             )
             incomplete = not agenda["scan_complete"]
@@ -272,15 +283,16 @@ def turn_start_hook(
             "error_code": error,
         }
 
-    command = shlex.join(
+    command = render_host_cli_command(
         [
-            "loopx",
+            *loopx_cli_argv(),
             "--registry",
             str(registry_path),
             "--runtime-root",
             str(runtime_root),
             "manager-inbox",
             "read",
+            *(["--format", "markdown"] if model_read else []),
             "--goal-id",
             goal_id,
             "--agent-id",
@@ -341,6 +353,30 @@ def _require_external_channel(channel: str) -> None:
         raise ValueError("an exact external manager channel is required")
 
 
+def revoke_conversation_sources(runtime_root: Path, binding_id: str) -> None:
+    """Persist the typed binding revocation under the existing source fence."""
+    path = _root(runtime_root) / "policy.json"
+    try:
+        path.stat()
+    except FileNotFoundError:
+        return
+    with source_policy_fence(path):
+        try:
+            policy = _read(path)
+        except FileNotFoundError:
+            return
+        try:
+            planned = effect_runtime_result("collaboration.source.revoke_conversation", {
+                "policy": policy, "binding_id": binding_id,
+            })
+        except EffectRuntimeRejected as exc:
+            raise ValueError(str(exc)) from exc
+        if planned["would_change"]:
+            _write(path, planned["policy"])
+            if _read(path) != planned["policy"]:
+                raise OSError("conversation source revocation did not verify")
+
+
 def configure_evidence_scope(runtime_root: Path, registry_path: Path, *, channel: str,
                              goal_ids: list[str], goal_scope: str = "selected", execute: bool = False) -> dict:
     """Configure read-only evidence through the existing audience policy owner."""
@@ -367,7 +403,7 @@ def configure_evidence_scope(runtime_root: Path, registry_path: Path, *, channel
 
     if execute:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        with exclusive_file_lock(path.with_suffix(".lock")):
+        with source_policy_fence(path):
             result = update(True)
             if update(False)["would_change"]:
                 raise ValueError("read scope verification failed")
@@ -426,7 +462,7 @@ def configure_delivery_target(
 
     if not execute:
         return update(apply=False)
-    with exclusive_file_lock(path.with_suffix(".lock")):
+    with source_policy_fence(path):
         result = update(apply=True)
         if update(apply=False)["granted_before"] != grant:
             raise ValueError("delivery target verification failed")
@@ -465,7 +501,7 @@ def configure_delivery_scope(runtime_root: Path, *, channel: str,
         return planned
 
     if execute:
-        with exclusive_file_lock(path.with_suffix(".lock")):
+        with source_policy_fence(path):
             result = update(True)
             if update(False)["would_change"]:
                 raise ValueError("delivery scope verification failed")

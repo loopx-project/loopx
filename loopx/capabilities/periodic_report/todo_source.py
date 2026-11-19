@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 from ...control_plane.coordination.local_authority import (
-    canonical_todo_summary_fields,
     read_canonical_todos_if_promoted,
 )
 from ...control_plane.todos.active_state_todo_parser import parse_active_state_todos
@@ -62,16 +61,11 @@ def read_report_todo_source(
         registry, None, registry_path=registry_path
     )
     canonical = read_canonical_todos_if_promoted(
-        runtime_root=runtime_root, goal_id=goal_id
+        runtime_root=runtime_root, goal_id=goal_id, include_summary=True,
+        rollout_events=rollout_events, available_capabilities=available_capabilities
     )
     if canonical is not None:
-        fields = canonical_todo_summary_fields(
-            canonical["todos"],
-            rollout_events=rollout_events,
-            available_capabilities=available_capabilities,
-            goal_acceptance_contract=canonical.get("goal_acceptance_contract"),
-            goal_acceptance_work_guards=canonical.get("goal_acceptance_work_guards"),
-        )
+        fields = canonical["_todo_fields"]
         return fields, [row for row in canonical["todos"] if row.get("role") == "user"]
     state_path = state_path or resolve_state_file(
         Path(str(goal.get("repo") or "")).expanduser(),

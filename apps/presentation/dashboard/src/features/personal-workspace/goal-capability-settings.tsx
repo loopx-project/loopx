@@ -1,5 +1,6 @@
+import {ContextHelp} from "./context-help";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Code2, LoaderCircle, RefreshCw } from "lucide-react";
+import { AlertTriangle, CircleHelp, Code2, LoaderCircle, RefreshCw } from "lucide-react";
 
 import {
   applyGoalConfiguration,
@@ -10,14 +11,14 @@ import {
   type GoalConfigurationPreview,
   type GoalConfigurationPartialWrite,
 } from "../../data/chat";
-import { goalReplanCadenceEditorValue, goalReplanCadenceWriteValue, hasReplanCadenceOverride, parseEditableCapabilityJson, projectEditableCapabilityConfiguration, replanCadenceEditorDefaults } from "../../data/capability-configuration";
+import { goalExploreEditorValue, goalExploreWriteValue, goalReplanCadenceEditorValue, goalReplanCadenceWriteValue, hasReplanCadenceOverride, parseEditableCapabilityJson, projectEditableCapabilityConfiguration, replanCadenceEditorDefaults } from "../../data/capability-configuration";
 import { useWorkspaceI18n } from "./i18n";
 import { CapabilityConfigurationFields } from "./capability-configuration-fields";
 import { withReportScheduleTimezone } from "./periodic-report-schedule-field";
+import {PeriodicReportSessionField} from "./periodic-report-session-field";
 import { localizeCapability, localizedCapabilityFieldCopy } from "./capability-localization";
 import { orderCapabilitiesForPresentation, canEditCapability, CapabilityCatalogNavigation, CapabilityConfigurationSummary, CapabilityDetailHeader, CapabilityEditorStatus, CapabilityConfigurationHelp } from "./capability-workbench";
 import { GoalAutoNotifyToggle } from "./notification-settings-panel";
-import { ContentReferenceWorkbench } from "./content-reference-workbench";
 import { DecisionContextWorkbench } from "./decision-context-workbench";
 import { rewardMemoryBindingStatus, rewardMemoryScopeDraft, rewardMemoryWriteValue } from "./reward-memory-settings";
 import {isMemoryCapability, memorySettingsTitle, MemorySettingsHeader} from "./memory-settings";
@@ -28,6 +29,7 @@ type CapabilityCatalogProps = Readonly<{
   catalog: CapabilityConfigurationCatalog;
   goalId: string;
   loading: boolean;
+  readbackLoading: boolean;
   onApplied: () => Promise<void>;
   notification?: WorkspaceGoalNotification;
   onNotificationChanged: () => void;
@@ -37,18 +39,23 @@ type CapabilityMutationState = Readonly<{
   busy: "preview" | "apply" | null;
   draft: Record<string, unknown>;
   cadenceOverride: boolean;
+  horizonOverride: boolean;
+  yardstickOverride: boolean;
+  exploreModeOverride: boolean;
   partialWrite: GoalConfigurationPartialWrite | null;
+  readbackPending: boolean;
   preview: GoalConfigurationPreview | null;
 }>;
 
-function goalWriteDraft(selected: CapabilityConfigurationCatalog["capabilities"][number], draft: Record<string, unknown>, editorMode: "guided" | "json", cadenceOverride: boolean) {
+function goalWriteDraft(selected: CapabilityConfigurationCatalog["capabilities"][number], draft: Record<string, unknown>, editorMode: "guided" | "json", cadenceOverride: boolean, horizonOverride: boolean, exploreModeOverride: boolean, yardstickOverride: boolean) {
   const defaults = selected.capability_id === "todo_replan_cadence"
     ? editorMode === "json" ? undefined : replanCadenceEditorDefaults(selected.effective_configuration?.configuration, selected.default)
     : selected.default;
   const writable = projectEditableCapabilityConfiguration(selected.configuration_editor, draft, defaults);
   if (selected.capability_id === "reward_memory") return rewardMemoryWriteValue(writable);
+  if (selected.capability_id === "explore_harness") return goalExploreWriteValue(writable, exploreModeOverride);
   if (selected.capability_id === "todo_replan_cadence" && editorMode === "guided") {
-    return goalReplanCadenceWriteValue(writable, cadenceOverride);
+    return goalReplanCadenceWriteValue(writable, cadenceOverride, horizonOverride, yardstickOverride);
   }
   if (selected.capability_id === "pull_request_review" && !Object.hasOwn(selected.current ?? {}, "owner_logins")
     && JSON.stringify(writable.owner_logins ?? []) === JSON.stringify(selected.effective_configuration?.configuration?.owner_logins ?? [])) {
@@ -76,12 +83,17 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
     busy: null,
     draft: {},
     cadenceOverride: false,
+    horizonOverride: false,
+    yardstickOverride: false,
+    exploreModeOverride: false,
     partialWrite: null,
+    readbackPending: false,
     preview: null,
   });
   const [error, setError] = useState<string | null>(null);
   const [editorMode, setEditorMode] = useState<"guided" | "json">("guided");
   const [jsonDraft, setJsonDraft] = useState("");
+  const editorGeneration = useRef(0);
   // Preserve the inspected Agent across fresh readbacks, never across Goals.
   // Config paths and mutation previews still reset from the native snapshot.
   const memoryScope = useRef({goalId, agentId: ""});
@@ -92,6 +104,7 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
   // Initialize the new capability's draft before it can receive input. A
   // post-paint reset can otherwise erase the first toggle after selection.
   useLayoutEffect(() => {
+    editorGeneration.current++;
     setEditorMode("guided");
     setJsonDraft("");
     const current = (selected?.capability_id === "pull_request_review" ? selected.effective_configuration?.configuration : selected?.current)
@@ -102,55 +115,67 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
         selected?.configuration_editor ?? { fields: [] },
         selected?.capability_id === "todo_replan_cadence"
           ? goalReplanCadenceEditorValue(selected.current, selected.effective_configuration?.configuration)
+          : selected?.capability_id === "explore_harness"
+            ? goalExploreEditorValue(selected.current, selected.effective_configuration?.configuration)
           : selected?.capability_id === "reward_memory"
             ? rewardMemoryScopeDraft(selected.current, memoryScope.current.goalId === goalId ? memoryScope.current.agentId : "")
           : current,
         selected?.default,
       ),
       cadenceOverride: hasReplanCadenceOverride(selected?.current),
+      horizonOverride: Object.hasOwn(selected?.current ?? {}, "planning_horizon_goal"),
+      yardstickOverride: Object.hasOwn(selected?.current ?? {}, "yardstick_enabled"),
+      exploreModeOverride: Object.hasOwn(selected?.current ?? {}, "mode"),
       partialWrite: null,
+      readbackPending: false,
       preview: null,
     });
     setError(null);
+    return () => { editorGeneration.current++; };
   }, [selected, goalId]);
 
   async function preview(configuration: Record<string, unknown> | null) {
     if (!selected || loading || mutation.busy || !jsonValid) return;
-    setMutation((current) => ({ ...current, busy: "preview", partialWrite: null }));
+    const generation = editorGeneration.current;
+    setMutation((current) => ({ ...current, busy: "preview", partialWrite: null, readbackPending: false }));
     setError(null);
     try {
-      const nextPreview = await previewGoalConfiguration(goalId, selected.capability_id, configuration === null ? null : goalWriteDraft(selected, configuration, editorMode, mutation.cadenceOverride));
-      setMutation((current) => ({ ...current, preview: nextPreview }));
+      const nextPreview = await previewGoalConfiguration(goalId, selected.capability_id, configuration === null ? null : goalWriteDraft(selected, configuration, editorMode, mutation.cadenceOverride, mutation.horizonOverride, mutation.exploreModeOverride, mutation.yardstickOverride));
+      if (generation === editorGeneration.current) setMutation((current) => ({ ...current, preview: nextPreview }));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : t("capabilities.previewFailed"));
+      if (generation === editorGeneration.current) setError(reason instanceof Error ? reason.message : t("capabilities.previewFailed"));
     } finally {
-      setMutation((current) => ({ ...current, busy: null }));
+      if (generation === editorGeneration.current) setMutation((current) => ({ ...current, busy: null }));
     }
   }
 
   async function apply() {
     if (!selected || loading || !mutation.preview || mutation.busy || !jsonValid) return;
+    const generation = editorGeneration.current;
     setMutation((current) => ({ ...current, busy: "apply" }));
     setError(null);
     try {
-      const writableDraft = goalWriteDraft(selected, mutation.draft, editorMode, mutation.cadenceOverride);
+      const writableDraft = goalWriteDraft(selected, mutation.draft, editorMode, mutation.cadenceOverride, mutation.horizonOverride, mutation.exploreModeOverride, mutation.yardstickOverride);
       const result = await applyGoalConfiguration(
         goalId,
         selected.capability_id,
         mutation.preview.action === "delete" ? null : writableDraft,
         mutation.preview.plan_revision,
       );
+      if (generation !== editorGeneration.current) return;
       setMutation((current) => ({
         ...current,
         partialWrite: result.status === "partial_write" ? result : null,
+        readbackPending: result.status !== "partial_write",
         preview: null,
       }));
       if (result.status !== "partial_write") await onApplied();
     } catch (reason) {
+      if (generation !== editorGeneration.current) return;
       setMutation((current) => ({ ...current, preview: null }));
       setError(reason instanceof Error ? reason.message : t("capabilities.applyFailed"));
     } finally {
-      setMutation((current) => ({ ...current, busy: null }));
+      if (generation === editorGeneration.current) setMutation((current) => ({ ...current, busy: null }));
     }
   }
 
@@ -167,6 +192,9 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
           ? rewardMemoryScopeDraft(selected.current, value)
         : { ...current.draft, [key]: value },
       cadenceOverride: current.cadenceOverride || (selected?.capability_id === "todo_replan_cadence" && (key === "count_unit" || key === "count")),
+      horizonOverride: current.horizonOverride || (selected?.capability_id === "todo_replan_cadence" && key === "planning_horizon_goal"),
+      yardstickOverride: current.yardstickOverride || (selected?.capability_id === "todo_replan_cadence" && key === "yardstick_enabled"),
+      exploreModeOverride: current.exploreModeOverride || (selected?.capability_id === "explore_harness" && key === "mode"),
       preview: null,
     }));
     setError(null);
@@ -181,10 +209,17 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
     }
     setMutation((current) => ({ ...current, preview: null, draft: parsed
       ? projectEditableCapabilityConfiguration(selected.configuration_editor, parsed,
-        selected.capability_id === "todo_replan_cadence" ? undefined : selected.default)
+        selected.capability_id === "todo_replan_cadence" ? undefined
+          : selected.capability_id === "explore_harness" ? selected.effective_configuration?.configuration : selected.default)
       : current.draft,
       cadenceOverride: selected.capability_id === "todo_replan_cadence" && parsed
         ? hasReplanCadenceOverride(parsed) : current.cadenceOverride,
+      horizonOverride: selected.capability_id === "todo_replan_cadence" && parsed
+        ? Object.hasOwn(parsed, "planning_horizon_goal") : current.horizonOverride,
+      yardstickOverride: selected.capability_id === "todo_replan_cadence" && parsed
+        ? Object.hasOwn(parsed, "yardstick_enabled") : current.yardstickOverride,
+      exploreModeOverride: selected.capability_id === "explore_harness" && parsed
+        ? Object.hasOwn(parsed, "mode") : current.exploreModeOverride,
     }));
     setError(null);
   }
@@ -192,14 +227,17 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
   function changeMode() {
     if (loading || mutation.busy || !jsonValid) return;
     if (editorMode === "guided" && selected) {
-      const jsonValue = selected.capability_id === "todo_replan_cadence"
-        ? goalWriteDraft(selected, mutation.draft, editorMode, mutation.cadenceOverride)
+      const jsonValue = ["todo_replan_cadence", "explore_harness"].includes(selected.capability_id)
+        ? goalWriteDraft(selected, mutation.draft, editorMode, mutation.cadenceOverride, mutation.horizonOverride, mutation.exploreModeOverride, mutation.yardstickOverride)
         : mutation.draft;
       setJsonDraft(JSON.stringify(jsonValue, null, 2));
     }
     setEditorMode(editorMode === "guided" ? "json" : "guided");
     setMutation((current) => ({ ...current, preview: null,
-      draft: editorMode === "json" && selected?.capability_id === "todo_replan_cadence"
+      draft: editorMode === "json" && selected?.capability_id === "explore_harness"
+        ? projectEditableCapabilityConfiguration(selected.configuration_editor,
+          goalExploreEditorValue(current.draft, selected.effective_configuration?.configuration), selected.default)
+        : editorMode === "json" && selected?.capability_id === "todo_replan_cadence"
         ? projectEditableCapabilityConfiguration(selected.configuration_editor, current.draft,
           replanCadenceEditorDefaults(selected.effective_configuration?.configuration, selected.default))
         : current.draft,
@@ -209,30 +247,32 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
   return { apply, changeDraft, changeJson, changeMode, editorMode, jsonDraft, jsonValid, error, mutation, preview };
 }
 
-function CapabilityMutationFeedback({ mutationError, onApplied, partialWrite, preview }: Readonly<{
+function CapabilityMutationFeedback({ mutationError, onApplied, partialWrite, readbackPending: pendingReadback, preview, busy }: Readonly<{
   mutationError: string | null;
   onApplied: () => Promise<void>;
   partialWrite: GoalConfigurationPartialWrite | null;
+  readbackPending: boolean;
   preview: GoalConfigurationPreview | null;
+  busy: boolean;
 }>) {
   const { locale, t } = useWorkspaceI18n();
-  const readbackPending = partialWrite && !partialWrite.readback_verified && !partialWrite.shared_sync_pending && !partialWrite.host_capacity_pending;
+  const readbackPending = pendingReadback || Boolean(partialWrite && !partialWrite.readback_verified && !partialWrite.shared_sync_pending && !partialWrite.host_capacity_pending);
   return (
     <>
       {mutationError ? <p className="personal-machine-error" role="alert">{mutationError}</p> : null}
-      {partialWrite ? (
+      {partialWrite || readbackPending ? (
         <section aria-live="polite" className="personal-capability-recovery">
           <AlertTriangle aria-hidden size={18} />
           <div>
-            <strong>{readbackPending ? locale === "zh-CN" ? "配置已写入，读回尚未确认" : "Configuration written; readback unverified" : t(partialWrite.host_capacity_pending
+            <strong>{readbackPending ? locale === "zh-CN" ? "配置已写入，读回尚未确认" : "Configuration written; readback unverified" : t(partialWrite?.host_capacity_pending
               ? "capabilities.hostCapacityPartialWrite"
               : "capabilities.partialWrite")}</strong>
-            <p>{readbackPending ? locale === "zh-CN" ? "请先重新读取当前配置，再决定是否需要其它变更。" : "Reload the current configuration before deciding whether another change is needed." : t(partialWrite.host_capacity_pending
+            <p>{readbackPending ? locale === "zh-CN" ? "请先重新读取当前配置，再决定是否需要其它变更。" : "Reload the current configuration before deciding whether another change is needed." : t(partialWrite?.host_capacity_pending
               ? "capabilities.hostCapacityPartialWriteDescription"
               : "capabilities.partialWriteDescription")}</p>
-            <small>{partialWrite.recommended_action}</small>
+            {partialWrite ? <small>{partialWrite.recommended_action}</small> : null}
           </div>
-          <button onClick={() => void onApplied()} type="button"><RefreshCw aria-hidden size={15} />{t("capabilities.refreshSource")}</button>
+          <button disabled={busy} onClick={() => void onApplied()} type="button"><RefreshCw aria-hidden size={15} />{t("capabilities.refreshSource")}</button>
         </section>
       ) : null}
       {preview ? (
@@ -257,7 +297,7 @@ function CapabilityMutationFeedback({ mutationError, onApplied, partialWrite, pr
   );
 }
 
-function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, onApplied, onNotificationChanged }: CapabilityCatalogProps) {
+function CapabilityCatalog({ callbacks, catalog, goalId, loading, readbackLoading, notification, onApplied, onNotificationChanged }: CapabilityCatalogProps) {
   const { locale, t } = useWorkspaceI18n();
   const orderedCapabilities = useMemo(
     () => orderCapabilitiesForPresentation(
@@ -280,14 +320,14 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
   );
   const capabilityMutation = useCapabilityMutation({ goalId, loading, onApplied, selected: localizedSelected, t });
   const { apply, changeDraft, changeJson, changeMode, editorMode, jsonDraft, jsonValid, error: mutationError, mutation, preview: requestPreview } = capabilityMutation;
-  const { busy, draft, partialWrite, preview } = mutation;
+  const { busy, draft, partialWrite, readbackPending, preview } = mutation;
   // A refreshed observation can replace `selected` and reset local mutation
   // state. The existing catalog read still owns admission until it settles.
   const editorBusy = loading || Boolean(busy);
   const memorySelected = selected ? isMemoryCapability(selected.capability_id) : false;
 
   if (!selected || !localizedSelected) {
-    return <p className="personal-capability-empty">{t("capabilities.empty")}</p>;
+    return <ContextHelp label={locale === "zh-CN" ? "暂无已注册能力" : "No registered capabilities"} icon={CircleHelp}><p className="personal-capability-empty">{t("capabilities.empty")}</p></ContextHelp>;
   }
 
   const supportsGoal = localizedSelected.available_scopes.includes("goal");
@@ -333,10 +373,9 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
           id={memorySelected && selected.capability_id !== "decision_context" ? `memory-panel-${selected.capability_id}` : undefined}
           aria-labelledby={memorySelected && selected.capability_id !== "decision_context" ? `memory-purpose-${selected.capability_id}` : undefined}
           role={memorySelected && selected.capability_id !== "decision_context" ? "tabpanel" : undefined}>
-        {localizedSelected.capability_id === "content_ops" ? <ContentReferenceWorkbench key={goalId} /> : <CapabilityEditorStatus available={editorAvailable} t={t}
-          description={readOnlyReason} />}
+        <CapabilityEditorStatus available={editorAvailable} t={t} description={readOnlyReason} />
 
-        {selected.capability_id === "progress_review" && selected.observation ? <section className="personal-capability-observation" aria-label={locale === "zh-CN" ? "审查证据读回" : "Review evidence readback"}>
+        {selected.capability_id === "progress_review" && selected.observation && !loading ? <section className="personal-capability-observation" aria-label={locale === "zh-CN" ? "审查证据读回" : "Review evidence readback"}>
           <h3>{locale === "zh-CN" ? "审查证据读回" : "Review evidence readback"}</h3>
           <button type="button" onClick={() => void onApplied()}>{locale === "zh-CN" ? "重新读取审查证据" : "Recheck review evidence"}</button>
           <p>{selected.observation.read_state === "unavailable" ? (locale === "zh-CN" ? "审查存储不可读，当前判断未知。" : "Review storage unavailable; current judgment unknown.")
@@ -352,15 +391,15 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
                 ? (locale === "zh-CN" ? "绑定任务的规范验收条款" : "Bound to canonical task acceptance criteria")
                 : (locale === "zh-CN" ? "依据操作者研究条款；不证明规范验收关联" : "Operator study basis; canonical acceptance binding is unverified")}</p>
               {selected.observation.latest.criterion_current === false ? <p role="alert">{locale === "zh-CN" ? "条款或任务关联已变化，旧判断不可作为当前依据。" : "Criteria or task binding changed; the old judgment is unavailable for current use."}</p> : null}
-              <p>{locale === "zh-CN" ? "仅观察声明文件在两个检查点之间的净变化" : "Observed only the net change of declared files between two checkpoints"}</p>
+              <ContextHelp label={locale === "zh-CN" ? "文件观察口径" : "File observation basis"}><p>{locale === "zh-CN" ? "仅观察声明文件在两个检查点之间的净变化" : "Observed only the net change of declared files between two checkpoints"}</p></ContextHelp>
               <details><summary>{locale === "zh-CN" ? "观察范围与条款版本" : "Observed scope and criterion version"}</summary>
                 <code>{selected.observation.latest.evidence_scope.criterion_binding.criteria_sha256}</code>
                 <p>{selected.observation.latest.evidence_scope.criterion_binding.criterion_ids?.join(", ")}</p>
                 <p>{selected.observation.latest.evidence_scope.files.join(", ")}</p>
               </details>
-            </> : <p>{locale === "zh-CN" ? "旧回执未记录所选条款及文件覆盖范围。" : "Legacy receipt did not record selected criteria or file coverage."}</p>}
+            </> : <ContextHelp label={locale === "zh-CN" ? "历史检查覆盖" : "Historical check coverage"} icon={CircleHelp}><p>{locale === "zh-CN" ? "旧回执未记录所选条款及文件覆盖范围。" : "Legacy receipt did not record selected criteria or file coverage."}</p></ContextHelp>}
           </> : null}
-          <p>{locale === "zh-CN" ? "此观察不证明任务完成；未命中漂移条件也不等于工作符合目标。" : "This observation does not prove completion; a drift condition not met does not establish on-goal work."}</p>
+          <ContextHelp label={locale === "zh-CN" ? "观察与验收" : "Observation and acceptance"}><p>{locale === "zh-CN" ? "此观察不证明任务完成；未命中漂移条件也不等于工作符合目标。" : "This observation does not prove completion; a drift condition not met does not establish on-goal work."}</p></ContextHelp>
         </section> : null}
 
         {localizedSelected.capability_id === "lark_event_inbox" ? (
@@ -421,12 +460,18 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
                 ? `复盘周期沿用${selected.machine_current ? "设备" : "产品"}默认；规划选项由本 Goal 设置。`
                 : `Review interval follows ${selected.machine_current ? "device" : "product"} defaults; this Goal sets the planning options.`}
             </p> : null}
+            {selected.capability_id === "periodic_report" && draft.profile_preset === "weekly-progress"
+              ? <PeriodicReportSessionField goalId={goalId} route={String(draft.route_ref ?? "")}
+                zh={locale === "zh-CN"} disabled={editorBusy} revision={JSON.stringify(selected.current)}
+                onChange={value => changeDraft("route_ref", value)} /> : null}
             <CapabilityConfigurationFields
               disabled={editorBusy}
               copy={localizedCapabilityFieldCopy(locale, localizedSelected.capability_id)}
               editor={localizedSelected.configuration_editor}
+              advancedKeys={selected.capability_id === "todo_replan_cadence" ? ["planning_horizon_goal"] : []}
               omitKeys={selected.capability_id === "reward_memory"
                 ? ["agent_id", ...(draft.agent_id ? ["enabled_agents", ...(draft.enabled === false ? ["config_path"] : [])] : ["enabled"])]
+                : selected.capability_id === "periodic_report" && draft.profile_preset === "weekly-progress" ? ["route_ref"]
                 : []}
               onChange={changeDraft}
               value={draft}
@@ -452,7 +497,8 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
           </p>)}
         </section> : null}
         {selected.capability_id === "reward_memory" ? <CapabilityConfigurationHelp capability={selected} locale={locale} /> : null}
-        <CapabilityMutationFeedback mutationError={mutationError} onApplied={onApplied} partialWrite={partialWrite} preview={preview} />
+        <CapabilityMutationFeedback mutationError={mutationError} onApplied={onApplied} partialWrite={partialWrite}
+          readbackPending={readbackPending} preview={preview} busy={readbackLoading || Boolean(busy)} />
         {editorAvailable ? (
           <footer className="personal-capability-actions">
             {localizedSelected.current && localizedSelected.available_scopes.includes("machine") ? (
@@ -495,9 +541,8 @@ export function GoalCapabilitySettings({ callbacks, goalId, notification, onChan
     const generation = ++readGeneration.current;
     setLoading(true);
     setError(null);
-    // Withdraw the previous observation during a recheck; preserve navigation.
-    setInspection(current => current ? {...current, capability_catalog: {...current.capability_catalog,
-      capabilities: current.capability_catalog.capabilities.map(item => item.observation ? {...item, observation: undefined} : item)}} : null);
+    // Keep the current editor and draft mounted during readback. Observation
+    // panels stay unavailable until the new read succeeds.
     await fetchGoalConfiguration(goalId)
       .then(value => {if (generation === readGeneration.current) setInspection(value);})
       .catch((reason: unknown) => {if (generation === readGeneration.current) setError(reason instanceof Error ? reason.message : t("capabilities.loadFailed"));})
@@ -512,24 +557,24 @@ export function GoalCapabilitySettings({ callbacks, goalId, notification, onChan
   if (loading && !inspection) {
     return <p aria-live="polite" className="personal-capability-empty"><LoaderCircle className="personal-spin" size={18} />{t("capabilities.loading")}</p>;
   }
-  if (error) {
-    return (
+  const loadError = error ? (
       <section className="personal-capability-error" role="alert">
         <AlertTriangle aria-hidden size={18} />
         <span><strong>{t("capabilities.loadFailed")}</strong><small>{error}</small></span>
         <button onClick={() => void load()} type="button"><RefreshCw aria-hidden size={15} />{t("capabilities.retry")}</button>
       </section>
-    );
-  }
-  if (!inspection) return null;
+    ) : null;
+  if (!inspection) return loadError;
 
   return (
     <section className="personal-capability-settings is-goal-scoped" data-revision={inspection.revision}>
+      {loadError}
       <CapabilityCatalog
         callbacks={callbacks}
         catalog={inspection.capability_catalog}
         goalId={goalId}
-        loading={loading}
+        loading={loading || Boolean(error)}
+        readbackLoading={loading}
         notification={notification}
         onApplied={load}
         onNotificationChanged={onChanged}

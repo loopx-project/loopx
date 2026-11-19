@@ -40,6 +40,8 @@ DELIVERY_CONTINUITY_REASONS = {
     *DELIVERY_CONTINUITY_PREEMPTIONS,
     "no_previous_todo",
     "previous_delivery_not_progress",
+    "previous_delivery_closed",
+    "previous_path_replanned",
     "current_todo_missing",
     "todo_identity_changed",
     "todo_not_open",
@@ -138,6 +140,8 @@ def evaluate_delivery_route(
     latest_replan_ack: Mapping[str, Any] | None = None,
     replan_actionable: bool = False,
     replan_capability_ready: bool = False,
+    previous_delivery_boundary: str | None = None,
+    previous_path_delta: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Resolve continuity selection and settlement boundary in one TS request."""
 
@@ -174,6 +178,10 @@ def evaluate_delivery_route(
                 "previous_delivery_outcome": (
                     str(previous_delivery_outcome or "").strip() or None
                 ),
+                **({"previous_delivery_boundary": previous_delivery_boundary}
+                   if previous_delivery_boundary is not None else {}),
+                **({"previous_path_delta": dict(previous_path_delta)}
+                   if previous_path_delta is not None else {}),
                 "continuity_todo": continuity_payload,
                 "fallback_todo": fallback_payload,
                 "preemptions": _normalize_preemptions(preemptions),

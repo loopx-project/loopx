@@ -33,6 +33,21 @@ def test_scheduled_recheck_codec_rejects_nonpositive_or_coerced_seconds(invalid)
             "scheduled_recheck_after_seconds": invalid})
 
 
+@pytest.mark.parametrize("invalid", [None, 0, 1, 1.5, "true", [], {}])
+def test_pending_dependency_codec_rejects_missing_or_coerced_proof(invalid):
+    with pytest.raises(TypeError, match="pending dependency wait"):
+        SchedulerArbitration.from_projection({"mode": "agent_scope_wait", "errors": [],
+            "disposition": "agent_scope_wait", "reason_code": "interaction_agent_scope_wait",
+            "pending_dependency_wait": invalid})
+
+
+def test_pending_dependency_codec_defaults_to_existing_bounded_supervision():
+    projection = {"mode": "agent_scope_wait", "errors": [], "disposition": "agent_scope_wait",
+        "reason_code": "interaction_agent_scope_wait"}
+    assert not SchedulerArbitration.from_projection(projection).pending_dependency_wait
+    assert SchedulerArbitration.from_projection({**projection, "pending_dependency_wait": True}).pending_dependency_wait
+
+
 def encoded_size(value: dict) -> int:
     return len(json.dumps(value, separators=(",", ":")).encode())
 
@@ -68,7 +83,7 @@ def test_compact_boundary_keeps_complete_quoted_reads_without_unneeded_snapshot(
         "unknown": {"opaque": ["界😀\ud800", {"keep": True, "null": None}],
             "numbers": [1e20, -1e20, 1e-6, -0.0]}}
     payload = {"goal_id": goal_id, "goal_state_file": state_file, "should_run": True,
-        "agent_todo_summary": {"goal_acceptance_contract": {"enabled": True}},
+        "agent_todo_summary": {"goal_acceptance_contract": {"criteria": []}},
         "selected_todo": {"todo_id": todo_id}, "required_reads": [read]}
     observed = []
     original = interaction.effect_runtime_result
@@ -92,18 +107,23 @@ def test_compact_boundary_keeps_complete_quoted_reads_without_unneeded_snapshot(
     assert observed == [(params_bytes, params_bytes > 65536)]
     assert bool(snapshot_directories) is (params_bytes > 65536)
     assert all(not directory.exists() for directory in snapshot_directories)
-    assert reads == [read, {
+    assert len(reads) == 4 and reads[0] == read
+    required = reads[1]
+    assert {key: value for key, value in required.items() if key != "reason"} == {
         "command": "cat -- " + shlex.quote(state_file), "source": "goal_state", "ordering": "before_work",
-        "reason": "Read complete Goal intent, acceptance and stops. Exact Todo reads own task state/claims. Source failure or changed requirements require a fresh guard; summaries cannot replace this read.",
-    }, {
+    }
+    for obligation in ("full Goal intent", "acceptance", "stops", "No summaries", "fresh guard"):
+        assert obligation in required["reason"]
+    assert reads[2:] == [{
         "command": "loopx --format json goal-acceptance inspect --goal-id " + shlex.quote(goal_id),
         "source": "goal_acceptance", "ordering": "before_work",
-        "reason": "Read full configured objective, non-goals and criteria with scope/revision. Scoped acceptance does not replace Goal intent or prove completion; disabled/changed criteria require a fresh guard.",
+        "reason": "Read full configured objective, non-goals and criteria with scope/revision. Scoped acceptance does not replace Goal intent or prove completion; Removed or changed checks require a fresh guard.",
     }, {
         "command": "loopx --format json todo list --goal-id " + shlex.quote(goal_id) + " --todo-id " + shlex.quote(todo_id),
         "source": "selected_todo", "ordering": "before_work",
         "reason": "Read full current requirements and status/claim. Require one matching active Todo; missing, ambiguous or changed work requires a fresh guard. A summary cannot replace this read.",
     }]
+
     assert arbitration == SchedulerArbitration(SchedulerDisposition.ACTIVE_WORK,
         "interaction_agent_attempt_required", "bounded_delivery")
     assert_private_files_removed(Path(tempfile.gettempdir()))
@@ -140,7 +160,9 @@ def test_failed_size_probe_preserves_real_rpc_serialization_error(
         assert error.value.diagnostic_code == "runtime_request_failed"
         assert isinstance(error.value.__cause__, RecursionError)
     assert modes == [True]
-    assert snapshot_directories == []
+    # The shared transport may allocate its response sink before encoding.
+    # Rejected input must still remove every private directory and file.
+    assert all(not directory.exists() for directory in snapshot_directories)
     assert_private_files_removed(Path(tempfile.gettempdir()))
     assert effect_runtime.effect_runtime_result("runtime.ping", {})["pid"] == pid
 
@@ -154,7 +176,7 @@ def test_near_limit_read_survives_fused_arbitration_and_cleans_private_files(
         "source": "existing", "evidence": ""}
     # Match the legacy carrier and envelope sizes; nonce values themselves do not matter.
     params = {"required_reads": [read], "goal_id": None, "goal_state_file": None,
-        "goal_acceptance_enabled": False, "selected_todo": {"todo_id": None},
+        "goal_acceptance_checks_present": False, "selected_todo": {"todo_id": None},
         "task_orchestration_contract": {"schema_version": None, "mode": None, "primary_todo_id": None},
         "should_run": False, "delivery_allowed": True, "selection_required": False,
         "has_replan": False, "settlement_only": False, "effective_action": None,
@@ -190,7 +212,7 @@ def test_small_request_retains_large_generated_read_reply_and_cleans_private_fil
     runtime_root = "/" + "r" * (effect_runtime.MAX_RESPONSE_BYTES // 2)
     prefix = "loopx --runtime-root " + runtime_root
     payload = {"goal_id": "goal-wire", "should_run": True,
-        "agent_todo_summary": {"goal_acceptance_contract": {"enabled": True}},
+        "agent_todo_summary": {"goal_acceptance_contract": {"criteria": []}},
         "selected_todo": {"todo_id": "todo_selected"},
         "required_reads": [{"command": "bad\0command"}] if reject else []}
     # The input carries this prefix once; generated acceptance/Todo reads each retain it.
@@ -199,7 +221,7 @@ def test_small_request_retains_large_generated_read_reply_and_cleans_private_fil
     expected = [{
         "command": prefix + " --format json goal-acceptance inspect --goal-id goal-wire",
         "source": "goal_acceptance", "ordering": "before_work",
-        "reason": "Read full configured objective, non-goals and criteria with scope/revision. Scoped acceptance does not replace Goal intent or prove completion; disabled/changed criteria require a fresh guard.",
+        "reason": "Read full configured objective, non-goals and criteria with scope/revision. Scoped acceptance does not replace Goal intent or prove completion; Removed or changed checks require a fresh guard.",
     }, {
         "command": prefix + " --format json todo list --goal-id goal-wire --todo-id todo_selected",
         "source": "selected_todo", "ordering": "before_work",

@@ -9,13 +9,15 @@ import sys
 import time
 
 import pytest
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import advance_canonical_fixture_authority, isolate_sqlite_runtime
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.effect_runtime import EffectRuntimeConflict
 from loopx.control_plane.goals import checkpoint_context_io as context_io
 from loopx.control_plane.projects.registry_codec import (
+    ProjectRegistryProtocolError,
     load_project_registry,
+    load_registry as load_runtime_registry,
     source_session_registry_transaction,
 )
 from tests.control_plane.test_checkpoint_read_context import _missing
@@ -92,14 +94,14 @@ def _replace_source_goal(registry: Path, instance_id: str) -> None:
 
 def fixture(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry, binding, delivery, original = _missing(tmp_path)
+    project, runtime, registry, binding, delivery, original = _missing(tmp_path, provider=provider)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     todos = [{"schema_version": "todo_item_v0", "todo_id": name, "index": index,
         "role": "agent", "status": "open", "done": False, "text": f"Synthetic page work {name}",
         "task_class": "advancement_task", "archive_state": "active", "source_section": "Agent Todo",
         "claimed_by": AGENT_ID} for index, name in enumerate((TODO_ID, "todo_dependency", "todo_unrelated"), 1)]
     projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos, handoff_mode="hard_lease", leases=[])
-    initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
+    advance_canonical_fixture_authority(runtime, GOAL_ID, projection, operation_id="fixture-checkpoint-fences")
     for todo in todos:
         rc, lease = _run_cli(registry, runtime, "task-lease", "acquire", "--goal-id", GOAL_ID,
             "--todo-id", todo["todo_id"], "--owner", AGENT_ID,
@@ -162,7 +164,7 @@ def test_exact_source_checkpoint_commits_only_for_the_current_goal_instance(
     tmp_path,
     monkeypatch,
 ):
-    from loopx import state_refresh
+    from loopx import history, state_refresh
 
     current = _missing(tmp_path / "current")
     stale = _missing(tmp_path / "stale")
@@ -173,8 +175,14 @@ def test_exact_source_checkpoint_commits_only_for_the_current_goal_instance(
 
     monkeypatch.setattr(context_io, "load_registry", load_project_registry)
     monkeypatch.setattr(state_refresh, "load_registry", load_project_registry)
+    # This fixture exercises the exact-source commit fence below runtime
+    # admission. Include late-bound Goal-facts reads in that fixture seam;
+    # the real generic reader must still refuse this lifecycle-only profile.
+    monkeypatch.setattr(history, "load_registry", load_project_registry)
 
     _, current_runtime, current_registry, _, _, current_original = current
+    with pytest.raises(ProjectRegistryProtocolError, match="lifecycle-only profile"):
+        load_runtime_registry(current_registry)
     current_context = context_io.read_checkpoint_context(
         registry_path=current_registry,
         runtime_root_override=str(current_runtime),
@@ -199,6 +207,17 @@ def test_exact_source_checkpoint_commits_only_for_the_current_goal_instance(
         .splitlines()[-1]
     )
     assert committed_row["goal_ref"] == goal_ref
+    current_index = current_runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    committed_bytes = current_index.read_bytes()
+    replay = refresh(
+        current_registry,
+        current_runtime,
+        current_context["read_context_id"],
+        goal_ref=goal_ref,
+    )
+    assert replay["idempotent_replay"] is True
+    assert current_index.read_bytes() == committed_bytes
+    assert _spend_run_count(current_runtime) == 0
 
     _, stale_runtime, stale_registry, _, _, _ = stale
     stale_context = context_io.read_checkpoint_context(
@@ -225,6 +244,7 @@ def test_exact_source_checkpoint_commits_only_for_the_current_goal_instance(
         )
     assert rejected.value.diagnostic_code == "stale_goal_instance"
     assert stale_index.read_bytes() == before
+    assert _spend_run_count(stale_runtime) == 0
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

@@ -7,8 +7,13 @@ COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 RUN --mount=type=cache,target=/root/.npm \
-    npm install --global --silent --ignore-scripts \
-      pnpm@10.33.0 @deepseek-ai/dsh@0.1.5-rc.2
+    npm install --global --silent --ignore-scripts pnpm@10.33.0
+# The legacy CLI's caret dependencies otherwise resolve a mixed rc.2/rc.3
+# boot graph, including a sandbox provider absent from that CLI distribution.
+COPY dsh-legacy-host.package.json /opt/dsh-legacy/package.json
+RUN --mount=type=cache,target=/root/.npm \
+    npm install --prefix /opt/dsh-legacy --silent --ignore-scripts --no-audit --no-fund
+ENV PATH="/opt/dsh-legacy/node_modules/.bin:${PATH}"
 RUN useradd --create-home --uid 10001 --shell /bin/bash loopx-smoke \
     && externally_managed="$(python3 -c \
       'import sysconfig; print(sysconfig.get_path("stdlib") + "/EXTERNALLY-MANAGED")')" \

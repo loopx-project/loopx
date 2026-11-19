@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from ..effect_runtime import effect_runtime_result
+from ..effect_runtime import effect_runtime_result, source_number_tokens
 
 
 TURN_JOURNAL_INTERPRETATION_REQUEST_SCHEMA_VERSION = (
@@ -124,6 +124,9 @@ def interpret_turn_journal_projection(
             else None
         ),
     }
+    tokens = source_number_tokens(journal)
+    if tokens:
+        request["source_number_tokens"] = tokens
     payload = effect_runtime_result("turn_journal.inspect", request)
     if not isinstance(payload, dict) or set(payload) != _PROJECTION_KEYS:
         raise RuntimeError(
@@ -172,9 +175,15 @@ def write_turn_journal(
 
     request: dict[str, Any] = {
         "path": path,
+        # TS owns validation, transitions and publication over the native object.
         "journal": dict(journal),
         "expected_effect_id": expected_effect_id,
     }
+    # Reuse context-delivery's sparse IO metadata. Keep the ordinary object
+    # carrier so quoted task/evidence text is not escaped a second time.
+    tokens = source_number_tokens(journal)
+    if tokens:
+        request["source_number_tokens"] = tokens
     if source_admission is not None:
         request["source_admission"] = dict(source_admission)
     payload = effect_runtime_result(

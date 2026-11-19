@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from typing import Any, TYPE_CHECKING, cast
+
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..goals.goal_frontier.fallback_source import FallbackTodoSource
@@ -13,6 +14,7 @@ from ...materials import goal_state_path
 from ...quota import (
     AUTONOMOUS_REPLAN_ACK_NEUTRAL_CLASSIFICATIONS,
     _resolve_reward_memory_experiment_from_status,
+    quota_status,
 )
 from ..agents.agent_lane_recommendation import (
     build_agent_lane_next_action,
@@ -40,6 +42,7 @@ from ..quota.blocked_transition_notice import build_blocked_transition_notice
 from ..quota.error_codes import HeartbeatReceiptIdentityConflictError
 from ..effect_runtime import EffectRuntimeRejected
 from ..work_items.replan_semantics_codec import project_replan_semantics
+from ..work_items.lifecycle_recovery import attach_receipt_replan_context
 from ..agents.capability_memory import resolve_agent_capabilities
 from ..quota.goal_boundary import (
     goal_boundary as _goal_boundary,
@@ -75,6 +78,7 @@ from ..quota.task_orchestration import (
 from ..scheduler.execution_context import (
     SchedulerExecutionContextResolution,
 )
+from ..status.monitor_display_projection import build_project_asset
 from ..todos.contract import (
     TODO_STATUS_BLOCKED,
     TODO_STATUS_DEFERRED,
@@ -96,9 +100,7 @@ from ..todos.todo_semantics import (
     todo_item_task_class as projection_todo_item_task_class,
 )
 from ..todos.quota_summary import (
-    select_planning_inventory_source_items,
-    select_quota_todo_source_items,
-    select_quota_todo_summary,
+    select_quota_todo_contexts,
     select_task_orchestration_authority_items,
 )
 from ..todos.summary_item import compact_todo_summary_item, compact_todo_summary_items
@@ -109,6 +111,7 @@ from ..work_items.capability_monitor_fallback import (
     build_capability_gate_with_monitor_fallback,
 )
 from ..work_items.primary_action import protocol_action_text as _protocol_action_text
+from ..work_items.project_asset import project_asset_quota_summary
 from ..work_items.work_lane import (
     lark_inbox_reply_due_work_lane_contract,
     operator_inbox_material_review_due_work_lane_contract,
@@ -146,6 +149,7 @@ class _QuotaDecisionPreparation:
     action_selection_qualification: dict[str, Any] | None
     receipt_bound_monitor_phase: ReceiptBoundMonitorPhase | None
     receipt_bound_replay_phase: ReceiptBoundReplayPhase | None
+    receipt_bound_replan_execution_pending: bool
     user_todo_summary: dict[str, Any] | None
     agent_todo_summary: dict[str, Any] | None
     agent_todo_planning_source_items: list[dict[str, Any]]
@@ -196,6 +200,10 @@ def _preserve_receipt_bound_replan_obligation(
     replay_phase: ReceiptBoundReplayPhase | None = None,
     transition_candidates: list[dict[str, Any]] | None = None,
     stride_strategy: str = "off",
+    receipt_review: Mapping[str, Any] | None = None,
+    goal_id: str | None = None,
+    guard_recorded_at: str | None = None,
+    guard_turn_instance_id: str | None = None,
 ) -> dict[str, Any] | None:
     preserved_replan_id = normalize_todo_replan_obligation_id(
         receipt_bound_replan_obligation_id
@@ -211,6 +219,10 @@ def _preserve_receipt_bound_replan_obligation(
             "replay_phase": replay_phase.value if replay_phase is not None else None,
             "transition_candidates": transition_candidates or [],
             "stride_strategy": stride_strategy,
+            "receipt_review": receipt_review,
+            "goal_id": goal_id,
+            "guard_recorded_at": guard_recorded_at,
+            "guard_turn_instance_id": guard_turn_instance_id,
         })
     except EffectRuntimeRejected as exc:
         if exc.diagnostic_code == "heartbeat_receipt_identity_conflict":
@@ -222,6 +234,88 @@ def _preserve_receipt_bound_replan_obligation(
     if not isinstance(obligation, Mapping) or obligation.get("obligation_id") != preserved_replan_id:
         raise RuntimeError("TypeScript receipt-bound replan obligation shape mismatch")
     return dict(obligation)
+
+
+def _prepare_quota_replan_context(
+    *,
+    status_payload: dict[str, Any],
+    safe_goal_id: str,
+    agent_frontier_id: str | None,
+    item: dict[str, Any],
+    project_asset: dict[str, Any],
+    user_todo_summary: dict[str, Any] | None,
+    agent_todo_summary: dict[str, Any] | None,
+    agent_todo_terminal_source_items: list[dict[str, Any]],
+    authoritative_fallback_todo_items: FallbackTodoSource,
+    effective_available_capabilities: Any,
+    work_lane_contract: dict[str, Any] | None,
+    registered_agent_ids: list[str],
+    registry_goal: dict[str, Any],
+    agent_identity: dict[str, Any] | None,
+    receipt_bound_replan_obligation_id: str | None,
+    receipt_bound_replan_guard_scoped: bool,
+    receipt_bound_replay_phase: ReceiptBoundReplayPhase | None,
+    receipt_bound_guard_recorded_at: str | None,
+    receipt_bound_guard_turn_instance_id: str | None,
+    receipt_bound_replan_review: Mapping[str, Any] | None,
+    replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Project the current frontier and contextualize its receipt-bound review."""
+    # Once the settlement owner verifies writeback, an old review's sources
+    # cannot be prerequisites for spending its receipt (or replaying it).
+    reconstruct_review = receipt_bound_replay_phase not in (
+        ReceiptBoundReplayPhase.SETTLEMENT_PENDING, ReceiptBoundReplayPhase.SETTLED,
+    )
+    goal_frontier_context = build_goal_frontier_projection_context_from_status(
+        replan_explore_reader=replan_explore_reader,
+        goal_id=safe_goal_id,
+        agent_id=agent_frontier_id,
+        status_payload=status_payload,
+        item=item,
+        project_asset=project_asset,
+        user_todo_summary=user_todo_summary,
+        agent_todo_summary=agent_todo_summary,
+        agent_todo_source_items=agent_todo_terminal_source_items,
+        fallback_todo_source_items=authoritative_fallback_todo_items,
+        available_capabilities=effective_available_capabilities,
+        work_lane_contract=work_lane_contract,
+        neutral_replan_ack_classifications=AUTONOMOUS_REPLAN_ACK_NEUTRAL_CLASSIFICATIONS,
+        registered_agent_ids=registered_agent_ids,
+        goal_status=str(registry_goal.get("status") or ""),
+        agent_profile=_quota_agent_profile(agent_identity),
+        receipt_bound_replan_obligation_id=(
+            receipt_bound_replan_obligation_id if reconstruct_review else None
+        ),
+        receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
+    )
+    replan_obligation = (
+        None
+        if receipt_bound_replay_phase is ReceiptBoundReplayPhase.SETTLED
+        else _preserve_receipt_bound_replan_obligation(
+            goal_frontier_context.get("replan_obligation") if reconstruct_review else None,
+            receipt_bound_replan_obligation_id,
+            guard_scoped=receipt_bound_replan_guard_scoped,
+            agent_id=agent_frontier_id,
+            replay_phase=receipt_bound_replay_phase,
+            transition_candidates=(
+                goal_frontier_context.get("replan_transition_candidates") if reconstruct_review else None
+            ),
+            stride_strategy=goal_frontier_context["stride_strategy"],
+            receipt_review=receipt_bound_replan_review,
+            goal_id=safe_goal_id,
+            guard_recorded_at=receipt_bound_guard_recorded_at,
+            guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
+        )
+    )
+    if replan_obligation and not replan_obligation.get("replan_context") and not replan_obligation.get("settlement_action_packet"):
+        replan_obligation = attach_receipt_replan_context(
+            replan_obligation, None, goal_id=safe_goal_id, agent_id=agent_frontier_id,
+            source_status=status_payload, stride_strategy=goal_frontier_context["stride_strategy"],
+            explore_reader=replan_explore_reader,
+            goal_acceptance_contract=(agent_todo_summary or {}).get("goal_acceptance_contract"),
+            todo_items=agent_todo_terminal_source_items,
+        )
+    return goal_frontier_context, replan_obligation
 
 
 def _same_todo_identity(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -237,20 +331,24 @@ def _same_todo_identity(left: dict[str, Any], right: dict[str, Any]) -> bool:
 
 def _blocked_priority_fallback(
     agent_todo_summary: dict[str, Any] | None,
+    *,
+    selected_executable: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if not isinstance(agent_todo_summary, dict):
         return None
     first_open = (
-        agent_todo_summary.get("first_open_items")
+        cast(list[Any], agent_todo_summary.get("first_open_items"))
         if isinstance(agent_todo_summary.get("first_open_items"), list)
         else []
     )
     first_executable = (
-        agent_todo_summary.get("first_executable_items")
+        cast(list[Any], agent_todo_summary.get("first_executable_items"))
         if isinstance(agent_todo_summary.get("first_executable_items"), list)
         else []
     )
-    selected = next((item for item in first_executable if isinstance(item, dict)), None)
+    selected = selected_executable or next(
+        (item for item in first_executable if isinstance(item, dict)), None,
+    )
     if not selected:
         return None
 
@@ -367,7 +465,7 @@ def _outcome_floor_blocker_already_projected(
         return False
 
     executable_items = (
-        agent_todo_summary.get("first_executable_items")
+        cast(list[Any], agent_todo_summary.get("first_executable_items"))
         if isinstance(agent_todo_summary.get("first_executable_items"), list)
         else []
     )
@@ -378,7 +476,7 @@ def _outcome_floor_blocker_already_projected(
         return False
 
     first_open = (
-        agent_todo_summary.get("first_open_items")
+        cast(list[Any], agent_todo_summary.get("first_open_items"))
         if isinstance(agent_todo_summary.get("first_open_items"), list)
         else []
     )
@@ -419,20 +517,20 @@ def _agent_monitor_only(agent_identity: Mapping[str, Any] | None) -> bool:
 
 
 def _build_agent_work_lane(
-    item: Mapping[str, Any],
+    item: dict[str, Any],
     *,
-    status_payload: Mapping[str, Any],
-    project_asset: Mapping[str, Any],
+    status_payload: dict[str, Any],
+    project_asset: dict[str, Any],
     goal_id: str,
     agent_id: str | None,
-    goal_boundary: Mapping[str, Any],
-    agent_identity: Mapping[str, Any] | None,
-    agent_todo_summary: Mapping[str, Any],
+    goal_boundary: dict[str, Any] | None,
+    agent_identity: dict[str, Any] | None,
+    agent_todo_summary: dict[str, Any] | None,
     agent_todo_source_items: list[dict[str, Any]],
     user_todo_source_items: list[dict[str, Any]],
     available_capabilities: Any,
-    monitor_debt_arbitration: Mapping[str, Any] | None,
-) -> tuple[bool, dict[str, Any], dict[str, Any] | None]:
+    monitor_debt_arbitration: dict[str, Any] | None,
+) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None]:
     monitor_only = _agent_monitor_only(agent_identity)
     work_lane = build_quota_work_lane_contract(
         item,
@@ -452,16 +550,16 @@ def _build_agent_work_lane(
         agent_identity=agent_identity,
         agent_todo_summary=agent_todo_summary,
         raw_agent_todo_summary=(
-            item.get("agent_todos")
+            cast(dict[str, Any], item.get("agent_todos"))
             if isinstance(item.get("agent_todos"), dict)
-            else project_asset.get("agent_todos")
+            else cast(dict[str, Any], project_asset.get("agent_todos"))
             if isinstance(project_asset.get("agent_todos"), dict)
             else None
         ),
         raw_user_todo_summary=(
-            item.get("user_todos")
+            cast(dict[str, Any], item.get("user_todos"))
             if isinstance(item.get("user_todos"), dict)
-            else project_asset.get("user_todos")
+            else cast(dict[str, Any], project_asset.get("user_todos"))
             if isinstance(project_asset.get("user_todos"), dict)
             else None
         ),
@@ -470,7 +568,7 @@ def _build_agent_work_lane(
         available_capabilities=available_capabilities,
         parent_goal_id=goal_id,
         agent_management_projection=(
-            status_payload.get("agent_management_projection")
+            cast(dict[str, Any], status_payload.get("agent_management_projection"))
             if isinstance(status_payload.get("agent_management_projection"), dict)
             else None
         ),
@@ -516,7 +614,7 @@ def _pending_receipt_resume_is_ready(
     return pending and goal_health_ok and state == "eligible" and any(
         normalize_todo_id(candidate.get("todo_id")) == todo_id
         for candidate in _agent_scope_deferred_resume_candidates(
-            summary,
+            cast(dict[str, Any], summary),
             agent_id=normalize_todo_claimed_by((identity or {}).get("agent_id")),
         )
     )
@@ -534,6 +632,101 @@ def _receipt_delivery_continuity(
     todo = next((candidate for candidate in todos
                  if normalize_todo_id(candidate.get("todo_id")) == todo_id), None)
     return anchor, todo
+
+
+def _prepare_gate_selection_candidates(
+    *, agent_identity: dict[str, Any] | None,
+    source_items: list[dict[str, Any]], planning_items: list[dict[str, Any]],
+    available_capabilities: Any, requested_todo_id: str | None,
+    receipt_bound_todo_id: str | None,
+) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None]:
+    """Transport exact candidates through the existing selection/gate owners."""
+    # Resolve the exact choice before selecting a gate-independent route. The
+    # ranked fallback is advice, not an additional permission boundary.
+    requested_action_candidate = (
+        build_explicit_advancement_next_action(
+            agent_identity=agent_identity,
+            agent_todo_items=planning_items,
+            available_capabilities=available_capabilities,
+            todo_id=requested_todo_id,
+            selection_binding="pending_action_selection",
+        )
+        if requested_todo_id
+        else None
+    )
+    # Recovery keeps the committed work identity. Requalify that exact work
+    # against the current gate instead of borrowing an unrelated default's
+    # independence after the explicit selection has become a receipt.
+    fallback_todo_id = receipt_bound_todo_id or requested_todo_id
+    fallback_candidate = (
+        build_receipt_bound_advancement_next_action(
+            agent_identity=agent_identity,
+            agent_todo_items=source_items,
+            available_capabilities=available_capabilities,
+            receipt_bound_todo_id=receipt_bound_todo_id,
+        ) if receipt_bound_todo_id else requested_action_candidate
+    )
+    source_candidate = next((item for item in source_items
+        if item.get("todo_id") == fallback_todo_id), None) if fallback_candidate else None
+    return requested_action_candidate, fallback_todo_id, source_candidate
+
+
+def _apply_agent_scoped_user_todo_override(
+    source_item: dict[str, Any],
+    *,
+    quota: dict[str, Any],
+    project_asset: dict[str, Any],
+    override: dict[str, Any],
+    registry_goal: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Keep the scoped quota decision and its cached projection coherent."""
+    item = {**source_item, **override.pop("item_patch", {})}
+    quota = {**quota, **override.pop("quota_patch", {})}
+    # Resolve the current lane through the existing quota owner. Removing a
+    # foreign gate does not remove exhaustion, focus waits or lifecycle stops.
+    for field in ("safe_bypass_allowed", "safe_bypass_kind", "safe_bypass_policy", "blocked_action_scope"):
+        quota.pop(field, None)
+    scoped_quota = quota_status(
+        {**registry_goal, "quota": quota},
+        waiting_on=item.get("waiting_on"), severity=source_item.get("severity"),
+        lifecycle_phase=source_item.get("lifecycle_phase"),
+        lifecycle_flags=source_item.get("lifecycle_flags"), status=source_item.get("status"),
+    )
+    state = str(scoped_quota["state"])
+    reason = str(
+        override["reason"] if state == override["to_state"] else scoped_quota["reason"]
+    )
+    override["to_state"] = state
+    quota = {**quota, **scoped_quota, str(override["kind"]): override, "reason": reason}
+    if project_asset:
+        shared_asset_inputs = {
+            "operator_question": source_item.get("operator_question"),
+            "agent_command": source_item.get("agent_command"),
+            "missing_gates": source_item.get("missing_gates"),
+            "next_handoff_condition": source_item.get("next_handoff_condition"),
+        }
+        source_asset = build_project_asset(
+            status=str(source_item.get("status") or ""),
+            waiting_on=str(source_item.get("waiting_on") or ""),
+            recommended_action=str(source_item.get("recommended_action") or ""),
+            **shared_asset_inputs,
+        )
+        scoped_asset = build_project_asset(
+            status=str(item.get("status") or ""),
+            waiting_on=str(item.get("waiting_on") or ""),
+            recommended_action=str(item.get("recommended_action") or ""),
+            **shared_asset_inputs,
+        )
+        # Only replace a derived stop instruction. Opaque caller constraints
+        # are retained verbatim and never participate in quota admission.
+        cached_stop = project_asset.get("stop_condition")
+        if cached_stop and cached_stop != source_asset["stop_condition"]:
+            scoped_asset["stop_condition"] = cached_stop
+        project_asset = {**project_asset, **scoped_asset}
+        if "quota" in project_asset:
+            project_asset["quota"] = project_asset_quota_summary(quota)
+        item = {**item, "project_asset": project_asset}
+    return {**item, "quota": quota}, quota, project_asset
 
 
 def _prepare_quota_should_run_item(
@@ -558,12 +751,15 @@ def _prepare_quota_should_run_item(
     receipt_bound_replay_phase: ReceiptBoundReplayPhase | None,
     receipt_bound_replan_obligation_id: str | None,
     receipt_bound_replan_guard_scoped: bool = False,
+    receipt_bound_replan_execution_pending: bool = False,
     receipt_bound_successor_replan: bool = False,
     authoritative_fallback_todo_items: FallbackTodoSource = None,
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
     receipt_bound_guard_recorded_at: str | None = None,
+    receipt_bound_guard_turn_instance_id: str | None = None,
+    receipt_bound_replan_review: Mapping[str, Any] | None = None,
 ) -> _QuotaDecisionPreparation:
-    quota = item.get("quota") if isinstance(item.get("quota"), dict) else {}
+    quota = cast(dict[str, Any], item.get("quota")) if isinstance(item.get("quota"), dict) else {}
     state = str(quota.get("state") or "unknown")
     normal_delivery_allowed = goal_health_ok and state == "eligible"
     recovery_allowed = _recovery_delivery_allowed(quota, plan_ok=goal_health_ok)
@@ -582,40 +778,29 @@ def _prepare_quota_should_run_item(
         item=item, project_asset=project_asset, available=available_capabilities,
     )
     effective_available_capabilities = availability["effective"]
-    user_todo_summary = select_quota_todo_summary(
+    user_todo_summary, agent_todo_summary, agent_todo_display_views, user_todo_source_items = select_quota_todo_contexts(
         item.get("user_todos"),
         project_asset.get("user_todos") if project_asset else None,
-        agent_identity=agent_identity,
-        filter_user_gate_blocks_agent=True,
-        available_capabilities=effective_available_capabilities,
-    )
-    agent_todo_summary = select_quota_todo_summary(
         item.get("agent_todos"),
         project_asset.get("agent_todos") if project_asset else None,
         agent_identity=agent_identity,
         available_capabilities=effective_available_capabilities,
     )
-    user_todo_source_items = select_quota_todo_source_items(
-        item.get("user_todos"),
-        project_asset.get("user_todos") if project_asset else None,
-    )
-    agent_todo_source_items = select_quota_todo_source_items(
-        item.get("agent_todos"),
-        project_asset.get("agent_todos") if project_asset else None,
-    )
-    agent_todo_planning_source_items = select_planning_inventory_source_items(
-        item.get("agent_todos"),
-        project_asset.get("agent_todos") if project_asset else None,
-    )
+    # Only this Agent source is consumed as summary, planning and retained
+    # terminal rows below. User-source and general display calls stay single-view.
+    agent_todo_source_items = agent_todo_display_views["summary"]
+    agent_todo_planning_source_items = agent_todo_display_views["planning"]
     task_orchestration_agent_items = select_task_orchestration_authority_items(
         item.get("agent_todos"),
         project_asset.get("agent_todos") if project_asset else None,
         role="agent",
+        fallback_source_items=agent_todo_source_items,
     )
     task_orchestration_user_blockers = select_task_orchestration_authority_items(
         item.get("user_todos"),
         project_asset.get("user_todos") if project_asset else None,
         role="user",
+        fallback_source_items=user_todo_source_items,
     )
     agent_scoped_user_todo_override = _agent_scoped_user_todo_override(
         state=state,
@@ -625,16 +810,11 @@ def _prepare_quota_should_run_item(
         agent_identity=agent_identity,
     )
     if agent_scoped_user_todo_override:
-        state = str(agent_scoped_user_todo_override["to_state"])
-        reason = str(agent_scoped_user_todo_override["reason"])
-        quota = {
-            **quota,
-            **agent_scoped_user_todo_override.pop("quota_patch", {}),
-            "state": state,
-            str(agent_scoped_user_todo_override["kind"]): agent_scoped_user_todo_override,
-            "reason": reason,
-        }
-        item = {**item, **agent_scoped_user_todo_override.pop("item_patch", {})}
+        item, quota, project_asset = _apply_agent_scoped_user_todo_override(
+            item, quota=quota, project_asset=project_asset,
+            override=agent_scoped_user_todo_override, registry_goal=registry_goal,
+        )
+        state, reason = str(quota["state"]), str(quota["reason"])
         normal_delivery_allowed = goal_health_ok and state == "eligible"
         recovery_allowed = _recovery_delivery_allowed(quota, plan_ok=goal_health_ok)
     if recovery_allowed and _outcome_floor_blocker_already_projected(agent_todo_summary):
@@ -736,12 +916,23 @@ def _prepare_quota_should_run_item(
     if task_orchestration_contract_is_actionable(task_orchestration_contract):
         capability_monitor_contract = capability_monitor_fallback = None
     work_lane_contract = capability_monitor_contract or work_lane_contract
+    requested_action_candidate, fallback_todo_id, fallback_source_candidate = (
+        _prepare_gate_selection_candidates(
+            agent_identity=agent_identity, source_items=agent_todo_source_items,
+            planning_items=agent_todo_planning_source_items,
+            available_capabilities=effective_available_capabilities,
+            requested_todo_id=requested_action_todo_id,
+            receipt_bound_todo_id=receipt_bound_todo_id,
+        )
+    )
     scoped_user_gate_fallback = _scoped_user_gate_fallback(
         user_todo_summary,
         agent_todo_summary,
         capability_gate=capability_gate,
         allow_unrelated_gate=bool(quota.get("safe_bypass_allowed")),
         monitor_debt_backoff_active=bool(monitor_debt_arbitration.get("active")),
+        requested_todo_id=fallback_todo_id,
+        requested_candidate=fallback_source_candidate,
     )
     work_lane_contract = (
         scoped_user_gate_due_monitor_contract(
@@ -782,7 +973,7 @@ def _prepare_quota_should_run_item(
             active_next_action=(
                 item.get("active_state_next_action")
                 or (
-                    item.get("project_asset", {}).get("next_action")
+                    cast(dict[str, object], item.get("project_asset")).get("next_action")
                     if isinstance(item.get("project_asset"), dict)
                     else None
                 )
@@ -848,46 +1039,32 @@ def _prepare_quota_should_run_item(
         if isinstance(agent_identity, dict)
         else []
     )
-    goal_frontier_context = build_goal_frontier_projection_context_from_status(
-        replan_explore_reader=replan_explore_reader,
-        goal_id=safe_goal_id,
-        agent_id=agent_frontier_id,
+    goal_frontier_context, replan_obligation = _prepare_quota_replan_context(
         status_payload=status_payload,
+        safe_goal_id=safe_goal_id,
+        agent_frontier_id=agent_frontier_id,
         item=item,
         project_asset=project_asset,
         user_todo_summary=user_todo_summary,
         agent_todo_summary=agent_todo_summary,
-        agent_todo_source_items=select_planning_inventory_source_items(
-            item.get("agent_todos"),
-            project_asset.get("agent_todos") if project_asset else None,
-            include_terminal=True,
-        ),
-        fallback_todo_source_items=authoritative_fallback_todo_items,
-        available_capabilities=effective_available_capabilities,
+        agent_todo_terminal_source_items=agent_todo_display_views["terminal"],
+        authoritative_fallback_todo_items=authoritative_fallback_todo_items,
+        effective_available_capabilities=effective_available_capabilities,
         work_lane_contract=work_lane_contract,
-        neutral_replan_ack_classifications=AUTONOMOUS_REPLAN_ACK_NEUTRAL_CLASSIFICATIONS,
         registered_agent_ids=registered_agent_ids,
-        goal_status=str(registry_goal.get("status") or ""),
-        agent_profile=_quota_agent_profile(agent_identity),
+        registry_goal=registry_goal,
+        agent_identity=agent_identity,
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
+        receipt_bound_replan_guard_scoped=receipt_bound_replan_guard_scoped,
+        receipt_bound_replay_phase=receipt_bound_replay_phase,
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
-    )
-    replan_obligation = (
-        None
-        if receipt_bound_replay_phase is ReceiptBoundReplayPhase.SETTLED
-        else _preserve_receipt_bound_replan_obligation(
-            goal_frontier_context.get("replan_obligation"),
-            receipt_bound_replan_obligation_id,
-            guard_scoped=receipt_bound_replan_guard_scoped,
-            agent_id=agent_frontier_id,
-            replay_phase=receipt_bound_replay_phase,
-            transition_candidates=goal_frontier_context.get("replan_transition_candidates"),
-            stride_strategy=goal_frontier_context["stride_strategy"],
-        )
+        receipt_bound_guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
+        receipt_bound_replan_review=receipt_bound_replan_review,
+        replan_explore_reader=replan_explore_reader,
     )
     replan_scope = goal_frontier_context.get("replan_scope") or {}
     goal_frontier_projection = (
-        goal_frontier_context.get("goal_frontier_projection")
+        cast(dict[str, Any], goal_frontier_context.get("goal_frontier_projection"))
         if isinstance(goal_frontier_context.get("goal_frontier_projection"), dict)
         else {}
     )
@@ -908,19 +1085,6 @@ def _prepare_quota_should_run_item(
         recovery_allowed = False
         reason = str(projection_gap_repair.get("reason") or reason)
     boundary_projection_repair = None
-    # Resolve exact identity before Agent/display compaction. Live callers supply
-    # the complete source; pure status callers use only their supplied snapshot.
-    requested_action_candidate = (
-        build_explicit_advancement_next_action(
-            agent_identity=agent_identity,
-            agent_todo_items=agent_todo_planning_source_items,
-            available_capabilities=effective_available_capabilities,
-            todo_id=requested_action_todo_id,
-            selection_binding="pending_action_selection",
-        )
-        if requested_action_todo_id
-        else None
-    )
     state_path = goal_state_path(registry_goal)
     return _QuotaDecisionPreparation(
         status_payload=status_payload,
@@ -947,6 +1111,7 @@ def _prepare_quota_should_run_item(
         action_selection_qualification=None,
         receipt_bound_monitor_phase=receipt_bound_monitor_phase,
         receipt_bound_replay_phase=receipt_bound_replay_phase,
+        receipt_bound_replan_execution_pending=receipt_bound_replan_execution_pending,
         user_todo_summary=user_todo_summary,
         agent_todo_summary=agent_todo_summary,
         agent_todo_planning_source_items=agent_todo_planning_source_items,

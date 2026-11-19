@@ -35,6 +35,47 @@ def test_history_contract_errors_are_not_empty_results():
             replan_history_from_status(status, "evidence-goal")
 
 
+@pytest.mark.parametrize("configured", [False, True])
+def test_replan_keeps_open_outcome_requirements_and_their_evidence(configured):
+    declaration = {"schema_version": "loopx_goal_outcomes_v0", "revision": 2,
+        "current_lifetime": True, "execution_authority_granted": False,
+        "goal_completion_assessed": False, "acceptance_gaps": [], "outcomes": [{
+            "id": "artifact", "owner_agent_id": "agent-a", "objective": "Deliver a correct artifact",
+            "todo_ids": ["todo-a"], "work": [{"todo_id": "todo-a", "status": "open"}],
+            "requirements": [{"id": "correct", "description": "Preserve the required behavior",
+                "status": "unverified", "planning_satisfied": False,
+                "agent_review": {"conclusion": "unmet", "basis_current": True,
+                    "independently_verified": False, "evidence_refs": ["probe:negative"],
+                    "note": "The diagnostic exposed a remaining mismatch"}}]}]}
+    acceptance = {"outcome_requirements": declaration}
+    if configured:
+        acceptance.update(outcome_id="artifact", objective="Deliver a correct artifact",
+            criteria=[{"id": "correct", "description": "Preserve the required behavior"}],
+            revision=1, digest="a" * 64, status="failed",
+            tasks=[{"todo_id": "todo-a", "state": "ready", "criterion_ids": ["correct"]}],
+            verification={"contract_revision": 1, "contract_digest": "a" * 64, "todo_id": None,
+                "results": [{"criterion_id": "correct", "passed": False, "exit_code": 1}]})
+    context = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=(),
+        goal_acceptance_contract=acceptance)
+    assert context["core_goal"]["acceptance_contract"] == acceptance
+    assert context["core_goal"]["objective_missing"], "a supporting outcome cannot replace root intent"
+    changed = json.loads(json.dumps(acceptance))
+    changed["outcome_requirements"]["outcomes"][0]["requirements"][0]["agent_review"]["evidence_refs"] = ["probe:new"]
+    next_context = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=(),
+        goal_acceptance_contract=changed)
+    assert next_context["context_id"] != context["context_id"], "changed outcome evidence belongs to the decision basis"
+
+
+def test_empty_acceptance_stays_absent_and_configured_evidence_survives_without_outcomes():
+    from loopx.control_plane.work_items.replan_context_codec import goal_context_facts
+
+    assert goal_context_facts(None, "evidence-goal", {}) == {}
+    assert goal_context_facts(None, "evidence-goal", {"enabled": False, "criteria": []}) == {}
+    checks = {"objective": "Check one task", "criteria": [], "scope": {"kind": "all_advancement"},
+        "status": "unverified", "tasks": [], "verification": None}
+    assert goal_context_facts(None, "evidence-goal", checks) == {"acceptance_contract": checks}
+
+
 def test_projection_rejects_invalid_typed_records_and_preserves_scoped_prose():
     for invalid in [None, {}, {"schema_version": "future"}]:
         with pytest.raises(ValueError):
@@ -171,14 +212,15 @@ def test_old_evidence_survives_display_limit_and_core_goal_uses_registered_state
     context = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=(),
         source_status={"registry": str(registry), "runtime_root": str(runtime), "run_history": {
             "goals": [{"id": "evidence-goal", "latest_runs": newer[-3:]}]}},
-        goal_acceptance_contract={"enabled": True, "scope": {"kind": "selected_work", "todo_ids": ["new-work"]},
+        goal_acceptance_contract={"criteria": [], "scope": {"kind": "selected_work", "todo_ids": ["new-work"]},
                                   "objective": "Validate only the new route"})
     assert context["from_full_index"] is True
     assert context["evidence_count"] == 181
     assert len(context["evidence"]) == 2
     assert context["core_goal"]["objective"] == "Deliver the accepted outcome across the whole workload."
     assert context["core_goal"]["acceptance_contract"]["scope"]["kind"] == "selected_work"
-    command = context["evidence"][-1]["read_action"]
+    command = context["evidence_read_action_template"].replace(
+        "{evidence_ref}", context["evidence"][-1]["evidence_ref"])
     result = subprocess.run([sys.executable, "-m", "loopx.cli", *shlex.split(command)[1:]], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
     assert json.loads(result.stdout)["evidence"]["progress_observation"]["evidence_ids"] == ["old-best"]
@@ -263,17 +305,18 @@ def test_dense_context_uses_shared_private_snapshot_transport(monkeypatch):
     assert project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=[_run()]) == expected
 
 
-def _settled_pair():
-    identity = {"schema_version": "quota_settlement_identity_v0", "goal_id": "evidence-goal",
-        "agent_id": "agent-a", "todo_id": "todo-a", "turn_instance_id": "turn-a", "effect_id": "settlement-a"}
-    work = _run(**{key: identity[key] for key in ("todo_id", "turn_instance_id")},
+def _settled_pair(*, goal_id="evidence-goal", agent_id="agent-a", todo_id="todo-a", turn_instance_id="turn-a"):
+    effect_id = f"{goal_id}:{agent_id}:{todo_id}:{turn_instance_id}"
+    identity = {"schema_version": "quota_settlement_identity_v0", "goal_id": goal_id,
+        "agent_id": agent_id, "todo_id": todo_id, "turn_instance_id": turn_instance_id, "effect_id": effect_id}
+    work = _run(goal_id=goal_id, agent_id=agent_id, todo_id=todo_id, turn_instance_id=turn_instance_id,
         settlement_identity=identity, recommended_action="Retain the negative finding and try the next route.",
         progress_observation={"schema_version": "typed_progress_observation_v0",
-            "result_class": "unchanged", "surface_id": "surface-a", "work_item_id": "todo-a"})
+            "result_class": "unchanged", "surface_id": "surface-a", "work_item_id": todo_id})
     accounting = {key: value for key, value in work.items() if key != "progress_observation"}
     accounting.update(classification="quota_slot_spent", generated_at="2026-08-18T01:00:01Z",
         quota_spend_commit={"schema_version": "quota_spend_commit_receipt_v0",
-            "effect_id": "settlement-a#quota_spend"})
+            "effect_id": f"{effect_id}#quota_spend"})
     return work, accounting
 
 
@@ -314,7 +357,7 @@ def test_matched_accounting_keeps_new_health_and_all_published_references(tmp_pa
 
 @pytest.mark.parametrize("change", [
     {"settlement_identity": None}, {"quota_spend_commit": None}, {"turn_instance_id": "turn-b"},
-    {"quota_spend_commit": {"schema_version": "future", "effect_id": "settlement-a#quota_spend"}},
+    {"quota_spend_commit": {"schema_version": "future", "effect_id": "evidence-goal:agent-a:todo-a:turn-a#quota_spend"}},
     {"quota_spend_commit": {"schema_version": "quota_spend_commit_receipt_v0", "effect_id": "other#quota_spend"}},
     {"classification": "future_accounting"}, {"recommended_action": "Keep an additional obligation."},
     {"delivery_outcome": "outcome_failure"},
@@ -349,10 +392,7 @@ def test_real_quota_cli_preserves_the_replan_obligation_while_reducing_accountin
     from test_replan_successor_guard_reentry import _fixture, _guard, GOAL, AGENT
 
     call, runtime, index = _fixture(tmp_path, monkeypatch, provider)
-    work, accounting = _settled_pair()
-    for row in (work, accounting):
-        row.update(goal_id=GOAL, agent_id=AGENT)
-        row["settlement_identity"] = {**row["settlement_identity"], "goal_id": GOAL, "agent_id": AGENT}
+    work, accounting = _settled_pair(goal_id=GOAL, agent_id=AGENT)
     # Keep the fixture's existing required-vision evidence. This changes only
     # metadata in the disposable read model, never an active authority store.
     prior = index.read_text()

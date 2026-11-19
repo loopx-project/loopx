@@ -1,10 +1,16 @@
 import { useWorkspaceI18n } from "./i18n";
 import type { WorkspaceReturnDelivery } from "./personal-workspace-model";
 
+export function needsOriginalDeliveryProof(delivery?: Pick<WorkspaceReturnDelivery, "error" | "status">) {
+  return delivery?.error === "initial_delivery_receipt_unavailable"
+    && delivery.status !== "delivered" && delivery.status !== "superseded";
+}
+
 export function ReturnDeliveryStatus({ delivery }: { delivery?: WorkspaceReturnDelivery }) {
   const { t, locale } = useWorkspaceI18n();
   if (!delivery) return null;
-  const label = delivery.status === "delivered"
+  const needsProof = needsOriginalDeliveryProof(delivery);
+  const label = needsProof ? t("returnDelivery.originalHandoff") : delivery.status === "delivered"
     ? delivery.verification === "reconciled_after_restart"
       ? t("returnDelivery.reconciled")
       : t("returnDelivery.delivered")
@@ -13,7 +19,7 @@ export function ReturnDeliveryStatus({ delivery }: { delivery?: WorkspaceReturnD
       : delivery.status === "explicit_unverified"
         ? t("returnDelivery.unverified")
         : t("returnDelivery.queued");
-  const tone = delivery.status === "delivered"
+  const tone = needsProof ? "explicit_unverified" : delivery.status === "delivered"
     ? "delivered"
     : delivery.status === "verification_required"
       ? "verification_required"

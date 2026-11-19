@@ -153,6 +153,25 @@ text; readback does not rewrite the ledger.
 | `signals` | `stall_suspected`, `repetition_suspected`, `unrecovered_error`, `event_loss`, `integrity_not_valid` |
 | `integrity` | the receipt status and reason codes |
 
+### Exact binding and freshness
+
+For a manual current-session read, pass `status --expected-binding '<JSON>'`
+with `--as-of <current timestamp>` and `--max-observation-age-ms <nonnegative integer>`.
+The JSON object has exactly `provider_id`, `observer_id`, `session_id` and
+`run_identity` (the eight existing observer-stats treatment fields above).
+Invalid input exits with code 2. Omission preserves historical projection output.
+
+The optional `binding` object contains `expected`, `eligible`, `reason_codes`
+and `max_observation_age_ms`. It refuses an empty ledger, any different
+session/provider/observer or run treatment, non-valid integrity, any future
+observation, or a latest observation older than the caller's ceiling. Refusal
+sets `stage` to `unknown`; counts and signals remain historical ledger evidence.
+Reason codes are local to this read contract: `no_observations`,
+`session_identity_mismatch`, `run_identity_mismatch`, `integrity_not_valid`,
+`observation_in_future`, and `observation_stale`. Matching evidence proves
+admissibility only, never task success. The read does not filter out conflicting
+runs, write state, call a provider, or enable polling.
+
 ## Use It
 
 ```bash
@@ -170,15 +189,14 @@ loopx reliability-diagnostics ingest  --goal-id <goal-id> --input observer.ndjso
 
 For live age/stall evaluation, pass the current timezone-aware `--as-of` as in
 the POSIX-shell example. Without it, historical replay uses the last event time
-and reports zero last-event age. This does not establish current liveness.
+and reports zero last-event age.
 
 Explicit `--as-of` values must be ISO-8601 timestamps with `Z` or a UTC offset.
 Empty, malformed, or timezone-free values exit with code 2, even when the ledger
 is missing, empty, or corrupt; this applies with or without `--with-receipt`.
 
 `status --with-receipt` returns both existing contracts from one ledger read.
-Omit the option to retain projection-only output. It grants no control authority
-and does not enable the observer. Concurrent appends are not atomic snapshots;
+Omit the option to retain projection-only output. Concurrent appends are not atomic snapshots.
 partial records remain integrity failures. See the
 [DSH/Pi assessment](../../../docs/architecture/rfcs/harness-selection-dsh-pi-v0.md)
 before wiring this full-ledger CLI into a polling surface.
@@ -209,6 +227,33 @@ covers legacy readback and an explicit offline upgrade. Legacy files remain
 readable, but block new appends until reconciled; mixed ownership must hold
 deletion. Upgrade CLI and plugin together with writers frozen.
 
+## Measure Observer Overhead
+
+`packages/dsh-loopx-plugin/bench/observer-overhead.ts` measures the observer
+component cost on a deterministic synthetic DSH event stream: observer off/on
+arms, CPU (user+system), RSS, ledger append through the shipped writer, ledger
+bytes per envelope and stats bytes per flush, per-trial event loss and buffer
+peaks, and the clock-source mix with full denominators. It also checks that
+every planned record is observed with the planned envelope-kind mix. A trial
+that drops or rejects events, fails an append, persists fewer envelopes than it
+accepted, or misses that record mix is excluded from the timing summary; the
+report is marked not usable and lists warnings, so a lossy or incompletely
+consumed run cannot read as a clean result. It writes a public-safe
+JSON + Markdown report and states its limits. It does not measure a live DSH
+host, model, network, or Cordis dispatch, and it does not qualify C1. See the
+[bench README](../../../packages/dsh-loopx-plugin/bench/README.md).
+
+Run it from `packages/dsh-loopx-plugin`:
+
+```bash
+node --experimental-strip-types bench/observer-overhead.ts --events 10000
+```
+
+`--events` is normalized down to a whole six-event turn cycle (5,000 → 4,998;
+10,000 → 9,996); the report states both counts. The bench uses a 4,096 buffer
+bound for the synthetic burst; pass `--buffer-bound 256` to mirror the observer's
+product default.
+
 ## Validation
 
 ```bash
@@ -231,5 +276,6 @@ No dashboard surface, no L2 recommendations, no automatic recovery, no
 writeback into goals, todos, gates, or session runtime, and no change to the
 `loopx status` first screen. The adapter requires an externally pinned
 goal/session/run identity; it does not discover bindings through the Driver or
-LoopX CLI. This prototype also does not provide matched native/L1 execution,
-observer CPU/I/O/latency/storage measurement, or an eligible C1 run.
+LoopX CLI. This prototype also does not provide matched native/L1 execution, a
+live DSH host measurement, or an eligible C1 run. The bench tool measures
+observer component cost on a synthetic stream; it is not a live qualification.

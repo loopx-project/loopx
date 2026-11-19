@@ -630,7 +630,7 @@ def build_repair_delta_contract(
     update = active_state_next_action_update or {}
     effective_vision = agent_vision or existing_agent_vision or {}
     vision_patch = (
-        effective_vision.get("vision_patch")
+        cast(dict[str, Any], effective_vision.get("vision_patch"))
         if isinstance(effective_vision.get("vision_patch"), dict)
         else {}
     )

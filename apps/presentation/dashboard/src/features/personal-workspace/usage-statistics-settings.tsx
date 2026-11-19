@@ -46,9 +46,10 @@ export function UsageStatisticsSettings() {
       <label><input type="checkbox" checked={state.consent === "enabled" || (state.consent === "default" && !state.notice_required)} disabled={busy}
         onChange={event => void update(event.target.checked)} /> {zh ? "允许基础使用统计（整台机器）" : "Allow basic usage statistics (this machine)"}</label>
       <p role="status">{state.sending ? (zh ? "已允许发送" : "Sending allowed")
-        : state.notice_required && state.consent !== "disabled" ? (zh ? "等待首次告知确认；尚未发送" : "Awaiting first-use acknowledgment; not sending")
+        : state.blocked_by === "temporary_path" ? (zh ? "临时环境不发送统计" : "Not sending in a temporary environment")
+        : state.blocked_by === "notice_required" ? (zh ? "等待首次告知确认；尚未发送" : "Awaiting first-use acknowledgment; not sending")
           : (zh ? `当前不发送：${({disabled:"已关闭",CI:"CI 环境",DO_NOT_TRACK:"请勿追踪开关",LOOPX_USAGE_PING:"环境变量已关闭",consent_required:"需要明确同意",invalid_policy:"策略配置无效",invalid_endpoint:"接收地址无效",notice_required:"需要重新告知"} as Record<string,string>)[state.blocked_by ?? ""] ?? "请检查配置"}` : `Not sending: ${state.blocked_by}`)}</p>
-      {state.notice_required && state.consent !== "disabled" ? <button className="personal-secondary-action" type="button" disabled={busy} onClick={() => void update(true)}>{zh ? "已了解，启用统计" : "Understood, enable statistics"}</button> : null}
+      {["notice_required", "consent_required"].includes(state.blocked_by ?? "") ? <button className="personal-secondary-action" type="button" disabled={busy} onClick={() => void update(true)}>{zh ? "已了解，启用统计" : "Understood, enable statistics"}</button> : null}
       <p>{zh ? "接收地址：" : "Recipient: "}{state.endpoint ?? (zh ? "未配置" : "Not configured")}</p>
       <details><summary>{zh ? "查看待发送数据与本地发送摘要" : "Preview outgoing data and local delivery summaries"}</summary><pre>{JSON.stringify({ heartbeat: state.next_payload, aggregate: state.aggregate_preview, diagnostics: state.diagnostic_preview, goals: state.goal_preview, installation: state.installation_preview, identity_scope: state.identity_scope, dropped: state.diagnostic_dropped, delivery_history: state.delivery_history }, null, 2)}</pre></details>
     </> : null}

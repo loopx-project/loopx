@@ -195,7 +195,11 @@ def test_completion_result_stays_canonical_and_projection_recovers(
     assert "Keep this line unchanged and outside the Todo sections." in displayed
     assert "Write the accepted result" in displayed
     assert "Next independent work" in displayed
-    assert "completion_result" not in displayed
+    assert "completion_result=" not in displayed
+    if provider == "sqlite":
+        pointer = next(line for line in displayed.splitlines()
+                       if "scope=active_todo" in line and "todo_id=todo_result" in line)
+        assert "completion_result" in pointer.split("omitted_fields=", 1)[1].split(" ", 1)[0].split(",")
     assert result_body not in displayed
     assert binding["sha256"] not in displayed
 

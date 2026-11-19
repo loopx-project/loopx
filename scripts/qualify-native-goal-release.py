@@ -112,7 +112,8 @@ def setup(
     )
     fixture = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(fixture)
-    project, runtime, registry = fixture.write_fixture(root)
+    # Finish the release source before its one canonical cold import.
+    project, runtime, registry = fixture.write_fixture(root, initialize=False)
     config = json.loads(registry.read_text())
     goal = config["goals"][0]
     goal.update(state_file="ACTIVE_GOAL_STATE.md", coordination={"registered_agents": [AGENT]})
@@ -165,7 +166,7 @@ def setup(
         "--backup-manifest",
         str(backup["manifest_path"]),
         "--provider",
-        "file",
+        "sqlite",
         "--target-handoff-mode",
         "soft_claim",
     )["cold_import"]
@@ -193,6 +194,7 @@ def cli(launcher: Path, *args: str) -> dict:
     result = subprocess.run(
         [str(launcher), "--format", "json", *args], cwd=launcher.parent.parent,
         capture_output=True, text=True, timeout=120,
+        env={**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"},
     )
     if result.returncode:
         raise RuntimeError("fixture_cli_failed")

@@ -423,6 +423,7 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
   const sessions = runtime.sessions;
   const messages = runtime.messages;
   const turnMessages = runtime.turnMessages;
+  const queuedTurns = runtime.queuedTurns ??= new Map();
   const loopxModes = runtime.loopxModes ??= new Map();
   for (const proposal of initialActionProposals) {
     actionProposals.set(proposal.proposal_id, structuredClone(proposal));
@@ -988,6 +989,12 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
   await page.route("**/api/chat/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
+    if (url.pathname === "/api/chat/app-steward" && request.method() === "GET") {
+      // An ordinary manager is available only after discovery explicitly finds
+      // no selected original conversation; a missing/failed read is not empty.
+      await route.fulfill({json: {ok: true, binding_id: null, session_id: null}});
+      return;
+    }
     if (url.pathname === "/api/chat/sidebar-goal-order") {
       const body = request.method() === "POST" ? request.postDataJSON() : null;
       const source = body?.source ?? url.searchParams.get("source");
@@ -1003,6 +1010,10 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
       await route.fulfill({ json: text === undefined ? { ok: false, error: "Task not found" } : {
         ok: true, goal_id: goalId, todo_id: todoId, text, status: "open", archive_state: "active", updated_at: null,
       } });
+      return;
+    }
+    if (url.pathname === "/api/chat/report-reviews") {
+      await route.fulfill({json: {ok: true, available: true, items: [], total: 0, next_cursor: null}});
       return;
     }
     if (url.pathname === "/api/chat/completed-todos") {
@@ -1455,7 +1466,11 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
       const answer = (typeof scriptedAnswer === "object" ? scriptedAnswer?.message : scriptedAnswer)
         || "已沿用当前 Goal 与 Agent Session。接下来会先核对状态，再继续推进。";
       await new Promise((resolveWait) => setTimeout(resolveWait, /(中断控制|刷新恢复)/u.test(turnMessages.get(turnId) ?? "") ? 5000 : 1200));
-      await route.fulfill({ contentType: "text/event-stream", body: finishTurn(sessionId, turnId, answer, null, scriptedAnswer?.goal_draft, scriptedAnswer?.proposals ?? []), status: 200 });
+      try {
+        await route.fulfill({ contentType: "text/event-stream", body: finishTurn(sessionId, turnId, answer, null, scriptedAnswer?.goal_draft, scriptedAnswer?.proposals ?? []), status: 200 });
+      } catch (error) {
+        if (!/Route is already handled/u.test(String(error?.message ?? error))) throw error;
+      }
       return;
     }
     if (url.pathname === "/api/chat/goals/contexts") {
@@ -1470,14 +1485,23 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
       }, status: 200 });
       return;
     }
+    if (url.pathname === "/api/chat/projects" && request.method() === "GET") {
+      await route.fulfill({json: {ok: true, projects: []}});
+      return;
+    }
+    if (url.pathname === "/api/chat/lark/private-conversations" && request.method() === "GET") {
+      await route.fulfill({json: {ok: true, revision: 0, connections: [], stop_recoveries: []}});
+      return;
+    }
     if (url.pathname === "/api/chat/lark/apps") {
+      const apps = [
+        { active: true, app_ref: "mew", brand: "feishu", label: "LoopX Mew", ready: true, reply_ready: true },
+        { active: true, app_ref: "mew-research", brand: "feishu", label: "LoopX Research", ready: true, reply_ready: true },
+      ].filter(app => !url.searchParams.has("app_ref") || app.app_ref === url.searchParams.get("app_ref"));
       await route.fulfill({ contentType: "application/json", json: {
-        ok: true,
-        schema_version: "loopx_lark_apps_v0",
-        apps: [
-          { active: true, app_ref: "mew", brand: "feishu", label: "LoopX Mew", ready: true, reply_ready: true },
-          { active: true, app_ref: "mew-research", brand: "feishu", label: "LoopX Research", ready: true, reply_ready: true },
-        ],
+        ok: true, schema_version: "loopx_lark_apps_v0",
+        apps: apps.map(app => url.searchParams.get("verify") === "false"
+          ? {...app, ready: false, reply_ready: false, health_error_code: "lark_app_unverified"} : app),
       }, status: 200 });
       return;
     }
@@ -1828,6 +1852,13 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
       await route.fulfill({ contentType: "application/json", json: configured, status: 200 });
       return;
     }
+    const queue = url.pathname.match(/^\/api\/chat\/sessions\/([^/]+)\/queue$/);
+    if (queue && request.method() === "GET") {
+      const active = sessions.get(queue[1])?.active_turn_id ?? null;
+      await route.fulfill({json: {ok: true, schema_version: "loopx_chat_store_v1", session_id: queue[1], active_turn_id: active,
+        turns: (queuedTurns.get(queue[1]) ?? []).filter(turn => turn.turn_id !== active)}});
+      return;
+    }
     const snapshot = url.pathname.match(/^\/api\/chat\/sessions\/([^/]+)$/);
     if (snapshot && request.method() === "GET") {
       const session = sessions.get(snapshot[1]);
@@ -2082,6 +2113,7 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
       const storedProposal = actionProposals.get(apply[1]);
       const proposal = {
         schema_version: "loopx_chat_action_proposal_v1", proposal_id: apply[1], action_kind: actionKind,
+        idempotency_key: storedProposal?.idempotency_key,
         summary: actionKind === "team.plan" && storedProposal ? storedProposal.summary : "已应用",
         normalized_parameters: actionKind === "team.plan" && storedProposal
           ? storedProposal.normalized_parameters : preview?.normalized_parameters ?? storedProposal?.normalized_parameters ?? {},

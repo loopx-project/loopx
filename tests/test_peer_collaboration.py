@@ -23,6 +23,7 @@ from loopx.control_plane.collaboration.peers import (
     returns,
     consume_return,
     input_readiness,
+    read_inbox,
 )
 from loopx.capabilities.manager_context.roundtrip import (
     drain,
@@ -122,12 +123,46 @@ def cli(root, registry, agent, action, *args, ok=True):
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=30,
         cwd=registry.parent,
     )
     result = json.loads(proc.stdout)
     assert proc.returncode == (0 if ok else 1), (proc.stdout, proc.stderr)
     return result
+
+
+def test_peer_cli_preserves_unicode_request_and_reply(scenario):
+    root, registry, brief, _, _, _, parent = scenario
+    purpose = "独立复核恢复计划 🚀"
+    reply = "已验证库存约束，恢复完成 🚀"
+    path = root / "unicode-peer-brief.json"
+    path.write_text(json.dumps({**brief, "purpose": purpose}, ensure_ascii=False), encoding="utf-8")
+    request_id = cli(root, registry, "builder", "request", "--peer-agent-id", "reviewer",
+                     "--operation-id", "unicode-review", "--brief-file", str(path),
+                     "--parent-request-id", parent)["request_id"]
+    received = next(item for item in cli(root, registry, "reviewer", "read")["items"]
+                    if item["request_id"] == request_id)
+    assert received["brief"]["purpose"] == purpose
+    cli(root, registry, "reviewer", "acknowledge", "--request-id", request_id,
+        "--decision", "adopt", "--reason", "按原约束进行独立复核。")
+    cli(root, registry, "reviewer", "report", "--request-id", request_id, "--reply-text", reply)
+    returned = cli(root, registry, "builder", "read", "--turn-instance-id", "turn-unicode")["peer_returns"]["items"][0]
+    assert returned["text"] == reply and returned["parent_request_id"] == parent
+    assert "acknowledge_command" not in returned
+    delivery = _root(root) / "replies" / request_id / "conclusion.delivery.json"
+    transport_receipt = json.loads(delivery.read_text())
+    assert transport_receipt["status"] == "delivered" and "model_turn" not in transport_receipt
+    for disposition in ("accepted", "deferred", "rejected"):
+        refused = cli(root, registry, "builder", "acknowledge-return", "--request-id", request_id,
+            "--turn-instance-id", "turn-unicode", "--disposition", disposition, ok=False)
+        assert "in this work Turn" in refused["error"]
+    hook = turn_start_hook(root, registry, "delivery", "builder")
+    assert hook.producer()["agent_read_required"]
+    assert hook.context_reader()["unfinished_delegations"]["return_attention"]["count"] == 1
+    assert json.loads(delivery.read_text()) == transport_receipt
+    rejected = cli(root, registry, "unknown-agent", "read", ok=False)
+    assert rejected["ok"] is False and "recipient is not registered" in rejected["error"]
 
 
 @pytest.fixture
@@ -190,9 +225,11 @@ def test_granted_external_peer_request_returns_through_original_conversation(ext
         "--decision", "adopt", "--reason", "Will check the corrected stock plan.")
     cli(root, registry, "reviewer", "report", "--request-id", rid,
         "--reply-text", "Checked the stock constraint and zero-demand item; both pass.")
-    returned = cli(root, registry, "builder", "read")["peer_returns"]["items"][0]
+    returned = read_inbox(root, registry, "delivery", "builder",
+        turn_instance_id="turn-external")["peer_returns"]["items"][0]
     assert returned["parent_request_id"] == parent
-    cli(root, registry, "builder", "acknowledge-return", "--request-id", rid)
+    cli(root, registry, "builder", "acknowledge-return", "--request-id", rid,
+        "--turn-instance-id", "turn-external", "--disposition", "accepted")
     cli(root, registry, "builder", "acknowledge", "--request-id", parent,
         "--decision", "adopt", "--reason", "Incorporated the independent check.")
     cli(root, registry, "builder", "report", "--request-id", parent,
@@ -207,7 +244,9 @@ def test_granted_external_peer_request_returns_through_original_conversation(ext
         drain(root, registry, ChatSessionStore(root), sender)
     assert len(sent) == 1
     assert sent[0][:3] == (session["channel_id"], session["session_id"], turn["turn_id"])
-    assert sent[0][3].endswith("Stock plan delivered with the independent check.")
+    body, provenance = sent[0][3].split("\n\n", 1)
+    assert body == "Stock plan delivered with the independent check."
+    assert provenance == f"协作回复 · builder · 委托 {parent[:8]}"
     assert not query(root, registry, goal_ids=["delivery"], owner_scope=False,
                      channel_id="manager.external.unrelated")["rows"]
 
@@ -335,17 +374,20 @@ def test_two_peer_review_rounds_return_to_original_conversation_after_restart(sc
         assert turn_start_hook(root, registry, "delivery", "builder").producer()[
             "agent_read_required"
         ]
-        # New CLI processes reconstruct the work context with no source session.
-        returned = cli(root, registry, "builder", "read")["peer_returns"]["items"][0]
+        # Both the bound host and new CLI processes reconstruct the original context.
+        page = read_inbox(root, registry, "delivery", "builder", turn_instance_id="turn-replay")
+        returned = page["peer_returns"]["items"][0]
         assert (
             returned["text"] == result_text and returned["parent_request_id"] == parent
         )
         assert (
             cli(root, registry, "builder", "read")["peer_returns"]["items"][0]
-            == returned
+            == {key: value for key, value in returned.items() if key != "acknowledge_command"}
         )
-        cli(root, registry, "builder", "acknowledge-return", "--request-id", rid)
-        cli(root, registry, "builder", "acknowledge-return", "--request-id", rid)
+        cli(root, registry, "builder", "acknowledge-return", "--request-id", rid,
+            "--turn-instance-id", "turn-replay", "--disposition", "accepted")
+        cli(root, registry, "builder", "acknowledge-return", "--request-id", rid,
+            "--turn-instance-id", "turn-replay", "--disposition", "accepted")
         assert not returns(root, "delivery", "builder")["items"]
     assert ids[0] != ids[1]
     cli(
@@ -487,9 +529,11 @@ def test_operation_replay_conflicts_and_independent_requests(scenario):
         )
     rid = receipts[0]["request_id"]
     with pytest.raises(ValueError, match="scope mismatch"):
-        consume_return(root, "delivery", "analyst", rid)
+        consume_return(root, "delivery", "analyst", rid,
+            turn_instance_id="turn-invalid", disposition="accepted")
     with pytest.raises(ValueError, match="read the peer conclusion"):
-        consume_return(root, "delivery", "builder", rid)
+        consume_return(root, "delivery", "builder", rid,
+            turn_instance_id="turn-invalid", disposition="accepted")
     with pytest.raises(ValueError, match="different"):
         request(root, registry, "delivery", "builder", "builder", "self", brief)
     with pytest.raises(ValueError, match="registered"):
@@ -505,6 +549,124 @@ def test_operation_replay_conflicts_and_independent_requests(scenario):
             brief,
             parent,
         )
+
+
+@pytest.mark.parametrize("registered_locally", [False, True])
+@pytest.mark.parametrize("surface", ["codex-app", "codex-app-ssh"])
+@pytest.mark.parametrize("select_surface", [False, True])
+def test_cli_cross_goal_peer_failure_is_typed_and_records_no_delivery(
+    scenario, registered_locally, surface, select_surface
+):
+    root, registry, brief, *_ = scenario
+    data = json.loads(registry.read_text())
+    if not registered_locally:
+        data["goals"][0]["coordination"]["registered_agents"].remove("reviewer")
+    data["goals"].append({
+        "id": "other-goal", "repo": str(root),
+        "coordination": {
+            "registered_agents": ["reviewer"],
+            "thread_agent_bindings": [{
+                "agent_id": "reviewer", "host_surface": surface,
+                "thread_id": "foreign-review-task",
+            }],
+        },
+    })
+    registry.write_text(json.dumps(data))
+    registry_before = registry.read_bytes()
+    brief_path = root / "cross-goal-review.json"
+    brief_path.write_text(json.dumps(brief))
+    ledger = _root(root)
+    before = {path.relative_to(ledger): path.read_bytes() for path in ledger.rglob("*.json")}
+    assert before, "The fixture must contain a real Inbox record before checking no writes."
+
+    result = cli(
+        root,
+        registry,
+        "builder",
+        "request",
+        "--peer-agent-id",
+        "reviewer",
+        "--require-host-route",
+        "--peer-thread-link",
+        "codex://threads/foreign-review-task",
+        *(["--peer-host-surface", surface] if select_surface else []),
+        "--operation-id",
+        "cross-goal-review",
+        "--brief-file",
+        str(brief_path),
+        ok=False,
+    )
+
+    assert result["error_code"] == "peer_request_same_goal_required"
+    assert result["host_delivery"]["status"] == "not_attempted"
+    assert "next Turn" in result["recommended_action"]
+    assert "submission receipt" in result["recommended_action"]
+    assert "request_id" not in result
+    after = {path.relative_to(ledger): path.read_bytes() for path in ledger.rglob("*.json")}
+    assert after == before
+    assert registry.read_bytes() == registry_before
+
+
+@pytest.mark.parametrize(
+    ("case", "host_surface"),
+    [
+        ("unknown", None),
+        ("invalid", None),
+        ("wrong-agent", None),
+        ("ambiguous", None),
+        ("no-host-selection", None),
+        ("wrong-surface", "codex-app-ssh"),
+        ("wrong-surface", "lark"),
+        ("wrong-surface", "claude-code"),
+        ("wrong-surface", "unknown-host"),
+        pytest.param("wrong-surface", "", id="empty-host"),
+        pytest.param("wrong-surface", "codex-app ", id="host-with-trailing-space"),
+    ],
+)
+def test_cli_unconfirmed_foreign_link_keeps_original_route_refusal(scenario, case, host_surface):
+    root, registry, brief, *_ = scenario
+    data = json.loads(registry.read_text())
+    foreign = {
+        "id": "other-goal", "repo": str(root),
+        "coordination": {
+            "registered_agents": ["reviewer", "analyst"],
+            "thread_agent_bindings": [{
+                "agent_id": "analyst" if case == "wrong-agent" else "reviewer",
+                "host_surface": "codex-app", "thread_id": "foreign-review-task",
+            }],
+        },
+    }
+    data["goals"].append(foreign)
+    if case == "ambiguous":
+        data["goals"].append({**foreign, "id": "third-goal"})
+    registry.write_text(json.dumps(data))
+    registry_before = registry.read_bytes()
+    ledger = _root(root)
+    before = {path.relative_to(ledger): path.read_bytes() for path in ledger.rglob("*.json")}
+    assert before, "The fixture must contain a real Inbox record before checking no writes."
+    path = root / "unconfirmed-review.json"
+    path.write_text(json.dumps(brief))
+    link = {
+        "unknown": "codex://threads/unknown-review-task",
+        "invalid": "codex://settings",
+    }.get(case, "codex://threads/foreign-review-task")
+    route_args = [] if case == "no-host-selection" else ["--require-host-route"]
+    if host_surface is not None:
+        route_args += ["--peer-host-surface", host_surface]
+    result = cli(root, registry, "builder", "request", "--peer-agent-id", "reviewer",
+                 "--operation-id", "unconfirmed-review", "--brief-file", str(path),
+                 "--peer-thread-link", link, *route_args, ok=False)
+
+    expected = {
+        "no-host-selection": "peer host selection requires --require-host-route",
+        "invalid": "peer host route unavailable: invalid_thread_link; no request was recorded",
+    }.get(
+        case,
+        "peer host route not_authorized: thread_not_bound_to_peer; no request was recorded",
+    )
+    assert result == {"ok": False, "error": expected}
+    assert {p.relative_to(ledger): p.read_bytes() for p in ledger.rglob("*.json")} == before
+    assert registry.read_bytes() == registry_before
 
 
 @pytest.mark.parametrize(
@@ -674,34 +836,43 @@ def test_consumption_rejects_corrupt_reply_and_receipt(scenario):
         "--reply-text",
         "Checked",
     )
-    cli(root, registry, "builder", "read")
+    turn = "turn-peer-identity"
+    read_inbox(root, registry, "delivery", "builder", turn_instance_id=turn)
     folder = _root(root) / "replies" / rid
     reply = folder / "conclusion.json"
     original = reply.read_text()
     reply.write_text(json.dumps({**json.loads(original), "source_id": "other"}))
     with pytest.raises(ValueError, match="identity conflict"):
-        consume_return(root, "delivery", "builder", rid)
+        consume_return(root, "delivery", "builder", rid,
+            turn_instance_id=turn, disposition="accepted")
     reply.write_text(original)
-    consume_return(root, "delivery", "builder", rid)
+    consume_return(root, "delivery", "builder", rid,
+        turn_instance_id=turn, disposition="accepted")
     consumed = folder / "conclusion.consumed.json"
     consumed.write_text(
         json.dumps({**json.loads(consumed.read_text()), "agent_id": "other"})
     )
     with pytest.raises(ValueError, match="scope mismatch"):
-        consume_return(root, "delivery", "builder", rid)
+        consume_return(root, "delivery", "builder", rid,
+            turn_instance_id=turn, disposition="accepted")
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX FIFO fixture")
 def test_special_file_read_is_bounded_and_stopped_goal_remains_readable(scenario):
     import os
     from loopx.control_plane.collaboration.peers import read_inbox
+    from loopx.control_plane.goals.activation import GoalActivationState, build_goal_activation
 
     root, registry, brief, *_ = scenario
     (root / "inputs/demand.csv").unlink()
     os.mkfifo(root / "inputs/demand.csv")
     assert input_readiness(registry, "delivery", brief)[0]["status"] == "unavailable"
     config = json.loads(registry.read_text())
-    config["goals"][0]["status"] = "stopped"
+    config["goals"][0]["activation"] = build_goal_activation(
+        state=GoalActivationState.STOPPED,
+        updated_at="2026-10-06T00:00:00Z",
+        reason="Owner stopped the Goal.",
+    )
     registry.write_text(json.dumps(config))
     assert read_inbox(root, registry, "delivery", "builder")["items"]
     with pytest.raises(ValueError, match="stopped"):
@@ -792,12 +963,13 @@ def test_nested_coordinators_return_to_each_immediate_requester(scenario):
     )
     assert not returns(root, "delivery", "builder")["items"]
     assert (
-        cli(root, registry, "reviewer", "read")["peer_returns"]["items"][0][
+        read_inbox(root, registry, "delivery", "reviewer", turn_instance_id="turn-inner")["peer_returns"]["items"][0][
             "request_id"
         ]
         == inner
     )
-    consume_return(root, "delivery", "reviewer", inner)
+    consume_return(root, "delivery", "reviewer", inner,
+        turn_instance_id="turn-inner", disposition="accepted")
     cli(
         root,
         registry,
@@ -809,10 +981,11 @@ def test_nested_coordinators_return_to_each_immediate_requester(scenario):
         "Specialist findings independently assessed",
     )
     assert (
-        cli(root, registry, "builder", "read")["peer_returns"]["items"][0]["request_id"]
+        read_inbox(root, registry, "delivery", "builder", turn_instance_id="turn-outer")["peer_returns"]["items"][0]["request_id"]
         == outer
     )
-    consume_return(root, "delivery", "builder", outer)
+    consume_return(root, "delivery", "builder", outer,
+        turn_instance_id="turn-outer", disposition="accepted")
     assert not returns(root, "delivery", "builder")["items"]
 
 
@@ -832,12 +1005,16 @@ def test_peer_updates_have_independent_read_and_consumption_receipts(scenario):
     update = updates[0]
     assert {item["result_key"] for item in updates} == {update["result_key"]}
     with pytest.raises(ValueError, match="read the peer"):
-        consume_return(root, "delivery", "builder", rid, result_key=update["result_key"])
-    offered = returns(root, "delivery", "builder", mark_read=True)["items"]
+        consume_return(root, "delivery", "builder", rid, result_key=update["result_key"],
+            turn_instance_id="turn-updates", disposition="accepted")
+    page = read_inbox(root, registry, "delivery", "builder", turn_instance_id="turn-updates")
+    offered = page["peer_returns"]["items"]
     assert [item["text"] for item in offered] == ["Waiting for evidence.", "Evidence checked; review complete."]
-    consume_return(root, "delivery", "builder", rid)
+    consume_return(root, "delivery", "builder", rid,
+        turn_instance_id="turn-updates", disposition="accepted")
     assert [item["result_key"] for item in returns(root, "delivery", "builder")["items"]] == [update["result_key"]]
-    consume_return(root, "delivery", "builder", rid, result_key=update["result_key"])
+    consume_return(root, "delivery", "builder", rid, result_key=update["result_key"],
+        turn_instance_id="turn-updates", disposition="accepted")
     assert returns(root, "delivery", "builder")["items"] == []
     assert return_result(root, "delivery", "reviewer", rid, "Evidence checked; review complete.", update_id="evidence-ready")["result_key"] == update["result_key"]
     assert returns(root, "delivery", "builder")["items"] == []
@@ -851,14 +1028,16 @@ def test_peer_update_rejects_another_results_read_and_consumption_receipts(scena
     rid = request(root, registry, "delivery", "builder", "reviewer", "update-review", brief, parent)["request_id"]
     acknowledge(root, "delivery", "reviewer", rid, "adopt", "Accepted")
     return_result(root, "delivery", "reviewer", rid, "Draft ready.")
-    returns(root, "delivery", "builder", mark_read=True)
-    consume_return(root, "delivery", "builder", rid)
+    read_inbox(root, registry, "delivery", "builder", turn_instance_id="turn-first-update")
+    consume_return(root, "delivery", "builder", rid,
+        turn_instance_id="turn-first-update", disposition="accepted")
     update = return_result(root, "delivery", "reviewer", rid, "Review complete.", update_id="reviewed")
     folder = root / ".local/manager-context/replies" / rid
     delivery = folder / (update["result_key"] + ".delivery.json")
     delivery.write_bytes((folder / "conclusion.delivery.json").read_bytes())
     with pytest.raises(ValueError, match="read the peer"):
-        consume_return(root, "delivery", "builder", rid, result_key=update["result_key"])
+        consume_return(root, "delivery", "builder", rid, result_key=update["result_key"],
+            turn_instance_id="turn-first-update", disposition="accepted")
     consumed = folder / (update["result_key"] + ".consumed.json")
     consumed.write_bytes((folder / "conclusion.consumed.json").read_bytes())
     with pytest.raises(ValueError, match="receipt scope"):
@@ -912,7 +1091,9 @@ def test_peer_exchange_survives_long_private_store_paths(scenario):
     cli(long_root, registry, "reviewer", "report", "--request-id", rid,
         "--phase", "conclusion", "--reply-text", "Independent review complete")
     assert cli(long_root, registry, "builder", "read")["peer_returns"]["items"][0]["request_id"] == rid
-    cli(long_root, registry, "builder", "acknowledge-return", "--request-id", rid)
+    read_inbox(long_root, registry, "delivery", "builder", turn_instance_id="turn-long")
+    cli(long_root, registry, "builder", "acknowledge-return", "--request-id", rid,
+        "--turn-instance-id", "turn-long", "--disposition", "accepted")
     replay = cli(long_root, registry, "builder", "request", *args)
     assert replay["replayed"] and replay["request_id"] == rid
     requests = [path for path in (_root(long_root) / "entries").glob("*/*.json") if path.stem == rid]

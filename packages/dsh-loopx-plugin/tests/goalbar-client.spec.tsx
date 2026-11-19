@@ -85,6 +85,7 @@ function snapshot(
     goalActivation: 'active',
     agentStatus: 'idle',
     progress: { processed: 2, remaining: 3, total: 5 },
+    continuationAdmission: { state: 'clear' },
     ...overrides,
   }
 }
@@ -241,6 +242,65 @@ describe('LoopXGoalBar presentation', () => {
     expect(view.container.textContent).toContain('0 / 0')
     expect(view.container.querySelector('progress')?.getAttribute('aria-label'))
       .toBe('No agent-lane todos')
+  })
+
+  it.each([
+    ['active', 'idle', 'Prior turn needs recovery'],
+    ['active', 'running', 'Running'],
+    ['stopped', 'idle', 'Paused'],
+  ] as const)('shows the appropriate status on a recovery hold with %s and %s', async (
+    goalActivation, agentStatus, text,
+  ) => {
+    const rpc = fakeRpc({
+      read: sessionId => Promise.resolve(readOutcome(sessionId, {
+        kind: 'present',
+        snapshot: snapshot({ sessionId, goalActivation, agentStatus, recoveryAttention: true }),
+        baseSessionEventSeq: 0,
+      })),
+    })
+    const view = mount({ rpcSessionId: 'session-one', rpc })
+    await flush()
+    expect(view.container.querySelector('[data-status]')?.textContent).toBe(text)
+  })
+
+  it('surfaces an unadmitted continuation with its category and recovery action', async () => {
+    const rpc = fakeRpc({
+      read: sessionId => Promise.resolve(readOutcome(sessionId, {
+        kind: 'present',
+        snapshot: snapshot({
+          sessionId,
+          continuationAdmission: { state: 'failed', category: 'invalid_response' },
+        }),
+        baseSessionEventSeq: 7,
+      })),
+    })
+    const view = mount({ rpcSessionId: 'session-one', rpc })
+    await flush()
+
+    const status = view.container.querySelector('[role="status"]')
+    expect(status?.textContent).toContain('Automatic continuation is not admitted.')
+    expect(status?.textContent).toContain('LoopX returned an incompatible response.')
+    expect(status?.textContent).toContain('Pause, then Start, to retry automatic continuation.')
+    // The failure is not an idle, paused, or completed state: the Goal keeps
+    // its own status text and the Pause recovery action stays available.
+    expect(view.container.textContent).toContain('Active')
+    expect(button(view.container, 'Pause').disabled).toBe(false)
+    expect(view.container.querySelector('button.refresh')).toBeNull()
+  })
+
+  it('renders no continuation failure line for a clear admission state', async () => {
+    const rpc = fakeRpc({
+      read: sessionId => Promise.resolve(readOutcome(sessionId, {
+        kind: 'present',
+        snapshot: snapshot({ sessionId }),
+        baseSessionEventSeq: 7,
+      })),
+    })
+    const view = mount({ rpcSessionId: 'session-one', rpc })
+    await flush()
+
+    expect(view.container.textContent).not.toContain('not admitted')
+    expect(view.container.querySelector('[role="status"]')).toBeNull()
   })
 
   it.each(['binding_missing', 'binding_ambiguous'] as const)(
@@ -998,13 +1058,19 @@ describe('GoalBar Connection and registration boundaries', () => {
       component: unknown
     } | undefined
     const registerLocale = vi.fn(() => () => undefined)
+    const injectedKeys: string[] = []
+    const registrations: Array<{ options: Record<string, unknown>; component: unknown }> = []
     const ctx = {
       connection: { rpc: { call: vi.fn() } },
       locale: { register: registerLocale },
       slots: {
-        inject: vi.fn((_key: string, install: () => () => void) => install()),
+        inject: vi.fn((key: string, install: () => () => void) => {
+          injectedKeys.push(key)
+          return install()
+        }),
         register: vi.fn((options: typeof registration extends { options: infer O } ? O : never, component: unknown) => {
           registration = { options, component }
+          registrations.push({ options: options as unknown as Record<string, unknown>, component })
           return () => undefined
         }),
       },
@@ -1026,6 +1092,25 @@ describe('GoalBar Connection and registration boundaries', () => {
     expect(registration?.options.id).toBe('loopx-goal')
     expect(registration?.options.order).toBe(15)
     expect(registration?.component).toBe(LoopXGoalBar)
+    // The panel contributes one global sidebar row plus its keyed central
+    // panel; both must be present so one row always selects one panel.
+    expect(injectedKeys).toEqual([
+      'sidebar.panellist',
+      'main',
+      'conversation.input.dock',
+    ])
+    expect(registerLocale).toHaveBeenCalledWith('loopx.dashboard', expect.any(Object))
+    expect(registrations[0]?.options).toMatchObject({
+      name: 'sidebar.panellist',
+      id: 'loopx-dashboard',
+      order: 7,
+    })
+    expect(registrations[0]?.options.label).toBeTypeOf('function')
+    expect(registrations[1]?.options).toMatchObject({
+      name: 'main',
+      key: 'loopx-dashboard',
+      locale: 'loopx.dashboard',
+    })
     const injected = registration?.options.inject('session-injected')
     expect(injected?.rpcSessionId).toBe('session-injected')
     expect(injected).not.toHaveProperty('sessionId')

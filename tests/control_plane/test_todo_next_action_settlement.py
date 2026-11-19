@@ -8,15 +8,6 @@ from loopx.bootstrap import render_state_markdown
 from loopx.control_plane.coordination.runtime_shadow import (
     build_todo_runtime_shadow_projection,
 )
-from loopx.control_plane.todos.next_action_runtime import (
-    _agent_todo_snapshots,
-    apply_added_todo_next_action,
-    reconcile_added_todo_next_action,
-)
-from loopx.control_plane.todos.projection import (
-    TODO_MISSING_PRIORITY_RANK,
-    todo_priority_rank,
-)
 from loopx.state_projection import active_state_next_action_entries
 from loopx.state_refresh import build_state_refresh_record
 from loopx.todos import add_goal_todo, complete_goal_todo
@@ -36,28 +27,6 @@ def _initialize_canonical(tmp_path: Path, state: Path) -> None:
         ),
         state_path=state,
     )
-
-
-def test_agent_todo_snapshot_uses_structured_prefix_priority() -> None:
-    snapshots = _agent_todo_snapshots(
-        [
-            "## Agent Todo",
-            "",
-            "- [ ] [P2-review] Validate the typed priority contract.",
-            "  <!-- loopx:todo todo_id=todo_typed task_class=advancement_task -->",
-            "- [ ] Explain why a P0 mention in prose is not priority metadata.",
-            "  <!-- loopx:todo todo_id=todo_untyped task_class=advancement_task -->",
-            "",
-            "## Next Action",
-            "",
-        ]
-    )
-
-    assert [snapshot["priority"] for snapshot in snapshots] == ["P2", None]
-    assert [todo_priority_rank(snapshot["priority"]) for snapshot in snapshots] == [
-        2,
-        TODO_MISSING_PRIORITY_RANK,
-    ]
 
 
 def _write_fixture(tmp_path: Path, *, next_action: str) -> tuple[Path, Path]:
@@ -295,66 +264,6 @@ def test_higher_priority_todo_does_not_take_over_another_claimed_lane(
     assert active_state_next_action_entries(state.read_text(encoding="utf-8")) == [
         bound_text
     ]
-
-
-def test_higher_priority_todo_preserves_multi_entry_operator_route() -> None:
-    lines = [
-        "## Agent Todo",
-        "",
-        "- [ ] [P1] Run the generated startup check.",
-        "  <!-- loopx:todo todo_id=todo_startup task_class=advancement_task -->",
-        "- [ ] [P0] Implement the requested behavior.",
-        "  <!-- loopx:todo todo_id=todo_task task_class=advancement_task claimed_by=codex -->",
-        "",
-        "## Next Action",
-        "",
-        "- [P1] Run the generated startup check.",
-        "<!-- loopx:next-action schema=loopx_next_action_binding_v0 todo_id=todo_startup -->",
-        "- Preserve this operator-authored route.",
-        "",
-    ]
-
-    assert reconcile_added_todo_next_action(lines, added_todo_id="todo_task") is False
-    assert "- Preserve this operator-authored route." in lines
-    assert "todo_id=todo_startup" in "\n".join(lines)
-
-
-def test_unchanged_and_non_advancement_adds_skip_the_ts_transition(
-    monkeypatch,
-) -> None:
-    def reject_unexpected_transition(*_args, **_kwargs):
-        raise AssertionError("non-candidate Todo addition crossed the TS boundary")
-
-    monkeypatch.setattr(
-        "loopx.control_plane.todos.next_action_runtime.effect_runtime_result",
-        reject_unexpected_transition,
-    )
-    lines = ["## Next Action", "", "- Preserve the existing route.", ""]
-
-    assert (
-        apply_added_todo_next_action(
-            lines,
-            role="agent",
-            add_result={
-                "changed": False,
-                "todo_id": "todo_existing",
-                "task_class": "advancement_task",
-            },
-        )
-        is False
-    )
-    assert (
-        apply_added_todo_next_action(
-            lines,
-            role="agent",
-            add_result={
-                "changed": True,
-                "todo_id": "todo_monitor",
-                "task_class": "continuous_monitor",
-            },
-        )
-        is True
-    )
 
 
 def test_refresh_record_preserves_a_long_wrapped_next_action_losslessly(

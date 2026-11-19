@@ -411,6 +411,78 @@ def test_local_file_read_enforces_limit_after_stale_preflight(tmp_path, monkeypa
     assert grew
 
 
+@pytest.mark.parametrize("platform", ["nt", "posix"])
+@pytest.mark.parametrize("descriptor_change", [False, True])
+def test_local_file_ctime_skew(tmp_path, monkeypatch, platform, descriptor_change):
+    import os
+    from types import SimpleNamespace
+
+    from loopx import materials
+
+    authority = tmp_path / "authority.txt"
+    authority.write_text("stable source", encoding="utf-8")
+    profile = normalize_decision_context_profile(profile_payload(authority))
+    provider = build_decision_source_provider(profile.provider_binding_map()["local-authority"])
+    original_fstat = os.fstat
+    calls = 0
+
+    def descriptor_stat(fd):
+        nonlocal calls
+        observed = original_fstat(fd)
+        calls += 1
+        fields = {name: getattr(observed, name) for name in dir(observed) if name.startswith("st_")}
+        fields["st_ctime_ns"] = authority.stat().st_ctime_ns + 499_700
+        if descriptor_change and calls == 2:
+            fields["st_ctime_ns"] += 1
+        return SimpleNamespace(**fields)
+
+    monkeypatch.setattr(materials, "os", SimpleNamespace(**{
+        **vars(os), "name": platform, "fstat": descriptor_stat,
+    }))
+    args = dict(source=profile.sources[0], after_cursor=None,
+        before="2100-01-01T00:00:00+00:00", limit=8,
+        timeout_seconds=2, observed_at=OBSERVED_AT)
+    if platform == "posix":
+        with pytest.raises(ValueError, match="changed during bounded read"):
+            provider.scan(**args)
+    else:
+        scan = provider.scan(**args)
+        exact = provider.exact_read(source=profile.sources[0], item=scan.items[0],
+            timeout_seconds=2, observed_at=OBSERVED_AT)
+        assert scan.status == "completed"
+        assert exact.content == "stable source"
+
+
+@pytest.mark.parametrize("change", ["mtime", "size"])
+def test_local_file_path_change_after_descriptor_snapshot(tmp_path, monkeypatch, change):
+    import os
+
+    authority = tmp_path / "authority.txt"
+    authority.write_bytes(b"before")
+    profile = normalize_decision_context_profile(profile_payload(authority))
+    provider = build_decision_source_provider(profile.provider_binding_map()["local-authority"])
+    original_fstat = os.fstat
+    calls = 0
+
+    def change_after_snapshot(fd):
+        nonlocal calls
+        observed = original_fstat(fd)
+        calls += 1
+        if calls == 2:
+            if change == "size":
+                authority.write_bytes(b"longer source")
+            os.utime(authority, ns=(observed.st_atime_ns,
+                observed.st_mtime_ns + (1_000_000_000 if change == "mtime" else 0)))
+        return observed
+
+    monkeypatch.setattr(os, "fstat", change_after_snapshot)
+    with pytest.raises(ValueError, match="changed during bounded read"):
+        provider.scan(source=profile.sources[0], after_cursor=None,
+            before="2100-01-01T00:00:00+00:00", limit=8,
+            timeout_seconds=2, observed_at=OBSERVED_AT)
+    assert calls == 2
+
+
 def test_local_file_growth_during_read_is_bounded(tmp_path, monkeypatch):
     import os
 
@@ -458,6 +530,86 @@ def test_local_file_growth_during_read_is_bounded(tmp_path, monkeypatch):
             timeout_seconds=2, observed_at=OBSERVED_AT)
     assert grew
     assert read_sizes == [17]
+
+
+@pytest.mark.parametrize("missing_identity", [None, "st_ino", "st_dev"])
+def test_local_file_same_metadata_replacement_has_no_verified_read(tmp_path, monkeypatch, missing_identity):
+    import os
+    import subprocess
+    from types import SimpleNamespace
+
+    from loopx import materials
+
+    original_dir, replacement_dir = tmp_path / "original", tmp_path / "replacement"
+    original_dir.mkdir()
+    replacement_dir.mkdir()
+    original = original_dir / "authority.txt"
+    original.write_bytes(b"original")
+    os.utime(original, (1_700_000_000, 1_700_000_000))
+    before = original.stat()
+    replacement = replacement_dir / "authority.txt"
+    replacement.write_bytes(b"replaced")
+    os.utime(replacement, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert replacement.stat().st_ino != before.st_ino
+    assert replacement.stat().st_size == before.st_size
+    assert replacement.stat().st_mtime_ns == before.st_mtime_ns
+    alias = tmp_path / "alias"
+
+    def link_to(target):
+        if os.name == "nt":
+            created = subprocess.run(
+                ["cmd.exe", "/d", "/c", "mklink", "/J", str(alias), str(target)],
+                capture_output=True,
+            )
+            assert created.returncode == 0, created.stderr or created.stdout
+        else:
+            alias.symlink_to(target, target_is_directory=True)
+
+    link_to(original_dir)
+    authority = alias / "authority.txt"
+    profile = normalize_decision_context_profile(profile_payload(authority))
+    provider = build_decision_source_provider(profile.provider_binding_map()["local-authority"])
+    original_fstat, original_stat = os.fstat, Path.stat
+    observations = 0
+
+    def windows_stat(observed):
+        fields = {name: getattr(observed, name) for name in dir(observed) if name.startswith("st_")}
+        fields["st_ctime_ns"] = before.st_ctime_ns + (observed.st_ino != before.st_ino)
+        if missing_identity:
+            fields[missing_identity] = 0
+        if missing_identity == "st_dev":
+            # File indexes may collide across volumes; inject only the OS metadata.
+            fields["st_ino"] = before.st_ino
+        return SimpleNamespace(**fields)
+
+    def descriptor_stat(fd):
+        nonlocal observations
+        observed = original_fstat(fd)
+        observations += 1
+        if observations == 2:
+            # Retarget the directory while the original file is open on Windows.
+            if os.name == "nt":
+                alias.rmdir()
+            else:
+                alias.unlink()
+            link_to(replacement_dir)
+            assert authority.read_bytes() == b"replaced"
+        return windows_stat(observed)
+
+    def path_stat(path, *args, **kwargs):
+        observed = original_stat(path, *args, **kwargs)
+        return windows_stat(observed) if path in (authority, original, replacement) else observed
+
+    monkeypatch.setattr(materials, "os", SimpleNamespace(**{
+        **vars(os), "name": "nt", "fstat": descriptor_stat,
+    }))
+    monkeypatch.setattr(Path, "stat", path_stat)
+    with pytest.raises(ValueError, match="changed during bounded read"):
+        provider.scan(source=profile.sources[0], after_cursor=None,
+            before="2100-01-01T00:00:00+00:00", limit=8,
+            timeout_seconds=2, observed_at=OBSERVED_AT)
+    assert observations == 2
+    assert authority.read_bytes() == b"replaced"
 
 
 def test_local_file_replacement_after_open_has_no_verified_read(tmp_path, monkeypatch):

@@ -4,16 +4,24 @@ Read when the CLI is missing, host/runtime versions disagree, or project/registr
 
 ## Desktop Runtime
 
+For the ordinary upgrade request, prefer `loopx upgrade` (or
+`loopx upgrade --ref main` for an explicitly selected Main archive). It composes
+the existing CLI owner and native App updater, restarts the App and reads back
+both outcomes. `--dry-run` previews without mutation. An App launch alone,
+an old bundle without terminal readback, or a healthy workspace after an update
+check failure cannot qualify completion. Keep partial results and the native
+Recovery & updates error visible. For a silent older `update apply`, inspect
+its installer process before declaring a hang or starting another transaction;
+installation may still be downloading sources or building workspace assets.
+
 When asked to upgrade LoopX on a machine with the desktop App, inspect the App
 bundle and its runtime as well as the CLI. `loopx doctor` exposes
-`desktop_installation` for standard macOS install locations; a paired bundle
-still does not prove which App process is running. Upgrade the App and its
+`desktop_installation` for standard macOS install locations; Upgrade the App and its
 bundled runtime together, then restart and verify the App, CLI and service
 source revisions. Never claim a desktop upgrade from CLI/HTTP checks alone:
 current App builds automatically select the newest qualified runtime they can
 establish from Core package versions and source ancestry, retaining a provably
-newer runtime without a version-selection round. Unknown ancestry is not proof
-of freshness; same-installation fallback follows its existing ownership rules.
+newer runtime without a version-selection round. Same-installation fallback follows its existing ownership rules.
 When the bundle is needed, the App prepares an App-owned snapshot rather than
 replacing the user's uv/pip/pipx CLI. Inspect the installed App's actual version
 and readback: older builds may still require pairing or replace a separately
@@ -29,6 +37,14 @@ for the same authorized task without asking again merely because the previous
 round finished or handed it back. Active user intervention, explicit pauses,
 reserved control and unverified spaces retain the installed Ego skill's stop
 rules. This is host guidance, not permission to bypass Ego's ownership checks.
+Before carrying an old STOP into a new control question, read the live inventory
+once. The same task already returned to Agent ownership resumes without a claim
+or another chat approval; an explicit pause or unresolved user step still holds.
+Normal handback and explicit return approval retain their existing recovery
+paths. The dynamic `ego-browser skill` guide owns native API usage and does not
+replace this installed continuation policy. The optional read-only source
+provider already checks live control on each call; UI automation through the
+CLI must apply the same distinction between a historical stop and current control.
 After an independently authorized Ego upgrade, run `loopx workflow-skills --install`
 and read `ego_browser`: it follows the current installed Ego source, preserves
 custom edits and reports recovery steps. It does not upgrade Ego. App-private

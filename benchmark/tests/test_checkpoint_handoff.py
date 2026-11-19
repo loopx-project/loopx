@@ -11,11 +11,129 @@ import pytest
 from benchmark.runtime.checkpoint_handoff import await_controller_capture
 
 
-@pytest.mark.parametrize("response", ["captured", "failed", "foreign", "timeout"])
+@pytest.mark.parametrize("trigger", [None, "fresh_replan"])
+@pytest.mark.parametrize("missing", [None, "native_session", "loopx_state", "evaluation_opportunity"])
+def test_full_controller_capture_requires_all_participants_at_either_boundary(trigger, missing):
+    from benchmark.runtime.checkpoint import parse_checkpoint_request
+
+    request = {"destination": "/logs/agent/checkpoints/point", "point_metadata": {},
+        "components": [{"id": "workspace", "source_path": "/task"}],
+        "controller_handoff": True, "native_session": True,
+        "loopx_state": True, "evaluation_opportunity": True}
+    if trigger is not None:
+        request["trigger"] = trigger
+    if missing:
+        del request[missing]
+        with pytest.raises(ValueError, match="all three state participants"):
+            parse_checkpoint_request(json.dumps(request).encode())
+    else:
+        assert parse_checkpoint_request(json.dumps(request).encode()) == request
+
+
+def test_full_controller_capture_does_not_invent_an_operator_trigger():
+    from benchmark.runtime.checkpoint import parse_checkpoint_request
+
+    request = {"destination": "/logs/agent/checkpoints/point", "point_metadata": {},
+        "components": [{"id": "workspace", "source_path": "/task"}],
+        "controller_handoff": True, "native_session": True, "loopx_state": True,
+        "evaluation_opportunity": True, "trigger": "operator_handoff"}
+    with pytest.raises(ValueError, match="trigger must be fresh_replan or omitted"):
+        parse_checkpoint_request(json.dumps(request).encode())
+
+
+def test_completed_controller_point_cannot_retry_a_failed_boundary_with_later_work(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from benchmark.runtime import checkpoint
+
+    declaration = tmp_path / "request.json"
+    destination = tmp_path / "checkpoints" / "point"
+    declaration.write_text(json.dumps({"destination": str(destination), "point_metadata": {},
+        "components": [{"id": "workspace", "source_path": str(tmp_path / "workspace")}],
+        "controller_handoff": True, "native_session": True, "loopx_state": True, "evaluation_opportunity": True}))
+    env = {"LOOPX_CHECKPOINT_REQUEST": str(declaration), "LOOPX_WAKE_LOG_DIR": str(tmp_path / "wakes"),
+        "LOOPX_RUNTIME_ROOT": str(tmp_path / "runtime"), "LOOPX_REGISTRY": str(tmp_path / "registry"),
+        "LOOPX_GOAL_ID": "source", "LOOPX_AGENT_ID": "agent"}
+    monkeypatch.setattr("benchmark.runtime.checkpoint_continuation.restored_capture_gate",
+                        lambda *a, **k: {"capture_allowed": True})
+    monkeypatch.setattr(checkpoint, "read_heartbeat_settlement", lambda *a, **k:
+        SimpleNamespace(progress={"state": "settled"},
+                        identity=SimpleNamespace(value=SimpleNamespace(effect_id=k["turn_instance_id"]))))
+    attempts = []
+    def unavailable(*args):
+        attempts.append(True)
+        raise ValueError("synthetic source unavailable before sealing")
+    monkeypatch.setattr(checkpoint, "research_participants", unavailable)
+    first = {"ok": True, "stage": "execute", "mode": "heartbeat", "turn_id": "original"}
+    checkpoint.capture_after_wake(env, first)
+    assert first["checkpoint"]["reason"] == "capture_failed" and not destination.exists()
+    marker = next((destination.parent / ".completed-attempts").iterdir())
+    original = marker.read_bytes()
+    for turn in ("original", "later-work"):
+        later = {**first, "turn_id": turn}
+        checkpoint.capture_after_wake(env, later)
+        assert later["checkpoint"]["reason"] == "destination_already_attempted_no_replay"
+        assert later["ok"] and not later["checkpoint"]["captured"]
+    assert attempts == [True] and marker.read_bytes() == original
+
+
+@pytest.mark.skipif(os.name != "posix" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                   reason="Requires real unprivileged directory permission denial")
+def test_completed_attempt_survives_artifact_index_permission_recovery(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from benchmark.runtime import checkpoint
+
+    declaration = tmp_path / "request.json"
+    destination = tmp_path / "checkpoints" / "point"
+    index = destination.parent / ".completed-attempts"
+    index.mkdir(parents=True)
+    declaration.write_text(json.dumps({"destination": str(destination), "point_metadata": {},
+        "components": [{"id": "workspace", "source_path": str(tmp_path / "workspace")}],
+        "controller_handoff": True, "native_session": True, "loopx_state": True, "evaluation_opportunity": True}))
+    env = {"LOOPX_CHECKPOINT_REQUEST": str(declaration), "LOOPX_WAKE_LOG_DIR": str(tmp_path / "wakes"),
+        "LOOPX_RUNTIME_ROOT": str(tmp_path / "runtime"), "LOOPX_REGISTRY": str(tmp_path / "registry"),
+        "LOOPX_GOAL_ID": "source", "LOOPX_AGENT_ID": "agent"}
+    monkeypatch.setattr("benchmark.runtime.checkpoint_continuation.restored_capture_gate",
+                        lambda *a, **k: {"capture_allowed": True})
+    monkeypatch.setattr(checkpoint, "read_heartbeat_settlement", lambda *a, **k:
+        SimpleNamespace(progress={"state": "settled"},
+                        identity=SimpleNamespace(value=SimpleNamespace(effect_id=k["turn_instance_id"]))))
+    monkeypatch.setattr(checkpoint, "research_participants",
+                        lambda *a: pytest.fail("A missed original point must not read later source state"))
+    first = {"ok": True, "stage": "execute", "mode": "heartbeat", "turn_id": "original"}
+    index.chmod(0o500)
+    try:
+        checkpoint.capture_after_wake(env, first)
+    finally:
+        index.chmod(0o700)
+    assert first["checkpoint"]["reason"] == "capture_failed"
+    assert first["checkpoint"]["error_kind"] == "PermissionError" and not list(index.iterdir())
+    witness = tmp_path / "wakes/original/checkpoint-completed-request.json"
+    original = witness.read_bytes()
+    for turn, changed_destination in (("original", True), ("later-work", False)):
+        if changed_destination:
+            request = json.loads(declaration.read_text())
+            request["destination"] = str(destination.with_name("another-point"))
+            declaration.write_text(json.dumps(request))
+        else:
+            request["destination"] = str(destination)
+            declaration.write_text(json.dumps(request))
+        later = {**first, "turn_id": turn}
+        checkpoint.capture_after_wake(env, later)
+        assert later["checkpoint"]["reason"] == "destination_already_attempted_no_replay"
+        assert later["ok"] and not later["checkpoint"]["captured"]
+    assert not list(index.iterdir()) and witness.read_bytes() == original
+
+
+@pytest.mark.parametrize("response", ["captured", "failed", "missing_component",
+                                      "foreign_component", "missing_image", "foreign_image",
+                                      "forged_diagnostic", "foreign", "timeout"])
 def test_original_request_only_and_cleanup_after_missed_point(tmp_path, response):
     mailbox = tmp_path / "checkpoint-controller"
     ready = mailbox / "ready.json"
     observed = []
+    error_kinds = {"missing_component": "NotFound", "foreign_component": "NotFound",
+                   "missing_image": "ImageNotFound", "foreign_image": "ImageNotFound",
+                   "forged_diagnostic": "SyntheticFailure"}
     def controller():
         until = time.time() + 2
         while not ready.exists() and time.time() < until:
@@ -28,6 +146,9 @@ def test_original_request_only_and_cleanup_after_missed_point(tmp_path, response
         result = {"request_sha256": hashlib.sha256(raw).hexdigest(),
                   "ok": response == "captured", "error_kind": "SyntheticFailure",
                   "capture": {"research_point_qualified": False, "sha256": "retained"}}
+        if response in error_kinds:
+            result["error_kind"] = error_kinds[response]
+            result["missing_component_id"] = "other" if response.startswith("foreign_") else "code"
         if response == "foreign":
             result["request_sha256"] = "another-point"
         pending = mailbox / "reply.tmp"
@@ -41,8 +162,13 @@ def test_original_request_only_and_cleanup_after_missed_point(tmp_path, response
         if response == "captured":
             assert await_controller_capture(*args)["sha256"] == "retained"
         else:
-            with pytest.raises(TimeoutError if response == "timeout" else ValueError):
+            with pytest.raises(TimeoutError if response == "timeout" else ValueError) as error:
                 await_controller_capture(*args, phase_deadline=args[-1])
+            if response in error_kinds:
+                expected = f"controller checkpoint failed: {error_kinds[response]}"
+                if response in {"missing_component", "missing_image"}:
+                    expected += " (missing component code)"
+                assert str(error.value) == expected
     finally:
         thread.join(3)
     assert not thread.is_alive() and not ready.exists() and len(observed) == 1
@@ -130,8 +256,8 @@ def test_capture_preparation_uses_one_window_without_renewing_phase(tmp_path, mo
     binding = SimpleNamespace(session_id="native-session", goal_ref="source", digest="profile")
     monkeypatch.setattr(checkpoint, "research_participants", lambda env, components, *a: (components, {}))
     monkeypatch.setattr(checkpoint, "verify_research_participants", lambda *a: None)
-    monkeypatch.setattr(checkpoint, "native_binding_participant", lambda env, components, *a: (components, binding))
-    monkeypatch.setattr("benchmark.runtime.sessions.BenchmarkSessionWake", lambda *a, **k: binding)
+    monkeypatch.setattr(checkpoint, "native_binding_participant", lambda env, components, *a: (components, binding, b"registry"))
+    monkeypatch.setattr(checkpoint, "verify_native_binding_participant", lambda *a: None)
     monkeypatch.setattr("benchmark.runtime.checkpoint_continuation.restored_capture_history", lambda *a, **k: {})
     @contextmanager
     def reader(*a, **k):
@@ -160,7 +286,10 @@ def test_capture_preparation_uses_one_window_without_renewing_phase(tmp_path, mo
         observed = SimpleNamespace(progress={"state": "settled"},
             identity=SimpleNamespace(value=SimpleNamespace(effect_id="original-effect")))
         monkeypatch.setattr(checkpoint, "read_heartbeat_settlement", lambda *a, **k: observed)
-        checkpoint.capture_after_wake(env, receipt, supplied_request=(request, b"declared"))
+        declaration = tmp_path / "capture-request.json"
+        declaration.write_text(json.dumps(request))
+        env["LOOPX_CHECKPOINT_REQUEST"] = str(declaration)
+        checkpoint.capture_after_wake(env, receipt)
         assert receipt["checkpoint"]["captured"] is (phase_seconds != 20)
         assert receipt["ok"] is True  # An optional miss cannot replay successful work.
     else:
@@ -177,6 +306,163 @@ def test_capture_preparation_uses_one_window_without_renewing_phase(tmp_path, mo
     expected = 190 if phase_seconds is None else 100 + phase_seconds
     assert deadlines and all(deadline == expected for deadline in deadlines)
     assert code.read_text() == "retained source"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Requires the Host Unix rendezvous")
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("invalid_root", ["foreign", "symlinked_ancestor"])
+def test_foreign_capture_root_does_not_commit_quota_guard(tmp_path, provider, invalid_root):
+    from pathlib import Path
+    import subprocess
+
+    from benchmark.runtime.checkpoint import held_quota_decision
+    from benchmark.runtime.checkpoint_wake import CheckpointWake
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TURN_ID, _configure_autonomous_replan_fixture,
+        _heartbeat_receipt_count, _initialize_fixture_authority, _write_fixture,
+    )
+
+    project, runtime, registry = _write_fixture(tmp_path / "authority")
+    _configure_autonomous_replan_fixture(project, runtime, registry)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    request = tmp_path / "checkpoint-request.json"
+    request.write_text(json.dumps({
+        "destination": str(tmp_path / "checkpoints"), "trigger": "fresh_replan",
+        "point_metadata": {}, "components": [{"id": "workspace", "source_path": str(project)}],
+    }))
+    wake_env = {
+        "LOOPX_WAKE_LOG_DIR": str(tmp_path / "wakes"),
+        "LOOPX_CHECKPOINT_REQUEST": str(request),
+    }
+    with CheckpointWake(wake_env, {"mode": "heartbeat", "stage": "execute", "turn_id": TURN_ID}) as host:
+        assert host.listener is not None
+        host.capture_root.mkdir(parents=True, mode=0o700)
+        native_context = tmp_path / "native-context"
+        native_context.mkdir(mode=0o700)
+        requested_root = native_context
+        original_parent = host.capture_root.parent.with_name("original-parent")
+        if invalid_root == "symlinked_ancestor":
+            (native_context / host.capture_root.name).mkdir(mode=0o700)
+            host.capture_root.parent.rename(original_parent)
+            host.capture_root.parent.symlink_to(native_context, target_is_directory=True)
+            requested_root = host.capture_root
+        command = [sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+                   "--registry", str(registry), "--runtime-root", str(runtime), "quota", "should-run",
+                   "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", TURN_ID,
+                   "--runtime-profile", "generic_cli", "--context-delivery", "off",
+                   "--decision-handoff-socket", host.socket_path, "--decision-output-root"]
+        env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])}
+        try:
+            refused = subprocess.run([*command, str(requested_root)], cwd=project, env=env,
+                                     capture_output=True, text=True, timeout=15, check=False)
+            assert refused.returncode == 1
+            assert "no guard was run" in (refused.stdout + refused.stderr).lower()
+            assert not list(requested_root.iterdir())
+            assert _heartbeat_receipt_count(runtime, TURN_ID) == 0
+        finally:
+            if invalid_root == "symlinked_ancestor":
+                host.capture_root.parent.unlink()
+                original_parent.rename(host.capture_root.parent)
+
+        host.listener.settimeout(15)
+        with subprocess.Popen([*command, str(host.capture_root)], cwd=project, env=env,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as process:
+            with held_quota_decision(host.listener, host.capture_root, goal_id=GOAL_ID,
+                                    agent_id=AGENT_ID, turn_instance_id=TURN_ID,
+                                    interrupt_when=lambda _: False) as held:
+                assert held["quota"]["ok"] is True
+                assert held["path"].parent.parent == host.capture_root
+            stdout, stderr = process.communicate(timeout=15)
+            assert process.returncode == 0, (stdout, stderr)
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Requires the Host Unix rendezvous")
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_quota_handoff_rejects_replacement_before_contacting_checkpoint_host(tmp_path, provider):
+    import select
+    import socket
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from benchmark.runtime.checkpoint import held_quota_decision
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TURN_ID, _configure_autonomous_replan_fixture, _heartbeat_receipt_count,
+        _initialize_fixture_authority, _run_cli, _spend_run_count, _write_fixture,
+    )
+
+    project, runtime, registry = _write_fixture(tmp_path / "authority")
+    _configure_autonomous_replan_fixture(project, runtime, registry)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    root = tmp_path / "captures"
+    root.mkdir(mode=0o700)
+    original_file = tmp_path / "original.json"
+    # Inject a byte-only replacement immediately after the production writer.
+    # Decoded content and the replan signature are still valid.
+    inject = """
+import sys
+from pathlib import Path
+from loopx.control_plane.turn_driver import decision_capture
+original = Path(sys.argv.pop(1))
+write = decision_capture.write_decision_capture
+def replace_published(path, payload, **kwargs):
+    digest = write(path, payload, **kwargs)
+    if path.name == 'decision.json' and path.parent.parent.name == 'captures':
+        raw = path.read_bytes()
+        original.write_bytes(raw)
+        path.write_bytes(raw + b' ')
+    return digest
+decision_capture.write_decision_capture = replace_published
+from loopx.cli import main
+raise SystemExit(main())
+"""
+    with tempfile.TemporaryDirectory(prefix="quota-host-", dir="/tmp") as short:
+        endpoint = Path(short).resolve() / "host.sock"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(endpoint))
+            listener.listen(1)
+            command = [sys.executable, "-c", inject, str(original_file), "--format", "json",
+                       "--registry", str(registry), "--runtime-root", str(runtime), "quota", "should-run",
+                       "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", TURN_ID,
+                       "--runtime-profile", "generic_cli", "--context-delivery", "off",
+                       "--decision-output-root", str(root), "--decision-handoff-socket", str(endpoint)]
+            env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])}
+            with subprocess.Popen(command, cwd=project, env=env, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, text=True) as process:
+                try:
+                    ready, _, _ = select.select([listener, process.stdout], [], [], 30)
+                    assert ready, "quota did not reach either the Host or its failure response"
+                    host_contacted = listener in ready
+                    if host_contacted:
+                        with held_quota_decision(listener, root, goal_id=GOAL_ID, agent_id=AGENT_ID,
+                                                turn_instance_id=TURN_ID, interrupt_when=lambda _: False) as held:
+                            assert held["intent"]["capture"] is True
+                    stdout, stderr = process.communicate(timeout=20)
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
+    assert not host_contacted, "the Host accepted bytes different from the published decision"
+    assert process.returncode == 1, (stdout, stderr)
+    failure = json.loads(stdout)
+    assert failure["error_code"] == "quota_decision_transport_failed"
+    raw = original_file.read_bytes()
+    decision = json.loads(raw)
+    receipt = decision["heartbeat_receipt"]
+    assert receipt["status"] == "committed" and failure["heartbeat_receipt"] == receipt
+    path = Path(failure["captured_decision"]["path"])
+    digest = hashlib.sha256(raw).hexdigest()
+    assert failure["captured_decision"]["sha256"] == digest
+    assert path.read_bytes() == raw + b" "
+    read = ["quota", "context-read", "--capture-file", str(path), "--capture-sha256", digest,
+            "--select", "/heartbeat_receipt"]
+    rc, refused = _run_cli(registry, runtime, *read)
+    assert rc != 0 and refused["ok"] is False
+    path.write_bytes(raw)  # Restore the original fixture bytes only.
+    rc, page = _run_cli(registry, runtime, *read)
+    assert rc == 0 and json.loads(page["content"])["selections"][0]["value"] == receipt
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Qualifies the Linux writer process group")
@@ -361,8 +647,8 @@ def test_interrupted_capture_keeps_reader_through_publication_and_cleans_up(tmp_
     held["path"].write_text("original guard")
     binding = SimpleNamespace(session_id="session", goal_ref="goal", digest="profile")
     monkeypatch.setattr("benchmark.runtime.checkpoint.native_binding_participant",
-                        lambda env, components, metadata: (components, binding))
-    monkeypatch.setattr("benchmark.runtime.sessions.BenchmarkSessionWake", lambda *a, **k: binding)
+                        lambda env, components, metadata: (components, binding, b"registry"))
+    monkeypatch.setattr("benchmark.runtime.checkpoint.verify_native_binding_participant", lambda *a: None)
     events = []
     token = object()
     native_options = {"retained_history": {"turn_ids": ["source"], "visible_history_sha256": "source-digest"},
@@ -463,17 +749,44 @@ def test_restored_capture_cannot_drop_its_preflight_basis(tmp_path, monkeypatch,
         assert reads == [True]
 
 
-@pytest.mark.parametrize("native_participant", [False, True])
-def test_preflight_defers_history_only_when_capture_will_verify_it(tmp_path, monkeypatch, native_participant):
+@pytest.mark.parametrize("native_context,native_participant,tampered_digest", [
+    (False, False, False), (False, True, False),
+    (True, False, False), (True, True, False),
+    (True, False, True), (True, True, True),
+])
+def test_preflight_defers_history_only_when_capture_will_verify_it(
+    tmp_path, monkeypatch, native_participant, native_context, tampered_digest,
+):
+    from pathlib import Path
     from types import SimpleNamespace
     from benchmark.runtime import checkpoint
+    from loopx.control_plane.turn_driver.codex_execution_preparation import prepared_capture_reference
     wake = tmp_path / "wakes" / "turn"
     wake.mkdir(parents=True)
     request = tmp_path / "request"
     request.write_text(json.dumps({"destination": str(tmp_path / "checkpoints"),
         "trigger": "fresh_replan", "native_session": native_participant,
         "components": [{"id": "code", "source_path": str(tmp_path / "code")}], "point_metadata": {}}))
-    monkeypatch.setattr(checkpoint.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=json.dumps({"ok": True})))
+    guard_commands = []
+    def guard(command, **kwargs):
+        guard_commands.append(command)
+        if native_context:
+            assert "--prepared-capture-reference" in command
+            assert "--defer-context-presentation" in command
+            assert "--decision-output-root" not in command
+            captured = Path(command[command.index("--decision-output-dir") + 1])
+        else:
+            captured = Path(command[command.index("--decision-output-root") + 1]) / "decision-original"
+        captured.mkdir()
+        original = json.dumps({"ok": True, "source": captured.parent.name})
+        (captured / "decision.json").write_text(original)
+        (captured / "decision.json").chmod(0o600)
+        if native_context:
+            digest = "0" * 64 if tampered_digest else hashlib.sha256(original.encode()).hexdigest()
+            return SimpleNamespace(stdout=json.dumps(prepared_capture_reference(json.loads(original), digest)))
+        return SimpleNamespace(stdout=original if native_participant else
+                               json.dumps({"ok": True, "view": captured.parent.name}))
+    monkeypatch.setattr(checkpoint.subprocess, "run", guard)
     monkeypatch.setattr(checkpoint, "effect_runtime_result", lambda *a, **k: {"capture": False, "reason": "no_fresh_replan"})
     observed = []
     def gate(*args, full_history):
@@ -484,8 +797,35 @@ def test_preflight_defers_history_only_when_capture_will_verify_it(tmp_path, mon
         "LOOPX_CLI": "loopx", "LOOPX_PROJECT": str(tmp_path), "LOOPX_RUNTIME_ROOT": str(tmp_path),
         "LOOPX_REGISTRY": str(tmp_path / "registry"), "LOOPX_GOAL_ID": "goal", "LOOPX_AGENT_ID": "agent"}
     receipt = {"turn_id": "turn", "mode": "heartbeat", "stage": "execute"}
-    assert checkpoint.capture_before_replan(env, receipt, "current work").endswith("current work")
+    if native_context:
+        env.update(LOOPX_CONTEXT_DELIVERY="on", LOOPX_CODEX_CONTEXT_DIR=str(tmp_path / "context"))
+    if tampered_digest:
+        with pytest.raises(ValueError, match="prepared capture differs from the original guard"):
+            checkpoint.capture_before_replan(env, receipt, "current work")
+        assert len(guard_commands) == 1 and not observed
+        assert not (wake / "checkpoint-start-guard.json").exists()
+        return
+    body = checkpoint.capture_before_replan(env, receipt, "current work")
+    assert body.endswith("current work")
     assert observed == [not native_participant]
+    if native_context:
+        pattern = "checkpoint-start-*/decision-original/decision.json"
+        original, = wake.glob(pattern)
+        assert str(original) in body and hashlib.sha256(original.read_bytes()).hexdigest() in body
+        assert "context-project" in body and "--initial-read" in body
+        first_bytes = original.read_bytes()
+        assert not list(wake.glob("checkpoint-start-*/checkpoint-start-view.json"))
+        assert json.loads(first_bytes) == {"ok": True, "source": original.parent.parent.name}
+        assert original.stat().st_mode & 0o077 == 0
+        resumed = checkpoint.capture_before_replan(env, receipt, "resume")
+        second, = set(wake.glob(pattern)) - {original}
+        assert str(second) in resumed and hashlib.sha256(second.read_bytes()).hexdigest() in resumed
+        assert original.read_bytes() == first_bytes != second.read_bytes()
+        assert not list(wake.glob("checkpoint-start-*/checkpoint-start-view.json"))
+        assert len(guard_commands) == 2
+    else:
+        view, = wake.glob("checkpoint-start-*/checkpoint-start-view.json")
+        assert str(view) in body and json.loads(view.read_text())["ok"]
     assert receipt["checkpoint"]["reason"] == "no_fresh_replan"
 
 

@@ -208,6 +208,11 @@ def apply_scoped_user_gate_fallback_projection(
 
     projected = dict(payload)
     projected["scoped_user_gate_fallback"] = fallback
+    if projected.get("effective_action") == EffectiveAction.AGENT_WORKSPACE_REPAIR.value:
+        # Independence from the user gate is not workspace admission. Preserve
+        # the selected repair obligation and its explicit delivery=False so the
+        # same Todo can bind for repair and reenter after moving workspaces.
+        return projected
     projected["should_run"] = True
     if projected.get("decision") == "skip":
         projected["decision"] = "safe_bypass_user_gate_fallback"

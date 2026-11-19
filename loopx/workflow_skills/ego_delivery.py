@@ -6,13 +6,14 @@ guidance, not browser-control authority or a new capability/provider lifecycle.
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
 import tempfile
-from typing import Any
 
 from .. import __version__
 from ..file_lock import exclusive_file_lock
@@ -24,9 +25,37 @@ _POLICY = """
 
 ## LoopX: continuing an authorized browser task
 
-This section overrides only a blanket requirement above or in API references
-to ask again before reclaiming a user-owned or inactive TaskSpace, including
-an entry-time user-control message caused by your own normal handback.
+This section overrides a blanket requirement above or in API references to
+ask again for qualified continuation of the same authorized task: reclaiming
+after your own normal handback, or replacing its confirmed-missing TaskSpace.
+The replacement becomes that task's single active space. These exceptions do
+not override a current user-control stop or authorize a different task.
+Apply this section after reading `ego-browser skill` too: that version-matched
+guide supplies the native APIs; it does not erase these continuation rules.
+
+Before repeating a browser-control question in a later round, inspect
+`listTaskSpaces()` once without constructing a handle or touching a Page.
+Match the recorded numeric id and task identity. A historical error, STOP note
+or carried-over summary is not evidence of a new user intervention. Keep the
+original observation and distinguish it from the current control state:
+
+- If Ego now reports the same task as Agent-owned, continue with `taskSpace(id)`
+  without a claim, takeover or chat confirmation. An old native control stop
+  does not require another approval after Ego itself returns Agent control.
+- If it remains user-owned/inactive without new return authorization, only the
+  qualified normal-handback rule below permits one claim. Otherwise preserve
+  the stop and ask only about the unresolved browser step/control choice. Do
+  not describe unknown history as a confirmed new user takeover.
+- An explicit user pause/control reservation or an unresolved login, permission
+  prompt or device chooser still blocks the affected action, even if inventory
+  reports Agent ownership. Inventory is not proof that those steps are resolved.
+- After the user explicitly authorizes return for this same task, consume that
+  authorization once through the documented native recovery API. Do not ask
+  again merely because the earlier STOP remains in task history. A subsequent
+  live stop needs its own current observation; do not retry around it.
+
+This is a bounded state check when continuing authorized work, not background
+polling, automatic takeover or permission to clear a live user reservation.
 
 For the same already-authorized task, reuse its known numeric TaskSpace and
 Page without another ownership-confirmation question when your previous normal
@@ -44,7 +73,33 @@ For this qualified continuation, use the documented `claimTaskSpace(id)` once
 before resolving Pages; use `taskSpace(id)` when already Agent-owned. If an
 initial handle lookup already returned the generic user-control/ended message,
 the same known handback permits that one claim; the message alone is not a new
-live takeover. Do not loop claims or create a replacement space.
+live takeover. Do not loop claims. A refused claim never permits replacement.
+
+For a known Agent-created TaskSpace, a successful, complete
+`listTaskSpaces()` result confirming its numeric id is absent permits one
+replacement without another question, while the same task remains authorized
+and no user pause, control reservation or unresolved handoff step applies.
+Keep its recorded id, task identity and Page URL. This includes unexpected
+loss: a successful `finish({ keep: [] })` receipt or proof of normal closure is
+not required. Record an unknown cause honestly; do not turn that uncertainty
+into a repeated authorization question. A failed, unreadable or incomplete
+inventory does not establish absence. If the space exists, recover within it;
+a missing Page label, timeout, blocked Page or generic error is not a reason
+to create a second space. The reuse example below is for an existing space.
+
+Before creation, record one recovery attempt and a unique recovery name tied
+to the original task/id in durable task context. Call `taskSpace(recoveryName)`
+once, record its returned numeric id and task identity, and navigate its initial
+`p1` to the known URL. Reuse this replacement in later rounds. If creation's
+receipt is lost, inspect the inventory once for that exact recovery name; reuse
+only a unique Agent-created, Agent-owned match. Otherwise retain the uncertain
+attempt and diagnose it without another creation or claim. Never reset the
+attempt merely because a new shell process or heartbeat started. If the
+replacement also disappears before verified continuation, stop the recovery
+loop and diagnose the recurring failure; do not create another replacement.
+After any loss, inspect the destination before retrying an external write or
+other side effect whose result is unknown. Reopening a URL is not evidence
+that an earlier operation failed or authority to replay it.
 
 After normal finish, kept tabs can be unmanaged and old Page labels can be
 absent. Read `task.tabs()`, match the known Page URL, and `task.adopt(tab.page)`
@@ -55,6 +110,13 @@ after establishing the provenance and authority above:
 ```js
 const space = (await listTaskSpaces()).find(s => s.id === knownSpaceId);
 if (!space || space.taskId !== knownTaskId) throw new Error("Task identity changed");
+// These facts come from the current task, not inferred from ownership alone.
+if (explicitPauseOrControlReservation || unresolvedUserStep) {
+  throw new Error("Browser action still belongs to the user");
+}
+if (space.ownership !== "agent" && !qualifiedNormalHandback) {
+  throw new Error("Browser control has not returned");
+}
 const task = space.ownership === "agent"
   ? await taskSpace(knownSpaceId) : await claimTaskSpace(knownSpaceId);
 const tab = (await task.tabs()).find(t => t.url === knownPageUrl);
@@ -64,16 +126,20 @@ console.log(await page.snapshot());
 ```
 
 Stop immediately for active user interaction, an unexpected live ownership
-change, an explicit pause, or a user reservation of browser control. Do not
-reclaim after a new user-control stop during Agent-owned work, or after the
-one qualified claim is refused. An unresolved permission prompt,
+change, an explicit pause, or a user reservation of browser control. A new
+user-control stop during Agent-owned work or a refused qualified claim ends
+that attempt: do not retry, replace the space or switch browser to get around it.
+In a later authorized round, apply the live-state check above before carrying
+that historical stop forward. An unresolved permission prompt,
 device chooser, login or verification still belongs to its existing owner.
 If this is an unrelated space, its task identity is unverified, or a current
 user-control reservation remains unresolved, ask about that specific choice.
 
-This continuation guidance grants no new operation, account, publishing,
+This is Agent guidance, not a change to Ego's native ownership checks. It
+grants no new operation, account, publishing,
 installation, paid-execution or permission authority. Keep the upstream
-one-space-per-goal, Page protection, handoff, error and finish-once rules.
+single-active-space, Page protection, handoff and error rules. Finish exactly
+once per space lifetime; do not finish early while browser work remains.
 """
 
 
@@ -296,7 +362,7 @@ def _reconcile(entry: Path, *, execute: bool, uninstall: bool) -> dict[str, Any]
             "status": "preserved_unmanaged",
             "reason": "Custom or unrecognized Ego skill preserved. Keep its policy manually, or restore the upstream Ego skill link before refreshing.",
         }
-    if managed and _digest(entry) != marker.get("tree_sha256"):
+    if managed and _digest(entry) != cast(dict[str, Any], marker).get("tree_sha256"):
         return {
             **result,
             "ok": not uninstall,
@@ -347,9 +413,9 @@ def _reconcile(entry: Path, *, execute: bool, uninstall: bool) -> dict[str, Any]
     if (
         not uninstall
         and managed
-        and marker.get("source_sha256") == source_digest
-        and marker.get("policy_sha256") == policy_digest
-        and marker.get("loopx_version") == __version__
+        and cast(dict[str, Any], marker).get("source_sha256") == source_digest
+        and cast(dict[str, Any], marker).get("policy_sha256") == policy_digest
+        and cast(dict[str, Any], marker).get("loopx_version") == __version__
     ):
         return {
             **result,

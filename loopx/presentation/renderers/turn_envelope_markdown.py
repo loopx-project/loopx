@@ -6,7 +6,8 @@ import json
 
 def work_context_lines(context: dict[str, Any]) -> list[str]:
     """Complete source content once; arbitrary source text stays JSON-escaped."""
-    if set(context) <= {"complete", "selected_todo_ref", "selected_todo_authority", "instruction"}:
+    # The machine-only source witness does not add another instruction body.
+    if set(context) <= {"complete", "selected_todo_ref", "selected_todo_authority", "instruction", "selected_todo_text_verified"}:
         lines = [
             "- work_context: "
             f"complete={context.get('complete')} "
@@ -18,8 +19,9 @@ def work_context_lines(context: dict[str, Any]) -> list[str]:
         if isinstance(instruction, str) and instruction:
             lines.append(f"- work_context_instruction: {instruction}")
         return lines
+    details = {key: value for key, value in context.items() if key != "instruction"}
     return ["", "## Current work context", "", context.get("instruction", ""),
-        "", "```json", json.dumps(context, ensure_ascii=False, indent=2), "```", ""]
+        "", "```json", json.dumps(details, ensure_ascii=False, indent=2), "```", ""]
 
 
 def turn_envelope_budget_warning_lines(payload: dict[str, Any]) -> list[str]:
@@ -40,7 +42,22 @@ def turn_envelope_budget_warning_lines(payload: dict[str, Any]) -> list[str]:
     ]
 
 
+def render_turn_context_markdown(payload: dict[str, Any]) -> str:
+    """Render the complete carrier or its same-source recovery reference."""
+    fields = ",\n".join(
+        json.dumps(key, ensure_ascii=False) + ":"
+        + json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        for key, value in payload.items()
+    )
+    return "# LoopX Turn Envelope\n\n```json\n{\n" + fields + "\n}\n```"
+
+
 def render_turn_envelope_markdown(payload: dict[str, Any]) -> str:
+    from ...control_plane.effect_program import reject_retired_quota_format
+
+    reject_retired_quota_format(payload)
+    if payload.get("schema_version") == "loopx_turn_envelope_v1":
+        return render_turn_context_markdown(payload)
     action_value = payload.get("action")
     user_value = payload.get("user")
     writeback_value = payload.get("writeback")

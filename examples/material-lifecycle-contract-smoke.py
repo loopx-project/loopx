@@ -14,8 +14,10 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from loopx.capabilities.material_lifecycle import (  # noqa: E402
     build_material_lifecycle_architecture_packet,
+    build_material_lifecycle_ranking_apply_receipt,
     build_material_lifecycle_receipt,
     build_material_migration_plan,
+    build_material_ranked_state_repair_plan,
     build_material_rerank_apply_receipt,
     build_material_rerank_proposal,
     build_material_store_inventory,
@@ -111,6 +113,36 @@ def main() -> int:
         applied_material_refs=["material:2"],
         rollback_ref="rollback:revision-1",
     )
+    ranked_entries = [
+        {"entry_ref": "entry:1", "rank": 1, "material_refs": ["material:1"]},
+        {"entry_ref": "entry:2", "rank": 2, "material_refs": ["material:2"]},
+    ]
+    repair_plan = build_material_ranked_state_repair_plan(
+        goal_id="goal:material-example",
+        plan_id="plan:repair-ranked-summary",
+        source_revision="revision:1",
+        observed_at=OBSERVED_AT,
+        entries=ranked_entries,
+        current_summary={"rebuilt_entry_count": 2, "top_window_size": 1},
+        top_window_size=1,
+    )
+    lifecycle_ranking_receipt = build_material_lifecycle_ranking_apply_receipt(
+        goal_id="goal:material-example",
+        receipt_id="receipt:archive-ranking-1",
+        lifecycle_receipt=lifecycle,
+        observed_at=OBSERVED_AT,
+        before_revision="revision:1",
+        after_revision="revision:2",
+        owner_gate_ref="gate:archive-1",
+        validation_ref="validation:archive-1",
+        rollback_ref="revision:1",
+        before_entries=ranked_entries,
+        after_entries=[
+            {"entry_ref": "entry:2", "rank": 1, "material_refs": ["material:2"]}
+        ],
+        top_window_size=1,
+        authority_readback_verified=True,
+    )
 
     serialized = json.dumps(
         {
@@ -120,6 +152,8 @@ def main() -> int:
             "lifecycle": lifecycle,
             "proposal": proposal,
             "apply_receipt": apply_receipt,
+            "repair_plan": repair_plan,
+            "lifecycle_ranking_receipt": lifecycle_ranking_receipt,
         },
         sort_keys=True,
     )
@@ -134,6 +168,8 @@ def main() -> int:
     assert lifecycle["raw_content_captured"] is False
     assert proposal["raw_content_captured"] is False
     assert apply_receipt["raw_content_captured"] is False
+    assert repair_plan["raw_content_captured"] is False
+    assert lifecycle_ranking_receipt["raw_content_captured"] is False
 
     print(
         json.dumps(
@@ -145,6 +181,8 @@ def main() -> int:
                 "lifecycle_ref": lifecycle["receipt_ref"],
                 "proposal_ref": proposal["proposal_ref"],
                 "apply_ref": apply_receipt["receipt_ref"],
+                "repair_plan_ref": repair_plan["plan_ref"],
+                "lifecycle_ranking_ref": lifecycle_ranking_receipt["receipt_ref"],
             },
             sort_keys=True,
         )

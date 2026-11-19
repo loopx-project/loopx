@@ -45,7 +45,7 @@ files; arbitrary caller-declared artifacts remain private and are not privacy
 certified. A new destination is required; capture never overwrites a point.
 
 Artifact operations use the existing private local snapshot transport for full
-inventories and retained metadata above the ordinary 2 MiB Effect wire limit.
+inventories and retained metadata above the ordinary [8 MiB Effect wire limit](canonical-snapshot-pagination.md#shared-rpc-byte-budget).
 The existing 64 MiB local snapshot bound and original operation deadlines still
 apply. No witness is truncated, no capture is enabled implicitly, and a lost
 capture response must be reconciled under its original identity before another
@@ -131,6 +131,44 @@ Read the destination Todo and `explore turn-context`, obtain current work
 admission and inspect the next accepted replan. A useful readback cites retained
 evidence, explains the next complete experiment and later checks its outcome.
 Restoring files or accepting a structured review alone proves no research gain.
+
+For a restored benchmark conversation, recapture also requires a settled,
+checkpoint-linked current review and a completed destination Codex conversation
+turn. That conversation turn is not a benchmark evaluation. A successor Todo
+can be a valid replan outcome without satisfying this recovery check. When the
+current guard offers original-Turn closeout, include
+`checkpoint:<capture-digest>` in `agent_vision.path_delta.evidence_refs` in that
+writeback and finish its settlement. If the Turn has ended, carry the unresolved
+review to the next admitted replan; do not replay or rebind historical Turns.
+Recapture remains closed until the existing recovery gate passes; the retained work cadence is unchanged.
+
+## Complete isolated benchmark replacement
+
+Benchmark warm replacement continues the original Goal/Agent and its complete
+captured LoopX runtime, including canonical SQLite/File state, Todos,
+dependencies, settlement/quota records and Vision/Explore history. It uses the
+backup inventory and artifact witness, checks canonical revision/history parity,
+then compares and replaces only the captured native session binding through the
+existing Goal/session owners. Current guards and lease owners still decide
+execution and interrupted-Turn recovery; settled effects are never replayed.
+
+This is distinct from the cross-Goal research import above. Warm replacement
+requires a stopped source and fresh isolated receiver at the qualified fixed
+paths. Existing receiver registry/state, divergent history or a changed native
+binding rejects. Preserve the failed attempt; do not overwrite it. The launcher
+uses the original Goal/Agent, validates the retained treatment without changing
+it, and creates no preparation Todo or temporary cadence. Research review before
+recapture remains required; checkpoint frequency, native opportunities, cooldown
+and the cumulative phase clock do not increase.
+
+See [warm worker composition](../../benchmark/README.md#explicit-warm-worker-composition-qualification-in-progress).
+The packaged frontend restore journey and sustained real-model benefit remain
+unqualified. Omit warm inputs to run a separate cold trial; stopping the receiver
+does not erase the sealed point or the original state.
+
+热恢复接续完整业务状态，跨 Goal 的 `adopt-context` 只导入研究证据。
+热恢复不再以新 preparation Todo 替换原任务队列，也不临时修改重规划频率。
+恢复副本不能覆盖活动实例，原结算、当前权限检查及预算/停止条件继续有效。
 
 ## Default bank rotation
 

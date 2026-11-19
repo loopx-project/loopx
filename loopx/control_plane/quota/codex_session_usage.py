@@ -145,12 +145,22 @@ def _read_codex_session_usage(
         raw_payload = item.get("payload")
         payload = raw_payload if isinstance(raw_payload, dict) else {}
         if kind == "session_meta":
-            session_id = str(
+            metadata_session_id = str(
                 payload.get("session_id") or payload.get("id") or ""
             ).strip()
-            session_started_at = _parse_timestamp(
-                payload.get("timestamp") or item.get("timestamp")
-            )
+            if not metadata_session_id:
+                raise CodexSessionUsageError(
+                    f"codex session rollout has no session_meta id: {path}"
+                )
+            if session_id and metadata_session_id != session_id:
+                raise CodexSessionUsageError(
+                    f"codex session rollout has conflicting session_meta ids: {path}"
+                )
+            if not session_id:
+                session_id = metadata_session_id
+                session_started_at = _parse_timestamp(
+                    payload.get("timestamp") or item.get("timestamp")
+                )
         elif kind == "turn_context":
             model_text = str(payload.get("model") or "").strip()
             if model_text:
@@ -162,6 +172,10 @@ def _read_codex_session_usage(
             info = raw_info if isinstance(raw_info, dict) else {}
             totals = info.get("total_token_usage")
             if isinstance(totals, Mapping):
+                if not session_id:
+                    raise CodexSessionUsageError(
+                        f"codex session rollout has usage before session_meta: {path}"
+                    )
                 last_totals = totals
                 last_totals_at = str(item.get("timestamp") or "").strip()
                 # The model labels this cumulative snapshot only if it was
@@ -279,6 +293,35 @@ def _legacy_model_at_booking(
     return model
 
 
+def _usage_index_records(index_path: Path) -> Iterator[tuple[int, dict[str, Any]]]:
+    try:
+        stream = index_path.open(encoding="utf-8")
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise CodexSessionUsageError(
+            f"cannot read run index for the usage basis: {exc}"
+        ) from exc
+    try:
+        with stream:
+            for line_number, line in enumerate(stream, start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise CodexSessionUsageError(
+                        f"run index row {line_number} is corrupt: {index_path}"
+                    ) from exc
+                if isinstance(row, dict):
+                    yield line_number, row
+    except OSError as exc:
+        raise CodexSessionUsageError(
+            f"cannot read run index for the usage basis: {exc}"
+        ) from exc
+
+
 def session_usage_baseline(
     index_path: Path, session_id: str
 ) -> dict[str, Any] | None:
@@ -292,38 +335,20 @@ def session_usage_baseline(
     Corrupt index rows fail closed: skipping a booked row would shrink the
     basis and double-book real spend. Callers must hold the usage booking lock
     while reading the basis and appending the row it funds.
+    Buffer one record at a time; retain only the selected session's aggregate
+    metadata and row identities needed for duplicate suppression.
     """
     sid = str(session_id or "").strip()
     if not sid:
         raise CodexSessionUsageError("usage observation has no session id")
     prefix = f"{CODEX_USAGE_PROVIDER}:{sid}:"
-    try:
-        raw = index_path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return None
-    except OSError as exc:
-        raise CodexSessionUsageError(
-            f"cannot read run index for the usage basis: {exc}"
-        ) from exc
-
     int_totals: dict[str, int | None] = {field: None for field in _BASELINE_INT_FIELDS}
     cost_total: float | None = None
     last_usage: Mapping[str, Any] | None = None
     snapshot_first_booked_at: Any = None
     binding_recorded = False
     seen_rows: set[tuple[str, str, str]] = set()
-    for line_number, line in enumerate(raw.split("\n"), start=1):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise CodexSessionUsageError(
-                f"run index row {line_number} is corrupt: {index_path}"
-            ) from exc
-        if not isinstance(row, dict):
-            continue
+    for line_number, row in _usage_index_records(index_path):
         raw_usage = row.get("usage")
         if not isinstance(raw_usage, dict):
             continue
@@ -358,8 +383,7 @@ def session_usage_baseline(
         if last_usage is None or last_usage["source_snapshot_id"] != usage["source_snapshot_id"]:
             snapshot_first_booked_at = row.get("generated_at")
             binding_recorded = False
-        # Unknown or malformed binding metadata is not evidence of an old
-        # producer either; any marker keeps this snapshot on the strict path.
+                #  any marker keeps this snapshot on the strict path.
         binding_recorded = binding_recorded or "codex_usage_binding" in row
         last_usage = usage
     if last_usage is None:

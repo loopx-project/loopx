@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -22,16 +23,31 @@ SANDBOXES = ("read-only", "workspace-write", "danger-full-access")
 @dataclass(frozen=True)
 class Execution:
     mode: str = "heartbeat"
-    context: str = "fresh"
+    context: str | None = None
     sandbox: str = "danger-full-access"
     timeout_seconds: float | None = None
     validation_command: tuple[str, ...] = ()
     task_entry: str | None = None
     turn_envelope: bool = False
+    context_delivery: str | None = None
+    native_child_limit: int | None = None
+    complete_turn: bool = False
 
     def __post_init__(self) -> None:
+        if self.native_child_limit is not None and (
+            type(self.native_child_limit) is not int or self.native_child_limit < 1
+        ):
+            raise ValueError("native_child_limit must be a positive integer or None")
+        if self.context is None:
+            object.__setattr__(self, "context", "resume" if self.mode in {"heartbeat", "turn"} else "fresh")
+        if self.context_delivery is None:
+            object.__setattr__(self, "context_delivery", "on" if self.mode == "heartbeat" else "off")
+        if self.context_delivery not in ("off", "on") or (self.context_delivery != "off" and self.mode != "heartbeat"):
+            raise ValueError("context_delivery supports only off or on with heartbeat execution")
         if not isinstance(self.turn_envelope, bool) or (self.turn_envelope and self.mode != "heartbeat"):
             raise ValueError("turn_envelope requires heartbeat execution and a boolean opt-in")
+        if type(self.complete_turn) is not bool or (self.complete_turn and (self.mode != "heartbeat" or self.turn_envelope)):
+            raise ValueError("complete_turn requires heartbeat execution without legacy turn_envelope")
         if self.mode not in MODES or self.context not in CONTEXTS:
             raise ValueError("unsupported execution mode or iteration context")
         if self.task_entry is None:
@@ -58,6 +74,12 @@ class Execution:
         if self.mode != "turn" and self.validation_command:
             raise ValueError("validation_command is only used by mode=turn")
 
+    def validation_receipt(self) -> dict[str, str]:
+        if self.mode != "turn":
+            return {}
+        encoded = json.dumps(self.validation_command, separators=(",", ":")).encode()
+        return {"validation_argv_sha256": hashlib.sha256(encoded).hexdigest()}
+
     @property
     def uses_loopx(self) -> bool:
         return self.mode in {"heartbeat", "turn", "loopx-goal"}
@@ -67,13 +89,42 @@ class Execution:
         return self.mode in {"native-goal", "loopx-goal"}
 
 
-def turn_envelope_receipt(*, explicit: bool) -> dict:
+def turn_envelope_receipt(*, explicit: bool, complete: bool = False) -> dict:
     """Record only the explicit display opt-in; checkpoint capture is independent."""
-    if explicit:
-        return {"turn_envelope": True, "turn_envelope_source": "explicit"}
-    return {}
+    return {**({"turn_envelope": True, "turn_envelope_source": "explicit"} if explicit else {}),
+        **({"complete_turn": True, "complete_turn_source": "explicit"} if complete else {})}
 
 
+def explicit_turn_display(env: dict[str, str]) -> Execution:
+    """Decode the shared explicit display request through its Execution owner."""
+    selected = {}
+    for variable, field in (("LOOPX_TURN_ENVELOPE", "turn_envelope"),
+                            ("LOOPX_COMPLETE_TURN", "complete_turn")):
+        value = env.get(variable, "0")
+        if value not in {"0", "1"}:
+            raise ValueError(f"{variable} must be 0 or 1")
+        selected[field] = value == "1"
+    return Execution(**selected)
+
+
+def native_child_instructions(limit: int | None) -> str:
+    """One explicit task authorization shared by every opted-in study arm."""
+    if limit is None:
+        return ""
+    Execution(mode="plain", native_child_limit=limit)
+    return (
+        "\n\n## Optional native collaboration\n\n"
+        f"You are authorized to use up to {limit} open host-native child sessions "
+        "for independent work on this task. Delegation is optional; do not create work "
+        "merely to fill capacity. Continue useful parent work and verify child results. "
+        "Completed children still occupy slots; close them when their work is no longer "
+        "needed to free capacity. "
+        "Children share the original task scope, permissions, total time allowance and "
+        "evaluation opportunities. Only the parent submits candidates to the evaluator. "
+        "This does not authorize registering persistent LoopX Agents, expanding access, "
+        "starting another experiment, or extending a deadline. Preserve explicit Stop "
+        "and close child work before the parent finishes.\n"
+    )
 
 def validate_model_catalog(model_catalog: Path, model: str) -> dict:
     """Admit only catalog entries that keep Codex's function-tool surface.
@@ -109,6 +160,79 @@ def validate_model_catalog(model_catalog: Path, model: str) -> dict:
             "client send an empty tool list"
         )
     return entry
+
+def codex_settings(
+    *, execution: Execution, workspace: Path, model: str, effort: str,
+    base_url: str, wire_api: str, web_search: str = "disabled",
+    model_catalog: Path | None = None, model_catalog_destination: Path | None = None,
+) -> str:
+    """Render fixed settings for the worker and its fresh checkpoint receiver.
+
+    Rendering does not create a home, change a session or handle credentials.
+    """
+    if not model or not effort:
+        raise ValueError("model and effort are required")
+    if wire_api not in {"responses", "chat"}:
+        raise ValueError("unsupported provider wire_api")
+    if web_search not in {"disabled", "cached", "live"}:
+        raise ValueError("unsupported web_search setting")
+    if model_catalog is not None:
+        validate_model_catalog(model_catalog, model)
+    if model_catalog_destination is not None and (
+        model_catalog is None or not model_catalog_destination.is_absolute()
+    ):
+        raise ValueError("catalog destination requires a validated catalog and an absolute guest path")
+    return "\n".join(
+        [
+            f"model = {json.dumps(model)}",
+            f"model_reasoning_effort = {json.dumps(effort)}",
+        ]
+        + (
+            # Codex resolves this path from its own working directory, not the
+            # caller's; a relative path validates here yet silently fails there.
+            [f"model_catalog_json = {json.dumps(str(model_catalog_destination or model_catalog.resolve()))}"]
+            if model_catalog is not None
+            else []
+        )
+        + [
+            'approval_policy = "never"',
+            f"sandbox_mode = {json.dumps(execution.sandbox)}",
+            f"web_search = {json.dumps(web_search)}",
+            f'model_provider = "{"harbor" if base_url else "openai"}"',
+            # Codex filters its inherited shell environment. Set the trial
+            # policy explicitly so model tools cannot silently lose it.
+            "[shell_environment_policy.set]",
+            'LOOPX_USAGE_PING = "0"',
+            f"LOOPX_CONTEXT_DELIVERY = {json.dumps(execution.context_delivery)}",
+            *(['LOOPX_EXECUTION_MODE = "heartbeat"'] if execution.context_delivery != "off" else []),
+            "[features]",
+            f"goals = {str(execution.native_goal).lower()}",
+            "unified_exec = true",
+            *(["[agents]", f"max_concurrent_threads_per_session = {execution.native_child_limit}"]
+              if execution.native_child_limit is not None else []),
+            "[memories]",
+            "generate_memories = false",
+            "use_memories = false",
+            f"[projects.{json.dumps(str(workspace))}]",
+            'trust_level = "trusted"',
+        ]
+        + (
+            [
+                "[model_providers.harbor]",
+                'name = "harbor"',
+                f"base_url = {json.dumps(base_url)}",
+                f"wire_api = {json.dumps(wire_api)}",
+                'env_key = "OPENAI_API_KEY"',
+                "request_max_retries = 8",
+                "stream_max_retries = 8",
+                "stream_idle_timeout_ms = 300000",
+            ]
+            if base_url
+            else []
+        )
+        + [""]
+    )
+
 
 def prepare_codex_home(
     home: Path,
@@ -150,63 +274,12 @@ def prepare_codex_home(
         raise ValueError("custom provider requires OPENAI_API_KEY")
     if not base_url and not (home / "auth.json").is_file():
         raise ValueError("provide a gateway and API key, or stage CODEX_AUTH_JSON_PATH")
-    if wire_api not in {"responses", "chat"}:
-        raise ValueError("unsupported provider wire_api")
-    if web_search not in {"disabled", "cached", "live"}:
-        raise ValueError("unsupported web_search setting")
-    if model_catalog is not None:
-        validate_model_catalog(model_catalog, model)
-    if model_catalog_destination is not None and (
-        model_catalog is None or not model_catalog_destination.is_absolute()
-    ):
-        raise ValueError("catalog destination requires a validated catalog and an absolute guest path")
-    home.mkdir(parents=True, exist_ok=True)
-    settings = "\n".join(
-        [
-            f"model = {json.dumps(model)}",
-            f"model_reasoning_effort = {json.dumps(effort)}",
-        ]
-        + (
-            # Codex resolves this path from its own working directory, not the
-            # caller's; a relative path validates here yet silently fails there.
-            [f"model_catalog_json = {json.dumps(str(model_catalog_destination or model_catalog.resolve()))}"]
-            if model_catalog is not None
-            else []
-        )
-        + [
-            'approval_policy = "never"',
-            f"sandbox_mode = {json.dumps(execution.sandbox)}",
-            f"web_search = {json.dumps(web_search)}",
-            f'model_provider = "{"harbor" if base_url else "openai"}"',
-            # Codex filters its inherited shell environment. Set the trial
-            # policy explicitly so model tools cannot silently lose it.
-            "[shell_environment_policy.set]",
-            'LOOPX_USAGE_PING = "0"',
-            "[features]",
-            f"goals = {str(execution.native_goal).lower()}",
-            "unified_exec = true",
-            "[memories]",
-            "generate_memories = false",
-            "use_memories = false",
-            f"[projects.{json.dumps(str(workspace))}]",
-            'trust_level = "trusted"',
-        ]
-        + (
-            [
-                "[model_providers.harbor]",
-                'name = "harbor"',
-                f"base_url = {json.dumps(base_url)}",
-                f"wire_api = {json.dumps(wire_api)}",
-                'env_key = "OPENAI_API_KEY"',
-                "request_max_retries = 8",
-                "stream_max_retries = 8",
-                "stream_idle_timeout_ms = 300000",
-            ]
-            if base_url
-            else []
-        )
-        + [""]
+    settings = codex_settings(
+        execution=execution, workspace=workspace, model=model, effort=effort,
+        base_url=base_url, wire_api=wire_api, web_search=web_search,
+        model_catalog=model_catalog, model_catalog_destination=model_catalog_destination,
     )
+    home.mkdir(parents=True, exist_ok=True)
     config = home / "config.toml"
     if config.exists() and config.read_text(encoding="utf-8") != settings:
         raise ValueError("Codex settings changed within a trial; use a new trial")

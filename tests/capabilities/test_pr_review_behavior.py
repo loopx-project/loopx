@@ -189,6 +189,26 @@ CASES = [
         "REQUEST_CHANGES",
         "evidence",
     ),
+    (
+        {
+            "request": "Review checkpoint recovery while supplied CI summaries are red or unknown.",
+            "problem": "Recovery must preserve full stored values and reject tampering before effects.",
+            "code": "verify_schema_and_digest(); reject_existing_target(); write_private_checkpoint(); readback(); return activation_false",
+            "evidence": "Independent exact-head real CLI/HTTP and installed-backend tests preserve unknown fields, null and false, reject damaged digests and occupied targets, and retain original source bytes. Full base/head comparison, architecture and all necessary review evidence are verified. Supplied CI summaries include a failed shard and cancelled jobs; failure payloads and causes are unavailable. There is no observed changed-path regression, material instability or explicit CI-root-cause acceptance requirement. Preserve the unknown causes and separate configured merge hold; the previous reviewer requests changes solely because every red CI result lacks attribution.",
+        },
+        "APPROVE",
+        "none",
+    ),
+    (
+        {
+            "request": "Review checkpoint recovery while supplied CI summaries are red or unknown.",
+            "problem": "Recovery must reject a stale owner before writing a checkpoint.",
+            "code": "write_private_checkpoint(); readback(); return activation_false # owner check removed",
+            "evidence": "Supplied CI summaries are unavailable, and unrelated focused tests pass. An independent exact-head stale-owner test writes successfully where the immutable base rejects it. The diff removes the existing ownership fence. The author labels that observation diagnostic and required=false because CI success is not an approval prerequisite. No accepted contract authorizes the stale write.",
+        },
+        "REQUEST_CHANGES",
+        "authority",
+    ),
 ]
 
 

@@ -22,6 +22,7 @@ from loopx.control_plane.coordination.legacy_writer_fence import (
     legacy_coordination_writer_fence_path,
 )
 from loopx.control_plane.coordination.local_authority import (
+    CanonicalAuthorityRequired,
     LocalCoordinationAuthorityRejection,
     LocalCoordinationAuthorityUnavailable,
     claim_canonical_todo_if_promoted,
@@ -59,6 +60,12 @@ from loopx.todos import (
     supersede_goal_todo,
     update_goal_todo,
 )
+
+
+def _assert_same_todo_content(current, expected):
+    assert current["projection_envelope"]["coverage"] == expected["projection_envelope"]["coverage"]
+    assert {key: value for key, value in current.items() if key != "projection_envelope"} == {
+        key: value for key, value in expected.items() if key != "projection_envelope"}
 
 
 def _engage_fence(runtime_root: Path, goal_id: str = "goal-a") -> None:
@@ -126,21 +133,13 @@ def test_python_terminal_adapter_rejects_coercible_numeric_values(
     assert not runtime_root.exists()
 
 
-def test_absent_fence_preserves_legacy_path_without_starting_typescript(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setattr(
-        "loopx.control_plane.coordination.local_authority.effect_runtime_result",
-        lambda *_args, **_kwargs: pytest.fail("pre-cutover read must stay legacy"),
-    )
-    assert (
-        read_canonical_todos_if_promoted(
-            runtime_root=tmp_path,
-            goal_id="goal-a",
-        )
-        is None
-    )
+def test_absent_fence_refuses_without_reconstructing_legacy_authority(tmp_path: Path) -> None:
+    with pytest.raises(CanonicalAuthorityRequired) as caught:
+        read_canonical_todos_if_promoted(runtime_root=tmp_path, goal_id="goal-a")
+    assert caught.value.code == "canonical_authority_required"
+    assert caught.value.payload["write_admitted"] is False
+    assert caught.value.payload["legacy_fallback_used"] is False
+    assert not legacy_coordination_writer_fence_path(runtime_root=tmp_path, goal_id="goal-a").exists()
 
 
 def test_engaged_fence_reads_typescript_provider_result(
@@ -150,7 +149,9 @@ def test_engaged_fence_reads_typescript_provider_result(
     _engage_fence(tmp_path)
     calls: list[tuple[str, float]] = []
 
-    def _read(method: str, _params: object, *, timeout: float) -> dict[str, object]:
+    def _read(method: str, _params: object, *, timeout: float,
+              large_local_snapshot: bool) -> dict[str, object]:
+        assert large_local_snapshot is True
         calls.append((method, timeout))
         return single_snapshot_page({
             "status": "loaded",
@@ -173,7 +174,7 @@ def test_engaged_fence_reads_typescript_provider_result(
     )
     assert result is not None
     assert result["todos"][0]["todo_id"] == "todo_a"
-    assert calls == [("coordination.local_authority.todo_snapshot_page", 15.0)]
+    assert calls == [("coordination.local_authority.todo_snapshot", 15.0)]
 
 
 def test_promoted_claim_adapter_invokes_typescript_without_markdown_fallback(
@@ -1114,32 +1115,16 @@ def test_todo_list_uses_provider_after_cutover_even_when_markdown_disagrees(
         ),
         encoding="utf-8",
     )
-    _engage_fence(runtime_root)
+    projection = build_todo_runtime_shadow_projection(goal_id="goal-a", todos=[{
+        "schema_version": "todo_item_v0", "todo_id": "todo_provider", "index": 1,
+        "role": "agent", "status": "open", "done": False, "text": "provider Todo",
+        "task_class": "advancement_task", "archive_state": "active", "source_section": "Agent Todo",
+    }])
+    initialize_canonical_authority(runtime_root, "goal-a", projection, state_path=state_file)
     state_file.unlink()
-    monkeypatch.setattr(
-        "loopx.control_plane.coordination.local_authority.effect_runtime_result",
-        lambda method, params, **_kwargs: single_snapshot_page({
-            "status": "loaded",
-            "todos": [
-                {
-                    "todo_id": "todo_provider",
-                    "role": "agent",
-                    "status": "open",
-                    "text": "provider Todo",
-                }
-            ],
-            "todo_read_model": _todo_read_model(1),
-            "provider_revision": "file:2",
-            "cursor": "2",
-            "source_authority": "file_v0",
-            "decision_read_from_provider": True,
-            "legacy_fallback_used": False,
-        }),
-    )
-
     result = list_goal_todos(registry_path=registry_path, goal_id="goal-a")
 
-    assert result["source"] == "file_authority"
+    assert result["source"] == "file_v0"
     assert [item["todo_id"] for item in result["todos"]] == ["todo_provider"]
     assert result["authority_read"]["legacy_fallback_used"] is False
 
@@ -1165,7 +1150,7 @@ def test_canonical_hard_lease_claim_cli_atomically_acquires_ownership(
                         "repo": str(project),
                         "state_file": ".codex/goals/goal-a/ACTIVE_GOAL_STATE.md",
                         "coordination": {
-                            "registered_agents": ["agent-a", "agent-b"]
+                            "registered_agents": ["agent-a"]
                         },
                     }
                 ],
@@ -1209,11 +1194,12 @@ def test_canonical_hard_lease_claim_cli_atomically_acquires_ownership(
         "todo_atomic_claim",
         "--claimed-by",
         "agent-a",
-        "--agent-id",
-        "agent-a",
         "--claim-operation-id",
         "atomic-cli-claim",
     ]
+    # The legacy single-agent call has no explicit actor and must not acquire
+    # execution. Explicit self-claim is a different, managed operation.
+    before = list_goal_todos(registry_path=registry_path, goal_id="goal-a")
     initial_failure = subprocess.run(
         base_command,
         capture_output=True,
@@ -1232,15 +1218,17 @@ def test_canonical_hard_lease_claim_cli_atomically_acquires_ownership(
     assert recovery.get("command") == "loopx todo claim"
     assert recovery.get("requires_flags") == ["--task-lease-idempotency-key"]
     assert "--task-lease-expected-version" in (recovery.get("optional_flags") or [])
+    _assert_same_todo_content(list_goal_todos(registry_path=registry_path, goal_id="goal-a"), before)
 
     command = [
         *base_command,
+        "--agent-id",
+        "agent-a",
         "--task-lease-idempotency-key",
         "turn:atomic-cli-claim",
         "--task-lease-expected-version",
         "0",
     ]
-    before = list_goal_todos(registry_path=registry_path, goal_id="goal-a")
     preview = json.loads(
         subprocess.run(
             [*command, "--dry-run"],
@@ -1253,7 +1241,7 @@ def test_canonical_hard_lease_claim_cli_atomically_acquires_ownership(
     assert preview["status"] == "planned"
     assert preview["todo_changed"] is True
     assert preview["lease_changed"] is True
-    assert list_goal_todos(registry_path=registry_path, goal_id="goal-a") == before
+    _assert_same_todo_content(list_goal_todos(registry_path=registry_path, goal_id="goal-a"), before)
 
     applied = json.loads(
         subprocess.run(
@@ -1296,7 +1284,7 @@ def test_canonical_hard_lease_claim_cli_atomically_acquires_ownership(
     preview_edit = invoke_edit([*edit, "--dry-run"])
     assert preview_edit.returncode == 0, preview_edit.stdout + preview_edit.stderr
     assert json.loads(preview_edit.stdout)["status"] == "planned"
-    assert list_goal_todos(registry_path=registry_path, goal_id="goal-a") == after
+    _assert_same_todo_content(list_goal_todos(registry_path=registry_path, goal_id="goal-a"), after)
     first_edit = invoke_edit(edit)
     assert first_edit.returncode == 0, first_edit.stdout + first_edit.stderr
     assert json.loads(first_edit.stdout)["status"] == "applied"
@@ -1482,15 +1470,19 @@ Continue provider-first delivery.
     assert completed["validation_receipt"]["command_label"] == (
         "provider terminal integration"
     )
-    # The extra bounded crossing admits/replays before resolving private argv.
-    assert terminal_phases == ["resolve_validation", "execute_validation", "applied"]
+    # Admission precedes private argv resolution. Recheck the execute plan
+    # once under the per-Todo execution lock before starting the validator.
+    assert terminal_phases == [
+        "resolve_validation", "execute_validation", "execute_validation", "applied",
+    ]
     assert runtime_calls == [
-        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_snapshot",
         "coordination.local_authority.todo_terminal",
         "coordination.local_authority.todo_terminal",
         "coordination.local_authority.todo_terminal",
-        "coordination.local_authority.todo_snapshot_page",
-        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_terminal",
+        "coordination.local_authority.todo_snapshot",
+        "coordination.local_authority.todo_snapshot",
     ]
     successor_id = completed["generated_successor_todo_ids"][0]
 
@@ -1511,10 +1503,10 @@ Continue provider-first delivery.
     assert superseded["superseded"] is True
     assert superseded["projection_delivery"] == "delivered"
     assert runtime_calls == [
-        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_snapshot",
         "coordination.local_authority.todo_terminal",
-        "coordination.local_authority.todo_snapshot_page",
-        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_snapshot",
+        "coordination.local_authority.todo_snapshot",
     ]
 
     canonical = read_canonical_todos_if_promoted(
@@ -1542,10 +1534,10 @@ Continue provider-first delivery.
     assert archived["moved_count"] == 2
     assert archived["projection_delivery"] == "delivered"
     assert runtime_calls == [
-        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_snapshot",
         "coordination.local_authority.todo_archive",
-        "coordination.local_authority.todo_snapshot_page",
-        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_snapshot",
+        "coordination.local_authority.todo_snapshot",
         "coordination.local_authority.todo_archive_ack",
     ]
     canonical_after_archive = read_canonical_todos_if_promoted(
@@ -1575,10 +1567,10 @@ Continue provider-first delivery.
         assert no_change["moved_count"] == 0
         assert no_change["provider_revision"] == archive_revision
         assert runtime_calls == [
-            "coordination.local_authority.todo_snapshot_page",
+            "coordination.local_authority.todo_snapshot",
             "coordination.local_authority.todo_archive",
-            "coordination.local_authority.todo_snapshot_page",
-            "coordination.local_authority.todo_snapshot_page",
+            "coordination.local_authority.todo_snapshot",
+            "coordination.local_authority.todo_snapshot",
         ]
         unchanged = read_canonical_todos_if_promoted(
             runtime_root=runtime_root,
@@ -2009,7 +2001,7 @@ def test_promoted_terminal_retry_reuses_receipt_after_projection_crash(
     with pytest.raises(OSError, match="projection delivery crash"):
         complete_goal_todo(**request)
     assert runtime_calls == [
-        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_snapshot",
         "coordination.local_authority.todo_terminal",
     ]
 
@@ -2022,12 +2014,12 @@ def test_promoted_terminal_retry_reuses_receipt_after_projection_crash(
     assert replay["provider_status"] == "replayed"
     assert replay["idempotent_replay"] is True
     assert runtime_calls == [
-        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_snapshot",
         "coordination.local_authority.todo_terminal",
-        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_snapshot",
         "coordination.local_authority.todo_terminal",
-        "coordination.local_authority.todo_snapshot_page",
-        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_snapshot",
+        "coordination.local_authority.todo_snapshot",
     ]
     canonical = read_canonical_todos_if_promoted(
         runtime_root=runtime_root, goal_id="goal-a"
@@ -2258,6 +2250,27 @@ def test_real_canonical_provider_preserves_complete_complex_todo_semantics(
         "--claim-operation-id",
         "initial-cli-claim",
     ]
+
+    def recover_native_claim(operation_id):
+        # Ordinary CLI self-claims expose the execution reference, while the
+        # existing transaction owner retains the complete durable receipt.
+        recovered = claim_canonical_todo_if_promoted(
+            registry_path=registry_path,
+            runtime_root=runtime_root,
+            goal_id="goal-a",
+            todo_id="todo_claimable",
+            role=None,
+            claimed_by="agent-a",
+            actor_agent_id="agent-a",
+            operation_id=operation_id,
+            manage_execution=True,
+            dry_run=False,
+        )
+        assert recovered["status"] == "replayed"
+        assert recovered["original_receipt"]["operation_id"] == operation_id
+        assert recovered["original_receipt"]["goal_id"] == "goal-a"
+        return recovered
+
     # Duplicate callers race from separate processes, but one operation must
     # produce exactly one accepted claim and the same durable receipt.
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -2277,7 +2290,13 @@ def test_real_canonical_provider_preserves_complete_complex_todo_semantics(
     assert all(
         item["status"] in {"applied", "recovered", "replayed"} for item in claims
     )
-    assert claims[0]["original_receipt"] == claims[1]["original_receipt"]
+    for claim in claims:
+        assert claim["execution_managed"] is True
+        assert claim["claim_operation_id"] == "initial-cli-claim"
+        assert "original_receipt" not in claim
+    receipts = [recover_native_claim(claim["claim_operation_id"]) for claim in claims]
+    assert receipts[0]["original_receipt"] == receipts[1]["original_receipt"]
+    assert all(receipt["provider_revision"] == claims[0]["provider_revision"] for receipt in receipts)
     assert claims[0]["provider_revision"] == claims[1]["provider_revision"]
     claimed = next(item for item in claims if item["status"] == "applied")
     assert claimed["ok"] is True
@@ -2321,7 +2340,13 @@ def test_real_canonical_provider_preserves_complete_complex_todo_semantics(
     )
     assert original["status"] == "no_change"
     assert replay["status"] == "replayed"
-    assert replay["original_receipt"] == original["original_receipt"]
+    assert original["claim_operation_id"] == replay["claim_operation_id"] == "retryable-cli-claim"
+    assert "original_receipt" not in original and "original_receipt" not in replay
+    original_receipt = recover_native_claim(original["claim_operation_id"])
+    replay_receipt = recover_native_claim(replay["claim_operation_id"])
+    assert replay_receipt["original_receipt"] == original_receipt["original_receipt"]
+    assert original_receipt["original_receipt"]["result"]["changed"] is False
+    assert replay_receipt["provider_revision"] == replay["provider_revision"]
     assert replay["provider_revision"] == original["provider_revision"]
     changed_intent = [
         "agent-b" if part == "agent-a" else part for part in claim_command

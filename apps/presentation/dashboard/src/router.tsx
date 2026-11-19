@@ -22,6 +22,31 @@ function RouteLoading() {
   return <main className="p-8" role="status">加载中… / Loading…</main>;
 }
 
+// The research readers validate their bookmarks against the selected Goal and
+// source. Keep their existing URL fields together for workspace navigation.
+const researchSearchShape = {
+  research_lens: z.unknown().optional(),
+  research_phase: z.unknown().optional(),
+  research_goal: z.unknown().optional(),
+  research_reading: z.unknown().optional(),
+  research_node: z.unknown().optional(),
+  research_finding: z.unknown().optional(),
+  research_event: z.unknown().optional(),
+  research_state: z.unknown().optional(),
+  research_group: z.unknown().optional(),
+  research_parent_node: z.unknown().optional(),
+  research_parent_group: z.unknown().optional(),
+  research_question: z.unknown().optional(),
+  research_return: z.unknown().optional(),
+  research_pack: z.unknown().optional(),
+  research_compare: z.unknown().optional(),
+  research_analysis: z.unknown().optional(),
+  research_analysis_goal: z.unknown().optional(),
+};
+export const clearedResearchSearch = Object.fromEntries(
+  Object.keys(researchSearchShape).map(key => [key, undefined]),
+) as Record<keyof typeof researchSearchShape, undefined>;
+
 const searchSchema = z.object({
   goalId: z.string().optional().default(""),
   // Absence alone opens all Goals. Preserve present decoded values, including
@@ -29,24 +54,36 @@ const searchSchema = z.object({
   // Numeric opaque IDs still survive the router's JSON decoding.
   rootGoalId: z.unknown().transform(value => typeof value === "string" && value
     ? value : JSON.stringify(value)).optional(),
-  // Preserve the existing history/analysis owners' query state. They validate
-  // it from the URL themselves; router decoding can produce arrays or numbers.
-  research_lens: z.unknown().optional(),
-  research_goal: z.unknown().optional(),
-  research_node: z.unknown().optional(),
-  research_group: z.unknown().optional(),
-  research_pack: z.unknown().optional(),
-  research_analysis: z.unknown().optional(),
-  research_analysis_goal: z.unknown().optional(),
+  ...researchSearchShape,
+  // Settings view state is validated by its local reader, just like research
+  // focus. Preserve it across workspace navigation without granting a target.
+  settings_scope: z.unknown().optional(),
+  settings_goal: z.unknown().optional(),
+  settings_tab: z.unknown().optional(),
   // Stable Goal/Agent working conversation; empty string opens the directory.
   workAgent: z.string().regex(/^[A-Za-z0-9._:-]{0,200}$/).optional().catch(undefined),
+  workSession: z.unknown().transform(value => typeof value === "string" ? value : JSON.stringify(value)).optional(),
   todo: z.string().regex(/^[A-Za-z0-9._:-]{1,200}$/).optional().catch(undefined),
+  // UI-only work browsing; the feature reader fences it to its exact Goal/source.
+  workGoal: z.string().optional().catch(undefined),
+  workSource: z.string().optional().catch(undefined),
+  workLens: z.enum(["owner", "board", "map"]).optional().catch(undefined),
+  taskView: z.enum(["board", "list"]).optional().catch(undefined),
+  taskOwner: z.string().max(200).optional().catch(undefined),
+  taskFilter: z.enum(["all", "needsYou", "open", "blocked", "done"]).optional().catch(undefined),
+  taskQuery: z.string().max(256).optional().catch(undefined),
   // Scopes the steward conversation to a host-granted workspace; selecting a Goal clears it.
   workspace: z.string().regex(/^[A-Za-z0-9]{1,80}$/).optional().catch(undefined),
+  // Preserve malformed/partial addresses so they fail closed in the source
+  // reader instead of silently opening an ordinary steward conversation.
+  conversationBinding: z.unknown().transform(value => typeof value === "string" ? value : JSON.stringify(value)).optional(),
+  conversationSession: z.unknown().transform(value => typeof value === "string" ? value : JSON.stringify(value)).optional(),
   statusUrl: z.string().optional().default(""),
-  view: z.enum(["conversation", "overview", "tasks", "files"]).optional(),
+  view: z.enum(["conversation", "overview", "tasks", "research", "files"]).optional(),
   reportSessionId: z.string().regex(/^[A-Za-z0-9._-]{1,160}$/).optional(),
   reportMessageId: z.string().regex(/^[A-Za-z0-9._-]{1,160}$/).optional(),
+  messageSession: z.string().regex(/^[A-Za-z0-9._-]{1,160}$/).optional().catch(undefined),
+  message: z.string().regex(/^[A-Za-z0-9._-]{1,160}$/).optional().catch(undefined),
 });
 
 const frontstageSearchSchema = z.object({

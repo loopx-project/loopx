@@ -4,7 +4,9 @@ from contextlib import contextmanager
 import json
 import os
 import re
+import shlex
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Iterator
@@ -13,6 +15,7 @@ import pytest
 
 from loopx.capabilities.project_skill_delivery import canonical_project_skill_source
 from loopx import file_lock
+from loopx import python_install_owner
 from loopx import skill_install_readback
 from loopx import workflow_skill_install as install_module
 from loopx.skill_install_readback import (
@@ -38,6 +41,49 @@ def test_source_checkout_contains_packaged_workflow_skills() -> None:
     assert "loopx-benchmark" in PACKAGED_HOST_SKILL_IDS
     for skill_id in PACKAGED_HOST_SKILL_IDS:
         assert (Path(source["skills_root"]) / skill_id / "SKILL.md").is_file()
+
+
+@pytest.mark.parametrize("host_surface", [None, "deepseek-harness-native"])
+@pytest.mark.parametrize("windows", [False, True])
+def test_printed_workflow_commands_preserve_target_and_host_arguments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    host_surface: str | None, windows: bool,
+) -> None:
+    pwsh = shutil.which("pwsh")
+    if windows and pwsh is None:
+        pytest.skip("native PowerShell is unavailable")
+    monkeypatch.setattr(python_install_owner, "_is_windows_host", lambda: windows)
+    skills_dir = tmp_path / "O'Brien $profile 中文" / "skills"
+    preview = workflow_skill_install(skills_dir=skills_dir, host_surface=host_surface)
+    installed = workflow_skill_install(
+        skills_dir=skills_dir, host_surface=host_surface, execute=True,
+    )
+    assert installed["ok"] and installed["after"]["ready"]
+    for command, operation in [
+        (preview["install_command"], "--install"),
+        (installed["rollback_command"], "--uninstall"),
+    ]:
+        expected = ["workflow-skills", operation, "--skills-dir", str(skills_dir)]
+        if operation == "--install" and host_surface is not None:
+            expected.extend(["--host-surface", host_surface])
+        if windows:
+            completed = subprocess.run(
+                [pwsh, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+                 "function loopx { ConvertTo-Json -InputObject @($args) -Compress }; "
+                 + command],
+                capture_output=True, encoding="utf-8", timeout=30, check=True,
+            )
+            assert json.loads(completed.stdout) == expected
+        else:
+            assert shlex.split(command) == ["loopx", *expected]
+
+    modified = skills_dir / "loopx-project" / "SKILL.md"
+    modified.write_text(modified.read_text(encoding="utf-8") + "\nUser notes\n", encoding="utf-8")
+    removed = workflow_skill_install(skills_dir=skills_dir, execute=True, uninstall=True)
+    assert removed["ok"] is False
+    assert removed["result"]["preserved_modified"] == ["loopx-project"]
+    assert modified.is_file()
+    assert not (skills_dir / "loopx-benchmark").exists()
 
 
 def test_entry_metadata_repair_is_previewed_recorded_and_uninstalled(tmp_path: Path) -> None:

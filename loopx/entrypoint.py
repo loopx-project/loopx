@@ -68,7 +68,7 @@ def _native_scheduler_followup_argv(raw_argv: list[str]) -> list[str] | None:
     if os.environ.get("LOOPX_KUNLUNCODE_OUTER_CONTROLLER") == "1":
         return None
 
-    value_options = {"--format", "--registry", "--runtime-root"}
+    value_options = {"--format", "--registry", "--runtime-root", "--cli-bin"}
     positionals: list[str] = []
     skip_value = False
     for value in raw_argv:
@@ -105,6 +105,7 @@ def _native_scheduler_followup_argv(raw_argv: list[str]) -> list[str] | None:
     if positionals[1] == "scheduler-ack-current" and (
         "--host-match-observed" in raw_argv
         and "--trae_app" not in raw_argv
+        and "--antigravity_app" not in raw_argv
     ):
         # The bound hint predates the host update. Read the App again; only the
         # typed commit owner may decide whether that observation proves an ACK.

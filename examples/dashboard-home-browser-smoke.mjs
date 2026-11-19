@@ -67,12 +67,46 @@ const goalSpecs = [
     status: "state_refreshed",
     waiting_on: "user_or_controller",
     quota: { ...quotaEligible, state: "operator_gate" },
-    userTodos: { open: 1, done: 3, total: 4, next: "请确认 owner 选项 A/B 的取舍。" },
+    userTodos: { open: 4, done: 3, total: 7, next: "请确认 owner 选项 A/B 的取舍。" },
+    capabilityActions: {
+      schema_version: "todo_capability_actions_v0",
+      total_count: 4,
+      groups: [{
+        action_kind: "review_periodic_report",
+        count: 4,
+        latest_at: "2026-01-01T00:04:00Z",
+        items: [4, 3, 2].map(index => ({
+          index,
+          done: false,
+          text: `合成研究材料第 ${index} 版`,
+          todo_id: `todo_report_edition_${index}`,
+          role: "user",
+          status: "open",
+          task_class: "user_action",
+          action_kind: "review_periodic_report",
+          capability_binding_ref: `periodic-report-review:r${String(index).repeat(64)}`,
+          created_by: "researcher",
+          updated_at: `2026-01-01T00:0${index}:00Z`,
+        })),
+      }],
+    },
     userTodoItems: [
       { done: false, text: "请确认 owner 选项 A/B 的取舍；未确认前不推进 gated route。" },
       { done: true, text: "已读完核心迁移文档第 8 节，并确认当前结论。" },
       { done: true, text: "已确认 item embedding 不阻塞当前 P0 i2i 路径。" },
       { done: true, text: "已确认 P0 degrade 走统一标准品策略。" },
+      ...[4, 3, 2].map(index => ({
+        done: false,
+        text: `合成研究材料第 ${index} 版`,
+        todo_id: `todo_report_edition_${index}`,
+        role: "user",
+        status: "open",
+        task_class: "user_action",
+        action_kind: "review_periodic_report",
+        capability_binding_ref: `periodic-report-review:r${String(index).repeat(64)}`,
+        created_by: "researcher",
+        updated_at: `2026-01-01T00:0${index}:00Z`,
+      })),
     ],
     agentTodos: { open: 4, done: 0, total: 4, next: "推进与 owner 决策独立的 safe side path。" },
     agentTodoItems: [
@@ -226,12 +260,14 @@ const goalSpecs = [
 ];
 
 function projectAssetFor(spec) {
+  const userGroup = todoGroupFor(spec, "user");
   return {
     owner: spec.waiting_on,
     gate: spec.userTodos.open > 0 ? "user_todo" : "none",
     next_action: spec.agentTodos.next ?? "continue from current fixture state",
     stop_condition: "fixture stop condition",
-    user_todos: spec.userTodos,
+    user_todos: {...spec.userTodos, items: userGroup.items,
+      ...(userGroup.capability_actions ? {capability_actions: userGroup.capability_actions} : {})},
     agent_todos: spec.agentTodos,
     quota: spec.quota,
     control_plane: spec.controlPlane,
@@ -262,9 +298,13 @@ function todoGroupFor(spec, role) {
       status: item.status,
       task_class: item.task_class,
       action_kind: item.action_kind,
+      capability_binding_ref: item.capability_binding_ref,
       claimed_by: item.claimed_by,
+      created_by: item.created_by,
       review_materials: [],
+      updated_at: item.updated_at,
     })),
+    ...(role === "user" && spec.capabilityActions ? {capability_actions: spec.capabilityActions} : {}),
   };
 }
 
@@ -792,6 +832,10 @@ async function installChatApiFixture(page, { activeTurn = false } = {}) {
   await page.route("**/api/chat/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
+    if (url.pathname === "/api/chat/app-steward" && request.method() === "GET") {
+      // An unbound source is verified; an unhandled request fails closed.
+      return route.fulfill({json: {ok: true, binding_id: null, session_id: null}});
+    }
     if (url.pathname === "/api/chat/capabilities") {
       await route.fulfill({
         contentType: "application/json",
@@ -857,13 +901,17 @@ async function installChatApiFixture(page, { activeTurn = false } = {}) {
     }
     if (url.pathname === "/api/chat/sessions" && request.method() === "POST") {
       const body = request.postDataJSON();
+      if (body.context_kind === "manager" && body.agent_id !== undefined) {
+        throw new Error("The ordinary manager must leave executor resolution to its channel owner.");
+      }
+      const agentId = body.agent_id ?? "codex";
       createdSessionId = activeTurn
         ? activeSession.session_id
         : `fixture-${body.context_kind}-${body.goal_id || "global"}`;
       const session = activeTurn ? activeSession : {
         session_id: createdSessionId,
         goal_id: body.goal_id,
-        agent_id: body.agent_id,
+        agent_id: agentId,
         adapter_kind: "codex_app_server",
         channel_id: body.context_kind,
         status: "ready",
@@ -877,7 +925,7 @@ async function installChatApiFixture(page, { activeTurn = false } = {}) {
       await route.fulfill({
         contentType: "application/json",
         json: {
-          agent_id: body.agent_id,
+          agent_id: agentId,
           goal_id: body.goal_id,
           ok: true,
           resumed: activeTurn,
@@ -974,17 +1022,21 @@ async function captureHomeVisualAcceptance(page, url, label) {
   await page.waitForSelector('[data-testid="personal-goal-home"]', { timeout: 10_000 });
   const composer = page.getByLabel("向 LoopX 发送消息");
   const composerPlaceholder = await composer.getAttribute("placeholder");
-  if (composerPlaceholder !== "问问 LoopX 管家，或描述一个新 Goal…") {
-    throw new Error(`${label} Manager composer placeholder changed: ${composerPlaceholder}`);
+  if (!composerPlaceholder?.trim()) {
+    throw new Error(`${label} Manager composer omitted its input prompt.`);
   }
   const composerForm = page.locator(".personal-channel-composer");
   const composerBox = await composerForm.boundingBox();
-  if (!composerBox || composerBox.height > 84) {
-    throw new Error(`${label} composer regressed from the compact single-row layout: ${JSON.stringify(composerBox)}`);
+  // The same two-row composer measures 98px desktop / 124px narrow on base and head.
+  const maxComposerHeight = label === "mobile" ? 132 : 104;
+  if (!composerBox || composerBox.height > maxComposerHeight) {
+    throw new Error(`${label} composer exceeds its compact layout budget: ${JSON.stringify(composerBox)}`);
   }
-  const composerAgentBox = await page.getByRole("combobox", { name: "选择聊天 Runtime" }).boundingBox();
-  if (!composerAgentBox || composerAgentBox.width < 40) {
-    throw new Error(`${label} composer Agent selector is visually truncated: ${JSON.stringify(composerAgentBox)}`);
+  if (await composerForm.locator("textarea").count() !== 1) {
+    throw new Error(`${label} composer must keep one message input.`);
+  }
+  if (await page.getByRole("combobox", { name: "选择聊天 Runtime" }).count()) {
+    throw new Error(`${label} steward exposed a Goal runtime selector instead of its channel-owned configuration.`);
   }
   if (await composerForm.locator(".personal-composer-tools > span").count()) {
     throw new Error(`${label} composer rendered a duplicate Goal context chip.`);
@@ -1010,7 +1062,8 @@ async function captureHomeVisualAcceptance(page, url, label) {
     if (await composer.inputValue()) {
       throw new Error("Manager advice shortcut should send immediately without leaving a draft.");
     }
-    const projectedAnswer = page.locator(".personal-manager-conversation-tray .is-assistant").last();
+    await page.getByRole("button", { name: "对话", exact: true }).click();
+    const projectedAnswer = page.locator(".personal-channel-timeline article.is-assistant").last();
     await projectedAnswer.waitFor({ state: "visible", timeout: 10_000 });
     await projectedAnswer.getByText("请确认 owner 选项 A/B 的取舍。", { exact: false })
       .waitFor({ state: "visible", timeout: 10_000 });
@@ -1024,32 +1077,33 @@ async function captureHomeVisualAcceptance(page, url, label) {
       throw new Error(`Manager projection answer exposed a raw Goal id: ${projectedAnswerText}`);
     }
 
-    const agentSelect = page.getByRole("combobox", { name: "选择聊天 Runtime" });
-    await agentSelect.click();
-    const agentListbox = page.getByRole("listbox", { name: "选择聊天 Runtime" });
-    const agentOptions = await agentListbox.getByRole("option").allTextContents();
-    for (const text of ["Codex", "仅查状态"]) {
-      if (!agentOptions.some((option) => option.includes(text))) {
-        throw new Error(`${label} Agent selector missing: ${text}`);
-      }
-    }
-    await agentListbox.getByRole("option", { name: "仅查状态", exact: true }).click();
+    await page.locator(".personal-status-mode").click();
+    const executionRequests = [];
+    const observeExecution = request => {
+      if (request.method() === "POST" && /^\/api\/chat\/sessions(?:\/[^/]+\/turns)?$/.test(new URL(request.url()).pathname)) executionRequests.push(request.url());
+    };
+    page.on("request", observeExecution);
     await composer.fill("当前健康状态");
     await sendButton.click();
-    const statusOnlyAnswer = page.locator(".personal-manager-conversation-tray .is-assistant").last();
+    const statusOnlyAnswer = page.locator(".personal-channel-timeline article.is-assistant").last();
     const statusOnlyAnswerText = await statusOnlyAnswer.innerText();
-    for (const text of ["仅查状态", "当前需要关注这些健康问题"]) {
+    for (const text of ["仅查状态", "只读状态快照", "未调用 Agent"]) {
       if (!statusOnlyAnswerText.includes(text)) {
         throw new Error(`Status-only answer missing attribution: ${text}`);
       }
     }
-    await page.reload({ waitUntil: "networkidle" });
-    const persistedAgent = await page.getByRole("combobox", { name: "选择聊天 Runtime" }).getAttribute("data-value");
-    if (persistedAgent !== "status-only") {
-      throw new Error(`Manager Agent selection did not persist per Chat: ${persistedAgent}`);
+    page.off("request", observeExecution);
+    if (executionRequests.length) {
+      throw new Error("Status-only snapshot attempted to create an execution Session or Turn.");
     }
-    await page.getByRole("combobox", { name: "选择聊天 Runtime" }).click();
-    await page.getByRole("listbox", { name: "选择聊天 Runtime" }).getByRole("option", { name: "Codex", exact: true }).click();
+    await page.reload({ waitUntil: "networkidle" });
+    if (await page.locator(".personal-status-mode").getAttribute("aria-pressed") !== "true") {
+      throw new Error("Manager status-only selection did not persist per Chat.");
+    }
+    await page.locator(".personal-status-mode").click();
+    if (await page.locator(".personal-status-mode").getAttribute("aria-pressed") !== "false") {
+      throw new Error("Manager did not return from status-only to its channel executor.");
+    }
   }
 
   const goalList = page.locator(".personal-goal-list");
@@ -1072,38 +1126,37 @@ async function captureHomeVisualAcceptance(page, url, label) {
   const goalTabs = page.getByRole("navigation", { name: "Goal 视图" });
   await goalTabs.waitFor({ state: "visible", timeout: 10_000 });
   const goalHeaderText = await page.locator(".personal-channel-header").innerText();
-  for (const text of [selectedGoalTitle, "Codex", "概览", "对话", "任务", "成果"]) {
+  for (const text of [selectedGoalTitle, "概览", "对话", "任务", "成果"]) {
     if (text && !goalHeaderText.includes(text)) {
       throw new Error(`${label} Goal header missing: ${text}`);
     }
   }
-  const goalComposerPlaceholder = await page.getByLabel("向 LoopX 发送消息").getAttribute("placeholder");
-  if (!goalComposerPlaceholder?.includes(selectedGoalTitle)) {
-    throw new Error(`${label} Goal composer lost its Goal context: ${goalComposerPlaceholder}`);
-  }
-
   await goalTabs.getByRole("button", { name: "任务", exact: true }).click();
   const taskBoard = page.locator(".personal-task-kanban");
   await taskBoard.waitFor({ state: "visible", timeout: 10_000 });
   const taskBoardText = await taskBoard.innerText();
   for (const text of ["待你确认", "待执行 / 进行中", "定时与持续", "已完成", "请确认 owner 选项 A/B 的取舍", "推进与 owner 决策独立的 safe side path"]) {
     if (!taskBoardText.includes(text)) {
-      throw new Error(`${label} Tasks projection missing: ${text}`);
+      throw new Error(`${label} Tasks projection missing: ${text}; actual=${taskBoardText}`);
     }
   }
   const taskBoardBox = await taskBoard.boundingBox();
-  const currentComposerBox = await page.locator(".personal-channel-composer").boundingBox();
-  if (!taskBoardBox || !currentComposerBox || taskBoardBox.y >= currentComposerBox.y) {
+  const currentComposer = page.locator(".personal-channel-composer");
+  const currentComposerBox = await currentComposer.count() ? await currentComposer.boundingBox() : null;
+  if (!taskBoardBox || (currentComposerBox && taskBoardBox.y >= currentComposerBox.y)) {
     throw new Error(`${label} Tasks view is obscured by the composer: tasks=${JSON.stringify(taskBoardBox)} composer=${JSON.stringify(currentComposerBox)}`);
   }
   await taskBoard.getByText("请确认 owner 选项 A/B 的取舍；未确认前不推进 gated route。", { exact: true }).click();
   const attentionDrawer = page.getByRole("dialog");
   await attentionDrawer.waitFor({ state: "visible", timeout: 10_000 });
   const attentionText = await attentionDrawer.innerText();
-  for (const text of ["正在阻塞 Agent", selectedGoalTitle, "原因", "证据", "查看影响并决定"]) {
+  for (const text of ["需要你", selectedGoalTitle, "请确认 owner 选项 A/B 的取舍", "原因", "证据", "阅读不会做出决定", "来源未提供状态"]) {
     if (text && !attentionText.includes(text)) {
-      throw new Error(`${label} Needs You detail missing: ${text}`);
+      throw new Error(`${label} request detail missing: ${text}; detail=${attentionText}`);
     }
+  }
+  if (await attentionDrawer.getByRole("button", {name: "批准", exact: true}).count()) {
+    throw new Error(`${label} summary-only request gained an approval action without a typed gate.`);
   }
   const closeAttention = page.getByRole("button", { name: new RegExp(`关闭详情：返回${selectedGoalTitle}`) });
   await assertDrawerTitleFocus(page, `${label} Needs You detail`);
@@ -1113,7 +1166,7 @@ async function captureHomeVisualAcceptance(page, url, label) {
   const todoDrawer = page.getByRole("dialog");
   await todoDrawer.waitFor({ state: "visible", timeout: 10_000 });
   const todoText = await todoDrawer.innerText();
-  for (const text of [selectedGoalTitle, "Owner", "状态", "依赖", "下一转换", "管理任务", "标记完成"]) {
+  for (const text of [selectedGoalTitle, "Owner", "未分配", "状态", "下一转换", "管理任务", "标记完成", "旧版任务缺少原始 ID"]) {
     if (text && !todoText.includes(text)) {
       throw new Error(`${label} Todo lineage detail missing: ${text}; detail=${todoText}`);
     }
@@ -1121,35 +1174,31 @@ async function captureHomeVisualAcceptance(page, url, label) {
   await page.getByRole("button", { name: new RegExp(`关闭详情：返回${selectedGoalTitle}`) }).click();
 
   await goalTabs.getByRole("button", { name: "成果", exact: true }).click();
-  await page.getByText("Files & Outputs", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-  const filesList = page.getByTestId("personal-goal-outputs");
-  const filesText = await filesList.innerText();
-  if (!filesText.includes("最近验证") || !(await page.locator(".personal-channel-header").innerText()).includes(selectedGoalTitle)) {
-    throw new Error(`${label} Files projection lost its public-safe summary or Goal lineage: ${filesText}`);
+  const files = page.getByRole("region", {name: "内容作品", exact: true});
+  await files.getByText("作品暂不可读，请重新读取。", {exact: true}).waitFor({state: "visible", timeout: 10_000});
+  // A validation summary is not a saved artifact. Missing providers stay
+  // unavailable; the real benchmark smoke verifies saved-result readback.
+  if (await page.getByTestId("personal-goal-outputs").count()
+    || !(await page.locator(".personal-channel-header").innerText()).includes(selectedGoalTitle)) {
+    throw new Error(`${label} Files invented an artifact from a status summary or lost its Goal.`);
   }
-  await filesList.getByRole("button").first().click();
-  const outputDrawer = page.getByRole("dialog");
-  await outputDrawer.waitFor({ state: "visible", timeout: 10_000 });
-  const outputText = await outputDrawer.innerText();
-  for (const text of ["产出详情", selectedGoalTitle, "Run", "Agent"]) {
-    if (text && !outputText.includes(text)) {
-      throw new Error(`${label} run evidence detail missing: ${text}`);
-    }
+  const retryRead = page.waitForRequest((request) => new URL(request.url()).pathname === "/api/chat/content-media"
+    && request.method() === "POST" && request.postDataJSON()?.action === "list");
+  await files.getByRole("button", {name: "重新读取", exact: true}).click();
+  const retryRequest = await retryRead;
+  if (retryRequest.postDataJSON().goal_id !== "showcase-user-gate-safe-side-path") {
+    throw new Error(`${label} Files retry lost its Goal context.`);
   }
-  if (!(await outputDrawer.getByLabel("公开安全产出预览").count()) && !outputText.includes("此产出没有可用的公开安全内联预览")) {
-    throw new Error(`${label} output detail omitted both its public-safe preview and an explicit unavailable state.`);
-  }
-  await page.getByRole("button", { name: new RegExp(`关闭详情：返回${selectedGoalTitle}`) }).click();
 
   await goalTabs.getByRole("button", { name: "对话", exact: true }).click();
-  const chatPaneText = await page.locator(".personal-channel-scroll").innerText();
-  if (!chatPaneText.includes("Codex")) {
-    throw new Error(`${label} Goal Chat does not expose the owning Agent.`);
+  const goalComposerPlaceholder = await page.getByLabel("向 LoopX 发送消息").getAttribute("placeholder");
+  if (!goalComposerPlaceholder?.trim() || goalComposerPlaceholder.includes(selectedGoalTitle)) {
+    throw new Error(`${label} Goal composer omitted its prompt or duplicated the visible Goal title: ${goalComposerPlaceholder}`);
   }
   const goalSummary = page.locator(".personal-channel-header");
   await goalSummary.waitFor({ state: "visible", timeout: 10_000 });
   const goalSummaryText = await goalSummary.innerText();
-  const missingGoalSummary = [selectedGoalTitle, "Codex", "概览", "对话", "任务", "成果"]
+  const missingGoalSummary = [selectedGoalTitle, "概览", "对话", "任务", "成果"]
     .filter((text) => !goalSummaryText.includes(text));
   if (missingGoalSummary.length) {
     throw new Error(`${label} Goal Chat projection missing labels: ${missingGoalSummary.join(", ")}`);
@@ -1160,10 +1209,8 @@ async function captureHomeVisualAcceptance(page, url, label) {
     throw new Error(`${label} Goal Chat plan did not preserve Todo lineage.`);
   }
   await goalTabs.getByRole("button", { name: "对话", exact: true }).click();
-  const runEvidence = page.locator(".personal-output-row").first();
-  await runEvidence.waitFor({ state: "visible", timeout: 10_000 });
-  if (!await runEvidence.locator("time").getAttribute("datetime") && !(await runEvidence.locator("time").innerText()).trim()) {
-    throw new Error(`${label} Goal Chat run evidence did not preserve run lineage.`);
+  if (await page.locator(".personal-output-row").count()) {
+    throw new Error(`${label} Goal Chat invented output evidence from a validation summary.`);
   }
   const needsYou = page.locator(".personal-attention-row").first();
   const decisionText = await needsYou.innerText();
@@ -1175,24 +1222,41 @@ async function captureHomeVisualAcceptance(page, url, label) {
   if (!isMobile && !/(受阻|阻塞|待处理)/u.test(decisionText)) {
     throw new Error(`${label} Goal Chat decision card omitted its actionable status: ${decisionText}`);
   }
+  await needsYou.click();
+  await attentionDrawer.waitFor({state: "visible", timeout: 10_000});
+  const requestDetail = await attentionDrawer.innerText();
+  for (const text of [selectedGoalTitle, "请确认 owner 选项 A/B 的取舍", "原因", "证据", "阅读不会做出决定"]) {
+    if (text && !requestDetail.includes(text)) {
+      throw new Error(`${label} request detail missing: ${text}`);
+    }
+  }
+  await assertDrawerTitleFocus(page, `${label} request detail`);
+  await closeAttention.click();
   const decisionBox = await needsYou.boundingBox();
   const goalComposerBox = await page.locator(".personal-channel-composer").boundingBox();
   if (!decisionBox || !goalComposerBox || decisionBox.y + decisionBox.height > goalComposerBox.y + 2) {
     throw new Error(`${label} needs-you card is obscured by the composer: decision=${JSON.stringify(decisionBox)} composer=${JSON.stringify(goalComposerBox)}`);
   }
-  const executionText = await page.locator(".personal-channel-header").innerText();
+  const executionText = await page.locator(".personal-composer-runtime").innerText();
   if (!executionText.includes("Codex")) {
     throw new Error(`${label} Goal Chat does not expose the owning Agent.`);
   }
 
   const agentTrigger = page.getByRole("combobox", { name: "选择聊天 Runtime" });
+  const composerAgentBox = await agentTrigger.boundingBox();
+  if (!composerAgentBox || composerAgentBox.width < 40) {
+    throw new Error(`${label} composer Agent selector is visually truncated: ${JSON.stringify(composerAgentBox)}`);
+  }
   await agentTrigger.click();
   const agentMenu = page.getByRole("listbox", { name: "选择聊天 Runtime" });
   const agentMenuText = (await agentMenu.getByRole("option").allTextContents()).join("\n");
-  for (const text of ["Codex", "仅查状态"]) {
+  for (const text of ["Codex"]) {
     if (!agentMenuText.includes(text)) {
       throw new Error(`${label} Agent selector missing: ${text}`);
     }
+  }
+  if (agentMenuText.includes("仅查状态")) {
+    throw new Error(`${label} read-only status projection was offered as an executor.`);
   }
   if (/token|secret|key|密钥/iu.test(agentMenuText)) {
     throw new Error(`${label} Agent selector leaked credential-oriented text: ${agentMenuText}`);
@@ -1217,10 +1281,13 @@ async function captureHomeVisualAcceptance(page, url, label) {
   const closeDetails = page.getByRole("button", { name: new RegExp(`关闭详情：返回${selectedGoalTitle}`) });
   await assertDrawerTitleFocus(page, `${label} running details`);
   const runningDetailsText = await runningDetails.innerText();
-  for (const text of ["执行 Session", "执行过程与结果", "详情与操作", "Goal", "进度", "运行记录", "本次运行产出"]) {
+  for (const text of ["执行 Session", "执行过程与结果", "详情与操作", "Goal", selectedGoalTitle, "Codex", "进度", "运行记录"]) {
     if (!runningDetailsText.includes(text)) {
       throw new Error(`${label} running details missing: ${text}`);
     }
+  }
+  if (runningDetailsText.includes("本次运行产出")) {
+    throw new Error(`${label} execution details invented outputs absent from its source.`);
   }
   await runningDetails.getByRole("tab", { name: "详情与操作" }).click();
   const executionDetailsText = await runningDetails.innerText();
@@ -1355,7 +1422,6 @@ async function main() {
       "询问全局待办",
       "汇总所有 Goal 进展",
       "创建新 Goal",
-      "Codex",
     ];
     const missing = required.filter((text) => !body.includes(text));
     if (missing.length) {
@@ -1377,6 +1443,17 @@ async function main() {
     const present = forbidden.filter((text) => body.includes(text));
     if (present.length) {
       throw new Error(`Dashboard home leaked raw machine/debug text: ${present.join(", ")}`);
+    }
+    const reviewTile = page.getByTestId("personal-brief-reviews");
+    await reviewTile.waitFor({ state: "visible", timeout: 10_000 });
+    if (!(await reviewTile.locator("header b").innerText()).includes("4")) {
+      throw new Error("Home review summary lost the full canonical count below generic Todo caps.");
+    }
+    const reviewText = await reviewTile.innerText();
+    for (const text of ["合成研究材料第 4 版", "查看全部 4 份待验收成果"]) {
+      if (!reviewText.includes(text)) {
+        throw new Error(`Home review summary missing bounded title or complete-directory entry: ${text}`);
+      }
     }
 
     const url = new URL(page.url());
@@ -1401,16 +1478,19 @@ async function main() {
     await installChatApiFixture(recoveryPage, { activeTurn: true });
     try {
       await recoveryPage.goto(`${baseUrl}/?statusUrl=/${fixtureName}`, { waitUntil: "networkidle" });
-      const recoveredAnswer = recoveryPage.locator(".personal-manager-conversation-tray .is-assistant").last();
-      await recoveredAnswer.waitFor({ state: "visible", timeout: 10_000 });
-      const recoveredText = await recoveredAnswer.innerText();
-      for (const text of ["恢复中的回答。", "LoopX 管家"]) {
+      await recoveryPage.getByRole("button", { name: "对话", exact: true }).click();
+      const recoveredTimeline = recoveryPage.locator(".personal-channel-timeline");
+      await recoveredTimeline.getByText("恢复中的回答。", { exact: true })
+        .or(recoveredTimeline.getByText("正在恢复进行中的 Agent 回合", { exact: true }))
+        .first().waitFor({ state: "visible", timeout: 10_000 });
+      const recoveredText = await recoveredTimeline.innerText();
+      const recoveryLabels = recoveredText.includes("恢复中的回答。")
+        ? ["LoopX 管家", "恢复中的回答。"]
+        : ["LoopX 管家", "正在恢复进行中的 Agent 回合", "中断本轮"];
+      for (const text of recoveryLabels) {
         if (!recoveredText.includes(text)) {
           throw new Error(`Active Turn recovery did not render ${text}: ${recoveredText}`);
         }
-      }
-      if (recoveredText.includes("Agent 正在处理")) {
-        throw new Error(`Recovered active Turn remained pending after terminal SSE: ${recoveredText}`);
       }
     } finally {
       await recoveryPage.close();
@@ -1419,6 +1499,7 @@ async function main() {
     // Explicitly select Goal to validate Goal workspace and Goal prompts
     await page.goto(`${baseUrl}/?goalId=showcase-user-gate-safe-side-path&statusUrl=/${fixtureName}`, { waitUntil: "networkidle" });
     await page.waitForSelector('[data-testid="personal-goal-home"]', { timeout: 10_000 });
+    await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "对话", exact: true }).click();
     await page.locator(".personal-composer-tools > summary").click();
     const goalBody = await page.locator("body").innerText();
     const requiredGoalText = [

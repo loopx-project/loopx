@@ -3,6 +3,7 @@ from pathlib import Path
 import shlex
 from typing import Any
 
+from ...command_invocation import loopx_cli_argv
 from ...agent_registry import load_goal_from_registry, registered_agent_ids_for_goal
 from ...control_plane.effect_runtime import effect_runtime_result
 
@@ -85,7 +86,7 @@ def extend_turn_start_dispatch(
             "provider_payload_returned": False, "error_code": None,
         }
 
-    command = shlex.join(["loopx", "--registry", str(registry_path), "--runtime-root",
+    command = shlex.join([*loopx_cli_argv(), "--registry", str(registry_path), "--runtime-root",
         str(runtime_root), "semantic-preference", "agent", "read", "--goal-id", goal_id,
         "--agent-id", agent_id, "--format", "json"])
     hook = TurnStartHookRegistration(

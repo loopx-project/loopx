@@ -1,0 +1,67 @@
+{
+  "source_commit": "21367015cce45294dcf99f54a3211d66f5d842c5",
+  "todo_id": "todo_3a7234404daa4e1c487d83b1",
+  "turn_instance_id": "turn-legacy",
+  "payload": {
+    "explore_result": {
+      "schema_version": "explore_result_attachment_v0",
+      "node_id": "question-a",
+      "question": "Which candidate improved?",
+      "applicability": "Synthetic fixed-input comparison only.",
+      "input_revision": "dataset-v1",
+      "observation": "The receipt was recorded before attribution validation.",
+      "interpretation": "Keep the original record auditable; contradictory values cannot establish improvement.",
+      "status": "confirmed",
+      "evidence_refs": [
+        "result:a",
+        "result:b"
+      ],
+      "execution_observation": {
+        "candidate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "change_reason": null,
+        "elapsed_seconds": 1,
+        "evidence_refs": [
+          "result:a",
+          "result:b"
+        ],
+        "executed_method_id": "probe",
+        "input_revision": "dataset-v1",
+        "limit_seconds": 10,
+        "planned_method_id": "probe",
+        "result_candidate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_ref": "result:a",
+        "schema_version": "explore_execution_observation_v0",
+        "search_iterations": null,
+        "stop_reason": "process_exit:0"
+      },
+      "measurements": [
+        {
+          "candidate_ref": "candidate:a",
+          "comparison_scope": "validation:budget-v1",
+          "evaluation_ref": "evaluator:v1",
+          "evidence_ref": "result:b",
+          "higher_is_better": true,
+          "input_revision": "dataset-v1",
+          "metric": "quality",
+          "unit": "points",
+          "value": 8
+        }
+      ]
+    },
+    "generated_at": "2026-01-01T01:00:00Z",
+    "appended": true,
+    "dry_run": false,
+    "settlement_identity": {
+      "effect_id": "research:worker:turn-legacy"
+    }
+  },
+  "events_jsonl": "{\"agent_id\": \"worker\", \"boundary\": {\"absolute_paths_recorded\": false, \"credential_values_recorded\": false, \"raw_logs_recorded\": false, \"raw_session_transcript_recorded\": false, \"raw_task_text_recorded\": false, \"raw_trajectory_recorded\": false}, \"event_id\": \"d5a9ab993f5b0fb9\", \"event_kind\": \"node\", \"goal_id\": \"research\", \"node_kind\": \"question\", \"recorded_at\": \"2026-01-01T01:00:00Z\", \"result_id\": \"question-a\", \"schema_version\": \"loopx_explore_result_event_v0\", \"status\": \"open\", \"summary\": \"Synthetic fixed-input comparison only.\", \"title\": \"Which candidate improved?\"}\n{\"agent_id\": \"worker\", \"boundary\": {\"absolute_paths_recorded\": false, \"credential_values_recorded\": false, \"raw_logs_recorded\": false, \"raw_session_transcript_recorded\": false, \"raw_task_text_recorded\": false, \"raw_trajectory_recorded\": false}, \"event_id\": \"74431d3bff696a54\", \"event_kind\": \"finding\", \"evidence_refs\": [\"result:a\", \"result:b\"], \"execution_observation\": {\"candidate_sha256\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"change_reason\": null, \"elapsed_seconds\": 1, \"evidence_refs\": [\"result:a\", \"result:b\"], \"executed_method_id\": \"probe\", \"input_revision\": \"dataset-v1\", \"limit_seconds\": 10, \"planned_method_id\": \"probe\", \"result_candidate_sha256\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"result_ref\": \"result:a\", \"schema_version\": \"explore_execution_observation_v0\", \"search_iterations\": null, \"stop_reason\": \"process_exit:0\"}, \"goal_id\": \"research\", \"measurements\": [{\"candidate_ref\": \"candidate:a\", \"comparison_scope\": \"validation:budget-v1\", \"evaluation_ref\": \"evaluator:v1\", \"evidence_ref\": \"result:b\", \"higher_is_better\": true, \"input_revision\": \"dataset-v1\", \"metric\": \"quality\", \"unit\": \"points\", \"value\": 8}], \"node_id\": \"question-a\", \"recorded_at\": \"2026-01-01T01:00:00Z\", \"result_id\": \"finding_98187d071ba473d6cde7c985dc3cc20ce5f0fe946be6340a98403405cf822c2c\", \"schema_version\": \"loopx_explore_result_event_v0\", \"status\": \"confirmed\", \"summary\": \"Input revision: dataset-v1 Applicability: Synthetic fixed-input comparison only. Observation: The receipt was recorded before attribution validation. Interpretation: Keep the original record auditable; contradictory values cannot establish improvement.\", \"tags\": [\"writeback-result\"], \"title\": \"Which candidate improved?\"}\n",
+  "hook_files": {
+    "goals/research/post_writeback_hooks/pwh_96ee515e67a60b94c0430f3db38a81f1691f45af6e479bc0c6087e77ff3387b5.json": "{\n  \"schema_version\": \"loopx_post_writeback_capability_hook_receipt_v0\",\n  \"dispatch_id\": \"pwh_96ee515e67a60b94c0430f3db38a81f1691f45af6e479bc0c6087e77ff3387b5\",\n  \"hook_id\": \"explore.result_writeback\",\n  \"capability_id\": \"explore\",\n  \"source_receipt_id\": \"pwr_67e18f791ccb70c9f0f3e8fa\",\n  \"status\": \"intent_recorded\",\n  \"intent\": {\n    \"schema_version\": \"loopx_capability_intent_v0\",\n    \"intent_kind\": \"explore.result_ingestion\",\n    \"idempotency_key\": \"explore-result:98187d071ba473d6cde7c985dc3cc20ce5f0fe946be6340a98403405cf822c2c\",\n    \"source_receipt_id\": \"pwr_67e18f791ccb70c9f0f3e8fa\",\n    \"payload\": {\n      \"attachment\": {\n        \"schema_version\": \"explore_result_attachment_v0\",\n        \"node_id\": \"question-a\",\n        \"question\": \"Which candidate improved?\",\n        \"applicability\": \"Synthetic fixed-input comparison only.\",\n        \"input_revision\": \"dataset-v1\",\n        \"observation\": \"The receipt was recorded before attribution validation.\",\n        \"interpretation\": \"Keep the original record auditable; contradictory values cannot establish improvement.\",\n        \"status\": \"confirmed\",\n        \"evidence_refs\": [\n          \"result:a\",\n          \"result:b\"\n        ],\n        \"execution_observation\": {\n          \"schema_version\": \"explore_execution_observation_v0\",\n          \"candidate_sha256\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n          \"input_revision\": \"dataset-v1\",\n          \"planned_method_id\": \"probe\",\n          \"executed_method_id\": \"probe\",\n          \"change_reason\": null,\n          \"elapsed_seconds\": 1,\n          \"limit_seconds\": 10,\n          \"search_iterations\": null,\n          \"stop_reason\": \"process_exit:0\",\n          \"evidence_refs\": [\n            \"result:a\",\n            \"result:b\"\n          ],\n          \"result_ref\": \"result:a\",\n          \"result_candidate_sha256\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n        },\n        \"measurements\": [\n          {\n            \"metric\": \"quality\",\n            \"unit\": \"points\",\n            \"value\": 8,\n            \"higher_is_better\": true,\n            \"comparison_scope\": \"validation:budget-v1\",\n            \"input_revision\": \"dataset-v1\",\n            \"evaluation_ref\": \"evaluator:v1\",\n            \"candidate_ref\": \"candidate:a\",\n            \"evidence_ref\": \"result:b\"\n          }\n        ]\n      }\n    },\n    \"requested_write_scope\": []\n  },\n  \"error_code\": null,\n  \"attempt_count\": 1,\n  \"recorded_at\": \"2026-01-01T01:00:00Z\"\n}\n"
+  },
+  "base_replay": {
+    "ok": true,
+    "idempotent_replay": true,
+    "retryable": false
+  }
+}

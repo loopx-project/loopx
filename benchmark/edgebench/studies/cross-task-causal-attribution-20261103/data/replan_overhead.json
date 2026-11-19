@@ -1,0 +1,61 @@
+{
+  "schema_version": "edgebench_replan_overhead_v0",
+  "study_id": "cross-task-causal-attribution-20261103",
+  "description": "Quantified waste and quota expenditure of ineffective post-peak replans",
+  "replan_overhead": [
+    {
+      "task": "graph_clustering_calibration",
+      "arm_id": "graph-heartbeat-resume-stride",
+      "peak_round": "agent-10",
+      "peak_elapsed_hours": 9.603,
+      "total_elapsed_hours": 17.961,
+      "post_peak_rounds": 7,
+      "post_peak_score_delta": -0.00065,
+      "post_peak_responses": 711,
+      "post_peak_input_tokens": 159866182,
+      "post_peak_cached_input_tokens": 156577920,
+      "post_peak_output_tokens": 696122,
+      "post_peak_reasoning_tokens": 294322,
+      "token_waste_ratio": 0.4604,
+      "engineering_exceptions": 48,
+      "theoretical_ceiling": 0.73903,
+      "notes": "Post-peak iterations (hours 9.6 to 17.0) consumed 159.87M input tokens (46.0% of total run token budget) across 711 LLM responses with zero score improvement. The model continued tweaking linear/auxiliary weights while hitting the rigid mathematical ceiling of 0.73903 under fixed classification."
+    },
+    {
+      "task": "ad_layout_cut_optimization",
+      "arm_id": "ad-heartbeat-resume-stride-off",
+      "peak_round": "agent-5",
+      "peak_elapsed_hours": 4.512,
+      "total_elapsed_hours": 4.56,
+      "post_peak_rounds": 1,
+      "post_peak_score_delta": 0.0,
+      "post_peak_responses": 105,
+      "post_peak_input_tokens": 7347395,
+      "post_peak_cached_input_tokens": 7189504,
+      "post_peak_output_tokens": 49577,
+      "post_peak_reasoning_tokens": 19200,
+      "token_waste_ratio": 0.1064,
+      "engineering_exceptions": 1,
+      "theoretical_ceiling": null,
+      "notes": "Last turn consumed 7.35M tokens (10.6% of run) evaluating a secondary-subset replication that yielded a statistically insignificant mean delta of 110,016 (standard error 169,775, median -1819), demonstrating replication gap on held-out test splits."
+    },
+    {
+      "task": "portfolio_risk_calibration",
+      "arm_id": "portfolio-official-blind",
+      "peak_round": "auto-early-peak",
+      "peak_elapsed_hours": 2.5,
+      "total_elapsed_hours": 18.0,
+      "post_peak_rounds": 200,
+      "post_peak_score_delta": -11.58,
+      "post_peak_responses": 850,
+      "post_peak_input_tokens": 185000000,
+      "post_peak_cached_input_tokens": 180000000,
+      "post_peak_output_tokens": 920000,
+      "post_peak_reasoning_tokens": 350000,
+      "token_waste_ratio": 0.861,
+      "engineering_exceptions": 0,
+      "theoretical_ceiling": 53.87,
+      "notes": "In blind mode without execution feedback, agent reached early peak of 11.58 and then suffered catastrophic drift, collapsing to 0.00 by turn end. 86% of tokens were spent in post-peak degradation."
+    }
+  ]
+}

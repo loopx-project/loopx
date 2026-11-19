@@ -186,24 +186,6 @@ paths. CI Sweeper and Dependency Sweeper are visible because they are high-ROI
 maintainer workflows, but they stay opt-in and begin with a dry-run or policy
 report before any isolated worktree patch is attempted.
 
-### Auto Research One-Click Start
-
-The auto-research path is the experimental one-command agent-team demo:
-
-```bash
-loopx auto-research "How should we evaluate whether multi-agent auto research creates value?"
-loopx auto-research start "How should we evaluate whether multi-agent auto research creates value?" --execute
-```
-
-The contract command previews the research brief, evidence boundary, and next
-launch packet. The `start --execute` command opens visible Codex CLI lanes
-through the generic multi-agent kernel; lane-authored evidence still has to be
-written back through LoopX state before the demo can claim progress. See the
-[auto-research command path](../../demo/auto_research/README.md).
-For the shipped stop marker, `--attach` takeover, and state-aware wake cycle,
-use the contributor
-[stop/takeover/wake walkthrough](../guides/auto-research-stop-takeover-wake-walkthrough.md).
-
 ### Review Agent Work
 
 Review Agent Work is also an experimental entry: it uses the read-first

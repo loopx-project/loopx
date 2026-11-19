@@ -74,10 +74,10 @@ def run_worker(root, sid, tid, started, workspace, codex_bin):
     )
 
 
-def session_and_turn(store, *, mode="managed_runtime"):
+def session_and_turn(store, *, mode="managed_runtime", channel_id=None):
     session = store.create_session(
         goal_id="fixture", agent_id="codex", adapter_kind="codex_app_server",
-        upstream_thread_id="saved-thread", session_mode=mode,
+        upstream_thread_id="saved-thread", session_mode=mode, channel_id=channel_id,
         host_surface="codex_app" if mode == "attached_host" else None,
     )
     sid = session["session_id"]
@@ -265,6 +265,71 @@ def test_http_reconnect_or_followup_releases_dead_execution(ordinary, read_event
         server.server_close()
         serving.join(2)
         runtime.close()
+
+
+def test_task_receipt_recovers_only_its_original_execution(ordinary):  # noqa: F811
+    store, _, _, request, capture, _, _ = ordinary
+    sid, old_id = session_and_turn(store, channel_id="task.cart")
+    store.update_turn(sid, old_id, status="completed")
+    store.release_active_turn(sid, old_id)
+    turn, _ = store.create_turn(sid, client_turn_id="later", message="Find the tax rate.")
+    tid = turn["turn_id"]
+    child = start_worker(store.root.parent, sid, tid)
+    scope = f"/api/chat/sessions/{sid}?message_limit=200"
+    receipt = "&task_goal_id=fixture&task_todo_id=cart"
+    try:
+        active = request(scope + f"&turn_id={tid}" + receipt)[1]["selected_turn"]
+        assert active["status"] in {"starting", "running"} and not active["terminal"]
+        child.kill()
+        child.join(5)
+        assert not child.is_alive()
+
+        assert request(scope + f"&turn_id={tid}&task_goal_id=fixture&task_todo_id=other")[0] == 400
+        assert request(scope + f"&turn_id={tid}&task_goal_id=other&task_todo_id=cart")[0] == 400
+        assert request(scope + f"&turn_id={tid}")[1]["selected_turn"] == active
+        assert request(scope + f"&turn_id={old_id}" + receipt)[1]["selected_turn"]["status"] == "completed"
+        assert store.load_turn(sid, tid)["status"] == active["status"]
+
+        assert request(scope + f"&turn_id={tid}" + receipt + "&message_cursor=invalid")[0] == 400
+        assert store.load_turn(sid, tid)["status"] == active["status"]
+
+        code, observed = request(scope + f"&turn_id={tid}" + receipt)
+        assert code == 200
+        assert observed["selected_turn"]["turn_id"] == tid
+        assert observed["selected_turn"]["status"] == "failed"
+        assert observed["selected_turn"]["terminal"]
+        assert "You can continue with a follow-up" in observed["selected_turn"]["error"]
+        assert store.load_turn(sid, old_id)["status"] == "completed"
+        assert store.load_session(sid)["active_turn_id"] is None
+        code, repeat = request(scope + f"&turn_id={tid}" + receipt)
+        assert code == 200 and repeat == observed
+        assert sum(row["kind"] == "turn.failed" for row in store.events_after(sid, tid, None)) == 1
+        assert sum(row.get("role") == "error" for row in observed["messages"]) == 1
+        assert not capture.exists() or "turn/start" not in capture.read_text()
+    finally:
+        if child.is_alive():
+            child.kill()
+        child.join(5)
+
+
+@pytest.mark.parametrize("status", ["failed", "timed_out"])
+def test_task_receipt_reads_failure_before_message_append(ordinary, status):  # noqa: F811
+    store, _, _, request, _, _, _ = ordinary
+    sid, tid = session_and_turn(store, channel_id="task.cart")
+    error = "The original execution stopped while reading the cart fixture."
+    store.update_turn(sid, tid, status=status, error=error, error_code="runtime_error")
+
+    scope = f"/api/chat/sessions/{sid}?message_limit=200&turn_id={tid}"
+    code, observed = request(scope + "&task_goal_id=fixture&task_todo_id=cart")
+    assert code == 200
+    assert observed["selected_turn"] == {"turn_id": tid, "status": status, "terminal": True, "error": error}
+    assert not any(row["role"] == "error" for row in observed["messages"])
+    assert "error" not in request(scope)[1]["selected_turn"]
+
+    store.append_message(sid, role="error", text=error, turn_id=tid)
+    _, complete = request(scope + "&task_goal_id=fixture&task_todo_id=cart")
+    assert complete["selected_turn"] == observed["selected_turn"]
+    assert [row["text"] for row in complete["messages"] if row["role"] == "error"] == [error]
 
 
 @pytest.mark.parametrize("failure_stage", ["decision", "initial_write"])

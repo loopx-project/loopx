@@ -15,6 +15,7 @@ import {retiredHandoffModeRejection, HANDOFF_MODE_RETIRED_REASON} from "../coord
 import {leaseOwnerConstraint} from "./task_lease_eligibility.ts";
 import {leaseRepositoryRejection} from "./task_lease_repository.ts";
 import {todoExecutionDependencyRejection} from "../coordination/todo_execution_dependency.ts";
+import {canonicalAuthorityRouteFailure, requireCanonicalAuthority} from "../coordination/local_authority_write.ts";
 
 export const TASK_LEASE_INSPECT_REQUEST = "loopx_task_lease_inspect_request_v0";
 
@@ -43,6 +44,9 @@ export async function inspectTaskLease(value: unknown,
     const root = input.runtime_root, canonical = input.source === "canonical";
     if (canonical) evidence = {source_authority: null, legacy_fallback_used: false};
     const beforeFence = await loadLegacyCoordinationWriterFence(root, goalId);
+    if (canonical && beforeFence.status !== "loaded") {
+      await requireCanonicalAuthority(root, goalId, "task_lease_inspect");
+    }
     if (beforeFence.status === "failed") throw new TaskLeaseAcquireError(beforeFence.reason, beforeFence.reason_code);
     if ((beforeFence.status === "loaded") !== canonical) {
       throw new TaskLeaseAcquireError("lease authority route changed; retry inspection", "authority_source_changed");
@@ -114,10 +118,12 @@ export async function inspectTaskLease(value: unknown,
       ...(dependency === null ? {} : {resume_condition: dependency.condition})};
   } catch (error) {
     const opening = localAuthorityOpenFailure(error);
+    const routing = canonicalAuthorityRouteFailure(error);
     return {ok: false, schema_version: TASK_LEASE_SCHEMA_VERSION, action: "inspect",
       goal_id: goalId, todo_id: todoId, ...evidence,
-      ...(error instanceof TaskLeaseAcquireError ? error.payload : {}), ...opening,
-      error_code: typeof opening.reason_code === "string" ? opening.reason_code
+      ...(error instanceof TaskLeaseAcquireError ? error.payload : {}), ...opening, ...routing,
+      error_code: typeof routing.reason_code === "string" ? routing.reason_code
+        : typeof opening.reason_code === "string" ? opening.reason_code
         : error instanceof TaskLeaseAcquireError ? error.code
           : error instanceof AuthorityStoreProtocolError ? "local_authority_snapshot_invalid" : "task_lease_inspection_unavailable",
       error: error instanceof Error ? error.message : "task lease inspection unavailable"};

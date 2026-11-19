@@ -33,7 +33,7 @@ LEGACY_ROOT_MODULES = {
 }
 LEGACY_CAPABILITY_PACKAGES = {
     "loopx/capabilities/cross_runtime/": "loopx.control_plane.handoff.cross_runtime_impl_review",
-    "loopx/capabilities/multi_agent/": "demo.multi_agent",
+    "loopx/capabilities/multi_agent/": None,
     "loopx/capabilities/review_batch/": "loopx.control_plane.handoff.review_batch",
 }
 CANONICAL_MODULES = {
@@ -159,10 +159,11 @@ def assert_rehomed_capability_packages_stay_in_bounded_contexts() -> None:
             "legacy_module": legacy_module,
             "canonical_module": canonical_module,
         }
-        assert importlib.util.find_spec(canonical_module) is not None, {
-            "reason": "canonical bounded-context import must be available",
-            "canonical_module": canonical_module,
-        }
+        if canonical_module is not None:
+            assert importlib.util.find_spec(canonical_module) is not None, {
+                "reason": "canonical bounded-context import must be available",
+                "canonical_module": canonical_module,
+            }
 
 
 def assert_moved_root_imports_are_not_shimmed() -> None:

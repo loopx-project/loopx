@@ -28,7 +28,7 @@
 
 ## 从三个 Showcase 看同一类工作图
 
-Issue-Fix、Single-Agent Auto ML 和 Auto Research 的 todo 文本不同，但都不是线性 checklist：
+Issue-Fix、Single-Agent Auto ML 和 Auto Research 的 todo 文本不同：
 
 ```text
 Issue-Fix
@@ -53,7 +53,7 @@ Auto Research
          -> holdout | retry | retirement | promotion_gate
 ```
 
-图中的箭头不是模型随口建议的“下一步”，而是带 lineage 的 successor transition。三条图
+图中的箭头是带 lineage 的 successor transition。三条图
 都需要回答相同问题：
 
 | 问题 | Issue-Fix | Single-Agent Auto ML | Auto Research |
@@ -86,7 +86,7 @@ identity + role + priority + task_class + action_kind
 + evidence / completion rationale
 ```
 
-因此 todo 集合不是按顺序执行的脚本，而是当前 goal 的可计算 frontier。
+因此 todo 集合是当前 goal 的可计算 frontier。
 
 ## 两类 Owner 与五类 Task Class
 
@@ -111,7 +111,7 @@ identity + role + priority + task_class + action_kind
 
 ## Priority 不是隐藏工作流
 
-Todo 文本通常带 `[P0]`、`[P1]`、`[P2]`。Priority 影响候选排序，但不是唯一决策：
+Todo 文本通常带 `[P0]`、`[P1]`、`[P2]`。Priority 影响候选排序：
 
 ```text
 priority
@@ -141,7 +141,7 @@ quota 可以同时返回：
 - `agent_channel.must_attempt=true`，要求推进 P1；
 - `safe_bypass_allowed=true`，说明旁路边界。
 
-这不是矛盾，而是双通道控制。
+这是双通道控制。
 
 ## Equal Peer Runtime
 
@@ -151,7 +151,7 @@ quota 可以同时返回：
 - 没有永久的主执行者；
 - 没有永久的辅助执行者；
 - todo claim 和 continuation policy 决定当前工作归属；
-- task-scoped coordination 不授予 durable authority；
+
 - 旧 hierarchy 字段只允许存在于 exactly-once migration reader。
 
 对应实现是 `loopx/control_plane/agents/runtime_model.py`。它只暴露 `AgentRuntimeModel.PEER_V1`。
@@ -184,8 +184,7 @@ Claim 可以过期、清除、被 completion/supersede 结束。Status 会投影
 ## Lifecycle Authority：显式委托不等于 Leader
 
 Equal peer 的默认规则是：一个 agent 不能修改另一个 peer 已 claim 的 todo。但
-orchestration 或 meta agent 有时确实需要完成、转交或废弃停滞工作。正确做法不是恢复
-永久 leader，而是在 goal 上声明动作级授权：
+orchestration 或 meta agent 有时确实需要完成、转交或废弃停滞工作。正确做法是在 goal 上声明动作级授权：
 
 ```yaml
 coordination:
@@ -217,18 +216,18 @@ if (rejection === "claim_owner_mismatch") {
 }
 ```
 
-这是同一 `authority` 决策中的片段，不是新的调用接口。canonical 事务从 registry
+这是同一 `authority` 决策中的片段。canonical 事务从 registry
 读取并规范化 grant，将 facts 交给 TS owner 统一决策。Python 只保留 registry facts
 与 grant 配置校验，不再暴露独立的 lifecycle mutation authorizer。
 
 这份 grant 有四个边界：
 
-1. 只授予列出的 lifecycle action，不授予 repo、quota 或 user decision 权限；
+1. 只授予列出的 lifecycle action
 2. actor 必须是当前 goal 的 registered agent；
 3. `excluded_agents`、`bound_agent` 和精确 user-gate scope 仍独立生效；
 4. reason 进入 mutation receipt，使越权操作可追溯。
 
-因此它表达的是一项可撤销的 goal-local capability，而不是 agent 之间的持久层级。
+因此它表达的是一项可撤销的 goal-local capability。
 
 ## Lease：显式、可选的执行占用
 
@@ -257,8 +256,7 @@ writeback 都必须提交当前 version。Release 会保留 inactive terminal re
 
 实现边界可以直接由调用图证明：产品 CLI 在
 `loopx/cli_commands/task_lease.py` 调用 native acquire transport，transaction owner
-是 `loopx/control_plane/work_items/task_lease_acquire.ts`，而不是 todo claim 或 quota
-pipeline。`acquire_task_lease()` 只保留 transport compatibility。生命周期与幂等合同
+是 `loopx/control_plane/work_items/task_lease_acquire.ts`。`acquire_task_lease()` 只保留 transport compatibility。生命周期与幂等合同
 由 native TS tests、`tests/control_plane/test_task_lease.py` 和
 `examples/control_plane/task-lease-runtime-smoke.py` 看护。
 
@@ -325,8 +323,7 @@ quota、gate、capability、claim/lease 和 workspace guard；packet 本身不�
 2. status-neutral run 不得冒充业务进展，只有真实后续 work run 才切换到
    `post_handoff_run_seen`。
 
-连续 N 次 handoff 可以作为低频状态稳定性资格测试，但不是日常执行流程，也不
-能用“漂移分数低”替代任务的 artifact、validation 或 outcome evidence。
+连续 N 次 handoff 可以作为低频状态稳定性资格测试。
 
 ### Handoff 携带 Material Frontier，不复制材料正文
 
@@ -369,7 +366,7 @@ def project_material_frontier_for_handoff(frontier):
 投影保留 `current`、`stale`、`missing`、`inaccessible`、`required_unread` 的计数和至多
 四个稳定 material id；材料正文、原始 transcript、凭证和本机路径不进入 packet。接手者
 先按 id 从 canonical source 重新读取，再判断材料是否 current。这样 handoff 传递的是
-“恢复决策面所需的引用与缺口”，不是一份越来越大的 session memory 副本。
+“恢复决策面所需的引用与缺口”。
 
 ## Capability Gate：能做不等于被授权
 
@@ -390,17 +387,11 @@ loopx --format json quota should-run \
   --available-capability filesystem_write
 ```
 
-Capability 是 preflight 条件，不是 permission：
-
-- 有 `network` 不代表可以上传私有材料；
-- 有 `filesystem_write` 不代表可以写任意 repo；
-- 有 `session_termination` 不代表 supervisor 可以随意终止 session；
-- 有 `benchmark_runner` 不代表可以提交 leaderboard。
+Capability 是 preflight 条件：
 
 权限仍来自 goal boundary、user gate、workspace policy 和 host authority。
 
-未知或非 owner-held 的缺失能力会作为 `repair_missing` 暴露给 agent，而不是
-直接跳过。Agent 必须自己判断能否满足：例如独立 worktree/branch 可以由当前
+未知或非 owner-held 的缺失能力会作为 `repair_missing` 暴露给 agent。Agent 必须自己判断能否满足：例如独立 worktree/branch 可以由当前
 runtime 自证，就执行 repair 并写回 `capability_gap_status=fixed`；不能证明就写
 blocker。分支/worktree 的最终约束仍由 `--task-repository`、
 `--required-write-scope` 和 workspace guard 执行，不要在 capability gate 里
@@ -461,8 +452,8 @@ loopx todo update \
 
 只有真正影响所有 peer 的 gate 才使用 `--global-gate`。不要因为不确定就扩大阻塞面。
 
-在 multi-agent goal 中，`blocks_agent` 和 `global_gate=true` 都缺失时，语义不是
-“默认全局阻塞”，而是“authority scope 不完整”。把不确定性扩大成全局 gate 会让一个
+在 multi-agent goal 中，`blocks_agent` 和 `global_gate=true` 都缺失时，语义是
+“authority scope 不完整”。把不确定性扩大成全局 gate 会让一个
 局部决策冻结所有独立 lane，也无法从状态解释用户当时究竟授权了什么。Quota 因此把它
 投影为有界修复：
 
@@ -572,7 +563,7 @@ loopx todo complete \
   --no-follow-up
 ```
 
-`no_followup` 不是“我不想继续”。它必须与 acceptance evidence、空 frontier、已关闭 monitor/successor/replan gap 一致。`terminal_no_followup` 是 CLI 派生的 closure 状态，不是用户可以随意定义的 todo status。
+`no_followup` 必须与 acceptance evidence、空 frontier、已关闭 monitor/successor/replan gap 一致。`terminal_no_followup` 是 CLI 派生的 closure 状态。
 
 ## Supersede：改变方向而不伪造完成
 
@@ -594,7 +585,7 @@ loopx todo supersede \
 
 ## Review 不是特殊身份
 
-Review 是普通 todo 的 `action_kind=review` 和 continuation policy，不是一个隐藏的 primary reviewer 身份。
+Review 是普通 todo 的 `action_kind=review` 和 continuation policy。
 
 例如作者完成实现后创建：
 
@@ -635,7 +626,7 @@ M1 monitor external PR
 - M1 未到期，不消耗 branch width，也不反复唤醒；
 - goal 不应进入 terminal closure。
 
-这里特别说明一个调度边界：即使另一个 claimed todo 被 gate，未认领的 advancement todo 仍应唤醒所有 eligible peer，而不是因为 goal 中存在 `claimed_by` 就饿死。
+这里特别说明一个调度边界：即使另一个 claimed todo 被 gate，未认领的 advancement todo 仍应唤醒所有 eligible peer。
 
 ## 实验：构造一个可计算 Frontier
 
@@ -696,7 +687,7 @@ loopx --format json quota should-run \
 
 ## 核心代码领读：一个 todo 怎样成为某个 peer 的合法工作
 
-这一讲的主线不是“找到最高优先级 todo”，而是逐层缩小候选集合：
+这一讲的主线是逐层缩小候选集合：
 
 ```text
 todo contract
@@ -728,8 +719,6 @@ class TodoContinuationPolicy(str, Enum):
     INDEPENDENT_HANDOFF = "independent_handoff"
     SAME_AGENT_NON_DELIVERY = "same_agent_non_delivery"
 ```
-
-因此 `open` 不等于“可执行”：一个 open `continuous_monitor` 可能尚未 due，一个 open `user_gate` 等待的是用户，一个 open `advancement_task` 还可能被 capability 或 workspace 卡住。
 
 再看 `loopx/control_plane/todos/completion_policy.ts` 中 continuation 的默认值。
 私有 `continuationPolicy` 在 `resolveTodoCompletionPolicy` 整项完成策略内使用：
@@ -783,7 +772,7 @@ def select_peer_for_work(registered_agents, *, work_key):
     return agents[int.from_bytes(digest[:8], "big") % len(agents)]
 ```
 
-这是 deterministic routing helper，不是 durable ownership。真正 ownership 仍要经过 todo claim/lease 写回。
+这是 deterministic routing helper。真正 ownership 仍要经过 todo claim/lease 写回。
 
 ### 3. Capability gate 输出候选集，不替 agent 领取 todo
 
@@ -860,7 +849,7 @@ if current_workspace:
     }
 ```
 
-这里不是代码风格 gate，而是 attribution gate：后续 refresh 与 quota spend 要能证明交付发生在 todo 声明的 repository、正确的 peer workspace 中。
+这里是 attribution gate：后续 refresh 与 quota spend 要能证明交付发生在 todo 声明的 repository、正确的 peer workspace 中。
 
 ### 断点练习
 
@@ -872,9 +861,8 @@ if current_workspace:
 ### 读完这一段应能回答
 
 1. 为什么 `task_class` 不能由 `status` 推断？
-2. `select_peer_for_work` 为什么不是 claim？
 3. migration reader 与 live runtime model 的边界在哪里？
-4. capability gate 为什么返回 candidate set，而不是唯一 todo？
+4. capability gate 为什么返回 candidate set？
 5. worktree guard 与 spend causality 有什么关系？
 6. delegated lifecycle authority 为什么没有把 peer 变成永久 leader？
 7. material handoff 为什么只传引用、状态计数和截断标记？
@@ -909,7 +897,7 @@ if current_workspace:
 1. Claim 和 lease 的差别是什么？
 2. Required capability 为什么不是权限？
 3. 什么情况下 user gate 应是 global？
-4. 为什么 review 应建模成普通 todo，而不是固定执行者的特权？
+4. 为什么 review 应建模成普通 todo？
 5. Completion 缺少 successor 和 no-followup 时，系统为什么不能终止？
 
 下一讲把这个工作图交给决策内核，逐层拆解 `quota should-run` 如何编译出本轮 interaction contract。

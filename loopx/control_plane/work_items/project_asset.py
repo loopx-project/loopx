@@ -259,6 +259,7 @@ def attach_active_state_project_asset_fields(
     autonomous_replan_obligation_from_runs: Callable[..., dict[str, Any] | None] | None = None,
     external_progress_review: dict[str, Any] | None = None,
     effective_turn_cadence: dict[str, Any] | None = None,
+    agent_lane_id: str | None = None,
 ) -> dict[str, Any]:
     project_asset = item.get("project_asset")
     if not isinstance(project_asset, dict):
@@ -306,6 +307,7 @@ def attach_active_state_project_asset_fields(
         "backlog_hygiene_warning",
         "state_projection_gap",
         "completed_todo_archive_warning",
+        "state_incomplete",
     ):
         value = item.get(key) if isinstance(item.get(key), dict) else None
         if value:
@@ -318,7 +320,13 @@ def attach_active_state_project_asset_fields(
         else None
     )
     if replan_obligation is None and autonomous_replan_obligation_from_runs is not None:
-        agent_ids = sorted(
+        shared_todos = item.get("agent_todos")
+        monitor_todos = {"monitor_open_items":
+            shared_todos.get("monitor_open_items", []) if isinstance(shared_todos, dict) else []}
+        # Status retains shared Goal history for ownership and health checks.
+        # A lane caller only needs that Agent's semantic review obligations;
+        # peer receipts must not become a prerequisite for its settlement.
+        agent_ids = [agent_lane_id] if agent_lane_id is not None else sorted(
             {
                 agent_id
                 for run in latest_runs or []
@@ -332,9 +340,10 @@ def attach_active_state_project_asset_fields(
             if (
                 obligation := autonomous_replan_obligation_from_runs(
                     latest_runs or [],
-                    # The shared todo summary is goal-scoped here. Quota derives
-                    # todo-based replans later from its agent-filtered summary.
-                    agent_todos=None,
+                    # The TS history owner matches monitor intent by Todo,
+                    # target and lane. Share those facts without importing
+                    # goal-scoped advancement/resume decisions into this lane.
+                    agent_todos=monitor_todos,
                     agent_id=agent_id,
                 )
             )
@@ -346,6 +355,7 @@ def attach_active_state_project_asset_fields(
         replan_obligation = autonomous_replan_obligation_from_runs(
             latest_runs or [],
             agent_todos=item.get("agent_todos") if isinstance(item.get("agent_todos"), dict) else None,
+            agent_id=agent_lane_id,
         )
         if replan_obligation:
             item["autonomous_replan_obligation"] = replan_obligation
@@ -518,6 +528,7 @@ PROJECT_ASSET_TODO_DISPLAY_FIELDS = (
     "source_section",
     "task_class",
     "action_kind",
+    "capability_binding_ref",
     "task_domain",
     "task_repository",
     "required_write_scopes",
@@ -549,6 +560,8 @@ PROJECT_ASSET_TODO_DISPLAY_FIELDS = (
     "consecutive_no_change",
     "material_change",
     "material_change_generation",
+    "material_change_scope",
+    "material_change_scope_generations",
     "max_no_change_before_replan",
     "route_continuation_replan_required",
     "route_continuation_reason",
@@ -625,6 +638,12 @@ def build_project_asset_todo_summary(
         "total": total_count,
         **metadata,
     }
+    capability_actions = todos.get("capability_actions")
+    if todo_role == "user" and isinstance(capability_actions, dict):
+        # Derived from the full canonical User Todo source before its generic
+        # display items are capped. This is a bounded projection, not another
+        # review or decision authority.
+        summary["capability_actions"] = dict(capability_actions)
     if todos.get("advancement_done_count") is not None:
         summary["advancement_done_count"] = todos.get("advancement_done_count")
     open_items = open_todo_items(todos, limit=item_limit)

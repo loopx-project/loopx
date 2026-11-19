@@ -7,7 +7,26 @@ from .base import ContextProvider
 
 
 ContextProviderBuilder = Callable[[Mapping[str, Any]], ContextProvider]
-_CONTEXT_PROVIDER_BUILDERS: dict[str, ContextProviderBuilder] = {}
+
+
+def _build_openviking(config: Mapping[str, Any]) -> ContextProvider:
+    from .openviking import build_openviking_context_provider
+
+    return build_openviking_context_provider(config)
+
+
+def _build_bm25(config: Mapping[str, Any]) -> ContextProvider:
+    from .bm25 import build_bm25_context_provider
+
+    return build_bm25_context_provider(config)
+
+
+# Builtin ids are already registered, so extensions retain the same duplicate
+# rejection. Resolving that registry does not select either provider's code.
+_CONTEXT_PROVIDER_BUILDERS: dict[str, ContextProviderBuilder] = {
+    "openviking": _build_openviking,
+    "bm25": _build_bm25,
+}
 
 
 def register_context_provider(

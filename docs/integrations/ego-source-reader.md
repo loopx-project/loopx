@@ -5,10 +5,29 @@
 LoopX's existing workflow-skill refresh now carries a small continuation policy
 for an **already installed** Ego browser skill. An authorized task can reuse its
 known idle TaskSpace after an ordinary finish or handoff without another chat
-confirmation. Active user intervention, explicit pauses, reserved control,
+confirmation. If a successful, complete inventory confirms that the task's
+known Agent-created TaskSpace is absent, the same authorization permits one
+replacement and reuse of its initial Page. This covers unexpected loss without
+requiring a normal-closure receipt or another authorization question. Unknown
+cause stays unknown; An existing
+space, a missing Page label, a refused claim or a stuck/blocked Page does not
+permit replacement. Keep one active space, record its identity and finish once
+per space lifetime.
+
+Record a stable unique recovery name and the attempt before creation, then the
+returned id. A lost receipt permits one inventory lookup for that exact name,
+reusing only a unique Agent-created, Agent-owned match; it does not permit
+another creation or claim. Carry that attempt across shell processes and
+heartbeats. If the replacement disappears before verified continuation, stop
+the loop and diagnose the recurring loss. Inspect the actual destination
+before replaying an external effect whose outcome is unknown.
+
+Active user intervention, explicit pauses, reserved control,
 unknown task identity and browser-owned permission/login prompts retain their
-existing stops. This is Agent guidance; it neither changes Ego's native control
-checks nor gives the public-source reader a claim/takeover tool.
+existing stops, even if the old space later disappears. This is Agent guidance;
+That optional reader already bounds its own
+confirmed-missing recovery; the host policy now admits the same known-missing
+case instead of making a normal-closure receipt a prerequisite.
 
 Normal LoopX Python-package upgrades already run `workflow-skills --install`;
 the POSIX and Windows installers use the same Ego delivery adapter. The adapter
@@ -55,10 +74,8 @@ LoopX does not intercept or promise to modify the browser's updater.
 ## Optional public-source reader
 
 The optional `loopx.extensions.ego_source_reader` stdio MCP adapter gives an
-existing Codex host narrow `read_public_url` and `read_public_image` tools when its model shell cannot
-reach Ego's local bootstrap. It reuses an installed Ego browser with a reserved
-Page. It does not replace the Chat Session owner or create a browser,
-model thread, background service, material catalog or permission authority.
+existing Codex host narrow `read_public_url`, `read_public_image`, and `search_x` tools when its model shell cannot
+reach Ego's local bootstrap. It reuses an installed Ego browser with a reserved Page.
 
 Operator setup is explicit. Choose `auto` to lazily create one TaskSpace and its
 initial `p1` per MCP process. Ego's named factory can reuse an existing space,
@@ -70,8 +87,7 @@ HTTPS origins; `LOOPX_EGO_READ_ORIGINS = "*"` selects that mode explicitly.
 Existing comma-separated origin lists retain their restricted behavior. Use an
 explicit list for a community or otherwise restricted host. Do not reserve a Page
 shared with another process. Navigation
-may use the existing browser's session; origin configuration does not prove that
-every page on that origin is public. Follow the browser's installed skill for
+may use the existing browser's session; Follow the browser's installed skill for
 TaskSpace/Page ownership and user consent.
 
 An origin list is insufficient for a public community host that must not reuse
@@ -100,11 +116,45 @@ LOOPX_EGO_READ_ORIGINS = "*"
 All-origin mode removes per-site configuration for source links, including
 links discovered while reading another source. It changes this provider's origin
 policy only: URLs still require HTTPS with no credentials and only the default
-port, and navigation cannot read a redirected or raced Page. It does not grant
-login, browser control, filesystem writes, publishing or private-account access.
+port, and navigation cannot read a redirected or raced Page.
 The tools retain their existing `read_public_url` and `read_public_image` names;
 the host must still distinguish public sources from signed-in private pages.
 The adapter remains optional and disabled until configured on the execution host.
+
+### X search and original-post discovery
+
+`search_x(query, max_posts=10, latest=false)` uses the same configured reader,
+reserved Page, origin scope, live-control checks, deadline and cleanup. It opens
+X's rendered search UI and returns at most 20 currently loaded post references,
+author handles, timestamps, bounded excerpts and media-presence indicators.
+It does not scroll indefinitely or use a second browser controller. `latest=true`
+selects the platform's Latest tab; the default uses its Top search.
+
+For creator demonstrations, a useful starting query is
+`"geometry nodes" filter:videos`; refine by topic, language or `from:<creator>`
+when the first results reveal an origin. The provider encodes query text as URL
+data. It never executes query text as shell or browser code. An explicit origin
+list must include `https://x.com`; this operation does not expand that list.
+
+Wait for real post cards or the platform's explicit empty state. Loading shells,
+unrecognized cards, login/verification walls and timeouts are not empty-result
+proof. Results identify each card through its own timestamp link, exclude account
+navigation and analytics links, and deduplicate post URLs. Private account chrome
+is not returned. Visible content still does not prove public visibility: review
+that boundary before publishing or admitting public evidence.
+
+Open the returned original URL with the existing reader or authorized Ego CLI,
+then inspect relevant media and trace technical claims to primary documentation
+or code. An excerpt, thumbnail or `media_present` flag is not full-post reading
+or video observation. Record sources through the existing
+[external-evidence workflow](../../loopx/capabilities/external_research/README.md#egox-discovery--egox-发现)
+when using LoopX research; the tool never admits evidence itself.
+
+The operation is available after upgrading this optional adapter and reloading
+its idle MCP host through the existing host lifecycle. Existing installations
+without that update can use the installed Ego CLI under its skill. Do not restart
+an active chat or change its permissions solely to expose the new tool. Disable
+by removing the existing adapter entry; no new persistent setting is added.
 
 To restrict or roll back that origin scope, set
 `LOOPX_EGO_READ_ORIGINS = "https://example.com,https://www.example.org"` and reload
@@ -154,10 +204,17 @@ stops the operation. Its hard-stop output sink can discard console sentinels;
 the adapter preserves only the stable user-control/inactive error code in a
 private temporary file and returns `source_reader_not_agent_owned`. It discards
 partial output, makes no replacement or takeover attempt, and removes that
-file after the call. Ordinary failures remain ordinary failures. This error
-transport does not grant control or prove a live human handoff was tested.
+file after the call. Ordinary failures remain ordinary failures.
 A source's actual login or verification requirement remains a
 separate boundary; follow the installed Ego skill and continue independent work.
+
+The direct `ego-browser` CLI used for interactive UI work is a separate route.
+LoopX's existing [host-skill refresh](../../skills/loopx-project/references/installation-and-diagnosis.md#ego-host-skill-refresh)
+delivers its same-task continuation guidance. Before repeating an old control
+question, inspect live inventory once: Agent control restored for the same task
+allows continuation without another chat approval. Normal handback can qualify
+one claim; a live user stop, explicit pause or unresolved user step still holds.
+Neither this reader nor a stored STOP note is a second browser-ownership owner.
 
 On normal MCP shutdown or SIGTERM, it finishes only its own created,
 still-agent-owned space, checking live control rather than the handle's creation

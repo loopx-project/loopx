@@ -1,6 +1,8 @@
 /** Criterion selection from authorized current facts; observation grants no authority. */
+import {isDeepStrictEqual} from "node:util";
+import {inspectLocalGoalAcceptance} from "../goals/acceptance_authority.ts";
 import type {JsonObject} from "../effect_program.ts";
-import {requireJsonObject} from "../runtime_decode.ts";
+import {jsonObject, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
@@ -43,7 +45,9 @@ export function progressReviewCriterionBasis(params: JsonObject): JsonObject {
 export function progressReviewEvidenceScope(params: JsonObject): JsonObject {
   const scope = requireJsonObject(params.scope, "progress-review evidence scope");
   const binding = requireJsonObject(scope.criterion_binding, "progress-review criterion binding");
-  const fail = (ok: boolean) => {if (!ok) throw new EffectRuntimeRequestError("invalid bounded progress-review evidence scope");};
+  const fail = (ok: boolean) => {
+    if (!ok) throw new EffectRuntimeRequestError("invalid bounded progress-review evidence scope");
+  };
   fail(scope.coverage === "declared_file_net_change" && Array.isArray(scope.files) && scope.files.length <= 32
     && scope.files.every(ref => typeof ref === "string" && ref.length > 0 && ref.length <= 1024
       && !ref.startsWith("/") && !ref.includes("\\") && !ref.split("/").includes("..")));
@@ -61,8 +65,79 @@ export function progressReviewEvidenceScope(params: JsonObject): JsonObject {
       && binding.criterion_ids.every(id => typeof id === "string" && id.length > 0 && id.length <= 200));
     const run = requireJsonObject(params.run, "criterion-bound run identity");
     fail(params.goal_id === binding.goal_id && run.agent_id === binding.agent_id && run.todo_id === binding.todo_id);
-    for (const key of ["goal_id", "agent_id", "todo_id", "contract_digest", "contract_revision", "todo_semantic_digest", "criterion_ids"])
+    for (const key of ["goal_id", "agent_id", "todo_id", "contract_digest", "contract_revision",
+      "todo_semantic_digest", "criterion_ids"]) {
       normalized[key] = binding[key];
+    }
   }
   return {scope: {criterion_binding: normalized, coverage: scope.coverage, files: scope.files}};
+}
+
+/**
+ * Qualify a batch in the Python loader's newest-first order. Its
+ * progress_review_receipt_order_key is the single ordering owner; the first
+ * qualified receipt is newest, including stable ties. Per-Todo reads are
+ * isolated, not an atomic snapshot.
+ */
+export async function qualifyProgressReviewContext(params: JsonObject): Promise<JsonObject> {
+  const goalId = requireNonEmptyString(params.goal_id, "progress-review goal_id");
+  const root = requireNonEmptyString(params.runtime_root, "progress-review runtime_root");
+  if (!Array.isArray(params.receipts)) {
+    throw new EffectRuntimeRequestError("progress-review receipts must be an array");
+  }
+  if (params.contract_revision !== null && typeof params.contract_revision !== "string") {
+    throw new EffectRuntimeRequestError("progress-review contract_revision must be a string or null");
+  }
+  const currentByTodo = new Map<string, unknown>();
+  const selected: JsonObject[] = [];
+  const selectedIndices: number[] = [];
+  let newest: JsonObject | null = null;
+  let stale = 0;
+  const pinned = params.contract_revision;
+  for (const [index, raw] of params.receipts.entries()) {
+    let receipt = requireJsonObject(raw, "loaded progress-review receipt");
+    const binding = jsonObject(jsonObject(receipt.evidence_scope)?.criterion_binding);
+    if (binding?.origin === "goal_acceptance") {
+      const todoId = requireNonEmptyString(binding.todo_id, "criterion binding todo_id");
+      if (!currentByTodo.has(todoId)) {
+        let requirements: unknown = null;
+        try {
+          const observation = await inspectLocalGoalAcceptance({goal_id: goalId, runtime_root: root, todo_id: todoId,
+            ...(params.goal_instance_id == null ? {} : {
+              goal_ref: {goal_id: goalId, goal_instance_id: params.goal_instance_id},
+            })});
+          requirements = observation.completion_requirements ?? null;
+        } catch {
+          // One unavailable Todo must not suppress other current observations.
+        }
+        currentByTodo.set(todoId, requirements);
+      }
+      let current = false;
+      try {
+        const requirements = currentByTodo.get(todoId);
+        if (requirements !== null) {
+          const selected = progressReviewCriterionBasis({requirements, criterion_ids: binding.criterion_ids,
+            acceptance: [], goal_id: goalId, agent_id: requireJsonObject(receipt.run, "receipt run").agent_id}).binding;
+          current = isDeepStrictEqual(selected, binding);
+        }
+      } catch {
+        // Removed criteria and unavailable bases withdraw both drift signals.
+      }
+      receipt = {...receipt, criterion_current: current};
+      if (!current) {
+        receipt = {...receipt, status: "stale", reason: "criterion_basis_unavailable",
+          drift_signal: {noul: null, choice: null}};
+      }
+    }
+    if (newest === null) newest = receipt;
+    if (!pinned || receipt.contract_revision === pinned) {
+      selected.push(receipt);
+      selectedIndices.push(index);
+      if (receipt.criterion_current === false) stale += 1;
+    } else {
+      stale += 1;
+    }
+  }
+  return {selected, selected_indices: selectedIndices, stale,
+    newest_contract_revision: newest?.contract_revision ?? null};
 }

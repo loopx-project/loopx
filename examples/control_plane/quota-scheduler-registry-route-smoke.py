@@ -17,6 +17,7 @@ AGENT_ID = "codex-scheduler-route-smoke"
 GOAL_ID = "scheduler-route-smoke"
 sys.path.insert(0, str(REPO_ROOT))
 from examples.control_plane.quota_plan_fixtures import write_codex_heartbeat_fixture  # noqa: E402
+from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture  # noqa: E402
 
 
 def write_registry(path: Path, *, project: Path, runtime: Path) -> None:
@@ -90,12 +91,16 @@ def main() -> None:
         global_runtime = root / "shared" / "runtime"
         write_registry(project_registry, project=project, runtime=project_runtime)
         write_registry(global_registry, project=project, runtime=global_runtime)
+        initialize_canonical_source_fixture(global_runtime, GOAL_ID,
+            state_path=project / ".loopx" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md")
 
         decision = run_cli(
             "--registry",
             str(global_registry),
             "quota",
             "should-run",
+            "--context-delivery",
+            "off",
             "--goal-id",
             GOAL_ID,
             "--agent-id",
@@ -107,12 +112,10 @@ def main() -> None:
             "external_write",
             "--codex-app-current-rrule",
             "FREQ=MINUTELY;INTERVAL=3",
-            "--turn-envelope",
-            "--scan-path",
-            str(project),
             cwd=project,
         )
-        ack_cli_args = decision["scheduler"]["codex_app"]["ack_cli_args"]
+        assert decision["schema_version"] == "loopx_turn_envelope_v1", decision
+        ack_cli_args = decision["scheduler_hint"]["app_automation"]["ack_hint"]["cli_args"]
         assert ack_cli_args[:4] == [
             "--registry",
             str(global_registry.resolve()),
@@ -125,7 +128,7 @@ def main() -> None:
         assert "--identity-signature" in ack_cli_args, decision
         assert ack_cli_args[-1] == "--execute", decision
 
-        ack = run_cli(*ack_cli_args, "--scan-path", str(project), cwd=project)
+        ack = run_cli(*ack_cli_args,  cwd=project)
         state_path = Path(ack["scheduler_state_path"])
         assert state_path.resolve().is_relative_to(global_runtime.resolve()), ack
         assert state_path.exists(), ack
@@ -136,16 +139,16 @@ def main() -> None:
             str(global_registry),
             "quota",
             "should-run",
+            "--context-delivery",
+            "off",
             "--goal-id",
             GOAL_ID,
             "--agent-id",
             AGENT_ID,
             "--codex-app",
-            "--scan-path",
-            str(project),
             cwd=project,
         )
-        stateful = follow_up["scheduler_hint"]["codex_app"]["stateful_backoff"]
+        stateful = follow_up["scheduler_hint"]["app_automation"]["stateful_backoff"]
         assert stateful["state_status"] == "same_identity", follow_up
 
     print("quota scheduler registry route smoke passed")

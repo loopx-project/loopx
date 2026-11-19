@@ -77,6 +77,9 @@ export const confirmedOperationsScenario = {
         const confirmInGroup = locale === 'en' ? 'Confirm in Feishu group' : '前往飞书群确认';
         await drawer.getByText(confirmInGroup, {exact: true}).first().waitFor({timeout: 12_000});
         await tile.waitFor({state: 'detached', timeout: 12_000});
+        await page.getByTestId('personal-brief-confirmations').locator(`[data-operation-id="${fixtures.delivered.proposal_id}"]`).waitFor();
+        assert.equal(await page.getByTestId('personal-brief-needs').locator('[data-operation-id]').count(), 0,
+          'Delivered confirmations retain their own unit instead of joining native attention items');
         assert.equal(await drawer.getByRole('button', {name: /Confirm and apply|Reject|确认并应用|拒绝/}).count(), 0);
         // Advance only the presentation clock. Canonical proposal bytes stay
         // unchanged, including across equal-data readback responses.
@@ -86,7 +89,7 @@ export const confirmedOperationsScenario = {
         const expired = locale === 'en' ? 'Confirmation request expired; ask the Agent for a fresh request'
           : '确认请求已过期，请 Agent 重新准备请求';
         await drawer.getByText(expired, {exact: true}).first().waitFor({timeout: 12_000});
-        assert.equal(await page.locator(`[data-testid="personal-brief-needs"] [data-operation-id="${fixtures.delivered.proposal_id}"]`).count(), 0,
+        assert.equal(await page.locator(`.personal-brief [data-operation-id="${fixtures.delivered.proposal_id}"]`).count(), 0,
           'Expired delivered cards must not send the owner to an unusable confirmation');
         assert.equal(await page.getByTestId('personal-brief-operations').count(), 0);
         assert.equal(await drawer.getByRole('button', {name: /Confirm and apply|Reject|确认并应用|拒绝/}).count(), 0);

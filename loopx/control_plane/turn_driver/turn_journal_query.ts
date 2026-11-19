@@ -13,11 +13,13 @@ import {
 } from "../effect_program.ts";
 import { EffectRuntimeConflictError, EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { stripPythonWhitespace } from "../coordination/todo_agents.ts";
+import { turnPlanWorkSource } from "../quota/turn_envelope.ts";
 import {
   parseExactGoalRef,
   type ExactGoalRef,
 } from "../goals/goal_instance_identity.ts";
-import { jsonObject, requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
+import { jsonObject, parseJsonSource, parsedSourceNumberTokens, requireJsonObject, sourceNumberTokens,
+  requireNonEmptyString, type SourceNumbers } from "../runtime_decode.ts";
 import {
   interpretTurnJournal,
   parseTurnJournalGoalBinding,
@@ -73,11 +75,17 @@ function observedCapabilities(envelope: JsonObject): string[] {
   return [...observed];
 }
 
+// A lost Host acknowledgement may retain the wake address before the caller
+// has seen the selected Todo or replan. Its only permitted result is a locator
+// for the original journal. Settlement and capability reads remain fully bound.
+type JournalAddress = Pick<BoundSettlementIdentity, "goal_id" | "agent_id" | "turn_instance_id">;
+
 function evidenceForJournal(
   value: unknown,
   turnKey: string,
-  expected: BoundSettlementIdentity,
+  expected: JournalAddress | BoundSettlementIdentity,
   expectedGoalRef: ExactGoalRef | null,
+  numbers: SourceNumbers,
 ): JournalEvidence | null {
   const journal = jsonObject(value);
   const plan = jsonObject(journal?.plan);
@@ -89,7 +97,9 @@ function evidenceForJournal(
   if (!addresses.some(value => typeof value === "string" && value.trim())) {
     journalConflict("Turn journal history has no recovery address; reconcile it before retrying");
   }
-  if (!addresses.includes(expected.turn_instance_id) && rawIdentity?.effect_id !== expected.effect_id) return null;
+  const settlement = "effect_id" in expected ? expected : null;
+  if (!addresses.includes(expected.turn_instance_id) &&
+      (settlement === null || rawIdentity?.effect_id !== settlement.effect_id)) return null;
   if (journal?.schema_version !== "loopx_turn_journal_v0" || !transaction) {
     journalConflict("Turn journal history has an unsupported snapshot; reconcile it before retrying");
   }
@@ -101,8 +111,9 @@ function evidenceForJournal(
   // effect_id alone is insufficient: legacy delimiter-based identities can
   // have the same rendered id while binding different structured fields.
   if (actual.goal_id !== expected.goal_id || actual.agent_id !== expected.agent_id ||
-      actual.binding_kind !== expected.binding_kind || actual.binding_id !== expected.binding_id ||
-      actual.turn_instance_id !== expected.turn_instance_id || actual.effect_id !== expected.effect_id) return null;
+      actual.turn_instance_id !== expected.turn_instance_id) return null;
+  if (settlement !== null && (actual.binding_kind !== settlement.binding_kind ||
+      actual.binding_id !== settlement.binding_id || actual.effect_id !== settlement.effect_id)) return null;
   const goalBinding = parseTurnJournalGoalBinding(journal);
   if (goalBinding.kind === "invalid") {
     journalConflict(`Turn journal GoalRef binding is invalid: ${goalBinding.violation}`);
@@ -118,6 +129,7 @@ function evidenceForJournal(
   const inspection = interpretTurnJournal({
     schema_version: "loopx_turn_journal_interpretation_request_v0",
     journal, goal_id: expected.goal_id, agent_id: expected.agent_id, turn_key: turnKey,
+    source_number_tokens: parsedSourceNumberTokens(journal, numbers),
   });
   if (!inspection.journal_consistent) {
     journalConflict(`Turn journal history is inconsistent: ${inspection.violations.join(", ")}`);
@@ -125,13 +137,15 @@ function evidenceForJournal(
   return {
     turn_key: turnKey,
     observed_capabilities: inspection.replay_legal
-      ? observedCapabilities(jsonObject(plan?.turn_envelope) ?? {}) : null,
+      ? observedCapabilities(turnPlanWorkSource(plan ?? {}, sourceNumberTokens(journal,
+        parsedSourceNumberTokens(journal, numbers)).filter(({path}) => path[0] === "plan" && path[1] === "work_contract")
+        .map(({path, token}) => [path.slice(2), token])).work) : null,
   };
 }
 
-async function querySettlementJournal(
+async function queryTurnJournal(
   runtimeRootValue: unknown,
-  identity: BoundSettlementIdentity,
+  identity: JournalAddress | BoundSettlementIdentity,
   goalRef: ExactGoalRef | null,
 ): Promise<JournalEvidence | null> {
   const runtimeRoot = requireNonEmptyString(runtimeRootValue, "runtime_root");
@@ -153,7 +167,7 @@ async function querySettlementJournal(
   for (const entry of entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
     if (!/^[a-f0-9]{64}\.json$/u.test(entry.name)) continue;
     if (!entry.isFile()) journalConflict("Turn journal history contains a non-regular snapshot; reconcile it before retrying");
-    let value: unknown;
+    let parsed: ReturnType<typeof parseJsonSource>;
     // Journals are atomic-replace files. Read one complete version without
     // creating reader lock files; do not follow a replaced symlink. This is
     // not a snapshot of the directory or proof of provider-side absence.
@@ -161,7 +175,7 @@ async function querySettlementJournal(
     try {
       if (!(await handle.stat()).isFile()) journalConflict("Turn journal snapshot is not a regular file");
       try {
-        value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await handle.readFile()));
+        parsed = parseJsonSource(new TextDecoder("utf-8", { fatal: true }).decode(await handle.readFile()));
       } catch (error) {
         if (error instanceof SyntaxError || error instanceof TypeError) journalConflict("Turn journal history is unreadable; reconcile it before retrying");
         throw error;
@@ -170,10 +184,11 @@ async function querySettlementJournal(
       await handle.close();
     }
     const evidence = evidenceForJournal(
-      value,
+      parsed.value,
       `sha256:${entry.name.slice(0, -5)}`,
       identity,
       goalRef,
+      parsed.numbers,
     );
     if (evidence === null) continue;
     if (matched !== null) journalConflict("LoopX Turn settlement identity matched multiple journals");
@@ -186,10 +201,21 @@ export async function findTurnJournalBySettlement(params: JsonObject): Promise<{
   const identity = decodeIdentity(settlementIdentityPayload({
     goal_id: requireNonEmptyString(params.goal_id, "goal_id"),
     agent_id: requireNonEmptyString(params.agent_id, "agent_id"),
-    todo_id: requireNonEmptyString(params.todo_id, "todo_id"),
+    todo_id: params.todo_id == null ? null : requireNonEmptyString(params.todo_id, "todo_id"),
+    request_subject: params.request_subject as import("../effect_program.ts").ExecutionRequestSubject | undefined,
     turn_instance_id: requireNonEmptyString(params.turn_instance_id, "turn_instance_id"),
   }));
-  const evidence = await querySettlementJournal(params.runtime_root, identity, null);
+  const evidence = await queryTurnJournal(params.runtime_root, identity, null);
+  return { turn_key: evidence?.turn_key ?? null };
+}
+
+export async function findTurnJournalByInstance(params: JsonObject): Promise<{ turn_key: string | null }> {
+  const address = {
+    goal_id: requireNonEmptyString(params.goal_id, "goal_id"),
+    agent_id: requireNonEmptyString(params.agent_id, "agent_id"),
+    turn_instance_id: requireNonEmptyString(params.turn_instance_id, "turn_instance_id"),
+  };
+  const evidence = await queryTurnJournal(params.runtime_root, address, null);
   return { turn_key: evidence?.turn_key ?? null };
 }
 
@@ -203,7 +229,7 @@ export async function readTurnJournalCapabilities(params: JsonObject): Promise<{
       "Turn journal query GoalRef conflicts with its settlement identity",
     );
   }
-  const evidence = await querySettlementJournal(
+  const evidence = await queryTurnJournal(
     params.runtime_root,
     identity,
     goalRef,

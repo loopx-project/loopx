@@ -75,6 +75,36 @@ test("deferred dependency work retains the original Turn's blocked closeout proo
     todos: [request.todos[0], {...request.todos[1], status: "done"}]}), /registered pending/);
 });
 
+test("a blocked prerequisite keeps an exact no-spend wait without clearing its blocker", () => {
+  const request = fixture("todo_done");
+  request.todos[1].status = "blocked";
+  assert.ok(request.todos[0].resume_condition);
+  request.todos[0].resume_condition.target_status = "blocked";
+  const before = structuredClone(request);
+  const wait = prepareBlockedWait(request);
+  assert.equal(isBoundedBlockedRetry(wait, "todo_waiting"), true);
+  assert.equal(isBoundedBlockedRetry(wait, "todo_other"), false);
+  assert.deepEqual(request, before);
+});
+
+
+test("corrupt calendars and offset-less clocks are not bounded retries", () => {
+  const retry = (observed: string, due: string) => ({
+    schema_version: "quota_blocked_retry_v0", source: "turn_settlement",
+    todo_id: "todo_waiting", observed_at: observed, due_at: due,
+    resume_when: `resume_at:${due}`,
+  });
+  assert.equal(isBoundedBlockedRetry(retry("2026-01-01T00:00:00Z", "2026-01-01T00:05:00Z"), "todo_waiting"), true);
+  assert.equal(isBoundedBlockedRetry(retry("2026-01-01T08:00:00+08:00", "2026-01-01T08:05:00+08:00"), "todo_waiting"), true);
+  for (const [observed, due] of [
+    ["2026-02-30T00:00:00Z", "2026-02-30T00:05:00Z"],
+    ["2026-01-01T00:00:00", "2026-01-01T00:05:00"],
+    ["2026-01-01T23:50:00Z", "2026-01-01T24:00:00Z"],
+    ["2026-01-01T00:00:00+0000", "2026-01-01T00:05:00+0000"],
+  ] as const) {
+    assert.equal(isBoundedBlockedRetry(retry(observed, due), "todo_waiting"), false, due);
+  }
+});
 
 test("a PR wait gives a causal recovery route without accepting caller-authored PR evidence", () => {
   const request = fixture("todo_done");
@@ -99,7 +129,7 @@ test("an unpolled blocked Monitor offers lifecycle repair without execution auth
   assert.equal(obligation.must_attempt_work, true);
   assert.deepEqual(request, before);
   for (const patch of [{claimed_by: "agent-b"}, {archive_state: "archived"},
-    {role: "user"}, {status: "open"}, {status: "done"}, {task_class: "advancement_task"}]) {
+    {role: "user"}, {status: "open"}, {status: "done"}]) {
     assert.equal(projectReceiptBoundWait({...request, todos: [{...todo, ...patch}]}).status, "none");
   }
   for (const monitor_phase of [undefined, "settled", "settlement_pending", "invalid"]) {
@@ -108,4 +138,39 @@ test("an unpolled blocked Monitor offers lifecycle repair without execution auth
   assert.equal(projectReceiptBoundWait({...request, todos: []}).status, "none");
   assert.equal(projectReceiptBoundWait({...request, todos: [todo, todo]}).status, "none");
   assert.throws(() => projectReceiptBoundWait({...request, turn_instance_id: null}), /bound Turn/);
+});
+
+test("a blocked advancement lifecycle closes its attempt without creating a retry", () => {
+  const todo = {todo_id: "todo_blocked", role: "agent", task_class: "advancement_task",
+    status: "blocked", done: false, archive_state: "active", claimed_by: "agent-a"};
+  const request = {schema_version: BLOCKED_WAIT_REQUEST_SCHEMA, todo_id: todo.todo_id,
+    observed_at: "2026-01-01T00:00:00Z", todos: [todo], allow_turn_settlement_retry: true};
+  const before = structuredClone(request);
+  const wait = prepareBlockedWait(request);
+  assert.equal(wait.schema_version, "quota_blocked_lifecycle_v0");
+  assert.equal(isBoundedBlockedRetry(wait, todo.todo_id), true);
+  assert.equal(isBoundedBlockedRetry(wait, "todo_other"), false);
+  assert.equal("resume_when" in wait, false);
+  assert.equal("due_at" in wait, false);
+  assert.deepEqual(request, before);
+  for (const patch of [{role: "user"}, {task_class: "continuous_monitor"},
+    {archive_state: "archived"}, {done: true}, {done: "false"}, {done: 0}]) {
+    assert.throws(() => prepareBlockedWait({...request, todos: [{...todo, ...patch}]}), /active blocked advancement/);
+    assert.equal(isBoundedBlockedRetry({...wait, blocked_todo: {...todo, ...patch}}, todo.todo_id), false);
+  }
+  for (const patch of [{due_at: "2026-01-01T00:05:00Z"},
+    {resume_when: "resume_at:2026-01-01T00:05:00Z"}, {observed_at: "unknown"},
+    {source: "turn_settlement"}]) {
+    assert.equal(isBoundedBlockedRetry({...wait, ...patch}, todo.todo_id), false);
+  }
+  for (const status of ["open", "deferred", "done"]) {
+    assert.equal(isBoundedBlockedRetry({...wait, blocked_todo: {...todo, status}}, todo.todo_id), false);
+  }
+  assert.throws(() => prepareBlockedWait({...request, todos: [todo, todo]}), /same unfinished/);
+  const recovery = projectReceiptBoundWait({...request, schema_version: RECEIPT_BOUND_WAIT_REQUEST_SCHEMA,
+    agent_id: "agent-a", turn_instance_id: "blocked-turn"});
+  assert.equal((recovery.recovery as Record<string, unknown>).repair, "blocked_writeback");
+  assert.equal((recovery.obligation as Record<string, unknown>).delivery_allowed, false);
+  assert.equal(projectReceiptBoundWait({...request, schema_version: RECEIPT_BOUND_WAIT_REQUEST_SCHEMA,
+    agent_id: "agent-b", turn_instance_id: "blocked-turn"}).status, "none");
 });

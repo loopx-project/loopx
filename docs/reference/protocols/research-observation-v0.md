@@ -108,6 +108,25 @@ input fingerprints cannot close the gap. Updating an input node through
 `explore node` invalidates its current observation until fresh evidence is
 recorded. Historical explicit claims remain visible as ineligible candidates.
 
+Current input eligibility follows the complete declared observation lineage.
+For `A+B -> AB` and `AB+C -> ABC`, reopening A or changing its observation
+also makes AB ineligible as a current input to ABC, even if the stored AB
+fingerprint is unchanged. Each composition link must still match its current
+binary dependencies and exact input fingerprints. Missing inputs or circular
+lineage cannot supply current coverage. Ordinary relations, parent grouping,
+tags and unrelated research branches do not imply evidence dependencies;
+coverage-backed negative results remain eligible.
+
+This is a current-use check, not a verdict that the scientific conclusion is
+false. It does not delete observations, reopen completed Todos or rewrite
+historical completion receipts. New execution attribution, completion and
+writeback use the same derived eligibility; historical replay remains read-only.
+Revalidation records fresh attributable observations through the existing
+writers. Rechecking a supported result can reuse its data; the projection does
+not schedule blanket re-execution. Existing whole-observation fingerprints
+remain exact: changes to a composition candidate also change that observation's
+fingerprint, and no semantic-equivalence exemption is inferred.
+
 Exact observation replay returns `replayed=true`, `written=false`, even if
 inputs have since changed. It neither rebinds evidence nor appends a revision.
 New writes validate attribution and append under the existing log lock. Both

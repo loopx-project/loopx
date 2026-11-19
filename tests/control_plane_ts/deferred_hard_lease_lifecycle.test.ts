@@ -130,6 +130,25 @@ for (const provider of ["file", "sqlite"] as const) {
     }
   });
 
+  providerTest(`${provider}: wait-edit recovery cannot bypass an active holder`, async () => {
+    for (const holder of AGENTS) {
+      const store = await seeded(provider, {}, {...oldLease("active", "2026-09-06T00:00:00Z"), owner: holder});
+      const before = await read(store);
+      const input = {...resume("revise-suspended-wait"), planning_intent: {status: "deferred",
+        resume_when: "resume_at:2026-09-06T01:00:00Z", reason: "Reviewed next observation"}};
+      for (const dry_run of [true, false]) {
+        const rejected = await executeCoordinationTodoUpdate(store, {...input, dry_run});
+        assert.equal(rejected.status, "failed", JSON.stringify(rejected));
+        const recovery = rejected.recovery as JsonObject;
+        assert.equal(recovery.execution_authority_granted, false);
+        assert.equal(recovery.retry, undefined, "active execution cannot authorize administrative resume");
+        assert.equal(recovery.acquire, undefined);
+        if (holder !== OWNER) assert.equal(recovery.action, "reconcile_lease_owner");
+        assert.deepEqual(await read(store), before);
+      }
+    }
+  });
+
   providerTest(`${provider}: an unclaimed deferred Todo stays unclaimed; excluded actors cannot reopen it`, async () => {
     const unclaimed = await seeded(provider, {claimed_by: null});
     const applied = await executeCoordinationTodoUpdate(unclaimed, resume("unclaimed-resume"));

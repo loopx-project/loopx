@@ -19,6 +19,18 @@ slot accounting) but what it spent. This closes the gap left open in
 `docs/quota-allocation.md`, which notes that later versions may "replace slots
 with real runtime, token spend, or cost."
 
+## Current implementation checkpoint
+
+The Codex capture adapter and typed run usage are shipped; the problem and
+smallest-slice sections below retain the original proposal basis. The existing
+booking module now streams its complete retained run index when reconstructing
+the session baseline. This removes whole-index text buffers without adding an
+public interface, cache, ledger or decision owner. The [usage contract](../../status-data-contract.md#usage-summary)
+retains replay, duplicate suppression, corruption refusal and unknown metrics.
+Buffering scales with the largest record; selected-session row identities still
+grow with that session's retained history. Lifetime and runtime coverage remain
+open questions, not inferred totals.
+
 ## Problem
 
 `usage_summary` is explicitly a run-history proxy that excludes token counts.

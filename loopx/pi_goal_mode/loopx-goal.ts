@@ -41,6 +41,7 @@ import {
   createEphemeralSessionIdentity,
   createGoalLoop,
   hasAbortedAssistantMessage,
+  piThreadId,
   sessionKey,
 } from "./pi-goal-loop-runtime.mjs";
 
@@ -220,7 +221,18 @@ async function runLoopxTaskLeaseCli(
 
 async function probeLoopxQuota(binding: Record<string, unknown>): Promise<Record<string, unknown>> {
   const args = buildQuotaArgs(binding);
-  const stdout = await runLoopxCli(args, String(binding.directory || ""));
+  let stdout: string;
+  try {
+    stdout = await runLoopxCli(args, String(binding.directory || ""));
+  } catch (error) {
+    // A denied/gated decision exits non-zero while still carrying the authoritative
+    // JSON decision payload on stdout; only rethrow when stdout lacks a JSON object.
+    const failure = error as { stdout?: unknown };
+    const candidate = typeof failure?.stdout === "string" ? failure.stdout.trim() : "";
+    const parsed = candidate ? parseJsonObject(candidate) : null;
+    if (!parsed) throw error;
+    return parsed as Record<string, unknown>;
+  }
   const decision: unknown = JSON.parse(stdout || "{}");
   if (!decision || typeof decision !== "object" || Array.isArray(decision)) {
     throw new Error("loopx quota should-run returned a non-object payload");
@@ -311,20 +323,15 @@ export default function (pi: ExtensionAPI) {
     return candidate;
   };
 
-  const inspectLoopx = async (key: string, ctx: ExtensionContext) => {
+  const inspectLoopx = async (ctx: ExtensionContext) => {
     try {
       const stdout = await runLoopxCli(
         ["--format", "json", "bootstrap-command-pack", "--project", "."],
         ctx.cwd,
       );
       const packet = parseJsonObject(stdout);
-      if (packet) {
-        try {
-          establishSessionAuthority(key, packet);
-        } catch {
-          // A status-only packet may intentionally stop before host activation.
-        }
-      }
+      // Preview packets must not mint or lock session authority. Only explicit
+      // Pi startup verifies the identity and capabilities used for activation.
       const display = typeof packet?.message === "string" ? packet.message : stdout;
       // The packet preview is a long multi-section document. A widget is a
       // fixed-height area near the editor, so dumping the preview into it gets
@@ -352,6 +359,7 @@ export default function (pi: ExtensionAPI) {
     // floating while the guided start packet renders its own summary.
     ctx.ui.setWidget("loopx", undefined);
     try {
+      const threadId = piThreadId(ctx.sessionManager.getSessionFile());
       const stdout = await runLoopxCli(
         [
           "--format",
@@ -364,6 +372,7 @@ export default function (pi: ExtensionAPI) {
           trimmed,
           "--host-surface",
           "pi",
+          ...(threadId ? ["--thread-id", threadId] : []),
           "--available-capability",
           TASK_LEASE_CAPABILITY,
         ],
@@ -425,7 +434,7 @@ export default function (pi: ExtensionAPI) {
           await loop.resume(key);
           return;
         }
-        await inspectLoopx(key, ctx);
+        await inspectLoopx(ctx);
         return;
       }
       await startLoopx(trimmed, key, store, ctx);
@@ -616,14 +625,30 @@ export default function (pi: ExtensionAPI) {
     await loop.interrupt(key);
   });
 
-  // Every prompt that is not this loop's own injected task body is the owner
-  // taking the wheel and pauses the loop; the pause itself carries the reason.
+  // Queued steer/followUp input does not start a new run. Observe its explicit
+  // host source here, even when its text equals our task body or is image-only.
+  // Return continue so Pi still processes the owner's message normally.
+  pi.on("input", async (event, ctx) => {
+    if (event.source === "interactive" || event.source === "rpc") {
+      const { key } = bindContext(ctx);
+      await loop.ownerInput(key);
+    }
+    return { action: "continue" };
+  });
+
+  // Starts without observed external input retain the conservative fallback.
+  // "extension" is not proof that a message came from this LoopX instance.
   // Pi compacts before it emits before_agent_start for a submitted prompt, so a
   // preceding compaction says nothing about who submitted that prompt and is not
   // used to exempt one.
   pi.on("before_agent_start", async (event, ctx) => {
     const { key } = bindContext(ctx);
-    await loop.userPrompt(key, String(event.prompt || ""));
+    if (event.messageType === "custom") {
+      // LoopX only injects user messages; a custom start has no prompt string.
+      await loop.ownerInput(key);
+    } else {
+      await loop.userPrompt(key, String(event.prompt || ""));
+    }
   });
 
   // Session shutdown / session replacement: atomically dispose the whole

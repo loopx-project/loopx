@@ -36,7 +36,7 @@ def test_empty_canonical_ownership_never_revives_display_claim_or_local_lease(tm
 def test_explicit_empty_observation_is_not_unspecified():
     observed = build_goal_channel_projection(goal_id=GOAL_ID, status_item=_status_item(claimed_by='stale-agent'), active_leases=[])
     assert observed['active_leases'] == []
-    assert observed['coordination_authority']['state'] == 'promotion_required'
+    assert observed['coordination_authority']['state'] == 'unavailable'
     assert observed['mode'] == 'read_only'
     assert observed['truth_contract']['write_authority'] == 'none'
 
@@ -130,8 +130,15 @@ def test_real_cli_reports_native_lease_and_recovers_provider_without_legacy_fall
     def channel():
         status = cli('status', '--goal-id', GOAL_ID)
         items = status['attention_queue']['items']
-        item = next(row for row in items if row['goal_id'] == GOAL_ID)
-        return item['goal_channel_projection']
+        channels = [row['goal_channel_projection'] for row in items
+                    if row['goal_id'] == GOAL_ID and 'goal_channel_projection' in row]
+        assert len(channels) == 1, items
+        if not state.exists():
+            # The missing Goal document blocks execution independently of the
+            # canonical ownership read model, which remains inspectable.
+            assert any(row['goal_id'] == GOAL_ID and row['status'] == 'state_file_missing'
+                       for row in items)
+        return channels[0]
 
     def assert_current(view):
         assert view['coordination_observation']['source_authority'] == provider + '_v0'

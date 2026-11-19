@@ -1,17 +1,68 @@
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any, NamedTuple
 
+from ..effect_runtime import effect_runtime_result
+from ..goals.goal_ref_validation import exact_goal_ref
 from ..runtime.time import parse_timestamp
 from .progress_observation import FRESH_VISION_PATH_DISPOSITIONS
 
 AUTONOMOUS_REPLAN_ACK_MATERIAL_RUN_WINDOW = 20
+AUTONOMOUS_REPLAN_ACK_RECOVERY_CANDIDATE_LIMIT = 8
 # A normal delivery appends both a durable run record and a neutral quota-spend
 # record. Keep enough internal history to observe the full material-run
 # threshold even when those records are interleaved, with headroom for other
 # neutral events. The budget is per agent lane: a Goal-wide window that peer
 # lanes also fill cannot decide one lane's material-run count.
 AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK = AUTONOMOUS_REPLAN_ACK_MATERIAL_RUN_WINDOW * 3
+
+
+class SettlementHistoryQualification(NamedTuple):
+    accepted_blocked_replans: frozenset[int]
+    active_turn_retries: frozenset[int]
+
+
+def qualify_settlement_history(
+    runs: list[dict[str, Any]], *, observed_at: str | None = None,
+) -> SettlementHistoryQualification:
+    """Transport a history batch to its settlement owner, preserving originals.
+
+    Candidate selection is an IO optimization, never positive qualification.
+    The TS result selects existing rows; it cannot acknowledge or settle work.
+    Missing legacy evidence remains an ordinary outcome checkpoint.
+    """
+    candidates = [index for index, run in enumerate(runs)
+                  if run.get("replan_obligation_id")
+                  or (observed_at is not None and "blocked_retry" in run)]
+    if not candidates:
+        return SettlementHistoryQualification(frozenset(), frozenset())
+    fields = (
+        "goal_id", "agent_id", "todo_id", "turn_instance_id", "replan_obligation_id",
+        "settlement_identity", "delivery_outcome", "progress_observation",
+        "autonomous_replan_ack", "vision_checkpoint", "blocked_retry",
+    )
+    result = effect_runtime_result("quota.settlement.read", {
+        "schema_version": "loopx_quota_history_qualification_request_v0",
+        "observed_at": observed_at,
+        "runs": [{key: runs[index][key] for key in fields if key in runs[index]}
+                 for index in candidates],
+    }, large_local_snapshot=True)
+    def indexes(field: str) -> frozenset[int]:
+        values = result.get(field) if isinstance(result, dict) else None
+        if not isinstance(values, list) or any(
+            type(index) is not int or not 0 <= index < len(candidates) for index in values
+        ):
+            raise RuntimeError("TypeScript settlement history result must contain valid indexes")
+        return frozenset(candidates[index] for index in values)
+
+    return SettlementHistoryQualification(indexes("accepted_indexes"), indexes("active_retry_indexes"))
+
+
+def accepted_blocked_replan_history_indexes(runs: list[dict[str, Any]]) -> frozenset[int]:
+    """Legacy outcome reader needs administrative qualification, not a clock."""
+    return qualify_settlement_history(runs).accepted_blocked_replans
 
 
 def ack_binds_trigger_checkpoints(ack: dict[str, Any] | None) -> bool:
@@ -145,16 +196,425 @@ def compact_autonomous_replan_ack(run: dict[str, Any] | None) -> dict[str, Any] 
                 if isinstance(item, dict)
             ][:6],
         }
+    goal_id = str(run.get("goal_id") or "").strip()
+    if goal_id:
+        result["goal_id"] = goal_id
     agent_id = str(run.get("agent_id") or "").strip()
     if agent_id:
         result["agent_id"] = agent_id
+    turn_instance_id = str(run.get("turn_instance_id") or "").strip()
+    if turn_instance_id:
+        result["turn_instance_id"] = turn_instance_id
     frontier_identity = str(ack.get("frontier_identity") or "").strip()
     if frontier_identity:
         result["frontier_identity"] = frontier_identity
     generated_at = str(run.get("generated_at") or "").strip()
     if generated_at:
         result["generated_at"] = generated_at
+    todo_source = run.get("todo_source", normalized_ack.get("todo_source"))
+    if isinstance(todo_source, dict):
+        # Transport the original provider anchor, never a current-head alias.
+        # The canonical source reader validates it before legacy ACK recovery.
+        result["todo_source"] = dict(todo_source)
     return result
+
+
+def autonomous_replan_ack_candidates_for_obligation(
+    newest_first_runs: list[dict[str, Any]] | None,
+    *,
+    goal_id: str | None,
+    agent_id: str | None,
+    obligation_id: str | None,
+    limit: int = AUTONOMOUS_REPLAN_ACK_RECOVERY_CANDIDATE_LIMIT,
+) -> list[dict[str, Any]]:
+    """Project a bounded set of exact durable ACK candidates for recovery.
+
+    This lookup prevents a newer unrelated ACK from hiding an older ACK for a
+    receipt-bound obligation.  It only narrows journal IO by stable identity;
+    the TypeScript settlement owner still validates schema, outcomes,
+    chronology, and the distinct durable Turn before accepting any candidate.
+    """
+
+    safe_goal_id = str(goal_id or "").strip()
+    safe_agent_id = str(agent_id or "").strip()
+    safe_obligation_id = str(obligation_id or "").strip()
+    if not safe_goal_id or not safe_agent_id or not safe_obligation_id or limit <= 0:
+        return []
+    candidates: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for run in newest_first_runs or []:
+        compact = compact_autonomous_replan_ack(run)
+        if not isinstance(compact, dict):
+            continue
+        semantic_delta = compact.get("semantic_delta")
+        if not isinstance(semantic_delta, dict):
+            continue
+        if (
+            compact.get("goal_id") != safe_goal_id
+            or compact.get("agent_id") != safe_agent_id
+            or semantic_delta.get("obligation_id") != safe_obligation_id
+        ):
+            continue
+        identity = (
+            str(compact.get("turn_instance_id") or "").strip(),
+            str(compact.get("generated_at") or "").strip(),
+            safe_obligation_id,
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        candidates.append(compact)
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+def _event_details(event: dict[str, Any]) -> dict[str, Any]:
+    details = event.get("details")
+    return details if isinstance(details, dict) else {}
+
+
+def _parsed_exact_goal_ref(value: object) -> dict[str, str] | None:
+    """Parse one exact GoalRef, keeping the native string-only rule."""
+    if not isinstance(value, Mapping):
+        return None
+    goal_id = value.get("goal_id")
+    instance_id = value.get("goal_instance_id")
+    if not isinstance(goal_id, str) or not isinstance(instance_id, str):
+        return None
+    try:
+        return exact_goal_ref(goal_id, instance_id)
+    except ValueError:
+        return None
+
+
+def _owner_goal_ref(
+    goal_ref: Mapping[str, Any] | None, *, goal_id: str,
+) -> dict[str, str] | None:
+    """Normalize the quota owner. None is the alias owner."""
+    if goal_ref is None:
+        return None
+    owner = _parsed_exact_goal_ref(goal_ref)
+    if owner is None or owner["goal_id"] != str(goal_id or "").strip():
+        raise ValueError("historical ACK GoalRef does not match goal_id")
+    return owner
+
+
+def _record_owned_by_goal_ref(
+    record: Mapping[str, Any], owner: dict[str, str] | None,
+) -> bool:
+    """Match quotaOwnerOwnsProjection for one rollout or run-index row.
+
+    An alias owner keeps only rows with no goal_ref. An exact owner keeps
+    only rows whose goal_ref is that exact Goal instance. Non-string ids are
+    not owned, matching the strict GoalRef parser.
+    """
+    if owner is None:
+        return "goal_ref" not in record
+    if "goal_ref" not in record:
+        return False
+    parsed = _parsed_exact_goal_ref(record.get("goal_ref"))
+    return parsed == owner
+
+
+def drop_unowned_recorded_replan_acks(
+    runs: list[dict[str, Any]] | None, *, goal_id: str,
+    goal_ref: Mapping[str, Any] | None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Drop recorded replan ACKs that belong to another Goal instance.
+
+    Other run rows stay. Alias owners keep ACKs with no goal_ref; an exact
+    owner keeps only its own goal_ref.
+    """
+    owner = _owner_goal_ref(goal_ref, goal_id=goal_id)
+    kept: list[dict[str, Any]] = []
+    changed = False
+    for run in runs or []:
+        if not isinstance(run, dict):
+            continue
+        ack = run.get("autonomous_replan_ack")
+        if (
+            isinstance(ack, dict)
+            and ack.get("recorded") is True
+            and not _record_owned_by_goal_ref(run, owner)
+        ):
+            changed = True
+            continue
+        kept.append(run)
+    return kept, changed
+
+
+def _owned_records(
+    records: list[dict[str, Any]] | None, owner: dict[str, str] | None,
+) -> list[dict[str, Any]]:
+    return [
+        record for record in records or []
+        if isinstance(record, dict) and _record_owned_by_goal_ref(record, owner)
+    ]
+
+
+def _admission_event_index(
+    events: list[dict[str, Any]], *, goal_id: str, agent_id: str,
+    turn_instance_id: str, recorded_at: str,
+    owner_goal_ref: dict[str, str] | None,
+    event_id: str | None = None,
+) -> int | None:
+    """Log position of the Turn's original bound admission.
+
+    The settlement readback names that event after GoalRef filtering. Matching
+    the id keeps a retired Goal instance that reused this Turn id out of the
+    order. Callers without an id use the first row with the admission time.
+    """
+
+    if not turn_instance_id:
+        return None
+    if event_id:
+        for index, event in enumerate(events):
+            if not _record_owned_by_goal_ref(event, owner_goal_ref):
+                continue
+            if (
+                event.get("event_id") == event_id
+                and event.get("event_kind") == "quota_should_run"
+                and event.get("goal_id") == goal_id
+                and event.get("agent_id") == agent_id
+                and event.get("run_id") == turn_instance_id
+            ):
+                return index
+        return None
+    if not recorded_at:
+        return None
+    for index, event in enumerate(events):
+        if not _record_owned_by_goal_ref(event, owner_goal_ref):
+            continue
+        if (
+            event.get("event_kind") == "quota_should_run"
+            and event.get("goal_id") == goal_id
+            and event.get("agent_id") == agent_id
+            and event.get("run_id") == turn_instance_id
+            and event.get("recorded_at") == recorded_at
+        ):
+            return index
+    return None
+
+
+def _binding_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _source_run(
+    runs: list[dict[str, Any]] | None, *, turn_instance_id: str, obligation_id: str,
+    owner_goal_ref: dict[str, str] | None,
+) -> dict[str, Any]:
+    for run in runs or []:
+        if not _record_owned_by_goal_ref(run, owner_goal_ref):
+            continue
+        if _binding_text(run.get("turn_instance_id")) != turn_instance_id:
+            continue
+        ack = run.get("autonomous_replan_ack")
+        delta = ack.get("semantic_delta") if isinstance(ack, dict) else None
+        if isinstance(delta, dict) and _binding_text(delta.get("obligation_id")) == obligation_id:
+            return run
+    return {}
+
+
+def _expected_todo_receipt(
+    run: dict[str, Any], events: list[dict[str, Any]], *,
+    goal_id: str, agent_id: str, turn_instance_id: str, obligation_id: str,
+    owner_goal_ref: dict[str, str] | None,
+) -> tuple[str, str]:
+    """Todo command identity for this ACK, filled from its heartbeat receipt.
+
+    A historical index can omit the Todo and effect. The turn's existing
+    quota receipt still has that exact identity.  A replan-bound receipt keeps
+    the admitted Todo as its pending action selection; that retained selection
+    may address the writeback without replacing the receipt's obligation.
+    An empty or differently bound side is not a match.
+    """
+
+    identity = run.get("settlement_identity")
+    identity = identity if isinstance(identity, dict) else {}
+    todo = _binding_text(run.get("todo_id") or identity.get("todo_id"))
+    effect = _binding_text(identity.get("effect_id"))
+    if todo and effect:
+        return todo, effect
+    for event in events:
+        if not _record_owned_by_goal_ref(event, owner_goal_ref):
+            continue
+        if (
+            event.get("event_kind") != "quota_should_run"
+            or event.get("goal_id") != goal_id
+            or event.get("agent_id") != agent_id
+            or _binding_text(event.get("run_id")) != turn_instance_id
+        ):
+            continue
+        details = _event_details(event)
+        receipt_replan = _binding_text(details.get("replan_obligation_id"))
+        retained_todo = (
+            _binding_text(details.get("pending_action_selection_todo_id"))
+            if receipt_replan == obligation_id
+            else ""
+        )
+        todo = todo or _binding_text(
+            event.get("todo_id") or details.get("todo_id") or retained_todo
+        )
+        effect = effect or _binding_text(details.get("settlement_effect_id"))
+    return todo, effect
+
+
+def _writeback_event_is_bound(
+    event: dict[str, Any], run: dict[str, Any], events: list[dict[str, Any]], *,
+    goal_id: str, agent_id: str, obligation_id: str, turn_instance_id: str,
+    owner_goal_ref: dict[str, str] | None,
+) -> bool:
+    """Require one positive identity shared with the accepted ACK.
+
+    The event obligation must equal the semantic delta, or its Todo and effect
+    must equal the ACK receipt. Missing fields do not count as agreement.
+    """
+
+    if not _record_owned_by_goal_ref(event, owner_goal_ref):
+        return False
+    if (
+        event.get("event_kind") != "refresh_state"
+        or event.get("goal_id") != goal_id
+        or event.get("agent_id") != agent_id
+        or _binding_text(event.get("run_id")) != turn_instance_id
+    ):
+        return False
+    details = _event_details(event)
+    if details.get("autonomous_replan_recorded") is not True:
+        return False
+    event_obligation = _binding_text(details.get("replan_obligation_id"))
+    if event_obligation:
+        return event_obligation == obligation_id
+    event_todo = _binding_text(event.get("todo_id"))
+    event_effect = _binding_text(details.get("settlement_effect_id"))
+    if not event_todo or not event_effect:
+        return False
+    expected_todo, expected_effect = _expected_todo_receipt(
+        run, events, goal_id=goal_id, agent_id=agent_id,
+        turn_instance_id=turn_instance_id, obligation_id=obligation_id,
+        owner_goal_ref=owner_goal_ref)
+    return bool(
+        expected_todo and expected_effect
+        and event_todo == expected_todo and event_effect == expected_effect
+    )
+
+
+def _original_writeback_event_index(
+    events: list[dict[str, Any]], runs: list[dict[str, Any]] | None, *,
+    goal_id: str, agent_id: str, obligation_id: str, turn_instance_id: str,
+    owner_goal_ref: dict[str, str] | None,
+) -> int | None:
+    if not turn_instance_id or not obligation_id:
+        return None
+    run = _source_run(
+        runs, turn_instance_id=turn_instance_id, obligation_id=obligation_id,
+        owner_goal_ref=owner_goal_ref)
+    for index, event in enumerate(events):
+        if _writeback_event_is_bound(
+            event, run, events, goal_id=goal_id, agent_id=agent_id,
+            obligation_id=obligation_id, turn_instance_id=turn_instance_id,
+            owner_goal_ref=owner_goal_ref,
+        ):
+            return index
+    return None
+
+
+def attach_historical_ack_writeback_order(
+    candidates: list[dict[str, Any]], events: list[dict[str, Any]], *,
+    goal_id: str, agent_id: str, obligation_id: str,
+    guard_recorded_at: str | None, guard_turn_instance_id: str | None,
+    runs: list[dict[str, Any]] | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
+    admission_event_id: str | None = None,
+) -> None:
+    """Copy the original refresh event order onto matching ACK candidates.
+
+    The compact run clock is whole seconds. The decision owner compares this
+    event with admission; this reader only selects the bound original event.
+    """
+
+    owner = _owner_goal_ref(goal_ref, goal_id=goal_id)
+    owned_events = _owned_records(events, owner)
+    owned_runs = _owned_records(runs, owner)
+    admission_index = _admission_event_index(
+        owned_events, goal_id=goal_id, agent_id=agent_id,
+        turn_instance_id=str(guard_turn_instance_id or "").strip(),
+        recorded_at=str(guard_recorded_at or "").strip(),
+        event_id=str(admission_event_id or "").strip() or None,
+        owner_goal_ref=owner,
+    )
+    for candidate in candidates:
+        turn_instance_id = _binding_text(candidate.get("turn_instance_id"))
+        evidence_index = _original_writeback_event_index(
+            owned_events, owned_runs, goal_id=goal_id, agent_id=agent_id,
+            obligation_id=obligation_id, turn_instance_id=turn_instance_id,
+            owner_goal_ref=owner,
+        )
+        if evidence_index is None:
+            continue
+        event = owned_events[evidence_index]
+        candidate["writeback_recorded_at"] = event.get("recorded_at")
+        candidate["writeback_goal_id"] = event.get("goal_id")
+        candidate["writeback_agent_id"] = event.get("agent_id")
+        candidate["writeback_turn_instance_id"] = event.get("run_id")
+        candidate["writeback_obligation_id"] = obligation_id
+        candidate["writeback_follows_admission"] = (
+            admission_index is not None and evidence_index > admission_index
+        )
+
+
+def historical_ack_candidates_with_writeback_order(
+    newest_first_runs: list[dict[str, Any]] | None, *,
+    goal_id: str, agent_id: str, obligation_id: str | None,
+    guard_scoped: bool = True, runtime_root: Path | str | None = None,
+    source_route: Any = None,
+    guard_recorded_at: str | None = None, guard_turn_instance_id: str | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
+    admission_event_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Project obligation candidates and attach their original writeback order."""
+    from ...rollout_event_log import load_rollout_events, rollout_event_log_path
+
+    owner = _owner_goal_ref(goal_ref, goal_id=goal_id)
+    owned_runs = _owned_records(newest_first_runs, owner)
+    selected = _binding_text(obligation_id) if guard_scoped else ""
+    candidates = autonomous_replan_ack_candidates_for_obligation(
+        owned_runs, goal_id=goal_id, agent_id=agent_id, obligation_id=selected or None)
+    route = source_route if isinstance(source_route, dict) else {}
+    root_text = runtime_root or route.get("runtime_root")
+    root = Path(str(root_text)) if root_text else None
+    if root is None or not selected:
+        return candidates
+    attach_historical_ack_writeback_order(
+        candidates, load_rollout_events(rollout_event_log_path(root, goal_id)),
+        goal_id=goal_id, agent_id=agent_id, obligation_id=selected,
+        guard_recorded_at=guard_recorded_at, guard_turn_instance_id=guard_turn_instance_id,
+        runs=owned_runs, goal_ref=owner, admission_event_id=admission_event_id,
+    )
+    return candidates
+
+
+def load_receipt_replan_ack_candidates(
+    runtime_root: Path, *, goal_id: str, agent_id: str, obligation_id: str,
+    guard_recorded_at: str | None = None, guard_turn_instance_id: str | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
+    admission_event_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Read exact recovery candidates without widening ordinary status history."""
+    from ...history import load_index
+    from ..runtime.time import chronology_key
+
+    runs, _ = load_index(runtime_root / "goals" / goal_id / "runs" / "index.jsonl")
+    newest_first = [run for _, run in sorted(enumerate(runs),
+        key=lambda item: (*chronology_key(item[1].get("generated_at")), item[0]), reverse=True)]
+    return historical_ack_candidates_with_writeback_order(
+        newest_first, goal_id=goal_id, agent_id=agent_id, obligation_id=obligation_id,
+        runtime_root=runtime_root, guard_recorded_at=guard_recorded_at,
+        guard_turn_instance_id=guard_turn_instance_id, goal_ref=goal_ref,
+        admission_event_id=admission_event_id,
+    )
 
 
 def latest_blocked_successor_frontier_identity(

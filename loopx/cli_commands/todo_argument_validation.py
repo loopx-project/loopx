@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 from collections.abc import Iterable
 from pathlib import Path
 
+from ..command_invocation import cli_option_args, loopx_cli_argv
 from ..control_plane.todos.contract import TODO_CONTINUATION_POLICY_VALUES
 
 TODO_OPTION_FIELDS = (
@@ -14,6 +16,7 @@ TODO_OPTION_FIELDS = (
     ("--todo-id", "todo_id"),
     ("--operation-id", "operation_id"),
     ("--claim-operation-id", "claim_operation_id"),
+    ("--recover-execution", "recover_execution"),
     ("--update-operation-id", "update_operation_id"),
     ("--update-expected-provider-revision", "update_expected_provider_revision"),
     ("--turn-instance-id", "turn_instance_id"),
@@ -80,6 +83,8 @@ TODO_OPTION_FIELDS = (
     ("--agent-id", "agent_id"),
     ("--limit", "todo_limit"),
     ("--thin", "todo_thin"),
+    ("--summary", "todo_summary"),
+    ("--include-archived", "include_archived"),
     ("--state-file", "state_file"),
     ("--execute", "execute"),
     ("--provider-revision", "provider_revision"),
@@ -139,16 +144,22 @@ _TODO_ADD_UNSUPPORTED_FIELDS = (
 )
 _TODO_OPTION_FLAGS = {field: flag for flag, field in TODO_OPTION_FIELDS}
 
-# The same strict subset drives validation and action help. Complex lifecycle
-# commands retain full help until their conditional grammar is centralized.
+# Read/claim subsets share validation and help. Update help reuses the mutable
+# field owner; other lifecycle commands retain full help until centralized.
 TODO_ACTION_FIELDS = {
-    "list": frozenset({"role", "todo_id", "status", "agent_id", "todo_limit", "todo_thin", "state_file", "project", "dry_run"}),
+    "list": frozenset({"role", "todo_id", "status", "agent_id", "todo_limit", "todo_thin", "todo_summary", "include_archived", "state_file", "project", "dry_run"}),
     "receipt": frozenset({"operation_id"}),
     "result-read": frozenset({"todo_id"}),
     "plan": frozenset({"text", "agent_id", "project"}),
     "project-markdown": frozenset({"state_file", "execute", "provider_revision", "project"}),
     "claim": frozenset({"role", "todo_id", "claimed_by", "agent_id", "state_file",
-                        "claim_operation_id", "task_lease_idempotency_key", "task_lease_expected_version", "project", "dry_run"}),
+                        "claim_operation_id", "task_lease_idempotency_key", "task_lease_expected_version",
+                        "project", "dry_run", "todo_thin"}),
+    "update": frozenset(_TODO_UPDATE_MUTABLE_FIELDS) | frozenset({
+        "role", "todo_id", "agent_id", "state_file", "project", "dry_run", "authority_reason",
+        "claim_operation_id", "update_operation_id", "update_expected_provider_revision",
+        "recover_execution",
+    }),
 }
 
 
@@ -179,12 +190,14 @@ def register_todo_linkage_arguments(
             "For deferred todo add/update, or for an open advancement todo update "
             "paired with --successor-todo-id, declare a machine-readable resume "
             "condition such as todo_done:todo_ab12cd34ef56, "
-            "monitor_changed:todo_monitor123, pr_merged:#532, or "
+            "monitor_changed:todo_monitor123, "
+            "monitor_changed:todo_monitor123@case-a/run-1, pr_merged:#532, or "
             "capacity_available:short_pool; use "
             "resume_at:2026-09-14T09:30:00+08:00 for an exact dated wakeup. "
             "resume_at requires an RFC3339 timezone and is normalized to UTC. "
-            "monitor_changed binds the monitor's "
-            "current material-change generation and resumes only after it advances; "
+            "monitor_changed binds the monitor's current material-change generation; "
+            "an optional @scope binds that scope's generation and ignores unrelated changes. "
+            "The Todo resumes only after its bound generation advances; "
             "the waiting advancement todo must remain status=open and pair with an "
             "independent runnable --successor-todo-id."
         ),
@@ -302,8 +315,8 @@ def validate_todo_list_options(args: argparse.Namespace) -> None:
         args,
         TODO_ACTION_FIELDS["list"],
         "todo list only accepts --goal-id, optional --role, --status, --todo-id, "
-        "--agent-id, --limit, --thin, --project, --state-file, --dry-run, and "
-        "--format; "
+        "--agent-id, --limit, --thin, --summary, --include-archived, --project, "
+        "--state-file, --dry-run, and --format; "
         "unsupported: ",
     )
 
@@ -374,21 +387,29 @@ class TodoClaimArgumentError(ValueError):
         ]
         if args.task_lease_expected_version is not None and not args.task_lease_idempotency_key:
             missing.append("--task-lease-idempotency-key")
-        cli_args = ["--registry", str(registry_path), "--format", "json"]
+        route = loopx_cli_argv()
+        cli_args = [*route[1:], *cli_option_args("--registry", registry_path), "--format", "json"]
         if runtime_root_arg is not None:
-            cli_args.extend(["--runtime-root", runtime_root_arg])
-        cli_args.extend(["todo", "claim", "--goal-id", args.goal_id])
-        # Reuse the grammar owner; preserve identities and zero-valued CAS versions.
+            cli_args.extend(cli_option_args("--runtime-root", runtime_root_arg))
+        cli_args.extend(["todo", "claim", *cli_option_args("--goal-id", args.goal_id)])
+        # Omit inputs the caller must supply. Preserve other explicit values for
+        # the authority owner to validate, including an empty operation ID.
         for flag, field in TODO_OPTION_FIELDS:
+            if field not in _TODO_CLAIM_FIELDS or flag in missing:
+                continue
             value = getattr(args, field, None)
-            if field in _TODO_CLAIM_FIELDS and value is not None and value != "":
-                cli_args.extend([flag, str(value)])
-        if args.project:
-            cli_args.extend(["--project", args.project])
+            if value is None or value is False:
+                continue
+            if value is True:
+                cli_args.append(flag)
+            else:
+                cli_args.extend(cli_option_args(flag, value))
+        if args.project is not None:
+            cli_args.extend(cli_option_args("--project", args.project))
         if args.dry_run:
             cli_args.append("--dry-run")
         return {
-            "command": "loopx todo claim",
+            "command": shlex.join([*route, "todo", "claim"]),
             "cli_args": cli_args,
             "requires_flags": missing,
             "remove_flags": unsupported_todo_options(args, allowed_fields=_TODO_CLAIM_FIELDS),
@@ -417,7 +438,7 @@ def validate_todo_claim_options(args: argparse.Namespace) -> None:
         raise TodoClaimArgumentError(
             "todo claim only accepts --todo-id, --claimed-by, --agent-id, optional --role, "
             "--claim-operation-id, --task-lease-idempotency-key, "
-            "--task-lease-expected-version, --project, --state-file, and --dry-run; unsupported: "
+            "--task-lease-expected-version, --project, --state-file, --dry-run, and --thin; unsupported: "
             + ", ".join(unsupported)
         )
     if args.task_lease_expected_version is not None and not args.task_lease_idempotency_key:
@@ -440,6 +461,20 @@ def validate_todo_update_options(args: argparse.Namespace) -> None:
         )
     if not any(getattr(args, field) for field in _TODO_UPDATE_MUTABLE_FIELDS):
         raise ValueError("todo update requires at least one mutable todo field")
+    if args.status == "deferred" and args.recover_execution:
+        missing = [
+            flag
+            for flag, value in (
+                ("--reason", args.reason),
+                ("--resume-when", args.resume_when),
+            )
+            if not str(value or "").strip()
+        ]
+        if missing:
+            raise ValueError(
+                "todo update --status deferred requires --reason and "
+                "--resume-when; missing: " + ", ".join(missing)
+            )
     validation_fields = (
         args.validation_command,
         args.validation_command_json,
@@ -524,6 +559,50 @@ def validate_todo_complete_options(args: argparse.Namespace) -> None:
     validate_successor_routing_options(args)
 
 
+def validate_todo_execution_recovery_options(args: argparse.Namespace) -> None:
+    """Keep the one-command helper narrower than the typed recovery owner."""
+    if not getattr(args, "recover_execution", False):
+        return
+    if args.todo_command not in {"update", "complete"}:
+        raise ValueError(
+            "--recover-execution is supported only by todo update/complete"
+        )
+    if not args.agent_id:
+        raise ValueError("--recover-execution requires a registered --agent-id")
+    if args.dry_run:
+        raise ValueError(
+            "--recover-execution cannot be combined with --dry-run because the "
+            "retry requires a committed claim reference"
+        )
+    supplied_proof = [
+        flag
+        for flag, present in (
+            ("--claim-operation-id", args.claim_operation_id is not None),
+            (
+                "--task-lease-idempotency-key",
+                args.task_lease_idempotency_key is not None,
+            ),
+            (
+                "--task-lease-expected-version",
+                args.task_lease_expected_version is not None,
+            ),
+        )
+        if present
+    ]
+    if supplied_proof:
+        raise ValueError(
+            "--recover-execution accepts only omitted execution proof; inspect "
+            "and retry explicit stale proof unchanged instead of replacing: "
+            + ", ".join(supplied_proof)
+        )
+    if args.todo_command == "update" and args.update_expected_provider_revision:
+        raise ValueError(
+            "--recover-execution cannot silently rebase "
+            "--update-expected-provider-revision; claim, inspect the same Todo, "
+            "then retry with the reconciled provider revision"
+        )
+
+
 def validate_todo_supersede_options(args: argparse.Namespace) -> None:
     if not args.todo_id:
         raise ValueError("todo supersede requires --todo-id")
@@ -594,12 +673,14 @@ def validate_shared_todo_options(args: argparse.Namespace) -> None:
         "complete",
         "supersede",
     }
-    if getattr(args, "turn_instance_id", None) and args.todo_command not in {"complete", "supersede"}:
+    if (getattr(args, "turn_instance_id", None) and args.todo_command not in {"complete", "supersede"}
+            and not (args.todo_command == "add" and getattr(args, "replan_obligation_id", None))):
         raise ValueError(
             "--turn-instance-id is supported only by todo complete/supersede settlement"
         )
     if getattr(args, "goal_instance_id", None) and (
-        args.todo_command not in {"complete", "supersede"}
+        (args.todo_command not in {"complete", "supersede"}
+         and not (args.todo_command == "add" and getattr(args, "replan_obligation_id", None)))
         or not getattr(args, "turn_instance_id", None)
     ):
         raise ValueError(
@@ -610,8 +691,8 @@ def validate_shared_todo_options(args: argparse.Namespace) -> None:
         raise ValueError("--update-operation-id is supported only by todo update")
     if getattr(args, "update_expected_provider_revision", None) is not None and args.todo_command != "update":
         raise ValueError("--update-expected-provider-revision is supported only by todo update")
-    if getattr(args, "claim_operation_id", None) is not None and args.todo_command != "claim":
-        raise ValueError("--claim-operation-id is supported only by todo claim")
+    if getattr(args, "claim_operation_id", None) is not None and args.todo_command not in {"claim", "update", "complete", "supersede"}:
+        raise ValueError("--claim-operation-id is supported only by todo claim/update/complete/supersede")
     if (
         getattr(args, "completion_identity_key", None)
         and args.todo_command != "complete"
@@ -685,8 +766,15 @@ def validate_shared_todo_options(args: argparse.Namespace) -> None:
         raise ValueError(
             "--limit is supported only by todo list"
         )
-    if args.todo_thin and args.todo_command != "list":
-        raise ValueError("--thin is supported only by todo list")
+    if args.todo_thin and args.todo_command not in {"list", "claim"}:
+        raise ValueError("--thin is supported only by todo list and todo claim")
+    if getattr(args, "todo_summary", False):
+        if args.todo_command != "list":
+            raise ValueError("--summary is supported only by todo list")
+        if args.todo_thin:
+            raise ValueError("todo list accepts either --summary or --thin")
+        if args.todo_id:
+            raise ValueError("Exact Todo reads return full requirements; remove --summary or omit --todo-id for a queue overview")
 
 
 def validate_capability_gap_options(args: argparse.Namespace) -> None:

@@ -10,7 +10,7 @@
  * this rule, so it lives here rather than in either caller.
  */
 import type { JsonObject } from "../effect_program.ts";
-import {settlementIdentity, type SettlementIdentity} from "../effect_program.ts";
+import {executionRequestSubject, settlementIdentity, type SettlementIdentity, type ExecutionRequestSubject} from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { jsonObject, requireJsonObject, requireNonEmptyString, requireStringLiteral } from "../runtime_decode.ts";
 import {nativeChildReportAdmission} from "../capabilities/native_child_admission.ts";
@@ -69,7 +69,7 @@ export function normalizeHeartbeatReplanObligationId(
 }
 
 export interface HeartbeatReceiptBinding extends JsonObject {
-  binding_kind: "todo" | "autonomous_replan";
+  binding_kind: "todo" | "autonomous_replan" | "request";
   /** The Todo id or autonomous replan obligation id, per `binding_kind`. */
   binding_id: string;
   /**
@@ -97,6 +97,7 @@ export interface HeartbeatReceiptFact extends JsonObject {
   run_id: string | null;
   todo_id: string | null;
   replan_obligation_id: string | null;
+  request_subject?: ExecutionRequestSubject | null;
   settlement_effect_id: string | null;
   closeout_required: boolean;
 }
@@ -112,11 +113,24 @@ export function heartbeatReceiptFactFromEvent(
     replan_obligation_id: optionalHeartbeatString(
       eventDetails.replan_obligation_id,
     ),
+    ...(!Object.hasOwn(eventDetails, "request_id") ? {} : {request_subject: executionRequestSubject({
+      request_id: eventDetails.request_id, request_revision: eventDetails.request_revision,
+      request_digest: eventDetails.request_digest, execution_scope_sha256: eventDetails.execution_scope_sha256})}),
     settlement_effect_id: optionalHeartbeatString(
       eventDetails.settlement_effect_id,
     ),
     closeout_required: eventDetails.closeout_required === true,
   };
+}
+
+/** Read positive autonomous replan admission from an effective guard receipt. */
+export function admitsAutonomousReplan(event: JsonObject, fact: HeartbeatReceiptFact): boolean {
+  const guard = heartbeatReceiptDetails(event);
+  const obligationId = normalizeHeartbeatReplanObligationId(guard.semantic_replan_obligation_id);
+  return fact.settlement_effect_id !== null && obligationId !== null
+    && (fact.todo_id !== null || obligationId === fact.replan_obligation_id)
+    && guard.interaction_mode === "autonomous_replan" && guard.ok === true && guard.should_run === true
+    && guard.must_attempt_work === true && guard.delivery_allowed === false && guard.quiet_noop_allowed === false;
 }
 
 /**
@@ -135,17 +149,18 @@ export function heartbeatReceiptBinding(
     fact.replan_obligation_id,
   );
   const declaredEffectId = optionalHeartbeatString(fact.settlement_effect_id);
-  if (declaredTodoId && replanObligationId) {
+  const requestSubject = executionRequestSubject(fact.request_subject);
+  if ([declaredTodoId, replanObligationId, requestSubject].filter(Boolean).length > 1) {
     throw receiptIdentityConflict(
       "heartbeat receipt has conflicting Todo and autonomous replan bindings",
     );
   }
-  if (declaredEffectId && !declaredTodoId && !replanObligationId) {
+  if (declaredEffectId && !declaredTodoId && !replanObligationId && !requestSubject) {
     throw receiptIdentityConflict(
       "heartbeat receipt has an effect identity without a Todo or autonomous replan binding; refuse to infer or upgrade it",
     );
   }
-  if (!declaredTodoId && !replanObligationId) return null;
+  if (!declaredTodoId && !replanObligationId && !requestSubject) return null;
   // A Todo-binding the settlement authority cannot address is not a binding we
   // may act on: acting on the raw string would create a recovery obligation
   // whose identity no other reader can reproduce, and dropping it would let a
@@ -161,12 +176,10 @@ export function heartbeatReceiptBinding(
     agent_id: agentId,
     todo_id: todoId,
     turn_instance_id: fact.run_id ?? "",
-    replan_obligation_id: replanObligationId,
+    replan_obligation_id: replanObligationId, request_subject: requestSubject,
   });
   return {
-    binding_kind: identity.binding_kind === "todo"
-      ? "todo"
-      : "autonomous_replan",
+    binding_kind: identity.binding_kind as HeartbeatReceiptBinding["binding_kind"],
     binding_id: identity.binding_id,
     settlement_effect_id: declaredEffectId,
     identity_key: `${identity.binding_kind}\u0000${identity.binding_id}\u0000${
@@ -203,6 +216,34 @@ export function selectEffectiveHeartbeatReceipt<Value>(
     : entries.at(-1)!.value;
 }
 
+/**
+ * The first bound receipt for one Turn, used only as the admission clock.
+ *
+ * `selectEffectiveHeartbeatReceipt` still returns the latest bound receipt so
+ * review and work content stay current. A later same-Turn upgrade must not
+ * move the historical-ACK admission time or log position. Callers pass the
+ * GoalRef-filtered receipt list; this reduction does not widen that scope.
+ * Conflicting bindings fail closed, the same way the effective reduction does.
+ */
+export function selectAdmissionHeartbeatReceipt<Value>(
+  goalId: string,
+  agentId: string,
+  entries: readonly { fact: HeartbeatReceiptFact; value: Value }[],
+): Value | null {
+  const identities = new Map<string, Value>();
+  for (const entry of entries) {
+    const binding = heartbeatReceiptBinding(goalId, agentId, entry.fact);
+    if (!binding || identities.has(binding.identity_key)) continue;
+    identities.set(binding.identity_key, entry.value);
+  }
+  if (identities.size > 1) {
+    throw receiptIdentityConflict(
+      "heartbeat receipt has conflicting settlement identities for the same goal, agent, and turn",
+    );
+  }
+  return identities.size === 1 ? [...identities.values()][0]! : null;
+}
+
 /** Reentry can qualify work on the original binding, never replace its authority.
  * The caller commits this append-only projection under the receipt-log lock. */
 export function heartbeatWorkRequalification(
@@ -221,21 +262,40 @@ export function heartbeatWorkRequalification(
     throw receiptIdentityConflict("work requalification must preserve the original settlement binding");
   }
   if (phase !== "open" || closeoutStarted) return replay;
+  // The retained settlement binding is not today's executable selection.
+  // A waiting Todo can leave broad compatibility flags set with no selected
+  // work; those flags cannot requalify a repair-only original receipt.
+  if (identity.todo_id !== null && currentDetails.selected_todo_id !== identity.todo_id) return replay;
   // No legacy/status-label compatibility for new qualifications: all modern
   // work facts must be explicit. This reuses the report-admission predicate.
-  if (nativeChildReportAdmission(currentDetails, null, identity.effect_id, phase, false)
-      .report_permission !== "new_operation") return replay;
   const oldDetails = heartbeatReceiptDetails(original);
-  if (nativeChildReportAdmission(oldDetails, original.status, identity.effect_id, phase, false)
-      .report_permission === "new_operation") return replay;
   const originalReplan = normalizeHeartbeatReplanObligationId(oldDetails.semantic_replan_obligation_id);
   const currentReplan = normalizeHeartbeatReplanObligationId(currentDetails.semantic_replan_obligation_id);
+  if (nativeChildReportAdmission(currentDetails, null, identity.effect_id, phase, false, currentReplan)
+      .report_permission !== "new_operation") return replay;
+  if (nativeChildReportAdmission(oldDetails, original.status, identity.effect_id, phase, false, originalReplan)
+      .report_permission === "new_operation") return replay;
   if (currentReplan !== null && currentReplan !== originalReplan) {
     throw receiptIdentityConflict("work requalification cannot replace the original semantic replan guard");
   }
   const qualified = {...oldDetails};
-  for (const field of ["ok", "should_run", "must_attempt_work", "delivery_allowed", "quiet_noop_allowed"]) {
-    qualified[field] = currentDetails[field]!;
+  // The guarded route becomes durable when this binding first admits work.
+  const spendSource = currentDetails.quota_spend_source;
+  if (spendSource != null) {
+    if (spendSource !== "heartbeat" && spendSource !== "visible-goal") {
+      throw receiptIdentityConflict("work requalification has an unsupported quota spend source");
+    }
+    if (oldDetails.quota_spend_source != null && oldDetails.quota_spend_source !== spendSource) {
+      throw receiptIdentityConflict("work requalification cannot replace the original quota spend source");
+    }
+    qualified.quota_spend_source = spendSource;
+  }
+  // The first positive work admission owns these facts. A repair-only
+  // receipt's earlier selection cannot describe the newly admitted work.
+  for (const field of ["ok", "should_run", "must_attempt_work", "delivery_allowed", "quiet_noop_allowed",
+    "interaction_mode", "admission_resume_when", "admission_resume_ready"]) {
+    if (currentDetails[field] !== undefined) qualified[field] = currentDetails[field]!;
+    else delete qualified[field];
   }
   // Preserve workspace causality, semantic guards, pending selection and all
   // original identities. Work admission makes this same Todo owe closeout.

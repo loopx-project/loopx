@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import json
 import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 from .capabilities.pr_review_queue import (
     DEFAULT_REVIEW_PRIORITY,
@@ -33,10 +34,14 @@ from .capabilities.pr_review_queue.github_source import (
 from .capabilities.pr_review_queue.check_attempts import latest_check_attempts
 from .capabilities.pr_review_queue.scheduling import is_owner_authored
 from .capabilities.pr_review_queue.review_body import (
+    author_owned_review_title_matches,
     check_review_body,
     english_review_verdict as _english_review_verdict,
 )
-from .capabilities.pr_review_queue.review_contract import CODE_AREAS, BEHAVIORAL_POLICY_AREAS
+from .capabilities.pr_review_queue.review_contract import (
+    CODE_AREAS as CODE_AREAS,
+    BEHAVIORAL_POLICY_AREAS as BEHAVIORAL_POLICY_AREAS,
+)
 from .control_plane.runtime.time import now_utc_iso
 from .presentation.markdown import as_dict as _as_dict
 from .presentation.markdown import as_list as _as_list
@@ -54,12 +59,6 @@ SOURCE_SURFACES = [
     "GitHub pull request status check rollup",
 ]
 
-AUTHOR_OWNED_APPROVAL_FALLBACK_TITLE = (
-    "Approval conclusion (author-owned PR; GitHub blocks formal self-approval)"
-)
-AUTHOR_OWNED_REQUEST_CHANGES_FALLBACK_TITLE = (
-    "Request changes conclusion (author-owned PR; GitHub blocks formal self-review)"
-)
 REVIEW_CONCLUSION_SCHEMA_VERSION = "pull_request_review_conclusion_v0"
 RUNTIME_OR_CLI_PREFIXES = (
     "src/",
@@ -495,7 +494,7 @@ def _top_file_phrase(files: list[dict[str, Any]], *, limit: int = 3) -> str:
 
 def _int_or_zero(value: object) -> int:
     try:
-        return int(value or 0)
+        return int(cast(Any, value or 0))
     except (TypeError, ValueError):
         return 0
 
@@ -833,11 +832,7 @@ def _review_conclusion(
             reasons.append("review_body_missing_standalone_bilingual_format")
             reasons.extend(f"review_body:{reason}" for reason in body_check["invalid_reasons"])
         if author_owned_fallback:
-            expected_title = {
-                "APPROVE": AUTHOR_OWNED_APPROVAL_FALLBACK_TITLE,
-                "REQUEST_CHANGES": AUTHOR_OWNED_REQUEST_CHANGES_FALLBACK_TITLE,
-            }.get(english_verdict or "")
-            if state != "COMMENTED" or not expected_title or expected_title not in body:
+            if state != "COMMENTED" or not author_owned_review_title_matches(body, english_verdict):
                 reasons.append("author_owned_review_missing_titled_commented_fallback")
         elif state not in {"APPROVED", "CHANGES_REQUESTED"}:
             reasons.append("formal_review_state_required")
@@ -861,17 +856,24 @@ def _review_conclusion(
         }
 
     conclusions = [evaluate(review) for review in reviews]
-    if len(reviews) == 1:
+    if len(reviews) == 1 and pr.get("reviews_complete") is not True:
         return conclusions[0]
-    from .capabilities.pr_review_queue.approval_closeout import select_review_conclusion
-    index = select_review_conclusion({"head": head_oid, "author": pr_author,
+    from .capabilities.pr_review_queue.approval_closeout import select_review_history
+    selection = select_review_history({"head": head_oid, "author": pr_author,
+        "reviews_complete": pr.get("reviews_complete") is True,
         "reviews": [{"state": conclusion["state"],
             "login": str(_as_dict(review.get("author")).get("login") or ""),
             "head": str(_as_dict(review.get("commit")).get("oid") or ""),
             "time": _parse_updated_epoch(review.get("submittedAt")),
+            "review_id": review.get("id"), "url": review.get("url"),
+            "association": review.get("authorAssociation"),
+            "is_bot": _as_dict(review.get("author")).get("is_bot"),
+            "submitted_at": review.get("submittedAt"),
             "conclusion": conclusion}
             for review, conclusion in zip(reviews, conclusions)]})
-    return conclusions[index]
+    index = cast(int, selection["index"])
+    return conclusions[index] | ({"independent_review": selection["independent_review"]}
+        if "independent_review" in selection else {})
 
 
 def _review_sequence_entry(item: dict[str, Any], *, rank: int) -> dict[str, Any]:
@@ -936,6 +938,7 @@ def _normalize_pr(
     )
     conclusion = _review_conclusion(pr, reviewer_login=reviewer_login,
         behavior_bearing=bool({item["area"] for item in files} & (CODE_AREAS | BEHAVIORAL_POLICY_AREAS)))
+    independent = conclusion.pop("independent_review", None)
     item: dict[str, Any] = {
         "number": number,
         "title": _redact_text(pr.get("title"), limit=180),
@@ -966,6 +969,7 @@ def _normalize_pr(
         "is_draft": bool(pr.get("isDraft")),
         "review_decision": str(pr.get("reviewDecision") or "UNKNOWN"),
         "review_conclusion": conclusion,
+        **({"independent_review": independent} if independent else {}),
         "merge_state": str(
             pr.get("mergeStateStatus") or pr.get("mergeable") or "UNKNOWN"
         ),
@@ -1313,6 +1317,8 @@ def build_pr_review_packet(
 def _review_why_now(item: dict[str, Any]) -> str:
     if item.get("fresh_audit_requested") is True:
         return "A caller explicitly requested a fresh audit of this unchanged exact head."
+    if item.get("independent_review") and not item.get("review_action_kind"):
+        return "The current exact head has a submitted independent review; skip duplicate full review."
     state = str(item.get("state") or "").upper()
     if state == "MERGED":
         return "Merged exact head lacks a valid conclusion; audit outcome, validation, and follow-up quality."

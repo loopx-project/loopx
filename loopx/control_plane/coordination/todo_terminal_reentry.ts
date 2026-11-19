@@ -1,6 +1,7 @@
-import {settlementIdentity, type JsonObject} from "../effect_program.ts";
+import {settlementIdentity, settlementIdentityPayload, type JsonObject} from "../effect_program.ts";
 import {jsonObject} from "../runtime_decode.ts";
-import {AuthorityStoreProtocolError, canonicalAuthoritySha256} from "./authority_store_codec.ts";
+import {AuthorityStoreProtocolError, canonicalAuthoritySha256, requireAuthorityStoreId} from "./authority_store_codec.ts";
+import {canonicalTodoRecord} from "./todo_presentation.ts";
 import type {CoordinationTodoTerminalLifecycleInput} from "./todo_terminal_lifecycle.ts";
 import {registeredTodoMutationRejection} from "./todo_lifecycle_decision.ts";
 import {evaluateTodoCompletionFence, localTodoCompletionIdentity, TODO_COMPLETION_FENCE_REQUEST_SCHEMA} from "../todos/completion_fence.ts";
@@ -19,7 +20,7 @@ export function requiresReentrySettlement(input: CoordinationTodoTerminalLifecyc
 /** Resolve historical quota identity from its durable receipt, never by parsing
  * an opaque completion key or treating missing history as unscoped work. */
 export async function verifyReentrySettlement(runtimeRoot: string,
-  input: CoordinationTodoTerminalLifecycleInput): Promise<void> {
+  input: CoordinationTodoTerminalLifecycleInput): Promise<JsonObject> {
   const {readQuotaSettlementSnapshot, readQuotaSettlementFromSnapshot,
     QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA} = await import("../quota/settlement_readback.ts");
   const snapshot = await readQuotaSettlementSnapshot(runtimeRoot, input.goal_id);
@@ -43,6 +44,8 @@ export async function verifyReentrySettlement(runtimeRoot: string,
   if (jsonObject(jsonObject(readback.settlement)?.payload)?.ok !== true) {
     throw new AuthorityStoreProtocolError("Lifecycle closeout requires matching writeback and quota spend receipts");
   }
+  return settlementIdentityPayload({goal_id: input.goal_id, agent_id: input.actor_agent_id,
+    todo_id: input.todo_id, turn_instance_id: turn});
 }
 
 /** A migrated completion is already authoritative. Close only its continuation;
@@ -86,4 +89,122 @@ export function prepareTerminalReentry(todo: JsonObject, input: CoordinationTodo
   return {...todo, no_followup: true, completion_continuation: state.continuation,
     completion_recovery: state.recovery, completion_turn_key: input.requested_completion_turn_key,
     updated_at: input.now.toISOString().replace(/\.\d{3}Z$/u, "Z")};
+}
+
+export function evaluateSameTurnTerminalUpgradeFence(
+  input: CoordinationTodoTerminalLifecycleInput,
+  todo: JsonObject,
+): boolean {
+  const fence = evaluateTodoCompletionFence({
+    schema_version: TODO_COMPLETION_FENCE_REQUEST_SCHEMA,
+    projection_source: "materialized",
+    goal_id: input.goal_id,
+    todo_id: input.todo_id,
+    todo,
+    requested_no_followup: input.requested_no_followup,
+    requested_completion_turn_key: input.requested_completion_turn_key,
+    requested_completion_identity_source: input.requested_completion_identity_source,
+  });
+  return fence.outcome === "continue" && fence.reason === "same_turn_terminal_upgrade";
+}
+
+export interface UntypedCompletionRepairPlan {
+  readonly todo: JsonObject;
+  readonly successorTodoIds: readonly string[];
+}
+
+function validateUntypedCompletionRepairPolicy(
+  request: JsonObject,
+  input: CoordinationTodoTerminalLifecycleInput,
+  todo: JsonObject,
+): void {
+  const allowedFields = new Set([
+    "schema_version", "goal_id", "agent_model", "claimed_by", "registered_agents",
+    "next_claimed_by", "next_agent_todo", "next_continuation_policy", "next_excluded_agents",
+    "self_merged", "evidence", "linked_successors",
+  ]);
+  if (Object.keys(request).some((field) => !allowedFields.has(field))) {
+    throw new AuthorityStoreProtocolError(
+      "imported completion repair must not carry completion policy extensions",
+    );
+  }
+  const policy = resolveTodoCompletionPolicy(request);
+  if (request.goal_id !== input.goal_id ||
+      canonicalAuthoritySha256(policy.registered_agents) !== canonicalAuthoritySha256(input.registered_agents) ||
+      (policy.effective_claimed_by !== null && policy.effective_claimed_by !== (todo.claimed_by ?? null)) ||
+      policy.effective_next_claimed_by !== null ||
+      policy.effective_next_excluded_agents.length > 0 ||
+      policy.self_merged ||
+      policy.linked_successor_id !== null ||
+      (request.next_agent_todo != null && request.next_agent_todo !== "") ||
+      (request.next_continuation_policy != null && request.next_continuation_policy !== "") ||
+      (Array.isArray(request.linked_successors) && request.linked_successors.length > 0) ||
+      (request.evidence != null && request.evidence !== "")) {
+    throw new AuthorityStoreProtocolError(
+      "imported completion repair must not carry completion policy edits",
+    );
+  }
+}
+
+export function planUntypedCompletionRepair(
+  todo: JsonObject,
+  input: CoordinationTodoTerminalLifecycleInput,
+  authorityOutcome: string,
+): UntypedCompletionRepairPlan | null {
+  if (input.command !== "complete" || input.requested_no_followup || todo.status !== "done") return null;
+  const fence = evaluateTodoCompletionFence({
+    schema_version: TODO_COMPLETION_FENCE_REQUEST_SCHEMA,
+    projection_source: "materialized",
+    goal_id: input.goal_id,
+    todo_id: input.todo_id,
+    todo,
+    requested_no_followup: false,
+    requested_completion_turn_key: input.requested_completion_turn_key,
+    requested_completion_identity_source: input.requested_completion_identity_source,
+  });
+  if (fence.outcome !== "continue" || fence.reason !== "untyped_completion_repair") return null;
+
+  const storedTurnKey = typeof todo.completion_turn_key === "string" ? todo.completion_turn_key : null;
+  if (input.requested_completion_turn_key !== storedTurnKey) {
+    throw new AuthorityStoreProtocolError("imported completion repair must preserve the stored completion_turn_key");
+  }
+  if (authorityOutcome !== "no_change") {
+    throw new AuthorityStoreProtocolError("imported completion repair cannot apply a fresh authority transition");
+  }
+  if (input.user_update !== undefined || input.note !== null || input.evidence !== null ||
+      input.reason !== null || input.decision_outcome !== null || input.clear_claim ||
+      input.linked_successor_todo_ids.length > 0 ||
+      input.successor_intents.length > 0 || input.completion_result != null ||
+      input.validation_declaration !== null ||
+      input.validation_receipt !== null || input.validation_source_provider_revision != null ||
+      input.goal_acceptance_source_binding != null ||
+      input.goal_acceptance_validation_receipts != null) {
+    throw new AuthorityStoreProtocolError(
+      "imported completion repair must not carry fresh completion content, policy, validation, or ownership edits",
+    );
+  }
+  if (input.completion_policy_request !== null) {
+    validateUntypedCompletionRepairPolicy(input.completion_policy_request, input, todo);
+  }
+  if (input.validation_declaration_sha256 != null &&
+      input.validation_declaration_sha256 !== todo.completion_validation_sha256) {
+    throw new AuthorityStoreProtocolError("imported completion repair must preserve the stored validation commitment");
+  }
+  const successorTodoIds = Array.isArray(todo.successor_todo_ids)
+    ? todo.successor_todo_ids.map((value, index) => requireAuthorityStoreId(value, `todo.successor_todo_ids[${index}]`))
+    : [];
+  const completionState = selectTodoCompletionState({
+    schema_version: TODO_COMPLETION_STATE_REQUEST_SCHEMA,
+    todo,
+    requested_no_followup: false,
+    has_successor: successorTodoIds.length > 0,
+    completion_identity_source: input.requested_completion_identity_source,
+  });
+  const target: JsonObject = {
+    ...todo,
+    completion_continuation: completionState.continuation,
+    ...(completionState.recovery === null ? {} : {completion_recovery: completionState.recovery}),
+  };
+  canonicalTodoRecord(target, "imported completion repair");
+  return {todo: target, successorTodoIds};
 }

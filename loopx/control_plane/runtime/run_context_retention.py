@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
-from typing import Any
+from typing import Any, cast
 
-from ..quota.blocked_retry import active_turn_retry_for_run
+from collections.abc import Callable, Iterator
+
 from ..work_items.delivery_outcome import (
     MATERIAL_DELIVERY_OUTCOMES,
     PROGRESS_DELIVERY_OUTCOMES,
@@ -12,8 +12,10 @@ from ..work_items.progress_result import PROGRESS_OBSERVATION_SCHEMA_VERSION, Pr
 from ..work_items.autonomous_replan_ack import (
     AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK,
     autonomous_replan_ack_recorded,
+    qualify_settlement_history,
 )
 from ..work_items.autonomous_replan_obligation import run_history_agent_id
+from ..work_items.replan_history_codec import REPLAN_HISTORY_NEUTRAL_CLASSIFICATIONS
 from .time import now_utc_iso
 
 GOAL_SEMANTIC_HISTORY_SCHEMA_VERSION = "goal_semantic_history_v0"
@@ -28,7 +30,7 @@ SEMANTIC_CONTEXT_RUN_FIELDS = (
     "latest_evidence_delivery_run",
 )
 SEMANTIC_CONTEXT_RUN_PAYLOAD_FIELDS = {
-    "latest_lane_step_run": ("generated_at", "goal_id", "agent_id", "recommended_action_resolution"),
+    "latest_lane_step_run": ("generated_at", "json_path", "goal_id", "agent_id", "recommended_action_resolution"),
     "latest_agent_vision_run": (
         "generated_at",
         "agent_id",
@@ -88,12 +90,12 @@ RunCompactor = Callable[[dict[str, Any]], dict[str, Any]]
 
 def _agent_id_for_run(run: dict[str, Any]) -> str:
     checkpoint = (
-        run.get("vision_checkpoint")
+        cast(dict[str, Any], run.get("vision_checkpoint"))
         if isinstance(run.get("vision_checkpoint"), dict)
         else {}
     )
     vision = (
-        run.get("agent_vision") if isinstance(run.get("agent_vision"), dict) else {}
+        cast(dict[str, Any], run.get("agent_vision")) if isinstance(run.get("agent_vision"), dict) else {}
     )
     return str(
         run.get("agent_id")
@@ -134,6 +136,8 @@ def goal_semantic_history_from_runs(
     bounded list.
     """
 
+    from ..work_items.recommendation_source_io import recommendation_run_decision
+
     contexts: dict[str, dict[str, Any]] = {}
     resolved_agent_vision: set[str] = set()
     latest_owner_correction_run: dict[str, Any] | None = None
@@ -141,7 +145,8 @@ def goal_semantic_history_from_runs(
     seen_retry_todos: set[tuple[str, str]] = set()
     observed_at = now_utc_iso()
 
-    for run in runs:
+    qualification = qualify_settlement_history(runs, observed_at=observed_at)
+    for index, run in enumerate(runs):
         if latest_owner_correction_run is None and isinstance(
             run.get("human_reward"), dict
         ):
@@ -156,15 +161,12 @@ def goal_semantic_history_from_runs(
             key = (agent_id, todo_id)
             if key not in seen_retry_todos:
                 seen_retry_todos.add(key)
-                if (
-                    active_turn_retry_for_run(run, observed_at=observed_at)
-                    is not None
-                ):
+                if index in qualification.active_turn_retries:
                     active_blocked_retry_runs.append(run)
         context = contexts.setdefault(agent_id, {"agent_id": agent_id})
 
-        resolution = run.get("recommended_action_resolution")
-        if "latest_lane_step_run" not in context and isinstance(resolution, dict) and resolution.get("step_revision"):
+        if ("latest_lane_step_run" not in context and run.get("agent_id") == agent_id
+                and recommendation_run_decision(run) is not None):
             context["latest_lane_step_run"] = run
         checkpoint = run.get("vision_checkpoint")
         if "latest_vision_checkpoint_run" not in context and isinstance(
@@ -182,6 +184,7 @@ def goal_semantic_history_from_runs(
 
         if (
             "latest_outcome_vision_checkpoint_run" not in context
+            and index not in qualification.accepted_blocked_replans
             and _run_has_outcome_vision_checkpoint(run)
         ):
             context["latest_outcome_vision_checkpoint_run"] = run
@@ -199,6 +202,7 @@ def goal_semantic_history_from_runs(
 
         if (
             "latest_material_milestone_run" not in context
+            and index not in qualification.accepted_blocked_replans
             and str(run.get("delivery_outcome") or "").strip()
             in MATERIAL_DELIVERY_OUTCOMES
         ):
@@ -322,8 +326,10 @@ def latest_runs_with_agent_context(
     material runs since its own last replan ACK, so a Goal with several active
     lanes can interleave more than ``limit`` peer records between two rows of a
     single lane and hide that lane's own threshold. The requesting lane keeps
-    the same ``AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK`` budget a single-lane Goal
-    would have, and the goal-wide rows stay in place.
+    the same ``AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK`` budget of non-neutral
+    records and accepted ACK boundaries. No-op reviews and accounting rows
+    cannot consume that budget before the typed history owner sees the work.
+    The goal-wide display rows stay in place, including recent neutral rows.
     """
 
     bounded = max(0, limit)
@@ -337,6 +343,10 @@ def latest_runs_with_agent_context(
         if attributed == agent_lane_id:
             lane_present = True
         elif attributed is not None:
+            continue
+        if (str(run.get("classification") or "").strip()
+                in REPLAN_HISTORY_NEUTRAL_CLASSIFICATIONS
+                and not autonomous_replan_ack_recorded(run)):
             continue
         lane_positions.append(position)
     if not lane_present:

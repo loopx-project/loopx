@@ -53,11 +53,14 @@ FULLY_MERGED: dict[str, tuple[object, tuple[object, ...]]] = {
         autonomous_replan_projection,
         (status,),
     ),
-    "AUTONOMOUS_REPLAN_SCHEMA_VERSION": (autonomous_replan_projection, (status,)),
-    "BACKLOG_HYGIENE_BULLET_PATTERN": (active_state_projection, (status,)),
-    "BACKLOG_HYGIENE_HINT_PATTERN": (active_state_projection, (status,)),
-    "BACKLOG_HYGIENE_SECTION_HEADINGS": (active_state_projection, (status,)),
-    "DEAD_MONITOR_REPEAT_SCHEMA_VERSION": (autonomous_replan_projection, (status,)),
+    "AUTONOMOUS_REPLAN_SCHEMA_VERSION": (autonomous_replan_projection, ()),
+    "BACKLOG_HYGIENE_BULLET_PATTERN": (
+        active_state_projection,
+        (state_projection,),
+    ),
+    "BACKLOG_HYGIENE_HINT_PATTERN": (active_state_projection, ()),
+    "BACKLOG_HYGIENE_SECTION_HEADINGS": (active_state_projection, ()),
+    "DEAD_MONITOR_REPEAT_SCHEMA_VERSION": (autonomous_replan_projection, ()),
     "DEAD_MONITOR_REPEAT_THRESHOLD": (autonomous_replan_projection, (status,)),
     "LEGACY_EXTERNAL_EVIDENCE_CLASSIFICATION_PREFIXES": (
         goal_attention_projection,
@@ -65,9 +68,9 @@ FULLY_MERGED: dict[str, tuple[object, tuple[object, ...]]] = {
     ),
     "MINIMUM_DASHBOARD_STATUS_CONTRACT_SCHEMA_VERSION": (
         contract_projection,
-        (status,),
+        (),
     ),
-    "MONITOR_DISPLAY_SCHEMA_VERSION": (monitor_display_projection, (status,)),
+    "MONITOR_DISPLAY_SCHEMA_VERSION": (monitor_display_projection, ()),
     "MONITOR_SIGNAL_WAITING_ON": (
         monitor_display_projection,
         (attention_projection, goal_attention_projection, status),
@@ -75,12 +78,12 @@ FULLY_MERGED: dict[str, tuple[object, tuple[object, ...]]] = {
     "REGISTRY_WAITING_ON_OVERRIDES": (goal_attention_projection, (status,)),
     "SECTION_HEADING_PATTERN": (
         active_state_projection,
-        (state_projection, status),
+        (state_projection,),
     ),
-    "STATUS_CONTRACT_SCHEMA_VERSION": (contract_projection, (status,)),
+    "STATUS_CONTRACT_SCHEMA_VERSION": (contract_projection, ()),
     "STATUS_CONTRACT_SIGNAL_LIMIT": (
         contract_projection,
-        (diagnose, status),
+        (diagnose,),
     ),
 }
 

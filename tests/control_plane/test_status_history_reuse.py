@@ -220,9 +220,7 @@ def test_status_reuses_one_history_scan_without_hiding_runtime_only_audit(
     payload = collect_status(
         registry_path=registry_path,
         runtime_root_override=str(runtime_root),
-        scan_roots=[tmp_path],
         limit=2,
-        include_public_boundary_scan=False,
         agent_lane_id="agent-a",
     )
 
@@ -250,9 +248,7 @@ def test_status_projects_the_exact_run_index_digest(tmp_path: Path) -> None:
     payload = collect_status(
         registry_path=registry_path,
         runtime_root_override=str(runtime_root),
-        scan_roots=[tmp_path],
         limit=2,
-        include_public_boundary_scan=False,
     )
 
     goal = next(

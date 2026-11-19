@@ -1,0 +1,473 @@
+[
+  {
+    "name": "merged_conflicts_exact_scope_warning_order_redaction",
+    "quota": {
+      "ok": true,
+      "normal_delivery_allowed": true,
+      "selected_todo": {
+        "todo_id": "todo_sample",
+        "status": "open",
+        "title": "",
+        "priority": null,
+        "text": "Synthetic long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text  /home/sample/private.txt",
+        "required_decision_scopes": [
+          {
+            "kind": "write_scope",
+            "granularity": "action",
+            "scope_key": "sample"
+          }
+        ]
+      },
+      "agent_lane_next_action": {
+        "todo_id": "todo_sample",
+        "status": "blocked",
+        "title": "Complementary title",
+        "priority": "P0",
+        "text": "Synthetic long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text  /home/sample/private.txt",
+        "required_decision_scopes": [
+          {
+            "kind": "write_scope",
+            "granularity": "action",
+            "scope_key": "sample"
+          }
+        ]
+      },
+      "agent_todo_summary": {
+        "items": [
+          {
+            "todo_id": "todo_scope",
+            "required_decision_scopes": [
+              {
+                "kind": "write_scope",
+                "granularity": "action",
+                "scope_key": "sample"
+              }
+            ]
+          },
+          {
+            "todo_id": "todo_unrelated",
+            "status": "open"
+          },
+          {
+            "text": "Missing identity"
+          }
+        ],
+        "deferred_resume_candidates": [
+          {
+            "todo_id": "todo_sample",
+            "status": "deferred",
+            "resume_ready": true
+          },
+          {
+            "todo_id": "todo_deferred",
+            "status": "deferred",
+            "resume_ready": true
+          }
+        ],
+        "blocker_items": [
+          {
+            "todo_id": "todo_blocked",
+            "status": "open"
+          }
+        ]
+      },
+      "agent_scope_frontier": {
+        "items": [
+          {
+            "text": "Second missing identity"
+          },
+          {
+            "todo_id": "todo_sample",
+            "status": "open"
+          }
+        ]
+      },
+      "user_todo_summary": {
+        "gate_open_items": [
+          {
+            "todo_id": "todo_gate",
+            "task_class": "user_gate",
+            "unblocks_todo_id": "todo_sample",
+            "decision_scope": {
+              "kind": "write_scope",
+              "granularity": "action",
+              "scope_key": "sample"
+            }
+          },
+          {
+            "todo_id": "todo_other_gate",
+            "task_class": "user_gate",
+            "unblocks_todo_id": "todo_other"
+          }
+        ]
+      },
+      "recommended_action": "Inspect synthetic /home/sample/private.txt details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details "
+    },
+    "expected": {
+      "global_json": "{\"ok\":true,\"schema_version\":\"global_manager_command_response_v0\",\"request\":{\"schema_version\":\"global_manager_command_request_v0\",\"command\":\"/loopx-global-todos\",\"legacy_aliases\":[\"/loop-global-todos\"],\"cli_command\":\"loopx global-todos\",\"include\":[\"runnable\",\"blocked\",\"deferred_ready\",\"review\"],\"privacy_mode\":\"public_safe_summary\",\"dry_run\":true},\"generated_at\":\"2026-11-02T00:00:00+00:00\",\"summary\":{\"headline\":\"3 of 3 classified todos returned.\",\"matched_todo_count\":3,\"returned_todo_count\":3,\"runnable_count\":0,\"blocked_count\":2,\"deferred_ready_count\":1,\"review_count\":0,\"source_warning_count\":3,\"source_surfaces\":[\"status attention queue\",\"quota should-run summaries\",\"active-state todo projections\",\"compact run-history projection consumed by status\"],\"truncated\":false,\"goal_scan_limit\":160,\"goal_scan_truncated\":false},\"groups\":{\"runnable\":[],\"deferred_ready\":[{\"todo_id\":\"todo_deferred\",\"goal_id\":\"sample\",\"role\":\"agent\",\"status\":\"deferred\",\"priority\":\"\",\"title\":\"\",\"claimed_by\":null,\"action_kind\":\"\",\"readiness\":\"deferred_ready\",\"work_kind\":\"ordinary\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\"}],\"blocked\":[{\"todo_id\":\"todo_sample\",\"goal_id\":\"sample\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"P0\",\"title\":\"Complementary title\",\"claimed_by\":null,\"action_kind\":\"\",\"readiness\":\"blocked\",\"work_kind\":\"ordinary\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\"},{\"todo_id\":\"todo_blocked\",\"goal_id\":\"sample\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"\",\"title\":\"\",\"claimed_by\":null,\"action_kind\":\"\",\"readiness\":\"blocked\",\"work_kind\":\"ordinary\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\"}],\"review\":[]},\"todos\":[{\"todo_id\":\"todo_deferred\",\"goal_id\":\"sample\",\"role\":\"agent\",\"status\":\"deferred\",\"priority\":\"\",\"title\":\"\",\"claimed_by\":null,\"action_kind\":\"\",\"readiness\":\"deferred_ready\",\"work_kind\":\"ordinary\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\"},{\"todo_id\":\"todo_sample\",\"goal_id\":\"sample\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"P0\",\"title\":\"Complementary title\",\"claimed_by\":null,\"action_kind\":\"\",\"readiness\":\"blocked\",\"work_kind\":\"ordinary\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\"},{\"todo_id\":\"todo_blocked\",\"goal_id\":\"sample\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"\",\"title\":\"\",\"claimed_by\":null,\"action_kind\":\"\",\"readiness\":\"blocked\",\"work_kind\":\"ordinary\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\"}],\"source_warnings\":[{\"reason_code\":\"todo_identity_missing\",\"goal_id\":\"sample\",\"detail\":\"Structured todo candidate from agent_todo_summary.items has no todo_id.\"},{\"reason_code\":\"todo_identity_missing\",\"goal_id\":\"sample\",\"detail\":\"Structured todo candidate from agent_scope_frontier.items has no todo_id.\"},{\"reason_code\":\"conflicting_readiness_projection\",\"goal_id\":\"sample\",\"todo_id\":\"todo_sample\",\"detail\":\"Multiple structured readiness signals were projected.\"}],\"source_warnings_truncated\":false,\"projection_envelope\":{\"schema_version\":\"loopx_projection_envelope_v0\",\"projection\":\"global_todos\",\"observed_at\":\"2026-11-02T00:00:00+00:00\",\"served_at\":\"2026-11-02T00:00:00+00:00\",\"age_seconds\":0,\"served_from_cache\":false,\"fresh\":false,\"complete\":false,\"alert\":true,\"alert_reasons\":[\"incomplete_coverage\",\"missing_required_sources\"],\"alert_source_ids\":[\"global_registry\",\"status\"],\"sources\":[{\"source_id\":\"global_registry\",\"required\":true,\"read_status\":\"missing\",\"last_read_at\":null,\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":null,\"status\":\"missing\",\"item_count\":null,\"missing_count\":0,\"unreadable_count\":0,\"alert\":true,\"alert_reasons\":[\"missing\"]},{\"source_id\":\"goal_quota\",\"required\":true,\"read_status\":\"read\",\"last_read_at\":\"2026-11-02T00:00:00+00:00\",\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":0,\"status\":\"fresh\",\"item_count\":1,\"missing_count\":0,\"unreadable_count\":0,\"alert\":false,\"alert_reasons\":[]},{\"source_id\":\"attention_queue\",\"required\":true,\"read_status\":\"read\",\"last_read_at\":\"2026-11-02T00:00:00+00:00\",\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":0,\"status\":\"fresh\",\"item_count\":1,\"missing_count\":0,\"unreadable_count\":0,\"alert\":false,\"alert_reasons\":[]},{\"source_id\":\"status\",\"required\":true,\"read_status\":\"not_read\",\"last_read_at\":null,\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":null,\"status\":\"not_read\",\"item_count\":null,\"missing_count\":0,\"unreadable_count\":0,\"alert\":true,\"alert_reasons\":[\"not_read\"]}],\"coverage\":{\"scope\":\"global\",\"expected_count\":null,\"included_count\":0,\"omitted\":[],\"shown_count\":3,\"available_count\":3,\"truncated\":false,\"complete\":false},\"upstream\":[]},\"omissions\":[\"Raw logs, raw transcripts, connector payloads, credential values, local paths, and private source bodies were intentionally omitted.\",\"Recent progress, gates, and unrelated risks are outside this focused command.\"],\"boundary\":{\"raw_logs_recorded\":false,\"raw_transcripts_recorded\":false,\"raw_connector_payloads_recorded\":false,\"credential_values_recorded\":false,\"absolute_paths_recorded\":false,\"private_source_bodies_recorded\":false}}",
+      "global_markdown": "# LoopX Global Todos\n\n- command: `/loopx-global-todos`\n- matched: `3`\n- returned: `3`\n- truncated: `False`\n- goal_scan_truncated: `False`\n- projection: 🔴 envelope=`loopx_projection_envelope_v0` observed_at=`2026-11-02T00:00:00+00:00` age=`0s` sources_fresh=`2/4` coverage=`0/None` scope=`global`\n- 🔴 projection alerts: `incomplete_coverage,missing_required_sources` sources=`global_registry,status` omitted=`-`; state this before treating the projection as current or whole\n\nReview is an overlapping work-kind facet of the readiness groups.\n\n## Runnable\n- None.\n\n## Deferred Ready\n- goal=`sample` todo=`todo_deferred` priority=`unknown` owner=`agent`: Untitled todo. Next: Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\n\n## Blocked\n- goal=`sample` todo=`todo_sample` priority=`P0` owner=`agent`: Complementary title Next: Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\n- goal=`sample` todo=`todo_blocked` priority=`unknown` owner=`agent`: Untitled todo. Next: Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\n\n## Review\n- None.\n\n## Source Warnings\n- `todo_identity_missing` goal=`sample`: Structured todo candidate from agent_todo_summary.items has no todo_id.\n- `todo_identity_missing` goal=`sample`: Structured todo candidate from agent_scope_frontier.items has no todo_id.\n- `conflicting_readiness_projection` goal=`sample` todo=`todo_sample`: Multiple structured readiness signals were projected.\n\n## Boundary\n- Raw/private material omitted; local paths are not recorded.",
+      "portfolio_json": "{\"ok\":true,\"schema_version\":\"goal_portfolio_v0\",\"collected_at\":\"2026-11-02T00:00:00+00:00\",\"collection_completed_at\":\"2026-11-02T00:00:00+00:00\",\"inventory_revision\":\"sha256:fefe0094588f824dc245d7b04ded8653cb5021c00c8daea19ceb3b16fbc131d4\",\"scope\":{\"kind\":\"caller_authorized_registry\",\"requested_goal_ids\":[\"sample\"],\"missing_goal_ids\":[]},\"coverage\":{\"discovered\":1,\"attempted\":1,\"stopped_excluded\":0,\"verified\":0,\"stale\":0,\"conflicting\":1,\"unreadable\":0,\"partial\":0,\"omitted\":0,\"invalid_registry_entries\":0,\"complete\":false},\"warnings\":[],\"goals\":[{\"goal_id\":\"sample\",\"host_id\":null,\"project_id\":null,\"quality\":\"conflicting\",\"progress\":\"unknown\",\"warnings\":[\"todo_identity_missing\",\"todo_identity_missing\",\"conflicting_readiness_projection\",\"todo_identity_missing\",\"todo_identity_missing\",\"conflicting_readiness_projection\"],\"agents\":[{\"agent_id\":\"alpha\",\"source_verified\":true,\"waiting_on\":null,\"todos\":[{\"todo_id\":\"todo_sample\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"P0\",\"title\":\"Complementary title\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\",\"claimed_by\":null,\"readiness\":\"blocked\"},{\"todo_id\":\"todo_deferred\",\"role\":\"agent\",\"status\":\"deferred\",\"priority\":\"\",\"title\":\"\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\",\"claimed_by\":null,\"readiness\":\"deferred_ready\"},{\"todo_id\":\"todo_blocked\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"\",\"title\":\"\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\",\"claimed_by\":null,\"readiness\":\"blocked\"}],\"owner_gate_ids\":[\"todo_gate\",\"todo_other_gate\"]},{\"agent_id\":\"beta\",\"source_verified\":true,\"waiting_on\":null,\"todos\":[{\"todo_id\":\"todo_sample\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"P0\",\"title\":\"Complementary title\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\",\"claimed_by\":null,\"readiness\":\"blocked\"},{\"todo_id\":\"todo_deferred\",\"role\":\"agent\",\"status\":\"deferred\",\"priority\":\"\",\"title\":\"\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\",\"claimed_by\":null,\"readiness\":\"deferred_ready\"},{\"todo_id\":\"todo_blocked\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"\",\"title\":\"\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\",\"claimed_by\":null,\"readiness\":\"blocked\"}],\"owner_gate_ids\":[\"todo_gate\",\"todo_other_gate\"]}],\"deliveries\":[],\"source\":{\"kind\":\"core_status\",\"revision\":\"sha256:bd5039affc9f0707912ac5b617e70b516e3227aa91761cf23d6e4f9a2cda8155\",\"observed_at\":\"2026-11-02T00:00:00+00:00\",\"file_metadata_revisions\":{\"run_index\":null},\"latest_recorded_at\":\"2026-11-02T00:00:00+00:00\"},\"agent_coverage\":{\"discovered\":2,\"attempted\":2,\"omitted\":0},\"activation_state\":\"active\"}],\"limitations\":[\"Local registry projection; unavailable remote sources are not fetched.\",\"Evidence refs identify Core records, not an independent artifact audit.\",\"Latest evidence-bearing delivery per Agent; not a complete delivery history.\",\"Todo readiness reuses the Core summary; the returned task list is not exhaustive.\",\"No absence-of-progress or all-healthy conclusion; external sharing needs its own scope authorization.\"],\"snapshot_id\":\"sha256:ede2b0223a69ab0e6804e43ecd21be15d27e66ed64fe895b333439264fb30108\"}",
+      "portfolio_markdown": "Goal coverage: 0/1 sources verified; complete=False\n- sample: conflicting; progress=unknown; recorded deliveries=0"
+    },
+    "crossings_before": {
+      "global": [
+        "todo.decision_scope.evaluate",
+        "projection.envelope.seal"
+      ],
+      "portfolio": [
+        "todo.decision_scope.evaluate",
+        "todo.decision_scope.evaluate"
+      ]
+    },
+    "crossings_after": {
+      "global": [
+        "todo.global_readiness.project",
+        "projection.envelope.seal"
+      ],
+      "portfolio": [
+        "todo.global_readiness.project",
+        "todo.global_readiness.project"
+      ]
+    }
+  },
+  {
+    "name": "scope_gate",
+    "quota": {
+      "ok": true,
+      "normal_delivery_allowed": true,
+      "selected_todo": {
+        "todo_id": "todo_sample",
+        "status": "open",
+        "title": "",
+        "priority": null,
+        "text": "Synthetic long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text  /home/sample/private.txt",
+        "required_decision_scopes": [
+          {
+            "kind": "write_scope",
+            "granularity": "action",
+            "scope_key": "sample"
+          }
+        ]
+      },
+      "agent_lane_next_action": {
+        "todo_id": "todo_sample",
+        "status": "blocked",
+        "title": "Complementary title",
+        "priority": "P0",
+        "text": "Synthetic long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text  /home/sample/private.txt",
+        "required_decision_scopes": [
+          {
+            "kind": "write_scope",
+            "granularity": "action",
+            "scope_key": "sample"
+          }
+        ]
+      },
+      "agent_todo_summary": {
+        "items": [
+          {
+            "todo_id": "todo_scope",
+            "required_decision_scopes": [
+              {
+                "kind": "write_scope",
+                "granularity": "action",
+                "scope_key": "sample"
+              }
+            ]
+          },
+          {
+            "todo_id": "todo_unrelated",
+            "status": "open"
+          },
+          {
+            "text": "Missing identity"
+          }
+        ],
+        "deferred_resume_candidates": [
+          {
+            "todo_id": "todo_sample",
+            "status": "deferred",
+            "resume_ready": true
+          },
+          {
+            "todo_id": "todo_deferred",
+            "status": "deferred",
+            "resume_ready": true
+          }
+        ],
+        "blocker_items": [
+          {
+            "todo_id": "todo_blocked",
+            "status": "open"
+          }
+        ]
+      },
+      "agent_scope_frontier": {
+        "items": [
+          {
+            "text": "Second missing identity"
+          },
+          {
+            "todo_id": "todo_sample",
+            "status": "open"
+          }
+        ]
+      },
+      "user_todo_summary": {
+        "items": [
+          {
+            "todo_id": "todo_gate",
+            "task_class": "user_gate",
+            "decision_scope": {
+              "kind": "write_scope",
+              "granularity": "action",
+              "scope_key": "sample"
+            }
+          }
+        ]
+      },
+      "recommended_action": "Inspect synthetic /home/sample/private.txt details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details details "
+    },
+    "expected": {
+      "global_json": "{\"ok\":true,\"schema_version\":\"global_manager_command_response_v0\",\"request\":{\"schema_version\":\"global_manager_command_request_v0\",\"command\":\"/loopx-global-todos\",\"legacy_aliases\":[\"/loop-global-todos\"],\"cli_command\":\"loopx global-todos\",\"include\":[\"runnable\",\"blocked\",\"deferred_ready\",\"review\"],\"privacy_mode\":\"public_safe_summary\",\"dry_run\":true},\"generated_at\":\"2026-11-02T00:00:00+00:00\",\"summary\":{\"headline\":\"4 of 4 classified todos returned.\",\"matched_todo_count\":4,\"returned_todo_count\":4,\"runnable_count\":0,\"blocked_count\":3,\"deferred_ready_count\":1,\"review_count\":0,\"source_warning_count\":3,\"source_surfaces\":[\"status attention queue\",\"quota should-run summaries\",\"active-state todo projections\",\"compact run-history projection consumed by status\"],\"truncated\":false,\"goal_scan_limit\":160,\"goal_scan_truncated\":false},\"groups\":{\"runnable\":[],\"deferred_ready\":[{\"todo_id\":\"todo_deferred\",\"goal_id\":\"sample\",\"role\":\"agent\",\"status\":\"deferred\",\"priority\":\"\",\"title\":\"\",\"claimed_by\":null,\"action_kind\":\"\",\"readiness\":\"deferred_ready\",\"work_kind\":\"ordinary\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\"}],\"blocked\":[{\"todo_id\":\"todo_sample\",\"goal_id\":\"sample\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"P0\",\"title\":\"Complementary title\",\"claimed_by\":null,\"action_kind\":\"\",\"readiness\":\"blocked\",\"work_kind\":\"ordinary\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\"},{\"todo_id\":\"todo_blocked\",\"goal_id\":\"sample\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"\",\"title\":\"\",\"claimed_by\":null,\"action_kind\":\"\",\"readiness\":\"blocked\",\"work_kind\":\"ordinary\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\"},{\"todo_id\":\"todo_scope\",\"goal_id\":\"sample\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"\",\"title\":\"\",\"claimed_by\":null,\"action_kind\":\"\",\"readiness\":\"blocked\",\"work_kind\":\"ordinary\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\"}],\"review\":[]},\"todos\":[{\"todo_id\":\"todo_deferred\",\"goal_id\":\"sample\",\"role\":\"agent\",\"status\":\"deferred\",\"priority\":\"\",\"title\":\"\",\"claimed_by\":null,\"action_kind\":\"\",\"readiness\":\"deferred_ready\",\"work_kind\":\"ordinary\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\"},{\"todo_id\":\"todo_sample\",\"goal_id\":\"sample\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"P0\",\"title\":\"Complementary title\",\"claimed_by\":null,\"action_kind\":\"\",\"readiness\":\"blocked\",\"work_kind\":\"ordinary\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\"},{\"todo_id\":\"todo_blocked\",\"goal_id\":\"sample\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"\",\"title\":\"\",\"claimed_by\":null,\"action_kind\":\"\",\"readiness\":\"blocked\",\"work_kind\":\"ordinary\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\"},{\"todo_id\":\"todo_scope\",\"goal_id\":\"sample\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"\",\"title\":\"\",\"claimed_by\":null,\"action_kind\":\"\",\"readiness\":\"blocked\",\"work_kind\":\"ordinary\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\"}],\"source_warnings\":[{\"reason_code\":\"todo_identity_missing\",\"goal_id\":\"sample\",\"detail\":\"Structured todo candidate from agent_todo_summary.items has no todo_id.\"},{\"reason_code\":\"todo_identity_missing\",\"goal_id\":\"sample\",\"detail\":\"Structured todo candidate from agent_scope_frontier.items has no todo_id.\"},{\"reason_code\":\"conflicting_readiness_projection\",\"goal_id\":\"sample\",\"todo_id\":\"todo_sample\",\"detail\":\"Multiple structured readiness signals were projected.\"}],\"source_warnings_truncated\":false,\"projection_envelope\":{\"schema_version\":\"loopx_projection_envelope_v0\",\"projection\":\"global_todos\",\"observed_at\":\"2026-11-02T00:00:00+00:00\",\"served_at\":\"2026-11-02T00:00:00+00:00\",\"age_seconds\":0,\"served_from_cache\":false,\"fresh\":false,\"complete\":false,\"alert\":true,\"alert_reasons\":[\"incomplete_coverage\",\"missing_required_sources\"],\"alert_source_ids\":[\"global_registry\",\"status\"],\"sources\":[{\"source_id\":\"global_registry\",\"required\":true,\"read_status\":\"missing\",\"last_read_at\":null,\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":null,\"status\":\"missing\",\"item_count\":null,\"missing_count\":0,\"unreadable_count\":0,\"alert\":true,\"alert_reasons\":[\"missing\"]},{\"source_id\":\"goal_quota\",\"required\":true,\"read_status\":\"read\",\"last_read_at\":\"2026-11-02T00:00:00+00:00\",\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":0,\"status\":\"fresh\",\"item_count\":1,\"missing_count\":0,\"unreadable_count\":0,\"alert\":false,\"alert_reasons\":[]},{\"source_id\":\"attention_queue\",\"required\":true,\"read_status\":\"read\",\"last_read_at\":\"2026-11-02T00:00:00+00:00\",\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":0,\"status\":\"fresh\",\"item_count\":1,\"missing_count\":0,\"unreadable_count\":0,\"alert\":false,\"alert_reasons\":[]},{\"source_id\":\"status\",\"required\":true,\"read_status\":\"not_read\",\"last_read_at\":null,\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":null,\"status\":\"not_read\",\"item_count\":null,\"missing_count\":0,\"unreadable_count\":0,\"alert\":true,\"alert_reasons\":[\"not_read\"]}],\"coverage\":{\"scope\":\"global\",\"expected_count\":null,\"included_count\":0,\"omitted\":[],\"shown_count\":4,\"available_count\":4,\"truncated\":false,\"complete\":false},\"upstream\":[]},\"omissions\":[\"Raw logs, raw transcripts, connector payloads, credential values, local paths, and private source bodies were intentionally omitted.\",\"Recent progress, gates, and unrelated risks are outside this focused command.\"],\"boundary\":{\"raw_logs_recorded\":false,\"raw_transcripts_recorded\":false,\"raw_connector_payloads_recorded\":false,\"credential_values_recorded\":false,\"absolute_paths_recorded\":false,\"private_source_bodies_recorded\":false}}",
+      "global_markdown": "# LoopX Global Todos\n\n- command: `/loopx-global-todos`\n- matched: `4`\n- returned: `4`\n- truncated: `False`\n- goal_scan_truncated: `False`\n- projection: 🔴 envelope=`loopx_projection_envelope_v0` observed_at=`2026-11-02T00:00:00+00:00` age=`0s` sources_fresh=`2/4` coverage=`0/None` scope=`global`\n- 🔴 projection alerts: `incomplete_coverage,missing_required_sources` sources=`global_registry,status` omitted=`-`; state this before treating the projection as current or whole\n\nReview is an overlapping work-kind facet of the readiness groups.\n\n## Runnable\n- None.\n\n## Deferred Ready\n- goal=`sample` todo=`todo_deferred` priority=`unknown` owner=`agent`: Untitled todo. Next: Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\n\n## Blocked\n- goal=`sample` todo=`todo_sample` priority=`P0` owner=`agent`: Complementary title Next: Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\n- goal=`sample` todo=`todo_blocked` priority=`unknown` owner=`agent`: Untitled todo. Next: Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\n- goal=`sample` todo=`todo_scope` priority=`unknown` owner=`agent`: Untitled todo. Next: Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\n\n## Review\n- None.\n\n## Source Warnings\n- `todo_identity_missing` goal=`sample`: Structured todo candidate from agent_todo_summary.items has no todo_id.\n- `todo_identity_missing` goal=`sample`: Structured todo candidate from agent_scope_frontier.items has no todo_id.\n- `conflicting_readiness_projection` goal=`sample` todo=`todo_sample`: Multiple structured readiness signals were projected.\n\n## Boundary\n- Raw/private material omitted; local paths are not recorded.",
+      "portfolio_json": "{\"ok\":true,\"schema_version\":\"goal_portfolio_v0\",\"collected_at\":\"2026-11-02T00:00:00+00:00\",\"collection_completed_at\":\"2026-11-02T00:00:00+00:00\",\"inventory_revision\":\"sha256:fefe0094588f824dc245d7b04ded8653cb5021c00c8daea19ceb3b16fbc131d4\",\"scope\":{\"kind\":\"caller_authorized_registry\",\"requested_goal_ids\":[\"sample\"],\"missing_goal_ids\":[]},\"coverage\":{\"discovered\":1,\"attempted\":1,\"stopped_excluded\":0,\"verified\":0,\"stale\":0,\"conflicting\":1,\"unreadable\":0,\"partial\":0,\"omitted\":0,\"invalid_registry_entries\":0,\"complete\":false},\"warnings\":[],\"goals\":[{\"goal_id\":\"sample\",\"host_id\":null,\"project_id\":null,\"quality\":\"conflicting\",\"progress\":\"unknown\",\"warnings\":[\"todo_identity_missing\",\"todo_identity_missing\",\"conflicting_readiness_projection\",\"todo_identity_missing\",\"todo_identity_missing\",\"conflicting_readiness_projection\"],\"agents\":[{\"agent_id\":\"alpha\",\"source_verified\":true,\"waiting_on\":null,\"todos\":[{\"todo_id\":\"todo_sample\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"P0\",\"title\":\"Complementary title\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\",\"claimed_by\":null,\"readiness\":\"blocked\"},{\"todo_id\":\"todo_scope\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"\",\"title\":\"\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\",\"claimed_by\":null,\"readiness\":\"blocked\"},{\"todo_id\":\"todo_deferred\",\"role\":\"agent\",\"status\":\"deferred\",\"priority\":\"\",\"title\":\"\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\",\"claimed_by\":null,\"readiness\":\"deferred_ready\"},{\"todo_id\":\"todo_blocked\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"\",\"title\":\"\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\",\"claimed_by\":null,\"readiness\":\"blocked\"}],\"owner_gate_ids\":[]},{\"agent_id\":\"beta\",\"source_verified\":true,\"waiting_on\":null,\"todos\":[{\"todo_id\":\"todo_sample\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"P0\",\"title\":\"Complementary title\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\",\"claimed_by\":null,\"readiness\":\"blocked\"},{\"todo_id\":\"todo_scope\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"\",\"title\":\"\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\",\"claimed_by\":null,\"readiness\":\"blocked\"},{\"todo_id\":\"todo_deferred\",\"role\":\"agent\",\"status\":\"deferred\",\"priority\":\"\",\"title\":\"\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\",\"claimed_by\":null,\"readiness\":\"deferred_ready\"},{\"todo_id\":\"todo_blocked\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"\",\"title\":\"\",\"next_safe_action\":\"Inspect synthetic <local-path-redacted> details details details details details details details details details details details details details details details details details details details details details details details details details details details det…\",\"claimed_by\":null,\"readiness\":\"blocked\"}],\"owner_gate_ids\":[]}],\"deliveries\":[],\"source\":{\"kind\":\"core_status\",\"revision\":\"sha256:bd5039affc9f0707912ac5b617e70b516e3227aa91761cf23d6e4f9a2cda8155\",\"observed_at\":\"2026-11-02T00:00:00+00:00\",\"file_metadata_revisions\":{\"run_index\":null},\"latest_recorded_at\":\"2026-11-02T00:00:00+00:00\"},\"agent_coverage\":{\"discovered\":2,\"attempted\":2,\"omitted\":0},\"activation_state\":\"active\"}],\"limitations\":[\"Local registry projection; unavailable remote sources are not fetched.\",\"Evidence refs identify Core records, not an independent artifact audit.\",\"Latest evidence-bearing delivery per Agent; not a complete delivery history.\",\"Todo readiness reuses the Core summary; the returned task list is not exhaustive.\",\"No absence-of-progress or all-healthy conclusion; external sharing needs its own scope authorization.\"],\"snapshot_id\":\"sha256:6456d8ee70ecfe5098f51e7b47d1d7b31fd8398d6dd1249d886588fbdd6c7610\"}",
+      "portfolio_markdown": "Goal coverage: 0/1 sources verified; complete=False\n- sample: conflicting; progress=unknown; recorded deliveries=0"
+    },
+    "crossings_before": {
+      "global": [
+        "todo.decision_scope.evaluate",
+        "projection.envelope.seal"
+      ],
+      "portfolio": [
+        "todo.decision_scope.evaluate",
+        "todo.decision_scope.evaluate"
+      ]
+    },
+    "crossings_after": {
+      "global": [
+        "todo.global_readiness.project",
+        "projection.envelope.seal"
+      ],
+      "portfolio": [
+        "todo.global_readiness.project",
+        "todo.global_readiness.project"
+      ]
+    }
+  },
+  {
+    "name": "delivery_denied",
+    "quota": {
+      "ok": true,
+      "normal_delivery_allowed": false,
+      "selected_todo": {
+        "todo_id": "todo_sample",
+        "status": "open",
+        "title": "",
+        "priority": null,
+        "text": "Synthetic long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text  /home/sample/private.txt",
+        "required_decision_scopes": [
+          {
+            "kind": "write_scope",
+            "granularity": "action",
+            "scope_key": "sample"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "global_json": "{\"ok\":true,\"schema_version\":\"global_manager_command_response_v0\",\"request\":{\"schema_version\":\"global_manager_command_request_v0\",\"command\":\"/loopx-global-todos\",\"legacy_aliases\":[\"/loop-global-todos\"],\"cli_command\":\"loopx global-todos\",\"include\":[\"runnable\",\"blocked\",\"deferred_ready\",\"review\"],\"privacy_mode\":\"public_safe_summary\",\"dry_run\":true},\"generated_at\":\"2026-11-02T00:00:00+00:00\",\"summary\":{\"headline\":\"0 of 0 classified todos returned.\",\"matched_todo_count\":0,\"returned_todo_count\":0,\"runnable_count\":0,\"blocked_count\":0,\"deferred_ready_count\":0,\"review_count\":0,\"source_warning_count\":0,\"source_surfaces\":[\"status attention queue\",\"quota should-run summaries\",\"active-state todo projections\",\"compact run-history projection consumed by status\"],\"truncated\":false,\"goal_scan_limit\":160,\"goal_scan_truncated\":false},\"groups\":{\"runnable\":[],\"deferred_ready\":[],\"blocked\":[],\"review\":[]},\"todos\":[],\"source_warnings\":[],\"source_warnings_truncated\":false,\"projection_envelope\":{\"schema_version\":\"loopx_projection_envelope_v0\",\"projection\":\"global_todos\",\"observed_at\":\"2026-11-02T00:00:00+00:00\",\"served_at\":\"2026-11-02T00:00:00+00:00\",\"age_seconds\":0,\"served_from_cache\":false,\"fresh\":false,\"complete\":false,\"alert\":true,\"alert_reasons\":[\"incomplete_coverage\",\"missing_required_sources\"],\"alert_source_ids\":[\"global_registry\",\"status\"],\"sources\":[{\"source_id\":\"global_registry\",\"required\":true,\"read_status\":\"missing\",\"last_read_at\":null,\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":null,\"status\":\"missing\",\"item_count\":null,\"missing_count\":0,\"unreadable_count\":0,\"alert\":true,\"alert_reasons\":[\"missing\"]},{\"source_id\":\"goal_quota\",\"required\":true,\"read_status\":\"read\",\"last_read_at\":\"2026-11-02T00:00:00+00:00\",\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":0,\"status\":\"fresh\",\"item_count\":1,\"missing_count\":0,\"unreadable_count\":0,\"alert\":false,\"alert_reasons\":[]},{\"source_id\":\"attention_queue\",\"required\":true,\"read_status\":\"read\",\"last_read_at\":\"2026-11-02T00:00:00+00:00\",\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":0,\"status\":\"fresh\",\"item_count\":1,\"missing_count\":0,\"unreadable_count\":0,\"alert\":false,\"alert_reasons\":[]},{\"source_id\":\"status\",\"required\":true,\"read_status\":\"not_read\",\"last_read_at\":null,\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":null,\"status\":\"not_read\",\"item_count\":null,\"missing_count\":0,\"unreadable_count\":0,\"alert\":true,\"alert_reasons\":[\"not_read\"]}],\"coverage\":{\"scope\":\"global\",\"expected_count\":null,\"included_count\":0,\"omitted\":[],\"shown_count\":0,\"available_count\":0,\"truncated\":false,\"complete\":false},\"upstream\":[]},\"omissions\":[\"Raw logs, raw transcripts, connector payloads, credential values, local paths, and private source bodies were intentionally omitted.\",\"Recent progress, gates, and unrelated risks are outside this focused command.\"],\"boundary\":{\"raw_logs_recorded\":false,\"raw_transcripts_recorded\":false,\"raw_connector_payloads_recorded\":false,\"credential_values_recorded\":false,\"absolute_paths_recorded\":false,\"private_source_bodies_recorded\":false}}",
+      "global_markdown": "# LoopX Global Todos\n\n- command: `/loopx-global-todos`\n- matched: `0`\n- returned: `0`\n- truncated: `False`\n- goal_scan_truncated: `False`\n- projection: 🔴 envelope=`loopx_projection_envelope_v0` observed_at=`2026-11-02T00:00:00+00:00` age=`0s` sources_fresh=`2/4` coverage=`0/None` scope=`global`\n- 🔴 projection alerts: `incomplete_coverage,missing_required_sources` sources=`global_registry,status` omitted=`-`; state this before treating the projection as current or whole\n\nReview is an overlapping work-kind facet of the readiness groups.\n\n## Runnable\n- None.\n\n## Deferred Ready\n- None.\n\n## Blocked\n- None.\n\n## Review\n- None.\n\n## Boundary\n- Raw/private material omitted; local paths are not recorded.",
+      "portfolio_json": "{\"ok\":true,\"schema_version\":\"goal_portfolio_v0\",\"collected_at\":\"2026-11-02T00:00:00+00:00\",\"collection_completed_at\":\"2026-11-02T00:00:00+00:00\",\"inventory_revision\":\"sha256:fefe0094588f824dc245d7b04ded8653cb5021c00c8daea19ceb3b16fbc131d4\",\"scope\":{\"kind\":\"caller_authorized_registry\",\"requested_goal_ids\":[\"sample\"],\"missing_goal_ids\":[]},\"coverage\":{\"discovered\":1,\"attempted\":1,\"stopped_excluded\":0,\"verified\":1,\"stale\":0,\"conflicting\":0,\"unreadable\":0,\"partial\":0,\"omitted\":0,\"invalid_registry_entries\":0,\"complete\":true},\"warnings\":[],\"goals\":[{\"goal_id\":\"sample\",\"host_id\":null,\"project_id\":null,\"quality\":\"verified\",\"progress\":\"unknown\",\"warnings\":[],\"agents\":[{\"agent_id\":\"alpha\",\"source_verified\":true,\"waiting_on\":null,\"todos\":[],\"owner_gate_ids\":[]},{\"agent_id\":\"beta\",\"source_verified\":true,\"waiting_on\":null,\"todos\":[],\"owner_gate_ids\":[]}],\"deliveries\":[],\"source\":{\"kind\":\"core_status\",\"revision\":\"sha256:bd5039affc9f0707912ac5b617e70b516e3227aa91761cf23d6e4f9a2cda8155\",\"observed_at\":\"2026-11-02T00:00:00+00:00\",\"file_metadata_revisions\":{\"run_index\":null},\"latest_recorded_at\":\"2026-11-02T00:00:00+00:00\"},\"agent_coverage\":{\"discovered\":2,\"attempted\":2,\"omitted\":0},\"activation_state\":\"active\"}],\"limitations\":[\"Local registry projection; unavailable remote sources are not fetched.\",\"Evidence refs identify Core records, not an independent artifact audit.\",\"Latest evidence-bearing delivery per Agent; not a complete delivery history.\",\"Todo readiness reuses the Core summary; the returned task list is not exhaustive.\",\"No absence-of-progress or all-healthy conclusion; external sharing needs its own scope authorization.\"],\"snapshot_id\":\"sha256:4bf8cc4643fd1d06f832be5e145b1e6a14a7d44d4a673505c2ce48fee89af385\"}",
+      "portfolio_markdown": "Goal coverage: 1/1 sources verified; complete=True\n- sample: verified; progress=unknown; recorded deliveries=0"
+    },
+    "crossings_before": {
+      "global": [
+        "projection.envelope.seal"
+      ],
+      "portfolio": []
+    },
+    "crossings_after": {
+      "global": [
+        "todo.global_readiness.project",
+        "projection.envelope.seal"
+      ],
+      "portfolio": [
+        "todo.global_readiness.project",
+        "todo.global_readiness.project"
+      ]
+    }
+  },
+  {
+    "name": "no_gates",
+    "quota": {
+      "ok": true,
+      "normal_delivery_allowed": true,
+      "selected_todo": {
+        "todo_id": "todo_sample",
+        "status": "open",
+        "title": "",
+        "priority": null,
+        "text": "Synthetic long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text  /home/sample/private.txt",
+        "required_decision_scopes": [
+          {
+            "kind": "write_scope",
+            "granularity": "action",
+            "scope_key": "sample"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "global_json": "{\"ok\":true,\"schema_version\":\"global_manager_command_response_v0\",\"request\":{\"schema_version\":\"global_manager_command_request_v0\",\"command\":\"/loopx-global-todos\",\"legacy_aliases\":[\"/loop-global-todos\"],\"cli_command\":\"loopx global-todos\",\"include\":[\"runnable\",\"blocked\",\"deferred_ready\",\"review\"],\"privacy_mode\":\"public_safe_summary\",\"dry_run\":true},\"generated_at\":\"2026-11-02T00:00:00+00:00\",\"summary\":{\"headline\":\"1 of 1 classified todos returned.\",\"matched_todo_count\":1,\"returned_todo_count\":1,\"runnable_count\":1,\"blocked_count\":0,\"deferred_ready_count\":0,\"review_count\":0,\"source_warning_count\":0,\"source_surfaces\":[\"status attention queue\",\"quota should-run summaries\",\"active-state todo projections\",\"compact run-history projection consumed by status\"],\"truncated\":false,\"goal_scan_limit\":160,\"goal_scan_truncated\":false},\"groups\":{\"runnable\":[{\"todo_id\":\"todo_sample\",\"goal_id\":\"sample\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"\",\"title\":\"Synthetic long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text…\",\"claimed_by\":null,\"action_kind\":\"\",\"readiness\":\"runnable\",\"work_kind\":\"ordinary\",\"next_safe_action\":\"\"}],\"deferred_ready\":[],\"blocked\":[],\"review\":[]},\"todos\":[{\"todo_id\":\"todo_sample\",\"goal_id\":\"sample\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"\",\"title\":\"Synthetic long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text…\",\"claimed_by\":null,\"action_kind\":\"\",\"readiness\":\"runnable\",\"work_kind\":\"ordinary\",\"next_safe_action\":\"\"}],\"source_warnings\":[],\"source_warnings_truncated\":false,\"projection_envelope\":{\"schema_version\":\"loopx_projection_envelope_v0\",\"projection\":\"global_todos\",\"observed_at\":\"2026-11-02T00:00:00+00:00\",\"served_at\":\"2026-11-02T00:00:00+00:00\",\"age_seconds\":0,\"served_from_cache\":false,\"fresh\":false,\"complete\":false,\"alert\":true,\"alert_reasons\":[\"incomplete_coverage\",\"missing_required_sources\"],\"alert_source_ids\":[\"global_registry\",\"status\"],\"sources\":[{\"source_id\":\"global_registry\",\"required\":true,\"read_status\":\"missing\",\"last_read_at\":null,\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":null,\"status\":\"missing\",\"item_count\":null,\"missing_count\":0,\"unreadable_count\":0,\"alert\":true,\"alert_reasons\":[\"missing\"]},{\"source_id\":\"goal_quota\",\"required\":true,\"read_status\":\"read\",\"last_read_at\":\"2026-11-02T00:00:00+00:00\",\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":0,\"status\":\"fresh\",\"item_count\":1,\"missing_count\":0,\"unreadable_count\":0,\"alert\":false,\"alert_reasons\":[]},{\"source_id\":\"attention_queue\",\"required\":true,\"read_status\":\"read\",\"last_read_at\":\"2026-11-02T00:00:00+00:00\",\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":0,\"status\":\"fresh\",\"item_count\":1,\"missing_count\":0,\"unreadable_count\":0,\"alert\":false,\"alert_reasons\":[]},{\"source_id\":\"status\",\"required\":true,\"read_status\":\"not_read\",\"last_read_at\":null,\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":null,\"status\":\"not_read\",\"item_count\":null,\"missing_count\":0,\"unreadable_count\":0,\"alert\":true,\"alert_reasons\":[\"not_read\"]}],\"coverage\":{\"scope\":\"global\",\"expected_count\":null,\"included_count\":0,\"omitted\":[],\"shown_count\":1,\"available_count\":1,\"truncated\":false,\"complete\":false},\"upstream\":[]},\"omissions\":[\"Raw logs, raw transcripts, connector payloads, credential values, local paths, and private source bodies were intentionally omitted.\",\"Recent progress, gates, and unrelated risks are outside this focused command.\"],\"boundary\":{\"raw_logs_recorded\":false,\"raw_transcripts_recorded\":false,\"raw_connector_payloads_recorded\":false,\"credential_values_recorded\":false,\"absolute_paths_recorded\":false,\"private_source_bodies_recorded\":false}}",
+      "global_markdown": "# LoopX Global Todos\n\n- command: `/loopx-global-todos`\n- matched: `1`\n- returned: `1`\n- truncated: `False`\n- goal_scan_truncated: `False`\n- projection: 🔴 envelope=`loopx_projection_envelope_v0` observed_at=`2026-11-02T00:00:00+00:00` age=`0s` sources_fresh=`2/4` coverage=`0/None` scope=`global`\n- 🔴 projection alerts: `incomplete_coverage,missing_required_sources` sources=`global_registry,status` omitted=`-`; state this before treating the projection as current or whole\n\nReview is an overlapping work-kind facet of the readiness groups.\n\n## Runnable\n- goal=`sample` todo=`todo_sample` priority=`unknown` owner=`agent`: Synthetic long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text…\n\n## Deferred Ready\n- None.\n\n## Blocked\n- None.\n\n## Review\n- None.\n\n## Boundary\n- Raw/private material omitted; local paths are not recorded.",
+      "portfolio_json": "{\"ok\":true,\"schema_version\":\"goal_portfolio_v0\",\"collected_at\":\"2026-11-02T00:00:00+00:00\",\"collection_completed_at\":\"2026-11-02T00:00:00+00:00\",\"inventory_revision\":\"sha256:fefe0094588f824dc245d7b04ded8653cb5021c00c8daea19ceb3b16fbc131d4\",\"scope\":{\"kind\":\"caller_authorized_registry\",\"requested_goal_ids\":[\"sample\"],\"missing_goal_ids\":[]},\"coverage\":{\"discovered\":1,\"attempted\":1,\"stopped_excluded\":0,\"verified\":1,\"stale\":0,\"conflicting\":0,\"unreadable\":0,\"partial\":0,\"omitted\":0,\"invalid_registry_entries\":0,\"complete\":true},\"warnings\":[],\"goals\":[{\"goal_id\":\"sample\",\"host_id\":null,\"project_id\":null,\"quality\":\"verified\",\"progress\":\"unknown\",\"warnings\":[],\"agents\":[{\"agent_id\":\"alpha\",\"source_verified\":true,\"waiting_on\":null,\"todos\":[{\"todo_id\":\"todo_sample\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"\",\"title\":\"Synthetic long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text…\",\"next_safe_action\":\"\",\"claimed_by\":null,\"readiness\":\"runnable\"}],\"owner_gate_ids\":[]},{\"agent_id\":\"beta\",\"source_verified\":true,\"waiting_on\":null,\"todos\":[{\"todo_id\":\"todo_sample\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"\",\"title\":\"Synthetic long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text long text…\",\"next_safe_action\":\"\",\"claimed_by\":null,\"readiness\":\"runnable\"}],\"owner_gate_ids\":[]}],\"deliveries\":[],\"source\":{\"kind\":\"core_status\",\"revision\":\"sha256:bd5039affc9f0707912ac5b617e70b516e3227aa91761cf23d6e4f9a2cda8155\",\"observed_at\":\"2026-11-02T00:00:00+00:00\",\"file_metadata_revisions\":{\"run_index\":null},\"latest_recorded_at\":\"2026-11-02T00:00:00+00:00\"},\"agent_coverage\":{\"discovered\":2,\"attempted\":2,\"omitted\":0},\"activation_state\":\"active\"}],\"limitations\":[\"Local registry projection; unavailable remote sources are not fetched.\",\"Evidence refs identify Core records, not an independent artifact audit.\",\"Latest evidence-bearing delivery per Agent; not a complete delivery history.\",\"Todo readiness reuses the Core summary; the returned task list is not exhaustive.\",\"No absence-of-progress or all-healthy conclusion; external sharing needs its own scope authorization.\"],\"snapshot_id\":\"sha256:dd2c5bfc2b9563a685ec290b332888d27bbc5770746ce99af7634e22d80485cc\"}",
+      "portfolio_markdown": "Goal coverage: 1/1 sources verified; complete=True\n- sample: verified; progress=unknown; recorded deliveries=0"
+    },
+    "crossings_before": {
+      "global": [
+        "projection.envelope.seal"
+      ],
+      "portfolio": []
+    },
+    "crossings_after": {
+      "global": [
+        "todo.global_readiness.project",
+        "projection.envelope.seal"
+      ],
+      "portfolio": [
+        "todo.global_readiness.project",
+        "todo.global_readiness.project"
+      ]
+    }
+  },
+  {
+    "name": "no_candidates",
+    "quota": {
+      "ok": true,
+      "user_todo_summary": {
+        "items": [
+          {
+            "todo_id": "todo_gate",
+            "task_class": "user_gate",
+            "unblocks_todo_id": "todo_sample",
+            "decision_scope": {
+              "kind": "write_scope",
+              "granularity": "action",
+              "scope_key": "sample"
+            }
+          }
+        ]
+      }
+    },
+    "expected": {
+      "global_json": "{\"ok\":true,\"schema_version\":\"global_manager_command_response_v0\",\"request\":{\"schema_version\":\"global_manager_command_request_v0\",\"command\":\"/loopx-global-todos\",\"legacy_aliases\":[\"/loop-global-todos\"],\"cli_command\":\"loopx global-todos\",\"include\":[\"runnable\",\"blocked\",\"deferred_ready\",\"review\"],\"privacy_mode\":\"public_safe_summary\",\"dry_run\":true},\"generated_at\":\"2026-11-02T00:00:00+00:00\",\"summary\":{\"headline\":\"0 of 0 classified todos returned.\",\"matched_todo_count\":0,\"returned_todo_count\":0,\"runnable_count\":0,\"blocked_count\":0,\"deferred_ready_count\":0,\"review_count\":0,\"source_warning_count\":0,\"source_surfaces\":[\"status attention queue\",\"quota should-run summaries\",\"active-state todo projections\",\"compact run-history projection consumed by status\"],\"truncated\":false,\"goal_scan_limit\":160,\"goal_scan_truncated\":false},\"groups\":{\"runnable\":[],\"deferred_ready\":[],\"blocked\":[],\"review\":[]},\"todos\":[],\"source_warnings\":[],\"source_warnings_truncated\":false,\"projection_envelope\":{\"schema_version\":\"loopx_projection_envelope_v0\",\"projection\":\"global_todos\",\"observed_at\":\"2026-11-02T00:00:00+00:00\",\"served_at\":\"2026-11-02T00:00:00+00:00\",\"age_seconds\":0,\"served_from_cache\":false,\"fresh\":false,\"complete\":false,\"alert\":true,\"alert_reasons\":[\"incomplete_coverage\",\"missing_required_sources\"],\"alert_source_ids\":[\"global_registry\",\"status\"],\"sources\":[{\"source_id\":\"global_registry\",\"required\":true,\"read_status\":\"missing\",\"last_read_at\":null,\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":null,\"status\":\"missing\",\"item_count\":null,\"missing_count\":0,\"unreadable_count\":0,\"alert\":true,\"alert_reasons\":[\"missing\"]},{\"source_id\":\"goal_quota\",\"required\":true,\"read_status\":\"read\",\"last_read_at\":\"2026-11-02T00:00:00+00:00\",\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":0,\"status\":\"fresh\",\"item_count\":1,\"missing_count\":0,\"unreadable_count\":0,\"alert\":false,\"alert_reasons\":[]},{\"source_id\":\"attention_queue\",\"required\":true,\"read_status\":\"read\",\"last_read_at\":\"2026-11-02T00:00:00+00:00\",\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":0,\"status\":\"fresh\",\"item_count\":1,\"missing_count\":0,\"unreadable_count\":0,\"alert\":false,\"alert_reasons\":[]},{\"source_id\":\"status\",\"required\":true,\"read_status\":\"not_read\",\"last_read_at\":null,\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":null,\"status\":\"not_read\",\"item_count\":null,\"missing_count\":0,\"unreadable_count\":0,\"alert\":true,\"alert_reasons\":[\"not_read\"]}],\"coverage\":{\"scope\":\"global\",\"expected_count\":null,\"included_count\":0,\"omitted\":[],\"shown_count\":0,\"available_count\":0,\"truncated\":false,\"complete\":false},\"upstream\":[]},\"omissions\":[\"Raw logs, raw transcripts, connector payloads, credential values, local paths, and private source bodies were intentionally omitted.\",\"Recent progress, gates, and unrelated risks are outside this focused command.\"],\"boundary\":{\"raw_logs_recorded\":false,\"raw_transcripts_recorded\":false,\"raw_connector_payloads_recorded\":false,\"credential_values_recorded\":false,\"absolute_paths_recorded\":false,\"private_source_bodies_recorded\":false}}",
+      "global_markdown": "# LoopX Global Todos\n\n- command: `/loopx-global-todos`\n- matched: `0`\n- returned: `0`\n- truncated: `False`\n- goal_scan_truncated: `False`\n- projection: 🔴 envelope=`loopx_projection_envelope_v0` observed_at=`2026-11-02T00:00:00+00:00` age=`0s` sources_fresh=`2/4` coverage=`0/None` scope=`global`\n- 🔴 projection alerts: `incomplete_coverage,missing_required_sources` sources=`global_registry,status` omitted=`-`; state this before treating the projection as current or whole\n\nReview is an overlapping work-kind facet of the readiness groups.\n\n## Runnable\n- None.\n\n## Deferred Ready\n- None.\n\n## Blocked\n- None.\n\n## Review\n- None.\n\n## Boundary\n- Raw/private material omitted; local paths are not recorded.",
+      "portfolio_json": "{\"ok\":true,\"schema_version\":\"goal_portfolio_v0\",\"collected_at\":\"2026-11-02T00:00:00+00:00\",\"collection_completed_at\":\"2026-11-02T00:00:00+00:00\",\"inventory_revision\":\"sha256:fefe0094588f824dc245d7b04ded8653cb5021c00c8daea19ceb3b16fbc131d4\",\"scope\":{\"kind\":\"caller_authorized_registry\",\"requested_goal_ids\":[\"sample\"],\"missing_goal_ids\":[]},\"coverage\":{\"discovered\":1,\"attempted\":1,\"stopped_excluded\":0,\"verified\":1,\"stale\":0,\"conflicting\":0,\"unreadable\":0,\"partial\":0,\"omitted\":0,\"invalid_registry_entries\":0,\"complete\":true},\"warnings\":[],\"goals\":[{\"goal_id\":\"sample\",\"host_id\":null,\"project_id\":null,\"quality\":\"verified\",\"progress\":\"unknown\",\"warnings\":[],\"agents\":[{\"agent_id\":\"alpha\",\"source_verified\":true,\"waiting_on\":null,\"todos\":[],\"owner_gate_ids\":[]},{\"agent_id\":\"beta\",\"source_verified\":true,\"waiting_on\":null,\"todos\":[],\"owner_gate_ids\":[]}],\"deliveries\":[],\"source\":{\"kind\":\"core_status\",\"revision\":\"sha256:bd5039affc9f0707912ac5b617e70b516e3227aa91761cf23d6e4f9a2cda8155\",\"observed_at\":\"2026-11-02T00:00:00+00:00\",\"file_metadata_revisions\":{\"run_index\":null},\"latest_recorded_at\":\"2026-11-02T00:00:00+00:00\"},\"agent_coverage\":{\"discovered\":2,\"attempted\":2,\"omitted\":0},\"activation_state\":\"active\"}],\"limitations\":[\"Local registry projection; unavailable remote sources are not fetched.\",\"Evidence refs identify Core records, not an independent artifact audit.\",\"Latest evidence-bearing delivery per Agent; not a complete delivery history.\",\"Todo readiness reuses the Core summary; the returned task list is not exhaustive.\",\"No absence-of-progress or all-healthy conclusion; external sharing needs its own scope authorization.\"],\"snapshot_id\":\"sha256:4bf8cc4643fd1d06f832be5e145b1e6a14a7d44d4a673505c2ce48fee89af385\"}",
+      "portfolio_markdown": "Goal coverage: 1/1 sources verified; complete=True\n- sample: verified; progress=unknown; recorded deliveries=0"
+    },
+    "crossings_before": {
+      "global": [
+        "projection.envelope.seal"
+      ],
+      "portfolio": []
+    },
+    "crossings_after": {
+      "global": [
+        "todo.global_readiness.project",
+        "projection.envelope.seal"
+      ],
+      "portfolio": [
+        "todo.global_readiness.project",
+        "todo.global_readiness.project"
+      ]
+    }
+  },
+  {
+    "name": "empty",
+    "quota": {
+      "ok": true
+    },
+    "expected": {
+      "global_json": "{\"ok\":true,\"schema_version\":\"global_manager_command_response_v0\",\"request\":{\"schema_version\":\"global_manager_command_request_v0\",\"command\":\"/loopx-global-todos\",\"legacy_aliases\":[\"/loop-global-todos\"],\"cli_command\":\"loopx global-todos\",\"include\":[\"runnable\",\"blocked\",\"deferred_ready\",\"review\"],\"privacy_mode\":\"public_safe_summary\",\"dry_run\":true},\"generated_at\":\"2026-11-02T00:00:00+00:00\",\"summary\":{\"headline\":\"0 of 0 classified todos returned.\",\"matched_todo_count\":0,\"returned_todo_count\":0,\"runnable_count\":0,\"blocked_count\":0,\"deferred_ready_count\":0,\"review_count\":0,\"source_warning_count\":0,\"source_surfaces\":[\"status attention queue\",\"quota should-run summaries\",\"active-state todo projections\",\"compact run-history projection consumed by status\"],\"truncated\":false,\"goal_scan_limit\":160,\"goal_scan_truncated\":false},\"groups\":{\"runnable\":[],\"deferred_ready\":[],\"blocked\":[],\"review\":[]},\"todos\":[],\"source_warnings\":[],\"source_warnings_truncated\":false,\"projection_envelope\":{\"schema_version\":\"loopx_projection_envelope_v0\",\"projection\":\"global_todos\",\"observed_at\":\"2026-11-02T00:00:00+00:00\",\"served_at\":\"2026-11-02T00:00:00+00:00\",\"age_seconds\":0,\"served_from_cache\":false,\"fresh\":false,\"complete\":false,\"alert\":true,\"alert_reasons\":[\"incomplete_coverage\",\"missing_required_sources\"],\"alert_source_ids\":[\"global_registry\",\"status\"],\"sources\":[{\"source_id\":\"global_registry\",\"required\":true,\"read_status\":\"missing\",\"last_read_at\":null,\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":null,\"status\":\"missing\",\"item_count\":null,\"missing_count\":0,\"unreadable_count\":0,\"alert\":true,\"alert_reasons\":[\"missing\"]},{\"source_id\":\"goal_quota\",\"required\":true,\"read_status\":\"read\",\"last_read_at\":\"2026-11-02T00:00:00+00:00\",\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":0,\"status\":\"fresh\",\"item_count\":1,\"missing_count\":0,\"unreadable_count\":0,\"alert\":false,\"alert_reasons\":[]},{\"source_id\":\"attention_queue\",\"required\":true,\"read_status\":\"read\",\"last_read_at\":\"2026-11-02T00:00:00+00:00\",\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":0,\"status\":\"fresh\",\"item_count\":1,\"missing_count\":0,\"unreadable_count\":0,\"alert\":false,\"alert_reasons\":[]},{\"source_id\":\"status\",\"required\":true,\"read_status\":\"not_read\",\"last_read_at\":null,\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":null,\"status\":\"not_read\",\"item_count\":null,\"missing_count\":0,\"unreadable_count\":0,\"alert\":true,\"alert_reasons\":[\"not_read\"]}],\"coverage\":{\"scope\":\"global\",\"expected_count\":null,\"included_count\":0,\"omitted\":[],\"shown_count\":0,\"available_count\":0,\"truncated\":false,\"complete\":false},\"upstream\":[]},\"omissions\":[\"Raw logs, raw transcripts, connector payloads, credential values, local paths, and private source bodies were intentionally omitted.\",\"Recent progress, gates, and unrelated risks are outside this focused command.\"],\"boundary\":{\"raw_logs_recorded\":false,\"raw_transcripts_recorded\":false,\"raw_connector_payloads_recorded\":false,\"credential_values_recorded\":false,\"absolute_paths_recorded\":false,\"private_source_bodies_recorded\":false}}",
+      "global_markdown": "# LoopX Global Todos\n\n- command: `/loopx-global-todos`\n- matched: `0`\n- returned: `0`\n- truncated: `False`\n- goal_scan_truncated: `False`\n- projection: 🔴 envelope=`loopx_projection_envelope_v0` observed_at=`2026-11-02T00:00:00+00:00` age=`0s` sources_fresh=`2/4` coverage=`0/None` scope=`global`\n- 🔴 projection alerts: `incomplete_coverage,missing_required_sources` sources=`global_registry,status` omitted=`-`; state this before treating the projection as current or whole\n\nReview is an overlapping work-kind facet of the readiness groups.\n\n## Runnable\n- None.\n\n## Deferred Ready\n- None.\n\n## Blocked\n- None.\n\n## Review\n- None.\n\n## Boundary\n- Raw/private material omitted; local paths are not recorded.",
+      "portfolio_json": "{\"ok\":true,\"schema_version\":\"goal_portfolio_v0\",\"collected_at\":\"2026-11-02T00:00:00+00:00\",\"collection_completed_at\":\"2026-11-02T00:00:00+00:00\",\"inventory_revision\":\"sha256:fefe0094588f824dc245d7b04ded8653cb5021c00c8daea19ceb3b16fbc131d4\",\"scope\":{\"kind\":\"caller_authorized_registry\",\"requested_goal_ids\":[\"sample\"],\"missing_goal_ids\":[]},\"coverage\":{\"discovered\":1,\"attempted\":1,\"stopped_excluded\":0,\"verified\":1,\"stale\":0,\"conflicting\":0,\"unreadable\":0,\"partial\":0,\"omitted\":0,\"invalid_registry_entries\":0,\"complete\":true},\"warnings\":[],\"goals\":[{\"goal_id\":\"sample\",\"host_id\":null,\"project_id\":null,\"quality\":\"verified\",\"progress\":\"unknown\",\"warnings\":[],\"agents\":[{\"agent_id\":\"alpha\",\"source_verified\":true,\"waiting_on\":null,\"todos\":[],\"owner_gate_ids\":[]},{\"agent_id\":\"beta\",\"source_verified\":true,\"waiting_on\":null,\"todos\":[],\"owner_gate_ids\":[]}],\"deliveries\":[],\"source\":{\"kind\":\"core_status\",\"revision\":\"sha256:bd5039affc9f0707912ac5b617e70b516e3227aa91761cf23d6e4f9a2cda8155\",\"observed_at\":\"2026-11-02T00:00:00+00:00\",\"file_metadata_revisions\":{\"run_index\":null},\"latest_recorded_at\":\"2026-11-02T00:00:00+00:00\"},\"agent_coverage\":{\"discovered\":2,\"attempted\":2,\"omitted\":0},\"activation_state\":\"active\"}],\"limitations\":[\"Local registry projection; unavailable remote sources are not fetched.\",\"Evidence refs identify Core records, not an independent artifact audit.\",\"Latest evidence-bearing delivery per Agent; not a complete delivery history.\",\"Todo readiness reuses the Core summary; the returned task list is not exhaustive.\",\"No absence-of-progress or all-healthy conclusion; external sharing needs its own scope authorization.\"],\"snapshot_id\":\"sha256:4bf8cc4643fd1d06f832be5e145b1e6a14a7d44d4a673505c2ce48fee89af385\"}",
+      "portfolio_markdown": "Goal coverage: 1/1 sources verified; complete=True\n- sample: verified; progress=unknown; recorded deliveries=0"
+    },
+    "crossings_before": {
+      "global": [
+        "projection.envelope.seal"
+      ],
+      "portfolio": []
+    },
+    "crossings_after": {
+      "global": [
+        "todo.global_readiness.project",
+        "projection.envelope.seal"
+      ],
+      "portfolio": [
+        "todo.global_readiness.project",
+        "todo.global_readiness.project"
+      ]
+    }
+  },
+  {
+    "name": "empty_values",
+    "quota": {
+      "ok": true,
+      "normal_delivery_allowed": true,
+      "selected_todo": {
+        "todo_id": "todo_empty",
+        "status": false,
+        "title": [],
+        "text": {},
+        "priority": 0
+      },
+      "agent_lane_next_action": {
+        "todo_id": "todo_empty",
+        "status": "blocked",
+        "title": "Filled",
+        "text": "Filled text",
+        "priority": "P2"
+      },
+      "agent_todo_summary": {
+        "items": [
+          {
+            "todo_id": 0
+          },
+          {
+            "todo_id": false
+          },
+          {
+            "todo_id": []
+          },
+          {
+            "todo_id": {}
+          }
+        ]
+      }
+    },
+    "expected": {
+      "global_json": "{\"ok\":true,\"schema_version\":\"global_manager_command_response_v0\",\"request\":{\"schema_version\":\"global_manager_command_request_v0\",\"command\":\"/loopx-global-todos\",\"legacy_aliases\":[\"/loop-global-todos\"],\"cli_command\":\"loopx global-todos\",\"include\":[\"runnable\",\"blocked\",\"deferred_ready\",\"review\"],\"privacy_mode\":\"public_safe_summary\",\"dry_run\":true},\"generated_at\":\"2026-11-02T00:00:00+00:00\",\"summary\":{\"headline\":\"1 of 1 classified todos returned.\",\"matched_todo_count\":1,\"returned_todo_count\":1,\"runnable_count\":0,\"blocked_count\":1,\"deferred_ready_count\":0,\"review_count\":0,\"source_warning_count\":5,\"source_surfaces\":[\"status attention queue\",\"quota should-run summaries\",\"active-state todo projections\",\"compact run-history projection consumed by status\"],\"truncated\":false,\"goal_scan_limit\":160,\"goal_scan_truncated\":false},\"groups\":{\"runnable\":[],\"deferred_ready\":[],\"blocked\":[{\"todo_id\":\"todo_empty\",\"goal_id\":\"sample\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"\",\"title\":\"Filled\",\"claimed_by\":null,\"action_kind\":\"\",\"readiness\":\"blocked\",\"work_kind\":\"ordinary\",\"next_safe_action\":\"\"}],\"review\":[]},\"todos\":[{\"todo_id\":\"todo_empty\",\"goal_id\":\"sample\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"\",\"title\":\"Filled\",\"claimed_by\":null,\"action_kind\":\"\",\"readiness\":\"blocked\",\"work_kind\":\"ordinary\",\"next_safe_action\":\"\"}],\"source_warnings\":[{\"reason_code\":\"todo_identity_missing\",\"goal_id\":\"sample\",\"detail\":\"Structured todo candidate from agent_todo_summary.items has no todo_id.\"},{\"reason_code\":\"todo_identity_missing\",\"goal_id\":\"sample\",\"detail\":\"Structured todo candidate from agent_todo_summary.items has no todo_id.\"},{\"reason_code\":\"todo_identity_missing\",\"goal_id\":\"sample\",\"detail\":\"Structured todo candidate from agent_todo_summary.items has no todo_id.\"},{\"reason_code\":\"todo_identity_missing\",\"goal_id\":\"sample\",\"detail\":\"Structured todo candidate from agent_todo_summary.items has no todo_id.\"},{\"reason_code\":\"conflicting_readiness_projection\",\"goal_id\":\"sample\",\"todo_id\":\"todo_empty\",\"detail\":\"Multiple structured readiness signals were projected.\"}],\"source_warnings_truncated\":false,\"projection_envelope\":{\"schema_version\":\"loopx_projection_envelope_v0\",\"projection\":\"global_todos\",\"observed_at\":\"2026-11-02T00:00:00+00:00\",\"served_at\":\"2026-11-02T00:00:00+00:00\",\"age_seconds\":0,\"served_from_cache\":false,\"fresh\":false,\"complete\":false,\"alert\":true,\"alert_reasons\":[\"incomplete_coverage\",\"missing_required_sources\"],\"alert_source_ids\":[\"global_registry\",\"status\"],\"sources\":[{\"source_id\":\"global_registry\",\"required\":true,\"read_status\":\"missing\",\"last_read_at\":null,\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":null,\"status\":\"missing\",\"item_count\":null,\"missing_count\":0,\"unreadable_count\":0,\"alert\":true,\"alert_reasons\":[\"missing\"]},{\"source_id\":\"goal_quota\",\"required\":true,\"read_status\":\"read\",\"last_read_at\":\"2026-11-02T00:00:00+00:00\",\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":0,\"status\":\"fresh\",\"item_count\":1,\"missing_count\":0,\"unreadable_count\":0,\"alert\":false,\"alert_reasons\":[]},{\"source_id\":\"attention_queue\",\"required\":true,\"read_status\":\"read\",\"last_read_at\":\"2026-11-02T00:00:00+00:00\",\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":0,\"status\":\"fresh\",\"item_count\":1,\"missing_count\":0,\"unreadable_count\":0,\"alert\":false,\"alert_reasons\":[]},{\"source_id\":\"status\",\"required\":true,\"read_status\":\"not_read\",\"last_read_at\":null,\"source_updated_at\":null,\"window_seconds\":300,\"staleness_seconds\":null,\"status\":\"not_read\",\"item_count\":null,\"missing_count\":0,\"unreadable_count\":0,\"alert\":true,\"alert_reasons\":[\"not_read\"]}],\"coverage\":{\"scope\":\"global\",\"expected_count\":null,\"included_count\":0,\"omitted\":[],\"shown_count\":1,\"available_count\":1,\"truncated\":false,\"complete\":false},\"upstream\":[]},\"omissions\":[\"Raw logs, raw transcripts, connector payloads, credential values, local paths, and private source bodies were intentionally omitted.\",\"Recent progress, gates, and unrelated risks are outside this focused command.\"],\"boundary\":{\"raw_logs_recorded\":false,\"raw_transcripts_recorded\":false,\"raw_connector_payloads_recorded\":false,\"credential_values_recorded\":false,\"absolute_paths_recorded\":false,\"private_source_bodies_recorded\":false}}",
+      "global_markdown": "# LoopX Global Todos\n\n- command: `/loopx-global-todos`\n- matched: `1`\n- returned: `1`\n- truncated: `False`\n- goal_scan_truncated: `False`\n- projection: 🔴 envelope=`loopx_projection_envelope_v0` observed_at=`2026-11-02T00:00:00+00:00` age=`0s` sources_fresh=`2/4` coverage=`0/None` scope=`global`\n- 🔴 projection alerts: `incomplete_coverage,missing_required_sources` sources=`global_registry,status` omitted=`-`; state this before treating the projection as current or whole\n\nReview is an overlapping work-kind facet of the readiness groups.\n\n## Runnable\n- None.\n\n## Deferred Ready\n- None.\n\n## Blocked\n- goal=`sample` todo=`todo_empty` priority=`unknown` owner=`agent`: Filled\n\n## Review\n- None.\n\n## Source Warnings\n- `todo_identity_missing` goal=`sample`: Structured todo candidate from agent_todo_summary.items has no todo_id.\n- `todo_identity_missing` goal=`sample`: Structured todo candidate from agent_todo_summary.items has no todo_id.\n- `todo_identity_missing` goal=`sample`: Structured todo candidate from agent_todo_summary.items has no todo_id.\n- `todo_identity_missing` goal=`sample`: Structured todo candidate from agent_todo_summary.items has no todo_id.\n- `conflicting_readiness_projection` goal=`sample` todo=`todo_empty`: Multiple structured readiness signals were projected.\n\n## Boundary\n- Raw/private material omitted; local paths are not recorded.",
+      "portfolio_json": "{\"ok\":true,\"schema_version\":\"goal_portfolio_v0\",\"collected_at\":\"2026-11-02T00:00:00+00:00\",\"collection_completed_at\":\"2026-11-02T00:00:00+00:00\",\"inventory_revision\":\"sha256:fefe0094588f824dc245d7b04ded8653cb5021c00c8daea19ceb3b16fbc131d4\",\"scope\":{\"kind\":\"caller_authorized_registry\",\"requested_goal_ids\":[\"sample\"],\"missing_goal_ids\":[]},\"coverage\":{\"discovered\":1,\"attempted\":1,\"stopped_excluded\":0,\"verified\":0,\"stale\":0,\"conflicting\":1,\"unreadable\":0,\"partial\":0,\"omitted\":0,\"invalid_registry_entries\":0,\"complete\":false},\"warnings\":[],\"goals\":[{\"goal_id\":\"sample\",\"host_id\":null,\"project_id\":null,\"quality\":\"conflicting\",\"progress\":\"unknown\",\"warnings\":[\"todo_identity_missing\",\"todo_identity_missing\",\"todo_identity_missing\",\"todo_identity_missing\",\"conflicting_readiness_projection\",\"todo_identity_missing\",\"todo_identity_missing\",\"todo_identity_missing\",\"todo_identity_missing\",\"conflicting_readiness_projection\"],\"agents\":[{\"agent_id\":\"alpha\",\"source_verified\":true,\"waiting_on\":null,\"todos\":[{\"todo_id\":\"todo_empty\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"\",\"title\":\"Filled\",\"next_safe_action\":\"\",\"claimed_by\":null,\"readiness\":\"blocked\"}],\"owner_gate_ids\":[]},{\"agent_id\":\"beta\",\"source_verified\":true,\"waiting_on\":null,\"todos\":[{\"todo_id\":\"todo_empty\",\"role\":\"agent\",\"status\":\"open\",\"priority\":\"\",\"title\":\"Filled\",\"next_safe_action\":\"\",\"claimed_by\":null,\"readiness\":\"blocked\"}],\"owner_gate_ids\":[]}],\"deliveries\":[],\"source\":{\"kind\":\"core_status\",\"revision\":\"sha256:bd5039affc9f0707912ac5b617e70b516e3227aa91761cf23d6e4f9a2cda8155\",\"observed_at\":\"2026-11-02T00:00:00+00:00\",\"file_metadata_revisions\":{\"run_index\":null},\"latest_recorded_at\":\"2026-11-02T00:00:00+00:00\"},\"agent_coverage\":{\"discovered\":2,\"attempted\":2,\"omitted\":0},\"activation_state\":\"active\"}],\"limitations\":[\"Local registry projection; unavailable remote sources are not fetched.\",\"Evidence refs identify Core records, not an independent artifact audit.\",\"Latest evidence-bearing delivery per Agent; not a complete delivery history.\",\"Todo readiness reuses the Core summary; the returned task list is not exhaustive.\",\"No absence-of-progress or all-healthy conclusion; external sharing needs its own scope authorization.\"],\"snapshot_id\":\"sha256:e57553a4b369731114dd18f344df46367288305d073a30f1c7aec44d75b98a9f\"}",
+      "portfolio_markdown": "Goal coverage: 0/1 sources verified; complete=False\n- sample: conflicting; progress=unknown; recorded deliveries=0"
+    },
+    "crossings_before": {
+      "global": [
+        "projection.envelope.seal"
+      ],
+      "portfolio": []
+    },
+    "crossings_after": {
+      "global": [
+        "todo.global_readiness.project",
+        "projection.envelope.seal"
+      ],
+      "portfolio": [
+        "todo.global_readiness.project",
+        "todo.global_readiness.project"
+      ]
+    }
+  }
+]

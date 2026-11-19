@@ -75,7 +75,8 @@ def _project(
         registry_path.write_text('{"schema_version": "0.1", "goals": [', encoding="utf-8")
     elif registry != "missing":
         registry_path.write_text(
-            json.dumps({"schema_version": "0.1", "goals": entries}, indent=2) + "\n",
+            json.dumps({"schema_version": "0.1", "goals": entries,
+                        "common_runtime_root": str(root / "runtime")}, indent=2) + "\n",
             encoding="utf-8",
         )
     registered_state = project / ".codex" / "goals" / REGISTERED_GOAL_ID
@@ -89,6 +90,13 @@ def _project(
         (orphan / "ACTIVE_GOAL_STATE.md").write_text(
             "# Orphaned goal state written by a retired lane\n", encoding="utf-8"
         )
+    if registry == "registered":
+        from canonical_authority_fixture import initialize_canonical_authority
+        from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+
+        initialize_canonical_authority(root / "runtime", REGISTERED_GOAL_ID,
+            build_todo_runtime_shadow_projection(goal_id=REGISTERED_GOAL_ID, todos=[]),
+            state_path=registered_state / "ACTIVE_GOAL_STATE.md")
     return project
 
 

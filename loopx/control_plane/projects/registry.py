@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -16,6 +15,7 @@ from ...paths import (
 )
 from ..runtime.document_io import atomic_write_state_text as _atomic_write_text
 from ..coordination.local_authority import (
+    CanonicalAuthorityRequired,
     read_canonical_todos_if_promoted,
     require_canonical_authority,
 )
@@ -30,7 +30,10 @@ from ..goals.source_session_services import (
     register_fresh_source_session_project,
     resolve_source_session_project,
 )
-from ...repository_identity import normalize_repository_identity
+from ...repository_identity import (
+    _SAFE_PROJECT_ID,
+    normalize_repository_identity,
+)
 from .contract import validate_project_record_bindings
 from .registration_state import (
     registration_state_matches,
@@ -44,12 +47,11 @@ from .registry_codec import (
 )
 
 PROJECT_KINDS = ("work", "personal")
-_SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 
 
 def _identifier(value: str, *, field: str) -> str:
     compact = str(value or "").strip()
-    if not _SAFE_ID.fullmatch(compact):
+    if not _SAFE_PROJECT_ID.fullmatch(compact):
         raise ValueError(f"{field} must be a stable identifier")
     return compact
 
@@ -176,20 +178,21 @@ def _bind_project_goal_storage(
         and isinstance(existing_goal.get("creation_operation_id"), str)
         and existing_goal["creation_operation_id"] != ""
     )
-    existing_authority = (
-        read_canonical_todos_if_promoted(
-            runtime_root=effective_root,
-            goal_id=goal_id,
-        )
-        if existing_goal is None or not resumable_creation
-        else None
-    )
+    existing_authority = None
+    if not resumable_creation:
+        try:
+            existing_authority = read_canonical_todos_if_promoted(
+                runtime_root=effective_root, goal_id=goal_id,
+            )
+        except CanonicalAuthorityRequired:
+            # A new registration enters the explicit creation transaction.
+            # An existing unmigrated Goal must use its migration owner.
+            if existing_goal is not None:
+                raise
     if existing_goal is None and existing_authority is not None:
         raise ValueError(
             f"goal_id is already bound to canonical authority through another registry: {goal_id}"
         )
-    if existing_goal is not None and existing_authority is None and not resumable_creation:
-        require_canonical_authority(goal_id=goal_id, operation="goal_create")
     storage_target = (
         existing_target
         if existing_goal is not None

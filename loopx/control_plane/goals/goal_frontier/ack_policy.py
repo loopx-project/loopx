@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from typing import Any, TypeGuard, cast
+
+
 from collections.abc import Iterable
-from typing import Any
 
 from ...todos.contract import (
     TODO_TASK_CLASS_ADVANCEMENT,
@@ -11,6 +13,7 @@ from ...todos.contract import (
     replan_successor_semantic_binding,
 )
 from ...todos.todo_semantics import todo_item_is_actionable_open, todo_item_task_class
+from ...todos.succession_warning import TODO_SUCCESSION_WARNING_REASON_CODE
 from ...work_items.progress_observation import (
     replan_obligation_trigger_checkpoints,
     replan_obligation_trigger_kinds,
@@ -24,7 +27,7 @@ from .long_todo_chain import (
 )
 
 
-def autonomous_replan_ack_has_frontier_delta(ack: dict[str, Any] | None) -> bool:
+def autonomous_replan_ack_has_frontier_delta(ack: dict[str, Any] | None) -> TypeGuard[dict[str, Any]]:
     if not isinstance(ack, dict) or ack.get("recorded") is not True:
         return False
     semantic_delta = ack.get("semantic_delta")
@@ -70,7 +73,13 @@ def autonomous_replan_ack_satisfies_obligation(
         if str(item or "").strip()
     }
     required = set(required_semantic_outcomes(replan_obligation or {}))
-    if todo_succession_gap_open:
+    # Other completed work keeps its own succession duty. It must not veto an
+    # exact accepted receipt for an independent monitor or review obligation.
+    if (
+        todo_succession_gap_open
+        and TODO_SUCCESSION_WARNING_REASON_CODE
+        in replan_obligation_trigger_kinds(replan_obligation or {})
+    ):
         outcomes.intersection_update({"new_runnable_successor"})
     return bool(outcomes & required)
 
@@ -98,7 +107,7 @@ def replan_successor_transition_ack(
         return None
     if agent_todo_items is None:
         source_items = (
-            agent_todo_summary.get("first_executable_items")
+            cast(list[Any], agent_todo_summary.get("first_executable_items"))
             if isinstance(agent_todo_summary, dict)
             and isinstance(agent_todo_summary.get("first_executable_items"), list)
             else []
@@ -185,6 +194,7 @@ def replan_successor_transition_ack(
         "schema_version": "autonomous_replan_ack_v0",
         "recorded": True,
         "source": "todo_replan_successor_transition",
+        "agent_id": safe_agent_id,
         "generated_at": successor.get("updated_at"),
         "semantic_delta": semantic_delta,
     }

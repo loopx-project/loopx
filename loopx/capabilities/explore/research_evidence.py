@@ -1,6 +1,8 @@
 """Transport for the Explore research contract; TypeScript owns its rules."""
 from __future__ import annotations
 
+from .machine_defaults import resolve_explore_goal
+
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -121,7 +123,7 @@ def append_research_observation(
 
             lineage = canonical["execution_lineage"]
             goal = find_registry_goal(load_registry(registry_path), goal_id) or {}
-            harness = (goal.get("spawn_policy") or {}).get("explore_harness") or {}
+            harness = (resolve_explore_goal(goal, runtime_root).get("spawn_policy") or {}).get("explore_harness") or {}
             policy = _research_result("explore.research.composition_policy", {"harness": harness})
             candidate_sources = [{"node_id": event["result_id"], "research_observation": event["research_observation"]}
                                  for event in events if event.get("research_observation")]

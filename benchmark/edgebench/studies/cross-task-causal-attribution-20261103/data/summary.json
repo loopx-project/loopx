@@ -1,0 +1,29 @@
+{
+  "schema_version": "edgebench_cross_task_causal_study_v0",
+  "study_id": "cross-task-causal-attribution-20261103",
+  "title": "EdgeBench Sol 6.1-xhigh Cross-Task Five-Arm Causal Attribution & Trajectory Efficiency Study",
+  "model": "gpt-6.1-sol",
+  "effort": "xhigh",
+  "analyzed_tasks": [
+    "portfolio_risk_calibration",
+    "graph_clustering_calibration",
+    "ad_layout_cut_optimization"
+  ],
+  "arms": [
+    "official",
+    "native-goal",
+    "heartbeat-resume (explore-off)",
+    "heartbeat-explore (explore-on)",
+    "stride (evidence-conditioned-v1)"
+  ],
+  "key_findings": [
+    "Feedback Grounding Ratchet: In the 10-arm Portfolio cohort, blind feedback resulted in catastrophic terminal regression (falling to 0.00 score in Official, Native-Goal, and Explore), whereas native feedback maintained monotonic score retention (100% retention in Official at 53.87, Single at 28.08, and Explore at 31.19). Real-time execution feedback acts as an essential ratchet preventing catastrophic forgetting in long-horizon tasks.",
+    "True Inflection Point vs Deceptive Score Slope: In the 17-submission Graph longitudinal trial (18 hours), the decisive architectural breakthrough occurred at agent-2 (2.10h, score 0.7194). The subsequent global peak at agent-10 (9.60h, score 0.72399) was driven almost exclusively by probability calibration (ECE reduced by 28.4%) and execution speedup (-23.4% latency penalty), while macro-F1 slightly decreased (0.7090 to 0.7088).",
+    "Ineffective Replan Quota Waste: Post-peak exploration in Graph from 9.60h to 17.02h produced 7 consecutive failed iterations without score gains, consuming 159.87M input tokens (46.0% of total run token budget) and 696k output tokens across 711 LLM responses, while hitting a rigid theoretical ceiling of 0.73903.",
+    "Local Optimization Transfer Gap: In Ad optimization, the 4th-to-5th adoption of initialCutDelta produced an authoritative +3.48M native gain (+312.4M total). However, 40-pair held-out replication showed a mean delta of +110,016.7 with a standard error of 169,775.05 and median -1819.0, demonstrating that ungrounded synthetic proposal ranking risks overfitting to local geometries without adaptive stride gating."
+  ],
+  "reproducibility": {
+    "deterministic_verification": "uv run python -m benchmark.edgebench.causal_attribution --verify benchmark/edgebench/studies/cross-task-causal-attribution-20261103/data",
+    "report_generation": "uv run python -m benchmark.edgebench.causal_attribution --report benchmark/edgebench/studies/cross-task-causal-attribution-20261103/data"
+  }
+}

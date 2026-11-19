@@ -3,7 +3,7 @@ import type { ReviewExportLabels } from "../../data/delivery-review.js";
 export const goalAcceptanceContractCopy = {
   en: {
     title: "Delivery check", boundary: "Artifact checks do not establish independent review, adoption or Goal completion.",
-    scope: "Contract coverage", allWork: "All advancement work (including future tasks)", selectedWork: "Only explicitly selected tasks",
+    goalOnly: "Goal completion only", scope: "Contract coverage", allWork: "All advancement work (including future tasks)", selectedWork: "Only explicitly selected tasks",
     source: "Goal source", revision: "Contract revision", digest: "Contract digest", objective: "Objective", criteria: "Acceptance criteria", nonGoals: "Outside scope",
     tasks: "Task associations", verification: "Artifact verification", unknown: "Unknown", noTasks: "No task associations reported. Coverage is unknown.",
     noCriteria: "No acceptance criteria reported.", retained: "Retained snapshot; refresh to read current acceptance facts.",
@@ -13,11 +13,11 @@ export const goalAcceptanceContractCopy = {
     operation: "Verification reference", verificationScope: "Verification scope", allCriteria: "All contract criteria", passed: "Passed", failed: "Failed", exitCode: "Exit code",
     oracleChecker: "Owner-pinned checker", oracleSourceDigest: "Source digest", oracleCheckedAt: "Checked at", oracleInputVersions: "Input versions", oracleOutputVersions: "Output versions",
     oracleState: {current: "Current versions checked", recorded: "Recorded; current versions not checked", stale: "Source or versions changed; check again", failed: "Checks failed; repair the delivery before checking again", unverified: "Not checked", unavailable: "Evidence unavailable"},
-    help: "Setup and readback", guide: "Check setup guide (v0)", guidance: "The Agent can prepare a plan for review without running it. Existing technical contracts can also be imported here or managed through CLI configure/verify/disable. Saving does not run commands. Disabling retains historical evidence.",
+    help: "Setup and readback", guide: "Check setup guide (v0)", guidance: "The Agent can prepare a plan for review without running it. Existing technical contracts can also be imported here or managed through CLI configure/verify/clear-checks. Saving does not run commands. Removing check configuration retains history and default outcome review.",
   },
   "zh-CN": {
     title: "交付检查", boundary: "产物检查不等于独立复核、实际采用或 Goal 完成。",
-    scope: "合同覆盖范围", allWork: "全部推进任务（包括后续新增任务）", selectedWork: "仅明确选定的任务",
+    goalOnly: "仅 Goal 整体验收", scope: "合同覆盖范围", allWork: "全部推进任务（包括后续新增任务）", selectedWork: "仅明确选定的任务",
     source: "Goal 来源", revision: "合同版本", digest: "合同摘要", objective: "目标", criteria: "验收条件", nonGoals: "范围之外",
     tasks: "任务关联", verification: "产物验证", unknown: "未知", noTasks: "未提供任务关联，覆盖范围未知。",
     noCriteria: "未提供验收条件。", retained: "当前保留旧快照，请刷新读取最新验收事实。",
@@ -27,7 +27,7 @@ export const goalAcceptanceContractCopy = {
     operation: "验证引用", verificationScope: "验证范围", allCriteria: "全部合同条件", passed: "通过", failed: "失败", exitCode: "退出码",
     oracleChecker: "负责人指定的版本固定检查器", oracleSourceDigest: "来源摘要", oracleCheckedAt: "检查时间", oracleInputVersions: "输入版本", oracleOutputVersions: "输出版本",
     oracleState: {current: "当前版本已核对", recorded: "历史结果，当前版本未核对", stale: "来源或版本已变化，请重新检查", failed: "检查失败；修复交付物后可再次检查", unverified: "尚未检查", unavailable: "证据不可用"},
-    help: "配置与读回", guide: "检查配置指南（v0）", guidance: "Agent 可先准备方案供你核对，准备不会运行检查。已有技术合同也可在这里导入，或通过 CLI configure/verify/disable 管理。保存不执行命令，停用保留历史依据。",
+    help: "配置与读回", guide: "检查配置指南（v0）", guidance: "Agent 可先准备方案供你核对，准备不会运行检查。已有技术合同也可在这里导入，或通过 CLI configure/verify/clear-checks 管理。保存不执行命令，移除检查配置后仍保留历史依据与默认成果核对。",
   },
 };
 export type GoalAcceptanceContractCopy = typeof goalAcceptanceContractCopy.en;

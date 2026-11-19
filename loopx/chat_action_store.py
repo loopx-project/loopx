@@ -19,6 +19,8 @@ from .registry import atomic_write_json
 
 CHAT_ACTION_STORE_SCHEMA_VERSION = "loopx_chat_action_store_v1"
 CHAT_ACTION_PROPOSAL_SCHEMA_VERSION = "loopx_chat_action_proposal_v1"
+HUMAN_ACTOR_CLASS = "human"
+AUTHENTICATED_LARK_CARD_CALLBACK = "lark_authenticated_card_callback_v1"
 
 ACTION_KINDS = {
     "goal.acceptance.check",
@@ -34,6 +36,7 @@ ACTION_KINDS = {
     "gate.resolve",
     "run.correct",
     "operation.execute",
+    "pr.merge",
     "team.plan",
 }
 PROPOSAL_STATES = {
@@ -482,6 +485,8 @@ class ChatActionStore:
             "state_fingerprint",
             "card_digest",
             "confirmed_at",
+            "actor_class",
+            "verification_kind",
         }
         if set(safe_confirmation) != required:
             raise ValueError(
@@ -493,6 +498,12 @@ class ChatActionStore:
                 field=f"review_card.confirmation.{field}",
                 limit=512,
             )
+        if safe_confirmation["actor_class"] != HUMAN_ACTOR_CLASS:
+            raise ValueError("review card confirmation requires a human actor")
+        _opaque_id(
+            safe_confirmation["verification_kind"],
+            field="review_card.confirmation.verification_kind",
+        )
         token = _opaque_id(proposal_id, field="proposal_id")
         audience = _opaque_id(
             safe_confirmation["audience_id"], field="review_card.audience_id"
@@ -842,6 +853,8 @@ class ChatActionStore:
             "confirmation_digest",
             "card_digest",
             "confirmed_at",
+            "actor_class",
+            "verification_kind",
         }
         if set(safe_confirmation) != required:
             raise ValueError("operation confirmation has unsupported or missing fields")
@@ -851,6 +864,12 @@ class ChatActionStore:
                 field=f"operation.confirmation.{field}",
                 limit=512,
             )
+        if safe_confirmation["actor_class"] != HUMAN_ACTOR_CLASS:
+            raise ValueError("operation confirmation requires a human actor")
+        _opaque_id(
+            safe_confirmation["verification_kind"],
+            field="operation.confirmation.verification_kind",
+        )
         token = _opaque_id(proposal_id, field="proposal_id")
         with exclusive_file_lock(
             self.path,
@@ -1080,7 +1099,7 @@ class ChatActionStore:
     def reserve_agent_operation_turn(
         self, proposal_id: str, **launch_context: Any,
     ) -> dict[str, Any]:
-        """Internal callback launch intent; neither host start nor consumption.
+        """Internal callback launch intent.
 
         Commit before spawning. A lost/failed spawn is reconciled from the
         original Turn; callback replay never launches a replacement process.

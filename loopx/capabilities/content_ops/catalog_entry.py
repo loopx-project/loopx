@@ -23,6 +23,26 @@ CONTENT_OPS_CATALOG_ENTRY: dict[str, Any] = {
     "entry_command": "loopx content-ops aggregate-packets --format json",
     "commands": [
         {
+            "command": "loopx content-ops image prepare --goal-id <goal> --plan-json <image.json> --source-directory <authorized-images> --format json",
+            "purpose": "Prepare one immutable image intent with an optional source hash and a current nominal price estimate; no cloud effect.",
+            "write_boundary": "Goal-local private intent and immutable source; no external write",
+        },
+        {
+            "command": "loopx content-ops image submit --goal-id <goal> --image-id <id> --expected-revision <revision> --format json",
+            "purpose": "Generate one authorized image through the optional media provider; collect recovers saved response bytes without repeating the paid request.",
+            "write_boundary": "explicit cloud generation and optional reference upload; image-specific credential; no publishing",
+        },
+        {
+            "command": "loopx content-ops generation prepare --goal-id <goal> --plan-json <footage.json> --source-directory <authorized-frames> --format json",
+            "purpose": "Prepare an immutable cloud-video intent with source hashes, model parameters and a current nominal price estimate.",
+            "write_boundary": "Goal-local private intent and immutable sources; no cloud effect",
+        },
+        {
+            "command": "loopx content-ops generation submit --goal-id <goal> --generation-id <id> --expected-revision <revision> --format json",
+            "purpose": "Submit one authorized paid task through the optional media provider; check and collect the original task separately without automatic paid retries.",
+            "write_boundary": "explicit cloud generation and reference upload; separate provider permission and process-local credential; no publishing",
+        },
+        {
             "command": "loopx content-ops reference search --library-json <private-catalog.json> --query <topic> --structure <structure> --format json",
             "purpose": "Retrieve source credit, version, reuse boundary, styles and dated counters from an existing caller-owned catalog.",
             "write_boundary": "local-private metadata projection; no source access or store writes",
@@ -104,6 +124,16 @@ CONTENT_OPS_CATALOG_ENTRY: dict[str, Any] = {
         },
     ],
     "implemented_protocols": [
+        {
+            "schema_version": "content_ops_image_plan_v0",
+            "module": "loopx.control_plane.capabilities.content_media_image",
+            "doc": "docs/reference/protocols/content-ops-media-v0.md",
+        },
+        {
+            "schema_version": "content_ops_generation_plan_v0",
+            "module": "loopx.capabilities.content_ops.generation",
+            "doc": "docs/reference/protocols/content-ops-media-v0.md",
+        },
         {
             "schema_version": "content_ops_reference_v0",
             "module": "loopx.control_plane.capabilities.content_reference",
@@ -198,7 +228,8 @@ CONTENT_OPS_CATALOG_ENTRY: dict[str, Any] = {
         "Layout acceptance is deterministic and never implies creator approval or publishing authority.",
     ],
     "next_real_step": (
-        "Turn the aggregated surface into a small review/feed UI where a user "
-        "can score source items, angles, and drafts."
+        "Use the caller's brief to create and revise a usable work through "
+        "the existing conversation and artifact journey. Evaluate the result "
+        "and sources; add a product control only when that workflow needs it."
     ),
 }

@@ -21,7 +21,7 @@ def _record(todo_id="todo_current", **fields):
 
 
 def _canonical(tmp_path, records=None, *, events=None, leases=None, native=False):
-    paths = _write_fixture(tmp_path)
+    paths = _write_fixture(tmp_path, initialize=False)
     projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID,
         todos=[_record()] if records is None else records, leases=leases or [], handoff_mode="soft_claim")
     if native:
@@ -170,7 +170,7 @@ def test_canonical_lease_conflict_wins_over_obsolete_lease_file(tmp_path):
 
 
 def test_real_cli_reads_production_scale_snapshot_without_display(tmp_path):
-    paths = _write_fixture(tmp_path)
+    paths = _write_fixture(tmp_path, initialize=False)
     module = (Path(__file__).resolve().parents[2] / "tests/control_plane_ts/production_scale_coordination_fixture.ts").as_uri()
     process = subprocess.run(["node", "--no-warnings", "--experimental-strip-types", "--input-type=module", "-e",
         f"import {{productionScaleCoordinationFixture}} from {json.dumps(module)};"

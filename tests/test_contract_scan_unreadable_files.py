@@ -81,7 +81,7 @@ def test_scan_public_boundary_reports_unreadable_file(tmp_path: Path) -> None:
     finally:
         locked.chmod(0o644)
 
-    assert payload["ok"] is True
+    assert payload["ok"] is False
     assert payload["unreadable_files"] == ["locked.md: Permission denied"]
 
 

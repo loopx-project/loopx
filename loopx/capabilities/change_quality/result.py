@@ -105,14 +105,28 @@ def _bounded_text(value: Any, *, field: str, limit: int) -> str:
     return text
 
 
+def _exact_text(value: Any, *, field: str, limit: int) -> str:
+    """Keep the caller's value byte for byte; only reject what cannot be a path.
+
+    Evidence names a file the scope just enumerated, so trimming or collapsing
+    whitespace here would turn ``" padded.py"`` into a different, unrecordable
+    name.
+    """
+
+    text = str(value or "")
+    validate_public_safe_text(field, text)
+    if len(text) > limit:
+        raise ValueError(f"{field} exceeds {limit} characters")
+    return text
+
+
 def _relative_path(value: Any, *, field: str) -> str | None:
-    text = str(value or "").strip().replace("\\", "/")
+    text = _exact_text(value, field=field, limit=1000)
     if not text:
         return None
     path = PurePosixPath(text)
     if path.is_absolute() or ".." in path.parts:
         raise ValueError(f"{field} must be a repo-relative path")
-    validate_public_safe_text(field, text)
     return path.as_posix()
 
 
@@ -138,7 +152,7 @@ def _bounded_text_list(
 
 
 def _normalize_evidence_ref(value: Any, *, field: str) -> str:
-    text = _bounded_text(value, field=field, limit=400)
+    text = _exact_text(value, field=field, limit=400)
     kind, separator, target = text.partition(":")
     if not separator or kind not in EVIDENCE_REF_KINDS:
         raise ValueError(
@@ -155,15 +169,13 @@ def _normalize_evidence_ref(value: Any, *, field: str) -> str:
 
 
 def _normalize_evidence_refs(value: Any, *, field: str) -> list[str]:
-    refs = [
-        _normalize_evidence_ref(item, field=f"{field}[]")
-        for item in _bounded_text_list(
-            value,
-            field=field,
-            item_limit=400,
-            count_limit=20,
-        )
-    ]
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{field} must be an array")
+    if len(value) > 20:
+        raise ValueError(f"{field} supports at most 20 items")
+    refs = [_normalize_evidence_ref(item, field=f"{field}[]") for item in value]
     if len(set(refs)) != len(refs):
         raise ValueError(f"{field} must not contain duplicates")
     return refs
@@ -270,12 +282,13 @@ def _normalize_validation(value: Any, *, index: int) -> dict[str, Any]:
     if status in {"failed", "skipped"} and not reason:
         raise ValueError(f"{field} with status={status} requires reason")
     if "covers_paths" in value:
+        covers = value["covers_paths"]
+        if not isinstance(covers, list):
+            raise ValueError(f"{field}.covers_paths must be an array")
+        if len(covers) > 200:
+            raise ValueError(f"{field}.covers_paths supports at most 200 items")
         evidence["covers_paths"] = [
-            _relative_path(path, field=f"{field}.covers_paths[]")
-            for path in _bounded_text_list(
-                value["covers_paths"], field=f"{field}.covers_paths",
-                item_limit=240, count_limit=200,
-            )
+            _relative_path(item, field=f"{field}.covers_paths[]") for item in covers
         ]
     if "failure_attribution" in value:
         _validate_attribution_public_safety(value["failure_attribution"], field=field)

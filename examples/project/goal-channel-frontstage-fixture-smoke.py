@@ -33,7 +33,11 @@ def test_fixture_projection_and_html_are_read_only() -> None:
     assert projection["decision_frame"]["user_action_required"] is True, projection
     assert projection["decision_frame"]["agent_action_required"] is True, projection
     assert projection["agent_todos"][1]["claimed_by"] == "codex-side-bypass", projection
-    assert projection["active_leases"][1]["owner_agent"] == "codex-side-bypass", projection
+    # The renderer fixture carries display metadata without a canonical provider.
+    assert projection["active_leases"] == [], projection
+    assert projection["coordination_observation"]["status"] == "unavailable", projection
+    assert projection["coordination_authority"] == {"state": "unavailable"}, projection
+    assert projection["truth_contract"]["write_authority"] == "none", projection
 
     assert 'data-schema="goal_channel_projection_v0"' in html, html
     assert 'data-mode="read_only"' in html, html

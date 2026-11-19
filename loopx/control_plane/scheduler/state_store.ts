@@ -17,6 +17,7 @@ import {
   requireNonEmptyString as requiredString,
   requireStringLiteral,
 } from "../runtime_decode.ts";
+import { parseIsoTimestamp } from "../runtime_timestamp.ts";
 
 export const SCHEDULER_STATE_SCHEMA_VERSION = "loopx_scheduler_state_v0";
 export const SCHEDULER_HOST_UPDATE_FAILURE_SCHEMA_VERSION =
@@ -216,14 +217,26 @@ export function normalizeSchedulerHostUpdateFailures(
   return normalized.slice(-HOST_UPDATE_FAILURE_CACHE_LIMIT);
 }
 
+/** Calendar-checked ISO instant. Blank is null; a missing timezone means UTC. */
 export function schedulerTimestampMilliseconds(value: unknown): number | null {
   const text = trimmed(value);
   if (!text) return null;
-  const timezoneAware = /(?:[zZ]|[+-]\d{2}(?::?\d{2})?)$/.test(text)
-    ? text
-    : `${text}Z`;
-  const parsed = Date.parse(timezoneAware);
-  return Number.isNaN(parsed) ? null : parsed;
+  const parsed = parseIsoTimestamp(text);
+  return parsed === null ? null : parsed.getTime();
+}
+
+/** Blank stays null. Present text that is not a calendar-checked ISO timestamp is rejected. */
+export function requireSchedulerTimestampMilliseconds(
+  value: unknown,
+  label: string,
+): number | null {
+  const text = trimmed(value);
+  if (!text) return null;
+  const parsed = schedulerTimestampMilliseconds(text);
+  if (parsed === null) {
+    throw new EffectRuntimeRequestError(`${label} must be an ISO timestamp`);
+  }
+  return parsed;
 }
 
 export function retainedSchedulerHostUpdateFailures(
@@ -232,7 +245,10 @@ export function retainedSchedulerHostUpdateFailures(
   observedHostRrule: unknown = null,
 ): JsonObject[] {
   const failures = normalizeSchedulerHostUpdateFailures(value);
-  const now = schedulerTimestampMilliseconds(referenceTime) ?? Date.now();
+  const now = requireSchedulerTimestampMilliseconds(
+    referenceTime,
+    "reference_time",
+  ) ?? Date.now();
   const cutoff = now - HOST_UPDATE_FAILURE_TTL_MS;
   const expectedHostRrule = normalizeSchedulerRrule(observedHostRrule);
   return failures.filter((failure) => {

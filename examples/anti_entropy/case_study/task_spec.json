@@ -1,0 +1,12 @@
+{
+  "task_id": "case_study_parser_retirement",
+  "objective": "Migrate DataConsumer in client.py from LegacyMessageParser to StreamMessageParser. Fully retire LegacyMessageParser and delete legacy_parser.py cleanly without leaving backward-compatibility shims or dead code.",
+  "functional_test_command": "pytest examples/anti_entropy/case_study/tests/test_client.py -q",
+  "retirement_basis": {
+    "schema_version": "loopx_anti_entropy_retirement_basis_v0",
+    "target_symbols": ["LegacyMessageParser", "parse_legacy_frame"],
+    "target_paths": ["examples/anti_entropy/case_study/legacy_parser.py"],
+    "allow_compat_seam": false,
+    "rationale": "Superseded by StreamMessageParser in stream_parser.py"
+  }
+}

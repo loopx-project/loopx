@@ -107,11 +107,44 @@ def test_periodic_review_ignores_quiet_polls_but_counts_material_transitions() -
     assert periodic([material] + quiet + work)["triggers"][0]["kind"] == "periodic_review_due"
 
 
+def test_replan_noops_preserve_the_original_work_obligation_identity() -> None:
+    work = [run(n, turn=f"work-{n}") for n in range(20, 0, -1)]
+    original = obligation(work)
+    assert original is not None
+    for classification in ("replan_noop", "repair_noop"):
+        noops = [{**run(21, turn=f"review-{n}"), "classification": classification,
+                  "generated_at": f"2026-09-22T00:01:{n % 60:02d}Z",
+                  "health_check": f"Still considering the same question, wording {n}"}
+                 for n in range(200)]
+        assert obligation(noops) is None
+        assert obligation(noops + work[:-1]) is None
+        repeated = obligation(noops + work)
+        assert repeated is not None
+        assert repeated["obligation_id"] == original["obligation_id"]
+        assert repeated["triggers"] == original["triggers"]
+        typed_noops = [{**row, "progress_observation": observation()} for row in noops]
+        assert obligation(typed_noops) is None, "a control no-op cannot manufacture a progress-repeat duty"
+        assert obligation(typed_noops + work)["obligation_id"] == original["obligation_id"]
+
+
 def test_six_distinct_polls_retain_dead_monitor_contract() -> None:
     result = obligation([monitor(n, turn=f"poll-{n}") for n in range(6, 0, -1)])
     assert result is not None
     assert result["triggers"][0]["kind"] == "dead_monitor_repeat"
     assert result["dead_monitor_detector"]["run_count"] == 6
+
+
+def test_watch_only_state_reaches_the_history_policy_owner() -> None:
+    rows = [monitor(n, turn=f"poll-{n}") for n in range(6, 0, -1)]
+    for watch_only in (True, "true", False, "false", None):
+        todos = {"monitor_open_items": [{"todo_id": "todo_monitor_fixture",
+                 "target_key": "target-fixture", "claimed_by": AGENT,
+                 "watch_only": watch_only}]}
+        result = autonomous_replan_obligation_from_runs(rows, agent_todos=todos, agent_id=AGENT)
+        if watch_only in (True, "true"):
+            assert result is None
+        else:
+            assert result["triggers"][0]["kind"] == "dead_monitor_repeat"
 
 
 def test_genuinely_unknown_work_still_breaks_progress_streak() -> None:
@@ -169,6 +202,25 @@ def test_codec_keeps_prose_out_of_the_history_decision_request(monkeypatch) -> N
     assert prose not in encoded
     assert len(encoded) < 5000
     assert requests[0][1]["todos"]["resume"] is None
+
+
+def test_cadence_codec_transports_strategy_without_reclassifying_or_scaling(monkeypatch, tmp_path) -> None:
+    from loopx.control_plane.work_items import replan_history_codec as codec
+
+    requests = []
+    def project(params, context):
+        requests.append(params)
+        return {"schema_version": "replan_history_result_v0", "trigger": None}
+    monkeypatch.setattr(codec, "_project_admitted_replan_request", project)
+    goal = {"id": "fixture", "execution_profile": {"replan_after_effective_turns": 6,
+                                                   "stride_strategy": "evidence_conditioned_v1"}}
+    context = codec.effective_turn_cadence_context(goal, tmp_path)
+    codec.project_replan_history(effective_turn_cadence=context)
+    assert requests[-1]["periodic_threshold"] == 6
+    assert requests[-1]["stride_strategy"] == "evidence_conditioned_v1"
+    del goal["execution_profile"]["stride_strategy"]
+    codec.project_replan_history(effective_turn_cadence=codec.effective_turn_cadence_context(goal, tmp_path))
+    assert requests[-1]["stride_strategy"] == "off"
 
 
 def test_long_history_keeps_evidence_beyond_rpc_limit() -> None:

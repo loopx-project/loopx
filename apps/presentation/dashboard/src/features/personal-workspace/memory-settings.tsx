@@ -4,7 +4,7 @@ import type {WorkspaceLocale} from "./i18n";
 type Capability = CapabilityConfigurationCatalog["capabilities"][number];
 
 // Local navigation only. Each purpose retains its native capability/configuration owner.
-const purposes = ["decision_context", "reward_memory", "content_ops"] as const;
+const purposes = ["decision_context", "reward_memory"] as const;
 export function isMemoryCapability(id: string) {return purposes.some(purpose => purpose === id);}
 export function memorySettingsTitle(locale: WorkspaceLocale) {return locale === "zh-CN" ? "记忆与资料" : "Memory & sources";}
 export function memoryCapabilities(capabilities: readonly Capability[]) {
@@ -31,8 +31,6 @@ export function MemorySettingsHeader({capabilities, locale, onSelect, selectedId
       effect: cn ? "按问题查找已有材料。不会保存配置或开启 Agent 的自动记忆。" : "Find existing material for a question. This does not save configuration or enable automatic Agent memory."},
     reward_memory: {name: cn ? "经验学习" : "Learn from outcomes", mode: cn ? "持久配置 · 实验功能" : "Saved configuration · experimental",
       effect: cn ? "为指定 Agent 配置经验复用；旧版共享绑定单独管理。配置、自动召回和写回的实际接入分别验证。" : "Configure experience reuse for a named Agent, or manage a legacy shared binding separately. Configuration, automatic recall and writeback each require their own verification."},
-    content_ops: {name: cn ? "素材与风格" : "Reference styles", mode: cn ? "只读素材目录" : "Read-only reference catalog",
-      effect: cn ? "查找参考素材的表达和结构，保留来源署名；与事实证据、Agent 经验分开使用。" : "Find source-attributed writing styles and structures, separately from factual evidence and Agent experience."},
   };
   const available = memoryCapabilities(capabilities);
   const selected = purposes.find(id => id === selectedId);

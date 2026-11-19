@@ -18,6 +18,7 @@ import loopx.pr_review as pr_review_module  # noqa: E402
 from loopx.capabilities.project_skill_delivery.core import (  # noqa: E402
     discover_project_scoped_skill_ids,
 )
+from loopx.capabilities.pr_review_queue.review_body import check_review_body  # noqa: E402
 from loopx.doctor import REQUIRED_INSTALLED_SKILL_PHRASES  # noqa: E402
 from loopx.pr_review import (  # noqa: E402
     _github_search_date,
@@ -40,14 +41,24 @@ PRIVATE_PATTERNS = [
 
 
 def run_cli(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, "-m", "loopx.cli", *args],
-        cwd=REPO_ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=check,
-    )
+    # Fixture reviews must not read or depend on the operator's runtime routes.
+    with tempfile.TemporaryDirectory(prefix="pr-review-cli-") as temporary:
+        root = Path(temporary).resolve()
+        defaults = []
+        if "--runtime-root" not in args:
+            defaults += ["--runtime-root", str(root / "runtime")]
+        if "--registry" not in args:
+            registry = root / "registry.json"
+            registry.write_text(json.dumps({"goals": []}), encoding="utf-8")
+            defaults += ["--registry", str(registry)]
+        return subprocess.run(
+            [sys.executable, "-m", "loopx.cli", *defaults, *args],
+            cwd=REPO_ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=check,
+        )
 
 
 def assert_public_safe(payload: dict[str, object]) -> None:
@@ -57,33 +68,6 @@ def assert_public_safe(payload: dict[str, object]) -> None:
             raise AssertionError(
                 f"pr-review payload leaked private pattern {pattern.pattern!r}"
             )
-
-
-# `--check-merge-readiness` now mandates a Goal id. Every authoritative
-# invocation an agent may read has to carry it, or the canonical self-merge
-# gate fails deterministically before it can record its observation.
-MERGE_READINESS_GUIDANCE_PATHS = (
-    REPO_ROOT / "AGENTS.md",
-    REPO_ROOT / "loopx" / "capabilities" / "pr_review_queue" / "README.md",
-    REPO_ROOT / "loopx" / "capabilities" / "pr_review_queue" / "catalog_entry.py",
-    PR_REVIEW_SKILL,
-    PR_MERGE_SKILL,
-)
-
-
-def assert_merge_readiness_invocations_require_goal_id() -> None:
-    for path in MERGE_READINESS_GUIDANCE_PATHS:
-        source = path.read_text(encoding="utf-8")
-        for span in re.findall(r"`[^`]*--check-merge-readiness[^`]*`", source):
-            assert "--goal-id" in span, (
-                f"{path.name} must pass --goal-id to --check-merge-readiness: {span}"
-            )
-        for line in source.splitlines():
-            if "--check-merge-readiness" in line and "`" not in line:
-                assert "--goal-id" in line, (
-                    f"{path.name} must pass --goal-id to --check-merge-readiness: "
-                    f"{line.strip()}"
-                )
 
 
 def main() -> int:
@@ -103,24 +87,20 @@ def main() -> int:
         "Read the published review back",
         "Route approval, merge, self-merge, and admin bypass to `loopx-pr-merge`",
         "--check-merge-readiness NUMBER@HEAD_OID",
-        "admin bypass never overrides this gate",
+        "admin bypass may override a readiness or GitHub policy hold",
         "Full PR Review And Bilingual Format",
         "findings-only or blocker-only body is incomplete",
         "Cover every changed surface and key symbols",
-        "详细中文评审",
-        "英文简短结论",
-        "complete Chinese five-block review plus one concise English verdict",
         "review_execution_contract.verdict_policy",
         "validation_matrix",
         "validation_source",
         "failure_attribution",
         "durable_smoke_value",
-        "null action does not imply an existing conclusion",
         "Reserve Draft for unfinished author work",
         "review_execution_contract.policy_revision",
         "review_policy_revision",
         "Do not retain expired temporary worktree overrides",
-        "Treat `candidate` as a preview, not a durable projection",
+        "Treat `candidate` as a preview",
         "durable Todo target-key readback -> `--projected-exact-head` -> exact-head review/comment readback -> `--handled-exact-head`",
         "Never send the projection ACK before the Todo exists",
         "Generic `re-review`, `重新review`, and `复审` wording selects the named PR; it is not a force-refresh token.",
@@ -128,7 +108,10 @@ def main() -> int:
         "--target-exact-head NUMBER@HEAD_OID",
     ):
         assert phrase in skill_text, phrase
-    assert len(skill_source.splitlines()) <= 180, len(skill_source.splitlines())
+    # The adapter grows from 165/11,818 to 181/13,018 lines/UTF-8 bytes to
+    # preserve body-edit authority and compatibility obligations. Keep it thin
+    # without removing those clauses to fit the former 180-line budget.
+    assert len(skill_source.splitlines()) <= 190, len(skill_source.splitlines())
     for duplicated_contract_heading in (
         "Per-PR Evidence And Depth Gate",
         "Motivation Causal Chain",
@@ -177,13 +160,12 @@ def main() -> int:
         "loopx --format json pr-review --state all",
         "agent_response_contract.review_execution_contract",
         "--check-merge-readiness NUMBER@HEAD_OID",
-        "ready=true",
+        "Record the readiness result",
         "completion_gate",
-        "admin bypass never overrides this gate",
+        "admin bypass may override a readiness or GitHub policy hold",
         "A merge decision without this evidence is not authorized",
     ):
         assert phrase in merge_text, phrase
-    assert_merge_readiness_invocations_require_goal_id()
 
     assert _github_search_date("2026-06-28T00:00:00+08:00") == "2026-06-27"
     assert _github_search_date("2026-06-28T00:00:00Z") == "2026-06-28"
@@ -406,6 +388,16 @@ def main() -> int:
             ],
         }
         merge_fixture_path.write_text(json.dumps(merge_fixture), encoding="utf-8")
+        before_standalone = sorted(str(path) for path in Path(temp_dir).rglob("*"))
+        standalone = json.loads(run_cli(
+            "--runtime-root", str(runtime_root), "--registry", str(registry_path),
+            "--format", "json", "pr-review", "--fixture", str(merge_fixture_path),
+            "--check-merge-readiness", f"4110@{merge_head}",
+        ).stdout)
+        assert standalone["ready"] is True, standalone
+        assert standalone["local_goal_observation_write_performed"] is False, standalone
+        assert "readiness_observation" not in standalone, standalone
+        assert sorted(str(path) for path in Path(temp_dir).rglob("*")) == before_standalone
         ready = json.loads(
             run_cli(
                 "--runtime-root",
@@ -478,6 +470,15 @@ def main() -> int:
             "current_head_review_missing_or_invalid" in blocked["blocking_reasons"]
         ), blocked
         assert "status_checks_failed" in blocked["blocking_reasons"], blocked
+        standalone_blocked = run_cli(
+            "--runtime-root", str(runtime_root), "--registry", str(registry_path),
+            "--format", "json", "pr-review", "--fixture", str(merge_fixture_path),
+            "--check-merge-readiness", f"4110@{merge_head}", check=False,
+        )
+        assert standalone_blocked.returncode == 1, standalone_blocked
+        standalone_hold = json.loads(standalone_blocked.stdout)
+        assert standalone_hold["blocking_reasons"] == blocked["blocking_reasons"], standalone_hold
+        assert standalone_hold["local_goal_observation_write_performed"] is False, standalone_hold
 
     # Merge readiness follows the typed approval verdict, not GitHub's review
     # state. The platform blocks self-approval, so an author-owned approval is
@@ -637,6 +638,20 @@ def main() -> int:
         assert section["agent_instruction"], section
         assert "quota.py" not in section["agent_instruction"], section
     assert all(section["minimum_prose_characters"] > 0 for section in template["sections"])
+    preferred_titles = ["动机 / Motivation", "改动思路 / Approach", "具体改动 / Changes",
+                        "对主干的风险 / Risks", "我的整体评价 / Verdict"]
+    for section, title in zip(template["sections"], preferred_titles, strict=True):
+        assert title in section["agent_instruction"], section
+    body_head = "a" * 40
+    canonical_body = (REPO_ROOT / "examples/fixtures/pr-review.body.md").read_text(
+        encoding="utf-8").replace("HEAD_OID", body_head).replace("VERDICT", "APPROVE")
+    bilingual_body = canonical_body
+    for label, title in zip(labels, preferred_titles, strict=True):
+        bilingual_body = bilingual_body.replace(f"## {label}\n", f"## {title}\n")
+    canonical_check = check_review_body(canonical_body, head_oid=body_head, behavior_bearing=True)
+    assert canonical_check["valid"], canonical_check
+    assert check_review_body(bilingual_body, head_oid=body_head,
+                             behavior_bearing=True) == canonical_check
     concrete_change = next(
         section for section in template["sections"] if section["label"] == "具体改动"
     )
@@ -1071,7 +1086,7 @@ def main() -> int:
         "review_sequence_membership": "review_action_kind_non_null_only",
         "no_action_inventory_location": "pull_requests",
         "generic_rereview_terms_force_fresh_audit": False,
-        "no_action_behavior": "compact_exact_head_conclusion_readback_only",
+        "no_action_behavior": "compact_exact_head_review_or_lifecycle_readback_only",
         "no_action_execution_artifacts": "plan_and_template_null_commands_empty",
         "force_fresh_audit_requires": (
             "An explicit request to rerun evidence despite the unchanged/no-action "

@@ -163,6 +163,14 @@ def register_periodic_report_commands(
         required=True,
         help="Path to periodic_report_runtime_trigger_request_v0 JSON.",
     )
+    review = commands.add_parser("request-review", help="Freeze a generated report for owner review in App results and Home.")
+    add_subcommand_format(review)
+    _add_input_limit(review)
+    review.add_argument("--goal-id", required=True)
+    review.add_argument("--agent-id", required=True)
+    review.add_argument("--bundle-json", required=True)
+    review.add_argument("--session-id", help="Exact original managed report Session for feedback.")
+    review.add_argument("--execute", action="store_true")
     request = commands.add_parser(
         "request",
         help=(
@@ -520,7 +528,14 @@ def handle_periodic_report_command(
         if result is not None:
             return result
     try:
-        if args.periodic_report_command == "archive-openviking":
+        if args.periodic_report_command == "request-review":
+            from .review import request_report_review
+            registry = load_registry(registry_path)
+            payload = request_report_review(registry_path=registry_path,
+                runtime_root=resolve_runtime_root(registry, runtime_root_arg, registry_path=registry_path),
+                goal_id=args.goal_id, agent_id=args.agent_id,
+                bundle=_load_json_object(args.bundle_json, args.max_input_bytes), session_id=args.session_id, execute=args.execute)
+        elif args.periodic_report_command == "archive-openviking":
             payload = _archive_openviking(
                 _load_json_object(args.request_json, args.max_input_bytes),
                 args,

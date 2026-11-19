@@ -47,7 +47,7 @@ Frontstage Pages 只验收并发布公共网站和 projection demo，保留构�
 仍由 Python Tests 承担。新合并不会中断正在运行的正式发布，只替换等待中的下一次
 发布；同一 PR 的旧验证仍会取消。
 
-本方案不是为每类 PR 维护一套测试清单，而是明确重型 job 的职责。纯前端变化不需要
+本方案是明确重型 job 的职责。纯前端变化不需要
 重跑后端持久化与崩溃恢复矩阵，但前端自己的实际构建与浏览器验收成为必需项。
 预算、静态宿主 prompt 和后端 Python/TS 逻辑暂不享受免跑；它们仍可能改变核心行为。
 新增一种豁免只需审阅其业务边界和保留的验收，不要求列举全部替代测试文件。
@@ -61,27 +61,42 @@ No tests are removed. Without timing history the splitter uses equal weights;
 six shards do not establish perfect duration balancing. Each numbered shard
 shares its queue across workflow runs without replacing another current head.
 
-Long Python shards now wait for the existing `checks` aggregate. An ordinary
-PR enters those queues only after core qualification succeeds, so a known-red
-candidate does not occupy the long-test lanes. This changes scheduling, not
-qualification: skipped shards after a failed prerequisite still fail `pytest`
-and `merge-gate`; a passing full candidate still requires every shard and the
-same coverage floor. Main, scheduled, manual and merge-queue runs retain full
-Python diagnostics after `checks` finishes, even if it failed, provided the
-classification and source bundle succeeded and the workflow was not cancelled.
-The tradeoff is extra serial latency for a healthy run in an idle queue, in
-exchange for less work behind known failures under contention. `ci:full` still
-forces the full profile; use a manual run for complete diagnostics of a failing
-PR revision. This does not cancel previously queued runs of older workflows.
+The existing `kernel-static-checks` lane now follows classification directly:
+the dependency lock, top-level module budget and existing Ruff scope run before
+the Chat build or any heavy matrix. Full PR, main-push and merge-queue candidates
+must pass that lane before the source bundle admits downstream work. A client-only
+exemption requires its static lane to be explicitly skipped. Scheduled and manual
+full runs may continue after a static failure to collect complete diagnostics;
+cancelled, missing or unexpectedly skipped prerequisites never grant admission.
+The downstream jobs retain explicit cancellation predicates so GitHub's implicit
+`success()` does not discard requested diagnostics after a failed ancestor.
 
-长 Python 分片现在先等待现有 `checks` 汇总；普通 PR 仅在核心资格检查成功后
-进入长队列，避免已知失败的候选继续占用分片。前置失败导致的跳过仍使 `pytest`
-和 `merge-gate` 失败，完整候选仍须通过全部分片与原覆盖率门槛。主干、定时、
-手动和 merge queue 在汇总结束后仍执行完整 Python 诊断，即使该汇总失败；
-分类和源码构建必须成功，取消的 workflow 不再启动分片。代价是空闲队列中健康
-候选的串行等待增加；收益是拥塞时不再给已知失败的 PR 排长测试。`ci:full` 仍强制
-完整 profile；需要失败候选的全部诊断时可手动运行其分支。旧 workflow 已排队的
-任务不会因此自动取消。
+Python shards start after the admitted bundle, alongside TypeScript and browser
+qualification. The six repository-wide slots and two workers per shard remain.
+File-authority tests, mypy and CLI output budgets move to `kernel-contracts` and
+remain required by `checks`, as does the static lane. The existing `pytest` and
+`merge-gate` still reject any required failure, skip or missing coverage. This
+removes the full browser/TypeScript wait from Python's critical path, but allows
+up to six already-bounded Python jobs to overlap those lanes; a later browser
+failure may now coexist with running Python tests. `ci:full` selects all qualification,
+without overriding failed admission; use a manual run for complete diagnostics
+of a failing revision. Older queued workflow versions keep their own policy.
+
+既有 `kernel-static-checks` 现在直接等待分类：依赖锁、顶层模块预算和原有 Ruff
+范围在 Chat 构建及全部重型矩阵之前检查。全量 PR、main push 和 merge queue
+必须先通过此通道，源码 bundle 才准入下游；纯前端豁免要求静态通道明确 skipped。
+定时与手动全量运行可在静态 failure 后继续收集完整诊断；取消、缺失或意外 skipped
+均不放行。下游显式保留取消条件，避免 GitHub 隐含的 `success()` 因祖先失败丢弃
+本次请求的诊断。
+
+Python 分片在已准入的 bundle 完成后即可与 TypeScript／浏览器并行，仍受六个
+仓库级槽位、每片两个 worker 限制。File authority、mypy 与 CLI 输出预算移到
+`kernel-contracts`，与静态通道一起继续作为 `checks` 必过项。既有 `pytest` 和
+`merge-gate` 仍拒绝必需项失败、跳过或 coverage 缺失。这样缩短 Python 等待全套
+前端／TS 的关键路径，但最多六个已有上限的 Python job 会与这些通道重叠；稍后
+发生浏览器失败时，Python 可能已经运行。这不预留 hosted 容量，也不直接证明吞吐
+改善。`ci:full` 选择全部资格检查，不绕过准入失败；失败版本的完整诊断仍使用手动
+运行。旧版 workflow 已排队的任务保留其原有规则。
 
 The shard command explicitly loads `scripts.ci.pytest_timing`. Its controller
 streams pytest's setup/call/teardown durations to Actions logs as each report
@@ -136,8 +151,7 @@ worker 秒数、各阶段总和与最慢用例。缺失、损坏或矛盾记录�
 断言结构；子测试单独保留失败位置，不重复计时。新增 JSON 不含消息、参数、locals 或
 捕获的 IO，原 pytest 输出不变。未知类、缺失源码或诊断异常仍是证据缺口；未送达的
 报告与收集失败不在覆盖范围，不能据此完成原因归因、证明真实性或豁免完整门禁。
-并发 phase 总和不是
-runner-minutes、排队时长或 CPU 时间；不完整记录仅给出下界，环境准备与占用须结合
+不完整记录仅给出下界，环境准备与占用须结合
 job/step 时间戳。记录不进入 timing cache、不改变测试选择、不替代门禁；没有耗时
 历史时仍按原等权规则分片。
 完整 pytest node id 用 SHA-256 标识；显示名去除参数内容并限制为 256 字符。
@@ -179,7 +193,7 @@ describes the workflow topology, not how many jobs actually ran.
 
 `python_shards` 从 `checkout_sha` 对应的不可变 workflow 读取静态分片轴，当前为六片，
 不另存历史计数；不支持或不连续的拓扑直接报错，不输出猜测值。文档／前端豁免仍为零。
-它描述 workflow 拓扑，不能证明任何分片实际执行或 JUnit／coverage 已完整。
+它描述 workflow 拓扑。
 
 The merge gate requires
 success for required jobs and an explicit skip for exempt ones; failure,
@@ -240,12 +254,20 @@ to one and background shard occupancy from five runners to two; the complete
 sweep may take longer. The existing fleet-health readback still checks receipts.
 
 Python Tests also runs daily at `20:17 UTC`. Its event-scoped concurrency keeps
-that full run separate from main pushes and PRs. New PR heads and main pushes
-cancel superseded runs; scheduled, manual and merge-queue qualification is not
-cancelled by that policy. Release-artifact, desktop-artifact, signed-desktop,
+that full run separate from main pushes and PRs. New PR heads cancel their
+superseded runs. Active main qualification finishes; `queue: single` replaces
+only the pending main successor with the latest push instead of interrupting
+the running candidate or accumulating every intermediate commit. Scheduled,
+manual and merge-queue qualification is not cancelled by that policy.
+Release-artifact, desktop-artifact, signed-desktop,
 DCO and optional Ark PR checks cancel only superseded validation for the same PR.
 Signed-desktop PRs use separate groups from each other and from channel publication.
 Release publication remains serialized and is never cancelled by a PR update.
+
+Python Tests 每日 `20:17 UTC` 的完整运行与 main push、PR 保持不同并发组。
+PR 新 head 仍取消本 PR 的旧运行；正在执行的 main 资格验证会完成，`queue: single`
+仅用最新 push 替换等待中的主干后继，不中断运行中的候选，也不积压每个中间提交。
+该策略不取消定时、手动和 merge queue 的资格验证；发布仍保持原有串行规则。
 
 Trusted obsolete-PR cleanup runs in the separate **CI Maintenance** workflow on
 `pull_request_target` close/synchronize events. It never checks out PR content
@@ -270,7 +292,7 @@ coverage command runs only in shard 1, whose `lcov.info` the existing merger
 already consumes; browser coverage and acceptance receipts remain required from
 all three shards. The merger rejects missing unit coverage or incomplete browser
 acceptance. This removes two duplicate unit-coverage invocations per full or
-presentation run; it does not establish a hosted wall-time improvement.
+presentation run.
 
 旧 PR 清理独立为 CI Maintenance，保留原有来源与 head 校验，也不执行 PR 代码。
 清理成功不再显示为一次 Python Tests 成功。Dashboard 的单元覆盖率只在第 1 片

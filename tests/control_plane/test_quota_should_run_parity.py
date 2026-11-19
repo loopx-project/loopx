@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from contextlib import nullcontext
+
+import pytest
 
 from loopx.control_plane.quota.should_run import (
     build_quota_should_run as bounded_build_quota_should_run,
@@ -101,6 +104,38 @@ def test_advancement_run_parity_surface() -> None:
     assert parity["must_attempt_work"] is True
     assert parity["interaction_mode"] == "bounded_delivery"
     assert parity["capability_gate_action"] is None
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_quota_read_resolves_code_once_and_preserves_current_pause(monkeypatch, nested):
+    from loopx.control_plane import effect_runtime
+
+    active = quota_status_payload(
+        goal_id=GOAL_ID, status="active", recommended_action="Inspect the fixture.",
+    )
+    paused = quota_status_payload(
+        goal_id=GOAL_ID, status="active", recommended_action="Inspect the fixture.",
+        quota_state="paused", quota_extra={"compute": 0},
+    )
+    revisions = []
+    fingerprint = effect_runtime._runtime_fingerprint
+
+    def observe_code_read():
+        revision = fingerprint()
+        revisions.append(revision)
+        return revision
+
+    monkeypatch.setattr(effect_runtime, "_runtime_fingerprint", observe_code_read)
+    with effect_runtime.effect_runtime_request_scope() if nested else nullcontext():
+        first = facade_build_quota_should_run(active, goal_id=GOAL_ID)
+        assert len(revisions) == 1, f"resolved code {len(revisions)} times"
+        assert first["decision"] == "run"
+        second = bounded_build_quota_should_run(paused, goal_id=GOAL_ID)
+        assert len(revisions) == (1 if nested else 2)
+        assert second["state"] == "paused"
+        assert second["decision"] == "skip"
+        assert second["should_run"] is False
+        assert second["normal_delivery_allowed"] is False
 
 
 def test_capability_gate_repair_parity_surface() -> None:

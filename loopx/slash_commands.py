@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
+
 
 from .presentation.markdown import (
     markdown_code,
@@ -77,6 +78,7 @@ def build_slash_command_catalog(
                     "cursor-agent": "drive the loop from the agent's own turns; enter every turn through quota should-run",
                     "zcode": "drive the loop from the agent's turns; enter through quota should-run",
                     "agy": "native /goal + schedule wakes; quota entry advisory",
+                    "antigravity-app": "schedule timer + sidecar heartbeat",
                     "kiro-cli": "native /goal loop; quota entry advisory",
                     "manual": "wire an external scheduler or run quota/status manually",
                     "other-agent": "use the custom host loop driver declared by `loopx agent-onboard`",
@@ -239,7 +241,7 @@ def render_slash_command_catalog_markdown(payload: dict[str, Any]) -> str:
         intent = str(item.get("intent") or "")
         if legacy:
             intent += " Legacy aliases: " + ", ".join(f"`{alias}`" for alias in legacy) + "."
-        agent_contract = item.get("agent_contract") if isinstance(item.get("agent_contract"), dict) else {}
+        agent_contract = cast(dict[str, Any], item.get("agent_contract")) if isinstance(item.get("agent_contract"), dict) else {}
         if agent_contract.get("must_run_cli_first"):
             intent += " Agent contract: run the CLI reference first; do not rebuild the queue manually."
         if agent_contract.get("host_loop_activation_required_after_todo_writeback"):

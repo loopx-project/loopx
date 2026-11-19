@@ -63,12 +63,18 @@ def goal_attention(
             adapter_status in connected_adapter_statuses
             or adapter_status in connected_delivery_adapter_statuses
         ):
+            # Lane notes and neutral runs do not establish Goal status, but are history.
+            has_history = bool(goal.get("unique_runs") or goal.get("latest_runs"))
             return attention_item(
                 goal_id=goal_id,
-                status="connected_without_run",
+                status="unknown" if has_history else "connected_without_run",
                 waiting_on="codex",
                 severity="action",
-                recommended_action="run the first read-only adapter tick and save a compact run record",
+                recommended_action=(
+                    "inspect the active goal state; existing history has no goal-level status run"
+                    if has_history
+                    else "run the first read-only adapter tick and save a compact run record"
+                ),
                 source="run_history",
                 **lifecycle_fields,
             )

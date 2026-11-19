@@ -21,10 +21,13 @@ from loopx.control_plane.testing.cli_output_differential import (  # noqa: E402
     compare_cli_output_receipts,
     select_cli_output_base_ref,
 )
+from loopx.control_plane.testing.cli_output_budget import CLI_OUTPUT_BUDGET_BY_ID  # noqa: E402
+from tests.control_plane.cli_output_fixture import budget_fixture_path  # noqa: E402
 
 
 PROBE_TEST = REPO_ROOT / "tests" / "control_plane" / "test_cli_output_budget.py"
 PROBE_RUNNER = REPO_ROOT / "examples" / "control_plane" / "cli-output-probe-runner.py"
+FIXTURE_SUPPORT = REPO_ROOT / "tests" / "control_plane" / "cli_output_fixture.py"
 SEMANTICS_SOURCE = (
     REPO_ROOT / "loopx" / "control_plane" / "testing" / "cli_output_semantics.py"
 )
@@ -37,6 +40,8 @@ def _run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) ->
         env=env,
         check=False,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         timeout=240,
@@ -62,10 +67,17 @@ def _run_probe(
 ) -> None:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(source_root)
+    # This subprocess starts Python directly and pins product imports through
+    # PYTHONPATH. Do not inherit the invoking launcher's release identity: that
+    # would mix a base probe with head assets. Setting it to source_root is also
+    # wrong here because rendered recovery commands would expose two different
+    # checkout paths and turn path length into a false output regression.
+    env.pop("LOOPX_RELEASE_ROOT", None)
     # Both revisions measure the same fixture, including implicit machine
     # defaults. Never let the operator's registry/configuration select a host.
-    isolated_current = str(fixture_root / "host-runtime")
-    isolated_legacy = str(fixture_root / "legacy-runtime")
+    stable_root = budget_fixture_path(fixture_root)
+    isolated_current = str(stable_root / "host-runtime")
+    isolated_legacy = str(stable_root / "legacy-runtime")
     bootstrap = (
         "import pathlib, runpy, sys; from loopx import paths; "
         f"paths.DEFAULT_RUNTIME_ROOT=pathlib.Path({isolated_current!r}); "
@@ -101,6 +113,33 @@ def _load_receipt(path: Path) -> dict:
     return payload
 
 
+def _base_ceiling_observation(receipt: dict) -> dict:
+    """Keep bounded base metrics when candidate enforcement stops the probe."""
+    failures = []
+    for row in receipt["rows"]:
+        if row.get("variant_id") is not None:
+            continue
+        spec = CLI_OUTPUT_BUDGET_BY_ID.get(row["surface_id"])
+        if spec is None or row["scenario"] not in spec.max_chars:
+            continue
+        limits = {
+            "chars": spec.max_chars[row["scenario"]][row["format"]],
+            "lines": spec.max_lines[row["scenario"]][row["format"]],
+        }
+        if any(row[key] > limit for key, limit in limits.items()):
+            failures.append({
+                "row_id": row["row_id"],
+                "base": {key: row[key] for key in limits},
+                "current_ceiling": limits,
+            })
+    return {
+        "scope": "default_surface_baselines",
+        "failure_count": len(failures),
+        "rows": failures[:4],
+        "omitted_count": max(0, len(failures) - 4),
+    }
+
+
 def _is_ancestor(ancestor: str, descendant: str) -> bool:
     completed = subprocess.run(
         ["git", "merge-base", "--is-ancestor", ancestor, descendant],
@@ -109,6 +148,8 @@ def _is_ancestor(ancestor: str, descendant: str) -> bool:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     if completed.returncode == 0:
         return True
@@ -120,11 +161,33 @@ def _is_ancestor(ancestor: str, descendant: str) -> bool:
     )
 
 
+def _pin_probe_base_ref(base_ref: str, *, main_ref: str) -> str:
+    # CI may fetch a newer main after its candidate merge commit was created.
+    # Compare that candidate's ancestry, not unrelated later output changes.
+    command = (
+        ["git", "merge-base", "--all", "--", base_ref, "HEAD"]
+        if base_ref == main_ref else
+        ["git", "rev-parse", "--verify", "--end-of-options", f"{base_ref}^{{commit}}"]
+    )
+    completed = subprocess.run(
+        command, cwd=REPO_ROOT, check=False, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
+    )
+    revisions = completed.stdout.splitlines()
+    if completed.returncode != 0 or len(revisions) != 1:
+        raise RuntimeError(
+            f"cannot resolve one CLI output base for {base_ref}; "
+            f"select an explicit --base-ref commit: {completed.stderr.strip()}"
+        )
+    return revisions[0]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--base-ref",
         default=os.environ.get("LOOPX_CLI_OUTPUT_BASE_REF", "origin/main"),
+        help="Comparison base; the selected main branch uses its common ancestor with HEAD.",
     )
     parser.add_argument(
         "--main-ref",
@@ -136,6 +199,7 @@ def main() -> int:
         main_ref=args.main_ref,
         is_ancestor=_is_ancestor,
     )
+    base_ref = _pin_probe_base_ref(base_ref, main_ref=args.main_ref)
     if not PROBE_TEST.is_file():
         raise RuntimeError(f"missing probe source: {PROBE_TEST.relative_to(REPO_ROOT)}")
     if not PROBE_RUNNER.is_file():
@@ -151,11 +215,16 @@ def main() -> int:
         temp_root = Path(temp)
         base_root = temp_root / "base"
         probe_runner = temp_root / "cli_output_probe_runner.py"
+        probe_test = temp_root / "cli_output_probe_fixture.py"
         semantics_source = temp_root / "cli_output_semantics.py"
         fixture_root = temp_root / "public-fixture"
         base_receipt = temp_root / "base-receipt.json"
         candidate_receipt = temp_root / "candidate-receipt.json"
         shutil.copy2(PROBE_RUNNER, probe_runner)
+        # Freeze one caller workload for both arms. Each subprocess still
+        # imports its own pinned product through source_root/PYTHONPATH.
+        shutil.copy2(PROBE_TEST, probe_test)
+        shutil.copy2(FIXTURE_SUPPORT, temp_root / FIXTURE_SUPPORT.name)
         shutil.copy2(SEMANTICS_SOURCE, semantics_source)
 
         _run(
@@ -172,26 +241,32 @@ def main() -> int:
             cwd=REPO_ROOT,
         )
         try:
-            base_probe_test = base_root / PROBE_TEST.relative_to(REPO_ROOT)
-            if not base_probe_test.is_file():
-                raise RuntimeError(
-                    "base ref is missing the CLI output probe source: "
-                    f"{PROBE_TEST.relative_to(REPO_ROOT)}"
-                )
             _run_probe(
                 source_root=base_root,
                 probe_runner=probe_runner,
-                probe_test=base_probe_test,
+                probe_test=probe_test,
                 semantics_source=semantics_source,
                 fixture_root=fixture_root,
                 receipt_path=base_receipt,
                 cwd=temp_root,
                 enforce_budget=False,
             )
+            base_observation = _base_ceiling_observation(_load_receipt(base_receipt))
+            if base_observation["failure_count"]:
+                # Candidate assertions still run unchanged. These metrics are
+                # attribution evidence, not a waiver for an over-budget base.
+                print(
+                    "cli-output-base-current-ceilings "
+                    + json.dumps(
+                        {"base_ref": base_ref, **base_observation},
+                        sort_keys=True, separators=(",", ":"),
+                    ),
+                    flush=True,
+                )
             _run_probe(
                 source_root=REPO_ROOT,
                 probe_runner=probe_runner,
-                probe_test=PROBE_TEST,
+                probe_test=probe_test,
                 semantics_source=semantics_source,
                 fixture_root=fixture_root,
                 receipt_path=candidate_receipt,
@@ -223,7 +298,7 @@ def main() -> int:
                 if row["status"] == "failed"
             ]
             raise AssertionError(
-                "agent-facing CLI base/head differential failed\n"
+                f"agent-facing CLI base/head differential failed (base_ref={base_ref})\n"
                 + json.dumps(failed, ensure_ascii=False, indent=2, sort_keys=True)
             )
         if comparison["review_required"]:

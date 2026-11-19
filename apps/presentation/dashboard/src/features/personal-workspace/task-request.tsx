@@ -1,4 +1,5 @@
-import {useEffect, useRef, useState} from "react";
+import {useCallback, useEffect, useId, useRef, useState} from "react";
+import {compactPythonWhitespace, compactPythonTextLength} from "../../../../../../loopx/control_plane/coordination/python_whitespace.ts";
 import {readTodoRequest} from "../../data/chat";
 import type {TodoUpdateSourceBasis} from "../../data/action-source-basis";
 import {useWorkspaceI18n} from "./i18n";
@@ -6,17 +7,25 @@ import {MarkdownText} from "./markdown";
 import type {PersonalWorkspaceCallbacks, WorkspaceActionPreview, WorkspaceTodo} from "./personal-workspace-model";
 
 // Per-open read/draft state, never a second Task or execution owner.
-type RequestRead = {identity: string} & (
+export type TaskRequestRead = {identity: string} & (
   | {phase: "loading" | "error"; detail?: never}
   | {phase: "ready"; detail: Awaited<ReturnType<typeof readTodoRequest>>}
 );
 
-export function TaskRequest({todo, local, onSave}: {todo: WorkspaceTodo; local: boolean;
+export function taskRequestIdentity(todo: WorkspaceTodo, local: boolean, sourceNamespace?: string) {
+  return JSON.stringify([local, sourceNamespace, todo.goalId, todo.sourceTodoId, todo.requestText,
+    todo.status, todo.evidence, todo.note]);
+}
+
+export function TaskRequest({todo, local, sourceNamespace, onSave, onRead}: {todo: WorkspaceTodo; local: boolean; sourceNamespace?: string;
+  onRead?: (read: TaskRequestRead) => void;
   onSave?: PersonalWorkspaceCallbacks["onSaveTodoRequirements"]}) {
-  const {t} = useWorkspaceI18n();
+  const {locale, t} = useWorkspaceI18n();
+  const countId = useId();
   const sourceId = todo.sourceTodoId;
-  const identity = JSON.stringify([local, todo.goalId, sourceId, todo.requestText, todo.status]);
-  const [read, setRead] = useState<RequestRead | null>(null);
+  const identity = taskRequestIdentity(todo, local, sourceNamespace);
+  const [read, setRead] = useState<TaskRequestRead | null>(null);
+  const publishRead = useCallback((value: TaskRequestRead) => {setRead(value); onRead?.(value);}, [onRead]);
   const [retry, setRetry] = useState(0);
   const [draft, setDraft] = useState<{text: string; basis: TodoUpdateSourceBasis} | null>(null);
   const [pending, setPending] = useState<WorkspaceActionPreview | null>(null);
@@ -30,10 +39,10 @@ export function TaskRequest({todo, local, onSave}: {todo: WorkspaceTodo; local: 
   useEffect(() => {
     if (!local || !sourceId) return;
     const controller = new AbortController();
-    setRead({identity, phase: "loading"});
-    void readTodoRequest(todo.goalId, sourceId, controller.signal).then(detail => {
+    publishRead({identity, phase: "loading"});
+    void readTodoRequest(todo.goalId, sourceId, controller.signal, sourceNamespace).then(detail => {
       if (controller.signal.aborted) return;
-      setRead({identity, phase: "ready", detail});
+      publishRead({identity, phase: "ready", detail});
       if (rebaseRef.current && detail.review_basis) {
         const basis = detail.review_basis;
         setDraft(previous => previous ? {...previous, basis} : null);
@@ -42,20 +51,21 @@ export function TaskRequest({todo, local, onSave}: {todo: WorkspaceTodo; local: 
       }
       rebaseRef.current = false;
     }).catch(() => {
-      if (!controller.signal.aborted) setRead({identity, phase: "error"});
+      if (!controller.signal.aborted) publishRead({identity, phase: "error"});
     });
     return () => controller.abort();
-  }, [identity, local, retry, todo.goalId, sourceId]);
+  }, [identity, local, retry, todo.goalId, sourceId, sourceNamespace, publishRead]);
   const current = local && read?.identity === identity ? read : null;
   const detail = current?.phase === "ready" ? current.detail : null;
   const editable = local && onSave && todo.claimedBy && sourceId && detail?.review_basis
     && detail.archive_state === "active" && detail.status !== "done";
+  const draftLength = compactPythonTextLength(draft?.text ?? "");
   async function save() {
-    if (!onSave || !draft || !sourceId || savingRef.current) return;
+    if (!onSave || !draft || !sourceId || !editable || savingRef.current || !draftLength || draftLength > 8000) return;
     savingRef.current = true;
     setSaving(true); setFailure(null); setSaved(false);
     try {
-      const text = draft.text.replace(/\s+/gu, " ").trim();
+      const text = compactPythonWhitespace(draft.text);
       const proposal = await onSave(todo, text, draft.basis, pending ?? undefined);
       if (!mounted.current) return;
       setPending(proposal);
@@ -63,9 +73,9 @@ export function TaskRequest({todo, local, onSave}: {todo: WorkspaceTodo; local: 
         throw new Error(proposal.errorMessage ?? proposal.gate?.summary
           ?? (proposal.reviewPlan ? t(`actionReview.${proposal.reviewPlan.reason}`) : t("drawer.requirementsNotSaved")));
       }
-      const observed = await readTodoRequest(todo.goalId, sourceId, new AbortController().signal);
+      const observed = await readTodoRequest(todo.goalId, sourceId, new AbortController().signal, sourceNamespace);
       if (!mounted.current) return;
-      setRead({identity, phase: "ready", detail: observed});
+      publishRead({identity, phase: "ready", detail: observed});
       if (observed.text !== text) throw new Error(t("drawer.requirementsReadbackChanged"));
       setDraft(null); setPending(null); setSaved(true);
     } catch (error) {
@@ -86,12 +96,14 @@ export function TaskRequest({todo, local, onSave}: {todo: WorkspaceTodo; local: 
     }}>{t("drawer.requirementsEdit")}</button> : null}
     {draft ? <form className="personal-task-requirements-editor" onSubmit={event => {event.preventDefault(); void save();}}>
       <label>{t("drawer.requirementsLabel")}<textarea autoFocus rows={8} value={draft.text} disabled={saving}
+        aria-describedby={countId} aria-invalid={draftLength > 8000}
         onChange={event => {setDraft({...draft, text: event.target.value}); setPending(null); setSaved(false);}} /></label>
+      <output id={countId} aria-live="off" aria-label={locale === "zh-CN" ? "保存字数" : "Characters to save"}>{draftLength} / 8000</output>
       <p>{t("drawer.requirementsEffect")}</p>
-      <div><button className="personal-primary-action" type="submit" disabled={saving || !editable || !draft.text.trim() || draft.text.length > 8000}>
+      <div><button className="personal-primary-action" type="submit" disabled={saving || !editable || !draftLength || draftLength > 8000}>
         {t(saving ? "drawer.requirementsSaving" : pending?.status === "applied" || pending?.status === "error" ? "drawer.requirementsReadback" : "drawer.requirementsSave")}</button>
         <button className="personal-secondary-action" type="button" disabled={saving} onClick={() => {setDraft(null); setPending(null); setFailure(null);}}>{t("common.cancel")}</button></div>
-      {draft.text.length > 8000 ? <p role="alert">{t("drawer.requirementsTooLong")}</p> : null}
+      {draftLength > 8000 ? <p role="alert">{t("drawer.requirementsTooLong")}</p> : null}
       {failure ? <div role="alert"><p>{failure}</p><button className="personal-secondary-action" type="button" disabled={saving} onClick={() => {
         rebaseRef.current = true; setRetry(value => value + 1);
       }}>{t("drawer.requirementsReload")}</button></div> : null}

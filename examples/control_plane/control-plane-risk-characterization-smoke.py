@@ -107,7 +107,7 @@ def assert_agent_lane_delivery() -> None:
     ], packet
 
 
-def assert_scoped_operator_gate_safe_bypass() -> None:
+def assert_foreign_operator_gate_keeps_normal_admission() -> None:
     payload = status_payload(
         [
             todo_item(
@@ -136,7 +136,11 @@ def assert_scoped_operator_gate_safe_bypass() -> None:
     )
     assert quota["should_run"] is True, quota
     assert quota["effective_action"] == "normal_run", quota
-    assert quota["safe_bypass_allowed"] is True, quota
+    assert quota["safe_bypass_allowed"] is False, quota
+    scoped = quota["agent_scoped_user_gate_override"]
+    assert scoped["agent_id"] == AGENT_ID, scoped
+    assert scoped["from_state"] == "operator_gate", scoped
+    assert scoped["to_state"] == "eligible", scoped
     assert quota["interaction_contract"]["user_channel"]["action_required"] is False, quota
     assert quota["agent_lane_next_action"]["todo_id"] == "todo_refactor_slice", quota
 
@@ -450,12 +454,12 @@ def assert_reassignment_scheduler_contract() -> None:
     scheduler = quota["scheduler_hint"]
     assert scheduler["action"] == "backoff_until_reassigned", scheduler
     assert scheduler["cadence_class"] == "agent_scope_wait", scheduler
-    assert scheduler["codex_app"]["recommended_rrule"] == (
+    assert scheduler["app_automation"]["recommended_rrule"] == (
         "FREQ=MINUTELY;INTERVAL=10"
     ), scheduler
-    assert scheduler["codex_app"]["recommended_interval_minutes"] == 10, scheduler
-    assert scheduler["codex_app"]["stateful_backoff"]["apply_needed"] is True, scheduler
-    assert scheduler["codex_app"]["no_spend_for_cadence_change"] is True, scheduler
+    assert scheduler["app_automation"]["recommended_interval_minutes"] == 10, scheduler
+    assert scheduler["app_automation"]["stateful_backoff"]["apply_needed"] is True, scheduler
+    assert scheduler["app_automation"]["no_spend_for_cadence_change"] is True, scheduler
 
     packet = build_review_packet(payload, goal_id=GOAL_ID)
     assert packet["ok"] is True, packet
@@ -467,7 +471,7 @@ def assert_reassignment_scheduler_contract() -> None:
 
 def main() -> None:
     assert_agent_lane_delivery()
-    assert_scoped_operator_gate_safe_bypass()
+    assert_foreign_operator_gate_keeps_normal_admission()
     assert_due_monitor_context_does_not_steal_advancement()
     assert_current_agent_claimed_advancement_beats_other_agent_frontier()
     assert_higher_priority_due_monitor_preempts_advancement()

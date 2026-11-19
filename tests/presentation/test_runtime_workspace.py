@@ -1,34 +1,44 @@
 """Real HTTP boundary: source identity, read-only access and full history."""
 
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import json
-from threading import Thread
+import os
+from pathlib import Path
+import subprocess
+import sys
+from threading import Event, Thread
 from urllib.error import HTTPError
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 import pytest
 
-from loopx.capabilities.explore.result_log import build_explore_node_event
-from loopx.presentation.runtime_workspace import ContainerSource, RuntimeWorkspaceServer
+from loopx.capabilities.explore.result_log import build_explore_node_event, explore_history_rows
+from loopx.control_plane.status.goal_source import GoalSource, GoalSourceReader, read_endpoint
+from loopx.presentation.runtime_workspace import RuntimeWorkspaceServer
 from loopx.presentation.runtime_workspace import main as runtime_workspace_main
 
 
-class Source:
-    goal_id = "shared-goal"
-
+class Source(GoalSource):
     def __init__(self, identity):
-        self.id = identity
-        self.label = identity
+        super().__init__(identity, identity, "/registry", "/runtime", "/cli", "/python",
+                         "/bin", "local", "host", "shared-goal")
         self.failed = False
         self.calls = 0
 
-    def read(self):
+    def read_status(self, goal_id=None):
+        self.check_access(goal_id)
         self.calls += 1
         if self.failed:
             raise OSError("private diagnostic must not reach the browser")
         return {"ok": True, "run_history": {"goals": [{"id": self.goal_id,
-            "display_name": self.id, "registry_goal_digest": self.id}], "run_count": 17}}, [
-            {"event_id": f"{self.id}-{i}", "title": self.id} for i in range(91)]
+            "display_name": self.id, "registry_goal_digest": self.id}], "run_count": 17}}
+
+    def read_events(self, goal_id):
+        self.check_access(goal_id)
+        return [build_explore_node_event(goal_id=goal_id, node_id=f"question{i}",
+            title=self.id) for i in range(91)]
 
 
 @contextmanager
@@ -44,10 +54,15 @@ def serving(source, assets):
         thread.join()
 
 
-def get(server, path="/status.json", *, method="GET", headers=None):
-    request = Request(server.status_url.replace("/status.json", path), method=method, headers=headers or {})
+def get(server, path="/status.json", *, method="GET", headers=None, namespace=True, timeout=5):
+    source_url, target = urlsplit(server.status_url), urlsplit(path)
+    query = parse_qsl(target.query, keep_blank_values=True)
+    if namespace and not any(key == "source_namespace" for key, _ in query):
+        query += [("source_namespace", server.source.namespace)]
+    url = urlunsplit((source_url.scheme, source_url.netloc, target.path, urlencode(query), ""))
+    request = Request(url, method=method, headers=headers or {})
     try:
-        response = urlopen(request, timeout=5)
+        response = urlopen(request, timeout=timeout)
     except HTTPError as exc:
         response = exc
     with response:
@@ -83,6 +98,10 @@ def test_scope_origin_and_mutation_are_rejected_before_source_read(tmp_path):
         for method in ("POST", "PUT", "PATCH", "DELETE"):
             assert get(server, method=method)[0] == 405
         assert get(server, "/unavailable")[0] == 404
+        assert get(server, "/api/goal-source/status", namespace=False)[0] == 409
+        assert get(server, "/api/goal-source/status?source_namespace=" + "0" * 64)[0] == 409
+        assert get(server, "/status.json?goal_id=shared-goal&goal_id=another")[0] == 400
+        assert get(server, "/api/goal-source")[1]["operations"]["lifecycle"] is False
         assert source.calls == 0
 
 
@@ -90,42 +109,185 @@ def test_failed_refresh_does_not_serve_old_success_and_recovers(tmp_path):
     source = Source("original")
     with serving(source, tmp_path) as server:
         assert get(server)[0] == 200
-        server._read_at = 0
+        _, page = get(server, "/api/chat/explore-results?view=history&goal_id=shared-goal")
+        cursor = page["next_cursor"]
+        server.reader._read_at = 0
         source.failed = True
         code, error = get(server)
         assert code == 503 and "private diagnostic" not in json.dumps(error)
         source.failed = False
         assert get(server)[0] == 200
         assert source.calls == 3
+        assert get(server, f"/api/chat/explore-results?view=history&goal_id=shared-goal&cursor={cursor}")[0] == 409
+
+
+@pytest.fixture
+def native_history(tmp_path):
+    """A pinned source backed by the native CLI and a disposable SQLite Goal."""
+    project, runtime = tmp_path / "project", tmp_path / "runtime"
+    project.mkdir()
+    (project / "goal.md").write_text(
+        "---\nstatus: active\n---\n\n# Research\n\n## Agent Todo\n")
+    registry = project / "registry.json"
+    registry.write_text(json.dumps(dict(schema_version=1, common_runtime_root=str(runtime), goals=[dict(
+        id="shared-goal", status="active", domain="source-read", repo=str(project),
+        state_file="goal.md", adapter={"kind": "test_v0", "status": "connected-read-only"},
+        authority_sources=[])])))
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    initialize_canonical_authority(runtime, "shared-goal",
+        build_todo_runtime_shadow_projection(goal_id="shared-goal", todos=[], handoff_mode="soft_claim"),
+        state_path=project / "goal.md", provider="sqlite")
+    cli = Path(sys.executable).with_name("loopx")
+    assert cli.is_file(), "Use the source checkout's prepared Python environment"
+    source = GoalSource("native", "Native", str(registry), str(runtime), str(cli),
+                        sys.executable, os.environ["PATH"], "local", "host", "shared-goal")
+    events = [build_explore_node_event(goal_id="shared-goal", node_id=f"question{i}",
+                                     title=f"Question {i}") for i in range(43)]
+    log = runtime / "goals" / "shared-goal" / "explore-result-log.jsonl"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("\n".join(json.dumps(event) for event in events))
+    return source, log, events
+
+
+@pytest.mark.parametrize("invalid_kind", ["null", "event-pairs"])
+def test_invalid_native_history_clears_only_its_source_and_recovers(tmp_path, invalid_kind, native_history):
+    """Exercise actual native CLI/log IO through both shared HTTP consumers."""
+    source, log, events = native_history
+    project = Path(source.registry).parent
+    valid = log.read_bytes()
+    routes = ("/api/goal-source/history?goal_id=shared-goal",
+              "/api/chat/explore-results?view=history&goal_id=shared-goal")
+    with serving(source, tmp_path) as server, serving(Source("untouched"), tmp_path) as other:
+        # Match the shared client's budget for the native CLI's 25-second IO.
+        code, page = get(server, routes[0], timeout=30)
+        assert code == 200 and page["total"] == 43 and page["next_cursor"]
+        cursor = page["next_cursor"]
+        _, other_page = get(other, routes[0])
+        other_status = other.reader._status
+        invalid = None if invalid_kind == "null" else list(events[20].items())
+        corrupted = [*events[:20], invalid, *events[21:]]
+        log.write_text("\n".join(json.dumps(event) for event in corrupted))
+        for route in routes:
+            code, error = get(server, route, timeout=30)
+            assert code == 503 and error["ok"] is False
+            assert str(project) not in json.dumps(error)
+            assert server.reader._status is None and not server.reader._pages._snapshots
+        with pytest.raises(ValueError):
+            read_endpoint(server.status_url, "history", goal_id="shared-goal")
+        assert other.reader._status is other_status
+        assert get(other, f'{routes[0]}&cursor={other_page["next_cursor"]}')[0] == 200
+        log.write_bytes(valid)
+        assert get(server, f"{routes[0]}&cursor={cursor}", timeout=30)[0] == 409
+        code, restored = get(server, routes[0], timeout=30)
+        assert code == 200 and restored["total"] == 43
+        _, tail = get(server, f'{routes[0]}&cursor={restored["next_cursor"]}', timeout=30)
+        assert {row["event_id"] for row in restored["items"] + tail["items"]} == {
+            event["event_id"] for event in events}
+        assert log.read_bytes() == valid
+
+
+@pytest.mark.parametrize("wrong_goal", ["another-goal", ""])
+@pytest.mark.parametrize("scope", ["fixed", "all_registered"])
+@pytest.mark.parametrize("route", ["/api/goal-source/history?goal_id=shared-goal",
+                                  "/api/chat/explore-results?view=history&goal_id=shared-goal"])
+def test_invalid_selector_does_not_invalidate_authorized_history(
+    tmp_path, native_history, monkeypatch, wrong_goal, scope, route,
+):
+    source, log, events = native_history
+    if scope == "all_registered":
+        from dataclasses import replace
+        source = replace(source, goal_id=None)
+    registry = Path(source.registry)
+    original = {path: path.read_bytes() for path in (log, registry)}
+    history = route
+    entered, release = Event(), Event()
+    read_events = GoalSource.read_events
+
+    def hold_after_native_read(self, goal_id):
+        rows = read_events(self, goal_id)
+        if self is source:
+            entered.set()
+            assert release.wait(20)
+        return rows
+
+    with serving(source, tmp_path) as server:
+        code, first = get(server, history, timeout=30)
+        assert code == 200 and first["total"] == 43 and first["next_cursor"]
+        monkeypatch.setattr(GoalSource, "read_events", hold_after_native_read)
+        with ThreadPoolExecutor(max_workers=1) as clients:
+            pending = clients.submit(get, server, history, timeout=30)
+            try:
+                assert entered.wait(12)
+                code, error = get(server, "/status.json?" + urlencode({"goal_id": wrong_goal}))
+                assert code == 404 and error["ok"] is False and "items" not in error
+                assert not pending.done()
+            finally:
+                release.set()
+            code, latest = pending.result(timeout=15)
+        assert code == 200 and latest["total"] == first["total"]
+        assert latest["items"] == first["items"] and latest["next_cursor"]
+        for page in (first, latest):
+            code, tail = get(server, f'{history}&cursor={page["next_cursor"]}', timeout=30)
+            assert code == 200 and tail["next_cursor"] is None
+            assert {row["event_id"] for row in page["items"] + tail["items"]} == {
+                event["event_id"] for event in events}
+    assert all(path.read_bytes() == data for path, data in original.items())
+
+
+def test_cli_agent_and_app_use_the_same_reader_and_source_binding(tmp_path):
+    source = Source("original")
+    with serving(source, tmp_path) as server:
+        description = read_endpoint(server.status_url, "describe")
+        assert description["read_only"] and not description["operations"]["analysis"]
+        cli = subprocess.run([sys.executable, "-m", "loopx.control_plane.status.goal_source",
+                              "goals", "--endpoint", server.status_url],
+                             capture_output=True, text=True, check=True, timeout=10)
+        assert json.loads(cli.stdout)["source"]["namespace"] == source.namespace
+        assert read_endpoint(server.status_url, "goals")["items"][0]["id"] == "shared-goal"
+        native = read_endpoint(server.status_url, "status")["status"]
+        assert native["run_history"] == get(server)[1]["run_history"]
+        page = read_endpoint(server.status_url, "history", goal_id="shared-goal")
+        assert page["total"] == 91
+        assert read_endpoint(server.status_url, "history", goal_id="shared-goal",
+                             cursor=page["next_cursor"])["items"]
+        with pytest.raises(ValueError, match="Conflicting source"):
+            read_endpoint(server.status_url, "status", source_namespace="0" * 64)
+        with pytest.raises(ValueError, match="not available"):
+            read_endpoint(server.status_url, "history", goal_id="another")
 
 
 def test_native_transport_preserves_valid_events_and_rejects_wrong_goal(monkeypatch):
-    source = ContainerSource("native", "Native", "a" * 64, "shared-goal", "/registry.json",
-        "/runtime", "/bin/loopx", "/bin/python", "/bin")
+    source = GoalSource.parse(dict(id="native", label="Native", connection={"kind": "local"},
+        environment={"kind": "container", "container_id": "a" * 64}, scope={"goal_id": "shared-goal"},
+        registry="/registry.json", runtime_root="/runtime",
+        cli="/bin/loopx", python="/bin/python", path="/bin"))
     node = build_explore_node_event(goal_id="shared-goal", node_id="question", title="Actual question")
     commands = []
 
-    def run(argv):
+    def run(argv, **_kwargs):
         commands.append(argv)
         if source.cli in argv:
             return json.dumps({"ok": True, "run_history": {"goals": [{"id": source.goal_id}]}})
         return json.dumps(node)
 
-    monkeypatch.setattr("loopx.presentation.runtime_workspace._run", run)
-    _, events = source.read()
+    monkeypatch.setattr("loopx.control_plane.status.goal_source._run", run)
+    assert source.read_status()["run_history"]["goals"][0]["id"] == "shared-goal"
+    events = source.read_events("shared-goal")
     assert events[0]["event_id"] == node["event_id"]
     assert events[0]["title"] == "Actual question"
     assert all(source.container_id in argv for argv in commands)
     node["goal_id"] = "different"
     with pytest.raises(ValueError):
-        source.read()
+        GoalSourceReader(source, history_projector=explore_history_rows).history("shared-goal")
 
 
 def test_manifest_requires_physical_identity():
-    raw = dict(id="source", label="Source", container_id="alias", goal_id="goal",
+    raw = dict(id="source", label="Source", connection={"kind": "local"},
+        environment={"kind": "container", "container_id": "alias"}, scope={"goal_id": "goal"},
         registry="/registry", runtime_root="/runtime", cli="/cli", python="/python", path="/bin")
     with pytest.raises(ValueError, match="pinned container"):
-        ContainerSource.parse(raw)
+        GoalSource.parse(raw)
 
 
 def test_default_entry_rejects_stale_bundle_before_opening_sources(monkeypatch, tmp_path, capsys):

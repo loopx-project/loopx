@@ -50,17 +50,15 @@ import {computeContinuationTodoFacts} from "../../loopx/control_plane/coordinati
 import {
   checkLegacyCoordinationWriteAllowed,
   engageLegacyCoordinationWriterFence,
-  legacyCoordinationWriterFencePath,
   loadLegacyCoordinationWriterFence,
   LEGACY_COORDINATION_WRITER_FENCE_ENGAGE_REQUEST_SCHEMA,
-  LEGACY_COORDINATION_WRITER_FENCE_SCHEMA,
   LEGACY_COORDINATION_WRITE_CHECK_REQUEST_SCHEMA,
 } from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
 import {
   bootstrapCoordinationRuntimeShadow,
   COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA,
 } from "../../loopx/control_plane/coordination/runtime_shadow.ts";
-import { qualifiedShadow, promotionRequest, engageFence } from "./local_promotion_fixture.ts";
+import { qualifiedShadow, promotionRequest, engageFence, engageCanonicalRoute } from "./local_promotion_fixture.ts";
 import { sourceRequest } from "./shadow_file_fixture.ts";
 import { LOCAL_COORDINATION_PROMOTION_REVIEW_REQUEST_SCHEMA } from "../../loopx/control_plane/coordination/coordination_state_contract.generated.ts";
 import { executeTaskLeaseAcquire } from "../../loopx/control_plane/work_items/task_lease_acquire.ts";
@@ -68,7 +66,6 @@ import {
   TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA_VERSION,
   executeTaskLeaseLifecycle,
 } from "../../loopx/control_plane/work_items/task_lease_lifecycle.ts";
-import {atomicWriteJson} from "../../loopx/control_plane/effect_runtime_io.ts";
 
 function sha256(value: unknown): string {
   return createHash("sha256").update(canonicalAuthorityBytes(value)).digest("hex");
@@ -122,18 +119,6 @@ async function applyTestProjectionMutation(
 function noteFacts(note: unknown): string {
   const parsed = canonicalAuthorityObject(JSON.parse(String(note)), "continuation note");
   return canonicalAuthoritySha256(parsed);
-}
-
-async function engageCanonicalRoute(root: string): Promise<void> {
-  await atomicWriteJson(legacyCoordinationWriterFencePath(root, "goal-a"), {
-    schema_version: LEGACY_COORDINATION_WRITER_FENCE_SCHEMA,
-    state: "engaged",
-    goal_id: "goal-a",
-    fence_id: "legacy-writer-fence:goal-a:test",
-    source_version: "state:test",
-    source_projection_sha256: "a".repeat(64),
-    expected_shadow_provider_revision: `file:1:${"a".repeat(24)}`,
-  });
 }
 
 async function claimSeededTodo(
@@ -674,6 +659,7 @@ test("new bootstrap and provider list fail closed without exact Todo consumer se
     receipts: [],
   });
   assert.equal(committed.status, "applied");
+  await engageCanonicalRoute(root);
   const listed = await listLocalCoordinationTodos({
     schema_version: LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA,
     runtime_root: root,
@@ -1538,6 +1524,7 @@ test("provider-first atomic claim replays current execution and rejects expired 
 
 test("local canonical runtime never falls back when provider state is missing", async () => {
   const root = await mkdtemp(join(tmpdir(), "loopx-local-authority-missing-"));
+  await engageCanonicalRoute(root);
   const result = await readLocalCoordinationTodo({
     schema_version: LOCAL_COORDINATION_TODO_READ_REQUEST_SCHEMA,
     runtime_root: root,
@@ -1845,4 +1832,22 @@ test("an engagement fence does not authorize retired legacy task-lease writers",
     action: "migrate_goal_authority",
     backup_required: true,
   });
+});
+
+test("managed execution fields cannot be ignored by older public transports", async () => {
+  const runtime = await import("../../loopx/control_plane/coordination/local_authority_runtime.ts");
+  const noStore = {createStore: () => {throw new Error("must reject before opening a provider");}};
+  for (const v of [0, 1]) {
+    const result = await runtime.claimLocalCoordinationTodo({schema_version: `loopx_local_coordination_todo_claim_request_v${v}`,
+      manage_execution: true}, noStore);
+    assert.match(String(result.reason), /requires claim request v2/);
+  }
+  for (const v of [0, 1, 2, 3, 4, 5]) {
+    const result = await runtime.updateLocalCoordinationTodo({schema_version: `loopx_local_coordination_todo_update_request_v${v}`,
+      claim_operation_id: "original-claim"}, noStore);
+    assert.match(String(result.reason), /requires update request v6/);
+  }
+  const terminal = await runtime.terminalLifecycleLocalCoordinationTodo({
+    schema_version: "loopx_local_coordination_todo_terminal_lifecycle_request_v3", claim_operation_id: "original-claim"}, noStore);
+  assert.match(String(terminal.reason), /requires terminal request v4/);
 });

@@ -164,28 +164,36 @@ CONSUMER_MODULES = (
     "loopx.capabilities.benchmark_toolkit.trajectory_assessment_store",
     "loopx.capabilities.content_ops.item_lifecycle",
     "loopx.capabilities.deep_research.runtime",
+    "loopx.capabilities.issue_fix.cli",
     "loopx.capabilities.issue_fix.outcome_projection",
     "loopx.capabilities.issue_fix.reviewer_notification",
     "loopx.capabilities.machine_configuration.store",
+    "loopx.capabilities.manager_context.execution",
     "loopx.capabilities.manager_context.roundtrip",
     "loopx.capabilities.manager_context.tracking",
+    "loopx.capabilities.native_chat.codex_adapter",
     "loopx.capabilities.periodic_report.adapters",
     "loopx.capabilities.periodic_report.archive",
     "loopx.capabilities.periodic_report.bindings",
     "loopx.capabilities.periodic_report.cadence_journal",
     "loopx.capabilities.periodic_report.incremental",
     "loopx.capabilities.periodic_report.machine_defaults",
+    "loopx.capabilities.periodic_report.review",
     "loopx.capabilities.progress_review.receipt",
+    "loopx.chat.result_files_api",
     "loopx.chat_action_normalization",
+    "loopx.capabilities.manager_context.chat_history",
+    "loopx.cli_commands.quota_context_reader",
+    "loopx.cli_commands.update_artifact",
     "loopx.configuration_transaction",
     "loopx.control_plane.agents.execution_facts",
+    "loopx.control_plane.collaboration.conversation_inventory",
     "loopx.control_plane.collaboration.delegation_inventory",
     "loopx.control_plane.collaboration.inbox",
     "loopx.control_plane.collaboration.links",
     "loopx.control_plane.collaboration.peers",
     "loopx.control_plane.collaboration.request_control_source",
     "loopx.control_plane.collaboration.result_files",
-    "loopx.control_plane.collaboration.turn_context_observation",
     "loopx.control_plane.coordination.local_authority_shadow_history",
     "loopx.control_plane.coordination.shadow_management",
     "loopx.control_plane.digest_envelope",
@@ -194,6 +202,8 @@ CONSUMER_MODULES = (
     "loopx.control_plane.goals.deletion_service",
     "loopx.control_plane.goals.goal_amendment_proposal",
     "loopx.control_plane.projects.registry_codec",
+    "loopx.control_plane.scheduler.monitor_batch_receipts",
+    "loopx.control_plane.status.goal_source",
     "loopx.control_plane.testing.cli_output_semantics",
     "loopx.control_plane.testing.release_commit_qualification",
     "loopx.control_plane.todos.completion_result",
@@ -201,22 +211,32 @@ CONSUMER_MODULES = (
     "loopx.control_plane.todos.completion_validation",
     "loopx.control_plane.todos.completion_validation_store",
     "loopx.control_plane.todos.machine_section_projection",
+    "loopx.control_plane.turn_driver.codex_context",
+    "loopx.control_plane.turn_driver.codex_execution_preparation",
     "loopx.control_plane.turn_driver.codex_sessions",
+    "loopx.control_plane.turn_driver.decision_capture",
     "loopx.control_plane.turn_driver.operation_requests",
     "loopx.control_plane.work_items.governed_transition_proposal",
     "loopx.control_plane.work_items.progress_review_policy",
     "loopx.domain_packs.issue_fix",
     "loopx.extensions.lark.document_comment_provider",
+    "loopx.extensions.lark.private_conversations",
     "loopx.extensions.openviking_semantic_preference.history_export",
     "loopx.extensions.presentation",
+    "loopx.hosts.checkpoint_retention",
     "loopx.hosts.codex_checkpoint",
     "loopx.presentation.chat_bundle",
+    "loopx.presentation.content_media_api",
     "loopx.presentation.static_site",
 )
 
 # A consumer that hands `re` a pattern this file cannot fold. Folding reads
 # every construction except the declared readers, each fenced below.
 UNREADABLE_CONSUMER_CONSTRUCTIONS: dict[str, str] = {
+    "loopx.control_plane.scheduler.monitor_batch_receipts": (
+        "_read_receipt locates an escaped operation-bound HTML receipt marker, "
+        "not a whole-value digest. Its sole dynamic regex is fenced below."
+    ),
     "loopx.capabilities.benchmark_toolkit.integrity": (
         "_marker_present matches an escaped caller-supplied filename/token inside "
         "command text with explicit basename boundaries; it does not validate a "
@@ -1265,6 +1285,24 @@ def test_cli_output_dynamic_prose_pattern_is_fenced_to_its_literal_question() ->
     assert isinstance(literal, ast.Constant) and isinstance(literal.value, str) and literal.value
 
 
+def test_monitor_receipt_dynamic_pattern_only_locates_its_operation_marker() -> None:
+    dotted = "loopx.control_plane.scheduler.monitor_batch_receipts"
+    module = importlib.import_module(dotted)
+    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+    reader = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_read_receipt")
+    calls = [node for node in ast.walk(reader) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Attribute) and ast.unparse(node.func) == "re.findall"]
+    assert len(calls) == 1
+    unreadable = [site for site in _module_of(dotted)["constructions"] if not site["readable"]]
+    assert [site["line"] for site in unreadable] == [calls[0].lineno]
+    pattern = calls[0].args[0]
+    assert isinstance(pattern, ast.BinOp) and isinstance(pattern.op, ast.Add)
+    assert ast.unparse(pattern.left) == "re.escape(marker)"
+    assert isinstance(pattern.right, ast.Constant) and pattern.right.value == r"([A-Za-z0-9+/=]+) -->"
+    assert any(isinstance(node, ast.Assign) and ast.unparse(node) == "marker = _receipt_marker(operation_id)"
+               for node in reader.body)
+
+
 # --- layer 4: behaviour, per spelling and per surface -------------------------------------
 
 
@@ -1325,6 +1363,27 @@ def test_the_owner_is_a_leaf_and_exports_only_the_two_shapes() -> None:
     assert patterns == set(CANONICAL_EXPORTS), patterns
 
 
+def test_context_capture_reader_checks_bare_shape_and_original_bytes(tmp_path: Path) -> None:
+    from hashlib import sha256
+
+    from loopx.control_plane.turn_driver.decision_capture import read_context_capture_file
+
+    raw = b'{"ok":true}\n'
+    capture = tmp_path / "capture.json"
+    capture.write_bytes(raw)
+    digest = sha256(raw).hexdigest()
+    path, received, payload = read_context_capture_file(str(capture), digest)
+    assert path == capture.resolve()
+    assert received == raw and payload == {"ok": True}
+
+    for invalid in (*BARE_REJECTS, f"sha256:{digest}", digest.upper(), f"{digest}\n"):
+        with pytest.raises(ValueError, match="exact SHA-256"):
+            read_context_capture_file(str(capture), invalid)
+    for wrong_bytes in BARE_ACCEPTS:
+        with pytest.raises(ValueError, match="capture digest mismatch"):
+            read_context_capture_file(str(capture), wrong_bytes)
+
+
 def test_periodic_report_generation_receipt_checks_both_digest_fields() -> None:
     """The site a reviewer named: two digest fields, checked by one reader.
 
@@ -1370,18 +1429,20 @@ def test_periodic_report_generation_receipt_checks_both_digest_fields() -> None:
         bindings._generation_receipt(receipt(ENVELOPED, HEX64))
 
 
-def test_schema_string_site_is_the_same_question_as_the_owner_bare_shape() -> None:
-    statements = _module_of("loopx.capabilities.manager_context.inspection")[
-        "statements"
-    ]
-    assert statements, "the recorded schema site no longer states the shape"
-    for statement in statements:
-        assert statement["shape"] == "bare"
-        declared = re.compile(statement["value"])
-        for value in PARITY_PROBES:
-            assert bool(declared.fullmatch(value)) is bool(
-                BARE_SHA256_PATTERN.fullmatch(value)
-            ), value
+@pytest.mark.parametrize(
+    ("field", "owner"),
+    [
+        ("request_id", BARE_SHA256_PATTERN),
+        ("expected_source_revision", ENVELOPED_SHA256_PATTERN),
+        ("delivery_ref", ENVELOPED_SHA256_PATTERN),
+    ],
+)
+def test_manager_schema_digest_fields_keep_their_declared_envelopes(field, owner) -> None:
+    from loopx.capabilities.manager_context.inspection import READ_TOOL
+
+    declared = re.compile(READ_TOOL["inputSchema"]["properties"][field]["pattern"])
+    for value in PARITY_PROBES:
+        assert bool(declared.fullmatch(value)) is bool(owner.fullmatch(value)), value
 
 
 # --- per-surface wiring: every case enters through that surface's own reader -------------
@@ -1597,14 +1658,34 @@ def test_inbox_linked_references_keep_their_two_shapes(tmp_path: Path) -> None:
 
 
 def test_turn_agenda_addresses_keep_the_bare_digest_contract(tmp_path: Path) -> None:
-    from loopx.control_plane.collaboration.turn_context_observation import _paths
+    from loopx.control_plane.collaboration.inbox import ENTRY_SCHEMA, _hash, read_inbox_transaction
 
+    target = {"goal_id": "digest-fixture", "agent_id": "worker"}
+    folder = tmp_path / ".local" / "manager-context" / "entries" / _hash(target)
+    folder.mkdir(parents=True)
     rejected = (HEX64.upper(), HEX64[:-1], HEX64 + "0", "g" * 64,
                 "sha256-" + HEX64, HEX64 + ".stop")
-    for stem in (*BARE_ACCEPTS, *rejected):
-        (tmp_path / f"{stem}.json").write_text("{}", encoding="utf-8")
-    (tmp_path / f"{HEX64}.txt").write_text("{}", encoding="utf-8")
-    assert {path.stem for path in _paths(tmp_path)} == set(BARE_ACCEPTS)
+    # Keep each spelling separate on case-insensitive filesystems: an uppercase
+    # negative must not overwrite a valid lowercase request's record bytes.
+    for stem, accepted in [*((item, True) for item in BARE_ACCEPTS),
+                           *((item, False) for item in rejected)]:
+        for path in folder.iterdir():
+            path.unlink()
+        (folder / f"{stem}.json").write_text(json.dumps({
+            "schema_version": ENTRY_SCHEMA, **target, "request_id": stem,
+            "source_id": "synthetic-source", "message": "Inspect the fixture.",
+        }), encoding="utf-8")
+        (folder / f"{HEX64}.txt").write_text("{}", encoding="utf-8")
+        before = {path.name: path.read_bytes() for path in folder.iterdir()}
+        result = read_inbox_transaction(tmp_path, {
+            "operation": "turn_context", **target,
+            "read_command": "loopx manager-inbox read",
+        })["unfinished_delegations"]
+        assert {item["request_id"] for item in result["items"]} == ({stem} if accepted else set())
+        assert result["incoming_count"] == int(accepted)
+        assert result["scan_complete"] is True
+        assert result["unavailable_count"] == 0
+        assert {path.name: path.read_bytes() for path in folder.iterdir()} == before
 
 
 def test_outcome_projection_fingerprint_requires_the_envelope() -> None:
@@ -1668,6 +1749,35 @@ def test_benchmark_task_authorization_keeps_the_bare_digest_contract(
             match="benchmark_task_environment_access_authorization_sha256_invalid",
         ):
             _validated_task_environment_access(access)
+
+
+@pytest.mark.parametrize("digest", (*BARE_ACCEPTS, *BARE_REJECTS))
+def test_benchmark_task_service_authorization_keeps_the_bare_digest_contract(
+    digest: str,
+) -> None:
+    from loopx.capabilities.benchmark_toolkit.integrity import (
+        BENCHMARK_TASK_SERVICE_ACCESS_SCHEMA_VERSION,
+        _validated_task_service_access,
+    )
+
+    access = {
+        "schema_version": BENCHMARK_TASK_SERVICE_ACCESS_SCHEMA_VERSION,
+        "authorization_id": "digest-contract-fixture",
+        "authorization_sha256": digest,
+        "authority": "runner",
+        "purpose": "benchmark_task_service",
+        "origins": ["http://host.docker.internal:35103"],
+    }
+    if digest in BARE_ACCEPTS:
+        normalized = _validated_task_service_access(access)
+        assert normalized is not None
+        assert normalized["authorization_sha256"] == digest
+    else:
+        with pytest.raises(
+            ValueError,
+            match="benchmark_task_service_access_authorization_sha256_invalid",
+        ):
+            _validated_task_service_access(access)
 
 
 def test_benchmark_dynamic_regex_exemption_stays_in_the_marker_reader() -> None:

@@ -2,14 +2,18 @@
 from __future__ import annotations
 
 import argparse
-import os
 import shlex
 from collections.abc import Callable
 from pathlib import Path
 
 from ..control_plane.effect_runtime import EffectRuntimeResponseAmbiguous, effect_runtime_result
-from ..paths import global_registry_path, resolve_runtime_root, select_default_runtime_root
+from ..paths import resolve_runtime_root
 from ..control_plane.projects.registry_codec import load_registry
+from ..control_plane.goals.activation_service import (
+    authority_upgrade_registries,
+    authority_upgrade_roots,
+    upgrade_goal_activation_registries,
+)
 
 
 def register_authority_archive_command(
@@ -76,6 +80,9 @@ def handle_authority_archive_command(
         if args.authority_archive_action == "inspect":
             request["source"] = str(args.source.expanduser().resolve())
         elif args.authority_archive_action == "upgrade":
+            registries = authority_upgrade_registries(
+                registry_path, runtime_root_arg, all_known=args.all_known)
+            activation_plan = upgrade_goal_activation_registries(registries, execute=False)
             request.update(runtime_roots=authority_upgrade_roots(
                 registry_path, runtime_root_arg, all_known=args.all_known), execute=args.execute)
         elif args.authority_archive_action in {"plan-migration", "migrate"}:
@@ -107,6 +114,16 @@ def handle_authority_archive_command(
         result = effect_runtime_result(
             "coordination.authority_archive.manage", request, timeout=300.0, retry_safe=False
         )
+        if args.authority_archive_action == "upgrade" and result.get("status") != "failed":
+            result["goal_activation_upgrade"] = (
+                upgrade_goal_activation_registries(registries, execute=True)
+                if args.execute else activation_plan
+            )
+            if args.require_current and any(
+                row["status"] == "planned"
+                for row in activation_plan["results"]
+            ):
+                result.update(status="failed", reason="Goal activation metadata upgrade required before activating this runtime.")
     except (OSError, RuntimeError, ValueError) as error:
         uncertain = args.authority_archive_action == "migrate" and args.execute
         result = {"status": "failed", "reason": str(error),
@@ -132,28 +149,3 @@ def handle_authority_archive_command(
         f"{value.get('audit', '')}{recovery_hint}"
     ))
     return 1 if result.get("status") in {"failed", "outcome_unknown"} else 0
-
-
-def authority_upgrade_roots(registry_path: Path, runtime_root_arg: str | None,
-                            *, all_known: bool) -> list[str]:
-    """Bounded discovery from existing registries; never scan arbitrary home paths."""
-    registry = load_registry(registry_path) if registry_path.exists() else {}
-    override = runtime_root_arg or os.environ.get("LOOPX_RUNTIME_ROOT")
-    selected = resolve_runtime_root(registry, override, registry_path=registry_path).resolve()
-    roots = {selected}
-    if all_known:
-        common = Path(override).expanduser().resolve() if override else select_default_runtime_root().resolve()
-        roots.add(common)
-        global_path = global_registry_path(common)
-        global_registry = load_registry(global_path) if global_path.exists() else {}
-        for goal in global_registry.get("goals", []):
-            source = goal.get("source_registry") if isinstance(goal, dict) else None
-            if not source:
-                continue
-            path = Path(str(source)).expanduser()
-            if not path.is_absolute():
-                raise ValueError("Registered source_registry must be absolute for automatic upgrade")
-            # A disconnected checkout does not hide the common runtime store.
-            if path.exists():
-                roots.add(resolve_runtime_root(load_registry(path), registry_path=path).resolve())
-    return sorted(str(root) for root in roots)

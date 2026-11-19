@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import shlex
 import stat
 import subprocess
 import sys
@@ -24,6 +25,13 @@ from loopx.control_plane.runtime.local_state_migration import (
     rollback_local_state_migration,
 )
 from loopx.project_prompt import build_new_project_prompt
+from loopx.control_plane.runtime.file_paths import windows_extended_path
+
+
+def _runtime_root_argument(command: str) -> str:
+    argv = shlex.split(command)
+    assert argv.count("--runtime-root") == 1
+    return argv[argv.index("--runtime-root") + 1]
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
@@ -386,7 +394,7 @@ def test_doctor_reads_legacy_capture_hosts_from_selected_runtime(
     tmp_path: Path,
 ) -> None:
     source, _target, _projects = _fixture(tmp_path, projects=1)
-    env = dict(os.environ, HOME=str(source.parents[1]), LOOPX_USAGE_PING="0")
+    env = dict(os.environ, HOME=str(source.parents[1]), USERPROFILE=str(source.parents[1]), LOOPX_USAGE_PING="0")
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
     completed = subprocess.run(
         [sys.executable, "-m", "loopx.cli", "--format", "json", "doctor"],
@@ -460,9 +468,9 @@ def test_existing_project_prompt_keeps_registered_goal_and_runtime_routes(tmp_pa
         allowed_domains=None,
         write_scope=None,
     )
-    assert f"--runtime-root {source}" in payload["quota_guard_command"]
-    assert f"--runtime-root {source}" in payload["quota_spend_command"]
-    assert f"--runtime-root {source}" in payload["connect_command"]
+    assert _runtime_root_argument(payload["quota_guard_command"]) == str(source)
+    assert _runtime_root_argument(payload["quota_spend_command"]) == str(source)
+    assert _runtime_root_argument(payload["connect_command"]) == str(source)
     assert ".codex/goals/goal-0/ACTIVE_GOAL_STATE.md" in payload["prompt"]
 
 
@@ -545,7 +553,7 @@ def test_strict_project_registry_keeps_legacy_route_and_wire_format(tmp_path: Pa
         adapter_kind="read_only_project_map_v0", adapter_status="connected-read-only",
         next_probe=None, spawn_allowed=False, allowed_domains=None, write_scope=None,
     )
-    assert f"--runtime-root {source}" in prompt["quota_guard_command"]
+    assert _runtime_root_argument(prompt["quota_guard_command"]) == str(source)
     assert ".codex/goals/goal-0/ACTIVE_GOAL_STATE.md" in prompt["prompt"]
 
     preview = migrate_local_state(source_runtime_root=source, target_runtime_root=target)
@@ -849,7 +857,7 @@ def test_preview_execute_and_verified_rollback_cover_all_registered_projects(tmp
         execute=True,
     )
     receipt_path = Path(receipt["backup_dir"]) / RECEIPT_NAME
-    assert receipt_path.exists()
+    assert windows_extended_path(receipt_path).is_file()
     assert not source.exists()
     assert _read(target / "registry.global.json")["common_runtime_root"] == str(target)
     for index, project in enumerate(projects):
@@ -932,7 +940,7 @@ def test_rollback_io_failure_can_retry_to_consistent_original_routes(
     def fail_copy_once(original: Path, destination: Path, **kwargs: object) -> Path:
         nonlocal failed
         selected = backup / "snapshot" / ("0/registry.global.json" if failed_kind == "global-registry" else "1")
-        if not failed and failed_kind in {"registry", "global-registry"} and Path(original) == selected:
+        if not failed and failed_kind in {"registry", "global-registry"} and migration.windows_extended_path(Path(original)) == migration.windows_extended_path(selected):
             failed = True
             raise OSError(5, "synthetic rollback I/O failure")
         return original_copy(original, destination, **kwargs)
@@ -989,17 +997,17 @@ original_project_write = migration._write_project_registry
 interrupt = Path(sys.argv.pop(1))
 def rename(self, destination):
     result = original(self, destination)
-    if self == interrupt:
+    if migration.windows_extended_path(self) == migration.windows_extended_path(interrupt):
         os._exit(137)
     return result
 def replace(self, destination):
     result = original_replace(self, destination)
-    if Path(destination) == interrupt:
+    if migration.windows_extended_path(Path(destination)) == migration.windows_extended_path(interrupt):
         os._exit(137)
     return result
 def project_write(path, payload):
     original_project_write(path, payload)
-    if path == interrupt:
+    if migration.windows_extended_path(path) == migration.windows_extended_path(interrupt):
         os._exit(137)
 Path.rename = rename
 Path.replace = replace
@@ -1079,7 +1087,7 @@ def test_registry_recovery_rechecks_backup_before_replacement(
     original_copy = migration.shutil.copy2
 
     def corrupt_before_copy(original: Path, destination: Path, **kwargs: object) -> Path:
-        if Path(original) == snapshot:
+        if migration.windows_extended_path(Path(original)) == migration.windows_extended_path(snapshot):
             snapshot.write_text("corrupted backup\n", encoding="utf-8")
         return original_copy(original, destination, **kwargs)
 
@@ -1263,7 +1271,7 @@ def test_goal_source_is_rechecked_before_backup_copy(
     ) -> None:
         nonlocal redirected
         original_mkdir(self, mode=mode, parents=parents, exist_ok=exist_ok)
-        if self == backup:
+        if migration.windows_extended_path(self) == migration.windows_extended_path(backup):
             redirected = True
 
     monkeypatch.setattr(migration, "_is_redirected_path", classify)
@@ -1613,6 +1621,7 @@ def test_custom_state_keeps_its_declared_file_through_migration_and_rollback(
     source, target, project, custom = _custom_state_fixture(tmp_path)
     local_registry = project / ".loopx" / "registry.json"
     before = local_registry.read_bytes()
+    declared = load_project_registry(local_registry)["goals"][0]["state_file"]
     preview = migrate_local_state(source_runtime_root=source, target_runtime_root=target)
     assert preview["goal_directory_count"] == 0
     receipt = migrate_local_state(
@@ -1621,7 +1630,7 @@ def test_custom_state_keeps_its_declared_file_through_migration_and_rollback(
     )
     migrated = load_project_registry(local_registry)
     assert migrated["common_runtime_root"] == str(target)
-    assert migrated["goals"][0]["state_file"] == "custom/STATE.md"
+    assert migrated["goals"][0]["state_file"] == declared
     assert custom.read_text(encoding="utf-8") == "custom state\n"
     rollback_local_state_migration(Path(receipt["backup_dir"]) / RECEIPT_NAME, execute=True)
     assert local_registry.read_bytes() == before

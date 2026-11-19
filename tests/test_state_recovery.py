@@ -578,7 +578,7 @@ def test_offline_worker_timeout_does_not_leave_a_copy_or_stop_shared_runtime(tmp
     assert normal["activation_performed"] is False
 
 
-def test_real_sqlite_history_limit_is_complete_and_overflow_refuses_publication(tmp_path):
+def test_real_sqlite_history_above_20000_is_verified_through_outer_backup(tmp_path):
     registry, runtime, state = promoted_create_fixture(tmp_path, provider="sqlite")
     project = state.parents[3]
     owner = Path(__file__).parents[1] / "loopx/control_plane/coordination"
@@ -615,25 +615,24 @@ const readback=await store.loadAuthority();
 if(readback.status!=='loaded'||Number(readback.cursor)!==r.last)throw new Error('Fixture readback mismatch');
 process.stdout.write(JSON.stringify(audit));
 """
-    for first, last, expected in [(2, 20000, "readable"), (20001, 20001, "refused")]:
+    for first, last in [(2, 20000), (20001, 20001)]:
         seeded = subprocess.run(["node", "--no-warnings", "--experimental-sqlite", "--experimental-strip-types",
             "--input-type=module", "-e", script], input=json.dumps({"root": str(runtime), "first": first, "last": last}),
             text=True, capture_output=True, check=True, timeout=120)
-        assert json.loads(seeded.stdout)["commits"] == last
+        verified = json.loads(seeded.stdout)
+        assert verified["commits"] == last
         backup = execute_state_backup_plan(build_state_backup_plan(project=project, runtime_root=runtime,
             registry_path=registry, output_dir=tmp_path / "backups", backup_id=f"history-{last}",
             include_registry_projects=False, include_automations=False, include_skills=False))
         destination = tmp_path / f"inert-{last}"
         code, result = _cli("backup-state", "verify", "--archive", backup["archive_path"],
             "--manifest", backup["manifest_path"], "--destination", destination, "--execute")
-        if expected == "readable":
-            assert code == 0, result
-            [goal] = [row for row in result["components"] if row["owner_kind"] == "coordination_authority"]
-            assert goal["state"] == "readable" and goal["facts"]["history_commits"] == 20000
-        else:
-            assert code == 1 and result["error_code"] == "authority_history_capacity", result
-            assert not destination.exists()
-            assert not list(tmp_path.glob(".loopx-recovery-*"))
+        assert code == 0, result
+        [goal] = [row for row in result["components"] if row["owner_kind"] == "coordination_authority"]
+        assert goal["state"] == "readable"
+        assert goal["facts"]["history_commits"] == last
+        assert goal["facts"]["cursor"] == str(last)
+        assert (destination / "recovery-audit.json").is_file()
 
 
 def test_digest_refusal_precedes_tar_decoding_and_writes_nothing(tmp_path):
@@ -643,6 +642,74 @@ def test_digest_refusal_precedes_tar_decoding_and_writes_nothing(tmp_path):
         verify_state_backup(archive=archive, manifest=manifest, destination=tmp_path / "inert", execute=True)
     assert not (tmp_path / "inert").exists()
     assert not list(tmp_path.glob(".loopx-recovery-*"))
+
+
+@pytest.mark.parametrize("execute", [False, True])
+def test_archive_bytes_changed_between_reads_are_rejected_even_after_restore(tmp_path, monkeypatch, execute):
+    archive, manifest = _backup(tmp_path)
+    original_bytes = archive.read_bytes()
+    changed = bytearray(original_bytes)
+    changed[4] ^= 1  # gzip mtime changes identity without changing tar members.
+    changed_bytes = bytes(changed)
+    archive_inode = archive.stat().st_ino
+    original_fdopen = os.fdopen
+
+    class ChangingArchive(io.BufferedReader):
+        passes = 0
+        eof = False
+
+        def note_eof(self):
+            if not self.eof:
+                self.passes += 1
+                self.eof = True
+
+        def read(self, size=-1):
+            value = super().read(size)
+            if not value:
+                self.note_eof()
+            return value
+
+        def readinto(self, buffer):
+            count = super().readinto(buffer)
+            if not count:
+                self.note_eof()
+            return count
+
+        def seek(self, offset, whence=0):
+            if offset == 0 and whence == 0:
+                if self.passes == 1:
+                    archive.write_bytes(changed_bytes)
+                elif self.passes >= 3:
+                    archive.write_bytes(original_bytes)
+                # Force real file reads rather than replaying a buffered prefix.
+                super().seek(0, os.SEEK_END)
+                self.eof = False
+            return super().seek(offset, whence)
+
+    def input_file(fd, *args, **kwargs):
+        handle = original_fdopen(fd, *args, **kwargs)
+        return ChangingArchive(handle.detach()) if os.fstat(fd).st_ino == archive_inode else handle
+
+    monkeypatch.setattr(os, "fdopen", input_file)
+    destination = tmp_path / "unpublished"
+    with pytest.raises(StateRecoveryError, match="recovery_input_changed"):
+        verify_state_backup(archive=archive, manifest=manifest, destination=destination, execute=execute)
+    assert not destination.exists()
+    assert not list(tmp_path.glob(".loopx-recovery-*"))
+
+
+def test_archive_stream_enforces_the_compressed_byte_budget(monkeypatch):
+    from loopx.control_plane import state_recovery_io as recovery
+
+    data = io.BytesIO()
+    with tarfile.open(fileobj=data, mode="w:gz") as archive:
+        member = tarfile.TarInfo("manifest.json")
+        member.size = 2
+        archive.addfile(member, io.BytesIO(b"{}"))
+    compressed = data.getvalue()
+    monkeypatch.setattr(recovery, "MAX_ARCHIVE_BYTES", len(compressed) - 1)
+    with pytest.raises(StateRecoveryError, match="recovery_capacity_exceeded"):
+        recovery._scan(io.BytesIO(compressed), len(compressed))
 
 
 def test_external_manifest_cannot_relabel_the_embedded_capture(tmp_path):

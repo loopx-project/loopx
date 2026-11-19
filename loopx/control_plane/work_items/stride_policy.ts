@@ -1,4 +1,4 @@
-/** One opt-in work and research stride strategy; all execution authority retains its owners. */
+/** One work and research stride strategy; all execution authority retains its owners. */
 import {createHash} from "node:crypto";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import schema from "../stride_strategy_schema.json" with {type: "json"};
@@ -6,7 +6,8 @@ import decisionSchema from "../stride_decision_schema.json" with {type: "json"};
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject, requireNonEmptyString, requireStringLiteral} from "../runtime_decode.ts";
-import {normalizeExploreResultPages} from "../capabilities/explore_result_page.ts";
+import {EXPLORE_RESULT_PAGE_MAX, normalizeExploreResultPages} from "../capabilities/explore_result_page.ts";
+import {PLANNING_TODO_ID} from "./planning_relations.ts";
 
 export function normalizeStrideStrategy(value: unknown): string {
   if (value === undefined) return schema.default;
@@ -18,49 +19,19 @@ export function normalizeStrideStrategy(value: unknown): string {
 // Read-only questions for the existing three axes; not another decision schema,
 // result classifier, route ban or admission authority.
 const decisionValueReview = {
-  work_slice: "Compare the complete cost and useful outcome of continuation with one feasible alternative. " +
-    "Assess the quality of the first deliverable and later gain beyond the retained best separately; " +
-    "recovering an avoidable initial quality deficit is not evidence of additional capability. " +
-    "Name the observation that would change that choice, and size a complete experiment to obtain it. " +
-    "A larger test count is not greater decision value; preserve unfinished decisive work rather than restart its setup.",
-  route_distance: "Name the remaining authoritative goal gap, its limiting component and the plausible headroom. " +
-    "Keep the retained best artifact as the comparison anchor and check whether subsequent work actually implements the proposed mechanism change. " +
-    "Compare a different approach that can affect that component. Distinguish an unexecuted intervention, failed transfer and insufficient route potential: they imply different next experiments. " +
-    "A changed auxiliary mechanism alone does not show that it addresses the gap.",
-  validation_scope: "Use evidence applicable to the limiting outcome and changed mechanism. " +
-    "Bind comparisons to the artifact version, input conditions and original budget, and distinguish when feedback became available from when work was submitted. " +
-    "Keep decision, execution and measured outcome separate; a saved snapshot is not proof of restoration or continued execution. " +
-    "First establish that the intervention actually changes the relevant behavior; unchanged outcomes may require tracing its activation rather than a wider parameter sweep. " +
-    "Choose a comparison or negative control that separates the surviving explanations, and state what each possible result would change. " +
-    "Before a check vetoes further work, identify its source and protected goal: an original constraint or frozen study criterion, versus an agent-proposed candidate heuristic. " +
-    "For a heuristic discrepancy, compare the incumbent under the same relevant control and measure or bound the effect on the goal; use a finite diagnosis that can decide grow or switch. " +
-    "A prospective heuristic revision needs an explicit rationale and retained counterevidence; it cannot turn an earlier failure into a pass, relax an original constraint or override a frozen study criterion. " +
-    "Distinguish readiness for an authorized informative evaluation from evidence sufficient to replace the incumbent. Consider its full marginal and opportunity cost under existing budget, feedback and permission limits; preserve the best qualified artifact. " +
-    "Distinguish local or synthetic gains from authoritative transfer, and repeated identical outcomes from new information. " +
-    "Choose decisive coverage before broadening a sweep; retain uncertainty and relevant negative evidence.",
+  work_slice: "Compare continuation with a feasible alternative by complete cost and useful outcome. " +
+    "Separate first deliverable quality from later gain beyond the retained best; recovering an avoidable initial quality deficit is not added capability. " +
+    "Name the choice-changing observation and a complete experiment to obtain it. Test count is not decision value; retain unfinished decisive work instead of restarting setup.",
+  route_distance: "Identify the authoritative goal gap, limiting component and headroom. Anchor to the retained best artifact; check whether subsequent work actually implements a mechanism addressing that gap. " +
+    "Distinguish unexecuted intervention, failed transfer and insufficient route potential. If evidence weakens the route, generate a small set of genuinely different explanations or approaches (representation, decomposition, search method or information source). " +
+    "Contrast their predictions and full costs, then choose a discriminating experiment; parameter variants of the same mechanism are not independent alternatives. Missing feedback is a wait or evidence gap, not route failure or exhaustion.",
+  validation_scope: "Bind evidence to the limiting outcome, changed mechanism, artifact version, input conditions and original budget; separate submission from when feedback became available. " +
+    "Separate decision, execution and outcome: a snapshot is not proof of restoration or continued execution. Check activation before widening a sweep; choose decisive comparisons/negative controls and what each result changes. " +
+    "Before a check vetoes work, identify its source and protected goal: original constraint or frozen study criterion versus agent-proposed candidate heuristic. For a heuristic discrepancy, compare the incumbent under the same relevant control, measure or bound the effect on the goal, and use finite diagnosis that can decide grow or switch. " +
+    "A prospective heuristic revision needs explicit rationale and retained counterevidence; it cannot turn an earlier failure into a pass, relax an original constraint or override a frozen study criterion. " +
+    "Separate readiness for an authorized informative evaluation from evidence sufficient to replace the incumbent; count full marginal/opportunity cost within budget, feedback and permission limits and preserve the best qualified artifact. " +
+    "Separate local/synthetic gains from authoritative transfer and identical outcomes from new information; retain uncertainty and negatives before broadening.",
 };
-export function stridePlanningGuidance(value: unknown): string[] {
-  if (normalizeStrideStrategy(value) === "off") return [];
-  return ["Review actual adoption of the previous decision, new information and authoritative goal outcomes separately. " +
-    "Choose grow to expand useful completed scope on a supported route, switch to test a different mechanism, or verify to resolve a route decision. " +
-    "Describe work size, route distance and validation breadth independently as concrete plans, with a reason for each. " +
-    "Name the reference method and the assumption or mechanism that changes; more tuning alone is not a route switch. " +
-    "Use the live decision_value_review questions to compare goal headroom and full cost through the three existing axes. " +
-    "Work size must cover a coherent accepted deliverable or an experiment capable of an interpretable conclusion: a new route may need a larger " +
-    "implementation and uncertain evidence may need broader validation. Expand useful work when evidence supports it; " +
-    "do not respond to a persistent unexplained gap by repeatedly making the same work smaller. " +
-    "For engineering, organizing or maintenance, grow can complete related implementation, integration, validation and readback together to reduce repeated planning and source reads. Work size is accepted scope, not Todo text, file count or tool calls. Do not bundle independent commitments or cross dependency, risk or authority boundaries to make work larger. Do not restart unfinished coherent work or repeat small probes unless changed inputs or a new uncertainty justify it. " +
-    "Where relevant, compare continuation, an alternative mechanism and replication using applicable Explore findings and scoped counterevidence. " +
-    "Do not force a pivot from elapsed time, a progress count or one noisy result. " +
-    "Missing or refuted evidence is not a universal route ban. Preserve the best qualified artifact and original priorities. " +
-    "Declare minimum evidence, a testable prediction, adoption criterion and full marginal cost including control and validation; review actual adoption, quality and cost next. Verify must resolve a named grow-or-switch question, not repeat an unchanged check. " +
-    "Carry the next_probe into existing executable Todo work, reusing an unfinished experiment when it still answers the question. " +
-    "Use agent_vision.todo_delta entries such as retain:todo_<id> to identify that work after its normal authoring/readback; do not invent IDs or add a planning-only Todo. " +
-    "Read planned_work and subsequent observations before crediting the previous decision. A negative experiment may finish its Todo while the broader goal remains open. " +
-    "Keep a candidate experiment separate from the best retained artifact: authorized evaluation may be informative before replacement is justified. " +
-    "Use the live stride_control contract for agent_vision.stride_decision. This controls proposal completeness, not execution, " +
-    "spawn, acceptance or a promise of utility; existing Todo/path and authority owners still govern work."];
-}
 
 export const STRIDE_DECISION_SCHEMA = decisionSchema.schema_version;
 export const STRIDE_PROBE_LIMITS = decisionSchema.probe_field_limits;
@@ -68,6 +39,7 @@ export const STRIDE_AXIS_NAMES = decisionSchema.axis_names;
 export const STRIDE_PLAN_LIMIT = decisionSchema.axis_plan_limit;
 export const STRIDE_REASON_LIMIT = decisionSchema.axis_reason_limit;
 export const STRIDE_REVIEW_LIMIT = decisionSchema.review_text_limit;
+export const STRIDE_REVIEW_REFERENCE_LIMIT = decisionSchema.review_reference_limit;
 // Persisted v1 records retain their original meaning; never offered for new reviews.
 export const RECORDED_STRIDE_SCHEMA = "stride_decision_v1";
 const recordedAdjustments = ["grow", "hold", "shrink"] as const;
@@ -81,17 +53,48 @@ function exactFields(value: JsonObject, fields: string[], label: string): void {
   if (Object.keys(value).some(key => !fields.includes(key))) throw new EffectRuntimeRequestError(`${label} contains unsupported fields`);
 }
 function refs(value: unknown, label: string): string[] {
-  if (!Array.isArray(value) || value.length > 3 || value.some(ref => typeof ref !== "string" ||
+  if (!Array.isArray(value) || value.length > STRIDE_REVIEW_REFERENCE_LIMIT || value.some(ref => typeof ref !== "string" ||
       !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(ref)) || new Set(value).size !== value.length) {
-    throw new EffectRuntimeRequestError(`${label} requires at most three distinct public-safe evidence references`);
+    throw new EffectRuntimeRequestError(`${label} requires at most ${STRIDE_REVIEW_REFERENCE_LIMIT} distinct public-safe evidence references`);
   }
   return value as string[];
+}
+function selectedCandidate(value: unknown): JsonObject {
+  const input = requireJsonObject(value, "explore_review.selected_candidate");
+  exactFields(input, ["todo_id", "node_id", "finding_id", "source_sha256"], "selected_candidate");
+  const todo = requireNonEmptyString(input.todo_id, "selected_candidate.todo_id");
+  if (!PLANNING_TODO_ID.test(todo)) throw new EffectRuntimeRequestError("selected_candidate requires a public Todo id");
+  const node = refs([input.node_id], "selected_candidate.node_id")[0];
+  const finding = refs([input.finding_id], "selected_candidate.finding_id")[0];
+  const digest = requireNonEmptyString(input.source_sha256, "selected_candidate.source_sha256");
+  if (!BARE_SHA256_PATTERN.test(digest)) throw new EffectRuntimeRequestError("selected_candidate requires the exact source digest");
+  return {todo_id: todo, node_id: node, finding_id: finding, source_sha256: digest};
+}
+function comparisonCandidates(value: unknown): JsonObject[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 20) throw new EffectRuntimeRequestError("comparison_candidates must be a bounded source page");
+  return value.map(value => {
+    const card = requireJsonObject(value, "comparison candidate");
+    exactFields(card, ["todo_id", "outcomes"], "comparison candidate");
+    if (!Array.isArray(card.outcomes) || !card.outcomes.length || card.outcomes.length > EXPLORE_RESULT_PAGE_MAX) {
+      throw new EffectRuntimeRequestError("comparison candidate requires one to twenty scoped outcomes from its result page");
+    }
+    const outcomes = card.outcomes.map(value => {
+      const outcome = requireJsonObject(value, "comparison outcome");
+      exactFields(outcome, ["node_id", "finding_id", "source_sha256"], "comparison outcome");
+      const checked = selectedCandidate({todo_id: card.todo_id, ...outcome});
+      return {node_id: checked.node_id, finding_id: checked.finding_id, source_sha256: checked.source_sha256};
+    });
+    return {todo_id: card.todo_id, outcomes};
+  });
 }
 
 /** Agent interpretations are structured claims, not certified evidence or authority. */
 export function normalizeStrideDecision(value: unknown, bounded: BoundedText = text):
   [JsonObject | null, Record<string, number>] {
-  if (value === undefined) return [null, {}];
+  // Compact run history records absent optional decisions as JSON null.
+  // Absence is not a proposal and cannot satisfy an enabled stride review.
+  if (value == null) return [null, {}];
   const input = requireJsonObject(value, "stride_decision");
   // Off-mode transport and historical readback retain both earlier v1 shapes.
   // An enabled fresh review requires the current concrete-plan schema.
@@ -164,7 +167,7 @@ export function normalizeStrideDecision(value: unknown, bounded: BoundedText = t
   }
   if (input.explore_review != null) {
     const review = requireJsonObject(input.explore_review, "stride_decision.explore_review");
-    exactFields(review, ["revision", "disposition", "considered_refs", "reason", ...(!historical ? ["result_pages"] : [])], "explore_review");
+    exactFields(review, ["revision", "disposition", "considered_refs", "reason", ...(!historical ? ["result_pages", "selected_candidate"] : [])], "explore_review");
     if (review.revision !== null && !BARE_SHA256_PATTERN.test(requireNonEmptyString(review.revision, "explore_review.revision"))) throw new EffectRuntimeRequestError("explore_review requires a delivered revision or null when unavailable");
     requireStringLiteral(review.disposition, decisionSchema.explore_dispositions, "explore_review.disposition");
     const considered = refs(review.considered_refs, "explore_review.considered_refs");
@@ -180,13 +183,20 @@ export function normalizeStrideDecision(value: unknown, bounded: BoundedText = t
       (output.explore_review as JsonObject).result_pages = pages;
       usage["stride_decision.explore_review.result_pages"] = JSON.stringify(pages).length;
     }
+    if (Object.hasOwn(review, "selected_candidate")) {
+      const candidate = selectedCandidate(review.selected_candidate);
+      if (review.disposition !== "used" || review.revision === null || !considered.includes(String(candidate.finding_id))) {
+        throw new EffectRuntimeRequestError("selected_candidate requires used, cited Explore evidence");
+      }
+      (output.explore_review as JsonObject).selected_candidate = candidate;
+      usage["stride_decision.explore_review.selected_candidate"] = JSON.stringify(candidate).length;
+    }
   }
   return [output, usage];
 }
 
 /** Historical read codec only, never a selectable strategy or new proposal. */
 export function normalizeRecordedStrideDecision(value: unknown): JsonObject | null {
-  if (value == null) return null;
   return normalizeStrideDecision(value)[0];
 }
 function normalizeHistoricalStrideDecision(value: unknown, bounded: BoundedText): [JsonObject, Record<string, number>] {
@@ -230,7 +240,22 @@ export function projectStrideExploreBasis(value: unknown, goal: string, agent: s
   const harness = source.harness as JsonObject | undefined;
   const findings = Array.isArray(graph?.writeback_results) ? graph.writeback_results as JsonObject[] : [];
   const recent = Array.isArray(graph?.recent_findings) ? graph.recent_findings as JsonObject[] : [];
+  const measurementFeedback = (Array.isArray(graph?.measurement_feedback) ? graph.measurement_feedback : [])
+    .slice(0, 3).filter((item): item is JsonObject => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+    .map(row => {
+      // The profile is already on the group. Keep candidate/value comparisons
+      // inline; the existing source reader retains full point provenance.
+      const latest = row.latest as JsonObject | undefined;
+      const measurement = latest?.measurement as JsonObject | undefined;
+      const point = (value: unknown) => value && typeof value === "object" && !Array.isArray(value)
+        ? {candidate_ref: (value as JsonObject).candidate_ref, value: (value as JsonObject).value} : value;
+      return {...row, best: point(row.best), previous_best: point(row.previous_best),
+        ...(latest && measurement ? {latest: point(measurement)} : {})};
+    });
+  const workYardsticks = (Array.isArray(graph?.work_yardsticks) ? graph.work_yardsticks : [])
+    .slice(0, 3).filter((item): item is JsonObject => Boolean(item && typeof item === "object" && !Array.isArray(item)));
   const branches = Array.isArray(harness?.selected_branches) ? harness.selected_branches as JsonObject[] : [];
+  const candidates = source.harness_enabled === true ? comparisonCandidates(harness?.comparison_candidates) : [];
   const audits = branches.flatMap(branch => {
     const audit = branch.typed_evidence_audit as JsonObject | undefined;
     return Array.isArray(audit?.findings) ? audit.findings as JsonObject[] : [];
@@ -239,6 +264,7 @@ export function projectStrideExploreBasis(value: unknown, goal: string, agent: s
   for (const row of [...findings, ...audits, ...recent]) {
     const id = requireNonEmptyString(row.finding_id, "Explore finding id");
     if (!byId.has(id)) byId.set(id, {finding_id: id, node_id: row.node_id, status: row.status,
+      ...(row.execution_observation ? {execution_observation: row.execution_observation} : {}),
       source_sha256: typeof row.source_sha256 === "string" ? row.source_sha256
         : createHash("sha256").update(JSON.stringify(row)).digest("hex")});
   }
@@ -246,8 +272,18 @@ export function projectStrideExploreBasis(value: unknown, goal: string, agent: s
     // Planner scores/counts and unrelated pool churn do not alter a cited
     // finding's source. Bind the actual bounded evidence, not the whole view.
     revision: createHash("sha256").update(JSON.stringify([goal, agent, source.graph_enabled,
-      source.harness_enabled, [...byId.values()].slice(0, 6)])).digest("hex"),
+      source.harness_enabled, [...byId.values()].slice(0, 6), ...(candidates.length ? [candidates] : [])])).digest("hex"),
     finding_refs: [...byId.values()].slice(0, 6),
+    ...(measurementFeedback.length ? {measurement_feedback: measurementFeedback} : {}),
+    ...(graph?.measurement_feedback_page ? {measurement_feedback_page: graph.measurement_feedback_page} : {}),
+    ...(typeof graph?.omitted_measurement_feedback === "number" && graph.omitted_measurement_feedback > 0
+      ? {omitted_measurement_feedback: graph.omitted_measurement_feedback} : {}),
+    ...(workYardsticks.length ? {work_yardsticks: workYardsticks} : {}),
+    ...(typeof graph?.omitted_work_yardsticks === "number" && graph.omitted_work_yardsticks > 0
+      ? {omitted_work_yardsticks: graph.omitted_work_yardsticks} : {}),
+    ...(candidates.length ? {comparison_candidates: candidates} : {}),
+    ...(harness?.omitted_comparison_candidates !== undefined ? {
+      omitted_comparison_candidates: harness.omitted_comparison_candidates} : {}),
     branches: branches.slice(0, 3).map(branch => ({todo_id: branch.todo_id,
       selection_status: branch.selection_status, actionable_open: branch.actionable_open})),
     omitted_finding_refs: Math.max(0, byId.size - 6),
@@ -258,7 +294,7 @@ export function projectStrideExploreBasis(value: unknown, goal: string, agent: s
 }
 
 /** Context binding checks shape and declared provenance, never truth of Agent claims. */
-export function strideReviewMismatch(decision: JsonObject, context: JsonObject, sourceReview?: unknown): string | null {
+export function strideReviewMismatch(decision: JsonObject, context: JsonObject, sourceReview?: unknown, todoDelta?: unknown): string | null {
   const follow = context.decision_followthrough as JsonObject | undefined;
   const previous = follow?.previous_decision as JsonObject | undefined;
   const review = decision.previous_review as JsonObject | undefined;
@@ -318,16 +354,33 @@ export function strideReviewMismatch(decision: JsonObject, context: JsonObject, 
   }
   if (explore.disposition === "unavailable") return "Available Explore evidence cannot be declared unreadable.";
   const allowed = new Set((basis.finding_refs as JsonObject[]).map(row => row.finding_id));
+  const candidates = comparisonCandidates(basis.comparison_candidates);
+  for (const card of candidates) for (const outcome of card.outcomes as JsonObject[]) allowed.add(outcome.finding_id);
   const deliveredPages = Array.isArray(context.explore_result_pages) ? context.explore_result_pages as JsonObject[] : [];
   for (const page of (explore.result_pages ?? []) as JsonObject[]) {
     const resolved = deliveredPages.find(row => row.revision === page.revision &&
-      row.offset === page.offset && row.limit === page.limit);
-    if (page.revision !== (basis.result_page as JsonObject | null)?.revision || !resolved) {
-      return "Explore result pages require current source replay; reread global pages under the original Turn.";
+      row.offset === page.offset && row.limit === page.limit && row.todo_id === page.todo_id);
+    if (!resolved || page.todo_id === undefined && page.revision !== (basis.result_page as JsonObject | null)?.revision) {
+      return page.todo_id === undefined
+        ? "Explore result pages require current source replay; reread global pages under the original Turn."
+        : "Explore task result pages require current source replay; reread scoped pages under the original Turn.";
     }
     for (const ref of resolved.finding_refs as string[]) allowed.add(ref);
+    candidates.push(...comparisonCandidates(resolved.comparison_candidates));
   }
   if (considered.some(ref => !allowed.has(ref))) return "Explore review cites an undelivered or foreign finding.";
+  if (explore.selected_candidate != null) {
+    const selected = selectedCandidate(explore.selected_candidate);
+    if (!candidates.some(card => card.todo_id === selected.todo_id && (card.outcomes as JsonObject[]).some(outcome =>
+      ["node_id", "finding_id", "source_sha256"].every(key => outcome[key] === selected[key])))) {
+      return "Selected candidate requires the current Todo's explicit link to the exact scoped result; reread changed sources.";
+    }
+    // The existing Vision Todo plan and followthrough owner retain execution
+    // lineage. This optional claim cannot invent work or grant its admission.
+    if (!Array.isArray(todoDelta) || !todoDelta.includes(`retain:${selected.todo_id}`)) {
+      return "Selected candidate must be retained as the same existing Todo in agent_vision.todo_delta.";
+    }
+  }
   return null;
 }
 
@@ -339,11 +392,11 @@ export function strideControlContract(context: JsonObject, obligationId: unknown
   const example: JsonObject = {schema_version: decisionSchema.schema_version, strategy_version: context.stride_strategy,
     reference_context_id: context.context_id ?? null, reference_obligation_id: obligationId,
     basis: "uncertain_evidence", action: "verify", axes: {
-      work_slice: {plan: "Complete the work and checks needed to resolve the pending adoption decision.", reason: "Resolve decision-relevant uncertainty before expanding the route."},
-      route_distance: {plan: "Keep the current method; vary the unresolved assumption only.", reason: "The existing evidence does not yet distinguish a replacement route."},
-      validation_scope: {plan: "Check the disputed outcome and its relevant failure case under the same constraints.", reason: "Obtain independent evidence rather than repeat an unchanged check."}},
-    next_probe: {scope: "One complete decision-relevant verification.", prediction: "Distinguish the remaining explanations.",
-      adoption_criterion: "Applicable evidence supports the next slice.", cost_bound: "Bound full implementation and validation cost.", minimum_evidence: "A verified outcome, relevant failure evidence and attributable cost."}};
+      work_slice: {plan: "Complete the work and checks for the adoption decision.", reason: "Resolve adoption uncertainty before expanding."},
+      route_distance: {plan: "Vary only the unresolved assumption in the current method.", reason: "Evidence leaves the replacement route uncertain."},
+      validation_scope: {plan: "Verify the disputed outcome and failure case under the same constraints.", reason: "Obtain new independent evidence."}},
+    next_probe: {scope: "One complete decision-relevant check.", prediction: "Distinguish the remaining explanations.",
+      adoption_criterion: "Applicable evidence supports the next slice.", cost_bound: "Bound all implementation and validation costs.", minimum_evidence: "Verified outcome, relevant failure evidence and attributable cost."}};
   if (previous) example.previous_review = {reference_decision_ref: previous, adoption: "unknown", information_gain: "unknown", goal_gain: "unknown",
     evidence_refs: [], lesson: "Example only: inspect subsequent work and evidence before replacing these unknowns."};
   if (basis) example.explore_review = {revision: basis.revision, disposition: basis.availability === "unavailable" ? "unavailable" : "deferred",
@@ -351,25 +404,31 @@ export function strideControlContract(context: JsonObject, obligationId: unknown
   return {schema_version: decisionSchema.schema_version, strategy_version: context.stride_strategy,
     reference_context_id: context.context_id ?? null, reference_obligation_id: obligationId,
     axis_names: decisionSchema.axis_names, actions: decisionSchema.actions,
+    basis_options: decisionSchema.basis_options,
+    required_fields: ["schema_version", "strategy_version", "reference_context_id", "reference_obligation_id",
+      "basis", "action", "axes", "next_probe", ...(previous ? ["previous_review"] : []), ...(basis ? ["explore_review"] : [])],
     axis_plan_limit: decisionSchema.axis_plan_limit,
     axis_reason_limit: decisionSchema.axis_reason_limit, probe_field_limits: STRIDE_PROBE_LIMITS,
     decision_value_review: {...decisionValueReview},
     review_text_limit: decisionSchema.review_text_limit,
+    review_reference_limit: STRIDE_REVIEW_REFERENCE_LIMIT,
     previous_decision_ref: previous,
     ...(follow ? {decision_followthrough: follow} : {}),
     previous_review_options: {adoption: decisionSchema.adoption_options, information_gain: decisionSchema.information_options, goal_gain: decisionSchema.gain_options},
     explore_basis: context.explore_basis ?? null, explore_dispositions: decisionSchema.explore_dispositions,
+    ...(basis?.harness_enabled === true ? {
+      selected_candidate_option: {
+        attachment: "explore_review.selected_candidate",
+        fields: ["todo_id", "node_id", "finding_id", "source_sha256"],
+        rule: "Optional: bind an exact comparison_candidates Todo/outcome, cite its finding as used, and retain that Todo in agent_vision.todo_delta. " +
+          "Read omitted alternatives via explore_basis.rule; cards share the page limit (--result-limit up to 20). Omission is not ineligibility. Binding grants no admission or proof of novelty, execution or utility.",
+      },
+    } : {}),
     minimal_example: example,
     attachment: "agent_vision.stride_decision", requires_evidence_linked_path: true,
     required_on_periodic_review: true,
-    rule: "Every due periodic review with this strategy enabled must record a stride decision before settlement, including when a typed progress, successor, blocker or terminal outcome is also reported. " +
-      "The decision requires an evidence-linked Vision path (including a terminal stop when supported by evidence), an explicit grow/switch/verify action and a concrete plan/reason for each axis. " +
-      "Grow expands a supported route; switch names the reference method and changed mechanism; verify resolves a named grow-or-switch question. Size every action for a coherent accepted deliverable or complete interpretable experiment, including ordinary engineering and maintenance. Grow changes useful completed scope, not authority or settlement boundaries. " +
-      "The minimal example demonstrates syntax, not the recommended action for the current evidence. " +
-      "decision_value_review is Agent guidance for the existing axis plans/reasons and next_probe, not additional proposal fields or a settlement gate. " +
-      "When a previous decision is delivered, assess its adoption, information and goal gain in previous_review against its exact reference. " +
-      "When Explore basis is delivered, assess applicable findings/alternatives in explore_review; missing or omitted evidence stays unknown. " +
-      "An empty current projection does not establish that retained historical research is absent; distinguish unread or unprojected evidence from an exhausted alternative. " +
-      "These are Agent claims and proposal-shape obligations, not execution authority or utility certification. Other source-specific outcomes remain legal but cannot bypass a due stride review.",
+    rule: "Enabled periodic and observed-stall reviews require a current evidence-linked Vision path and stride decision before any settlement, including progress/successor/blocker/terminal exits. " +
+      "Each axis needs plan/reason: grow useful completed scope on a supported route; switch names reference method and changed mechanism; verify resolves a grow-or-switch question. Apply these plans to the actual Todo scope and acceptance using the existing Todo authoring/update commands, then record the verified IDs in todo_delta. Retain unfinished useful work; do not create successor microtasks merely to count progress. On grow, consolidate fragmented setup, implementation, integration and decisive validation into a coherent accepted deliverable or complete interpretable experiment, including engineering/maintenance. The next admitted work must execute that scope, method and validation plan; changing review frequency or repeating the proposal is not adoption. Keep the configured review interval and preserve dependencies, acceptance, risk, authority and per-Turn settlement boundaries. " +
+      "Review the exact previous decision's adoption/information/goal gain and delivered Explore sources in their review fields. Apply review_reference_limit separately to previous_review.evidence_refs and explore_review.considered_refs. Missing/omitted/unread/unprojected evidence stays unknown, not exhausted. Guidance adds no fields/gates; the example is syntax, not an action recommendation. Claims certify no authority, execution or utility. Other legal outcomes cannot bypass a due review.",
   };
 }

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import ast
 import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from ...release_metadata import checkout_release_metadata
 from ..content_digest import ENVELOPED_SHA256_PATTERN
 from ..runtime.public_safety import public_safe_compact_text
 from .actual_default_model_behavior_portfolio import (
@@ -40,7 +40,7 @@ EXPECTED_RESULT_SCHEMA_BY_QUALIFICATION = {
     "mypy": "mypy_summary_v0",
     "risk_canary": "loopx_premerge_validation_gate_v0",
     "full_public": "smoke_fleet_health_v0",
-    "install_upgrade_host": "release_install_upgrade_host_summary_v0",
+    "install_upgrade_host": "release_install_upgrade_host_summary_v1",
     "public_boundary": "loopx_public_boundary_check_v0",
     "doubao_actual_default": "actual_default_model_behavior_portfolio_v0",
 }
@@ -242,11 +242,11 @@ def _validate_install_upgrade_host(value: Any) -> tuple[dict[str, Any], list[str
     summary = _summary(
         value,
         qualification_id="install_upgrade_host",
-        allowed={"install_passed", "upgrade_passed", "host_passed"},
+        allowed={"install_passed", "upgrade_passed", "host_passed", "packaged_frontend_passed"},
     )
     normalized = {
         field: _boolean(summary.get(field), field=f"install_upgrade_host.{field}")
-        for field in ("install_passed", "upgrade_passed", "host_passed")
+        for field in ("install_passed", "upgrade_passed", "host_passed", "packaged_frontend_passed")
     }
     issues = [] if all(normalized.values()) else ["install_upgrade_host_failed"]
     return normalized, issues
@@ -512,25 +512,9 @@ def _git(repo_root: Path, *args: str) -> str:
 
 def _checkout_package_version(repo_root: Path) -> str:
     try:
-        init_module = ast.parse(
-            (repo_root / "loopx" / "__init__.py").read_text(encoding="utf-8")
-        )
-    except (OSError, SyntaxError) as exc:
+        module_version = checkout_release_metadata(repo_root)["version"]
+    except (OSError, SyntaxError, ValueError) as exc:
         raise ValueError("release package version is unavailable from the checkout") from exc
-
-    module_version = None
-    for statement in init_module.body:
-        if not isinstance(statement, ast.Assign) or len(statement.targets) != 1:
-            continue
-        target = statement.targets[0]
-        if (
-            isinstance(target, ast.Name)
-            and target.id == "__version__"
-            and isinstance(statement.value, ast.Constant)
-            and isinstance(statement.value.value, str)
-        ):
-            module_version = statement.value.value
-            break
     if not isinstance(module_version, str) or not _VERSION_RE.fullmatch(module_version):
         raise ValueError("release package version is invalid in the checkout")
     return module_version

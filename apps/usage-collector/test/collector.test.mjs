@@ -191,7 +191,8 @@ for (const version of ["1.2.4", "2.0.0a1", "2.0.0b2", "2.0.0rc3"]) {
     await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
     const root = await mkdtemp(join(tmpdir(), "loopx-real-collector-")), path = join(root, "usage.json");
     t.after(async () => { server.closeAllConnections(); server.close(); await rm(root, { recursive: true, force: true }); });
-    const ctx = { env: { LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:" + server.address().port + "/v1/ping" },
+    const ctx = { env: { LOOPX_USAGE_PING: "1",
+      LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:" + server.address().port + "/v1/ping" },
       version, python: "3.13", channel: "source", now };
     await configureContext(path, ctx, "personal"); await configure(path, ctx, "enable");
     const generation = JSON.parse(await readFile(path, "utf8")).generation;

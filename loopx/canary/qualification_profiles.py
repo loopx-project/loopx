@@ -225,6 +225,8 @@ CONTROL_PLANE_QUALIFICATION_PROFILES: tuple[dict[str, Any], ...] = (
             "loopx/control_plane/scheduler/monitor_wait.py",
             "loopx/control_plane/scheduler/state.py",
             "loopx/control_plane/scheduler/state_transition_rules.py",
+            "loopx/cli_commands/context_machine.py",
+            "loopx/capabilities/machine_configuration/context_delivery.py",
             "loopx/cli_commands/quota",
             "quota-scheduler-state-ack-smoke.py",
             "quota-scheduler-registry-route-smoke.py",

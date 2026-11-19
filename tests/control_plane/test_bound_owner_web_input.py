@@ -74,11 +74,122 @@ def bound_chat(tmp_path, monkeypatch, request):
             source_context={"source_ref": "a" * 24, "sender_ref": observed["operator_ref"], "private_human_message": True})
         return binding, session
 
+    post.server_address = server.server_address
     yield store, runtime, bindings, observed, post, open_bound, capture, canonical
     server.shutdown()
     server.server_close()
     thread.join(timeout=2)
     runtime.close()
+
+
+def _bound_sessions(post, query):
+    connection = http.client.HTTPConnection(*post.server_address, timeout=15)
+    try:
+        connection.request("GET", "/api/chat/sessions?" + query)
+        response = connection.getresponse()
+        return response.status, json.loads(response.read())
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("kind", ["project", "steward"])
+def test_http_binding_discovery_selects_original_session_without_starting_work(bound_chat, kind):
+    store, runtime, _, _, post, open_bound, capture, _ = bound_chat
+    binding, original = open_bound(kind)
+    other, _ = runtime.open_session(goal_id=None, agent_id="codex", objective="", mode="new",
+        work_dir=Path(runtime.project_contexts.available()[0]["workspace_path"]),
+        project_ref=binding["project_ref"])
+    before = store.load_session(original["session_id"])
+    requests_before = capture.read_bytes()
+    status, listed = _bound_sessions(post, "conversation_binding_id=" + binding["binding_id"])
+    assert status == 200, listed
+    assert listed["conversation_binding_id"] == binding["binding_id"]
+    assert [row["session_id"] for row in listed["sessions"]] == [original["session_id"]]
+    assert listed["sessions"][0]["goal_id"] == ("loopx-manager" if kind == "steward" else None)
+    assert listed["sessions"][0]["session_id"] != other["session_id"]
+    assert store.load_session(original["session_id"]) == before
+    assert capture.read_bytes() == requests_before
+    status, ordinary = _bound_sessions(post, "")
+    assert status == 200 and {row["session_id"] for row in ordinary["sessions"]} == {
+        original["session_id"], other["session_id"]}
+    assert "conversation_binding_id" not in ordinary
+    # The discovery result is an existing identity, not a new execution grant.
+    selected = listed["sessions"][0]
+    status, accepted = post(selected, {"message": "Continue the discovered original conversation.",
+                                     "client_turn_id": "discovered"})
+    assert status == 202, accepted
+    assert runtime.wait_for_turn(session_id=selected["session_id"], turn_id=accepted["turn_id"],
+                                 timeout_sec=15)["status"] == "completed"
+    assert store.load_session(selected["session_id"])["upstream_thread_id"] == original["upstream_thread_id"]
+
+
+@pytest.mark.parametrize("query", ["conversation_binding_id=", "conversation_binding_id=x&conversation_binding_id=y",
+                                  "conversation_binding_id=x&goal_id=goal-a"])
+def test_http_binding_discovery_rejects_ambiguous_selector_without_unfiltered_fallback(bound_chat, query):
+    _, _, _, _, post, open_bound, _, _ = bound_chat
+    open_bound()
+    status, denied = _bound_sessions(post, query)
+    assert status == 400 and "sessions" not in denied
+
+
+@pytest.mark.parametrize("mutation", ["operator_ref", "verified", "workspace", "revoked", "closed"])
+def test_http_binding_discovery_rechecks_private_source_and_retains_closed_history(bound_chat, mutation):
+    store, _, bindings, observed, post, open_bound, capture, canonical = bound_chat
+    binding, session = open_bound()
+    if mutation == "operator_ref":
+        observed[mutation] = "f" * 24
+    elif mutation == "verified":
+        observed[mutation] = False
+    elif mutation == "workspace":
+        Path(session["project_context"]["workspace_path"]).rename(canonical.parent / "removed-workspace")
+    elif mutation == "revoked":
+        bindings.disconnect(binding["binding_id"], expected_revision=bindings.read()["revision"])
+    else:
+        store.update_session(session["session_id"], status="closed")
+    before = capture.read_bytes()
+    status, result = _bound_sessions(post, "conversation_binding_id=" + binding["binding_id"])
+    if mutation == "closed":
+        assert status == 200 and result["sessions"] == []
+        assert store.load_session(session["session_id"])["status"] == "closed"
+    else:
+        assert status == 409 and "sessions" not in result
+    assert capture.read_bytes() == before
+
+
+def test_http_binding_discovery_does_not_hold_publication_fence_during_provider_io(bound_chat, monkeypatch):
+    _, _, bindings, observed, post, open_bound, _, _ = bound_chat
+    binding, _ = open_bound()
+    verifying, release = threading.Event(), threading.Event()
+    result = []
+
+    def observe(_):
+        snapshot = dict(observed)
+        verifying.set()
+        assert release.wait(5)
+        return snapshot
+
+    monkeypatch.setattr(bindings, "_observe_owner", observe)
+    reader = threading.Thread(target=lambda: result.append(_bound_sessions(post,
+        "conversation_binding_id=" + binding["binding_id"])))
+    reader.start()
+    try:
+        assert verifying.wait(5)
+        bindings.disconnect(binding["binding_id"], expected_revision=bindings.read()["revision"])
+    finally:
+        release.set()
+        reader.join(timeout=10)
+    assert not reader.is_alive() and result[0][0] == 409
+    assert "sessions" not in result[0][1]
+
+
+def test_http_binding_discovery_preserves_duplicate_observations_for_the_typed_owner(bound_chat, monkeypatch):
+    store, _, _, _, post, open_bound, _, _ = bound_chat
+    binding, _ = open_bound()
+    observed = store.list_sessions()
+    # Inject an ambiguous storage read, never duplicate/corrupt a live store.
+    monkeypatch.setattr(store, "list_sessions", lambda **_: observed + observed)
+    status, denied = _bound_sessions(post, "conversation_binding_id=" + binding["binding_id"])
+    assert status == 409 and "sessions" not in denied
 
 
 def test_http_local_owner_continues_private_project_thread_and_queue(bound_chat):
@@ -131,6 +242,27 @@ def test_http_local_input_cannot_inherit_a_group_topic(bound_chat):
     status, denied = post(session, {"message": "not a verified group event", "client_turn_id": "group-web"})
     assert status == 400 and denied["delivery_state"] == "not_delivered"
     assert store.queued_turns(session["session_id"]) == []
+    status, denied = _bound_sessions(post, "conversation_binding_id=" + binding["binding_id"])
+    assert status == 409 and "sessions" not in denied
+
+
+def test_http_bound_steward_starts_with_current_directory_and_deferred_status(bound_chat, monkeypatch):
+    from loopx import goal_portfolio
+
+    store, runtime, _, _, post, open_bound, _, _ = bound_chat
+    _, session = open_bound("steward")
+    monkeypatch.setattr(goal_portfolio, "collect_status",
+        lambda **_: pytest.fail("ordinary steward input must not eagerly collect Goal status"))
+    status, accepted = post(session, {
+        "message": "Which approved changes are still open?", "client_turn_id": "directory-only",
+    })
+    assert status == 202, accepted
+    turn = runtime.wait_for_turn(session_id=session["session_id"], turn_id=accepted["turn_id"], timeout_sec=15)
+    assert turn["status"] == "completed" and turn["origin"] == "web", turn
+    events = store.events_after(session["session_id"], turn["turn_id"], None)
+    context = next(event["payload"] for event in events if event["kind"] == "manager.context")
+    assert context["authorization_scope_id"] and context["coverage"]["attempted"] == 0
+    assert [(row["goal_id"], row["quality"]) for row in context["goals"]] == [("goal-a", "omitted")]
 
 
 def test_http_bound_steward_keeps_web_provenance_at_coordination_root(bound_chat, monkeypatch):
@@ -158,6 +290,57 @@ def test_http_bound_steward_keeps_web_provenance_at_coordination_root(bound_chat
         "kind": "external_audience", "goal_ids": [], "private_conversation": False, "bound_steward": True}
     with pytest.raises((OSError, ValueError)):
         external_source_policy(store.root.parent, session, turn)
+
+
+def test_http_web_handoff_reports_missing_mirror_receipt_without_retargeting(bound_chat):
+    from types import SimpleNamespace
+    from loopx.capabilities.manager_context import acknowledge
+    from loopx.capabilities.manager_context.roundtrip import drain, report, reply_status
+    from loopx.extensions.lark.manager_returns import LarkManagerReturnTransport
+    from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+
+    store, runtime, _, _, post, open_bound, capture, canonical = bound_chat
+    fake = Path(runtime.codex_bin)
+    # Only model output is synthetic; HTTP admission, source grants, handoff,
+    # canonical inbox, Chat storage and the Lark return owner remain real.
+    needle = '"message": "Runtime response.",'
+    source = fake.read_text()
+    assert source.count(needle) == 1
+    fake.write_text(source.replace(needle, needle +
+        '\n            "context_handoff": {"goal_id": "goal-a", "agent_id": "agent-a"},'))
+    _, session = open_bound("steward")
+    sid = session["session_id"]
+    message = "Ask the registered worker to check this source and return here."
+    status, accepted = post(session, {"message": message, "client_turn_id": "local-worker-request"})
+    assert status == 202, accepted
+    turn = runtime.wait_for_turn(session_id=sid, turn_id=accepted["turn_id"], timeout_sec=15)
+    assert turn["status"] == "completed", turn
+    receipt = turn["response"]["context_handoff_receipt"]
+    assert receipt["status"] == "delivered"
+    assert turn["origin"] == "web" and canonical != store.root.parent
+    acknowledge(canonical, "goal-a", "agent-a", receipt["request_id"], "adopt", "Checked source",
+                registry=runtime.registry_path, caller_goal_ref=receipt.get("goal_ref"))
+    report(canonical, "goal-a", "agent-a", receipt["request_id"], "conclusion", "Checked the original source.",
+           registry=runtime.registry_path, caller_goal_ref=receipt.get("goal_ref"))
+
+    def forbidden_provider(*_):
+        pytest.fail("A Web request cannot fabricate a provider event or guess a prior message")
+
+    private = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+                                      runner=forbidden_provider, cli_bin="synthetic-provider")
+    server = SimpleNamespace(registry_path=runtime.registry_path, lark_private_conversations=private,
+        lark_goal_topic_runtime=SimpleNamespace(snapshot_provider=forbidden_provider))
+    drain(canonical, runtime.registry_path, store, LarkManagerReturnTransport(server, canonical))
+    delivery = reply_status(canonical, receipt)[0]
+    assert delivery["status"] == "retry_pending"
+    assert delivery["error"] == "initial_delivery_receipt_unavailable"
+    returned = [row for row in store.messages(sid) if row.get("origin") == "manager_followup"]
+    assert len(returned) == 1 and returned[0]["turn_id"] == turn["turn_id"]
+    status, replay = post(session, {"message": message, "client_turn_id": "local-worker-request"})
+    assert status == 202 and not replay["created"] and replay["turn_id"] == turn["turn_id"]
+    assert store.load_session(sid)["upstream_thread_id"] == session["upstream_thread_id"]
+    calls = [json.loads(line) for line in capture.read_text().splitlines()]
+    assert sum(row.get("method") == "turn/start" for row in calls) == 1
 
 
 @pytest.mark.parametrize("mutation", ["operator_ref", "provider_ref", "verified", "workspace", "revoked", "closed", "body_origin"])
@@ -252,6 +435,84 @@ def test_binding_publication_fence_covers_canonical_queue_commit(bound_chat, mon
     assert result[0][0] == 202, result
     turn = store.load_turn(session["session_id"], result[0][1]["turn_id"])
     assert turn["status"] in {"interrupted", "cancelled"}
+
+
+@pytest.mark.parametrize("kind", ["project", "steward"])
+@pytest.mark.parametrize("origin", ["lark", "external"])
+@pytest.mark.parametrize("phase", ["identity", "commit"])
+def test_provider_input_orders_revocation_around_identity_and_queue(bound_chat, monkeypatch, kind, origin, phase):
+    from loopx.capabilities.native_chat.external_conversations import ChatExternalConversations
+
+    store, runtime, bindings, observed, _, open_bound, _, _ = bound_chat
+    binding, session = open_bound(kind)
+    monkeypatch.setattr(runtime, "resume_session_queue", lambda **_: None)
+    entered, release, revoked, queueing = (threading.Event() for _ in range(4))
+    results, failures, revoke_failures = [], [], []
+    core = ChatExternalConversations(runtime)
+    original = bindings.observe if phase == "identity" else store.create_queued_turn
+    enqueue = runtime.enqueue_turn
+
+    def enqueue_provider(**kwargs):
+        queueing.set()
+        return enqueue(**kwargs)
+
+    monkeypatch.setattr(runtime, "enqueue_turn", enqueue_provider)
+
+    def gated(*args, **kwargs):
+        # The identity observation is complete before its simulated IO returns;
+        # queue publication has not happened while its commit is paused.
+        value = original(*args, **kwargs) if phase == "identity" else None
+        if phase == "identity" and not queueing.is_set():
+            return value
+        entered.set()
+        assert release.wait(5)
+        return value if phase == "identity" else original(*args, **kwargs)
+
+    monkeypatch.setattr(bindings if phase == "identity" else store,
+                        "observe" if phase == "identity" else "create_queued_turn", gated)
+
+    def send():
+        try:
+            results.append(core.admit(binding_id=binding["binding_id"],
+                source={"source_ref": "a" * 24, "sender_ref": observed["operator_ref"],
+                        "private_human_message": True},
+                request_ref="b" * 24, message="Preserve the original request", origin=origin))
+        except Exception as exc:
+            failures.append(exc)
+
+    def revoke():
+        try:
+            bindings.disconnect(binding["binding_id"], expected_revision=bindings.read()["revision"])
+        except Exception as exc:
+            revoke_failures.append(exc)
+        finally:
+            revoked.set()
+
+    sender, revoker = threading.Thread(target=send), threading.Thread(target=revoke)
+    sender.start()
+    try:
+        assert entered.wait(5)
+        revoker.start()
+        if phase == "identity":
+            assert revoked.wait(3), "provider IO blocked revocation"
+        else:
+            assert not revoked.wait(0.15), "revocation crossed canonical queue publication"
+    finally:
+        release.set()
+        sender.join(timeout=10)
+        if revoker.ident is not None:
+            revoker.join(timeout=10)
+    assert not sender.is_alive() and not revoker.is_alive()
+    assert revoked.is_set() and not revoke_failures
+    assert store.load_session(session["session_id"])["upstream_thread_id"] == session["upstream_thread_id"]
+    assert store.queued_turns(session["session_id"]) == []
+    if phase == "identity":
+        assert not results and len(failures) == 1 and isinstance(failures[0], ValueError), failures
+    else:
+        assert not failures and results[0]["status"] == "accepted", failures
+        turn = store.load_turn(session["session_id"], results[0]["turn_id"])
+        assert turn["status"] in {"interrupted", "cancelled"}
+        assert turn["message"] == "Preserve the original request" and turn["origin"] == origin
 
 
 def test_provider_and_local_followups_keep_busy_fifo_and_exact_replay(bound_chat):

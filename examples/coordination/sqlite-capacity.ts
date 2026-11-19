@@ -6,7 +6,7 @@ import {existsSync, mkdtempSync, readFileSync, readdirSync, rmSync,
   statfsSync, statSync, writeFileSync} from "node:fs";
 import {cpus, platform, release, tmpdir, totalmem} from "node:os";
 import {DatabaseSync} from "node:sqlite";
-import {delimiter, dirname, join, relative, resolve, sep} from "node:path";
+import {delimiter, dirname, join, relative, sep} from "node:path";
 import {performance} from "node:perf_hooks";
 import {fileURLToPath} from "node:url";
 import {parseArgs} from "node:util";
@@ -17,19 +17,15 @@ import {selectLocalSqliteAuthority} from "../../loopx/control_plane/coordination
 import {engageLegacyCoordinationWriterFence} from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {authorityProjectionFixture} from "../../tests/control_plane_ts/authority_projection_fixture.ts";
-import {CAPACITY_PROFILES, capacityLedger, latency, sameCapacityScan, type CapacityScanInput, type CapacityAxis, type CapacityProfileId,
-  type QualificationRow} from "./sqlite-capacity-report.ts";
+import {CAPACITY_PROFILES, capacityLedger, latency, splitShellCommand,
+  type CapacityAxis, type CapacityProfileId, type QualificationRow} from "./sqlite-capacity-report.ts";
 
 const {values: options} = parseArgs({options: {
   profile: {type: "string", default: "rehearsal"}, output: {type: "string"},
   python: {type: "string", default: "python3"}, cli: {type: "boolean", default: false},
-  "scan-root": {type: "string"},
 }});
 const goal = "sqlite-capacity";
 const script = fileURLToPath(import.meta.url), repository = fileURLToPath(new URL("../../", import.meta.url));
-assert(options.cli || !options["scan-root"], "--scan-root requires --cli");
-const scanRoot = resolve(options["scan-root"] ?? join(repository, "loopx"));
-if (options.cli) assert(statSync(scanRoot).isDirectory(), "--scan-root must be a nonempty public source directory");
 const sqlite = (() => {
   try { return sqliteAuthorityRuntime(); }
   catch (error) {
@@ -59,9 +55,7 @@ const report: Record<string, unknown> = {
     sampling: "last 1000 commits (or entire smaller rehearsal); nearest-rank quantiles",
     traffic_window: "8 warmup commits, then one bounded window (1000 formal / 100 rehearsal) with a held read mark that blocks WAL resets; exact frames from WAL file growth",
     lock_probe: "a probe process holds the write lock for 200 ms per sample (12 formal / 3 rehearsal); the end-to-end store commit wait is reported",
-    cold_cli: options.cli ? "new Python process and newly started managed Effect runtime per sample; shutdown outside timing" : "not_requested",
-    cold_cli_scan_root: options.cli ? scanRoot : null,
-    cold_cli_scan_control: "explicit identical root for status/quota; Todo mutation has no scan option; before/after input hashes outside timing; no OS cache drop or scan suppression",
+    cold_cli: options.cli ? "new Python process and newly started managed Effect runtime per sample; shutdown outside timing; public scans deferred; historical scan-inclusive status budget remains missing" : "not_requested",
     cold_node: "new Node process and import plus first load; OS file cache is not dropped",
     warm: "same process, actual provider opens and closes each connection"},
   durability: {journal_mode: "WAL", synchronous: "FULL", altered_for_measurement: false},
@@ -110,35 +104,6 @@ function sourceIdentity(): Record<string, unknown> {
     fingerprint_scope: "LoopX Python/TS/JSON source, capacity entrypoint/report and shared fixture; includes uncommitted source"};
 }
 
-function scanInput(environment: NodeJS.ProcessEnv): CapacityScanInput {
-  // Python is an I/O probe here, not a second scanner owner. Reuse production
-  // enumeration and privacy classification, including tracked-file overrides.
-  const child = spawnSync(options.python!, ["-c", `
-import hashlib, json, os, sys
-from pathlib import Path
-from loopx.contract import iter_scan_files, _is_local_private_state_path, _git_probe
-root = Path(sys.argv[1]).resolve()
-digest = hashlib.sha256()
-count = size = skipped = 0
-for path in iter_scan_files(root):
-    name = os.path.relpath(path, root).replace(os.sep, "/")
-    private = _is_local_private_state_path(path, root) and not _git_probe(path).get("tracked")
-    digest.update(json.dumps([name, bool(private)], ensure_ascii=True).encode() + b"\\0")
-    if private:
-        skipped += 1
-        continue
-    data = path.read_bytes()
-    digest.update(hashlib.sha256(data).digest())
-    count += 1
-    size += len(data)
-print(json.dumps(dict(sha256=digest.hexdigest(), files=count, bytes=size, skipped_private_files=skipped)))
-`, scanRoot], {cwd: repository, env: environment, encoding: "utf8", timeout: 60000});
-  assert.equal(child.status, 0, "public scan input capture failed");
-  const input = JSON.parse(child.stdout) as CapacityScanInput;
-  assert(sameCapacityScan(input, input), "public scan input must contain readable nonempty source files");
-  return input;
-}
-
 async function measureAxis(count: number): Promise<CapacityAxis> {
   const projection = authorityProjectionFixture(goal, [{todo_id: "todo_capacity", role: "agent", status: "open",
     done: false, text: "Capacity 000000", archive_state: "active", claimed_by: "agent-a", task_class: "advancement_task"}],
@@ -183,23 +148,54 @@ async function measureAxis(count: number): Promise<CapacityAxis> {
   let phase = "setup", managedRuntimeUsed = false;
   const stopRuntime = () => {
     if (!managedRuntimeUsed) return;
+    // Cleanup deletes the runtime's whole temporary namespace, so the stop is
+    // anchored to observed process exit: a shutdown receipt alone let the
+    // runtime's exit-time lock retirement mkdir the axis directory back after
+    // cleanup_verified was already recorded. Reuse the disposable-owner stop
+    // interface and require its result to prove the exit before any delete.
     const child = spawnSync(options.python!, ["-c",
-      "from loopx.control_plane.effect_runtime import effect_runtime_result; effect_runtime_result('runtime.shutdown', {}, retry_safe=False)"],
+      "import json; from loopx.control_plane.effect_runtime import restart_effect_runtime; "
+      + "print(json.dumps(restart_effect_runtime(wait_for_exit=True)))"],
     {cwd: repository, env: environment, encoding: "utf8", timeout: 30000});
     assert.equal(child.status, 0, "isolated Effect runtime shutdown failed");
+    assert.equal((JSON.parse(child.stdout) as Record<string, unknown>).stopped, true,
+      "isolated Effect runtime did not exit before cleanup");
     managedRuntimeUsed = false;
   };
   const cli = (args: string[], samples: number[]) => {
     phase = `cold_cli_${args[0] === "todo" ? "mutation" : args[0]}`;
     const start = performance.now(); managedRuntimeUsed = true;
-    const child = spawnSync(options.python!, ["-m", "loopx.cli", "--registry", registry, "--format", "json", ...args],
+    const run = (file: string, argv: string[]) => spawnSync(file, argv,
       {cwd: repository, env: environment, encoding: "utf8", timeout: 60000, maxBuffer: 4 * 1024 ** 2});
-    const elapsed = performance.now() - start;
+    const child = run(options.python!, ["-m", "loopx.cli", "--registry", registry, "--format", "json", ...args]);
     if (child.status !== 0) process.stderr.write(`${phase}: process exited ${child.status ?? "without an exit code"}\n`);
     assert.equal(child.status, 0, `cold CLI ${args[0]} failed`);
     const result = JSON.parse(child.stdout) as Record<string, unknown>;
     assert.notEqual(result.ok, false, `cold CLI ${args[0]} rejected`);
-    samples.push(elapsed); stopRuntime(); return result;
+    if (result.schema_version === "context_capture_navigation_v1") {
+      // `quota should-run` delivers its payload through a context capture:
+      // follow the returned reader commands page by page until eof, then parse
+      // the reassembled original JSON. The sample keeps the whole navigation
+      // cost, because a cold reader cannot act before the payload arrives.
+      let follow = splitShellCommand(String(result.command ?? result.first_read_command ?? ""));
+      assert.ok(follow.length > 0, `cold CLI ${args[0]} navigation returned no read command`);
+      let payload = "";
+      for (let pages = 0; ; pages++) {
+        assert.ok(pages < 256, `cold CLI ${args[0]} context read exceeded the page guard`);
+        const read = run(follow[0]!, follow.slice(1));
+        if (read.status !== 0) process.stderr.write(`${phase}: context read exited ${read.status ?? "without an exit code"}\n`);
+        assert.equal(read.status, 0, `cold CLI ${args[0]} context read failed`);
+        const page = JSON.parse(read.stdout) as Record<string, unknown>;
+        assert.equal(page.ok, true, `cold CLI ${args[0]} context read rejected`);
+        payload += typeof page.content === "string" ? page.content : "";
+        if (page.eof === true) break;
+        const next = page.next_command;
+        assert.ok(typeof next === "string" && next.length > 0, `cold CLI ${args[0]} context page lacks the next command before eof`);
+        follow = splitShellCommand(next);
+      }
+      samples.push(performance.now() - start); stopRuntime(); return JSON.parse(payload) as Record<string, unknown>;
+    }
+    samples.push(performance.now() - start); stopRuntime(); return result;
   };
   try {
     assert.equal((await selectLocalSqliteAuthority(runtime, goal, true)).ok, true);
@@ -392,7 +388,6 @@ async function measureAxis(count: number): Promise<CapacityAxis> {
     axis.cold_node = latency(cold);
     if (options.cli) {
       phase = "cold_cli";
-      const before = scanInput(environment);
       const fence = await engageLegacyCoordinationWriterFence({schema_version: "loopx_legacy_coordination_writer_fence_engage_request_v0",
         runtime_root: runtime, goal_id: goal, state_path: state, fence: {schema_version: "loopx_legacy_coordination_writer_fence_v0",
           state: "engaged", goal_id: goal, fence_id: "capacity-fixture", source_version: "capacity-fixture",
@@ -400,10 +395,10 @@ async function measureAxis(count: number): Promise<CapacityAxis> {
       assert.equal(fence.status, "applied");
       const mutation: number[] = [], status: number[] = [], quota: number[] = [];
       for (let i = 0; i < samples; i++) {
-        const statusResult = cli(["status", "--goal-id", goal, "--scan-root", scanRoot], status);
+        const statusResult = cli(["status", "--goal-id", goal], status);
         const index = statusResult.todo_index as {items?: {todo_id?: string}[]} | undefined;
         assert(index?.items?.some(row => row.todo_id === "todo_capacity"), "status lost the canonical Todo");
-        const quotaResult = cli(["quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a", "--scan-root", scanRoot], quota);
+        const quotaResult = cli(["quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a"], quota);
         const selected = quotaResult.selected_todo as {todo_id?: string} | undefined;
         const summary = quotaResult.agent_todo_summary as {first_executable_items?: {todo_id?: string}[]} | undefined;
         assert(selected?.todo_id === "todo_capacity" || summary?.first_executable_items?.some(row => row.todo_id === "todo_capacity"),
@@ -413,20 +408,31 @@ async function measureAxis(count: number): Promise<CapacityAxis> {
         assert.equal(result.source_authority, "sqlite_v0"); axis.cli_commits++;
       }
       axis.cold_cli = {mutation: latency(mutation), status: latency(status), quota: latency(quota)};
-      phase = "cold_cli_scan_stability";
-      axis.cold_cli_scan = {before, after: scanInput(environment)};
-      assert(sameCapacityScan(before, axis.cold_cli_scan.after), "public scan input changed during CLI samples");
       const final = await store.loadAuthority(); assert.equal(final.status, "loaded");
       if (final.status === "loaded") assert.equal(final.cursor, String(count + extraCommits + samples));
     }
     axis.status = "passed";
   } catch (error) {
-    axis.failure = `${phase}: ${error instanceof Error ? error.name : "unknown failure"}`;
+    axis.failure = `${phase}: ${error instanceof Error ? `${error.name}: ${error.message.slice(0, 600)}` : "unknown failure"}`;
   } finally {
-    try { stopRuntime(); } catch { axis.status = "failed"; axis.failure = "isolated_runtime_cleanup_failed"; }
+    // A stop that cannot prove observed process exit fails the axis, but the
+    // first recorded failure (the measurement error) keeps precedence.
+    try { stopRuntime(); }
+    catch { axis.status = "failed"; if (!axis.failure) axis.failure = "isolated_runtime_cleanup_failed"; }
     axis.resource_peak_rss_bytes = process.resourceUsage().maxRSS * 1024;
-    try { rmSync(root, {recursive: true, force: true}); axis.cleanup_verified = !existsSync(root); }
-    catch { axis.status = "failed"; axis.failure = "temporary_database_cleanup_failed"; }
+    // A just-stopped managed runtime can leave a grandchild briefly holding the
+    // temp root (for example its working directory), which makes an immediate
+    // recursive delete raise while a retry a moment later succeeds. Retry a few
+    // times before declaring the disposable database uncleaned.
+    for (let attempt = 0; ; attempt++) {
+      try { rmSync(root, {recursive: true, force: true}); } catch { /* retried below */ }
+      axis.cleanup_verified = !existsSync(root);
+      if (axis.cleanup_verified || attempt >= 4) break;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    }
+    if (!axis.cleanup_verified && axis.status !== "failed") {
+      axis.status = "failed"; axis.failure = "temporary_database_cleanup_failed";
+    }
   }
   return axis;
 }

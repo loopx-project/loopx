@@ -43,6 +43,7 @@ from loopx.capabilities.reward_memory.experiment import (
     load_reward_memory_experiment_config,
     resolve_reward_memory_surface_config,
 )
+from loopx.control_plane.quota.effect_program import SettlementIdentity
 
 
 SURFACE = "agent_workflow.turn_admission"
@@ -436,6 +437,75 @@ def test_configured_session_scope_is_canonical() -> None:
         _resolve_session_ref(identity, "session:other")
 
 
+def bound_quota_decision(*, status: str = "upgraded") -> dict[str, Any]:
+    turn = "turn-selected-recall"
+    return quota_decision() | {
+        "goal_id": "goal",
+        "agent_identity": {"agent_id": "pilot"},
+        "heartbeat_receipt": {
+            "turn_instance_id": turn,
+            "status": status,
+            "settlement_identity": SettlementIdentity(
+                goal_id="goal", agent_id="pilot", todo_id="todo_123",
+                turn_instance_id=turn,
+            ).as_dict(),
+        },
+    }
+
+
+@pytest.mark.parametrize("status", ["committed", "replayed", "upgraded"])
+def test_bound_quota_receipt_matches_selected_work(status: str) -> None:
+    _validate_quota_identity(
+        bound_quota_decision(status=status), goal_id="goal", agent_id="pilot",
+        turn_instance_id="turn-selected-recall",
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("goal_id", "other"), ("agent_id", "other"),
+     ("turn_instance_id", "other"), ("todo_id", "todo_other"),
+     ("effect_id", "unrelated-effect"), ("schema_version", "unknown")],
+)
+def test_selected_quota_receipt_rejects_inconsistent_binding(field: str, value: str) -> None:
+    decision = bound_quota_decision()
+    decision["heartbeat_receipt"]["settlement_identity"][field] = value
+    with pytest.raises(ValueError, match="settlement"):
+        _validate_quota_identity(
+            decision, goal_id="goal", agent_id="pilot",
+            turn_instance_id="turn-selected-recall",
+        )
+
+
+def test_upgraded_quota_receipt_requires_committed_binding() -> None:
+    decision = bound_quota_decision()
+    del decision["heartbeat_receipt"]["settlement_identity"]
+    with pytest.raises(ValueError, match="settlement identity"):
+        _validate_quota_identity(
+            decision, goal_id="goal", agent_id="pilot",
+            turn_instance_id="turn-selected-recall",
+        )
+
+
+def test_upgraded_replan_receipt_uses_its_own_binding() -> None:
+    decision = bound_quota_decision()
+    decision["heartbeat_receipt"]["settlement_identity"] = SettlementIdentity(
+        goal_id="goal", agent_id="pilot", todo_id=None,
+        turn_instance_id="turn-selected-recall", replan_obligation_id="replan-0123456789abcdef",
+    ).as_dict()
+    decision["autonomous_replan_obligation"] = {"obligation_id": "replan-0123456789abcdef"}
+    _validate_quota_identity(
+        decision, goal_id="goal", agent_id="pilot",
+        turn_instance_id="turn-selected-recall",
+    )
+    decision["autonomous_replan_obligation"]["obligation_id"] = "replan-fedcba9876543210"
+    with pytest.raises(ValueError, match="replan obligation"):
+        _validate_quota_identity(
+            decision, goal_id="goal", agent_id="pilot",
+            turn_instance_id="turn-selected-recall",
+        )
+
+
 def test_same_turn_receipt_round_trip_reuses_private_context(tmp_path: Path) -> None:
     receipt_path = tmp_path / "pilot.json"
     receipt = {
@@ -610,6 +680,37 @@ def test_explicit_cli_checkpoint_transport_failure_returns_safe_packet(
     assert payload["reason_code"] == "automatic_recall_runtime_failed"
     assert payload["provider_call_count"] == 0 and not payload["quota_spend_performed"]
     assert "private runtime" not in json.dumps(payload)
+    assert not agent_turn_recall_receipt_path(tmp_path, goal_id="goal", agent_id="pilot").exists()
+
+
+def test_selected_receipt_identity_transport_failure_stops_before_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.control_plane import effect_program
+
+    config = normalized_config(tmp_path)
+    decision = bound_quota_decision()
+    monkeypatch.setattr(recall_cli, "resolve_reward_memory_experiment", lambda **_kwargs: ({"status": "available"}, config))
+    monkeypatch.setattr(recall_cli, "_goal_repo", lambda *_args: tmp_path)
+    monkeypatch.setattr(recall_cli, "_quota_decision", lambda *_args: decision)
+
+    def unavailable(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("private runtime startup detail")
+
+    monkeypatch.setattr(effect_program, "effect_runtime_result", unavailable)
+    effect_program._settlement_identity_full.cache_clear()
+    monkeypatch.setattr(recall_cli, "run_agent_turn_recall", lambda *_args, **_kwargs: pytest.fail("provider boundary reached"))
+    payloads: list[dict[str, Any]] = []
+    code = recall_cli.handle_agent_turn_recall_command(
+        argparse.Namespace(command="agent-turn-recall", goal_id="goal", agent_id="pilot",
+                           turn_instance_id="turn-selected-recall", quota_decision_json="unused",
+                           session_ref=None, force_refresh=False, execute=True),
+        registry_path=tmp_path / "registry.json", output_format=lambda *_args: "json",
+        print_payload=lambda payload, *_args: payloads.append(payload),
+    )
+    assert code == 2 and payloads[0]["status"] == "runtime_unavailable"
+    assert payloads[0]["provider_call_count"] == 0
+    assert "private runtime" not in json.dumps(payloads[0])
     assert not agent_turn_recall_receipt_path(tmp_path, goal_id="goal", agent_id="pilot").exists()
 
 

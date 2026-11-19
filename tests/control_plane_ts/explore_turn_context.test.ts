@@ -2,7 +2,120 @@ import assert from "node:assert/strict";
 import {createHash} from "node:crypto";
 import test from "node:test";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
+import {projectStrideExploreBasis, strideReviewMismatch} from "../../loopx/control_plane/work_items/stride_policy.ts";
 import {projectExploreTurnContext} from "../../loopx/control_plane/capabilities/explore_turn_context.ts";
+import * as yardstick from "../../loopx/control_plane/work_items/yardstick_decision.ts";
+
+test("initial work measurement feedback preserves linked scopes without choosing an outcome profile", () => {
+  const project = (source: JsonObject) => projectExploreTurnContext(source, yardstick);
+  const profile = {metric: "quality", unit: "points", higher_is_better: true,
+    comparison_scope: "inputs:shared", input_revision: "v1", evaluation_ref: "judge:public"};
+  const finding = (id: string, node: string, order: number, candidate: string, value: number | null,
+    changes: JsonObject = {}) => ({finding_id: id, node_id: node, recorded_order: order,
+    measurements: [{...profile, ...changes, candidate_ref: candidate, evidence_ref: `result:${id}`, value}]});
+  const todo = {todo_id: "todo_current", role: "agent", status: "open", done: false, claimed_by: "worker",
+    explore_result_node_refs: ["shared", "local"]};
+  const request = {goal_id: "research", agent_id: "worker", route: ["loopx"], yardstick_enabled: true,
+    graph_enabled: true, harness_gate: {enabled: false}, work_todos: [todo], plan: {},
+    projection: {nodes: [], findings: [
+      finding("first", "shared", 1, "candidate:a", 10),
+      finding("second", "shared", 2, "candidate:b", 20),
+      finding("foreign", "unlinked", 3, "candidate:foreign", 1000),
+      finding("local-a", "local", 4, "candidate:a", 9, {metric: "screen"}),
+      finding("local-b", "local", 5, "candidate:b", 8, {metric: "screen"}),
+      finding("unknown", "local", 6, "candidate:c", null, {input_revision: "v2"}),
+      finding("other-unit", "local", 7, "candidate:c", 30, {unit: "percent"}),
+    ]}};
+  const original = structuredClone(request);
+  const graph = project(request).graph as JsonObject;
+  assert.match(String(graph.result_writeback_guidance), /loopx explore finding --result-json FILE/);
+  assert.equal(project({...request, graph_enabled: false}).graph, null);
+  const card = graph.work_measurements[0];
+  assert.equal(card.todo_id, todo.todo_id);
+  assert.equal(card.measurement_feedback.length, 3);
+  assert.equal(card.omitted_measurement_feedback, 1);
+  const outcome = card.measurement_feedback.find(row => row.node_id === "shared");
+  assert.equal(outcome.best.candidate_ref, "candidate:b");
+  assert.equal(outcome.best.value, 20);
+  assert.equal(outcome.latest.finding_id, "second");
+  assert.equal(outcome.input_revision, "v1");
+  const unknown = card.measurement_feedback.find(row => row.input_revision === "v2");
+  assert.equal(unknown.latest.measurement.value, null);
+  assert.equal(unknown.best, null);
+  assert.equal(unknown.improvement, null);
+  assert.ok(card.measurement_feedback.every(row => row.node_id !== "unlinked"));
+  assert.ok(!Object.hasOwn(card, "authoritative") && !Object.hasOwn(card, "search_comparison"));
+  // Joint selection is useful before an optional decision is authored. The
+  // ordinary cue must allow continuing a productive route and keep the
+  // original uncertainty, authority and record-optional conditions intact.
+  assert.match(card.guidance, /expected accepted-outcome gain/);
+  assert.match(card.guidance, /remaining horizon/);
+  assert.match(card.guidance, /full implementation and validation cost/);
+  assert.match(card.guidance, /including search, confirmation and model\/control overhead/);
+  assert.match(card.guidance, /meaningful evidence or probe boundary/);
+  assert.match(card.guidance, /within accepted constraints/);
+  assert.match(card.guidance, /Keep unknowns as unknown/);
+  assert.match(card.guidance, /continuing a supported route is valid/);
+  assert.match(card.guidance, /Without a material change, continue the authorized slice/);
+  assert.match(card.guidance, /no extra review, measurement or decision payload/);
+  assert.match(card.guidance, /No outcome\/proxy profile has been selected/);
+  assert.match(card.guidance, /decision attachment remains optional/);
+  assert.ok(!Object.hasOwn(graph, "work_yardsticks"));
+  assert.ok(card.details_command.includes("--todo-id") && card.details_command.includes(todo.todo_id));
+  assert.deepEqual(request, original);
+  for (const enabled of [false, undefined]) {
+    const off = project({...request, yardstick_enabled: enabled}).graph as JsonObject;
+    assert.ok(!Object.hasOwn(off, "work_measurements"));
+    assert.deepEqual(off.measurement_feedback, graph.measurement_feedback);
+  }
+  for (const changes of [{claimed_by: "another"}, {done: true}, {status: "blocked"}, {explore_result_node_refs: []}]) {
+    const unavailable = project({...request, work_todos: [{...todo, ...changes}]}).graph as JsonObject;
+    assert.ok(!Object.hasOwn(unavailable, "work_measurements"));
+  }
+  const scoped = project({...request, result_node: "unlinked"}).graph as JsonObject;
+  assert.ok(!Object.hasOwn(scoped, "work_measurements"));
+  const shared = project({...request,
+    work_todos: [todo, {...todo, todo_id: "todo_shared"}]}).graph as JsonObject;
+  assert.deepEqual(shared.work_measurements.map(row => row.todo_id), ["todo_current", "todo_shared"]);
+  assert.deepEqual(shared.work_measurements[0].measurement_feedback, shared.work_measurements[1].measurement_feedback);
+  const tied = structuredClone(request);
+  tied.projection.findings[1].measurements[0].value = 10;
+  const tiedGraph = project(tied).graph as JsonObject;
+  const tie = tiedGraph.work_measurements[0].measurement_feedback.find(row => row.node_id === "shared");
+  assert.equal(tie.best.candidate_ref, "candidate:a");
+  assert.equal(tie.latest.measurement.candidate_ref, "candidate:b");
+  assert.equal(tie.improvement, 0);
+  const declared: JsonObject = {...request, result_node: "local", projection: {...request.projection,
+    findings: [...request.projection.findings, {finding_id: "declared", node_id: "shared", recorded_order: 8,
+      evidence_refs: [], work_yardstick: {binding: {goal_id: "research", agent_id: "worker",
+        todo_id: todo.todo_id, turn_instance_id: "turn:declared"}, decision: {
+        schema_version: "work_yardstick_decision_v0", target: {summary: "Improve the accepted outcome",
+          scope: "Original work", acceptance_ref: "acceptance:original"}, authoritative: profile,
+        proxy: null, counterevidence_refs: [], prior_finding_id: null,
+        next_action: {method_id: "method:retained", reason: "Continue the recorded choice", cost_bound: "Existing budget"},
+      }}}]}};
+  const differentQuestion = project(declared).graph as JsonObject;
+  assert.ok(!Object.hasOwn(differentQuestion, "work_measurements"));
+  assert.ok(differentQuestion.measurement_feedback.every(row => row.node_id === "local"));
+});
+
+test("recent questions use UTC instants, preserve microseconds and retain legacy timestamps", () => {
+  for (const timestamps of [
+    ["2026-01-02T08:00:00+08:00", "2026-01-02T00:01:00Z", "2026-01-01T19:02:00-05:00"],
+    ["2026-01-02T08:00:00.000001+08:00", "2026-01-02T00:00:00.000002Z"],
+    ["unknown", "2026-01-02T00:00:00"],
+  ]) {
+    const nodes = timestamps.map((last_updated_at, index) => ({node_id: `node-${index}`, last_updated_at}));
+    const request = {goal_id: "research", agent_id: "worker", route: ["loopx"],
+      graph_enabled: true, harness_gate: {enabled: false},
+      projection: {nodes, findings: [], edges: []}, plan: {}};
+    const original = structuredClone(request);
+    const result = projectExploreTurnContext(request).graph as JsonObject;
+    assert.deepEqual(result.recent_nodes.map(row => row.node_id), nodes.map(row => row.node_id).reverse());
+    assert.deepEqual(request, original);
+    assert.equal(projectExploreTurnContext({...request, graph_enabled: false}).graph, null);
+  }
+});
 
 test("next-turn evidence exposes current question state and relation changes invalidate old pages", () => {
   const request = {goal_id: "research", agent_id: "worker", route: ["loopx"],
@@ -79,4 +192,154 @@ for (const includeDigests of [false, true]) {
       assert.deepEqual(updatedFinding, audit.findings[0]);
     }
   });
+}
+
+for (const tagged of [false, true]) for (const limit of [3, 4, 20]) {
+  test(`every scoped measured outcome remains selectable: tagged=${tagged}, limit=${limit}`, () => {
+    const findings = Array.from({length: 20}, (_, index) => ({finding_id: `scoped-${index}`,
+      node_id: "question", finding: `Measured input family ${index}`, status: "confirmed",
+      summary: `Applicable to input family ${index} only.`, tags: tagged ? ["writeback-result"] : [],
+      evidence_refs: [`result:scoped-${index}`],
+      measurements: [{metric: "quality", value: index, unit: "points", higher_is_better: true,
+        comparison_scope: "validation:owned-v1", input_revision: "owned-input-v1",
+        evaluation_ref: "evaluator:owned-v1", candidate_ref: `candidate:scoped-${index}`,
+        evidence_ref: `result:scoped-${index}`}]}));
+    const request = {goal_id: "research", agent_id: "worker", route: ["loopx"],
+      graph_enabled: true, harness_gate: {enabled: true}, result_limit: limit,
+      projection: {nodes: [{node_id: "question", status: "exploring"}], findings},
+      plan: {selected_branches: [{todo_id: "todo_method", actionable_open: true,
+        typed_evidence_audit: {requested_node_refs: ["question"]}}]}};
+    const source = projectExploreTurnContext(request);
+    const graph = source.graph as JsonObject, harness = source.harness as JsonObject;
+    assert.ok(harness.comparison_candidates?.length, "measured findings must reach the existing decision cards without an origin tag");
+    const card = harness.comparison_candidates[0];
+    // Quantitative feedback still uses all sources, independently of page size.
+    assert.equal(graph.measurement_feedback[0].measured_count, 20);
+    assert.equal(graph.measurement_feedback[0].best.value, 19);
+    assert.equal(graph.measurement_feedback[0].best.candidate_ref, "candidate:scoped-19");
+    // The result page and candidate card must describe the same read scope.
+    assert.equal(graph.writeback_results.length, limit);
+    assert.deepEqual(card.outcomes.map((row: JsonObject) => row.finding_id),
+      findings.slice(0, limit).map(row => row.finding_id));
+    const last = findings[limit - 1];
+    const selected = {todo_id: "todo_method", node_id: last.node_id, finding_id: last.finding_id,
+      source_sha256: createHash("sha256").update(JSON.stringify(last)).digest("hex")};
+    const basis = projectStrideExploreBasis(source, "research", "worker")!;
+    const decision = {explore_review: {revision: basis.revision, disposition: "used",
+      considered_refs: [last.finding_id], selected_candidate: selected}};
+    assert.equal(strideReviewMismatch(decision, {explore_basis: basis}, undefined, ["retain:todo_method"]), null);
+    assert.match(String(strideReviewMismatch({explore_review: {...decision.explore_review,
+      selected_candidate: {...selected, source_sha256: "f".repeat(64)}}},
+      {explore_basis: basis}, undefined, ["retain:todo_method"])), /exact scoped result/);
+    assert.match(String(strideReviewMismatch(decision, {explore_basis: basis}, undefined, [])), /retained/);
+    // Page replay must expose exactly the same choices at ordinary writeback.
+    const page = {revision: graph.result_page.revision, offset: 0, limit};
+    const replay = projectExploreTurnContext({...request, review_pages: [page]});
+    assert.deepEqual(replay.review_pages[0].comparison_candidates, harness.comparison_candidates);
+    const tooMany = {...source, harness: {...harness, comparison_candidates: [
+      {...card, outcomes: Array.from({length: 21}, () => card.outcomes[0])}]}};
+    assert.throws(() => projectStrideExploreBasis(tooMany, "research", "worker"), /scoped outcomes/);
+    const evidenceOnly = projectExploreTurnContext({...request, harness_gate: {enabled: false}});
+    assert.equal(evidenceOnly.harness, null);
+    assert.equal(Object.hasOwn(evidenceOnly.graph, "comparison_candidates"), false);
+  });
+}
+
+test("explicit task links outrank an independent planner without hiding scoped counterevidence", () => {
+  const result = (id: string, node: string, status = "confirmed") => ({finding_id: id, node_id: node,
+    finding: id, status, summary: `Only ${id}'s recorded inputs.`, tags: ["writeback-result"],
+    measurements: [{metric: "quality", value: id === "current-negative" ? 4 : 8, unit: "points",
+      higher_is_better: true, comparison_scope: `validation:${node}`, input_revision: "inputs-v1",
+      evaluation_ref: "evaluator:v1", candidate_ref: `candidate:${id}`, evidence_ref: `result:${id}`}],
+    evidence_refs: [`result:${id}`]});
+  const findings = [result("other-new", "other"), result("current-new", "current"),
+    result("other-negative", "other", "refuted"), result("current-negative", "current", "refuted")];
+  const request = {goal_id: "research", agent_id: "worker", route: ["loopx"], graph_enabled: true,
+    harness_gate: {enabled: true}, result_limit: 1,
+    projection: {nodes: ["current", "other"].map(node_id => ({node_id, status: "exploring"})), findings},
+    plan: {selected_branches: [{todo_id: "todo_planned", actionable_open: true,
+      typed_evidence_audit: {requested_node_refs: ["other"]}}]}};
+  const global = projectExploreTurnContext(request);
+  const focus = {todo_id: "todo_chosen", focus_todo: {todo_id: "todo_chosen", role: "agent", status: "open",
+    claimed_by: "worker", explore_result_node_refs: ["current"]}};
+  const chosen = projectExploreTurnContext({...request, ...focus});
+  assert.equal((global.graph as JsonObject).writeback_results[0].finding_id, "other-negative");
+  assert.equal((chosen.graph as JsonObject).writeback_results[0].finding_id, "current-negative");
+  assert.equal((chosen.graph as JsonObject).measurement_feedback[0].node_id, "current");
+  assert.deepEqual((chosen.harness as JsonObject).selected_branches, (global.harness as JsonObject).selected_branches);
+  assert.deepEqual(chosen.boundary, global.boundary, "read focus grants no execution or selection authority");
+  const graph = chosen.graph as JsonObject;
+  assert.equal(graph.result_page.total, findings.length);
+  assert.ok(graph.result_page.next_command.includes("--todo-id"));
+  assert.ok(graph.result_page.next_command.includes("todo_chosen"));
+  const second = projectExploreTurnContext({...request, ...focus, result_offset: 1,
+    result_revision: graph.result_page.revision});
+  assert.equal((second.graph as JsonObject).writeback_results[0].finding_id, "current-new");
+  const all = projectExploreTurnContext({...request, ...focus, result_limit: 20}).graph as JsonObject;
+  assert.deepEqual(new Set(all.writeback_results.map((row: JsonObject) => row.finding_id)),
+    new Set(findings.map(row => row.finding_id)), "other findings remain available");
+  const source = {...chosen, graph: all};
+  const basis = projectStrideExploreBasis(source, "research", "worker")!;
+  const decision = {explore_review: {revision: basis.revision,
+    disposition: "used", considered_refs: ["current-negative"]}};
+  assert.equal(strideReviewMismatch(decision, {explore_basis: basis}), null);
+  const page = {revision: graph.result_page.revision, offset: 1, limit: 1, todo_id: "todo_chosen"};
+  assert.deepEqual(projectExploreTurnContext({...request, ...focus, review_pages: [page]}).review_pages[0].finding_refs,
+    ["current-new"]);
+  assert.deepEqual(projectExploreTurnContext({...request, review_pages: [page]}).review_pages, []);
+  assert.throws(() => projectExploreTurnContext({...request, ...focus, focus_todo: {
+    ...focus.focus_todo, explore_result_node_refs: ["other"]}, result_offset: 1,
+    result_revision: graph.result_page.revision}), /changed/);
+});
+
+test("task focus rejects missing, foreign and terminal sources and is inert when Explore is off", () => {
+  const request = {goal_id: "research", agent_id: "worker", route: ["loopx"], graph_enabled: true,
+    harness_gate: {enabled: false}, projection: {}, plan: {}, todo_id: "todo_chosen"};
+  const task = {todo_id: "todo_chosen", role: "agent", status: "open", claimed_by: "worker"};
+  for (const focus_todo of [null, {...task, todo_id: "todo_other"}, {...task, claimed_by: "peer"},
+    {...task, status: "done"}, {...task, role: "user"}]) {
+    assert.throws(() => projectExploreTurnContext({...request, focus_todo}), /Todo/);
+  }
+  const off = {...request, graph_enabled: false};
+  assert.deepEqual(projectExploreTurnContext(off), projectExploreTurnContext({...off, todo_id: null}));
+});
+
+for (const counterexample of [false, true]) {
+  for (const field of ["writeback_results", "measurement_feedback"]) {
+    test(`overlapping planner links cannot reorder current task ${field}, refutation=${counterexample}`, () => {
+      const finding = (id: string, node: string, status = "confirmed") => ({finding_id: id,
+        node_id: node, status, finding: id, tags: ["writeback-result"],
+        measurements: [{metric: "quality", value: 5, unit: "points", higher_is_better: true,
+          comparison_scope: `validation:${node}`, input_revision: "inputs-v1", evaluation_ref: "eval:v1",
+          candidate_ref: `candidate:${id}`, evidence_ref: `result:${id}`} ]});
+      const findings = [finding("current-new", "current"), finding("shared-old", "shared"),
+        ...(counterexample ? [finding("current-negative", "current", "refuted")] : []),
+        finding("planner-only", "other"), finding("unrelated", "unrelated")];
+      const request = {goal_id: "research", agent_id: "worker", route: ["loopx"], graph_enabled: true,
+        harness_gate: {enabled: true}, result_limit: 1,
+        projection: {nodes: [], findings}, todo_id: "todo_current",
+        focus_todo: {todo_id: "todo_current", role: "agent", status: "open", claimed_by: "worker",
+          explore_result_node_refs: ["current", "shared"]}};
+      const expected = field === "measurement_feedback" ? ["current", "shared", "other", "unrelated"]
+        : [...(counterexample ? ["current-negative"] : []), "current-new", "shared-old", "planner-only", "unrelated"];
+      for (const plannedRefs of [["other"], ["shared", "other"]]) {
+        const params = {...request, plan: {selected_branches: [{todo_id: "todo_planned", actionable_open: true,
+          typed_evidence_audit: {requested_node_refs: plannedRefs}}]}};
+        const first = projectExploreTurnContext(params);
+        const all = projectExploreTurnContext({...params, result_limit: 20});
+        const values = (graph: JsonObject) => graph[field].map((row: JsonObject) =>
+          field === "measurement_feedback" ? row.node_id : row.finding_id);
+        assert.deepEqual(values(first.graph as JsonObject), expected.slice(0, 1));
+        assert.deepEqual(values(all.graph as JsonObject), expected);
+        assert.deepEqual((first.harness as JsonObject).selected_branches,
+          (projectExploreTurnContext({...params, todo_id: null}).harness as JsonObject).selected_branches);
+        if (field === "writeback_results") {
+          const page = {todo_id: request.todo_id, revision: (first.graph as JsonObject).result_page.revision,
+            offset: 1, limit: 1};
+          const replay = projectExploreTurnContext({...params, review_pages: [page]});
+          assert.deepEqual(replay.review_pages[0].finding_refs, expected.slice(1, 2));
+        }
+      }
+    });
+  }
 }

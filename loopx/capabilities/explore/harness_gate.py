@@ -1,18 +1,14 @@
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
+
 
 from ...orchestration import compact_orchestration_policy
 
 
-# Per-goal opt-in gate shared by the experimental exploration planners
-# (todo-branch-plan and worker-branch-plan). Planning stays disabled unless
-# the registered goal's spawn_policy -- the single source the quota/status
-# pipeline projects into goal_boundary.orchestration -- explicitly sets
-# explore_harness.enabled=true. The gate also decides whether suggested
-# claim/lease commands may be emitted (spawn_allowed) and caps lane width
-# with max_children; execution authority always stays with the normal LoopX
-# quota/claim/lease lifecycle.
+# The typed mode owner composes explicit Goal settings over the live machine
+# preference. This gate receives the resulting orchestration projection, never
+# reads settings itself, and preserves Goal-owned spawn/claim/lease authority.
 EXPLORE_HARNESS_GATE_SCHEMA_VERSION = "loopx_explore_harness_gate_v0"
 GATE_STATE_DISABLED = "disabled"
 GATE_STATE_ANALYSIS_ONLY = "analysis_only"
@@ -37,10 +33,10 @@ def explore_harness_required_contract(*, default_profile: str) -> dict[str, Any]
             },
         },
         "note": (
-            "explore_harness.enabled defaults to false for every goal and must be "
-            "a boolean true; register the opt-in on the goal's spawn_policy (it "
-            "projects into quota should-run as goal_boundary.orchestration) before "
-            "the exploration planners will produce lanes for this goal"
+            "Explore planning defaults to off. Choose planning in the machine "
+            "settings or on this Goal; explicit Goal modes take precedence. "
+            "The effective mode reaches goal_boundary.orchestration without "
+            "granting spawn, claim, lease or quota authority."
         ),
     }
 
@@ -63,9 +59,9 @@ def resolve_explore_harness_gate(
     """
 
     boundary_provided = isinstance(orchestration, Mapping) and bool(orchestration)
-    compact = compact_orchestration_policy(dict(orchestration) if boundary_provided else None)
+    compact = compact_orchestration_policy(dict(cast(Mapping[str, Any], orchestration)) if boundary_provided else None)
     harness_policy = (
-        compact.get("explore_harness") if isinstance(compact.get("explore_harness"), dict) else {}
+        cast(dict[str, Any], compact.get("explore_harness")) if isinstance(compact.get("explore_harness"), dict) else {}
     )
     enabled = bool(harness_policy.get("enabled"))
     spawn_allowed = bool(compact.get("spawn_allowed"))

@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from canonical_authority_fixture import initialize_canonical_source_fixture
 
 from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.control_plane.quota import live_decision, should_run_packet
@@ -19,6 +20,7 @@ from loopx.control_plane.capability_hooks import (
     dispatch_turn_start_hooks,
 )
 from loopx.control_plane.quota.live_decision import (
+    _receipt_bound_guard_fields,
     bind_action_selection_cli_routes,
     build_live_quota_should_run_decision,
 )
@@ -29,6 +31,98 @@ from loopx.control_plane.testing.quota_fixtures import quota_status_payload
 from loopx.rollout_event_log import build_rollout_event
 
 GOAL_ID = "effect-interpreter-fixture"
+
+
+@pytest.mark.parametrize(
+    ("guard_matches", "execution_pending", "expected_pending"),
+    [(True, True, True), (True, False, False), (False, True, False)],
+    ids=["matching-open", "matching-not-pending", "different-obligation"],
+)
+def test_receipt_guard_fields_use_the_typed_identity_and_guard(
+    guard_matches: bool, execution_pending: bool, expected_pending: bool,
+) -> None:
+    obligation = "replan-1111111111111111"
+    selected = obligation if guard_matches else "replan-2222222222222222"
+    fields = _receipt_bound_guard_fields(SimpleNamespace(
+        semantic_replan_guard={"scope": "turn_guard", "selected_obligation_id": selected},
+        identity=SimpleNamespace(value=SimpleNamespace(turn_instance_id="original-turn")),
+        heartbeat_receipt={"recorded_at": "2026-08-01T00:00:00Z", "run_id": "other-turn",
+            "details": {"semantic_replan_obligation_id": obligation}},
+        successor_replan_pending=False,
+        replan_execution_pending=execution_pending,
+    ), obligation)
+    assert fields["receipt_bound_replan_guard_scoped"] is guard_matches
+    assert fields["receipt_bound_replan_execution_pending"] is expected_pending
+    assert fields["receipt_bound_guard_turn_instance_id"] == "original-turn"
+    assert fields["receipt_bound_guard_recorded_at"] == "2026-08-01T00:00:00Z"
+    assert fields["receipt_bound_admission_event_id"] is None
+    upgraded = _receipt_bound_guard_fields(SimpleNamespace(
+        semantic_replan_guard={"scope": "turn_guard", "selected_obligation_id": selected},
+        identity=SimpleNamespace(value=SimpleNamespace(turn_instance_id="original-turn")),
+        heartbeat_receipt={"recorded_at": "2026-08-01T02:00:00Z"},
+        admission_recorded_at="2026-08-01T00:00:00Z",
+        admission_event_id="evt-admission",
+        successor_replan_pending=False,
+        replan_execution_pending=execution_pending,
+    ), obligation)
+    assert upgraded["receipt_bound_guard_recorded_at"] == "2026-08-01T00:00:00Z"
+    assert upgraded["receipt_bound_admission_event_id"] == "evt-admission"
+
+
+@pytest.mark.parametrize("binding", ["todo", "autonomous_replan", "unbound"])
+def test_action_selection_keeps_only_admitted_settlement_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    binding: str,
+) -> None:
+    from loopx.cli_commands import quota_action_selection
+
+    obligation_id = "replan-1111111111111111"
+    settlement_obligation_id = "replan-2222222222222222"
+    details = {"semantic_replan_obligation_id": obligation_id}
+    if binding == "todo":
+        details.update(
+            todo_id="todo_legacy",
+            settlement_effect_id=f"{GOAL_ID}:agent-a:todo_legacy:guided-start:legacy",
+            settlement_receipt_revision="identity_upgrade",
+        )
+    elif binding == "autonomous_replan":
+        details["replan_obligation_id"] = settlement_obligation_id
+    receipt = {
+        "goal_id": GOAL_ID,
+        "agent_id": "agent-a",
+        "run_id": "guided-start:legacy",
+        "details": details,
+    }
+    monkeypatch.setattr(
+        quota_action_selection,
+        "find_heartbeat_receipt",
+        lambda *args, **kwargs: receipt,
+    )
+    args = SimpleNamespace(
+        goal_id=GOAL_ID,
+        agent_id="agent-a",
+        todo_id="todo_legacy",
+        turn_instance_id="guided-start:legacy",
+        codex_app=False,
+        trae_app=False,
+        antigravity_app=False,
+        runtime_profile="codex_cli",
+    )
+
+    selection = quota_action_selection.load_requested_quota_action_selection(
+        args,
+        runtime_root=tmp_path,
+        turn_instance_id="guided-start:legacy",
+    )
+
+    assert selection.receipt_bound_todo_id == ("todo_legacy" if binding == "todo" else None)
+    expected_replan = {
+        "todo": obligation_id,
+        "autonomous_replan": settlement_obligation_id,
+        "unbound": None,
+    }[binding]
+    assert selection.receipt_bound_replan_obligation_id == expected_replan
 
 
 def _turn_start_dispatch(
@@ -519,6 +613,7 @@ def test_managed_turn_projects_prior_unsettled_heartbeat_recovery(
         },
         claim_scope_agent_id=agent_id,
     )
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID, state_path=state_path, provider="sqlite")
     packet = build_live_quota_should_run_decision(
         status,
         goal_id=GOAL_ID,
@@ -553,6 +648,8 @@ def test_settled_turn_defers_prior_turn_recovery_to_a_fresh_turn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from loopx.control_plane.effect_program import SettlementIdentity, SettlementResult
+
     runtime_root = tmp_path / "runtime"
     registry_path = tmp_path / "registry.json"
     registry_path.write_text(json.dumps({"goals": []}), encoding="utf-8")
@@ -561,6 +658,9 @@ def test_settled_turn_defers_prior_turn_recovery_to_a_fresh_turn(
         live_decision,
         "read_heartbeat_settlement",
         lambda *_args, **_kwargs: SimpleNamespace(
+            identity=SettlementResult.pure(SettlementIdentity(
+                GOAL_ID, "codex-fixture", "todo_ordinary_work", "managed-settled-turn",
+            )),
             monitor_phase=None,
             replay_phase=ReceiptBoundReplayPhase.SETTLED,
         ),
@@ -724,6 +824,7 @@ def test_managed_turn_accepts_exact_material_monitor_poll_closeout(
         coordination={"registered_agents": [agent_id], "agent_model": "peer_v1"},
         claim_scope_agent_id=agent_id,
     )
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID, state_path=state_path, provider="sqlite")
     packet = build_live_quota_should_run_decision(
         status,
         goal_id=GOAL_ID,
@@ -820,6 +921,7 @@ def test_recovery_reads_lifecycle_when_status_summary_omits_bound_todo(
         coordination={"registered_agents": [agent_id], "agent_model": "peer_v1"},
         claim_scope_agent_id=agent_id,
     )
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID, state_path=state_path, provider="sqlite")
     packet = build_live_quota_should_run_decision(
         status,
         goal_id=GOAL_ID,
@@ -1253,6 +1355,7 @@ def test_prior_closeout_identity_conflict_fails_closed(
         },
         claim_scope_agent_id=agent_id,
     )
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID, state_path=state_path, provider="sqlite")
     with pytest.raises(HeartbeatReceiptIdentityConflictError):
         build_live_quota_should_run_decision(
             status,
@@ -1357,6 +1460,14 @@ def test_packet_retirement_preserves_reads_and_independent_capability_command(tm
     assert "protocol_action_packet" not in envelope["contract_capsule"]
     authority = extract_turn_authority({"turn_envelope": envelope})
     assert authority["primary_action"] == "Generate the exact report."
+    assert authority["action"]["capability_intent"]["command"] == command
+    assert authority["action"]["capability_intent"]["generation_authorized"] is True
+    assert authority["action"]["capability_intent"]["external_delivery_authorized"] is True
+    # This admitted capability operation is allowed while ordinary delivery
+    # remains unavailable. The Host must retain both distinct source facts.
+    assert authority["action"]["delivery_allowed"] is True
+    assert authority["execution_policy"]["normal_delivery_allowed"] is False
+    assert authority["effective_action"] == "governed_capability_intent"
     assert envelope["writeback"]["next_cli_actions"] == [command]
     assert authority["required_reads"]
 
@@ -1485,6 +1596,17 @@ def test_retained_selection_reentry_refreshes_provider_todos_before_replan(
         }
         for index in range(20)
     ]
+    # The refreshed list supplies the frontier. The real canonical owner
+    # independently validates delivery eligibility for the selected Todo.
+    runtime_root = tmp_path / "runtime"
+    state_path = tmp_path / "ACTIVE_GOAL_STATE.md"
+    state_path.write_text("# Goal\n\n## Agent Todo\n\n" + "".join(
+        f"- [ ] {item['text']}\n"
+        f"  <!-- loopx:todo todo_id={item['todo_id']} status=open "
+        f"task_class={item['task_class']} claimed_by={agent_id} -->\n"
+        for item in fresh_items
+    ))
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID, state_path=state_path)
     from loopx.control_plane.testing.quota_fixtures import quota_todo_summary
 
     fresh_agent_todos = quota_todo_summary(
@@ -1496,9 +1618,12 @@ def test_retained_selection_reentry_refreshes_provider_todos_before_replan(
     reads: list[str] = []
 
     def fresh_todos(**_kwargs: object) -> dict[str, object]:
+        if _kwargs.get("role") == "user":
+            return {"ok": True, "source": "file_v0", "todos": []}
         reads.append("provider")
         return {
             "ok": True,
+            "source": "file_v0",
             "todos": fresh_items,
             "agent_todos": fresh_agent_todos,
             "user_todos": fresh_user_todos,
@@ -1516,7 +1641,7 @@ def test_retained_selection_reentry_refreshes_provider_todos_before_replan(
         include_scheduler_detail=False,
         codex_app_current_rrule=None,
         registry_path=tmp_path / "registry.json",
-        runtime_root=tmp_path / "runtime",
+        runtime_root=runtime_root,
         retained_action_selection_todo_id=selected_todo_id,
         turn_instance_id="turn-provider-frontier-reentry",
     )

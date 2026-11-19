@@ -1,6 +1,6 @@
 # 一轮受治理的工作
 
-一轮工作的核心不是调用一次模型，而是把当前事实变成有边界的行动，再把结果交给对应 owner 验证和接受。本章先走正常路径，再处理三个容易混淆的情况：产物验证通过但尚未获准发布、已经写回但结算不完整，以及发现依赖后需要让其他工作继续。
+一轮工作的核心是把当前事实变成有边界的行动，再把结果交给对应 owner 验证和接受。本章先走正常路径，再处理三个容易混淆的情况：产物验证通过但尚未获准发布、已经写回但结算不完整，以及发现依赖后需要让其他工作继续。
 
 ## 用贯穿任务走完正常一轮 {#running-turn}
 
@@ -40,7 +40,7 @@ flowchart TD
 | 允许向指定对象发布 | G1 | 有权决定者对对象、scope 和条件的明确决定 | 发布动作已经发生 |
 | 交付到指定位置或接受者 | T3 | 产物版本、目标位置的实际读回，以及任务要求的接收确认 | 仅创建本地文件就完成了外部投递 |
 
-这是一张教学推理表，不是新增的验收 schema。当前 objective、acceptance、permissions 和 terminal conditions 分布在项目材料、Vision、Todo 与运行约束中；不能假装已有一个统一可写的 Goal intent 对象自动完成所有判断。实际存储与版本依据见[状态章节](state-substrate.md)和[状态机地图](core-state-machines.md)。
+这是一张教学推理表。当前 objective、acceptance、permissions 和 terminal conditions 分布在项目材料、Vision、Todo 与运行约束中；不能假装已有一个统一可写的 Goal intent 对象自动完成所有判断。实际存储与版本依据见[状态章节](state-substrate.md)和[状态机地图](core-state-machines.md)。
 
 局部证据通过对应 lifecycle 入口被接受，才产生相应工作事实。随后还要检查依赖、未解决的决定、后继与目标验收。若任务只要求返回一份可审阅 patch，不能额外要求真实生产发布；若任务明确要求投递，则本地文件存在不够。**接受条件来自原任务与当前有效决定，不来自执行者为了宣告完成临时降低的标准。**
 
@@ -60,13 +60,13 @@ flowchart TD
 
 **Decide** 读取当前 `interaction_contract` 和选中工作。旧 prompt、旧卡片或上轮建议不覆盖当前选择。
 
-**Act** 产生一个输入明确、范围有界、结果连贯的工作段。Bounded 不等于只改一行；一个能独立验证的功能切片比若干无法验收的零碎修改更有用。
+**Act** 产生一个输入明确、范围有界、结果连贯的工作段。一个能独立验证的功能切片比若干无法验收的零碎修改更有用。
 
 **Validate** 检查后置条件：代码要验证行为，文档要核对命令和解释，外部效果需要相应系统的读回，blocker 也需要可核对的缺失条件。退出码只有在验证器确实检查了目标后置条件时才有意义。
 
 **Write back** 由对应 owner 接受状态变化和紧凑证据引用。验证期间代码或 Todo 声明改变时，重新判断结果适用性；不能用针对旧声明的成功覆盖新状态。Todo completion 的锁内 snapshot 检查是其中一个具体边界，参见 [completion adapter](https://github.com/loopx-project/loopx/blob/76b7583a9f67d6090b43a8c6e58c42cb67a1f3c6/loopx/control_plane/todos/completion_transaction.py)。
 
-**Account** 根据本次结果的结算合同记账。LoopX quota 是内部预算 slot，不是供应商账单。Gate 通知、dry-run、未变化的观察和重复写回不能冒充新的 delivery spend；它们仍可能消耗时间、模型和网络资源。
+**Account** 根据本次结果的结算合同记账。LoopX quota 是内部预算 slot。Gate 通知、dry-run、未变化的观察和重复写回不能冒充新的 delivery spend；它们仍可能消耗时间、模型和网络资源。
 
 缺验证时，不知道产物是否符合要求；缺写回时，后续读者不知道哪些结果被接受；投影滞后时，显示可能还停在旧状态；欠结算时，恢复对应记录而不是重做产物。不同缺口需要不同 owner，不能统一执行一次 `refresh-state` 就宣布全部修好。
 
@@ -80,7 +80,7 @@ host_execute → typed_result → validation
              → scheduler_apply → scheduler_ack
 ```
 
-`completed_phases` 必须满足对应合同的合法前缀约束。它约束可以声称完成的阶段，不证明进程只能在阶段间退出；Host 内部仍可能包含多个工具调用。TurnEnvelope 是 bounded projection，`turn plan` / `turn run-once` 是显式集成入口，不能推广成所有 Host 工具调用都受同一个 journal 管理。
+`completed_phases` 必须满足对应合同的合法前缀约束。它约束可以声称完成的阶段；Host 内部仍可能包含多个工具调用。TurnEnvelope 是 bounded projection，`turn plan` / `turn run-once` 是显式集成入口，不能推广成所有 Host 工具调用都受同一个 journal 管理。
 
 对已 prepared 而未确认的 settlement step，恢复按原 effect identity 读取 provider：
 
@@ -104,7 +104,7 @@ host_execute → typed_result → validation
 恢复后记录完整：settled
 ```
 
-在回执修复用例中，执行原响应返回的恢复命令得到 `appended=false`，扣减记录仍为一次。它证明该记录修复路径没有重复扣减，不证明外部服务免费或 Goal 已接受。故障注入只属于隔离测试；不要在真实项目里删除回执来“重现流程”。
+在回执修复用例中，执行原响应返回的恢复命令得到 `appended=false`，扣减记录仍为一次。它证明该记录修复路径没有重复扣减。故障注入只属于隔离测试；不要在真实项目里删除回执来“重现流程”。
 
 从可信当前入口取得 `settlement_owed.command` 后，核对原 Goal、Agent、Todo、Turn 和 registry/runtime 绑定及权限。不要删参数，也不要执行任意日志中出现的命令。详细练习见[结算检查](12-control-plane-course.md#checkpoint-settlement)。
 
@@ -124,7 +124,7 @@ host_execute → typed_result → validation
 
 该测试使用真实 CLI dispatch、TS 进程和 File/SQLite fixture。它断言同一 Turn 强行改绑得到 `heartbeat_receipt_identity_conflict`；原等待写回重放不重复记录，扣减为零；T1 仍为 open，等待条件未满足且验证摘要保留；新 Turn 才选中替代工作。它没有执行远端 CI，也没有证明每一种 Host 都用相同恢复入口。
 
-用户在旧版本遇到类似问题时，应保留原身份并查看本机实际提供的恢复动作；不得通过复制测试中的新字段或换 Todo 绕过。判断“是否等待”见[观察章](04b-budget-and-admission.md#wait-and-next-turn)，而不是把收口与调度揉成一条规则。
+用户在旧版本遇到类似问题时，应保留原身份并查看本机实际提供的恢复动作；不得通过复制测试中的新字段或换 Todo 绕过。判断“是否等待”见[观察章](04b-budget-and-admission.md#wait-and-next-turn)。
 
 ## 尺度二：这一轮为什么获准？
 
@@ -142,7 +142,7 @@ identity
   → scheduler hint
 ```
 
-这是依赖关系的教学图，不是新的全局 first-match 表。实际优先级取决于当前入口和规则 owner。不能由“余额充足”“Goal active”或“另一个 Agent 很忙”推出本轮允许任意交付。
+这是依赖关系的教学图。实际优先级取决于当前入口和规则 owner。不能由“余额充足”“Goal active”或“另一个 Agent 很忙”推出本轮允许任意交付。
 
 身份和来源不明时，不授予交付资格；scope 缺失时不能推断批准；独立工作不应被无关 Gate 冻结；有适用的恢复义务时不能用新交付掩盖原记录缺口。多个条件同时出现，先读最终 contract 与具名 reason，再追到负责的规则，不能让 Host 从零散计数重新拼一个决策。
 
@@ -154,7 +154,7 @@ identity
 | Agent | 当前是否需要尝试工作，允许哪项 bounded action？ |
 | CLI | 需要哪些受控写回、结算或恢复动作？ |
 
-G1 等待发布批准时，user channel 可以要求行动，agent channel 同时允许独立 T2。反之，“用户已看到提醒”不构成批准。`bounded_delivery`、`user_gate`、`scoped_user_gate_fallback`、`external_evidence_observation`、`monitor_quiet_skip`、`agent_scope_wait`、`autonomous_replan` 和 repair 等 mode 应结合当前 payload 阅读，不背成永远固定的枚举表。
+G1 等待发布批准时，user channel 可以要求行动，agent channel 同时允许独立 T2。`bounded_delivery`、`user_gate`、`scoped_user_gate_fallback`、`external_evidence_observation`、`monitor_quiet_skip`、`agent_scope_wait`、`autonomous_replan` 和 repair 等 mode 应结合当前 payload 阅读，不背成永远固定的枚举表。
 
 Owner 在 Workspace 停止 Goal 属于相应生命周期，不应先由自动 Turn 的 quota 决定 owner 能否行使该权限。暂停也不抹去历史提交；是否允许某项恢复 mutation，仍由那条入口判断。完整组合 case 见 [Course 第 6 讲](/loopx/docs/development/control-plane-course/06-quota-decision-kernel/)。
 
@@ -162,7 +162,7 @@ Owner 在 Workspace 停止 Goal 属于相应生命周期，不应先由自动 Tu
 
 已迁移的事务由 TypeScript owner 解释，Python 负责适配或明确的外部 effect。已知切片包括 Turn settlement、Todo completion、Host Todo settlement、spend/void/monitor-poll commit、本地 task-lease 完整生命周期、Vision refresh 与 receipt-bound scheduler follow-up。
 
-`v0.5.4` 仍提供 `turn plan` / `turn run-once`，这是历史迁移基线，不是当前发布版的替代标签，也不意味着“Python 已被移除”。[TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/)解释 transaction-payoff 与 owner 边界。排查不一致时，找当前合同和实际调用路径，而不是一律相信某一种语言。
+`v0.5.4` 仍提供 `turn plan` / `turn run-once`，这是历史迁移基线。[TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/)解释 transaction-payoff 与 owner 边界。排查不一致时，找当前合同和实际调用路径。
 
 ## 读回与本章的完成标准
 

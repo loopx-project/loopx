@@ -11,6 +11,13 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tests.control_plane.cli_output_fixture import read_cli_context_for_oracle  # noqa: E402
+sys.path.insert(0, str(REPO_ROOT / "tests" / "control_plane"))
+from canonical_authority_fixture import initialize_canonical_source_fixture  # noqa: E402
+
 GOAL_ID = "backlog-hygiene-goal"
 
 
@@ -33,7 +40,8 @@ def run_cli(*args: str, registry_path: Path, runtime: Path) -> dict:
         capture_output=True,
         text=True,
     )
-    return json.loads(result.stdout)
+    body, _ = read_cli_context_for_oracle(result.stdout)
+    return json.loads(body)
 
 
 def write_fixture(
@@ -57,7 +65,7 @@ def write_fixture(
         agent_todo_lines.append(
             "- [ ] [P1] Mirror durable follow-up work into Agent Todo before scheduling.\n"
         )
-    agent_todo_section = "\n## Agent Todo\n\n" + "".join(agent_todo_lines) if agent_todo_lines else ""
+    agent_todo_section = "\n## Agent Todo\n\n" + "".join(agent_todo_lines)
     archive_section = ""
     if archived_done_todos:
         archive_section = "\n## Completed Work Archive\n\n" + "".join(
@@ -112,6 +120,7 @@ def write_fixture(
         + "\n",
         encoding="utf-8",
     )
+    initialize_canonical_source_fixture(runtime, GOAL_ID, state_path=state_path, provider="sqlite")
     return registry_path, runtime
 
 
@@ -136,7 +145,10 @@ def assert_hidden_backlog_warning() -> None:
         guard = run_cli("quota", "should-run", "--goal-id", GOAL_ID, registry_path=registry_path, runtime=runtime)
         assert guard["should_run"] is True, guard
         assert guard["backlog_hygiene_warning"] == warning, guard
-        assert "agent_todo_summary" not in guard, guard
+        assert guard["agent_todo_summary"]["open_count"] == 0, guard
+        assert guard["effective_action"] == "state_projection_gap_repair", guard
+        assert guard["normal_delivery_allowed"] is False, guard
+        assert guard["execution_obligation"]["must_attempt_work"] is True, guard
 
 
 def assert_open_agent_todo_suppresses_warning() -> None:

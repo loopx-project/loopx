@@ -4,7 +4,7 @@
 - Supersedes / closes: none
 - Proposed by: LoopX maintainers
 - Date: 2026-08-15
-- Last revised: 2026-10-16
+- Last revised: 2026-10-21
 - Scope: an incremental, replacement-first migration of the LoopX control-plane
   core from Python to TypeScript without maintaining two semantic
   implementations
@@ -15,7 +15,198 @@
 
 ---
 
+### Primary-action instruction selection converges in TypeScript (2026-10-27)
+
+`work_item.interaction_execution.project` now selects the primary instruction
+alongside its existing mode, composing selection recovery before instruction
+construction. The three Python decision functions are retired; Python retains
+bounded scalar/label compatibility views, monitor text, resolution trace and
+final serialization; transported list facts are bounded to the first selectable
+row per source. Mode-only preflight, later overrides and persisted formats
+are unchanged. Production Python −185 lines, TS +109, net −76. All eight measured
+CLI outputs retain equal byte counts and normalized content; crossings remain
+1/3/3/75 for both binding counts. No latency improvement is claimed.
+The slice moves one `goal_boundary` prose token Python → TypeScript; lexical budgets move 30/2 → 29/3 with migration surfaces unchanged at 16/1, as recorded in the ledger; registry and anchor move together.
+Validation is complete for this slice: the final canary reports status:
+`passed`, ok: `true`, merge_gate_passed: `true`, manual_holds: `0` and 0 failures;
+all eight benchmark commands retain byte parity and unchanged crossings, with
+median regressions within the stated 5% rule. Remaining limits are the CI-only
+real PostgreSQL server, Node 22.22.3, Windows and browser lanes, plus inherited
+main failures tracked by #7433–#7436 and #7389. See the [ownership, economics and validation ledger](ledger/typescript-control-plane-migration-v0/2026-10-27-primary-action-instruction-selection.md)
+for negative cases, retained-code deletion conditions and code-only rollback.
+
+### Todo summary-display projection has one TypeScript owner (2026-10-26)
+
+The existing `todo.context.page` owns standalone summary/planning source
+selection, display normalization and handoff composition. Quota planning
+composes display in process; Python retains JSON/Python-value compatibility,
+bounded transport, mutable-row attachment and the text-revision codec.
+Completion and display share the registered scoped-decision receipt version;
+no persisted format or authority boundary changes. Both planning decisions
+remain. The [original source checkpoint](ledger/typescript-control-plane-migration-v0/2026-10-26-todo-summary-display-projection.md)
+retains its initial counts and unverified boundaries. The [follow-up qualification](ledger/typescript-control-plane-migration-v0/2026-10-27-todo-summary-qualification.md)
+records subsequent schema, recovery, packaging and matched-cost evidence at
+separate immutable revisions. Later results do not relabel historical failures
+or certify unrelated platform, large-Goal or long-run behavior.
+
+### Goal agent-context delegation projection converges in TypeScript (2026-10-25)
+
+`capability_hook.agent_context.project`
+(`loopx/control_plane/goal_agent_context.ts` + `projectDelegationContext` in
+`loopx/control_plane/subagent_context.ts`) now composes
+`loopx_delegation_context_v0` from Python facts: `configuration_state`,
+per-route `readiness`/`runtime_readiness`, six-route cap/truncation,
+operation-receipt summary and blocked fallback
+`delegation_context_unavailable`.
+`loopx/control_plane/collaboration/delegation_context.py` shrinks from 182
+rule-owner lines to 84 facts-reader lines: guarded config JSON (symlink/escape),
+registered Agent ids, executor probe once per distinct `host_args`, and
+operation inventory only in `after_delegate_result`.
+`loopx/control_plane/agent_context.py` loses its duplicate enabled gate and
+lazy Python join; TS `boundedDelegationContext` re-validation folds into the
+single owner.
+With N requester bindings, `loopx agent-context` crossings fall `before_plan`
+2N+1 → 1; `after_delegate_result` 2N+3 → 3 (inventory retains its existing
+two-crossing TS transaction).
+The same reduction applies inside `loopx quota should-run`
+(`live_decision` planning context).
+Packets remain byte-identical, including `context_id`, for 3-/8-binding
+fixtures in both phases
+(`tests/control_plane_ts/fixtures/goal_agent_context_delegation.json`); CLI
+JSON size is unchanged.
+Production LOC: Python −99, TypeScript +98. Compact orchestration policy and
+executor environment probe (`managed_executor_binding_from_host_args`) remain
+Python-supplied facts; `not_configured` remains reachable only through the
+replayed-observation decoder.
+Delete `loopx/control_plane/collaboration/delegation_context.py` and request
+field `delegation_facts` when TS reads the Goal registry, local delegation
+configuration and Turn host executor projection in-process, leaving Python
+entrypoints (`agent-context`, `quota should-run`, goal inspection) passing only
+phase/scope/observations.
+
+### Scheduler hint projection
+
+The complete scheduler hint is projected by `scheduler/hint.ts` in one
+`scheduler.hint.project` request, including paused and invalid-context outcomes.
+It composes the existing cadence and backoff owners in process, then projects
+runtime ownership, monitor/retry waits, reset identities and both App views.
+The Python builder and App compatibility composer are retired. Python retains
+the existing execution-context decoder, Todo frontier source projection,
+timestamp and identity JSON codecs, and final bounded zlib/base64 CLI encoding.
+Encoding does not request another native decision. Other quota observations,
+interaction arbitration and scheduler-state reads remain separate operations;
+this does not claim one request for the whole quota command.
+
+Named Python ACK/failure and continuation imports remain transport facades;
+they exit when their compatibility callers migrate. The unchanged reset-token
+and follow-up wire contracts, real runtime transport, installed callers and
+matched complete SQLite CLI performance must qualify independently before
+delivery. Fewer requests alone do not establish a performance gain.
+
+### Global read CLI caller adoption
+
+The existing five global read commands now use the selected parser and shared
+dispatcher. `summary_all_registration.py` owns their parser-only registration;
+the old registration import remains an alias. Full-parser compatibility callers
+use the same handler dispatch, and the old full-CLI branch is removed. Help and
+diagnostics retain the existing interface; accepted reads retain registry/runtime
+resolution, guards, formatting and typed owners. This adds no domain rule, bridge
+operation or data cache. Incremental qualification accounts for pending quota
+request-scope adoption separately rather than counting its gain again.
+
+### Agent collaboration CLI caller adoption
+
+`agent-context`, `agent-directory` and `agent-capabilities` now use the existing
+selected parser and shared dispatcher. Full-parser compatibility callers use
+the same dispatcher; their old handler branches are removed. Each command keeps
+its original registration, handler, registry/runtime resolution, native-controller
+guard and output. The dispatcher reuses the existing executable-revision request
+scope; source and capability observations remain live. No new module, bridge,
+semantic owner or state cache is introduced. This is bounded caller adoption;
+it does not qualify peer execution, model outcomes or the complete native CLI.
+
+### Lifecycle CLI caller adoption
+
+`refresh-state`, `checkpoint-context`, `read-only-map`, `reward` and
+`operator-gate` reuse the selected parser and shared dispatcher. Both CLI
+entrypoints use the existing lifecycle registration, handlers and writeback-hook
+composition; the old full-CLI dispatch branch is removed. The command set lives
+with routing and remains available through its lifecycle-module import. Existing
+help, diagnostics, registry/runtime selection and native-controller guards stay
+on their established paths. This adds no domain rule, bridge operation or state
+cache. Complete command cost and real write/recovery behavior qualify separately
+from import timing; installed and live-provider behavior need their own evidence.
+
+### Handoff CLI caller adoption
+
+`handoff` and `handoff-mode` use the existing selected parser and shared
+dispatcher. The full compatibility CLI reaches the same unchanged handlers;
+its separate continuation and mode dispatch blocks are retired. Each command
+joins the existing executable-revision request scope, while registry, provider,
+workspace and authority observations remain live. Existing help, diagnostics,
+formats, native-controller guards and operation replay identities remain with
+their current owners. This adds no module, semantic owner, bridge operation or
+data cache. It is bounded Stage 3 caller adoption; complete CLI cost and real
+handoff/policy recovery qualify separately from the full native CLI and host
+or provider promotion.
+
 ### Product conversations and asynchronous inbox
+
+**Chat HTTP POST scope.** `ChatRequestHandler.do_POST` now joins the existing
+executable-revision request scope for each complete HTTP dispatch. Session
+creation/resume and other POST routes reuse one code revision across their typed
+calls; the next request resolves current code again. Session, workspace grant,
+provider and authority observations remain live. Background Turn workers retain
+their own scope. This adds no bridge operation, semantic owner or state cache.
+Real HTTP and runtime regressions qualify source admission and revoked-grant
+refusal separately from installed behavior and real-model response latency.
+
+**Public quota read scope.** `quota/should_run.py` now reuses the existing
+executable-revision request scope for each complete public quota read. The
+compatibility facade and global views share that lifetime instead of resolving
+the code tree before every typed decision. Existing outer scopes still compose;
+the next independent read resolves current code again. The caller's status
+snapshot and existing provider/callback reads are not cached by this scope.
+This adds no data cache, bridge operation, semantic owner or provider route, and
+does not change scheduling authority.
+
+**Bounded Goal portfolio reads.** `goal_portfolio.py` now joins the existing
+executable-revision request scope around the complete portfolio read. CLI,
+Chat context and manager inspection callers reuse that scope across status and
+per-Agent quota reads. Nested scopes join it; the next portfolio read resolves
+the current executable again. Registry, provider and run-history reads remain
+live, with their existing scope, limits and change detection. This is bounded
+caller adoption: no new bridge, data cache, semantic owner or provider routing.
+
+**Receiver Inbox read transaction (2026-10-19).**
+`loopx/control_plane/collaboration/inbox_read.ts` now composes local source scans, pagination,
+Goal-instance admission, receiver and peer-return read receipts, and unfinished
+delegation context through the existing typed owners. Turn-start observation
+uses a read-only request. Receiver reads without a pending Host provider commit
+their local read receipts in that request. Actual Core Todo, workspace-input and
+operation-ticket providers remain explicit Python IO; finalization reacquires
+the Goal lifetime guard and rereads entries under the shared request fence.
+Reading still grants neither adoption, consumption nor execution authority.
+The old Python scan/composition loops and five fine-grained RPC registrations
+are removed. The legacy Inbox read imports and tracking/presentation receipt
+views retain thin native facades; their exit is migration of those remaining
+Python consumers. Existing return-display file IO retains its Python adapter
+and the shared persisted delivery vocabulary. Large pages reuse the shared
+private snapshot transport. Normal runtime IPC, installed
+HTTP caller parity and complete default-SQLite CLI performance remain separate
+qualification gates. This source cutover does not certify R1–R3 or the complete
+asynchronous collaboration lifecycle.
+
+**Inbox CLI caller adoption.** The normal `manager-inbox` command family now
+uses the existing selected-command parser, shared dispatcher and executable-
+revision request scope. The full compatibility CLI reuses that same dispatcher;
+its duplicate Inbox branch is retired. Both paths retain the existing parser,
+handler, registry/runtime resolution and native-controller guard. A command
+resolves executable identity once while source records stay live reads under
+their existing locks; the next command resolves the current code again.
+Existing TypeScript semantic owners, bridge operations, receipt formats and
+Python provider IO are unchanged. This is Stage 3 caller adoption, not another
+leaf migration, a new result store or completion of R1–R3.
 
 R1–R3 also consume the typed kernel through the App, not only CLI settlement.
 The [App/inbox integration plan](app-conversation-and-async-inbox-v0.md#ts-and-generic-async-inbox-migrate-with-the-user-path)
@@ -44,6 +235,93 @@ the existing `projection_envelope.ts` owner. Completeness is scoped to
 disclose remaining pages. Replay preserves the original observation time.
 Each page reuses the existing executable-revision request scope; operation
 records remain live reads, and the next page resolves the current code again.
+
+
+Manager result return now uses the existing `collaboration/return_delivery.ts`
+transaction for admission, provider-attempt checkpoints, retry/verification reduction
+and atomic delivery receipts. The two Python exact/legacy delivery coordinators
+and the private attempt-normalization RPC are retired together. Python retains
+original Chat/authority observations, Host fences and real provider IO. Bounded
+scan hints are rechecked under the write lock; an accepted provider attempt is
+persisted before verification, without a second queue or a Python decision fallback.
+Original request/result/route identities, historical codecs and public readback
+remain. This implements one R3/T1–T2 return transaction cutover, not Inbox acceptance,
+source-grant migration, installed adoption or live-provider qualification.
+
+### Todo read transaction source checkpoint
+
+`todo.read` now composes canonical provider reads, full-source resume and
+succession evidence, standing decisions, both role summaries, selection and the
+public result through `todos/read_projection.ts` and `todos/read_transaction.ts`.
+Ordinary canonical queries use one request. Large result continuations retain
+one observation and result digest; changed results refuse rather than combining
+pages. Dependency and closure decisions still use the complete source.
+Python retains registry, document/material IO, independent Vision-wait consumers
+and compatibility exports. Its replaced summary, filter and result coordination
+is retired. Persisted completion spellings use shared token data and compatibility codecs
+without scalar RPCs;
+Vision-wait state projection now composes typed resume planning, current-agent
+blocker eligibility, causal lineage coverage and result assembly in one TypeScript
+effect. Python retains source-snapshot encoding, result validation, historical
+wait-state decoding and independent consumers.
+`todo.summary.project`, `todo.completion_state.normalize` and
+`todo.completion_state.require_metadata` are retired after their production
+callers exit. Existing semantic owners execute in process inside the transaction.
+
+Native summary composition now passes rows and succession records directly.
+The retired summary RPC's request versions, column codecs and unused handoff
+carrier are removed. Full-source succession, field, frontier, lane and closure
+checks stay with their existing owners; public read and summary outputs remain
+compatible.
+
+CLI query results carry a query-scoped `projection_envelope`. A read grants no
+execution, acceptance, lease or mutation authority. The shared wire and private
+snapshot budgets are unchanged. Oversized Python facts use an owned temporary
+source, not another durable store; complete results use digest-bound pieces.
+Envelope coverage counts the complete matching source before display limits.
+Hot, limited and thin views report their final displayed count separately;
+display truncation alone does not create a source omission or alert. Exact
+detail reads count their returned Todo rather than the removed list view.
+Remaining historical/source adapters still name their actual IO and crossings.
+Python source codecs and transport now share the existing
+`todos/goal_todo_projection.py` module. The separate Python `read_projection.py`
+is removed; the independent py/ts twin budget stays at 43. Current host oracle
+observations remain with the existing acceptance owner.
+The unchanged 18-row Todo output matrix adds 783–854 JSON characters for source
+freshness and omitted-work coverage; Markdown is unchanged. Only the first
+envelope schema transition receives a 896-character allowance on the three
+measured Todo query views. Existing absolute ceilings and later growth limits
+remain in force. These are controlled-transport output measurements.
+Ordinary reads retain main's canonical-authority requirement; unmigrated Goals
+receive the existing migration cause instead of a Markdown fallback. Empty
+optional metadata bypasses exception-based normalization in the compatibility
+reader; supplied values still use the existing validators. Objective-only
+acceptance observations remain visible without configured checks.
+Canonical summaries prepare recovery history only for role groups that contain
+a resume condition. Succession still uses complete active and archived lineage.
+Role summaries reuse request-local lineage facts and the succession owner's
+existing context fields. That owner validates and indexes the complete graph
+before materializing requested evaluations. Source fingerprinting hashes every
+admitted byte and rechecks freshness; sequential reads avoid a thread pool. On
+POSIX, a private per-user digest keyed by release, interpreter and complete
+source metadata lets later processes skip reopening unchanged sources. Only
+sources unchanged for two seconds are recorded; a key mismatch or untrusted
+record rereads every byte. A different file matching size, mtime and ctime,
+such as a retargeted symlink, or a filesystem that does not maintain ctime can
+hide a change; other hosts reread in every process.
+Healthy read commands use canonical registry/path owners and defer mutation
+error imports until needed.
+Exact detail queries push selection into the existing source projection after
+complete source validation. Queries that report unfiltered counts retain the
+complete first projection.
+The output measurements above retain their original controlled-transport scope.
+[#6874](https://github.com/loopx-project/loopx/pull/6874) records the original
+normal-IPC, package and complete-command evidence. Follow-up measurements apply
+only to their reported revisions.
+Historical performance failures remain failures; neither fewer RPCs nor codec
+CPU savings waive the full-CLI gate or establish R3/D2/D3 adoption.
+The current warm-request miss remains an owner review hold. A passing full-CLI
+comparison does not waive the 2 ms target.
 
 
 <a id="current-delivery-frontier-2026-10-02"></a>
@@ -482,6 +760,21 @@ the read-only three-arm rehearsal as a separate promotion gate.
 - Checkpoint moved to the execution ledger: [Provider-neutral projection conformance checkpoint (2026-09-12)](ledger/typescript-control-plane-migration-v0/2026-09-12-provider-neutral-projection-conformance.md).
 - Checkpoint moved to the execution ledger: [Canonical Todo presentation checkpoint (2026-09-12)](ledger/typescript-control-plane-migration-v0/2026-09-12-canonical-todo-presentation.md).
 
+### Quota Todo source selection (2026-10-21)
+
+Quota source and planning-inventory reads select the preferred available summary
+before invoking the existing typed projection owners. Canonical/legacy precedence
+and an authoritative empty selection are preserved. Unselected rows no longer
+cross the runtime transport; malformed unselected rows cannot block a valid
+selected source. A selected-source projection failure still propagates without
+adopting the other source.
+
+The duplicated planning adapter and discarded projections are removed. Python
+retains compatibility source selection until its quota and planning callers move
+in-process. There is no new RPC, data cache or domain-rule implementation. This
+bounded caller change requires complete-command SQLite measurements and installed
+File/SQLite parity; fewer requests alone do not establish performance payoff.
+
 ### Long-goal persistence is part of the migration payoff
 
 The product target is at least ten elapsed days per goal, not a short-lived
@@ -511,6 +804,14 @@ Material-closeout guidance now enters the existing settlement step before writin
 the shared [authoring example](../../reference/protocols/goal-vision-replan-contract-v0.md)
 carries a complete evidence-linked continuation. Real CLI write/read negatives
 qualify that guidance seam; avoided model retries and sustained cost remain open.
+
+Vision prepare now collects independent numeric budget failures in its existing
+TypeScript owner. Optional bounded request-error details cross the shared runtime
+transport; Python renders them without duplicating validation. Limits, original
+packet contents, first-error compatibility and pre-write refusal remain intact.
+File/SQLite CLI rejection, corrected-packet readback and fixed-caller base/head
+comparison qualify this recovery seam separately from model adoption, billing,
+installed behavior and sustained long-horizon benefit.
 
 ### Delivery semantics: correctness before migration
 
@@ -687,6 +988,16 @@ this slice reduces semantic owners, not crossing count. Native transactions stay
 in-process. Fold the remaining crossings into that complete transaction rather
 than extending these adapters field by field.
 
+The automatic-wait read model now qualifies all canonical witnesses before
+display compaction. `pending_resume_count` extends the existing quiet path only
+when it covers every waiting successor; clock-only frontiers use the earliest
+deadline. The interaction adapter reuses the scoped notice-only classifier so
+an optional user action does not replace that proven wait. Actual gates,
+unknown sources, Turn bindings and strict monitor-poll identity checks remain.
+File/SQLite CLI initial/replay, preserved state and no-debit checks qualify
+this source slice; installed adoption and long-running Host behavior remain
+separate acceptance.
+
 The waiting/resume planning slice now uses `todos/resume_planning.ts` for the
 complete deferred, resume-blocked, monitor-repair and blocked-successor selection.
 Quota composes capacity evaluation with these lanes in one request per source summary, reusing the
@@ -815,8 +1126,9 @@ closure, not completion of all Todo fields or Goal promotion.
 Bounded prerequisite: `todos/public_update.ts` now composes authoring scope,
 external-wait topology and Monitor/field planning over one locked source.
 The public Python writer no longer sequences their leaf RPCs or derives the
-Monitor wait baseline. `update_source.py` supplies complete compact active/archive
-facts, never a display-limited inventory. A partial topology edit validates its
+Monitor wait baseline. Correction (2026-11-02): `update_source.py` had no
+remaining caller and is removed; planning still requires complete compact
+active/archive facts, never a display-limited inventory. A partial topology edit validates its
 retained wait; copy-only edits preserve the original fence without re-arming it.
 Explicitly clearing the condition still permits changing its former topology.
 Locked completion proof is checked before this pure plan, so a stale proof wins
@@ -1163,6 +1475,16 @@ unknown-effect policy are unchanged; decoded expansion uses the existing
 64 MiB local-snapshot bound before copying records. This is internal transport,
 not a new capability, setting, authority source or installed-runtime claim.
 
+The resume-planning input uses a co-deployed v1 record table for repeated source
+lanes. It retains every v0 payload fact before typed decisions, rather than a
+consumer-specific field allowlist or a second Python restoration pass. Existing
+v0 callers remain valid; conflicting same-id facts are not merged. Both quota
+planning and its subsequent Vision-wait projection opt into the existing private,
+digest-verified local snapshot transport for unique histories beyond 2 MiB;
+the 64 MiB snapshot/expanded-response bounds and ordinary RPC limits remain.
+File/SQLite qualification must reach the public quota result, preserve the source
+and select tail work, not stop after the first oversized request is repaired.
+
 Current bounded delivery: shared-goal alignment and amendment admission use one
 `shared_goal_work_source.py` snapshot per decision, reusing the canonical Todo
 summary after promotion. The same provider read optionally supplies leases at
@@ -1179,9 +1501,12 @@ migrate all T3 consumers or grant amendment commit/whole-Goal promotion authorit
 
 Standing-decision consumer closure: `todos/standing_decision.ts` owns reusable
 receipt eligibility and chronology, shared by status/quota reads and archive
-selection. Python decodes legacy metadata and submits one batch; its old receipt
-selector and the archive-local TS eligibility copy are removed. Canonical reads
-use the complete Todo snapshot, including retained archived decisions, before
+selection. Python decodes legacy metadata for the composed `todo.read` batch;
+its old receipt selector and the archive-local TS eligibility copy are removed.
+The unused `build_standing_decision_authority` wrapper and its standalone
+`todo.standing_decision.project` handler/request decoder are now removed; tests
+and the example use the composed read, while the shared TS owner remains.
+Canonical reads use the complete Todo snapshot, including retained archived decisions, before
 assigning display indexes. Later rejection/cancellation is ordered by decision
 time, not Todo ID; contradictory unresolved chronology yields a diagnostic and
 no active receipt. Explicit user-gate metadata replaces notification heuristics
@@ -1427,7 +1752,7 @@ codec retire when CLI/Host callers use the typed kernel directly. The target is
 TypeScript ownership throughout, with no Python rule fallback.
 The adapter transports bounded facts and diagnostic strings, then applies the
 typed quota patch without round-tripping source numbers or metadata. Receipt-bound
-overlays, later route/action builders and effect authority retain their owners.
+overlays, remaining route/action builders and effect authority retain their owners.
 The existing effective-action vocabulary and generated TS binding are reused;
 its canonical Python enum remains until a separate contract-owner cutover.
 The TypeScript producer witness executes the real typed classifier against shared guard fixtures and rejects a
@@ -1435,6 +1760,15 @@ changed rule or an enum-only substitute. This delivers the implementation and
 semantic parity for one base-admission consumer. Full-CLI performance acceptance
 is held for owner review after a p95 regression; whole-Goal migration and
 provider/default qualification remain open.
+
+The task-scoped `goal_route_hint` override now comes back in that same
+`quota.run_decision` response. Python projects the lane count from the existing
+task-orchestration source fact. TypeScript owns the ready-state check, route
+decision and coordination wording. Python's duplicate `task_goal_route_hint` decision is
+deleted, leaving only the bounded merge into the assembled hint. This adds no
+request, provider read or authority. Other Goal-route and primary-action
+builders remain separate migration work; this does not complete the quota read
+transaction or claim a performance gain.
 
 **Long-history transport boundary.** Replan history still has one TS decision
 owner. Small requests retain the inline codec; larger complete fact snapshots
@@ -1480,6 +1814,10 @@ the transport neither truncates history nor creates a Python decision or new
 authority. Missing, changed, non-private or over-64-MiB files fail closed.
 After a handler may have committed, an unverifiable response stays ambiguous
 and requires exact receipt readback, never automatic mutation retry.
+Both inline and private-file responses apply this rule to invalid encoding,
+JSON value limits and excessive nesting. A decoder failure cannot enter the
+pre-send startup retry path or erase possible durable acceptance; it reports
+`runtime_response_ambiguous` through the existing transport adapter.
 
 Source read and read/check reduction now compose inside one TypeScript request.
 Both context reading and commit preflight use one checkpoint request instead of
@@ -1733,6 +2071,15 @@ Keep malformed-JSON rejection, schema-error order, canonical bytes and
 input/output independence unchanged.
 This is a bounded shared-codec cost repair, not a provider-format migration or
 qualification of sustained operation, CI capacity or release admission.
+
+Canonical Todo collection reads also share one `GoalAcceptanceRead` within the
+loaded provider head. Contract, oracle basis and work guards reuse the validated
+authority, Todo index and task decisions. Guard projection stays lazy so source
+identity and continuation checks retain their original precedence. Public
+standalone helpers start fresh, and returned containers remain independent.
+Every new provider head or continuation read creates a new scope. This adds no
+Python bridge, RPC, persisted cache or write authority; native-read measurements
+do not qualify full CLI latency, installed adoption or PostgreSQL operation.
 
 `as unknown as T` is permitted only as a named migration seam: its exact call
 site, upstream validator, negative boundary coverage, and removal owner must be
@@ -2271,6 +2618,17 @@ promotion also requires deleting characterization machinery that serves only
 that implementation comparison; durable regression fixtures may remain when
 they express a public or persisted compatibility contract.
 
+#### Canonical Todo recovery qualification (2026-10-21)
+
+Canonical Todo readback does not make a separately declared Goal source optional.
+Quota still refuses automatic work when that declared state file is missing.
+Recovery fixtures therefore retain the original Goal prose and remove only its
+legacy Todo display after capture. File and SQLite CLI checks exercise monitor
+repair, generation waits and capacity recovery without recreating Todo display.
+Separate missing-source and restore checks retain the Goal health guard. These
+checks qualify the bounded Todo recovery paths; full Goal-source migration
+remains separate.
+
 ### Performance
 
 Measure cold startup separately from steady-state execution. Every transaction
@@ -2487,3 +2845,14 @@ Event replay and the reconciled cutover inventory: [2026-09-25](ledger/shared-go
 
 The native query now owns recovery lookup and completion capability evidence,
 with shared write/read status-phase checks. See the [2026-10-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-10-02-turn-journal-readback.md) for compatibility, measured cost, validation boundaries and facade exit.
+
+- Summary-display final-head qualification and preserved tail cohorts: [2026-10-27 follow-up](ledger/typescript-control-plane-migration-v0/2026-10-27-todo-summary-qualification.md).
+- Quota summary composition in one `todo.quota_planning.project` crossing with source references: [2026-11-02 cutover](ledger/typescript-control-plane-migration-v0/2026-11-02-quota-summary-transaction.md).
+- Complete global summary and gate read transactions: [2026-11-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-11-02-global-manager-reads.md).
+- Complete global-risk read ownership: [2026-11-02](ledger/typescript-control-plane-migration-v0/2026-11-02-global-risks-read.md).
+- Complete durable-completion evidence read: [2026-11-02 owner and crossings ledger](ledger/typescript-control-plane-migration-v0/2026-11-02-completion-evidence-read.md).
+- Complete status task-graph composition: [2026-11-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-11-02-status-task-graph.md).
+- Complete adaptive child admission decision: [2026-11-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-11-02-adaptive-child-admission.md).
+- Progress-review receipt qualification: [2026-11-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-11-02-progress-review-qualification.md).
+- Global Todo readiness complete owner cutover (both consumers): [2026-11-02 ledger](ledger/typescript-control-plane-migration-v0/2026-11-02-global-todo-readiness.md).
+- Selected Todo source read inside the context transaction: [2026-11-04](ledger/typescript-control-plane-migration-v0/2026-11-04-selected-context-source-read.md).

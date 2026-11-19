@@ -1,5 +1,5 @@
 /** Notification discovery owns no Todo lifecycle or execution authority.
- * Complete native snapshots select subjects; provider journals prove delivery. */
+ * Complete per-Goal snapshots select subjects; provider journals prove delivery. */
 import type {JsonObject} from "../effect_program.ts";
 import {requireInteger, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {canonicalAuthoritySha256 as digest} from "../coordination/authority_store_codec.ts";
@@ -9,6 +9,64 @@ const records = (value: unknown, name: string): JsonObject[] => {
   if (!Array.isArray(value)) throw new TypeError(`${name} must be a complete array`);
   return value.map(row => requireJsonObject(row, name));
 };
+const identities = (value: unknown, name: string): Set<string> => {
+  if (!Array.isArray(value)) throw new TypeError(`${name} must be a complete array`);
+  const result = new Set(value.map(item => requireNonEmptyString(item, name)));
+  if (result.size !== value.length) throw new Error(`duplicate ${name}`);
+  return result;
+};
+
+/** The provider enumerates the whole current grant, even when a Goal cannot be read. */
+function sourceCoverage(input: JsonObject, goals: JsonObject[]) {
+  const read = identities(goals.map(goal => goal.goal_id), "read Goal ids");
+  if (input.scope_goal_ids === undefined && input.unavailable_goal_ids === undefined) {
+    if (input.source_complete !== true) throw new Error("owner attention source is incomplete");
+    return {read, scope: read, unavailable: new Set<string>()};
+  }
+  const scope = identities(input.scope_goal_ids, "scope_goal_ids");
+  const unavailable = identities(input.unavailable_goal_ids, "unavailable_goal_ids");
+  if ([...read].some(id => !scope.has(id) || unavailable.has(id))
+      || [...unavailable].some(id => !scope.has(id)) || read.size + unavailable.size !== scope.size
+      || input.source_complete !== (unavailable.size === 0))
+    throw new Error("owner attention coverage does not partition the current scope");
+  return {read, scope, unavailable};
+}
+
+function readCoverage(raw: unknown): JsonObject | null {
+  if (raw == null) return null;
+  const coverage = requireJsonObject(raw, "source_coverage");
+  const counts = ["goal_count", "read_goal_count", "unavailable_goal_count"]
+    .map(key => requireInteger(coverage[key], key));
+  if (counts.some(count => count < 0) || counts[0] !== counts[1] + counts[2])
+    throw new Error("invalid owner attention coverage");
+  return coverage;
+}
+
+/** Explanatory only: failures neither widen scope nor authorize a retry. */
+function sourceFailures(raw: unknown, unavailable?: Set<string>): JsonObject[] {
+  if (raw === undefined) return [...(unavailable ?? [])].sort()
+    .map(goal_id => ({goal_id, error_code: "source_unavailable"}));
+  const result = records(raw, "source_failures").map(row => {
+    const goal_id = requireNonEmptyString(row.goal_id, "source failure Goal");
+    if (typeof row.error_code !== "string" || !["canonical_authority_required", "source_unavailable"].includes(row.error_code))
+      throw new Error("unknown owner attention source failure");
+    return {goal_id, error_code: row.error_code};
+  });
+  const ids = identities(result.map(row => row.goal_id), "source failure Goal ids");
+  if (unavailable && (ids.size !== unavailable.size || [...ids].some(id => !unavailable.has(id))))
+    throw new Error("source failures must identify exactly the unavailable Goals");
+  return result.sort((a, b) => String(a.goal_id).localeCompare(String(b.goal_id)));
+}
+
+function storedSourceFailures(raw: unknown, coverage: JsonObject | null): JsonObject[] {
+  // Older writers can retain stale optional diagnostics. They must not make
+  // an otherwise valid receipt journal unavailable or stop its next refresh.
+  try {
+    const failures = sourceFailures(raw);
+    return failures.length === (coverage?.unavailable_goal_count ?? 0) ? failures : [];
+  } catch { return []; }
+}
+
 function active(row: JsonObject, goalId: string): boolean {
   if (row.goal_id != null && row.goal_id !== goalId) throw new Error("foreign owner Todo");
   // Reuse the existing attention owner, one source at a time. Its presentation
@@ -30,6 +88,9 @@ function readState(raw: unknown): JsonObject {
       || typeof state.initialized !== "boolean" || requireInteger(state.revision, "revision") < 0)
     throw new Error("owner notification state is unavailable");
   records(state.subjects, "subjects");
+  if (state.baseline_pending_goal_ids !== undefined)
+    identities(state.baseline_pending_goal_ids, "baseline_pending_goal_ids");
+  readCoverage(state.source_coverage);
   for (const row of records(state.outbox, "outbox")) {
     if (!["pending", "sending", "unconfirmed", "delivered", "failed", "superseded"].includes(String(row.status)))
       throw new Error("unknown notification receipt state");
@@ -40,8 +101,11 @@ function readState(raw: unknown): JsonObject {
 export function ownerAttentionHealth(input: JsonObject): JsonObject {
   const state = readState(input.state);
   const rows = records(state.outbox, "outbox");
+  const coverage = readCoverage(state.source_coverage);
   return {available: true, enabled: state.enabled, revision: state.revision,
     last_checked_at: state.last_checked_at ?? null, error_code: state.error_code ?? null,
+    source_coverage: coverage,
+    source_failures: storedSourceFailures(state.source_failures, coverage),
     pending_count: rows.filter(row => row.status === "pending").length,
     unconfirmed_count: rows.filter(row => row.status === "sending" || row.status === "unconfirmed").length,
     failed_count: rows.filter(row => row.status === "failed").length};
@@ -49,11 +113,15 @@ export function ownerAttentionHealth(input: JsonObject): JsonObject {
 
 export function planOwnerAttention(input: JsonObject): JsonObject {
   const state = readState(input.state);
-  if (input.source_complete !== true) throw new Error("owner attention source is incomplete");
+  const goals = records(input.goals, "goals");
+  const coverage = sourceCoverage(input, goals);
+  const failures = sourceFailures(input.source_failures, coverage.unavailable);
+  const baselinePending = identities(state.baseline_pending_goal_ids ?? [], "baseline_pending_goal_ids");
+  if (state.initialized !== true) for (const id of coverage.unavailable) baselinePending.add(id);
   const previous = records(state.subjects, "subjects");
   const outbox = records(state.outbox, "outbox").map(row => ({...row}));
   const current = new Map<string, JsonObject>();
-  for (const goal of records(input.goals, "goals")) {
+  for (const goal of goals) {
     const goalId = requireNonEmptyString(goal.goal_id, "goal_id");
     for (const todo of records(goal.todos, "todos")) {
       if (!active(todo, goalId)) continue;
@@ -68,19 +136,41 @@ export function planOwnerAttention(input: JsonObject): JsonObject {
       if (current.has(key)) throw new Error("duplicate owner Todo");
       current.set(key, {key, goal_id: goalId, todo_id: todoId, terms, digest: digest(terms), active: true});
     }
+    // Failure rows are complete active blocked-terminal snapshots from Core.
+    for (const failure of records(goal.failures ?? [], "failures")) {
+      const todoId = requireNonEmptyString(failure.todo_id, "failure.todo_id");
+      if (!["reject", "cancel"].includes(String(failure.outcome))) throw new Error("invalid terminal outcome");
+      const count = requireInteger(failure.terminal_outcome_count ?? 1, "terminal_outcome_count");
+      if (count < 1) throw new Error("invalid terminal outcome count");
+      const terms: JsonObject = {text: requireNonEmptyString(failure.text, "failure.text"),
+        note: failure.outcome, reason: failure.reason ?? "", terminal_outcome_count: count};
+      if (failure.terminal_outcome_identities != null) {
+        // Canonical hashes ignore object key order; sorting ignores outcome list order.
+        terms.terminal_outcome_identities = records(failure.terminal_outcome_identities, "terminal_outcome_identities")
+          .map(row => Object.fromEntries(["decision_scope", "outcome", "source_todo_id"]
+            .filter(key => row[key] != null).map(key => [key, row[key]])))
+          .sort((a, b) => digest(a).localeCompare(digest(b)));
+      }
+      if (failure.evidence != null && failure.evidence !== "") terms.evidence = failure.evidence;
+      const key = `${goalId}/${todoId}/terminal`;
+      if (current.has(key)) throw new Error("duplicate terminal Todo");
+      current.set(key, {key, goal_id: goalId, todo_id: todoId, terms, digest: digest(terms), active: true});
+    }
   }
   const subjects: JsonObject[] = [...current.values()].map(row => {
     const old = previous.find(item => item.key === row.key);
     const changed = !old || old.active !== true || old.digest !== row.digest;
     const generation = Number(old?.generation ?? 0) + Number(changed);
-    if (state.initialized === true && changed) {
+    if (state.initialized === true && changed && !baselinePending.has(String(row.goal_id))) {
       const id = digest([row.key, generation, row.digest]);
       const terms = row.terms as JsonObject;
       // Structured scopes remain identity/authority inputs, not operator copy.
-      const body = [`待你处理 · ${row.goal_id}`, String(terms.text),
+      const terminal = terms.terminal_outcome_count != null;
+      const body = [terminal ? `任务失败 · ${row.goal_id}` : `待你处理 · ${row.goal_id}`, String(terms.text),
         ...["note", "reason", "evidence"].flatMap(key =>
           terms[key] == null ? [] : [`${({note: "说明", reason: "原因", evidence: "依据"} as Record<string, string>)[key]}：${
             typeof terms[key] === "string" ? terms[key] : JSON.stringify(terms[key])}`]),
+        ...(terminal ? [`终止决定共 ${terms.terminal_outcome_count} 项；需要所有者决定。`] : []),
         "可在原管家对话中查看或答复这项待办。"].join("\n\n");
       outbox.push({id, key: row.key, generation, digest: row.digest, goal_id: row.goal_id,
         todo_id: row.todo_id, body, status: Buffer.byteLength(body, "utf8") > 20000 ? "failed" : "pending",
@@ -91,7 +181,8 @@ export function planOwnerAttention(input: JsonObject): JsonObject {
     return {...subject, generation};
   });
   for (const row of previous) {
-    if (!current.has(String(row.key))) subjects.push({...row, active: false});
+    if (!current.has(String(row.key))) subjects.push(coverage.unavailable.has(String(row.goal_id))
+      ? {...row} : {...row, active: false});
   }
   for (const row of outbox) {
     const subject = subjects.find(item => item.key === row.key);
@@ -99,9 +190,14 @@ export function planOwnerAttention(input: JsonObject): JsonObject {
     // A crash after starting a write is ambiguous even without a locator.
     if (row.status === "sending") {row.status = "unconfirmed"; row.error_code = "send_outcome_unknown";}
     if (obsolete && ["pending", "failed"].includes(String(row.status))) row.status = "superseded";
-    row.source_current = !obsolete;
+    row.source_current = !obsolete && coverage.read.has(String(row.goal_id));
   }
-  return {...state, initialized: true, subjects, outbox};
+  return {...state, initialized: true, subjects, outbox,
+    error_code: coverage.unavailable.size ? "source_incomplete" : null,
+    source_failures: failures,
+    baseline_pending_goal_ids: [...baselinePending].filter(id => coverage.unavailable.has(id)).sort(),
+    source_coverage: {goal_count: coverage.scope.size, read_goal_count: coverage.read.size,
+      unavailable_goal_count: coverage.unavailable.size}};
 }
 
 /** Fold provider observations, preserving frozen intent and ambiguous writes. */

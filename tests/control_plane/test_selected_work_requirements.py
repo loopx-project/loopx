@@ -14,7 +14,7 @@ import pytest
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.testing.canary_harness import run_json_cli_result, write_fixture_registry
-from loopx.control_plane.work_items.context_readback import _source_content
+from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
 from loopx.control_plane.todos.goal_todo_projection import retained_todo_summary_fields
 from loopx.control_plane.turn_driver.codex_cli import _prompt
@@ -25,7 +25,7 @@ from loopx.control_plane.turn_driver.host_candidate import extract_turn_authorit
 REPO = Path(__file__).resolve().parents[2]
 
 
-def test_legacy_selected_todo_requires_same_goal_state_revision(tmp_path: Path) -> None:
+def test_selected_todo_refuses_unmigrated_source(tmp_path: Path) -> None:
     state = tmp_path / "state.md"
     state.write_text(
         "---\nstatus: active\n---\n# Goal\n## Agent Todo\n"
@@ -33,16 +33,16 @@ def test_legacy_selected_todo_requires_same_goal_state_revision(tmp_path: Path) 
         "  <!-- loopx:todo todo_id=todo_current status=open task_class=advancement_task -->\n"
     )
 
-    with pytest.raises(ValueError, match="changed after the Goal state read"):
-        _source_content(
-            {"source": "selected_todo"},
-            registry_path=tmp_path / "registry.json",
-            runtime_root=tmp_path / "runtime",
-            goal_id="goal-current",
-            todo_id="todo_current",
-            state_file=state,
-            expected_state_revision="sha256:stale",
-        )
+    original = state.read_bytes()
+    result = effect_runtime_result("work_item.context.project", {
+        "required_reads": [{"source": "selected_todo", "command": "read-selected"}],
+        "source_results": [], "selected_todo": {"todo_id": "todo_current"},
+        "source_context": {"runtime_root": str(tmp_path / "runtime"), "goal_id": "goal-current"},
+    })
+    context = result["work_context"]
+    assert context["complete"] is False
+    assert context["failures"][0]["error_code"] == "context_source_unavailable"
+    assert state.read_bytes() == original
 
 
 @pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
@@ -83,12 +83,58 @@ def test_inline_user_context_preserves_full_scoped_gates_without_granting_delive
             build_todo_runtime_shadow_projection(goal_id="requirements-goal", todos=items, handoff_mode="soft_claim"),
             state_path=state, provider=provider)
 
-    def guard(*extra):
+    def guard(*extra, expected_exit=0):
         code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "requirements-goal",
-            "--agent-id", "agent-a", "--scan-path", str(tmp_path), *extra,
+            "--agent-id", "agent-a",  *extra,
             registry_path=registry, runtime_root=runtime)
-        assert code == 0, json.dumps(packet, indent=2)
+        assert code == expected_exit, json.dumps(packet, indent=2)
         return packet
+
+    if provider == "legacy":
+        refused = guard(expected_exit=1)
+        assert refused["error_code"] == "canonical_authority_required"
+        assert refused["decision_read_from_provider"] is False
+        assert refused["should_run"] is False
+        assert state.read_text() == state_text
+        return
+
+    # The old implementation performs inventory plus one whole-source read per
+    # scoped User Todo. The optimized path must return identical exact bodies
+    # from one read, without changing scope or canonical authority.
+    from loopx.control_plane.work_items import context_readback
+    original_read = context_readback.list_goal_todos
+    expected_users = [original_read(registry_path=registry, runtime_root_arg=str(runtime),
+        goal_id="requirements-goal", role="user", status="open", agent_id="agent-a",
+        todo_id=todo)["todo"] for todo in ("todo_gate", "todo_user_action", "todo_global_action")]
+    bounded = original_read(registry_path=registry, runtime_root_arg=str(runtime),
+        goal_id="requirements-goal", role="user", status="open", agent_id="agent-a")
+    assert bounded["todos"][0]["text"] != gate_text, "ordinary inventories remain bounded"
+    reads = []
+
+    def counted_read(**options):
+        reads.append(options)
+        return original_read(**options)
+
+    monkeypatch.setattr(context_readback, "list_goal_todos", counted_read)
+    direct = context_readback._user_context(registry_path=registry, runtime_root=runtime,
+        goal_id="requirements-goal", agent_id="agent-a")
+    assert direct["todos"] == expected_users
+    assert len(reads) == 1, "scoped full User bodies need one canonical query, not N+1"
+    assert direct["authority_read"]["decision_read_from_provider"] is True
+    from loopx.control_plane.todos import goal_todo_projection
+    typed_read = goal_todo_projection.project_todo_read
+
+    def old_delivery(options):
+        result = typed_read(options)
+        if "payload" in result:
+            result["payload"].pop("full_text", None)
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(goal_todo_projection, "project_todo_read", old_delivery)
+        with pytest.raises(ValueError, match="unsupported by this runtime"):
+            context_readback._user_context(registry_path=registry, runtime_root=runtime,
+                goal_id="requirements-goal", agent_id="agent-a")
 
     packet = guard()
     channel = packet["interaction_contract"]["agent_channel"]
@@ -103,17 +149,17 @@ def test_inline_user_context_preserves_full_scoped_gates_without_granting_delive
     envelope = guard("--turn-envelope")
     assert envelope["work_context"]["user_todos"] == channel["work_context"]["user_todos"]
     assert state.read_text() == state_text
-    if provider != "legacy":
-        # Canonical tasks still exist: the full Goal source must fail closed,
-        # rather than silently substituting a Todo summary for missing intent.
-        state.unlink()
-        failed = guard()
-        failed_channel = failed["interaction_contract"]["agent_channel"]
-        assert failed_channel["delivery_allowed"] is False
-        assert failed_channel["work_context"]["complete"] is False
-        assert any(read["source"] == "goal_state" for read in failed_channel["required_reads"])
-        state.write_text(state_text)
-        assert guard()["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
+    # Canonical tasks still exist: the full Goal source must fail closed,
+    # rather than silently substituting a Todo summary for missing intent.
+    state.unlink()
+    failed = guard(expected_exit=1)
+    assert failed["ok"] is False and failed["status_health_ok"] is False
+    failed_channel = failed["interaction_contract"]["agent_channel"]
+    assert failed_channel["delivery_allowed"] is False
+    assert failed_channel["work_context"]["complete"] is False
+    assert any(read["source"] == "goal_state" for read in failed_channel["required_reads"])
+    state.write_text(state_text)
+    assert guard()["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -153,10 +199,12 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     state.write_text(
         goal_requirements + "## Agent Todo\n- [ ] Stale display: do only an easier check.\n",
     )
+    cli_bin = Path(sys.executable).parent / "loopx"
 
     def guard(*extra: str) -> dict:
-        code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "requirements-goal",
-            "--agent-id", "agent-a", "--scan-path", str(tmp_path), *extra,
+        code, packet = run_json_cli_result("--cli-bin", str(cli_bin),
+            "quota", "should-run", "--goal-id", "requirements-goal",
+            "--agent-id", "agent-a",  *extra,
             registry_path=registry, runtime_root=runtime)
         assert code == 0, json.dumps(packet, indent=2)
         assert packet["should_run"] is True, packet.get("reason")
@@ -166,7 +214,7 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     before = state.read_bytes()
     # Run the actual default product prompt's guard: no capture/envelope opt-in.
     code, generated = run_json_cli_result("heartbeat-prompt", "--goal-id", "requirements-goal",
-        "--agent-id", "agent-a", "--codex-app", "--cli-bin", str(Path(sys.executable).parent / "loopx"),
+        "--agent-id", "agent-a", "--codex-app", "--cli-bin", str(cli_bin),
         registry_path=registry, runtime_root=runtime)
     assert code == 0 and generated["ok"], generated
     body = generated["task_body"]
@@ -203,17 +251,24 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     assert reads[-1]["content"]["todo"]["text"] == expected
     assert json.dumps(context).count(expected) == 1
     assert envelope["required_reads"] == channel["required_reads"]
-    assert envelope["work_context"] == context
+    assert context["selected_todo_text_verified"] is True
+    assert envelope["work_context"] == {
+        key: value
+        for key, value in context.items()
+        if key != "selected_todo_text_verified"
+    }
+    assert envelope["action"]["selected_todo"]["text_source_verified"] is True
     selected = envelope["action"]["selected_todo"]
     assert selected["todo_id"] == "todo_cursor_work"
     read = reads[-1]
     tokens = shlex.split(read["command"])
+    assert tokens[:3] == [str(cli_bin), "--cli-bin", str(cli_bin)]
     assert tokens[tokens.index("--registry") + 1] == str(registry)
     assert tokens[tokens.index("--runtime-root") + 1] == str(runtime)
     assert tokens[tokens.index("--todo-id") + 1] == "todo_cursor_work"
 
     def read_detail() -> dict:
-        result = subprocess.run([sys.executable, "-m", "loopx.cli", *tokens[1:]],
+        result = subprocess.run(tokens, cwd=REPO, env=env,
             capture_output=True, text=True, check=True)
         return json.loads(result.stdout)
 
@@ -234,7 +289,8 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     authority = extract_turn_authority(request)
     assert authority["selected_todo"]["todo_id"] == "todo_cursor_work"
     assert authority["required_reads"] == channel["required_reads"]
-    assert authority["work_context"] == context
+    assert authority["work_context"] == envelope["work_context"]
+    assert authority["selected_todo"]["text_source_verified"] is True
     assert read["command"] in render_prompt(authority)
 
     # A fresh CLI process must recover current requirements from the same owner,
@@ -258,7 +314,7 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     # The old observation remains an observation, not a rewritten current brief.
     assert reads[-1]["content"]["todo"]["text"] == expected
     missing_tokens = ["todo_missing" if token == "todo_cursor_work" else token for token in tokens]
-    missing = subprocess.run([sys.executable, "-m", "loopx.cli", *missing_tokens[1:]],
+    missing = subprocess.run(missing_tokens, cwd=REPO, env=env,
         capture_output=True, text=True, check=True)
     assert json.loads(missing.stdout)["not_found"] is True
     # Source reads are fresh, not snapshots of the earlier guard. Failure is
@@ -310,14 +366,13 @@ def test_selected_todo_body_change_between_selection_and_readback_blocks_deliver
     )
     from loopx.control_plane.work_items import context_readback
 
-    read_source = context_readback._source_content
     run_effect = context_readback.effect_runtime_result
     projected_request = {}
     changed = False
 
-    def mutate_after_selection(read, **kwargs):
+    def capture_projection(effect, request, **kwargs):
         nonlocal changed
-        if read.get("source") == "selected_todo" and not changed:
+        if effect == "work_item.context.project" and not changed:
             update_code, update = run_json_cli_result(
                 "todo", "update", "--goal-id", "selected-race-goal",
                 "--todo-id", "todo_selected_work", "--agent-id", "agent-a",
@@ -325,14 +380,10 @@ def test_selected_todo_body_change_between_selection_and_readback_blocks_deliver
             )
             assert update_code == 0, update
             changed = True
-        return read_source(read, **kwargs)
-
-    def capture_projection(effect, request, **kwargs):
         if effect == "work_item.context.project":
             projected_request.update(request)
         return run_effect(effect, request, **kwargs)
 
-    monkeypatch.setattr(context_readback, "_source_content", mutate_after_selection)
     monkeypatch.setattr(context_readback, "effect_runtime_result", capture_projection)
     from loopx.cli import build_parser
     from loopx.cli_commands.quota import handle_quota_command
@@ -340,8 +391,8 @@ def test_selected_todo_body_change_between_selection_and_readback_blocks_deliver
 
     args = build_parser().parse_args([
         "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
-        "quota", "should-run", "--goal-id", "selected-race-goal", "--agent-id", "agent-a",
-        "--scan-path", str(tmp_path),
+        "quota", "should-run", "--context-delivery", "off",
+        "--goal-id", "selected-race-goal", "--agent-id", "agent-a",
     ])
     packet: dict[str, object] = {}
 
@@ -356,12 +407,12 @@ def test_selected_todo_body_change_between_selection_and_readback_blocks_deliver
     assert changed
     assert packet["selected_todo"]["todo_id"] == "todo_selected_work"
     selected_revision = projected_request["selected_todo"]["content_revision"]
-    readback = next(
-        result for result in projected_request["source_results"]
-        if result.get("content", {}).get("todo", {}).get("todo_id") == "todo_selected_work"
-    )
     assert selected_revision
-    assert readback["content"]["todo"]["content_revision"] != selected_revision
+    current_code, current = run_json_cli_result(
+        "todo", "list", "--goal-id", "selected-race-goal", "--todo-id", "todo_selected_work",
+        registry_path=registry, runtime_root=runtime,
+    )
+    assert current_code == 0 and current["todo"]["text"] == changed_text, current
     channel = packet["interaction_contract"]["agent_channel"]
     assert channel["work_context"]["complete"] is False
     assert channel["delivery_allowed"] is False
@@ -419,7 +470,7 @@ def test_short_selected_todo_deduplicates_body_but_keeps_canonical_note(
     assert json.dumps(context).count(note) == 1
 
     code, turn = run_json_cli_result("quota", "should-run", "--goal-id", "requirements-goal",
-        "--agent-id", "agent-a", "--scan-path", str(tmp_path), "--turn-envelope",
+        "--agent-id", "agent-a",  "--turn-envelope",
         registry_path=registry, runtime_root=runtime)
     assert code == 0 and turn["ok"], turn
     turn_context = turn["work_context"]

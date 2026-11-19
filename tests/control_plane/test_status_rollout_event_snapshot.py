@@ -67,6 +67,8 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path, dict[str, Any]]:
         + "\n",
         encoding="utf-8",
     )
+    from canonical_authority_fixture import initialize_canonical_source_fixture
+    initialize_canonical_source_fixture(runtime_root, goal["id"], state_path=state_path, provider="sqlite")
     return registry_path, runtime_root, goal
 
 
@@ -136,7 +138,7 @@ def _indexed_todo_ids(payload: dict[str, Any]) -> set[str]:
     }
 
 
-def test_collect_status_reuses_display_snapshot_but_pr_wait_reads_complete_facts(
+def test_collect_status_freezes_complete_pr_facts_before_bounded_display_read(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -153,6 +155,10 @@ def test_collect_status_reuses_display_snapshot_but_pr_wait_reads_complete_facts
     )
     for event in initial_events:
         _append_event(runtime_root, event)
+        if event is initial_events[0]:
+            for index in range(600):
+                _append_event(runtime_root, {**_merge_event(900, recorded_at="2026-09-18T01:00:30Z"),
+                    "event_id": f"merge-noise-{index}"})
 
     loads: list[tuple[str, int | None]] = []
     original_load = rollout_event_log_module.load_rollout_events
@@ -174,21 +180,18 @@ def test_collect_status_reuses_display_snapshot_but_pr_wait_reads_complete_facts
     first = status_module.collect_status(
         registry_path=registry_path,
         runtime_root_override=str(runtime_root),
-        scan_roots=[tmp_path],
         limit=20,
         goal_id=GOAL_ID,
-        include_public_boundary_scan=False,
     )
 
     assert loads == [(GOAL_ID, 500)]
     assert _deferred_todo(first, "todo_wait_pr_41")["resume_ready"] is True
-    # The retained PR proof is read by the typed Todo owner, independently of
-    # the bounded display snapshot. Evidence receipts and Todo index still
-    # share the original snapshot within this status request.
+    # The typed owner captures complete PR facts before display enrichment.
+    # PR41 is older than the 500-event display tail and still resumes. PR42
+    # arriving after that request snapshot is visible on the next request.
     resumed = _deferred_todo(first, "todo_wait_pr_42")
-    assert resumed["resume_ready"] is True
-    assert resumed["resume_condition"]["matched_event_id"] == appended_events[0]["event_id"]
-    assert resumed["resume_condition"]["matched_pr_ref"] == f"{REPOSITORY}#42"
+    assert resumed["resume_ready"] is False
+    assert "matched_event_id" not in resumed["resume_condition"]
     assert [
         receipt["event_id"]
         for receipt in _goal_queue_item(first)["evidence_log_read_receipts"]
@@ -200,14 +203,13 @@ def test_collect_status_reuses_display_snapshot_but_pr_wait_reads_complete_facts
     second = status_module.collect_status(
         registry_path=registry_path,
         runtime_root_override=str(runtime_root),
-        scan_roots=[tmp_path],
         limit=20,
         goal_id=GOAL_ID,
-        include_public_boundary_scan=False,
     )
 
     assert loads == [(GOAL_ID, 500), (GOAL_ID, 500)]
     assert _deferred_todo(second, "todo_wait_pr_42")["resume_ready"] is True
+    assert _deferred_todo(second, "todo_wait_pr_42")["resume_condition"]["matched_event_id"] == appended_events[0]["event_id"]
     assert [
         receipt["event_id"]
         for receipt in _goal_queue_item(second)["evidence_log_read_receipts"]
@@ -370,16 +372,16 @@ def test_collect_status_scans_effect_runtime_sources_once_per_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry_path, runtime_root, _goal = _write_fixture(tmp_path)
-    original_scan = effect_runtime._scan_runtime_source_files
+    original_scan = effect_runtime._scan_runtime_source_snapshot
     scanned_roots: list[Path] = []
 
-    def counted_scan(root: Path) -> tuple[str, ...]:
+    def counted_scan(root: Path) -> effect_runtime._RuntimeSourceSnapshot:
         scanned_roots.append(root)
         return original_scan(root)
 
     monkeypatch.setattr(
         effect_runtime,
-        "_scan_runtime_source_files",
+        "_scan_runtime_source_snapshot",
         counted_scan,
     )
 
@@ -387,10 +389,8 @@ def test_collect_status_scans_effect_runtime_sources_once_per_request(
         status_module.collect_status(
             registry_path=registry_path,
             runtime_root_override=str(runtime_root),
-            scan_roots=[tmp_path],
             limit=20,
             goal_id=GOAL_ID,
-            include_public_boundary_scan=False,
         )
 
     assert scanned_roots == [
@@ -504,10 +504,8 @@ def test_attention_queue_todo_text_stays_authoritative_over_events(
     payload = status_module.collect_status(
         registry_path=registry_path,
         runtime_root_override=str(runtime_root),
-        scan_roots=[tmp_path],
         limit=20,
         goal_id=GOAL_ID,
-        include_public_boundary_scan=False,
     )
 
     row = next(

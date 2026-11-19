@@ -81,13 +81,21 @@ def test_public_status_cli_retains_safe_contract_sidecar_without_extra_source(tm
     result = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
         "--format", "json", "status", "--goal-id", goal["id"]], capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
-    items = json.loads(result.stdout)["attention_queue"]["items"]
-    item = next(item for item in items if item["goal_id"] == goal["id"])
+    status = json.loads(result.stdout)
+    items = status["attention_queue"]["items"]
+    summaries = [item for item in items if item["goal_id"] == goal["id"] and "agent_todos" in item]
+    assert len(summaries) == 1, items
+    item = summaries[0]
     contract = item["agent_todos"]["goal_acceptance_contract"]
     assert contract["status"] == "held"
     assert contract["criteria"] == [{"id": "criterion-a", "description": "The check passes"}]
     assert item["agent_todos"]["first_executable_items"] == []
     assert "validation_argv" not in json.dumps(contract)
+    assert any(row["goal_id"] == goal["id"] and row["status"] == "state_file_missing" for row in items)
+    decision = build_quota_should_run(status, goal_id=goal["id"])
+    assert decision["status_health_ok"] is False
+    assert decision["should_run"] is False
+    assert decision["normal_delivery_allowed"] is False
     assert not state.exists()
 
 

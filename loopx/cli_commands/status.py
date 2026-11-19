@@ -5,7 +5,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ..contract import check_contract, render_contract_markdown
+from ..contract import (
+    check_contract,
+    display_report_value,
+    render_contract_markdown,
+)
+from ..paths import display_path_text
+from ..control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
 from ..control_plane.runtime.status_projection_cache import (
     load_status_projection_cache,
     resolve_status_projection_cache_runtime_root,
@@ -166,17 +172,24 @@ def handle_check_command(
             allow_missing_registry=allow_missing_registry,
         )
     except Exception as exc:
+        scan_roots = args.scan_path or [args.scan_root]
         payload = {
             "ok": False,
-            "registry": str(registry_path),
-            "runtime_root": runtime_root_arg,
-            "scan_roots": args.scan_path or [args.scan_root],
+            "registry": display_path_text(registry_path),
+            "runtime_root": (
+                display_path_text(runtime_root_arg)
+                if runtime_root_arg is not None
+                else None
+            ),
+            "scan_roots": [display_path_text(path) for path in scan_roots],
             "summary": {"errors": 1, "warnings": 0, "checks": 0},
             "errors": [str(exc)],
             "warnings": [],
             "checks": [],
         }
-    print_payload(payload, args.format, render_contract_markdown)
+    print_payload(
+        display_report_value(payload), args.format, render_contract_markdown
+    )
     return 0 if payload.get("ok") else 1
 
 
@@ -189,7 +202,6 @@ def handle_status_command(
     print_payload: PrintPayload,
 ) -> int:
     try:
-        scan_roots = _scan_roots(args)
         display_limit = max(0, args.limit)
         collection_limit = _status_collection_limit_for_agent_lane(
             requested_limit=display_limit,
@@ -205,7 +217,6 @@ def handle_status_command(
             payload, cache_metadata = load_status_projection_cache(
                 registry_path=registry_path,
                 runtime_root=runtime_root,
-                scan_roots=scan_roots,
                 limit=collection_limit,
                 include_task_graph=args.include_task_graph,
                 goal_id=args.goal_id,
@@ -217,7 +228,6 @@ def handle_status_command(
             payload = collect_status(
                 registry_path=registry_path,
                 runtime_root_override=runtime_root_arg,
-                scan_roots=scan_roots,
                 limit=collection_limit,
                 include_task_graph=args.include_task_graph,
                 goal_id=args.goal_id,
@@ -228,7 +238,6 @@ def handle_status_command(
                 cache_metadata = write_status_projection_cache(
                     registry_path=registry_path,
                     runtime_root=runtime_root,
-                    scan_roots=scan_roots,
                     limit=collection_limit,
                     include_task_graph=args.include_task_graph,
                     goal_id=args.goal_id,
@@ -288,7 +297,14 @@ def handle_status_command(
                 ],
             },
         }
-    print_payload(payload, output_format(args), render_status_markdown)
+        if isinstance(exc, LocalCoordinationAuthorityUnavailable):
+            payload["error_code"] = exc.code
+            payload["authority_read"] = exc.payload
+    print_payload(
+        display_report_value(payload),
+        output_format(args),
+        render_status_markdown,
+    )
     return 0 if payload.get("ok") else 1
 
 
@@ -857,7 +873,6 @@ def handle_diagnose_command(
         payload = collect_diagnosis(
             registry_path=registry_path,
             runtime_root_override=runtime_root_arg,
-            scan_roots=_scan_roots(args),
             limit=max(1, args.limit),
             goal_id=args.goal_id,
             agent_id=args.agent_id,
@@ -903,7 +918,6 @@ def handle_review_packet_command(
         status_payload = collect_status(
             registry_path=registry_path,
             runtime_root_override=runtime_root_arg,
-            scan_roots=_scan_roots(args),
             limit=max(0, args.limit),
             include_task_graph=not args.handoff_only,
             goal_id=args.goal_id,

@@ -194,6 +194,7 @@ def test_real_native_interrupt_retains_branch_but_does_not_qualify_checkpoint(tm
     boundary; a successful native fork alone must not loosen that contract.
     """
     import subprocess
+    from pathlib import Path
     from loopx.capabilities.benchmark_toolkit.native_codex_goal import StdioNativeGoalTransport
 
     workspace = tmp_path / "work"
@@ -261,6 +262,9 @@ def test_real_native_interrupt_retains_branch_but_does_not_qualify_checkpoint(tm
         with pytest.raises(ValueError, match="completed final cursor"):
             native_session_checkpoint(env, source, timeout=15)
         with native_host(env) as native:
+            source_rollouts = list((Path(env["CODEX_HOME"]) / "sessions").rglob(f"*{source}.jsonl"))
+            assert len(source_rollouts) == 1
+            original_rollout = source_rollouts[0].read_bytes()
             fork = native.request("thread/fork", {"threadId": source, "cwd": str(workspace),
                 "lastTurnId": turn, "persistExtendedHistory": True})["thread"]["id"]
             assert fork != source and history(native, fork) == retained
@@ -269,7 +273,17 @@ def test_real_native_interrupt_retains_branch_but_does_not_qualify_checkpoint(tm
             wait_terminal(native, fork, next_turn, "completed")
             assert (workspace / "continued.txt").read_text() == "continued-candidate\n"
             assert "retained-candidate" in json.dumps(requests[2])
-            assert history(native, source) == retained
+            assert len(requests) == 4
+            # Extended history may hydrate the interrupted command's terminal
+            # metadata later. The persisted original and all model input must
+            # remain unchanged; that derived metadata is not a new source Turn.
+            assert source_rollouts[0].read_bytes() == original_rollout
+            original = history(native, source)
+            assert [row["id"] for row in original] == [row["id"] for row in retained]
+            assert original[:-1] == retained[:-1]
+            assert original[-1]["status"] == retained[-1]["status"] == "interrupted"
+            assert [item for item in original[-1]["items"] if item["type"] == "userMessage"] == [
+                item for item in retained[-1]["items"] if item["type"] == "userMessage"]
 
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),
@@ -291,7 +305,8 @@ def test_real_native_workspace_readback_rejects_foreign_code_basis(tmp_path):
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),
                     reason="Requires an explicit real native Host binary; only a local static provider is used")
 @pytest.mark.parametrize("case", ["resume", "scope_change", "profile_change", "joint", "binding_reply_loss",
-                                 "fork_reply_loss", "fork_missing", "fork_ambiguous", "warm_preparation"])
+                                 "fork_reply_loss", "fork_missing", "fork_ambiguous",
+                                 "model_transition", "provider_transport", "joint_provider_transport"])
 def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, capsys, monkeypatch, case, request):
     """Real Host/CLI/Goal/session/artifact owners; deterministic synthetic work.
 
@@ -304,6 +319,8 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
     import shlex
     import subprocess
     import sys
+    import tomllib
+    from contextlib import ExitStack
     from pathlib import Path
     from benchmark.runtime.codex import Execution
     from loopx.hosts.codex_checkpoint import admit_native_checkpoint_session
@@ -315,6 +332,8 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
     from loopx.control_plane.quota.settlement import read_heartbeat_settlement
     from loopx.control_plane.projects.registry_codec import ProjectRegistryProtocolError
 
+    joint = case in {"joint", "joint_provider_transport"}
+    provider_transport = case in {"provider_transport", "joint_provider_transport"}
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     monkeypatch.chdir(workspace)  # Real settlement verifies the producing workspace.
@@ -324,7 +343,6 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
     research.write_text("candidate 3 was rejected by the original synthetic check\n")
     source_goal, source_agent = "source-research", "source-researcher"
     destination_goal, destination_agent = "branch-research", "branch-researcher"
-    from benchmark.runtime.sforge_warm_start import _PREPARATION_TASK, _read_preparation
 
     def register(name, agent):
         registry = tmp_path / name / "registry.json"
@@ -339,9 +357,8 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         capsys.readouterr()
         assert main([*prefix, "todo", "add", "--goal-id", name, "--role", "agent", "--claimed-by", agent,
             "--task-class", "advancement_task", "--required-capability", "shell",
-            *(["--operation-id", "checkpoint-preparation"] if case == "warm_preparation" and name == destination_goal else []),
-            "--text", _PREPARATION_TASK if case == "warm_preparation" and name == destination_goal else
-            "Verify the retained candidate and preserve applicable negative evidence."]) == 0
+            *([]),
+            "--text", "Verify the retained candidate and preserve applicable negative evidence."]) == 0
         added = json.loads(capsys.readouterr().out)
         return registry, runtime, added["todo_id"]
     source_registry, source_runtime, source_todo = register(source_goal, source_agent)
@@ -350,10 +367,9 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
     turn_id = "checkpoint-continuation-fixture"
     binding = ["--goal-id", destination_goal, "--agent-id", destination_agent,
                "--todo-id", destination_todo, "--turn-instance-id", turn_id]
-    if case != "warm_preparation":
-        assert main([*prefix, "quota", "should-run", "--runtime-profile", "generic_cli", *binding]) == 0
-        guard = json.loads(capsys.readouterr().out)
-        assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    assert main([*prefix, "quota", "should-run", "--runtime-profile", "generic_cli", *binding]) == 0
+    guard = json.loads(capsys.readouterr().out)
+    assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
     from loopx.hosts.research_checkpoint import canonical_context, research_context, adopt_todo_context, _encoded
     source_prefix = ["--format", "json", "--registry", str(source_registry), "--runtime-root", str(source_runtime)]
     def invoke(arguments):
@@ -372,7 +388,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
     requests = []
     retained_context_path = None
     joint_command = ""
-    if case == "joint":
+    if joint:
         import copy
         import shlex
         import requests as http
@@ -394,45 +410,24 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
 
     def response(request, index, message):
         requests.append(request)
-        if case == "warm_preparation" and index == 1:
-            message["content"][0]["text"] = "The previous Host deadline has passed; the prior phase was closed."
         if index == 2:
-            current_command = [sys.executable, "-m", "loopx.cli", *prefix, "todo", "list",
-                "--goal-id", destination_goal, "--todo-id", destination_todo]
-            # Read the actual Todo but emit only its task text. Whole authority
-            # envelopes can hide the adjacent retained files in native output
-            # truncation, which is unrelated to continuation admission.
-            read_current = (shlex.join([sys.executable, "-c",
-                "import json, subprocess; print(json.loads(subprocess.check_output("
-                + repr(current_command) + ", text=True))['todo']['text'])"]) + " && "
-                if case == "warm_preparation" else "")
             return {"type": "function_call", "id": "fc_retained", "call_id": "call_retained",
                 "name": "exec_command", "arguments": json.dumps({
-                    "cmd": read_current + "cat candidate.txt research.txt " + retained_context_path + joint_command,
-                    "max_output_tokens": 6000})}
+                    "cmd": "cat candidate.txt research.txt " + retained_context_path + joint_command,
+                    "yield_time_ms": 10000, "max_output_tokens": 6000})}
         if index == 3:
             message["content"][0]["text"] = "Retained candidate 7 verified; candidate 3 remains rejected."
         return message
 
     binary = os.environ["LOOPX_NATIVE_CHECKPOINT_BIN"]
-    # The warm receiver uses the benchmark's execution profile inside its
-    # isolated worker. Other cases retain their original sandbox contract.
-    sandbox = ("danger-full-access" if case == "warm_preparation" else
-               "workspace-write" if case == "joint" else "read-only")
+    sandbox = ("danger-full-access" if provider_transport or case == "model_transition" else
+               "workspace-write" if joint else "read-only")
     execution = Execution(context="resume", sandbox=sandbox)
-    with real_native_source(tmp_path / "native", binary, workspace, close_source=True,
+    with ExitStack() as receiver_transports, real_native_source(tmp_path / "native", binary, workspace, close_source=True,
                             response_builder=response, sandbox=execution.sandbox) as (env, source_session, _, calls):
         env.update(LOOPX_REGISTRY=str(source_registry), LOOPX_RUNTIME_ROOT=str(source_runtime),
                    LOOPX_GOAL_ID=source_goal, LOOPX_AGENT_ID=source_agent,
                    MODEL_NAME="fixture", REASONING_EFFORT="high", LOOPX_CODEX_SANDBOX=execution.sandbox)
-        if case == "warm_preparation":
-            executable = tmp_path / "receiver-cli"
-            executable.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + ' -m loopx.cli "$@"\n')
-            executable.chmod(0o700)
-            skills = tmp_path / "shared-skills"
-            skills.mkdir()
-            env.update(LOOPX_CLI=str(executable), LOOPX_SHARED_SKILLS=str(skills),
-                       PYTHONPATH=str(Path(__file__).resolve().parents[2]) + os.pathsep + env.get("PYTHONPATH", ""))
         source_wake = BenchmarkSessionWake(env, execution, {})
         source_wake.admission.accept_result(lambda: _store_codex_cli_session(source_runtime,
             lineage={"goal_id": source_goal, "agent_id": source_agent}, session_scope="agent",
@@ -464,7 +459,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         components = [*native["components"], {"id": "code", "source_path": str(candidate)},
                       {"id": "research", "source_path": str(research)},
                       {"id": "research_context", "source_path": str(context_export)}]
-        if case == "joint":
+        if joint:
             components.append({"id": "evaluation", "source_path": str(evaluator_unit)})
         probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components})
         unit = tmp_path / "point"
@@ -478,7 +473,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
                     "provider_revision": source_context["snapshot"]["provider_revision"],
                     "store_identity": source_context["snapshot"]["store_identity"]}}}, retry_safe=False)
         digest = captured["sha256"]
-        if case == "joint":
+        if joint:
             source_judge.state.judge.tokens[source_token]["submission_cooldown"] = 0
             assert submit(source_url, source_token, 99).status_code == 200
             judge_before = copy.deepcopy((source_judge.state.judge.tokens,
@@ -516,6 +511,29 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         env.update(LOOPX_REGISTRY=str(registry), LOOPX_RUNTIME_ROOT=str(runtime),
                    LOOPX_GOAL_ID=destination_goal, LOOPX_AGENT_ID=destination_agent,
                    MODEL_NAME="fixture", REASONING_EFFORT="high")
+        admission_options, model_config_args = {}, []
+        if case == "model_transition":
+            target_config = tmp_path / "destination-model.toml"
+            target_config.write_text(config.read_text().replace('model="fixture"', 'model="fixture-next"')
+                                     .replace('model_reasoning_effort="high"', 'model_reasoning_effort="max"'))
+            env.update(MODEL_NAME="fixture-next", REASONING_EFFORT="max")
+            admission_options = {"destination_config": target_config}
+            model_config_args = ["--destination-model-config", str(target_config)]
+        if provider_transport:
+            from tests.control_plane.codex_checkpoint_fixture import local_inference_provider
+
+            def receiver_response(body, index, message):
+                calls.append("/v1/responses")
+                return response(body, index + 1, message)
+
+            receiver_url, _, _ = receiver_transports.enter_context(local_inference_provider(receiver_response))
+            original = tomllib.loads(config.read_text())
+            source_url = original["model_providers"][original["model_provider"]]["base_url"]
+            assert receiver_url != source_url
+            target_config = tmp_path / "destination-transport.toml"
+            target_config.write_text(config.read_text().replace(source_url, receiver_url))
+            env["OPENAI_BASE_URL"] = receiver_url
+            admission_options = {"destination_config": target_config, "provider_base_url": receiver_url}
         lifecycle_registry = tmp_path / "lifecycle-only" / "registry.json"
         assert main(["--format", "json", "--registry", str(lifecycle_registry),
             "--runtime-root", str(tmp_path / "lifecycle-only/runtime"), "project", "register",
@@ -618,11 +636,20 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
             assert load_codex_cli_session(runtime, lineage={"goal_id": destination_goal,
                 "agent_id": destination_agent}, session_scope="agent")["checkpoint_artifact_sha256"] == digest
             assert len(calls) == 1
-        admitted_cli = subprocess.run([sys.executable, "-m", "loopx.hosts.codex_checkpoint",
-            "--root", str(unit), "--expected-sha256", digest, "--config-path", str(config), "--sandbox", execution.sandbox],
-            env=env, text=True, capture_output=True, timeout=40)
-        assert admitted_cli.returncode == 0, admitted_cli.stderr
-        admitted = json.loads(admitted_cli.stdout)
+        if provider_transport:
+            with pytest.raises(ValueError, match="only model and reasoning effort"):
+                admit_native_checkpoint_session(env, unit, digest, config, sandbox=execution.sandbox,
+                    timeout=90, destination_config=target_config)
+            assert not Path(env["CODEX_HOME"]).exists() and len(calls) == 1
+            admitted = admit_native_checkpoint_session(env, unit, digest, config,
+                sandbox=execution.sandbox, timeout=90, **admission_options)
+        else:
+            admitted_cli = subprocess.run([sys.executable, "-m", "loopx.hosts.codex_checkpoint",
+                "--root", str(unit), "--expected-sha256", digest, "--config-path", str(config),
+                "--sandbox", execution.sandbox, *model_config_args],
+                env=env, text=True, capture_output=True, timeout=40)
+            assert admitted_cli.returncode == 0, admitted_cli.stderr
+            admitted = json.loads(admitted_cli.stdout)
         assert admitted["session_binding_admitted"] and admitted["history_verified"]
         assert admitted["model_calls"] == 0 and not admitted["continuation_qualified"]
         assert admitted["session_id"] != source_session and len(calls) == 1
@@ -636,17 +663,22 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
             def forbidden_fork(*args, **kwargs):
                 raise AssertionError("a repeated admission must not create a second native fork")
             replay.setattr("loopx.hosts.codex_checkpoint.fork_native_checkpoint", forbidden_fork)
-            recovered = admit_native_checkpoint_session(env, unit, digest, config, sandbox=(execution).sandbox, timeout=30)
+            recovered = admit_native_checkpoint_session(env, unit, digest, config,
+                sandbox=(execution).sandbox, timeout=30, **admission_options)
             assert recovered == admitted
             assert bound["checkpoint_artifact_sha256"] == digest
             # Transport reply loss leaves the atomic source-bound binding as the
             # original receipt. An exact CLI retry must also recover it.
-            retry_cli = subprocess.run(admitted_cli.args, env=env, text=True, capture_output=True, timeout=40)
-            assert retry_cli.returncode == 0, retry_cli.stderr
-            assert json.loads(retry_cli.stdout) == admitted
-            with pytest.raises(ValueError, match="profile changed"):
+            if provider_transport:
+                assert admit_native_checkpoint_session(env, unit, digest, config,
+                    sandbox=execution.sandbox, timeout=90, **admission_options) == admitted
+            else:
+                retry_cli = subprocess.run(admitted_cli.args, env=env, text=True, capture_output=True, timeout=40)
+                assert retry_cli.returncode == 0, retry_cli.stderr
+                assert json.loads(retry_cli.stdout) == admitted
+            with pytest.raises(ValueError, match="profile changed|destination model differs"):
                 admit_native_checkpoint_session({**env, "REASONING_EFFORT": "low"}, unit, digest,
-                                                config, sandbox=(execution).sandbox, timeout=30)
+                    config, sandbox=(execution).sandbox, timeout=30, **admission_options)
         assert len(calls) == 1 and load_codex_cli_session(runtime, lineage={
             "goal_id": destination_goal, "agent_id": destination_agent}, session_scope="agent") == bound
         if case == "resume":
@@ -673,50 +705,26 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
 
         # Both participants meet at the real destination continuation owner.
         # No source claim/lease is replayed; adoption alone still starts no work.
-        if case == "warm_preparation":
-            declaration = tmp_path / "warm-start.json"
-            payload = {"root": str(unit), "sha256": digest, "config": str(config),
-                "goal_id": destination_goal, "agent_id": destination_agent,
-                "source_todo_id": source_todo, "normal_cadence": 6,
-                "deadline_epoch": int(time.time()) + 600}
-            declaration.write_text(json.dumps(payload))
-            prepared_cli = subprocess.run([sys.executable, "-m", "benchmark.runtime.sforge_warm_start",
-                "context", "--declaration", str(declaration)], env=env, cwd=workspace,
-                text=True, capture_output=True, timeout=90)
-            assert prepared_cli.returncode == 0, prepared_cli.stderr
-            prepared = json.loads(prepared_cli.stdout)
-            assert prepared["preparation_todo_id"] == destination_todo
-            assert prepared["preparation_actionable"] and prepared["model_calls"] == 0
-            assert prepared["research_continuation_qualified"] is False
-            context_result = prepared["context"]
-            _read_preparation(lambda *args: invoke([*prefix, *args]), destination_goal,
-                destination_agent, destination_todo, payload)
-            assert json.loads(declaration.read_text()) == payload
-            guard = invoke([*prefix, "quota", "should-run", "--runtime-profile", "generic_cli", *binding,
-                "--available-capability", "shell", "--available-capability", "filesystem_write"])
-            assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"]
-            assert len(calls) == 1
-        else:
-            lease = invoke([*prefix, "task-lease", "acquire", "--goal-id", destination_goal,
-                "--todo-id", destination_todo, "--owner", destination_agent, "--idempotency-key", "branch-context"])
-            current = invoke([*prefix, "todo", "list", "--goal-id", destination_goal, "--todo-id", destination_todo])
-            context_command = [sys.executable, "-m", "loopx.hosts.research_checkpoint",
-                "--root", str(unit), "--expected-sha256", digest, "--source-todo-id", source_todo,
-                "--todo-id", destination_todo, "--operation-id", "branch-context",
-                "--expected-revision", current["authority_read"]["provider_revision"],
-                "--lease-key", "branch-context", "--lease-version", str(lease["lease"]["version"])]
-            assert not explore_result_log_path(runtime, destination_goal).exists(), "session admission must not adopt knowledge"
-            adopted_cli = subprocess.run(context_command, env=env, text=True, capture_output=True, timeout=60)
-            assert adopted_cli.returncode == 0, adopted_cli.stderr
-            context_result = json.loads(adopted_cli.stdout)
-            # Retrying the exact CLI after a lost result reuses both original
-            # receipts; it must not fork, charge, edit the Todo or run a model.
-            replay_cli = subprocess.run(context_command, env=env, text=True, capture_output=True, timeout=60)
-            assert replay_cli.returncode == 0, replay_cli.stderr
-            replay_result = json.loads(replay_cli.stdout)
-            assert replay_result["continuation"]["adoption"]["status"] == "replayed"
-            assert replay_result["continuation"]["provider_revision"] == context_result["continuation"]["provider_revision"]
-            assert len(calls) == 1
+        lease = invoke([*prefix, "task-lease", "acquire", "--goal-id", destination_goal,
+            "--todo-id", destination_todo, "--owner", destination_agent, "--idempotency-key", "branch-context"])
+        current = invoke([*prefix, "todo", "list", "--goal-id", destination_goal, "--todo-id", destination_todo])
+        context_command = [sys.executable, "-m", "loopx.hosts.research_checkpoint",
+            "--root", str(unit), "--expected-sha256", digest, "--source-todo-id", source_todo,
+            "--todo-id", destination_todo, "--operation-id", "branch-context",
+            "--expected-revision", current["authority_read"]["provider_revision"],
+            "--lease-key", "branch-context", "--lease-version", str(lease["lease"]["version"])]
+        assert not explore_result_log_path(runtime, destination_goal).exists(), "session admission must not adopt knowledge"
+        adopted_cli = subprocess.run(context_command, env=env, text=True, capture_output=True, timeout=60)
+        assert adopted_cli.returncode == 0, adopted_cli.stderr
+        context_result = json.loads(adopted_cli.stdout)
+        # Retrying the exact CLI after a lost result reuses both original
+        # receipts; it must not fork, charge, edit the Todo or run a model.
+        replay_cli = subprocess.run(context_command, env=env, text=True, capture_output=True, timeout=60)
+        assert replay_cli.returncode == 0, replay_cli.stderr
+        replay_result = json.loads(replay_cli.stdout)
+        assert replay_result["continuation"]["adoption"]["status"] == "replayed"
+        assert replay_result["continuation"]["provider_revision"] == context_result["continuation"]["provider_revision"]
+        assert len(calls) == 1
         retained_context_path = str(Path(context_result["artifact"]).relative_to(workspace))
         assert Path(context_result["artifact"]).read_bytes() == context_raw and len(calls) == 1
         adopted_todo = invoke([*prefix, "todo", "list", "--goal-id", destination_goal, "--todo-id", destination_todo])
@@ -724,7 +732,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         assert json.loads(adopted_todo["todo"]["note"])["source_session"] == source_session
         guard = invoke([*prefix, "quota", "should-run", "--runtime-profile", "generic_cli", *binding])
         assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
-        if case == "joint":
+        if joint:
             control = tmp_path / "host-control"
             control.mkdir()
             branch_phase = control / "phase-deadline"
@@ -760,7 +768,7 @@ response = requests.post(url + '/api/v1/submit', data={'token': token},
 response.raise_for_status()
 identifier = response.json()['submission_id']
 for _ in range(100):
-    result = requests.get(url + '/api/v1/result/' + identifier, timeout=5).json()
+    result = requests.get(url + '/api/v1/result/' + identifier, params={'token': token}, timeout=5).json()
     if result['status'] == 'completed': break
     time.sleep(.01)
 assert result['status'] == 'completed'
@@ -779,7 +787,7 @@ print('Captured public best 7; continued candidate 8; consumed round agent-3; no
         logs = tmp_path / "continuation"
         logs.mkdir()
         command = native_command(env, execution, "execute", logs, wake)
-        if case == "joint":
+        if joint:
             command = ["/bin/bash", "-c", shell + "exec " + shlex.join(command)]
         current_body = json.dumps(guard["interaction_contract"], ensure_ascii=False)
         result = subprocess.run(command, env=env, cwd=workspace, input=current_body + "\nContinue: verify the retained files.",
@@ -788,8 +796,10 @@ print('Captured public best 7; continued candidate 8; consumed round agent-3; no
         (logs / "stdout.jsonl").write_text(result.stdout)
         wake.observe(logs / "stdout.jsonl")
         assert wake.session_id == admitted["session_id"] and len(calls) == 3
-        retained_message = ("previous Host deadline has passed" if case == "warm_preparation"
-                            else "Synthetic source result.")
+        if case == "model_transition":
+            assert requests[1]["model"] == "fixture-next"
+            assert requests[1]["reasoning"]["effort"] == "max"
+        retained_message = ("Synthetic source result.")
         assert retained_message in json.dumps(requests[1])
         assert destination_goal in json.dumps(requests[1]) and destination_todo in json.dumps(requests[1])
         assert "retained candidate: 7" in json.dumps(requests[2])
@@ -820,7 +830,7 @@ print('Captured public best 7; continued candidate 8; consumed round agent-3; no
         assert "Future route outside this checkpoint" not in json.dumps(requests[2])
         assert canonical_context({**env, "LOOPX_GOAL_ID": source_goal,
             "LOOPX_RUNTIME_ROOT": str(source_runtime)}, deadline=time.time() + 30) == later_context
-        if case == "joint":
+        if joint:
             assert "Captured public best 7; continued candidate 8" in json.dumps(requests[2])
             history = http.get(branch_url + "/api/v1/history", params={"token": fresh["token"]}, timeout=5).json()
             assert history["best_score"] == 8 and history["best_round"] == "agent-3"
@@ -830,10 +840,6 @@ print('Captured public best 7; continued candidate 8; consumed round agent-3; no
             for secret in (source_token, fresh["token"], source_judge.state.judge.admin_secret,
                            branch_judge.state.judge.admin_secret):
                 assert secret not in json.dumps(requests)
-        if case == "warm_preparation":
-            assert "previous Host deadline has passed" in json.dumps(requests[1])
-            assert _PREPARATION_TASK in json.dumps(requests[2])
-            assert "Earlier Host deadlines" not in json.dumps(requests[2])
         assert "Retained candidate 7 verified" in result.stdout
         retained = native_session_checkpoint(env, admitted["session_id"], timeout=20)
         assert retained["metadata"]["turn_ids"][:-1] == native["metadata"]["turn_ids"]
@@ -842,15 +848,15 @@ print('Captured public best 7; continued candidate 8; consumed round agent-3; no
             "agent_id": destination_agent}, session_scope="agent")
         assert after_work["checkpoint_artifact_sha256"] == digest
         with pytest.raises(ValueError, match="advanced or differs"):
-            admit_native_checkpoint_session(env, unit, digest, config, sandbox=(execution).sandbox, timeout=30)
+            admit_native_checkpoint_session(env, unit, digest, config,
+                sandbox=(execution).sandbox, timeout=30, **admission_options)
         assert load_codex_cli_session(runtime, lineage={"goal_id": destination_goal,
             "agent_id": destination_agent}, session_scope="agent") == after_work
-        if case != "warm_preparation":
-            with pytest.raises(ValueError, match="native history or configuration moved"):
-                adopt_todo_context(env, unit, digest, source_todo_id=source_todo,
-                    todo_id=destination_todo, operation_id="must-not-adopt-later-session",
-                    expected_revision=adopted_todo["authority_read"]["provider_revision"],
-                    lease_key="branch-context", lease_version=lease["lease"]["version"])
+        with pytest.raises(ValueError, match="native history or configuration moved"):
+            adopt_todo_context(env, unit, digest, source_todo_id=source_todo,
+                todo_id=destination_todo, operation_id="must-not-adopt-later-session",
+                expected_revision=adopted_todo["authority_read"]["provider_revision"],
+                lease_key="branch-context", lease_version=lease["lease"]["version"])
         assert len(calls) == 3
         assert invoke([*prefix, "todo", "list", "--goal-id", destination_goal,
                        "--todo-id", destination_todo])["todo"] == adopted_todo["todo"]
@@ -875,8 +881,11 @@ print('Captured public best 7; continued candidate 8; consumed round agent-3; no
         assert settled.progress["state"] == "settled"
 
 
-@pytest.mark.parametrize("turn_envelope", [None, False, True], ids=["legacy", "ordinary", "envelope"])
-def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monkeypatch, turn_envelope):
+@pytest.mark.parametrize("turn_envelope,complete_turn", [(None, None), (False, False), (True, False), (False, True)],
+                         ids=["legacy", "ordinary", "envelope", "complete"])
+@pytest.mark.parametrize("context_option", [None, "codex_context_dir", "codex_context_root"])
+def test_interrupted_cursor_requires_exact_unreleased_final_guard(
+        tmp_path, monkeypatch, turn_envelope, complete_turn, context_option):
     """A stopped command is eligible only at the declared pre-output boundary."""
     import copy
     import shlex
@@ -894,6 +903,13 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monk
         guard["turn_envelope"] = turn_envelope
     if turn_envelope is False:
         argv.remove("--turn-envelope")
+    if complete_turn is not None:
+        guard["complete_turn"] = complete_turn
+    if complete_turn:
+        argv.append("--complete-turn")
+    if context_option:
+        guard[context_option] = "/fixture/context"
+        argv += ["--" + context_option.replace("_", "-"), guard[context_option]]
     command = shlex.join(["/bin/bash", "-lc", shlex.join(argv)])
     item = {"type": "commandExecution", "id": "guard-call", "command": command, "cwd": str(tmp_path),
             "status": "failed", "exitCode": 137, "aggregatedOutput": None}
@@ -904,36 +920,82 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monk
     captured = native_session_checkpoint(env, "fixture-session", timeout=10, interrupted_guard=guard)
     assert captured["metadata"]["turn_ids"] == ["retained-compaction", "pending"]
     assert "completed_turn_id" not in captured["metadata"]
-    assert captured["metadata"]["interrupted_guard"]["native_call_id"] == "guard-call"
+    assert captured["metadata"]["interrupted_guard"] == {**guard, "native_call_id": "guard-call"}
     assert "thread/fork" not in calls
 
     rendered = copy.deepcopy(turns)
     rendered[-1]["items"][-1]["command"] = shlex.join(["/bin/bash", "-lc",
         "LOOPX_TURN=turn-1\n" + shlex.join(argv).replace("--turn-instance-id turn-1", '--turn-instance-id "${LOOPX_TURN:?}"')])
     _verify_interrupted_guard(rendered, guard)
+    for setting in ("off", "on"):
+        explicit = copy.deepcopy(turns)
+        explicit[-1]["items"][-1]["command"] = shlex.join([
+            "/bin/bash", "-lc", shlex.join(argv + ["--context-delivery", setting])])
+        _verify_interrupted_guard(explicit, {**guard, "context_delivery": setting})
+    with pytest.raises(ValueError, match="routes or identity"):
+        _verify_interrupted_guard(turns, {**guard, "context_delivery": "on"})
+    with pytest.raises(ValueError, match="routes or identity"):
+        _verify_interrupted_guard(turns, {**guard, "context_delivery": None})
+    # Equivalent implicit/explicit off commands cannot hide an earlier call.
+    repeated = copy.deepcopy(turns)
+    repeated[-1]["items"].append({**item, "id": "later-call", "command": shlex.join([
+        "/bin/bash", "-lc", shlex.join(argv + ["--context-delivery", "off"])])})
+    with pytest.raises(ValueError, match="ambiguous"):
+        _verify_interrupted_guard(repeated, guard)
     # A caller cannot change the captured presentation/authority mode on restore.
     opposite = list(argv)
     if "--turn-envelope" in opposite:
         opposite.remove("--turn-envelope")
     else:
+        if "--complete-turn" in opposite:
+            opposite.remove("--complete-turn")
         opposite.append("--turn-envelope")
     changed = copy.deepcopy(turns)
     changed[-1]["items"][-1]["command"] = shlex.join(["/bin/bash", "-lc", shlex.join(opposite)])
     with pytest.raises(ValueError, match="routes or identity"):
         _verify_interrupted_guard(changed, guard)
+    if turn_envelope is False:
+        # Complete and ordinary commands have the same old envelope flag but
+        # different settlement routes. Neither may stand in for the other.
+        alternate = [word for word in argv if word != "--complete-turn"] if complete_turn else [*argv, "--complete-turn"]
+        switched = copy.deepcopy(turns)
+        switched[-1]["items"][-1]["command"] = shlex.join(["/bin/bash", "-lc", shlex.join(alternate)])
+        with pytest.raises(ValueError, match="routes or identity"):
+            _verify_interrupted_guard(switched, guard)
+        # A previous invocation of the other mode is not this held command.
+        switched[-1]["items"].append(item)
+        _verify_interrupted_guard(switched, guard)
+    if complete_turn:
+        with pytest.raises(ValueError, match="incompatible"):
+            _verify_interrupted_guard(turns, {**guard, "turn_envelope": True})
+        with pytest.raises(ValueError, match="routes or identity"):
+            _verify_interrupted_guard(turns, {k: v for k, v in guard.items() if k != "complete_turn"})
     for invalid in [None, 0, 1, "false"]:
-        with pytest.raises(ValueError, match="must be boolean"):
-            _verify_interrupted_guard(turns, {**guard, "turn_envelope": invalid})
+        for flag in ("turn_envelope", "complete_turn"):
+            with pytest.raises(ValueError, match="must be boolean"):
+                _verify_interrupted_guard(turns, {**guard, flag: invalid})
     variants = []
+    for option in ("--codex-context-dir", "--codex-context-root"):
+        altered = list(argv)
+        if option in altered:
+            altered[altered.index(option) + 1] = "/foreign/context"
+        else:
+            altered += [option, "/foreign/context"]
+        changed = copy.deepcopy(turns)
+        changed[-1]["items"][-1]["command"] = shlex.join(["/bin/bash", "-lc", shlex.join(altered)])
+        variants.append(changed)
     for field, value in [("aggregatedOutput", "score already exposed"), ("cwd", "/elsewhere"),
                          ("status", "completed"), ("command", shlex.join(["/bin/bash", "-lc", shlex.join(argv) + "; touch later"]))]:
         changed = copy.deepcopy(turns)
         changed[-1]["items"][-1][field] = value
         variants.append(changed)
-    for option, value in [("--turn-instance-id", "wrong-turn"), ("--decision-handoff-socket", "/tmp/other"),
+    for option, value in [("--context-delivery", "on"), ("--turn-instance-id", "wrong-turn"), ("--decision-handoff-socket", "/tmp/other"),
                           ("--registry", "/other.json"), ("--goal-id", "other")]:
         altered = list(argv)
-        altered[altered.index(option) + 1] = value
+        if option in altered:
+            altered[altered.index(option) + 1] = value
+        else:
+            altered += [option, value]
         changed = copy.deepcopy(turns)
         changed[-1]["items"][-1]["command"] = shlex.join(["/bin/bash", "-lc", shlex.join(altered)])
         variants.append(changed)
@@ -951,3 +1013,108 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monk
             _verify_interrupted_guard(changed, guard)
     with pytest.raises(ValueError, match="call identity"):
         _verify_interrupted_guard(turns, {**guard, "native_call_id": "different"})
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Exercises the private Host Unix rendezvous")
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("mode_matches", [True, False], ids=["retained", "switched"])
+def test_held_complete_guard_checkpoint_binds_original_settlement_mode(tmp_path, monkeypatch, provider, mode_matches):
+    """Exercise the worker, real quota guard and checkpoint store with fixed native history."""
+    from copy import deepcopy
+    from pathlib import Path
+    import shlex
+    import subprocess
+    import sys
+
+    from benchmark.runtime.checkpoint import held_quota_decision
+    from benchmark.runtime.checkpoint_wake import CheckpointWake
+    from benchmark.runtime.codex import turn_envelope_receipt
+    from benchmark.runtime.worker import heartbeat_body
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+    from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
+    from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
+    from loopx.hosts.codex_checkpoint import _guard_cli_arguments
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TURN_ID, _configure_autonomous_replan_fixture, _heartbeat_receipt_count,
+        _initialize_fixture_authority, _spend_run_count, _write_fixture,
+    )
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_autonomous_replan_fixture(project, runtime, registry)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    code = project / "candidate.txt"
+    code.write_text("synthetic candidate\n")
+    source = Path(sys.modules["loopx"].__file__).resolve().parent.parent
+    cli = source / "scripts/loopx"
+    pages = []
+    native, calls = fixture(project, monkeypatch, pages)
+    declaration = tmp_path / "request.json"
+    declaration.write_text(json.dumps({
+        "destination": str(tmp_path / "checkpoints"), "trigger": "fresh_replan",
+        "point_metadata": {}, "native_session": True,
+        "components": [{"id": "candidate", "source_path": str(code)}],
+    }))
+    env = {**os.environ, **native, "CODEX_BIN": sys.executable, "MODEL_NAME": "fixture",
+           "REASONING_EFFORT": "high", "LOOPX_CODEX_SANDBOX": "read-only",
+           "LOOPX_PYTHON": sys.executable, "PYTHONPATH": str(source),
+           "LOOPX_REGISTRY": str(registry), "LOOPX_RUNTIME_ROOT": str(runtime), "LOOPX_CLI": str(cli),
+           "LOOPX_GOAL_ID": GOAL_ID, "LOOPX_AGENT_ID": AGENT_ID,
+           "LOOPX_WAKE_LOG_DIR": str(tmp_path / "wakes"), "LOOPX_CHECKPOINT_REQUEST": str(declaration),
+           "LOOPX_CONTEXT_DELIVERY": "off", "LOOPX_TURN_ENVELOPE": "0",
+           "LOOPX_COMPLETE_TURN": "1"}
+    session = CodexAgentSession(env, context="resume", sandbox="read-only", receipt={})
+    _store_codex_cli_session(runtime, lineage=session.lineage, session_scope="agent",
+        session_id="fixture-session", goal_ref=session.goal_ref, session_profile_digest=session.digest)
+    receipt = {"mode": "heartbeat", "stage": "execute", "turn_id": TURN_ID,
+        "session": {"session_id": "fixture-session"},
+        **turn_envelope_receipt(explicit=False, complete=True)}
+    (tmp_path / "wakes" / TURN_ID).mkdir(parents=True)
+
+    with CheckpointWake(env, receipt) as host:
+        body = heartbeat_body(env, TURN_ID, native_goal=False, decision_handoff_socket=host.socket_path)
+        block = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
+        command = shlex.join(["/bin/bash", "-lc", block])
+        original = _guard_cli_arguments(command, {"cli": str(cli), "turn_instance_id": TURN_ID})
+        assert "--complete-turn" in original and "--turn-envelope" not in original
+        observed = original if mode_matches else [word for word in original if word != "--complete-turn"]
+        item = {"type": "commandExecution", "id": "pending-guard", "cwd": str(project),
+                "command": shlex.join(["/bin/bash", "-lc", shlex.join([str(cli), *observed])]),
+                "status": "failed", "exitCode": 137, "aggregatedOutput": None}
+        history = {"data": [{"id": "interrupted-turn", "status": "interrupted", "items": [item]}],
+                   "nextCursor": None}
+        pages.extend((history, deepcopy(history)))
+        host.listener.settimeout(30)
+        with subprocess.Popen([str(cli), *original], cwd=project, env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as command_process:
+            with held_quota_decision(host.listener, host.capture_root, goal_id=GOAL_ID,
+                    agent_id=AGENT_ID, turn_instance_id=TURN_ID,
+                    deadline=time.monotonic() + 30) as held:
+                assert held["quota"]["ok"] is True and held["intent"]["capture"] is True
+                quota = held["quota"]["heartbeat_receipt"]
+                assert quota["turn_instance_id"] == TURN_ID
+                digest = hashlib.sha256(held["path"].read_bytes()).hexdigest()
+                assert digest == held["sha256"]
+                point = host.root / held["intent"]["obligation_id"]
+                if mode_matches:
+                    captured = host._capture(held, time.monotonic() + 30)
+                    result = effect_runtime_result("runtime.checkpoint_artifacts", {
+                        "action": "verify", "root": str(point), "expected_sha256": captured["sha256"],
+                    })
+                    assert result["sha256"] == captured["sha256"]
+                    manifest = json.loads((point / "checkpoint.json").read_bytes())["point_metadata"]
+                    stored = manifest["native_session"]["interrupted_guard"]
+                    assert stored["complete_turn"] is True and stored["turn_envelope"] is False
+                    assert stored["turn_instance_id"] == TURN_ID and stored["native_call_id"] == item["id"]
+                    assert stored["decision_sha256"] == digest
+                    assert (point / "components" / manifest["held_decision_component_id"]).read_bytes() == held["path"].read_bytes()
+                else:
+                    with pytest.raises(ValueError, match="routes or identity"):
+                        host._capture(held, time.monotonic() + 30)
+                    assert not point.exists()
+            stdout, stderr = command_process.communicate(timeout=30)
+            assert command_process.returncode == 0, (stdout, stderr)
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+    assert _spend_run_count(runtime) == 0
+    assert "thread/fork" not in calls

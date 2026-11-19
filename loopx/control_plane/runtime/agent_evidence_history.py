@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 from collections.abc import Iterable, Mapping
 from datetime import datetime
-from typing import Any
 
 from ..todos.contract import normalize_todo_id_list
 from .public_safety import public_safe_compact_text
@@ -116,7 +117,7 @@ def evidence_log_read_receipt(
     agent_id = _compact_text(event.get("agent_id"), limit=180)
     event_id = _compact_text(event.get("event_id"), limit=180)
     recorded_at = _compact_text(event.get("recorded_at"), limit=80)
-    details = event.get("details") if isinstance(event.get("details"), Mapping) else {}
+    details = cast(Mapping[str, Any], event.get("details")) if isinstance(event.get("details"), Mapping) else {}
     command = _compact_text(details.get("command"), limit=500)
     if not all((goal_id, agent_id, event_id, recorded_at, command)):
         return None

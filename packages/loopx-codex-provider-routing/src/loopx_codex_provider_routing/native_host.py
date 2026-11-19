@@ -1,30 +1,78 @@
-"""IO adapter to the installed Personal Apps native account owner.
+"""Native Codex IO using the account and App owners shipped in this package.
 
-No copied account writer: the installed owner's locks, idle check, transaction,
-readback and recovery remain authoritative. Paths/pins and credentials stay here,
-outside policy input and browser projections. Run only through the opt-in host.
+Private profiles/pins and credentials stay outside policy input and browser
+projections. Existing vaults retain their original locks and recovery contract.
 """
 from __future__ import annotations
 
 import hashlib
-import importlib
+from contextlib import ExitStack, contextmanager
+import ctypes
 import json
+import math
 import os
 from pathlib import Path
+import plistlib
+import re
 import selectors
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
+
+from .native_processes import codex_home, lima_pidfile, responsible_pid
+from . import native_account_store, native_app
+
+OWNER = "loopx_native_codex_accounts_v1"
+OWNER_FILES = ("native_account_store.py", "native_app.py")
 
 
 class HostError(Exception):
     def __init__(self, code: str):
         self.code = code
         super().__init__(code)
+
+
+# Kept only to read recovery intents written before dynamic service discovery.
+# New handoffs discover the actual same-home process tree, not service names.
+CHAT_AGENTS = ("com.loopx.chat", "com.loopx.personal-bots.chat")
+
+
+def process_identity(pid: int) -> tuple[int, str, int, int] | None:
+    """Kernel executable/start identity; command text is not process ownership."""
+    class BSDInfo(ctypes.Structure):
+        _fields_ = ([(name, ctypes.c_uint32) for name in (
+            "flags", "status", "xstatus", "pid", "ppid", "uid", "gid", "ruid",
+            "rgid", "svuid", "svgid", "reserved")]
+            + [("comm", ctypes.c_char * 16), ("name", ctypes.c_char * 32)]
+            + [("tail", ctypes.c_uint32 * 6), ("seconds", ctypes.c_uint64),
+               ("microseconds", ctypes.c_uint64)])
+    try:
+        lib = ctypes.CDLL("/usr/lib/libproc.dylib")
+        info, path = BSDInfo(), ctypes.create_string_buffer(4096)
+        if (lib.proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info)) != ctypes.sizeof(info)
+                or info.pid != pid or info.uid != os.getuid()
+                or lib.proc_pidpath(pid, path, len(path)) <= 0):
+            return None
+        return info.ppid, os.fsdecode(path.value), info.seconds, info.microseconds
+    except (OSError, ValueError):
+        return None
+
+
+def process_exited(pid: int) -> bool:
+    """An unreadable kernel identity alone does not establish process exit."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        pass
+    return False
 
 
 # Address one inspected process, not an App bundle id shared by other routes.
@@ -43,8 +91,22 @@ function run(argv) {
   } while (Date.now() < deadline);
   if (!app || !app.executableURL || !app.isFinishedLaunching) throw Error("Client startup is still incomplete");
   if (ObjC.unwrap(app.executableURL.path) !== argv[1]) throw Error("Client executable changed");
-  if (!app.terminate) throw Error("Client refused normal quit");
+  var started = Number(app.launchDate.timeIntervalSince1970);
+  if (argv.length > 2 && argv[2] !== "unknown" && started !== Number(argv[2])) throw Error("Client launch changed");
+  return JSON.stringify({launch_time: started, accepted: Boolean(app.terminate)});
 }'''
+
+FORCE_QUIT = QUIT.replace(
+    'return JSON.stringify({launch_time: started, accepted: Boolean(app.terminate)});',
+    'if (!app.forceTerminate) throw Error("Client force quit failed");',
+)
+
+# Freeze launch identity before graceful quit so a refused/timed-out quit can
+# escalate only against that same instance, without another confirmation.
+PROBE = QUIT.replace(
+    'return JSON.stringify({launch_time: started, accepted: Boolean(app.terminate)});',
+    'return JSON.stringify({launch_time: started});',
+)
 
 
 def trusted_file(path: Path) -> Path:
@@ -55,41 +117,57 @@ def trusted_file(path: Path) -> Path:
     return path
 
 
-def discover() -> dict:
-    command = shutil.which("personal-apps")
+def discover(*, user_home: Path | None = None) -> dict:
     codex = shutil.which("codex")
-    if not command or not codex:
+    if not codex:
         raise HostError("adapter_unavailable")
-    source = trusted_file(Path(command)).parent
+    source = Path(__file__).parent
     pins = {name: hashlib.sha256(trusted_file(source / name).read_bytes()).hexdigest()
-            for name in ("personal_apps.py", "personal_accounts.py")}
-    return {"source": str(source), "pins": pins, "codex": str(trusted_file(Path(codex)))}
+            for name in OWNER_FILES}
+    profile = native_app.route(user_home or Path.home(), "gpt")
+    return {"owner": OWNER, "pins": pins, "codex": str(trusted_file(Path(codex))),
+            "profile": {key: str(value) for key, value in profile.items()}}
+
+
+def checked_adapter(adapter: dict, home: Path) -> tuple[Path, dict]:
+    if adapter.get("owner") != OWNER:
+        raise HostError("adapter_changed")
+    source = Path(__file__).parent
+    for name in OWNER_FILES:
+        if hashlib.sha256(trusted_file(source / name).read_bytes()).hexdigest() != adapter["pins"][name]:
+            raise HostError("adapter_changed")
+    codex = trusted_file(Path(adapter["codex"]))
+    spec = native_app.route(home, "gpt")
+    if {key: str(value) for key, value in spec.items()} != adapter.get("profile"):
+        raise HostError("adapter_changed")
+    return codex, spec
 
 
 class NativeHost:
-    def __init__(self, adapter: dict, *, user_home: Path | None = None):
-        source = Path(adapter["source"])
-        for name in ("personal_apps.py", "personal_accounts.py"):
-            if hashlib.sha256(trusted_file(source / name).read_bytes()).hexdigest() != adapter["pins"][name]:
-                raise HostError("adapter_changed")
-        self.codex = trusted_file(Path(adapter["codex"]))
-        # This adapter runs in its own process; module names cannot collide with
-        # an earlier owner version loaded by another request.
-        sys.path.insert(0, str(source))
-        self.apps = importlib.import_module("personal_apps")
-        self.accounts = importlib.import_module("personal_accounts")
+    def __init__(self, adapter: dict, *, user_home: Path | None = None, reconcile_services: bool = True):
         self.home = user_home or Path.home()
-        self.spec = self.apps.route(self.home, "gpt")
+        self.codex, self.spec = checked_adapter(adapter, self.home)
+        self.apps = native_app
+        self.accounts = native_account_store
         self.expected = None
         self.not_after = None
 
         def idle():
             if self.not_after is not None and time.time() >= self.not_after:
                 raise HostError("quota_stale")
+            # A filesystem server holding only read-only directory handles
+            # neither pins auth.json nor proves a cached Codex login. Keep
+            # real file owners and warm Codex processes as independent holds.
+            if self._home_owners():
+                raise HostError("waiting_for_idle")
             try:
-                self.apps.account_idle(self.home, self.spec)
+                self.apps.account_idle(self.home, self.spec,
+                                       read_only_owners=tuple(self._directory_identities))
             except (ValueError, OSError, subprocess.SubprocessError):
                 raise HostError("waiting_for_idle") from None
+            # A warm CLI can cache auth without keeping an auth file open.
+            if self._home_owners():
+                raise HostError("waiting_for_idle")
             if self.expected is not None and self.revision() != self.expected:
                 raise HostError("selection_changed")
 
@@ -97,6 +175,8 @@ class NativeHost:
             self.home, self.spec, idle, lambda: str(self.codex),
             lambda selected: self.apps.clean_env(selected, self.home),
         )
+        if reconcile_services and sys.platform == "darwin" and (self.manager.root / "chat-recovery.json").exists():
+            self.resume_chat_agents()
 
     def revision(self) -> str:
         # last.json also changes for a manual re-selection of the same slot.
@@ -104,34 +184,133 @@ class NativeHost:
                   for path in (self.manager.active, self.manager.root / "last.json")]
         return hashlib.sha256(b"\0".join(values)).hexdigest()
 
-    def status(self) -> dict:
+    def status(self, *, adopt_current: bool = True) -> dict:
         self.apps.check_provider(self.spec, "gpt")
-        value = self.manager.status()
+        value = self.manager.status(adopt_current=adopt_current)
         result = {key: value[key] for key in (
             "slots", "active_slot", "current_login_matches", "recovery_required"
         )} | {"selection_revision": self.revision()}
+        kinds = value.get("slot_kinds", {})
+        result["slots"] = [slot for slot in result["slots"] if kinds.get(slot) != "api"]
+        result["api_slot"] = "openai-api" if kinds.get("openai-api") == "api" else None
+        result["api_fallback_supported"] = getattr(self.accounts, "API_KEY_SLOTS_VERSION", 0) == 1
         if sys.platform == "darwin":
             exe = self.apps.executable(self.apps.app_bundle(self.spec, "gpt", self.home))
             result["client_running"] = self.apps.running(exe, self.spec) is not None
         return result
 
-    def close_client(self, expected: str, *, timeout: float = 25) -> bool:
+    def enroll_api(self, slot: str, api_key: str, base_url: str) -> dict:
+        if slot != "openai-api" or getattr(self.accounts, "API_KEY_SLOTS_VERSION", 0) != 1:
+            raise HostError("api_owner_upgrade_required")
+        self.manager.enroll_api(slot, api_key=api_key, base_url=base_url)
+        return self.status()
+
+    def enroll_current(self, expected: str) -> dict:
+        if self.revision() != expected or self.manager.status()["active_slot"] is not None:
+            raise HostError("selection_changed")
+        if (not self.manager.auth.exists()
+                or self.accounts.auth_kind(self.accounts.read_private(self.manager.auth)) != "subscription"):
+            raise HostError("native_login_required")
+        self.expected = expected
+        self.manager.enroll("primary", current=True)
+        return self.status()
+
+    def close_client(self, expected: str, *, timeout: float = 25, force: bool = False,
+                     inspected: tuple | None = None) -> bool:
         exe = self.apps.executable(self.apps.app_bundle(self.spec, "gpt", self.home))
         pid = self.apps.running(exe, self.spec)
+        if inspected is not None and (pid != inspected[0] or
+                (pid is not None and process_identity(pid) != inspected[1])):
+            raise HostError("client_changed")
         if self.revision() != expected:
             raise HostError("selection_changed")
         if pid is None:
             return False
-        # Recheck exact ownership immediately before requesting a normal quit.
+        # Recheck exact ownership immediately before requesting a quit.
         if self.apps.running(exe, self.spec) != pid:
             raise HostError("client_changed")
+        if force:
+            try:
+                result = subprocess.run(["/usr/bin/osascript", "-l", "JavaScript", "-", str(pid), str(exe)],
+                                        input=PROBE, text=True, check=True, capture_output=True, timeout=10)
+                receipt = json.loads(result.stdout)
+                launch_time = receipt["launch_time"]
+                # Launch Services can report a nil launchDate for an App started
+                # outside the normal Finder/open registration path. Fall back to
+                # the inspected PID + executable identity instead of stalling.
+                if launch_time is not None and (type(launch_time) not in (int, float)
+                                               or not math.isfinite(launch_time) or launch_time <= 0):
+                    raise ValueError()
+            except (OSError, subprocess.SubprocessError, AttributeError, KeyError, TypeError, ValueError, OverflowError):
+                if self.apps.running(exe, self.spec) is None:
+                    return True
+                raise HostError("client_quit_refused") from None
+            if self.revision() != expected:
+                raise HostError("selection_changed")
+            current = self.apps.running(exe, self.spec)
+            if current is None:
+                return True
+            if current != pid:
+                raise HostError("client_changed")
+            if self.not_after is not None and time.time() >= self.not_after:
+                raise HostError("quota_stale")
+            identity = str(launch_time) if launch_time is not None else "unknown"
+            try:
+                return self._graceful_quit(pid, exe, timeout, identity=identity)
+            except HostError as error:
+                if error.code not in ("client_quit_refused", "client_quit_timeout"):
+                    raise
+            # Opt-in covers fallback only; a quit dialog must not bypass a
+            # later selection/process/quota change before force termination.
+            if self.revision() != expected:
+                raise HostError("selection_changed")
+            current = self.apps.running(exe, self.spec)
+            if current is None:
+                return True
+            if current != pid:
+                raise HostError("client_changed")
+            if self.not_after is not None and time.time() >= self.not_after:
+                raise HostError("quota_stale")
+            try:
+                subprocess.run(["/usr/bin/osascript", "-l", "JavaScript", "-", str(pid), str(exe), identity],
+                               input=FORCE_QUIT, text=True, check=True, capture_output=True, timeout=10)
+            except (OSError, subprocess.SubprocessError):
+                if self.apps.running(exe, self.spec) is None:
+                    return True
+                raise HostError("client_quit_refused") from None
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                current = self.apps.running(exe, self.spec)
+                if current is None:
+                    return True
+                if current != pid:
+                    raise HostError("client_changed")
+                time.sleep(0.1)
+            raise HostError("client_quit_timeout")
+        return self._graceful_quit(pid, exe, timeout)
+
+    def _graceful_quit(self, pid: int, exe: Path, timeout: float, *, identity: str | None = None) -> bool:
+        command = ["/usr/bin/osascript", "-l", "JavaScript", "-", str(pid), str(exe)]
+        if identity is not None:
+            command.append(identity)
         try:
-            subprocess.run(["/usr/bin/osascript", "-l", "JavaScript", "-", str(pid), str(exe)],
-                           input=QUIT, text=True, check=True, capture_output=True, timeout=10)
+            result = subprocess.run(command,
+                                    input=QUIT, text=True, check=True, capture_output=True, timeout=10)
         except (OSError, subprocess.SubprocessError):
             raise HostError("client_quit_refused") from None
+        accepted = True
+        if getattr(result, "stdout", ""):
+            try:
+                receipt = json.loads(result.stdout)
+                accepted = receipt["accepted"]
+                if type(accepted) is not bool:
+                    raise ValueError()
+            except (AttributeError, KeyError, TypeError, ValueError):
+                raise HostError("client_changed") from None
+        if not accepted:
+            raise HostError("client_quit_refused")
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+        while accepted and time.monotonic() < deadline:
             current = self.apps.running(exe, self.spec)
             if current is None:
                 return True
@@ -144,13 +323,459 @@ class NativeHost:
         value = self.status()
         if value["selection_revision"] != expected or value["recovery_required"] or value["current_login_matches"] is not True:
             raise HostError("selection_changed")
-        self.apps.open_app(self.home, "gpt", [])
+        self.apps.open_app(self.home, "gpt", [], spec=self.spec)
         return self.status()
 
-    def switch(self, slot: str, expected: str, *, reopen: bool, restart_clients: bool = False,
-               not_after: float | None = None) -> dict:
+    def _home_owners(self) -> list[int]:
+        # ps/kernel enumeration and lsof are not an atomic snapshot. A consumer
+        # born between them needs a fresh read, not a restart against an identity
+        # which was never inspected. Rescan only discovery; never retry effects.
+        for _ in range(3):
+            processes = self._processes()
+            result = subprocess.run(["/usr/sbin/lsof", "-Fpfat", "+d", str(self.spec["home"])],
+                                    capture_output=True, text=True, timeout=10)
+            if result.returncode not in (0, 1):
+                raise HostError("ownership_unverified")
+            handles, owner, descriptor = {}, None, None
+            for line in result.stdout.splitlines():
+                if line.startswith("p") and line[1:].isdigit():
+                    owner, descriptor = int(line[1:]), None
+                    handles.setdefault(owner, [])
+                elif line.startswith("f") and owner is not None:
+                    descriptor = {"fd": line[1:].lstrip("*")}
+                    handles[owner].append(descriptor)
+                elif line[:1] in ("a", "t") and descriptor is not None and line[:1] not in descriptor:
+                    descriptor[line[0]] = line[1:]
+                elif line:
+                    raise HostError("ownership_unverified")
+            cached = self._cached_codex_owners(processes)
+            directories = {pid for pid, files in handles.items() if files and all(
+                f["fd"].isdigit() and f.get("a") == "r" and f.get("t") == "DIR" for f in files)} - cached
+            owners = set(handles) | cached
+            unstable = False
+            for pid in owners:
+                current, previous = process_identity(pid), processes.get(pid)
+                if previous is not None and current == previous:
+                    continue
+                if ((previous is None and current is not None)
+                        or (current is None and process_exited(pid))):
+                    unstable = True  # A new or proven-exited process: re-read.
+                else:
+                    raise HostError("client_changed")  # Reuse/unknown is a hold.
+            if not unstable:
+                self._owner_identities = {p: processes[p] for p in owners}
+                self._directory_identities = {p: processes[p] for p in directories}
+                return sorted(owners - directories)
+        raise HostError("client_changed")
+
+    def _processes(self) -> dict:
+        result = subprocess.run(["/bin/ps", "-axo", "pid="],
+                                capture_output=True, text=True, check=True, timeout=5)
+        return {int(p): process_identity(int(p)) for p in result.stdout.split() if p.isdigit()}
+
+    def _cached_codex_owners(self, processes: dict | None = None) -> set[int]:
+        owners = set()
+        for pid, identity in (self._processes() if processes is None else processes).items():
+            # Names select which private environment to inspect. They never
+            # establish restart/signal ownership; that needs the process tree.
+            if identity is None or Path(identity[1]).name != "codex":
+                continue
+            try:
+                home = codex_home(pid)
+            except OSError:
+                if process_identity(pid) is None and process_exited(pid):
+                    continue
+                raise HostError("ownership_unverified") from None
+            current = process_identity(pid)
+            if current is None and process_exited(pid):
+                continue
+            if current != identity:
+                raise HostError("client_changed")
+            if home:
+                if not Path(home).is_absolute():
+                    raise HostError("ownership_unverified")
+                if Path(home).resolve() == Path(self.spec["home"]).resolve():
+                    owners.add(pid)
+        return owners
+
+    @staticmethod
+    def _descendants(root: int, processes: dict) -> set[int]:
+        descendants = {root}
+        while True:
+            added = {p for p, identity in processes.items()
+                     if identity is not None and identity[0] in descendants and p not in descendants}
+            if not added:
+                return descendants
+            descendants.update(added)
+
+    def inspect_client_helpers(self) -> tuple[tuple, dict]:
+        """Freeze descendants of the inspected launch BEFORE requesting quit."""
+        bundle = str(self.apps.app_bundle(self.spec, "gpt", self.home))
+        exe = self.apps.executable(Path(bundle))
+        pid = self.apps.running(exe, self.spec)
+        if pid is None:
+            return (None, None), {}
+        root = process_identity(pid)
+        if root is None or root[1] != str(exe):
+            raise HostError("ownership_unverified")
+        processes, helpers = self._processes(), {}
+        descendants = self._descendants(pid, processes)
+        for child in descendants - {pid}:
+            identity = processes[child]
+            if identity[1].startswith(bundle + "/"):
+                helpers[child] = identity[1:]  # Reparenting after quit is expected.
+        if process_identity(pid) != root or self.apps.running(exe, self.spec) != pid:
+            raise HostError("client_changed")
+        return (pid, root), helpers
+
+    def retire_app_helpers(self, helpers: dict, *, force: bool = False) -> None:
+        """Retire only still-identical, previously observed launch descendants."""
+        exe = self.apps.executable(self.apps.app_bundle(self.spec, "gpt", self.home))
+        if self.apps.running(exe, self.spec) is not None:
+            raise HostError("client_changed")
+        for pid in helpers:
+            identity = process_identity(pid)
+            if identity is None or identity[1:] != helpers[pid]:
+                continue
+            if self.revision() != self.expected:
+                raise HostError("selection_changed")
+            if self.not_after is not None and time.time() >= self.not_after:
+                raise HostError("quota_stale")
+            try:
+                os.kill(pid, signal.SIGKILL if force else signal.SIGTERM)
+            except OSError:
+                pass
+
+    def _helpers_stopped(self, helpers: dict) -> bool:
+        for pid, frozen in helpers.items():
+            current = process_identity(pid)
+            if current is not None:
+                if current[1:] == frozen:
+                    return False
+            else:
+                if process_exited(pid):
+                    continue
+                return False
+        return True
+
+    def _consumer_agents(self, owners: list[int]) -> list[tuple]:
+        """Resolve real holders to trusted, currently loaded user LaunchAgents."""
+        definitions = {}
+        for plist in sorted((self.home / "Library/LaunchAgents").glob("*.plist")):
+            try:
+                value = plistlib.loads(trusted_file(plist).read_bytes())
+                label = value.get("Label") if isinstance(value, dict) else None
+                if not isinstance(label, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,254}", label) is None:
+                    continue
+                definitions.setdefault(label, []).append(plist)
+            except (HostError, OSError, ValueError, plistlib.InvalidFileException):
+                continue  # An unrelated invalid definition grants no effect.
+        agents, processes = [], self._processes()
+        if any(processes.get(p) != self._owner_identities.get(p) for p in owners):
+            raise HostError("client_changed")
+        auth_owners = {p for p in owners if Path(processes[p][1]).name == "codex"}
+        worker_tree = self._descendants(os.getpid(), processes)
+        for label, plists in definitions.items():
+            if len(plists) != 1:
+                continue  # Ambiguous definitions cannot be restored safely.
+            plist = plists[0]
+            target = f"gui/{os.getuid()}/{label}"
+            loaded = subprocess.run(["/bin/launchctl", "print", target],
+                                    capture_output=True, text=True, timeout=10)
+            match = re.search(r"^\s*pid = (\d+)\s*$", loaded.stdout, re.MULTILINE)
+            path = re.search(r"^\s*path = (.+)\s*$", loaded.stdout, re.MULTILINE)
+            if loaded.returncode or match is None or path is None or Path(path[1].strip()).resolve() != plist.resolve():
+                continue
+            service_pid = int(match[1])
+            service = processes.get(service_pid)
+            if service is None or service_pid in worker_tree:
+                continue
+            descendants = self._descendants(service_pid, processes)
+            if not (descendants & auth_owners - worker_tree):
+                continue
+            helpers = {p: processes[p][1:] for p in descendants - worker_tree if processes.get(p) is not None}
+            if process_identity(service_pid) != service:
+                raise HostError("client_changed")
+            agents.append((label, plist, service_pid, service, helpers))
+        return agents
+
+    def _lima_instance(self, pid: int, executable: str) -> dict | None:
+        """Corroborate hostagent ownership with its original manager, read-only."""
+        try:
+            binary = trusted_file(Path(executable))
+            installed = shutil.which("limactl")
+            if installed is None or binary != trusted_file(Path(installed)):
+                return None  # A matching basename is not an executable allowlist.
+            pidfile_value = lima_pidfile(pid)
+            if pidfile_value is None:
+                return None
+            pidfile = Path(pidfile_value)
+            # Only the user's normal Lima/Colima catalogs. A private argv path
+            # must not authorize arbitrary file reads or a different catalog.
+            catalogs = {(self.home / ".lima").resolve(), (self.home / ".colima/_lima").resolve()}
+            if (pidfile.name != "ha.pid" or pidfile.parent.parent not in catalogs
+                    or pidfile.resolve() != pidfile):
+                return None
+            raw = trusted_file(pidfile).read_bytes()
+            if len(raw) > 32 or raw.strip() != str(pid).encode():
+                return None
+            result = subprocess.run([str(binary), "list", "--format", "json"],
+                                    env={**os.environ, "LIMA_HOME": str(pidfile.parent.parent)},
+                                    capture_output=True, text=True, timeout=5)
+            if result.returncode or len(result.stdout) > 1048576:
+                return None
+            instances = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+            matches = [value for value in instances if isinstance(value, dict)
+                       and value.get("dir") == str(pidfile.parent)
+                       and type(value.get("hostAgentPID")) is int and value["hostAgentPID"] == pid]
+            if len(matches) != 1 or trusted_file(pidfile).read_bytes() != raw:
+                return None
+            value = matches[0]
+            name = value.get("name")
+            if (not isinstance(name, str) or name != pidfile.parent.name
+                    or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", name) is None
+                    or value.get("status") != "Running"):
+                return None
+            return {"instance": name, "status": "Running"}
+        except (HostError, OSError, ValueError, subprocess.SubprocessError):
+            return None  # Missing corroboration does not invent a restart owner.
+
+    def _external_manager(self, pid: int) -> dict:
+        """Explain an unmanaged holder without granting new shutdown authority."""
+        holder = self._owner_identities[pid]
+        if process_identity(pid) != holder:
+            raise HostError("client_changed")
+        manager_pid = responsible_pid(pid)
+        manager = process_identity(manager_pid) if manager_pid else None
+        result = {"restart_blocker": "manager_unverified"}
+        if manager is not None:
+            provenance = {"pid": manager_pid, "process": Path(manager[1]).name}
+            if Path(manager[1]).name == "limactl":
+                instance = self._lima_instance(manager_pid, manager[1])
+                if instance:
+                    provenance.update(instance)
+
+            result = {"manager": provenance, "restart_blocker": "external_workload_unverified"}
+            if process_identity(manager_pid) != manager or responsible_pid(pid) != manager_pid:
+                raise HostError("client_changed")
+        if process_identity(pid) != holder:
+            raise HostError("client_changed")
+        return result
+
+    def clients(self) -> dict:
         if sys.platform != "darwin":
             raise HostError("platform_unavailable")
+        owners = self._home_owners()
+        inspected, helpers = self.inspect_client_helpers()
+        app = set(helpers) | ({inspected[0]} if inspected[0] else set())
+        services = {p: label for label, _, _, _, processes in self._consumer_agents(owners) for p in processes}
+        return {"complete": True, "clients": [
+            {"pid": p, "kind": "app" if p in app else "service" if p in services else "unmanaged",
+             "process": Path(self._owner_identities[p][1]).name,
+             "restartable": p in app or p in services,
+             **({"service": services[p]} if p in services else {}),
+             **(self._external_manager(p) if p not in app and p not in services else {})} for p in owners]}
+
+    @contextmanager
+    def restart_guard(self):
+        """Resolve blockers before quitting an App; fence accepted Chat work."""
+        owners = self._home_owners()
+        inspected, helpers = self.inspect_client_helpers()
+        agents = self._consumer_agents(owners)
+        restartable = set(helpers) | ({inspected[0]} if inspected[0] else set())
+        restartable.update(p for _, _, _, _, children in agents for p in children)
+        if set(owners) - restartable:
+            raise HostError("waiting_for_idle")
+        if not agents:
+            yield
+            return
+        try:
+            # Reuse the running product's accepted-work reader and ingress
+            # lock. Missing/unsupported Core cannot authorize a service stop.
+            from loopx.extensions.chat_service_guard import managed_chat_activation_guard, RuntimeActivationDeferred
+        except ImportError as error:
+            raise HostError("waiting_for_idle") from error
+        frozen = {label: (pid, identity, self._chat_definition(plist, label))
+                  for label, plist, pid, identity, _ in agents}
+        with ExitStack() as guard:
+            try:
+                guard.enter_context(managed_chat_activation_guard(
+                    [plist for _, plist, _, _, _ in agents],
+                    expected_services={plist: (label, pid) for label, plist, pid, _, _ in agents},
+                ))
+                if any(self._chat_definition(plist, label) != frozen[label][2]
+                       for label, plist, _, _, _ in agents):
+                    raise HostError("client_changed")
+            except (RuntimeActivationDeferred, OSError, ValueError, TimeoutError) as error:
+                raise HostError("waiting_for_idle") from error
+            try:
+                self._guarded_agents = frozen
+                yield
+            finally:
+                self._guarded_agents = {}
+
+    def _chat_recovery(self) -> tuple[Path, dict]:
+        from .native import SCHEMA, private_read
+        path = self.manager.root / "chat-recovery.json"
+        value = private_read(path) if path.exists() else {"schema_version": SCHEMA, "agents": {}}
+        if not isinstance(value.get("agents"), dict):
+            raise HostError("state_untrusted")
+        for label, entry in value["agents"].items():
+            if isinstance(entry, str) and label in CHAT_AGENTS:
+                continue  # Legacy recovery intent; keep its original path.
+            if (not isinstance(label, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,254}", label) is None
+                    or not isinstance(entry, dict) or not isinstance(entry.get("digest"), str)
+                    or re.fullmatch(r"[0-9a-f]{64}", entry["digest"]) is None
+                    or not isinstance(entry.get("plist"), str) or Path(entry["plist"]).name != entry["plist"]
+                    or not entry["plist"].endswith(".plist") or type(entry.get("pid")) is not int or entry["pid"] <= 1
+                    or not isinstance(entry.get("identity"), list) or len(entry["identity"]) != 3
+                    or not isinstance(entry["identity"][0], str)
+                    or any(type(v) is not int or v < 0 for v in entry["identity"][1:])):
+                raise HostError("state_untrusted")
+        if value["agents"]:
+            owner = value.get("owner", {})
+            identity = owner.get("identity") if isinstance(owner, dict) else None
+            if (not isinstance(owner, dict) or type(owner.get("pid")) is not int or owner["pid"] <= 1 or
+                    not isinstance(identity, list) or len(identity) != 3 or
+                    not isinstance(identity[0], str) or
+                    any(type(v) is not int or v < 0 for v in identity[1:])):
+                raise HostError("state_untrusted")
+        return path, value
+
+    def _chat_definition(self, plist: Path, label: str) -> str:
+        raw = trusted_file(plist).read_bytes()
+        try:
+            value = plistlib.loads(raw)
+            if not isinstance(value, dict) or value.get("Label") != label:
+                raise ValueError()
+        except (ValueError, plistlib.InvalidFileException):
+            raise HostError("state_untrusted") from None
+        return hashlib.sha256(raw).hexdigest()
+
+    def pause_chat_agents(self) -> dict:
+        """Pause every provably related user service through its real manager."""
+        from .native import atomic
+        self.accounts.private_dir(self.manager.root)
+        path, recovery = self._chat_recovery()
+        if recovery["agents"] and recovery["owner"]["pid"] != os.getpid():
+            raise HostError("chat_recovery_pending")
+        helpers = {}
+        for label, plist, service_pid, service, descendants in self._consumer_agents(self._home_owners()):
+            if label in recovery["agents"]:
+                continue
+            if getattr(self, "_guarded_agents", {}).get(label) != (
+                    service_pid, service, self._chat_definition(plist, label)):
+                raise HostError("client_changed")
+            target = f"gui/{os.getuid()}/{label}"
+            digest = self._chat_definition(plist, label)
+            fresh = set(self._home_owners())
+            if not any(p in fresh and self._owner_identities[p][1:] == identity
+                       for p, identity in descendants.items()):
+                raise HostError("client_changed")
+            current = subprocess.run(["/bin/launchctl", "print", target],
+                                     capture_output=True, text=True, timeout=10)
+            if (current.returncode or process_identity(service_pid) != service or
+                    re.search(r"^\s*pid = " + str(service_pid) + r"\s*$", current.stdout, re.MULTILINE) is None):
+                raise HostError("client_changed")
+            if self.revision() != self.expected:
+                raise HostError("selection_changed")
+            if self.not_after is not None and time.time() >= self.not_after:
+                raise HostError("quota_stale")
+            # Retain recovery BEFORE an operation which can take effect and
+            # then time out. The detached worker's finally or the next native
+            # request reconciles this same intent, never another account swap.
+            recovery["agents"][label] = {"digest": digest, "plist": plist.name,
+                                         "pid": service_pid, "identity": list(service[1:])}
+            owner = process_identity(os.getpid())
+            if owner is None:
+                raise HostError("ownership_unverified")
+            recovery["owner"] = {"pid": os.getpid(), "identity": list(owner[1:])}
+            atomic(path, recovery)
+            try:
+                result = subprocess.run(["/bin/launchctl", "bootout", target],
+                                        capture_output=True, text=True, timeout=20)
+                if result.returncode:
+                    raise HostError("chat_pause_failed")
+                deadline = time.monotonic() + 5
+                while self._chat_loaded(target):
+                    if time.monotonic() >= deadline:
+                        raise HostError("chat_pause_failed")
+                    time.sleep(0.1)
+            except (OSError, subprocess.SubprocessError):
+                raise HostError("chat_pause_failed") from None
+            helpers.update(descendants)
+        return helpers
+
+    def _chat_loaded(self, target: str) -> bool:
+        return subprocess.run(["/bin/launchctl", "print", target],
+                              capture_output=True, text=True, timeout=10).returncode == 0
+
+    def resume_chat_agents(self) -> None:
+        from .native import atomic
+        path, recovery = self._chat_recovery()
+        if recovery["agents"]:
+            owner = recovery["owner"]
+            current = process_identity(owner["pid"])
+            if owner["pid"] != os.getpid():
+                if current is not None and list(current[1:]) == owner["identity"]:
+                    return  # A concurrent status read must not undo a live handoff.
+                if current is None:
+                    if not process_exited(owner["pid"]):
+                        return
+        failed = False
+        for label, entry in list(recovery["agents"].items()):
+            digest = entry if isinstance(entry, str) else entry["digest"]
+            plist = self.home / "Library/LaunchAgents" / (f"{label}.plist" if isinstance(entry, str) else entry["plist"])
+            target = f"gui/{os.getuid()}/{label}"
+            try:
+                if self._chat_definition(plist, label) != digest:
+                    raise HostError("chat_resume_failed")
+                if not self._chat_loaded(target):
+                    try:
+                        subprocess.run(["/bin/launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist)],
+                                       capture_output=True, text=True, timeout=20)
+                    except (OSError, subprocess.SubprocessError):
+                        if not self._chat_loaded(target):
+                            raise HostError("chat_resume_failed") from None
+                    # A timeout/nonzero reply is ambiguous. Read the actual
+                    # service state before accepting or retrying restoration.
+                if not self._chat_loaded(target):
+                    raise HostError("chat_resume_failed")
+                if isinstance(entry, dict):
+                    # A registered job is insufficient: the old auth consumer
+                    # must exit, and restoration must produce a fresh process.
+                    old = process_identity(entry["pid"])
+                    if old is not None and list(old[1:]) == entry["identity"]:
+                        raise HostError("chat_resume_failed")
+                    deadline, started = time.monotonic() + 5, False
+                    while True:
+                        loaded = subprocess.run(["/bin/launchctl", "print", target],
+                                                capture_output=True, text=True, timeout=10)
+                        match = re.search(r"^\s*pid = (\d+)\s*$", loaded.stdout, re.MULTILINE)
+                        if loaded.returncode == 0 and match is not None and process_identity(int(match[1])) is not None:
+                            break
+                        if time.monotonic() >= deadline:
+                            raise HostError("chat_resume_failed")
+                        if not started:
+                            subprocess.run(["/bin/launchctl", "kickstart", target],
+                                           capture_output=True, text=True, timeout=10)
+                            started = True  # Restore a previously running, non-RunAtLoad job too.
+                        time.sleep(0.1)
+            except (HostError, OSError, subprocess.SubprocessError):
+                failed = True
+                continue  # Attempt every outstanding restoration.
+            del recovery["agents"][label]
+            atomic(path, recovery)
+        if failed:
+            raise HostError("chat_resume_failed")
+
+    def switch(self, slot: str, expected: str, *, reopen: bool, restart_clients: bool = False,
+               force_quit_clients: bool = False, not_after: float | None = None) -> dict:
+        if sys.platform != "darwin":
+            raise HostError("platform_unavailable")
+        self.resume_chat_agents()
+        if self._chat_recovery()[1]["agents"]:
+            raise HostError("chat_recovery_pending")
         self.expected = expected
         self.not_after = not_after
         before = self.status()
@@ -159,50 +784,84 @@ class NativeHost:
         # idle() is rechecked by the native owner under launch/account locks,
         # and immediately before its first mutation. This is the CAS fence,
         # including against manual selections outside LoopX.
-        try:
+        with ExitStack() as guard:
             if restart_clients:
-                if not_after is not None and time.time() >= not_after:
-                    raise HostError("quota_stale")
-                self.close_client(expected)
-                # Children may flush and exit just after their App root. An
-                # unrelated CLI/file owner remains a hold, never a kill target.
-                deadline = time.monotonic() + 10
-                while True:
-                    try:
-                        self.manager.idle()
-                        break
-                    except HostError as error:
-                        if error.code != "waiting_for_idle":
-                            raise
-                        if time.monotonic() >= deadline:
-                            raise HostError("other_clients_busy") from None
-                        time.sleep(0.2)
-            result = self.manager.switch(slot)
-        except Exception as error:
-            # A refused/failed transaction must not unnecessarily leave a
-            # normally closed source App down. Native preflight blocks opening
-            # an incomplete credential journal; a later manual choice wins.
-            if restart_clients and before.get("client_running") and getattr(error, "code", None) != "client_changed":
-                try:
-                    if self.status().get("client_running") is False:
-                        self.reopen(expected)
-                except (HostError, OSError, ValueError, subprocess.SubprocessError):
-                    pass
-            raise
-        value = self.status()
-        if value["active_slot"] != slot or value["current_login_matches"] is not True:
-            raise HostError("readback_failed")
-        launch_failed = False
-        if reopen:
+                guard.enter_context(self.restart_guard())
+            result, restore_error = None, None
             try:
-                self.apps.open_app(self.home, "gpt", [])
-            except (OSError, ValueError, subprocess.SubprocessError):
-                launch_failed = True
-        after = self.status()
-        if after["selection_revision"] != value["selection_revision"]:
-            raise HostError("selection_changed")
-        value = after
-        return value | {"history_untouched": result["history_untouched"], "launch_failed": launch_failed}
+                try:
+                    if restart_clients:
+                        if not_after is not None and time.time() >= not_after:
+                            raise HostError("quota_stale")
+                        inspected, helpers = self.inspect_client_helpers()
+                        self.close_client(expected, inspected=inspected,
+                                          **({"force": True} if force_quit_clients else {}))
+                        # Orphaned App helpers and idle chat transports are
+                        # product-owned clients of this home. Retire or pause them;
+                        # an unrelated CLI/file owner remains a hold, never a kill
+                        # target.
+                        self.retire_app_helpers(helpers)
+                        helpers.update(self.pause_chat_agents())
+                        self.retire_app_helpers(helpers)
+                        deadline = time.monotonic() + 15
+                        force_after, rescans = deadline - 5, 0
+                        while True:
+                            try:
+                                if not self._helpers_stopped(helpers):
+                                    raise HostError("waiting_for_idle")
+                                self.manager.idle()
+                                break
+                            except HostError as error:
+                                if error.code != "waiting_for_idle":
+                                    raise
+                                if time.monotonic() >= deadline:
+                                    raise HostError("other_clients_busy") from None
+                                # Catch services started during initial shutdown,
+                                # without an unbounded scan/termination loop.
+                                if rescans < 3:
+                                    helpers.update(self.pause_chat_agents())
+                                    rescans += 1
+                                self.retire_app_helpers(helpers, force=force_quit_clients and time.monotonic() >= force_after)
+                                time.sleep(0.2)
+                    result = self.manager.switch(slot)
+                except Exception:
+                    # A refused/failed transaction must not unnecessarily leave a
+                    # normally closed source App down. Native preflight blocks
+                    # opening an incomplete credential journal; a later manual
+                    # choice wins.
+                    if restart_clients and before.get("client_running"):
+                        try:
+                            if self.status().get("client_running") is False:
+                                self.reopen(expected)
+                        except (HostError, OSError, ValueError, subprocess.SubprocessError):
+                            pass
+                    raise
+            finally:
+                # Restore product-owned transports even when the handoff fails.
+                try:
+                    self.resume_chat_agents()
+                except HostError as error:
+                    if result is None:
+                        raise
+                    # A committed account still needs its App reopened. Report the
+                    # retained service recovery after that original continuation.
+                    restore_error = error
+            value = self.status()
+            if value["active_slot"] != slot or value["current_login_matches"] is not True:
+                raise HostError("readback_failed")
+            launch_failed = False
+            if reopen:
+                try:
+                    self.apps.open_app(self.home, "gpt", [], spec=self.spec)
+                except (OSError, ValueError, subprocess.SubprocessError):
+                    launch_failed = True
+            after = self.status()
+            if after["selection_revision"] != value["selection_revision"]:
+                raise HostError("selection_changed")
+            value = after
+            if restore_error is not None:
+                raise restore_error
+            return value | {"history_untouched": result["history_untouched"], "launch_failed": launch_failed}
 
     def recover(self, rollback: bool, expected: str) -> dict:
         if sys.platform != "darwin":
@@ -322,8 +981,13 @@ def read_usage(raw: bytes) -> dict:
             "Authorization": "Bearer " + token, "chatgpt-account-id": account_id,
             "User-Agent": "codex-cli", "Accept": "application/json",
         })
-        with urllib.request.build_opener(NoRedirect()).open(request, timeout=10) as response:
-            encoded = response.read(131073)
+        try:
+            with urllib.request.build_opener(NoRedirect()).open(request, timeout=10) as response:
+                encoded = response.read(131073)
+        except urllib.error.HTTPError:
+            raise  # Authentication/HTTP denials do not change transport.
+        except OSError:
+            encoded = socks_usage(token, account_id)
         if len(encoded) > 131072:
             raise HostError("quota_unavailable")
         value = json.loads(encoded)
@@ -335,6 +999,38 @@ def read_usage(raw: bytes) -> dict:
         raise HostError("auth_required" if error.code in (401, 403) else "quota_unavailable") from None
     except (KeyError, TypeError, ValueError, OSError):
         raise HostError("quota_unavailable") from None
+
+
+def socks_usage(token: str, account_id: str) -> bytes:
+    """Use an already configured SOCKS route after an HTTP transport failure.
+
+    urllib has no SOCKS transport. Keep credentials on stdin, verified HTTPS,
+    the fixed quota endpoint, no redirects and the original response bound.
+    A missing route/tool stays unknown; this never configures a proxy.
+    """
+    proxies = urllib.request.getproxies()
+    proxy = proxies.get("all") or proxies.get("socks", "")
+    if urllib.parse.urlsplit(proxy).scheme == "socks":
+        proxy = "socks5h:" + proxy.split(":", 1)[1]
+    binary = shutil.which("curl")
+    if not binary or urllib.parse.urlsplit(proxy).scheme not in {"socks5", "socks5h"}:
+        raise HostError("quota_unavailable")
+    headers = ["Authorization: Bearer " + token, "chatgpt-account-id: " + account_id,
+               "User-Agent: codex-cli", "Accept: application/json"]
+    if any("\n" in value or "\r" in value for value in headers):
+        raise HostError("auth_required")
+    config = "\n".join(["proxy = " + json.dumps(proxy),
+                         *("header = " + json.dumps(value) for value in headers)]) + "\n"
+    result = subprocess.run([str(trusted_file(Path(binary))), "-q", "--config", "-",
+        "--url", "https://chatgpt.com/backend-api/wham/usage", "--proto", "=https",
+        "--max-time", "10", "--max-filesize", "131072", "--silent", "--show-error",
+        "--write-out", "\n%{http_code}"], input=config.encode(), capture_output=True, timeout=12)
+    status = result.stdout[-3:]
+    if status in {b"401", b"403"}:
+        raise HostError("auth_required")
+    if result.returncode or status != b"200" or len(result.stdout) > 131076:
+        raise HostError("quota_unavailable")
+    return result.stdout[:-4]
 
 
 def app_server_usage(binary: str, env: dict) -> dict:
@@ -396,15 +1092,22 @@ def main() -> int:
                {"schema_version": SCHEMA, "pid": os.getpid()})
     try:
         request = json.load(sys.stdin)
-        host = NativeHost(request["adapter"])
         operation = request["operation"]
+        host = NativeHost(request["adapter"], reconcile_services=operation != "clients")
         if operation == "status":
             value = host.status()
+        elif operation == "clients":
+            value = host.clients()
         elif operation == "observe":
             value = host.observe(request["slots"], request["expected_revision"], request.get("auth_failures"))
+        elif operation == "enroll_api":
+            value = host.enroll_api(request["slot"], request["api_key"], request["base_url"])
+        elif operation == "enroll_current":
+            value = host.enroll_current(request["expected_revision"])
         elif operation == "switch":
             value = host.switch(request["slot"], request["expected_revision"], reopen=request["reopen"],
-                                restart_clients=request.get("restart_clients", False), not_after=request.get("not_after"))
+                                restart_clients=request.get("restart_clients", False),
+                                force_quit_clients=request.get("force_quit_clients", False), not_after=request.get("not_after"))
         elif operation == "reopen":
             value = host.reopen(request["expected_revision"])
         elif operation in ("recover", "rollback"):

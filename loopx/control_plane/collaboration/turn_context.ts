@@ -3,8 +3,9 @@ import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject, requireStringLiteral} from "../runtime_decode.ts";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
+import {normalizeOriginalConversationRecipient} from "./semantic_request.ts";
 
-function item(value: unknown): JsonObject | null {
+export function projectDelegationTurnItem(value: unknown): JsonObject | null {
   const row = requireJsonObject(value, "delegation observation");
   const direction = requireStringLiteral(row.direction, ["incoming", "outgoing"], "delegation direction");
   const request = requireJsonObject(row.request, "delegation request");
@@ -19,36 +20,47 @@ function item(value: unknown): JsonObject | null {
   // Cancellation of a request does not release an in-flight publication reservation.
   if (cancelled && control?.active_reservation == null) return null;
   if (!Array.isArray(row.results)) throw new EffectRuntimeRequestError("delegation results are required");
+  // A correction changes the work brief, not an earlier result's delivery or
+  // consumption receipt. Keep unresolved returns at their original revision;
+  // resolved historical results remain available through the full reader.
   const results = row.results.map(value => requireJsonObject(value, "delegation result"))
-    .filter(result => result.request_revision === (control?.revision ?? 1));
+    .filter(result => result.request_revision === (control?.revision ?? 1)
+      || result.status !== "delivered" && result.status !== "superseded"
+      || request.source_kind === "peer" && result.consumed !== true);
   const incomplete = results.filter(result => result.status !== "delivered" && result.status !== "superseded");
-  const unconsumed = results.filter(result => result.consumed !== true);
+  // Peer returns require their requester acknowledgement. An original Chat
+  // return has a delivery receipt.
+  const unconsumed = request.source_kind === "peer" ? results.filter(result => result.consumed !== true) : [];
   let step: string;
   if (kind === "receipt_unavailable" || row.evidence_unavailable === true) step = "recover_evidence";
   else if (cancelled) step = "reconcile_reservation";
+  else if (direction === "outgoing" && unconsumed.length) step = "consume_peer_result";
   else if (kind !== "settled") step = direction === "outgoing" ? "await_peer_result"
     : receipt.recorded_decision == null ? "assess_request"
     : receipt.recorded_decision === "adopt" ? "review_request_work" : "return_answer";
-  else if (direction === "outgoing" && unconsumed.length) step = "consume_peer_result";
   else if (incomplete.length) step = "await_return_delivery";
   else if (request.source_kind === "peer" && unconsumed.length) step = "await_peer_consumption";
   else return null;
   const purpose = String(control?.brief && (control.brief as JsonObject).purpose
     || request.purpose || "").replace(/\s+/g, " ").trim();
   const todos = Array.isArray(row.todo_ids) ? row.todo_ids : [];
+  const visibleReturns = (step === "consume_peer_result" ? unconsumed : results).slice(-3);
   return {
     request_id: request.request_id, direction,
     ...(request.goal_ref ? {goal_ref: request.goal_ref} : {}),
     request_revision: control?.revision ?? 1,
     ...(control ? {request_digest: control.revision_digest} : {}),
     ...(request.source_agent_id ? {source_agent_id: request.source_agent_id} : {}),
+    ...(request.recipient ? {recipient: normalizeOriginalConversationRecipient(request.recipient)} : {}),
     agent_id: request.agent_id,
     purpose: [...purpose].slice(0, 120).join(""), purpose_truncated: [...purpose].length > 120,
     receipt_state: kind, decision: receipt.recorded_decision ?? null, step,
+    ...(receipt.remaining_work ? {remaining_work: receipt.remaining_work} : {}),
     ...(todos.length ? {todo_ids: todos.slice(0, 4), additional_todo_count: Math.max(0, todos.length - 4)} : {}),
     ...(results.length ? {pending_return_count: incomplete.length, unconsumed_return_count: unconsumed.length,
-      returns: results.slice(-3).map(result => ({result_key: result.result_key,
-        status: result.status, consumed: result.consumed})), additional_return_count: Math.max(0, results.length - 3)} : {}),
+      returns: visibleReturns.map(result => ({result_key: result.result_key,
+        request_revision: result.request_revision, status: result.status, consumed: result.consumed})),
+      additional_return_count: results.length - visibleReturns.length} : {}),
   };
 }
 
@@ -64,14 +76,72 @@ function visibleRows(rows: JsonObject[]): JsonObject[] {
   return visible;
 }
 
+const RETURN_ATTENTION_LIMIT = 4;
+
+function peerReturnNeedsAttention(row: JsonObject): boolean {
+  return row.direction === "outgoing" && row.step === "consume_peer_result"
+    && typeof row.unconsumed_return_count === "number" && row.unconsumed_return_count > 0
+    && Array.isArray(row.returns) && row.returns.some(value => {
+      const result = value !== null && typeof value === "object" && !Array.isArray(value)
+        ? value as JsonObject : undefined;
+      return result?.consumed !== true;
+    });
+}
+
+function peerReturnAttention(rows: JsonObject[]): JsonObject {
+  const pending = rows.filter(peerReturnNeedsAttention);
+  const items = pending.slice(0, RETURN_ATTENTION_LIMIT).map(row => {
+    const item: JsonObject = {
+      request_id: row.request_id,
+      request_revision: row.request_revision,
+      step: row.step,
+      unconsumed_return_count: row.unconsumed_return_count,
+      returns: row.returns,
+    };
+    for (const field of ["source_agent_id", "agent_id"] as const) {
+      if (row[field] !== undefined) item[field] = row[field];
+    }
+    return item;
+  });
+  return {count: pending.length, items, omitted_count: pending.length - items.length};
+}
+
+function requirePeerReturnAttention(value: unknown): {count: number; items: JsonObject[]} {
+  const attention = requireJsonObject(value, "delegation return attention");
+  const count = attention.count, omitted = attention.omitted_count;
+  if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0
+      || typeof omitted !== "number" || !Number.isSafeInteger(omitted) || omitted < 0
+      || !Array.isArray(attention.items) || attention.items.length > RETURN_ATTENTION_LIMIT
+      || count !== attention.items.length + omitted) {
+    throw new EffectRuntimeRequestError("invalid delegation return attention");
+  }
+  const items = attention.items.map(value => {
+    const item = requireJsonObject(value, "delegation return attention item");
+    if (typeof item.request_id !== "string" || !BARE_SHA256_PATTERN.test(item.request_id)
+        || typeof item.request_revision !== "number" || !Number.isSafeInteger(item.request_revision)
+        || item.request_revision < 1 || item.step !== "consume_peer_result"
+        || typeof item.unconsumed_return_count !== "number"
+        || !Number.isSafeInteger(item.unconsumed_return_count) || item.unconsumed_return_count < 1
+        || !Array.isArray(item.returns) || !item.returns.some(value => {
+          const result = requireJsonObject(value, "delegation return attention result");
+          return result.consumed !== true;
+        })) {
+      throw new EffectRuntimeRequestError("invalid delegation return attention item");
+    }
+    return item;
+  });
+  return {count, items};
+}
+
 /** Input is already scope-checked by the existing inbox and result owners. */
 export function projectDelegationTurnItems(params: JsonObject): JsonObject {
   if (!Array.isArray(params.observations) || params.observations.length > 128) {
     throw new EffectRuntimeRequestError("delegation observation batch must contain at most 128 requests");
   }
-  const rows = params.observations.map(item).filter((value): value is JsonObject => value !== null);
+  const rows = params.observations.map(projectDelegationTurnItem).filter((value): value is JsonObject => value !== null);
   return {items: visibleRows(rows), incoming_count: rows.filter(row => row.direction === "incoming").length,
-    outgoing_count: rows.filter(row => row.direction === "outgoing").length};
+    outgoing_count: rows.filter(row => row.direction === "outgoing").length,
+    return_attention: peerReturnAttention(rows)};
 }
 
 export function projectDelegationTurnContext(params: JsonObject): JsonObject {
@@ -92,9 +162,14 @@ export function projectDelegationTurnContext(params: JsonObject): JsonObject {
   }, 0);
   const incoming = total("incoming_count"), outgoing = total("outgoing_count");
   const visible = visibleRows(rows);
+  const attention = batches.map(batch => requirePeerReturnAttention(batch.return_attention));
+  const attentionCount = attention.reduce((sum, batch) => sum + batch.count, 0);
+  const attentionItems = attention.flatMap(batch => batch.items).slice(0, RETURN_ATTENTION_LIMIT);
   return {ok: true, read_complete: false, unfinished_delegations: {
     count_unit: "request", items: visible, incoming_count: incoming, outgoing_count: outgoing,
     omitted_count: incoming + outgoing - visible.length,
+    return_attention: {count: attentionCount, items: attentionItems,
+      omitted_count: attentionCount - attentionItems.length},
     scan_complete: params.scan_complete === true && params.unavailable_count === 0,
     unavailable_count: params.unavailable_count, observed_at: params.observed_at,
     read_command: params.read_command,

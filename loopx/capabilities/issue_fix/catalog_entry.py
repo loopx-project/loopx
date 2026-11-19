@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .workflow_plan import build_issue_fix_pr_lifecycle_command
+from .command_templates import build_issue_fix_pr_lifecycle_command
 
 
 ISSUE_FIX_CATALOG_ENTRY: dict[str, Any] = {
@@ -241,6 +241,7 @@ ISSUE_FIX_CATALOG_ENTRY: dict[str, Any] = {
         "python3 examples/issue-fix-validated-memory-writeback-smoke.py",
         "python3 examples/issue-fix-reviewer-recommendation-smoke.py",
         "python3 examples/issue-fix-reviewer-request-smoke.py",
+        "python3 examples/issue-fix-reviewer-notification-drain-postwrite-smoke.py",
         "python3 examples/issue-fix-json-input-boundary-smoke.py",
         "python3 examples/issue-fix-reviewer-notification-sink-smoke.py",
         "python3 examples/content-ops-issue-fix-metadata-preview-smoke.py",

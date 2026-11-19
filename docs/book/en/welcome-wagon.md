@@ -142,11 +142,11 @@ Review the draft and remove anything that should not be public before submitting
 
 | Your situation | Use this route | Include |
 | --- | --- | --- |
-| First installation or connection | [First-run feedback](https://github.com/huangruiteng/loopx/issues/new?template=first_run.yml) | Version, OS, Host, and completed steps |
-| A run lasting hours or days | [Usage story](https://github.com/huangruiteng/loopx/issues/new?template=usage_story.yml) | Duration, capabilities, recovery, and outcome |
-| Reproducible incorrect behavior | [Bug report](https://github.com/huangruiteng/loopx/issues/new?template=bug_report.yml) | Minimal reproduction, expected/actual behavior, sanitized diagnostics |
-| Usage or design question | [GitHub Q&A](https://github.com/huangruiteng/loopx/discussions/categories/q-a) | Goal, current version, and attempted route |
-| A public workflow or outcome | [Show and tell](https://github.com/huangruiteng/loopx/discussions/categories/show-and-tell) | What ran, evidence, and limitations |
+| First installation or connection | [First-run feedback](https://github.com/loopx-project/loopx/issues/new?template=first_run.yml) | Version, OS, Host, and completed steps |
+| A run lasting hours or days | [Usage story](https://github.com/loopx-project/loopx/issues/new?template=usage_story.yml) | Duration, capabilities, recovery, and outcome |
+| Reproducible incorrect behavior | [Bug report](https://github.com/loopx-project/loopx/issues/new?template=bug_report.yml) | Minimal reproduction, expected/actual behavior, sanitized diagnostics |
+| Usage or design question | [GitHub Q&A](https://github.com/loopx-project/loopx/discussions/categories/q-a) | Goal, current version, and attempted route |
+| A public workflow or outcome | [Show and tell](https://github.com/loopx-project/loopx/discussions/categories/show-and-tell) | What ran, evidence, and limitations |
 
 For informal conversation, join [Discord](https://discord.gg/XmGgQyCFZd). Chat is useful for exploration;
 final bugs, decisions, and reproducible conclusions should return to an Issue, Discussion, PR, or
@@ -164,12 +164,12 @@ Read these in order:
    direction is shipped, incubating, research, draft, or held;
 2. the [Contributor Task Board](/loopx/docs/development/contributor-tasks/) to choose a
    `Starter / Good First` task or another bounded task with design agreement;
-3. [CONTRIBUTING](https://github.com/huangruiteng/loopx/blob/main/CONTRIBUTING.md) for setup, DCO,
+3. [CONTRIBUTING](https://github.com/loopx-project/loopx/blob/main/CONTRIBUTING.md) for setup, DCO,
    public/private boundaries, and validation.
 
 The task board is a dynamic source of truth. This book does not copy its current rows. If a task has no
 Issue, open one with the
-[Contributor task form](https://github.com/huangruiteng/loopx/issues/new?template=contributor-task.yml)
+[Contributor task form](https://github.com/loopx-project/loopx/issues/new?template=contributor-task.yml)
 to establish a public coordination boundary.
 
 <!-- welcome-wagon:claim-bounded-slice -->
@@ -239,7 +239,7 @@ A first review can answer only six questions:
 
 Cross-direction questions may enter an
 [Open Strategy Review](/loopx/docs/community/open-strategy-reviews/). It produces a disposition, owner,
-next artifact, and review trigger; it does not replace the RFC, Issue, or PR path with a meeting vote.
+next artifact, and review trigger.
 
 ## Ask For Help Without Losing The Signal {#ask-for-help}
 
@@ -256,7 +256,7 @@ Include:
 
 Do not paste a large log without context or say only that something “does not work.” A good question lets
 another person reproduce the problem, locate the owner, and propose a next action. See
-[LoopX Support](https://github.com/huangruiteng/loopx/blob/main/.github/SUPPORT.md) for channel and
+[LoopX Support](https://github.com/loopx-project/loopx/blob/main/.github/SUPPORT.md) for channel and
 response boundaries.
 
 ## Where To Go Next {#next-stop}

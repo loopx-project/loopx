@@ -30,6 +30,7 @@ ROOT_DOCS = {
 PRODUCT_ROOT_DOCS = {
     "README.md",
     "domain-capability-packs.md",
+    "periodic-reports.md",
     "public-adoption-loop.md",
     "release-note-template.md",
     "release-readiness.md",
@@ -62,14 +63,6 @@ MOVED_PATHS = {
     ),
     "docs/protocol-action-packet-router-comparison-v0.md": (
         "docs/reference/protocols/protocol-action-packet-router-comparison-v0.md"
-    ),
-    "docs/codex-cli-long-run-benchmark-design.md": (
-        "deprecate/benchmark-legacy/docs/research/long-horizon-agent-benchmarks/"
-        "codex-cli-long-run-benchmark-design.md"
-    ),
-    "docs/codex-cli-long-run-regression.md": (
-        "deprecate/benchmark-legacy/docs/research/long-horizon-agent-benchmarks/"
-        "codex-cli-long-run-regression.md"
     ),
     "docs/project-skill-delivery.md": (
         "loopx/capabilities/project_skill_delivery/README.md"
@@ -988,11 +981,9 @@ def main() -> int:
     root_readme_zh = read("README.zh-CN.md")
     governance = read(".github/GOVERNANCE.md")
     support = read(".github/SUPPORT.md")
-    auto_research_command_path = read("demo/auto_research/README.md")
     codex_cli_tui_loop = read("docs/product/runtimes/codex-cli/codex-cli-tui-loop.md")
     project_agent_contract = read("docs/project-agent-todo-contract.md")
     status_contract = read("docs/status-data-contract.md")
-    compact_auto_research_command_path = compact(auto_research_command_path)
     compact_codex_cli_tui_loop = compact(codex_cli_tui_loop)
     compact_project_agent_contract = compact(project_agent_contract)
     compact_status_contract = compact(status_contract)
@@ -1003,6 +994,9 @@ def main() -> int:
         "SECURITY.md",
         "SUPPORT.md",
         "COMMUNICATIONS.md",
+        "deprecate/benchmark-legacy",
+        "docs/codex-cli-long-run-benchmark-design.md",
+        "docs/codex-cli-long-run-regression.md",
     ):
         assert not (REPO_ROOT / retired_root_policy).exists(), retired_root_policy
     for governance_contract in (
@@ -1141,8 +1135,6 @@ def main() -> int:
         "docs/development/documentation-layout.md",
         "docs/development/testing-and-quality.md",
         "docs/guides/README.md",
-        "demo/auto_research/README.md",
-        "docs/guides/multi-agent-product-recipe.md",
         "docs/integrations/README.md",
         "docs/reference/README.md",
         "docs/reference/contracts/README.md",
@@ -1183,6 +1175,17 @@ def main() -> int:
         path.name for path in (DOCS / "product").glob("*.md")
     }
     assert product_root_markdown == PRODUCT_ROOT_DOCS, sorted(product_root_markdown)
+    product_entrypoints = {
+        resolve_docs_relative_target("product/README.md", target)
+        for target in iter_relative_md_targets(read("docs/product/README.md"))
+    }
+    missing_product_entries = {
+        name for name in product_root_markdown - {"README.md"}
+        if (DOCS / "product" / name).resolve() not in product_entrypoints
+    }
+    assert not missing_product_entries, (
+        "product docs missing from docs/product/README.md", sorted(missing_product_entries)
+    )
 
     assert not (DOCS / "outreach").exists(), (
         "retired marketing and launch drafts must stay out of the active docs tree"
@@ -1230,7 +1233,6 @@ def main() -> int:
             read("docs/reference/protocols/README.md"),
             read("docs/research/README.md"),
             read("benchmark/README.md"),
-            read("deprecate/benchmark-legacy/README.md"),
             read("docs/showcases/README.md"),
         ]
     )
@@ -1242,7 +1244,6 @@ def main() -> int:
             new_path in combined_public_indexes
             or basename in combined_public_indexes
             or new_path.startswith("docs/archive/")
-            or new_path.startswith("deprecate/benchmark-legacy/")
         ), new_path
 
     for required in [
@@ -1263,38 +1264,6 @@ def main() -> int:
         "agent_lane_recommendation",
     ]:
         assert required in compact_status_contract, required
-
-    for required in [
-        "Start From A Clean Workspace",
-        "loopx-auto-research-demo",
-        "auto-research demo-e2e",
-        "auto-research demo-supervisor",
-        "auto-research worker-loop",
-        "research-curator",
-        "hypothesis-proposer",
-        "research-executor",
-        "evaluator-promoter",
-        "tmux attach -t loopx-auto-research",
-        "tmux kill-session -t loopx-auto-research",
-        "not a leader agent",
-    ]:
-        assert required in compact_auto_research_command_path, required
-
-    multi_agent_product_recipe = read("docs/guides/multi-agent-product-recipe.md")
-    compact_multi_agent_product_recipe = compact(multi_agent_product_recipe)
-    for required in [
-        "Multi-Agent Product Recipe",
-        "Product preset",
-        "Multi-agent kernel",
-        "role list",
-        "agent scope",
-        "worker-local skill snippet",
-        "handoff/todo hints",
-        "One-Command Launch",
-        "Attach, Stop, Retry",
-        "Auto-research should stay a reference preset, not the kernel",
-    ]:
-        assert required in compact_multi_agent_product_recipe, required
 
     check_rfc_language_mirrors()
     check_rfc_ledger_entries()

@@ -9,8 +9,10 @@ import { requireJsonObject, requireBoolean, requireNonEmptyString, requireString
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import { normalizeTodoAgent, stripPythonWhitespace } from "../coordination/todo_agents.ts";
-import { AuthorityStoreProtocolError } from "../coordination/authority_store_codec.ts";
+import { AuthorityStoreProtocolError, canonicalAuthorityObject,
+  canonicalAuthoritySha256 } from "../coordination/authority_store_codec.ts";
 import {claimAllowsAgent} from "./agent_scope.ts";
+import {legacyTodoPriority} from "./priority.ts";
 
 const REVISION = "todo_frontier_revision_v0";
 const INDEX = "todo_frontier_revision_index_v0";
@@ -152,8 +154,20 @@ function checkpoint(rows: Row[] | null, agent: string | null, unclaimedOnly = fa
   // real change to the measured chain but not to this agent's own work basis,
   // so the ACK fence also carries an identity over the rows this agent owns.
   const owned = agent === null ? [] : selected.filter(row => row.claim === agent);
-  const ownedDigest = owned.length === 0 ? null : createHash("sha256")
-    .update(`[${owned.map(row => row.serialized).join(",")}]`).digest("hex").slice(0, 24);
+  // Display title and priority remain full-revision freshness, but do not buy
+  // another review of the same owned work. Canonical text is the requirement
+  // when no enabled acceptance contract covers this Todo, so preserve its
+  // exact bytes alongside task/target/dependency identity. The separate exact
+  // owner-contract hold checkpoint governs already-held acceptance reviews;
+  // this generic chain must not guess whether a body edit is merely a rename.
+  const ownedDigest = owned.length === 0 ? null : canonicalAuthoritySha256(owned.map(row => {
+    const work = canonicalAuthorityObject(JSON.parse(row.serialized), "frontier work");
+    const {title: _title, priority: _priority, ...basis} = work;
+    // The original priority writer decorates `text` as well. Decode only its
+    // declared marker syntax; retain the entire remaining requirement body.
+    if (typeof basis.text === "string") basis.text = legacyTodoPriority(basis.text).title;
+    return basis;
+  })).slice(0, 24);
   return {complete: true, frontier_revision: `${REVISION}:${digest.slice(0, 24)}`,
     frontier_updated_at: updated,
     frontier_owned_identity: ownedDigest === null ? null : `${REVISION}:owned:${ownedDigest}`};

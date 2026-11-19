@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -262,6 +263,17 @@ def test_word_level_classification_flags_every_raw_material_key() -> None:
 
 
 def test_status_ingests_projection_first_screen() -> None:
+    with tempfile.TemporaryDirectory(prefix="loopx-session-readonly-") as temporary:
+        _assert_status_ingests_projection_first_screen(Path(temporary))
+
+
+def _assert_status_ingests_projection_first_screen(root: Path) -> None:
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+    runtime, state, registry = root / "runtime", root / "STATE.md", root / "registry.json"
+    state.write_text("# Session Goal\n\n## Objective\nObserve compact session readback.\n\n## Agent Todo\n")
+    goal = {"id": "demo-goal", "repo": str(root), "state_file": str(state)}
+    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [goal]}))
+    import_fixture_authority(registry, "demo-goal", provider="sqlite")
     payload = build_session_runtime_readonly_projection(
         goal_id="demo-goal",
         sessions=[
@@ -311,6 +323,7 @@ def test_status_ingests_projection_first_screen() -> None:
         "runs": [run],
     }
     queue = build_attention_queue(
+        runtime_root=runtime, registry_path=registry,
         contract={"ok": True},
         history=history,
         global_registry={"ok": True, "findings": []},
@@ -330,7 +343,7 @@ def test_status_ingests_projection_first_screen() -> None:
     run_history = build_status_runtime_summaries(
         history=history,
         queue=queue,
-        runtime_root=REPO_ROOT,
+        runtime_root=runtime,
         goal_id_filter=None,
         display_limit=10,
         todo_index_limit=10,

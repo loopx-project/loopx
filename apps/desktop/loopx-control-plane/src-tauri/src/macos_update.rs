@@ -3,12 +3,56 @@
 //! the existing updater. This is only its macOS filesystem effect adapter.
 use std::{
     fs,
-    io::{self, Cursor},
+    io::{self, Cursor, Read},
     path::{Component, Path},
 };
 
 use flate2::read::GzDecoder;
+use serde_json::Value;
 use tauri_plugin_updater::Update;
+
+const PUBLIC_DEFAULT_CONTRACT: &str =
+    include_str!("../../../../../loopx/cli_commands/public_default_contract.json");
+
+/// Read the publisher's observed contract inside the signature-verified bytes
+/// before an update can be cached, close the workspace, or replace its App.
+pub(crate) fn qualify_candidate(
+    channel: &str,
+    version: &str,
+    verified_bytes: &[u8],
+) -> Result<(), String> {
+    // Historical stable bundles predate the attestation and remain usable.
+    // A preview stays subject to the check even if cache metadata changes channel.
+    if channel != "main"
+        && !semver::Version::parse(version)
+            .is_ok_and(|value| value.pre.as_str().starts_with("main."))
+    {
+        return Ok(());
+    }
+    let invalid = "runtime_bundle_invalid";
+    let unavailable = "update_platform_unavailable";
+    let supported: Value = serde_json::from_str(PUBLIC_DEFAULT_CONTRACT).map_err(|_| invalid)?;
+    let identity_path = Path::new("LoopX.app/Contents/Resources/runtime/identity.json");
+    let mut archive = tar::Archive::new(GzDecoder::new(Cursor::new(verified_bytes)));
+    let mut qualified = false;
+    for entry in archive.entries().map_err(|_| invalid)? {
+        let mut entry = entry.map_err(|_| invalid)?;
+        if entry.path().map_err(|_| invalid)? != identity_path {
+            continue;
+        }
+        if qualified || !entry.header().entry_type().is_file() || entry.size() > 16 * 1024 {
+            return Err(invalid.into());
+        }
+        let mut raw = Vec::new();
+        entry.read_to_end(&mut raw).map_err(|_| invalid)?;
+        let identity = crate::bundled_runtime::parse_identity(&raw)?;
+        if identity["default_contract"] != supported {
+            return Err(unavailable.into());
+        }
+        qualified = true;
+    }
+    qualified.then_some(()).ok_or_else(|| unavailable.into())
+}
 
 // Provider-local errors, never a new persisted or caller-facing vocabulary.
 #[derive(Debug, PartialEq)]
@@ -19,7 +63,7 @@ enum InstallError {
 
 pub(crate) fn install(update: &Update, verified_bytes: &[u8]) -> Result<(), String> {
     let executable = std::env::current_exe().map_err(|_| "app_install_failed")?;
-    match install_verified_archive(&executable, verified_bytes) {
+    match install_archive(&executable, verified_bytes, Some(&update.version)) {
         Ok(()) => Ok(()),
         // An administrator-owned installation retains the existing native
         // authorization path. Never fall back after extraction or a failed
@@ -31,7 +75,25 @@ pub(crate) fn install(update: &Update, verified_bytes: &[u8]) -> Result<(), Stri
     }
 }
 
+// Prepared downloads are activated before this App starts any service. A
+// permission-restricted target stays on the working App; its explicit update
+// action retains the updater's existing native authorization adapter above.
+pub(crate) fn install_prepared(version: &str, verified_bytes: &[u8]) -> Result<(), String> {
+    let executable = std::env::current_exe().map_err(|_| "app_install_failed")?;
+    install_archive(&executable, verified_bytes, Some(version))
+        .map_err(|_| "app_install_failed".into())
+}
+
+#[cfg(test)]
 fn install_verified_archive(executable: &Path, verified_bytes: &[u8]) -> Result<(), InstallError> {
+    install_archive(executable, verified_bytes, None)
+}
+
+fn install_archive(
+    executable: &Path,
+    verified_bytes: &[u8],
+    expected_version: Option<&str>,
+) -> Result<(), InstallError> {
     let failed = || InstallError::Failed;
     let target = crate::update_backup::installed_bundle_at(executable).map_err(|_| failed())?;
     let parent = target.parent().ok_or_else(failed)?;
@@ -74,6 +136,21 @@ fn install_verified_archive(executable: &Path, verified_bytes: &[u8]) -> Result<
     {
         return Err(failed());
     }
+    // The archive is signed, but its local cache metadata is not. Bind the
+    // announced version to the sealed bundle before any replacement so a
+    // modified cache cannot relabel a valid older archive as a newer update.
+    if let Some(expected) = expected_version {
+        let mut command = std::process::Command::new("/usr/libexec/PlistBuddy");
+        command
+            .args(["-c", "Print :CFBundleShortVersionString"])
+            .arg(candidate.join("Contents/Info.plist"));
+        let matches = crate::services::timed_output(command).is_some_and(|output| {
+            output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == expected
+        });
+        if !matches {
+            return Err(failed());
+        }
+    }
 
     // Retain both sides before the only commit operation. The same atomic
     // exchange as rollback keeps the install path occupied, even across a
@@ -97,6 +174,55 @@ mod tests {
         let mut builder = tar::Builder::new(encoder);
         builder.append_dir_all("LoopX.app", app).unwrap();
         builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn only_qualified_preview_can_replace_the_prepared_candidate() {
+        let root = tempfile::tempdir().unwrap();
+        let candidate = root.path().join("candidate");
+        let resources = candidate.join("Contents/Resources/runtime");
+        fs::create_dir_all(&resources).unwrap();
+        let cache = root.path().join("prepared");
+        let version = "0.0.0-main.2.1";
+        let identity_path = resources.join("identity.json");
+        let mut identity = serde_json::json!({
+            "schema_version": "desktop_runtime_bundle_v1",
+            "source_revision": "1111111111111111111111111111111111111111"
+        });
+        let rejected = [
+            None,
+            Some(serde_json::json!({"surface": "unknown"})),
+            Some(serde_json::json!({
+                "surface": "complete_turn",
+                "schema_version": "loopx_turn_envelope_v1",
+                "interaction_schema_version": "loopx_interaction_contract_v0"
+            })),
+        ];
+        for contract in rejected {
+            if let Some(contract) = contract {
+                identity["default_contract"] = contract;
+            }
+            fs::write(&identity_path, identity.to_string()).unwrap();
+            let bytes = archive(&candidate);
+            assert_eq!(
+                crate::prepared_update::save(&cache, "main", version, "unused", &bytes),
+                Err("update_platform_unavailable".into())
+            );
+            assert!(!cache.exists());
+            assert_eq!(
+                qualify_candidate("stable", version, &bytes),
+                Err("update_platform_unavailable".into())
+            );
+            assert!(qualify_candidate("stable", "2.3.0", &bytes).is_ok());
+        }
+
+        identity["default_contract"] = serde_json::from_str(PUBLIC_DEFAULT_CONTRACT).unwrap();
+        fs::write(identity_path, identity.to_string()).unwrap();
+        let bytes = archive(&candidate);
+        crate::prepared_update::save(&cache, "main", version, "unused", &bytes).unwrap();
+        let pointer = fs::read(cache.join("prepared.json")).unwrap();
+        assert!(crate::prepared_update::save(&cache, "main", version, "unused", b"bad").is_err());
+        assert_eq!(fs::read(cache.join("prepared.json")).unwrap(), pointer);
     }
 
     #[test]
@@ -217,6 +343,37 @@ mod tests {
         assert!(crate::update_backup::installed_bundle_verifies(
             &synthetic_executable(&target)
         ));
+    }
+
+    #[test]
+    fn local_metadata_cannot_relabel_a_sealed_older_bundle() {
+        let root = tempfile::tempdir().unwrap();
+        let target = ad_hoc_signed_synthetic_app(root.path(), "Installed.app");
+        let candidate = ad_hoc_signed_synthetic_app(root.path(), "Candidate.app");
+        let plist = candidate.join("Contents/Info.plist");
+        let content = fs::read_to_string(&plist).unwrap().replace(
+            "</dict>",
+            "<key>CFBundleShortVersionString</key><string>1.1.0</string></dict>",
+        );
+        fs::write(&plist, content).unwrap();
+        assert!(std::process::Command::new("codesign")
+            .args(["--sign", "-", "--force"])
+            .arg(&candidate)
+            .status()
+            .unwrap()
+            .success());
+        let bytes = archive(&candidate);
+        assert_eq!(
+            install_archive(&synthetic_executable(&target), &bytes, Some("9.0.0")),
+            Err(InstallError::Failed)
+        );
+        assert!(!fs::read_to_string(target.join("Contents/Info.plist"))
+            .unwrap()
+            .contains("1.1.0"));
+        install_archive(&synthetic_executable(&target), &bytes, Some("1.1.0")).unwrap();
+        assert!(fs::read_to_string(target.join("Contents/Info.plist"))
+            .unwrap()
+            .contains("1.1.0"));
     }
 
     #[test]

@@ -19,7 +19,7 @@ export const composerSessionAdmissionScenario = {
     const notes = [];
     const composerInput = page.getByLabel("向 LoopX 发送消息");
     const sendButton = page.getByRole("button", { name: "发送", exact: true });
-    const turnRunningHint = page.locator(".personal-composer-status", { hasText: "新消息将在下一轮处理" });
+    const turnRunningHint = page.getByRole("button", {name: "中断本轮", exact: true});
     const pasteDraftImage = async (name) => {
       await composerInput.evaluate((target, filename) => {
         const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jN3sAAAAASUVORK5CYII="), (char) => char.charCodeAt(0));
@@ -48,6 +48,7 @@ export const composerSessionAdmissionScenario = {
       // Start the Turn outside this page and reload, so the page learns of it
       // only from the Session read. Its stream is held so the Turn stays running.
       const reloadWithRunningTurn = async (sessionMode, turnId, adapterKind = "codex_app_server") => {
+        page.__loopxRuntime.queuedTurns.set(sessionId, []);
         page.__loopxRuntime.turnMessages.set(turnId, "另一入口发起的运行中回合");
         page.__loopxRuntime.sessions.set(sessionId, {
           ...page.__loopxRuntime.sessions.get(sessionId),
@@ -68,6 +69,9 @@ export const composerSessionAdmissionScenario = {
           posts.push(body.message);
           postBodies.push(body);
           const queuedTurnId = `${turnId}-queued-${posts.length}`;
+          if (sessionMode === "attached_host" || body.delivery === "queue") page.__loopxRuntime.queuedTurns.get(sessionId).push({turn_id: queuedTurnId,
+            created_at: "2026-08-13T01:00:01Z", origin: "web", preview: body.message.slice(0, 240),
+            character_count: body.message.length, attachment_count: body.attachments?.length ?? 0, steering: null});
           page.__loopxRuntime.messages.get(sessionId).push({ message_id: `${queuedTurnId}-user`, turn_id: queuedTurnId,
             role: "user", text: body.message, created_at: "2026-08-13T01:00:01Z" });
           // A queued follow-up waits behind the running Turn; its stream is held too.
@@ -195,9 +199,28 @@ export const composerSessionAdmissionScenario = {
       if (await composerInput.inputValue() !== nextManagerDraft) throw new Error("Returning lost the unsent request's text");
       await openGoalChat();
       if (new Set(adjustments.slice(0, 3).map(row => row.client_ingress_id)).size !== 1) throw new Error("Uncertain retries minted new ingress identities");
-      await composerInput.fill(instruction);
+      for (let attempt = 0; attempt < 20 && await composerInput.inputValue() !== instruction; attempt += 1) {
+        await composerInput.fill(instruction);
+        await page.waitForTimeout(50);
+      }
+      if (await composerInput.inputValue() !== instruction) {
+        const statuses = await page.getByRole("status").allTextContents().catch(() => []);
+        throw new Error(`Confirmed non-delivery retry could not stage its draft: statuses=${JSON.stringify(statuses)} draft=${JSON.stringify(await composerInput.inputValue())}`);
+      }
+      if (await sendButton.isDisabled()) throw new Error("Confirmed non-delivery retry was blocked before it reached steering");
       await composerInput.press("Meta+Enter");
-      await page.getByRole("status").filter({ hasText: "本次未送达" }).waitFor();
+      for (let attempt = 0; attempt < 100 && adjustments.length < 4; attempt += 1) await page.waitForTimeout(50);
+      if (adjustments.length < 4) {
+        const statuses = await page.getByRole("status").allTextContents().catch(() => []);
+        throw new Error(`Confirmed non-delivery retry did not reach steering: adjustments=${JSON.stringify(adjustments)} statuses=${JSON.stringify(statuses)} draft=${JSON.stringify(await composerInput.inputValue())}`);
+      }
+      try {
+        await page.getByRole("status").filter({ hasText: "本次未送达" }).waitFor();
+      } catch (error) {
+        const statuses = await page.getByRole("status").allTextContents().catch(() => []);
+        const feedbacks = await page.locator(".personal-action-feedback").allTextContents().catch(() => []);
+        throw new Error(`Confirmed non-delivery feedback did not render: adjustments=${JSON.stringify(adjustments)} statuses=${JSON.stringify(statuses)} feedbacks=${JSON.stringify(feedbacks)} draft=${JSON.stringify(await composerInput.inputValue())}`, { cause: error });
+      }
       await composerInput.press("Meta+Enter");
       await page.getByRole("status").filter({ hasText: "执行器已接收本轮追加指令" }).waitFor();
       if (adjustments[3].client_ingress_id === adjustments[4].client_ingress_id) throw new Error("Confirmed non-delivery could not retry after recovery");
@@ -266,13 +289,26 @@ export const composerSessionAdmissionScenario = {
       const queuedMessage = "当前工作完成后再检查下一项。";
       await composerInput.fill(queuedMessage);
       await composerInput.press("Enter");
-      await page.locator(".personal-action-feedback", { hasText: "已排队，将在当前回合结束后处理" }).waitFor();
+      await page.locator(".personal-conversation-queue li").filter({hasText: queuedMessage}).waitFor();
+      if (await page.locator(".personal-action-feedback", {hasText: "已排队"}).count()) throw new Error("Queue acceptance duplicated its content with a banner");
       if (queued.posts.length !== 1 || queued.posts[0] !== queuedMessage
         || queued.postBodies[0].delivery !== "queue" || !queued.postBodies[0].client_turn_id
         || adjustments.length !== 10 || await composerInput.inputValue()
         || page.__loopxRuntime.sessions.get(sessionId).active_turn_id !== queued.turnId) {
         throw new Error("Ordinary Enter did not queue once behind the original Turn, or it silently steered current work");
       }
+      // The consumer may advance a queue accepted before this page opened.
+      // Observe its exact Turn through the history owner before offering Stop.
+      const advancedId = `${queued.turnId}-queued-1`;
+      const stops = [];
+      const stopRoute = `**/api/chat/sessions/${sessionId}/turns/*/interrupt`;
+      await page.route(stopRoute, async route => {stops.push(new URL(route.request().url()).pathname); await route.fallback();});
+      page.__loopxRuntime.sessions.set(sessionId, {...page.__loopxRuntime.sessions.get(sessionId), active_turn_id: advancedId, status: "busy"});
+      const currentStop = page.locator(`.personal-composer-stop[data-turn-id="${advancedId}"]`);
+      await currentStop.waitFor({timeout: 15000});
+      await currentStop.click();
+      if (stops.length !== 1 || !stops[0].endsWith(`/${advancedId}/interrupt`)) throw new Error("Automatic queue advancement left Stop on the previous Turn");
+      await page.unroute(stopRoute);
       await queued.release();
       notes.push("managed Enter: one explicit FIFO request retains the original Session/active Turn and never becomes steering");
 
@@ -289,7 +325,7 @@ export const composerSessionAdmissionScenario = {
       const attached = await reloadWithRunningTurn("attached_host", `turn-attached-${Date.now()}`);
       const followUp = "宿主回合运行中排队的下一条消息";
       await composerInput.fill(followUp);
-      if (await turnRunningHint.count()) throw new Error("An attached host Session showed the managed-runtime running-Turn hint");
+      if (await page.locator(".personal-composer-status", {hasText: "新消息将在下一轮处理"}).count()) throw new Error("The removed duplicate queue hint returned");
       if (await sendButton.isDisabled()) throw new Error("An attached host Session's composer closed while the host Turn ran, though the service queues follow-ups");
       await sendButton.click();
       for (let attempt = 0; attempt < 100 && attached.posts.length === 0; attempt += 1) await page.waitForTimeout(50);

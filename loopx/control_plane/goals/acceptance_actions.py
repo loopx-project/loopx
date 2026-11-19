@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any
 from uuid import uuid4
 
 from ...chat_action_store import (
@@ -20,14 +20,8 @@ from ...chat_action_store import (
 from ...file_lock import exclusive_file_lock
 from .acceptance import (
     configure_goal_acceptance, inspect_goal_acceptance, public_goal_acceptance,
-    verify_goal_acceptance,
+    verify_goal_acceptance, goal_acceptance_route, GoalAcceptanceRoute,
 )
-
-
-class _AcceptanceRoute(TypedDict):
-    registry_path: Path
-    runtime_root: str
-    goal_id: str
 
 
 def _review_basis(fingerprint: str) -> dict[str, str]:
@@ -50,7 +44,8 @@ def _saved_check(store: ChatActionStore, parameters: dict[str, Any],
             continue
         if (proposal["action_kind"] != "goal.acceptance.check"
                 or proposal["context"] != {"kind": "goal", "goal_id": parameters["goal_id"]}
-                or proposal["normalized_parameters"] != parameters):
+                or {key: value for key, value in proposal["normalized_parameters"].items()
+                    if key != "resolved_document"} != parameters):
             raise ActionConflictError("The operation belongs to another check request")
         return proposal
     return None
@@ -65,9 +60,7 @@ def prepare_acceptance_check(*, registry_path: Path, runtime_root: str | None,
 
     root = effective_runtime_root(registry_path, runtime_root)
     if not execute:
-        route: _AcceptanceRoute = {
-            "registry_path": registry_path, "runtime_root": str(root), "goal_id": goal_id,
-        }
+        route = goal_acceptance_route(registry_path, goal_id, runtime_root)
         before = inspect_goal_acceptance(**route, agent_id=agent_id)
         preview = configure_goal_acceptance(**route, document=document,
             expected_provider_revision=before["provider_revision"],
@@ -99,8 +92,7 @@ def prepare_acceptance_check(*, registry_path: Path, runtime_root: str | None,
     if recovered:
         # A historical proposal cannot stand in for an unavailable or retired
         # canonical Goal. Reading current authority does not refresh its basis.
-        inspect_goal_acceptance(registry_path=registry_path, runtime_root=str(root),
-                                goal_id=goal_id, agent_id=agent_id)
+        inspect_goal_acceptance(**service._acceptance_route(goal_id), agent_id=agent_id)
     return {"ok": True, "goal_id": goal_id, "prepared": True, "executed": False,
             "proposal": proposal}
 
@@ -109,10 +101,8 @@ class GoalAcceptanceActionMixin:
     store: ChatActionStore
     registry_path: Path
 
-    def _acceptance_route(self, goal_id: str) -> _AcceptanceRoute:
-        # ChatHTTPServer and the prepare CLI both use runtime/chat/actions.
-        return {"registry_path": self.registry_path, "goal_id": goal_id,
-                "runtime_root": str(self.store.root.parent.parent)}
+    def _acceptance_route(self, goal_id: str) -> GoalAcceptanceRoute:
+        return goal_acceptance_route(self.registry_path, goal_id, str(self.store.root.parent.parent))
 
     def _acceptance_preview(self, parameters: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         route = self._acceptance_route(parameters["goal_id"])

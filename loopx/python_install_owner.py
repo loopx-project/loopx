@@ -8,10 +8,44 @@ string literal rather than a command; POSIX keeps shell quoting.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Callable
+from importlib.metadata import Distribution, PackageNotFoundError, PackagePath
 import json
 import os
 from pathlib import Path
 import shlex
+
+
+def installed_loopx_distribution(lookup: Callable[[str], Distribution]) -> Distribution:
+    """Select the existing distribution, or the standalone core when absent.
+
+    Callers still verify that its RECORD owns their actual imported file.
+    Missing metadata, redirected records and content checks keep their original
+    failure behavior.
+    """
+    try:
+        return lookup("loopx")
+    except PackageNotFoundError:
+        return lookup("loopx-core")
+
+
+def distribution_record_path(item: PackagePath) -> Path:
+    # PackagePath uses POSIX components and can lose a Windows drive root on
+    # Python 3.11. Interpret absolute RECORD entries under native path rules.
+    path = Path(str(item))
+    return path if path.is_absolute() else Path(item.locate())
+
+
+def verified_distribution_console(recorded: Path) -> Path | None:
+    """Keep the recorded launcher identity when resolving its directory."""
+    try:
+        expected = recorded.parent.resolve(strict=True) / recorded.name
+        resolved = recorded.resolve(strict=True)
+        if resolved == expected and resolved.is_file():
+            return resolved
+    except (OSError, RuntimeError):
+        pass
+    return None
 
 
 @dataclass(frozen=True)
@@ -30,7 +64,7 @@ def _is_windows_host() -> bool:
     return os.name == "nt"
 
 
-def interpreter_invocation(python_executable: str) -> str:
+def interpreter_invocation(python_executable: str, arguments: list[str] | None = None) -> str:
     """The text that runs an interpreter path on the host that prints it.
 
     POSIX shells run a quoted path directly. PowerShell reads a bare quoted
@@ -38,11 +72,15 @@ def interpreter_invocation(python_executable: str) -> str:
     literal is required; that form also carries spaces and apostrophes in the
     interpreter path. This module owns the renderer because the pip-owned
     upgrade command is the first caller; doctor and update reuse it.
+    Arguments, when supplied, use the same host quoting and retain empty values.
     """
 
     if _is_windows_host():
-        return f"& {_powershell_literal(python_executable)}"
-    return shlex.quote(python_executable)
+        return " ".join(
+            [f"& {_powershell_literal(python_executable)}",
+             *(_powershell_literal(value) for value in arguments or [])]
+        )
+    return shlex.join([python_executable, *(arguments or [])])
 
 
 def resolve_python_install_owner(
@@ -73,18 +111,17 @@ def python_distribution_upgrade_command(
     owner: PythonInstallOwner,
     python_executable: str,
     doctor_command: str,
+    distribution_name: str = "loopx",
 ) -> str | None:
     if owner.manager == "pipx":
-        package_command = f"pipx upgrade {shlex.quote(owner.environment or 'loopx')}"
+        package_command = f"pipx upgrade {shlex.quote(owner.environment or distribution_name)}"
     elif owner.manager == "pip":
         package_command = (
-            f"{interpreter_invocation(python_executable)} -m pip install --upgrade loopx"
+            f"{interpreter_invocation(python_executable)} -m pip install --upgrade {shlex.quote(distribution_name)}"
         )
     else:
         return None
-    return (
-        f"{package_command}\n"
-        "loopx workflow-skills --install\n"
-        "loopx slash-commands --install\n"
-        f"{doctor_command}"
-    )
+    steps = [package_command]
+    if distribution_name == "loopx":
+        steps.extend(["loopx workflow-skills --install", "loopx slash-commands --install"])
+    return "\n".join([*steps, doctor_command])

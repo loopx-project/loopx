@@ -454,6 +454,26 @@ with no diagnostic input passed into prompts or scheduler decisions. Existing
 CLI ledger reads are unbounded; do not put this command on an automatic polling
 loop before adding an owner-reviewed read budget/snapshot strategy.
 
+### Exact-binding manual readback
+
+The optional `status --expected-binding '<JSON>' --as-of <timestamp>
+--max-observation-age-ms <integer>` read binds the existing goal argument to
+one expected `provider_id`, `observer_id`, `session_id` and `run_identity`.
+The latter uses the observer stats' existing exact fields: `worker_id`,
+`model_id`, `task_id`, `environment_id`, `tools_id`, `budget_id`,
+`adapter_revision` and `observer_revision`. Tokens follow the observer identity
+schema; unknown/missing fields fail before producing a projection.
+
+This bound read requires an explicit evaluation timestamp and caller-selected
+non-negative age ceiling. Its `binding.eligible` is false for another session or
+treatment, missing/invalid integrity, future observations or an exceeded age
+ceiling; the stage is then `unknown`. It rejects ambiguity rather than hiding
+other runs by filtering the ledger. Eligibility says only that this binding's
+observation is admissible, never that its task succeeded. Unbound historical
+reads retain their prior shape. Both forms remain manual, read-only and
+unbounded ledger reads: this contract does not authorize automatic polling or
+supply the owner-reviewed read budget required for a panel.
+
 ## Qualification Plan and Stop Conditions
 
 1. **C0 adapter fidelity:** compare native execution with the managed adapter,
@@ -756,12 +776,16 @@ entry must derive caller identity from a verified binding.
 
 Per-Agent readback uses `loopx shared-goal-alignment --goal-id <goal> --agent-id
 <agent>`, within its Stage 1/2 source-facts boundary. The plan receipt does not
-project that entire state. The [three-layer contract](../../reference/protocols/multi-agent-three-layer-minimality-v0.md)
-and [visible launcher](../../reference/protocols/multi-agent-visible-launcher-v0.md)
+project that entire state. The [three-layer contract](https://github.com/loopx-project/loopx/blob/910ff3bca5c8ff5ee52bd691ae924cc37dbaf05f/docs/reference/protocols/multi-agent-three-layer-minimality-v0.md)
+and [visible launcher](https://github.com/loopx-project/loopx/blob/910ff3bca5c8ff5ee52bd691ae924cc37dbaf05f/docs/reference/protocols/multi-agent-visible-launcher-v0.md)
 remain independent owners: user intent, preset procedure and kernel declarations
 join by Goal/Agent/Todo identity, not by creating another runner, pane owner,
 vision budget or evidence loop. Selecting an executor or storing credentials
 grants none of these effects.
+
+> The tmux multi-agent and auto-research demos are retired. Demo-contract links
+> above are pinned to the pre-retirement revision for historical design context;
+> they do not describe current entrypoints or shared runtime ownership.
 
 ## Steward Channel Readiness by Milestone (2026-09-16)
 

@@ -6,27 +6,364 @@ validation only; resolving a source merge followed by a build produces one
 coherent HTML/JavaScript/CSS set. Do not concatenate competing HTML entrypoints or
 asset-retention manifests when resolving an older PR.
 
-For owner-authorized reads of existing container runtimes, the presentation
-adapter `python -m loopx.presentation.runtime_workspace --sources <manifest>`
-serves the packaged Goal workspace directly. The Agent prepares the manifest:
-each entry names `id`, `label`, the full pinned `container_id`, the original
-`goal_id`, absolute `registry`, `runtime_root`, `cli`, `python` paths and the
-source's executable `path` (PATH). The startup JSON returns working preview
-URLs and the existing source selector offers the prepared readers. Keep these
-manifests and actual source captures private. Before staging or updating the PR,
+The source launcher (`bash scripts/dashboard-dev.sh`, also used by source-mode
+`loopx dashboard`) needs Node.js 22.22.3 or newer for the control plane, even
+when an older Node can run Vite. It uses the runtime's existing version rule,
+tries compatible installed NVM candidates, and rejects unsupported runtimes
+before installing frontend dependencies. For a UI-only preview, run
+`npm run dev:web` in `apps/presentation/dashboard`; that command does not start
+the control plane or change the installed runtime.
+
+For owner-authorized reads of existing runtimes, shared access lives in
+`loopx.control_plane.status.goal_source`. Native status and Explore owners retain
+their semantics; Connection (`local` or a configured `ssh` alias) is independent of
+environment (`host` or a container pinned by its full physical id), so a remote
+container uses the same reader. It never starts a container, tunnel or worker.
+
+The thin presentation adapter
+`python -m loopx.presentation.runtime_workspace --sources <manifest>` serves the
+packaged Goal workspace. The Agent prepares a private JSON array of sources:
+
+```json
+[
+  {
+    "id": "research", "label": "Research",
+    "connection": {"kind": "local"},
+    "environment": {"kind": "host"},
+    "scope": {"all_registered": true},
+    "registry": "/runtime/registry.json", "runtime_root": "/runtime/state",
+    "cli": "/runtime/bin/loopx", "python": "/runtime/bin/python",
+    "path": "/runtime/bin:/usr/bin:/bin"
+  }
+]
+```
+
+Use `connection: {"kind": "ssh", "host_alias": "configured-alias"}` for SSH;
+the alias must remain in the existing SSH catalog. Use
+`environment: {"kind": "container", "container_id": "<full 64-character id>"}`
+for a container. `scope: {"goal_id": "original-goal"}` restricts the source to
+one Goal; `all_registered` allows the native registered Goal list without copying
+its registry. Source paths are absolute in the selected environment. The reader
+requires this explicit connection/environment/scope model; there is no alternate
+manifest format or implicit scope conversion.
+
+Startup JSON returns working workspace URLs, `access_url` and a source namespace.
+The existing source selector offers the prepared readers. Keep these manifests
+and actual source captures private. Before staging or updating the PR,
 compare every source, validation script and visual-evidence path with the
 selected Todo's declared write scopes; place presentation evidence inside the
 existing authorized surface rather than assuming all docs/examples are covered.
 Build Chat first or supply
 `--assets-dir`; stop the adapter to remove its temporary readers.
 
+App, CLI and Agents can use the same loopback read API: `GET /api/goal-source`
+describes identity, scope and supported operations; `/goals`, `/status` and
+`/history` below it require `source_namespace`, with optional `goal_id` and history
+`cursor`. Status is wrapped as `status`; Goal lists and history use `items`.
+The CLI client shares this transport:
+
+```sh
+python -m loopx.control_plane.status.goal_source goals --endpoint <prepared-status-url>
+python -m loopx.control_plane.status.goal_source history --endpoint <prepared-status-url> --goal-id <original-goal>
+```
+
+Retain the returned pinned status URL/namespace on subsequent reads, including
+history cursors. A stale identity returns an error even if a new reader reuses
+the port. The App binds an initial relative `/status.json` entry to its prepared
+identity once, preserving ordinary local/SSH behavior outside these readers.
+Its existing status/history aliases use this same reader, not separate IO.
+
 These are read transports, not connected execution Goals or a second registry.
-The native status and complete validated Explore history stay scoped to the
-physical source, including identical Goal ids in different containers. An
-unavailable container fails visibly without replacement; refreshing retries.
-All mutation endpoints are denied. A read-only source does not imply an
+Native status and complete validated Explore history stay scoped to the physical
+source, including identical Goal ids in different containers. Status has a
+two-second per-reader cache; history uses bounded server-local snapshots. A failed
+read or removed SSH alias invalidates saved status/pages. Unavailable sources
+fail visibly without replacement; refreshing retries.
+The main view keeps the selected source's failure and retry visible on narrow
+screens, with technical detail collapsed. Other sources' cached Goal contents
+are withheld on failure; retry targets the failed selection, not the last
+successful reader.
+Switching prepared readers clears source-local question and analysis selections;
+Back restores the previous reader's URL and its own selection.
+By default all mutation endpoints are denied. A read-only source does not imply an
 analysis pack, model execution, adoption or validated benefit; analysis remains
-unavailable until its existing owner binds the appropriate source pack.
+unavailable until its existing owner binds the appropriate source pack and the
+operator explicitly enables [local analysis](../reference/trajectory-assessment.md#existing-isolated-goal-sources).
+That separate local provider uses the original source Goal id and a
+source-namespace-isolated store; it creates no Goal mirror or source mutations.
+The adapter uses one local Python process with one HTTP listener/thread per
+prepared source. Cache misses invoke the source's native status CLI or bounded
+log read; no lower CPU, process or IO cost is implied. Local host/container
+readback and SSH command composition are separate validation boundaries.
+
+### Native App source Goals
+
+A prepared reader or a separately served workspace is an access adapter. It
+does not complete a request to use the installed LoopX App. For that request,
+the App's normal Chat service must discover the original Goals through its
+persisted directory, keep them beneath the requested parent, and use the same
+origin for status, native Task/history reads and explicit analysis. A browser
+URL, local-storage source switch or empty local analysis Goal is not a substitute.
+Qualify the running installed App and service identities, parent-to-child
+navigation, original evidence, analysis readback, source failure and reopening.
+Keep backend, browser-renderer and native WebView evidence distinct.
+
+The registry's `goal_source_links` contains only owner-configured references:
+`parent_goal_id` plus the existing explicit source object above, scoped to one
+original Goal. It creates no execution Goal, state document, worker or copied
+registry entry. The TypeScript presentation owner validates the local parent
+and unambiguous original identity; the existing source reader performs IO.
+`POST /api/chat/goal-sources` admits that connection through the normal loopback
+owner boundary after verifying original membership; `GET` reads safe descriptors.
+The same POST removes a link when given `parent_goal_id`, `goal_id` and its
+current `source_namespace`; removal preserves the original Goal and local
+analysis artifacts and refuses a stale physical identity.
+An Agent prepares the connection within the owner's authority. Do not require
+the owner to discover runtime paths, write a manifest or copy a tunnel command.
+Links survive ordinary registry synchronization and App restart. Ambiguous Goal
+views, unknown parents and source replacement are refused instead of borrowing
+another Goal's state. Native execution/configuration remains on the original
+runtime; the local App does not acquire those writes through a display link.
+
+When separate runtimes use the same native Goal id, the link may specify a
+unique `workspace_goal_id`. This is only a local routing identity: the source
+object, physical namespace, native Task/run ids, history and analysis scope
+retain the original Goal id. `source_access.original_goal_id` exposes that
+identity on aliased views. A workspace id cannot replace a local Goal or another
+source; the same physical source cannot be linked twice. Removing an aliased
+link uses its workspace id and current physical namespace. Linked-source research
+opens native history by default; an authored case reading remains optional.
+When a complete linked history read has no Explore records, show that limit
+alongside the retained strategy chronology and a route to the original Tasks. A failed
+read still offers recovery, and a linked reader never offers to enable research
+mode on the original Goal.
+
+The **Strategy history** action reads every retained `agent_vision` version
+through the original Goal's native history, including versions outside the
+status window. Its default overview spans all retained records by recorded time;
+it never silently selects the latest version. Sources proven to have no Explore
+records show this overview directly. Other sources keep their Explore history
+and load strategy history only on request. Unknown times stay visible.
+It preserves original language, negative results and unresolved
+questions. The focused reader supports exact-version links, reload, Back/Forward
+and unavailable-version recovery; missing versions never select the latest one
+silently. Plans and recorded adoption claims remain distinct from demonstrated
+subsequent action or benefit. Opening or switching records starts no analysis.
+The App and prepared workspace share `GET /api/chat/goal-source-strategies`;
+prepared readers also expose `/api/goal-source/strategies` and the existing
+source-read CLI's `strategies` operation. These reads retain physical namespace
+and original Goal scope, recheck membership after native history IO, and fail
+explicitly when complete coverage exceeds the transport's existing bounds.
+
+The optional **Original task** disclosure reads the single
+`goal_doc` / `primary_goal_document` declared by the original Goal, separately
+from current objective revisions and Agent strategies. It never reconstructs
+intent from a display label, a Todo or an analysis. App and prepared readers
+use the source CLI's registry owner for declaration reads, including strict
+envelopes; the presentation adapter does not decode a parallel registry format. They
+share `GET /api/chat/goal-source-document`; prepared readers and their CLI also
+support `/api/goal-source/document` and `document`. Reads validate the original
+Goal, namespace and declaration again after IO, retain complete UTF-8 text up
+to 128 KiB, and fail rather than truncate or substitute another document.
+
+When a retained source's declared path is no longer accessible, an Agent may
+prepare its optional `goal_document_snapshot` within existing source-connection
+authority: `{declared_path, path, sha256}` binds one explicit captured file to
+that exact declared reference. The source must be scoped to one Goal; paths are
+not guessed from basenames. The captured bytes must match the pinned SHA-256.
+The reader identifies a configured captured copy in provenance; a binding alone
+does not independently verify its lineage. Keep capture proof with the source.
+Only this attachment can be updated on an existing link; its connection, Goal
+and parent remain fixed, and snapshot admission verifies the declared file and
+hash before saving. This attachment does not change physical namespace, original Goal state,
+execution authority or existing history/analysis identities. Transport locator
+paths stay in the adapter; document text is preserved. Missing files, changed declarations or hashes remain explicit
+read failures with retry. Opening, refreshing or closing the disclosure starts
+no model or document commands; source switches hide old content immediately.
+
+Each linked Goal carries `source_access` in the workspace projection. Its
+original Goal id, tasks, explicit graph edges and native measurements remain
+intact; the local link owns parent organization and optional workspace routing. Source identity pins
+history and analysis requests. First-layer reads invoke no model. Optional
+second-layer artifacts use the existing toolkit store beneath the local
+runtime's `goal-sources/<physical-namespace>` and remain bound to that original
+Goal. Every model start/retry revalidates original membership without the display
+cache. Source loss must stay local to the affected Goal and must not launch a
+model or strand the rest of the App. Native liveness, causal value and missing
+relations cannot be supplied by the local parent or an analysis result.
+
+Use the link's display label consistently after native status loads, while
+preserving the original Goal objective, id and Tasks. Two runs can have the
+same native title; loading their evidence must not erase their distinguishing
+labels. Read-only linked Goals offer no local stop, resume or delete control.
+An unavailable source has a source-specific error and an explicit retry,
+without repeating ordinary service-restart retries or affecting other Goals.
+
+When a disposable source has stopped, an owner-authorized retained runtime can
+remain the original historical source. Verify its original registry membership,
+canonical store identity and complete native history through the existing reader
+before replacing the lost connection. Read the retained registry/runtime in place;
+do not create or rename an execution Goal, restart a solver, or rewrite its state
+to make the display work. Label the link as historical, preserve the source bytes,
+and retain the old namespace's artifacts. Admit the replacement through the same
+source-link owner; its new physical namespace must invalidate old cursors and
+analysis selection. Re-register an existing evidence pack only after verifying
+its original run/window, hashes and literal excerpts.
+
+## Finding original steward delegations
+
+Open **Delegations** in the steward header, enter request text, a Goal, an Agent
+or a request ID, and choose **Search**. Search matches the original question and
+current brief purpose/context without case sensitivity, before pagination.
+**All records** includes returned and cancelled requests; **Awaiting follow-up**
+keeps the existing unfinished-work contract. Expand a result to inspect its
+current brief, linked work and original conversation. **Clear** restores the list.
+The header count remains the total awaiting follow-up, not the number of search
+matches. Search retains the existing authorized source scope and bounded scan;
+partial/unreadable records stay explicitly incomplete, and **Retry** repeats the
+same query. Browsing does not acknowledge, cancel or execute a request.
+
+The dialog keeps **Load next page** and its loaded/total count in a fixed footer,
+including an unavailable count while the first page is loading. Opening it reads
+the inventory; a closed dialog does not rescan history on conversation arrivals.
+Arrivals mark **Conversation updated** beside Refresh; they do not cancel or
+restart an active read or keep pagination busy. Opening, searching, paging and
+explicitly refreshing read current facts. Request authorization, receipt/agenda
+classification and search still cover
+the existing bounded inventory on every HTTP read. Linked Core work is fetched
+only when **Linked work and records** is expanded, through the same authorized
+reader and current request revision. It is a separate current observation, not
+part of the request ordering/paging digest. Original conversations remain readable
+through their existing complete-history reader. The 2,000-entry discovery bound
+and explicit incomplete coverage remain.
+
+Inventory and original-history HTTP reads both pin the shared runtime code
+revision once per request. Without that boundary, every collaboration rule on a
+large history page requalified the same source tree and could exhaust the
+original reader's deadline. This reuses the existing request scope; each new
+HTTP read still qualifies its code, and current receipts and source permissions
+are reread. It caches no authorization or completion decision.
+
+在管家页头打开**委派**，输入请求内容、Goal、Agent 或请求 ID 后点**搜索**。
+查询不区分大小写，匹配原始问题及当前交办的目的/背景，先筛选再分页。
+**全部记录**包括已回传和已取消的请求；展开可回看交办、关联工作及原对话。
+**清空**恢复列表。页头数量仍表示全部待跟进请求；读取不完整
+时保留提示，**重试**沿用当前查询。搜索沿用既有来源授权和扫描上限，不确认、
+取消或执行任何请求。
+
+分页栏固定显示**加载下一页**和已显示/匹配数量，首次读取时也保留入口与未知数量。
+关闭窗口不扫描历史；阅读期间的对话消息只提示更新，不打断读取或持续占用分页。
+打开、搜索、翻页和手动刷新仍核验当前来源与回执。**关联工作与记录**展开后才读取
+当前任务，且绑定原请求版本。原对话继续沿完整历史读取；既有 2,000 条发现上限与
+覆盖不完整提示保留，不据此宣称无界历史或原子快照。
+清单与原对话的每个 HTTP 请求只核验一次共享运行时代码版本，避免长历史逐条规则
+重复扫描同一源码。后续 HTTP 请求仍独立核验代码；当前回执和来源权限仍重新读取，
+不缓存授权或完成判断。
+
+The packaged synthetic reader below shows the previous layout and the fixed
+footer. No live conversation or model result is used. During loading the footer
+remains visible; after loading it provides the next page at desktop and narrow
+widths. 这些图使用打包后的合成数据：加载期间和窄屏均保留分页入口。
+
+![Previous delegation reader](../assets/personal-workspace/delegation-loading/before-desktop.png)
+![Loading with the pagination footer](../assets/personal-workspace/delegation-loading/loading-desktop.png)
+![Loaded desktop reader](../assets/personal-workspace/delegation-loading/after-desktop.png)
+![Narrow reader](../assets/personal-workspace/delegation-loading/after-narrow.png)
+
+### Reading original replies / 阅读原回复
+
+For a bound external conversation, the transcript and delegation's **Original
+conversation** show the original user body with **Reply and thread context**
+closed by default. Expand it to read the exact quoted target and ordered earlier
+thread excerpts. Excerpt labels remain visible inside the reader; this does not
+claim a complete provider thread. Opening long context keeps its summary in view
+instead of following the latest message to the end.
+
+The read projection requires the original Session, Turn and both existing
+transport/Core correlation receipts. Canonical messages, model input and history
+cursors remain unchanged. Missing, changed or unsupported frozen context keeps
+the full original message visible.
+
+外部原会话和委派的**原对话**优先显示用户原文，**引用与话题上下文**默认折叠。
+展开后可读准确引用和按原顺序保存的话题节选，长内容不会跳到末尾。节选标记保留，
+不据此宣称完整话题已同步；原 Session、Turn 或任一关联回执不匹配时保留完整旧正文。
+只读投影不改模型输入、历史游标或业务执行。
+
+After building Chat, reproduce the production SQLite/HTTP journey with:
+
+```sh
+node apps/presentation/dashboard/smoke/conversation-reply-browser-smoke.mjs
+node apps/presentation/dashboard/smoke/delegation-media-browser-smoke.mjs
+```
+
+The first uses synthetic provider identity and the real existing frozen-context
+producer; the second also checks the shared reader inside original delegations.
+Both check read-only browsing. Source/receipt negatives live in
+`tests/test_manager_context_roundtrip.py`; captures and limits are described in
+[the history evidence](../assets/personal-workspace/conversation-pagination/README.md).
+
+When a later history page loses its transport, the existing read retry retains
+the verified prefix in browser memory and resumes its next cursor. Partial text
+never becomes a readable snapshot or enables sending. Each recovery rechecks
+the current source; source conflicts, invalid cursors/pages and permission
+denials discard the checkpoint. Reload and explicit refresh start a new read.
+See [the repeated-interruption evidence](../assets/personal-workspace/history-recovery/README.md).
+
+### Workspace reading and request continuity / 工作区阅读与请求连续性
+
+The home brief counts observed native attention items separately from affected
+Goals and operation delivery. Equal titles never merge identities. Open a request,
+review its existing typed action, and return to that same request; leaving the
+drawer while preview or apply is pending does not let its late response replace
+the new selection. Canonical receipts still read back through their existing owner.
+Linked-source requests remain read-only even when opened directly from home.
+
+Overview and Tasks share source/Goal-scoped filters and view choices in the URL.
+The selected Todo stays addressable when filtered out. Completed lists start
+folded; selecting a completed Todo opens its lane, and switching between board
+and list preserves that expansion. Search over already-listed tasks filters the
+complete owner-scoped snapshot without discarding rows. Changing or clearing a
+saved query restores the matching completions even on a read-only source, where
+local completed-history requests remain disabled. Files opens with a native
+result catalog; select a row to read only that result, retain its exact version on
+refresh, and return to the original row. These readers retain their existing paging
+and error contracts; a missing or changed version is not silently replaced.
+
+Answer reports use semantic headings, a stable table of contents and a manual
+Markdown copy fallback. Return restores the original Session/Message without
+changing the currently selected runtime. Older stable messages may show a
+complete-block excerpt; expanding it preserves the reading position. The newest
+reply and streaming content remain expanded.
+
+Todo creation, combined Goal intention and source requirements use the existing
+400/1000/8000 limits after Python-compatible whitespace normalization and Unicode
+code-point counting. Drafts remain raw until submission. Device and Goal settings
+distinguish a failed write from a known write whose readback failed; the latter
+retains the draft and retries GET without applying again. Changing target still
+discards that target's draft and preview.
+
+首页将原生事项、受影响目标和操作投递分开计数，标题相同不会合并身份。处理时
+可回到原请求；切换或关闭后，迟到的预览/写入回执不会抢回当前选择，原生回读
+仍会保存真实结果。关联来源从首页打开也保持只读。概览与任务共用按来源/Goal
+隔离的路由筛选；成果先列目录，按需读取并固定准确版本，返回恢复原条目。
+完成列表默认收起；选中已完成任务后自动展开，切换看板与列表保留展开状态。
+已列出任务的搜索只筛选完整负责人快照，不删除缓存行；只读来源修改或清空
+已保存的查询也能恢复相应完成项，且不会请求本地完成历史。
+报告提供语义标题、稳定目录和手动复制降级，返回准确原消息；仅旧稳定消息
+默认节选，展开保持阅读位置。输入沿用规范化后的 400/1000/8000 码点限制，
+保留原始草稿。设置的“写入成功、回读未确认”只重试读取，切换目标仍丢弃旧草稿。
+
+After building Chat, the existing `attention-user-action`, `goal-activity`,
+`confirmed-operations`, `answer-presentation`, `managed-goal-results`,
+`research-results`, `team-evidence`, `goal-workspace-create`, `goal-draft`,
+`task-inspector-return`, `steward-model-settings`, `capability-scope`,
+`completed-history-isolation`, `typed-actions`, `conversation-input` and
+`report-download` scenarios
+exercise these boundaries via `examples/personal-workspace-browser-smoke.mjs`.
+Set `LOOPX_PERSONAL_WORKSPACE_PACKAGED=1` and `LOOPX_PERSONAL_WORKSPACE_SCENARIO`
+to the chosen scenario. The existing task-inspector-route and workspace-craft
+smokes cover navigation and narrow ordering. Packaged-browser checks do not
+establish installed native-WebView or live-team qualification.
 
 ## Task-first delivery / 从用户任务开始
 
@@ -50,6 +387,23 @@ including discoverability, authorized operation, feedback and result readback.
 CLI-only prerequisites are partial delivery; catalog text or a command-copy
 button is not the journey. Reuse the typed capability owner rather than adding
 frontend-only decisions or a setting for a capability with no persistent policy.
+
+For artifact creation, follow the user's request through the existing conversation
+and artifact journey where it can already deliver preview, download, feedback and
+revision. A requested HTML page, game, mini-world or video is an output format,
+not a requirement to build an editor or simulator into LoopX. The Agent can author
+the work with the host's tools and reusable capability/provider operations; add a
+product control only when the accepted workflow needs it. Keep work-specific
+content, rules and scenes in the editable artifact rather than imposing one
+generic example as the capability's product model.
+
+Validate this route with an actual brief, the resulting usable work and a
+meaningful revision. For video, inspect the complete film's message, visuals,
+sound and pacing alongside its editable project and sources. Compare techniques
+on the same communication objective while allowing each its own composition;
+separate rendering/playback correctness from creative judgment, audience evidence
+and complete production cost. A new interface, a fixed demonstration or a passing
+encoder does not answer whether the requested work is good.
 
 Carry the same task through these steps:
 
@@ -85,6 +439,11 @@ Carry the same task through these steps:
    [explanations on demand](design.md#explanations-on-demand): keep results and
    consequential qualifiers visible, share optional contextual help by region,
    and reuse existing provenance details instead of adding footnotes to each card.
+   Record the default-versus-detail choices in this same brief. Requirements,
+   reviews and evidence must remain reachable without all rendering expanded.
+   Design the requested detail as well as its closed summary: comparable rows,
+   readable body text and one place for shared explanations. Moving the same
+   repeated text wall behind a disclosure does not complete this step.
 3. **Implement and challenge.** Use the smallest meaningful regression derived
    from the accepted outcome. Select realistic populated data and one negative
    or recovery path likely to falsify the claim: multiple owners, out-of-order
@@ -92,6 +451,9 @@ Carry the same task through these steps:
    Select by the touched risk, not all cases for every patch. Reuse shared TS
    projections; fix the owning selector rather than sorting an already-sorted
    mock or adding a frontend-only source of truth.
+   For information-density changes, compare small and realistically large
+   datasets with long text and mixed states. A one-item fixture cannot qualify
+   a repeated list; use the affected feature alongside the shared showcase.
 4. **Walk the actual product.** Start at the affected user entry, use the built
    packaged surface, inspect the rendered viewport, perform the task and read
    back the result. Validate affected narrow/keyboard/language behavior. Pair
@@ -100,6 +462,10 @@ Carry the same task through these steps:
    For contextual help, verify hover-to-panel continuity, keyboard focus/Escape,
    touch dismissal and narrow positioning. Confirm that opening help causes no
    operation and that failures/unknowns remain legible with every help closed.
+   Complete the [populated page review](design.md#populated-page-review): inspect
+   the default whole page and a selected expanded item, including lower regions.
+   A more compact component fails the task if the page's primary result remains
+   buried or if details, uncertainty or failed items became inaccessible.
    Record source/build identity and fixture boundaries. Source preview, packaged
    browser, installed App and real model each prove different things.
 5. **Review the task before the diff narrative.** The review capability's
@@ -110,6 +476,15 @@ Carry the same task through these steps:
    Reused evidence needs its revision and unchanged assumptions. A material
    unsupported claim remains unproven. A necessary confirmation can be accepted
    with its authority basis; green CI cannot justify redundant confirmation.
+   Reject an information dump from the rendered evidence even when all fields
+   and controls pass their local checks; report missing dense-page evidence as
+   unverified rather than marking the design contract satisfied by a read receipt.
+   Fill the capability-owned `visual_review` with actual default/expanded
+   observations and the affected narrow composition, using the same captures
+   and revision boundaries. Keep automated data/folding/overflow checks distinct
+   from visual inspection. Publish the observed hierarchy, repetition and reading
+   quality, plus unverified scope; do not generalize a closed-view pass to the
+   whole page. A nonvisual change records why this review is not applicable.
 6. **Deliver and read back.** Report the observable improvement, evidence limits
    and whether code is proposed, merged, packaged or installed. After an
    authorized upgrade, reopen the exact installed surface and check the same
@@ -155,6 +530,13 @@ uv run --extra test python scripts/chat_bundle.py build --install
 uv run --extra test python scripts/chat_bundle.py verify --source
 uv run --extra test loopx chat --no-open
 ```
+
+`loopx update apply` and `loopx upgrade` keep their detached worker on the
+requesting installation, including when invoked inside another LoopX checkout.
+The caller's working directory and explicit registry/runtime routes remain in
+effect; a workspace or `PYTHONPATH` entry must not select another installation's
+update code. An observer disconnect still leaves one durable worker and the
+existing installation lock, status and result readback in control.
 
 Builds start with current assets only. Use `build --previous /path/to/prior/chat`
 when deliberately carrying a prior local delivery; release and installation
@@ -206,7 +588,7 @@ order only, without changing Goal priority, lifecycle or execution.
 
 The existing TypeScript ordering functions remain the semantic owner. The
 Python presentation adapter validates and atomically stores the list under a
-file lock; it is not a capability configuration namespace. Existing same-origin
+file lock; Existing same-origin
 browser preferences migrate only when the durable source has no value. An old
 origin's inaccessible browser storage cannot be recovered automatically. Read
 or save failure keeps the current page usable and displays unsaved feedback;
@@ -216,8 +598,7 @@ although that runtime continues to use its browser-local preference.
 The packaged `navigation-sorting` browser scenario uses synthetic workspace
 records with the real HTTP preference owner. It checks pointer/keyboard moves,
 refresh, service restart on another port, delayed hydration, rapid moves,
-failure/retry and browser-cache migration. It does not certify native WebView
-crash recovery or an already-installed App's adoption of a proposed PR.
+failure/retry and browser-cache migration.
 
 ## PR qualification and releases
 
@@ -231,6 +612,11 @@ artifact that failed browser qualification. Both frontend-only and
 mixed/backend PRs pass through this producer. On pull requests the checkout SHA is GitHub's tested merge commit, which
 may differ from the branch head. Generated-file Git cleanliness is no longer a
 qualification gate. Browser, integrity and workflow gates remain required.
+
+The `dashboard-browser` source lane waits for its Vite child to confirm that
+it bound the requested port. An HTTP response from a listener already on that
+port cannot qualify the checkout or supply its source coverage. For a local
+port conflict, select a free port with `LOOPX_PERSONAL_WORKSPACE_PORT` and rerun.
 
 Release Artifacts checks out the exact release tag and runs:
 

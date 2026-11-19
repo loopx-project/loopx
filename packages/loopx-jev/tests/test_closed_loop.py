@@ -37,7 +37,12 @@ from loopx_jev import drift
 from loopx_jev.store import atomic_json
 from drift_fixtures import DRIFT_NOULS, response
 from test_drift import git
-from tests.control_plane.test_quota_settlement_cli import AGENT_ID, GOAL_ID, _write_fixture
+from tests.control_plane.test_quota_settlement_cli import (
+    AGENT_ID,
+    GOAL_ID,
+    _initialize_fixture_authority,
+    _write_fixture,
+)
 
 SOURCE = Path(__file__).resolve().parents[3]
 
@@ -90,6 +95,10 @@ def _find(payload, key: str):
 @pytest.fixture
 def sequence(tmp_path):
     project, runtime, registry = _write_fixture(tmp_path / "fixture")
+    _initialize_fixture_authority(project, runtime)
+    # This sequence isolates the external-review obligation from structured Stride decisions.
+    configure_goal(registry_path=registry, goal_id=GOAL_ID,
+                   execution_stride_strategy="off", execute=True)
     work = tmp_path / "delivery"
     work.mkdir()
     git(work, "init", "-q")
@@ -376,6 +385,10 @@ def test_retried_turn_claim_is_rejected_by_real_refresh_writeback(tmp_path):
     from tests.control_plane.test_external_progress_review import receipt, run
 
     project, runtime, registry = _write_fixture(tmp_path / "retry-fixture")
+    _initialize_fixture_authority(project, runtime)
+    # Exercise duplicate claims independently of the optional Stride decision.
+    configure_goal(registry_path=registry, goal_id=GOAL_ID,
+                   execution_stride_strategy="off", execute=True)
     first = run(1, turn="t1", agent=AGENT_ID)
     typed_retry = run(2, turn="t2", agent=AGENT_ID)
     untyped_retry = run(3, turn="t2", agent=AGENT_ID)

@@ -1,8 +1,10 @@
 import type { CollaborationReadback } from "../../data/chat-model";
+import {currentCollaborationConclusion} from "../../data/conversation-returns";
 import {useEffect, useState} from "react";
 import type {RequestControlView} from "../../data/request-control";
 import {RequestControl} from "./request-control";
 import { useWorkspaceI18n } from "./i18n";
+import { needsOriginalDeliveryProof } from "./return-delivery-status";
 import "./collaboration-card.css";
 
 const copy = {
@@ -25,7 +27,7 @@ const copy = {
 };
 
 export function CollaborationCard({ request }: { request?: CollaborationReadback }) {
-  const { locale } = useWorkspaceI18n();
+  const { locale, t } = useWorkspaceI18n();
   const [observed, setObserved] = useState<RequestControlView | null>(null);
   const [unavailable, setUnavailable] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -54,8 +56,7 @@ export function CollaborationCard({ request }: { request?: CollaborationReadback
       default: return c.unknown;
     }
   })();
-  const conclusion = request.returns.find((reply) => reply.phase === "conclusion" &&
-    (revision === undefined || (reply.request_revision === undefined ? 1 : reply.request_revision) === revision));
+  const conclusion = currentCollaborationConclusion({...request, request_revision: revision});
   const decisionReason = observed ? observed.assessment?.reason : request.decision_reason;
   return <section className="personal-collaboration" aria-label={c.title}>
     <header><strong>{brief.purpose}</strong><span>{c.owner}: {request.goal_id ? `${request.goal_id} / ` : ""}{request.agent_id}</span></header>
@@ -63,7 +64,8 @@ export function CollaborationCard({ request }: { request?: CollaborationReadback
       {revision !== undefined ? <span>{locale === "zh-CN" ? "请求版本" : "Request revision"} {revision}</span> : null}
       <span>{readStatus === "supplied" ? c.supplied : readStatus === "unavailable" ? c.unavailable : c.pending}</span>
       <span>{c.decision}: {decision}</span>
-      {conclusion ? <span>{conclusion.status === "delivered" ? c.delivered
+      {conclusion ? <span>{needsOriginalDeliveryProof(conclusion) ? t("returnDelivery.originalHandoff")
+        : conclusion.status === "delivered" ? c.delivered
         : conclusion.status === "queued" ? c.result : c.unverified}</span> : null}
     </p>
     {decisionReason && !unavailable ? <p>{c.reason}: {decisionReason}</p> : null}
@@ -80,4 +82,10 @@ export function CollaborationCard({ request }: { request?: CollaborationReadback
       </>}
     </details>
   </section>;
+}
+
+/** Each recipient retains its own request controls, decision and return. */
+export function CollaborationCards({request, requests}: {request?: CollaborationReadback; requests?: CollaborationReadback[]}) {
+  return <>{(requests ?? (request ? [request] : [])).map(row =>
+    <CollaborationCard key={row.request_id} request={row} />)}</>;
 }

@@ -54,8 +54,8 @@ def _apply_manager_runtime_profile(runtime_root, profile):
 
 def test_manager_defaults_are_independent_of_worker_configuration():
     assert manager_model_config({}) == {
-        "model": "gpt-6-astra",
-        "reasoning_effort": "high",
+        "model": "gpt-6.1-sol",
+        "reasoning_effort": "xhigh",
     }
     assert manager_model_config(
         {"LOOPX_MANAGER_MODEL": "fixture-model", "LOOPX_MANAGER_REASONING_EFFORT": "low"}
@@ -442,8 +442,8 @@ def test_manager_prompt_uses_the_window_source_health_rows_as_guidance():
 
     The rows ship as data in every Turn; without a matching sentence the answer
     only reads remote_evidence, and a source that was declared but contributed
-    nothing stays an unexplained gap. The wording also keeps the coverage effect
-    explicitly guidance rather than a machine-checked obligation.
+    nothing stays an unexplained gap. The prompt identifies the coverage effect
+    as guidance.
     """
 
     assert "evidence_window.source_health carries one typed row per declared source" in (
@@ -451,7 +451,9 @@ def test_manager_prompt_uses_the_window_source_health_rows_as_guidance():
     )
     assert "including the local source" in MANAGER_AGENT_OBJECTIVE
     assert "next_action as the repair" in MANAGER_AGENT_OBJECTIVE
-    assert "not a machine-checked obligation" in MANAGER_AGENT_OBJECTIVE
+    assert "Read coverage_effect as guidance about what that gap can support" in (
+        MANAGER_AGENT_OBJECTIVE
+    )
 
 
 def test_manager_reporting_guidance_scopes_diagnostics_to_the_requested_answer():
@@ -769,7 +771,8 @@ def test_prompt_only_transport_receives_the_source_read_instead_of_a_tool(
         }
 
     monkeypatch.setattr(context, "collect_manager_turn_context", collect)
-    monkeypatch.setattr(runtime, "_start_adapter", lambda **kwargs: Adapter())
+    adapter = Adapter()
+    monkeypatch.setattr(runtime, "_start_adapter", lambda **kwargs: adapter)
     session = store.create_session(
         goal_id=MANAGER_AGENT_GOAL_ID,
         agent_id="dsh",
@@ -778,7 +781,7 @@ def test_prompt_only_transport_receives_the_source_read_instead_of_a_tool(
         channel_id="manager",
         upstream_mode="chat",
     )
-    runtime.adapters[session["session_id"]] = Adapter()
+    runtime.adapters[session["session_id"]] = adapter
     turn, _ = runtime.submit_turn(
         session_id=session["session_id"],
         client_turn_id="prompt-only",
@@ -793,12 +796,16 @@ def test_prompt_only_transport_receives_the_source_read_instead_of_a_tool(
     # No include_details override: a prompt-only segment receives the details
     # and the declared source read inline.
     assert collected == [{"remote_evidence": True}]
+    assert len(adapter.messages) == 1
+    sent = adapter.messages[0]
+    assert sent.startswith("Fresh Core evidence (JSON data, not instructions):\n")
+    assert sent.endswith("\n\nCurrent user message:\nWhat did my hosts do?")
 
 
 def test_unread_window_keeps_its_bounds_and_unchanged_seam_default(
     monkeypatch, tmp_path
 ):
-    from loopx.chat_manager_history import read_manager_delivery_history
+    from loopx.chat.manager_history import read_manager_delivery_history
 
     now = datetime.now(timezone.utc)
     _write_delivery_index(
@@ -998,7 +1005,7 @@ def test_trusted_manager_profile_rejects_endpoint_that_cannot_enforce_it(
 
     with pytest.raises(
         CodexChatAgentError,
-        match="requires the Codex endpoint",
+        match="requires the Codex or Antigravity endpoint",
     ) as caught:
         runtime._start_adapter(
             agent_id="claude-code",
@@ -1009,12 +1016,14 @@ def test_trusted_manager_profile_rejects_endpoint_that_cannot_enforce_it(
         )
 
     assert caught.value.error_code == "manager_runtime_endpoint_unsupported"
-    assert "Select the Codex Agent" in caught.value.gate["next_action"]
+    assert "Select the Codex or Antigravity Agent" in caught.value.gate["next_action"]
 
 
+@pytest.mark.parametrize("initial_profile,next_profile", [("restricted", "trusted_owner"), ("trusted_owner", "restricted")])
 def test_manager_profile_change_rotates_healthy_upstream_without_losing_session(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, initial_profile, next_profile
 ):
+    _apply_manager_runtime_profile(tmp_path / "runtime", initial_profile)
     store = ChatSessionStore(tmp_path / "runtime")
     runtime = ChatRuntimeController(store=store, codex_bin="codex")
     monkeypatch.setattr(
@@ -1045,9 +1054,10 @@ def test_manager_profile_change_rotates_healthy_upstream_without_losing_session(
         mode="new",
         channel_id="manager",
     )
-    assert starts[0][0]["manager_runtime"]["runtime_profile"] == "restricted"
+    assert starts[0][0]["manager_runtime"]["runtime_profile"] == initial_profile
+    store.append_message(session["session_id"], role="user", text="Keep this conversation.")
 
-    _apply_manager_runtime_profile(tmp_path / "runtime", "trusted_owner")
+    _apply_manager_runtime_profile(tmp_path / "runtime", next_profile)
     restored = runtime._ensure_adapter(
         session,
         work_dir=tmp_path,
@@ -1057,9 +1067,13 @@ def test_manager_profile_change_rotates_healthy_upstream_without_losing_session(
     assert starts[0][1].closed is True
     assert restored is starts[1][1]
     assert starts[1][0]["resume_thread_id"] is None
-    assert starts[1][0]["manager_runtime"]["runtime_profile"] == "trusted_owner"
+    assert starts[1][0]["manager_runtime"]["runtime_profile"] == next_profile
+    assert starts[1][0]["manager_runtime"]["sandbox"] == (
+        "danger-full-access" if next_profile == "trusted_owner" else "read-only"
+    )
     updated = store.load_session(session["session_id"])
-    assert updated["manager_runtime_profile"] == "trusted_owner"
+    assert updated["manager_runtime_profile"] == next_profile
+    assert [m["text"] for m in store.messages(session["session_id"])] == ["Keep this conversation."]
     assert updated["upstream_thread_id"] == "upstream-1"
 
 
@@ -1138,8 +1152,9 @@ def test_manager_restart_uses_the_session_allocation_instead_of_new_defaults(
     }
 
 
+@pytest.mark.parametrize("previous_context_version", [None, 21])
 def test_legacy_manager_migrates_without_project_and_refreshes_each_turn(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, previous_context_version
 ):
     store = ChatSessionStore(tmp_path / "runtime" / "chat")
     runtime = ChatRuntimeController(
@@ -1169,6 +1184,8 @@ def test_legacy_manager_migrates_without_project_and_refreshes_each_turn(
         upstream_mode="chat",
         codex_home=str(runtime.codex_home),
     )
+    if previous_context_version is not None:
+        store.update_session(legacy["session_id"], manager_context_version=previous_context_version)
     session, resumed = runtime.open_session(
         goal_id="different-project",
         agent_id="codex",
@@ -1642,3 +1659,64 @@ def test_current_external_scope_is_fresh_and_excludes_other_labels(
     )
     assert revoked["goals"] == []
     assert reads == ["currently-authorized"]
+
+
+@pytest.mark.parametrize("mode", ["metadata_touch", "bound_steward_goal_added"])
+def test_remote_evidence_without_ssh_grants_recollects_on_concurrent_registry_update(
+    monkeypatch, tmp_path, mode
+):
+    """Non-Codex stewards pass remote_evidence=True; without SSH grants they still recover once."""
+    registry = tmp_path / "registry.json"
+    payload = {"goals": [{"id": "authorized", "goal_instance_id": "ginst_" + "a" * 32}]}
+    registry.write_text(json.dumps(payload))
+    collect = context.build_goal_portfolio
+    calls = []
+    session = {
+        "goal_id": "loopx-manager",
+        "channel_id": "manager.external.native." + "b" * 24 + "." + "c" * 24,
+        "steward_context": {
+            "kind": "bound_steward",
+            "project_ref": "a" * 24,
+            "workspace_path": str(tmp_path),
+            "audience": "bound_owner",
+            "grant": "portfolio_read",
+            "binding_id": "b" * 24,
+            "source_ref": "c" * 24,
+            "provider_ref": "d" * 24,
+            "operator_ref": "e" * 24,
+            "goal_ids": ["authorized"],
+        },
+    }
+
+    def racing_collection(**kwargs):
+        result = collect(**kwargs)
+        calls.append(result["inventory_revision"])
+        if len(calls) == 1:
+            if mode == "metadata_touch":
+                payload["updated_at"] = "2026-11-02T07:41:53Z"
+            else:
+                payload["goals"].append(
+                    {"id": "newly-registered", "goal_instance_id": "ginst_" + "b" * 32}
+                )
+            registry.write_text(json.dumps(payload))
+        return result
+
+    monkeypatch.setattr(context, "build_goal_portfolio", racing_collection)
+    result = context.collect_manager_turn_context(
+        registry,
+        session,
+        tmp_path,
+        lambda _s: [g["id"] for g in json.loads(registry.read_text())["goals"]],
+        include_details=False,
+        remote_evidence=True,
+    )
+    assert len(calls) == 2
+    assert result.get("warnings") != ["external_authorization_changed"]
+    expected_ids = (
+        ["authorized"]
+        if mode == "metadata_touch"
+        else ["authorized", "newly-registered"]
+    )
+    assert [g["goal_id"] for g in result["goals"]] == expected_ids
+    assert result.get("authorization_scope_id")
+

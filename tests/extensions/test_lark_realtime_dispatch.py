@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import threading
+import time
 
 import pytest
 
@@ -14,7 +15,11 @@ from loopx.extensions.lark import goal_topic_runtime as runtime
 from loopx.extensions.lark.event_inbox import inspect_lark_event_inbox
 from loopx.extensions.lark.goal_channel_contracts import read_goal_channel_binding
 from loopx.extensions.lark.goal_channel_targets import read_goal_channel_targets
-from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
+from loopx.extensions.lark.goal_topic_runtime_service import (
+    LarkGoalTopicRuntimeService,
+    ProfileTransport,
+    ProfileWorkerFingerprint,
+)
 from test_lark_goal_topic_runtime import _reply_runner, _seed_legacy_topic
 
 
@@ -304,6 +309,117 @@ def test_inactive_profile_keeps_the_native_listener_and_dispatch_off(
     assert not (tmp_path / "runtime").exists()
 
 
+@pytest.mark.parametrize("batch", [False, True])
+def test_native_group_topic_admission_does_not_block_another_topics_control(
+    tmp_path, batch
+):
+    # Native bindings have no legacy Goal/topic routing rows. A missing legacy
+    # route must not collapse every native topic in this group onto one lane.
+    snapshot = {"private_profiles": {"mew": {
+        "cli_bin": "fake-lark", "provider_ref": "a" * 24,
+    }}}
+    active, release, beta_done, followup = [threading.Event() for _ in range(4)]
+    order = []
+
+    def admit(profile, event):
+        assert profile == "mew"
+        message = event["message_id"]
+        order.append(message)
+        if message == "om_alpha_first":
+            active.set()
+            assert release.wait(5)
+        elif message == "om_alpha_followup":
+            followup.set()
+        else:
+            assert event["content"] == "/stop"
+            beta_done.set()
+        return {"status": "command_recorded"}
+
+    def native_event(message, topic="alpha"):
+        return {**_event(message, topic), "chat_type": "group", "message_type": "text"}
+
+    def lines():
+        yield "[event] ready event_key=im.message.receive_v1\n"
+        yield json.dumps(native_event("alpha_first"))
+        assert active.wait(5)
+        events = [native_event("alpha_followup"),
+                  {**native_event("beta_control", "beta"), "content": "/stop"}]
+        if batch:
+            yield json.dumps(events)
+        else:
+            yield from map(json.dumps, events)
+        yield "[event] exited (reason: timeout)\n"
+
+    def unexpected(*_args):
+        raise AssertionError("Native events must retain their native admission owner")
+
+    consumer, options = _start(tmp_path, snapshot, lines(), unexpected)
+    options["private_admitter"] = admit
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(runtime.stream_lark_goal_topic_profile, **options)
+        try:
+            assert beta_done.wait(1), "Another native topic's control waited for admission"
+            assert not followup.is_set(), "One topic lost its source FIFO"
+            assert not consumer.waited
+        finally:
+            release.set()
+        result = future.result(timeout=8)
+    assert result["event_count"] == 3
+    assert result["replied_count"] == 0  # Core delivery, not the legacy reply path.
+    assert order == ["om_alpha_first", "om_beta_control", "om_alpha_followup"]
+    assert not (tmp_path / "runtime").exists()
+
+
+def test_native_source_lanes_preserve_topic_and_private_sender_order(tmp_path, monkeypatch):
+    snapshot = _snapshot(tmp_path)
+    snapshot["private_profiles"] = {
+        "mew": {"provider_ref": "a" * 24, "audience": "group"},
+        "alias": {"provider_ref": "a" * 24, "audience": "group"},
+        "other": {"provider_ref": "b" * 24, "audience": "group"},
+    }
+
+    def unexpected(**_kwargs):
+        raise AssertionError("Native source scheduling must not select a legacy route")
+
+    monkeypatch.setattr(runtime, "_profile_event_route", unexpected)
+
+    def lane(event, profile="mew"):
+        return runtime._profile_event_lane(
+            profile=profile, snapshot=snapshot, event=event, runtime_root=tmp_path
+        )
+
+    group = {**_event("first"), "chat_type": "group"}
+    first = lane(group)
+    assert first == lane({**group, "message_id": "om_next", "sender_id": "ou_other"})
+    assert first == lane(group, "alias")  # Same verified App's source shape.
+    assert first != lane(group, "other")
+    assert first != lane({**group, "root_id": "om_topic_beta"})
+    assert first != lane({**group, "chat_id": "oc_other"})
+    # A group root and its replies keep FIFO. A private sender cannot shard its
+    # queue by supplying a different root; Core private source identity ignores it.
+    root = {**group, "root_id": "", "message_id": "om_topic_alpha"}
+    assert first == lane(root)
+    private = {**group, "chat_type": "p2p"}
+    assert lane(private) == lane({**private, "root_id": "om_fake", "message_id": "om_next"})
+    assert lane(private) != lane({**private, "sender_id": "ou_other"})
+    assert not (tmp_path / "runtime").exists()
+
+
+@pytest.mark.parametrize("invalid", [
+    {"sender_id": ""}, {"chat_id": "invalid"},
+    {"message_id": "../escape"}, {"root_id": "", "parent_id": "om_parent"},
+])
+def test_malformed_native_source_hint_keeps_conservative_lane(tmp_path, invalid):
+    snapshot = {"private_profiles": {"mew": {"provider_ref": "a" * 24}}}
+    event = {**_event("first"), "chat_type": "group", **invalid}
+    lane = runtime._profile_event_lane(
+        profile="mew", snapshot=snapshot, event=event, runtime_root=tmp_path
+    )
+    assert lane[0].startswith("unmatched.")
+    assert len(lane) == 1
+    assert not list(tmp_path.iterdir())
+
+
 def test_reader_failure_drains_active_work_and_cleans_up_without_accepting_buffered_input(
     tmp_path,
 ):
@@ -475,3 +591,129 @@ def test_idle_handler_failure_reconnects_through_the_existing_service_owner(
     assert health[-1]["status"] == "listening"
     assert health[-1]["restart_count"] == 1
     assert _processed(tmp_path) == 0
+
+
+def test_profile_without_steerable_binding_keeps_four_ordinary_workers(
+    tmp_path, monkeypatch
+):
+    snapshot = {
+        "private_profiles": {
+            "mew": {"cli_bin": "fake-lark", "provider_ref": "a" * 24}
+        }
+    }
+    all_four = threading.Barrier(4, timeout=3)
+    release = threading.Event()
+    entered = []
+    stop = threading.Event()
+
+    def admit(_profile, event):
+        entered.append(event["message_id"])
+        all_four.wait()
+        assert release.wait(5)
+        if len(entered) == 4:
+            stop.set()
+        return {"status": "command_recorded"}
+
+    def lines():
+        yield "[event] ready event_key=im.message.receive_v1\n"
+        for index in range(4):
+            yield json.dumps(
+                {
+                    **_event(f"role_{index}", f"topic_{index}"),
+                    "chat_type": "group",
+                    "message_type": "text",
+                }
+            )
+        assert release.wait(5)
+        yield "[event] exited (reason: timeout)\n"
+
+    service = LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: snapshot,
+        runtime_root=tmp_path / "runtime",
+        runtime_controller=object(),
+        private_conversations=object(),
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(service, "_admit_private", admit)
+    stream = runtime.stream_lark_goal_topic_profile
+
+    def owned_stream(**kwargs):
+        result = stream(**{**kwargs, "process_factory": lambda _args: _Consumer(lines())})
+        service._closed.set()
+        return result
+
+    monkeypatch.setattr(runtime, "stream_lark_goal_topic_profile", owned_stream)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(service._poll_profile, "mew", stop)
+        try:
+            deadline = threading.Event()
+            started = time.monotonic()
+            while len(entered) < 4 and time.monotonic() - started < 5.0 and not deadline.wait(0.02):
+                pass
+            assert len(entered) == 4
+        finally:
+            release.set()
+            stop.set()
+            service._closed.set()
+        future.result(timeout=6)
+
+
+def test_poll_profile_direct_unmanaged_call_runs_and_close_sets_stop_under_lock(
+    tmp_path: Path, monkeypatch
+) -> None:
+    snapshot = _snapshot(tmp_path)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    entered: list[str] = []
+
+    def fake_stream(*, profile: str, stop: threading.Event, **_kwargs: object) -> dict[str, object]:
+        entered.append(profile)
+        stop.set()
+        return {"ok": True, "status": "stopped"}
+
+    monkeypatch.setattr(runtime, "stream_lark_goal_topic_profile", fake_stream)
+    service = LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: snapshot,
+        runtime_root=tmp_path / "runtime",
+        runtime_controller=object(),
+    )
+    direct_stop = threading.Event()
+    service._poll_profile("mew", direct_stop)
+    assert entered == ["mew"]
+
+    entered.clear()
+    other_stop = threading.Event()
+    fingerprint = ProfileWorkerFingerprint(
+        transport=ProfileTransport(
+            cli_bin="fake-lark",
+            app_id="",
+            consumer_lease_key="mew",
+            callback_chats=(),
+            other_binding_id="",
+        )
+    )
+    with service._lock:
+        service._workers["mew"] = (threading.Event(), threading.current_thread(), fingerprint)
+    service._poll_profile("mew", other_stop)
+    assert entered == []
+
+    worker_started = threading.Event()
+    seen_stop: list[threading.Event] = []
+
+    def managed_poller(_profile: str, stop: threading.Event) -> None:
+        seen_stop.append(stop)
+        worker_started.set()
+        assert stop.wait(5)
+
+    managed_service = LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: snapshot,
+        runtime_root=tmp_path / "runtime-managed",
+        runtime_controller=object(),
+        profile_poller=managed_poller,
+    )
+    managed_service.refresh()
+    assert worker_started.wait(5)
+    worker_stop = seen_stop[0]
+    managed_service.close()
+    assert worker_stop.is_set()
+    with managed_service._lock:
+        assert managed_service._workers == {}

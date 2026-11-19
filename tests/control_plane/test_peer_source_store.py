@@ -2,15 +2,18 @@
 
 import json
 import os
+from contextlib import contextmanager
 import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from types import SimpleNamespace
 
 import pytest
 
 from canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture
 from loopx.capabilities.manager_context import POLICY_SCHEMA, _hash, _root, _write, register_ingress
-from loopx.chat_coordination import apply_context_handoff
+from loopx.chat.coordination import apply_context_handoff
 from loopx.chat_store import ChatSessionStore
 from loopx.control_plane.collaboration.peers import read_inbox, request
 from loopx.capabilities.manager_context.roundtrip import (
@@ -45,7 +48,7 @@ def source_request(tmp_path, monkeypatch, *, provider="file", colocated=False):
     store = ChatSessionStore(root if colocated else tmp_path / "chat-host")
     session = store.create_session(
         goal_id="loopx-manager", agent_id="codex", adapter_kind="codex_app_server",
-        upstream_thread_id="synthetic-host", channel_id="manager.external.fixture",
+        upstream_thread_id="synthetic-host", channel_id="manager.external." + "a" * 24,
     )
     turn, _ = store.create_turn(session["session_id"], client_turn_id="source-request",
                                message="Review this correction and return the evidence.", origin="lark")
@@ -70,12 +73,124 @@ def source_request(tmp_path, monkeypatch, *, provider="file", colocated=False):
     response = apply_context_handoff(
         controller, {"kind": "external_audience"}, session, turn,
         {"context_handoff": {"goal_id": "goal-a", "agent_id": "agent-a"}},
-        {"authorization_scope_id": "synthetic-host-scope"}, execution_allowed=lambda: False,
+        # The source Turn is active. Worker launch separately requires an
+        # execution_binding_id, which this delivery-only request does not have.
+        {"authorization_scope_id": "synthetic-host-scope"}, execution_allowed=lambda: True,
     )
+    assert response["context_execution"]["submitted"] is False
     receipt = response["context_handoff_receipt"]
     store.update_turn(session["session_id"], turn["turn_id"], status="completing", response=response)
     store.finalize_managed_turn_completion(session["session_id"], turn["turn_id"])
     return root, registry, store, session, turn, receipt
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite", "source_session"])
+def test_stopped_source_cannot_republish_a_previous_delivery(tmp_path, monkeypatch, provider):
+    root, registry, store, session, turn, _ = source_request(tmp_path, monkeypatch, provider=provider)
+
+    def snapshot():
+        return {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+
+    before = snapshot()
+    controller = SimpleNamespace(store=store, coordination_runtime_root=root,
+                                 registry_path=registry, manager_scope_resolver=None)
+    response = apply_context_handoff(
+        controller, {"kind": "external_audience"}, session, turn,
+        {"context_handoff": {"goal_id": "goal-a", "agent_id": "agent-a"}},
+        {"authorization_scope_id": "synthetic-host-scope"}, execution_allowed=lambda: False,
+    )
+    assert response.get("context_handoff_receipt") is None
+    assert not response.get("context_execution", {}).get("submitted", False)
+    assert snapshot() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite", "source_session"])
+@pytest.mark.parametrize("publication", ["transcript", "provider"])
+def test_source_revocation_fences_original_return(tmp_path, monkeypatch, provider, publication):
+    from loopx.control_plane.collaboration import source_policy_fence
+    from loopx.capabilities.manager_context import configure_delivery_target
+    from loopx.capabilities.manager_context.roundtrip import report
+    from loopx.control_plane.collaboration.inbox import acknowledge
+
+    root, registry, store, session, turn, receipt = source_request(tmp_path, monkeypatch, provider=provider)
+    rid, goal_ref = receipt["request_id"], receipt.get("goal_ref")
+    acknowledge(root, "goal-a", "agent-a", rid, "adopt", "Read exact source",
+                registry=registry, caller_goal_ref=goal_ref)
+    report(root, "goal-a", "agent-a", rid, "conclusion", "Checked the exact original source.",
+           registry=registry, caller_goal_ref=goal_ref)
+    entered, release, attempted, revoked = [threading.Event() for _ in range(4)]
+    append = store.append_message
+    thread_lock = source_policy_fence._thread_lock
+    revoker, first_attempt, sent = [], [], []
+
+    def pause():
+        entered.set()
+        assert release.wait(10), "test did not release return publication"
+
+    def append_message(*args, **kwargs):
+        if publication == "transcript" and kwargs.get("origin") == "manager_followup":
+            pause()
+        return append(*args, **kwargs)
+
+    def sender(*args):
+        if publication == "provider":
+            pause()
+        sent.append(revoked.is_set())
+        return {"reply_verified": True, "verification_performed": True}
+
+    @contextmanager
+    def observe_lock(path):
+        lock = thread_lock(path)
+        if revoker == [threading.get_ident()] and not first_attempt:
+            # Source writers first contend on the real in-process fence, before
+            # entering the kernel fence. Observe that owner instead of waiting
+            # for a syscall which correctly cannot happen until publication ends.
+            acquired = lock.acquire(blocking=False)
+            first_attempt.append(acquired)
+            attempted.set()
+            if acquired:
+                try:
+                    yield
+                finally:
+                    lock.release()
+                return
+        with lock:
+            yield
+
+    def revoke():
+        revoker.append(threading.get_ident())
+        result = configure_delivery_target(
+            root, registry, channel=session["channel_id"], goal_id="goal-a",
+            agent_id="agent-a", grant=False, execute=True,
+        )
+        revoked.set()
+        return result
+
+    monkeypatch.setattr(store, "append_message", append_message)
+    monkeypatch.setattr(source_policy_fence, "_thread_lock", observe_lock)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        delivery = pool.submit(drain, root, registry, store, sender)
+        try:
+            assert entered.wait(10)
+            revocation = pool.submit(revoke)
+            assert attempted.wait(10)
+            # Observe a real contended writer, not a wall-clock ordering guess.
+            assert first_attempt == [False] and not revoked.is_set()
+        finally:
+            release.set()
+        assert delivery.result(timeout=15) == 1
+        assert revocation.result(timeout=15)["readback_verified"]
+    assert sent == [False]
+    messages = store.messages(session["session_id"])
+    assert sum(m.get("origin") == "manager_followup" for m in messages) == 1
+    assert store.turn_for_client(session["session_id"], turn["client_turn_id"])["turn_id"] == turn["turn_id"]
+
+    # A later result cannot use the retired grant, even after a pump restart.
+    report(root, "goal-a", "agent-a", rid, "conclusion", "A later result.",
+           update_id="after-revocation", registry=registry, caller_goal_ref=goal_ref)
+    drain(root, registry, ChatSessionStore(store.root.parent), sender)
+    assert sent == [False]
+    assert store.messages(session["session_id"]) == messages
 
 
 def forward(root, registry, receipt, *, agent="reviewer", source="agent-a", operation="review"):
@@ -95,6 +210,64 @@ def test_split_store_handoff_can_forward_source_context(tmp_path, monkeypatch, p
     assert received[0]["parent_request_id"] == receipt["request_id"]
     assert received[0]["request_id"] == peer["request_id"]
     assert not (root / "chat").exists(), "A context read must not create another Chat store"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite", "source_session"])
+@pytest.mark.parametrize("reason,typed", [
+    ("original_route_unavailable", True),
+    ("return_authorization_unavailable", True),
+    ("initial_delivery_receipt_unavailable", True),
+    ("original_route_unavailable", False),
+])
+def test_prewrite_return_retains_typed_cause_and_recovers_original_result(
+    tmp_path, monkeypatch, provider, reason, typed,
+):
+    from datetime import datetime, timedelta, timezone
+    from loopx.capabilities.manager_context.roundtrip import ReturnResolutionBlocked, reply_status
+
+    root, registry, store, session, turn, receipt = source_request(tmp_path, monkeypatch, provider=provider)
+    rid = receipt["request_id"]
+    cli(root, registry, "agent-a", "acknowledge", "--request-id", rid,
+        "--decision", "adopt", "--reason", "Read the original source")
+    cli(root, registry, "agent-a", "report", "--request-id", rid,
+        "--reply-text", "Checked the original source and its result.")
+    failed_reads, writes = [], []
+    unavailable = True
+
+    def sender(*_):
+        if unavailable:
+            failed_reads.append(reason)
+            # Prose with the same spelling is still an untyped outage. Only
+            # the adapter's Core-classified reason may enter public readback.
+            if typed:
+                raise ReturnResolutionBlocked(reason, "Synthetic source is temporarily unavailable")
+            raise ValueError(reason)
+        writes.append("original audience")
+        return {"reply_verified": True, "idempotency_key": "synthetic-provider-receipt"}
+
+    now = datetime.now(timezone.utc)
+    expected = reason if typed else "original_route_or_return_delivery_unavailable"
+    for offset in (0, 10):
+        drain(root, registry, store, sender, now=now + timedelta(minutes=offset))
+        status = reply_status(root, receipt)[0]
+        assert status["status"] == "retry_pending" and status["error"] == expected
+        public = project_chat_session_snapshot(root, store, session["session_id"], registry=registry)
+        returned = [row for row in public["messages"] if row.get("origin") == "manager_followup"]
+        assert len(returned) == 1 and returned[0]["turn_id"] == turn["turn_id"]
+        assert returned[0]["return_delivery"]["error"] == expected
+    assert failed_reads == [reason, reason] and writes == []
+    # Source repair resumes the original retry clock and conclusion. Keeping
+    # its typed cause must not terminalize a pending initial provider receipt.
+    unavailable = False
+    recovered = ChatSessionStore(store.root.parent)
+    drain(root, registry, recovered, sender, now=now + timedelta(minutes=20))
+    drain(root, registry, recovered, sender, now=now + timedelta(minutes=30))
+    assert reply_status(root, receipt)[0]["status"] == "delivered"
+    assert writes == ["original audience"]
+    returned = [row for row in recovered.messages(session["session_id"])
+                if row.get("origin") == "manager_followup"]
+    assert len(returned) == 1 and returned[0]["turn_id"] == turn["turn_id"]
+    assert recovered.turn_for_client(session["session_id"], turn["client_turn_id"])["turn_id"] == turn["turn_id"]
 
 
 def route_path(root, receipt):
@@ -163,7 +336,9 @@ def test_host_restart_recovers_legacy_source_and_full_return_once(tmp_path, monk
         "--reply-text", "Review found no gap.")
     returned = cli(root, registry, "agent-a", "read")
     assert returned["peer_returns"]["items"][0]["request_id"] == peer["request_id"]
-    cli(root, registry, "agent-a", "acknowledge-return", "--request-id", peer["request_id"])
+    read_inbox(root, registry, "goal-a", "agent-a", turn_instance_id="turn-peer-source")
+    cli(root, registry, "agent-a", "acknowledge-return", "--request-id", peer["request_id"],
+        "--turn-instance-id", "turn-peer-source", "--disposition", "accepted")
     cli(root, registry, "agent-a", "acknowledge", "--request-id", receipt["request_id"],
         "--decision", "adopt", "--reason", "Adopt peer result")
     cli(root, registry, "agent-a", "report", "--request-id", receipt["request_id"],
@@ -337,3 +512,220 @@ def test_source_session_recovery_preserves_goal_ref_and_rejects_new_instance(tmp
     with pytest.raises(ValueError, match="instance"):
         forward(root, registry, receipt, operation="new-instance")
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite", "source_session"])
+@pytest.mark.parametrize("entrypoint", ["handoff", "peer"])
+@pytest.mark.parametrize("order", ["revoke_first", "publish_first"])
+def test_context_revocation_orders_inbox_publication(tmp_path, monkeypatch, provider, entrypoint, order):
+    from loopx.capabilities import manager_context
+    from loopx.control_plane.collaboration import peers
+
+    root, registry, store, session, turn, receipt = source_request(tmp_path, monkeypatch, provider=provider)
+    adapter = manager_context if entrypoint == "handoff" else peers
+    publication_entered, release_publication = threading.Event(), threading.Event()
+    original_plan = adapter.plan_request_publication
+
+    def publication_plan(*args, **kwargs):
+        plan = original_plan(*args, **kwargs)
+        publication_entered.set()
+        assert release_publication.wait(5), "test did not release inbox publication"
+        return plan
+
+    def publish():
+        if entrypoint == "peer":
+            return forward(root, registry, receipt)
+        return manager_context.deliver(
+            root, registry, session=session, turn=turn,
+            request={"goal_id": "goal-a", "agent_id": "reviewer"}, source_store=store,
+        )
+
+    def revoke():
+        return manager_context.configure_delivery_target(
+            root, registry, channel=session["channel_id"], goal_id="goal-a",
+            agent_id="reviewer", grant=False, execute=True,
+        )
+
+    def records():
+        return {p.relative_to(_root(root)): p.read_bytes()
+                for folder in ("entries", "peer-operations", "roundtrips")
+                for p in (_root(root) / folder).rglob("*.json")}
+
+    before = records()
+    if order == "revoke_first":
+        assert revoke()["readback_verified"]
+        with pytest.raises(ValueError, match="not authorized"):
+            publish()
+        assert records() == before
+        assert not read_inbox(root, registry, "goal-a", "reviewer")["items"]
+        return
+
+    monkeypatch.setattr(adapter, "plan_request_publication", publication_plan)
+    revoke_entered = threading.Event()
+
+    def concurrent_revoke():
+        revoke_entered.set()
+        return revoke()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        publishing = executor.submit(publish)
+        try:
+            assert publication_entered.wait(5)
+            revoking = executor.submit(concurrent_revoke)
+            assert revoke_entered.wait(5)
+            # Revocation may not report completion across an admitted commit.
+            # The timeout only bounds the blocked-call observation; events
+            # determine when the real publication can continue.
+            with pytest.raises(FutureTimeout):
+                revoking.result(timeout=0.2)
+        finally:
+            release_publication.set()
+        published = publishing.result(timeout=5)
+        revoked = revoking.result(timeout=5)
+    assert published["status"] == "delivered" and revoked["readback_verified"]
+    received = read_inbox(root, registry, "goal-a", "reviewer")["items"]
+    assert len(received) == 1 and received[0]["request_id"] == published["request_id"]
+    if entrypoint == "peer":
+        assert received[0]["parent_request_id"] == receipt["request_id"]
+        assert received[0]["inherited_context"]["message"] == turn["message"]
+    else:
+        assert received[0]["message"] == turn["message"]
+    # A committed receipt remains historical evidence, never a replay grant.
+    committed = records()
+    with pytest.raises(ValueError, match="not authorized"):
+        publish()
+    assert records() == committed
+    assert not (root / "chat").exists()
+
+
+def native_source_request(tmp_path, monkeypatch, provider):
+    from loopx.capabilities.native_chat.conversation_bindings import ChatConversationBindings
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+    from loopx.capabilities.manager_context import deliver
+
+    root, registry, store, _, _, legacy = source_request(tmp_path, monkeypatch, provider=provider)
+    workspace = tmp_path / "native-workspace"
+    workspace.mkdir()
+    other = tmp_path / "other-workspace"
+    other.mkdir()
+    contexts = ChatProjectContexts([workspace, other])
+    observation = {"verified": True, "transport_ref": "fixture-app",
+                   "provider_ref": "b" * 24, "operator_ref": "c" * 24}
+    bindings = ChatConversationBindings(root=store.root, project_contexts=contexts, observe=lambda _: observation)
+    bindings.controller = SimpleNamespace(store=store, registry_path=registry, coordination_runtime_root=root)
+    binding = bindings.configure(transport_ref="fixture-app", project_ref=contexts.available()[0]["project_ref"],
+                                 executor_endpoint_id="codex", context_kind="steward")
+    selected = bindings.resolve(binding_id=binding["binding_id"], source_ref="d" * 24,
+                                sender_ref=binding["operator_ref"], private_human_message=True)
+    session = store.create_session(goal_id="loopx-manager", agent_id="codex", adapter_kind="codex_app_server",
+        upstream_thread_id="synthetic-host", channel_id=selected["channel_id"], steward_context=selected["context"])
+    turn, _ = store.create_turn(session["session_id"], client_turn_id="native-source",
+                               message="Review the original evidence.", origin="lark")
+    bindings.ensure_delivery_scope(selected)
+    register_ingress(root, session_id=session["session_id"], client_turn_id=turn["client_turn_id"],
+        channel=session["channel_id"], sender_id=binding["operator_ref"], message=turn["message"],
+        source_id="lark:native-source")
+    receipt = deliver(root, registry, session=session, turn=turn,
+                      request={"goal_id": "goal-a", "agent_id": "agent-a"}, source_store=store)
+    store.update_turn(session["session_id"], turn["turn_id"], status="completing",
+                      response={"context_handoff_receipt": receipt})
+    store.finalize_managed_turn_completion(session["session_id"], turn["turn_id"])
+    return SimpleNamespace(root=root, registry=registry, store=store, bindings=bindings,
+                           selected=selected, session=session, turn=turn, receipt=receipt, legacy=legacy)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("change", ["disconnect", "replace"])
+def test_native_binding_revokes_inherited_context_without_resurrection(tmp_path, monkeypatch, provider, change):
+    value = native_source_request(tmp_path, monkeypatch, provider)
+    bindings, selected = value.bindings, value.selected
+    before = forward(value.root, value.registry, value.receipt, operation="before-revocation")
+    policy_path = _root(value.root) / "policy.json"
+    policy = json.loads(policy_path.read_text())
+    # Exact sibling sources and legacy connections must survive. These are
+    # policy fixtures, not source identities that authorize this request.
+    unrelated = "manager.external.native." + "e" * 24 + "." + "d" * 24
+    policy["sources"][unrelated] = dict(policy["sources"][selected["channel_id"]])
+    _write(policy_path, policy)
+    historical = route_path(value.root, value.receipt).read_bytes()
+    if change == "disconnect":
+        bindings.disconnect(selected["binding"]["binding_id"], expected_revision=bindings.read()["revision"])
+    else:
+        ref = next(row["project_ref"] for row in bindings.projects.available()
+                   if row["project_ref"] != selected["binding"]["project_ref"])
+        bindings.configure(transport_ref="fixture-app", project_ref=ref,
+                           executor_endpoint_id="codex", context_kind="steward")
+    assert value.store.load_session(value.session["session_id"])["status"] != "closed"
+    for operation in ("after-revocation", "before-revocation"):
+        with pytest.raises(ValueError, match="source authorization unavailable"):
+            forward(value.root, value.registry, value.receipt, operation=operation)
+    with pytest.raises(ValueError, match="no longer authorized"):
+        bindings.ensure_delivery_scope(selected)
+    retained = json.loads(policy_path.read_text())
+    retired = {**policy["sources"][selected["channel_id"]], "sender_ids": [],
+               "evidence_goal_scope": "selected", "evidence_goal_ids": []}
+    assert retained == {**policy, "sources": {**policy["sources"], selected["channel_id"]: retired}}
+    from loopx.capabilities.manager_context import evidence_scope_readback
+    assert evidence_scope_readback(value.root, selected["channel_id"], registry_path=value.registry)["goal_ids"] == []
+    assert route_path(value.root, value.receipt).read_bytes() == historical
+    items = read_inbox(value.root, value.registry, "goal-a", "reviewer")["items"]
+    assert [row["request_id"] for row in items] == [before["request_id"]]
+    assert forward(value.root, value.registry, value.legacy, operation="unrelated")["status"] == "delivered"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("stage", ["policy", "binding"])
+def test_native_binding_source_revocation_retries_policy_failure(tmp_path, monkeypatch, provider, stage):
+    from loopx.capabilities import manager_context
+    from loopx.capabilities.native_chat import conversation_bindings
+
+    value = native_source_request(tmp_path, monkeypatch, provider)
+    bindings = value.bindings
+    current = bindings.read()
+    owner, method = (manager_context, "_write") if stage == "policy" else (conversation_bindings, "_atomic_write_json")
+    write = getattr(owner, method)
+
+    def failed_write(path, row):
+        raise OSError("synthetic revocation IO failure")
+
+    monkeypatch.setattr(owner, method, failed_write)
+    with pytest.raises(OSError, match="synthetic revocation"):
+        bindings.disconnect(value.selected["binding"]["binding_id"], expected_revision=current["revision"])
+    assert bindings.read() == current, "failed retirement must not advertise a completed disconnect"
+    if stage == "binding":
+        with pytest.raises(ValueError, match="source authorization unavailable"):
+            forward(value.root, value.registry, value.receipt, operation="partial-retirement")
+    monkeypatch.setattr(owner, method, write)
+    result = bindings.disconnect(value.selected["binding"]["binding_id"], expected_revision=current["revision"])
+    assert not result["bindings"]
+    assert bindings.disconnect(value.selected["binding"]["binding_id"], expected_revision=result["revision"]) == result
+    with pytest.raises(ValueError, match="source authorization unavailable"):
+        forward(value.root, value.registry, value.receipt)
+
+
+@pytest.mark.parametrize("with_transport", [False, True])
+def test_composed_binding_reuses_host_and_retires_source(tmp_path, monkeypatch, with_transport):
+    from loopx.capabilities.native_chat.transports import install_conversation_transports
+
+    value = native_source_request(tmp_path, monkeypatch, "file")
+    controller = value.bindings.controller
+    controller.project_contexts = value.bindings.projects
+    server = SimpleNamespace(runtime_controller=controller, chat_store=value.store)
+    observe = value.bindings._observe_owner
+    transport = SimpleNamespace(transport_ref="fixture-app", observe=lambda: observe("fixture-app"))
+    install_conversation_transports(server, observe_default=observe,
+                                   factories=[lambda _: transport] if with_transport else [])
+    bindings = controller.project_contexts.conversation_bindings
+    assert bindings.controller is controller
+    assert bindings.session_context(value.session["steward_context"])["channel_id"] == value.session["channel_id"]
+    bindings.disconnect(value.selected["binding"]["binding_id"], expected_revision=bindings.read()["revision"])
+    with pytest.raises(ValueError, match="source authorization unavailable"):
+        forward(value.root, value.registry, value.receipt)
+
+
+def test_source_retirement_without_policy_does_not_initialize_storage(tmp_path):
+    from loopx.capabilities.manager_context import revoke_conversation_sources
+
+    root = tmp_path / "unused-runtime"
+    revoke_conversation_sources(root, "a" * 24)
+    assert not root.exists()

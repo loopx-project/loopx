@@ -1,0 +1,84 @@
+{
+  "schema_version": "edgebench_inflection_points_v0",
+  "study_id": "cross-task-causal-attribution-20261103",
+  "description": "Empirically validated causal inflection points where feedback or mechanisms changed subsequent actions",
+  "inflection_points": [
+    {
+      "task": "graph_clustering_calibration",
+      "round_id": "agent-1",
+      "elapsed_hours": 0.149,
+      "score": 0.6639,
+      "score_delta": 0.6639,
+      "metric_name": "balanced_composite_score",
+      "causal_mechanism": "Initial prototype baseline establishment using sparse ridge operator and standard neighborhood features.",
+      "driver_type": "initial_pipeline_bootstrap",
+      "evidence_ref": "submission:agent-1"
+    },
+    {
+      "task": "graph_clustering_calibration",
+      "round_id": "agent-2",
+      "elapsed_hours": 2.103,
+      "score": 0.7194,
+      "score_delta": 0.0555,
+      "metric_name": "balanced_composite_score",
+      "causal_mechanism": "Primary architectural inflection: adoption of graph topology statistics and neighbor-group feature aggregation, lifting Macro-F1 to 0.7090.",
+      "driver_type": "architecture_selection",
+      "evidence_ref": "submission:agent-2"
+    },
+    {
+      "task": "graph_clustering_calibration",
+      "round_id": "agent-10",
+      "elapsed_hours": 9.603,
+      "score": 0.7240,
+      "score_delta": 0.0046,
+      "metric_name": "balanced_composite_score",
+      "causal_mechanism": "Secondary calibration inflection: probability calibration reduced ECE from 0.0746 to 0.0534 (-28.4%) and average inference latency from 3.54s to 2.71s (-23.4%), while classification Macro-F1 remained flat (0.7088).",
+      "driver_type": "calibration_and_latency_tuning",
+      "evidence_ref": "submission:agent-10"
+    },
+    {
+      "task": "ad_layout_cut_optimization",
+      "round_id": "agent-1",
+      "elapsed_hours": 0.521,
+      "score": 49236547122.0,
+      "score_delta": 49236547122.0,
+      "metric_name": "objective_cost_function",
+      "causal_mechanism": "Initial greedy layout proposal generation with standard bounding box constraints.",
+      "driver_type": "initial_pipeline_bootstrap",
+      "evidence_ref": "submission:agent-1"
+    },
+    {
+      "task": "ad_layout_cut_optimization",
+      "round_id": "agent-5",
+      "elapsed_hours": 4.512,
+      "score": 49548942642.0,
+      "score_delta": 3475498.0,
+      "metric_name": "objective_cost_function",
+      "causal_mechanism": "Substantive heuristic shift: initialCutDelta ranks up to 4 anchor-safe proposals by immediate layout cut score before repair, with 25% random bypass. Delivered +3,475,498 native gain and 50/50 test suite pass.",
+      "driver_type": "proposal_ranking_heuristic",
+      "evidence_ref": "submission:agent-5"
+    },
+    {
+      "task": "portfolio_risk_calibration",
+      "round_id": "official-native-peak",
+      "elapsed_hours": 18.0,
+      "score": 53.87,
+      "score_delta": 42.29,
+      "metric_name": "raw_risk_calibration_score",
+      "causal_mechanism": "Tight closed-loop evaluation feedback (140 agent / 215 auto evaluations) allowed continuous portfolio weight re-estimation without catastrophic drift.",
+      "driver_type": "feedback_grounding_loop",
+      "evidence_ref": "study:portfolio-ten-arm-20261006:official-native"
+    },
+    {
+      "task": "portfolio_risk_calibration",
+      "round_id": "explore-native-peak",
+      "elapsed_hours": 18.0,
+      "score": 31.19,
+      "score_delta": 16.23,
+      "metric_name": "raw_risk_calibration_score",
+      "causal_mechanism": "Dynamic exploration across portfolio volatility regimes under VaR-timing-v1 evaluator with native execution feedback ratcheting progress.",
+      "driver_type": "exploratory_regime_search",
+      "evidence_ref": "study:portfolio-ten-arm-20261006:explore-native"
+    }
+  ]
+}

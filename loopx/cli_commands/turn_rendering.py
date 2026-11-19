@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from ..control_plane.turn_driver import (
@@ -11,6 +13,51 @@ from ..control_plane.turn_driver import (
 from ..presentation.renderers.turn_envelope_markdown import (
     turn_envelope_budget_warning_lines,
 )
+
+
+def project_turn_plan_inspection(plan: dict[str, Any], runtime_root: Path) -> None:
+    """Copy display fields from the original Python values, then pin the rest."""
+    paths = plan.pop("_inspection_paths", None)
+    if not paths or not plan.get("ok"):
+        return
+    source = plan["work_contract"]
+    preview: dict[str, Any] = {}
+    for path in paths:
+        value = source
+        for field in path:
+            if not isinstance(value, dict) or field not in value:
+                break
+            value = value[field]
+        else:
+            target = preview
+            for field in path[:-1]:
+                target = target.setdefault(field, {})
+            target[path[-1]] = value
+
+    from .context_machine import capture_context_recovery
+
+    detail = capture_context_recovery(source, runtime_root=runtime_root, index_and_select=False)
+    if detail.get("available") is False:
+        return  # The original complete plan is the fallback.
+    plan["work_contract"] = preview
+    plan["detail_ref"] = {**detail, "instruction": (
+        "This inspection shows the current decision and authoring guidance. "
+        "Before a decision or action that depends on other Goal requirements or evidence, "
+        "append --list or --select '<pointer>' to the command to read the necessary fields from this exact work contract. "
+        "The plan and its saved source grant no execution authority."
+    )}
+
+
+def _turn_start_observation_lines(payload: Mapping[str, object]) -> list[str]:
+    dispatch = payload.get("turn_start_capability_hook_dispatch")
+    if not isinstance(dispatch, Mapping):
+        return []
+    lines = []
+    for result in dispatch.get("results", []):
+        readback = result.get("readback")
+        if isinstance(readback, Mapping):
+            lines.extend(f"- {result['capability_id']}: {line}" for line in readback.get("summary_lines", []))
+    return lines
 
 
 def build_turn_error_payload(
@@ -29,12 +76,15 @@ def build_turn_error_payload(
     planned_effects = planned.get("effects")
     planned_effects = planned_effects if isinstance(planned_effects, Mapping) else {}
     # Once the executor was entered an exception can follow a protected effect.
-    # A missing reply is not proof of non-execution. The original journal is
+    #  The original journal is
     # projected separately so a replay never looks like a second host launch.
     effects = {
         key: True if planned_effects.get(key) is True else None if execution_started else False
         for key in ("host_invoked", "state_written", "scheduler_acknowledged", "quota_spent")
     }
+    preparation_effects = getattr(exc, "execution_effects", None)
+    if isinstance(preparation_effects, Mapping):
+        effects.update({key: preparation_effects[key] for key in effects if key in preparation_effects})
     return {
         **({"error_code": error_code, **(error_payload if isinstance(error_payload, Mapping) else {})}
            if isinstance(error_code, str) else {}),
@@ -63,7 +113,38 @@ def build_turn_error_payload(
     }
 
 
-def render_loopx_turn_plan_markdown(payload: dict[str, object]) -> str:
+def _turn_plan_readback_lines(payload: Mapping[str, object]) -> list[str]:
+    """Render the existing inspection source; never recompute admission here."""
+    source = payload.get("work_contract")
+    if payload.get("schema_version") != "loopx_turn_plan_v1" or not isinstance(source, Mapping):
+        return []
+    lines = [
+        "Inspection only; this plan does not authorize execution.",
+        f"- should_run: {source.get('should_run')}",
+        f"- effective_action: {source.get('effective_action')}",
+    ]
+    reason = source.get("reason")
+    if isinstance(reason, str) and reason:
+        lines.append(f"- reason: {reason}")
+    selected = source.get("selected_todo")
+    if isinstance(selected, Mapping) and selected.get("todo_id"):
+        lines.extend([
+            "", "## Selected work (summary)",
+            f"- todo_id: {selected['todo_id']}",
+        ])
+        text = selected.get("text")
+        if isinstance(text, str) and text:
+            lines.append(text)
+    # The explicit detail surface carries the original contract and transaction.
+    # Keep every field, including future owner additions, instead of introducing
+    # a second hand-maintained projection of their execution semantics.
+    return [*lines, "", "## Full plan (inspection only)", "```json",
+            json.dumps(payload, ensure_ascii=False, indent=2), "```", ""]
+
+
+def render_loopx_turn_plan_markdown(
+    payload: dict[str, object], *, include_transaction_detail: bool = False,
+) -> str:
     if not payload.get("ok"):
         error = payload.get("error") or "invalid TurnEnvelope contract"
         return f"LoopX Turn plan failed: {error}"
@@ -72,14 +153,20 @@ def render_loopx_turn_plan_markdown(payload: dict[str, object]) -> str:
     capability = payload.get("capability_action") if isinstance(payload.get("capability_action"), dict) else {}
     intent = capability.get("intent") if isinstance(capability.get("intent"), dict) else {}
     envelope = payload.get("turn_envelope")
+    observation = payload.get("turn_start_capability_hook_dispatch")
     return "\n".join(
         [
             "# LoopX Turn Plan",
+            *(_turn_plan_readback_lines(payload) if include_transaction_detail else []),
             f"- host: {host.get('kind')}",
             f"- execution_mode: {host.get('execution_mode')}",
             f"- route: {route.get('kind')}",
             f"- would_invoke_host: {route.get('would_invoke_host')}",
-            "- side_effects: none",
+            ("- side_effects: registered capability observation"
+             if isinstance(observation, dict) and (observation.get("uncertain_local_effects") or any(
+                 row.get("local_private_state_mutated") is not False for row in observation.get("results", [])))
+             else "- side_effects: none"),
+            *_turn_start_observation_lines(payload),
             *(["- capability_action: required (not executed)",
                f"- next_command: {capability.get('command') or intent.get('command')}"] if capability else []),
             *turn_envelope_budget_warning_lines(
@@ -124,11 +211,10 @@ def render_loopx_turn_execution_markdown(payload: dict[str, object]) -> str:
         if isinstance(managed_executor.get("output_token_budget"), dict)
         else {}
     )
-    host_failure = (
-        payload.get("host_failure")
-        if isinstance(payload.get("host_failure"), dict)
-        else {}
-    )
+    raw_host_failure = payload.get("host_failure")
+    host_failure: dict[str, Any] = raw_host_failure if isinstance(raw_host_failure, dict) else {}
+    retry = host_failure.get("retry")
+    retry = retry if isinstance(retry, dict) else {}
     journal_observation = (
         payload.get("journal_observation")
         if isinstance(payload.get("journal_observation"), dict) else {}
@@ -155,8 +241,15 @@ def render_loopx_turn_execution_markdown(payload: dict[str, object]) -> str:
             *(
                 [f"- host_failure_kind: {host_failure.get('kind')}",
                  f"- host_failure_retryable: {host_failure.get('retryable')}",
-                 f"- failure_reason: {payload.get('reason')}"]
-                if host_failure.get("kind") == "output_budget_exhausted" else []
+                 *([f"- host_failure_attempt: {host_failure['attempt']}"]
+                   if "attempt" in host_failure else []),
+                 *([f"- host_failure_max_attempts: {retry.get('max_attempts')}",
+                    f"- host_failure_backoff_seconds: {retry.get('backoff_seconds')}",
+                    "Retry policy is a scheduling hint. Recovery must still be admitted against the original Turn journal."]
+                   if retry else []),
+                 *([f"- failure_reason: {payload.get('reason')}"]
+                   if host_failure.get("kind") == "output_budget_exhausted" else [])]
+                if host_failure else []
             ),
             f"- validation: {validation.get('status')}",
             f"- recovery_kind: {validation.get('recovery_kind')}",
@@ -164,6 +257,7 @@ def render_loopx_turn_execution_markdown(payload: dict[str, object]) -> str:
             f"- host_invoked: {effects.get('host_invoked')}",
             f"- state_written: {effects.get('state_written')}",
             f"- quota_spent: {effects.get('quota_spent')}",
+            *_turn_start_observation_lines(payload),
             *([f"- error: {payload['error']}"] if payload.get("error") else []),
             *([f"- journal_readback: {journal_observation.get('status')}",
                f"- recorded_effects: {journal_observation.get('recorded_effects')}",

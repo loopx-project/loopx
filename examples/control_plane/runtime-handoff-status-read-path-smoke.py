@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,9 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 GOAL_ID = "runtime-handoff-status-read-path-fixture"
 AGENT_ID = "codex-product-capability"
 TODO_ID = "todo_runtime_handoff_status_read"
@@ -43,6 +47,7 @@ def run_cli(
         cwd=REPO_ROOT,
         check=False,
         capture_output=True,
+        env={**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"},
         text=True,
     )
     if result.returncode != 0:
@@ -154,6 +159,9 @@ def write_fixture(root: Path, *, stale_run: bool) -> tuple[Path, Path, Path]:
         + "\n",
         encoding="utf-8",
     )
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
+
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID, state_path=state_path)
     return project, runtime_root, registry_path
 
 

@@ -8,11 +8,34 @@ from canonical_authority_fixture import initialize_canonical_authority, isolate_
 import pytest
 
 from loopx.control_plane.todos.frontier_deadline import (
-    build_frontier_recheck_plan,
     todo_summary_frontier_deadline,
 )
 
 NOW = datetime(2026, 10, 1, tzinfo=UTC)
+
+
+def _recheck(payload, monkeypatch):
+    from loopx.control_plane.scheduler import scheduler_hint
+    from loopx.control_plane.scheduler.arbitration import (
+        SchedulerArbitration,
+        SchedulerDisposition,
+    )
+    from loopx.control_plane.scheduler.execution_context import (
+        scheduler_execution_context_for_runtime_profile,
+    )
+
+    monkeypatch.setattr(scheduler_hint, "now_utc", lambda: NOW)
+    hint = scheduler_hint.build_scheduler_hint(
+        payload,
+        arbitration=SchedulerArbitration(
+            SchedulerDisposition.QUIET_WAIT, "quiet_wait", "quiet_wait"
+        ),
+        scheduler_execution_context=scheduler_execution_context_for_runtime_profile(
+            "ark_managed_agent_goal"
+        ),
+        include_detail=True,
+    )
+    return hint["cold_path_detail"].get("frontier_recheck")
 
 
 def projected(due: str, identity: str) -> dict:
@@ -26,41 +49,61 @@ def projected(due: str, identity: str) -> dict:
     ("2026-10-01T08:01:00+08:00", "2026-10-01T00:02:00Z"),
     ("2026-09-30T20:01:00-04:00", "2026-10-01T01:02:00+01:00"),
 ])
-def test_recheck_compares_projected_deadlines_by_instant(agent_due, user_due):
-    result = build_frontier_recheck_plan({
-        "agent_todo_summary": projected(agent_due, "earlier"),
-        "user_todo_summary": projected(user_due, "later"),
-    }, current_time=NOW)
-    assert result == {"frontier_recheck_after_seconds": 60,
-        "frontier_recheck_source": "user_gate", "frontier_recheck_identity": "earlier",
-        "frontier_recheck_candidate_count": 2}
+def test_recheck_compares_projected_deadlines_by_instant(
+    monkeypatch, agent_due, user_due
+):
+    result = _recheck(
+        {
+            "agent_todo_summary": projected(agent_due, "earlier"),
+            "user_todo_summary": projected(user_due, "later"),
+        },
+        monkeypatch,
+    )
+    assert result == {
+        "frontier_recheck_after_seconds": 60,
+        "frontier_recheck_source": "user_gate",
+        "frontier_recheck_identity": "earlier",
+        "frontier_recheck_candidate_count": 2,
+    }
 
 
-def test_deadline_keeps_dedup_expiry_identity_and_source_compatibility():
+def test_deadline_keeps_dedup_expiry_identity_and_source_compatibility(monkeypatch):
     early = {"todo_id": "todo_early", "next_due_at": "2026-10-01T00:01:00.000001Z"}
     summary = {
         "current_agent_claimed_monitor_items": [
-            {"todo_id": "expired", "expires_at": "2026-10-01T00:00:00Z",
-             "next_due_at": "2026-10-01T00:00:01Z"},
-            {"todo_id": "due", "next_due_at": "2026-10-01T00:00:00Z"}, early,
+            {
+                "todo_id": "expired",
+                "expires_at": "2026-10-01T00:00:00Z",
+                "next_due_at": "2026-10-01T00:00:01Z",
+            },
+            {"todo_id": "due", "next_due_at": "2026-10-01T00:00:00Z"},
+            early,
         ],
         "monitor_open_items": [early, None],
-        "gate_open_items": [{"target_key": "later", "next_due_at": "2026-10-01T00:02:00Z"}],
+        "gate_open_items": [
+            {"target_key": "later", "next_due_at": "2026-10-01T00:02:00Z"}
+        ],
         "deferred_resume_candidates": [{"index": 0, "next_due_at": "bad"}],
     }
     assert todo_summary_frontier_deadline(summary, current_time=NOW) == {
-        "schema_version": "todo_frontier_deadline_v0", "identity": "todo_early",
-        "source": "continuous_monitor", "next_due_at": "2026-10-01T00:01:00.000001+00:00",
+        "schema_version": "todo_frontier_deadline_v0",
+        "identity": "todo_early",
+        "source": "continuous_monitor",
+        "next_due_at": "2026-10-01T00:01:00.000001+00:00",
         "candidate_count": 2,
     }
-    assert build_frontier_recheck_plan({"agent_todo_summary": summary}, current_time=NOW)[
-        "frontier_recheck_after_seconds"] == 61
+    assert (
+        _recheck({"agent_todo_summary": summary}, monkeypatch)[
+            "frontier_recheck_after_seconds"
+        ]
+        == 61
+    )
 
 
 @pytest.mark.parametrize("summary", [None, [], {}, {"monitor_open_items": "bad"}])
-def test_absent_deadline_does_not_create_a_wakeup(summary):
+def test_absent_deadline_does_not_create_a_wakeup(monkeypatch, summary):
     assert todo_summary_frontier_deadline(summary, current_time=NOW) is None
-    assert build_frontier_recheck_plan({"agent_todo_summary": summary}, current_time=NOW) is None
+    assert _recheck({"agent_todo_summary": summary}, monkeypatch) is None
 
 
 def test_future_projection_preserves_extra_fields_and_stale_projection_falls_back():
@@ -93,9 +136,9 @@ def test_quota_planning_keeps_gate_deadline_before_visibility_limits(monkeypatch
     original = json.loads(json.dumps(gates))
     crossings = []
     invoke = quota_selection.effect_runtime_result
-    def observed(method, params):
+    def observed(method, params, **kwargs):
         crossings.append(method)
-        return invoke(method, params)
+        return invoke(method, params, **kwargs)
     monkeypatch.setattr(quota_selection, "effect_runtime_result", observed)
     summary = quota_summary.summarize_user_todos_for_quota(
         {"schema_version": "todo_summary_v0", "items": gates, "total_count": 26,
@@ -148,7 +191,8 @@ def test_installed_cli_keeps_full_source_deadline_after_compaction(tmp_path, mon
     before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
     child = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry),
         "quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
-        "--runtime-profile", "ark_managed_agent_goal", "--include-detail", "scheduler"],
+        "--runtime-profile", "ark_managed_agent_goal", "--include-detail", "scheduler",
+        "--context-delivery", "off"],
         capture_output=True, text=True, timeout=60)
     assert child.returncode == 0, child.stdout or child.stderr
     packet = json.loads(child.stdout)

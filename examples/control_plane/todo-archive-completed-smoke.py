@@ -369,13 +369,14 @@ def main() -> int:
         )
 
         completed_projection = parse_active_state_todos(state_path.read_text(encoding="utf-8"))
-        completion_warning = completed_todo_archive_warning(
-            completed_projection["agent_todos"]
-        )
-        assert completion_warning is not None, completed_projection
-        assert completion_warning["active_done_count"] == done_before_completion + 1, (
-            completion_warning
-        )
+        auto_archive = completed_with_successor["auto_archive"]
+        assert auto_archive["role"] == "agent", auto_archive
+        assert auto_archive["active_done_before"] == done_before_completion + 1, auto_archive
+        assert auto_archive["active_done_after"] == auto_archive["max_active_done"] == 10, auto_archive
+        assert auto_archive["moved_count"] == done_before_completion + 1 - 10, auto_archive
+        active_done = completed_todo_count(completed_projection["agent_todos"])
+        assert active_done == auto_archive["active_done_after"], completed_projection
+        assert completed_todo_archive_warning(completed_projection["agent_todos"]) is None
 
         archive_completed = run_cli(
             registry_path,
@@ -388,13 +389,9 @@ def main() -> int:
             "0",
             "--execute",
         )
-        assert archive_completed["active_done_before"] == completion_warning["active_done_count"], (
-            archive_completed
-        )
+        assert archive_completed["active_done_before"] == active_done, archive_completed
         assert archive_completed["active_done_after"] == 0, archive_completed
-        assert archive_completed["moved_count"] == completion_warning["active_done_count"], (
-            archive_completed
-        )
+        assert archive_completed["moved_count"] == active_done, archive_completed
 
         archived_lineage = state_path.read_text(encoding="utf-8")
         assert archived_lineage.index("## Completed Work Archive") < archived_lineage.index(
@@ -461,8 +458,8 @@ def main() -> int:
         after_authority = run_cli(registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID)
         assert after_authority["todos"] == before_authority["todos"]
         assert after_authority["authority_read"]["provider_revision"] == before_authority["authority_read"]["provider_revision"]
-        # These diagnostics still belong to explicit legacy source inspection,
-        # before import. Display text outside canonical regions grants no work.
+        # Ordinary reads refuse an unimported malformed source before consulting
+        # its display diagnostics. The imported collection above stays unchanged.
         source_registry, source_runtime, source_state = write_fixture(
             Path(tmp) / "invalid-source", text=state_text() + invalid_rows,
             import_authority=False,
@@ -471,18 +468,11 @@ def main() -> int:
         invalid_status = run_cli(source_registry, source_runtime, "status", check=False)
         assert invalid_status["ok"] is False, invalid_status
         assert source_state.read_bytes() == before_source
-        assert any(
-            "todo_archived_open" in item and "executor exclusions" in item
-            for item in invalid_status["contract_errors"]
-        ), invalid_status
-        assert any(
-            "todo_archived_malformed" in item and "malformed status metadata" in item
-            for item in invalid_status["contract_errors"]
-        ), invalid_status
-        assert any(
-            "todo_archived_empty" in item and "malformed status metadata" in item
-            for item in invalid_status["contract_errors"]
-        ), invalid_status
+        refused = next(item for item in invalid_status["attention_queue"]["items"]
+            if item.get("goal_id") == GOAL_ID and item.get("todo_source") == "unavailable")
+        assert refused["error_code"] == "canonical_authority_required"
+        assert refused["authority_read"]["write_admitted"] is False
+        assert refused["authority_read"]["legacy_fallback_used"] is False
 
     assert_user_role_archive_retains_standing_decision()
 

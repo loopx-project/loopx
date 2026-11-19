@@ -17,7 +17,7 @@ from typing import Any
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID,
     GOAL_ID,
-    _configure_autonomous_replan_fixture,
+    _configure_autonomous_replan_fixture, _initialize_fixture_authority,
     _projected_cli_args,
     _run_cli,
     _spend_run_count,
@@ -121,8 +121,6 @@ def _should_run(
         AGENT_ID,
         "--turn-instance-id",
         TURN_INSTANCE_ID,
-        "--scan-path",
-        str(project),
     )
     assert rc == 0, payload
     return payload
@@ -153,8 +151,6 @@ def _dry_run_spend_preview(
         registry_path,
         runtime,
         *args,
-        "--scan-path",
-        str(project),
     )
     assert rc == 0, preview
     return preview
@@ -164,8 +160,9 @@ def test_coverage_backed_no_followup_replan_does_not_strand_its_quota_spend(
     tmp_path: Path,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
-    _configure_autonomous_replan_fixture(project, runtime, registry_path)
+    _configure_autonomous_replan_fixture(project, runtime, registry_path, stride_strategy="off")
     _write_terminal_frontier_state(project)
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
     vision_path = _write_no_followup_vision(tmp_path)
 
     guard = _should_run(registry_path, runtime, project)
@@ -215,8 +212,6 @@ def test_coverage_backed_no_followup_replan_does_not_strand_its_quota_spend(
         registry_path,
         runtime,
         *spend_args,
-        "--scan-path",
-        str(project),
     )
     assert spend_rc == 0, spend
     assert spend["settlement_result"]["ok"] is True
@@ -235,8 +230,6 @@ def test_coverage_backed_no_followup_replan_does_not_strand_its_quota_spend(
         registry_path,
         runtime,
         *spend_args,
-        "--scan-path",
-        str(project),
     )
     assert replay_rc == 0, replay
     assert replay["idempotent_replay"] is True
@@ -248,8 +241,9 @@ def test_unbound_terminal_spend_stays_rejected(tmp_path: Path) -> None:
     """The terminal guard keeps rejecting a spend that owns no settlement."""
 
     project, runtime, registry_path = _write_fixture(tmp_path)
-    _configure_autonomous_replan_fixture(project, runtime, registry_path)
+    _configure_autonomous_replan_fixture(project, runtime, registry_path, stride_strategy="off")
     _write_terminal_frontier_state(project)
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
     vision_path = _write_no_followup_vision(tmp_path)
 
     guard = _should_run(registry_path, runtime, project)
@@ -277,8 +271,6 @@ def test_unbound_terminal_spend_stays_rejected(tmp_path: Path) -> None:
         "--source",
         "heartbeat",
         "--execute",
-        "--scan-path",
-        str(project),
     )
     assert spend["ok"] is False
     assert spend["appended"] is False

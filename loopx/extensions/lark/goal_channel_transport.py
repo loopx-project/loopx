@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import subprocess
+import time
 from collections.abc import Mapping
 from enum import Enum
 from typing import Any
@@ -24,6 +27,23 @@ REQUIRED_BOT_GROUP_HISTORY_SCOPES = (
     "im:message.group_msg.include_bot:read",
 )
 BOT_GROUP_HISTORY_API_PATH = "/document/server-docs/im-v1/message/list"
+
+
+def record_event_timing(profile: str, message_id: str, stage: str) -> None:
+    """Opt-in local stage observation; never an admission or delivery receipt.
+
+    Callers pass literal stage names only. Correlation excludes source content,
+    identity fields and provider output; diagnostics must not break transport.
+    """
+    if os.environ.get("LOOPX_LARK_EVENT_TIMING") != "1" or not message_id:
+        return
+    try:
+        event_ref = hashlib.sha256(json.dumps([profile, message_id]).encode()).hexdigest()
+        print(json.dumps({"schema_version": "loopx_lark_event_timing_v0",
+            "event_ref": event_ref, "stage": stage, "wall_time": time.time(),
+            "monotonic_ns": time.monotonic_ns(), "pid": os.getpid()}, separators=(",", ":")), flush=True)
+    except (OSError, ValueError):
+        pass
 
 
 class BotChatMembershipResult(str, Enum):

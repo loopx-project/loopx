@@ -1119,9 +1119,7 @@ class StatusRequestHandler(ExtensionPresentationRequestMixin, BaseHTTPRequestHan
             payload = collect_status(
                 registry_path=self.server.registry_path,
                 runtime_root_override=self.server.runtime_root_override,
-                scan_roots=self.server.scan_roots,
                 limit=self.server.limit,
-                include_public_boundary_scan=False,
                 include_goal_subagent_configuration=(
                     getattr(
                         self.server,

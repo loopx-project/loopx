@@ -1,3 +1,5 @@
+import {CircleHelp} from "lucide-react";
+import {ContextHelp} from "./context-help";
 import {useEffect, useRef, useState} from "react";
 import {inspectDecisionContext, recallDecisionContext, type DecisionContextActivation, type DecisionContextRecall} from "../../data/decision-context";
 import {useWorkspaceI18n} from "./i18n";
@@ -102,7 +104,7 @@ export function DecisionContextWorkbench({goalId, active = true}: Readonly<{goal
   return <section className="personal-capability-field-summary personal-content-reference personal-decision-context" aria-label={copy("资料召回", "Find evidence")}>
     <label>{copy("选择私有检索配置（JSON）", "Choose a private retrieval profile (JSON)")}<input ref={input} type="file" accept=".json,application/json" onChange={event => void importProfile(event.target.files?.[0])} /></label>
     <p>{copy("使用配置副本；仅发给本机服务。查询在你点击召回后才发给检索器。离开“记忆与资料”、切换 Goal 或清除时移除副本与结果。", "A profile copy is sent only to this local service. Your query reaches the provider only when you recall. Leaving Memory & sources, changing Goal or clearing removes the copy and results.")}</p>
-    {!profile ? <p>{copy("尚未选择配置，不会调用检索器。", "No profile selected; no provider calls.")}</p> : <>
+    {!profile ? <ContextHelp label={copy("检索配置", "Retrieval configuration")} icon={CircleHelp}><p>{copy("尚未选择配置，不会调用检索器。", "No profile selected; no provider calls.")}</p></ContextHelp> : <>
       <p className="decision-context-connection">{copy("检索方式", "Retrieval")}: <strong>{memoryRetrievalLabel(context?.provider, locale)}</strong>{" · "}{copy("Agent", "Agent")}: {agent || "—"}</p>
       <label>{copy("要找什么证据？", "What evidence do you need?")}<textarea rows={3} maxLength={1000} value={query} onChange={event => {invalidate(); setQuery(event.target.value);}} /></label>
       <details><summary>{copy("本次配置与检索范围", "Profile and retrieval scope")}</summary>
@@ -122,7 +124,7 @@ export function DecisionContextWorkbench({goalId, active = true}: Readonly<{goal
     {error ? <p role="alert" className="personal-machine-error">{error}</p> : null}
     {result?.ok ? <section aria-label={copy("召回结果", "Recall results")} aria-live="polite">
       <p>{result.results.length} {copy("条结果", "results")} · {memoryRetrievalLabel(result.provider, locale)} · {result.observed_at}</p>
-      <small>{copy("分数只用于该 provider 内的排序，不代表置信度。", "Scores rank hits within this provider; they are not confidence.")}</small>
+      <ContextHelp label={copy("检索分数口径", "Retrieval score basis")}><small>{copy("分数只用于该 provider 内的排序，不代表置信度。", "Scores rank hits within this provider; they are not confidence.")}</small></ContextHelp>
       {!result.results.length ? <p>{copy("没有匹配证据。可修改问题或本次检索范围。", "No matching evidence. Refine your question or retrieval scope.")}</p> : null}
       {result.results.map(hit => <article key={hit.provider_ref} className="personal-capability-linked-setting"><div>
         <strong>{hit.summary}</strong><p className="decision-context-hit">{hit.content}</p>

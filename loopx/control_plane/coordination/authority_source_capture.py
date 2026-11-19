@@ -111,6 +111,27 @@ def todo_partition_projector(
     return project
 
 
+def _same_registry_observation(current: Mapping[str, Any], supplied: Mapping[str, Any]) -> bool:
+    """Compare one Goal to the registry entry, resolving its state route.
+
+    A creation that was interrupted after registry publication is resumed by
+    spelling the same state route as an absolute path (the CLI bootstrap always
+    resolves it), while the registry stores it relative to the project. The
+    typed creation owner already compares resolved routes, so a raw dict
+    comparison misread that resume as a changed registration and blocked every
+    retry. A real route or field change still differs.
+    """
+    from ...registry import resolve_state_file
+
+    if {**current, "state_file": None} != {**supplied, "state_file": None}:
+        return False
+    current_state = resolve_state_file(Path(str(current.get("repo") or "")), current.get("state_file"))
+    supplied_state = resolve_state_file(Path(str(supplied.get("repo") or "")), supplied.get("state_file"))
+    if current_state is None or supplied_state is None:
+        return current_state is supplied_state
+    return current_state.resolve(strict=False) == supplied_state.resolve(strict=False)
+
+
 def build_runtime_shadow_source_snapshot(
     *, goal: Mapping[str, Any], runtime_root: Path, state_path: Path,
     registry_path: Path,
@@ -125,7 +146,7 @@ def build_runtime_shadow_source_snapshot(
     with authority_registry_source(registry_path) as witness:
         registry = load_project_registry(registry_path)
         current = find_registry_goal(registry, str(goal["id"]))
-        if current is None or current != dict(goal):
+        if current is None or not _same_registry_observation(current, goal):
             raise ShadowManagementError("source_registry_changed_retry")
         projection, snapshot = _build_runtime_shadow_source_snapshot(
             goal=current, runtime_root=runtime_root, state_path=state_path,
@@ -151,7 +172,10 @@ def _source_lease_paths(runtime_root: Path, goal_id: str) -> list[Path]:
             return []
         if not stat.S_ISDIR(info.st_mode):
             raise ShadowManagementError("source_lease_inventory_invalid")
-    paths = sorted(path for path in directory.iterdir() if path.name.endswith(".json"))
+    # Path ordering folds case on Windows; the lease inventory feeds a
+    # byte-stable witness and must order identically on every platform.
+    paths = sorted((path for path in directory.iterdir() if path.name.endswith(".json")),
+        key=lambda path: path.name)
     for path in paths:
         if re.fullmatch(r"[A-Za-z0-9_.-]+\.json", path.name) is None:
             raise ShadowManagementError("source_lease_inventory_invalid")
@@ -172,11 +196,18 @@ def _source_lease_bytes(path: Path) -> bytes:
         data = stream.read()
         after = os.fstat(stream.fileno())
         current = path.lstat()
+        # Tolerate Windows ctime-only skew only with a volume and file index
+        # in every observation; POSIX keeps ctime in the lease fence.
+        stability_fields: tuple[str, ...] = ("st_mtime_ns",)
+        if os.name != "nt" or not all(
+            observed.st_dev and observed.st_ino for observed in (before, after, current)
+        ):
+            stability_fields += ("st_ctime_ns",)
         if ((current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)
                 or not stat.S_ISREG(current.st_mode) or before.st_size != len(data)
                 or after.st_size != len(data) or current.st_size != len(data)
-                or before.st_mtime_ns != after.st_mtime_ns or before.st_ctime_ns != after.st_ctime_ns
-                or after.st_mtime_ns != current.st_mtime_ns or after.st_ctime_ns != current.st_ctime_ns):
+                or any(getattr(before, field) != getattr(after, field) for field in stability_fields)
+                or any(getattr(after, field) != getattr(current, field) for field in stability_fields)):
             raise ShadowManagementError("source_changed_retry")
     return data
 

@@ -105,7 +105,7 @@ def test_start_goal_bootstrap_todo_and_chat_readback(tmp_path, capsys, monkeypat
         host_surface="shell", goal_text=objective, runtime_root_arg=str(runtime),
     )
     connect = next(step for step in packet["guided_transaction"]["ordered_steps"] if step["id"] == "connect_if_needed")
-    command = connect["command"].replace("\\\n", " ")
+    command = connect["command"]
     args = shlex.split(command.split("\n", 1)[1])
     assert args[0] == "loopx"
     monkeypatch.chdir(project)

@@ -63,23 +63,27 @@ export const chatTodoProposalScenario = {
       && preview.normalized_parameters?.text === text);
     const todoPreviews = () => previewsWithText(PROPOSAL_TEXT);
     const composer = page.getByLabel("向 LoopX 发送消息");
+    const openManagerChat = async () => {
+      await page.locator(".personal-manager-link").first().click();
+      const managerChatTab = page.getByRole("navigation", { name: /Manager|管家/ }).getByRole("button", { name: /^(Chat|对话)$/ });
+      await managerChatTab.click();
+      if (await managerChatTab.getAttribute("aria-current") !== "page") throw new Error("Manager Chat did not open");
+    };
     try {
       // Manager channel: no target Goal, so the proposal cannot become a write.
       await composer.fill(MANAGER_PROMPT);
       await page.getByRole("button", { name: "发送", exact: true }).click();
+      await waitFor(() => api.turnRequests.length === 1, "The unscoped manager Turn was not admitted");
+      if (await page.locator(".personal-manager-conversation-tray").count()) throw new Error("A proposal reply covered the manager overview");
+      await openManagerChat();
       await page.getByText("我找到一个可评审的步骤。", { exact: true }).first().waitFor({ state: "visible", timeout: 10_000 });
+      if (api.turnRequests.length !== 1) throw new Error("Opening Chat sent the manager request again");
       await page.waitForTimeout(500);
       if (todoPreviews().length) throw new Error("A manager-channel proposal created a Todo preview without a target Goal");
 
       const openGoalChat = async () => {
         await page.locator(".personal-goal-link", { hasText: "Product Release" }).click();
         await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
-      };
-      const openManagerChat = async () => {
-        await page.locator(".personal-manager-link").first().click();
-        const managerChatTab = page.getByRole("navigation", { name: /Manager|管家/ }).getByRole("button", { name: /^(Chat|对话)$/ });
-        await managerChatTab.click();
-        if (await managerChatTab.getAttribute("aria-current") !== "page") throw new Error("Manager Chat did not open");
       };
       // Explicit manager targets reach the existing confirmation card in place;
       // this is a preview, never an implicit apply or a new execution.

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
+import shutil
+import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -37,11 +41,13 @@ from loopx.control_plane.quota.settlement_cli import (
 from loopx.control_plane.quota.error_codes import (
     HeartbeatReceiptIdentityConflictError,
 )
+from loopx.control_plane.quota.effective_action import EffectiveAction
 from loopx.control_plane.quota.turn_envelope import quota_action_signature_document
 from loopx.control_plane.scheduler.execution_context import (
     SchedulerRuntimeProfile,
     scheduler_execution_context_for_runtime_profile,
 )
+from loopx.control_plane.turn_driver import decision_capture as decision_capture_module
 from loopx.control_plane.work_items.interaction_contract import (
     build_interaction_contract,
     interaction_next_cli_actions,
@@ -53,6 +59,68 @@ GOAL_ID = "settlement-goal"
 AGENT_ID = "codex-settlement"
 TODO_ID = "todo_settlement"
 TURN_ID = "turn-settlement-1"
+_DEFAULT_TURN_ARG = (
+    "--turn-instance-id $LOOPX_TURN"
+    if os.name == "nt"
+    else '--turn-instance-id "${LOOPX_TURN:?}"'
+)
+
+
+def test_writeback_guidance_uses_current_cli_scale_vocabulary():
+    from loopx.control_plane.work_items.delivery_batch_scale import (
+        DELIVERY_BATCH_SCALE_INPUT_CHOICES, DELIVERY_BATCH_SCALE_ALIASES,
+    )
+
+    plan = quota_effect_program.build_turn_scoped_cli_settlement_plan(
+        goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
+        turn_instance_id=TURN_ID, scoped_cli_args="", lifecycle_actor_args="",
+    )
+    hint = plan.as_dict()["ordered_steps"][1]["precondition"]
+    for scale in DELIVERY_BATCH_SCALE_INPUT_CHOICES:
+        assert scale in hint
+    for alias in DELIVERY_BATCH_SCALE_ALIASES:
+        assert alias not in hint  # Historical aliases remain read-only.
+
+
+def test_quota_decision_reuses_only_the_same_settlement_plan_input(monkeypatch):
+    real_render = quota_effect_program.effect_runtime_result
+    requests = []
+
+    def record(method, request):
+        assert method == "settlement.turn_scoped_cli_plan"
+        requests.append(request)
+        return real_render(method, request)
+
+    monkeypatch.setattr(quota_effect_program, "effect_runtime_result", record)
+
+    def plan(capabilities=""):
+        return quota_effect_program.build_turn_scoped_cli_settlement_plan(
+            goal_id=GOAL_ID,
+            agent_id=AGENT_ID,
+            todo_id=TODO_ID,
+            turn_instance_id=TURN_ID,
+            scoped_cli_args=capabilities,
+            lifecycle_actor_args="",
+        )
+
+    with quota_effect_program.reuse_cli_settlement_plans():
+        first = plan()
+        expected = first.as_dict()
+        writeback = next(step for step in first.steps if step.kind is SettlementStepKind.DURABLE_WRITEBACK)
+        assert isinstance(writeback.vision_authoring, dict)
+        writeback.vision_authoring.clear()
+        assert plan().as_dict() == expected
+        assert len(requests) == 1
+
+        with_capability = settlement_step_command(
+            plan(" --available-capability shell").as_dict(),
+            SettlementStepKind.QUOTA_SPEND,
+        )
+        assert "--available-capability shell" in with_capability
+        assert len(requests) == 2
+
+    assert plan().as_dict() == expected
+    assert len(requests) == 3
 
 
 @pytest.mark.parametrize("replan", [False, True])
@@ -94,6 +162,23 @@ def test_command_plan_retains_one_matching_actor(arguments):
     argv = shlex.split(settlement_step_command(plan.as_dict(), SettlementStepKind.QUOTA_SPEND))
     assert argv[argv.index("--turn-instance-id") + 1] == TURN_ID
     assert sum(arg == "--agent-id" or arg.startswith("--agent-id=") for arg in argv) == 1
+
+
+@pytest.mark.parametrize("proof", [
+    "--claim-operation-id original-claim",
+    "--claim-operation-id=original-claim",
+    "--task-lease-idempotency-key original-lease --task-lease-expected-version 3",
+])
+def test_hard_lease_plan_preserves_supplied_proof_without_a_second_reference(proof):
+    plan = quota_effect_program.build_turn_scoped_cli_settlement_plan(
+        goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
+        turn_instance_id=TURN_ID, scoped_cli_args="", lifecycle_actor_args=proof,
+        handoff_mode="hard_lease",
+    ).as_dict()
+    for kind in (SettlementStepKind.VALIDATION, SettlementStepKind.TERMINAL_CLOSEOUT):
+        command = settlement_step_command(plan, kind)
+        assert proof in command
+        assert "<original claim_operation_id>" not in command
 
 
 def _receipt(step: SettlementStepKind, marker: str) -> SettlementReceipt:
@@ -168,6 +253,22 @@ def test_selected_todo_suppresses_stale_replan_packet_binding() -> None:
     args = SimpleNamespace(todo_id=None, replan_obligation_id=None)
 
     assert quota_rollout_todo_id(payload, args) == TODO_ID
+    assert quota_rollout_replan_obligation_id(payload, args) is None
+
+
+def test_current_replan_preserves_explicit_planning_selection_gate() -> None:
+    obligation_id = "replan-0000000000000001"
+    payload = {
+        "effective_action": EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED.value,
+        "selected_todo": {"todo_id": TODO_ID},
+        "action_portfolio": {
+            "selection_policy": {"requires_explicit_turn_binding": True},
+        },
+        "replan_action_packet": {"obligation_id": obligation_id},
+    }
+    args = SimpleNamespace(todo_id=None, replan_obligation_id=None)
+
+    assert quota_rollout_todo_id(payload, args) is None
     assert quota_rollout_replan_obligation_id(payload, args) is None
 
 
@@ -670,7 +771,20 @@ def test_settlement_result_bind_rejects_corrupted_receipts() -> None:
             SettlementResult.pure(2).bind(writeback)
 
 
-def test_codex_app_plan_projects_one_identity_across_settlement_steps() -> None:
+@pytest.mark.parametrize(
+    ("windows_host", "expected_ref", "expected_arg"),
+    (
+        (False, "${LOOPX_TURN:?}", '--turn-instance-id "${LOOPX_TURN:?}"'),
+        (True, "$LOOPX_TURN", "--turn-instance-id $LOOPX_TURN"),
+    ),
+)
+def test_codex_app_plan_projects_one_identity_across_settlement_steps(
+    monkeypatch: pytest.MonkeyPatch,
+    windows_host: bool,
+    expected_ref: str,
+    expected_arg: str,
+) -> None:
+    monkeypatch.setattr(quota_effect_program, "_is_windows_host", lambda: windows_host)
     plan = build_codex_app_settlement_plan(
         goal_id=GOAL_ID,
         agent_id=AGENT_ID,
@@ -680,7 +794,7 @@ def test_codex_app_plan_projects_one_identity_across_settlement_steps() -> None:
     ).as_dict()
 
     assert plan["identity"]["todo_id"] == TODO_ID
-    assert plan["identity"]["turn_instance_id"] == "${LOOPX_TURN:?}"
+    assert plan["identity"]["turn_instance_id"] == expected_ref
     assert [step["kind"] for step in plan["ordered_steps"]] == [
         "validation",
         "durable_writeback",
@@ -688,6 +802,7 @@ def test_codex_app_plan_projects_one_identity_across_settlement_steps() -> None:
         "terminal_closeout",
     ]
     for kind in (
+        SettlementStepKind.VALIDATION,
         SettlementStepKind.DURABLE_WRITEBACK,
         SettlementStepKind.QUOTA_SPEND,
         SettlementStepKind.TERMINAL_CLOSEOUT,
@@ -695,8 +810,99 @@ def test_codex_app_plan_projects_one_identity_across_settlement_steps() -> None:
         command = settlement_step_command(plan, kind)
         assert command is not None
         assert f"--todo-id {TODO_ID}" in command
-        assert '--turn-instance-id "${LOOPX_TURN:?}"' in command
+        assert expected_arg in command
     assert plan["host_handoff"]["inside_agent_settlement"] is False
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows PowerShell rendering")
+def test_codex_app_windows_settlement_command_substitutes_powershell_turn(
+    tmp_path: Path,
+) -> None:
+    capture = tmp_path / "capture_args.py"
+    capture.write_text(
+        "import json, sys\nprint(json.dumps(sys.argv[1:]))\n",
+        encoding="utf-8",
+    )
+    def quote(value: object) -> str:
+        return "'" + str(value).replace("'", "''") + "'"
+
+    command_prefix = " ".join((
+        "&",
+        quote(Path(sys.executable).resolve()),
+        quote(capture.resolve()),
+    ))
+    plan = build_codex_app_settlement_plan(
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        todo_id=TODO_ID,
+        scoped_cli_args=f" --agent-id {AGENT_ID}",
+        lifecycle_actor_args=f" --agent-id {AGENT_ID}",
+        command_prefix=command_prefix,
+    ).as_dict()
+    command = settlement_step_command(plan, SettlementStepKind.QUOTA_SPEND)
+    assert command is not None
+
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    assert powershell is not None
+    completed = subprocess.run(
+        [
+            powershell,
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            '$LOOPX_TURN = "turn-windows-settlement"\n' + command,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    argv = json.loads(completed.stdout)
+    assert argv[argv.index("--turn-instance-id") + 1] == "turn-windows-settlement"
+    assert "--turn-instance-id $LOOPX_TURN" in command
+    assert '"${LOOPX_TURN:?}"' not in command
+
+
+@pytest.mark.parametrize(("platform", "supported"), [
+    (SimpleNamespace(name="nt", getuid=lambda: 0), False),
+    (SimpleNamespace(name="posix", getuid=None), False),
+    (SimpleNamespace(name="posix", getuid=lambda: 0), True),
+])
+def test_private_capture_support_matches_uid_boundary(
+    platform: SimpleNamespace, supported: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(decision_capture_module, "os", platform)
+    assert decision_capture_module.private_capture_supported() is supported
+    if supported:
+        assert decision_capture_module.private_capture_uid() == 0
+    else:
+        with pytest.raises(ValueError, match="unsupported on this platform"):
+            decision_capture_module.private_capture_uid()
+
+
+def test_settlement_command_uses_private_capture_support() -> None:
+    # The generated command and the CLI's private-capture check must share one
+    # platform qualification; a POSIX-looking host without getuid is unsupported.
+    # The settlement kernel resolves the predicate at its owner, because keeping
+    # capture IO out of the plan module's cold import is itself a guard.
+    with patch.object(decision_capture_module, "private_capture_supported", return_value=False):
+        plan = quota_effect_program.build_turn_scoped_cli_settlement_plan(
+            goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
+            turn_instance_id=TURN_ID, scoped_cli_args="", lifecycle_actor_args="",
+        ).as_dict()
+        command = settlement_step_command(plan, SettlementStepKind.QUOTA_SPEND)
+        assert command is not None
+        assert "--max-page-output-bytes" not in command
+
+    with patch.object(decision_capture_module, "private_capture_supported", return_value=True):
+        plan = quota_effect_program.build_turn_scoped_cli_settlement_plan(
+            goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
+            turn_instance_id=TURN_ID, scoped_cli_args="", lifecycle_actor_args="",
+        ).as_dict()
+        command = settlement_step_command(plan, SettlementStepKind.QUOTA_SPEND)
+        assert command is not None
+        assert "--max-page-output-bytes" in command
 
 
 def test_cli_validation_projects_ordinary_completion_not_terminal_intent() -> None:
@@ -710,20 +916,31 @@ def test_cli_validation_projects_ordinary_completion_not_terminal_intent() -> No
     assert command is not None
     argv = shlex.split(command)
     assert "--no-follow-up" not in argv
+    assert "--successor-todo-id" in validation["precondition"]
+    assert "--successor-todo-id" not in argv
     assert "--next-agent-todo" not in argv
     assert argv[argv.index("--todo-id") + 1] == TODO_ID
     assert argv[argv.index("--agent-id") + 1] == AGENT_ID
     assert argv[argv.index("--turn-instance-id") + 1] == TURN_ID
 
 
-def test_in_flight_validation_never_projects_a_completion_command() -> None:
+def test_in_flight_validation_conditions_completion_on_original_deliverable() -> None:
     plan = build_codex_app_settlement_plan(
         goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
         scoped_cli_args="", lifecycle_actor_args="", turn_instance_id_ref=TURN_ID,
         delivery_boundary="in_flight_continuation",
     ).as_dict()
-    assert settlement_step_command(plan, SettlementStepKind.VALIDATION) is None
-    assert "command_condition" not in plan["ordered_steps"][0]
+    validation = plan["ordered_steps"][0]
+    assert validation["command_condition"] == "todo_deliverable_complete"
+    assert "conditional" not in validation
+    assert "Keep an unfinished Todo open with its original declaration." in validation["precondition"]
+    command = settlement_step_command(plan, SettlementStepKind.VALIDATION)
+    assert command is not None
+    argv = shlex.split(command)
+    assert "--no-follow-up" not in argv
+    assert argv[argv.index("--todo-id") + 1] == TODO_ID
+    assert argv[argv.index("--agent-id") + 1] == AGENT_ID
+    assert argv[argv.index("--turn-instance-id") + 1] == TURN_ID
 
 
 def test_native_plan_rerender_reuses_one_runtime_projection_without_shared_mutability() -> None:
@@ -789,7 +1006,7 @@ def test_standard_app_actions_use_typed_settlement_before_turn_driver(
     assert actions[1].startswith("loopx --format json quota spend-slot")
     for command in actions:
         assert f"--todo-id {todo_id}" in command
-        assert '--turn-instance-id "${LOOPX_TURN:?}"' in command
+        assert _DEFAULT_TURN_ARG in command
 
 
 def test_codex_app_actions_preserve_a_concrete_admitted_turn_identity() -> None:
@@ -1008,10 +1225,10 @@ def test_codex_app_external_observation_settles_only_substantive_writeback() -> 
     assert actions[1].startswith("on a substantive transition or blocker only:")
     assert "--delivery-outcome <outcome>" in actions[1]
     assert f"--todo-id {todo_id}" in actions[1]
-    assert '--turn-instance-id "${LOOPX_TURN:?}"' in actions[1]
+    assert _DEFAULT_TURN_ARG in actions[1]
     assert actions[2].startswith("after that accountable writeback receipt only:")
     assert f"--todo-id {todo_id}" in actions[2]
-    assert '--turn-instance-id "${LOOPX_TURN:?}"' in actions[2]
+    assert _DEFAULT_TURN_ARG in actions[2]
     assert "otherwise do not spend for unchanged observation" in actions[2]
 
 

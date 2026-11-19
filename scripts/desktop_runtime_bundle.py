@@ -16,6 +16,11 @@ import tarfile
 import io
 import importlib.util
 import tomllib
+import tempfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from loopx.cli_commands.update_artifact import extract_artifact, validate_default_contract
+from scripts.qualify_runtime_artifact import observe_default_contract
 
 
 def build(root: Path) -> None:
@@ -107,10 +112,17 @@ def build(root: Path) -> None:
             target.addfile(member, io.BytesIO(content))
     rebuilt.replace(archive)
     entries = qualify_archive(archive)
+    # Inspect the actual archived writer, not dirty checkout files or the
+    # engineering-only installer result. The signed App carries these bytes.
+    with tempfile.TemporaryDirectory(prefix="loopx-desktop-contract-") as raw:
+        source_root = Path(raw).resolve()
+        extract_artifact(archive, source_root)
+        default_contract = validate_default_contract(observe_default_contract(source_root))
     identity = {
         "schema_version": "desktop_runtime_bundle_v1",
         "source_revision": revision,
         "package_version": archive_package_version(archive),
+        "default_contract": default_contract,
         "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
     }
     (destination / "identity.json").write_text(json.dumps(identity, indent=2) + "\n")

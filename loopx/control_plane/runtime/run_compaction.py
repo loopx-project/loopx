@@ -85,6 +85,7 @@ RUN_BASE_COMPACT_FIELDS = (
     "turn_instance_id",
     "replan_obligation_id",
     "goal_id",
+    "goal_ref",
     "parent_run_id",
     "spawned_by_goal_id",
     "agent_role",
@@ -358,9 +359,12 @@ def compact_run_base(
         compact["subagent_count"] = len(subagents)
 
     if isinstance(run.get("recommended_action_resolution"), dict):
-        resolution = run["recommended_action_resolution"]
-        if resolution.get("step_revision"):
-            compact["recommended_action_resolution"] = dict(resolution)
+        from ..work_items.recommendation_source_io import recommendation_run_decision
+
+        if recommendation_run_decision(run) is not None:
+            compact["recommended_action_resolution"] = dict(run["recommended_action_resolution"])
+            if "json_path" in run:
+                compact["json_path"] = run["json_path"]
     return compact
 
 

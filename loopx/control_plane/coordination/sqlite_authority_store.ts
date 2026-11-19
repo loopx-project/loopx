@@ -7,7 +7,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import type { JsonObject } from "../effect_program.ts";
 import type { AuthorityStore, AuthorityStoreCommit, AuthorityStoreCommitResult, AuthorityStoreCommittedTransaction,
-  AuthorityStoreIdentityResult, AuthorityStoreLoadResult, AuthorityStoreReadFailure, AuthorityStoreHead,
+  AuthorityStoreIdentityResult, AuthorityStoreLoadResult, AuthorityStoreSnapshotResult, AuthorityStoreReadFailure, AuthorityStoreHead,
   AuthorityStoreReceiptResult, AuthorityStoreReceiptBatchResult, AuthorityStoreScanResult } from "./authority_store.ts";
 import { AuthorityStoreProtocolError, canonicalAuthorityBytes, canonicalAuthorityObject,
   canonicalAuthorityObjectList, canonicalAuthoritySha256,
@@ -49,7 +49,9 @@ const COMMIT_COLUMNS = `CAST(cursor AS TEXT) AS sequence, operation_id, commit_d
  * window from the covering checkpoint, and `verifyAuthorityHistory` proves the
  * complete chain when a caller needs the whole archive.
  *
- * Exported so the reviewed V1 to V2 migration builds identical tables.
+ * The cursor covering index narrows the exact continuity count's physical
+ * scan. It is optional for existing V2 stores: ordinary opens never backfill it.
+ * Exported so the reviewed V1 to V2 migration builds identical tables/indexes.
  */
 export function sqliteAuthorityStoreSchemaDdl(tables: {
   commits: string;
@@ -65,6 +67,7 @@ CREATE TABLE ${tables.commits} (
   parent_state_digest TEXT CHECK(parent_state_digest IS NULL OR length(parent_state_digest) = 64),
   delta TEXT NOT NULL, events TEXT NOT NULL, receipts TEXT NOT NULL
 );
+CREATE INDEX ${tables.commits}_cursor ON ${tables.commits}(cursor);
 CREATE TABLE ${tables.checkpoints} (
   cursor INTEGER PRIMARY KEY CHECK(cursor > 0),
   projection TEXT NOT NULL,
@@ -143,10 +146,12 @@ export function sqliteAuthorityPath(directory: string, goalId: string): string {
 function protocol(message: string): never { throw new AuthorityStoreProtocolError(message); }
 
 function readFailure(error: unknown): AuthorityStoreReadFailure {
-  return error instanceof AuthorityStoreProtocolError || error instanceof SyntaxError
-    ? {status: "failed", reason_code: "provider_protocol_violation", reason: error.message}
-    : {status: "unavailable", reason_code: "provider_read_unavailable",
-      reason: "SQLite authority store could not be read; check database availability and lock contention"};
+  if (error instanceof AuthorityStoreProtocolError || error instanceof SyntaxError) {
+    return {status: "failed", reason_code: "provider_protocol_violation", reason: error.message};
+  }
+  // For other errors, include the original error message if available
+  const reason = error instanceof Error ? error.message : "SQLite authority store could not be read; check database availability and lock contention";
+  return {status: "unavailable", reason_code: "provider_read_unavailable", reason};
 }
 
 function fileBytes(path: string): number {
@@ -160,12 +165,16 @@ export class SqliteAuthorityStore implements AuthorityStore {
   readonly goalId: string;
   readonly existingOnly: boolean;
   readonly expectedIdentity: string | undefined;
+  readonly readAuthoritySnapshot?: () => Promise<AuthorityStoreSnapshotResult>;
 
   constructor(directory: string, goalId: string, options: {existingOnly?: boolean; expectedIdentity?: string} = {}) {
     this.goalId = requireAuthorityStoreId(goalId, "goal id");
     this.path = sqliteAuthorityPath(directory, this.goalId);
     this.existingOnly = options.existingOnly ?? false;
     this.expectedIdentity = options.expectedIdentity;
+    // Only an already selected read-only store offers the paired read. General
+    // stores retain their existing identity/initialization and load behavior.
+    if (this.existingOnly) this.readAuthoritySnapshot = this.readSnapshot.bind(this);
   }
 
   private open(write: boolean): DatabaseSync | null {
@@ -402,6 +411,27 @@ export class SqliteAuthorityStore implements AuthorityStore {
         provider_revision: current.provider_revision, head: current.state.projection};
     } catch (error) { return readFailure(error); }
     finally { db?.close(); }
+  }
+
+  private async readSnapshot(): Promise<AuthorityStoreSnapshotResult> {
+    let db: DatabaseSync | null = null;
+    let identity: AuthorityStoreIdentityResult = {status: "unavailable",
+      reason_code: "store_identity_unavailable", reason: "SQLite authority database is missing"};
+    try {
+      db = this.open(false);
+      if (!db) return {identity, authority: {status: "missing"}};
+      db.exec("BEGIN");
+      identity = {status: "available", store_identity: this.identity(db)};
+      const current = this.current(db);
+      return {identity, authority: current === null ? {status: "missing"} : {
+        status: "loaded", cursor: current.state.cursor.toString(),
+        provider_revision: current.provider_revision, head: current.state.projection}};
+    } catch (error) {
+      const failure = readFailure(error);
+      return {identity: identity.status === "available" ? identity : failure, authority: failure};
+    } finally { db?.close(); }
+    // No await while the transaction owns the connection. Neither the opened
+    // handle nor its head survives this method; final identity reopens the path.
   }
 
   /** No await between BEGIN and ROLLBACK: another DatabaseSync request must not

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import re
+import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -25,7 +27,8 @@ def event(name: str, *, pr: int = 101, tag: str = "", backend: bool = True) -> d
             event=SimpleNamespace(action="opened", number=pr, pull_request=SimpleNamespace(number=pr), release=SimpleNamespace(tag_name=tag)),
         ),
         "inputs": SimpleNamespace(tag=tag),
-        "needs": SimpleNamespace(changes=SimpleNamespace(outputs=SimpleNamespace(**{
+        "cancelled": lambda: False,
+        "needs": SimpleNamespace(chat_bundle=SimpleNamespace(result="success"), changes=SimpleNamespace(outputs=SimpleNamespace(**{
             key: str(backend).lower() for key in ("backend_tests", "core_tests", "python_tests", "stage2c_tests")
         }))),
     }
@@ -37,6 +40,7 @@ def expression(value: str | bool, context: dict) -> str | bool:
         return value
 
     def evaluate(source: str):
+        source = source.replace("needs.chat-bundle", "needs.chat_bundle")
         return eval(  # noqa: S307 - repository-owned expressions, no builtins.
             re.sub(r"!(?!=)", " not ", source.strip()).replace("&&", " and ").replace("||", " or "),
             {"__builtins__": {}, "format": lambda template, *args: template.format(*args)},
@@ -74,7 +78,7 @@ def test_signed_desktop_prs_do_not_share_either_publication_channel() -> None:
     assert expression(concurrency["group"], event("schedule")) == expression(concurrency["group"], event("workflow_dispatch"))
 
 
-def test_main_supersession_does_not_cancel_nightly_or_manual_full_qualification() -> None:
+def test_main_finishes_active_qualification_and_keeps_only_the_latest_pending_successor() -> None:
     policy = workflow("python-tests")
     assert "schedule" in policy[True]
     concurrency = policy["concurrency"]
@@ -83,7 +87,8 @@ def test_main_supersession_does_not_cancel_nightly_or_manual_full_qualification(
         if context["github"].event_name != "pull_request":
             del context["github"].event.number
     assert len({expression(concurrency["group"], context) for context in contexts}) == 5
-    assert [expression(concurrency["cancel-in-progress"], context) for context in contexts] == [True, True, False, False, False]
+    assert [expression(concurrency["cancel-in-progress"], context) for context in contexts] == [False, True, False, False, False]
+    assert concurrency["queue"] == "single"
 
 
 @pytest.mark.parametrize("job_id", ["checks", "pytest", "stage2c-correctness-e2e", "merge-gate"])
@@ -122,6 +127,147 @@ def test_cleanup_concurrency_cannot_replace_current_qualification() -> None:
     qualification = expression(workflow("python-tests")["concurrency"]["group"], event("pull_request"))
     cleanup = expression(workflow("ci-maintenance")["concurrency"]["group"], event("pull_request_target"))
     assert qualification != cleanup
+
+
+@pytest.mark.parametrize("action", ["opened", "reopened", "edited", "synchronize", "closed"])
+def test_diff_inspection_uses_trusted_code_and_read_only_scope(action: str) -> None:
+    policy = workflow("ci-maintenance")
+    job = policy["jobs"]["inspect-pr-diff"]
+    context = event("pull_request_target")
+    context["github"].event.action = action
+    assert action in policy[True]["pull_request_target"]["types"]
+    assert expression(job["if"], context) is (action != "closed")
+    assert policy["permissions"] == {"contents": "read"}
+    assert job["permissions"] == {"contents": "read", "pull-requests": "read"}
+    assert job["timeout-minutes"] <= 2
+    assert all(step["uses"].startswith("actions/github-script@") for step in job["steps"])
+
+
+def _run_diff_inspection(mode: str, branch: str = "main") -> dict:
+    script = workflow("ci-maintenance")["jobs"]["inspect-pr-diff"]["steps"][0]["with"]["script"]
+    harness = r'''
+let input = ''; for await (const chunk of process.stdin) input += chunk;
+const {script, mode, branch} = JSON.parse(input);
+const oldBase = 'a'.repeat(40), head = 'b'.repeat(40), target = 'c'.repeat(40), newer = 'd'.repeat(40);
+const pr = {state:'open', head:{sha:head,ref:'work',repo:{id:2}},
+  base:{sha:oldBase,ref:branch,repo:{id:1}}, changed_files:9,additions:30,deletions:12};
+const expected = structuredClone(pr);
+if (mode === 'closed') pr.state = 'closed';
+if (mode === 'fresh') pr.base.sha = target;
+if (mode === 'old_event_head') expected.head.sha = newer;
+if (mode === 'old_event_source') expected.head.repo.id = 3;
+if (mode === 'old_event_base') expected.base.ref = 'other';
+if (mode === 'missing_source') pr.head.repo = null;
+if (mode === 'same_repo') {pr.head.repo.id = 1; expected.head.repo.id = 1;}
+let reads = 0, branchReads = 0;
+const updates = [], notes = [];
+const context = {repo:{owner:'owner',repo:'fixture'}, payload:{number:17,pull_request:expected}};
+const github = {rest:{pulls:{get:async()=>{
+  reads++;
+  if (reads === 2) {
+    if (mode === 'head_before_write') pr.head.sha = newer;
+    if (mode === 'source_before_write') pr.head.repo.id = 3;
+    if (mode === 'base_before_write') pr.base.ref = 'other';
+    if (mode === 'refreshed_before_write') pr.base.sha = target;
+  }
+  const snapshot = structuredClone(pr);
+  if (reads === 2 && mode === 'retarget_after_read') pr.base.ref = 'release/stable';
+  return {data:snapshot};
+}, update:async params=>{
+  updates.push(params);
+  pr.base.ref = params.base;
+  if (mode === 'failed_api') throw new Error('provider rejected update');
+  if (mode !== 'not_applied') pr.base.sha = mode === 'target_moves' ? newer : target;
+  if (mode === 'head_during_write') pr.head.sha = newer;
+  if (mode === 'base_during_write') pr.base.ref = 'other';
+  pr.changed_files = 2; pr.additions = 3; pr.deletions = 1;
+}}, repos:{getBranch:async params=>{
+  if (params.branch !== branch) throw new Error('unverified target');
+  branchReads++;
+  return {data:{commit:{sha:mode === 'target_moves' && branchReads > 1 ? newer : target}}};
+}}}};
+let error = null;
+try {await new (Object.getPrototypeOf(async function(){}).constructor)('github','context','core',script)
+  (github,context,{info:message=>notes.push(message)});} catch(e) {error=e.message;}
+process.stdout.write(JSON.stringify({updates,notes,error,pr}));
+'''
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", harness],
+        input=json.dumps({"script": script, "mode": mode, "branch": branch}),
+        text=True, capture_output=True, check=True, timeout=10,
+    )
+    return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize("branch", ["main", "release/stable"])
+@pytest.mark.parametrize("mode", ["stale", "same_repo", "target_moves"])
+def test_diff_inspection_reports_evidence_without_mutation(mode: str, branch: str) -> None:
+    observed = _run_diff_inspection(mode, branch)
+    assert observed["error"] is None
+    assert observed["updates"] == []
+    assert observed["pr"]["base"]["ref"] == branch
+    assert any("Comparison inspection" in note and "read-only" in note for note in observed["notes"])
+
+
+@pytest.mark.parametrize("mode", [
+    "fresh", "closed", "old_event_head", "old_event_source", "old_event_base", "missing_source",
+    "head_before_write", "source_before_write", "base_before_write", "refreshed_before_write",
+])
+def test_diff_inspection_does_not_publish_stale_evidence(mode: str) -> None:
+    observed = _run_diff_inspection(mode)
+    assert observed["updates"] == []
+    assert observed["error"] is None
+    assert not any("Comparison inspection" in note for note in observed["notes"])
+
+
+def test_diff_inspection_cannot_overwrite_a_last_moment_retarget() -> None:
+    observed = _run_diff_inspection("retarget_after_read")
+    assert observed["pr"]["base"]["ref"] == "release/stable"
+    assert observed["updates"] == []
+
+
+@pytest.mark.parametrize("mode", ["delayed", "never", "changed"])
+def test_obsolete_run_cancellation_waits_for_verified_completion(mode: str) -> None:
+    script = workflow("ci-maintenance")["jobs"]["cancel-obsolete-pr"]["steps"][0]["with"]["script"]
+    harness = r'''
+let input = ''; for await (const chunk of process.stdin) input += chunk;
+const {script, mode} = JSON.parse(input);
+let clock = 0; const calls = [], notes = [];
+Date.now = () => clock;
+globalThis.setTimeout = callback => {clock += 1000; callback();};
+const pr = {state:'open', head:{sha:'current', ref:'fixture', label:'owner:fixture', repo:{id:1}}};
+const context = {repo:{owner:'owner', repo:'fixture'}, payload:{number:1, action:'synchronize',
+  before:'old', after:'current', pull_request:pr}};
+const github = {rest:{pulls:{get:async()=>({data:mode==='changed' && clock>=5000
+  ? {...pr,head:{...pr.head,sha:'newer'}} : pr}),list:'pulls'},actions:{listWorkflowRuns:'runs',
+  cancelWorkflowRun:async params=>calls.push(['cancel',params.run_id]),
+  getWorkflowRun:async()=>({data:{status:mode==='delayed' && clock>=35000?'completed':'in_progress'}})}},
+  paginate:async endpoint=>endpoint==='pulls' ? [] : [{id:7,status:'in_progress',head_repository:{id:1},
+    head_branch:'fixture',head_sha:'old',created_at:'2026-01-01T00:00:00Z',pull_requests:[{number:1}]}],
+  request:async(_route,params)=>calls.push(['force',params.run_id])};
+let error = null;
+try {await new (Object.getPrototypeOf(async function(){}).constructor)('github','context','core',script)
+  (github,context,{info:message=>notes.push(message)});} catch(e) {error=e.message;}
+process.stdout.write(JSON.stringify({clock,calls,notes,error}));
+'''
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", harness],
+        input=json.dumps({"script": script, "mode": mode}), text=True,
+        capture_output=True, check=True, timeout=10,
+    )
+    observed = json.loads(result.stdout)
+    assert observed["calls"] == [["cancel", 7], ["force", 7]]
+    if mode == "delayed":
+        assert observed["error"] is None
+        assert 35000 <= observed["clock"] <= 61000
+        assert any("Retired obsolete" in note for note in observed["notes"])
+    elif mode == "never":
+        assert "has not completed" in observed["error"]
+        assert observed["clock"] <= 62000
+    else:
+        assert observed["error"] is None
+        assert observed["clock"] <= 6000
+        assert not any("Retired obsolete" in note for note in observed["notes"])
 
 
 def test_dashboard_unit_coverage_runs_once_while_all_browser_shards_remain_required() -> None:

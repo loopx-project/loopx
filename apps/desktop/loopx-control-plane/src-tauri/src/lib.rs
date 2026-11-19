@@ -2,19 +2,21 @@ mod bundled_runtime;
 #[cfg(target_os = "macos")]
 mod macos_update;
 mod maintenance;
+mod prepared_update;
 mod runtime_ancestry;
 mod runtime_selection;
 mod service_endpoints;
+mod service_lifecycle;
+#[cfg(target_os = "macos")]
+mod service_lifetime;
 mod services;
 mod update_backup;
+mod upgrade_request;
 mod workspace_handoff;
 mod workspace_location;
 
-use services::ServiceSet;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-};
+use service_lifecycle::ServiceLifecycle;
+use std::sync::{Arc, Mutex};
 use tauri::{
     ipc::CapabilityBuilder, webview::PageLoadEvent, AppHandle, Manager, RunEvent, Url, WebviewUrl,
     WebviewWindowBuilder, WindowEvent,
@@ -52,6 +54,15 @@ fn maintenance_origin(url: &Url) -> String {
 // echo verbatim into the boot surface, where it names the recovery panel's
 // actionable diagnostics instead of a misleading fixed message.
 fn boot_failure_message(error: &str) -> String {
+    if services::runtime_alignment_error(error) {
+        return "正在自动恢复本地服务，完成后会打开工作区。".to_string();
+    }
+    if error == "chat_work_pending" {
+        return "管家正在处理请求，完成后会自动连接工作区。".to_string();
+    }
+    if matches!(error, "chat_state_unverified" | "chat_service_unverified") {
+        return "正在等待安全连接管家服务；请展开「恢复与更新」查看诊断。".to_string();
+    }
     // The pairing decision is not a failure: the window is waiting for the
     // operator to choose between updating the App and aligning the CLI.
     if error == "runtime_pairing_required" {
@@ -95,10 +106,19 @@ fn open_web_destination(
 
 fn workspace_navigation(
     url: &Url,
-    origin: &Url,
+    workspace_origin: &Url,
+    boot_origin: &Url,
     launch: impl FnOnce(&str) -> std::io::Result<()>,
 ) -> bool {
-    if url.scheme() == "tauri" || url.origin() == origin.origin() {
+    // macOS serves the App's bundled boot surface over `tauri://localhost`, and
+    // the scheme check below covers it. Windows serves the same bundled page
+    // over the WebView2 transport alias `http://tauri.localhost`, so that boot
+    // origin stays inside the fence too. Opaque origins never compare equal,
+    // which keeps `file://` and other custom protocols outside the fence.
+    if url.scheme() == "tauri"
+        || url.origin() == workspace_origin.origin()
+        || url.origin() == boot_origin.origin()
+    {
         return true;
     }
     // WKWebView evaluates navigation policy before its new-window delegate.
@@ -108,23 +128,36 @@ fn workspace_navigation(
 }
 
 pub fn run() {
+    #[cfg(target_os = "macos")]
+    service_lifetime::run_if_requested();
+    let context = tauri::generate_context!();
+
+    #[cfg(target_os = "macos")]
+    if std::env::args().any(|arg| arg == "--loopx-upgrade-prepare") {
+        maintenance::prepare_terminal_upgrade(context);
+        return;
+    }
+
     // Release builds load the versioned LoopX Chat workspace that ships inside
     // the installed `loopx` release, so `loopx update` refreshes the frontend
     // and backend together instead of reusing a separately built asset bundle.
-    let endpoints = service_endpoints::ServiceEndpoints::allocate(!cfg!(dev))
+    // App and browser are clients of the same machine services. Private
+    // endpoints are an explicit developer/QA choice, never a second default
+    // Chat store created merely by opening a release window.
+    let private_endpoints = std::env::var_os("LOOPX_DESKTOP_PRIVATE_ENDPOINTS");
+    let endpoints = service_endpoints::ServiceEndpoints::for_window(private_endpoints.as_deref())
         .expect("could not allocate LoopX loopback endpoints");
     #[cfg(dev)]
     let web_origin = "http://127.0.0.1:5173".to_string();
     #[cfg(not(dev))]
     let web_origin = endpoints.workspace_origin();
-    let services = Arc::new(Mutex::new(None::<ServiceSet>));
-    let services_for_setup = Arc::clone(&services);
     let navigation_origin: Url = web_origin.parse().expect("valid desktop origin");
-    let shutting_down = Arc::new(AtomicBool::new(false));
-    let shutting_down_for_setup = Arc::clone(&shutting_down);
+    let lifecycle = ServiceLifecycle::new();
+    let lifecycle_for_setup = lifecycle.clone();
 
     let builder = tauri::Builder::default()
         .manage(maintenance::Maintenance::default())
+        .manage(lifecycle.clone())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             maintenance::desktop_update,
@@ -160,8 +193,9 @@ pub fn run() {
             } else {
                 NavigationRetry::SingleAttempt
             };
+            let boot_origin = boot_url(app.handle());
             let handoff = Arc::new(Mutex::new(WorkspaceHandoff::new(
-                boot_url(app.handle()),
+                boot_origin.clone(),
                 workspace_location::launch_destination(app.handle(), &origin),
                 retry,
             )));
@@ -183,7 +217,7 @@ pub fn run() {
                         .page_reached(payload.url());
                 })
                 .on_navigation(move |url| {
-                    workspace_navigation(url, &navigation_origin, |destination| {
+                    workspace_navigation(url, &navigation_origin, &boot_origin, |destination| {
                         open::that_detached(destination)
                     })
                 })
@@ -194,12 +228,20 @@ pub fn run() {
 
             let handle = app.handle().clone();
             std::thread::spawn(move || {
+                let lifecycle = lifecycle_for_setup;
                 // Runtime preparation belongs to the same live supervisor as
                 // service startup. A failed install must not strand this window
                 // after a later repair, reload, or external runtime correction.
-                while !shutting_down_for_setup.load(Ordering::Acquire) {
+                while !lifecycle.should_stop() {
+                    // The App-update handoff owns the runtime until it either
+                    // replaces this process or returns; while it is active the
+                    // supervisor neither starts nor recovers services.
+                    if lifecycle.handoff_active() {
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                        continue;
+                    }
                     {
-                        let mut current = services_for_setup.lock().expect("service state lock");
+                        let mut current = lifecycle.services();
                         if current.is_some() {
                             if maintenance::reconnect_requested(&handle) {
                                 // Runtime repair reuses this supervisor even
@@ -220,23 +262,45 @@ pub fn run() {
                             }
                         }
                     }
-                    match maintenance::start_services(&handle, &endpoints) {
+                    let restoring = lifecycle.restore_pending();
+                    let started = if restoring {
+                        // A released handoff (the installer never launched)
+                        // already stopped this window's own services. Bring the
+                        // same runtime back without re-announcing phases: the
+                        // failure snapshot on screen is the state the operator
+                        // is retrying from, and it must not be overwritten.
+                        maintenance::restore_services_after_update_failure(&handle, &endpoints)
+                    } else {
+                        maintenance::start_services(&handle, &endpoints)
+                    };
+                    match started {
                         Ok(None) => {
                             std::thread::sleep(std::time::Duration::from_millis(200));
                             continue;
                         }
-                        Ok(Some(mut started)) => {
-                            if shutting_down_for_setup.load(Ordering::Acquire) {
-                                started.stop();
-                                return;
-                            }
+                        Ok(Some(started)) => {
                             let healed = started.healed;
-                            *services_for_setup.lock().expect("service state lock") = Some(started);
+                            if let Err(mut returned) = lifecycle.adopt(started) {
+                                // The window closed or a new handoff claimed
+                                // the runtime while this start was in flight:
+                                // stop the group this thread started instead
+                                // of stranding it, and keep owing whatever the
+                                // owner recorded.
+                                returned.stop();
+                                continue;
+                            }
+                            if restoring {
+                                // The failure snapshot owns this transition;
+                                // the workspace handoff already settled and
+                                // must not replay an old selection.
+                                continue;
+                            }
                             handoff
                                 .lock()
                                 .expect("workspace handoff lock")
                                 .services_ready();
                             WorkspaceHandoff::reconcile(&handoff, &handle);
+                            maintenance::start_background_update(&handle);
                             if healed {
                                 let _ = handle
                                     .notification()
@@ -247,6 +311,22 @@ pub fn run() {
                             }
                         }
                         Err(error) => {
+                            if restoring {
+                                // The failure diagnostics stay on screen;
+                                // retry the reclaimed runtime at the
+                                // supervisor's pace without re-announcing a
+                                // phase.
+                                eprintln!(
+                                    "LoopX service restore after failed App update deferred: {error}"
+                                );
+                                for _ in 0..10 {
+                                    if lifecycle.should_stop() || lifecycle.handoff_active() {
+                                        break;
+                                    }
+                                    std::thread::sleep(std::time::Duration::from_millis(200));
+                                }
+                                continue;
+                            }
                             let message = boot_failure_message(&error);
                             eprintln!("LoopX service error: {error}");
                             if let Some(window) = handle.get_webview_window("main") {
@@ -270,7 +350,7 @@ pub fn run() {
                                 10
                             };
                             for _ in 0..rounds {
-                                if shutting_down_for_setup.load(Ordering::Acquire) {
+                                if lifecycle.should_stop() {
                                     return;
                                 }
                                 if maintenance::reconnect_requested(&handle) {
@@ -292,18 +372,13 @@ pub fn run() {
     let builder = builder.on_web_content_process_terminate(workspace_handoff::content_lost);
 
     let app = builder
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("failed to build LoopX desktop shell");
     app.run(move |app, event| {
         if matches!(event, RunEvent::Exit | RunEvent::ExitRequested { .. }) {
-            workspace_location::remember_current(app);
-            shutting_down.store(true, Ordering::Release);
-            if let Ok(mut guard) = services.lock() {
-                if let Some(current) = guard.as_mut() {
-                    current.stop();
-                }
-                *guard = None;
-            }
+            // Save the route and reclaim this App's own services through the
+            // same owner the App-update handoff uses.
+            lifecycle.shutdown(app);
         }
     });
 }
@@ -352,26 +427,58 @@ mod tests {
 
     #[test]
     fn navigation_keeps_the_workspace_fence_and_hands_external_web_links_off_once() {
-        let origin: Url = "http://127.0.0.1:8767/chat/".parse().unwrap();
-        for destination in [
-            "tauri://localhost/",
-            "http://127.0.0.1:8767/chat/?goalId=example",
+        let workspace: Url = "http://127.0.0.1:8767/chat/".parse().unwrap();
+        // macOS reaches the bundled boot surface over the custom protocol;
+        // Windows serves the same page over the WebView2 transport alias.
+        for (boot, boot_page) in [
+            ("tauri://localhost/", "tauri://localhost/index.html"),
+            (
+                "http://tauri.localhost/",
+                "http://tauri.localhost/index.html",
+            ),
         ] {
-            assert!(workspace_navigation(
-                &destination.parse().unwrap(),
-                &origin,
-                |_| { panic!("workspace navigation must not leave the App") }
-            ));
+            let boot: Url = boot.parse().unwrap();
+            for destination in [boot_page, "http://127.0.0.1:8767/chat/?goalId=example"] {
+                assert!(workspace_navigation(
+                    &destination.parse().unwrap(),
+                    &workspace,
+                    &boot,
+                    |_| { panic!("workspace navigation must not leave the App") }
+                ));
+            }
         }
+        let boot: Url = "http://tauri.localhost/".parse().unwrap();
         let external: Url = "https://example.org/form?lang=en&view=all".parse().unwrap();
         let mut opened = Vec::new();
-        let allowed = workspace_navigation(&external, &origin, |value| {
+        let allowed = workspace_navigation(&external, &workspace, &boot, |value| {
             opened.push(value.to_string());
             Ok(())
         });
         // macOS never reaches the new-window delegate after this rejection.
         assert!(!allowed);
         assert_eq!(opened, [external.as_str()]);
+        // The transport alias is accepted only as an exact origin: a lookalike
+        // host, port, or scheme stays an external web destination and is
+        // handed off once more.
+        for destination in [
+            "http://tauri.localhost.evil.example/index.html",
+            "http://elsewhere.localhost/index.html",
+            "http://tauri.localhost:8080/index.html",
+            "https://tauri.localhost/index.html",
+        ] {
+            let destination: Url = destination.parse().unwrap();
+            let mut opened = Vec::new();
+            assert!(!workspace_navigation(
+                &destination,
+                &workspace,
+                &boot,
+                |value| {
+                    opened.push(value.to_string());
+                    Ok(())
+                }
+            ));
+            assert_eq!(opened, [destination.as_str()]);
+        }
         for destination in [
             "file:///tmp/example.txt",
             "javascript:alert(1)",
@@ -379,11 +486,12 @@ mod tests {
         ] {
             assert!(!workspace_navigation(
                 &destination.parse().unwrap(),
-                &origin,
+                &workspace,
+                &boot,
                 |_| { panic!("non-web navigation must not reach a system handler") }
             ));
         }
-        assert!(!workspace_navigation(&external, &origin, |_| {
+        assert!(!workspace_navigation(&external, &workspace, &boot, |_| {
             Err(std::io::Error::other("browser unavailable"))
         }));
     }
@@ -435,6 +543,12 @@ mod tests {
         // snapshot itself and name the known fresh-Mac installer failure.
         assert!(script.contains("runtime_install_exit_2"));
         assert!(script.contains("desktop_recovery_diagnostics_v2"));
+        // The Windows release ships no bundled-runtime repair and no rollback,
+        // so fallback copy for states without a dedicated code must switch to
+        // wording that avoids those controls when repair is unavailable.
+        assert!(
+            script.contains("!bundledRepairAvailable && Object.hasOwn(unrepairedFallback, phase)")
+        );
     }
 
     #[test]

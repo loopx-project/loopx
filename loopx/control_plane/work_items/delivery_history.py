@@ -28,7 +28,7 @@ def _identifier_fact(value: Any) -> str:
 
 def _run_facts(run: Mapping[str, Any]) -> dict[str, Any]:
     observation = run.get("progress_observation")
-    compact_observation = None
+    compact_observation: dict[str, Any] | None = None
     if isinstance(observation, Mapping):
         compact_observation = {
             **{key: _bounded_text(_text(observation.get(key))) for key in ("schema_version", "result_class")},
@@ -101,7 +101,8 @@ def project_delivery_response(
         todo["resume_condition"] = {key: condition[key] for key in (
             "schema_version", "resume_when", "satisfied", "invalid_target", "invalid_state",
             "kind", "target", "target_todo_id", "target_status", "target_task_class", "target_archive_state",
-            "baseline_generation", "material_change_generation", "provider_required", "provider", "capability",
+            "baseline_generation", "material_change_generation", "monitor_change_scope",
+            "scoped_material_change_generation", "provider_required", "provider", "capability",
             "pr_repo", "pr_number", "repository_binding_state", "repository_binding_source",
             "scheduled_for", "evaluated_at", "clock_provider", "generation_fence", "material_change",
             "resume_receipt",

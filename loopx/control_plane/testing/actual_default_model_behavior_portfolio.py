@@ -10,8 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ...bootstrap_command_pack import build_start_goal_guided_packet
-from ..quota.cli_projection import compact_quota_should_run_cli_payload
-from ..quota.turn_envelope import quota_action_signature_document
+from ..quota.turn_envelope import assert_complete_turn_decision, compose_turn_decision, quota_action_signature_document
 from ..work_items.interaction_contract import build_interaction_contract
 from .action_portfolio_scenarios import (
     turn_scenario_source as _turn_scenario_source,
@@ -64,7 +63,9 @@ ACTUAL_DEFAULT_MODEL_BEHAVIOR_CATALOG_SCHEMA_VERSION = (
     "actual_default_model_behavior_scenario_catalog_v0"
 )
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_REPEAT_ATTEMPTS = 2
-ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET = 40_000
+# Historical compact-output threshold: characterizes the crowded fixture only.
+# Current actors receive the complete source; production wire/page limits are separate.
+ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET = 90_000
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_CONTRAST_SCHEMA_VERSION = (
     "actual_default_model_behavior_contrast_v0"
 )
@@ -336,11 +337,11 @@ _CONTRASTS = (
             "decision",
             "user_action_required",
             "must_attempt_work",
-            "delivery_allowed",
             "quiet_noop_allowed",
             "external_write_requested",
         ),
-        ("selected_todo_id",),
+        # The Host must attempt the replan, without ordinary delivery authority.
+        ("selected_todo_id", "delivery_allowed"),
     ),
 )
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_CONTRAST_COUNT = len(_CONTRASTS)
@@ -411,42 +412,29 @@ def actual_default_model_behavior_scenario_catalog() -> dict[str, Any]:
 
 
 def _write_scenario_project(root: Path) -> tuple[Path, Path]:
+    root = root.resolve()
+    from ..coordination.new_goal_storage_transport import initialize_goal_storage_target
+    from ..goals.source_session_registration import configure_source_creation_goal
+
     project = root / "project"
-    state_file = (
-        project
-        / ".codex"
-        / "goals"
-        / ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID
-        / "ACTIVE_GOAL_STATE.md"
-    )
+    state_file = project / ".codex" / "goals" / ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID / "ACTIVE_GOAL_STATE.md"
     state_file.parent.mkdir(parents=True)
     state_file.write_text("# Active Goal State\n", encoding="utf-8")
     registry_path = project / ".loopx" / "registry.json"
     registry_path.parent.mkdir(parents=True)
-    registry_path.write_text(
-        json.dumps(
-            {
-                "schema_version": "0.1",
-                "goals": [
-                    {
-                        "id": ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID,
-                        "status": "active",
-                        "repo": str(project),
-                        "state_file": str(state_file.relative_to(project)),
-                        "coordination": {
-                            "agent_model": "peer_v1",
-                            "registered_agents": [
-                                ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID
-                            ],
-                        },
-                    }
-                ],
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    runtime_root = root / "runtime"
+    goal = {
+        "id": ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID,
+        "status": "active", "repo": str(project),
+        "state_file": str(state_file.relative_to(project)),
+    }
+    # This is a new empty synthetic Goal.
+    # Reuse the first-party typed creation owner before requesting its frontier.
+    configure_source_creation_goal(goal, [ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID],
+                                   "sqlite", "portfolio-entry-fixture")
+    registry_path.write_text(json.dumps({"schema_version": "0.1",
+        "common_runtime_root": str(runtime_root), "goals": [goal]}, indent=2) + "\n", encoding="utf-8")
+    initialize_goal_storage_target(runtime_root, goal, registry_path=registry_path)
     return project, registry_path
 
 
@@ -767,12 +755,12 @@ def _build_actual_default_model_behavior_scenario_sources(
     return packets
 
 
-def _compact_actual_default_model_behavior_scenario_sources(
+def _compose_actual_default_model_behavior_scenario_sources(
     sources: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, dict[str, Any]]:
     return {
         scenario_id: (
-            compact_quota_should_run_cli_payload(deepcopy(dict(packet)))
+            compose_turn_decision(packet, composed_settlement=True)
             if packet.get("mode") == "should-run"
             else deepcopy(dict(packet))
         )
@@ -786,7 +774,7 @@ def build_actual_default_model_behavior_scenario_inputs(
     """Build paired source and actual-default actor packets from one fixture."""
 
     sources = _build_actual_default_model_behavior_scenario_sources(root)
-    return sources, _compact_actual_default_model_behavior_scenario_sources(sources)
+    return sources, _compose_actual_default_model_behavior_scenario_sources(sources)
 
 
 def build_actual_default_model_behavior_scenario_packets(
@@ -851,8 +839,9 @@ def _validate_quota_hot_path_compaction_regression(
 ) -> None:
     if _pretty_json_size(source) <= ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET:
         raise ValueError("compaction-regression source must exceed the hot-path budget")
-    if _pretty_json_size(packet) > ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET:
-        raise ValueError("compaction-regression packet exceeds the hot-path budget")
+    assert_complete_turn_decision(packet)
+    if packet.get("capability_gate") != source.get("capability_gate"):
+        raise ValueError("compaction regression must preserve complete capability candidate context")
     if contract.get("selected_todo_id") != expected_selected_todo_id:
         raise ValueError("compaction regression must preserve the selected todo")
 
@@ -1209,17 +1198,22 @@ def _tool_repeat_diagnostic(receipt: Mapping[str, Any], repeat: int) -> dict[str
     steps = receipt.get("tool_call_receipts")
     entries = steps if isinstance(steps, list) else []
     errors: dict[str, int] = {}
+    observed_tool_sequence: list[str] = []
     for entry in entries[:64]:
-        if not isinstance(entry, Mapping) or not entry.get("error_code"):
+        if not isinstance(entry, Mapping):
             continue
-        error = code(entry["error_code"]) or "unclassified"
-        errors[error] = errors.get(error, 0) + 1
+        if (kind := code(entry.get("kind"))) is not None:
+            observed_tool_sequence.append(kind)
+        if entry.get("error_code"):
+            error = code(entry["error_code"]) or "unclassified"
+            errors[error] = errors.get(error, 0) + 1
     return {
         "repeat": repeat,
         "actor_passed": receipt.get("qualification_passed") is True,
         "failure_code": code(receipt.get("failure_code")),
         "tool_call_count": count(receipt.get("tool_call_count")),
         "tool_call_limit": count(receipt.get("tool_call_limit")),
+        "observed_tool_sequence": observed_tool_sequence,
         "tool_error_counts": dict(sorted(errors.items())),
         "tool_errors_truncated": len(entries) > 64,
     }

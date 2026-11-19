@@ -8,21 +8,8 @@ import subprocess
 from pathlib import Path
 
 
-_RESEARCH_PLANNING_GUIDANCE = (
-    "Before an expensive implementation, check the declared interface, units, scale "
-    "and other decision-critical assumptions against the available task material. "
-    "Compare a feasible alternative with the strongest available starting point; "
-    "preserve that reference while testing a replacement. Use a cheap discriminating "
-    "check when it can resolve the choice, then budget enough work for the selected "
-    "complete experiment. An informative negative experiment can complete its own "
-    "Todo without satisfying the broader goal. Keep evaluation readiness separate "
-    "from evidence for replacing the best artifact; neither creates a new acceptance "
-    "document or permission requirement."
-)
-
-
 def render_planning_prompt(packet: dict, env: dict[str, str]) -> str:
-    """Compose benchmark-only research guidance without changing the Core packet.
+    """Deliver the Core packet and explicitly selected observation tool context.
 
     The worker calls this only for its explicit loopx-planned task entry. Core
     Goal/CLI planning and plain native benchmark workers do not use this wrapper.
@@ -36,8 +23,11 @@ def render_planning_prompt(packet: dict, env: dict[str, str]) -> str:
         value = float(env[key])
         if not math.isfinite(value) or value <= 0:
             raise ValueError(f"{key} must be finite and positive")
-    return ("$loopx\n\nBenchmark research planning guidance:\n" + _RESEARCH_PLANNING_GUIDANCE
-            + "\n\nHost-supplied planning checkpoint:\n" + json.dumps(packet, ensure_ascii=False))
+    from .research_probe import runtime_execution_guidance
+
+    return ("$loopx\n\n"
+            + runtime_execution_guidance(env)
+            + "Host-supplied planning checkpoint:\n" + json.dumps(packet, ensure_ascii=False))
 
 
 def task_plan_packet(env: dict[str, str], cli: list[str]) -> dict:
@@ -99,6 +89,13 @@ def validate_plan_readback(result: dict, before: dict, after: dict) -> dict:
         raise ValueError("planning referenced non-runnable or unclaimed work")
     if status == "blocked" and not set(ids).issubset(after["blocking_todo_ids"]):
         raise ValueError("blocked planning result requires unresolved blocking Todos")
+    requirements = after.get("goal_acceptance", {}).get("planning_requirements", {})
+    if status == "ready" and (
+        requirements.get("agent_id") != after["agent_id"]
+        or requirements.get("declaration_current") is not True
+        or not set(ids).issubset(requirements.get("linked_todo_ids", []))
+    ):
+        raise ValueError("ready planning requires canonical overall requirements linked to its Todos")
     return {
         "input_digest": before["input_digest"],
         "status": status,
@@ -106,5 +103,6 @@ def validate_plan_readback(result: dict, before: dict, after: dict) -> dict:
         "goal_id": after["goal_id"],
         "agent_id": after["agent_id"],
         "state_readback_verified": True,
+        **({"goal_requirements_readback": requirements} if status == "ready" else {}),
         "execution_owner": "caller",
     }

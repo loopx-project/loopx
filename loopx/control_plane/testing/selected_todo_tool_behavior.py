@@ -20,6 +20,8 @@ from .doubao_model_behavior_actor import (
     _direct_ark_transport,
 )
 from .model_tool_behavior import (
+    QuotaToolContext,
+    is_context_read_command,
     DoubaoExecToolClient,
     QUOTA_FIRST_TOOL_INSTRUCTION,
     argument_value,
@@ -220,6 +222,12 @@ def _build_fixture(
         registry_path.parent.mkdir(parents=True, exist_ok=True)
         registry_path.write_text(registry_text + "\n", encoding="utf-8")
 
+    from .canary_harness import import_fixture_authority
+
+    import_fixture_authority(
+        global_registry_path, SELECTED_TODO_TOOL_FIXTURE_GOAL_ID, provider="sqlite",
+    )
+
     if prior_in_flight_progress:
         run = {
             "generated_at": "2026-08-12T00:01:00+00:00",
@@ -260,6 +268,7 @@ def _build_fixture(
         registered_agents=[SELECTED_TODO_TOOL_FIXTURE_AGENT_ID],
         available_capabilities=["shell", "filesystem_read"],
         runtime_profile="codex_app_heartbeat",
+        registry_path=os.path.relpath(global_registry_path, project_root),
     )
     quota_guard_command = str(prompt["quota_guard_command"])
     if quota_guard_command not in str(prompt["task_body"]):
@@ -1087,6 +1096,7 @@ class DoubaoSelectedTodoToolBehaviorActor:
         ]
         steps: list[dict[str, Any]] = []
         quota_observed = False
+        quota_context: QuotaToolContext | None = None
         selection_required = False
         contract: dict[str, Any] | None = None
         seen_once: set[str] = set()
@@ -1117,6 +1127,8 @@ class DoubaoSelectedTodoToolBehaviorActor:
                 fixture=fixture,
                 quota_observed=quota_observed,
             )
+            if is_context_read_command(tool_call.command):
+                kind, tool_output = "context_read", None
             steps.append(
                 {
                     "ordinal": len(steps) + 1,
@@ -1169,8 +1181,8 @@ class DoubaoSelectedTodoToolBehaviorActor:
                             "--turn-instance-id": turn_instance_id,
                         },
                     )
-                    quota_packet = json.loads(tool_output)
-                    contract = _quota_contract(quota_packet)
+                    quota_context = QuotaToolContext.from_output(tool_output)
+                    contract = _quota_contract(quota_context.packet)
                     quota_observed = True
                     selection_required = bool(contract["selection_required"])
                     if kind == "quota_action_selection":
@@ -1183,6 +1195,14 @@ class DoubaoSelectedTodoToolBehaviorActor:
                         passed=False,
                         failure_code="quota_execution_failed",
                     )
+            elif kind == "context_read":
+                try:
+                    if quota_context is None:
+                        raise ValueError("context read before quota")
+                    tool_output = quota_context.read(tool_call.command,
+                        source_root=fixture.source_root, project_root=fixture.project_root)
+                except (OSError, RuntimeError, ValueError):
+                    return receipt(passed=False, failure_code="context_read_failed")
             elif kind == "candidate_discovery":
                 try:
                     tool_output = execute_loopx_cli(

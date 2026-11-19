@@ -1,13 +1,14 @@
 """IO adapter for the typed direction owner; no host-side reverse policy."""
+
+from typing import Any, cast
 from collections.abc import Mapping, Sequence
-from typing import Any
 
 from ...control_plane.effect_runtime import effect_runtime_result, EffectRuntimeRejected
 
 
 def configuration(request: Mapping[str, Any]) -> dict[str, Any]:
     try:
-        return effect_runtime_result("capabilities.pr_review.configuration", dict(request))
+        return cast(dict[str, Any], effect_runtime_result("capabilities.pr_review.configuration", dict(request)))
     except EffectRuntimeRejected as exc:
         if exc.diagnostic_code == "pr_review_configuration_type":
             raise TypeError(str(exc)) from exc

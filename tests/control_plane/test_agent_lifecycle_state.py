@@ -3,11 +3,12 @@
 `executing` and `unknown` come from execution facts (Turn lane liveness,
 delegation worker locks, task leases), never from a Todo timestamp. The facts
 fixtures here are real: a lane held in-process, a holder record edited the
-way a crash or another machine leaves it, a lease file, a delegation row lock.
+way a crash or another machine leaves it, a canonical lease, a delegation row lock.
 """
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import json
+from hashlib import sha256
 import os
 from pathlib import Path
 import subprocess
@@ -23,6 +24,9 @@ from loopx.control_plane.collaboration.inbox import _root as manager_context_roo
 from loopx.control_plane.quota.task_orchestration import apply_task_orchestration_contract
 from loopx.control_plane.turn_driver.lane_fence import turn_lane_singleflight, turn_lane_target
 from loopx.file_lock import exclusive_file_lock, lock_holder_path
+from canonical_authority_fixture import initialize_canonical_authority, advance_canonical_fixture_authority, read_fixture_todos
+from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from loopx.control_plane.coordination.legacy_writer_fence import legacy_coordination_writer_fence_path
 
 NOW = datetime(2026, 9, 18, 12, tzinfo=timezone.utc)
 GOAL = "test-goal"
@@ -45,6 +49,7 @@ def build_projection(monkeypatch, *, age=None, binding=False, status="open",
                                         "host_surface": "codex-app"}] if binding else [],
         }}]}, "todo_index": {"items": todos}}
     if runtime_root is not None:
+        _ensure_canonical_execution_fixture(runtime_root)
         facts = collect_agent_execution_facts(runtime_root=runtime_root, status_payload=payload)
     execution_facts = {"peer": facts} if facts is not None and runtime_root is None else facts
     return projection.build_agent_management_projection(payload, execution_facts=execution_facts), todo
@@ -154,17 +159,39 @@ def _dead_pid() -> int:
             continue
 
 
+def _ensure_canonical_execution_fixture(runtime_root: Path) -> None:
+    if legacy_coordination_writer_fence_path(runtime_root=runtime_root, goal_id=GOAL).exists():
+        return
+    state = runtime_root.parent / "execution-state.md"
+    state.write_text("# Execution fixture\n\n## Agent Todo\n\n"
+                     "- [ ] Inspect the public contract.\n"
+                     "  <!-- loopx:todo todo_id=todo_peer status=open claimed_by=peer task_class=advancement_task -->\n")
+    initialize_canonical_authority(runtime_root, GOAL,
+        build_todo_runtime_shadow_projection(goal_id=GOAL, todos=read_fixture_todos(state), handoff_mode="soft_claim"),
+        state_path=state)
+
+
+def _canonical_document(runtime_root: Path) -> Path:
+    _ensure_canonical_execution_fixture(runtime_root)
+    document, = (runtime_root / "authority/file-v0").rglob("authority-store-*.json")
+    return document
+
+
 def _write_lease(runtime_root: Path, *, expires_in_hours: float, status: str = "active",
                  owner: str = "peer") -> None:
     now = datetime.now(timezone.utc)
-    path = runtime_root / "goals" / GOAL / "task-leases" / "todo_peer.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({
+    _ensure_canonical_execution_fixture(runtime_root)
+    lease = {
         "schema_version": "task_lease_v0", "goal_id": GOAL, "todo_id": "todo_peer", "owner": owner,
         "idempotency_key": "execution-peer", "version": 1, "lease_epoch": 1, "status": status,
         "write_scopes": ["src/**"], "acquire_ttl_seconds": 600, "acquired_at": now.isoformat(),
         "updated_at": now.isoformat(), "expires_at": (now + timedelta(hours=expires_in_hours)).isoformat(),
-    }), encoding="utf-8")
+    }
+    canonical = execution_facts.read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=GOAL)
+    projection = build_todo_runtime_shadow_projection(goal_id=GOAL, todos=canonical["todos"],
+        handoff_mode="soft_claim", leases=[lease])
+    advance_canonical_fixture_authority(runtime_root, GOAL, projection,
+        operation_id="fixture-lease:" + sha256(json.dumps(lease, sort_keys=True).encode()).hexdigest())
 
 
 def test_a_lane_held_in_process_makes_a_stale_todo_executing(monkeypatch, tmp_path):
@@ -232,9 +259,7 @@ def test_an_expired_active_lease_with_nothing_live_is_unknown(monkeypatch, tmp_p
 def test_unreadable_claimed_lease_fails_closed_without_hiding_healthy_peer(monkeypatch, tmp_path,
                                                                             lease_bytes):
     runtime_root = tmp_path / "runtime"
-    lease_path = runtime_root / "goals" / GOAL / "task-leases" / "todo_peer.json"
-    lease_path.parent.mkdir(parents=True)
-    lease_path.write_bytes(lease_bytes)
+    _canonical_document(runtime_root).write_bytes(lease_bytes)
     other_todo = {"todo_id": "todo_healthy", "goal_id": GOAL, "role": "agent",
                   "claimed_by": "healthy", "status": "open", "task_class": "advancement_task"}
     with turn_lane_singleflight(runtime_root=runtime_root, goal_id=GOAL,
@@ -261,11 +286,10 @@ def test_unreadable_claimed_lease_fails_closed_without_hiding_healthy_peer(monke
     assert contract["blocked_peer_lanes"][0]["reason_codes"] == ["peer_runtime_not_active"]
 
 
-def test_unreadable_second_todo_overrides_fresh_lease_but_not_live_lane(monkeypatch, tmp_path):
+def test_canonical_snapshot_failure_overrides_fresh_lease_but_not_live_lane(monkeypatch, tmp_path):
     runtime_root = tmp_path / "runtime"
     _write_lease(runtime_root, expires_in_hours=1)
-    lease_path = runtime_root / "goals" / GOAL / "task-leases" / "todo_second.json"
-    lease_path.write_text("{broken json", encoding="utf-8")
+    _canonical_document(runtime_root).write_text("{broken json", encoding="utf-8")
     second = {"todo_id": "todo_second", "goal_id": GOAL, "role": "agent",
               "claimed_by": "peer", "status": "open", "task_class": "advancement_task"}
     kwargs = {"age": 0, "runtime_root": runtime_root, "extra_todos": [second]}
@@ -293,14 +317,14 @@ def test_canonical_lease_read_failure_stays_unavailable(monkeypatch, tmp_path):
     assert packet["agents"][0]["execution"]["lease"] == {"status": "unavailable"}
 
 
-def test_local_lease_oserror_is_unavailable(monkeypatch, tmp_path):
+def test_canonical_lease_oserror_is_unavailable(monkeypatch, tmp_path):
     runtime_root = tmp_path / "runtime"
     runtime_root.mkdir()
 
-    def unreadable(_path):
-        raise OSError("synthetic lease read failure")
+    def unreadable(**_kwargs):
+        raise OSError("synthetic canonical lease read failure")
 
-    monkeypatch.setattr(execution_facts, "read_lease", unreadable)
+    monkeypatch.setattr(execution_facts, "read_canonical_todos_if_promoted", unreadable)
     packet, _ = build_projection(monkeypatch, age=0, runtime_root=runtime_root)
     assert packet["agents"][0]["state"] == "unknown"
     assert packet["agents"][0]["execution"]["lease"] == {"status": "unavailable"}
@@ -309,6 +333,7 @@ def test_local_lease_oserror_is_unavailable(monkeypatch, tmp_path):
 def _delegation_row(runtime_root: Path, *, goal: str, requester: str, agent: str = "peer",
                     operation: str = "op-1", status: str = "running") -> tuple[Path, Path]:
     """A journal row where the delegation service keeps it, plus its execution slot."""
+    _ensure_canonical_execution_fixture(runtime_root)
     store = manager_context_root(runtime_root)
     row_path = (store / "executions" / manager_context_hash([goal, requester])
                 / (manager_context_hash(operation) + ".json"))
@@ -376,7 +401,7 @@ def test_an_operation_lock_without_its_execution_slot_is_not_a_worker(monkeypatc
 
 
 def _payload(registered):
-    todo = {"todo_id": "todo_peer", "goal_id": GOAL, "role": "agent", "claimed_by": "peer", "status": "open"}
+    todo = {"todo_id": "todo_peer", "role": "agent", "claimed_by": "peer", "status": "open"}
     return {"goal_filter": GOAL, "run_history": {"goals": [{
         "id": GOAL, "coordination": {"registered_agents": list(registered)}}]},
         "todo_index": {"items": [todo]}}

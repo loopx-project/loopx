@@ -94,6 +94,9 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
         + "\n",
         encoding="utf-8",
     )
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+
+    import_fixture_authority(registry_path, GOAL_ID, provider="sqlite")
     return registry_path, runtime, project
 
 
@@ -318,7 +321,6 @@ def main() -> None:
             status = collect_status(
                 registry_path=registry_path,
                 runtime_root_override=str(runtime),
-                scan_roots=[project],
                 limit=5,
             )
             items = status["attention_queue"]["items"]
@@ -423,7 +425,6 @@ def main() -> None:
             primary_goal_status = collect_status(
                 registry_path=registry_path,
                 runtime_root_override=str(runtime),
-                scan_roots=[project],
                 limit=5,
             )
             primary_goal_item = next(

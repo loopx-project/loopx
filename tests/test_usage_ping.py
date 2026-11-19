@@ -6,6 +6,7 @@ import io
 import os
 import runpy
 import select
+import shutil
 import socket
 import subprocess
 import sys
@@ -69,6 +70,8 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(usage_ping, 'select_default_runtime_root', lambda: tmp_path)
     for key in ('CI', 'DO_NOT_TRACK', 'LOOPX_USAGE_PING', 'LOOPX_USAGE_POLICY'):
         monkeypatch.delenv(key, raising=False)
+    # Explicit transport qualifications may send only to a numeric loopback collector.
+    monkeypatch.setenv('LOOPX_USAGE_PING', '1')
     monkeypatch.setenv('LOOPX_USAGE_PING_ENDPOINT', 'http://127.0.0.1:1/v1/ping')
     return tmp_path
 
@@ -116,6 +119,124 @@ def test_settings_commands_and_corrupt_state_repair(isolated, capsys):
     usage_ping.state_path().write_text('invalid')
     assert main(['usage-ping', 'disable', '--format', 'json']) == 0
     assert json.loads(capsys.readouterr().out)['next_payload'] is None
+
+
+def test_settings_lock_failure_is_readable_and_does_not_change_consent(isolated, capsys):
+    path = usage_ping.state_path()
+    usage_ping.control('enable')
+    before = path.read_bytes()
+    lock_owner = Path(usage_ping.__file__).parent / 'control_plane/effect_runtime_io.ts'
+    script = '''
+      const {acquireFileMutationLock, releaseFileMutationLock} = await import(process.argv[1]);
+      const lock = await acquireFileMutationLock(process.argv[2]);
+      process.stdout.write('ready\\n');
+      for await (const chunk of process.stdin) { /* Keep the live claim until released. */ }
+      await releaseFileMutationLock(lock.targetPath, lock.token);
+    '''
+    holder = subprocess.Popen(
+        [usage_ping._command()[0], '--no-warnings', '--experimental-strip-types',
+         '--input-type=module', '-e', script, lock_owner.as_uri(), str(path)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    ready, line = threading.Event(), []
+
+    def read_ready():
+        line.append(holder.stdout.readline())
+        ready.set()
+
+    threading.Thread(target=read_ready, daemon=True).start()
+    try:
+        assert ready.wait(10) and line == ['ready\n']
+        assert main(['usage-ping', 'disable', '--format', 'json']) == 1
+        captured = capsys.readouterr()
+        failure = json.loads(captured.out)
+        assert failure['ok'] is False and failure['error'] == 'mutation_lock_timeout'
+        assert captured.err == ''
+        assert main(['usage-ping', 'disable', '--format', 'markdown']) == 1
+        assert capsys.readouterr().out.strip() == failure['message']
+        assert path.read_bytes() == before
+        assert usage_ping.control('status')['consent'] == 'enabled'
+    finally:
+        try:
+            holder.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            holder.kill()
+            holder.communicate()
+    assert holder.returncode == 0
+    assert main(['usage-ping', 'disable', '--format', 'json']) == 0
+    assert json.loads(capsys.readouterr().out)['consent'] == 'disabled'
+    assert 'install_id' not in json.loads(path.read_text())
+
+
+def test_unavailable_settings_are_public_safe_and_explicit_disable_still_repairs(isolated, capsys):
+    private_content = 'synthetic-private-setting-token'
+    usage_ping.state_path().write_text(private_content)
+    for output_format in ('json', 'markdown'):
+        assert main(['usage-ping', 'status', '--format', output_format]) == 1
+        captured = capsys.readouterr()
+        assert private_content not in captured.out + captured.err
+        assert str(isolated) not in captured.out + captured.err
+        assert 'Traceback' not in captured.out + captured.err
+        if output_format == 'json':
+            failure = json.loads(captured.out)
+            assert failure['ok'] is False and failure['error'] == 'usage_statistics_unavailable'
+        else:
+            assert captured.out.strip() == failure['message']
+        assert captured.err == ''
+    assert usage_ping.state_path().read_text() == private_content
+    assert main(['usage-ping', 'disable', '--format', 'json']) == 0
+    assert json.loads(capsys.readouterr().out)['consent'] == 'disabled'
+
+
+@pytest.mark.parametrize('failure', ['bad_json', 'bad_utf8', 'missing_node'])
+def test_settings_bridge_failure_has_no_traceback_or_private_output(isolated, monkeypatch, capsys, failure):
+    secret = 'synthetic-private-transport-token'
+    if failure == 'missing_node':
+        monkeypatch.setattr(usage_ping.shutil, 'which', lambda *_args, **_kwargs: None)
+    else:
+        body = (f"import sys;sys.stdout.buffer.write(b'\\xff{secret}')"
+                if failure == 'bad_utf8' else f"import sys;print({secret!r});print({secret!r},file=sys.stderr)")
+        monkeypatch.setattr(usage_ping, '_command', lambda: [sys.executable, '-c', body])
+    assert main(['usage-ping', 'status', '--format', 'json']) == 1
+    captured = capsys.readouterr()
+    failure_payload = json.loads(captured.out)
+    assert failure_payload['ok'] is False
+    assert failure_payload['error'] == 'usage_statistics_unavailable'
+    assert captured.err == '' and secret not in captured.out
+    assert str(isolated) not in captured.out and 'Traceback' not in captured.out
+    assert not usage_ping.state_path().exists()
+
+
+def test_lost_settings_reply_preserves_the_choice_and_requires_readback(isolated, monkeypatch, capsys):
+    usage_ping.control('enable')
+    node = usage_ping._command()
+    attempts = isolated / 'settings-attempts.txt'
+    # Run the real TS mutation, then lose its reply within the existing 4s
+    # bridge deadline. The caller cannot infer whether that mutation committed.
+    delayed_reply = '''
+import json, subprocess, sys, time
+from pathlib import Path
+result = subprocess.run(json.loads(sys.argv[1]), input=sys.stdin.read(), capture_output=True, text=True)
+with Path(sys.argv[2]).open('a') as output:
+    output.write(str(result.returncode) + '\\n')
+time.sleep(10)
+'''
+    with monkeypatch.context() as patch:
+        patch.setattr(usage_ping, '_command', lambda: [
+            sys.executable, '-c', delayed_reply, json.dumps(node), str(attempts),
+        ])
+        assert main(['usage-ping', 'disable', '--format', 'json']) == 1
+    captured = capsys.readouterr()
+    failure = json.loads(captured.out)
+    assert failure['ok'] is False and failure['error'] == 'usage_statistics_unavailable'
+    assert 'consent' not in failure and captured.err == ''
+    assert attempts.read_text() == '0\n'  # One successful backend call, no retry.
+    after = usage_ping.state_path().read_bytes()
+    assert main(['usage-ping', 'status', '--format', 'json']) == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status['consent'] == 'disabled' and status['sending'] is False
+    assert status['next_payload'] is None
+    assert usage_ping.state_path().read_bytes() == after
 
 
 @pytest.mark.parametrize('interactive', [False, True])
@@ -188,6 +309,90 @@ def test_first_disclosure_respects_policy_overrides(isolated, monkeypatch, capsy
     assert usage_ping.begin('status') is None
     assert not usage_ping.state_path().exists()
     assert capsys.readouterr().err == ''
+
+
+@pytest.mark.parametrize('switch,value', [
+    ('LOOPX_USAGE_PING', 'off'), ('LOOPX_USAGE_PING', ' FALSE '),
+    ('LOOPX_USAGE_PING', '\ufeffOFF\ufeff'), ('DO_NOT_TRACK', 'yes'),
+    ('DO_NOT_TRACK', 'false'), ('CI', '1'), ('CI', ' YES '),
+])
+@pytest.mark.parametrize('current_notice', [False, True])
+def test_environment_opt_out_skips_automatic_cli_transport(
+    isolated, monkeypatch, capsys, switch, value, current_notice,
+):
+    # Real business dispatch and enabled hints prevent missing state or consent
+    # from masking automatic disclosure or warm-command transport attempts.
+    usage_ping.state_path().write_text(json.dumps({
+        'generation': 'fixture', 'consent': 'enabled',
+        'notice': {'version': 6 if current_notice else 0},
+    }))
+    monkeypatch.setenv(switch, value)
+    attempts = []
+
+    def unavailable_command():
+        attempts.append('transport')
+        raise OSError('fixture transport unavailable')
+
+    monkeypatch.setattr(usage_ping, '_command', unavailable_command)
+    assert main(['version', '--format', 'json']) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)['ok'] is True
+    assert captured.err == ''
+    assert attempts == []
+
+
+@pytest.mark.parametrize('switch,value', [
+    ('LOOPX_USAGE_PING', 'off'), ('DO_NOT_TRACK', 'yes'), ('CI', '1'),
+])
+@pytest.mark.parametrize('producer', ['finish', 'verified_return', 'direct', 'python_child'])
+def test_environment_opt_out_fences_late_or_direct_observation(
+    isolated, monkeypatch, switch, value, producer,
+):
+    usage_ping.state_path().write_text(json.dumps({
+        'generation': 'fixture', 'consent': 'enabled', 'notice': {'version': 6},
+    }))
+    monkeypatch.setenv(switch, value)
+    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('opt-out spawned a child'))
+    monkeypatch.setattr(usage_ping, '_pin_caller_paths', lambda *a: pytest.fail('opt-out resolved caller paths'))
+    if producer == 'finish':
+        usage_ping.finish(('fixture', time.monotonic()), 'version', 0)
+    elif producer == 'verified_return':
+        usage_ping.observe_verified_return()
+    else:
+        usage_ping._detach({'path': 'caller-relative-state'}, command=(
+            [sys.executable, '-P', '-m', 'loopx.usage_goal'] if producer == 'python_child' else None
+        ))
+
+
+def test_environment_hint_matches_the_typescript_owner():
+    node = shutil.which('node')
+    if node is None:
+        pytest.skip('TypeScript owner parity requires the supported Node runtime')
+    # DNT differs from CI/PING. JS trims FEFF but not U+0085; Python's default
+    # strip has the opposite behavior for these two characters.
+    values = ['', '0', '1', 'false', 'true', 'no', 'off', 'yes', 'unknown',
+              ' FALSE ', ' OFF ', ' YES ', '\ufeff0\ufeff', '\ufeffOFF\ufeff',
+              '\ufefffalse\ufeff', '\u00850\u0085', '\u0085off\u0085']
+    environments = [{}] + [{key: value} for key in ('LOOPX_USAGE_PING', 'DO_NOT_TRACK', 'CI') for value in values]
+    environments += [
+        {'LOOPX_USAGE_PING': 'yes', 'DO_NOT_TRACK': '0', 'CI': 'false'},
+        {'LOOPX_USAGE_PING': 'off', 'DO_NOT_TRACK': 'yes', 'CI': '1'},
+    ]
+    owner = (Path(usage_ping.__file__).parent / 'control_plane/runtime/usage_statistics.ts').as_uri()
+    script = f'''import {{ blockedBy }} from {json.dumps(owner)};
+let input=''; for await (const chunk of process.stdin) input+=chunk;
+const reasons=JSON.parse(input).map(env=>blockedBy({{consent:'disabled'}},
+  {{env,version:'1.0.0',python:'3.13',channel:'source'}},'unused'));
+process.stdout.write(JSON.stringify(reasons));'''
+    result = subprocess.run([node, '--no-warnings', '--experimental-strip-types', '--input-type=module', '-e', script],
+                            input=json.dumps(environments), capture_output=True, text=True, timeout=20, check=True)
+    reasons = json.loads(result.stdout)
+    assert len(reasons) == len(environments)
+    for env, reason in zip(environments, reasons):
+        # Disabled consent makes the existing owner return before filesystem or
+        # sending when no environment suppressor exists; this does not enable it.
+        expected = reason in {'LOOPX_USAGE_PING', 'DO_NOT_TRACK', 'CI'}
+        assert usage_ping._environment_suppressed(env) is expected, (env, reason)
 
 
 def test_real_agent_cli_keeps_json_clean_and_sends_only_after_disclosure(isolated, collector, monkeypatch):

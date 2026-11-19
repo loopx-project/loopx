@@ -1,9 +1,9 @@
 """Research checkpoint context IO through existing canonical Todo owners.
 
-Captured records are historical input, never a replacement authority store.
-Only the existing explicit continuation owner can adopt a note on an already
-claimed destination Todo. Verified Explore knowledge may seed a fresh graph;
-historical execution observations, effects and vision authority are not revived.
+Research import adopts historical input on a claimed destination Todo; verified
+Explore knowledge may seed a fresh graph. Explicit isolated full-state restore
+instead verifies the complete retained business state without rewriting it.
+Neither path grants a work admission or settles historical execution effects.
 """
 from __future__ import annotations
 
@@ -123,6 +123,43 @@ def _encoded(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 
 
+def verify_restored_loopx_state(env: dict[str, str], unit: Path, metadata: dict, *, deadline: float) -> Path:
+    """Read back complete business state through its existing canonical owners.
+
+    The caller has verified the sealed artifact and materialized a quiescent,
+    isolated replacement at its original paths. Equality preserves receipts,
+    Todo identities/dependencies, acceptance, Explore and Vision history. It
+    does not settle an interrupted Turn or grant a lease/model invocation.
+    """
+    state = metadata["loopx_state"]
+    if any(env[key] != state[field] for key, field in
+           (("LOOPX_GOAL_ID", "goal_id"), ("LOOPX_AGENT_ID", "agent_id"))):
+        raise ValueError("full LoopX restore requires the captured Goal and Agent")
+    registry = Path(env["LOOPX_REGISTRY"])
+    if registry.resolve(strict=True) != registry or hashlib.sha256(registry.read_bytes()).hexdigest() != state["registry_sha256"]:
+        raise ValueError("restored LoopX registry differs from its sealed source")
+    roots = [entry for entry in state["source_inventory"] if entry["key"] == "runtime_root"]
+    if len(roots) != 1 or roots[0]["source_path"] != env["LOOPX_RUNTIME_ROOT"]:
+        raise ValueError("restored LoopX runtime differs from its captured route")
+    context = metadata["research_context"]
+    path = unit / "components" / context["component_id"] / context["member_path"]
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != context["sha256"]:
+        raise ValueError("restored LoopX canonical context digest differs")
+    expected = json.loads(raw)
+    actual = research_context(env, deadline=deadline)
+    # The canonical cursor binds the complete business revision. Derived Todo
+    # resume/readiness observations may legitimately change as time elapses;
+    # they must be evaluated now, rather than frozen to their capture time.
+    identity = ("store_identity", "provider_revision", "cursor", "todo_ids")
+    if (actual["goal_id"] != expected["goal_id"]
+            or any(actual["snapshot"].get(key) != expected["snapshot"].get(key) for key in identity)
+            or actual["research_evidence"] != expected["research_evidence"]
+            or actual["source_files"] != expected["source_files"]):
+        raise ValueError("restored LoopX canonical state or research history differs from its sealed source")
+    return unit / "components" / roots[0]["component_id"]
+
+
 def _handoff(env, payload):
     from loopx.agent_registry import registered_agent_ids_from_registry
     request = {"runtime_root": env["LOOPX_RUNTIME_ROOT"], "goal_id": env["LOOPX_GOAL_ID"],
@@ -135,21 +172,34 @@ def _handoff(env, payload):
 
 
 
-def _context_session(env, metadata, timeout=30):
+def _context_session(env, metadata, timeout=30, *, checkpoint_sha256=None):
     """Read the admitted native branch before publishing captured Todo context."""
     from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
     from loopx.hosts.codex_checkpoint import native_session_checkpoint
 
     wake = CodexAgentSession(env, context="resume", sandbox=env["LOOPX_CODEX_SANDBOX"], receipt={})
     native = metadata["native_session"]
+    expected_profile = metadata.get("session", {}).get("session_profile_digest")
+    expected_config = native["config_sha256"]
+    binding = wake.binding or {}
+    transition = binding.get("checkpoint_model_transition")
+    if transition is not None:
+        from loopx.control_plane.turn_driver.codex_sessions import validate_checkpoint_model_transition
+        validate_checkpoint_model_transition(transition)
+        if (not checkpoint_sha256 or binding.get("checkpoint_artifact_sha256") != checkpoint_sha256 or
+                transition["source_profile_digest"] != expected_profile or
+                transition["source_config_sha256"] != expected_config):
+            raise ValueError("context adoption model transition does not match the captured source")
+        expected_profile = transition["destination_profile_digest"]
+        expected_config = transition["destination_config_sha256"]
     if (not wake.session_id or wake.session_id == native["session_id"] or
-            wake.digest != metadata.get("session", {}).get("session_profile_digest")):
+            wake.digest != expected_profile):
         raise ValueError("context adoption requires the admitted destination session profile")
     observed = native_session_checkpoint(env, wake.session_id, timeout=timeout,
         interrupted_guard=native.get("interrupted_guard"))["metadata"]
     cursor_key = "interrupted_turn_id" if native.get("interrupted_guard") is not None else "completed_turn_id"
     for key in ("visible_history_sha256", "turn_ids", cursor_key, "host_version", "config_sha256"):
-        if observed[key] != native[key]:
+        if observed[key] != (expected_config if key == "config_sha256" else native[key]):
             raise ValueError("destination native history or configuration moved beyond the captured context")
     return wake.session_id
 
@@ -189,7 +239,7 @@ def adopt_todo_context(env: dict[str, str], unit: Path, digest: str, *, source_t
         read_timeout()  # A late successful read cannot authorize the next write.
 
     def read_session():
-        session = _context_session(env, metadata, read_timeout())
+        session = _context_session(env, metadata, read_timeout(), checkpoint_sha256=digest)
         read_timeout()
         return session
 
@@ -412,8 +462,11 @@ def _loopx_state_components(env, components, output_dir):
 
 def native_binding_participant(env, components, metadata):
     from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
+    registry_bytes = Path(env["LOOPX_REGISTRY"]).read_bytes()
     source_wake = CodexAgentSession(env, context="resume",
         sandbox=env.get("LOOPX_CODEX_SANDBOX", "danger-full-access"), receipt={})
+    if Path(env["LOOPX_REGISTRY"]).read_bytes() != registry_bytes:
+        raise ValueError("checkpoint registry moved during session observation")
     if source_wake.session_id != metadata["session"].get("session_id"):
         raise ValueError("native checkpoint differs from the current source session binding")
     # This sideband record belongs to the existing session owner. It
@@ -427,7 +480,32 @@ def native_binding_participant(env, components, metadata):
     metadata["session"] = {**metadata["session"], "session_profile_digest": source_wake.digest}
     if source_wake.binding.get("checkpoint_context_refresh") is not None:
         metadata["session"]["checkpoint_context_refresh"] = source_wake.binding["checkpoint_context_refresh"]
-    return components, source_wake
+    return components, source_wake, registry_bytes
+
+
+def verify_native_binding_participant(env, source_wake, registry_bytes):
+    """Recheck the accepted binding without creating another launch admission.
+
+    The initial session owner selects the binding and Goal lifetime. After the
+    byte probe, constructing that owner again would write its advisory locks
+    and invalidate the snapshot. Compare the complete binding, profile and
+    unchanged registry instead; this observation grants no launch authority.
+    """
+    import shutil
+    from loopx.control_plane.turn_driver.codex_sessions import (
+        codex_session_profile_digest, select_codex_cli_session,
+    )
+    if Path(env["LOOPX_REGISTRY"]).read_bytes() != registry_bytes:
+        raise ValueError("checkpoint registry moved before sealing")
+    binding = select_codex_cli_session(source_wake.root, lineage=source_wake.lineage, session_scope="agent")
+    binary = shutil.which(env["CODEX_BIN"])
+    if binary is None:
+        raise ValueError("checkpoint native binary is unavailable")
+    digest = codex_session_profile_digest(project=Path(env["LOOPX_PROJECT"]), codex_bin=binary,
+        home=Path(env["CODEX_HOME"]), model=env["MODEL_NAME"], reasoning_effort=env["REASONING_EFFORT"],
+        sandbox=env.get("LOOPX_CODEX_SANDBOX", "danger-full-access"))
+    if binding != source_wake.binding or digest != source_wake.digest:
+        raise ValueError("checkpoint source session binding or profile moved before sealing")
 
 
 def research_participants(env, components, metadata, destination, evidence_path, deadline):
@@ -517,7 +595,7 @@ def capture_research_checkpoint(env: dict[str, str], request: dict, *,
             destination, Path(temporary) / "research-context.json", deadline)
         if research is None:
             raise ValueError("research capture requires canonical source coordination")
-        components, observed_session = native_binding_participant(env, components, metadata)
+        components, observed_session, registry_bytes = native_binding_participant(env, components, metadata)
         # Reopening the native reader after probing can checkpoint its history
         # database and invalidate our own byte witness. Keep one inspection
         # process open; the original logical reread and byte fence both remain.
@@ -535,10 +613,7 @@ def capture_research_checkpoint(env: dict[str, str], request: dict, *,
                 timeout=max(.1, deadline-time.time()), retry_safe=False, large_local_snapshot=True)
             if native_session_checkpoint(env, session.session_id, timeout=max(.1, deadline-time.time()), transport=reader) != native:
                 raise ValueError("native checkpoint source moved before sealing")
-            _, confirmed = native_binding_participant(env, components, metadata)
-            if ((confirmed.session_id, confirmed.goal_ref, confirmed.digest) !=
-                    (observed_session.session_id, observed_session.goal_ref, observed_session.digest)):
-                raise ValueError("research checkpoint session binding moved before sealing")
+            verify_native_binding_participant(env, observed_session, registry_bytes)
             verify_research_participants(env, components, metadata, research, probe["source_witness"], deadline)
             if settled().identity.value != original.identity.value:
                 raise ValueError("research checkpoint source settlement moved")

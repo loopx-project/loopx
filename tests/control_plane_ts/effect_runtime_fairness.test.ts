@@ -78,8 +78,8 @@ test("a real runtime serves lightweight work during cold File history verificati
   await delay(100);
   const binding = {id: "review", agent_id: "reviewer", todo_id: "todo_review", workspace: root,
     requesters: ["coordinator"], host_args: ["--host", "dsh"], timeout_seconds: 60, output_refs: ["output.json"]};
-  const [ping, decisions, scope, ownership, selectedBinding] = await Promise.all([rpc("runtime.ping"), rpc("todo.standing_decision.project", {
-    schema_version: "standing_decision_projection_request_v0", items: [], legacy_source_order: false,
+  const [ping, decisions, scope, ownership, selectedBinding] = await Promise.all([rpc("runtime.ping"), rpc("todo.read", {
+    schema_version: "todo_read_request_v0", kind: "source_fields", groups: [], standing_items: [], legacy_source_order: false,
   }), rpc("todo.authoring_scope.plan", {
     schema_version: "todo_authoring_scope_request_v0", command: "class", role: "agent",
     todo: {task_class: "continuous_monitor"}, intent: {},
@@ -93,7 +93,7 @@ test("a real runtime serves lightweight work during cold File history verificati
   assert.equal(scope.schema_version, "todo_authoring_scope_result_v0");
   assert.equal(ownership.ownership_gate, "require_holder");
   assert.ok(ping.pid);
-  assert.equal(decisions, null, "no standing decisions means no authority projection");
+  assert.equal((decisions.fields as Record<string, unknown>).standing_decision_authority, undefined, "no standing decisions means no authority projection");
   assert.equal(heavyFinished, false, "a full history proof must not monopolize other requests");
   const receipt = await heavy;
   assert.equal(receipt.status, "found");

@@ -13,11 +13,62 @@ import {
   createGoalLoop,
   createMemoryBindingStore,
   hasAbortedAssistantMessage,
+  piThreadId,
   runPiTaskLease,
   sanitizedKey,
   sessionKey,
   waitPlan,
 } from "../loopx/pi_goal_mode/pi-goal-loop-runtime.mjs"
+
+test("Pi thread identity is private, stable and distinguishes colliding basenames", () => {
+  const file = path.join(os.tmpdir(), "project-a", "session.jsonl")
+  const id = piThreadId(file)
+  assert.equal(id, piThreadId(file))
+  assert.notEqual(id, piThreadId(path.join(os.tmpdir(), "project-b", "session.jsonl")))
+  assert.notEqual(piThreadId("session?.jsonl"), piThreadId("session*.jsonl"))
+  assert.match(id, /^[A-Za-z0-9_-]+$/)
+  assert.ok(!id.includes(os.tmpdir()))
+  assert.equal(piThreadId(undefined), null)
+  assert.equal(piThreadId(""), null)
+  assert.equal(piThreadId("  "), null)
+  assert.equal(piThreadId(path.join(os.tmpdir(), "sessions") + path.sep), null)
+})
+
+
+test("LOOPX_PI_THREAD_ID override takes precedence over the session file path", () => {
+  const original = process.env.LOOPX_PI_THREAD_ID
+  try {
+    process.env.LOOPX_PI_THREAD_ID = "stable-project-identity"
+    const file = path.join(os.tmpdir(), "2026-10-22T10-43-51-124Z_uuid1.jsonl")
+    assert.equal(piThreadId(file), "stable-project-identity")
+    const file2 = path.join(os.tmpdir(), "2026-10-23T09-12-04-887Z_uuid2.jsonl")
+    assert.equal(piThreadId(file2), "stable-project-identity")
+  } finally {
+    if (original === undefined) {
+      delete process.env.LOOPX_PI_THREAD_ID
+    } else {
+      process.env.LOOPX_PI_THREAD_ID = original
+    }
+  }
+})
+
+
+test("blank LOOPX_PI_THREAD_ID falls through to session file derivation", () => {
+  const original = process.env.LOOPX_PI_THREAD_ID
+  try {
+    process.env.LOOPX_PI_THREAD_ID = "   "
+    const file = path.join(os.tmpdir(), "session.jsonl")
+    assert.equal(piThreadId(file), sessionKey(file))
+    delete process.env.LOOPX_PI_THREAD_ID
+    assert.equal(piThreadId(file), sessionKey(file))
+  } finally {
+    if (original === undefined) {
+      delete process.env.LOOPX_PI_THREAD_ID
+    } else {
+      process.env.LOOPX_PI_THREAD_ID = original
+    }
+  }
+})
 
 
 function memoryBindingStore() {
@@ -370,7 +421,6 @@ test("an aborted Pi run pauses durably and cancels the scheduled timer", async (
   fixture.setDecision({ should_run: true, scheduler_hint: { action: "run_now" } })
   await fixture.loop.resume("session-abort")
   assert.equal((await fixture.store.read("session-abort")).pauseReason, "")
-  await fixture.loop.settle("session-abort")
   assert.equal(fixture.calls.quota, probesBefore + 1)
   assert.equal(fixture.calls.send, 1)
 })
@@ -1620,27 +1670,30 @@ test("hard pause stays disarmed across idle events until explicit resume and fre
   assert.equal(fixture.calls.send, 0)
   assert.equal(fixture.scheduled.length, 0)
   await fixture.loop.resume("paused")
-  await fixture.loop.settle("paused")
   assert.equal(fixture.calls.quota, 2)
   assert.equal(fixture.calls.send, 1)
 })
 
-test("pause then resume fences the pre-pause quota result", async () => {
+test("idle resume starts fresh admission without waiting for a pre-pause quota result", async t => {
   let release
   let started
   const ready = new Promise(resolve => { started = resolve })
   const fixture = harness(() => { started(); return new Promise(resolve => { release = resolve }) })
+  t.after(() => { release?.({ should_run: true }); fixture.loop.dispose() })
   fixture.loop.bind("race", fixture.services)
   await fixture.activate("race")
   const pending = fixture.loop.settle("race")
   await ready
   await fixture.loop.interrupt("race")
+  fixture.setDecision({ should_run: false, scheduler_hint: { action: "stop_until_explicit_resume" } })
   await fixture.loop.resume("race")
+  assert.equal(fixture.calls.quota, 2, "resume must obtain fresh admission before the old probe returns")
+  assert.equal((await fixture.store.read("race")).autoResume, false)
   release({ should_run: true, scheduler_hint: { action: "run_now" } })
   await pending
   assert.equal(fixture.calls.send, 0)
   fixture.setDecision({ should_run: true, scheduler_hint: { action: "run_now" } })
-  await fixture.loop.settle("race")
+  await fixture.loop.resume("race")
   assert.equal(fixture.calls.send, 1)
 })
 
@@ -1660,7 +1713,6 @@ test("cancelled timer cannot steal the replacement wake after explicit resume", 
   const oldTimer = fixture.scheduled.at(-1)
   await fixture.loop.interrupt("timer")
   await fixture.loop.resume("timer")
-  await fixture.loop.settle("timer")
   const replacement = fixture.scheduled.at(-1)
   const probes = fixture.calls.quota
   await oldTimer.callback()
@@ -1684,9 +1736,591 @@ test("file-backed Core pause survives a new loop instance and resume rechecks ad
     await second.loop.settle("durable")
     assert.equal(second.calls.quota, 0)
     await second.loop.resume("durable")
-    await second.loop.settle("durable")
     assert.equal(second.calls.quota, 1)
     assert.equal(second.calls.send, 1)
     second.loop.dispose()
   } finally { await fs.rm(root, { recursive: true, force: true }) }
+})
+
+
+test("explicit owner input ignores text equality and duplicate starts do not re-pause", async () => {
+  const f = harness({ should_run: true })
+  f.loop.bind("owner", f.services)
+  await f.activate("owner")
+  await f.loop.settle("owner")
+  const before = await f.store.read("owner")
+  await Promise.all([f.loop.ownerInput("owner"), f.loop.ownerInput("owner")])
+  await f.loop.ownerInput("owner")
+  await f.loop.userPrompt("owner", before.lastInjectedPrompt)
+  await f.loop.userPrompt("owner", "expanded input")
+  const paused = await f.store.read("owner")
+  assert.equal(paused.autoResume, false)
+  assert.equal(paused.generation, before.generation + 1)
+  assert.equal(paused.pauseReason, "user_prompt")
+  assert.equal(f.calls.notify, 2) // activation + one pause
+  await f.loop.settle("owner")
+  assert.equal(f.calls.send, 1)
+})
+
+for (const failure of ["read", "write", "cas"]) {
+  test("input pause " + failure + " failure keeps dispatch revoked until successful resume", async () => {
+    const f = harness(backoffDecision())
+    const notices = []
+    const inner = f.store
+    let fail = false, failResume = false
+    const store = {
+      read: key => {
+        if (fail && failure === "read") throw new Error("synthetic read failure")
+        return inner.read(key)
+      },
+      write: (key, changes, expected) => {
+        if (fail && changes.autoResume === false) {
+          if (failure === "write") throw new Error("synthetic write failure")
+          if (failure === "cas") return null
+        }
+        if (failResume && changes.autoResume === true) throw new Error("synthetic resume failure")
+        return inner.write(key, changes, expected)
+      },
+    }
+    f.loop.bind("fault", {...f.services, store, notify: (message, kind) => notices.push({message, kind})})
+    await f.activate("fault")
+    await f.loop.settle("fault")
+    const timer = f.scheduled.at(-1)
+    fail = true
+    await f.loop.ownerInput("fault")
+    fail = false
+    assert.equal((await inner.read("fault")).autoResume, true, "persistence did not succeed")
+    assert.equal(notices.at(-1).kind, "error")
+    assert.match(notices.at(-1).message, /could not be saved/)
+    assert.equal(timer.cleared, true)
+    f.setDecision({ should_run: true })
+    await timer.callback()
+    await f.loop.settle("fault")
+    assert.equal(f.calls.quota, 1)
+    assert.equal(f.calls.send, 0)
+    failResume = true
+    await assert.rejects(f.loop.resume("fault"), /resume failure/)
+    await f.loop.settle("fault")
+    assert.equal(f.calls.send, 0)
+    failResume = false
+    await f.loop.resume("fault")
+    assert.equal(f.calls.quota, 2)
+    assert.equal(f.calls.send, 1)
+  })
+}
+
+test("owner input fences a committed dispatch while its pause cannot be persisted", async () => {
+  const f = harness({ should_run: true })
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  let failPause = false
+  const store = {
+    read: key => f.store.read(key),
+    async write(key, changes, expected) {
+      if (failPause && changes.autoResume === false) throw new Error("synthetic pause failure")
+      const result = await f.store.write(key, changes, expected)
+      if (changes.lastInjectedPrompt) {
+        entered.resolve()
+        await release.promise
+      }
+      return result
+    },
+  }
+  f.loop.bind("dispatch", {...f.services, store})
+  await f.activate("dispatch")
+  const pending = f.loop.settle("dispatch")
+  await entered.promise
+  failPause = true
+  await f.loop.ownerInput("dispatch")
+  release.resolve()
+  await pending
+  assert.equal(f.calls.send, 0)
+  assert.equal(f.scheduled.length, 0)
+})
+
+test("input revokes synchronously while its state read is pending", async () => {
+  const probe = Promise.withResolvers(), probeStarted = Promise.withResolvers()
+  const readStarted = Promise.withResolvers(), releaseRead = Promise.withResolvers()
+  const f = harness(() => { probeStarted.resolve(); return probe.promise })
+  let blockRead = false
+  const store = {
+    async read(key) {
+      if (blockRead) {
+        blockRead = false
+        readStarted.resolve()
+        await releaseRead.promise
+      }
+      return f.store.read(key)
+    },
+    write: (...args) => f.store.write(...args),
+  }
+  f.loop.bind("pending", {...f.services, store})
+  await f.activate("pending")
+  const evaluation = f.loop.settle("pending")
+  await probeStarted.promise
+  blockRead = true
+  const pause = f.loop.ownerInput("pending")
+  await readStarted.promise
+  probe.resolve({ should_run: true })
+  await evaluation
+  assert.equal(f.calls.send, 0)
+  releaseRead.resolve()
+  await pause
+  assert.equal((await f.store.read("pending")).autoResume, false)
+})
+
+test("a newer activation fences a delayed owner-input read", async () => {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  const f = harness({ should_run: true })
+  let blockRead = false
+  const store = {
+    async read(key) {
+      if (blockRead) {
+        blockRead = false
+        entered.resolve()
+        await release.promise
+      }
+      return f.store.read(key)
+    },
+    write: (...args) => f.store.write(...args),
+  }
+  f.loop.bind("replacement", {...f.services, store})
+  await f.activate("replacement")
+  blockRead = true
+  const pause = f.loop.ownerInput("replacement")
+  await entered.promise
+  await f.activate("replacement", {taskBody: "new task"})
+  release.resolve()
+  await pause
+  await f.loop.settle("replacement")
+  assert.equal((await f.store.read("replacement")).autoResume, true)
+  assert.deepEqual(f.calls.messages, ["new task"])
+})
+
+test("input revocation is scoped to its session and survives a runtime restart on disk", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-input-pause-"))
+  t.after(() => fs.rm(root, {recursive: true, force: true}))
+  const store = createBindingStore(root)
+  const f = harness({ should_run: true })
+  for (const key of ["a", "b"]) {
+    f.loop.bind(key, {...f.services, store})
+    await f.activate(key)
+  }
+  await f.loop.ownerInput("a")
+  await f.loop.settle("a")
+  await f.loop.settle("b")
+  assert.equal(f.calls.send, 1)
+  f.loop.dispose()
+  const restarted = harness({ should_run: true })
+  restarted.loop.bind("a", {...restarted.services, store: createBindingStore(root)})
+  await restarted.loop.settle("a")
+  assert.equal(restarted.calls.quota, 0)
+  assert.equal(restarted.calls.send, 0)
+  await restarted.loop.resume("a")
+  assert.equal(restarted.calls.quota, 1)
+  assert.equal(restarted.calls.send, 1)
+  restarted.loop.dispose()
+})
+
+test("new input during resume does not coalesce into the pre-resume pause", async () => {
+  const f = harness({ should_run: true })
+  const firstPause = Promise.withResolvers(), releasePause = Promise.withResolvers()
+  const resuming = Promise.withResolvers(), releaseResume = Promise.withResolvers()
+  let gatePause = true, gateResume = false
+  const store = {
+    read: key => f.store.read(key),
+    async write(key, changes, expected) {
+      if (changes.autoResume === false && gatePause) {
+        gatePause = false
+        firstPause.resolve()
+        await releasePause.promise
+      }
+      if (changes.autoResume === true && gateResume) {
+        resuming.resolve()
+        await releaseResume.promise
+      }
+      return f.store.write(key, changes, expected)
+    },
+  }
+  f.loop.bind("overlap", {...f.services, store})
+  await f.activate("overlap")
+  const oldPause = f.loop.ownerInput("overlap")
+  await firstPause.promise
+  gateResume = true
+  const resume = f.loop.resume("overlap")
+  await resuming.promise
+  const newPause = f.loop.ownerInput("overlap")
+  releaseResume.resolve()
+  await resume
+  releasePause.resolve()
+  await Promise.all([oldPause, newPause])
+  assert.equal((await f.store.read("overlap")).autoResume, false)
+  await f.loop.settle("overlap")
+  assert.equal(f.calls.send, 0)
+})
+
+for (const [operation, inputKind] of [
+  ["resume", "explicit"], ["activation", "explicit"],
+  ["resume", "fallback"], ["activation", "fallback"],
+]) {
+  for (const phase of ["read", "write"]) {
+    test(`${inputKind} input during a pending ${operation} ${phase} stays paused after restart`, async t => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-rearm-input-"))
+      t.after(() => fs.rm(root, { recursive: true, force: true }))
+      const disk = createBindingStore(root)
+      const f = harness({ should_run: true })
+      t.after(() => f.loop.dispose())
+      f.loop.bind("durable-race", { ...f.services, store: disk })
+      await f.activate("durable-race", { autoResume: false, pauseReason: "aborted" })
+      const paused = await disk.read("durable-race")
+      const entered = Promise.withResolvers(), release = Promise.withResolvers()
+      let blockRead = phase === "read", blockWrite = phase === "write"
+      let pendingRead = false, pendingWrite = false
+      const store = {
+        async read(key) {
+          if (blockRead) {
+            blockRead = false
+            pendingRead = true
+            entered.resolve()
+            await release.promise
+            pendingRead = false
+            return paused
+          }
+          // The blocked re-arm has not changed the file. Return its actual
+          // paused snapshot synchronously to fix this ordering without timers.
+          if (pendingRead || pendingWrite) return paused
+          return disk.read(key)
+        },
+        async write(key, changes, expected) {
+          if (blockWrite && changes.autoResume === true) {
+            blockWrite = false
+            pendingWrite = true
+            entered.resolve()
+            await release.promise
+            pendingWrite = false
+          }
+          return disk.write(key, changes, expected)
+        },
+      }
+      f.loop.bind("durable-race", { ...f.services, store })
+      const rearm = operation === "resume"
+        ? f.loop.resume("durable-race") : f.activate("durable-race")
+      await entered.promise
+      const pause = () => inputKind === "explicit"
+        ? f.loop.ownerInput("durable-race")
+        : f.loop.userPrompt("durable-race", "Inspect the new result")
+      const input = pause()
+      const duplicate = pause()
+      await f.loop.settle("durable-race")
+      assert.equal(f.calls.send, 0, "input revokes dispatch before the older operation finishes")
+      release.resolve()
+      assert.equal(await rearm, null, "the older operation cannot report a successful re-arm")
+      await Promise.all([input, duplicate])
+      const saved = await disk.read("durable-race")
+      assert.equal(saved.autoResume, false, "newer input must be persisted after the older re-arm")
+      assert.equal(saved.pauseReason, phase === "read" ? "aborted" : "user_prompt")
+      await f.loop.ownerInput("durable-race")
+      assert.equal((await disk.read("durable-race")).generation, saved.generation)
+      f.loop.dispose()
+
+      const restarted = harness({ should_run: true })
+      t.after(() => restarted.loop.dispose())
+      restarted.loop.bind("durable-race", { ...restarted.services, store: createBindingStore(root) })
+      await restarted.loop.settle("durable-race")
+      assert.equal(restarted.calls.quota, 0)
+      assert.equal(restarted.calls.send, 0)
+      await restarted.loop.resume("durable-race")
+      assert.equal(restarted.calls.quota, 1, "a later explicit resume obtains fresh admission")
+      assert.equal(restarted.calls.send, 1)
+    })
+  }
+}
+
+test("input waits for an older activation even after a newer re-arm finishes", async () => {
+  const f = harness({ should_run: true })
+  f.loop.bind("multiple", f.services)
+  await f.activate("multiple", { autoResume: false })
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  let block = true
+  const store = {
+    read: key => f.store.read(key),
+    async write(key, changes, expected) {
+      if (block && changes.autoResume === true) {
+        block = false
+        entered.resolve()
+        await release.promise
+      }
+      return f.store.write(key, changes, expected)
+    },
+  }
+  f.loop.bind("multiple", { ...f.services, store })
+  const older = f.activate("multiple")
+  await entered.promise
+  await f.activate("multiple")
+  const pause = f.loop.ownerInput("multiple")
+  await f.loop.settle("multiple")
+  assert.equal(f.calls.send, 0)
+  release.resolve()
+  await Promise.all([older, pause])
+  assert.equal((await f.store.read("multiple")).autoResume, false)
+  await f.loop.settle("multiple")
+  assert.equal(f.calls.quota, 0)
+  f.loop.dispose()
+})
+
+test("a later explicit resume supersedes input waiting for an older resume", async () => {
+  const f = harness({ should_run: true })
+  f.loop.bind("later", f.services)
+  await f.activate("later", { autoResume: false })
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  let block = true
+  const store = {
+    read: key => f.store.read(key),
+    async write(key, changes, expected) {
+      if (block && changes.autoResume === true) {
+        block = false
+        entered.resolve()
+        await release.promise
+      }
+      return f.store.write(key, changes, expected)
+    },
+  }
+  f.loop.bind("later", { ...f.services, store })
+  const older = f.loop.resume("later")
+  await entered.promise
+  const pause = f.loop.ownerInput("later")
+  assert.ok(await f.loop.resume("later"))
+  release.resolve()
+  await Promise.all([older, pause])
+  assert.equal((await f.store.read("later")).autoResume, true)
+  assert.equal(f.calls.quota, 1)
+  assert.equal(f.calls.send, 1)
+  f.loop.dispose()
+})
+
+test("a failed pending resume does not prevent input from retaining a saved pause", async () => {
+  const f = harness({ should_run: true })
+  f.loop.bind("failed-rearm", f.services)
+  await f.activate("failed-rearm", { autoResume: false, pauseReason: "aborted" })
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  const store = {
+    read: key => f.store.read(key),
+    async write(key, changes, expected) {
+      if (changes.autoResume === true) {
+        entered.resolve()
+        await release.promise
+        throw new Error("synthetic resume failure")
+      }
+      return f.store.write(key, changes, expected)
+    },
+  }
+  f.loop.bind("failed-rearm", { ...f.services, store })
+  const failed = assert.rejects(f.loop.resume("failed-rearm"), /synthetic resume failure/)
+  await entered.promise
+  const pause = f.loop.ownerInput("failed-rearm")
+  release.resolve()
+  await Promise.all([failed, pause])
+  assert.equal((await f.store.read("failed-rearm")).autoResume, false)
+  assert.equal((await f.store.read("failed-rearm")).pauseReason, "aborted")
+  assert.equal(f.calls.notify, 1, "no false unsaved-pause warning or resume notification")
+  f.loop.bind("failed-rearm", f.services)
+  await f.loop.resume("failed-rearm")
+  assert.equal(f.calls.send, 1)
+  f.loop.dispose()
+})
+
+for (const laterResume of [false, true]) {
+  test(`fallback classification spanning a completed resume honors later resume=${laterResume}`, async t => {
+    const f = harness({ should_run: true })
+    let idle = false // The foreign run is starting while its source is classified.
+    t.after(() => f.loop.dispose())
+    f.loop.bind("classify", f.services)
+    await f.activate("classify", { autoResume: false })
+    const writing = Promise.withResolvers(), releaseWrite = Promise.withResolvers()
+    const reading = Promise.withResolvers(), releaseRead = Promise.withResolvers()
+    let blockWrite = true, blockRead = false
+    const store = {
+      async read(key) {
+        const value = await f.store.read(key)
+        if (blockRead) {
+          blockRead = false
+          reading.resolve()
+          await releaseRead.promise
+        }
+        return value
+      },
+      async write(key, changes, expected) {
+        if (blockWrite && changes.autoResume === true) {
+          blockWrite = false
+          writing.resolve()
+          await releaseWrite.promise
+        }
+        return f.store.write(key, changes, expected)
+      },
+    }
+    f.loop.bind("classify", { ...f.services, store, isIdle: () => idle })
+    const resume = f.loop.resume("classify")
+    await writing.promise
+    blockRead = true
+    const input = f.loop.userPrompt("classify", "Inspect the new result")
+    // Let the older resume finish while classification can still be pending.
+    releaseWrite.resolve()
+    await resume
+    // A dropped input may finish without ever attempting classification.
+    await Promise.race([reading.promise, input])
+    blockRead = false
+    if (laterResume) await f.loop.resume("classify")
+    releaseRead.resolve()
+    await input
+    assert.equal((await f.store.read("classify")).autoResume, laterResume)
+    idle = true
+    await f.loop.settle("classify")
+    assert.equal(f.calls.quota, Number(laterResume))
+    assert.equal(f.calls.send, Number(laterResume))
+  })
+}
+
+test("failed fallback classification keeps a pending resume locally revoked", async t => {
+  const f = harness({ should_run: true })
+  t.after(() => f.loop.dispose())
+  f.loop.bind("read-failure", f.services)
+  await f.activate("read-failure", { autoResume: false })
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  let failRead = false, blockWrite = true
+  const notices = []
+  const store = {
+    read(key) {
+      if (failRead) throw new Error("synthetic classification failure")
+      return f.store.read(key)
+    },
+    async write(key, changes, expected) {
+      if (blockWrite && changes.autoResume === true) {
+        blockWrite = false
+        entered.resolve()
+        await release.promise
+      }
+      return f.store.write(key, changes, expected)
+    },
+  }
+  f.loop.bind("read-failure", { ...f.services, store, notify: (...args) => notices.push(args) })
+  const resume = f.loop.resume("read-failure")
+  await entered.promise
+  failRead = true
+  const input = f.loop.userPrompt("read-failure", "Inspect the new result")
+  release.resolve()
+  await Promise.all([resume, input])
+  failRead = false
+  assert.ok(notices.some(([text, kind]) => kind === "error" && /could not be saved/.test(text)))
+  await f.loop.settle("read-failure")
+  assert.equal(f.calls.quota, 0)
+  assert.equal(f.calls.send, 0)
+  await f.loop.resume("read-failure")
+  assert.equal(f.calls.quota, 1)
+  assert.equal(f.calls.send, 1)
+})
+
+test("busy resume defers admission until the host settles", async () => {
+  const f = harness({ should_run: true })
+  let idle = false
+  f.loop.bind("busy", { ...f.services, isIdle: () => idle })
+  await f.activate("busy", { autoResume: false, pauseReason: "aborted" })
+  await f.loop.resume("busy")
+  assert.equal((await f.store.read("busy")).autoResume, true)
+  assert.equal(f.calls.quota, 0)
+  assert.equal(f.calls.send, 0)
+  assert.equal(f.scheduled.length, 0)
+  idle = true
+  await f.loop.settle("busy")
+  assert.equal(f.calls.quota, 1)
+  assert.equal(f.calls.send, 1)
+})
+
+for (const decision of [backoffDecision(), new Error("synthetic quota failure")]) {
+  test(`idle resume restores bounded checks after ${decision instanceof Error ? "probe failure" : "a dependency wait"}`, async () => {
+    const f = harness(decision)
+    f.loop.bind("retry", f.services)
+    await f.activate("retry", { autoResume: false })
+    await f.loop.resume("retry")
+    assert.equal(f.calls.quota, 1)
+    assert.equal(f.calls.send, 0)
+    assert.equal(f.scheduled.length, 1)
+    assert.ok(f.scheduled[0].delayMs >= 60_000)
+    f.setDecision({ should_run: true })
+    await f.scheduled[0].callback()
+    assert.equal(f.calls.quota, 2)
+    assert.equal(f.calls.send, 1)
+    f.loop.dispose()
+  })
+}
+
+test("idle resume cannot override denied quota with a run_now hint", async () => {
+  const f = harness({ should_run: false, scheduler_hint: { action: "run_now" } })
+  f.loop.bind("denied-resume", f.services)
+  await f.activate("denied-resume", { autoResume: false })
+  await f.loop.resume("denied-resume")
+  assert.equal(f.calls.quota, 1)
+  assert.equal(f.calls.send, 0)
+  assert.equal(f.scheduled.length, 0)
+})
+
+test("settle coalesces with resumed admission even after the old evaluation finishes", async t => {
+  const oldProbe = Promise.withResolvers(), newProbe = Promise.withResolvers()
+  const oldStarted = Promise.withResolvers(), newStarted = Promise.withResolvers()
+  const f = harness(count => {
+    if (count === 1) { oldStarted.resolve(); return oldProbe.promise }
+    newStarted.resolve()
+    return newProbe.promise
+  })
+  t.after(() => { oldProbe.resolve({ should_run: true }); newProbe.resolve({ should_run: true }); f.loop.dispose() })
+  f.loop.bind("coalesced", f.services)
+  await f.activate("coalesced")
+  const old = f.loop.settle("coalesced")
+  await oldStarted.promise
+  await f.loop.interrupt("coalesced")
+  const resumed = f.loop.resume("coalesced")
+  // The original implementation returns without starting any new probe.
+  await Promise.race([newStarted.promise, resumed])
+  assert.equal(f.calls.quota, 2)
+  oldProbe.resolve({ should_run: true })
+  await old
+  const first = f.loop.settle("coalesced"), second = f.loop.settle("coalesced")
+  newProbe.resolve({ should_run: true })
+  await Promise.all([resumed, first, second])
+  assert.equal(f.calls.quota, 2)
+  assert.equal(f.calls.send, 1)
+})
+
+for (const boundary of ["input", "shutdown"]) {
+  test(`${boundary} revokes an idle resume while its fresh probe is pending`, async t => {
+    const entered = Promise.withResolvers(), release = Promise.withResolvers()
+    const f = harness(() => { entered.resolve(); return release.promise })
+    t.after(() => { release.resolve({ should_run: true }); f.loop.dispose() })
+    f.loop.bind("revoked", f.services)
+    await f.activate("revoked", { autoResume: false })
+    const resumed = f.loop.resume("revoked")
+    await Promise.race([entered.promise, resumed])
+    assert.equal(f.calls.quota, 1)
+    if (boundary === "input") await f.loop.ownerInput("revoked")
+    else f.loop.dispose()
+    release.resolve({ should_run: true })
+    await resumed
+    assert.equal(f.calls.send, 0)
+    assert.equal(f.scheduled.length, 0)
+  })
+}
+
+test("missing bindings and rejected resume writes never obtain admission", async () => {
+  const f = harness({ should_run: true })
+  assert.equal(await f.loop.resume("unbound"), null)
+  f.loop.bind("missing", f.services)
+  assert.equal(await f.loop.resume("missing"), null)
+  assert.equal(await f.store.read("missing"), null)
+  f.loop.bind("rejected", f.services)
+  await f.activate("rejected", { autoResume: false })
+  f.loop.bind("rejected", { ...f.services, store: {
+    read: key => f.store.read(key), write: async () => null,
+  } })
+  assert.equal(await f.loop.resume("rejected"), null)
+  assert.equal((await f.store.read("rejected")).autoResume, false)
+  assert.equal(f.calls.quota, 0)
+  assert.equal(f.calls.send, 0)
 })

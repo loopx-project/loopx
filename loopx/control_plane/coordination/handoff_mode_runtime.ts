@@ -5,7 +5,7 @@ import {requireAuthorityStoreId} from "./authority_store_codec.ts";
 import {openLocalAuthorityStore, localAuthorityOpenFailure} from "./local_authority_provider.ts";
 import {requireLocalAuthorityRuntimeRoot as runtimeRoot} from "./local_authority_provider.ts";
 import {authorityStoreSourceAuthority as sourceAuthorityFor} from "./authority_store.ts";
-import {canonicalWriteRouteFailure, withCanonicalWriter} from "./local_authority_write.ts";
+import {canonicalAuthorityRouteFailure, withCanonicalWriter} from "./local_authority_write.ts";
 import {ShadowManagementError} from "./shadow_management.ts";
 import {executeHandoffModeSet, HANDOFF_MODE_SET_SCHEMA} from "./handoff_mode_transaction.ts";
 import {planHandoffModeMigration, executeHandoffModeMigration} from "./handoff_mode_migration.ts";
@@ -29,7 +29,7 @@ export async function setLocalHandoffMode(value: unknown): Promise<JsonObject> {
     return {schema_version: "loopx_coordination_handoff_mode_set_result_v0", status: "failed", changed: false,
       reason_code: error instanceof ShadowManagementError ? error.reason_code : "handoff_mode_unavailable",
       reason: error instanceof Error ? error.message : String(error), ...evidence,
-      ...localAuthorityOpenFailure(error), ...canonicalWriteRouteFailure(error)};
+      ...localAuthorityOpenFailure(error), ...canonicalAuthorityRouteFailure(error)};
   }
 }
 

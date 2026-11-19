@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 import json
 import os
 from pathlib import Path
@@ -80,6 +81,41 @@ def test_detects_escaped_and_mixed_windows_private_path() -> None:
         assert any(h.rule_id == "private_abs_path" for h in res.hits), label
 
 
+def test_detects_common_private_home_path_variants() -> None:
+    # Home paths are often copied from an environment variable or config value:
+    # they may end at the account segment, use a non-ASCII account name, or use
+    # the case-insensitive spelling a Windows host accepts. Each is the same
+    # private root the rule already names, not a new policy.
+    slash = "/"
+    sep = "\\"
+    user = "示例用户"
+    cases = {
+        "posix-home-value": slash + "home" + slash + "example-user",
+        "windows-home-value": "C:" + sep + "Users" + sep + "example-user",
+        "non-ascii-user": "C:" + sep + "Users" + sep + user + sep + "some_workspace",
+        "lowercase-root": "c:" + sep + "users" + sep + "example-user" + sep + "some_workspace",
+    }
+    for label, private in cases.items():
+        res = scan_texts({label: "value=" + private})
+        assert res.ok is False, label
+        assert any(h.rule_id == "private_abs_path" for h in res.hits), label
+
+
+def test_private_root_without_an_account_segment_stays_clean() -> None:
+    # Dropping the trailing separator must not turn the root keyword itself or
+    # a relative path that merely contains it into a private absolute path.
+    sep = "\\"
+    public_values = (
+        "/home/",
+        "home/example-user",
+        "C:" + sep + "Users" + sep,
+        "https://example.com/home/",
+    )
+    for value in public_values:
+        res = scan_texts({"public": "value=" + value})
+        assert res.ok is True, value
+
+
 def test_native_windows_path_outside_the_private_roots_stays_clean() -> None:
     # The rule keeps the same root keywords as the POSIX spelling carried, so
     # an ordinary drive path that is not under a private root must stay clean
@@ -154,6 +190,74 @@ def test_oversize_requested_file_fails_closed(tmp_path: Path) -> None:
     assert res.unscanned == ["content_too_large"]
 
 
+def test_bom_marked_unicode_candidates_are_decoded_before_the_rules(tmp_path: Path) -> None:
+    """Windows PowerShell 5.1 writes redirected output as UTF-16LE with a BOM.
+
+    Reading those bytes as UTF-8 leaves NUL-interleaved mojibake that no rule
+    can match, so a private path or credential would pass as clean. The BOM
+    declares the codec; UTF-32 must be recognised before UTF-16 because its
+    little-endian BOM starts with the UTF-16 one.
+    """
+
+    private = "\\".join(["C:", "Users", "example-user", "notes.txt"])
+    body = "run from " + private + "\nkey " + SK_SECRET + "\n"
+    cases = {
+        "utf-16": body.encode("utf-16"),
+        "utf-16-be": "\ufeff".encode("utf-16-be") + body.encode("utf-16-be"),
+        "utf-32": body.encode("utf-32"),
+        "utf-8-sig": body.encode("utf-8-sig"),
+    }
+    for label, data in cases.items():
+        candidate = tmp_path / f"{label}.log"
+        candidate.write_bytes(data)
+        res = scan_paths([candidate], root=tmp_path)
+        assert res.ok is False, label
+        assert res.unscanned == [], label
+        assert [hit.rule_id for hit in res.hits] == ["sk_bearer", "private_abs_path"], label
+        assert [hit.line for hit in res.hits] == [2, 1], label
+
+
+def test_undecodable_candidate_bytes_fail_closed_instead_of_reading_clean(tmp_path: Path) -> None:
+    """BOM-less UTF-16 and other NUL-bearing bytes name no reviewable text."""
+    private = "private=" + "\\".join(["C:", "Users", "example-user", "notes.txt"])
+    candidate = tmp_path / "bomless.log"
+    candidate.write_bytes(private.encode("utf-16-le"))
+    res = scan_paths([candidate])
+    assert res.ok is False
+    assert res.hits == []
+    assert res.unscanned == ["content_not_text"]
+    assert str(candidate) not in compact_json(res)
+
+
+def test_undecodable_candidate_bytes_never_read_clean(tmp_path: Path) -> None:
+    """Replacement decoding would certify a mangled copy of the candidate.
+
+    A malformed UTF-8 byte and a truncated BOM-marked UTF-16 candidate both
+    carry text the scanner cannot vouch for. Decoding them with ``errors=
+    "replace"`` yields U+FFFD, which no rule matches, so the scan would review
+    a different document and could return a clean receipt for bytes it never
+    saw. Both must be reported unscanned, not clean.
+    """
+    malformed_utf8 = tmp_path / "malformed-utf8.log"
+    malformed_utf8.write_bytes(b"run from C:\\Users\\example-user\\notes.txt\n\xff")
+    truncated_utf16 = tmp_path / "truncated-utf16.log"
+    body = ("key " + SK_SECRET + "\n").encode("utf-16-le")
+    truncated_utf16.write_bytes(codecs.BOM_UTF16_LE + body[:-1])
+    for candidate in (malformed_utf8, truncated_utf16):
+        res = scan_paths([candidate], root=tmp_path)
+        assert res.ok is False, candidate.name
+        assert res.hits == [], candidate.name
+        assert res.unscanned == ["content_not_text"], candidate.name
+
+
+def test_cr_only_unicode_candidate_keeps_the_text_read_line_numbers(tmp_path: Path) -> None:
+    """The decoded read keeps universal-newline line numbering."""
+    candidate = tmp_path / "cr-only.log"
+    candidate.write_bytes(("first line\rkey " + SK_SECRET + "\r").encode("utf-16"))
+    res = scan_paths([candidate])
+    assert [(hit.rule_id, hit.line) for hit in res.hits] == [("sk_bearer", 2)]
+
+
 def test_unreadable_requested_file_fails_closed(tmp_path: Path) -> None:
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         pytest.skip("root bypasses file mode checks")
@@ -215,6 +319,101 @@ def _assert_receipt_withholds(result, *fragments: str) -> None:
         assert fragment not in payload, fragment
     for hit in json.loads(payload)["hits"]:
         assert hit["sample_masked"] == "***"
+
+
+def test_a_provider_token_with_no_label_is_not_certified_clean() -> None:
+    """A token's own prefix identifies it; the scan must not need a label.
+
+    The rule table recognized an Ark key, a `sk-`/`Bearer` value and an `AKLT`
+    value, so every other provider credential arrived with no label this scan
+    could match and the caller got `ok: true` for content that was about to be
+    published. Each shape below is real provider syntax assembled at runtime.
+    """
+    shapes = {
+        "github_pat_classic": "ghp" + "_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8",
+        "github_pat_fine_grained": "github_pat" + "_" + "11ABCDEFG0" + "x" * 40,
+        "aws_access_key_id": "AKIA" + "7Q2Z3XJ5V6N8W1PL",
+        "aws_session_key_id": "ASIA" + "7Q2Z3XJ5V6N8W1PL",
+        "slack_bot": "xoxb" + "-" + "123456789012-AbCdEfGhIjKlMnOpQrStUvWx",
+        "google_api": "AIza" + "SyA1234567890abcdefghijklmnopqrs",
+        "stripe_live": "sk" + "_live_" + "51H8abcdefghijklmnopqrstuv",
+        "npm_token": "npm" + "_" + "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8",
+        "pypi_token": "pypi" + "-" + "AgEIcHlwaS5vcmcCJDkwNzE5MTIzNDU2Nzg5",
+        "jwt": "eyJhbGciOiJIUzI1NiJ9" + "." + "eyJzdWIiOiIxMjM0NTY3ODkwIn0" + "."
+        + "dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+    }
+    for label, value in shapes.items():
+        res = scan_texts({"candidate": value})
+        assert res.ok is False, label
+        assert [hit.rule_id for hit in res.hits] == ["provider_token"], label
+        _assert_receipt_withholds(res, value, value[4:])
+
+
+def test_provider_token_in_an_env_file_on_disk_fails_the_whole_scan(tmp_path: Path) -> None:
+    """The documented `--scan-root` route must reject a credential file.
+
+    `.env` is exactly the extension-less, credential-named file the scan's
+    deny-list selection promises to review, so the end-to-end path -- not only
+    the rule -- is what this pins.
+    """
+    candidate = tmp_path / ".env"
+    candidate.write_text(
+        "GITHUB_TOKEN=" + "ghp" + "_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8" + "\n",
+        encoding="utf-8",
+    )
+    res = scan_paths([candidate], root=tmp_path)
+    assert res.ok is False
+    assert res.unscanned == []
+    assert [(hit.rule_id, hit.location, hit.line) for hit in res.hits] == [
+        ("provider_token", ".env", 1)
+    ]
+    assert str(tmp_path) not in compact_json(res)
+
+
+def test_provider_shape_does_not_flag_the_prose_and_labels_it_must_pass() -> None:
+    """Ordinary documentation and config references stay clean.
+
+    A publication gate that reports clean prose as a credential is switched off
+    by its operators, so the passing edge is part of the rule's contract. The
+    documented over-match is pinned in the second half rather than left implicit:
+    a hyphenated package slug that happens to start with an issuer prefix is
+    reported, because no rule set can tell such a slug from a token by shape
+    alone. That direction is the capability's documented "prefer a false hit
+    over a miss" boundary, not an accident.
+    """
+    clean = {
+        "prose": "rotate the api key and the " + "bear" + "er credential for the npm registry",
+        "placeholder": "GITHUB_TOKEN=<your-token>",
+        "reference": "token = os.environ['GITHUB_TOKEN']",
+        "identifier": "npm_packages and pypi_index are directory names",
+        "ark_prefix_prose": "the sk learn pipeline and the ak sk handshake",
+    }
+    for label, text in clean.items():
+        res = scan_texts({"candidate": text})
+        assert res.ok is True, (label, [(h.rule_id, h.line) for h in res.hits])
+
+    for label, text in {
+        "hyphenated_package": "install " + "pypi" + "-django-rest-framework first",
+        "dashed_slug": "the " + "xoxb" + "-slack-app-configuration page",
+    }.items():
+        res = scan_texts({"candidate": text})
+        assert [hit.rule_id for hit in res.hits] == ["provider_token"], label
+
+
+def test_a_labelled_provider_token_still_fails_closed() -> None:
+    """A labelled credential can match two rules; the verdict must not change.
+
+    Each rule reports at most one hit and the scan collects every matching rule,
+    so a quoted credential assignment whose value is also a provider token yields
+    both `provider_token` and the assignment rule. `hit_count` is therefore not a
+    per-credential count, and no caller in the tree reads it as one; the contract
+    this pins is the verdict and the content-free receipt.
+    """
+    text = "api" + "_key = '" + "ghp" + "_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8" + "'"
+    res = scan_texts({"candidate": text})
+    assert res.ok is False
+    assert {hit.rule_id for hit in res.hits} == {"provider_token", "api_key_assignment"}
+    _assert_receipt_withholds(res, "ghp_", "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8")
 
 
 def test_hit_is_located_by_line_and_carries_no_file_content() -> None:

@@ -1,3 +1,5 @@
+import {CircleHelp} from "lucide-react";
+import {ContextHelp} from "./context-help";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchZCodeGoal, updateZCodeGoal } from "../../data/zcode-goal";
 import type { ZCodeGoalAction, ZCodeGoalReadback, ZCodeModelSelection } from "../../../../../../loopx/zcode_goal_mode/contract.js";
@@ -160,8 +162,7 @@ function ZCodeAgentControl({goalId, agentId}: {goalId: string; agentId: string})
       </details> : null}
       {snapshot.quota && !snapshot.quota.should_run && snapshot.quota.reason ? <p>{snapshot.quota.reason}</p> : null}
     {controls}
-      <p className="personal-zcode-help">{t("zcode.quotaBoundary")}</p>
-      <p className="personal-zcode-help">{t("zcode.usageUnknown")}</p>
+      <ContextHelp label={t("zcode.title")} icon={CircleHelp}><p>{t("zcode.quotaBoundary")}</p><p>{t("zcode.usageUnknown")}</p></ContextHelp>
       {checkedAt ? <p className="personal-zcode-help">{t("zcode.checked", {time: checkedAt})}</p> : null}
       <details className="personal-zcode-diagnostics"><summary>{t("zcode.diagnostics")}</summary>
         <dl>

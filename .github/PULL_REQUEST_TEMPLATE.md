@@ -117,6 +117,11 @@ refinement do not require another user-confirmation round; reuse prior scoped
 direction. Ask only for an explicitly reserved presentation decision or a real
 scope/authority gap. See AGENTS.md's First-Screen Review Evidence rule.
 
+Keep generated captures in ignored output/playwright/ and attach the selected
+evidence here. Do not commit a capture pack just to embed it in this PR. Tracked
+media needs a current documentation/product consumer or a versioned fixture
+contract; follow docs/development/documentation-layout.md#visual-evidence-retention.
+
 Use synthetic or public fixture data only. Do not upload live/private screenshots,
 even when the underlying access was authorized.
 -->

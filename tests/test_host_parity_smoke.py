@@ -162,7 +162,7 @@ class TestSchedulerBindings:
 
 class TestTurnHostIdentities:
     def test_supported_hosts(self):
-        assert SUPPORTED_HOSTS == {"codex-cli", "claude-code", "dsh", "generic-cli"}
+        assert SUPPORTED_HOSTS == {"codex-cli", "codex-app-server", "claude-code", "dsh", "generic-cli"}
         assert set(SUPPORTED_TURN_HOST_IDENTITIES) == {
             "codex-cli",
             "claude-code",

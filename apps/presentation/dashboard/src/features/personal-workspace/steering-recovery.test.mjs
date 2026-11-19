@@ -4,6 +4,31 @@ import test from "node:test";
 const key = JSON.stringify(["inline", "session", "turn"]);
 const request = {sessionId: "session", turnId: "turn", text: "Keep the original constraint", id: "original-request"};
 
+test("executor-keyed bound recovery retains the original request and excludes peers", async () => {
+  const bound = "bound/source-one/session", old = `${bound}:codex`;
+  const peer = "bound/source-two/peer:codex";
+  const queued = {...request, delivery: "queue", attachments: []};
+  let stored = JSON.stringify([[old, queued], [peer, {...request, sessionId: "peer", id: "peer-request"}]]);
+  let writable = false;
+  globalThis.window = {sessionStorage: {getItem: () => stored, setItem: (_, value) => {
+    if (!writable) throw new Error("Synthetic storage failure");
+    stored = value;
+  }}};
+  const recovery = await import("./steering-recovery.ts?bound-legacy");
+  assert.deepEqual(recovery.legacySteeringRequests("session", bound), [[old, queued]]);
+  assert.equal(recovery.restoreLegacySteeringRequest(bound, peer, "session"), undefined);
+  assert.deepEqual(recovery.restoreLegacySteeringRequest(bound, old, "session"), queued, "Text remains recoverable even when storage is unavailable");
+  assert.equal(recovery.readSteeringRequest(bound), undefined, "Recoverable text is not a qualified dispatch identity");
+  assert.deepEqual(recovery.readSteeringRequest(old), queued);
+  writable = true;
+  recovery.restoreLegacySteeringRequest(bound, old, "session");
+  assert.deepEqual(recovery.readSteeringRequest(bound), queued);
+  assert.equal(recovery.readSteeringRequest(old), undefined);
+  const reloaded = await import("./steering-recovery.ts?bound-legacy-reload");
+  assert.deepEqual(reloaded.readSteeringRequest(bound), queued);
+  assert.equal(reloaded.readSteeringRequest(peer).id, "peer-request");
+});
+
 test("steering identity survives reload only after exact persistent readback", async () => {
   let stored = null;
   globalThis.window = {sessionStorage: {getItem: () => stored, setItem: (_, value) => {stored = value;}}};

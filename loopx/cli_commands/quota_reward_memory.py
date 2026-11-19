@@ -4,16 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ..capabilities.agent_turn_recall import (
-    run_configured_agent_turn_recall_fail_open,
-)
-from ..capabilities.reward_memory.codex_app_outcome import (
-    stage_codex_app_turn_outcome_candidate_fail_open,
-    run_staged_codex_app_turn_outcome_ingest_fail_open,
-)
-from ..control_plane.quota.settlement import read_heartbeat_settlement
+if TYPE_CHECKING:
+    from ..control_plane.quota.settlement import QuotaSettlementReadback
 
 
 def stage_reward_memory_outcome_candidate(
@@ -29,6 +23,9 @@ def stage_reward_memory_outcome_candidate(
     validation_workspace: Path,
 ) -> None:
     """Attach a privately staged outcome candidate after a valid refresh."""
+    from ..capabilities.reward_memory.codex_app_outcome import (
+        stage_codex_app_turn_outcome_candidate_fail_open,
+    )
 
     settlement_identity = payload.get("settlement_identity")
     settlement_identity = (
@@ -71,27 +68,12 @@ def attach_reward_memory_ingest_after_spend(
     execute: bool,
     runtime_root: Path,
     registry_path: Path,
-    goal_id: str,
-    agent_id: str,
-    todo_id: str | None,
-    turn_instance_id: str,
-    replan_obligation_id: str | None,
-    goal_ref: Mapping[str, Any] | None = None,
+    readback: QuotaSettlementReadback,
 ) -> None:
     if not execute or payload.get("ok") is not True:
         return
-    readback = read_heartbeat_settlement(
-        runtime_root,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        todo_id=todo_id,
-        turn_instance_id=turn_instance_id,
-        replan_obligation_id=replan_obligation_id,
-        registry_path=registry_path,
-        goal_ref=goal_ref,
-    )
-    if readback is None:
-        return
+    from ..capabilities.reward_memory.turn_hooks import run_staged_memory_settlement
+
     identity = readback.identity.value
     writeback_event = readback.writeback_event
     details_value = (
@@ -103,7 +85,7 @@ def attach_reward_memory_ingest_after_spend(
             or readback.writeback.failure is not None or readback.spend.failure is not None):
         return
     result = (
-        run_staged_codex_app_turn_outcome_ingest_fail_open(
+        run_staged_memory_settlement(
             registry_path=registry_path,
             goal_id=identity.goal_id,
             agent_id=identity.agent_id,
@@ -139,11 +121,13 @@ def attach_reward_memory_recall_after_should_run(
         or heartbeat_receipt.get("status") not in {"committed", "replayed"}
     ):
         return
-    payload["reward_memory_recall"] = run_configured_agent_turn_recall_fail_open(
+    from ..capabilities.turn_context import attach_turn_context
+
+    attach_turn_context(
+        payload,
         registry_path=registry_path,
         goal_id=goal_id,
         agent_id=agent_id,
-        quota_decision=payload,
+        decision=payload,
         turn_instance_id=heartbeat_turn_id,
-        execute=True,
     )

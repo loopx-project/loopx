@@ -41,6 +41,13 @@ UNSAFE_FIELDS = {
 }
 
 
+# The outcome vocabulary of an owner-gated apply.  Ranking records the result of
+# one apply and rebuild replays a whole plan, so both ask the same question: is
+# this token a legal apply outcome.  It is stated once, here, because the two
+# copies drifted apart only by accident, not by policy.
+APPLY_STATUSES = frozenset({"applied", "no_change", "rejected", "rolled_back"})
+
+
 def compact_text(value: Any, *, field: str, max_len: int = 320) -> str:
     text = " ".join(str(value or "").strip().split())
     if not text:

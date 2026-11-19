@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Mapping
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
-from ..capabilities.periodic_report.post_writeback_hook import (
-    build_periodic_report_post_writeback_projection,
-    periodic_report_post_writeback_hooks_for_goal,
-)
-from ..capabilities.periodic_report.todo_source import read_report_source_history
 from ..control_plane.effect_runtime import (
     CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS,
     effect_runtime_result,
@@ -20,6 +17,30 @@ from .post_writeback import (
     dispatch_committed_cli_post_writeback_hooks,
     post_writeback_source_failure,
 )
+
+
+_LAZY_EXPORTS = {
+    "build_periodic_report_post_writeback_projection": "loopx.capabilities.periodic_report.post_writeback_hook",
+    "periodic_report_post_writeback_hooks_for_goal": "loopx.capabilities.periodic_report.post_writeback_hook",
+    "read_report_source_history": "loopx.capabilities.periodic_report.todo_source",
+}
+
+
+def __getattr__(name: str) -> Any:
+    owner = _LAZY_EXPORTS.get(name)
+    if owner is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(owner), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY_EXPORTS))
+
+
+def _report_export(name: str) -> Any:
+    return getattr(sys.modules[__name__], name)
 
 
 def drain_committed_turn_post_writeback_hooks(
@@ -32,7 +53,7 @@ def drain_committed_turn_post_writeback_hooks(
 ) -> dict[str, Any]:
     """Drain committed sources on first return and replay without primary effects."""
     try:
-        hooks = periodic_report_post_writeback_hooks_for_goal(
+        hooks = _report_export("periodic_report_post_writeback_hooks_for_goal")(
             registry_path=registry_path, goal_id=identity.goal_id, runtime_root=runtime_root
         )
     except Exception:  # Optional subscription reads grant no primary failure.
@@ -49,7 +70,7 @@ def drain_committed_turn_post_writeback_hooks(
         run = readback.writeback_run if readback is not None else None
         if run is None:
             return {}
-        source_runs = read_report_source_history(
+        source_runs = _report_export("read_report_source_history")(
             runtime_root=runtime_root, goal_id=identity.goal_id, run=run,
         )
     except Exception:  # Optional source recovery must preserve primary settlement.
@@ -83,7 +104,7 @@ def drain_committed_turn_post_writeback_hooks(
             )
 
             def projection_builder(**kwargs: Any) -> Mapping[str, object]:
-                return build_periodic_report_post_writeback_projection(
+                return _report_export("build_periodic_report_post_writeback_projection")(
                     **kwargs, source_todos=source, source_runs=source_runs,
                 )
 
@@ -122,3 +143,7 @@ def drain_committed_turn_post_writeback_hooks(
         if terminal is not None:
             result["terminal_post_writeback_hooks"] = terminal
     return result
+
+
+# Preserve the previous implicit wildcard exports; explicit imports remain lazy.
+__all__ = sorted({name for name in globals() if not name.startswith("_")} | set(_LAZY_EXPORTS))

@@ -17,7 +17,7 @@ export async function acceptanceRequest(goalId: string, operation?: Record<strin
 // Read model only. The existing typed acceptance owner validates the complete
 // document and its command/file bindings again at apply time.
 const preparedDocument = z.object({objective: z.string().min(1),
-  scope: z.discriminatedUnion("kind", [z.object({kind: z.literal("all_advancement")}),
+  scope: z.discriminatedUnion("kind", [z.object({kind: z.literal("goal")}),z.object({kind: z.literal("all_advancement")}),
     z.object({kind: z.literal("selected_work"), todo_ids: z.array(z.string()).min(1)})]),
   criteria: z.array(z.object({id: z.string(), description: z.string(),
     validation_argv: z.array(z.string()).min(1),
@@ -36,6 +36,7 @@ export function preparedAcceptancePlan(proposals: TypedActionProposal[], goalId:
   if (proposal.permission_classification !== "local_command_execution"
       || !["preview_ready", "deferred"].includes(proposal.status) || proposal.gate || proposal.error
       || !proposal.available_transitions.includes("apply")) return null;
-  const parsed = preparedDocument.safeParse(proposal.normalized_parameters.document);
+  const input = proposal.normalized_parameters.document as Record<string, unknown> | undefined;
+  const parsed = preparedDocument.safeParse(input?.outcome_id === undefined ? input : proposal.normalized_parameters.resolved_document);
   return parsed.success ? {proposal, document: parsed.data} : null;
 }

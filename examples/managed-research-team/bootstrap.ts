@@ -4,21 +4,31 @@
  */
 import {readFile, mkdir} from "node:fs/promises";
 import {resolve, join, isAbsolute} from "node:path";
+import {pathToFileURL} from "node:url";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
-import {canonicalAuthoritySha256, authorityUnicodeCompare} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
-import {canonicalTodoDomainRecord, TODO_DOMAIN_ITEM_SCHEMA, TODO_DOMAIN_READ_RECORD_SCHEMA}
-  from "../../loopx/control_plane/coordination/coordination_state_contract.ts";
-import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
-import {openLocalAuthorityStore, selectLocalSqliteAuthority}
-  from "../../loopx/control_plane/coordination/local_authority_provider.ts";
-import {engageLegacyCoordinationWriterFence}
-  from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
-import {configureGoalAcceptance} from "../../loopx/control_plane/goals/acceptance_authority.ts";
 
-const [directory, provider = "file"] = process.argv.slice(2);
-if (!directory || !isAbsolute(directory) || !["file", "sqlite"].includes(provider)) {
-  throw new Error("absolute disposable directory and file|sqlite provider required");
+const [directory, provider = "file", packageRoot] = process.argv.slice(2);
+if (!directory || !isAbsolute(directory) || !packageRoot || !isAbsolute(packageRoot)
+    || !["file", "sqlite"].includes(provider)) {
+  throw new Error("absolute disposable directory, package root and file|sqlite provider required");
 }
+// The Python launcher pins its actually loaded package, including a wheel.
+// Keep this disposable initializer on that same production authority owner.
+const moduleUrl = (path: string) => pathToFileURL(resolve(packageRoot, "control_plane", path)).href;
+const [codec, contract, projectionOwner, providerOwner, fenceOwner, acceptanceOwner] = await Promise.all([
+  import(moduleUrl("coordination/authority_store_codec.ts")),
+  import(moduleUrl("coordination/coordination_state_contract.ts")),
+  import(moduleUrl("coordination/coordination_projection.ts")),
+  import(moduleUrl("coordination/local_authority_provider.ts")),
+  import(moduleUrl("coordination/legacy_writer_fence.ts")),
+  import(moduleUrl("goals/acceptance_authority.ts")),
+]);
+const {canonicalAuthoritySha256, authorityUnicodeCompare} = codec;
+const {canonicalTodoDomainRecord, TODO_DOMAIN_ITEM_SCHEMA, TODO_DOMAIN_READ_RECORD_SCHEMA} = contract;
+const {coordinationTodoReadModel} = projectionOwner;
+const {openLocalAuthorityStore, selectLocalSqliteAuthority} = providerOwner;
+const {engageLegacyCoordinationWriterFence} = fenceOwner;
+const {configureGoalAcceptance} = acceptanceOwner;
 const root = resolve(directory);
 const setup = JSON.parse(await readFile(join(root, "bootstrap.json"), "utf8"));
 const goalId = "synthetic-managed-research";

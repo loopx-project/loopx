@@ -4,7 +4,7 @@ use std::{
     env,
     ffi::OsStr,
     fmt, fs,
-    io::{Read, Write},
+    io::{ErrorKind, Read, Write},
     net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -19,6 +19,46 @@ pub const SERVICE_KINDS: [ServiceKind; 2] = [ServiceKind::Status, ServiceKind::C
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 const MAX_PROBE_RESPONSE_BYTES: u64 = 1024 * 1024;
+
+// Core owns activation admission. Keep its bounded reason codes intact across
+// the native supervisor and recovery view; a deferred provider prerequisite is
+// not a failed service transaction or proof that rollback happened.
+pub(crate) fn activation_error_code(code: &str) -> Option<&'static str> {
+    match code {
+        "chat_work_pending" => Some("chat_work_pending"),
+        "chat_state_unverified" => Some("chat_state_unverified"),
+        "chat_service_unverified" => Some("chat_service_unverified"),
+        "native_account_work_pending" => Some("native_account_work_pending"),
+        "native_observer_provider_binding_required" => {
+            Some("native_observer_provider_binding_required")
+        }
+        "native_observer_provider_upgrade_required" => {
+            Some("native_observer_provider_upgrade_required")
+        }
+        "native_observer_requires_target_runtime" => {
+            Some("native_observer_requires_target_runtime")
+        }
+        "service_runtime_alignment_unavailable" => Some("service_runtime_alignment_unavailable"),
+        "service_runtime_alignment_failed" => Some("service_runtime_alignment_failed"),
+        "service_runtime_route_unverified" => Some("service_runtime_route_unverified"),
+        "service_runtime_rollback_failed" => Some("service_runtime_rollback_failed"),
+        _ => None,
+    }
+}
+
+pub(crate) fn runtime_alignment_error(code: &str) -> bool {
+    matches!(
+        code,
+        "native_account_work_pending"
+            | "native_observer_provider_binding_required"
+            | "native_observer_provider_upgrade_required"
+            | "native_observer_requires_target_runtime"
+            | "service_runtime_alignment_unavailable"
+            | "service_runtime_route_unverified"
+            | "service_runtime_alignment_failed"
+            | "service_runtime_rollback_failed"
+    )
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServiceKind {
@@ -55,7 +95,7 @@ impl ServiceKind {
     fn probe_path(self) -> &'static str {
         match self {
             Self::Status => "/?readiness=1",
-            Self::Chat => "/api/chat/capabilities",
+            Self::Chat => "/api/chat/readiness",
         }
     }
 
@@ -127,8 +167,17 @@ struct OwnedService {
 
 impl OwnedService {
     fn stop(&mut self) {
+        #[cfg(target_os = "macos")]
+        let group = self.child.id();
         let _ = self.child.kill();
         let _ = self.child.wait();
+        #[cfg(target_os = "macos")]
+        if let Err(error) = crate::service_lifetime::wait_for_group_exit(group) {
+            eprintln!(
+                "LoopX owned {} stop not confirmed: {error}",
+                self.kind.label()
+            );
+        }
     }
 }
 
@@ -148,12 +197,34 @@ pub(crate) struct SelectedRuntime {
     pub identity: Option<serde_json::Value>,
 }
 
+/// A qualified installation is reusable only when both existing listeners
+/// answer with its exact identity. Observation starts/stops no service.
+pub(crate) fn runtime_ready(runtime: &SelectedRuntime, endpoints: &ServiceEndpoints) -> bool {
+    runtime.identity.is_some()
+        && SERVICE_KINDS.iter().all(|kind| {
+            probe_on_port(*kind, endpoints.port(*kind), runtime.identity.as_ref())
+                == Probe::Matching
+        })
+}
+
 impl ServiceSet {
+    pub(crate) fn runtime(&self) -> &SelectedRuntime {
+        &self.runtime
+    }
+
+    pub(crate) fn runtime_identity(&self) -> Option<&serde_json::Value> {
+        self.runtime.identity.as_ref()
+    }
+
     pub(crate) fn start(
         runtime: &SelectedRuntime,
         endpoints: &ServiceEndpoints,
         progress: impl Fn(&[ServiceKind]) + Sync,
     ) -> Result<Self, ServiceError> {
+        #[cfg(target_os = "macos")]
+        if !endpoints.isolated {
+            align_managed_runtime(runtime)?;
+        }
         Self::collect(
             connect_all(
                 SERVICE_KINDS,
@@ -194,17 +265,16 @@ impl ServiceSet {
         }
     }
 
-    /// Recover only this window's exited private children. Keep its qualified
+    /// Recover only this window's exited owned children. Keep its qualified
     /// artifact, ports and healthy peer; never infer ownership from a listener.
     pub(crate) fn recover_exited(
         &mut self,
         endpoints: &ServiceEndpoints,
         now: Instant,
     ) -> Result<bool, ServiceError> {
-        if !endpoints.isolated
-            || self
-                .last_recovery_attempt
-                .is_some_and(|at| now.duration_since(at) < Duration::from_secs(2))
+        if self
+            .last_recovery_attempt
+            .is_some_and(|at| now.duration_since(at) < Duration::from_secs(2))
         {
             return Ok(false);
         }
@@ -248,6 +318,89 @@ impl ServiceSet {
             service.stop();
         }
         self.owned.clear();
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn align_managed_runtime(runtime: &SelectedRuntime) -> Result<(), ServiceError> {
+    let managed = SERVICE_KINDS
+        .iter()
+        .any(|kind| platform_managed_service_declared(env::var_os("HOME").as_deref(), *kind));
+    if !managed
+        || SERVICE_KINDS
+            .iter()
+            .all(|kind| probe(*kind, runtime.identity.as_ref()) == Probe::Matching)
+    {
+        return Ok(());
+    }
+    let mut command = Command::new(&runtime.executable);
+    configure_runtime_environment(&mut command);
+    command.args([
+        "--format",
+        "json",
+        "update",
+        "activate",
+        "--service",
+        "all",
+        "--runtime-executable",
+        &runtime.executable,
+    ]);
+    managed_runtime_alignment_result(
+        timed_output_with_timeout(command, Duration::from_secs(60)),
+        runtime.identity.as_ref(),
+    )
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn managed_runtime_alignment_result(
+    output: Option<std::process::Output>,
+    expected: Option<&serde_json::Value>,
+) -> Result<(), ServiceError> {
+    let payload = output
+        .as_ref()
+        .and_then(|result| serde_json::from_slice::<serde_json::Value>(&result.stdout).ok());
+    let Some(payload) = payload.filter(|value| {
+        value["schema_version"] == "loopx_runtime_service_activation_v1"
+            && value["service"] == "all"
+    }) else {
+        return Err(ServiceError("service_runtime_alignment_unavailable".into()));
+    };
+    if payload["ok"] == true
+        && payload["status"] == "aligned"
+        && payload["readiness_verified"] == true
+        && expected.is_some_and(|identity| payload.get("runtime_identity") == Some(identity))
+        && output
+            .as_ref()
+            .is_some_and(|result| result.status.success())
+    {
+        return Ok(());
+    }
+    let code = payload["reason"]
+        .as_str()
+        .and_then(activation_error_code)
+        .unwrap_or("service_runtime_alignment_failed");
+    Err(ServiceError(code.into()))
+}
+
+// Ownership transfer (adopt, update handoff, stop) is exercisable without a
+// real runtime: the set owns exactly the groups a test hands it, so a reclaim
+// is observable on the same job objects production uses.
+#[cfg(test)]
+pub(crate) fn owned_set_for_test(children: Vec<GroupChild>) -> ServiceSet {
+    ServiceSet {
+        owned: children
+            .into_iter()
+            .map(|child| OwnedService {
+                child,
+                kind: ServiceKind::Status,
+            })
+            .collect(),
+        runtime: SelectedRuntime {
+            executable: String::new(),
+            identity: None,
+        },
+        last_recovery_attempt: None,
+        healed: false,
     }
 }
 
@@ -318,7 +471,7 @@ fn connect(
     }
 }
 
-// Release windows never borrow a listener or restart a LaunchAgent. A matching
+// Explicit private endpoints never borrow a listener or restart a LaunchAgent. A matching
 // revision alone cannot establish the listener's registry/process ownership.
 fn connect_owned_service(
     kind: ServiceKind,
@@ -346,7 +499,11 @@ fn connect_owned_service(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let child = command.group_spawn().map_err(|error| {
+    #[cfg(target_os = "macos")]
+    let child = crate::service_lifetime::spawn(&command);
+    #[cfg(not(target_os = "macos"))]
+    let child = command.group_spawn();
+    let child = child.map_err(|error| {
         ServiceError(format!(
             "could not start private LoopX {}: {error}",
             kind.label()
@@ -469,6 +626,16 @@ fn connect_service(
         )));
     }
 
+    // A declared machine service owns its registry and Chat store even while
+    // launchd has it unloaded. Do not replace that source with an empty default.
+    #[cfg(target_os = "macos")]
+    if platform_managed_service_declared(env::var_os("HOME").as_deref(), kind) {
+        return Err(ServiceError(format!(
+            "system-managed LoopX {} is configured but not loaded; restore its service and retry",
+            kind.label()
+        )));
+    }
+
     let mut command = Command::new(executable);
     configure_runtime_environment(&mut command);
     if matches!(kind, ServiceKind::Chat) {
@@ -551,6 +718,20 @@ fn request_platform_managed_start(kind: ServiceKind) -> bool {
     true
 }
 
+#[cfg(target_os = "macos")]
+fn platform_managed_service_declared(home: Option<&OsStr>, kind: ServiceKind) -> bool {
+    let Some(home) = home else {
+        return false;
+    };
+    let path = PathBuf::from(home)
+        .join("Library/LaunchAgents")
+        .join(format!("{}.plist", platform_managed_service_label(kind)));
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => true,
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+    }
+}
+
 fn platform_managed_service_label(kind: ServiceKind) -> &'static str {
     match kind {
         ServiceKind::Status => "com.loopx.status",
@@ -597,6 +778,25 @@ fn terminate_verified_listener(
     loopx_executable: &str,
     port: u16,
 ) -> Result<(), ServiceError> {
+    #[cfg(target_os = "macos")]
+    if kind == ServiceKind::Chat {
+        // Core owns the loaded manager's route, accepted-work fence and exact
+        // listener PID. A desktop Python-template match cannot authorize
+        // stopping a Chat worker, including one using a private bootstrap.
+        let mut command = Command::new(loopx_executable);
+        configure_runtime_environment(&mut command);
+        command.args([
+            "--format",
+            "json",
+            "update",
+            "activate",
+            "--service",
+            "chat",
+            "--port",
+            &port.to_string(),
+        ]);
+        return managed_chat_activation_result(timed_output_with_timeout(command, STARTUP_TIMEOUT));
+    }
     #[cfg(not(windows))]
     {
         let processes = listener_processes(port)?;
@@ -629,6 +829,37 @@ fn terminate_verified_listener(
             "port {port} is serving stale LoopX {}; automatic replacement is unavailable on Windows",
             kind.label()
         )))
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn managed_chat_activation_result(
+    output: Option<std::process::Output>,
+) -> Result<(), ServiceError> {
+    let payload = output
+        .as_ref()
+        .and_then(|result| serde_json::from_slice::<serde_json::Value>(&result.stdout).ok());
+    let Some(payload) = payload.filter(|value| {
+        value["schema_version"] == "loopx_runtime_service_activation_v1"
+            && value["service"] == "chat"
+    }) else {
+        // An older Core or lost result grants no fallback raw kill. The next
+        // HTTP read observes whether the original manager actually recovered.
+        return Err(ServiceError("chat_service_unverified".into()));
+    };
+    match (payload["ok"].as_bool(), payload["status"].as_str()) {
+        (Some(true), Some("restart_requested" | "not_running"))
+            if output
+                .as_ref()
+                .is_some_and(|result| result.status.success()) =>
+        {
+            Ok(())
+        }
+        (Some(false), Some("deferred")) => match payload["reason"].as_str() {
+            Some("chat_work_pending") => Err(ServiceError("chat_work_pending".into())),
+            _ => Err(ServiceError("chat_state_unverified".into())),
+        },
+        _ => Err(ServiceError("chat_service_unverified".into())),
     }
 }
 
@@ -869,6 +1100,14 @@ fn runtime_search_path(
         paths.extend([
             PathBuf::from("/opt/homebrew/bin"),
             PathBuf::from("/usr/local/bin"),
+            // Homebrew's supported LTS Node formulae are keg-only. Finder
+            // does not inherit the shell PATH that activates those runtimes.
+            // Use the same bounded search for the private installer and the
+            // services it starts; Core still qualifies the actual version.
+            PathBuf::from("/opt/homebrew/opt/node@24/bin"),
+            PathBuf::from("/usr/local/opt/node@24/bin"),
+            PathBuf::from("/opt/homebrew/opt/node@22/bin"),
+            PathBuf::from("/usr/local/opt/node@22/bin"),
         ]);
     }
     for path in inherited
@@ -900,6 +1139,31 @@ pub(crate) fn python3_environment() -> (bool, Option<String>) {
         timed_output(probe)
             .filter(|output| output.status.success())
             .and_then(|output| parse_python_version(&output))
+    });
+    (found, version)
+}
+
+pub(crate) fn node_environment() -> (bool, Option<String>) {
+    let path = runtime_search_path(env::var_os("HOME"), env::var_os("PATH"));
+    let executable = resolve_executable_path("node", Some(path.as_os_str()));
+    let found = executable.is_some();
+    let version = executable.and_then(|node| {
+        let mut probe = Command::new(node);
+        probe.arg("--version");
+        timed_output(probe)
+            .filter(|output| output.status.success())
+            .and_then(|output| {
+                let text = std::str::from_utf8(&output.stdout)
+                    .ok()?
+                    .trim()
+                    .strip_prefix('v')?;
+                let fields: Vec<_> = text.split('.').collect();
+                (fields.len() == 3
+                    && fields.iter().all(|field| {
+                        !field.is_empty() && field.bytes().all(|byte| byte.is_ascii_digit())
+                    }))
+                .then(|| text.to_owned())
+            })
     });
     (found, version)
 }
@@ -1121,33 +1385,77 @@ fn probe_on_port(
     port: u16,
     expected_runtime_identity: Option<&serde_json::Value>,
 ) -> Probe {
-    let address = SocketAddr::from(([127, 0, 0, 1], port));
-    let mut stream = match TcpStream::connect_timeout(&address, PROBE_TIMEOUT) {
-        Ok(stream) => stream,
-        Err(_) => return Probe::Unavailable,
+    // This budget covers the whole observation, including any legacy request.
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    let mut response = match read_probe_response(port, kind.probe_path(), deadline) {
+        Ok(response) => response,
+        Err(probe) => return probe,
     };
-    let _ = stream.set_read_timeout(Some(PROBE_TIMEOUT));
-    let _ = stream.set_write_timeout(Some(PROBE_TIMEOUT));
-    let request = format!(
-        "GET {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
-        kind.probe_path(),
-        port
-    );
-    if stream.write_all(request.as_bytes()).is_err() {
-        return Probe::Unresponsive;
-    }
-    let mut response = String::new();
-    if stream
-        .take(MAX_PROBE_RESPONSE_BYTES + 1)
-        .read_to_string(&mut response)
-        .is_err()
+    if kind == ServiceKind::Chat
+        && response
+            .lines()
+            .next()
+            .and_then(|line| line.split_ascii_whitespace().nth(1))
+            == Some("404")
     {
-        return Probe::Unresponsive;
-    }
-    if response.len() as u64 > MAX_PROBE_RESPONSE_BYTES {
-        return Probe::Foreign;
+        // A legacy Core has no lightweight endpoint. Keep its original
+        // fingerprint/identity checks; new services never enumerate metadata.
+        response = match read_probe_response(port, "/api/chat/capabilities", deadline) {
+            Ok(response) => response,
+            Err(probe) => return probe,
+        };
     }
     classify_response(kind, &response, expected_runtime_identity)
+}
+
+fn probe_time_left(deadline: Instant) -> Result<Duration, Probe> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(Probe::Unresponsive);
+    }
+    Ok(remaining)
+}
+
+fn read_probe_response(port: u16, path: &str, deadline: Instant) -> Result<String, Probe> {
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let mut stream = TcpStream::connect_timeout(&address, probe_time_left(deadline)?)
+        .map_err(|_| Probe::Unavailable)?;
+    let request = format!(
+        "GET {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+        path, port
+    );
+    let mut unsent = request.as_bytes();
+    while !unsent.is_empty() {
+        stream
+            .set_write_timeout(Some(probe_time_left(deadline)?))
+            .map_err(|_| Probe::Unresponsive)?;
+        match stream.write(unsent) {
+            Ok(0) => return Err(Probe::Unresponsive),
+            Ok(written) => unsent = &unsent[written..],
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(_) => return Err(Probe::Unresponsive),
+        }
+    }
+    let mut reader = stream.take(MAX_PROBE_RESPONSE_BYTES + 1);
+    let mut response = Vec::new();
+    let mut buffer = [0; 8192];
+    loop {
+        reader
+            .get_ref()
+            .set_read_timeout(Some(probe_time_left(deadline)?))
+            .map_err(|_| Probe::Unresponsive)?;
+        match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => response.extend_from_slice(&buffer[..read]),
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(_) => return Err(Probe::Unresponsive),
+        }
+        if response.len() as u64 > MAX_PROBE_RESPONSE_BYTES {
+            return Err(Probe::Foreign);
+        }
+    }
+    probe_time_left(deadline)?;
+    String::from_utf8(response).map_err(|_| Probe::Unresponsive)
 }
 
 fn classify_response(
@@ -1171,6 +1479,18 @@ fn classify_response(
     let Ok(payload) = serde_json::from_str::<serde_json::Value>(body) else {
         return Probe::Foreign;
     };
+    if kind == ServiceKind::Chat && payload["schema_version"] == "loopx_chat_readiness_v1" {
+        if payload["ok"] != true || payload["state"] != "ready" {
+            return Probe::Foreign;
+        }
+        return if expected_runtime_identity
+            .is_some_and(|expected| payload.get("runtime_identity") != Some(expected))
+        {
+            Probe::Stale
+        } else {
+            Probe::Matching
+        };
+    }
     let (field, expected) = kind.expected_fingerprint();
     if payload
         .as_object()

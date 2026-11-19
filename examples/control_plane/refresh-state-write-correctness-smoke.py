@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import loopx.state_refresh as state_refresh
+from loopx.control_plane.testing.canary_harness import import_fixture_authority
 
 
 GOAL_ID = "refresh-state-write-correctness-goal"
@@ -64,6 +65,7 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
         + "\n",
         encoding="utf-8",
     )
+    import_fixture_authority(registry_path, GOAL_ID)
     return registry_path, runtime, project
 
 
@@ -92,11 +94,18 @@ def main() -> None:
             registry_path, runtime, project = write_fixture(Path(raw_tmp))
             state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
             state_before, registry_before = state_path.read_bytes(), registry_path.read_bytes()
+            runtime_before = {
+                path.relative_to(runtime): path.read_bytes()
+                for path in runtime.rglob("*") if path.is_file()
+            }
             first = dry_run_payload(registry_path, runtime, project)
             second = dry_run_payload(registry_path, runtime, project)
             assert state_path.read_bytes() == state_before
             assert registry_path.read_bytes() == registry_before
-            assert not runtime.exists()
+            assert {
+                path.relative_to(runtime): path.read_bytes()
+                for path in runtime.rglob("*") if path.is_file()
+            } == runtime_before
 
             assert first["dry_run"] is True, first
             assert first["appended"] is False, first

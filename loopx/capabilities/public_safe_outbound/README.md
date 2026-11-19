@@ -4,6 +4,11 @@
 对一组候选文本或路径检测：
 
 - 凭据：Ark/ARK api key、`sk-`、`Bearer`、AK/SK、private key 块、`api_key=` 赋值；
+  以及**带发行方前缀、无需标签**的第三方令牌（GitHub `ghp_`/`github_pat_`、AWS
+  `AKIA`/`ASIA`、Slack `xoxb-` 等、Google `AIza`、Stripe `sk_live_`、npm、PyPI、
+  JWT 三段式）。这些形状由 `loopx/public_safe_text.py` 的
+  `PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE` 统一提供，本 capability 复用同一份定义，
+  不再各自维护子集——只识别部分发行方会让其余凭据以 `ok=true` 通过对外门禁。
 - 公司内部信息：内部域名、内部代码托管、内部 MCP 网关、内部文档链接——
   **由部署环境注入**（`PUBLIC_SAFE_CONFIG` 指向一个本地 JSON 文件，见下）；
 - 私有绝对路径：home 目录与 root 挂载等本地绝对路径；
@@ -69,16 +74,18 @@ installed/enabled，可经 `loopx capability list` / `show` 查看。
   无配置模式（只跑通用规则）；已设置却读不到或解析失败时，扫描以 `ok=false`、
   `unscanned_reasons=["config_unreadable"]` 结束，不会静默降级为通用规则。
   被请求的文件读不到或超过 `limit_bytes` 时同样记为
-  `content_unreadable` / `content_too_large`，`ok` 保持 false；目录等
-  不指向文件的路径跳过。`--scan-root` 指向不存在的路径记为 `scan_root_missing`，
+  `content_unreadable` / `content_too_large`，`ok` 保持 false。候选文件先按 BOM
+  声明的 Unicode 编码（UTF-8/UTF-16/UTF-32）解码：Windows PowerShell 5.1 的
+  `>`/`Out-File` 默认写 UTF-16LE BOM，按 UTF-8 读取会把其中的私有路径或凭据读成
+  干净；解码后仍含 NUL 的字节（例如无 BOM 的 UTF-16）记为 `content_not_text` 并使
+  `ok` 为 false。目录等不指向文件的路径跳过。`--scan-root` 指向不存在的路径记为 `scan_root_missing`，
   遍历中无法列出的目录（包括根目录本身）记为 `directory_unreadable`，两者都使
-  `ok` 为 false 并返回回执，而不是静默缩小候选集或抛出带绝对路径的异常。被排除的
+  `ok` 为 false 并返回回执。被排除的
   目录（见下）从不进入，读不到也不影响结果；已存在的空目录没有可漏扫的内容，仍为通过。未扫描原因与命中位置一样只含相对标签或原因码，不含绝对路径。
 - 不做任何写操作、不读取 secrets 文件内容（仅规则扫描）。
-- **文件选择是排除式，不是后缀白名单**：默认扫描根目录下所有常规文件，因此
+- **文件选择是排除式**：默认扫描根目录下所有常规文件，因此
   `.env`、`Dockerfile`、`Makefile`、`id_rsa`、`credentials` 这类无后缀或点文件
-  都会被检查（白名单式曾把它们静默跳过，而 `node_modules`/`.venv` 因含 `.js`/`.py`
-  反而被走遍）。被排除的是版本控制、依赖、缓存、构建与虚拟环境目录
+  都会被检查。被排除的是版本控制、依赖、缓存、构建与虚拟环境目录
   （版本控制元数据 `.git`/`.hg`/`.svn` 见 `scan_cli.VCS_METADATA_NAMES`，作为
   目录或文件都排除；`node_modules`、`.venv`、`dist`、`build`、`__pycache__`、
   各类 `*_cache` 等工具生成目录见 `scan_cli.TOOL_MANAGED_DIRECTORY_NAMES`，只排除

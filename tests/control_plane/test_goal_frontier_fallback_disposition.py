@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 import pytest
@@ -89,6 +90,32 @@ def test_loaded_writeback_source_is_bounded_before_effect_transport(monkeypatch)
         agent_id=AGENT_ID, agent_todo_source_items=source,
     ) is None
     assert counts == [1]
+
+
+@pytest.mark.parametrize("token,dependency", [
+    ("todo_done:todo_monitor", "todo_monitor"),
+    ("monitor_changed:todo_monitor", "todo_monitor"),
+    ("monitor_changed:todo_monitor@case-a/run-1", "todo_monitor"),
+    ("monitor_changed:todo_monitor@case-a:run-1", "todo_monitor"),
+    ("monitor_changed:todo_monitor@bad scope", None),
+    ("monitor_changed:todo_monitor@one@two", None),
+    ("pr_merged:owner/repo#42", None),
+    ("capacity_available:todo_monitor", None),
+])
+def test_fallback_source_keeps_only_exact_direct_resume_dependency(token, dependency):
+    from loopx.control_plane.goals.goal_frontier.fallback_source import (
+        FallbackTodoReadState, select_fallback_source_items,
+    )
+
+    waiting = {"todo_id": FALLBACK_ID, "resume_when": token}
+    monitor = {"todo_id": "todo_monitor", "resume_when": "todo_done:todo_transitive"}
+    source = [waiting, monitor, {"todo_id": "todo_transitive"}, {"todo_id": "todo_unrelated"}]
+    selected = select_fallback_source_items(source, {FALLBACK_ID})
+    assert isinstance(selected, list)
+    assert selected == sorted([waiting, monitor] if dependency else [waiting], key=lambda row: row["todo_id"])
+    if dependency:
+        assert select_fallback_source_items(source + [dict(monitor)], {FALLBACK_ID}) is FallbackTodoReadState.UNAVAILABLE
+        assert select_fallback_source_items([waiting], {FALLBACK_ID}) == [waiting]
 
 
 def _fallback_vision_run(
@@ -533,11 +560,13 @@ def test_declared_fallback_linked_to_monitor_todo_keeps_the_gap() -> None:
         "changed-generation-remains-runnable-after-monitor-completes",
     ],
 )
+@pytest.mark.parametrize("scope", [None, "case-a/run-1", "case-a:run-1"])
 def test_fallback_monitor_wait_uses_typed_resume_evaluator(
     resume_monitor_generation: int | None,
     monitor_generation: int,
     monitor_status: str,
     expected_gap_kind: str | None,
+    scope: str | None,
 ) -> None:
     payload = _status_payload(
         fallback_runnable=False,
@@ -548,7 +577,7 @@ def test_fallback_monitor_wait_uses_typed_resume_evaluator(
         index=3,
         text="[P1] Resume the declared fallback after observation changes.",
         claimed_by=AGENT_ID,
-        resume_when="monitor_changed:todo_fallback_monitor",
+        resume_when="monitor_changed:todo_fallback_monitor" + (f"@{scope}" if scope else ""),
         resume_monitor_generation=resume_monitor_generation,
     )
     monitor = quota_todo_item(
@@ -560,6 +589,9 @@ def test_fallback_monitor_wait_uses_typed_resume_evaluator(
         status=monitor_status,
         material_change_generation=monitor_generation,
     )
+    if scope:
+        digest = hashlib.sha256(scope.encode()).hexdigest()[:24]
+        monitor["material_change_scope_generations"] = f"{digest}:{monitor_generation}"
 
     decision = build_quota_should_run(
         payload,

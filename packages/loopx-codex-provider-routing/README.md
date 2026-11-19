@@ -2,7 +2,7 @@
 
 This optional extension integrates **native Codex account slots** with LoopX.
 It observes allowance, selects an authorized available account after exhaustion,
-and asks the installed native slot owner to switch at an idle boundary. Codex
+and uses its packaged native account owner to switch at an idle boundary. Codex
 keeps its official OpenAI login, model settings and history. CPA is no longer
 the recommended provider path.
 
@@ -19,10 +19,11 @@ This package is an **extension** that supplies a standalone integration
 provider. It is not a built-in capability:
 
 - Codex App owns task settings, turn snapshots and the session store;
-- the installed Personal Apps slot manager owns credential transactions,
-  idle admission, login-cache preservation and rollback;
-- the optional provider owns allowance observation and its default-off policy;
+- this optional package owns credential transactions, idle admission, login-cache
+  preservation, rollback, allowance observation and its default-off policy;
   its TypeScript selector is shared by CLI and App;
+- existing Personal Apps/dotfiles routes import the packaged owner and retain
+  their original vault and locks; LoopX has no dependency on that repository;
 - LoopX Core supplies optional lifecycle and owner-local presentation transport,
   without becoming a credential or model proxy.
 

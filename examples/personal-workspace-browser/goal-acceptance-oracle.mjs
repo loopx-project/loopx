@@ -37,7 +37,7 @@ try {
   const cli = (...args) => JSON.parse(execFileSync(resolveTestPython(), ["-m", "loopx.cli", "--format", "json", "--registry", authority.registry, "--runtime-root", authority.runtime,
     "goal-acceptance", ...args, "--goal-id", "multi-agent-projection"], {cwd: repoRoot, encoding: "utf8"}));
   const read = () => cli("inspect");
-  assert.equal(read().goal_acceptance_contract.enabled, false);
+  assert.equal(read().goal_acceptance_contract.criteria, undefined);
   await page.locator(".personal-goal-link", {hasText: "Multi Agent Projection"}).click();
   await page.getByRole("button", {name: "概览", exact: true}).click();
   // The admitted conversation tool prepares the plan through its real owner.
@@ -45,7 +45,7 @@ try {
   const prepared = authority.prepared;
   assert.equal(prepared.executed, false);
   assert.equal(prepared.proposal.normalized_parameters.prepared_by, "coordinator");
-  assert.equal(read().goal_acceptance_contract.enabled, false, "preparation is not owner approval");
+  assert.equal(read().goal_acceptance_contract.criteria, undefined, "preparation is not owner approval");
   const panel = page.locator(".delivery-acceptance-contract");
   const resultStatus = text => panel.getByRole("status").filter({hasText: text});
   const adopt = panel.getByRole("button", {name: "采用并检查", exact: true});
@@ -138,14 +138,14 @@ try {
   await panel.getByRole("alert").waitFor();
   assert.deepEqual(read(), initial);
   await panel.getByRole("alert").getByRole("button", {name: "刷新结果", exact: true}).click();
-  await panel.getByRole("button", {name: "停用检查", exact: true}).click();
+  await panel.getByRole("button", {name: "移除检查配置", exact: true}).click();
   await panel.waitFor({state: "hidden"});
-  await page.getByRole("status").filter({hasText: "已停用检查，历史记录仍保留。"}).waitFor();
-  assert.equal(read().goal_acceptance_contract.enabled, false);
+  await page.getByRole("status").filter({hasText: "已移除检查配置，历史记录仍保留。"}).waitFor();
+  assert.equal(read().goal_acceptance_contract.criteria, undefined);
   const expected = "Failed to load resource: the server responded with a status of 409 (Conflict)";
   const at = context.errors.indexOf(expected); if (at >= 0) context.errors.splice(at, 1);
   assert.deepEqual(context.errors.filter(value => !value.includes("404")), []);
-  console.log(JSON.stringify({status: "PASS", boundary: "Packaged UI and admitted conversation tool with actual disposable SQLite/HTTP/CLI; model/tool transport is scripted, not live model or installed App evidence", checks: ["native conversation preparation without execution", "automatic prepared-plan discovery", "one contextual owner action", "no mandatory JSON/revision form", "exact native readback", "download preserves source and exact versions", "stale export retains historical witness without passing or command execution", "changed output clears green without execution", "failure/recovery", "advanced import rejection", "disable/default-off", "390px", "keyboard/reduced-motion"]}));
+  console.log(JSON.stringify({status: "PASS", boundary: "Packaged UI and admitted conversation tool with actual disposable SQLite/HTTP/CLI; model/tool transport is scripted, not live model or installed App evidence", checks: ["native conversation preparation without execution", "automatic prepared-plan discovery", "one contextual owner action", "no mandatory JSON/revision form", "exact native readback", "download preserves source and exact versions", "stale export retains historical witness without passing or command execution", "changed output clears green without execution", "failure/recovery", "advanced import rejection", "remove checks/default outcome review", "390px", "keyboard/reduced-motion"]}));
 } catch (error) {
   if (context?.page) {
     await mkdir(outputDir, {recursive: true});

@@ -1,7 +1,14 @@
 import type { WorkspaceTranslate } from "./i18n";
 import type { WorkspaceActionPreviewRequest, WorkspaceAgentOption } from "./personal-workspace-model";
+import type {GoalCreationPermission} from "../../../../../../loopx/control_plane/goals/creation_execution_review.ts";
+export type {GoalCreationPermission} from "../../../../../../loopx/control_plane/goals/creation_execution_review.ts";
+import {compactPythonWhitespace, hasPythonNonWhitespaceText} from "../../../../../../loopx/control_plane/coordination/python_whitespace.ts";
 
 type GoalContent = { objective: string; completion: string; boundary: string };
+
+export function goalDraftReady(draft: {question: string; objective: string; completion_criteria: string}): boolean {
+  return !draft.question && hasPythonNonWhitespaceText(draft.objective) && hasPythonNonWhitespaceText(draft.completion_criteria);
+}
 
 /** A read-only conversation projection cannot be the first Goal's executor. */
 export function goalCreationAgentId(selectedId: string, agents: readonly WorkspaceAgentOption[]): string {
@@ -12,21 +19,22 @@ export function goalCreationAgentId(selectedId: string, agents: readonly Workspa
 }
 
 export function goalCreateContent(input: GoalContent, t: WorkspaceTranslate) {
-  const objective = input.objective.trim();
-  const completion = input.completion.trim();
-  const boundary = input.boundary.trim();
+  const objective = compactPythonWhitespace(input.objective);
+  const completion = compactPythonWhitespace(input.completion);
+  const boundary = compactPythonWhitespace(input.boundary);
   return {
-    title: objective.slice(0, 80),
-    objective: [objective, t("goal.objectiveCompletion", { criteria: completion }),
-      boundary ? t("goal.objectiveBoundary", { boundary }) : ""].filter(Boolean).join("\n"),
+    title: Array.from(objective).slice(0, 80).join(""),
+    objective: compactPythonWhitespace([objective, t("goal.objectiveCompletion", { criteria: completion }),
+      boundary ? t("goal.objectiveBoundary", { boundary }) : ""].filter(Boolean).join("\n")),
     completion_criteria: completion, execution_boundary: boundary,
-    initial_todos: [t("goal.initialTodo", { criteria: completion })],
+    initial_todos: [compactPythonWhitespace(t("goal.initialTodo", { criteria: completion }))],
   };
 }
 
 /** One preview builder for explicit forms and conversational drafts. No effects. */
 export function goalCreateRequest(input: GoalContent & {
-  workspaceRef?: string; agentId: string; permission: string; contextGoalId: string | null; operationId?: string;
+  workspaceRef?: string; agentId: string; permission: GoalCreationPermission; contextGoalId: string | null; operationId?: string;
+  startExecution?: boolean;
 }, t: WorkspaceTranslate): WorkspaceActionPreviewRequest {
   const content = goalCreateContent(input, t);
   return {
@@ -36,6 +44,7 @@ export function goalCreateRequest(input: GoalContent & {
     normalizedParameters: {
       ...content, goal_id: `goal-${input.operationId ?? crypto.randomUUID()}`,
       agent_id: input.agentId, permission: input.permission,
+      ...(input.startExecution === true ? {start_execution: true} : {}),
       workspace_ref: input.workspaceRef ?? "current", heartbeat: { enabled: false, cadence: "1d", timezone: "Asia/Shanghai" },
       stop_condition: "goal_complete",
     },

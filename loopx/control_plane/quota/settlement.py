@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import shlex
 from typing import Any
 
+from ...command_invocation import loopx_cli_argv
+from ...install_contract import render_host_cli_command
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..settlement_driver import decode_settlement_result
 from .accounting_admission import quota_accounting_admission
@@ -28,6 +31,7 @@ from .effect_program import (
     settlement_binding_args,
     settlement_result_payload,
     settlement_step_command,
+    turn_instance_arg,
 )
 
 QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA = (
@@ -143,6 +147,15 @@ def render_refresh_recovery_markdown(payload: dict[str, Any]) -> str | None:
 
 
 @dataclass(frozen=True, slots=True)
+class QuotaSpendPrecheck:
+    identity: SettlementResult[SettlementIdentity]
+    settlement: SettlementResult[dict[str, Any]]
+    progress: dict[str, Any] | None
+    spend_run_present: bool
+    spend_request_rejection: SettlementResult[dict[str, Any]] | None
+
+
+@dataclass(frozen=True, slots=True)
 class QuotaSettlementReadback:
     identity: SettlementResult[SettlementIdentity]
     writeback: SettlementResult[dict[str, Any]]
@@ -167,6 +180,13 @@ class QuotaSettlementReadback:
     native_child_admission: dict[str, Any] | None = None
     heartbeat_reentry_qualification: dict[str, Any] | None = None
     successor_replan_pending: bool = False
+    replan_execution_pending: bool = False
+    admission_recorded_at: str | None = None
+    admission_event_id: str | None = None
+
+
+def render_owed_host_command(argv: list[str]) -> str:
+    return render_host_cli_command(argv)
 
 
 def attach_settlement_progress(
@@ -186,7 +206,8 @@ def attach_settlement_progress(
     identity = readback.identity.value
     if payload.get("ok") is not True or progress.get("next_step") != "quota_spend" or identity is None:
         return
-    prefix = "loopx"
+    route = loopx_cli_argv()
+    prefix = shlex.join(route)
     if registry_path is not None:
         prefix += f" --registry {shlex.quote(str(registry_path))}"
     if runtime_root is not None:
@@ -203,7 +224,8 @@ def attach_settlement_progress(
         quota_spend_source=progress["quota_spend_source"],
         goal_ref=goal_ref,
     )
-    payload["settlement_owed"] = {
+    command = settlement_step_command(plan.as_dict(), SettlementStepKind.QUOTA_SPEND)
+    owed = {
         **identity.as_dict(), "schema_version": "turn_settlement_owed_v0",
         "kind": "quota_spend", "recovery_does_not_spend": True,
         "reason": (
@@ -211,11 +233,26 @@ def attach_settlement_progress(
             if progress["state"] == "spend_receipt_required" else
             "writeback is verified; execute quota spend once for the same settlement identity"
         ),
-        "command": settlement_step_command(plan.as_dict(), SettlementStepKind.QUOTA_SPEND),
+        "command": command,
     }
+    # PowerShell quoting applies to every argument, even with an unquoted launcher.
+    # Keep the argv for the composed CLI so it does not have to parse shell text.
+    if os.name == "nt" or route[0].lower().endswith(".ps1"):
+        argv = shlex.split(command)
+        owed.update(command=render_owed_host_command(argv), command_argv=argv)
+    payload["settlement_owed"] = owed
 
 
 def render_settlement_progress_markdown(payload: dict[str, Any]) -> list[str]:
+    recovery = payload.get("settlement_recovery")
+    if isinstance(recovery, dict):
+        identity = recovery["settlement_identity"]
+        lines = [f"- Pending settlement: `{identity['turn_instance_id']}`", recovery["instruction"]]
+        for command in recovery["next_cli_actions"]:
+            lines.extend(["", "```sh", command, "```"])
+        return lines
+    if payload.get("settlement_recovery_error"):
+        return [f"- Settlement recovery could not be read: {payload['settlement_recovery_error']}"]
     progress = payload.get("settlement_progress")
     if not isinstance(progress, dict):
         return []
@@ -248,6 +285,7 @@ __all__ = [
     "settlement_binding_args",
     "settlement_result_payload",
     "settlement_step_command",
+    "turn_instance_arg",
 ]
 
 
@@ -277,6 +315,14 @@ def _optional_readback_record(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         raise RuntimeError("TypeScript quota settlement readback result shape mismatch")
     return dict(value)
+
+
+def _optional_readback_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError("TypeScript quota settlement readback result shape mismatch")
+    return value
 
 
 def _semantic_replan_guard(value: Any) -> dict[str, Any] | None:
@@ -311,29 +357,24 @@ def _semantic_replan_guard(value: Any) -> dict[str, Any] | None:
         # The TS readback owner validates the schema and ids. Preserve the
         # selected authority evidence when adapting the receipt to refresh.
         result["selected_capability_guard"] = dict(capability)
+    if "selected_review_source" in guard:
+        review = guard["selected_review_source"]
+        if not isinstance(review, dict) or selected_obligation_id is None:
+            raise RuntimeError("selected review source requires a typed object and obligation")
+        # Semantic eligibility and scalar bounds belong to the TS owner.
+        result["selected_review_source"] = dict(review)
     return result
 
 
-def read_heartbeat_settlement(
+def _read_heartbeat_settlement_payload(
     runtime_root: Path,
     *,
     goal_id: str,
-    agent_id: str | None,
-    todo_id: str | None,
-    turn_instance_id: str | None,
-    replan_obligation_id: str | None = None,
-    infer_turn_instance_id: bool = False,
-    allow_unbound_binding: bool = False,
-    resolve_original_binding: bool = False,
-    refresh_retry: dict[str, Any] | None = None,
-    registry_path: Path | None = None,
-    goal_ref: Mapping[str, Any] | None = None,
+    fields: Mapping[str, Any],
+    registry_path: Path | None,
+    goal_ref: Mapping[str, Any] | None,
     source_admission: Mapping[str, Any] | None = None,
-    borrow_source_admission: bool = False,
-    heartbeat_reentry_guard: dict[str, Any] | None = None,
-) -> QuotaSettlementReadback | None:
-    """Read one complete heartbeat settlement through the TS domain owner."""
-
+) -> Mapping[str, Any] | None:
     def read(admission: Mapping[str, Any] | None) -> Any:
         try:
             return effect_runtime_result(
@@ -342,40 +383,11 @@ def read_heartbeat_settlement(
                     "schema_version": QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
                     "runtime_root": str(runtime_root.expanduser()),
                     "goal_id": goal_id,
-                    "agent_id": agent_id,
-                    "todo_id": todo_id,
-                    "turn_instance_id": turn_instance_id,
-                    "replan_obligation_id": replan_obligation_id,
-                    "infer_turn_instance_id": infer_turn_instance_id,
-                    "allow_unbound_binding": allow_unbound_binding,
-                    **(
-                        {"resolve_original_binding": True}
-                        if resolve_original_binding
-                        else {}
-                    ),
-                    **(
-                        {"refresh_retry": refresh_retry}
-                        if refresh_retry is not None
-                        else {}
-                    ),
-                    **(
-                        {"goal_ref": dict(goal_ref)}
-                        if goal_ref is not None
-                        else {}
-                    ),
+                    **fields,
+                    **({"goal_ref": dict(goal_ref)} if goal_ref is not None else {}),
                     **(
                         {"source_admission": dict(admission)}
                         if admission is not None
-                        else {}
-                    ),
-                    **(
-                        {"borrow_source_admission": True}
-                        if borrow_source_admission
-                        else {}
-                    ),
-                    **(
-                        {"heartbeat_reentry_guard": heartbeat_reentry_guard}
-                        if heartbeat_reentry_guard is not None
                         else {}
                     ),
                 },
@@ -409,6 +421,117 @@ def read_heartbeat_settlement(
         return None
     if payload.get("found") is not True:
         raise RuntimeError("TypeScript quota settlement readback result shape mismatch")
+    return payload
+
+
+def read_quota_spend_precheck(
+    runtime_root: Path,
+    *,
+    goal_id: str,
+    agent_id: str | None,
+    todo_id: str | None,
+    turn_instance_id: str | None,
+    replan_obligation_id: str | None = None,
+    infer_turn_instance_id: bool = False,
+    allow_unbound_binding: bool = False,
+    registry_path: Path | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
+    spend_request: Mapping[str, Any] | None = None,
+) -> QuotaSpendPrecheck | None:
+    """Read the identity and replay controls before building a fresh preview."""
+
+    payload = _read_heartbeat_settlement_payload(
+        runtime_root,
+        goal_id=goal_id,
+        fields={
+            "agent_id": agent_id,
+            "todo_id": todo_id,
+            "turn_instance_id": turn_instance_id,
+            "replan_obligation_id": replan_obligation_id,
+            "infer_turn_instance_id": infer_turn_instance_id,
+            "allow_unbound_binding": allow_unbound_binding,
+            "spend_precheck": True,
+            **({"spend_request": dict(spend_request)} if spend_request is not None else {}),
+        },
+        registry_path=registry_path,
+        goal_ref=goal_ref,
+    )
+    if payload is None:
+        return None
+    spend_run_present = payload.get("spend_run_present")
+    if not isinstance(spend_run_present, bool):
+        raise RuntimeError("TypeScript quota spend precheck result shape mismatch")
+    return QuotaSpendPrecheck(
+        identity=_readback_result(payload.get("identity"), identity=True),
+        settlement=_readback_result(payload.get("settlement")),
+        progress=_optional_readback_record(payload.get("progress")),
+        spend_run_present=spend_run_present,
+        spend_request_rejection=(
+            _readback_result(payload["spend_request_rejection"])
+            if "spend_request_rejection" in payload else None
+        ),
+    )
+
+
+def read_heartbeat_settlement(
+    runtime_root: Path,
+    *,
+    goal_id: str,
+    agent_id: str | None,
+    todo_id: str | None,
+    turn_instance_id: str | None,
+    replan_obligation_id: str | None = None,
+    infer_turn_instance_id: bool = False,
+    allow_unbound_binding: bool = False,
+    resolve_original_binding: bool = False,
+    pending_closeout: bool = False,
+    refresh_retry: dict[str, Any] | None = None,
+    registry_path: Path | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
+    source_admission: Mapping[str, Any] | None = None,
+    borrow_source_admission: bool = False,
+    heartbeat_reentry_guard: dict[str, Any] | None = None,
+    include_record_bodies: bool = True,
+    tolerate_malformed_history: bool = False,
+) -> QuotaSettlementReadback | None:
+    """Read one complete heartbeat settlement through the TS domain owner."""
+
+    payload = _read_heartbeat_settlement_payload(
+        runtime_root,
+        goal_id=goal_id,
+        fields={
+            "agent_id": agent_id,
+            "todo_id": todo_id,
+            "turn_instance_id": turn_instance_id,
+            "replan_obligation_id": replan_obligation_id,
+            "infer_turn_instance_id": infer_turn_instance_id,
+            "allow_unbound_binding": allow_unbound_binding,
+            **(
+                {"include_record_bodies": include_record_bodies}
+                if include_record_bodies is not True
+                else {}
+            ),
+            **(
+                {"tolerate_malformed_history": True}
+                if tolerate_malformed_history
+                else {}
+            ),
+            **({"resolve_original_binding": True} if resolve_original_binding else {}),
+            **({"pending_closeout": True} if pending_closeout else {}),
+            **({"refresh_retry": refresh_retry} if refresh_retry is not None else {}),
+            **({"borrow_source_admission": True} if borrow_source_admission else {}),
+            **(
+                {"heartbeat_reentry_guard": heartbeat_reentry_guard}
+                if heartbeat_reentry_guard is not None
+                else {}
+            ),
+        },
+        registry_path=registry_path,
+        goal_ref=goal_ref,
+        source_admission=source_admission,
+    )
+    if payload is None:
+        return None
     workspace_causality = _optional_readback_record(
         payload.get("workspace_causality")
     )
@@ -441,6 +564,7 @@ def read_heartbeat_settlement(
         native_child_admission=_optional_readback_record(payload.get("native_child_admission")),
         heartbeat_reentry_qualification=_optional_readback_record(payload.get("heartbeat_reentry_qualification")),
         successor_replan_pending=payload.get("successor_replan_pending") is True,
+        replan_execution_pending=payload.get("replan_execution_pending") is True,
         spend_run=_optional_readback_record(payload.get("spend_run")),
         heartbeat_receipt=_optional_readback_record(payload.get("heartbeat_receipt")),
         writeback_event=_optional_readback_record(payload.get("writeback_event")),
@@ -456,4 +580,6 @@ def read_heartbeat_settlement(
             if replay_phase is not None
             else None
         ),
+        admission_recorded_at=_optional_readback_text(payload.get("admission_recorded_at")),
+        admission_event_id=_optional_readback_text(payload.get("admission_event_id")),
     )

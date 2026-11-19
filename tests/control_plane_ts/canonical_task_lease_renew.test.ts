@@ -108,6 +108,28 @@ for (const provider of ["file", "sqlite"] as const) {
       expected_version: 1, ttl_seconds: 600, write_scopes: ["src/**"], authority: request.authority};
   }
   const acquireNow = new Date("2026-09-13T10:11:00Z");
+  providerTest(`${provider} malformed receipt scopes cannot become a root wildcard`, async t => {
+    const {store, request, lease, goal} = await fixture(t, provider);
+    const command = {...acquireRequest(request), write_scopes: ["**"]};
+    const identityFields = {goal_id: goal, todo_id: command.todo_id, owner: command.owner,
+      idempotency_key: command.idempotency_key};
+    const operation_id = `lease-acquire:${canonicalAuthoritySha256(identityFields)}`;
+    const retained = {...lease, idempotency_key: command.idempotency_key, version: 2, lease_epoch: 8,
+      write_scopes: ["../bad"], acquired_at: "2026-09-13T10:11:00Z", updated_at: "2026-09-13T10:11:00Z",
+      expires_at: "2026-09-13T10:21:00Z"};
+    const loaded = await store.loadAuthority();
+    assert.equal(loaded.status, "loaded");
+    if (loaded.status !== "loaded") throw new Error("fixture head missing");
+    const identity = {schema_version: "loopx_canonical_task_lease_acquire_receipt_v0", operation_id, goal_id: goal,
+      request_sha256: canonicalAuthoritySha256({...identityFields, expected_version: 1, ttl_seconds: 600, write_scopes: ["**"]})};
+    assert.equal((await store.commitAuthority({operation_id, expected_provider_revision: loaded.provider_revision,
+      next_projection: authorityProjectionFixture(goal, request.authority.todos, [retained], "native", {handoff_mode: "hard_lease"}),
+      events: [], receipts: [{...identity, result: {changed: true, lease: retained, handoff_mode: "hard_lease"}}]})).status, "applied");
+    const before = await store.loadAuthority();
+    const result = await executeTaskLeaseAcquire(command, {now: () => acquireNow});
+    assert.equal(result.error_code, "invalid_coordination_command_receipt");
+    assert.deepEqual(await store.loadAuthority(), before);
+  });
   providerTest(`${provider} legacy acquire wire requires canonical authority`, async t => {
     const {store, request, state} = await fixture(t, provider);
     const command = acquireRequest(request);
@@ -405,8 +427,19 @@ for (const provider of ["file", "sqlite"] as const) {
         child.on("error", reject);
         child.on("close", code => {clearTimeout(timeout); if (code !== 0) reject(new Error(error)); else resolve(JSON.parse(output));});
       })));
-      assert.deepEqual(results.map(r => r.status).sort(), differentIntent ? ["applied", "failed"] : ["applied", "applied"]);
-      if (differentIntent) assert.equal(results.find(r => r.status === "failed")!.reason_code, "coordination_operation_identity_mismatch");
+      const statuses = results.map(r => r.status).sort();
+      if (differentIntent) {
+        assert.deepEqual(statuses, ["applied", "failed"]);
+        assert.equal(results.find(r => r.status === "failed")!.reason_code, "coordination_operation_identity_mismatch");
+      } else {
+        // The other worker may reach preflight after the first commit or
+        // recover the same receipt through its concurrent commit attempt.
+        assert.equal(statuses[0], "applied");
+        assert.ok(["applied", "recovered", "replayed"].includes(String(statuses[1])));
+        assert.ok(results.every(result => result.renewed === true && result.original_receipt));
+        assert.deepEqual(results[0]!.original_receipt, results[1]!.original_receipt);
+        assert.deepEqual(results[0]!.lease, results[1]!.lease);
+      }
       const head = await store.loadAuthority(); if (head.status !== "loaded") throw new Error("missing head");
       assert.equal(head.cursor, "2"); assert.equal((head.head.leases as Record<string, unknown>[])[0]!.version, 2);
     });

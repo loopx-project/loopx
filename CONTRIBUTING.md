@@ -105,6 +105,12 @@ loopx check \
   --scan-path examples/
 ```
 
+The credential rule also rejects unlabeled provider token shapes (GitHub, Slack,
+AWS, Google, Stripe, npm, PyPI, JWT) anywhere in a file. A fixture or example
+that must demonstrate a redaction keeps the value split, for example
+`"ghp_" + "<suffix>"` in Python or a `\u` escape in JSON, so the test still
+exercises the scan without a raw token entering the repository or the PR diff.
+
 ## Local Development
 
 Use the [developer guide](docs/development/README.md) as the stable entry point.
@@ -121,7 +127,8 @@ LoopX needs two runtimes:
 
 - **Python 3.11+.** `uv` installs a compatible one for you.
 - **Node.js 22.22.3 or newer**, with Node.js 24 LTS recommended. `pyproject.toml`
-  declares no Python dependencies, but the TypeScript control plane runs on the
+  declares no cross-platform Python dependencies (only `tzdata; sys_platform == 'win32'`),
+  but the TypeScript control plane runs on the
   system Node.js, both for `loopx` itself and for the test suite. `pip` and `uv`
   cannot install Node.js for you.
 
@@ -184,18 +191,20 @@ touch, mention it in the PR instead of fixing it there.
 | --- | --- | --- | --- |
 | `python-tests.yml` | every PR | yes (`merge-gate`) | lint, mypy, sharded pytest, TypeScript core and coverage, minimum Node.js, Windows PowerShell, dashboard presentation |
 | `dco.yml` | every PR | yes (`Sign-off`) | `Signed-off-by` on contribution commits; verified GitHub-generated two-parent merges are exempt |
-| `ci-maintenance.yml` | closed or updated PR (`pull_request_target`, trusted base code only) | no | cancels obsolete Python qualification runs after rechecking the PR and source branch |
+| `ci-maintenance.yml` | opened, reopened, edited, updated or closed PR (`pull_request_target`, trusted base code only) | no | inspects potential stale PR comparisons without mutating the head or target; cancels obsolete Python qualification runs after rechecking the PR and source branch |
 | `dependency-review.yml` | every PR | no | dependency changes introduced by the PR |
 | `postgresql-integration.yml` | control-plane or npm lockfile paths | no | PostgreSQL authority store and service on a temporary instance |
-| `package-smoke.yml` | extension package paths | no | extension packages install, entrypoints, and example schemas |
+| `package-smoke.yml` | `loopx-core` and extension package paths | no | `loopx-core` and extension packages install, entrypoints, and example schemas |
 | `release-artifacts.yml` | `loopx/`, packaging, and lockfile paths | no | release identity and a release build from this source |
+| `runtime-snapshots.yml` | runtime artifact, installer, and updater paths | no | qualified, revision-addressed runtime archives and the main channel pointer |
 | `ark-turn.yml` | Turn driver and collaboration paths | no | optional Ark Turn package, stdio MCP, and DSH parity |
+| `memt-turn.yml` | optional MemT package, Turn driver, lock, and packaging paths | no | explicit optional dependency installation, complete adapter workflow, stdio MCP, and driver binding |
 | `dsh-plugin.yml` | DSH plugin and distribution workflow paths | no | Linux/Windows package install and uninstall, typed host contracts, and Linux real LoopX/web runtime admission |
 | `dsh-plugin-publish.yml` | no (manual, published plugin tag) | no | merged release identity, immutable npm package publication, and distribution readback |
 | `frontstage-pages.yml` | README, dashboard, and chat bundle paths | no | public Pages build |
 | `desktop-release-artifacts.yml` | desktop app and dashboard paths | no | macOS and Windows desktop builds |
 | `desktop-updater.yml` | desktop app paths | no | desktop app build and updater feed |
-| `full-public-smokes.yml` | no (push to `main`, schedule) | no | every public smoke, in shards |
+| `full-public-smokes.yml` | no (manual, schedule) | no | every public smoke, in shards |
 | `sonarcloud.yml` | no (called by Python Tests) | no | SonarCloud analysis of that run's coverage |
 | `stale.yml` | no (schedule) | no | stale-issue reminders (never closes issues) |
 | `update-notes.yml` | no (schedule) | no | biweekly update notes |
@@ -371,6 +380,41 @@ message, mock or passing suite alone does not complete a promised user journey.
 Maintainers may request consolidation when a useful outcome was unnecessarily
 split, or a smaller PR when unrelated concerns were mixed. Review evaluates the
 verified goal delta and evidence, not minimum size, model identity or PR count.
+
+### Verify the published diff
+
+After opening or updating a PR, fetch its actual target branch and source head,
+then compare GitHub's changed-file inventory and line totals with
+`git diff --stat TARGET...HEAD` and `git diff --name-status TARGET...HEAD` at those
+exact revisions. Use the actual PR target, including a non-main target; a
+two-dot comparison with an advancing target also includes target-only changes.
+
+GitHub's [PR and compare views can use different merge bases](https://docs.github.com/en/pull-requests/reference/pull-requests#differences-between-commits-on-compare-and-pull-request-pages).
+The PR can retain an older base snapshot after the source branch incorporates
+target commits, inflating both files and line totals. CI Maintenance reports the pinned base and current target on PR lifecycle
+events, using trusted read-only inline code without checking out the contributor's
+branch. This is an advisory to compare inventories, not proof of an incorrect diff.
+It never updates the base: GitHub's REST base update has no conditional target
+write, so another GET cannot prevent overwriting a concurrent retarget.
+It does not repair unrelated code that is genuinely present in the Git diff.
+
+If published totals still disagree, inspect the PR's exact repository, head and
+base, and compare the pinned base with the current target. A maintainer can
+refresh the same base with the native API only while coordinating exclusive
+ownership of target edits for that operation:
+
+```bash
+gh api --method PATCH repos/OWNER/REPO/pulls/NUMBER -f base=VERIFIED_BASE_BRANCH
+```
+
+Do not use this unconditional PATCH in unattended automation. If target-edit
+ownership cannot be coordinated, leave the comparison unchanged and report the
+verified discrepancy. Read back the unchanged head, unchanged target branch and corrected file/line
+inventory before declaring the repair complete. Recheck moved revisions rather
+than reusing stale evidence. A refresh needs no empty commit, history rewrite,
+temporary retarget or close/reopen cycle. Ordinary target advancement alone is
+not evidence of an incorrect diff. If the Git diff itself contains unrelated
+work, isolate the intended changes on the verified target before publishing.
 
 ### Validation disclosure
 

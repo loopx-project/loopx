@@ -55,10 +55,10 @@ def recovery_cli_actions(
     if recovery.get("repair") == "blocked_writeback":
         bound_turn = shlex.quote(str(recovery["turn_instance_id"]))
         return [
-            "Verify the recorded dependency wait and inspect existing effects. This projection is not a closeout receipt.",
+            "Verify the recorded blocked Todo or dependency wait and inspect existing effects. This projection is not a closeout receipt.",
             (f"{command_prefix} refresh-state --goal-id {goal_id}{lifecycle_actor_args}"
              f" --todo-id {shlex.quote(prior_todo_id)} --turn-instance-id {bound_turn}"
-             " --classification blocked_dependency --delivery-batch-scale single_surface"
+             " --classification blocked_attempt --delivery-batch-scale single_surface"
              " --delivery-outcome outcome_gap --progress-result-class blocked"
              " --progress-blocker-id '<verified-blocker-id>'"
              " --progress-evidence-id '<verified-evidence-ref>'"),

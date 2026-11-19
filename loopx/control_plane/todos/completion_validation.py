@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import os
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from json import loads as json_loads
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
+from ...file_lock import (
+    try_exclusive_file_lock,
+    try_posix_child_retained_file_lock,
+)
 from ...history import load_registry
 from ...materials import find_registry_goal, goal_repo
 from ..agents.delivery_workspace import normalize_delivery_workspace_snapshot
@@ -13,8 +19,10 @@ from ..agents.workspace_guard import (
     capture_delivery_workspace,
     delivery_workspace_repository,
 )
+from ..coordination.local_authority import LocalCoordinationAuthorityUnavailable
 from ..runtime.validation_command import (
     CALLER_VALIDATION_RECEIPT_SCHEMA_VERSION,
+    retain_validation_execution_lock,
     run_caller_validation,
 )
 from .active_state_editing import find_todo_block
@@ -22,19 +30,15 @@ from .completion_policy import (
     build_completion_policy_request,
     linked_successors_from_state,
 )
-from .completion_transaction import (
-    reduce_todo_completion_transaction,
-    todo_completion_source_snapshot,
-)
 from .completion_validation_projection import (
     completion_validation_declaration,
     completion_validation_declaration_sha256,
 )
 from .completion_validation_store import (
+    completion_validation_declaration_path,
     persist_completion_validation_declaration,
     read_completion_validation_declaration,
 )
-from .contract import TODO_STATUS_DONE, normalize_todo_status
 from ..content_digest import BARE_SHA256_PATTERN
 
 # Kept safely under the 30s outer CLI/MCP subprocess budget so a timed-out
@@ -43,6 +47,7 @@ _COMPLETION_VALIDATION_TIMEOUT_SECONDS = 20
 # Per-todo overrides (declared on `todo add`) must also stay under that outer
 # budget for the same reason; the writer-side range check enforces this.
 COMPLETION_VALIDATION_TIMEOUT_MAX_SECONDS = 29
+COMPLETION_VALIDATION_IN_PROGRESS = "completion_validation_in_progress"
 
 
 def normalize_validation_command_json(raw: str | None) -> list[str] | None:
@@ -71,7 +76,7 @@ def _resolve_goal_repo_workspace(registry_path: Path, goal_id: str) -> Path | No
     repo = goal_repo(goal)
     if repo is None or not repo.is_dir():
         return None
-    return cast(Path, repo)
+    return repo
 
 
 def _workspace_failure(label: str, *, status: str, summary: str) -> dict[str, Any]:
@@ -292,23 +297,17 @@ def _run_declared_completion_validation(
     assert workspace is not None
     try:
         if validation_argv is not None:
-            return cast(
-                dict[str, Any],
-                run_caller_validation(
-                    workspace,
-                    validation_argv=validation_argv,
-                    validation_label=label,
-                    timeout_seconds=timeout_seconds,
-                ),
-            )
-        return cast(
-            dict[str, Any],
-            run_caller_validation(
+            return run_caller_validation(
                 workspace,
-                validation_command=str(validation_command),
+                validation_argv=validation_argv,
                 validation_label=label,
                 timeout_seconds=timeout_seconds,
-            ),
+            )
+        return run_caller_validation(
+            workspace,
+            validation_command=str(validation_command),
+            validation_label=label,
+            timeout_seconds=timeout_seconds,
         )
     except subprocess.TimeoutExpired:
         return {
@@ -324,17 +323,15 @@ def _run_declared_completion_validation(
             "stderr_captured": False,
             "local_path_captured": False,
         }
-    except (FileNotFoundError, PermissionError):
+    except OSError:
+        # Launch failures such as invalid executable formats can include a path.
         return {
             "schema_version": CALLER_VALIDATION_RECEIPT_SCHEMA_VERSION,
             "command_label": label,
             "exit_code": None,
             "passed": False,
             "status": "command_not_run",
-            "summary": (
-                "validation command could not be launched because its executable "
-                "is unavailable"
-            ),
+            "summary": "validation command could not be launched",
             "stdout_captured": False,
             "stderr_captured": False,
             "local_path_captured": False,
@@ -486,128 +483,6 @@ def resolve_private_completion_validation_declaration(
     return declaration
 
 
-def run_completion_validation_gate_with_source(
-    *,
-    state_file: Path,
-    todo_id: str,
-    role: str | None,
-    registry_path: Path,
-    goal_id: str,
-    dry_run: bool,
-    no_followup: bool = False,
-    completion_turn_key: str | None = None,
-    completion_identity_source: str | None = None,
-    requested_has_successor: bool = False,
-    completion_policy_facts: Mapping[str, Any] | None = None,
-    requested_successor_todo_ids: list[str] | None = None,
-    completion_delivery_workspace: Mapping[str, Any] | None = None,
-    completion_validation_workspace_path: Path | None = None,
-) -> dict[str, Any]:
-    """Run the caller-approved completion validation gate, OUTSIDE the mutation lock.
-
-    Returns one envelope containing the source snapshot and typed transaction.
-    ``failure`` is a ``validation_blocked_completion`` payload when a declared
-    command does not pass, otherwise ``None``. The caller returns failures
-    unchanged so durable writeback and quota spend are skipped. Dry runs and
-    terminal replays do not execute validation. This function is read-only
-    w.r.t. the state file and safe to call before acquiring the mutation lock,
-    so a multi-second validation command does not block concurrent Todo writes.
-    """
-    from ...history import load_registry
-    from ...registry import registry_goals
-    from ..goals.legacy_event_source import require_no_legacy_todo_events
-    goal = next((item for item in registry_goals(load_registry(registry_path)) if item.get("id") == goal_id), {})
-    require_no_legacy_todo_events(goal, state_path=state_file)
-    projection_source = "materialized"
-    source_authority: dict[str, Any] | None = None
-    todo = _materialized_todo_item(state_file=state_file, todo_id=todo_id, role=role)
-    if todo is None:
-        return {"todo": None, "validation": None, "failure": None,
-            "source_authority": None, "source_snapshot": None, "transaction": None}
-    source_snapshot = todo_completion_source_snapshot(todo)
-    completion_policy_source = None
-    if completion_policy_facts is not None:
-        try:
-            lines = state_file.read_text(encoding="utf-8").splitlines()
-        except FileNotFoundError:
-            lines = []
-        completion_policy_source = completion_policy_source_from_state(
-            registry_path=registry_path,
-            goal_id=goal_id,
-            lines=lines,
-            successor_todo_ids=requested_successor_todo_ids or [],
-            facts=completion_policy_facts,
-        )
-    transaction = reduce_todo_completion_transaction(
-        todo=todo,
-        projection_source=projection_source,
-        completion_turn_key=completion_turn_key,
-        no_followup=no_followup,
-        dry_run=dry_run,
-        completion_identity_source=completion_identity_source,
-        goal_id=goal_id,
-        todo_id=todo_id,
-        requested_has_successor=requested_has_successor,
-        validation_receipt=None,
-        # The coarse reducer returns policy success or typed failure as data.
-        # The public writer consumes that projection only after actor and lease
-        # admission, preserving legacy error priority without a second IPC.
-        completion_policy_request=completion_policy_source,
-    )
-    completion_validation = None
-    if transaction["decision"] == "execute_validation":
-        effect = transaction["validation_effect"]
-        completion_validation = run_declared_completion_validation_effect(
-            effect=effect,
-            registry_path=registry_path,
-            goal_id=goal_id,
-            delivery_workspace=completion_delivery_workspace,
-            validation_workspace_path=completion_validation_workspace_path,
-        )
-        if completion_validation is None:
-            raise RuntimeError("Todo completion validation effect produced no receipt")
-        transaction = reduce_todo_completion_transaction(
-            todo=todo,
-            projection_source=projection_source,
-            completion_turn_key=completion_turn_key,
-            no_followup=no_followup,
-            dry_run=dry_run,
-            completion_identity_source=completion_identity_source,
-            goal_id=goal_id,
-            todo_id=todo_id,
-            requested_has_successor=requested_has_successor,
-            validation_receipt=completion_validation,
-            completion_policy_request=completion_policy_source,
-        )
-    if transaction["decision"] != "reject":
-        return {
-            "failure": None,
-            "source_authority": source_authority,
-            "source_snapshot": source_snapshot,
-            "completion_policy_source": completion_policy_source,
-            "transaction": transaction,
-        }
-    failure_payload = transaction["failure"]
-    completion_validation = dict(failure_payload["validation_receipt"])
-    failure = {
-        "ok": False,
-        "dry_run": dry_run,
-        "completed": False,
-        "goal_id": goal_id,
-        "todo_id": todo_id,
-        "changed": False,
-        "validation": completion_validation,
-        "validation_blocked_completion": True,
-    }
-    return {
-        "failure": failure,
-        "source_authority": source_authority,
-        "source_snapshot": source_snapshot,
-        "completion_policy_source": completion_policy_source,
-        "transaction": transaction,
-    }
-
-
 def completion_policy_source_from_state(
     *,
     registry_path: Path,
@@ -618,81 +493,22 @@ def completion_policy_source_from_state(
 ) -> dict[str, Any]:
     """Project lock-comparable facts for the TS completion policy."""
 
-    return cast(
-        dict[str, Any],
-        build_completion_policy_request(
-            registry_path=registry_path,
-            goal_id=goal_id,
-            claimed_by=facts.get("claimed_by"),
-            next_claimed_by=facts.get("next_claimed_by"),
-            next_agent_todo=facts.get("next_agent_todo"),
-            next_action_kind=facts.get("next_action_kind"),
-            next_continuation_policy=facts.get("next_continuation_policy"),
-            next_excluded_agents=facts.get("next_excluded_agents") or [],
-            self_merged=bool(facts.get("self_merged")),
-            evidence=facts.get("evidence"),
-            linked_successors=linked_successors_from_state(
-                lines=lines,
-                successor_todo_ids=successor_todo_ids,
-            ),
-        ),
-    )
-
-
-def prepare_user_todo_update_completion(
-    *,
-    status: str | None,
-    state_file: Path,
-    todo_id: str,
-    role: str | None,
-    registry_path: Path,
-    goal_id: str,
-    dry_run: bool,
-    no_followup: bool,
-    requested_has_successor: bool,
-) -> dict[str, Any] | None:
-    """Prepare the coarse transaction for a direct user-Todo completion."""
-
-    if normalize_todo_status(status) != TODO_STATUS_DONE:
-        return None
-    match = find_todo_block(
-        state_file.read_text(encoding="utf-8").splitlines(),
-        todo_id=todo_id,
-        role=role,
-    )
-    if match is None or (role or match[0]) == "agent":
-        return None
-    return run_completion_validation_gate_with_source(
-        state_file=state_file,
-        todo_id=todo_id,
-        role=role,
+    return build_completion_policy_request(
         registry_path=registry_path,
         goal_id=goal_id,
-        dry_run=dry_run,
-        no_followup=no_followup,
-        requested_has_successor=requested_has_successor,
+        claimed_by=facts.get("claimed_by"),
+        next_claimed_by=facts.get("next_claimed_by"),
+        next_agent_todo=facts.get("next_agent_todo"),
+        next_action_kind=facts.get("next_action_kind"),
+        next_continuation_policy=facts.get("next_continuation_policy"),
+        next_excluded_agents=facts.get("next_excluded_agents") or [],
+        self_merged=bool(facts.get("self_merged")),
+        evidence=facts.get("evidence"),
+        linked_successors=linked_successors_from_state(
+            lines=lines,
+            successor_todo_ids=successor_todo_ids,
+        ),
     )
-
-
-def locked_todo_completion_source(
-    *,
-    lines: list[str],
-    state_file: Path,
-    project: Path | None,
-    registry_path: Path,
-    goal_id: str,
-    todo_id: str,
-    role: str | None,
-) -> tuple[Any, dict[str, Any] | None]:
-    """Resolve the materialized Todo under the write lock."""
-
-    match = find_todo_block(lines, todo_id=todo_id, role=role)
-    if match:
-        item_role, _section, _start, _end, block = match
-        todo = dict(block)
-        todo["role"] = item_role
-        return match, todo
-    return None, None
 
 
 def execute_completion_validation_effects(
@@ -735,6 +551,26 @@ def execute_completion_validation_effects(
         updates["goal_acceptance_source_binding"] = dict(source_binding)
         updates["goal_acceptance_validation_receipts"] = receipts
     return updates
+
+
+@contextmanager
+def completion_validation_execution(
+    *, runtime_root: Path, goal_id: str, todo_id: str,
+) -> Iterator[None]:
+    """Keep a single host executor through the canonical finalization call."""
+    target = completion_validation_declaration_path(
+        runtime_root=runtime_root, goal_id=goal_id, todo_id=todo_id,
+    ).with_suffix(".execution")
+    lock = try_posix_child_retained_file_lock if os.name == "posix" else try_exclusive_file_lock
+    with lock(target, operation="todo_completion_validation") as held:
+        if held is None:
+            raise LocalCoordinationAuthorityUnavailable(
+                "Completion validation is already running for this Todo. Retry the original completion after it finishes.",
+                code=COMPLETION_VALIDATION_IN_PROGRESS,
+                payload={"goal_id": goal_id, "todo_id": todo_id},
+            )
+        with retain_validation_execution_lock(held if isinstance(held, int) else None):
+            yield
 
 
 def completion_validation_failure(

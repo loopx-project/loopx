@@ -398,13 +398,13 @@ def run_should_run_cli(
         "json",
         "quota",
         "should-run",
+        "--context-delivery",
+        "off",
         "--goal-id",
         "needs-operator",
         "--agent-id",
         agent_id,
         "--codex-app",
-        "--scan-path",
-        str(project),
     ]
     if include_detail:
         args.extend(["--include-detail", "scheduler"])

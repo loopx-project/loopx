@@ -147,7 +147,7 @@ function readView(loaded: AuthorityStoreHead, goalRef: WireExactGoalRef, actor: 
     generated_at: now, authority_registry: registry, receipts: rows, available_boundaries: ["local_private"]}) : null;
   const authority = readGoalAcceptanceAuthority(loaded.head, goalRef.goal_id);
   const acceptance = authority.kind === "exact" && authority.owner_matches && authority.lifecycle.state === "active"
-    && sameExactGoalRef(authority.lifecycle.goal_ref, goalRef) && authority.state?.enabled ? authority.state : null;
+    && sameExactGoalRef(authority.lifecycle.goal_ref, goalRef) ? authority.state : null;
   return {schema_version: SCHEMA, status: "loaded", ok: true, changed: false, goal_ref: goalRef, provider_revision: loaded.provider_revision,
     enabled: configured?.enabled === true, authority_digest: configured?.authority_digest ?? null,
     authority_registry: registry, registered_agents: registered, projection,

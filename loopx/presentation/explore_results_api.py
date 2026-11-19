@@ -1,13 +1,19 @@
 """Loopback read adapter for the canonical Explore result projection."""
 
+from datetime import datetime, timezone
+import subprocess
 from urllib.parse import parse_qs, urlparse
 
 from ..control_plane.todos.list_readback import list_goal_todos
+from ..control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
+from ..control_plane.status.goal_source import SourceScopeError
 
 from ..capabilities.explore.result_log import (
     build_explore_result_projection,
+    explore_history_rows,
     explore_result_log_path,
     load_explore_result_events_strict,
+    validate_explore_result_event,
 )
 
 
@@ -15,37 +21,52 @@ def _result_rows(runtime_root, goal_id, registry_path):
     events = load_explore_result_events_strict(
         explore_result_log_path(runtime_root, goal_id), goal_id=goal_id,
     )
+    # Reuse canonical active/history readback; an association is not adoption.
+    todos = {}
+    try:
+        for view in ({}, {"status": "done", "read_scope": "completed_history"}):
+            for todo in list_goal_todos(
+                registry_path=registry_path, runtime_root_arg=str(runtime_root),
+                goal_id=goal_id, role="agent", **view,
+            )["todos"]:
+                todos[todo["todo_id"]] = todo
+    except LocalCoordinationAuthorityUnavailable:
+        # Task authority is independent of the verified evidence log. Reuse
+        # the source reader's unavailable-associations view; never present a
+        # partial list as complete or fall back to legacy task state.
+        return _finding_rows(events, None, goal_id=goal_id, validated=True)
+    return _finding_rows(events, todos.values(), goal_id=goal_id, validated=True)
+
+
+def _finding_rows(events, todos, *, goal_id, validated: bool = False):
+    """Same Explore projection and task associations for every physical source."""
+    from ..control_plane.work_items.yardstick_decision import project_work_yardstick_presentations
+    if not validated:
+        events = [validate_explore_result_event(event, expected_goal_id=goal_id) for event in events]
     projection = build_explore_result_projection(
         events, goal_id=goal_id, finding_limit=len(events),
     )
     nodes = {node["node_id"]: node for node in projection["nodes"]}
-    # Reuse canonical active/history readback; an association is not adoption.
-    todos = {}
-    for view in ({}, {"status": "done", "read_scope": "completed_history"}):
-        for todo in list_goal_todos(
-            registry_path=registry_path, runtime_root_arg=str(runtime_root),
-            goal_id=goal_id, role="agent", **view,
-        )["todos"]:
-            todos[todo["todo_id"]] = todo
     links = {}
-    for todo in todos.values():
+    for todo in todos or []:
         for node_id in todo.get("explore_result_node_refs") or []:
             links.setdefault(node_id, []).append({
                 "todo_id": todo["todo_id"], "text": todo["text"],
                 "status": todo["status"], "claimed_by": todo.get("claimed_by") or "",
             })
-    return [
+    return project_work_yardstick_presentations([
         {**finding, "linked_todos": links.get(finding["node_id"], []),
+         **({"linked_todos_available": False} if todos is None else {}),
          "question": nodes.get(finding["node_id"], {}).get("title", ""),
          "scope": nodes.get(finding["node_id"], {}).get("summary", "")}
         for finding in projection["findings"]
-    ]
+    ], goal_id=goal_id)
 
 
 def _history_rows(runtime_root, goal_id):
     """Adapt scoped canonical records without folding away earlier attempts.
 
-    This is transport adaptation, not a graph, progress or assessment owner.
+    This is transport adaptation.
     In particular, do not expose arbitrary observation payloads or materialize
     parent links as scientific supporting evidence.
     """
@@ -54,33 +75,129 @@ def _history_rows(runtime_root, goal_id):
     ))
 
 
-def explore_history_rows(events):
-    """Use the same display boundary for local and external native records."""
-    fields = (
-        "schema_version", "event_id", "goal_id", "event_kind", "result_id",
-        "recorded_at", "title", "summary", "status", "node_kind",
-        "blocked_reason", "parent_id", "node_id", "from_node", "to_node",
-        "edge_type", "agent_id", "run_id", "evidence_refs", "supersedes", "confidence",
-    )
-    return [
-        {key: event[key] for key in fields if key in event}
-        for event in events
-    ]
+def _explicit_clock(value):
+    if not isinstance(value, str):
+        return None
+    try:
+        clock = datetime.fromisoformat(value.strip())
+        return clock.astimezone(timezone.utc) if clock.utcoffset() is not None else None
+    except (ValueError, OverflowError):
+        return None
+
+
+def _utc_text(clock):
+    return clock.isoformat().replace("+00:00", "Z") if clock is not None else None
+
+
+def _saved_strategy_clock(goal):
+    def field(value, name):
+        return value.get(name) if isinstance(value, dict) else None
+
+    agents = field(field(goal, "semantic_history"), "agents")
+    clocks = []
+    for agent in agents if isinstance(agents, list) else ():
+        run = field(agent, "latest_agent_vision_run")
+        summary = field(field(field(run, "agent_vision"), "vision_patch"), "vision_summary")
+        if isinstance(summary, str) and summary.strip():
+            clock = _explicit_clock(field(run, "generated_at"))
+            if clock is not None:
+                clocks.append(clock)
+    return max(clocks, default=None)
+
+
+def _history_timing(events, *, goal_id, source_namespace=None, native_goal=None):
+    """Read clocks from the saved records, without using them as execution times."""
+    recorded = {}
+    for event in events:
+        recorded[event["event_id"]] = _explicit_clock(event["recorded_at"])
+    times = [clock for clock in recorded.values() if clock is not None]
+    # A strategy is an independent saved state fact. Its clock is useful even
+    # when a source predates the Explore log.
+    return {
+        "ok": True,
+        "goal_id": goal_id,
+        "source_namespace": source_namespace,
+        "first_recorded_at": _utc_text(min(times, default=None)),
+        "last_recorded_at": _utc_text(max(times, default=None)),
+        "untimed_record_count": len(recorded) - len(times),
+        "strategy_recorded_at": _utc_text(_saved_strategy_clock(native_goal)) if not times else None,
+    }
 
 
 class ExploreResultsRequestMixin:
     def _explore_results(self):
-        query = parse_qs(urlparse(self.path).query)
+        query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
         goal_id = query.get("goal_id", [""])[0]
         try:
+            if any(len(values) != 1 for values in query.values()):
+                self._send_error("Choose one Goal, source and Explore view.", status=400)
+                return
+            view = query.get("view", ["findings"])[0]
+            if view not in {"findings", "history", "history-timing"}:
+                self._send_error("Unknown Explore view.", status=400)
+                return
+            if view == "history-timing" and "cursor" in query:
+                self._send_error("The timing view has no pages.", status=400)
+                return
+            from .goal_source_routing import linked_goal_source
+            resolved = linked_goal_source(self.server, goal_id)
+            if resolved is not None:
+                if not self._require_loopback_origin():
+                    return
+                _, reader = resolved
+                if query.get("source_namespace") != [reader.source.namespace]:
+                    self._send_error("Source identity changed; refresh the Goal.", status=409)
+                    return
+                cursor = query.get("cursor", [""])[0]
+                original_goal_id = reader.source.goal_id
+                if view == "history-timing":
+                    status = reader.registered_status(original_goal_id, fresh=True)
+                    native_goals = (status.get("run_history") or {}).get("goals") or []
+                    native_goal = next(
+                        (
+                            goal
+                            for goal in native_goals
+                            if isinstance(goal, dict) and goal.get("id") == original_goal_id
+                        ),
+                        None,
+                    )
+                    if native_goal is None:
+                        raise SourceScopeError("The original Goal is no longer registered")
+                    events = (
+                        validate_explore_result_event(event, expected_goal_id=original_goal_id)
+                        for event in reader.source.read_events(original_goal_id)
+                    )
+                    page = _history_timing(
+                        events, goal_id=original_goal_id, source_namespace=reader.source.namespace,
+                        native_goal=native_goal,
+                    )
+                elif view == "history":
+                    page = reader.history(original_goal_id, cursor)
+                else:
+                    page = reader.findings(original_goal_id, cursor, projector=_finding_rows)
+                latest = linked_goal_source(self.server, goal_id)
+                if latest is None or latest[1].source.namespace != reader.source.namespace:
+                    self._send_error("Source identity changed; refresh the Goal.", status=409)
+                    return
+                self._send_json(page)
+                return
+            if "source_namespace" in query:
+                self._send_error("Source identity changed; refresh the Goal.", status=409)
+                return
             runtime_root = self._goal_result_scope(goal_id)
             if runtime_root is None:
                 return
-            # Local HTTP view selection; canonical event vocabularies are unchanged.
-            view = query.get("view", ["findings"])[0]
-            if view not in {"findings", "history"}:
-                self._send_error("Unknown Explore view.", status=400)
+            if view == "history-timing":
+                events = load_explore_result_events_strict(
+                    explore_result_log_path(runtime_root, goal_id), goal_id=goal_id,
+                )
+                # A Goal can become a different linked source during the read.
+                if linked_goal_source(self.server, goal_id) is not None:
+                    self._send_error("Source identity changed; refresh the Goal.", status=409)
+                    return
+                self._send_json(_history_timing(events, goal_id=goal_id))
                 return
+            # Local HTTP view selection; canonical event vocabularies are unchanged.
             page = self.server.completed_todo_pages.page(
                 scope=("explore_history" if view == "history" else "explore_results", goal_id),
                 cursor=query.get("cursor", [""])[0],
@@ -88,11 +205,13 @@ class ExploreResultsRequestMixin:
                     _result_rows(runtime_root, goal_id, self.server.registry_path),
             )
             self._send_json({**page, "goal_id": goal_id})
+        except SourceScopeError:
+            self._send_error("Goal or connection is not available in this source.", status=404)
         except ValueError as exc:
             expired = str(exc) == "history_cursor_expired"
             self._send_error(
                 "Result page expired; refresh to read current evidence." if expired else
                 "Explore evidence could not be verified.", status=409,
             )
-        except (OSError, RuntimeError):
+        except (OSError, RuntimeError, subprocess.SubprocessError):
             self._send_error("Explore evidence could not be read.", status=503)

@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from loopx.extensions.external_connector_provider import (
     build_document_comment_connector_registration,
     capture_document_comment_provider_page,
@@ -30,6 +32,7 @@ from loopx.extensions.lark.document_comment_provider import (
     LarkCliDocumentCommentProvider,
     LarkDocumentCommentProviderError,
     LarkDocumentCommentTarget,
+    _epoch_rfc3339,
 )
 
 
@@ -467,6 +470,28 @@ def test_lark_provider_rejects_boolean_comment_timestamp(tmp_path: Path) -> None
         assert error.code == "comment_timestamp_invalid"
     else:
         raise AssertionError("boolean timestamps must fail closed")
+
+
+def test_lark_document_comment_timestamp_accepts_microsecond_epoch():
+    assert _epoch_rfc3339("1700000000123456") == "2023-11-14T22:13:20.123456Z"
+
+
+@pytest.mark.parametrize("timestamp", ["²", "170000000²"])
+def test_lark_provider_rejects_non_ascii_comment_timestamp(
+    tmp_path: Path, timestamp: str
+) -> None:
+    payload = _comment_page()
+    payload["data"]["items"][0]["reply_list"]["replies"][0]["create_time"] = timestamp
+    provider = LarkCliDocumentCommentProvider(
+        target=_target(),
+        reply_store=tmp_path / "reply-receipts.json",
+        runner=lambda *_: _completed(payload),
+    )
+
+    with pytest.raises(
+        LarkDocumentCommentProviderError, match="comment_timestamp_invalid"
+    ):
+        provider.page_reader(_connector(), None, 100)
 
 
 def test_lark_document_comment_callsite_runs_read_effect_reply_readback_ack(

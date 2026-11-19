@@ -546,6 +546,8 @@ class ChatActionNormalizationMixin:
                     "stop_condition",
                     "initial_todos",
                     "native_token_budget",
+                    "start_execution",
+                    "open_session",
                 },
             )
             goal_id = _opaque(values.get("goal_id"), field="goal_id")
@@ -558,6 +560,13 @@ class ChatActionNormalizationMixin:
                 "goal_id": goal_id,
                 "title": _text(values.get("title"), field="title", limit=200),
             }
+            if "open_session" in values:
+                # Only the explicit opt-out is retained: a caller that owns its own
+                # conversation layer opens the first Session itself.
+                if type(values["open_session"]) is not bool:
+                    raise ValueError("open_session must be true or false")
+                if values["open_session"] is False:
+                    result["open_session"] = False
             if values.get("native_token_budget") is not None:
                 budget = values["native_token_budget"]
                 if type(budget) is not int or not 1 <= budget <= 999_999_999:
@@ -569,14 +578,22 @@ class ChatActionNormalizationMixin:
                 "objective",
                 "completion_criteria",
                 "execution_boundary",
-                "permission",
                 "stop_condition",
             ):
                 if values.get(field):
                     result[field] = _text(values[field], field=field, limit=1000)
+            if "permission" in values or "start_execution" in values:
+                from .control_plane.effect_runtime import effect_runtime_result
+                result.update(effect_runtime_result("goal.creation.execution.normalize", values))
+            if result.get("open_session") is False and result.get("start_execution"):
+                # start_execution queues the original task as the first Turn of the Session the
+                # core opens; with open_session=false there is no such Session to carry it.
+                raise ValueError("start_execution cannot be combined with open_session=false")
             for field in ("agent_id", "workspace_ref"):
                 if values.get(field):
                     result[field] = _opaque(values[field], field=field)
+            if result.get("completion_criteria") and not result.get("agent_id"):
+                raise ValueError("completion_criteria require the Goal's selected Agent")
             if result.get("agent_id"):
                 # A creation's Agent is refused as a typed gate, so a fresh install
                 # learns which Agent is missing instead of reading a protocol sentence.
@@ -609,6 +626,16 @@ class ChatActionNormalizationMixin:
                 ]
             return result
         if action_kind == "goal.update":
+            if "reason" in parameters or "source_ref" in parameters or "prepared_by" in parameters:
+                values = self._allowed_parameters(parameters, allowed={"goal_id", "objective", "reason", "source_ref", "prepared_by"})
+                goal_id = _opaque(values.get("goal_id"), field="goal_id")
+                goal = self._goal(goal_id)
+                actor = values.get("prepared_by")
+                if actor is not None and actor not in registered_agent_ids_for_goal(goal):
+                    raise ValueError("the preparing Agent must be registered for this Goal")
+                return {"goal_id": goal_id, "objective": _text(values.get("objective"), field="objective", limit=4096),
+                    "reason": _text(values.get("reason"), field="reason", limit=1024),
+                    "source_ref": _text(values.get("source_ref"), field="source_ref", limit=256), "prepared_by": actor}
             values = self._allowed_parameters(
                 parameters,
                 allowed={"goal_id", "title", "objective", "status", "write_scope"},
@@ -736,6 +763,7 @@ class ChatActionNormalizationMixin:
                     "agent_id",
                     "target",
                     "target_key",
+                    "task_repository",
                     "cadence",
                     "timezone",
                     "stop_condition",
@@ -752,6 +780,11 @@ class ChatActionNormalizationMixin:
                 "cadence": _normalize_cadence(values.get("cadence")),
                 "timezone": _text(values.get("timezone"), field="timezone", limit=80),
             }
+            if values.get("task_repository"):
+                raw_repo = _text(values["task_repository"], field="task_repository", limit=200)
+                if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", raw_repo):
+                    raw_repo = f"git:github.com/{raw_repo}"
+                result["task_repository"] = raw_repo
             stop_cond_raw = values.get("stop_condition")
             if stop_cond_raw:
                 raw_text = _text(stop_cond_raw, field="stop_condition", limit=160)
@@ -776,6 +809,7 @@ class ChatActionNormalizationMixin:
                     "operation",
                     "target",
                     "target_key",
+                    "task_repository",
                     "cadence",
                     "stop_condition",
                     "session_id",
@@ -803,6 +837,11 @@ class ChatActionNormalizationMixin:
                 result["target"] = _text(values["target"], field="target", limit=400)
             if values.get("target_key"):
                 result["target_key"] = _opaque(values["target_key"], field="target_key")
+            if values.get("task_repository"):
+                raw_repo = _text(values["task_repository"], field="task_repository", limit=200)
+                if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", raw_repo):
+                    raw_repo = f"git:github.com/{raw_repo}"
+                result["task_repository"] = raw_repo
             if values.get("cadence"):
                 result["cadence"] = _normalize_cadence(values["cadence"])
             if values.get("stop_condition"):
@@ -821,6 +860,53 @@ class ChatActionNormalizationMixin:
                 raise ValueError(
                     "monitor edit requires target, target_key, cadence, or stop_condition"
                 )
+            return result
+        if action_kind == "pr.merge":
+            values = self._allowed_parameters(
+                parameters,
+                allowed={
+                    "repository",
+                    "pr_number",
+                    "merge_method",
+                    "admin_bypass",
+                    "head_oid",
+                    "base_ref",
+                    "pr_url",
+                    "approval_review",
+                    "bypassed_gates",
+                },
+            )
+            repository = str(values.get("repository") or "").strip()
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+                raise ValueError("pr.merge repository must be <owner>/<repo>")
+            raw_num = values.get("pr_number")
+            if isinstance(raw_num, bool) or not isinstance(raw_num, int) or raw_num < 1:
+                raise ValueError("pr.merge pr_number must be a positive integer")
+            method = str(values.get("merge_method") or "squash").strip().lower()
+            if method not in {"squash", "merge", "rebase"}:
+                raise ValueError("pr.merge merge_method must be squash, merge, or rebase")
+            admin_bypass = values.get("admin_bypass", False)
+            if not isinstance(admin_bypass, bool):
+                raise ValueError("pr.merge admin_bypass must be true or false")
+            result: dict[str, Any] = {
+                "repository": repository,
+                "pr_number": raw_num,
+                "merge_method": method,
+                "admin_bypass": admin_bypass,
+            }
+            for optional_text, limit in (("head_oid", 80), ("base_ref", 160), ("pr_url", 300)):
+                if values.get(optional_text) is not None:
+                    result[optional_text] = _text(values[optional_text], field=optional_text, limit=limit)
+            if values.get("approval_review") is not None:
+                if not isinstance(values["approval_review"], Mapping):
+                    raise ValueError("pr.merge approval_review must be an object")
+                result["approval_review"] = dict(values["approval_review"])
+            if values.get("bypassed_gates") is not None:
+                if not isinstance(values["bypassed_gates"], list) or not all(
+                    isinstance(item, str) for item in values["bypassed_gates"]
+                ):
+                    raise ValueError("pr.merge bypassed_gates must be a list of gate labels")
+                result["bypassed_gates"] = [item.strip() for item in values["bypassed_gates"] if item.strip()]
             return result
         if action_kind == "gate.resolve":
             values = self._allowed_parameters(

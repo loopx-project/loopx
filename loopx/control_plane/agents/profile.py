@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from fnmatch import fnmatchcase
+from functools import lru_cache
 from typing import Any, Mapping
 
 from ..runtime.public_safety import public_safe_compact_text
@@ -200,18 +201,35 @@ def agent_profile_candidate_rank(
         return 1
     action_kind = normalize_todo_action_kind(item.get("action_kind")) or ""
     avoided = agent_profile.get("avoid_action_kinds")
-    if action_kind and isinstance(avoided, list) and any(
+    avoid = bool(action_kind and isinstance(avoided, list) and any(
         fnmatchcase(action_kind, str(pattern)) for pattern in avoided
-    ):
-        return 2
+    ))
     preferred = agent_profile.get("preferred_action_kinds")
-    if action_kind and isinstance(preferred, list) and any(
+    prefer = bool(action_kind and isinstance(preferred, list) and any(
         fnmatchcase(action_kind, str(pattern)) for pattern in preferred
-    ):
-        return 0
+    ))
     default_task_classes = agent_profile.get("default_task_classes")
-    if isinstance(default_task_classes, list):
-        task_class = str(item.get("task_class") or "").strip().lower()
-        if task_class and task_class in default_task_classes:
-            return 0
-    return 1
+    task_class = str(item.get("task_class") or "").strip().lower()
+    default_class = bool(task_class and isinstance(default_task_classes, list)
+                         and task_class in default_task_classes)
+    from ..effect_runtime import _runtime_fingerprint_for_request
+    return _typed_profile_rank(avoid, prefer, default_class, _runtime_fingerprint_for_request())
+
+
+@lru_cache(maxsize=16)
+def _typed_profile_rank(avoid: bool, prefer: bool, default_class: bool, revision: str) -> int:
+    """Legacy fnmatch IO stays here; advisory rank precedence has one TS owner.
+
+    Memoize the eight immutable Boolean combinations at their runtime revision,
+    never item, profile, source, authority or an execution decision.
+    """
+    from ..effect_runtime import effect_runtime_result
+
+    result = effect_runtime_result("todo.quota_planning.project", {
+        "schema_version": "todo_profile_rank_request_v0",
+        "facts": {"avoid": avoid, "prefer": prefer, "default_class": default_class},
+    })
+    rank = result.get("rank") if isinstance(result, dict) else None
+    if type(rank) is not int or rank not in (0, 1, 2):
+        raise RuntimeError("invalid typed advisory profile rank")
+    return rank

@@ -385,6 +385,10 @@ export function qualifyActionSelection(value: unknown): ActionSelectionQualifica
     : [];
   const shouldRun = request.should_run === true;
   const normalDeliveryAllowed = request.normal_delivery_allowed === true;
+  const scopedFallbackTodoId = optionalNonEmptyString(
+    request.scoped_fallback_todo_id,
+    "action_selection_qualification_request.scoped_fallback_todo_id",
+  );
   if (rawCandidate === null || rawCandidate === undefined) {
     const requestedTaskClass = request.requested_task_class === null ||
         request.requested_task_class === undefined
@@ -416,7 +420,13 @@ export function qualifyActionSelection(value: unknown): ActionSelectionQualifica
       "action_selection_qualification_request.candidate.todo_id must match requested_todo_id",
     );
   }
-  if (!shouldRun || !normalDeliveryAllowed || preemptions.length > 0) {
+  // The existing gate-scope owner already proved this single fallback's
+  // independence. A pending selection may bind that same current Todo, while
+  // health, budget states, receipts and every other hard lane keep priority.
+  const scopedFallbackAllowed = scopedFallbackTodoId === requestedTodoId
+    && request.quota_state === "operator_gate" && request.goal_health_ok === true
+    && preemptions.length === 1 && preemptions[0] === "delivery_not_allowed";
+  if (!scopedFallbackAllowed && (!shouldRun || !normalDeliveryAllowed || preemptions.length > 0)) {
     return {
       schema_version: ACTION_SELECTION_QUALIFICATION_SCHEMA_VERSION,
       state: "deferred",

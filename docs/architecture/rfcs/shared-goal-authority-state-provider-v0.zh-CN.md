@@ -4,7 +4,8 @@
 - 替代 / 关闭：无
 - 最初提案方：NoKV Lab
 - 扩展修订方：LoopX maintainer
-- 日期：2026-08-05；修订于 2026-09-13
+- 日期：2026-08-05，修订于 2026-09-13 和 2026-11-16
+- 跨人共享访问设计来源：[原提案与评审](https://github.com/loopx-project/loopx/pull/8747)
 - 范围：一个 provider-neutral 的 LoopX 权威合同，支持内置 file、可选 NoKV
   与可选 PostgreSQL provider profile，用来补充
   [`host-integration-surface-v0`](../../reference/protocols/host-integration-surface-v0.md)
@@ -120,9 +121,16 @@ SQLite 跨 provider 恢复复用逻辑归档。这不晋升 provider／默认值
 
 [统一路线](loopx-overall-roadmap-v0.zh-CN.md) R5 复用本 RFC 的 D1 投影、D2 真实 backend/容量/适用十日 soak、D3 fenced cutover；R6 再把所选 shared profile 接入认证的本地/云端路径。R1–R3 可在已支持 profile 上前进，不等待 PostgreSQL 或整 Goal 默认晋升。
 
-`e94759d88` 已增加 [PostgreSQL service admission](../../reference/postgresql-authority-service-v0.zh-CN.md)，包含认证/tenant 验证注入与 identity rotation；它是进程内服务边界，不是已部署网络服务。后续 P lane 复用它，补 transport、真实身份策略、pool/cancellation/failover 与运维资格，不能从零重造 admission。R7 百 Agent 资格需独立报告注册数、活跃执行器和实测容量；目录、presence、管家计划或一次 source read 不授予 shared authority。既有 source-failure fail-closed、receipt/replay 和 rollback 合同保持。
+`e94759d88` 已增加 [PostgreSQL service admission](../../reference/postgresql-authority-service-v0.zh-CN.md)，包含认证/tenant 验证注入与 identity rotation。[候选远程任务服务](../../reference/remote-authority-task-service-v0.md) 复用该边界，提供 TLS 认领、进度、租约与读取命令，以及服务端拥有的限定范围凭证、有界连接池、incarnation 绑定和回执恢复。源码入口测试使用独立客户端进程、真实 PostgreSQL 与受限数据库角色，覆盖响应丢失和服务重启。这不代表已通过本地／云端实机、共享预算所有权、Host 监督、App/CLI 接入、故障切换、容量／soak 或晋升资格；这些仍由 P lane 与 R6/D1–D3 owner 承接。R7 百 Agent 资格需独立报告注册数、活跃执行器和实测容量；目录、presence、管家计划或一次 source read 不授予 shared authority。既有 source-failure fail-closed、receipt/replay 和 rollback 合同保持。
 
 ## 当前实现事实
+
+合格 NoKV SDK 契约在 `loopx/control_plane/coordination/nokv_qualification.py`
+中保留唯一的、无依赖的 Python 定义。SDK 准入和阶段验收 ladder 都导入这份
+定义；bridge 保留原有版本名导出。只读取资格数据时，不加载可选 SDK transport
+或它的 CLI 导入。这保留
+单一所有者约束，并使类型契约目标可以独立检查。版本值、SDK 能力和 incarnation
+fence 检查、按文件启动的 helper 行为、provider 启用及资格门槛保持既有合同。
 
 长历史 closeout 读取复用仅缓存可重新验证的解析前缀，不新增持久 authority 或放宽
 writer fence/D2。剩余三个实现边界不因该运行缺陷修复而机械减一。
@@ -1156,6 +1164,11 @@ rehearsal 证据（1000 次提交／64 KiB）现为 16 个 checkpoint、63 次 r
 单次历史读取最多重建一个 64 次提交窗口，保留 1,048,576 字节 projection 与
 126,714 字节 delta，而“每提交一份完整拷贝”为 65,536,000 字节。
 
+[游标覆盖索引](../../reference/sqlite-authority-store.md#cursor-covering-index)只是针对新建 V2
+数据库与既有显式 V1 迁移的有界物理优化。精确连续性计数与保留证明保持不变，普通打开
+不改已有 V2 的 schema，也不改变 provider 默认。该边界仍需同负载读写、页／WAL、CLI
+与恢复证据；它不改写冻结失败，也不代表 D2 完成。
+
 这仍不代表 lane L 完成。当前比较采用 File 的 checkpoint/delta journal 与有界的
 已验证读取视图，见[同负载 provider 比较](../../reference/sqlite-authority-store.md#short-term-default-decision-and-matched-experiment)。
 File 在复用已解码视图前仍会重读并哈希完整 envelope、检查 store identity；避免重复
@@ -1228,6 +1241,105 @@ write 后，禁止自动 fallback 到本地 writer，否则会产生两个 autho
 
 Provider shadowing 与 read-only canary 可以采集 evidence，但两者都不改变真相源。
 Promotion 必须显式发生，并遵循现有 fail-closed migration discipline。
+
+<a id="cross-person-shared-access"></a>
+
+### 跨人共享访问
+
+不同的人可以让各自的 LoopX Agent 接入显式共享的 Goal。接入默认关闭。各人仍可在自己的
+电脑执行，使用本地模型凭证、私有工具及项目。共享工作与回执由选定的共享权威保存，本地登记
+只保留授权路由。被动发现和读取无需启动 Agent、调用模型或上传。云端 worker 需要单独的执行
+授权与预算。
+
+网关沿用现有服务准入，由工作、验收、租约和证据各自的类型化 owner 作业务判断。
+App、CLI 和 MCP 消费同一份投影事实，沿用不可变请求与回执身份。先使用显式配置的本地
+stdio MCP 桥接 HTTPS。原生远程 MCP 需通过宿主身份和认证资格验证。可独立安装的传输组件
+沿用可选扩展的生命周期。网关没有远程 shell 或底层提交通道。
+
+#### 身份与凭证
+
+服务准入认证主体，绑定其租户及获准的 Agent 和宿主范围。Goal 身份 owner 确认精确生命周期
+（`goal_id` 与 `goal_instance_id`），存储另外证明自己的 incarnation 和版本。Todo 或请求、
+当前租约和执行世代共同标定获准执行。调用方填写的姓名、别名、设备标签或存储 incarnation
+均不能代替其他身份。
+
+服务凭证独立于后端。PostgreSQL 和其他通过资格验证的存储凭证留在服务侧。先使用按主体和
+范围签发、可单独撤销的高熵客户端密钥。需要独立撤销设备权限时分发独立密钥。策略只保留
+校验摘要，密钥不进入模型参数、产物或回执。引入非对称或联邦凭证前，验证保管、请求绑定、
+新鲜度、轮换和防重放。本地 OS 与 stdio 入口沿用现有边界。网络凭证不授予存储挂载、本地
+模型或工具权限。
+
+#### 资源授权
+
+服务与资源 owner 对每个动作取 **主体授权、凭证范围、资源访问控制列表（ACL）、适用的委托
+和来源权限** 的交集。必需证据缺失、不可读、过期、撤销或不匹配时拒绝。判断绑定已认证的
+执行者、租户、精确 Goal 生命周期、资源、动作以及获准受众。版本化证据还要绑定不可变版本。
+子资源只继承显式授权，可以进一步收窄。成员资格、协调者角色或结果验收不能扩大来源受众，
+也不能代替独立核验。
+
+| 资源 | 分别核对的动作 |
+| --- | --- |
+| 精确 Goal 生命周期 | 发现或读取、提议或修订意图、管理成员 |
+| Todo 或请求 | 发现或读取、认领、记录进度、完成 |
+| 产物与证据版本 | 发现元数据、解析确切字节、提交、独立验收、返回或分享 |
+
+列表、搜索、投影与读回使用同一边界。排除被拒资源及其元数据，包括由这些资源派生的数量、
+链接和缓存投影。查询历史回执时，先核对当前对精确操作及资源范围的访问权。历史回执不授予
+新执行，也不会恢复旧租约。下载通过资源 owner 的解析器重新授权精确版本。限时定位链接需验证
+同一受众、版本和撤销策略。已下载的字节仍由原接收者持有。
+
+新请求按当前策略判断。已准入的操作可在原授权快照下结束，保留真实提交回执。审核并验证此期间
+的停止及排空能力。写入仍需要任务 owner 的当前租约、执行 fence、预算及验收前提。ACL
+沿用现有写入与回执账本。
+
+<a id="mixed-version-access"></a>
+
+#### 混合版本访问
+
+只缺写入 fence 时禁写，已证明精确读身份的请求仍可评估读取权限。读身份缺失、含混或过期时，
+拒绝受影响的发现、列表、元数据、下载及恢复。服务端仅在能独立核验精确的当前 Goal 生命周期、
+资源范围和受众时，才可补齐请求里缺失的身份，再执行普通 ACL 检查。按别名回退或展示不受
+范围约束的只读投影仍会暴露另一生命周期的数据。
+
+访问资格验证使用同一别名的两个不同 Goal 生命周期。
+
+| 客户端与服务端的证据 | 预期结果 |
+| --- | --- |
+| 精确且获准的生命周期和读范围，缺写入 fence | 允许已获准的读取。写入拒绝，状态不变。 |
+| 仅有别名，服务无法证明生命周期或受众 | 拒绝发现、列表、元数据、下载及恢复。 |
+| 客户端省略生命周期，服务端独立绑定当前生命周期及受众 | 按普通 ACL 检查已绑定资源和动作。范围外拒绝。 |
+| 显式提供过期生命周期或错误资源或版本 | 即使密钥有效且连接的是当前存储，仍拒绝不匹配的动作。 |
+
+[v0 远程任务服务](../../reference/remote-authority-task-service-v0.md) 是源码候选。
+其严格请求与策略支持租户、Goal、actor、动作范围和存储 incarnation，无法表达上述资源或
+Goal 生命周期 ACL。凭该服务的 scoped key，本身无法验证跨人阅读及证据交付。开放跨人
+接入前，通过已有服务和资源 owner 补齐检查。本地入口、provider 选择、Goal 身份激活及
+旧 writer 排除继续由既有 owner 管理。
+
+#### 跨设备证据与工作回传
+
+独立私有 Goal 可以完成获准的子问题并交付允许分享的结果。保留双方 GoalRef、请求血缘及
+验收条件。Explore 继续只在同一 Goal 内建立图边，跨 Goal 结果经产物或结果 owner 录入。
+意图修订沿用[共享目标对齐合同](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md)
+及其授权、采用门槛。
+
+结果绑定不可变产物版本及摘要、精确输入、认证后的生产者和执行来源。分享时保留来源权限，
+并与结果受众取交集。第二台电脑上的获准解析器应能读取精确字节。本地私有来源可以留在本地，
+按授权提供派生结果，并明确原始核验缺口。分别显示权限拒绝、来源离线、字节已删除及版本冲突。
+定位链接和校验摘要帮助找到字节，不能证明授权、独立性或正确性。共同来源、相互冲突的结果及
+不确定性均应保留。
+
+分别记录授权接活、执行、提交、独立核查、接收方实际使用和原路回传。每个回传身份只记录
+一个结果，显示部分成果和拒绝。带来源的质疑可以改变后续行动。保留后续工作与结果，以实际
+行为观察采用。共享准入与预算通过资格验证之前，各人保留自己的本地模型额度。
+
+[团队工作区](live-team-workspace-v0.zh-CN.md) 负责人类阅读旅程，消费各 owner 按受众过滤
+的投影。展示结论、不确定性、质疑或修订、来源与版本、独立核查、实际采用和待决事项。
+工作区导航及证据读回属于被动访问。研究判断和指标由相应领域 capability 持有。
+
+先在新的隔离范围启用。现有 Goal 的迁移要复用已评审的来源备份、旧 writer 排空、身份激活
+和受 fence 的切换。停用时收回准入、排空已授权工作，保留提交回执与允许保存的产物。恢复前
+核验新 incarnation 并对账有歧义的操作。断网时本地缓存继续保持只读。
 
 ## 9. 断网时怎么办，哪些数据不能出机器
 
@@ -1344,6 +1456,33 @@ Stage 3/4 qualification 必须保持以下 ownership 与 proof 边界：
 7. **Stage 5——切换唯一 authority source。** 只有经过评审的晋升，才能让 shared
    LoopX service 成为唯一 writer。本地 `.loopx` 退为 cache、offline projection 与
    诊断材料。绝不长期维持 dual-write 或 dual-master。
+
+<a id="cross-person-delivery-under-r6"></a>
+
+#### R6 跨人交付
+
+M1 验证只读接入。下列切片由[路线图 R6](loopx-overall-roadmap-v0.zh-CN.md#r6-localcloud-convergence) 的同一套共享
+服务、资源和工作 owner 持有。D1–D3、Goal 身份、受治理的意图修订、预算及 G3 的退出条件
+继续覆盖各自适用范围。切片的证据只证明实际通过的范围。
+
+| 切片 | 验收 | 退出与回退 |
+| --- | --- | --- |
+| M1 共享阅读 | 两人在两台真实电脑通过 App、CLI 和 MCP 阅读获准的问题、Todo 与一个精确证据版本。验证[混合版本三种读身份情形与显式错配](#mixed-version-access)、有效密钥但资源拒绝、错租户/actor/Goal、策略缺失或不可读、来源或受众拒绝、按客户端轮换和撤销。被动读取不改状态。旧客户端不支持时失败，本地 writer 不接管。 | 撤销访问并移除连接，保留共享记录。 |
+| M2 协作研究 | 实际观察限定请求与接活、本地工作、另一台电脑读取准确版本、独立核查、接收者改变下一步行动以及原路回传。覆盖响应丢失、重连、重启或恢复、租约过期或接管及重复执行或扣额。真实打包团队工作区 L1/L2 在桌面及窄屏验证长历史、争议证据、证据不可用或私有。验证停用时本地行为，以及 App、CLI、MCP、已授权的飞书摘要事实一致。 | 停止新准入、排空已准入执行，保留结果与回执。 |
+| M3 本地与云端资格 | 增加独立授权的真实云端 worker，验证持续跨主机恢复、共享预算与准入，以及完整的 provider 与运行资格条件。明确通过资格的环境和范围。 | 明确停止与排空后收窄远程准入，保留已验收历史。 |
+
+资格验证前，服务 owner 按实际工作负载明确分页、产物、订阅及延迟和负载上限。事件迟到时依权威
+游标对齐，保留来源时间、依赖关系和覆盖缺口。审计和内容留存、删除由各自 owner 执行。在线
+状态不能证明正在执行。单机独立进程可以验证候选服务行为，完整产品资格依赖跨电脑打包入口及
+失败恢复。
+
+交付时保留三项有明确 owner 的决定。服务与身份 owner 在 M1 前验证客户端凭证和轮换；
+证据、材料及来源 owner 在 M1 前选用有授权的解析器或获同意的不可变副本并明确留存；工作区
+与研究 owner 在 M2 前用真实有争议的发现验证 L1/L2 阅读设计。
+
+依[长程测量合同](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#6-测量模型) 对照单 Agent
+与团队在可比工作下的验收成果。记录重复工作，完整的模型、服务、存储成本与人工注意力，保留
+负面比较。可用协作旅程和长程净收益分别以各自证据验证。
 
 ### 11.2 当前实现与证据台账（非规范性）
 
@@ -1692,14 +1831,20 @@ pipeline；Markdown 缺失时仍可执行 provider-only read，并在响应中�
 receipt。provider 缺失、损坏、协议漂移或 Todo read-model 语义漂移都会 fail closed；
 cutover 后禁止回退 Markdown。
 
-完成续接（continuation）的持久化读回
-（`durable_completion.py`：`read_persisted_todo_record` /
-`project_durable_completion_outcome`）是一个 provider read point：它在完成写入之后、
-settlement 之前重新读取已落盘的 lifecycle record（Markdown 优先，event projection
-兜底）。落盘记录带有显式的 `completion_continuation`；done 记录缺少该字段、或该字段
-与 successor / no-follow-up 字段矛盾时，seam 都 fail closed，因此持有完成状态的
-provider 必须逐字节保存这个字段。一旦远端 provider 成为 canonical，这个 seam 翻转为
-provider-first，且不改变下述 typed outcome 合同。
+完成续接（continuation）的持久化读回以
+`loopx/control_plane/todos/durable_completion.py` 中的
+`read_durable_completion_evidence` 为 provider read point，在完成写入之后、
+settlement 之前执行。提供 `runtime_root` 和 `goal_id` 时，adapter 通过 kind 为
+`completion_evidence` 的 TypeScript `todo.read` transaction 读取已落盘的 lifecycle
+record：`loopx/control_plane/todos/read_transaction.ts` 中的
+`readCompletionEvidence` 先收集 canonical provider snapshot，再选出 Todo，并将其
+record 与已有 Todo id 传给 `loopx/control_plane/todos/read_projection.ts` 中的
+`projectCompletionEvidence`。这条 canonical 路径不回退 Markdown 或 event projection；
+adapter 的显式 legacy 路径只读取 Markdown。落盘记录带有显式的
+`completion_continuation`；done 记录缺少该字段、或该字段与 successor / no-follow-up
+字段矛盾时，seam 都 fail closed，因此持有完成状态的 provider 必须逐字节保存这个
+字段。一旦远端 provider 成为 canonical，这个 seam 翻转为 provider-first，且不改变
+下述 typed outcome 合同。
 
 #### Stage 2 切片状态（2026-08-23）
 
@@ -2649,6 +2794,15 @@ SQLite 证明与 provider-neutral 归档恢复共用持有私有状态的 TS 重
 评审，此后已合并。#4224 实测 1 MiB receipt/scan 超预算，恢复和自然时间资格仍有缺项，不能将优化 PR
 当成 D2 通过。摘要规则收口推进投影恢复边界，但没有把其他调用方或默认切换标记完成；
 剩余工作按当前核对表归类，不再按 helper 迁移数量机械扣减。
+
+**2026-11-08 1 MiB 预算行实测关闭。** 正式 matched-1m 复测在 head `a9485073f`
+（含已合并的 #4931 读取证明复用；#5251 亦已合并）上执行，容量测量入口由
+#8256（2026-11-08 合并）修复——此前 quota 上下文捕获导航曾使冷 CLI 臂静默失败。
+原两条失败行现已通过：receipt p95 在 10k/100k 为 26.44/27.65 ms、scan-100 p95 为
+60.85/69.62 ms，均在 50/250 ms 预算内，无随历史深度退化，账本 13 passed /
+0 failed / 11 missing（证据见 #4224）。这关闭的是上述预算行，不是 D2：soak 已在
+9 天 22.85 小时处失败（已在 #4224 报告），恢复、consumer-lag 与 OS/runtime 矩阵
+仍缺。
 
 **当前开发节奏。** 上述 L1–L9 是领域分工，不是剩余 PR 数。原七行 PR 计划
 已被[逐项核对表](ledger/shared-goal-authority-state-provider-v0/2026-09-24-default-cutover-reconciliation.zh-CN.md)取代：已合入的分页与恢复不再列为新 PR，

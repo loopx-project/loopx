@@ -8,6 +8,9 @@ from typing import Any, Iterable
 
 from ..control_plane.runtime.public_safety import REMOTE_LOCATION_SURFACE_PATTERN
 from ..domain_state import default_domain_state_file_path, upsert_domain_state_jsonl
+from ..public_safe_text import (
+    LETTER_LED_COMPACT_TOKEN_PATTERN as _TOKEN_RE,
+)
 
 
 DOMAIN_PACK_CONTRACT_SCHEMA_VERSION = "domain_pack_contract_v0"
@@ -35,7 +38,6 @@ VOLC_MLP_TASK_STATES = (
     "Unknown",
 )
 
-_TOKEN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,79}$")
 _ABSOLUTE_PATH_RE = re.compile(
     r"(^|[\s:=])(?:"
     + "/" + "Users/"

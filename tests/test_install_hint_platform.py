@@ -16,7 +16,7 @@ import os
 import shutil
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -35,6 +35,47 @@ WINDOWS_INTERPRETERS = (
 )
 
 PWSH = shutil.which("pwsh")
+BASH = shutil.which("bash")
+
+
+@pytest.mark.skipif(BASH is None, reason="requires Bash to execute POSIX guidance")
+@pytest.mark.parametrize("directory", ["checkout", "Loop X", "O'Brien $checkout"])
+@pytest.mark.parametrize("skip_skills", [False, True])
+def test_posix_local_install_hint_runs_the_owned_installer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, directory: str, skip_skills: bool
+) -> None:
+    monkeypatch.setattr(install_contract, "_is_windows_host", lambda: False)
+    root = tmp_path / directory
+    installer = root / "scripts/install-local.sh"
+    installer.parent.mkdir(parents=True)
+    source = Path(install_contract.__file__).resolve().parents[1] / "scripts/install-local.sh"
+    installer.write_text(source.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+    installer.chmod(0o755)
+    # Execute the shipped parser's early help path: no install, build or user state writes.
+    command = install_contract.local_install_command(
+        PurePosixPath(root.as_posix()), skip_skills=skip_skills
+    )
+    completed = subprocess.run(
+        [BASH, "-c", f"{command} --help"],
+        capture_output=True, encoding="utf-8", timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "Usage: install-local.sh" in completed.stdout
+
+
+@pytest.mark.parametrize("skip_skills", [False, True])
+def test_posix_local_install_hint_preserves_the_skill_opt_out(
+    monkeypatch: pytest.MonkeyPatch, skip_skills: bool
+) -> None:
+    import shlex
+
+    monkeypatch.setattr(install_contract, "_is_windows_host", lambda: False)
+    root = Path("/opt/Loop X/O'Brien")
+    tokens = shlex.split(install_contract.local_install_command(root, skip_skills=skip_skills))
+    expected = [str(root / "scripts/install-local.sh")]
+    if skip_skills:
+        expected.insert(0, "LOOPX_INSTALL_SKILL=0")
+    assert tokens == expected
 
 
 def powershell_literal(value: str) -> str:
@@ -225,6 +266,59 @@ def test_windows_installed_fallback_keeps_doctor_options_and_skips_owned_skills(
         "-m pip install --upgrade loopx",
         f"loopx doctor --agent-type {powershell_literal('codex')}",
     ]
+
+
+@pytest.mark.parametrize("os_name", ["posix", "nt"])
+def test_preflight_commands_follow_the_host_platform(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, os_name: str
+) -> None:
+    monkeypatch.setattr(install_contract, "_is_windows_host", lambda: os_name == "nt")
+    if os_name == "nt":
+        monkeypatch.setattr(sys, "executable", PLAIN_WINDOWS_INTERPRETER)
+    doctor = install_contract.doctor_preflight_command(cli_bin="loopx-canary")
+    codex = install_contract.codex_cli_install_preflight(
+        cli_bin="loopx-canary", doctor_agent_type="codex-cli"
+    )
+
+    if os_name == "nt":
+        for command in (doctor, codex):
+            for token in POSIX_ONLY_TOKENS:
+                assert token not in command, command
+            assert "Get-Command" in command
+            assert "pwsh" not in command
+            assert powershell_literal(PLAIN_WINDOWS_INTERPRETER) in command
+        assert doctor.splitlines()[-1] == "loopx-canary doctor | Out-Null"
+        assert "loopx-canary workflow-skills --install" in codex
+        assert (
+            f"loopx-canary doctor --agent-type {powershell_literal('codex-cli')} | Out-Null"
+            in codex
+        )
+    else:
+        assert doctor.startswith('export PATH="$HOME/.local/bin:$PATH"')
+        assert "loopx-canary doctor >/dev/null" in doctor
+        assert "python3 -m pip install --upgrade loopx" in codex
+        assert "loopx-canary doctor --agent-type codex-cli >/dev/null" in codex
+
+
+@pytest.mark.skipif(PWSH is None, reason="requires pwsh to parse the printed commands")
+def test_preflight_commands_parse_as_powershell(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pwsh = PWSH
+    assert pwsh is not None
+    pretend_windows_host(monkeypatch, PLAIN_WINDOWS_INTERPRETER)
+    commands = {
+        "doctor": install_contract.doctor_preflight_command(),
+        "codex": install_contract.codex_cli_install_preflight(doctor_agent_type="codex-cli"),
+    }
+
+    for name, command in commands.items():
+        script = tmp_path / f"{name}-preflight.ps1"
+        script.write_text(command, encoding="utf-8")
+
+        errors = powershell_parse_errors(pwsh, script)
+
+        assert errors == "", (name, errors)
 
 
 @pytest.mark.skipif(PWSH is None, reason="requires pwsh to parse the printed commands")

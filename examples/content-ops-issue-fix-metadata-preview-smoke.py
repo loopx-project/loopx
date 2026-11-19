@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,7 @@ from loopx.capabilities.issue_fix.intake_surface import (  # noqa: E402
     CONTENT_OPS_ISSUE_FIX_METADATA_PREVIEW_PACKET_SCHEMA_VERSION,
     GITHUB_ISSUE_METADATA_PREVIEW_SCHEMA_VERSION,
 )
+from tests.control_plane.host_process_fixture import write_python_host_fixture  # noqa: E402
 
 
 PRIVATE_PATTERNS = [
@@ -183,13 +185,16 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as tmpdir:
         fake_bin = Path(tmpdir)
-        gh = fake_bin / "gh"
-        gh.write_text(
+        marker = fake_bin / "fixture-called"
+        gh = write_python_host_fixture(
+            fake_bin / "gh",
             "\n".join(
                 [
                     "#!/usr/bin/env python3",
                     "import json",
                     "import sys",
+                    "from pathlib import Path",
+                    f"Path({str(marker)!r}).write_text('called', encoding='utf-8')",
                     "argv = sys.argv[1:]",
                     "assert argv[:2] == ['api', '-H'], argv",
                     "assert 'repos/huangruiteng/loopx/issues/123' in argv, argv",
@@ -207,10 +212,11 @@ def main() -> int:
                     "sys.stdout.write('\\n')",
                 ]
             ),
-            encoding="utf-8",
         )
-        gh.chmod(0o755)
-        live_env = {**os.environ, "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}"}
+        live_env = {**os.environ, "PATH": os.pathsep.join((str(fake_bin), os.environ.get("PATH", "")))}
+        assert Path(shutil.which("gh", path=live_env["PATH"]) or "").resolve() == gh.resolve(), (
+            "the smoke must resolve its fixture, never an installed GitHub CLI"
+        )
         live_payload = json.loads(
             run_cli(
                 [
@@ -225,6 +231,7 @@ def main() -> int:
                 env=live_env,
             ).stdout
         )
+        assert marker.read_text(encoding="utf-8") == "called"
     assert live_payload["ok"] is True, live_payload
     assert live_payload["external_reads_performed"] is True, live_payload
     assert live_payload["private_source_bodies_read"] is False, live_payload

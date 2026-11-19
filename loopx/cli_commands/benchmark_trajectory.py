@@ -33,6 +33,11 @@ def register_benchmark_trajectory_commands(subparsers, add_format) -> None:
     register.add_argument("--input-json", type=Path, required=True)
     register.add_argument("--source-root", type=Path, required=True)
     register.add_argument("--title", required=True)
+    register.add_argument("--case-study-json", type=Path,
+                          help="Optional authored case reading document; source-bound, versioned with this pack, no model execution.")
+    register.add_argument("--base-pack-id", help="Existing frozen pack in this owner Goal and original case/run; links a successor without running analysis.")
+    register.add_argument("--preserve-default", action="store_true",
+                          help="Keep the existing default capture when registering another version; the first capture still becomes default.")
     register.add_argument(
         "--usage-jsonl",
         help="Optional complete Codex session capture, relative to source-root; read-only cost facts, not model input.",
@@ -42,8 +47,28 @@ def register_benchmark_trajectory_commands(subparsers, add_format) -> None:
         help="Expected captured solver session identity; required with --usage-jsonl.",
     )
     register.add_argument(
+        "--loopx-input-json",
+        help="Optional host-recorded LoopX input source beside its private native trace, relative to source-root; estimates recorded Turn packet text with the optional input-token-estimates provider. Requires usage capture; never starts a model.",
+    )
+    register.add_argument(
+        "--include-tool-context", action="store_true",
+        help="Inventory appended Codex input text and simple LoopX CLI tool outputs in the usage capture; bytes only, not replayed/provider tokens. No model call.",
+    )
+    register.add_argument(
+        "--include-incomplete-usage", action="store_true",
+        help="Observe persisted counters from interrupted or unfinished Turns. Requires a usage capture. Unpersisted usage remains unknown.",
+    )
+    register.add_argument(
         "--native-outcomes-json",
         help="Optional provider-recorded native outcomes, relative to source-root; same pack scope, never analyzer scores.",
+    )
+    register.add_argument(
+        "--loopx-human-attention-start",
+        help="UTC start of an explicit partial capture of authenticated LoopX card decisions; requires --loopx-human-attention-end.",
+    )
+    register.add_argument(
+        "--loopx-human-attention-end",
+        help="UTC end of an explicit partial capture of authenticated LoopX card decisions; requires --loopx-human-attention-start.",
     )
     add_format(register)
     listing = subparsers.add_parser(
@@ -89,9 +114,17 @@ def _handle_benchmark_trajectory_command(
                 input_path=args.input_json,
                 source_root=args.source_root,
                 title=args.title,
+                case_study_json=args.case_study_json,
                 usage_jsonl=args.usage_jsonl,
                 usage_session_id=args.usage_session_id,
+                include_incomplete_usage=args.include_incomplete_usage,
+                include_tool_context=args.include_tool_context,
+                loopx_input_json=args.loopx_input_json,
                 native_outcomes_json=args.native_outcomes_json,
+                loopx_human_attention_start=args.loopx_human_attention_start,
+                loopx_human_attention_end=args.loopx_human_attention_end,
+                base_pack_id=args.base_pack_id,
+                select_default=not args.preserve_default,
             )
             if args.benchmark_command == "trajectory-pack-register"
             else discover(**scope)

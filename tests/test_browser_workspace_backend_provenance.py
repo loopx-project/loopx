@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 import venv
 
 import pytest
@@ -153,3 +154,72 @@ try {
     assert observed["status"] == 200
     assert observed["body"]["ok"] is True
     assert observed["pid"] != os.getpid()
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_research_history_owner_ignores_foreign_pythonpath(
+    bare_python: Path, tmp_path: Path, explicit: bool,
+) -> None:
+    assert NODE is not None
+    foreign = tmp_path / "foreign"
+    (foreign / "loopx").mkdir(parents=True)
+    (foreign / "loopx/__init__.py").write_text(
+        "raise RuntimeError('foreign research owner package imported')\n", encoding="utf-8",
+    )
+    captures = ROOT / "apps/presentation/dashboard/src/data/fixtures"
+    names = ["edgebench-research-history.json", "edgebench-graph-checkpoint-history.json",
+             "edgebench-ad-checkpoint-history.json"]
+    selected = [captures / "edgebench-grid-context-on-20261103-history.json"]
+    if explicit:
+        destination = tmp_path / "source captures '引用'"
+        destination.mkdir()
+        selected = []
+        for name in reversed(names[:2]):
+            target = destination / name
+            shutil.copyfile(captures / name, target)
+            selected.append(target)
+    expected = [json.loads(path.read_bytes()) for path in selected]
+    # These ordinary captures contain no analysis providers or model dispatch.
+    assert all(not capture.get("analyses") for capture in expected)
+    runner = """
+import assert from 'node:assert/strict';
+import {startHistoryOwner} from './examples/personal-workspace-browser/research-history.mjs';
+const owner = await startHistoryOwner(JSON.parse(process.argv[1]));
+let response, body;
+try {
+  response = await fetch(`${owner.base}/fixture/readback`);
+  body = await response.json();
+} finally {await owner.close();}
+await assert.rejects(fetch(`${owner.base}/fixture/readback`, {signal:AbortSignal.timeout(1000)}));
+console.log(JSON.stringify({status:response.status, body, goal_ids:owner.goal_ids,
+  goal_id:owner.goal_id, event_count:owner.event_count, closed:true}));
+"""
+    with tempfile.TemporaryDirectory(prefix="owner-", dir=tmp_path) as runtime_temp:
+        env = environment(bare_python, Path(runtime_temp))
+        env["PYTHONPATH"] = str(foreign)
+        try:
+            result = subprocess.run(
+                [NODE, "--input-type=module", "-e", runner,
+                 json.dumps([str(path) for path in selected] if explicit else None)],
+                cwd=ROOT, env=env, capture_output=True, text=True, timeout=40,
+            )
+        finally:
+            # Windows hard-terminates the HTTP owner; retire only this test's
+            # isolated Effect runtime before removing its temporary namespace.
+            cleanup = launch(
+                "from loopx.control_plane.effect_runtime import restart_effect_runtime; "
+                "restart_effect_runtime(wait_for_exit=True)", env,
+            )
+            assert cleanup.returncode == 0, cleanup.stderr
+    assert result.returncode == 0, result.stderr
+    observed = json.loads(result.stdout)
+    assert observed["status"] == 200
+    assert observed["goal_ids"] == [capture["goal_id"] for capture in expected]
+    assert observed["goal_id"] == expected[0]["goal_id"]
+    assert observed["event_count"] == sum(len(capture["events"]) for capture in expected)
+    assert observed["body"]["ok"] is True
+    assert observed["body"]["source_unchanged"] is True
+    assert observed["body"]["mutation_attempts"] == 0
+    assert observed["body"]["history_reads"] == 0
+    assert list(observed["body"]["fixtures"]) == observed["goal_ids"]
+    assert observed["closed"] is True

@@ -1,0 +1,1059 @@
+{
+  "crossings_before": {
+    "ordinary": 2,
+    "terminal": 2,
+    "intent": 1,
+    "post_completion": 1,
+    "legacy": 0
+  },
+  "cases": [
+    {
+      "name": "active",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"active_goal\"}}"
+    },
+    {
+      "name": "successors",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "successor",
+        "completion_turn_key": "turn-a",
+        "successor_todo_ids": [
+          "todo_zzz",
+          "todo_aaa",
+          "todo_zzz"
+        ]
+      },
+      "existing": [
+        "todo_zzz",
+        "todo_aaa"
+      ],
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"successor\",\"successor_todo_ids\":[\"todo_zzz\",\"todo_aaa\"]}}"
+    },
+    {
+      "name": "ordered-missing",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "successor",
+        "completion_turn_key": "turn-a",
+        "successor_todo_ids": [
+          "todo_zzz",
+          "todo_aaa",
+          "todo_zzz"
+        ]
+      },
+      "existing": [],
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion declares missing successor Todo ids: todo_zzz, todo_aaa\"}"
+    },
+    {
+      "name": "identity",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_other",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion todo_id does not match the selected Todo\"}"
+    },
+    {
+      "name": "bad-expected",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a"
+      },
+      "expected": "wrong",
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion requires a public Todo id\"}"
+    },
+    {
+      "name": "continuation-'DELETE'",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion is missing completion_continuation; repair the Todo with `loopx todo complete`\"}"
+    },
+    {
+      "name": "intent-continuation-'DELETE'",
+      "operation": "intent",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"active_goal\"}}"
+    },
+    {
+      "name": "recovery-'DELETE'",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"active_goal\"}}"
+    },
+    {
+      "name": "continuation-'invalid'",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "invalid",
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion is missing completion_continuation; repair the Todo with `loopx todo complete`\"}"
+    },
+    {
+      "name": "intent-continuation-'invalid'",
+      "operation": "intent",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "invalid",
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"active_goal\"}}"
+    },
+    {
+      "name": "recovery-'invalid'",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "completion_recovery": "invalid"
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion_recovery is invalid\"}"
+    },
+    {
+      "name": "continuation-''",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "",
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion is missing completion_continuation; repair the Todo with `loopx todo complete`\"}"
+    },
+    {
+      "name": "intent-continuation-''",
+      "operation": "intent",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "",
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"active_goal\"}}"
+    },
+    {
+      "name": "recovery-''",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "completion_recovery": ""
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"active_goal\"}}"
+    },
+    {
+      "name": "continuation-None",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": null,
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion is missing completion_continuation; repair the Todo with `loopx todo complete`\"}"
+    },
+    {
+      "name": "intent-continuation-None",
+      "operation": "intent",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": null,
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"active_goal\"}}"
+    },
+    {
+      "name": "recovery-None",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "completion_recovery": null
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"active_goal\"}}"
+    },
+    {
+      "name": "continuation-[]",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": [],
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion is missing completion_continuation; repair the Todo with `loopx todo complete`\"}"
+    },
+    {
+      "name": "intent-continuation-[]",
+      "operation": "intent",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": [],
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"active_goal\"}}"
+    },
+    {
+      "name": "recovery-[]",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "completion_recovery": []
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"active_goal\"}}"
+    },
+    {
+      "name": "continuation-{}",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": {},
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion is missing completion_continuation; repair the Todo with `loopx todo complete`\"}"
+    },
+    {
+      "name": "intent-continuation-{}",
+      "operation": "intent",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": {},
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"active_goal\"}}"
+    },
+    {
+      "name": "recovery-{}",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "completion_recovery": {}
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"active_goal\"}}"
+    },
+    {
+      "name": "continuation-True",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": true,
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion is missing completion_continuation; repair the Todo with `loopx todo complete`\"}"
+    },
+    {
+      "name": "intent-continuation-True",
+      "operation": "intent",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": true,
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"active_goal\"}}"
+    },
+    {
+      "name": "recovery-True",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "completion_recovery": true
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion_recovery is invalid\"}"
+    },
+    {
+      "name": "continuation-1",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": 1,
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion is missing completion_continuation; repair the Todo with `loopx todo complete`\"}"
+    },
+    {
+      "name": "intent-continuation-1",
+      "operation": "intent",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": 1,
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"active_goal\"}}"
+    },
+    {
+      "name": "recovery-1",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "completion_recovery": 1
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion_recovery is invalid\"}"
+    },
+    {
+      "name": "recovery-active-same_turn_terminal_closeout",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "completion_recovery": "same_turn_terminal_closeout"
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion_recovery requires a no_followup continuation\"}"
+    },
+    {
+      "name": "recovery-terminal-same_turn_terminal_closeout",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "no_followup",
+        "completion_turn_key": "turn-a",
+        "completion_recovery": "same_turn_terminal_closeout",
+        "no_followup": true
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"no_followup\"}}"
+    },
+    {
+      "name": "recovery-active-lifecycle_reentry_terminal_closeout",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "completion_recovery": "lifecycle_reentry_terminal_closeout"
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion_recovery requires a no_followup continuation\"}"
+    },
+    {
+      "name": "recovery-terminal-lifecycle_reentry_terminal_closeout",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "no_followup",
+        "completion_turn_key": "turn-a",
+        "completion_recovery": "lifecycle_reentry_terminal_closeout",
+        "no_followup": true
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"no_followup\"}}"
+    },
+    {
+      "name": "status-open",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "open",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion requires the selected Todo to be durably done\"}"
+    },
+    {
+      "name": "terminal-open",
+      "operation": "terminal",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "open",
+        "completion_continuation": "no_followup",
+        "completion_turn_key": "turn-a",
+        "no_followup": true
+      },
+      "bytes": "{\"result\":{\"kind\":\"absent\"}}"
+    },
+    {
+      "name": "status-blocked",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "blocked",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion requires the selected Todo to be durably done\"}"
+    },
+    {
+      "name": "terminal-blocked",
+      "operation": "terminal",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "blocked",
+        "completion_continuation": "no_followup",
+        "completion_turn_key": "turn-a",
+        "no_followup": true
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable terminal completion is not safely replayable\"}"
+    },
+    {
+      "name": "status-deferred",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "deferred",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion requires the selected Todo to be durably done\"}"
+    },
+    {
+      "name": "terminal-deferred",
+      "operation": "terminal",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "deferred",
+        "completion_continuation": "no_followup",
+        "completion_turn_key": "turn-a",
+        "no_followup": true
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable terminal completion is not safely replayable\"}"
+    },
+    {
+      "name": "status-done",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"active_goal\"}}"
+    },
+    {
+      "name": "terminal-done",
+      "operation": "terminal",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "no_followup",
+        "completion_turn_key": "turn-a",
+        "no_followup": true
+      },
+      "bytes": "{\"result\":{\"kind\":\"committed\",\"completion\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"no_followup\"}}}"
+    },
+    {
+      "name": "status-invalid",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "invalid",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion requires the selected Todo to be durably done\"}"
+    },
+    {
+      "name": "terminal-invalid",
+      "operation": "terminal",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "invalid",
+        "completion_continuation": "no_followup",
+        "completion_turn_key": "turn-a",
+        "no_followup": true
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"todo.status is unsupported\"}"
+    },
+    {
+      "name": "terminal-upgrade",
+      "operation": "terminal",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"result\":{\"kind\":\"absent\"}}"
+    },
+    {
+      "name": "terminal-cross-turn",
+      "operation": "terminal",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-b",
+        "completion_recovery": "invalid"
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"todo is already completed under a different completion_turn_key\"}"
+    },
+    {
+      "name": "terminal-missing-turn",
+      "operation": "terminal",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal"
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"todo is already completed under a different completion_turn_key\"}"
+    },
+    {
+      "name": "terminal-fence-precedence",
+      "operation": "terminal",
+      "todo": {
+        "todo_id": "wrong",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-b"
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"todo is already completed under a different completion_turn_key\"}"
+    },
+    {
+      "name": "contradictory-successors",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "no_followup",
+        "completion_turn_key": "turn-a",
+        "no_followup": true,
+        "successor_todo_ids": [
+          "todo_aaa"
+        ]
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion records both no_followup and successor_todo_ids\"}"
+    },
+    {
+      "name": "contradictory-no-followup",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "no_followup": true
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion_continuation contradicts no_followup\"}"
+    },
+    {
+      "name": "missing-matching-fields",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "successor",
+        "completion_turn_key": "turn-a"
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion_continuation requires matching no_followup or successor_todo_ids\"}"
+    },
+    {
+      "name": "scalar-no-followup-True",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "no_followup": true
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion_continuation contradicts no_followup\"}"
+    },
+    {
+      "name": "container-successors-True",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "successor",
+        "completion_turn_key": "turn-a",
+        "successor_todo_ids": true
+      },
+      "existing": [
+        "todo_aaa",
+        "todo_zzz"
+      ],
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion_continuation requires matching no_followup or successor_todo_ids\"}"
+    },
+    {
+      "name": "terminal-scalar-True",
+      "operation": "terminal",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "no_followup": true
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion_continuation contradicts no_followup\"}"
+    },
+    {
+      "name": "scalar-no-followup-False",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "no_followup": false
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"active_goal\"}}"
+    },
+    {
+      "name": "container-successors-False",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "successor",
+        "completion_turn_key": "turn-a",
+        "successor_todo_ids": false
+      },
+      "existing": [
+        "todo_aaa",
+        "todo_zzz"
+      ],
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion_continuation requires matching no_followup or successor_todo_ids\"}"
+    },
+    {
+      "name": "terminal-scalar-False",
+      "operation": "terminal",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "no_followup": false
+      },
+      "bytes": "{\"result\":{\"kind\":\"absent\"}}"
+    },
+    {
+      "name": "scalar-no-followup-1",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "no_followup": 1
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion_continuation contradicts no_followup\"}"
+    },
+    {
+      "name": "container-successors-1",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "successor",
+        "completion_turn_key": "turn-a",
+        "successor_todo_ids": 1
+      },
+      "existing": [
+        "todo_aaa",
+        "todo_zzz"
+      ],
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion_continuation requires matching no_followup or successor_todo_ids\"}"
+    },
+    {
+      "name": "terminal-scalar-1",
+      "operation": "terminal",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "no_followup": 1
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion_continuation contradicts no_followup\"}"
+    },
+    {
+      "name": "scalar-no-followup-0",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "no_followup": 0
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"active_goal\"}}"
+    },
+    {
+      "name": "container-successors-0",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "successor",
+        "completion_turn_key": "turn-a",
+        "successor_todo_ids": 0
+      },
+      "existing": [
+        "todo_aaa",
+        "todo_zzz"
+      ],
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion_continuation requires matching no_followup or successor_todo_ids\"}"
+    },
+    {
+      "name": "terminal-scalar-0",
+      "operation": "terminal",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "no_followup": 0
+      },
+      "bytes": "{\"result\":{\"kind\":\"absent\"}}"
+    },
+    {
+      "name": "scalar-no-followup-' YES '",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "no_followup": " YES "
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion_continuation contradicts no_followup\"}"
+    },
+    {
+      "name": "container-successors-' YES '",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "successor",
+        "completion_turn_key": "turn-a",
+        "successor_todo_ids": " YES "
+      },
+      "existing": [
+        "todo_aaa",
+        "todo_zzz"
+      ],
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion_continuation requires matching no_followup or successor_todo_ids\"}"
+    },
+    {
+      "name": "terminal-scalar-' YES '",
+      "operation": "terminal",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "no_followup": " YES "
+      },
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion_continuation contradicts no_followup\"}"
+    },
+    {
+      "name": "scalar-no-followup-'false'",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "no_followup": "false"
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"active_goal\"}}"
+    },
+    {
+      "name": "container-successors-'false'",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "successor",
+        "completion_turn_key": "turn-a",
+        "successor_todo_ids": "false"
+      },
+      "existing": [
+        "todo_aaa",
+        "todo_zzz"
+      ],
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion_continuation requires matching no_followup or successor_todo_ids\"}"
+    },
+    {
+      "name": "terminal-scalar-'false'",
+      "operation": "terminal",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "no_followup": "false"
+      },
+      "bytes": "{\"result\":{\"kind\":\"absent\"}}"
+    },
+    {
+      "name": "scalar-no-followup-[]",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "no_followup": []
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"active_goal\"}}"
+    },
+    {
+      "name": "container-successors-[]",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "successor",
+        "completion_turn_key": "turn-a",
+        "successor_todo_ids": []
+      },
+      "existing": [
+        "todo_aaa",
+        "todo_zzz"
+      ],
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion_continuation requires matching no_followup or successor_todo_ids\"}"
+    },
+    {
+      "name": "terminal-scalar-[]",
+      "operation": "terminal",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "no_followup": []
+      },
+      "bytes": "{\"result\":{\"kind\":\"absent\"}}"
+    },
+    {
+      "name": "scalar-no-followup-{}",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "no_followup": {}
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"active_goal\"}}"
+    },
+    {
+      "name": "container-successors-{}",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "successor",
+        "completion_turn_key": "turn-a",
+        "successor_todo_ids": {}
+      },
+      "existing": [
+        "todo_aaa",
+        "todo_zzz"
+      ],
+      "bytes": "{\"error_type\":\"ValueError\",\"message\":\"durable completion_continuation requires matching no_followup or successor_todo_ids\"}"
+    },
+    {
+      "name": "terminal-scalar-{}",
+      "operation": "terminal",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "no_followup": {}
+      },
+      "bytes": "{\"result\":{\"kind\":\"absent\"}}"
+    },
+    {
+      "name": "scalar-no-followup-['todo_aaa']",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "no_followup": [
+          "todo_aaa"
+        ]
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"active_goal\"}}"
+    },
+    {
+      "name": "container-successors-['todo_aaa']",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "successor",
+        "completion_turn_key": "turn-a",
+        "successor_todo_ids": [
+          "todo_aaa"
+        ]
+      },
+      "existing": [
+        "todo_aaa",
+        "todo_zzz"
+      ],
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"successor\",\"successor_todo_ids\":[\"todo_aaa\"]}}"
+    },
+    {
+      "name": "terminal-scalar-['todo_aaa']",
+      "operation": "terminal",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "no_followup": [
+          "todo_aaa"
+        ]
+      },
+      "bytes": "{\"result\":{\"kind\":\"absent\"}}"
+    },
+    {
+      "name": "scalar-no-followup-{'todo_zzz': 'todo_aaa'}",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "no_followup": {
+          "todo_zzz": "todo_aaa"
+        }
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"active_goal\"}}"
+    },
+    {
+      "name": "container-successors-{'todo_zzz': 'todo_aaa'}",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "successor",
+        "completion_turn_key": "turn-a",
+        "successor_todo_ids": {
+          "todo_zzz": "todo_aaa"
+        }
+      },
+      "existing": [
+        "todo_aaa",
+        "todo_zzz"
+      ],
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"successor\",\"successor_todo_ids\":[\"todo_zzz\",\"todo_aaa\"]}}"
+    },
+    {
+      "name": "terminal-scalar-{'todo_zzz': 'todo_aaa'}",
+      "operation": "terminal",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "no_followup": {
+          "todo_zzz": "todo_aaa"
+        }
+      },
+      "bytes": "{\"result\":{\"kind\":\"absent\"}}"
+    },
+    {
+      "name": "scalar-no-followup-['todo_zzz', 'todo_aaa']",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "no_followup": [
+          "todo_zzz",
+          "todo_aaa"
+        ]
+      },
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"active_goal\"}}"
+    },
+    {
+      "name": "container-successors-['todo_zzz', 'todo_aaa']",
+      "operation": "outcome",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "successor",
+        "completion_turn_key": "turn-a",
+        "successor_todo_ids": [
+          "todo_zzz",
+          "todo_aaa"
+        ]
+      },
+      "existing": [
+        "todo_aaa",
+        "todo_zzz"
+      ],
+      "bytes": "{\"result\":{\"todo_id\":\"todo_fixture0001\",\"continuation\":\"successor\",\"successor_todo_ids\":[\"todo_zzz\",\"todo_aaa\"]}}"
+    },
+    {
+      "name": "terminal-scalar-['todo_zzz', 'todo_aaa']",
+      "operation": "terminal",
+      "todo": {
+        "todo_id": "todo_fixture0001",
+        "status": "done",
+        "completion_continuation": "active_goal",
+        "completion_turn_key": "turn-a",
+        "no_followup": [
+          "todo_zzz",
+          "todo_aaa"
+        ]
+      },
+      "bytes": "{\"result\":{\"kind\":\"absent\"}}"
+    }
+  ]
+}

@@ -131,7 +131,8 @@ def test_v1_reduces_only_the_frontier_slot_and_keeps_root_action():
     capsule = envelope["contract_capsule"]["agent_scope_frontier"]
     expected = dict(legacy["agent_scope_frontier"])
     del expected["effective_action"]
-    expected["schema_version"] = "agent_scope_frontier_v1"
+    expected.update(schema_version="agent_scope_frontier_v1", agent_id="frontier-agent",
+                    candidate_counts={}, reason="ready successor")
     assert capsule == expected
     assert (
         envelope["effective_action"]

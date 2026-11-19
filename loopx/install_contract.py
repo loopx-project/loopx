@@ -1,15 +1,16 @@
 """Install, repair, and fallback command text printed to LoopX operators.
 
-One platform-aware owner keeps the bootstrap/connect hint, the doctor freshness
-command, and the archive fallback consistent. POSIX keeps the documented public
-defaults; native Windows has neither a ``python3`` launcher nor Bash, so it
-names the interpreter that runs here and prints the snapshot installer only for a
-checkout that actually ships it.
+One platform-aware owner keeps the bootstrap/connect hint, the preflight prompt,
+the doctor freshness command, and the archive fallback consistent. POSIX keeps
+the documented public defaults; native Windows has neither a ``python3`` launcher
+nor Bash, so it names the interpreter that runs here and prints the snapshot
+installer only for a checkout that actually ships it.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import sys
 from pathlib import Path
@@ -32,8 +33,41 @@ ARCHIVE_FALLBACK_INSTALL_COMMAND = (
 )
 
 
-def _powershell_literal(value: str | Path) -> str:
-    return "'" + str(value).replace("'", "''") + "'"
+_POWERSHELL_SAFE_COMMAND = re.compile(r"^[A-Za-z0-9_./-]+$")
+# PowerShell also treats U+2018 through U+201B as single-quote delimiters.
+_POWERSHELL_SINGLE_QUOTE_ESCAPES = str.maketrans(
+    {quote: quote * 2 for quote in "'\u2018\u2019\u201a\u201b"}
+)
+
+
+def powershell_literal(value: str | Path) -> str:
+    """Render a verbatim PowerShell string while preserving the original characters."""
+    return "'" + str(value).translate(_POWERSHELL_SINGLE_QUOTE_ESCAPES) + "'"
+
+
+def _powershell_command(value: str) -> str:
+    """A command name or path PowerShell can invoke from the start of a pipeline."""
+
+    if _POWERSHELL_SAFE_COMMAND.fullmatch(value):
+        return value
+    return f"& {powershell_literal(value)}"
+
+
+def host_command_name(value: str) -> str:
+    """Render an executable as the first token of a host-shell command."""
+
+    if _is_windows_host():
+        return _powershell_command(value)
+    return shlex.quote(value)
+
+
+def render_host_cli_command(argv: list[str]) -> str:
+    """Render CLI argv for PowerShell launchers or the default host shell."""
+    if _is_windows_host() or argv[0].lower().endswith(".ps1"):
+        # A PowerShell script can receive a bare numeric argument as Int32.
+        # The LoopX launcher expects strings when it scans and forwards argv.
+        return " ".join([_powershell_command(argv[0]), *(powershell_literal(arg) for arg in argv[1:])])
+    return shlex.join(argv)
 
 
 def _is_windows_host() -> bool:
@@ -60,7 +94,7 @@ def _checkout_snapshot_installer(repo_root: Path) -> Path | None:
 def _windows_pypi_upgrade_command(*, doctor_agent_arg: str, skip_skills: bool) -> str:
     """No-clone upgrade through the interpreter that owns this installation."""
 
-    lines = [f"& {_powershell_literal(sys.executable)} -m pip install --upgrade loopx"]
+    lines = [f"& {powershell_literal(sys.executable)} -m pip install --upgrade loopx"]
     if not skip_skills:
         lines.append(DEFAULT_WORKFLOW_SKILL_INSTALL_COMMAND)
     lines.append(f"loopx doctor{doctor_agent_arg}")
@@ -71,11 +105,11 @@ def local_install_command(repo_root: Path, *, skip_skills: bool = False) -> str:
     if _is_windows_host():
         return (
             "pwsh -NoLogo -NoProfile -File "
-            f"{_powershell_literal(repo_root / 'scripts' / 'install-windows.ps1')} "
-            f"-Python {_powershell_literal(sys.executable)}"
+            f"{powershell_literal(repo_root / 'scripts' / 'install-windows.ps1')} "
+            f"-Python {powershell_literal(sys.executable)}"
             + (" -SkipSkills" if skip_skills else "")
         )
-    command = str(repo_root / "scripts" / "install-local.sh")
+    command = shlex.quote(str(repo_root / "scripts" / "install-local.sh"))
     return f"LOOPX_INSTALL_SKILL=0 {command}" if skip_skills else command
 
 
@@ -88,7 +122,7 @@ def no_clone_upgrade_command(
     if _is_windows_host():
         repo_root = Path(__file__).resolve().parents[1]
         doctor_agent_arg = (
-            f" --agent-type {_powershell_literal(doctor_agent_type)}"
+            f" --agent-type {powershell_literal(doctor_agent_type)}"
             if doctor_agent_type
             else ""
         )
@@ -137,3 +171,89 @@ def archive_fallback_install_command() -> str:
     if _is_windows_host():
         return no_clone_upgrade_command()
     return ARCHIVE_FALLBACK_INSTALL_COMMAND
+
+
+def doctor_preflight_command(
+    *,
+    cli_bin: str = "loopx",
+    doctor_agent_type: str | None = None,
+    install_skills: bool = False,
+) -> str:
+    """Ensure the CLI is reachable without upgrading on every scheduled turn."""
+
+    if _is_windows_host():
+        doctor_arg = (
+            f" --agent-type {powershell_literal(doctor_agent_type)}"
+            if doctor_agent_type
+            else ""
+        )
+        install_lines = [
+            f"if (-not (Get-Command {powershell_literal(cli_bin)} -ErrorAction SilentlyContinue)) {{",
+            f"  & {powershell_literal(sys.executable)} -m pip install --upgrade loopx",
+        ]
+        if install_skills:
+            install_lines.append(
+                f"  {_powershell_command(cli_bin)} workflow-skills --install"
+            )
+        install_lines.append("}")
+        install_lines.append(
+            f"{_powershell_command(cli_bin)} doctor{doctor_arg} | Out-Null"
+        )
+        return "\n".join(install_lines)
+    cli_bin_arg = shlex.quote(cli_bin)
+    doctor_arg = (
+        f" --agent-type {shlex.quote(doctor_agent_type)}"
+        if doctor_agent_type
+        else ""
+    )
+    return f"""export PATH="$HOME/.local/bin:$PATH"
+install_script="$HOME/loopx/scripts/install-local.sh"
+if ! command -v {cli_bin_arg} >/dev/null 2>&1; then
+  if [ -x "$install_script" ]; then
+    "$install_script"
+    export PATH="$HOME/.local/bin:$PATH"
+  else
+    echo "loopx is not on PATH; clone the LoopX repo and run scripts/install-local.sh" >&2
+    exit 1
+  fi
+fi
+{cli_bin_arg} doctor{doctor_arg} >/dev/null"""
+
+
+def codex_cli_install_preflight(
+    *,
+    cli_bin: str = "loopx",
+    doctor_agent_type: str | None = None,
+) -> str:
+    """Install-or-doctor guidance a Codex CLI operator can paste on this host."""
+
+    if _is_windows_host():
+        return doctor_preflight_command(
+            cli_bin=cli_bin,
+            doctor_agent_type=doctor_agent_type,
+            install_skills=True,
+        )
+    cli_bin_arg = shlex.quote(cli_bin)
+    doctor_agent_arg = (
+        f" --agent-type {shlex.quote(doctor_agent_type)}"
+        if doctor_agent_type
+        else ""
+    )
+    return f"""export PATH="$HOME/.local/bin:$PATH"
+if ! command -v {cli_bin_arg} >/dev/null 2>&1; then
+  if command -v python3 >/dev/null 2>&1 && python3 -m pip --version >/dev/null 2>&1; then
+    python3 -m pip install --upgrade loopx
+    if command -v {cli_bin_arg} >/dev/null 2>&1; then
+      {cli_bin_arg} workflow-skills --install --cli-bin {cli_bin_arg}
+    fi
+  fi
+  if ! command -v {cli_bin_arg} >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
+    curl -fsSL {NO_CLONE_INSTALL_URL} | bash
+    export PATH="$HOME/.local/bin:$PATH"
+  fi
+  if ! command -v {cli_bin_arg} >/dev/null 2>&1; then
+    echo "loopx is not on PATH; use a Python 3.11+ environment, the archive fallback, or a contributor checkout" >&2
+    exit 1
+  fi
+fi
+{cli_bin_arg} doctor{doctor_agent_arg} >/dev/null"""

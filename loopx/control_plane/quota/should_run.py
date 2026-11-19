@@ -1,9 +1,14 @@
 from __future__ import annotations
+
+from typing import Any, TYPE_CHECKING, cast
+
+from ..goals.acceptance_readback import configured_checks
 from .effective_action import EffectiveAction
 
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+
+from ..effect_runtime import effect_runtime_request_scope
 
 if TYPE_CHECKING:
     from ..goals.goal_frontier.fallback_source import FallbackTodoSource
@@ -182,13 +187,14 @@ def _attach_quota_should_run_envelope(
             "included_count": 1 if goal_found else 0,
             "omitted": omitted,
         },
-        upstream=[dict(status_envelope)] if has_status_envelope else [],
+        upstream=[dict(cast(dict[str, Any], status_envelope))] if has_status_envelope else [],
     )
     return payload
 
 
 def _app_scheduler_state_read_observer(
     direct_sources: dict[str, dict[str, Any]],
+    observe_state: Callable[[Mapping[str, Any]], None] | None,
 ) -> Callable[[Mapping[str, Any]], None]:
     def record(readback: Mapping[str, Any]) -> None:
         previous = direct_sources.get("app_scheduler_state", {})
@@ -206,6 +212,8 @@ def _app_scheduler_state_read_observer(
             item_count=item_count,
             unreadable_count=unreadable_count,
         )
+        if observe_state is not None:
+            observe_state(readback)
 
     return record
 
@@ -268,16 +276,42 @@ def _apply_selected_todo_guards(
         return route
     summary = prepared.agent_todo_summary or {}
     acceptance = summary.get("goal_acceptance_contract")
-    if isinstance(acceptance, dict) and acceptance.get("enabled") is True:
-        held_ids = acceptance.get("held_todo_ids") or []
-        held_selection = bool(selected_todo and selected_todo.get("todo_id") in held_ids)
-        # Native guards already filtered these lanes. Do not let a generic
-        # Goal recommendation recreate advancement permission from held work.
-        no_runnable_work = bool(held_ids) and not selected_todo and not any(
+    if isinstance(acceptance, dict) and configured_checks(acceptance) is not None:
+        # The typed owner retains completed/archived work. A failed preflight
+        # check on an empty Goal is not evidence that any work has happened;
+        # preserve its initial planning. A currently accepted result can still
+        # suppress redundant empty delivery without declaring the Goal complete.
+        has_existing_work_basis = bool(acceptance.get("tasks")) or acceptance.get("status") == "accepted"
+        no_executable_work = not selected_todo and not any(
             summary.get(field) for field in (
                 "first_executable_items", "executable_backlog_items", "monitor_due_items",
             )
         )
+        if (
+            route.normal_delivery_allowed
+            and not route.recovery_allowed
+            and prepared.receipt_bound_todo_id is None
+            and not prepared.inbox_priority_due
+            and has_existing_work_basis
+            and no_executable_work
+        ):
+            # An empty generic Goal recommendation cannot replace the owner's
+            # current acceptance scope with another paid work attempt.
+            # Original receipt recovery, admitted replan and actual independent
+            # work retain their own routes; this only removes new empty delivery.
+            prepared.normal_delivery_allowed = False
+            prepared.reason = (
+                f"Current scoped acceptance is {acceptance.get('status') or 'unavailable'}; "
+                "no executable work is available. Inspect the preserved contract "
+                "and results with loopx goal-acceptance inspect, then verify or "
+                "repair the existing requirement."
+            )
+            route = _resolve_quota_should_run_route(prepared)
+        held_ids = acceptance.get("held_todo_ids") or []
+        held_selection = bool(selected_todo and selected_todo.get("todo_id") in held_ids)
+        # Native guards already filtered these lanes. Do not let a generic
+        # Goal recommendation recreate advancement permission from held work.
+        no_runnable_work = bool(held_ids) and no_executable_work
         if (
             (route.normal_delivery_allowed or route.recovery_allowed)
             and not prepared.inbox_priority_due
@@ -364,7 +398,7 @@ def build_quota_paused_should_run_payload(
     distinct resume authority for the host scheduler.
     """
 
-    quota = item.get("quota") if isinstance(item.get("quota"), dict) else {}
+    quota = cast(dict[str, Any], item.get("quota")) if isinstance(item.get("quota"), dict) else {}
     quota = {**quota, "state": "paused"}
     pause_cause = automatic_turn_pause_cause(
         {"quota": quota}
@@ -512,6 +546,7 @@ def _apply_missing_state_health_guidance(
         payload["recommended_action"] = recommended
 
 
+@effect_runtime_request_scope()
 def build_quota_should_run(
     status_payload: dict[str, Any],
     *,
@@ -533,14 +568,18 @@ def build_quota_should_run(
     receipt_bound_terminal_phase: ReceiptBoundTerminalPhase | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
     receipt_bound_replan_guard_scoped: bool = False,
+    receipt_bound_replan_execution_pending: bool = False,
     receipt_bound_successor_replan: bool = False,
     receipt_bound_guard_recorded_at: str | None = None,
+    receipt_bound_guard_turn_instance_id: str | None = None,
+    receipt_bound_replan_review: Mapping[str, Any] | None = None,
     turn_instance_id: str | None = None,
     runtime_root: str | Path | None = None,
     workspace_path: Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
     authoritative_fallback_todo_items: FallbackTodoSource = None,
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
+    app_scheduler_state_observer: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     safe_goal_id = str(goal_id or "").strip()
     direct_sources: dict[str, dict[str, Any]] = {}
@@ -573,7 +612,7 @@ def build_quota_should_run(
         None,
     )
     health_items = (
-        plan.get("health_items")
+        cast(list[Any], plan.get("health_items"))
         if isinstance(plan.get("health_items"), list)
         else []
     )
@@ -628,10 +667,13 @@ def build_quota_should_run(
             receipt_bound_replay_phase=receipt_bound_replay_phase,
             receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
             receipt_bound_replan_guard_scoped=receipt_bound_replan_guard_scoped,
+            receipt_bound_replan_execution_pending=receipt_bound_replan_execution_pending,
             receipt_bound_successor_replan=receipt_bound_successor_replan,
             authoritative_fallback_todo_items=authoritative_fallback_todo_items,
             replan_explore_reader=tracked_replan_explore_reader,
             receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
+            receipt_bound_guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
+            receipt_bound_replan_review=receipt_bound_replan_review,
         )
         route = _resolve_quota_should_run_route(prepared)
         route = _apply_selected_todo_guards(
@@ -648,7 +690,7 @@ def build_quota_should_run(
             runtime_root=runtime_root,
             goal_ref=goal_ref,
             scheduler_state_read_observer=_app_scheduler_state_read_observer(
-                direct_sources
+                direct_sources, app_scheduler_state_observer,
             ),
         )
         _apply_missing_state_health_guidance(

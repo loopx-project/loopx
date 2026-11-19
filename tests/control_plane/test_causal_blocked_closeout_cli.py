@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
 from loopx.cli import main as cli_main
 from test_quota_settlement_cli import (
     AGENT_ID, ALTERNATIVE_TODO_ID, GOAL_ID, TODO_ID,
@@ -15,6 +15,7 @@ from test_quota_settlement_cli import (
     _configure_selectable_alternative, _initialize_git_checkout, _spend_run_count, _write_fixture,
 )
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 
 MONITOR_ID = "todo_causal_monitor"
 
@@ -39,7 +40,7 @@ def test_pending_causal_wait_settles_once_and_releases_independent_work(
             context.chdir(cwd)
             rc = cli_main(["--registry", str(registry), "--runtime-root", str(runtime),
                            "--format", "json", *args])
-            return rc, json.loads(capsys.readouterr().out)
+            return rc, read_cli_policy_payload(capsys.readouterr().out, returncode=rc)
 
     state = _configure_completion_validation_todo(project)
     _configure_selectable_alternative(project)
@@ -73,17 +74,16 @@ def test_pending_causal_wait_settles_once_and_releases_independent_work(
             "\n- [ ] [P2] Complete the transitive prerequisite.\n"
             f"  <!-- loopx:todo todo_id=todo_cycle_third status=open claimed_by={dependency_owner} task_class=advancement_task -->\n"
         ))
-    rc, listed = cli("todo", "list", "--goal-id", GOAL_ID)
-    assert rc == 0, listed
+    authored_todos = read_fixture_todos(state)
     if defer:
-        next(todo for todo in listed["todos"] if todo["todo_id"] == TODO_ID)["claimed_by"] = AGENT_ID
+        next(todo for todo in authored_todos if todo["todo_id"] == TODO_ID)["claimed_by"] = AGENT_ID
     initialize_canonical_authority(runtime, GOAL_ID, build_todo_runtime_shadow_projection(
-        goal_id=GOAL_ID, todos=listed["todos"], handoff_mode="hard_lease" if defer else "soft_claim", leases=[],
+        goal_id=GOAL_ID, todos=authored_todos, handoff_mode="hard_lease" if defer else "soft_claim", leases=[],
     ), state_path=state, provider=provider)
     binding = ("--agent-id", AGENT_ID, "--todo-id", TODO_ID,
                "--turn-instance-id", f"causal-blocked-{kind}-{provider}")
     rc, guard = cli("quota", "should-run", "--codex-app",
-                        "--goal-id", GOAL_ID, *binding, "--scan-path", str(project), cwd=project)
+                        "--goal-id", GOAL_ID, *binding,  cwd=project)
     assert rc == 0 and guard["should_run"] is True, guard
     rc, original = cli("todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
     assert rc == 0, original
@@ -128,7 +128,7 @@ def test_pending_causal_wait_settles_once_and_releases_independent_work(
         assert rc == 0, current
         assert current["todo"]["resume_condition"]["invalid_state"] == "dependency_cycle"
         rc, recovery = cli("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
-                           *binding, "--scan-path", str(project))
+                           *binding, )
         assert rc == 0, recovery
         repair = recovery["unsettled_host_turn_recovery"]
         assert repair["repair"] == "dependency"
@@ -161,7 +161,7 @@ def test_pending_causal_wait_settles_once_and_releases_independent_work(
     assert _classification_count(runtime, "causal_wait_writeback") == 1
     rc, spend = cli("quota", "spend-slot", "--goal-id", GOAL_ID,
                         "--slots", "1", "--source", "heartbeat", "--execute", *binding,
-                        "--scan-path", str(project), cwd=project)
+                         cwd=project)
     assert rc == 0 and spend["appended"] is False, spend
     assert _spend_run_count(runtime) == 0
     rc, after = cli("todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
@@ -172,7 +172,7 @@ def test_pending_causal_wait_settles_once_and_releases_independent_work(
     assert todo["completion_validation_sha256"] == digest
     rc, next_turn = cli("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
                             "--agent-id", AGENT_ID, "--turn-instance-id", f"after-causal-{provider}",
-                            "--scan-path", str(project), cwd=project)
+                             cwd=project)
     assert rc == 0, next_turn
     assert next_turn["effective_action"] != "unsettled_host_turn_recovery"
     assert next_turn["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
