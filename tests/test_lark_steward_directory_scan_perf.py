@@ -576,3 +576,200 @@ def test_private_delivery_discovery_caches_retired_triage_captures(tmp_path, mon
     second = {path: row for path, row, _ in discovery.rows()}
     assert second[retired_path]["triage"]["retired"] == "card_delivery_expired"
     assert reads == [active_path], "retired triage capture must stay cached while active capture stays fresh"
+
+
+def _seed_backlog_health_store(tmp_path: Path, *, failed_count: int = 20, completed_count: int = 20):
+    from loopx.chat_store import CHAT_TURN_SCHEMA_VERSION, ChatSessionStore
+    from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+
+    store = ChatSessionStore(tmp_path)
+    session = store.create_session(
+        goal_id="goal-health-cache",
+        agent_id="codex",
+        adapter_kind="codex_app_server",
+        upstream_thread_id="thread-health-cache",
+        session_id="a" * 32,
+    )
+    sid = session["session_id"]
+    controller = SimpleNamespace(
+        store=store,
+        project_contexts=SimpleNamespace(conversation_bindings=SimpleNamespace()),
+    )
+    core = ChatExternalConversations(controller)
+    transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
+    transport.core = core
+    transport.root = store.root / "lark-private-deliveries"
+    core.root.mkdir(parents=True, exist_ok=True)
+    transport.root.mkdir(parents=True, exist_ok=True)
+
+    failed_rows: list[dict[str, object]] = []
+    for idx in range(failed_count + completed_count):
+        is_failed = idx < failed_count
+        ref = _hex_ref(1000 + idx)
+        tid = f"{1000 + idx:032x}"
+        row = {
+            "request_ref": ref,
+            "binding_id": "b" * 24,
+            "source": {"source_ref": "c" * 24},
+            "session_id": sid,
+            "turn_id": tid,
+            "command": None,
+            "status": "accepted",
+            "delivery_verified": True,
+            "message": f"req {idx}",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+        turn = {
+            "schema_version": CHAT_TURN_SCHEMA_VERSION,
+            "session_id": sid,
+            "turn_id": tid,
+            "client_turn_id": f"external-{ref}",
+            "status": "failed" if is_failed else "completed",
+            **({"error_code": "usage_limit_exceeded", "response": None} if is_failed else {
+                "error_code": None,
+                "response": {"message": "done", "proposals": []},
+            }),
+        }
+        _atomic_write_json(store._turn_path(sid, tid), turn)
+        _atomic_write_json(core.root / f"{ref}.json", row)
+        _atomic_write_json(transport.root / f"{ref}.json", {**row, "status": "delivered", "deliveries": {}})
+        if is_failed:
+            failed_rows.append(row)
+    return store, core, transport, sid, failed_rows
+
+
+def test_backlog_health_caches_unchanged_turns_and_avoids_ipc_and_event_lock_churn(tmp_path, monkeypatch):
+    from loopx.chat_store import ChatSessionStore
+    from loopx.control_plane import effect_runtime
+
+    store, core, transport, _sid, failed_rows = _seed_backlog_health_store(tmp_path)
+    original_rpc = effect_runtime.effect_runtime_result
+    original_load_turn = ChatSessionStore.load_turn
+    original_events_after = ChatSessionStore.events_after
+    counts = {"rpc": 0, "load_turn": 0, "events_after": 0}
+
+    def counted_rpc(method, params, **kwargs):
+        if method == "collaboration.conversation.request":
+            counts["rpc"] += 1
+        return original_rpc(method, params, **kwargs)
+
+    def counted_load_turn(self, session_id: str, turn_id: str):
+        counts["load_turn"] += 1
+        return original_load_turn(self, session_id, turn_id)
+
+    def counted_events_after(self, session_id: str, turn_id: str, event_id: str | None):
+        counts["events_after"] += 1
+        return original_events_after(self, session_id, turn_id, event_id)
+
+    monkeypatch.setattr(effect_runtime, "effect_runtime_result", counted_rpc)
+    monkeypatch.setattr(ChatSessionStore, "load_turn", counted_load_turn)
+    monkeypatch.setattr(ChatSessionStore, "events_after", counted_events_after)
+
+    assert transport.health()["b" * 24] == {"pending_count": 20, "recovery_count": 0}
+    assert counts["rpc"] == 1
+    assert counts["load_turn"] == 40
+    assert counts["events_after"] == 20
+
+    counts = {"rpc": 0, "load_turn": 0, "events_after": 0}
+    assert transport.health()["b" * 24] == {"pending_count": 20, "recovery_count": 0}
+    assert counts == {"rpc": 0, "load_turn": 0, "events_after": 0}
+
+    # Uncached direct observer (default use_cache=False) still evaluates in-memory mutations fresh.
+    mutated = [{**failed_rows[0], "command": "stop"}]
+    assert core.quota_backlog_observer()(mutated) == [False]
+
+
+def test_backlog_health_cache_invalidates_on_turn_event_recovery_session_and_stop_mutations(tmp_path, monkeypatch):
+    from loopx.chat_store import CHAT_TURN_SCHEMA_VERSION
+    from loopx.control_plane import effect_runtime
+
+    store, core, transport, sid, failed_rows = _seed_backlog_health_store(tmp_path, failed_count=6, completed_count=4)
+    original_rpc = effect_runtime.effect_runtime_result
+    rpc_calls = 0
+
+    def counted_rpc(method, params, **kwargs):
+        nonlocal rpc_calls
+        if method == "collaboration.conversation.request":
+            rpc_calls += 1
+        return original_rpc(method, params, **kwargs)
+
+    monkeypatch.setattr(effect_runtime, "effect_runtime_result", counted_rpc)
+    assert transport.health()["b" * 24]["pending_count"] == 6
+    assert rpc_calls == 1
+
+    # 1. Completing one failed Turn invalidates only that row immediately.
+    r0 = failed_rows[0]
+    _atomic_write_json(store._turn_path(sid, str(r0["turn_id"])), {
+        "schema_version": CHAT_TURN_SCHEMA_VERSION,
+        "session_id": sid,
+        "turn_id": r0["turn_id"],
+        "client_turn_id": f"external-{r0['request_ref']}",
+        "status": "completed",
+        "error_code": None,
+        "response": {"message": "ok", "proposals": []},
+    })
+    assert transport.health()["b" * 24]["pending_count"] == 5
+
+    # 2. Appending a flushed turn.interrupted event invalidates that Turn immediately.
+    r1 = failed_rows[1]
+    store.append_event(sid, str(r1["turn_id"]), kind="turn.interrupted", payload={}, buffered=False)
+    assert transport.health()["b" * 24]["pending_count"] == 4
+
+    # 3. Buffered (unflushed) turn.interrupt_requested in _event_pending must never serve stale cache.
+    r2 = failed_rows[2]
+    store.append_event(sid, str(r2["turn_id"]), kind="turn.interrupt_requested", payload={}, buffered=True)
+    assert transport.health()["b" * 24]["pending_count"] == 3
+
+    # 4. Recording a verified native_result_recovery on disk invalidates that request immediately.
+    r3 = failed_rows[3]
+    _atomic_write_json(core.root / f"{r3['request_ref']}.json", {
+        **r3,
+        "native_result_recovery": {
+            "turn_id": r3["turn_id"],
+            "message_id": f"native.{r3['turn_id']}.recovered",
+            "message_text": "recovered ok",
+            "delivery_verified": True,
+            "native_observation": {"response": {"message": "recovered ok", "proposals": []}},
+        },
+    })
+    assert transport.health()["b" * 24]["pending_count"] == 2
+
+    # 5. Writing a later /stop command clears remaining pending items using only stopped RPC, then hits _stopped cache.
+    rpc_calls = 0
+    _atomic_write_json(core.root / f"{_hex_ref(9999)}.json", {
+        "request_ref": _hex_ref(9999),
+        "binding_id": "b" * 24,
+        "source": {"source_ref": "c" * 24},
+        "session_id": sid,
+        "turn_id": None,
+        "command": "stop",
+        "status": "command_completed",
+        "created_at": "2026-01-02T00:00:00+00:00",
+    })
+    assert transport.health()["b" * 24]["pending_count"] == 0
+    assert rpc_calls == 1
+
+    rpc_calls = 0
+    assert transport.health()["b" * 24]["pending_count"] == 0
+    assert rpc_calls == 0
+
+    # Replacing effect_runtime_result invalidates cached verdicts by evaluator identity.
+    def wrapper_rpc(method, params, **kwargs):
+        nonlocal rpc_calls
+        if method == "collaboration.conversation.request":
+            rpc_calls += 1
+        return original_rpc(method, params, **kwargs)
+
+    monkeypatch.setattr(effect_runtime, "effect_runtime_result", wrapper_rpc)
+    assert transport.health()["b" * 24]["pending_count"] == 0
+    assert rpc_calls > 0
+    rpc_calls = 0
+    assert transport.health()["b" * 24]["pending_count"] == 0
+    assert rpc_calls == 0
+
+    # 6. Closing a Session also drops remaining cached pending counts.
+    _store2, _core2, transport2, sid2, _ = _seed_backlog_health_store(tmp_path / "s2", failed_count=3, completed_count=0)
+    assert transport2.health()["b" * 24]["pending_count"] == 3
+    sess_path = _store2._session_path(sid2)
+    _atomic_write_json(sess_path, {**store_read_json(sess_path), "status": "closed"})
+    assert transport2.health()["b" * 24]["pending_count"] == 0

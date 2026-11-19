@@ -39,9 +39,11 @@ from . import result_review_evidence
 from .codex_context import checked_session_home
 from .file_discovery import (
     FileChatDiscovery,
+    QuotaBacklogObservationCache,
     external_source_route_path,
     file_change_fingerprint,
     later_equivalent_source_input,
+    observe_quota_backlog_batch,
     recovery_journal_fields,
     source_control_fields,
 )
@@ -137,6 +139,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
         self._recovery_discovery = FileChatDiscovery()
         self._user_messages_lock = threading.Lock()
         self._session_user_messages_cache: dict[str, tuple[tuple[int, ...], tuple[dict[str, Any], ...]]] = {}
+        self._quota_backlog_cache = QuotaBacklogObservationCache()
         self.actions: Any | None = None
 
     def _retained_result_review(self, row: dict[str, Any]) -> dict[str, Any] | None:
@@ -406,36 +409,34 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                 for item in (source_controls or self.source_controls)())))
 
     def quota_backlog_observer(
-        self, *, source_controls: Callable[[], list[dict[str, Any]]] | None = None,
+        self, *, source_controls: Callable[[], list[dict[str, Any]]] | None = None, use_cache: bool = False,
     ) -> Callable[[Sequence[dict[str, Any]]], list[bool]]:
         """Read Session state after each batch's Turns and share source controls across batches."""
         read_controls = cache(source_controls or self.source_controls)
 
+        @cache
+        def stop_controls() -> tuple[tuple[Any, Any, datetime], ...]:
+            return tuple(
+                (item.get("binding_id"), item.get("source"), datetime.fromisoformat(item["created_at"]))
+                for item in read_controls()
+                if item.get("command") in {"stop", "new"}
+            )
+
         def observe(rows: Sequence[dict[str, Any]]) -> list[bool]:
             if len(rows) > QUOTA_BACKLOG_BATCH_SIZE:
                 raise ValueError("select at most 64 pending requests per observation")
-            params = [self._quota_pending_inputs(row) for row in rows]
-            load_session = self.controller.store.load_session
-            sessions = {}
-            for session_id in dict.fromkeys(row["session_id"] for row in rows):
-                # A transient read failure must not mask a closed Session.
-                session = load_session(session_id) or load_session(session_id)
-                sessions[session_id] = ({key: session[key] for key in ("session_id", "status") if key in session}
-                                        if session is not None else None)
-            for row, values in zip(rows, params, strict=True):
-                values["current_session"] = sessions[row["session_id"]]
-            flags = self._quota_pending_flags(params)
-            stopped = []
-            for index, (row, values, pending) in enumerate(zip(rows, params, flags, strict=True)):
-                if pending:
-                    events = self.controller.store.events_after(row["session_id"], row["turn_id"], None)
-                    if self._source_stop_observed(row, values["pending_observation"]["turn"], events,
-                                                 source_controls=read_controls):
-                        values["pending_observation"]["stop_observed"] = True
-                        stopped.append(index)
-            for index, pending in zip(stopped, self._quota_pending_flags([params[i] for i in stopped]), strict=True):
-                flags[index] = pending
-            return flags
+            cache_store = None
+            if use_cache:
+                cache_store = getattr(self, "_quota_backlog_cache", None)
+                if cache_store is None:
+                    cache_store = QuotaBacklogObservationCache()
+                    self._quota_backlog_cache = cache_store
+            return observe_quota_backlog_batch(
+                root=self.root, store=self.controller.store, rows=rows,
+                build_inputs=self._quota_pending_inputs, eval_flags=self._quota_pending_flags,
+                stop_controls=stop_controls, evaluator_id=id(effect_runtime.effect_runtime_result),
+                cache_store=cache_store,
+            )
 
         return observe
 
