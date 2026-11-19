@@ -44,6 +44,10 @@ switches show the saved original with a notice, without inventing a translation.
 Each citation in a case study has a direct link to that occurrence in its saved
 version. Opening it uses the same source reader as a citation selected on the
 page. Closing returns to the citation and restores its chapter address.
+If a chapter is absent, the reader keeps the linked version and offers its
+contents. If that version has no study, readers can choose another saved
+version explicitly. If the link cannot be read, retry keeps the same address
+and **Browse saved studies** opens the current Goal's saved readings.
 Rendering uses the existing Markdown renderer and host-owned components, with
 no executable HTML. Porthole is not a runtime dependency of this reader.
 
