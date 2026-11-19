@@ -581,7 +581,7 @@ def main() -> int:
         "Agent-facing CLI output budgets, deterministic control-plane qualification, "
         "model-behavior shadow evaluation, and release outcome baseline correctness",
         "current quota claim/lease and workspace contract plus repository rules",
-        "Read agent_channel.work_context and required_reads (or envelope) before work",
+        "Read agent_channel.work_context and required_reads before work",
         "Size by task/evidence/risk within authority/budget, not ops/files/wakes",
         "calls/writeback ≠ completion. Correct locally; obey projected replan/stop, never wake counts",
         "Task-scoped coordination grants no authority over other agents",
@@ -753,7 +753,7 @@ def main() -> int:
         "safe_bypass_allowed=true", "gate blocks only the gated delivery path",
         "monitor_quiet_skip", "On receipt write failure, retry same id",
         "exact monitor settlement never refreshes/spends",
-        "required_reads (or envelope) before work", "negative cases and readback",
+        "required_reads before work", "negative cases and readback",
         "preserve evidence and next action for recovery/resume",
         "autonomous_replan_obligation", "with original settlement still owed",
         "settlement_plan.ordered_steps", "next_cli_actions",
