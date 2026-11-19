@@ -40,6 +40,15 @@ BUILD = hashlib.sha256(b"".join(Path(__file__).with_name(name).read_bytes() for 
 
 
 class _RelayHTTPResponse(HTTPResponse):
+    def _get_chunk_left(self):
+        if self.chunk_left == 0:
+            # The standard parser discards the delimiter without validating it.
+            if self._safe_read(2) != b"\r\n":
+                raise IncompleteRead(b"")
+            # The delimiter is consumed. Let the standard parser advance.
+            self.chunk_left = None
+        return super()._get_chunk_left()
+
     def _read_and_discard_trailer(self):
         # Require the final blank line while retaining the standard trailer bounds.
         for _ in range(_MAXHEADERS + 1):

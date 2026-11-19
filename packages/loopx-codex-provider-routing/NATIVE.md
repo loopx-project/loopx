@@ -183,11 +183,12 @@ Unknown network effects, ordinary request/server failures and any started stream
 are not retried on another key. No job replay, model substitution or synthetic
 completion is added. For HTTP/1.1 clients, the relay streams bytes as they arrive
 and leaves the response incomplete when an upstream transfer is truncated. A
-chunked upstream transfer is complete after its trailer section's final blank
-line. A complete HTTP transfer alone does not prove a completed model response. A
-truncated rejection body or one larger than the 64 KiB inspection limit cannot
-trigger another key. There are no background paid probes. The transport survives
-the Chat/App restart used for native handoff. Disabling stops new admissions and
+chunked upstream transfer requires CRLF after each data chunk and a final blank
+line after the trailer fields. A complete HTTP transfer alone does not prove a
+completed model response. A truncated rejection body or one larger than the
+64 KiB inspection limit cannot trigger another key. There are no background paid
+probes. The transport survives the Chat/App restart used for native handoff.
+Disabling stops new admissions and
 drains admitted model requests before its process exits. With the policy off,
 an existing subscription is never routed through this transport.
 

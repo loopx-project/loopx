@@ -253,13 +253,14 @@ class WireResponse(socketserver.StreamRequestHandler):
 
 
 @pytest.mark.parametrize("status", [200, 429])
-@pytest.mark.parametrize(("trailer", "complete"), [
-    (b"0\r\n", False),
-    (b"0\r\nX-Fixture: retained\r\n", False),
-    (b"0\r\n\r\n", True),
-    (b"0\r\nX-Fixture: retained\r\n\r\n", True),
+@pytest.mark.parametrize(("delimiter", "trailer", "complete"), [
+    pytest.param(b"\r\n", b"0\r\n", False, id="missing-final-line"),
+    pytest.param(b"\r\n", b"0\r\nX-Fixture: retained\r\n", False, id="truncated-trailer"),
+    pytest.param(b"\r\n", b"0\r\n\r\n", True, id="no-trailer-fields"),
+    pytest.param(b"\r\n", b"0\r\nX-Fixture: retained\r\n\r\n", True, id="complete-trailer"),
+    pytest.param(b"  ", b"0\r\n\r\n", False, id="malformed-data-delimiter"),
 ])
-def test_chunked_upstream_requires_the_end_of_trailers(relay, monkeypatch, status, trailer, complete):
+def test_chunked_upstream_requires_complete_framing(relay, monkeypatch, status, delimiter, trailer, complete):
     owner, keys, calls, outcomes, post, _ = relay
     module = importlib.import_module("loopx_codex_provider_routing.openai_relay")
     # Keep the production HTTPS response parser while serving a raw local
@@ -271,14 +272,17 @@ def test_chunked_upstream_requires_the_end_of_trailers(relay, monkeypatch, statu
     payload = prefix if status == 200 else error
     status_line = "200 OK" if status == 200 else "429 Too Many Requests"
     content_type = "text/event-stream" if status == 200 else "application/json"
+    midpoint = len(payload) // 2
+    first, second = payload[:midpoint], payload[midpoint:]
+    chunks = f"{len(first):x}\r\n".encode() + first + b"\r\n"
+    chunks += f"{len(second):x}\r\n".encode() + second + delimiter
     with module.RelayServer(owner, {"port": 0}) as relay_server:
         origin_opener = relay_server.opener
     with socketserver.TCPServer(("127.0.0.1", 0), WireResponse) as server:
         server.wire_response = (
             f"HTTP/1.1 {status_line}\r\nTransfer-Encoding: chunked\r\n"
             f"Content-Type: {content_type}\r\nConnection: close\r\n\r\n"
-            f"{len(payload):x}\r\n"
-        ).encode() + payload + b"\r\n" + trailer
+        ).encode() + chunks + trailer
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
