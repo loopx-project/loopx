@@ -1271,14 +1271,12 @@ def exclusive_mutation_file_lock(
     try:
         yield effect_lock_path
     finally:
-        _release_effect_mutation_lock(
-            effect_lock_path,
-            token,
-            # Lock cleanup is secondary to the durable body result.  A cleanup
-            # failure must not replace either a successful result or its
-            # original exception; stale-owner recovery handles a later retry.
-            suppress_errors=True,
-        )
+        # A transient cleanup error can strand the marker while its process is
+        # still alive. Retry once for the marker this context created and let
+        # the release operation recheck its token and claim before retiring it.
+        released = _release_effect_mutation_lock(effect_lock_path, token, suppress_errors=True)
+        if not released and _same_effect_file_identity(identity, _effect_file_identity(effect_lock_path)):
+            _release_effect_mutation_lock(effect_lock_path, token, suppress_errors=True)
 
 
 @contextmanager
