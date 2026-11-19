@@ -43,16 +43,10 @@
           var params = new URLSearchParams(bare ? rawHash : at === -1 ? '' : rawHash.slice(at + 1));
           if (params.has('token')) { token = token || params.get('token') || ''; params.delete('token'); }
           var kept = bare ? params.toString() : route + (params.toString() ? '?' + params.toString() : '');
-          if (token) {
-            localStorage.setItem('calli.token', token);
-            var rest = u.pathname + u.search + (kept ? '#' + kept : '');
-            history.replaceState(null, '', rest || location.pathname);
-          }
-          var activeToken = token || localStorage.getItem('calli.token') || '';
-          var manifest = document.querySelector('link[rel="manifest"]');
-          if (manifest && activeToken && !/[^\x21-\x7e]/.test(activeToken)) {
-            manifest.setAttribute('href', '/manifest.webmanifest?token=' + encodeURIComponent(activeToken));
-          }
+          if (!token) return;
+          localStorage.setItem('calli.token', token);
+          var rest = u.pathname + u.search + (kept ? '#' + kept : '');
+          history.replaceState(null, '', rest || location.pathname);
         })();
       } catch (e) {}
     </script>
