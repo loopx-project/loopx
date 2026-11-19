@@ -416,7 +416,9 @@ are supplied when applicable; authority is never inferred from prompt text.
 The Standard CLI composition has three source-built capability wheel
 candidates, `loopx-capability-agent-turn-recall`,
 `loopx-capability-pull-request-review`, and `loopx-capability-issue-fix`.
-Install each alongside the matching Core release. Core and each add-on own
+Install them together with `loopx-core[standard]` or add each alongside the
+matching Core release. The extra pins these three packages to the Core version.
+Core and each add-on own
 disjoint files and keep existing capability IDs, configuration and runtime
 owners. Independent provider packages use the public capability boundary above.
 

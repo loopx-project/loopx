@@ -287,7 +287,8 @@ Capability 指令仅在适用时提供；authority 不能从 prompt 文字推导
 
 Standard CLI 装配有三个可从源码构建的能力 wheel 候选，即
 `loopx-capability-agent-turn-recall`、`loopx-capability-pull-request-review`
-和 `loopx-capability-issue-fix`。三个能力可分别装入同版本的 Core 环境。Core 与各可选包
+和 `loopx-capability-issue-fix`。用 `loopx-core[standard]` 一次安装三个能力，也可分别安装。
+这个 extra 将三个包锁定到 Core 的同一版本。Core 与各可选包
 各自拥有互不重叠的文件，沿用既有能力 ID、配置和运行时 owner。独立 provider 包仍按
 上文公共能力边界接入。
 

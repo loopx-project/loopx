@@ -74,18 +74,32 @@ command on explicit use. Removing it preserves review settings and checkpoints.
 
 ### Standard CLI composition
 
-Build the three optional wheels from the same checkout as Core. Set
-`LOOPX_CORE_PYTHON` to the interpreter of that Core environment and install the
-chosen capabilities there. This example installs all three.
+Install `loopx-core[standard]` to select Agent Turn Recall, Pull Request Review
+and Issue Fix together. Build the three companion wheels into the same
+directory as the Core wheel, using the same checkout. Set `LOOPX_CORE_PYTHON`
+to the interpreter of a new environment or the matching Core environment.
 
 ```sh
 for capability in agent-turn-recall pull-request-review issue-fix; do
   distribution="loopx-capability-$capability"
   python packages/loopx-core/prepare.py --distribution "$distribution" --output "/tmp/$distribution-source"
-  uv build --wheel "/tmp/$distribution-source" --out-dir /tmp/loopx-standard-wheels
+  uv build --wheel "/tmp/$distribution-source" --out-dir /tmp/loopx-core-dist
 done
-uv pip install --no-index --python "$LOOPX_CORE_PYTHON" /tmp/loopx-standard-wheels/loopx_capability_*.whl
-loopx capability list --format json
+uv pip install --no-index --find-links /tmp/loopx-core-dist \
+  --reinstall-package loopx-core --python "$LOOPX_CORE_PYTHON" 'loopx-core[standard]'
+"$LOOPX_CORE_PYTHON" -I -m loopx.entrypoint capability list --format json
+```
+
+The reinstall option reads the selected wheel's metadata when an earlier
+source build of the same version is already installed.
+
+Each ability can also be installed on its own. Use the existing commands and
+Goal settings to select a workflow. To return to Core-only installation,
+uninstall the three companion wheels in the same environment:
+
+```sh
+uv pip uninstall --python "$LOOPX_CORE_PYTHON" \
+  loopx-capability-agent-turn-recall loopx-capability-pull-request-review loopx-capability-issue-fix
 ```
 
 The candidate owns the same `loopx` import namespace and console command as the
