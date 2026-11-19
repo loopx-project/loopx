@@ -27,7 +27,7 @@ from ...capabilities.native_chat.external_conversations import (
     STEWARD_BINDING_ADOPTION_PENDING,
 )
 from ...capabilities.native_chat.file_discovery import (
-    REPLY_IMAGE_NAME_PATTERN, FileChatDiscovery, reply_image_workspace,
+    REPLY_IMAGE_NAME_PATTERN, FileChatDiscovery, file_change_fingerprint, reply_image_workspace,
 )
 from ...chat_attachments import CHAT_IMAGE_MAX_COUNT
 from ...chat_store import TERMINAL_TURN_STATES, _atomic_write_json, _read_json
@@ -123,6 +123,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
         self.steward_callback_streams: dict[tuple[str, str], TeamPlanReviewCallbackStream] = {}
         self.root = controller.store.root / "lark-private-deliveries"
         self._context_recovery_probe_at: dict[Path, float] = {}
+        self._context_recovery_noop_backoff: dict[Path, tuple[tuple[int, ...] | None, tuple[int, ...] | None, int]] = {}
         self._historical_image_probe_at: dict[Path, float] = {}
         self._planned_repairs_stamp: tuple[bool, int | None] | None = None
         self._planned_repairs_names: frozenset[str] = frozenset()
@@ -1555,6 +1556,46 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                  if row["status"] != "delivered" and triage.pending(row) and not _is_answer_image_followup(row)]
         return [*paths, *self._pending_web_projection_paths()]
 
+    def _noop_backoff_cache(self) -> dict[Path, tuple[tuple[int, ...] | None, tuple[int, ...] | None, int]]:
+        cache = getattr(self, "_context_recovery_noop_backoff", None)
+        if cache is None:
+            cache = {}
+            self._context_recovery_noop_backoff = cache
+        return cache
+
+    def _context_recovery_fingerprints(
+        self, path: Path, request_ref: str,
+    ) -> tuple[tuple[int, ...] | None, tuple[int, ...] | None]:
+        core_root = getattr(self.core, "root", None)
+        native_fp: tuple[int, ...] | None = None
+        if isinstance(core_root, Path):
+            try:
+                native_fp = file_change_fingerprint(core_root / f"{request_ref}.json")
+            except OSError:
+                native_fp = None
+        try:
+            delivery_fp = file_change_fingerprint(path)
+        except OSError:
+            delivery_fp = None
+        return delivery_fp, native_fp
+
+    def _clear_context_recovery_noop_backoff(self, path: Path) -> None:
+        self._noop_backoff_cache().pop(path, None)
+
+    def _record_context_recovery_noop_backoff(self, path: Path, request_ref: str) -> None:
+        cache = self._noop_backoff_cache()
+        delivery_fp, native_fp = self._context_recovery_fingerprints(path, request_ref)
+        prev = cache.get(path)
+        streak = prev[2] + 1 if prev is not None and (prev[0], prev[1]) == (delivery_fp, native_fp) else 1
+        cache[path] = (delivery_fp, native_fp, streak)
+        if streak <= 1:
+            delay = 60.0
+        else:
+            base = min(1800, 60 * (2 ** min(streak - 1, 5)))
+            jitter = zlib.crc32(path.name.encode("utf-8")) % 60
+            delay = float(base + jitter)
+        self._context_recovery_probe_at[path] = time.monotonic() + delay
+
     @effect_runtime_request_scope()
     def pending_delivery_paths(self) -> list[Path]:
         """The durable transport store is the queue; no in-memory admission."""
@@ -1562,6 +1603,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
         recovery_candidate = self.core.context_recovery_observer()
         now = datetime.now(timezone.utc).timestamp()
         planned_repairs = self._planned_historical_repairs()
+        noop_backoff = self._noop_backoff_cache()
         for path, row, repairs in self._delivery_discovery.rows():
             if row["status"] != "delivered":
                 if triage.pending(row) and not _answer_image_retry_waits(row, now):
@@ -1571,20 +1613,25 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
             elif (not row.get("historical_images_admitted") and path.name in planned_repairs
                     and time.monotonic() >= self._historical_image_probe_at.get(path, 0)):
                 paths.append(path)
-            elif (row.get("session_id") and row.get("turn_id")
-                    and time.monotonic() >= self._context_recovery_probe_at.get(path, 0)):
-                # Only a discovery/backoff hint, never execution authority.
-                # The canonical request, provider effect inventory and source
-                # are independently re-read by recover_failed_request.
-                # Stagger steady-state ineligible re-probes across [60, 120)s by filename
-                # hash so cold-start bursts do not stay synchronized on the same tick,
-                # while keeping eligible candidates on the exact 60s retry cadence.
-                now_mono = time.monotonic()
-                stagger = zlib.crc32(path.name.encode("utf-8")) % 60
-                self._context_recovery_probe_at[path] = now_mono + 60 + stagger
-                if repairs or recovery_candidate(row["request_ref"]):
-                    self._context_recovery_probe_at[path] = now_mono + 60
-                    paths.append(path)
+            elif row.get("session_id") and row.get("turn_id"):
+                saved_backoff = noop_backoff.get(path)
+                if (saved_backoff is not None
+                        and self._context_recovery_fingerprints(path, row["request_ref"]) != saved_backoff[:2]):
+                    noop_backoff.pop(path, None)
+                    self._context_recovery_probe_at.pop(path, None)
+                if time.monotonic() >= self._context_recovery_probe_at.get(path, 0):
+                    # Only a discovery/backoff hint, never execution authority.
+                    # The canonical request, provider effect inventory and source
+                    # are independently re-read by recover_failed_request.
+                    # Stagger steady-state ineligible re-probes across [60, 120)s by filename
+                    # hash so cold-start bursts do not stay synchronized on the same tick,
+                    # while keeping eligible candidates on the exact 60s retry cadence.
+                    now_mono = time.monotonic()
+                    stagger = zlib.crc32(path.name.encode("utf-8")) % 60
+                    self._context_recovery_probe_at[path] = now_mono + 60 + stagger
+                    if repairs or recovery_candidate(row["request_ref"]):
+                        self._context_recovery_probe_at[path] = now_mono + 60
+                        paths.append(path)
         return [*paths, *self._web_projection_paths()]
 
     def is_recovery_path(self, path: Path) -> bool:
@@ -1721,9 +1768,15 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                 source_observation=lambda selected: self._recovery_source_observation(row, selected))
             if (row["status"] == "delivered" and recovered.get("native_result_recovery")
                     and recovered["native_result_recovery"]["turn_id"] == recovered.get("turn_id")):
-                return self._reconcile_native_result(path, recovered)
+                delivered_native = self._reconcile_native_result(path, recovered)
+                if delivered_native:
+                    self._clear_context_recovery_noop_backoff(path)
+                else:
+                    self._record_context_recovery_noop_backoff(path, row["request_ref"])
+                return delivered_native
             if (recovered.get("context_recovery") and not recovered.get("delivery_verified")
                     and recovered.get("turn_id") != row["turn_id"]):
+                self._clear_context_recovery_noop_backoff(path)
                 with exclusive_file_lock(path, operation="deliver_private_chat_request"):
                     row = _read_json(path)
                     if not _same_fields(row, recovered, "request_ref", "binding_id", "source", "session_id"):
@@ -1731,6 +1784,8 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                     row.update(status="accepted", turn_id=recovered["turn_id"],
                         context_recovery=recovered["context_recovery"])
                     _atomic_write_json(path, row)
+            elif row["status"] == "delivered":
+                self._record_context_recovery_noop_backoff(path, row["request_ref"])
         if row["status"] == "captured":
             # Intake may still own this capture. Wait on its existing fence and
             # read its result before retrying admission from a stale snapshot.

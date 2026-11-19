@@ -230,6 +230,12 @@ class PrivateDeliveryDiscovery:
         self._completed.pop(path, None)
         row = _read_json(path)
         if row["status"] != "delivered":
+            triage = row.get("triage")
+            if isinstance(triage, dict) and triage.get("retired"):
+                view = {"status": row["status"], "triage": {"retired": triage["retired"]}}
+                if before is not None and file_change_fingerprint(path) == before:
+                    self._completed[path] = (before, view, False)
+                return view, False
             return row, False
 
         repairs = bool(row.get("session_id") and row.get("turn_id") and legacy_recovery_repairs(row))
