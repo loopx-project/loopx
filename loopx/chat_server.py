@@ -1412,7 +1412,7 @@ class ChatRequestHandler(
             {
                 "ok": True,
                 "schema_version": "loopx_chat_action_v1",
-                "proposal": proposal,
+                "proposal": self.server.action_service.project_task_dispatch(proposal),
             }
         )
 
@@ -1436,7 +1436,7 @@ class ChatRequestHandler(
             {
                 "ok": True,
                 "schema_version": "loopx_chat_action_list_v1",
-                "proposals": proposals,
+                "proposals": [self.server.action_service.project_task_dispatch(item) for item in proposals],
             }
         )
 

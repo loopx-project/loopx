@@ -609,6 +609,11 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
       return held("repair", "readback_unverified");
     }
     const taskExecution = taskExecutionReadback(proposal, receipt, identity.sourceFingerprint);
+    if (taskExecution && proposal.task_execution_dispatch_pending === true
+        && proposal.permission_classification === "durable_write" && identity.proposalId
+        && !objectValue(proposal.context)?.binding_id) {
+      return {...finish({interaction: "review", canApply: true, reason: "task_start_retry"}), retryOriginal: true};
+    }
     const completed = held("completed", "readback_verified");
     return taskExecution ? {...completed, taskExecution} : completed;
   }

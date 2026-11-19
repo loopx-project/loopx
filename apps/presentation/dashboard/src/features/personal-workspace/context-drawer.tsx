@@ -1232,6 +1232,8 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
               {selection.item.todoId && (selection.item.actionKind === "gate.resolve" || selection.item.actionKind === "todo.update")
                 ? <div className="personal-attention-meta"><AttentionProvenance detail={proposalRequests.length === 1 ? proposalRequests[0].details : undefined} /></div> : null}
               {selection.item.impact ? <p>{selection.item.impact}</p> : null}
+              {selection.item.reviewPlan?.retryOriginal && selection.item.errorMessage
+                ? <p className="personal-proposal-state is-error" role="status">{selection.item.errorMessage}</p> : null}
               {selection.item.reviewPlan && !selection.item.reviewPlan.creationExecution && !selection.item.reviewPlan.retryOriginal && !taskExecution && selection.item.actionKind !== "team.plan" && !(decisionFrame && ["ready", "applied"].includes(selection.item.status)) ? <p className="personal-proposal-explainer" data-action-review={selection.item.reviewPlan.interaction}>{operationUnknown
                 ? t("actionReview.operation_reconcile_original")
                 : selection.item.reviewPlan.operationFrame?.kind === "inactive"
