@@ -11,6 +11,7 @@ import shlex
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from time import monotonic
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -503,6 +504,7 @@ def execute_codex_execution_preparation(
     if request.get("claim_args") != expected_claim:
         raise ValueError("invalid Codex execution-preparation claim arguments")
     invoke = runner or _default_runner
+    deadline = monotonic() + timeout
     claimed = _run_json(
         expected_claim,
         registry_path=registry_path,
@@ -524,12 +526,16 @@ def execute_codex_execution_preparation(
         "--todo-id", todo_id, "--turn-instance-id", turn_instance_id,
         "--decision-output-dir", str(capture_directory), "--prepared-capture-reference",
     ]
+    # Reserve time for readiness and give it the time the claim left unused.
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        raise TimeoutError("Native execution preparation deadline elapsed before the ready check")
     after = _run_json(
         guard,
         registry_path=registry_path,
         runtime_root=runtime_root,
         cwd=workspace,
-        timeout=timeout / 2,
+        timeout=remaining,
         runner=invoke,
     )
     preparation = after.get("execution_preparation")
