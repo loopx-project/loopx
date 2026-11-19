@@ -981,8 +981,9 @@ def test_update_preserves_selected_route_through_install_and_readback(tmp_path, 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX snapshot rollback")
 @pytest.mark.parametrize("failed_stage", [None, "compatibility", "doctor", "extensions"])
+@pytest.mark.parametrize("archive_layout", ["default", "configured"])
 def test_rollback_cli_preserves_selected_route_and_failure_boundaries(
-    tmp_path, monkeypatch, capsys, failed_stage,
+    tmp_path, monkeypatch, capsys, failed_stage, archive_layout,
 ):
     from loopx.cli import main
     from loopx.self_update import render_update_plan_markdown
@@ -991,16 +992,27 @@ def test_rollback_cli_preserves_selected_route_and_failure_boundaries(
     runtime.mkdir()
     registry = runtime / "registry.global.json"
     registry.write_text(json.dumps({"goals": [], "common_runtime_root": str(runtime)}))
-    releases = tmp_path / "releases"
+    user_home = tmp_path / "user"
+    monkeypatch.setattr(Path, "home", lambda: user_home)
+    default_launcher = user_home / ".local/bin/loopx"
+    if archive_layout == "configured":
+        releases = tmp_path / "configured releases"
+        launcher = tmp_path / "configured bin/loopx"
+        monkeypatch.setenv("LOOPX_RELEASES_DIR", str(releases))
+        monkeypatch.setenv("LOOPX_BIN_DIR", str(launcher.parent))
+        default_launcher.parent.mkdir(parents=True)
+        default_launcher.write_text("Unrelated launcher")
+    else:
+        releases = user_home / ".local/share/loopx/releases"
+        launcher = default_launcher
+        monkeypatch.setenv("LOOPX_RELEASES_DIR", "")
+        monkeypatch.setenv("LOOPX_BIN_DIR", "")
     current, target = releases / "current", releases / "target"
     for release in (current, target):
         (release / "scripts").mkdir(parents=True)
         (release / "scripts/loopx").write_text("#!/bin/sh\nexit 0\n")
-    launcher = tmp_path / "bin/loopx"
-    launcher.parent.mkdir()
+    launcher.parent.mkdir(parents=True)
     launcher.symlink_to(current / "scripts/loopx")
-    monkeypatch.setattr("loopx.self_update._user_loopx_bin", lambda *_: launcher)
-    monkeypatch.setattr("loopx.self_update._user_releases_dir", lambda *_: releases)
     snapshot = doctor_payload()
     snapshot["package"]["release_root"] = str(current)
     planning_calls, calls = [], []
@@ -1053,6 +1065,8 @@ def test_rollback_cli_preserves_selected_route_and_failure_boundaries(
         assert "cannot read current authority formats" not in rendered
     expected_release = current if failed_stage in {"compatibility", "doctor"} else target
     assert launcher.resolve() == expected_release / "scripts/loopx"
+    if archive_layout == "configured":
+        assert default_launcher.read_text() == "Unrelated launcher"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX snapshot rollback")

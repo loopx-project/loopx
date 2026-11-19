@@ -48,7 +48,9 @@ names the readback and recovery command for each layer.
 
 For a pip or pipx distribution, apply delegates to that owner. For an archive
 snapshot, apply uses the public `stable` ref by default and preserves atomic
-snapshot rollback. Before replacing the launcher, `loopx update --rollback
+snapshot rollback. When rolling back, keep any `LOOPX_BIN_DIR` or
+`LOOPX_RELEASES_DIR` override from installation. Before replacing the launcher,
+`loopx update --rollback
 previous` checks that the selected release can read the current authoritative
 Todos for registered local File and SQLite Goals. If it cannot verify the read,
 the running version and Goal state stay in place. Both the registry's configured
