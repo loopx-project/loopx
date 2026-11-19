@@ -313,7 +313,8 @@ def test_initial_read_keeps_supporting_index_obligations_and_recovers_its_full_l
     assert json.loads(raw) == decision
 
 
-def test_workspace_repair_candidate_scopes_remain_readable_without_expanding_the_opening(tmp_path, monkeypatch, decision):
+@pytest.mark.parametrize("workspace_repair", [True, False], ids=["needs-worktree", "independent-worktree"])
+def test_unbound_candidate_scopes_are_only_expanded_on_request(tmp_path, monkeypatch, decision, workspace_repair):
     from test_codex_context_lifecycle import setup
 
     setup(tmp_path, monkeypatch)
@@ -324,15 +325,18 @@ def test_workspace_repair_candidate_scopes_remain_readable_without_expanding_the
         {"todo_id": "todo_alternative", "text": "Verify the documentation.", "required_write_scopes": short_scope},
     ]
     turn = "workspace-selection-fixture"
-    decision.update(should_run=True, effective_action="agent_workspace_repair",
-        normal_delivery_allowed=False, recovery_delivery_allowed=False, workspace_repair_allowed=True,
+    mode = "agent_workspace_repair" if workspace_repair else "normal_run"
+    obligation = "agent_workspace_guard" if workspace_repair else "work_lane_contract"
+    decision.update(should_run=True, effective_action=mode,
+        normal_delivery_allowed=not workspace_repair, recovery_delivery_allowed=False,
+        workspace_repair_allowed=workspace_repair,
         agent_identity={"agent_id": "agent"},
         heartbeat_receipt={"turn_instance_id": turn, "settlement_binding_owed": True},
-        execution_obligation={"kind": "agent_workspace_repair", "contract": "agent_workspace_guard",
+        execution_obligation={"kind": mode if workspace_repair else obligation, "contract": obligation,
                               "must_attempt_work": True, "delivery_allowed": False})
     decision["selected_todo"].update(schema_version="quota_selected_todo_v0", required_write_scopes=long_scopes)
     contract = decision["interaction_contract"]
-    contract["mode"] = "agent_workspace_repair"
+    contract["mode"] = mode
     contract["agent_channel"].update(delivery_allowed=False, must_attempt=True,
         work_context={"instruction": "Relocate before delivering.", "sources": []})
     contract["cli_channel"] = {
@@ -376,12 +380,15 @@ def test_workspace_repair_candidate_scopes_remain_readable_without_expanding_the
     projected = opening["/action_portfolio/suggested_actions"]
     assert projected == [{key: value for key, value in candidates[0].items() if key != "required_write_scopes"},
                          candidates[1]]
+    assert "required_write_scopes" not in opening["/selected_todo"]
     pointer = "/action_portfolio/suggested_actions/0/required_write_scopes"
+    recommended_scope = "/selected_todo/required_write_scopes"
     assert pointer in opening["/context_details/instruction"]
+    assert recommended_scope in opening["/context_details/instruction"]
     assert page["total_bytes"] < len(json.dumps(long_scopes).encode())
     template = opening["/context_details/command_template"]
-    _, detail = read_selection(template.replace("<pointer>", pointer))
-    assert detail[pointer] == long_scopes
+    _, detail = read_selection(template.replace("<pointer>", pointer) + f" --select {recommended_scope}")
+    assert detail[pointer] == detail[recommended_scope] == long_scopes
     assert capture.read_bytes() == original
     assert not registry.exists() and not runtime.exists()
 

@@ -2483,17 +2483,18 @@ function progressivePreparationScopes(payload: JsonObject): PreparationScopeDeta
     marker_path: ["goal_boundary", "write_scope_pointer"],
     instruction: repair
       ? "If workspace repair needs the Goal's write scopes, select /goal_boundary/write_scope from the source below. "
-      : "If choosing work depends on write scope, select the pointer in goal_boundary.write_scope_pointer from the source below. "
-        + "Use the complete current scope from the ready decision before delivery. ",
+      : "If choosing work depends on write scope, select the pointer in goal_boundary.write_scope_pointer from the source below. ",
   });
   const selected = jsonObject(payload.selected_todo);
-  if (repair && selected?.schema_version === "quota_selected_todo_v0" &&
+  if ((repair || selecting) && selected?.schema_version === "quota_selected_todo_v0" &&
       typeof selected.todo_id === "string" && longScope(selected.required_write_scopes)) scopes.push({
     path: ["selected_todo", "required_write_scopes"],
-    instruction: "If workspace repair needs the Todo's requested write scopes, select /selected_todo/required_write_scopes from the source below. ",
+    instruction: repair
+      ? "If workspace repair needs the Todo's requested write scopes, select /selected_todo/required_write_scopes from the source below. "
+      : "If choosing work depends on the recommended Todo's write scopes, select /selected_todo/required_write_scopes from the source below. ",
   });
   const suggestions = jsonObject(payload.action_portfolio)?.suggested_actions;
-  if (repair && selecting && Array.isArray(suggestions)) suggestions.forEach((value, index) => {
+  if (selecting && Array.isArray(suggestions)) suggestions.forEach((value, index) => {
     const candidate = jsonObject(value);
     if (typeof candidate?.todo_id !== "string" || !longScope(candidate.required_write_scopes)) return;
     const path = ["action_portfolio", "suggested_actions", index, "required_write_scopes"];
@@ -2502,8 +2503,9 @@ function progressivePreparationScopes(payload: JsonObject): PreparationScopeDeta
     });
   });
   const finalScope = scopes.at(-1);
-  if (repair && finalScope) finalScope.instruction +=
-    "After relocating, rerun the guard for this Turn and use its complete current scopes before delivery. ";
+  if (finalScope) finalScope.instruction += repair
+    ? "After relocating, rerun the guard for this Turn and use its complete current scopes before delivery. "
+    : "Use the complete current scope from the ready decision before delivery. ";
   return scopes;
 }
 
