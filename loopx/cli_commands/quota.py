@@ -802,6 +802,16 @@ def _restore_quota_work_input(args, payload, *, heartbeat_turn_id, heartbeat_rec
                         delivery["next_action"] = action
                         interaction["agent_channel"]["primary_action"] = payload["recommended_action"] = action
                 elif work_readback.writeback_run is None:
+                    interaction = payload.get("interaction_contract", {})
+                    agent_channel = interaction.get("agent_channel", {})
+                    if (not payload.get("work_input_restored")
+                            and payload.get("normal_delivery_allowed") is not True
+                            and payload.get("recovery_delivery_allowed") is not True
+                            and agent_channel.get("must_attempt") is not True):
+                        # A new gate observation has no delivery basis to issue.
+                        # Existing work and committed-result recovery stay above.
+                        payload.pop("work_input_restored", None)
+                        return payload
                     # A hard-lease admission may bind the Turn before the claim.
                     # Capture the work basis only after its execution lease exists.
                     if (payload.get("execution_preparation") or {}).get("state") == "claim_required":

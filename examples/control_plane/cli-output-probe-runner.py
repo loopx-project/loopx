@@ -211,6 +211,65 @@ def _quota_goal_material(source: dict) -> dict[str, str] | None:
     return None
 
 
+def _quota_markdown_admission(text: str, semantics: ModuleType) -> dict | None:
+    """Measure carriers actually printed by the complete one-root-field-per-line view."""
+    if text.count("```json\n") != 1:
+        return None
+    body = text.split("```json\n", 1)[1].split("\n```", 1)[0]
+    try:
+        source = json.loads(body)
+    except ValueError:
+        return None
+    if not isinstance(source, dict) or source.get("mode") != "should-run":
+        return None
+    compact = lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    rendered = "{\n" + ",\n".join(compact(key) + ":" + compact(value)
+                                  for key, value in source.items()) + "\n}"
+    if text != "# LoopX Turn Envelope\n\n```json\n" + rendered + "\n```\n":
+        return None
+    observation = semantics.native_admission_observation(source)
+    if not isinstance(observation, dict):
+        return None
+    channel = (source.get("interaction_contract") or {}).get("cli_channel", {})
+    fields = ("heartbeat_receipt", "delivery_result_context", "reward_memory_recall",
+              "planning_horizon", "action_portfolio", "first_delivery_progress",
+              "settlement_plan", "next_cli_actions", "selection_command")
+    costs = {}
+    for key in fields:
+        value = source.get(key, channel.get(key))
+        encoded = "" if value is None else compact(value)
+        costs[key] = {"chars": len(encoded), "utf8_bytes": len(encoded.encode("utf-8"))}
+    return {"kind": observation["kind"], "costs": costs, "root_fields": sorted(source)}
+
+
+def _quota_gated_receipt_cost(source: Any) -> dict | None:
+    """Count only a non-delivery gate receipt with unchanged execution controls."""
+    if not isinstance(source, dict) or source.get("mode") != "should-run":
+        return None
+    interaction = source.get("interaction_contract") or {}
+    agent, cli = interaction.get("agent_channel", {}), interaction.get("cli_channel", {})
+    receipt = source.get("heartbeat_receipt") or {}
+    identity = receipt.get("settlement_identity") or {}
+    if (source.get("effective_action") != "operator_gate_notify"
+            or source.get("should_run") is not False or source.get("requires_user_action") is not True
+            or source.get("normal_delivery_allowed") is not False
+            or source.get("recovery_delivery_allowed") is not False
+            or agent.get("must_attempt") is not False or agent.get("delivery_allowed") is not False
+            or cli.get("spend_allowed_now") is not False or cli.get("spend_after_validation") is not False
+            or "delivery_result_context" in source or receipt.get("closeout_required") is True
+            or receipt.get("schema_version") != "heartbeat_quota_receipt_v0"
+            or receipt.get("status") not in {"committed", "replayed"}
+            or identity.get("schema_version") != "quota_settlement_identity_v0"
+            or not isinstance(identity.get("turn_instance_id"), str) or not identity["turn_instance_id"]
+            or identity["turn_instance_id"] != receipt.get("turn_instance_id")
+            or identity.get("goal_id") != source.get("goal_id")
+            or identity.get("agent_id") != (source.get("agent_identity") or {}).get("agent_id")
+            or identity.get("todo_id") != (source.get("selected_todo") or {}).get("todo_id")):
+        return None
+    text = json.dumps(receipt, ensure_ascii=False)
+    return {"chars": len(text), "utf8_bytes": len(text.encode("utf-8"))}
+
+
 def _receipt_row(
     *,
     semantics: ModuleType,
@@ -261,6 +320,10 @@ def _receipt_row(
         "format": output_format,
         "qualification_policy": qualification_policy,
         "native_admission": semantics.native_admission_observation(payload),
+        **({"native_admission_markdown": _quota_markdown_admission(text, semantics)}
+           if surface_id == "quota_should_run" and output_format == "markdown" else {}),
+        **({"gated_receipt_cost": _quota_gated_receipt_cost(payload)}
+           if surface_id == "quota_should_run" and output_format == "json" else {}),
         "output_contract_version": ("loopx_turn_envelope_v1" if surface_id == "quota_should_run"
             and isinstance(quota_source, dict) and quota_source.get("schema_version") == "loopx_turn_envelope_v1"
             else output_contract_version),
@@ -589,6 +652,9 @@ def _blocking_gate_rows(
     if exit_code != 0:
         raise AssertionError("blocking user-gate turn envelope failed")
     measurement = probe._measure_context_output(output, output_format="json")
+    # A gate observation may retain its receipt, but cannot issue a work read.
+    payload = measurement.get("resolved_payload", measurement.get("payload"))
+    assert "delivery_result_context" not in payload, "blocked observation issued a delivery basis"
     variant = probe.CLI_OUTPUT_MODE_VARIANT_BY_ID[
         "quota_should_run_turn_envelope"
     ]

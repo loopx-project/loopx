@@ -1095,9 +1095,11 @@ def _native_admission_migration(
     base: dict[str, Any], candidate: dict[str, Any],
 ) -> tuple[dict[str, int], list[str]]:
     """One-time measured cost of original-Turn admission, not general headroom."""
-    before, after = base.get("native_admission"), candidate.get("native_admission")
+    markdown = base.get("format") == candidate.get("format") == "markdown"
+    field = "native_admission_markdown" if markdown else "native_admission"
+    before, after = base.get(field), candidate.get(field)
     if (candidate.get("row_id") != base.get("row_id")
-            or base.get("format") != "json" or candidate.get("format") != "json"
+            or (not markdown and (base.get("format") != "json" or candidate.get("format") != "json"))
             or not isinstance(before, dict) or before.get("kind") is not None
             or not isinstance(after, dict)):
         return {}, []
@@ -1118,6 +1120,21 @@ def _native_admission_migration(
     expected_surface = "status" if kind == "progress" else "loopx_turn_plan" if kind == "turn_pending_progress" else "quota_should_run"
     if base.get("surface_id") != expected_surface:
         return {}, []
+    line_growth = 0
+    if markdown:
+        if expected_surface != "quota_should_run":
+            return {}, []
+        old, new = before.get("root_fields"), after.get("root_fields")
+        if not (isinstance(old, list) and isinstance(new, list)
+                and all(isinstance(key, str) for key in old + new)
+                and len(old) == len(set(old)) and len(new) == len(set(new))):
+            return {}, []
+        if not set(new).difference(old) <= {
+            "heartbeat_receipt", "delivery_result_context", "reward_memory_recall",
+            "planning_horizon", "action_portfolio", "first_delivery_progress", "work_input_restored",
+        }:
+            return {}, []
+        line_growth = max(len(new) - len(old), 0)
     if kind == "turn_pending_progress" and not base["row_id"].startswith("variant/loopx_turn_plan_transaction_detail/"):
         return {}, []
     if kind == "turn_bound_settlement" and not base["row_id"].startswith((
@@ -1129,6 +1146,15 @@ def _native_admission_migration(
     for metric in ("chars", "utf8_bytes"):
         try:
             pairs = [(before["costs"][field][metric], after["costs"][field][metric]) for field in fields]
+            if markdown and kind == "unbound":
+                command = (before["costs"]["selection_command"][metric],
+                           after["costs"]["selection_command"][metric])
+                if any(type(value) is not int or value < 0 for value in command):
+                    return {}, []
+                # Only an existing command's original-Turn echo is incremental
+                # admission cost; a newly printed whole command is not.
+                if command[0] > 0:
+                    pairs.append(command)
         except (KeyError, TypeError):
             return {}, []
         if any(type(value) is not int or value < 0 for pair in pairs for value in pair):
@@ -1138,8 +1164,25 @@ def _native_admission_migration(
             return {}, []
         # Field names/separators and receipt clocks, not another context copy.
         allowance[metric] = growth + 64
-    allowance.update(lines=0, compact_payload_chars=allowance["chars"])
+    allowance.update(lines=line_growth, compact_payload_chars=0 if markdown else allowance["chars"])
     return allowance, ["original-Turn admission carriers migrated; measured bounded one-time cost"]
+
+
+def _gated_receipt_migration(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, int]:
+    row = "variant/quota_should_run_turn_envelope_blocking_user_gate/small/json"
+    cost = candidate.get("gated_receipt_cost")
+    controls = base.get("quota_controls")
+    if (base.get("row_id") != row or candidate.get("row_id") != row
+            or base.get("format") != "json" or candidate.get("format") != "json"
+            or base.get("gated_receipt_cost") is not None or not isinstance(cost, dict)
+            or not controls or controls != candidate.get("quota_controls")
+            or any(type(cost.get(key)) is not int or not 0 < cost[key] <= 1_024
+                   for key in ("chars", "utf8_bytes"))):
+        return {}
+    # Matched local receipt: 869 serialized / 832 compact bytes. Bound path
+    # variation without result context, line/shape exceptions or later growth.
+    return {"chars": cost["chars"] + 64, "utf8_bytes": cost["utf8_bytes"] + 64,
+            "compact_payload_chars": cost["chars"] + 64}
 
 
 def _compare_row_growth(
@@ -1175,6 +1218,9 @@ def _compare_row_growth(
         review_signals.append("Turn plan v0 -> v1: unchanged current controls; full-source costs require review")
     admission_allowance, admission_signals = _native_admission_migration(base, candidate)
     review_signals.extend(admission_signals)
+    gated_receipt_allowance = _gated_receipt_migration(base, candidate)
+    if gated_receipt_allowance:
+        review_signals.append("non-delivery gate receipt added; measured bounded one-time cost")
     quota_allowance = _complete_quota_source_allowance(base, candidate)
     deltas: dict[str, int | None] = {}
     allowances: dict[str, int | None] = {}
@@ -1220,6 +1266,7 @@ def _compare_row_growth(
             continuation_allowance.get(metric, 0),
             context_allowance.get(metric, 0),
             admission_allowance.get(metric, 0),
+            gated_receipt_allowance.get(metric, 0),
             quota_allowance.get(metric, 0),
         )
         # Thin installed prompts contain bilingual lifecycle instructions. A

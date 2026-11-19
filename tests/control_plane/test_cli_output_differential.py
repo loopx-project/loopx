@@ -2401,6 +2401,121 @@ def test_native_admission_cost_requires_matching_committed_original_identity(sta
         assert native_admission_observation(damaged)["kind"] is None
 
 
+def test_native_markdown_cost_requires_the_complete_visible_carrier():
+    import runpy
+    from pathlib import Path
+    from loopx.control_plane.testing import cli_output_semantics as semantics
+
+    runner = runpy.run_path(str(Path(__file__).resolve().parents[2]
+                               / "examples/control_plane/cli-output-probe-runner.py"))
+    observe = runner["_quota_markdown_admission"]
+    packet = _admission_packet()
+    previous = {key: value for key, value in packet.items()
+                if key not in {"heartbeat_receipt", "delivery_result_context", "first_delivery_progress"}}
+
+    def render(value):
+        rows = [json.dumps(key) + ":" + json.dumps(child, ensure_ascii=False, separators=(",", ":"))
+                for key, child in value.items()]
+        return "# LoopX Turn Envelope\n\n```json\n{\n" + ",\n".join(rows) + "\n}\n```\n"
+
+    before, after = observe(render(previous), semantics), observe(render(packet), semantics)
+    assert before["kind"] is None and after["kind"] == "delivery_result"
+    assert after["costs"]["delivery_result_context"]["chars"] == len(
+        json.dumps(packet["delivery_result_context"], ensure_ascii=False, separators=(",", ":")))
+    base = _row(row_id="surface/quota_should_run/small/markdown", surface_id="quota_should_run",
+                format="markdown", lines=20, compact_payload_chars=None, native_admission_markdown=before)
+    head = {**base, "native_admission_markdown": after}
+    for metric in ("chars", "utf8_bytes"):
+        head[metric] = base[metric] + sum(cost[metric] for cost in after["costs"].values())
+    head["lines"] = base["lines"] + 3
+    assert compare_cli_output_receipts(_receipt(base), _receipt(head))["ok"]
+    for changed_base, changed_head in (
+        (head, {**head, "chars": head["chars"] + 1_000}),
+        (base, {**head, "chars": head["chars"] + 10_000}),
+        (base, {**head, "lines": head["lines"] + 1}),
+        (base, {**head, "native_admission_markdown": None}),
+        ({**base, "surface_id": "status"}, {**head, "surface_id": "status"}),
+        (base, {**head, "action_signature_sha256": "changed-action"}),
+    ):
+        assert not compare_cli_output_receipts(_receipt(changed_base), _receipt(changed_head))["ok"]
+    padded = copy.deepcopy(head)
+    padded["native_admission_markdown"]["root_fields"].append("unrelated")
+    assert not compare_cli_output_receipts(_receipt(base), _receipt(padded))["ok"]
+    assert observe("Quoted ```json\nnot json\n```", semantics) is None
+    assert observe(render(packet).replace('\n"goal_id":', '\n  "goal_id":'), semantics) is None
+    assert observe(render(packet).replace("\n\n```json", "\n" + "x" * 500 + "\n```json"), semantics) is None
+    assert observe(render(packet).removesuffix("```\n"), semantics) is None
+
+
+def test_gate_receipt_cost_never_qualifies_a_delivery_context_or_changed_controls():
+    import runpy
+    from pathlib import Path
+
+    runner = runpy.run_path(str(Path(__file__).resolve().parents[2]
+                               / "examples/control_plane/cli-output-probe-runner.py"))
+    observe = runner["_quota_gated_receipt_cost"]
+    packet = _admission_packet()
+    packet.pop("delivery_result_context")
+    packet.pop("first_delivery_progress")
+    packet["heartbeat_receipt"].pop("closeout_required")
+    packet.update(effective_action="operator_gate_notify", should_run=False, requires_user_action=True,
+                  normal_delivery_allowed=False, recovery_delivery_allowed=False)
+    packet["interaction_contract"] = {
+        "agent_channel": {"must_attempt": False, "delivery_allowed": False},
+        "cli_channel": {"spend_allowed_now": False, "spend_after_validation": False},
+    }
+    cost = observe(packet)
+    assert cost["chars"] == len(json.dumps(packet["heartbeat_receipt"], ensure_ascii=False))
+    base = _row(row_id="variant/quota_should_run_turn_envelope_blocking_user_gate/small/json",
+                surface_id="quota_should_run", gated_receipt_cost=None,
+                quota_controls={"controls_sha256": "same-control-values"})
+    head = {**base, "gated_receipt_cost": cost}
+    for metric in ("chars", "utf8_bytes", "compact_payload_chars"):
+        head[metric] = base[metric] + cost["chars"]
+    assert compare_cli_output_receipts(_receipt(base), _receipt(head))["ok"]
+    for changed_base, changed_head in (
+        (head, {**head, "chars": head["chars"] + 1_000}),
+        (base, {**head, "quota_controls": {"controls_sha256": "changed"}}),
+        (base, {**head, "gated_receipt_cost": {"chars": 1_025, "utf8_bytes": 1_025}}),
+        ({**base, "format": "markdown"}, {**head, "format": "markdown"}),
+        (base, {**head, "chars": head["chars"] + 10_000}),
+    ):
+        assert not compare_cli_output_receipts(_receipt(changed_base), _receipt(changed_head))["ok"]
+    for path, value in [(("delivery_result_context",), {"ok": True}),
+                        (("heartbeat_receipt", "closeout_required"), True),
+                        (("normal_delivery_allowed",), True),
+                        (("interaction_contract", "agent_channel", "must_attempt"), True),
+                        (("heartbeat_receipt", "settlement_identity", "turn_instance_id"), "other-turn")]:
+        changed = copy.deepcopy(packet)
+        target = changed
+        for field in path[:-1]:
+            target = target[field]
+        target[path[-1]] = value
+        assert observe(changed) is None
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_new_user_gate_probe_does_not_issue_a_work_basis(tmp_path, monkeypatch, provider):
+    import runpy
+    from pathlib import Path
+    from tests.control_plane import test_cli_output_budget as probe
+    from loopx.control_plane.testing import cli_output_semantics as semantics
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+    from canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    runner = runpy.run_path(str(Path(__file__).resolve().parents[2]
+                               / "examples/control_plane/cli-output-probe-runner.py"))
+    blocked = runner["_blocking_gate_rows"]
+    monkeypatch.setitem(blocked.__globals__, "import_fixture_authority",
+                        lambda registry, goal: import_fixture_authority(registry, goal, provider=provider))
+    with probe._stable_budget_fixture_root(tmp_path) as root:
+        [row] = blocked(probe, semantics, root)
+    assert row["native_admission"]["kind"] is None
+    assert 0 < row["gated_receipt_cost"]["chars"] <= 1_024
+    assert not any(path.startswith("$.delivery_result_context") for path in row["json_shape_paths"])
+
+
 @pytest.mark.parametrize("kind", ["delivery_result", "replan", "unbound"])
 def test_native_admission_growth_is_measured_bounded_once_and_quota_json_only(kind):
     from loopx.control_plane.testing.cli_output_semantics import native_admission_observation
