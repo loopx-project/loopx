@@ -186,7 +186,7 @@ def assert_selected_agent_todo(
     item = items[0]
     if compact_quota:
         assert summary["payload_compaction"]["schema_version"] == (
-            "quota_cli_todo_summary_compaction_v0"
+            "quota_todo_summary_payload_compaction_v0"
         ), summary
         assert item["text"] == f"[P1] {CANARY_TODO_TITLE}", summary
     # The shared diagnostic projection retains each visible record in full.
@@ -394,9 +394,11 @@ def assert_todo_completion_successor_state_machine(
     assert routed["effective_action"] == "normal_run", routed
     assert routed["agent_lane_next_action"]["todo_id"] == successor_id, routed
     assert routed["agent_lane_next_action"]["text"] == f"[P1] {SUCCESSOR_TODO_TITLE}", routed
-    assert "title" not in routed["agent_lane_next_action"], routed
+    assert routed["agent_lane_next_action"]["title"] == SUCCESSOR_TODO_TITLE, routed
     assert routed["agent_lane_next_action"]["preserves_goal_next_action"] is True, routed
-    assert "active_state_next_action" not in routed, routed
+    assert routed["active_state_next_action"] == (
+        "Keep the fixture-only integrated canary under two minutes."
+    ), routed
     assert routed["goal_route_hint"]["selected_action_differs_from_durable"] is True, routed
     assert routed["goal_route_hint"]["goal_next_action_mutation"] == "none", routed
     assert routed["interaction_contract"]["mode"] == "bounded_delivery", routed
