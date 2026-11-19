@@ -116,6 +116,14 @@ def archive_runtime_goal(
     safe_goal_id = validate_goal_id_path_segment(goal_id)
     registered_ids = {str(goal.get("id")) for goal in registry_goals(registry)}
     registry_member = safe_goal_id in registered_ids
+    archive_goal = next(
+        (
+            goal
+            for goal in registry_goals(registry)
+            if str(goal.get("id")) == safe_goal_id
+        ),
+        None,
+    )
     if registry_member and not allow_registered:
         raise ValueError(
             "goal exists in registry; pass --allow-registered only after confirming it is obsolete"
@@ -138,6 +146,7 @@ def archive_runtime_goal(
     destination = unique_archive_path(archive_base, safe_goal_id, timestamp)
     _validate_archive_destination(source, destination)
 
+    closeout: dict[str, Any] | None = None
     if execute:
         from .control_plane.coordination.shadow_management import (
             runtime_artifact_lock_target,
@@ -237,6 +246,31 @@ def archive_runtime_goal(
             _validate_archive_destination(source, destination)
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(source), str(destination))
+            from .capabilities.goal_closeout.hooks import run_goal_closeout
+
+            archived_state_file = destination / "ACTIVE_GOAL_STATE.md"
+            declared_state_file = (
+                archive_goal.get("state_file") if archive_goal else None
+            )
+            closeout = run_goal_closeout(
+                runtime_root=runtime_root,
+                goal_id=safe_goal_id,
+                repo=(
+                    str(archive_goal.get("repo"))
+                    if archive_goal and archive_goal.get("repo")
+                    else None
+                ),
+                state_file=(
+                    str(archived_state_file)
+                    if archived_state_file.exists()
+                    else str(declared_state_file)
+                    if declared_state_file
+                    else None
+                ),
+                terminal_reason="archived",
+                trigger="archive-runtime",
+                ledger_dir=destination,
+            )
 
     return {
         "ok": True,
@@ -250,6 +284,7 @@ def archive_runtime_goal(
         "dry_run": not execute,
         "archived": execute,
         "action": "moved" if execute else "would-move",
+        "closeout": closeout,
         "checks": [
             "goal id is a single path segment",
             "source runtime goal directory exists",
