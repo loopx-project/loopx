@@ -99,10 +99,6 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
             del words[index:index + 2]
     for option, value in options.items():
         words.extend((option, value))
-    if getattr(args, "turn_envelope", False) and "--turn-envelope" not in words:
-        words.append("--turn-envelope")
-    if getattr(args, "complete_turn", False) and "--complete-turn" not in words:
-        words.append("--complete-turn")
     selection["command_args_template"] = shlex.join(words)
 
 

@@ -173,12 +173,12 @@ def register_heartbeat_control_commands(
     turn_view.add_argument(
         "--turn-envelope",
         action="store_true",
-        help="Keep the compatibility spelling in the generated thin guard. Requires --decision-output-root. "
-             "Current quota guards return the complete v1 work contract by default.",
+        help="Compatibility input for saved thin prompts with --decision-output-root. "
+             "Generated guards use the complete v1 work contract.",
     )
     turn_view.add_argument("--complete-turn", action="store_true",
-        help="Keep the explicit complete-turn spelling in the generated thin host-owned guard. "
-             "Current quota guards return the complete v1 work contract by default.")
+        help="Compatibility input for saved thin host-owned prompts. "
+             "Generated guards use the complete v1 work contract.")
 
     heartbeat_prompt_parser.add_argument(
         "--decision-handoff-socket",

@@ -245,10 +245,7 @@ def record_automatic_heartbeat_stall(
         agent_id=args.agent_id,
         available_capabilities=args.available_capabilities,
         include_scheduler_detail="scheduler" in context.detail_sections,
-        include_agent_todo_detail=(
-            "agent-todos" in context.detail_sections
-            and not bool(getattr(args, "turn_envelope", False))
-        ),
+        include_agent_todo_detail="agent-todos" in context.detail_sections,
         codex_app_current_rrule=args.app_automation_current_rrule,
         registry_path=registry_path,
         runtime_root=context.runtime_root,
