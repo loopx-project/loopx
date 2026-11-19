@@ -1892,6 +1892,12 @@ an accepted goal/contract, not a compression target. Instruction readback proves
 what was delivered, not actual model comprehension or adoption. The result
 checker enforces evidence structure and contradictions, not semantic truth.
 
+For installed skill prose, also inspect readiness consumers such as
+`doctor.installed_skill_summary`. Validate shipped skills in an external skill
+root and a copy missing a concrete permission requirement. The platform-neutral
+cases in `tests/test_skill_delivery_parity.py` cover this boundary even when
+native installer tests skip on the current host.
+
 PR-review 的 `semantic_alignment` 通过既有 `validation_matrix` 和
 `observable_semantics` 使用这些证据，不增加独立预算回执或审批门。结果校验器检查
 证据结构和结论一致性；测量是否可信、取舍是否合理仍由评审判断。
@@ -1899,6 +1905,11 @@ PR-review 的 `semantic_alignment` 通过既有 `validation_matrix` 和
 真实调用方上的判别性反例。缺少等价证据不能批准；语义变化须有目标或合同依据，
 压缩指标不能授权。指令读回只证明交付了什么，不证明模型理解或采用；校验器检查
 证据结构和矛盾，不自动判断语义真假。
+
+修改已安装技能文案时，还应检查 `doctor.installed_skill_summary` 等 readiness
+消费者。用外部技能目录中的发布技能，以及缺少具体权限要求的副本验证该边界。
+`tests/test_skill_delivery_parity.py` 的跨平台用例在原生安装测试因宿主不同而跳过时
+仍可执行。
 
 ## Decision Replay And Issue #2191 / 决策回放与 #2191
 
