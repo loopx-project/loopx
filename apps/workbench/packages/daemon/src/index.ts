@@ -94,6 +94,7 @@ async function main(): Promise<void> {
   const localSessions: LocalSessions = new LocalSessions({
     adapters,
     workdirs: () => manager.allowedWorkdirs,
+    hidden: () => config.hiddenSessionDirs,
     importedSessions: () => store.agentSessionOwners(),
     instances: () => registry.list().map((instance) => ({ id: instance.id, hidden: !!instance.hidden, store: sessionStoreKey(instance) })),
     enricher: new SessionEnricher({ bindings: () => loopx.lookup().bindings(), goal: (goalId) => loopx.lookup().goal(goalId) }),
@@ -115,9 +116,8 @@ async function main(): Promise<void> {
   // a scratch area there too.
   const dirs = new Workdirs(workdirs, join(config.dataDir, 'workdirs.json'), join(config.dataDir, 'scratch'));
   const manager = new ThreadManager(store, adapters, dirs, new AttachmentStore(config.dataDir), () => registry.list());
-  // The session list scans once here (it asks the manager for the allowed directories) and then
-  // only when a request finds it stale; the meter keeps its own timer, files only. Stopped in
-  // shutdown with everything else.
+  // The session list scans once here and then only when a request finds it stale; the meter keeps
+  // its own timer, files only. Stopped in shutdown with everything else.
   // LoopX Goal conversations: bindings, the core client and the Goal context; ordinary threads never touch it.
   const loopx = new LoopxService({ dataDir: config.dataDir, adapters, dirs });
   loopx.attach(manager);

@@ -246,7 +246,7 @@ npm test -w @calli/e2e -- --test-concurrency=1 test/smoke.spec.mjs
 
 - HTTP 监听上的 API 需要 `Authorization: Bearer <LOOCHAT_TOKEN>`，`/api/health` 除外；仅本机用户能访问的私有 Unix socket 免 token，由本机用户文件权限保护。
 - daemon 等同于远程 shell。只把它暴露在可信网络（VPN）中。
-- 工作目录必须在 `LOOCHAT_WORKDIRS` 白名单内。
+- 工作目录必须在 `LOOCHAT_WORKDIRS` 白名单内，或是从页面添加的目录。侧栏列出本机所有目录里的 Agent 会话；导入白名单外的会话时，会把它所在的目录加入工作目录（home 或根目录本身除外）。不想列出的目录写进 `LOOCHAT_HIDDEN_SESSION_DIRS`。
 
 ## 许可证
 

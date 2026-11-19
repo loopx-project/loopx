@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Server } from 'node:http';
@@ -46,7 +46,8 @@ after(() => {
   rmSync(outside, { recursive: true, force: true });
 });
 
-/** The fake agent's session list: two in the workdir, one outside it, one in a removed directory. */
+/** The fake agent's session list: some in the workdir, one outside it, one in the home directory
+ *  itself, one in a removed directory. */
 function givenSessions(): void {
   mkdirSync(join(workdir, 'app'), { recursive: true });
   imported = new Map<string, string>();
@@ -56,17 +57,20 @@ function givenSessions(): void {
     { sessionId: 's-tied', cwd: workdir, title: 'Same second, other agent file order', updatedAt: '2026-03-02T10:00:00.000Z' },
     { sessionId: 's-out', cwd: outside, title: 'Elsewhere', updatedAt: '2026-03-03T10:00:00.000Z' },
     { sessionId: 's-gone', cwd: join(workdir, 'deleted'), title: 'Directory removed', updatedAt: '2026-03-04T10:00:00.000Z' },
+    { sessionId: 's-home', cwd: homedir(), title: 'Started in home', updatedAt: '2026-03-04T11:00:00.000Z' },
     { sessionId: 's-usage', cwd: workdir, title: '/usage', updatedAt: '2026-03-05T10:00:00.000Z' },
     { sessionId: 's-nodate', cwd: workdir, title: 'No date', updatedAt: null },
   ]));
 }
 
-test('the scan lists this machine\'s sessions: newest first, only in existing allowed directories', async () => {
+test('the scan lists this machine\'s sessions from every existing directory, newest first', async () => {
   givenSessions();
   await scanner.scan();
   const page = scanner.page(100, null);
   // Newest first; the two sharing a second stay apart by id, and the one with no date goes last.
-  assert.deepEqual(page.sessions.map((s) => s.sessionId), ['s-tied', 's-new', 's-old', 's-nodate']);
+  // The one outside the workdirs is listed too (importing it adds its directory); the one in a
+  // removed directory and the one in the home directory itself, which can never be a workdir, are not.
+  assert.deepEqual(page.sessions.map((s) => s.sessionId), ['s-out', 's-tied', 's-new', 's-old', 's-nodate']);
   assert.equal(page.nextCursor, null);
   assert.ok(page.scannedAt);
   // The quota probe's leftover `/usage` sessions are not offered as conversations.
@@ -78,10 +82,10 @@ test('the scan lists this machine\'s sessions: newest first, only in existing al
 test('pages continue at the cursor, and one timestamp shared by two rows splits them', async () => {
   givenSessions();
   await scanner.scan();
-  const first = scanner.page(2, null);
-  assert.deepEqual(first.sessions.map((s) => s.sessionId), ['s-tied', 's-new']);
+  const first = scanner.page(3, null);
+  assert.deepEqual(first.sessions.map((s) => s.sessionId), ['s-out', 's-tied', 's-new']);
   assert.ok(first.nextCursor);
-  const second = scanner.page(2, first.nextCursor);
+  const second = scanner.page(3, first.nextCursor);
   assert.deepEqual(second.sessions.map((s) => s.sessionId), ['s-old', 's-nodate']);
   // The whole list fit in two pages: no cursor, no more to read.
   assert.equal(second.nextCursor, null);
@@ -183,7 +187,21 @@ test('a failing agent keeps its last list; the rest of the scan is unaffected', 
   await scanner.scan();
   writeFileSync(sessionsFile, 'not json');
   await scanner.scan();
-  assert.equal(scanner.page(100, null).sessions.length, 4);
+  assert.equal(scanner.page(100, null).sessions.length, 5);
+});
+
+test('hidden directories stay out of the list, and a workdir may still cover the home directory', async () => {
+  givenSessions();
+  const hiding = new LocalSessions({
+    adapters,
+    // A hub started with the home directory as a workdir can continue sessions there.
+    workdirs: () => [workdir, homedir()],
+    hidden: () => [outside, join(workdir, 'app')],
+    importedSessions: () => imported,
+    instances: () => instances,
+  });
+  await hiding.scan();
+  assert.deepEqual(hiding.page(100, null).sessions.map((s) => s.sessionId), ['s-home', 's-tied', 's-old', 's-nodate']);
 });
 
 test('GET /api/local-sessions serves a page and keeps the scan fresh', async () => {
@@ -200,7 +218,7 @@ test('GET /api/local-sessions serves a page and keeps the scan fresh', async () 
     assert.equal(page.sessions.length, 2);
     const next = await fetch(root + `/api/local-sessions?limit=100&cursor=${encodeURIComponent(page.nextCursor)}`, { headers: auth });
     const rest = await next.json() as { sessions: Array<{ sessionId: string }>; nextCursor: string | null };
-    assert.equal(rest.sessions.length, 2);
+    assert.equal(rest.sessions.length, 3);
     assert.equal(rest.nextCursor, null);
   } finally {
     server.close();

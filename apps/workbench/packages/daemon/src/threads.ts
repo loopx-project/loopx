@@ -49,7 +49,7 @@ import { HttpError } from './errors.js';
 import { handoverBrief, handoverPrompt, synthesizeBrief, turnMessage } from './handover.js';
 import { McpManager } from './mcp.js';
 import { SkillsManager } from './skills.js';
-import { isWithinWorkdirs, Workdirs } from './workdirs.js';
+import { isWithinWorkdirs, tooWide, Workdirs } from './workdirs.js';
 import { coalesceToolEvents, compactDeltas, toolText, type EmittedEvent, type EventType, type StoredEvent, type TurnChannel } from './events.js';
 import type { SearchHit, SectionRecord, Store, ThreadRecord, ThreadWorktree, TodoProposal, TodoRecord, TodoUrgency } from './store.js';
 import { readBrief, type ThreadBrief } from './brief.js';
@@ -592,7 +592,8 @@ export class ThreadManager {
   }
 
   /**
-   * Conversations the agent already has, in directories the hub is allowed to work in.
+   * Conversations the agent already has, in any directory that still exists and could be a
+   * workdir: importing one from outside the workdirs adds its directory (see {@link importSession}).
    * `threadId` is set for those that are already a thread here (including archived ones).
    */
   async listAgentSessions(agent: string): Promise<Array<AgentSessionSummary & { threadId: string | null }>> {
@@ -602,14 +603,15 @@ export class ThreadManager {
       throw new HttpError(400, `${agent} has no session history to import`);
     }
     const sessions = await adapter.listSessions();
-    const allowed = new Map<string, boolean>();
+    const offered = new Map<string, boolean>();
     const workdirs = this.workdirs;
     return sessions
       .filter((s) => !isProbeSession(s.title))
-      // A session whose directory has since been removed cannot be continued, so it is not offered.
+      // A session whose directory has since been removed, or that could never become a workdir,
+      // cannot be continued, so it is not offered.
       .filter((s) => {
-        if (!allowed.has(s.cwd)) allowed.set(s.cwd, !!s.cwd && isWithinWorkdirs(s.cwd, workdirs) && isDirectory(s.cwd));
-        return allowed.get(s.cwd);
+        if (!offered.has(s.cwd)) offered.set(s.cwd, !!s.cwd && (isWithinWorkdirs(s.cwd, workdirs) || !tooWide(s.cwd)) && isDirectory(s.cwd));
+        return offered.get(s.cwd);
       })
       .map((s) => ({ ...s, threadId: this.store.findThreadByAgentSession(agent, s.id)?.id ?? null }))
       // Newest first; sessions with no date go last.
@@ -620,8 +622,13 @@ export class ThreadManager {
    * Makes a thread out of a conversation the agent already has. Its past turns are written to the
    * event log once; the thread then continues the same agent session, so the terminal and the hub
    * keep sharing it.
+   *
+   * A session outside the workdirs is imported only with `addDirectory`, which the person's own
+   * import click sets: its directory then becomes a workdir, as if added from the page (a home
+   * directory or the root itself is refused as too wide). Imports nobody clicked, such as the
+   * LoopX Goal sync, never widen where threads may work.
    */
-  async importSession(input: { agent?: unknown; sessionId?: unknown }): Promise<ThreadView> {
+  async importSession(input: { agent?: unknown; sessionId?: unknown; addDirectory?: boolean }): Promise<ThreadView> {
     const agent = String(input.agent ?? '');
     const sessionId = String(input.sessionId ?? '');
     const adapter = this.adapters.get(agent);
@@ -630,12 +637,14 @@ export class ThreadManager {
     const summary = adapter.getSession
       ? await adapter.getSession(sessionId)
       : (await this.listAgentSessions(agent)).find((s) => s.id === sessionId);
-    if (!summary || summary.id !== sessionId || !summary.cwd || !isWithinWorkdirs(summary.cwd, this.workdirs) || !isDirectory(summary.cwd)) {
+    const outside = !!summary?.cwd && !isWithinWorkdirs(summary.cwd, this.workdirs);
+    if (!summary || summary.id !== sessionId || !summary.cwd || (outside && !input.addDirectory) || !isDirectory(summary.cwd)) {
       throw new HttpError(404, 'session not found, or it is outside the allowed workdirs');
     }
     const key = `${agent}:${sessionId}`;
     if (this.store.findThreadByAgentSession(agent, sessionId) || this.importing.has(key)) throw new HttpError(409, 'this session is already a thread');
     if (!adapter.loadHistory) throw new HttpError(400, `${agent} has no session history to import`);
+    if (outside) this.addWorkdir(summary.cwd);
 
     this.importing.add(key);
     try {

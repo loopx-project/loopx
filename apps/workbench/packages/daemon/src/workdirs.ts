@@ -24,7 +24,7 @@ export function isWithinWorkdirs(dir: string, workdirs: string[]): boolean {
 }
 
 /** Too wide to hand to an agent as a whole: the filesystem root, and a home directory itself. */
-function tooWide(dir: string): boolean {
+export function tooWide(dir: string): boolean {
   const target = real(dir);
   return target === sep || target === real(homedir());
 }

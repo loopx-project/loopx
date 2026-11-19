@@ -995,9 +995,11 @@ const events = async (threadId: string) =>
 test('import: Codex reads just the chosen session and rechecks its directory and duplicate status', async () => {
   const file = join(dataDir, 'codex-import-sessions.json');
   const log = join(dataDir, 'codex-import-rpc.jsonl');
+  const elsewhere = mkdtempSync(join(tmpdir(), 'loochat-test-codex-elsewhere-'));
   writeFileSync(file, JSON.stringify([
     { id: 'hist-indexed', cwd: workdir, name: 'Indexed session' },
-    { id: 'hist-outside', cwd: tmpdir(), name: 'Outside' },
+    { id: 'hist-outside', cwd: elsewhere, name: 'Outside' },
+    { id: 'hist-home', cwd: homedir(), name: 'In home' },
     { id: 'hist-removed', cwd: join(workdir, 'missing-project'), name: 'Removed' },
     { id: 'hist-subagent', cwd: workdir, name: 'Scratch', source: { subAgent: 'review' } },
   ]));
@@ -1013,9 +1015,12 @@ test('import: Codex reads just the chosen session and rechecks its directory and
     body: JSON.stringify({ agent: 'codex', sessionId }),
   });
   try {
-    for (const id of ['hist-outside', 'hist-removed', 'hist-missing', 'hist-subagent']) {
+    for (const id of ['hist-removed', 'hist-missing', 'hist-subagent']) {
       assert.equal((await requestImport(id)).status, 404, id);
     }
+    // The home directory itself is too wide to become a workdir, so its session cannot come in.
+    assert.equal((await requestImport('hist-home')).status, 400);
+    assert.ok(!m.workdirsConfig().workdirs.includes(homedir()));
     const imported = await requestImport('hist-indexed');
     assert.equal(imported.status, 201);
     const thread = await imported.json() as { id: string; title: string; agentSessionId: string };
@@ -1026,13 +1031,24 @@ test('import: Codex reads just the chosen session and rechecks its directory and
     const calls = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
     assert.equal(calls.filter((c) => c.method === 'thread/list').length, 0);
     assert.equal(calls.filter((c) => c.method === 'thread/turns/list').length, 1, 'only the valid import reads history');
+
+    // A session from outside the workdirs comes in when the person imports it, and brings its directory.
+    const outside = await requestImport('hist-outside');
+    assert.equal(outside.status, 201);
+    assert.equal(((await outside.json()) as { cwd: string }).cwd, elsewhere);
+    assert.ok(m.workdirsConfig().workdirs.includes(elsewhere));
+    // An import nobody clicked (the LoopX Goal sync) never widens the workdirs.
+    writeFileSync(file, JSON.stringify([{ id: 'hist-quiet', cwd: join(dataDir), name: 'Quiet' }]));
+    await assert.rejects(() => m.importSession({ agent: 'codex', sessionId: 'hist-quiet' }), /outside the allowed workdirs/);
+    assert.ok(!m.workdirsConfig().workdirs.includes(dataDir));
   } finally {
     srv.close();
     await m.shutdown();
+    rmSync(elsewhere, { recursive: true, force: true });
   }
 });
 
-test('import: sessions the agent already has are listed, and only those in allowed directories', async () => {
+test('import: sessions the agent already has are listed from every existing directory', async () => {
   const outside = mkdtempSync(join(tmpdir(), 'loochat-test-outside-'));
   try {
     writeFileSync(
@@ -1048,17 +1064,14 @@ test('import: sessions the agent already has are listed, and only those in allow
     const res = await api('/api/agents/claude/sessions');
     assert.equal(res.status, 200);
     const list = (await res.json()) as Array<{ id: string; cwd: string; title: string; threadId: string | null }>;
-    // Five sessions over three pages; the one outside the workdirs and the one whose directory is gone are left out.
-    // Newest first, and the one with no date last.
-    assert.deepEqual(list.map((s) => s.id), ['hist-b', 'hist-a', 'hist-c']);
+    // Five sessions over three pages; the one whose directory is gone is left out, the one outside
+    // the workdirs is offered (importing it adds its directory). Newest first, and the one with no date last.
+    assert.deepEqual(list.map((s) => s.id), ['hist-elsewhere', 'hist-b', 'hist-a', 'hist-c']);
     assert.ok(list.every((s) => s.threadId === null));
 
     assert.equal((await api('/api/agents/nope/sessions')).status, 404);
     assert.equal((await api('/api/agents/claude/sessions', {}, false)).status, 401);
 
-    // A session outside the allowed directories cannot be imported by naming it directly.
-    const sneaky = await api('/api/threads/import', { method: 'POST', body: JSON.stringify({ agent: 'claude', sessionId: 'hist-elsewhere' }) });
-    assert.equal(sneaky.status, 404);
     assert.equal((await api('/api/threads/import', { method: 'POST', body: JSON.stringify({ agent: 'claude', sessionId: 'no-such' }) })).status, 404);
     assert.equal((await api('/api/threads/import', { method: 'POST', body: JSON.stringify({ agent: 'nope', sessionId: 'hist-a' }) })).status, 400);
     assert.equal((await api('/api/threads/import', { method: 'POST', body: JSON.stringify({}) })).status, 400);
