@@ -660,6 +660,110 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
         ],
     },
     {
+        "id": "issue-fix-reviewer-notification-drain",
+        "title": "Issue-fix reviewer notification drain and sinks",
+        "purpose": (
+            "Check restart-safe reviewer notification queue draining, post-write "
+            "suppression, semantic history dedupe, and project-dedicated secondary "
+            "sink boundaries."
+        ),
+        "catalog_families": ["Human Decision", "Evidence Lifecycle", "State And Boundary"],
+        "trigger_hints": (
+            "reviewer notification drain",
+            "reviewer-notification-drain",
+            "reviewer notification sink",
+            "reviewer-notification-sink",
+            "issue_fix_reviewer_notification",
+            "issue-fix-reviewer-notification",
+            "loopx/capabilities/issue_fix/reviewer_notification_drain.py",
+            "loopx/capabilities/issue_fix/reviewer_notification.py",
+            "loopx/capabilities/issue_fix/reviewer_cli.py",
+            "loopx/extensions/lark/reviewer_notification.py",
+            "loopx/capabilities/issue_fix/docs/protocols/issue-fix-reviewer-notification-sinks-v0.md",
+            "examples/issue-fix-reviewer-notification-drain-postwrite-smoke.py",
+            "examples/issue-fix-reviewer-notification-sink-smoke.py",
+            "tests/capabilities/test_issue_fix_reviewer_notification_drain.py",
+        ),
+        "checks": [
+            {
+                "command": "python3 examples/issue-fix-reviewer-notification-drain-postwrite-smoke.py",
+                "tier": "default",
+                "reason": "guards restart-safe drain writeback, unverified-send suppression, and semantic notification deduplication",
+            },
+            {
+                "command": "python3 examples/issue-fix-reviewer-notification-sink-smoke.py",
+                "tier": "default",
+                "reason": "guards project-dedicated secondary notification identity, local-private mapping, idempotent send/readback, concrete gates, and public-safety redaction",
+            },
+        ],
+    },
+    {
+        "id": "issue-fix-reviewer-routing",
+        "title": "Issue-fix reviewer routing and bilingual guide",
+        "purpose": (
+            "Check the bilingual issue-fix product entry and explainable local "
+            "reviewer recommendation plus authority-gated GitHub reviewer request "
+            "contract."
+        ),
+        "catalog_families": ["Human Decision", "Evidence Lifecycle", "State And Boundary"],
+        "trigger_hints": (
+            "reviewer-plan",
+            "reviewer recommendation",
+            "issue_fix_reviewer_recommendation",
+            "reviewer-request",
+            "issue_fix_reviewer_request",
+            "loopx/capabilities/issue_fix/README",
+            "loopx/capabilities/issue_fix/docs/protocols/issue-fix-reviewer-recommendation",
+            "loopx/capabilities/issue_fix/docs/protocols/issue-fix-reviewer-request",
+            "examples/issue-fix-capability-guide-smoke.py",
+            "examples/issue-fix-reviewer-recommendation-smoke.py",
+            "examples/issue-fix-reviewer-request-smoke.py",
+            "loopx/capabilities/issue_fix/reviewer_cli.py",
+            "loopx/capabilities/issue_fix/reviewer_recommendation.py",
+            "loopx/capabilities/issue_fix/reviewer_request.py",
+        ),
+        "checks": [
+            {
+                "command": "python3 examples/issue-fix-capability-guide-smoke.py",
+                "tier": "default",
+                "reason": "guards the bilingual issue-fix product entry, README links, reviewer protocol, and public-safe roadmap surface",
+            },
+            {
+                "command": "python3 examples/issue-fix-reviewer-recommendation-smoke.py",
+                "tier": "default",
+                "reason": "guards explainable CODEOWNERS and base-revision changed-path/module-history reviewer recommendations",
+            },
+            {
+                "command": "python3 examples/issue-fix-reviewer-request-smoke.py",
+                "tier": "default",
+                "reason": "guards author exclusion, formal-request-first notification, permission-only comment fallback, idempotency, blockers, and post-write verification",
+            },
+        ],
+    },
+    {
+        "id": "issue-fix-json-input-boundary",
+        "title": "Issue-fix JSON input boundary",
+        "purpose": (
+            "Check bounded inline issue-fix JSON inputs and compact errors that "
+            "never echo raw payloads."
+        ),
+        "catalog_families": ["State And Boundary"],
+        "trigger_hints": (
+            "json-input-boundary",
+            "issue-fix-json-input-boundary",
+            "loopx/capabilities/issue_fix/cli.py",
+            "loopx/capabilities/issue_fix/cli_input.py",
+            "examples/issue-fix-json-input-boundary-smoke.py",
+        ),
+        "checks": [
+            {
+                "command": "python3 examples/issue-fix-json-input-boundary-smoke.py",
+                "tier": "default",
+                "reason": "guards bounded inline issue-fix JSON inputs and compact errors that never echo raw payloads",
+            },
+        ],
+    },
+    {
         "id": "product-entry-workflows",
         "title": "Product entry workflows",
         "purpose": (
@@ -741,70 +845,6 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
                 "command": "python3 examples/content-ops-private-connector-gate-smoke.py",
                 "tier": "deep",
                 "reason": "checks private connector owner-gate projection for content operations",
-            },
-        ],
-    },
-    {
-        "id": "issue-fix-reviewer-routing",
-        "title": "Issue-fix reviewer routing and bilingual guide",
-        "purpose": (
-            "Check the bilingual issue-fix product entry and explainable local "
-            "reviewer recommendation plus authority-gated verified notification "
-            "contract."
-        ),
-        "catalog_families": ["Human Decision", "Evidence Lifecycle", "State And Boundary"],
-        "trigger_hints": (
-            "reviewer-plan",
-            "reviewer recommendation",
-            "issue_fix_reviewer_recommendation",
-            "reviewer-request",
-            "issue_fix_reviewer_request",
-            "reviewer notification sink",
-            "issue_fix_reviewer_notification",
-            "loopx/capabilities/issue_fix/README",
-            "loopx/capabilities/issue_fix/docs/protocols/issue-fix-reviewer-recommendation",
-            "examples/issue-fix-capability-guide-smoke.py",
-            "examples/issue-fix-reviewer-recommendation-smoke.py",
-            "examples/issue-fix-reviewer-request-smoke.py",
-            "examples/issue-fix-reviewer-notification-drain-postwrite-smoke.py",
-            "loopx/capabilities/issue_fix/reviewer_notification_drain.py",
-            "examples/issue-fix-json-input-boundary-smoke.py",
-            "examples/issue-fix-reviewer-notification-sink-smoke.py",
-            "loopx/capabilities/issue_fix/cli.py",
-            "loopx/capabilities/issue_fix/reviewer_recommendation.py",
-            "loopx/capabilities/issue_fix/reviewer_request.py",
-            "loopx/capabilities/issue_fix/reviewer_notification.py",
-        ),
-        "checks": [
-            {
-                "command": "python3 examples/issue-fix-json-input-boundary-smoke.py",
-                "tier": "default",
-                "reason": "guards bounded inline issue-fix JSON inputs and compact errors that never echo raw payloads",
-            },
-            {
-                "command": "python3 examples/issue-fix-capability-guide-smoke.py",
-                "tier": "default",
-                "reason": "guards the bilingual issue-fix product entry, README links, reviewer protocol, and public-safe roadmap surface",
-            },
-            {
-                "command": "python3 examples/issue-fix-reviewer-recommendation-smoke.py",
-                "tier": "default",
-                "reason": "guards explainable CODEOWNERS and base-revision changed-path/module-history reviewer recommendations",
-            },
-            {
-                "command": "python3 examples/issue-fix-reviewer-request-smoke.py",
-                "tier": "default",
-                "reason": "guards author exclusion, formal-request-first notification, permission-only comment fallback, idempotency, blockers, and post-write verification",
-            },
-            {
-                "command": "python3 examples/issue-fix-reviewer-notification-drain-postwrite-smoke.py",
-                "tier": "default",
-                "reason": "guards restart-safe drain writeback, unverified-send suppression, and semantic notification deduplication",
-            },
-            {
-                "command": "python3 examples/issue-fix-reviewer-notification-sink-smoke.py",
-                "tier": "default",
-                "reason": "guards project-dedicated secondary notification identity, local-private mapping, idempotent send/readback, concrete gates, and public-safety redaction",
             },
         ],
     },

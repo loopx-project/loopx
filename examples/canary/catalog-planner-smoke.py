@@ -58,6 +58,9 @@ def assert_profiles_come_from_catalog_matrix() -> None:
         "todo-lifecycle",
         "monitor-scheduler",
         "state-write-correctness",
+        "issue-fix-reviewer-notification-drain",
+        "issue-fix-reviewer-routing",
+        "issue-fix-json-input-boundary",
         "product-entry-workflows",
         "cross-runtime-impl-review-demo",
         "host-command-entry",
@@ -593,15 +596,54 @@ def assert_pr_release_and_refactor_profiles_select() -> None:
     reviewer_profile = product_entry_profiles["issue-fix-reviewer-routing"]
     reviewer_commands = [check["command"] for check in reviewer_profile["checks"]]
     assert reviewer_commands == [
-        "python3 examples/issue-fix-json-input-boundary-smoke.py",
         "python3 examples/issue-fix-capability-guide-smoke.py",
         "python3 examples/issue-fix-reviewer-recommendation-smoke.py",
         "python3 examples/issue-fix-reviewer-request-smoke.py",
-        "python3 examples/issue-fix-reviewer-notification-drain-postwrite-smoke.py",
-        "python3 examples/issue-fix-reviewer-notification-sink-smoke.py",
     ], reviewer_profile
+    assert len(reviewer_commands) <= 3, reviewer_profile
     assert all(check["tier"] == "default" for check in reviewer_profile["checks"]), reviewer_profile
     assert reviewer_profile["deep_checks_available"] is False, reviewer_profile
+    assert "issue-fix-reviewer-notification-drain" not in product_entry_profiles, product_entry_payload
+
+    for trigger_file in (
+        "loopx/capabilities/issue_fix/reviewer_notification_drain.py",
+        "loopx/capabilities/issue_fix/reviewer_notification.py",
+        "examples/issue-fix-reviewer-notification-drain-postwrite-smoke.py",
+    ):
+        drain_payload = build_catalog_canary_plan(changed_files=[trigger_file])
+        drain_profiles = {
+            profile["id"]: profile for profile in drain_payload["domain_profiles"]
+        }
+        assert "issue-fix-reviewer-notification-drain" in drain_profiles, (
+            trigger_file,
+            drain_payload,
+        )
+        assert "issue-fix-reviewer-routing" not in drain_profiles, (
+            trigger_file,
+            drain_payload,
+        )
+        drain_profile = drain_profiles["issue-fix-reviewer-notification-drain"]
+        drain_commands = [check["command"] for check in drain_profile["checks"]]
+        assert drain_commands == [
+            "python3 examples/issue-fix-reviewer-notification-drain-postwrite-smoke.py",
+            "python3 examples/issue-fix-reviewer-notification-sink-smoke.py",
+        ], drain_profile
+        assert len(drain_commands) <= 3, drain_profile
+        assert "python3 examples/issue-fix-reviewer-notification-drain-postwrite-smoke.py" in (
+            drain_payload["commands"]
+        ), drain_payload
+
+    json_boundary_payload = build_catalog_canary_plan(
+        changed_files=["loopx/capabilities/issue_fix/cli.py"]
+    )
+    json_boundary_profiles = {
+        profile["id"]: profile for profile in json_boundary_payload["domain_profiles"]
+    }
+    assert "issue-fix-json-input-boundary" in json_boundary_profiles, json_boundary_payload
+    assert [
+        check["command"]
+        for check in json_boundary_profiles["issue-fix-json-input-boundary"]["checks"]
+    ] == ["python3 examples/issue-fix-json-input-boundary-smoke.py"]
 
     outcome_payload = build_catalog_canary_plan(
         changed_files=[
