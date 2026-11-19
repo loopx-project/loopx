@@ -21,9 +21,11 @@ pub fn identity(app: &AppHandle) -> Result<Value, String> {
 
 fn identity_at(resources: &Path) -> Result<Value, String> {
     let path = resources.join("runtime/identity.json");
-    let value: Value =
-        serde_json::from_slice(&fs::read(path).map_err(|_| "runtime_bundle_missing")?)
-            .map_err(|_| "runtime_bundle_invalid")?;
+    parse_identity(&fs::read(path).map_err(|_| "runtime_bundle_missing")?)
+}
+
+pub(crate) fn parse_identity(bytes: &[u8]) -> Result<Value, String> {
+    let value: Value = serde_json::from_slice(bytes).map_err(|_| "runtime_bundle_invalid")?;
     if value["schema_version"] != "desktop_runtime_bundle_v1"
         || !value["source_revision"]
             .as_str()

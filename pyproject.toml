@@ -81,6 +81,7 @@ include = ["loopx*"]
 
 [tool.setuptools.package-data]
 "loopx" = ["web/chat/*.html", "web/chat/*.json", "web/chat/assets/*", "web/chat/manifest.webmanifest", "web/chat/pwa/*"]
+"loopx.cli_commands" = ["public_default_contract.json"]
 "loopx.control_plane" = ["*.json", "*.ts", "presentation/*.ts"]
 "loopx.semantics" = ["*.json"]
 "loopx.control_plane.agents" = ["*.ts"]
