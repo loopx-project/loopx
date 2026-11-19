@@ -25,7 +25,8 @@ from . import LARK_EXTENSION_ID, LARK_GOAL_CHANNEL_PERMISSION
 from .card_callback import operator_membership_verified, read_callback_card_content, update_callback_card, patch_result_card
 from .goal_channel_delivery_contract import goal_channel_binding_digest, goal_channel_delivery_route
 from .goal_channel_message_delivery import GoalChannelMessageDeliverySession, GoalChannelDeliveryStageError
-from .goal_channel_work import _resolve_binding, build_work_card, room_work_sources, run_goal_channel_work
+from .goal_channel_work import (_resolve_binding, _room_card, build_work_card,
+    room_work_sources, run_goal_channel_work)
 from .cli_transport import CommandRunner, default_subprocess_runner
 from .goal_channel_transport import verified_app_id
 from .goal_channel_operation import _card_text
@@ -103,6 +104,13 @@ def _scope(p: Mapping[str, Any], broker_root: Path) -> dict[str, Any]:
     if goal_channel_binding_digest(binding) != p["binding_digest"]:
         raise RoomClaimCallbackError("binding_changed")
     return binding
+
+
+def build_unconfirmed_result_card(summary: str) -> dict[str, Any]:
+    """The honest unconfirmed hint rides the same Card 2.0 structure as the
+    original offer card and the committed-receipt confirmation: an in-place
+    update must match its original card's schema."""
+    return _room_card("Claim readback", summary)
 
 
 def build_room_claim_card(request: Mapping[str, Any], request_id: str) -> dict[str, Any]:
@@ -284,9 +292,7 @@ def handle_room_claim_callback(event: Mapping[str, Any], *, runtime_root: Path,
                 # Without a confirmed accepted receipt the summary branch keeps
                 # the honest unconfirmed hint instead of fabricating one.
                 or (committed_receipt is not None and committed_receipt.get("acceptance") == "accepted")
-            ) else {
-                "config": {"wide_screen_mode": True}, "header": {"title": {"tag": "plain_text", "content": "Claim readback"}},
-                "elements": [{"tag": "div", "text": {"tag": "plain_text", "content": str(claimed.get("public_summary"))}}]}
+            ) else build_unconfirmed_result_card(str(claimed.get("public_summary")))
             p["last_result_card"] = card
             p["result_delivery_verified"] = False
             write_private_json_atomic(path, p)

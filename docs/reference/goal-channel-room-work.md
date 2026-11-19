@@ -101,7 +101,13 @@ A claim result card is the message identity of the one accepted operation. It
 carries immutable acceptance facts only (Goal, Agent, task, acceptance,
 receipt id); the live revision, claimable counts and current ownership stay in
 the separate `work project` orientation and the machine readback, never in
-this identity. The provider idempotency key is likewise derived from the
+this identity. All room-facing cards — the scoped offer card, the committed
+confirmation, the honest unconfirmed hint and every recovery patch — use the
+Card 2.0 schema (`schema: "2.0"` with `body.elements`): Lark rejects updating
+an existing card with a payload of a different schema, so the first update
+and the committed-receipt recovery share one structure that always matches
+the original card. The same 2.0 confirmation is used for the CLI's
+new-message delivery, keeping one card builder for every room write. The provider idempotency key is likewise derived from the
 claim identity (Goal, Todo, Agent, original key), not from card content, so
 an unrelated Todo write between the original send and its recovery cannot
 mint a second key. Recovery checks the original send first — the transport
@@ -345,6 +351,10 @@ Markdown 写入。正常领取继续服从 canonical owner 的当前策略与准
 公开卡片仅包含标识、计数与安全回执，不携带任务正文、证据、artifact 或记忆内容。
 canonical 领取提交后，原卡上的回执号直接由不可变接受事实构造，后续实时投影读失败
 不会把它替换成无回执的摘要卡；未确认接受时保留诚实的未确认提示，不伪造回执号。
+所有房间卡片——受限 offer 卡、已提交确认、未确认提示与每次恢复补丁——统一使用
+Card 2.0 结构（`schema: "2.0"` 加 `body.elements`）：飞书拒绝以不同 schema 就地更新
+既有卡片，首次更新与已提交回执的恢复因此共用同一结构并始终与原卡匹配；CLI 新消息
+投递同样使用这份 2.0 确认卡。
 已提供单次授权的 IM 领取按钮、显式撤销和结果卡片恢复；默认不启用 collector。
 恢复在记录锁内复核资格，已撤销、已过期或已送达的记录不消耗投递名额，固定扫描
 顺序中的失效前缀不会饿死排在后面的有效回执。每轮投递预算还在该顺序上轮转：新一轮

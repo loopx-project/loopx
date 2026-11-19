@@ -56,6 +56,17 @@ def _resolve_binding(binding_path: Path, target_path: Path, goal_id: str, actor:
     return resolved
 
 
+def _room_card(title: str, body: str) -> dict[str, Any]:
+    """Room-facing cards use the Card 2.0 schema throughout: the scoped IM
+    offer card is 2.0, and Lark rejects updating an existing card with a
+    payload of a different schema (error 200830). One shared structure serves
+    the CLI's new-message confirmation, the callback's in-place result update
+    and the recovery patch, so an update always matches its original card."""
+    return {"schema": "2.0", "config": {"update_multi": True},
+        "header": {"title": {"tag": "plain_text", "content": title}},
+        "body": {"elements": [{"tag": "markdown", "content": body}]}}
+
+
 def build_work_card(packet: dict[str, Any]) -> dict[str, Any]:
     """Only content-minimal, validated projection/receipt fields reach the room."""
     validate_public_safe_value(packet)
@@ -71,9 +82,7 @@ def build_work_card(packet: dict[str, Any]) -> dict[str, Any]:
             f"Historical claim receipt: {receipt['acceptance']} · Task: {receipt['todo_id']}\n"
             f"Receipt: {receipt['receipt_id']}")
         body += "\nRead-only orientation. Claim through the scoped Agent CLI; recheck current authority after reconnect."
-        return {"config": {"wide_screen_mode": True},
-            "header": {"title": {"tag": "plain_text", "content": "LoopX work"}},
-            "elements": [{"tag": "div", "text": {"tag": "plain_text", "content": body}}]}
+        return _room_card("LoopX work", body)
     projection = packet.get("projection") or {}
     selected = projection.get("selected_todo") or {}
     counts = projection.get("counts") or {}
@@ -85,9 +94,7 @@ def build_work_card(packet: dict[str, Any]) -> dict[str, Any]:
     envelope = packet.get("projection_envelope") or {}
     if envelope.get("alert") is not False:
         body = "Read freshness or coverage is unknown; refresh before relying on this orientation.\n" + body
-    return {"config": {"wide_screen_mode": True},
-        "header": {"title": {"tag": "plain_text", "content": "LoopX work"}},
-        "elements": [{"tag": "div", "text": {"tag": "plain_text", "content": body}}]}
+    return _room_card("LoopX work", body)
 
 
 def run_goal_channel_work(*, registry_path: Path, runtime_root: Path, binding_path: Path,

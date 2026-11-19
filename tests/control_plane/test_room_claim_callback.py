@@ -14,6 +14,13 @@ from loopx.extensions.lark.goal_channel_contracts import write_goal_channel_bind
 from loopx.control_plane.projects.registry_codec import project_registry_transaction
 
 
+def _version_mismatch(target_message, incoming_card):
+    """Lark rejects updating an existing card with a different card schema
+    (error 200830): the update must match the original card's version."""
+    current = json.loads(target_message["body"]["content"])
+    return current.get("schema") != incoming_card.get("schema")
+
+
 @pytest.fixture
 def offered(room_setup, monkeypatch):  # noqa: F811 - pytest fixture dependency
     args, room, binding = room_setup
@@ -23,7 +30,7 @@ def offered(room_setup, monkeypatch):  # noqa: F811 - pytest fixture dependency
     (args["runtime_root"] / "registry.global.json").write_text(json.dumps(source))
     monkeypatch.setattr(ingress, "resolve_extension_activation", lambda *a, **k: {"enabled": True})
     transport_state = {"fail_update": False, "readable": True, "member": True, "delay_chat_get_until": None,
-        "fail_update_message_ids": ()}
+        "fail_update_message_ids": (), "seen_update_cards": []}
 
     def runner(argv, cwd, timeout):
         payload = None
@@ -46,6 +53,11 @@ def offered(room_setup, monkeypatch):  # noqa: F811 - pytest fixture dependency
             if transport_state["fail_update"] or mid in (transport_state.get("fail_update_message_ids") or ()):
                 return {"returncode": 1, "stdout": "", "stderr": "", "timed_out": True}
             target = next(m for m in room.messages if m["message_id"] == mid)
+            if _version_mismatch(target, data["card"]):
+                return {"returncode": 1, "stdout": json.dumps({"code": 200830,
+                    "msg": "card update schema must match the original card"}),
+                    "stderr": "", "returncode_payload": True}
+            transport_state["seen_update_cards"].append(data["card"])
             target["body"]["content"] = json.dumps(data["card"])
             payload = {}
         elif "messages" in argv and "patch" in argv:
@@ -53,7 +65,14 @@ def offered(room_setup, monkeypatch):  # noqa: F811 - pytest fixture dependency
             if mid in (transport_state.get("fail_update_message_ids") or ()):
                 return {"returncode": 1, "stdout": "", "stderr": "", "timed_out": True}
             data = json.loads(argv[argv.index("--data") + 1])
-            next(m for m in room.messages if m["message_id"] == mid)["body"]["content"] = data["content"]
+            target = next(m for m in room.messages if m["message_id"] == mid)
+            card = json.loads(data["content"])
+            if _version_mismatch(target, card):
+                return {"returncode": 1, "stdout": json.dumps({"code": 200830,
+                    "msg": "card update schema must match the original card"}),
+                    "stderr": "", "returncode_payload": True}
+            transport_state["seen_update_cards"].append(card)
+            target["body"]["content"] = data["content"]
             payload = {}
         if payload is None:
             result = room(argv, cwd, timeout)
@@ -708,3 +727,40 @@ def test_shared_runtime_scopes_keep_independent_recovery_rotation(offered):
     # once both scopes delivered their valid records in this phase.
     idle_a = recover(scope_a)
     assert idle_a["attempted"] <= 1 and snapshot(args)["provider_revision"] == committed
+
+def test_result_updates_match_the_original_card_schema(offered):
+    """The committed-receipt update and its recovery patch must ride the same
+    Card 2.0 structure as the original offer card (Lark rejects a schema
+    mismatch on in-place updates, error 200830): schema "2.0" with
+    body.elements, the same receipt lands on the original message id, and no
+    second canonical claim happens."""
+    args, room, _, _, offer, event, callback_args, transport = offered
+    prepared = offer()
+    original_message_id = next(m["message_id"] for m in room.messages
+        if "request_id" in m["body"]["content"])
+    original_card = json.loads(next(m for m in room.messages
+        if m["message_id"] == original_message_id)["body"]["content"])
+    assert original_card["schema"] == "2.0" and original_card["body"]["elements"]
+    # First update attempt loses its transport response; the claim commits.
+    transport["fail_update"] = True
+    result = ingress.handle_room_claim_callback(event(prepared), **callback_args)
+    assert result["canonical_claim_accepted"] is True and result["ok"] is False, result
+    receipt_id = result["receipt"]["receipt_id"]
+    committed = snapshot(args)["provider_revision"]
+    # Recovery patches the committed receipt onto the original message with a
+    # structure the original 2.0 card accepts (the fixture enforces 200830).
+    transport["fail_update"] = False
+    transport["seen_update_cards"].clear()
+    recovery = ingress.recover_room_claim_results(**callback_args,
+        allowed_chat_ids={"oc_room_fixture"})
+    assert recovery == {"attempted": 1, "delivered": 1, "failed": 0}, recovery
+    update_card = transport["seen_update_cards"][0]
+    assert update_card["schema"] == "2.0" and update_card["body"]["elements"]
+    message = next(m for m in room.messages if m["message_id"] == original_message_id)
+    assert receipt_id in message["body"]["content"]
+    assert len([m for m in room.messages if m["message_id"] == original_message_id]) == 1
+    assert ingress.recover_room_claim_results(**callback_args,
+        allowed_chat_ids={"oc_room_fixture"})["attempted"] == 0
+    # Exactly one canonical claim; recovery advanced nothing.
+    assert snapshot(args)["provider_revision"] == committed
+    assert next(t for t in snapshot(args)["todos"] if t["todo_id"] == TODO)["claimed_by"] == "agent-a"
