@@ -13,7 +13,7 @@
   "formal_model": {
     "schema_version": "loopx_semantic_formal_model_v0",
     "universes": {
-      "vocabularies": "V: registered vocabulary identifiers; Producers(V) ⊆ V is exactly the subset declaring a producers key (including compatibility-only entries with an empty list). Kernel(V) ⊆ Producers(V). Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 23 cross_runtime vocabularies outside Producers(V) are unverified.",
+      "vocabularies": "V: registered vocabulary identifiers; Producers(V) ⊆ V is exactly the subset declaring a producers key (including compatibility-only entries with an empty list). Kernel(V) ⊆ Producers(V). Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 28 cross_runtime vocabularies outside Producers(V) are unverified.",
       "values": "U(v): ambient runtime values; S(v): registered admitted values",
       "sites": "L: source locations that define, produce, consume, interpret, pass through, project, or persist values",
       "scopes": "Scope: global or bounded_context(context_id); ScopeDeclarations are the forked names the registry declares as bounded contexts",
@@ -73,25 +73,25 @@
     "invariants": [
       {
         "id": "F1_producer_closedness",
-        "statement": "∀v ∈ Producers(V): Produced_scan(v) ⊆ S(v) ⊆ U(v), where Produced_scan(v) is the production the fixed forms observe inside the code-owned scan reach. Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 23 cross_runtime vocabularies outside Producers(V) are unverified. Production outside the scan reach is unverified rather than proven closed.",
+        "statement": "∀v ∈ Producers(V): Produced_scan(v) ⊆ S(v) ⊆ U(v), where Produced_scan(v) is the production the fixed forms observe inside the code-owned scan reach. Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 28 cross_runtime vocabularies outside Producers(V) are unverified. Production outside the scan reach is unverified rather than proven closed.",
         "enforcement": "m0_5",
         "evidence": "bounded production-form AST scan over the PRODUCER_ROOTS/PRODUCER_FILES reach in loopx/semantics/production.py; check_producers visits only vocabularies that declare producers, and validate_production claims no whole-program closedness; unresolved dynamic sites are reported, not treated as proven safe",
         "domain": {
           "quantifies_over": "vocabularies[producers].producers",
           "verified": 6,
-          "registered": 29,
+          "registered": 34,
           "evidence_bound": "producer_scan_reach"
         }
       },
       {
         "id": "F2_canonical_value_liveness",
-        "statement": "∀v ∈ Producers(V): Canonical(v) ⊆ Produced_scan(v) ∪ CompatibilityOnly(v). Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 23 cross_runtime vocabularies outside Producers(V) are unverified. Liveness outside the walked set is not proven.",
+        "statement": "∀v ∈ Producers(V): Canonical(v) ⊆ Produced_scan(v) ∪ CompatibilityOnly(v). Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 28 cross_runtime vocabularies outside Producers(V) are unverified. Liveness outside the walked set is not proven.",
         "enforcement": "m0_5",
         "evidence": "every value of a vocabulary in Producers(V) has a producer recognised inside the scan reach, an executable input witness, or an explicit compatibility-only reason; a value whose only producer lies outside the reach would be reported as dead, not silently accepted",
         "domain": {
           "quantifies_over": "vocabularies[producers].producers",
           "verified": 6,
-          "registered": 29,
+          "registered": 34,
           "evidence_bound": "producer_scan_reach"
         }
       },
@@ -103,7 +103,7 @@
         "domain": {
           "quantifies_over": "vocabularies[*]",
           "verified": 0,
-          "registered": 29,
+          "registered": 34,
           "evidence_bound": "inventory_only"
         }
       },
@@ -170,8 +170,8 @@
     }
   },
   "coverage_floor": {
-    "vocabularies": 29,
-    "owner_symbols": 56,
+    "vocabularies": 34,
+    "owner_symbols": 62,
     "literal_scan_fields": 1,
     "projections": 1,
     "relations": 9,
@@ -1016,6 +1016,113 @@
         "readable": "An existing configuration verifier or the selected File/SQLite authority and full Todo/history readers accepted the captured component. This is historical readability, not a current Goal identity, permission or execution grant.",
         "historical_only": "A standalone SQLite copy passed its bounded offline structural integrity check, but its bytes have not been adopted by a current domain owner. Restored provider identities and leases remain historical data.",
         "unknown": "No supported owner inventory exists for remaining v0 state, or a component failed format, availability, qualified-runtime or owner-read validation. Unknown never becomes readable merely because archive or file hashes matched."
+      }
+    },
+    "session_mode": {
+      "meaning": "Explicit, non-implicitly-switchable execution ownership mode of a LoopX agent session binding.",
+      "tier": "cross_runtime",
+      "status": "canonical",
+      "owners": {
+        "python": "loopx/chat_store.py::CHAT_SESSION_MODES",
+        "typescript": "loopx/control_plane/collaboration/session_quota_fabric_contract.ts::SESSION_MODES"
+      },
+      "values": [
+        "managed_runtime",
+        "attached_host"
+      ],
+      "value_notes": {
+        "managed_runtime": "Default execution mode in loopx/chat_store.py when creating a LoopX-owned runtime session; preserved across governed session handover without implicit mode switching.",
+        "attached_host": "Explicitly bound execution mode when attaching an external host session with a non-empty host_surface in loopx/chat_store.py; preserved across governed session handover without implicit mode switching."
+      }
+    },
+    "session_fabric_ssh_connection_state": {
+      "meaning": "Read-only L0 SSH host readiness state attached optionally to ssh_host_catalog_v0 entries.",
+      "tier": "cross_runtime",
+      "status": "canonical",
+      "owners": {
+        "python": null,
+        "typescript": "loopx/control_plane/collaboration/session_quota_fabric_contract.ts::SESSION_FABRIC_SSH_CONNECTION_STATES"
+      },
+      "values": [
+        "connected",
+        "degraded",
+        "disconnected",
+        "unknown"
+      ],
+      "value_notes": {
+        "connected": "Supplied by an SSH host observation when the tunnel and remote host check succeeded; requires failure_code to be null.",
+        "degraded": "Supplied by an SSH host observation when the host or tunnel is partially reachable or impaired; requires a non-null failure_code from session_fabric_ssh_failure_code.",
+        "disconnected": "Supplied by an SSH host observation when the SSH tunnel or host check failed to connect; requires a non-null failure_code from session_fabric_ssh_failure_code.",
+        "unknown": "Supplied by an SSH host observation when readiness has not been established; requires failure_code to be null and grants no connection guarantee."
+      }
+    },
+    "session_fabric_ssh_failure_code": {
+      "meaning": "Typed SSH readiness failure reason required on degraded or disconnected L0 SSH host observations.",
+      "tier": "cross_runtime",
+      "status": "canonical",
+      "owners": {
+        "python": null,
+        "typescript": "loopx/control_plane/collaboration/session_quota_fabric_contract.ts::SESSION_FABRIC_SSH_FAILURE_CODES"
+      },
+      "values": [
+        "no_ssh",
+        "host_key",
+        "auth",
+        "unreachable",
+        "ssh_failed",
+        "daemon_missing",
+        "forward_denied"
+      ],
+      "value_notes": {
+        "no_ssh": "Emitted on a degraded or disconnected observation when the OpenSSH client binary is unavailable on the host.",
+        "host_key": "Emitted on a degraded or disconnected observation when SSH host-key verification failed.",
+        "auth": "Emitted on a degraded or disconnected observation when SSH authentication was rejected.",
+        "unreachable": "Emitted on a degraded or disconnected observation when the target SSH host could not be reached over the network.",
+        "ssh_failed": "Emitted on a degraded or disconnected observation when the SSH transport exited with a generic connection failure.",
+        "daemon_missing": "Emitted on a degraded or disconnected observation when the remote LoopX daemon or status endpoint is absent.",
+        "forward_denied": "Emitted on a degraded or disconnected observation when SSH port forwarding to the loopback target was denied."
+      }
+    },
+    "session_fabric_quota_availability": {
+      "meaning": "Opaque-profile quota window availability state decoded fail-closed by L0 session fabric.",
+      "tier": "cross_runtime",
+      "status": "canonical",
+      "owners": {
+        "python": null,
+        "typescript": "loopx/control_plane/collaboration/session_quota_fabric_contract.ts::SESSION_FABRIC_QUOTA_AVAILABILITIES"
+      },
+      "values": [
+        "available",
+        "near_limit",
+        "exhausted",
+        "unknown"
+      ],
+      "value_notes": {
+        "available": "Decoded on a quota window observation with remaining capacity; sets handover_eligible=false and causes evaluateGovernedSessionHandover to return no_handover_needed.",
+        "near_limit": "Decoded on a quota window observation approaching exhaustion; sets handover_eligible=true so evaluateGovernedSessionHandover enters gating/fencing when used_ratio >= threshold_ratio.",
+        "exhausted": "Decoded on a depleted quota window observation; sets handover_eligible=true so evaluateGovernedSessionHandover enters gating/fencing regardless of used_ratio.",
+        "unknown": "Decoded on an unverified quota window observation (requires used_ratio=null); forces handover_eligible=false and causes evaluateGovernedSessionHandover to fail closed with no_handover_needed."
+      }
+    },
+    "session_fabric_handover_disposition": {
+      "meaning": "Fence-bound governed session handover evaluation verdict returned without executing switches or acquiring leases.",
+      "tier": "cross_runtime",
+      "status": "canonical",
+      "owners": {
+        "python": null,
+        "typescript": "loopx/control_plane/collaboration/session_quota_fabric_contract.ts::SESSION_FABRIC_HANDOVER_DISPOSITIONS"
+      },
+      "values": [
+        "no_handover_needed",
+        "user_gate_required",
+        "await_turn_fence",
+        "ready_for_lease_reacquisition"
+      ],
+      "value_notes": {
+        "no_handover_needed": "Returned by evaluateGovernedSessionHandover when observation.handover_eligible is false (unknown or available) or when availability is near_limit with used_ratio below threshold_ratio.",
+        "user_gate_required": "Returned by evaluateGovernedSessionHandover when handover is warranted and ask_before_switch=true, routing confirmation to the shared Goal Inbox/Gate projection.",
+        "await_turn_fence": "Returned by evaluateGovernedSessionHandover when handover is warranted, ask_before_switch=false, and either current_turn_fenced or previous_lease_released is false.",
+        "ready_for_lease_reacquisition": "Returned by evaluateGovernedSessionHandover when handover is warranted, ask_before_switch=false, and both current_turn_fenced and previous_lease_released are true."
       }
     }
   },

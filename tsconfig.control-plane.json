@@ -130,6 +130,7 @@
     "tests/control_plane_ts/direction_authority.test.ts",
     "tests/control_plane_ts/direction_baseline.test.ts",
     "tests/control_plane_ts/material_wave_ranking.test.ts",
+    "tests/control_plane_ts/session_quota_fabric.test.ts",
     "tests/control_plane_ts/zcode*.test.ts"
   ]
 }

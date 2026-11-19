@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 import glob
 from pathlib import Path
 import re
 import shlex
+from typing import cast
 
 
 SSH_HOST_CATALOG_SCHEMA_VERSION = "ssh_host_catalog_v0"
@@ -64,7 +66,11 @@ def configured_ssh_host_aliases(config_path: Path | None = None) -> list[str]:
             if directive != "host":
                 continue
             for alias in parts[1:]:
-                if not _SAFE_HOST_ALIAS.fullmatch(alias) or alias in seen_aliases:
+                if (
+                    not _SAFE_HOST_ALIAS.fullmatch(alias)
+                    or ".." in alias
+                    or alias in seen_aliases
+                ):
                     continue
                 seen_aliases.add(alias)
                 aliases.append(alias)
@@ -76,8 +82,37 @@ def configured_ssh_host_aliases(config_path: Path | None = None) -> list[str]:
     return aliases
 
 
-def ssh_host_catalog_payload(config_path: Path | None = None) -> dict[str, object]:
+def project_ssh_host_catalog(
+    configured_aliases: Sequence[str],
+    observations: Sequence[Mapping[str, object]] | None = None,
+) -> dict[str, object]:
+    """Project `ssh_host_catalog_v0` with optional L0 SSH observations via the TypeScript owner."""
+
+    from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+
+    try:
+        return cast(
+            dict[str, object],
+            effect_runtime_result(
+                "collaboration.session_fabric.project_ssh_host_catalog",
+                {
+                    "configured_aliases": list(configured_aliases),
+                    "observations": [dict(item) for item in (observations or ())],
+                },
+            ),
+        )
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def ssh_host_catalog_payload(
+    config_path: Path | None = None,
+    *,
+    observations: Sequence[Mapping[str, object]] | None = None,
+) -> dict[str, object]:
     aliases = configured_ssh_host_aliases(config_path)
+    if observations:
+        return project_ssh_host_catalog(aliases, observations)
     return {
         "ok": True,
         "schema_version": SSH_HOST_CATALOG_SCHEMA_VERSION,

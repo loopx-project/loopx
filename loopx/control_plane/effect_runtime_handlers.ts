@@ -697,6 +697,8 @@ export function createEffectRuntimeHandlers(
     ["collaboration.result.attachment_refs", lazyHandler(() => import("./collaboration/result_publication.ts"), ({resultAttachmentRefs}) => resultAttachmentRefs)],
     ["collaboration.result.delivery_ready", lazyHandler(() => import("./collaboration/result_publication.ts"), ({collaborationResultDeliveryReady}) => collaborationResultDeliveryReady)],
     ["collaboration.peer_host_route.select", lazyHandler(() => import("./collaboration/peer_route_selection.ts"), ({selectObservedPeerHostRoute}) => selectObservedPeerHostRoute)],
+    ["collaboration.session_fabric.project_ssh_host_catalog", lazyHandler(() => import("./collaboration/session_quota_fabric.ts"), ({projectSshHostCatalogRequest}) => projectSshHostCatalogRequest)],
+    ["collaboration.session_fabric.evaluate_governed_session_handover", lazyHandler(() => import("./collaboration/session_quota_fabric.ts"), ({evaluateGovernedSessionHandover}) => evaluateGovernedSessionHandover)],
     ["runtime.background.project", lazyHandler(() => import("./runtime/background_services.ts"), ({projectBackgroundServices}) => projectBackgroundServices)],
     ["runtime.execution_identity.codex", lazyHandler(() => import("./runtime/execution_identity.ts"), ({readCodexExecutionIdentity}) => readCodexExecutionIdentity)],
     ["runtime.execution_identity.match", lazyHandler(() => import("./runtime/execution_identity.ts"), ({matchExecutionDeclaration}) => matchExecutionDeclaration)],

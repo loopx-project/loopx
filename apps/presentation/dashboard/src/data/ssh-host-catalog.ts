@@ -1,7 +1,15 @@
+import {
+  decodeSshHostObservationWith,
+  isSafeHostAlias,
+  type SshHostObservation,
+} from "../../../../../loopx/control_plane/collaboration/session_quota_fabric_contract.js";
+import { parseIsoTimestamp } from "../../../../../loopx/control_plane/runtime_timestamp.js";
+
 export const defaultConfiguredSshHostsUrl = "/ssh-hosts";
 
 export type ConfiguredSshHost = {
   alias: string;
+  observation?: SshHostObservation;
 };
 
 export type ConfiguredSshHostCatalog = {
@@ -9,10 +17,8 @@ export type ConfiguredSshHostCatalog = {
   schemaVersion: "ssh_host_catalog_v0";
 };
 
-const safeAliasPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/;
-
 export function isConfiguredSshHostAlias(value: unknown): value is string {
-  return typeof value === "string" && safeAliasPattern.test(value.trim());
+  return isSafeHostAlias(value);
 }
 
 export function parseConfiguredSshHostCatalog(value: unknown): ConfiguredSshHostCatalog {
@@ -24,12 +30,25 @@ export function parseConfiguredSshHostCatalog(value: unknown): ConfiguredSshHost
     throw new Error("SSH Host 列表协议不兼容，请更新本机 LoopX 服务。");
   }
   const seen = new Set<string>();
-  const hosts = payload.hosts.flatMap((value) => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
-    const alias = String((value as Record<string, unknown>).alias ?? "").trim();
+  const hosts = payload.hosts.flatMap((item): ConfiguredSshHost[] => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const record = item as Record<string, unknown>;
+    const alias = String(record.alias ?? "").trim();
     if (!isConfiguredSshHostAlias(alias) || seen.has(alias)) return [];
     seen.add(alias);
-    return [{ alias }];
+    if (record.observation === undefined || record.observation === null) {
+      return [{ alias }];
+    }
+    const observation = decodeSshHostObservationWith(record.observation, {
+      fail: (message) => {
+        throw new Error(`SSH Host observation 无效：${message}`);
+      },
+      parseTimestamp: parseIsoTimestamp,
+    });
+    if (observation.alias !== alias) {
+      throw new Error(`SSH Host observation 别名不匹配：${observation.alias} !== ${alias}`);
+    }
+    return [{ alias, observation }];
   });
   return { hosts, schemaVersion: "ssh_host_catalog_v0" };
 }
