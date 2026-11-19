@@ -300,7 +300,7 @@ def test_scope_revoked_during_provider_preflight_is_rechecked_before_claim(setup
 
 @pytest.mark.parametrize("has_receipt", [False, True])
 @pytest.mark.parametrize("goal_ref", [None, "invalid", {"goal_id": GOAL, "goal_instance_id": "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}])
-@pytest.mark.parametrize("wire_version", [0, 1, 2])
+@pytest.mark.parametrize("wire_version", [0, 1, 3])
 def test_unqualified_claim_wires_cannot_accept_goal_ref(setup, has_receipt, goal_ref, wire_version):
     import hashlib
     from loopx.control_plane.effect_runtime import effect_runtime_result
@@ -322,8 +322,8 @@ def test_unqualified_claim_wires_cannot_accept_goal_ref(setup, has_receipt, goal
     if wire_version == 0:
         packet["schema_version"] = "loopx_local_coordination_todo_claim_request_v0"
         packet.pop("registry_source")
-    elif wire_version == 2:
-        packet["schema_version"] = "loopx_local_coordination_todo_claim_request_v2"
+    elif wire_version == 3:
+        packet["schema_version"] = "loopx_local_coordination_todo_claim_request_v3"
         packet["registry_sources"] = [packet["registry_source"]]
     result = effect_runtime_result("coordination.local_authority.todo_claim", packet)
     assert result["status"] == "failed" and result["reason_code"] == "goal_ref_claim_contract_unqualified", result

@@ -80,7 +80,7 @@ test("timed claim wire rejects absent/malformed deadlines and legacy smuggling b
     assert.equal(result.status, "failed");
     assert.equal(result.decision_read_from_provider, false);
   }
-  for (const version of [0, 1, 2]) for (const admit_before of [null, "2030-01-01T00:00:00Z"]) {
+  for (const version of [0, 1, 2, 3]) for (const admit_before of [null, "2030-01-01T00:00:00Z"]) {
     const result = await claimLocalCoordinationTodo({
       schema_version: `loopx_local_coordination_todo_claim_request_v${version}`, admit_before,
     }, dependencies);
