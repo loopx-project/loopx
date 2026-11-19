@@ -416,8 +416,7 @@ invariant、画完协议链，通常要几个小时。换到的东西是：这�
 **边界一：full validation 跑不起全套，这是设计如此。** 本仓库的 [PR 基线](https://github.com/loopx-project/loopx/blob/main/docs/development/testing-and-quality.md) 包含 lint、type、
 output budget smoke、`pytest` 分层、`loopx canary premerge --from-git-diff` 和 public/private
 scan；真实路径验证（例如 PostgreSQL integration）需要一个一次性隔离实例。开发阶段应当从最
-聚焦的那条命令开始，无需等最宽矩阵。完整公开 smoke fleet 的职责是宽覆盖与健康观察，不是
-每个 PR 的语义设计。
+聚焦的那条命令开始，无需等最宽矩阵。完整公开 smoke fleet 的职责是宽覆盖与健康观察。
 
 **边界二：真实路径不可用时，正确做法是报告证据缺口。** 如果影响 PostgreSQL authority 的
 改动拿不到安全的隔离实例，那么"跳过该套件"并不构成通过。此时应暂停交付并说明缺口，不能用
@@ -451,8 +450,7 @@ diff 和描述来发现，这也是为什么下一章把 PR 描述本身当成�
 
 **让 renderer 修 policy。** 修改文案不能修复 source 或 authority；反过来，policy 也不应依赖 Markdown 字符串。
 
-**顺手重构所有相关模块。** 协议链跨多个 bounded context，不等于这个 PR 应当包含每一次可能的
-清理。只改本次 invariant 所要求的完整链条。
+**顺手重构所有相关模块。** 协议链跨多个 bounded context。只改本次 invariant 所要求的完整链条。
 
 **为未来 Host 增加空 adapter。** 没有真实调用方、capability 和 receipt 的 adapter 只增加
 维护面，而且它会看起来像一项已经交付的能力。

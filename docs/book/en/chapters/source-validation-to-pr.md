@@ -64,8 +64,7 @@ ambiguous scope -> typed repair
 explicit global scope -> global Gate
 ```
 
-This layer is the closest proof of an invariant. It does not prove that CLI, projection, and scheduler are
-connected correctly.
+This layer is the closest proof of an invariant.
 
 ### 2. Focused deterministic smoke
 
@@ -555,7 +554,7 @@ semantic core. The final `APPROVE` applies only to the revalidated exact head.
 
 ## Distinguish merge, release, deployment, and observation
 
-A merged PR does not prove a release, deployment, or every external Host update. Follow-up may include:
+Follow-up may include:
 
 - full-public smoke on `main`;
 - release qualification;

@@ -22,7 +22,7 @@ const TODO_STATUSES: ReadonlySet<string> = new Set(["open", "done", "blocked", "
 export const TODO_OWNERSHIP_INTENT_FIELDS = ["claimed_by", "clear_claim", "excluded_agents"] as const;
 
 /** Normalize explicit execution-owner intent before binding its replay identity.
- * This does not authorize the actor or manufacture a new execution lease. */
+ *  */
 export function normalizeTodoOwnershipIntent(raw: JsonObject): JsonObject {
   const intent: JsonObject = {};
   if (raw.claimed_by != null) {

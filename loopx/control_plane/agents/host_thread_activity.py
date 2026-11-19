@@ -1,7 +1,7 @@
 """Read-only activity of host threads bound to Goals.
 
-A ``bind-agent-thread`` binding proves which host thread owns an agent lane; it
-does not prove that the thread is working. Host observers read a host's own
+A ``bind-agent-thread`` binding proves which host thread owns an agent lane;
+Host observers read a host's own
 local records and report one typed state per bound thread. Observers never
 write to the host, and a record they cannot recognize is reported as
 ``unknown``, never as an open turn.

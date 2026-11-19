@@ -2,7 +2,7 @@
 
 Use a complete zero-permission teaching package to learn requests, responses, validation, and packaging. [Companion source](https://github.com/loopx-project/loopx/tree/main/packages/loopx-text-stats) in `packages/loopx-text-stats/` includes its manifest, Python package, two JSON Schemas, sample input, and standard-library tests.
 
-It is not a built-in Capability or default catalog entry and does not read or write Goals. The package owns text input and results; the existing Extension lifecycle owns installation, activation, and managed calls.
+Does not read or write Goals. The package owns text input and results; the existing Extension lifecycle owns installation, activation, and managed calls.
 
 ## Run the complete example first
 

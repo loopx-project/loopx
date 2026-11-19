@@ -113,8 +113,8 @@ export function todoUpdateAdmissionRejection(
     mode === "hard_lease" && lease === undefined &&
     input.lease_idempotency_key == null && input.lease_expected_version == null;
   // Preserve the single-agent compatibility path only for genuinely
-  // unowned work. An empty registry is not evidence that an arbitrary actor
-  // may rewrite an already-owned Todo.
+  // unowned work.
+
   if (input.registered_agents.length === 0 && input.actor_agent_id !== null) {
     return reject("actor_not_registered", "Todo update requires a registered actor");
   }

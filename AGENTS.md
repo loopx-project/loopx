@@ -19,7 +19,7 @@ Agent 团队的长程效果和长程效率：在可比预算下取得更好的�
 - **Governed continuation:** heartbeat, scheduling, quota and explicit stop/wait
   conditions decide when authorized work can continue.
 - **Peer collaboration:** claims, leases, scoped handoffs, dependent artifacts,
-  receiver adoption and result return; a coordinator gains no implicit authority.
+  receiver adoption and result return.
 - **Personal Workspace:** App/frontend, Lark and CLI expose conversations,
   settings, work, decisions, artifacts and readback over the same typed owners.
 - **Capabilities and extensions:** reusable engineering, research, knowledge,
@@ -40,7 +40,7 @@ prompt. Keep the root within both the 24,000-byte (24 KB) Antigravity per-file
 rule cap and the default 32 KiB Codex discovery budget, and do not eagerly
 import linked detail documents. See
 [loading](docs/development/README.md#agent-instruction-loading-and-maintenance)
-for host-specific checks; delivery does not prove model compliance.
+for host-specific checks.
 
 Prefer [context](docs/development/README.md#progressive-context-for-development):
 current goals, constraints and acceptance criteria first; supporting evidence and
@@ -65,16 +65,14 @@ acceptance is proven; reconcile the existing checkpoint as evidence changes.
 Carry one compact delivery brief from task to PR (goal/source, current gap,
 observable result, owning boundary and decisive acceptance evidence), keeping
 private Goal state out of public artifacts. Choose a complete, independently
-reviewable and reversible outcome slice; small diffs, fields, receipts, test
-counts and merged PR counts do not establish progress. Characterization,
+reviewable and reversible outcome slice. Characterization,
 prerequisites, research, docs and maintenance are valid when they remove an
 evidenced gap or enable a named next step.
 
 For long-horizon improvements, trace the accepted goal and structured state
 through feedback, the replan decision, subsequent work and validated outcomes.
 Check whether new evidence changed the action or justified continuing it, and
-preserve negative results and uncertainty (`state survival`, graph edges, read
-receipts or replan records alone do not prove adoption or benefit). Compare
+preserve negative results and uncertainty. Compare
 outcomes and complete costs under comparable conditions using the
 [measurement contract](docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md#6-measurement-model);
 do not force a direction change merely to increase replan counts.
@@ -93,8 +91,7 @@ a registered vocabulary, remains local or creates a shared contract, and follow
 the [diff advisory](CONTRIBUTING.md#check-new-semantic-vocabulary-while-developing)
 before the full-tree check (including intentional untracked sources). For
 multi-Agent changes, qualify dependency artifacts, receiver adoption, claim/lease
-handling, independent acceptance and result return; sending a message or
-registering workers does not prove collaboration, and missing frontend/Lark/CLI
+handling, independent acceptance and result return; missing frontend/Lark/CLI
 companion work makes a product journey partial.
 
 Before delivery, reconcile the result with the original/current goal, update its
@@ -102,7 +99,7 @@ task and RFC checkpoint when the boundary changes, and preserve passed, failed
 and untested distinctions. If user feedback exposes the same missing outcome,
 repair the owning rule, active task or projection through self-repair rather
 than appending stronger prose. PR review must execute the capability-owned
-`problem_context` delivery judgment; author declarations do not certify it.
+`problem_context` delivery judgment.
 
 ## Commit And PR Hygiene
 
@@ -171,9 +168,7 @@ Before staging non-trivial changes:
 
 Before approval or merge, read the repository-kept
 [merge workflow](skills/loopx-pr-merge/SKILL.md) and its
-[self-merge rules](skills/loopx-pr-merge/SKILL.md#self-merge-eligibility-and-benchmark-exceptions);
-installing it is optional and does not replace repository policy or the current
-capability-owned review.
+[self-merge rules](skills/loopx-pr-merge/SKILL.md#self-merge-eligibility-and-benchmark-exceptions).
 
 Control-plane, runtime and product surfaces (`loopx/**`, `apps/**`, `packages/**`,
 permissions/authority, persisted state/receipts, quota/scheduler/todo rules, and

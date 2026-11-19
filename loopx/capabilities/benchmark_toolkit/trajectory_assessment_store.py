@@ -169,7 +169,7 @@ def _usage_event(line_number: int, event: dict) -> dict | None:
     elif event.get("type") == "token_usage_record":
         payload = _request_usage_record(payload)
     elif event.get("type") == "loopx_input_token_attribution":
-        # Optional host measurement, not a tokenizer or prose classifier.
+        # Optional host measurement.
         # Preserve only binding/counts; raw prompts and packet text stay private.
         payload = {
             key: payload[key] if isinstance(payload[key], str) else None

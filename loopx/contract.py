@@ -869,8 +869,7 @@ def _todo_contract_diagnostics(
             add_error(exc.code, f"{goal_id}: canonical Todo contract unavailable: {exc}")
             continue
         if canonical is not None:
-            # Structural validity does not replace the shared Todo metadata
-            # and non-terminal User class/scope rules. Evaluate provider rows without reading display.
+                        #  Evaluate provider rows without reading display.
             try:
                 canonical_diagnostics = todo_contract_diagnostics(
                     todos=canonical["todo_contract_rows" if todo_snapshot is not None else "todos"],

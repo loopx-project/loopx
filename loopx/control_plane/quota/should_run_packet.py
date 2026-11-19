@@ -1709,7 +1709,7 @@ def _build_quota_should_run_payload(
     selected_todo = payload.get("selected_todo")
     if isinstance(selected_todo, dict) and selected_todo.get("todo_id"):
         # Retain current facts across contract rebuilds for hooks and selection.
-        # This preview neither admits a workspace nor replaces refresh checks.
+
         payload["delivery_workspace_isolation"] = observe_goal_delivery_workspace_isolation(
             prepared.item, selected_todo,
         )

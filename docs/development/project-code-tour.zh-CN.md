@@ -13,7 +13,7 @@ LoopX 是一个运行在 Codex、Claude Code、Cursor 等 Agent harness 之上�
 - **Agent**负责完成一次具体工作；
 - **LoopX Kernel**负责决定下一步是否合法、是否需要等待、是否需要询问人，以及如何从中断中恢复。
 
-本文讲的是“项目怎样工作”，不是逐个枚举所有 CLI 命令。仓库的命令面很大，第一次阅读应先抓住主干，再按需要深入能力包和扩展。
+本文讲的是“项目怎样工作”。仓库的命令面很大，第一次阅读应先抓住主干，再按需要深入能力包和扩展。
 
 ## 业务背景：为什么需要一个控制面
 
@@ -131,7 +131,7 @@ loopx/
 
 ## 四种运行责任：不要把边界读混
 
-LoopX 的目录分类和运行责任不是同一个维度。阅读一条调用链时，先问“谁拥有哪一类事实”：
+阅读一条调用链时，先问“谁拥有哪一类事实”：
 
 | 角色 | 负责什么 | 明确不负责什么 |
 | --- | --- | --- |
@@ -199,7 +199,7 @@ adapter_id: ...
 
 后面还有 Authority Sources、Operating Contract、Non-Goals、User Todo、Agent Todo、Next Action 和 Progress Ledger。它不是普通笔记，而是后续 Agent tick 要读取的持久状态。
 
-Bootstrap 还会维护 Registry 条目。Registry 记录 Goal id、项目路径、adapter、状态文件、authority source、spawn policy、write scope 等信息。注意这里的 `write_scope` 是边界声明，不是自动授予外部系统权限。
+Bootstrap 还会维护 Registry 条目。Registry 记录 Goal id、项目路径、adapter、状态文件、authority source、spawn policy、write scope 等信息。注意这里的 `write_scope` 是边界声明。
 
 ## 一次典型场景：从 Goal 到下一轮 Turn
 
@@ -276,7 +276,7 @@ Quota 结果会被压缩成一个面向 Host/Agent 的 packet。关键字段通�
 | `capability_gate` | 是否需要领域能力、用户批准或额外检查。 |
 | `todo_write_hint` | Todo 写回时需要遵守的最小协议。 |
 
-这些字段是“当前 snapshot 的编译结果”，不是新的事实源。下一次运行仍应从 Registry、Goal State、Authority Store 和运行历史重新生成。
+这些字段是“当前 snapshot 的编译结果”。下一次运行仍应从 Registry、Goal State、Authority Store 和运行历史重新生成。
 
 ### 第 3 步：构造 Turn Plan
 
@@ -292,7 +292,7 @@ Turn Driver 把 quota packet 转成 Host 可以执行的计划，主要绑定：
 - 子 Agent 的上下文与允许的 child operation；
 - 后续 transaction plan 和 settlement identity。
 
-这里有一个重要原则：**Turn plan 是一次执行的合同，不是执行结果。** 计划中写了要做什么，结果必须回来后再经过 schema、phase 和 identity 校验。
+这里有一个重要原则：**Turn plan 是一次执行的合同。** 计划中写了要做什么，结果必须回来后再经过 schema、phase 和 identity 校验。
 
 ### 第 4 步：Host 执行有界工作
 
@@ -311,7 +311,7 @@ Host request 会携带本轮允许的上下文、工作目录边界、执行模�
 - 不需要 spend 的结果是否错误地写入了 quota spend；
 - durable completion 是否指向了预期 Todo，以及 continuation 是否为 successor、active goal 或 no-followup。
 
-`run_loopx_turn_once` 再按阶段运行 Host、任务 validator 和 typed settlement。它的返回值不是“模型说完成了”，而是带有可追溯 identity、完成阶段和结果类型的结构化结果。
+`run_loopx_turn_once` 再按阶段运行 Host、任务 validator 和 typed settlement。它的返回值是带有可追溯 identity、完成阶段和结果类型的结构化结果。
 
 > 📦 **额外知识：bounded Turn 的边界在哪里？**
 >
@@ -343,7 +343,7 @@ validation
 
 > 📦 **额外知识：Idempotency（幂等）怎么理解？**
 >
-> 同一个带 identity 的提交重复到达时，系统应识别“这是同一件事的重试”，而不是再创建一份新的事实。LoopX 通过 effect id、Todo/Turn 绑定、completed phase 和 receipt 来实现这种判断，而不是依赖“最近一次运行看起来像成功”。
+> 同一个带 identity 的提交重复到达时，系统应识别“这是同一件事的重试”。LoopX 通过 effect id、Todo/Turn 绑定、completed phase 和 receipt 来实现这种判断。
 
 ### 第 6 步：写回运行历史与事件投影
 

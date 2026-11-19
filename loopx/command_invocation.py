@@ -44,7 +44,7 @@ def loopx_cli_argv(cli_bin: str | None = None) -> list[str]:
         return list(route)
     program = validate_cli_bin(cli_bin)
     # The executable selects this process; the option preserves that selection
-    # when its returned commands start another process. Neither grants authority.
+    # when its returned commands start another process.
     return [program] if program == "loopx" else [program, "--cli-bin", program]
 
 

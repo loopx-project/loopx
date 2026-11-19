@@ -372,8 +372,7 @@ def create_fastmcp_server(
         a goal_vision_replan_contract_v0 packet with state and vision_patch fields.
         Compare Goal acceptance with evidence; vision_closed closes a stage and
         still requires a successor, no_followup asserts no remaining scoped work.
-        An unchanged reason requires an existing valid vision. Recheck should_run;
-        checkpoint success alone does not certify Goal completion or clear gates.
+        An unchanged reason requires an existing valid vision. Recheck should_run.
         """
         return control.review_task_vision(todo_id, agent_id, agent_vision, vision_unchanged_reason, read_context_id)
 

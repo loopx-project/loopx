@@ -2,7 +2,6 @@
 
 The private directory belongs to one native session/workspace. Completed reader
 pages establish an explicit continuity assumption; hooks invalidate known loss.
-This neither proves retained model input nor grants execution authority.
 """
 from __future__ import annotations
 
@@ -731,7 +730,7 @@ def _native_context_request(state: dict[str, Any], scope: dict[str, Any], captur
     previous = state.get("recovery")
     target = previous.get("target") if isinstance(previous, dict) else None
     if isinstance(target, dict) and target.get("capture_id") == capture_id:
-        # Publishing an offer does not mean a reader saw it. A retry may use
+        #  A retry may use
         # the original predecessor, but never this offer as its own baseline.
         previous = previous.get("comparison_base")
     if isinstance(previous, dict) and isinstance(previous.get("target"), dict):

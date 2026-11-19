@@ -3,8 +3,7 @@
 > **本讲结论：** 长程任务的稳定性不来自一次更长的推理，也不来自让 Agent 永远保持活跃。
 > 它来自一组跨 Turn 持续成立的收敛合同：方向由 Vision、Goal 与 Acceptance 约束，工作由
 > Frontier 选择，外部动作由 Authority 与 Receipt 约束，进展由 Durable Evidence Delta
-> 定义；当证据不再增加或路线失效时，系统进入 Wait、Replan 或 Self-Repair，而不是重复
-> 同一个动作。
+> 定义；当证据不再增加或路线失效时，系统进入 Wait、Replan 或 Self-Repair。
 
 建议时长：60 分钟。问题定义 8 分钟、核心闭环 12 分钟、防跑偏 10 分钟、防循环 12 分钟、
 双 Showcase 回放 10 分钟、接入边界与问答 8 分钟。
@@ -30,17 +29,10 @@ Judge 可以判断“是否完成”，却未必能告诉下一轮“路线为�
 2. 解释为什么 Turn 是执行窗口，Accepted Transition 才是进展单位；
 3. 用方向、权限、证据、Delta、活性和终局六条不变量审查长程系统；
 4. 解释 Replan、Self-Repair、Monitor Backoff 和 Explore 各自解决哪类停滞；
-5. 解释 successor todo 怎样把局部完成接回 Goal，而不是制造无限任务链；
+5. 解释 successor todo 怎样把局部完成接回 Goal
 6. 把 PR Issue Fix 与 Auto Research 映射到同一套收敛闭环；
 7. 判断 LoopX、领域 Capability、Provider、Evaluator 与现有 Agent Runner 分别必须提供什么。
 
-本讲不承诺：
-
-- 给任意模糊目标自动生成正确验收标准；
-- 让模型的每次方案判断都正确；
-- 用一个通用 planner 替代领域 evaluator；
-- 让 Graph、Harness、scheduler 或 supervisor 获得隐藏的执行权限；
-- 把“运行时间更长”直接解释为“结果质量更高”。
 
 ## 一小时讲授路线
 
@@ -146,7 +138,7 @@ external source of truth
 | PR Issue Fix | `repo + issue_ref`、`repo + pr_ref` | feasibility、exact-head checks、review/merge state、notification receipt | 把旧 head 的绿色结果用于新 commit；重复处理已覆盖 review |
 | Auto Research / ML Experiment | hypothesis/experiment、revision、window、evaluator contract | matched result、dev/holdout、guardrail、support/refute、promotion/retirement proposal | 只记当前最好分数；把 infra failure 当模型负证据；反复探索已证伪 family |
 
-Domain State 仍不是新的事实源、memory dump 或第二套 Kernel。GitHub、训练系统和 evaluator
+GitHub、训练系统和 evaluator
 继续拥有外部真相；pack 只保存可重算、可比较、可幂等更新的紧凑 read model。下面的伪代码
 展示这条窄边界：
 
@@ -177,7 +169,7 @@ schema 和 proposal 属于 pack，最终是否执行仍由 Kernel 判断。
 [Domain Capability Packs](../../product/domain-capability-packs.md)和
 [Issue-Fix State Kernel × Domain State 案例](../../../loopx/capabilities/issue_fix/docs/state-kernel-domain-state-case-study.zh-CN.md)。
 
-所以 LoopX 不是一个包办所有推理的“大 Agent”。它更像一个长期控制内核：领域层提供
+它更像一个长期控制内核：领域层提供
 可判定事实，host 执行 bounded Turn，Kernel 维护跨 Turn 仍需成立的身份、权限、证据和
 恢复合同。
 
@@ -210,9 +202,6 @@ schema 和 proposal 属于 pack，最终是否执行仍由 Kernel 判断。
 
 这是目标漂移。每个实验都可能执行正确，但优化代理指标的过程已经离开原目标。
 
-两个失败的共同点，不是模型不够聪明，而是系统没有把“什么约束方向、什么构成新证据、
-什么变化才值得再花一轮”变成可继承的状态。
-
 ## 先区分四种运行状态
 
 长程系统不能把所有未完成都称为“继续”。至少要区分四种状态：
@@ -224,7 +213,7 @@ schema 和 proposal 属于 pack，最终是否执行仍由 Kernel 判断。
 | 目标漂移 | 局部代理目标开始替代 Goal/Acceptance | Vision checkpoint、acceptance audit、replan |
 | 局部循环 | 动作重复，但没有新增信息、状态 Delta 或失败区分度 | Stop repeating、diagnose、replan 或 self-repair |
 
-“重复”本身不是错误。CI 从 pending 变成 failed 后再次处理是合法迭代；外部训练任务未结束时
+CI 从 pending 变成 failed 后再次处理是合法迭代；外部训练任务未结束时
 按 due time 轮询也是合法等待。循环的判定依赖三件事：
 
 1. 输入事实是否变化；
@@ -316,7 +305,7 @@ Progress   = 与 Acceptance 相关的 durable transition
 ### 核心代码一：一轮怎样从 Decision 走到 Commit
 
 下面是 `build_quota_should_run`、`build_interaction_contract` 与
-`run_loopx_turn_once` 的教学压缩版。它是结构化伪代码，不是稳定 Python API：
+`run_loopx_turn_once` 的教学压缩版。它是结构化伪代码：
 
 ```python
 def advance_one_turn(status, goal_id, agent_id, host):
@@ -417,9 +406,6 @@ Todo 可以被替换，计划可以变化，Vision 也可以在新证据下被 p
 
 ### 权限不变量：Proposal、Effect 与 Commit 分开
 
-一个 Agent 可以提出 merge、promotion 或 launch proposal，不代表它有权执行；Provider 执行
-了外部 effect，也不代表它有权修改 Goal lifecycle。
-
 ```text
 proposal
   -> authority and scope check
@@ -489,8 +475,6 @@ progress。它们可以更新 cadence 或 compact counter，但不应消耗与�
 | Rolled back | activation 与 rollback receipt 均绑定 exact revision |
 | Closed with gap | 剩余缺口、原因和不再继续的依据明确 |
 
-“没有更多想法”不是终态证据；“暂时看不到 Todo”也不是。
-
 ### 核心代码二：Terminal 是严格合取，不是 Todo 为空
 
 下面的伪代码把终局审计压成一个可 review 的 predicate：
@@ -513,8 +497,7 @@ def terminal_ready(state):
 ```
 
 实际系统还会按领域加入 merge、promotion、rollback 或 `no_followup` 证明，但结构不变：
-终局是多项权威事实的合取。任何一个计数或 readback 缺失，都应产生明确 gap，而不是让
-空 Frontier 冒充 Complete。
+终局是多项权威事实的合取。任何一个计数或 readback 缺失，都应产生明确 gap。
 
 ## 防跑偏：方向必须外置，但不能冻结
 
@@ -527,8 +510,7 @@ def terminal_ready(state):
 | Acceptance | 什么证据允许宣称这一阶段完成？ | 不直接执行验证或 effect |
 | Todo | 下一步由谁、在什么条件下做什么？ | 不自行改写长期方向 |
 
-这条约束链让计划可以灵活变化，同时保持目标连续。它也解释了为什么“写一份大计划然后一直
-执行”不是长程控制面：外部事实变化后，大计划会过期；没有 Vision 和 Acceptance checkpoint，
+这条约束链让计划可以灵活变化，同时保持目标连续。没有 Vision 和 Acceptance checkpoint，
 Agent 只能在旧计划与新聊天之间猜测。
 
 ### Vision Checkpoint 不是例行总结
@@ -544,8 +526,7 @@ Material closeout 后，系统需要回答三个问题之一：
 
 ### Successor Todo：让局部完成留下可执行的下一段责任
 
-长程任务最常见的薄弱点，不是 Agent 做不完当前 Todo，而是它做完一个局部切片后，只留下
-“继续优化”“看看 CI”或“后续再处理”。这类自然语言意图没有稳定 identity、owner、触发
+长程任务最常见的薄弱点。这类自然语言意图没有稳定 identity、owner、触发
 条件和 lineage；session 或 Agent 一换，局部成果就很容易被误判成 Goal 已完成。
 
 Successor todo 把这段隐式意图改写成控制面事实：
@@ -566,7 +547,7 @@ Vision、Goal 或 Acceptance。Successor 只能说明“接下来由谁在什么
 
 1. 创建并绑定 successor，当前局部证据明确说明它继续缩小哪个 Acceptance gap；
 2. 写入 gate、monitor、blocker 或 `resume_when`，说明后继为什么暂时不可运行；
-3. 用 terminal evidence 明确记录 `no_followup`，证明不是因为 Agent 没想到下一步。
+3. 用 terminal evidence 明确记录 `no_followup`。
 
 教学伪代码可以压成一个局部闭包合同：
 
@@ -589,9 +570,9 @@ def close_todo(parent, evidence, result, acceptance):
   immediate action，必须显式 complete 或 defer；否则两个 Todo 都可能继续进入 quota。
 - 不要为每个 shell command、Turn 或微小子步骤创建 successor。Successor 应出现在有
   material closeout、owner/handoff 变化、外部等待或路线变化的语义边界；长链本身应触发
-  Vision/Acceptance checkpoint，而不是继续机械加节点。
+  Vision/Acceptance checkpoint。
 
-因此，successor 机制提升工程质量的方式并不是“让 Agent 多干活”，而是迫使每个局部交付
+因此，successor 机制提升工程质量的方式并是迫使每个局部交付
 同时交代证据、剩余缺口和下一段责任。它把“完成当前 PR”与“完成整个 Goal”之间原本容易
 丢失的推理，变成可验证、可恢复、可审计的状态转移。
 
@@ -605,7 +586,7 @@ def close_todo(parent, evidence, result, acceptance):
 | Todo | reproduce、patch、monitor、review correction | hypothesis、execute、evaluate、holdout、retire/retry |
 | Forbidden proxy | “有新 commit”替代“issue 已解决” | “dev lift”替代“research acceptance 已满足” |
 
-方向锚点不是静态不变。Reviewer 改变 public contract、实验否定原假设、用户缩小目标范围，
+Reviewer 改变 public contract、实验否定原假设、用户缩小目标范围，
 都可以触发 patch；变化必须形成带 source、scope 和 Delta 的状态，而不是只留在聊天里。
 
 ### 人的反馈也必须先分类
@@ -694,8 +675,7 @@ CLI 是状态与决策 truth；轻量 skill 或 system instruction 负责约束 
 - required gate 要给用户具体问题；
 - quiet 时不制造 delivery。
 
-Codex、Claude Code、自研 Agent 或远端开发机可以用各自方式承载这些行为约束。Skill 的安装
-路径不是产品合同，CLI packet、state schema 和 receipt 才是。
+Codex、Claude Code、自研 Agent 或远端开发机可以用各自方式承载这些行为约束。
 
 ## 防循环：先判断“有没有增加信息”
 
@@ -713,8 +693,7 @@ Codex、Claude Code、自研 Agent 或远端开发机可以用各自方式承载
 | 候选集中在同一近邻 family | exploration diversity 不足 | 应随机扩展所有分支 |
 | dev 改善但 holdout 不变 | evaluator 或假设泛化不足 | 模型永远不可改进 |
 
-当前 LoopX 工作流常把连续两轮 no-progress 作为触发 Self-Repair 的操作性阈值。它不是所有
-领域的数学定律。昂贵实验、长时间构建和低频外部事件需要领域化 cadence；关键是 streak
+当前 LoopX 工作流常把连续两轮 no-progress 作为触发 Self-Repair 的操作性阈值。昂贵实验、长时间构建和低频外部事件需要领域化 cadence；关键是 streak
 必须按 agent lane、monitor target 或 failure identity 归因，不能让一个 lane 的变化替另一个
 lane 清零。
 
@@ -798,7 +777,7 @@ same action with no new basis    -> retry loop
 new evidence + route delta       -> valid replan
 ```
 
-Replan 的价值不是“想一个新点子”，而是让下一轮看到不同的合法 Frontier。
+Replan 的价值是让下一轮看到不同的合法 Frontier。
 
 ### Replan 的真实复杂度：不是一个 Selector，而是一条可恢复控制链
 
@@ -832,7 +811,7 @@ Detect
 | Settle | 什么变化足以证明没有原地打转？ | Delta contract、frontier-scoped ACK、next Frontier |
 
 这条链刻意没有一个“万能 planner”。Detector、Frontier policy、obligation builder、Quota
-和 writeback 各自保留边界。复杂度来自这些合同的组合，而不是来自一个超长函数。
+和 writeback 各自保留边界。复杂度来自这些合同的组合。
 
 一小时现场主讲只需保留这张六层链、ordered rules 的三组优先级、Guidance/ACK 不一致
 案例和后面的端到端 trace，约 10 到 12 分钟。下面“之一”到“之六”是讲师备课与课后下钻
@@ -901,7 +880,7 @@ facts = GoalFrontierReplanFacts(
 3. **历史只能经 ACK 进入当前判断**：长 Todo 链是否已经被审视、watch lane 是否已确认，
    不能从自然语言推断，只能读取带 Delta contract 的 durable ACK。
 
-所以 `Facts` 不是原始状态的字段搬运，而是一个 agent-scoped、authority-aware 的语义
+所以 `Facts` 是一个 agent-scoped、authority-aware 的语义
 reducer。Selector 的确定性依赖这一层先把“谁的工作”“哪种 gap”“哪个 Frontier”归一化。
 
 ### 核心代码四之二：Frontier Replan 是有顺序的规则，不是自由发挥
@@ -1046,7 +1025,7 @@ if decision.rule in {MONITOR_NO_CHANGE_STREAK, MONITOR_FRONTIER_EXHAUSTED}:
 
 - `agent_id`：谁有义务处理；
 - `stall_threshold` 与 `trigger_count`：为什么现在触发；
-- `triggers`：可回读的证据，而不是一句“感觉卡住了”；
+- `triggers`：可回读的证据
 - `todo_actions`：允许写回的最小动作；
 - `stop_condition`：遇到 private material、credential、destructive git、production
   action 或 owner-only decision 时停止；
@@ -1098,14 +1077,12 @@ derived = derive_goal_frontier_replan_obligation_from_summaries(
 return projection(replan_obligation=derived or obligation)
 ```
 
-这里防止三种“伪完成”：
+这里防止“伪完成”：
 
 1. **错 Agent ACK**：peer A 的 Replan 不能替 peer B 关闭 obligation；
-2. **旧 Frontier ACK**：相同文案再次出现，不代表仍是同一个 blocked successor；
-3. **过期 ACK**：ACK 早于最新 trigger evidence 时，不能证明新问题已处理。
 
 因此 `autonomous_replan_ack_matches_frontier` 除了比较 `frontier_identity`，还会比较 ACK
-时间和 trigger 时间。ACK 是当前 obligation 的结算凭证，不是“历史上曾经授权过”的通行证。
+时间和 trigger 时间。ACK 是当前 obligation 的结算凭证。
 
 ### 核心代码四之五：Quota 把 Obligation 提升为 Must-Attempt
 
@@ -1127,7 +1104,7 @@ if autonomous_replan_obligation.required:
     }
 ```
 
-它表达的是一项机器执行义务，而不是用户提醒。即使用户当前没有待办，Agent 也必须先处理
+它表达的是一项机器执行义务。即使用户当前没有待办，Agent 也必须先处理
 Replan，再回到 monitor 或普通 advancement。反过来，若真正缺少 owner-only authority，
 前面的 `open_user_todo` 或 gate rule 已经短路，不会把用户决策伪装成自主 Replan。
 
@@ -1163,7 +1140,7 @@ read_back_semantic_receipt()
 spend_one_slot()
 ```
 
-classification、手工 ACK、读收据和 caller 自报 repair kind 都不是结算凭证。写时 gate
+写时 gate
 先重算与 quota 相同的完整 goal frontier，再检查 typed delta；因此旧 periodic ACK 不能关闭
 随后轮换出的 vision/frontier obligation，重复维护写回也不能落盘。
 
@@ -1191,7 +1168,7 @@ quota + refresh-state
 
 对 `repeat_until_closed` vision，maintenance-only continuation 不能结算；对确实应该等待的
 `as_needed` 场景，等待应留在有 cadence、expiry、resume condition 的 monitor Todo 生命周期
-中，而不是冒充 replan 成功。这个区分避免把“合法等待”与“方向改变”压进同一个 ACK。
+中。这个区分避免把“合法等待”与“方向改变”压进同一个 ACK。
 
 ### 端到端 Trace：为什么一次 Replan 之后还可能继续 Replan
 
@@ -1285,7 +1262,7 @@ Graph 和 Harness 应独立启用：
 | on | on | 证据拓扑已经稳定，需要 advisory portfolio |
 
 对 evaluator 尚不清楚、指标不可比较、资源 identity 不稳定的项目，先用 Graph 记录证据，
-不要急着启用 Harness。当前 Harness 的稳妥定位仍是只读规划器，不是自动 launch controller。
+不要急着启用 Harness。当前 Harness 的稳妥定位仍是只读规划器。
 
 ### 不需要先引入多层级 Agent
 
@@ -1335,7 +1312,7 @@ Executor 不能评价并 promotion 自己的 dev-only 结果。Explore Graph 也
 
 ### 门禁也要按风险分层
 
-不是每轮都运行最昂贵的 Judge。稳定 schema、transition rule 和 identity 先用 deterministic
+稳定 schema、transition rule 和 identity 先用 deterministic
 test；真实 Agent 是否正确理解 packet，再用 actual-default model behavior gate；明确宣称
 长程 outcome 提升时，才需要 matched stable/candidate baseline。
 
@@ -1368,7 +1345,7 @@ test；真实 Agent 是否正确理解 packet，再用 actual-default model beha
 6. `head-A` 的 checks 通过后，merge 仍等待 scoped authority；
 7. host 执行 merge 并 readback merged commit，terminal audit 关闭 monitor 与 successor。
 
-退出循环的关键不是“第三次终于改对代码”，而是失败被重新分类，新 Turn 增加了能区分代码
+退出循环的关键是失败被重新分类，新 Turn 增加了能区分代码
 问题与环境问题的证据。
 
 ### 回放 B：Auto Research 怎样退出 dev-only 局部最优
@@ -1381,7 +1358,7 @@ test；真实 Agent 是否正确理解 packet，再用 actual-default model beha
 6. `H2` 的 matched holdout 同时满足 metric 与 guardrail，形成 promotion candidate；
 7. promotion gate 和 activation receipt 结算后，Goal 决定继续探索还是严格关闭。
 
-退出局部最优的关键不是随机增加更多 Agent，而是让负向证据真正改变候选空间。
+退出局部最优的关键是让负向证据真正改变候选空间。
 
 ## 自编排 Runner 的最小接入合同
 
@@ -1422,7 +1399,7 @@ Evidence refs，但不能替领域系统宣布收敛。
 
 ## 什么时候不应启用更复杂的规划
 
-下面几种情况适合先收缩问题，而不是增加 Agent 或 Harness：
+下面几种情况适合先收缩问题：
 
 1. Acceptance 仍是一句价值判断，没有可观察的 proxy 与人工 gate；
 2. Provider 不能返回稳定 task/effect identity；
@@ -1432,8 +1409,7 @@ Evidence refs，但不能替领域系统宣布收敛。
 6. 一个 Goal/Frontier 尚未跑通，就准备增加多层 supervisor；
 7. planner 输出会直接触发不可逆 effect。
 
-此时最有价值的工作通常是完善 Domain Pack、receipt、evaluator 或 public-safe evidence，
-而不是提高 branch width。
+此时最有价值的工作通常是完善 Domain Pack、receipt、evaluator 或 public-safe evidence。
 
 ## 当前能力边界
 

@@ -116,7 +116,7 @@ export function validateMediaPlan(input: unknown) {
     const kind = shot.kind;
     if (typeof kind !== "string" || !["title", "diagram", "excerpt", "blender"].includes(kind)) fail("Unsupported shot kind");
     // Composition-local presentation vocabulary; omitted/editorial retains the
-    // original canonical bytes. It changes neither source nor publication scope.
+    // original canonical bytes.
     if (shot.framing !== undefined && shot.framing !== "editorial" && shot.framing !== "full_frame") fail("Unsupported shot framing");
     if (shot.framing !== undefined && kind !== "excerpt" && kind !== "blender") fail("Framing requires an excerpt or Blender shot");
     const framing = shot.framing === "full_frame" ? {framing: "full_frame" as const} : {};

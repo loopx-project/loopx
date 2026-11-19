@@ -136,7 +136,7 @@ def has_runtime_binding() -> bool:
 
 def _service_command(payload: dict) -> tuple[dict[str, str], list[str]]:
     arguments, _ = _launcher(payload)
-    # A standard label is not evidence of the service's role. Parse the command
+    #  Parse the command
     # position, rather than finding a word that could be an option's value.
     # This adapter accepts the installer's global options; custom invocations
     # remain under their original owner without any signal or persistent edit.
@@ -340,7 +340,7 @@ def _start_order(paths):
 
 
 def _verify_services(services: dict[Path, int], identity: dict) -> None:
-    # A working CLI does not prove its Chat assets can serve. Read back the
+    #  Read back the
     # exact HTTP runtime before committing the handoff; a failed start restores
     # the original manager configuration instead of leaving the App spinning.
     pending = dict(services)

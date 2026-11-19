@@ -226,13 +226,11 @@ compliance and live effects. Existing sessions may retain an older copy.
 Run `uv run --extra test python -m pytest -q tests/test_repository_instruction_delivery.py`
 for root size, shared import, local routes and existing inbound anchors. Review
 a moved obligation clause by clause: owner, modality, scope, order, exceptions,
-evidence provenance, continuation and stop conditions. A link test or shorter
-file does not establish equivalence. Keep operational rules in their existing
+evidence provenance, continuation and stop conditions. Keep operational rules in their existing
 owners rather than adding another parallel policy collection.
 
 Design sources and the disposition of the earlier proposal are recorded in
 [the instruction/skill/prompt study](../research/2026-10-17-agent-instruction-skill-prompt-guidance.md).
-
 
 ### Progressive Context For Development
 
@@ -278,7 +276,7 @@ Existing sessions may retain old instructions; source edits alone do not prove
 native startup adoption or agent compliance.
 
 For product context delivery, selection, continuation and replanning have different
-information needs. A suggested `selected_todo` is not proof of an actual work choice.
+information needs.
 A qualified continuation can retain the bound work in full and make other candidates
 discoverable with exact details; a new choice must inspect what that choice needs.
 Do not implement this by filtering a full-required response in the caller. Change
@@ -305,10 +303,9 @@ and unknown model cost/adoption rather than inferring benefit from fewer bytes.
 日志和完整证据在核验、争议、重规划、收口等需要它们的环节展开。默认仍显示相关
 失败或过期信号；验收声明必须读取对应证据，索引和旧 Agent 结论不代替核验。
 入口指引保留核心义务，详细流程以明确触发条件链接，不急切加载全部文档/Skill。
-移动指导须保留主体、顺序、义务强度、范围、例外和停止条件；源文件更新不证明
-当前宿主已加载，也不证明模型实际遵从。
+移动指导须保留主体、顺序、义务强度、范围、例外和停止条件；
 
-产品侧按选择、继续执行、重规划区分需要的信息；`selected_todo` 不证明模型已选择。
+产品侧按选择、继续执行、重规划区分需要的信息；
 合格的已绑定任务接续可保留当前工作全文和其他候选的可发现入口，但不能在仍要求
 全读的接口外手动裁剪。范围 owner、必读指引、详情接口、实际输入及恢复绑定应一起
 替换；未交付正文不能进入保留基线，丢失上下文须恢复原决定而非重新准入。

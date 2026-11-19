@@ -669,7 +669,7 @@ def _deferred_resume_continuation(
     todo_id: str, settlement_plan: Mapping[str, Any] | None,
     scheduler_args: str, typed_quota_guard: str,
 ) -> list[str] | None:
-    """Render the existing same-Todo admission path; reopening is not a grant."""
+    """Render the existing same-Todo admission path."""
     identity = (settlement_plan or {}).get("identity")
     binding_args = settlement_binding_args(settlement_plan)
     if (not scheduler_args or not binding_args or not isinstance(identity, Mapping)
@@ -1116,8 +1116,8 @@ def _interaction_reads_and_arbitration(
         "command" in recommendation or recommendation.get("source") == "interaction_contract"
     ):
         # Transport configured-command compatibility guidance and its readback.
-        # The existing typed quota projection uses interaction admission; neither
-        # this bridge nor later host projections choose another action.
+        # The existing typed quota projection uses interaction admission.
+
         projection_params.update({
             "heartbeat_recommendation": recommendation,
             "primary_action": contract["agent_channel"].get("primary_action"),

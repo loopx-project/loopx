@@ -337,7 +337,7 @@ def build_goal_channel_projection(
 ) -> dict[str, Any]:
     """Build a read-only channel snapshot for a LoopX goal.
 
-    The returned object is a frontstage projection, not a new source of truth.
+    The returned object is a frontstage projection.
     It summarizes existing compact status/quota/history/todo surfaces and
     records raw/private-looking inputs as warnings without copying their values.
     """

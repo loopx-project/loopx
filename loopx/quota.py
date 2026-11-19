@@ -511,7 +511,7 @@ def quota_status(
     if goal_is_stopped(goal):
         state = "paused"
         reason = "goal is stopped by owner; automatic agent turns are paused"
-        # Stopping is an owner lifecycle decision, not a destructive quota edit.
+        # Stopping is an owner lifecycle decision.
         # Project zero *effective* allocation while retaining the configured
         # values so an explicit Goal resume restores the prior quota policy.
         payload["configured_compute"] = compute

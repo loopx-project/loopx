@@ -142,8 +142,7 @@ Operators need not run source tests first; prospective contributors can use
 Command categories remain explicit. **Runnable** requires the stated version, inputs, and authorization.
 **Based on the official scaffold** follows the existing teaching package without inventing a runtime.
 **Simplified for explanation** tables, labels, and data shapes must not be pasted into production
-configuration. Record preview, execution, readback, and test results separately; supplying a command is
-not evidence that it ran successfully.
+configuration.
 
 ## Four questions for an accountable explanation {#judgment-standard}
 
@@ -166,7 +165,7 @@ independent T2 work remains legal. Follow the reasoning in
 
 This is an editorial and learning standard, not a new schema, runtime obligation, or approval gate. When
 information is insufficient, name what cannot yet be concluded, the missing evidence, and who can confirm
-it. Do not guess to fill a table. Refusal is not the end goal either: reassess when conditions are repaired,
+it. Do not guess to fill a table. reassess when conditions are repaired,
 preserve work that already happened, and find the next legal action.
 
 ## How to read the evidence
@@ -178,7 +177,7 @@ preserve work that already happened, and find the next legal action.
 | Teaching scenario or advice | Explains a tradeoff; it is not a historical incident or machine-enforced rule |
 | Tests and smokes | Establish only exercised inputs and assertions; matching headings/tables, existing paths, and successful builds do not establish semantic correctness |
 
-During revision, prioritize operational guarantees and bilingual obligation sentences. Narrow unsupported claims and retire obsolete models from current paths. Retaining an old word count is not a reason to keep teaching retired behavior.
+During revision, prioritize operational guarantees and bilingual obligation sentences. Narrow unsupported claims and retire obsolete models from current paths.
 
 ## Sources of authority
 

@@ -455,7 +455,7 @@ class NativeHost:
             else:
                 if process_exited(pid):
                     continue
-                return False  # Unknown identity does not prove exit.
+                return False
         return True
 
     def _consumer_agents(self, owners: list[int]) -> list[tuple]:
@@ -554,8 +554,7 @@ class NativeHost:
                 instance = self._lima_instance(manager_pid, manager[1])
                 if instance:
                     provenance.update(instance)
-            # Neither an inherited App coalition name nor this relationship
-            # proves guest idleness, recoverability or authority over its jobs.
+
             result = {"manager": provenance, "restart_blocker": "external_workload_unverified"}
             if process_identity(manager_pid) != manager or responsible_pid(pid) != manager_pid:
                 raise HostError("client_changed")
@@ -722,7 +721,7 @@ class NativeHost:
                     return  # A concurrent status read must not undo a live handoff.
                 if current is None:
                     if not process_exited(owner["pid"]):
-                        return  # Unreadable identity does not prove worker exit.
+                        return
         failed = False
         for label, entry in list(recovery["agents"].items()):
             digest = entry if isinstance(entry, str) else entry["digest"]

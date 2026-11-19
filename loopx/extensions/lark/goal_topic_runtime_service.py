@@ -182,7 +182,7 @@ class LarkGoalTopicRuntimeService:
         ingress_due = time.monotonic() + 60
         wakeup_scope = getattr(self.runtime_controller, "turn_release_wakeup", None)
         # Older/custom controllers retain polling. One local hint wakes the
-        # existing scanner; it is neither a queue nor a delivery receipt.
+        # existing scanner.
         with ThreadPoolExecutor(max_workers=4, thread_name_prefix="loopx-lark-private-reply") as pool, \
                 (wakeup_scope(self._delivery_wakeup) if callable(wakeup_scope) else nullcontext()):
             def finish_job(

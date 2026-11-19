@@ -129,10 +129,9 @@ function decodeLine(line: string, schemaVersion?: string): JsonObject {
 
 /**
  * Read fresh bytes on EVERY invocation. Only reuse a parsed newline-terminated
- * prefix after hashing those exact bytes; size/mtime/inode are not evidence of
- * unchanged history. Rewrites, rotation, truncation and same-size edits all
+ * prefix after hashing those exact bytes;
+ *  Rewrites, rotation, truncation and same-size edits all
  * remain observable, including edits to an old identity-conflicting receipt.
- *
  * Never cache an unterminated tail: an append can finish its UTF-8 character or
  * JSON token. The tail still participates in this read, including strict errors.
  * Cache loss/eviction/restart affects cost only, never the returned facts.

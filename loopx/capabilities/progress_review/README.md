@@ -122,10 +122,7 @@ signal `false`) or **unevaluated** for one typed reason (`pending`, `failed`,
 `abstained`, `stale`, `undecided`, `missing`, `unattributed`,
 `identity_conflict`, `other_revision`, `not_evaluated`). Formation is
 conservative: an obligation needs `drift_threshold` consecutive drift
-transitions with no unevaluated transition between them. Persistence is not:
-once formed, newer unevaluated transitions neither extend nor dissolve the
-obligation, and their count is reported as `unevaluated_transitions` on the
-trigger. Only an acknowledged replan or a newer completed non-triggering verdict ends
+transitions with no unevaluated transition between them. Only an acknowledged replan or a newer completed non-triggering verdict ends
 it; the Goal owner can also set the mode back to `shadow` or `off`. Receipts
 bound to a revision other than the pinned one are unevaluated history and
 never counted. The scan covers the run history the Goal keeps

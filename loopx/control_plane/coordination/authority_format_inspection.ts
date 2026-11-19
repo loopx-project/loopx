@@ -1,5 +1,5 @@
-/** Content-based administrative recognition. Identification is not migration
- * permission and does not certify a store's complete transaction history. */
+/** Content-based administrative recognition.
+ *  */
 import {open, readFile, stat} from "node:fs/promises";
 import {join} from "node:path";
 import {createHash} from "node:crypto";

@@ -208,7 +208,7 @@ Ordinary `turn run-once` accepts the same inline `explore_result` inside the
 Host's existing `agent_vision_json`. It retains one decoded Vision packet,
 then uses the original attachment parser and delivery owner. A failed delivery
 leaves quota unspent and recovers from the original Run on the same Turn;
-completed replay repeats neither Host work, finding ingestion nor quota spend.
+
 Off mode with an omitted attachment creates no finding; supplied invalid or
 disabled attachments reject before Todo completion and primary writeback. The
 completion path uses the same capability preflight before lifecycle effects;
@@ -238,7 +238,6 @@ and, when linked to eligible work, its exact-source comparison cards. They need
 no `writeback-result` origin tag. Read the page before optionally binding a
 `selected_candidate`; normal source-revision, Todo-link and followthrough checks
 still apply. Unmeasured manual notes retain their existing summary/audit path.
-Reading or selecting a measured result does not certify adoption or execution.
 
 ## At a Glance
 
@@ -476,7 +475,7 @@ summary limit. This raises the previous 300/300 attachment and 1200 summary
 limits to preserve legal Goal route decisions and their last negative condition.
 The next-turn view preserves that entire summary, with the same three-result
 default and existing paginated detail reads. Short findings and off mode retain
-their behavior. This is a transport limit change, not evidence of model adoption.
+their behavior. This is a transport limit change.
 
 Alternatively, add `--explore-result-json result.json` to the ordinary admitted work
 writeback, retaining its Goal, Agent, Todo, Turn and delivery fields. When both
@@ -554,8 +553,7 @@ in the interpretation. Use the existing optional `question_update` to close an
 answered question independently of finding status or overall Goal completion.
 Existing recorded statuses and the CLI finding default are unchanged.
 
-Use `tentative` for inconclusive observations or prerequisite failures. Neither
-compilation failure nor a score alone supplies a scientific interpretation.
+Use `tentative` for inconclusive observations or prerequisite failures.
 Routine work without reusable evidence needs no attachment. Omitting the option
 preserves ordinary writeback behavior; disabled Explore rejects an attachment
 before committing it. Disable further ingestion through the existing
@@ -679,8 +677,7 @@ The command is read-only and sits behind the same effective Goal-mode gate as
 `worker-branch-plan` (see "Per-Goal Opt-In Gate" below): without
 `explore_harness.enabled=true` on the Goal's effective orchestration boundary it returns
 a disabled packet, and `--width` is capped by `max_children` in addition to
-its own ceiling. It does not claim todos, acquire leases, launch agents,
-spend quota, or change the active state. Instead it emits a prediction
+its own ceiling. Instead it emits a prediction
 packet with:
 
 - selected branches, confidence, hazards, and reason codes;
@@ -783,7 +780,7 @@ Declaring resource capacities is an explicit portfolio-fill mode: the requested
 overall width becomes the selection ceiling instead of the legacy confidence
 prefix, while existing scores, hazards, and typed evidence remain unchanged.
 An available slot therefore makes a ranked candidate eligible for the analysis
-packet; it is not evidence that the candidate is valuable enough to execute.
+packet.
 The agent must still apply the goal's evidence, serving-cost, quota, claim, and
 lease gates before launch.
 
@@ -866,7 +863,7 @@ source retains a command for replay, but the inline context is not a separate
 `required_reads` obligation. It contains at most three recent nodes/findings
 and, in planning mode, three suggested Todo branches, plus structured commands
 for detail or evidence recording. The read folds existing history but bounds
-the returned context; it does not claim to reduce history IO. The agent chooses
+the returned context; The agent chooses
 evidence-backed work; planner suggestions do not require branching on every
 turn or recording empty ceremonial nodes. Use the detail command when the
 short view is insufficient.
@@ -890,8 +887,7 @@ repeated findings on the same question. An explicit `--todo-id` prioritizes that
 open, own-or-unclaimed task's canonical question links and measurement groups
 ahead of the independent planner's suggestions. Quota and managed-turn callers
 carry their explicit task selection into this read automatically. Other results
-remain available through the same bounded pages; an absent link does not imply
-that no evidence exists. Without a task scope, evidence-only mode retains
+remain available through the same bounded pages; Without a task scope, evidence-only mode retains
 recency ordering. These reads do not alter planner scores, graph state, claims
 or quota, and neither mode is enabled by supplying a task id.
 The dashboard's saved-evidence reader also pages through history; the CLI
@@ -921,15 +917,13 @@ Writeback replays the current canonical task links and exact page without
 replacing the original global stride basis or changing its review revision.
 Changed links, a missing/closed task or another agent's claim invalidate the
 scoped page. Restart the read after correcting the scope. Unscoped global reads
-and citations retain their existing behavior. This improves evidence delivery;
-it does not prove that the Agent used it or improved an outcome.
+and citations retain their existing behavior. This improves evidence delivery.
 
 Each comparison card retains every linked outcome on that result page, up to
 the same 20-result bound. Expanding `--result-limit` therefore also makes the
 fourth and later displayed outcomes available to `selected_candidate`; writeback
 replays the same page and exact source digest. The default three-result view
-and the separate number-of-cards limit remain unchanged. A larger page grants
-no execution permission and does not certify the quality of a selection.
+and the separate number-of-cards limit remain unchanged.
 
 Planning context also keeps a bounded `typed_evidence_audit` on suggested
 branches with explicit Todo/node links, and up to three existing exploring
@@ -945,8 +939,7 @@ uncertainty. These decision guidelines introduce no adoption/writeback gate,
 automatic successor or spawn permission. A context read does not prove that the
 model adopted the evidence or improved its result.
 
-Mode selection does not grant spawn, claim, lease, execution, quota or external
-publication authority. `spawn_allowed=false` retains analysis-only planning.
+`spawn_allowed=false` retains analysis-only planning.
 Feature-off adds no Explore hook or evidence reads. Turning off preserves all
 recorded evidence and existing display state.
 
@@ -968,8 +961,7 @@ An authorized `refresh-state` fails when a configured sink cannot sync and
 read back; the caller must retry before claiming delivery. A suppressed run
 may still commit canonical local state, but its packet reports an unsatisfied,
 retryable postcondition and requires a concrete authorized-sync successor.
-With no configured sink, local projection satisfies the postcondition. This
-contract does not enable Explore Harness.
+With no configured sink, local projection satisfies the postcondition.
 
 #### Explore Harness planning gate
 
@@ -1065,8 +1057,7 @@ packets when `spawn_policy.explore_harness.enabled=true`:
 - `selected_gap`: the first pending gap (pending sorts before scheduled, then
   by input count descending, then by stable gap id); at most 3 gaps are
   projected (`MAX_PROJECTED_GAPS`).
-- This legacy projection only considers open experiments; dropping a closed
-  experiment or marking all gaps scheduled does not certify research closure.
+- This legacy projection only considers open experiments.
   The separate typed research shadow requires attributable terminal evidence
   and current input fingerprints. Evidence-backed dismissal and shared
   write-time enforcement remain RFC milestones.
@@ -1512,7 +1503,6 @@ fatal structural preflight, record-mode malformed-item isolation with resume
 continuity, aggregate metric projection, and episode-only adapters without a
 legacy `execute` method.
 
-
 ## Machine default
 
 In Settings → Device → Explore Harness, choose **Off**, **Evidence**, or
@@ -1537,11 +1527,10 @@ Editing a profile or composition setting in the form or JSON preserves mode
 inheritance; only an explicit mode choice creates a mode override.
 
 Turn context, planning, quota/history, Todo settlement, native completion and
-material-refresh readers use the same mode owner. Evidence does not grant external publication authority; machine
+material-refresh readers use the same mode owner. machine
 activation retains local projection without enabling a sink. Profile, research
 scope, spawn permission, leases, quota and host continuation remain separately
-owned. Enabled configuration alone does not prove evidence adoption or better
-outcomes.
+owned.
 
 Native research completion retains the graph lock and, when inheriting, the
 device-configuration lock until its transaction finishes. Inherited planning
@@ -1588,10 +1577,8 @@ ingestion intent，并精确匹配来源、记录时间、canonical finding 与�
 此路径不写图或 Todo。未完成交付仍须遵守普通写入与归属检查，冲突附件重试仍拒绝。
 CLI 附件解析保留结构合法的历史输入，由既有 primary owner 精确匹配不可变重试；
 新 primary 写入和新 ingestion intent 仍在产生效果前检查执行与测量归属。
-解析成功不代表新写入合格，也不提供公开的绕过参数。
 
-`explore source-history-reconcile` 合并已注册且缺失的各结果最新记录，不是恢复完整
-归档前缀。预览与执行对该子集应用相同的普通写入校验，并在锁内绑定 canonical
+`explore source-history-reconcile` 合并已注册且缺失的各结果最新记录。预览与执行对该子集应用相同的普通写入校验，并在锁内绑定 canonical
 快照；部分旧 finding 归因矛盾不会
 阻断其他合法结果恢复。计划通过 `blocked_event_count`、被阻断事件 id 的摘要和
 `blocked_reasons` 报告原因，Markdown 的 warnings 同时显示这些原因。被阻断记录

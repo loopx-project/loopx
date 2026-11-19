@@ -266,7 +266,7 @@ def extract_turn_authority(
     if detail or context.get("detail_ref") or replan or authority.get("vision_continuation_audit") or horizon:
         # Replan/acceptance evidence and historical capability references need
         # the saved observation's route and hash. Native capture validation owns
-        # its binding; this adapter neither reads it nor re-enters admission.
+        # its binding.
         authority["detail_ref"] = {key: value for key, value in detail.items()
             if key not in {"replan_action_packet", "replan_read_argv", "core_goal", "planning_horizon", "acceptance_index"}}
         authority["action_signature"] = signature

@@ -192,7 +192,7 @@ def resolve_cli_registry(
 	)
 	if args.command == "update" and getattr(args, "update_action", None) == "activate":
 		# Service activation reads its route from the loaded original manager.
-		# It neither opens Goal authority nor guesses a default Chat store.
+
 		return registry_path, registry_was_configured
 	if args.command == "quota" and getattr(args, "quota_command", None) in {"context-read", "context-project", "replan-view"}:
 		from .cli_commands.context_machine import has_explicit_context_read_source
