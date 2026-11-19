@@ -19,6 +19,11 @@ SOURCE_SUFFIXES = {".py", ".ts", ".json", ".mjs", ".js", ".md", ".toml"}
 RECALL_DISTRIBUTION = "loopx-capability-agent-turn-recall"
 PR_REVIEW_DISTRIBUTION = "loopx-capability-pull-request-review"
 ISSUE_FIX_DISTRIBUTION = "loopx-capability-issue-fix"
+STANDARD_CAPABILITY_DISTRIBUTIONS = (
+    RECALL_DISTRIBUTION,
+    PR_REVIEW_DISTRIBUTION,
+    ISSUE_FIX_DISTRIBUTION,
+)
 PR_REVIEW_DIRECTORY = Path("loopx/capabilities/pr_review_queue")
 PR_REVIEW_CORE_FILES = {
     "__init__.py", "catalog_entry.py", "goal_configuration.py", "machine_defaults.py",
@@ -81,7 +86,13 @@ def prepare_core_source(output: Path, *, repository: Path = REPOSITORY) -> Path:
                and not path.as_posix().startswith(EXCLUDED_TREES)]
     if not sources or not (repository / "loopx/entrypoint.py").is_file():
         raise ValueError("a complete LoopX source checkout is required")
-    return _stage_source(output, repository, "loopx-core", sources)
+    output = _stage_source(output, repository, "loopx-core", sources)
+    version = run_path(str(repository / "loopx/__init__.py"))["__version__"]
+    (output / "requires-standard.txt").write_text(
+        "".join(f"{distribution}=={version}\n" for distribution in STANDARD_CAPABILITY_DISTRIBUTIONS),
+        encoding="utf-8",
+    )
+    return output
 
 
 def _stage_source(output: Path, repository: Path, distribution: str, sources: list[Path]) -> Path:
