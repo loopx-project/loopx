@@ -157,6 +157,11 @@ come from the private offer, never from incoming fields or memory. The canonical
 Todo transaction then owns the claim and idempotent receipt; the result replaces
 the initiating card after independent provider readback. A callback ACK alone
 is not an accepted claim. No claim callback acquires or renews execution authority.
+Once the canonical claim is committed, its receipt id is published on the
+originating card from the immutable acceptance facts alone: a later live
+projection read failure cannot replace that card with a receipt-less summary.
+Without a confirmed accepted receipt, the card keeps the honest unconfirmed
+hint instead of fabricating a receipt number.
 
 The original offer expiry also travels to the canonical owner as `admit_before`
 in claim request v4. It retains v3's broker/source guards. After provider and
@@ -325,6 +330,8 @@ Markdown 写入。正常领取继续服从 canonical owner 的当前策略与准
 也不提供执行所需的 lease proof。策略迁移仍由已有的 [handoff mode](handoff-mode.md) 入口负责。
 
 公开卡片仅包含标识、计数与安全回执，不携带任务正文、证据、artifact 或记忆内容。
+canonical 领取提交后，原卡上的回执号直接由不可变接受事实构造，后续实时投影读失败
+不会把它替换成无回执的摘要卡；未确认接受时保留诚实的未确认提示，不伪造回执号。
 已提供单次授权的 IM 领取按钮、显式撤销和结果卡片恢复；默认不启用 collector。
 真实房间、多主机、daemon reconnect、授权 artifact 引用和 OpenViking 只读检索仍待联调。
 合成 Lark transport 加真实隔离权威的测试不能宣称三方 RFC 已完成。

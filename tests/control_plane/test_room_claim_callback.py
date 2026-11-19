@@ -370,6 +370,42 @@ def test_restart_recovers_only_result_transport_without_a_new_transition(offered
     assert ingress.recover_room_claim_results(**callback_args, allowed_chat_ids={"oc_room_fixture"})["attempted"] == 0
 
 
+@pytest.mark.parametrize("projection_read", ["ok", "fail_after_commit"])
+def test_committed_receipt_stays_on_the_original_card(offered, monkeypatch, projection_read):
+    """Four contrasts in one room: the original callback, one successful
+    commit, a live projection read failure after that commit, and process
+    recovery. Once the canonical claim is committed, the originating message
+    keeps the same receipt id and the canonical revision does not advance
+    again, whether or not the live projection read succeeds."""
+    from loopx.extensions.lark import goal_channel_work as work_module
+
+    args, room, _, _, offer, event, callback_args, _ = offered
+    prepared = offer()
+    before = snapshot(args)["provider_revision"]
+    if projection_read == "fail_after_commit":
+        def unavailable(**_kwargs):
+            raise RuntimeError("projection read failed after the committed claim")
+        monkeypatch.setattr(work_module, "read_canonical_todos_if_promoted", unavailable)
+    result = ingress.handle_room_claim_callback(event(prepared), **callback_args)
+    assert result["ok"] is True and result["canonical_claim_accepted"] is True, result
+    assert result["card_update_verified"] is True
+    receipt_id = result["receipt"]["receipt_id"]
+    committed = snapshot(args)["provider_revision"]
+    assert committed != before
+    # The originating offer message carries the committed receipt number.
+    delivery = json.loads((args["runtime_root"] / "room-claim-offers"
+        / (prepared["request_id"] + ".json")).read_bytes())["delivery"]
+    original = next(m for m in room.messages if m["message_id"] == delivery["message_id"])
+    assert receipt_id in original["body"]["content"], original["body"]["content"]
+    assert "PRIVATE_" not in original["body"]["content"]
+    # Process recovery has nothing left to transport and preserves the card.
+    recovery = ingress.recover_room_claim_results(**callback_args, allowed_chat_ids={"oc_room_fixture"})
+    assert recovery == {"attempted": 0, "delivered": 0, "failed": 0}, recovery
+    still_original = next(m for m in room.messages if m["message_id"] == delivery["message_id"])
+    assert receipt_id in still_original["body"]["content"]
+    assert snapshot(args)["provider_revision"] == committed
+
+
 def test_collector_default_off_and_native_callback_dispatch(offered, tmp_path):
     import shutil
     from loopx.extensions.lark.event_collector_runtime import run_lark_event_collector

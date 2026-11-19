@@ -275,7 +275,16 @@ def handle_room_claim_callback(event: Mapping[str, Any], *, runtime_root: Path,
                 # Refused admission must not publish a result card or change
                 # the durable offer. The native owner checks after its reads.
                 raise RoomClaimCallbackError("offer_expired")
-            card = build_work_card(claimed) if claimed.get("projection") else {
+            committed_receipt = claimed.get("receipt") if isinstance(claimed.get("receipt"), Mapping) else None
+            card = build_work_card(claimed) if (
+                claimed.get("projection")
+                # A committed claim already owns a durable receipt: publish its
+                # immutable confirmation (with the receipt id) from those facts
+                # alone, even when the live projection read failed afterwards.
+                # Without a confirmed accepted receipt the summary branch keeps
+                # the honest unconfirmed hint instead of fabricating one.
+                or (committed_receipt is not None and committed_receipt.get("acceptance") == "accepted")
+            ) else {
                 "config": {"wide_screen_mode": True}, "header": {"title": {"tag": "plain_text", "content": "Claim readback"}},
                 "elements": [{"tag": "div", "text": {"tag": "plain_text", "content": str(claimed.get("public_summary"))}}]}
             p["last_result_card"] = card
