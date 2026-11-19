@@ -290,6 +290,9 @@ Worker 仍会收到对应内容。
 工作上下文携带选中的任务、作用域内的 User Todo 和读取依据。两种已登记的 Todo 读取
 格式都把字段表留在 canonical Todo 读取入口。已有 capture 仍可按原摘要读取。
 
+普通任务准入后，Worker 收到当前任务、范围与验证要求。完全一致的就绪租约记录留在
+启动和结算入口，未就绪、有差异或格式未知的记录仍在任务视图中可见。
+
 相关来源/要求版本变化、Session generation 变化、compaction 或 ACK 丢失时，必须使上下文复用失效。
 不能因为 packet 更小，就认为 executor 已掌握前文。连续性未知时走所属契约的恢复路径。
 Capability 指令仅在适用时提供；authority 不能从 prompt 文字推导。

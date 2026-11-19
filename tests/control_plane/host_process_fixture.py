@@ -49,6 +49,16 @@ def assert_host_task_context(model_input, source):
         assert recall["status"] == "disabled" and recall["context"] is None
         assert recall["experiment"]["automatic_recall"] is recall["experiment"]["automatic_ingest"] is False
         expected["reward_memory_recall"] = {key: recall[key] for key in ("status", "goal_id", "agent_id")}
+    interaction = {key: value for key, value in source["interaction_contract"].items() if key != "cli_channel"}
+    preparation = expected.get("execution_preparation")
+    if isinstance(preparation, dict) and "execution_preparation" not in context:
+        agent = interaction["agent_channel"]
+        assert preparation["state"] == "ready" and agent["delivery_allowed"] is True
+        assert preparation == agent["execution_preparation"]
+        assert preparation == source["interaction_contract"]["cli_channel"]["execution_preparation"]
+        assert preparation["todo_id"] == source["selected_todo"]["todo_id"]
+        del expected["execution_preparation"]
+        interaction["agent_channel"] = {key: value for key, value in agent.items() if key != "execution_preparation"}
     assert set(context) == set(expected), {
         "unexpected": sorted(context.keys() - expected.keys()),
         "missing": sorted(expected.keys() - context.keys()),
@@ -56,8 +66,7 @@ def assert_host_task_context(model_input, source):
     for field in set(expected) - {"interaction_contract"}:
         assert json.dumps(context[field], sort_keys=True, ensure_ascii=False) == json.dumps(
             expected[field], sort_keys=True, ensure_ascii=False), field
-    interaction = source["interaction_contract"]
-    assert context["interaction_contract"] == {k: v for k, v in interaction.items() if k != "cli_channel"}
+    assert context["interaction_contract"] == interaction
     if "source_decision_hash" in model_input:
         assert model_input["source_decision_hash"] == source["contract_binding"]["content_hash"]
     return context

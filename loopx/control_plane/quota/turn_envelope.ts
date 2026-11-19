@@ -1,4 +1,4 @@
-import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../work_items/execution_preparation.ts";
+import {EXECUTION_PREPARATION_SCHEMA_VERSION, isKnownReadyLeasePreparation} from "../work_items/execution_preparation.ts";
 import {capturedContextSelection} from "./context_selection.ts";
 import {contextReadSectionDigests, initialContextReadPointers, prepareProgressiveContext, prepareProgressiveContextDelivery,
   progressiveContextPlan, scopedReplanYardstickReversal,
@@ -1944,6 +1944,20 @@ function hostModelContextChanges(decision: JsonObject): JsonObject {
   if (disabledRecall) context.reward_memory_recall = disabledRecall;
   const interaction = {...object(decision.interaction_contract)};
   const agent = object(interaction.agent_channel);
+  // Start and settlement use the original preparation. Keep unfamiliar
+  // records and disagreements visible even when the rest of the task is ready.
+  const preparation = agent.execution_preparation;
+  if (decision.ok === true && decision.should_run === true &&
+      decision.normal_delivery_allowed === true && decision.effective_action === EffectiveAction.NORMAL_RUN &&
+      agent.must_attempt === true && agent.delivery_allowed === true && object(agent.work_context).complete === true &&
+      object(interaction.user_channel).action_required === false && decision.replan_action_packet == null &&
+      object(decision.goal_boundary).handoff_mode === "hard_lease" &&
+      isKnownReadyLeasePreparation(preparation, object(decision.agent_identity).agent_id, selectedWorkTodoId(decision)) &&
+      isDeepStrictEqual(decision.execution_preparation, preparation) &&
+      isDeepStrictEqual(object(interaction.cli_channel).execution_preparation, preparation)) {
+    delete context.execution_preparation;
+    delete agent.execution_preparation;
+  }
   // The complete source may share task authoring/evidence with its effect
   // owner. Resolve those existing references before omitting that owner.
   if (Object.hasOwn(agent, "work_context")) interaction.agent_channel = {...agent,

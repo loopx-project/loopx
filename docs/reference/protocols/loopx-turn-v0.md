@@ -108,6 +108,10 @@ observations, required reads and extended readbacks reach the Worker intact.
 Work-context delivery keeps scoped Todo records, their provider revision and
 record digest. The canonical Todo reader supplies the field dictionary for
 both registered read formats. Unknown formats retain their supplied metadata.
+For ordinary admitted work, matching recognized ready lease preparations stay
+with the launcher and settlement reader. The Worker retains the admitted task,
+scope, required reads and validation conditions. Unready, differing and
+extended preparations stay in the task view.
 The model receives the original `source_decision_hash`, reader references and
 `source_schema_version`; that hash commits the original source, not the task
 view. Inline task context does not require a filesystem read of a private
@@ -125,7 +129,10 @@ their renderer.
 保留原始标量和文本。能识别的未配置召回保留 Goal、Agent 和停用状态。已知的空观察
 保留钩子、能力和状态。完整回执留在外层执行器。有可用上下文、观察失败、必需读取
 或扩展回执时，Worker 仍收到完整内容。工作上下文保留作用域内的 Todo、读取版本和记录摘要。
-两种已登记格式的字段表由 canonical Todo 读取入口提供，未知格式保留其元数据。模型仍收到原始
+两种已登记格式的字段表由 canonical Todo 读取入口提供，未知格式保留其元数据。
+普通任务准入后，完全一致且可识别的就绪租约记录留在启动和结算入口。Worker 保留已准入
+任务、范围、必需读取与验证条件。未就绪、有差异或带扩展字段的记录继续交付给 Worker。
+模型仍收到原始
 `source_decision_hash`、reader 引用和 `source_schema_version`；该 hash 绑定原始
 来源，不绑定任务视图。已内联的任务上下文不要求 sandbox 读取不可访问的私有 capture，
 缺少必需证据仍暂停依赖该证据的工作。此呈现不是 adapter 请求，也不授予权限、结算或

@@ -421,6 +421,10 @@ provenance. For both registered Todo read formats, the field dictionary stays
 with the canonical Todo reader. Existing captures remain available under
 their original digests.
 
+An ordinary admitted task presents its work, scope and validation to the Worker.
+Matching ready lease preparations stay with launch and settlement. Unready,
+inconsistent and unfamiliar preparations remain visible.
+
 Context reuse must be invalidated by relevant source/requirement revisions,
 session generation changes, compaction or lost acknowledgements. A smaller
 packet cannot be treated as proof the executor has the prior context. Recover
