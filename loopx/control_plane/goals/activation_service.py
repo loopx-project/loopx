@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass
 from enum import Enum
@@ -406,7 +407,6 @@ def set_goal_activation_state(
             return payload
 
     sync_payload: dict[str, Any] | None = None
-    closeout_goal: dict[str, Any] | None = None
     with project_registry_transaction(
         source_registry,
         operation="set_goal_activation_state",
@@ -554,34 +554,47 @@ def set_goal_activation_state(
         and payload.get("written")
         and closeout_goal is not None
     ):
-        from ...capabilities.goal_closeout.hooks import run_goal_closeout
-
-        closeout_runtime_root = resolve_runtime_root(
-            load_registry(source_registry),
-            runtime_root_override,
-            registry_path=source_registry,
-        )
-        state_file = closeout_goal.get("state_file")
-        if not state_file:
-            state_file = (
-                source_registry.parent
-                / "goals"
-                / normalized_goal_id
-                / "ACTIVE_GOAL_STATE.md"
-            )
-        payload["closeout"] = run_goal_closeout(
-            runtime_root=closeout_runtime_root,
+        payload["closeout"] = _stop_closeout_payload(
+            source_registry=source_registry,
+            runtime_root_override=runtime_root_override,
             goal_id=normalized_goal_id,
-            repo=(
-                str(closeout_goal.get("repo"))
-                if closeout_goal.get("repo")
-                else None
-            ),
-            state_file=str(state_file),
-            terminal_reason="stopped",
-            trigger="goal-lifecycle-stop",
+            closeout_goal=closeout_goal,
         )
     return payload
+
+
+def _stop_closeout_payload(
+    *,
+    source_registry: Path,
+    runtime_root_override: str | None,
+    goal_id: str,
+    closeout_goal: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Run the terminal hook after a committed stop transition."""
+
+    from ...lifecycle.goal_closeout import run_goal_closeout
+
+    closeout_runtime_root = resolve_runtime_root(
+        load_registry(source_registry),
+        runtime_root_override,
+        registry_path=source_registry,
+    )
+    state_file = closeout_goal.get("state_file")
+    if not state_file:
+        state_file = (
+            source_registry.parent
+            / "goals"
+            / goal_id
+            / "ACTIVE_GOAL_STATE.md"
+        )
+    return run_goal_closeout(
+        runtime_root=closeout_runtime_root,
+        goal_id=goal_id,
+        repo=str(closeout_goal.get("repo")) if closeout_goal.get("repo") else None,
+        state_file=str(state_file),
+        terminal_reason="stopped",
+        trigger="goal-lifecycle-stop",
+    )
 
 
 def render_goal_activation_markdown(payload: dict[str, Any]) -> str:

@@ -33,6 +33,11 @@ class MachineConfigurationNamespace:
     description: str | None = None
     documentation: Mapping[str, str] | None = None
     default_configuration: Mapping[str, Any] | None = None
+    # Fields only the local operator CLI may write. The loopback Dashboard
+    # routes merge through this contract too, so without this split a public
+    # namespace update could persist an arbitrary executable path.
+    local_only_fields: frozenset[str] = frozenset()
+    apply_local_update: PublicUpdater | None = None
 
     def __post_init__(self) -> None:
         if not _NAMESPACE_RE.fullmatch(self.namespace):
@@ -197,10 +202,18 @@ def merge_machine_configuration_namespace(
     namespace: str,
     namespace_configuration: Mapping[str, Any],
     registry: MachineConfigurationRegistry,
+    allow_local_only: bool = False,
 ) -> dict[str, Any]:
     """Build one whole-document update while preserving sibling namespaces."""
 
     contract = registry.resolve(namespace)
+    if not allow_local_only:
+        blocked = sorted(set(namespace_configuration) & contract.local_only_fields)
+        if blocked:
+            raise ValueError(
+                "machine-configuration namespace only accepts these fields from "
+                f"the local CLI: {', '.join(blocked)}"
+            )
     # Namespace updates are also the recovery path for an installed namespace
     # whose previously valid value no longer satisfies the current contract.
     # Keep the stored value opaque until the owning namespace has replaced it;
@@ -228,8 +241,13 @@ def merge_machine_configuration_namespace(
         raise TypeError(
             f"machine_configuration.namespaces.{namespace} must be an object"
         )
+    updater = (
+        contract.apply_local_update
+        if allow_local_only and contract.apply_local_update is not None
+        else contract.apply_public_update
+    )
     updated_namespace = _mapping(
-        contract.apply_public_update(current_namespace, namespace_configuration),
+        updater(current_namespace, namespace_configuration),
         f"machine_configuration.namespaces.{namespace}",
     )
     return normalize_machine_configuration(
