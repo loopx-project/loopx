@@ -292,3 +292,80 @@ def test_task_retry_respects_original_turn_and_current_authority(task_start, mon
     assert calls.count("thread/start") == 1
     assert calls.count("turn/start") == (0 if interruption == "accepted-then-stopped" else 1)
     assert _snapshot(runtime) == before
+
+
+@pytest.mark.parametrize("stopped", [False, True], ids=["active", "stopped"])
+def test_applied_confirmation_retries_the_original_undispatched_turn(task_start, monkeypatch, stopped):
+    actions, request, chat, controller, reopen, runtime, capture, proposal_id = task_start
+    path = f"/api/actions/{proposal_id}"
+
+    # The server persisted acceptance and returned it, but its scheduled worker
+    # never wrote the first durable start fact before the process went away.
+    with monkeypatch.context() as faults:
+        faults.setattr(controller, "_start_accepted_turn_worker", lambda **kwargs: True)
+        code, original = request(f"{path}/apply", {})
+    assert code == 202 and original["proposal"]["status"] == "applied", original
+    receipt = original["proposal"]["receipt"]
+    ids = receipt["resource_ids"]
+    sid, tid = ids["session_id"], ids["turn_id"]
+    queued = chat.load_turn(sid, tid)
+    assert queued["status"] == "queued" and queued["started_at"] is None
+    if stopped:
+        _stop_goal(request)
+    before = _snapshot(runtime)
+    chat, controller = reopen()
+
+    # Looking at the original confirmation or its goal's list must never start it.
+    code, detail = request(path)
+    assert code == 200 and detail["proposal"]["receipt"] == receipt
+    code, history = request("/api/actions?goal_id=report")
+    assert code == 200, history
+    listed = next(row for row in history["proposals"] if row["proposal_id"] == proposal_id)
+    assert chat.load_turn(sid, tid) == queued
+    assert all(json.loads(line)["method"] != "turn/start" for line in capture.read_text().splitlines())
+
+    if stopped:
+        code, retried = request(f"{path}/apply", {})
+        assert code == 400 and "Goal is no longer active" in retried["error"], retried
+        assert chat.load_turn(sid, tid) == queued
+    else:
+        entered, proceed = Event(), Event()
+        start = controller._start_accepted_turn_worker
+
+        def pause_ready_dispatch(**kwargs):
+            entered.set()
+            assert proceed.wait(20), "the original retry did not resume"
+            return start(**kwargs)
+
+        monkeypatch.setattr(controller, "_start_accepted_turn_worker", pause_ready_dispatch)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            original_retry = pool.submit(request, f"{path}/apply", {})
+            try:
+                assert entered.wait(10), "the original retry did not reach dispatch"
+                code, concurrent = request(f"{path}/apply", {})
+                assert code == 409 and concurrent["error_code"] == "action_conflict", concurrent
+            finally:
+                proceed.set()
+            code, retried = original_retry.result(timeout=25)
+        assert code == 202 and retried["proposal"]["receipt"] == receipt, retried
+        assert retried["turn"]["created"] is False
+        assert retried["turn"]["turn_id"] == tid
+        assert controller.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=3)["status"] == "completed"
+        code, again = request(f"{path}/apply", {})
+        assert code == 202 and again["proposal"]["receipt"] == receipt
+        assert again["turn"]["status"] == "completed"
+        code, complete = request(path)
+        assert code == 200 and "task_execution_dispatch_pending" not in complete["proposal"]
+
+    assert detail["proposal"]["task_execution_dispatch_pending"] is True
+    assert listed["task_execution_dispatch_pending"] is True
+    assert "task_execution_dispatch_pending" not in actions.load(proposal_id)
+    assert actions.load(proposal_id)["receipt"] == receipt
+    assert _snapshot(runtime) == before
+    assert [row["session_id"] for row in chat.session_candidates(
+        goal_id="report", agent_id="codex", channel_id=f"task.{ids['todo_id']}",
+    )] == [sid]
+    assert len([row for row in chat.messages(sid) if row.get("role") == "user"]) == 1
+    calls = [json.loads(line)["method"] for line in capture.read_text().splitlines()]
+    assert calls.count("thread/start") == 1
+    assert calls.count("turn/start") == (0 if stopped else 1)

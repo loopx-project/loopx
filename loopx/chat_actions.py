@@ -1651,7 +1651,7 @@ class ChatActionService(
         proposal = self.store.load(proposal_id)
         if proposal is None:
             raise KeyError("typed Chat action proposal was not found")
-        if proposal.get("status") == "applied":
+        if proposal.get("status") == "applied" and self._pending_applied_task_receipt(proposal) is None:
             return {
                 "proposal": proposal,
                 "turn": self._turn_from_receipt(proposal.get("receipt")),
@@ -1698,7 +1698,7 @@ class ChatActionService(
     def _apply_confirmed_action(self, proposal_id: str) -> dict[str, object]:
         proposal = self.store.start_apply(proposal_id)
         if proposal["status"] == "applied":
-            return {"proposal": proposal, "turn": self._turn_from_receipt(proposal.get("receipt"))}
+            return {"proposal": proposal, "turn": self._recover_applied_task(proposal)}
         action_kind = str(proposal.get("action_kind") or "")
         parameters = proposal.get("normalized_parameters")
         if not isinstance(parameters, dict):

@@ -106,8 +106,58 @@ class ChatTodoActionMixin:
             raise ValueError("The original Task Session is ambiguous")
         return (sessions[0] if sessions else None), None
 
+    def _pending_applied_task_receipt(self, proposal: dict[str, Any]) -> dict[str, Any] | None:
+        """Find the exact accepted Turn whose worker has yet to start."""
+        parameters = proposal.get("normalized_parameters") or {}
+        receipt = proposal.get("receipt") or {}
+        if (proposal.get("status") != "applied" or proposal.get("action_kind") != "todo.create"
+                or parameters.get("start_execution") is not True
+                or proposal.get("permission_classification") != "durable_write"
+                or (proposal.get("context") or {}).get("binding_id")
+                or receipt.get("outcome") != "task_execution_started"
+                or receipt.get("projection_verified") is not True):
+            return None
+        resources = receipt.get("resource_ids")
+        canonical = receipt.get("canonical_receipt")
+        if not isinstance(resources, dict) or not isinstance(canonical, dict):
+            return None
+        goal_id = parameters.get("goal_id")
+        todo_id, sid, tid = (resources.get(key) for key in ("todo_id", "session_id", "turn_id"))
+        if (not all(isinstance(value, str) and value for value in (goal_id, todo_id, sid, tid))
+                or resources.get("goal_id") != goal_id or canonical.get("goal_id") != goal_id
+                or canonical.get("todo_id") != todo_id or canonical.get("status") != "applied"
+                or canonical.get("preview_id") != proposal.get("expected_state_fingerprint")):
+            return None
+        chat = getattr(self.runtime_controller, "store", None) or self.chat_store
+        if chat is None:
+            return None
+        try:
+            turn = chat.load_turn(sid, tid)
+        except (OSError, ValueError):
+            return None
+        if (turn and turn.get("session_id") == sid and turn.get("turn_id") == tid
+                and turn.get("client_turn_id") == f"task-start-{proposal['proposal_id']}"
+                and turn.get("status") == "queued" and not (turn.get("started_at") or turn.get("upstream_turn_id"))):
+            return resources
+        return None
+
+    def project_task_dispatch(self, proposal: dict[str, Any]) -> dict[str, Any]:
+        if self._pending_applied_task_receipt(proposal) is not None:
+            return {**proposal, "task_execution_dispatch_pending": True}
+        return proposal
+
+    def _recover_applied_task(self, proposal: dict[str, Any]) -> dict[str, Any] | None:
+        execution = self._pending_applied_task_receipt(proposal)
+        if execution is None:
+            return self._turn_from_receipt(proposal.get("receipt"))
+        return self._start_confirmed_task(
+            proposal["proposal_id"], proposal["normalized_parameters"], execution["todo_id"], {},
+            applied_execution=execution,
+        )
+
     def _start_confirmed_task(
         self, proposal_id: str, parameters: dict[str, Any], todo_id: str, steps: dict[str, Any],
+        *, applied_execution: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         from ..chat_actions import _opaque
 
@@ -122,7 +172,7 @@ class ChatTodoActionMixin:
         channel_id = f"task.{todo_id}"
         client_turn_id = f"task-start-{proposal_id}"
         opened = steps.get("task_session_opened")
-        execution = steps.get("execution_started")
+        execution = applied_execution if applied_execution is not None else steps.get("execution_started")
         session, turn = self._read_task_start(
             chat, goal_id=goal_id, agent_id=endpoint, channel_id=channel_id,
             client_turn_id=client_turn_id, checkpoint=execution if execution is not None else opened,
@@ -161,7 +211,7 @@ class ChatTodoActionMixin:
                 # A past soft claim still needs a read-only current-owner check.
                 if update_goal_todo(**claim_args, dry_run=True)["changed"]:
                     raise ValueError("The reviewed Task assignment changed before launch")
-            if not isinstance(steps.get("todo_assigned"), dict):
+            if applied_execution is None and not isinstance(steps.get("todo_assigned"), dict):
                 self.store.save_checkpoint(
                     proposal_id, step="todo_assigned", receipt={"todo_id": todo_id, "agent_id": owner},
                 )
