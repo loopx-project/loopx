@@ -133,6 +133,79 @@ def test_peer_return_deferral_survives_until_a_later_turn(flow):
     assert agenda(root, registry)["return_attention"]["count"] == 0
 
 
+@pytest.mark.skipif(os.name != "posix", reason="exercise the rendered POSIX host command")
+def test_before_work_reader_preserves_delivered_partial_work_without_repeating_the_brief(flow):
+    root, registry, store, create = flow
+    remainder = {"summary": "Run the remaining validation", "resume_when": "The isolated build is ready"}
+    delivered = {}
+    for index in range(4):
+        brief = {
+            "schema_version": "collaboration_brief_v0", "purpose": f"Verify artifact {index}",
+            "context": ("Detailed original acceptance evidence. " * 130).strip(),
+            "constraints": [], "inputs": [], "acceptance": ["Return the checked artifact."],
+            "return_requirement": "Report to the original conversation.",
+        }
+        _, _, receipt = create(brief=brief)
+        rid = receipt["request_id"]
+        acknowledge(root, "research", "worker", rid, "adopt", "Continue validation")
+        report(root, "research", "worker", rid, "conclusion", "The first check passed.",
+               remaining_work=remainder)
+        delivered[rid] = brief
+    drain(root, registry, store, lambda *_: pytest.fail("local return does not use an external sender"))
+    # Preserve the original brief when the delivery is unreadable or points to another request.
+    unreadable, mismatched, matching, *_ = delivered
+    delivery_file = _root(root) / "replies" / unreadable / "conclusion.delivery.json"
+    assert delivery_file.is_file()
+    delivery_file.write_text("{invalid")
+    wrong_delivery = _root(root) / "replies" / mismatched / "conclusion.delivery.json"
+    original_delivery = wrong_delivery.read_bytes()
+    other_delivery = _root(root) / "replies" / matching / "conclusion.delivery.json"
+    wrong_message = json.loads(other_delivery.read_bytes())["message_id"]
+    assert wrong_message != json.loads(original_delivery)["message_id"]
+    wrong_delivery.write_text(json.dumps({**json.loads(original_delivery), "message_id": wrong_message}))
+    _, _, queued = create()
+    queued_id = queued["request_id"]
+    acknowledge(root, "research", "worker", queued_id, "adopt", "Continue validation")
+    report(root, "research", "worker", queued_id, "conclusion", "The first check passed.",
+           remaining_work=remainder)
+    _, _, fresh = create()
+    expected = {fresh["request_id"], queued_id, unreadable, mismatched}
+
+    for _ in range(2):
+        dispatch = dispatch_turn_start_hooks([turn_start_hook(root, registry, "research", "worker")])
+        route, = dispatch["required_reads"]
+        command = shlex.split(route["command"])
+        assert "--attention-only" in command
+        native = subprocess.run(command, cwd=root, capture_output=True, timeout=60)
+        assert native.returncode == 0, native.stderr
+        view = json.loads(native.stdout)
+        assert {row["request_id"] for row in view["items"]} == expected
+        compact = {row["request_id"]: row for row in view["unfinished_delegations"]["items"]}
+        assert set(compact) == set(delivered) | expected
+        assert all(compact[rid]["remaining_work"] == remainder for rid in delivered)
+        assert compact[mismatched]["step"] == "recover_evidence"
+        mismatched_item = next(row for row in view["items"] if row["request_id"] == mismatched)
+        assert mismatched_item["brief"] == delivered[mismatched]
+        assert "--attention-only" not in view["unfinished_delegations"]["read_command"]
+
+    assert json.loads(wrong_delivery.read_bytes())["message_id"] == wrong_message
+    wrong_delivery.write_bytes(original_delivery)
+    restored = subprocess.run(command, cwd=root, capture_output=True, check=True, timeout=60)
+    restored_view = json.loads(restored.stdout)
+    assert {row["request_id"] for row in restored_view["items"]} == expected - {mismatched}
+    assert matching in {row["request_id"] for row in restored_view["open_request_summaries"]}
+    assert mismatched in {row["request_id"] for row in restored_view["open_request_summaries"]}
+
+    entire = subprocess.run([arg for arg in command if arg != "--attention-only"],
+                            cwd=root, capture_output=True, timeout=60)
+    assert entire.returncode == 0, entire.stderr
+    assert {row["request_id"] for row in json.loads(entire.stdout)["items"]} == set(delivered) | expected
+    assert len(native.stdout) < len(entire.stdout)
+    for rid, brief in delivered.items():
+        exact = read_inbox(root, registry, "research", "worker", request_id=rid)
+        assert exact["items"][0]["brief"] == brief
+
+
 def test_invalid_receipt_and_invalid_entries_are_visible_as_unavailable(flow):
     root, registry, _store, create = flow
     _session, _turn, receipt = create()
@@ -213,6 +286,7 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path,
     read, = (row for row in first["/interaction_contract/agent_channel/required_reads"] if row.get("kind") == "operator_inbox")
     command = shlex.split(read["command"])
     assert command[0] == str(console)
+    assert "--attention-only" in command
     def invoke(argv):
         result = subprocess.run(argv, cwd=project, capture_output=True, timeout=40)
         assert result.returncode == 0, result.stderr
@@ -424,7 +498,8 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
     })
     acknowledge(root, "research", "reviewer", peer["request_id"], "adopt", "Review the artifact", registry=registry)
     report(root, "research", "reviewer", peer["request_id"], "conclusion", "The artifact retains an explicit limit.", registry=registry)
-    code, inbox = run(*prefix, "manager-inbox", "read", "--goal-id", "research", "--agent-id", "worker")
+    code, inbox = run(*prefix, "manager-inbox", "read", "--goal-id", "research", "--agent-id", "worker",
+                      "--attention-only")
     assert code == 0 and inbox["ok"]
     assert inbox["peer_returns"]["items"][0]["request_id"] == peer["request_id"]
     code, tracking = run(*prefix, "manager-inbox", "status", "--goal-id", "research", "--agent-id", "worker",
@@ -484,9 +559,10 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
         else:
             assert packet["schema_version"] == "loopx_turn_envelope_v1"
             channel = packet["interaction_contract"]["agent_channel"]
-            source = next(row for row in channel["work_context"]["sources"] if row.get("hook_id") == "manager.context_inbox")
+            work_context = channel["work_context"]
+            source = next(row for row in work_context["sources"] if row.get("hook_id") == "manager.context_inbox")
             content, required_reads = source["content"], channel["required_reads"]
-            assert channel["work_context"]["complete"] is True
+            assert work_context["complete"] is True
         assert content["read_complete"] is False
         rows = {row["request_id"]: row for row in content["unfinished_delegations"]["items"]}
         assert set(rows) == {receipt["request_id"], queued["request_id"], peer["request_id"]}
@@ -500,7 +576,8 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
         manager_argv = shlex.split(manager_read["command"])
         assert "manager-inbox" in manager_argv and "read" in manager_argv
         assert "--turn-instance-id" not in manager_argv
-        assert "markdown" in manager_argv
+        assert "--attention-only" in manager_argv
+        assert manager_argv[manager_argv.index("--format") + 1] == "markdown"
         assert "Continue the linked work" not in json.dumps(content)
         assert os.environ["LOOPX_CONTEXT_DELIVERY"] == parent_context
     if delivery == "native_files":

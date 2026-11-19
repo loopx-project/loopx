@@ -13,7 +13,7 @@ import {jsonObject, requireJsonObject, requireNonEmptyString, requireStringLiter
 import {decideCollaborationLifecycle} from "./goal_instance_lifecycle.ts";
 import {inspectCollaborationInboxReceipts, projectReceiverFollowthrough} from "./inbox_receipts.ts";
 import {recordControlledRequestRead} from "./request_control.ts";
-import {planCollaborationResult} from "./result_publication.ts";
+import {planCollaborationResult, returnMessageId} from "./result_publication.ts";
 import {CONVERSATION_ENTRY_SCHEMA, normalizeOriginalConversationRecipient, verifyOriginalConversationReturnRoute} from "./semantic_request.ts";
 import {projectDelegationTurnContext, projectDelegationTurnItem, projectDelegationTurnItems} from "./turn_context.ts";
 import {isNativeChildResultCursor, nativeChildResultInbox} from "../capabilities/native_child_result_inbox.ts";
@@ -26,6 +26,10 @@ const DELIVERY_STATUSES: ReadonlySet<string> = new Set(deliveryContract.delivery
 const DELIVERY_ERRORS: ReadonlySet<string> = new Set(deliveryContract.delivery_errors);
 const RESULT_KEY = /^(?:decision|conclusion)(?:-[0-9]{8})?$/;
 const TURN_INSTANCE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+const INBOX_PAGE_SIZE = 20;
+const ATTENTION_GUIDANCE = " Reconcile open_request_summaries together with items on every page, including pages with no full briefs. " +
+  "For an incoming summary, use the unfiltered read command with --request-id for the full current brief before working on or returning it. " +
+  "Use the existing scoped request status for sent requests; follow next_cursor to reach their summaries.";
 type InboxSource = Readonly<{root: string; goal: string; agent: string; scope: JsonObject; exact: boolean; recipient?: JsonObject}>;
 type ReturnDelivery = Readonly<{key: string; request: JsonObject; reply: JsonObject}>;
 type PeerReturnPage = Readonly<{scope: string; afterOperation: string; afterResult: string}>;
@@ -203,7 +207,31 @@ function inboxItem(row: JsonObject, state: JsonObject): JsonObject {
   else if (view) item.next_action = view.receiver_instruction;
   return item;
 }
+function deliveredRemainderSummary(source: InboxSource, row: JsonObject, state: JsonObject): JsonObject | null {
+  if (state.kind !== "awaiting_conclusion" || !state.remaining_work) return null;
+  const control = jsonObject(state.request_control_view);
+  if (control?.active_reservation != null || jsonObject(jsonObject(state.readback)?.read)?.status === "unavailable") {
+    return null;
+  }
+  const links = linksReceipt(source.root, row);
+  if (links.unavailable) return null;
+  try {
+    const results = agendaResults(source.root, row);
+    const latest = results.filter(result => result.request_revision === (control?.revision ?? 1)).at(-1);
+    return latest?.status === "delivered"
+      ? projectDelegationTurnItem(delegationObservation("incoming", row, state, links, results))
+      : null;
+  } catch (error) {
+    if (!recordFailure(error)) throw error;
+    return null;
+  }
+}
+
 async function pendingPage(source: InboxSource, params: JsonObject): Promise<JsonObject> {
+  const attentionOnly = params.attention_only === true;
+  if (attentionOnly && (source.recipient || params.request_id != null)) {
+    fail("attention-only Inbox reads require a Goal inbox without an exact request selector");
+  }
   if (params.request_id != null) {
     if (params.cursor != null || params.operation_cursor != null) fail("an exact request read cannot use inbox cursors");
     let row: JsonObject;
@@ -214,29 +242,50 @@ async function pendingPage(source: InboxSource, params: JsonObject): Promise<Jso
     return {ok: true, request_id: params.request_id, items: [inboxItem(row, receiptState(source.root, row))],
       has_more: false, next_cursor: null, instruction: TRIAGE + " This is an exact source read, including concluded requests; it does not reopen their work."};
   }
-  const scope = digest(source.exact ? ["pending_requests_v1", params.runtime_root, target(source)]
-    : ["pending_requests_v1", params.runtime_root, source.goal, source.agent]);
+  const cursorKind = attentionOnly ? "pending_attention_v2" : "pending_requests_v1";
+  const scopeFor = (kind: string) => digest(source.exact ? [kind, params.runtime_root, target(source)]
+    : [kind, params.runtime_root, source.goal, source.agent]);
+  const scope = scopeFor(cursorKind);
+  const outgoingScope = attentionOnly ? scopeFor("pending_outgoing_v1") : null;
   let after = "";
   if (params.cursor != null) {
-    if (typeof params.cursor !== "string" || !/^1:[a-f0-9]{64}:[a-f0-9]{64}$/.test(params.cursor)) fail("invalid pending request cursor");
+    if (typeof params.cursor !== "string" || !/^1:[a-f0-9]{64}:(?:[a-f0-9]{64}|start)$/.test(params.cursor)) {
+      fail("invalid pending request cursor");
+    }
     const [, suppliedScope, suppliedAfter] = params.cursor.split(":");
-    if (suppliedScope !== scope) fail("pending request cursor scope mismatch");
+    if (outgoingScope === suppliedScope) {
+      const outgoing = await outgoingSummaryPage(source, outgoingScope, suppliedAfter === "start" ? "" : suppliedAfter, INBOX_PAGE_SIZE);
+      return {ok: true, items: [], open_request_summaries: outgoing.items, has_more: outgoing.next_cursor !== null,
+        next_cursor: outgoing.next_cursor, unavailable_count: outgoing.unavailable_count, _cursor_scope: scope,
+        _outgoing_continuation: true,
+        instruction: "Review these sent request summaries against the current work. Follow next_cursor when supplied. " +
+          "An unavailable_count above zero requires receipt recovery. This page records no request reads, result delivery or consumption."};
+    }
+    if (suppliedScope !== scope || suppliedAfter === "start") fail("pending request cursor scope mismatch");
     after = suppliedAfter;
   }
-  const folder = join(source.root, "entries", digest(target(source))), items: JsonObject[] = [];
+  const folder = join(source.root, "entries", digest(target(source)));
+  const entries: {item: JsonObject; summary: boolean}[] = [];
   for (const [index, name] of names(folder).entries()) {
     if (index > 0 && index % 128 === 0) await yieldToRuntime();
     if (!name.endsWith(".json") || !BARE_SHA256_PATTERN.test(name.slice(0, -5)) || name.slice(0, -5) <= after) continue;
     const row = pendingEntry(source, join(folder, name)), state = receiptState(source.root, row);
     if (state.kind === "settled" && !(source.recipient && params.include_settled === true)
         || !lifecycle(source, "inbox_observe", row)) continue;
-    items.push(inboxItem(row, state));
-    if (items.length === 21) break;
+    const summary = attentionOnly ? deliveredRemainderSummary(source, row, state) : null;
+    entries.push({item: summary ?? inboxItem(row, state), summary: summary !== null});
+    if (entries.length > INBOX_PAGE_SIZE) break;
   }
-  return {ok: true, items: items.slice(0, 20), has_more: items.length > 20,
-    next_cursor: items.length > 20 ? `1:${scope}:${items[19].request_id}` : null, _cursor_scope: scope,
-    instruction: TRIAGE + " Follow next_cursor to read later pending requests. Restart without a cursor " +
-      "to discover new requests before it. The end of a page sequence is not work completion."};
+  const page = entries.slice(0, INBOX_PAGE_SIZE);
+  const moreIncoming = entries.length > page.length;
+  const nextCursor = moreIncoming ? `1:${scope}:${page.at(-1)!.item.request_id}`
+    : outgoingScope === null ? null : (await outgoingSummaryPage(source, outgoingScope, "", 0)).next_cursor;
+  return {ok: true, items: page.filter(entry => !entry.summary).map(entry => entry.item),
+    ...(attentionOnly ? {open_request_summaries: page.filter(entry => entry.summary).map(entry => entry.item)} : {}),
+    has_more: nextCursor !== null, next_cursor: nextCursor, _cursor_scope: scope,
+    instruction: TRIAGE + (attentionOnly ? ATTENTION_GUIDANCE : "") +
+      " Follow next_cursor to read later pending requests. Restart without a cursor to discover new " +
+      "requests before it. The end of a page sequence is not work completion."};
 }
 function inspectResult(root: string, row: JsonObject, key: string, reply: JsonObject,
     observations?: JsonObject[]): JsonObject | null {
@@ -340,6 +389,21 @@ async function collectReturns(source: InboxSource, page: PeerReturnPage | null =
   return {view: {items: items.slice(0, 20), has_more: hasMore,
     ...(hasMore && nextCursor ? {next_cursor: nextCursor} : {})}, deliveries};
 }
+function peerDeliveryIdentity(row: JsonObject, reply: JsonObject, key: string): JsonObject {
+  return {status: "delivered",
+    ...(Object.hasOwn(reply, "result_key") ? {result_key: key} : {}),
+    ...(row.recipient !== undefined ? {requester: row.requester, recipient: row.recipient}
+      : Object.hasOwn(row, "goal_ref") ? {goal_ref: row.goal_ref} : {})};
+}
+
+function partialDeliveryMatches(row: JsonObject, reply: JsonObject, key: string, state: JsonObject): boolean {
+  if (row.source_kind === "peer" && state.kind === "requester_cli_read") {
+    return Object.entries(peerDeliveryIdentity(row, reply, key))
+      .every(([field, value]) => equal(state[field], value));
+  }
+  return state.message_id === returnMessageId(requestId(row.request_id), key);
+}
+
 function replyStatuses(root: string, row: JsonObject): JsonObject[] {
   const folder = join(root, "replies", requestId(row.request_id));
   return resultKeys(folder).map(key => {
@@ -361,6 +425,10 @@ function replyStatuses(root: string, row: JsonObject): JsonObject[] {
     if (typeof status !== "string" || !DELIVERY_STATUSES.has(status)
         || error !== null && (typeof error !== "string" || !DELIVERY_ERRORS.has(error))) {
       status = "explicit_unverified"; error = "delivery_state_unreadable";
+    }
+    if (status === "delivered" && phase === "conclusion" && reply.remaining_work != null
+        && !partialDeliveryMatches(row, reply, key, state)) {
+      fail("partial delegation result delivery scope mismatch");
     }
     return {...identity, status, created_at: reply.created_at ?? null,
       delivered_at: typeof state.delivered_at === "string" && [...state.delivered_at].length <= 80 ? state.delivered_at : null,
@@ -391,6 +459,58 @@ function linksReceipt(root: string, row: JsonObject): {value: JsonObject; unavai
     && validRefs("todo_ids", isCanonicalTodoId) && validRefs("evidence_ids", ref => ENVELOPED_SHA256_PATTERN.test(ref));
   return {value: valid ? value : {}, unavailable: !valid};
 }
+function delegationObservation(direction: "incoming" | "outgoing", row: JsonObject, state: JsonObject,
+    links: ReturnType<typeof linksReceipt>, results: JsonObject[], evidenceUnavailable = links.unavailable): JsonObject {
+  const view = jsonObject(state.request_control_view);
+  const receipt: JsonObject = {kind: state.kind, recorded_decision: state.recorded_decision};
+  if (state.remaining_work) receipt.remaining_work = state.remaining_work;
+  if (view) receipt.request_control_view = {control_state: view.control_state, active_reservation: view.active_reservation,
+    revision: view.revision, revision_digest: view.revision_digest, brief: {purpose: (view.brief as JsonObject).purpose}};
+  return {direction, request: {...Object.fromEntries(["request_id", "agent_id", "source_kind", "source_agent_id", "goal_ref", "recipient"]
+    .filter(key => Object.hasOwn(row, key)).map(key => [key, row[key]])),
+    purpose: (jsonObject(row.brief)?.purpose || [...(row.message as string ?? "")].slice(0, 2000).join(""))},
+    receipt, todo_ids: links.value.todo_ids ?? [], evidence_unavailable: evidenceUnavailable, results};
+}
+
+function agendaEntry(source: InboxSource, direction: "incoming" | "outgoing", path: string): JsonObject | null {
+  const row = direction === "incoming" ? pendingEntry(source, path) : outgoingEntry(source, readRecord(path));
+  if (row.schema_version === CONVERSATION_ENTRY_SCHEMA) {
+    verifyOriginalConversationReturnRoute({entry: row,
+      route: readRecord(join(source.root, "roundtrips", String(row.request_id) + ".json"))});
+    return row;
+  }
+  return lifecycle(source, "inbox_observe", row) ? row : null;
+}
+
+function observeDelegation(source: InboxSource, direction: "incoming" | "outgoing", row: JsonObject): JsonObject {
+  const state = receiptState(source.root, row), links = linksReceipt(source.root, row);
+  let results: JsonObject[] = [], evidenceUnavailable = links.unavailable;
+  try { results = agendaResults(source.root, row); }
+  catch (error) { if (!recordFailure(error)) throw error; evidenceUnavailable = true; }
+  return delegationObservation(direction, row, state, links, results, evidenceUnavailable);
+}
+
+async function outgoingSummaryPage(source: InboxSource, scope: string, after: string, limit: number) {
+  const folder = join(source.root, "peer-operations", digest(target(source))), items: JsonObject[] = [];
+  let unavailableCount = 0, cursorAfter = after;
+  for (const [index, name] of names(folder).entries()) {
+    if (index > 0 && index % 128 === 0) await yieldToRuntime();
+    const key = name.slice(0, -5);
+    if (!name.endsWith(".json") || !BARE_SHA256_PATTERN.test(key) || key <= after) continue;
+    let row: JsonObject | null;
+    try { row = agendaEntry(source, "outgoing", join(folder, name)); }
+    catch (error) { if (!recordFailure(error)) throw error; unavailableCount++; continue; }
+    const item = row ? projectDelegationTurnItem(observeDelegation(source, "outgoing", row)) : null;
+    if (!item) continue;
+    if (items.length === limit) {
+      return {items, unavailable_count: unavailableCount, next_cursor: `1:${scope}:${cursorAfter || "start"}`};
+    }
+    items.push(item);
+    cursorAfter = key;
+  }
+  return {items, unavailable_count: unavailableCount, next_cursor: null};
+}
+
 async function turnContext(source: InboxSource, params: JsonObject): Promise<JsonObject> {
   let complete = true, unavailable = 0;
   const batches: JsonObject[] = [], observations: JsonObject[] = [];
@@ -401,28 +521,11 @@ async function turnContext(source: InboxSource, params: JsonObject): Promise<Jso
     complete &&= paths.length <= 2000;
     for (const [index, name] of paths.slice(0, 2000).entries()) {
       if (index > 0 && index % 128 === 0) await yieldToRuntime();
-      let row: JsonObject;
-      try {
-        if (direction === "incoming") row = pendingEntry(source, join(folder, name));
-        else row = outgoingEntry(source, readRecord(join(folder, name)));
-        if (row.schema_version === CONVERSATION_ENTRY_SCHEMA) {
-          verifyOriginalConversationReturnRoute({entry: row,
-            route: readRecord(join(source.root, "roundtrips", String(row.request_id) + ".json"))});
-        } else if (!lifecycle(source, "inbox_observe", row)) continue;
-      } catch (error) { if (!recordFailure(error)) throw error; unavailable++; continue; }
-      const state = receiptState(source.root, row), links = linksReceipt(source.root, row);
-      let results: JsonObject[] = [], evidenceUnavailable = links.unavailable;
-      try { results = agendaResults(source.root, row); }
-      catch (error) { if (!recordFailure(error)) throw error; evidenceUnavailable = true; }
-      const view = jsonObject(state.request_control_view);
-      const receipt: JsonObject = {kind: state.kind, recorded_decision: state.recorded_decision};
-      if (state.remaining_work) receipt.remaining_work = state.remaining_work;
-      if (view) receipt.request_control_view = {control_state: view.control_state, active_reservation: view.active_reservation,
-        revision: view.revision, revision_digest: view.revision_digest, brief: {purpose: (view.brief as JsonObject).purpose}};
-      observations.push({direction, request: {...Object.fromEntries(["request_id", "agent_id", "source_kind", "source_agent_id", "goal_ref", "recipient"]
-        .filter(key => Object.hasOwn(row, key)).map(key => [key, row[key]])),
-      purpose: (jsonObject(row.brief)?.purpose || [...(row.message as string ?? "")].slice(0, 2000).join(""))},
-      receipt, todo_ids: links.value.todo_ids ?? [], evidence_unavailable: evidenceUnavailable, results});
+      let row: JsonObject | null;
+      try { row = agendaEntry(source, direction, join(folder, name)); }
+      catch (error) { if (!recordFailure(error)) throw error; unavailable++; continue; }
+      if (!row) continue;
+      observations.push(observeDelegation(source, direction, row));
       if (observations.length === 128) flush();
     }
   }
@@ -484,10 +587,7 @@ async function recordReads(source: InboxSource, params: JsonObject): Promise<Jso
       if (stored.source_agent_id !== source.agent) fail("peer return scope mismatch");
       if (!conversation) lifecycle(source, "read_record", stored);
       const prior = present(path) ? readRecord(path) : null;
-      const identity = {status: "delivered",
-        ...(Object.hasOwn(reply, "result_key") ? {result_key: key} : {}),
-        ...(conversation ? {requester: stored.requester, recipient: stored.recipient}
-          : Object.hasOwn(stored, "goal_ref") ? {goal_ref: stored.goal_ref} : {})};
+      const identity = peerDeliveryIdentity(stored, reply, key);
       if (prior && Object.entries(identity).some(([field, value]) => !equal(prior[field], value))) {
         fail("peer return delivery receipt scope mismatch");
       }
@@ -588,6 +688,12 @@ export async function readCollaborationInbox(params: JsonObject): Promise<JsonOb
     : await pendingPage(source, {...params, runtime_root: resolve(runtime)});
   const cursorScope = page._cursor_scope;
   delete page._cursor_scope;
+  const outgoingContinuation = page._outgoing_continuation === true;
+  delete page._outgoing_continuation;
+  if (outgoingContinuation && operation !== "turn_start") {
+    return {result: page, cursor_scope: cursorScope, ...(operation === "receiver_read"
+      ? {completed: true, read_receipts: [], followthrough: [], outgoing_continuation: true} : {})};
+  }
   const returns = params.request_id == null && !nativeCursor ? await collectReturns(source) : {view: {items: []}, deliveries: []};
   if ((returns.view.items as unknown[]).length) page.peer_returns = returns.view;
   const nativeResults = params.request_id == null && !conversation
