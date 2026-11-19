@@ -63,20 +63,33 @@ def test_unadmitted_explicit_turn_does_not_report_settlement_debt(tmp_path, monk
     assert _spend_run_count(runtime) == 0
 
 
+@pytest.mark.parametrize("handoff_mode", ["soft_claim", "hard_lease"])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("profile,spend_source", [("codex_app_heartbeat", "heartbeat"), ("codex_app_ssh_goal", "visible-goal")])
-def test_rejected_write_and_upgrade_state_recover_original_turn_once(tmp_path, monkeypatch, provider, profile, spend_source):
+def test_rejected_write_and_upgrade_state_recover_original_turn_once(
+    tmp_path, monkeypatch, provider, profile, spend_source, handoff_mode,
+):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
-    _initialize_fixture_authority(project, runtime, provider=provider)
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode=handoff_mode, leases=[])
     binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID]
     refresh = ["refresh-state", *binding, "--no-global-sync", "--suppress-external-sinks"]
     maintenance = [*refresh, "--classification", "local_upgrade_status_updated", "--delivery-outcome", "surface_only"]
     rc, setup = _run_cli(registry, runtime, *maintenance, cwd=project)
     assert rc == 0 and setup["ok"] and "settlement_recovery" not in setup, setup
-    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--runtime-profile", profile, *binding,
-        "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID, cwd=project)
+    guard_args = ["quota", "should-run", "--runtime-profile", profile, *binding,
+        "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
+    rc, guard = _run_cli(registry, runtime, *guard_args, cwd=project)
+    if handoff_mode == "hard_lease":
+        assert rc == 0 and guard["execution_preparation"]["state"] == "claim_required", guard
+        prepared_identity = guard["heartbeat_receipt"]["settlement_identity"]
+        rc, claim = _run_cli(registry, runtime, "todo", "claim", *binding,
+            "--claimed-by", AGENT_ID, "--todo-id", TODO_ID, cwd=project)
+        assert rc == 0 and claim["execution_managed"], claim
+        rc, guard = _run_cli(registry, runtime, *guard_args, cwd=project)
+        assert guard["heartbeat_receipt"]["settlement_identity"] == prepared_identity
     assert rc == 0 and guard["normal_delivery_allowed"], guard
+    assert guard["interaction_contract"]["cli_channel"]["quota_spend_source"] == spend_source
     identity = guard["heartbeat_receipt"]["settlement_identity"]
     receipts = _heartbeat_receipt_count(runtime, TURN_ID)
 
