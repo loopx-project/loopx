@@ -4021,7 +4021,7 @@ def test_successor_reconciles_schedule_after_lost_ack(
         "--turn-envelope", "--decision-output-dir", str(capture), cwd=project)
     assert rc == 0, envelope
     app = next_packet["scheduler_hint"]["app_automation"]
-    compact_app = envelope["scheduler"]["app_automation"]
+    compact_app = read_cli_policy_payload(json.dumps(envelope), returncode=rc)["scheduler_hint"]["app_automation"]
     unknown_reasons = {
         "paused": "paused", "missing": "no matching", "ambiguous": "ambiguous",
         "unreadable": "could not be fully read",
@@ -4047,7 +4047,7 @@ def test_successor_reconciles_schedule_after_lost_ack(
         assert app["stateful_backoff"]["ack_needed"] is True
         assert app["host_action"] == "ack_observed_rrule_without_update"
         assert "recommended_rrule" not in app and "recommended_rrule" not in compact_app
-        ack_args = compact_app.get("ack_cli_args")
+        ack_args = compact_app["ack_hint"]["cli_args"]
         if ack_args is None:
             assert compact_app["ack_cli_args_detail_ref"]["detail_ref"] == (
                 "full_decision.scheduler_hint.app_automation.ack_hint.cli_args"
