@@ -73,11 +73,10 @@ def _terminate(process: subprocess.Popen[bytes]) -> None:
 
 
 def _write_ledger(
-    runtime_root: Path,
-    goal_id: str,
+    ledger_dir: Path,
     record: dict[str, Any],
 ) -> tuple[Path, bool, str | None]:
-    path = goal_closeout_ledger_path(runtime_root, goal_id)
+    path = ledger_dir / GOAL_CLOSEOUT_LEDGER_FILENAME
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with exclusive_file_lock(
@@ -100,6 +99,7 @@ def run_goal_closeout(
     state_file: str | None,
     terminal_reason: str,
     trigger: str,
+    ledger_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Run the configured closeout command once and record the attempt.
 
@@ -196,8 +196,13 @@ def run_goal_closeout(
             "stdout": stdout_text,
             "stderr": stderr_text,
         }
+        selected_ledger_dir = (
+            ledger_dir
+            if ledger_dir is not None
+            else goal_closeout_ledger_path(runtime_root, goal_id).parent
+        )
         ledger_path, ledger_recorded, ledger_error = _write_ledger(
-            runtime_root, goal_id, record
+            selected_ledger_dir, record
         )
         result.update(
             {

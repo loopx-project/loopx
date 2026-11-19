@@ -571,6 +571,9 @@ def _retire_global_registry_reduction(
             "inspections": inspections,
             "global_goal_count_before": len(current_goals),
             "global_goal_count_after": len(retained_goals),
+            "retired_goals": [
+                dict(matches_by_id[goal_id][0]) for goal_id in requested_ids
+            ],
         },
         backup_label="retire-goal-backup",
     )
@@ -656,6 +659,39 @@ def retire_global_registry_goals(
         receipt = mutation["receipt"]
         backup_path = mutation["backup_path"]
 
+    closeouts: list[dict[str, Any]] = []
+    if execute:
+        from .capabilities.goal_closeout.hooks import run_goal_closeout
+
+        for retired_goal in receipt.get("retired_goals", []):
+            goal_id = str(retired_goal.get("id") or "").strip()
+            if not goal_id:
+                continue
+            state_file = retired_goal.get("state_file")
+            if not state_file:
+                state_file = runtime_root / "goals" / goal_id / "ACTIVE_GOAL_STATE.md"
+            goal_runtime_dir = runtime_root / "goals" / goal_id
+            closeout_ledger_dir = (
+                goal_runtime_dir
+                if goal_runtime_dir.is_dir()
+                else runtime_root / "closeout" / goal_id
+            )
+            closeouts.append(
+                run_goal_closeout(
+                    runtime_root=runtime_root,
+                    goal_id=goal_id,
+                    repo=(
+                        str(retired_goal.get("repo"))
+                        if retired_goal.get("repo")
+                        else None
+                    ),
+                    state_file=str(state_file),
+                    terminal_reason="retired",
+                    trigger="retire-global-goal",
+                    ledger_dir=closeout_ledger_dir,
+                )
+            )
+
     return {
         "ok": True,
         "schema_version": "loopx_global_goal_retirement_v0",
@@ -674,6 +710,7 @@ def retire_global_registry_goals(
         "wrote": execute,
         "updated_at": updated_at,
         "global_registry_writability": writability,
+        "closeouts": closeouts,
     }
 
 

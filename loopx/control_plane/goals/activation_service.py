@@ -406,6 +406,7 @@ def set_goal_activation_state(
             return payload
 
     sync_payload: dict[str, Any] | None = None
+    closeout_goal: dict[str, Any] | None = None
     with project_registry_transaction(
         source_registry,
         operation="set_goal_activation_state",
@@ -472,6 +473,7 @@ def set_goal_activation_state(
                 )
                 return payload
             locked_goal = _goal(source_payload, normalized_goal_id)
+            closeout_goal = dict(locked_goal)
             locked_state = goal_activation_state(locked_goal)
             if locked_state is not before_state:
                 payload.update(
@@ -543,6 +545,41 @@ def set_goal_activation_state(
         payload["recommended_action"] = (
             (sync_payload or {}).get("recommended_action")
             or f"rerun loopx sync-global --goal-id {normalized_goal_id} after repairing the shared registry route"
+        )
+    if (
+        execute
+        and target_state is GoalActivationState.STOPPED
+        and changed
+        and payload.get("ok")
+        and payload.get("written")
+        and closeout_goal is not None
+    ):
+        from ...capabilities.goal_closeout.hooks import run_goal_closeout
+
+        closeout_runtime_root = resolve_runtime_root(
+            load_registry(source_registry),
+            runtime_root_override,
+            registry_path=source_registry,
+        )
+        state_file = closeout_goal.get("state_file")
+        if not state_file:
+            state_file = (
+                source_registry.parent
+                / "goals"
+                / normalized_goal_id
+                / "ACTIVE_GOAL_STATE.md"
+            )
+        payload["closeout"] = run_goal_closeout(
+            runtime_root=closeout_runtime_root,
+            goal_id=normalized_goal_id,
+            repo=(
+                str(closeout_goal.get("repo"))
+                if closeout_goal.get("repo")
+                else None
+            ),
+            state_file=str(state_file),
+            terminal_reason="stopped",
+            trigger="goal-lifecycle-stop",
         )
     return payload
 
