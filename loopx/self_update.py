@@ -1663,6 +1663,10 @@ def execute_rollback_plan(
                     if previous is not None:
                         staged = Path(temporary.name) / launcher.name
                         staged.symlink_to(previous)
+                        # Preparing the restore link can overlap another publisher.
+                        current_stat = _rollback_launcher_stat(launcher)
+                        if current_stat is None or not os.path.samestat(staged_stat, current_stat):
+                            continue
                         os.replace(staged, launcher)
                         if launcher == loopx_bin:
                             execution["restored_previous_on_failure"] = True

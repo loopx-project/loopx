@@ -1161,7 +1161,8 @@ def test_rollback_reconciles_only_managed_helpers(tmp_path, monkeypatch, scenari
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX archive rollback")
 @pytest.mark.parametrize("same_target", [False, True])
-def test_rollback_preserves_helper_replaced_between_renames(tmp_path, monkeypatch, same_target):
+@pytest.mark.parametrize("during_restore", [False, True], ids=["activation", "recovery"])
+def test_rollback_preserves_concurrent_helper_replacement(tmp_path, monkeypatch, same_target, during_restore):
     from loopx.self_update import execute_rollback_plan
 
     releases = tmp_path / ".local/share/loopx/releases"
@@ -1178,28 +1179,44 @@ def test_rollback_preserves_helper_replaced_between_renames(tmp_path, monkeypatc
             script.chmod(0o755)
     launcher.symlink_to(current / "scripts" / launcher.name)
     helper.symlink_to(current / "scripts" / helper.name)
-    replacement_target = (current / "scripts" / helper.name if same_target
-                          else tmp_path / "independent-rrule")
+    owner_release = target if during_restore else current
+    replacement_target = (
+        owner_release / "scripts" / helper.name if same_target else tmp_path / "independent-rrule"
+    )
     replacement_stat = None
     replace_file = os.replace
+    create_symlink = Path.symlink_to
+
+    def replace_helper():
+        nonlocal replacement_stat
+        new_helper = helper.with_name("newer-helper")
+        new_helper.symlink_to(replacement_target)
+        replace_file(new_helper, helper)
+        replacement_stat = helper.lstat()
 
     def replace(source, destination):
-        nonlocal replacement_stat
         replace_file(source, destination)
+        if during_restore:
+            return
         if destination == launcher and launcher.resolve() == target / "scripts" / launcher.name:
-            new_helper = helper.with_name("newer-helper")
-            new_helper.symlink_to(replacement_target)
-            replace_file(new_helper, helper)
-            replacement_stat = helper.lstat()
+            replace_helper()
         elif destination == helper and helper.resolve() == target / "scripts" / helper.name:
             raise OSError("synthetic interruption after the helper rename")
 
+    def symlink_to(link, link_target, target_is_directory=False):
+        create_symlink(link, link_target, target_is_directory=target_is_directory)
+        if during_restore and link.name == helper.name and Path(link_target) == current / "scripts" / helper.name:
+            replace_helper()
+
     def run(command, **_kwargs):
-        assert "authority-archive" in command
-        return subprocess.CompletedProcess(command, 0, '{"ok":true}', "")
+        if "authority-archive" in command:
+            return subprocess.CompletedProcess(command, 0, '{"ok":true}', "")
+        assert during_restore and command[-1] == "doctor"
+        return subprocess.CompletedProcess(command, 1, '{"ok":false}', "")
 
     monkeypatch.setattr("loopx.self_update.os.replace", replace)
     monkeypatch.setattr("loopx.self_update.subprocess.run", run)
+    monkeypatch.setattr(Path, "symlink_to", symlink_to)
     result = execute_rollback_plan(
         {"ok": True, "plan": {"selected_release_root": str(target)}}, home=tmp_path,
     )
@@ -1207,7 +1224,11 @@ def test_rollback_preserves_helper_replaced_between_renames(tmp_path, monkeypatc
     assert launcher.resolve() == current / "scripts" / launcher.name
     assert replacement_stat is not None and os.path.samestat(helper.lstat(), replacement_stat)
     assert helper.resolve() == replacement_target
-    assert f"launcher changed during rollback checks ({helper.name})" in result["execution"]["error"]
+    error = result["execution"]["error"]
+    if during_restore:
+        assert "failed runtime checks" in error
+    else:
+        assert f"launcher changed during rollback checks ({helper.name})" in error
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX snapshot rollback")
