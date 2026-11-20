@@ -1512,7 +1512,7 @@ def execute_rollback_plan(
         # Share the archive installer's exact guard through checks and recovery.
         guard_path = release_root.parent / ".install-guard"
         guard_path.parent.mkdir(parents=True, exist_ok=True)
-        promotion_guard = os.fdopen(_open_lock_descriptor(guard_path, flags=os.O_CREAT | os.O_RDWR), "r+")
+        promotion_guard = os.fdopen(_open_lock_descriptor(guard_path, flags=os.O_CREAT | os.O_RDWR), "r+", encoding="utf-8")
         deadline = time.monotonic() + timeout_seconds
         while not _try_acquire_kernel_lock(promotion_guard):
             remaining = deadline - time.monotonic()
