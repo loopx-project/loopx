@@ -10,6 +10,9 @@ import {executeCanonicalTaskLeaseLifecycle as maintain} from "../../loopx/contro
 import {prepareCoordinationProjectionCommit} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {todoUpdateLeaseRecovery} from "../../loopx/control_plane/coordination/task_lease_proof.ts";
 import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
+import {SETTLED_EXECUTION_SWITCH_PROOF_SCHEMA,
+  ClaimExecutionSwitchRejected,
+  type ClaimExecutionSwitchVerifier} from "../../loopx/control_plane/coordination/claim_execution.ts";
 
 async function loaded(store: AuthorityStore) {
   const value = await store.loadAuthority();
@@ -17,6 +20,20 @@ async function loaded(store: AuthorityStore) {
   return value;
 }
 export function registerManagedClaimExecutionConformance(provider: string, factory: AuthorityStoreConformanceFactory) {
+  const settledSwitch: ClaimExecutionSwitchVerifier = async input => ({
+    schema_version: SETTLED_EXECUTION_SWITCH_PROOF_SCHEMA,
+    ...input,
+    settlement_identity: {
+      schema_version: "quota_settlement_identity_v0",
+      goal_id: input.goal_id,
+      agent_id: input.agent_id,
+      todo_id: input.source_todo_id,
+      turn_instance_id: "settled-source-turn",
+      binding_kind: "todo",
+      binding_id: input.source_todo_id,
+      effect_id: `settled:${input.source_todo_id}`,
+    },
+  });
   async function setup(t: test.TestContext, mode = "hard_lease") {
     const {store} = await factory(t);
     const projection = authorityProjectionFixture("goal-a", [{todo_id: "todo_managed", role: "agent",
@@ -46,6 +63,218 @@ export function registerManagedClaimExecutionConformance(provider: string, facto
       clear_claim: false, validation_declaration: null, validation_receipt: null,
       completion_policy_request: null, dry_run: false, now: request.now};
   }
+  test(`${provider} managed execution: explicit settled switch releases source and acquires target atomically`, async t => {
+    const {store} = await factory(t);
+    const repository = "git:github.com/example/project";
+    const todos = ["todo_source", "todo_target"].map(todo_id => ({
+      todo_id, role: "agent", status: "open", done: false,
+      archive_state: "active", text: `Execute ${todo_id}`,
+      task_class: "advancement_task", task_domain: "code", task_repository: repository,
+      required_write_scopes: ["src/**"],
+    }));
+    assert.equal((await store.commitAuthority({operation_id: "seed-switch", expected_provider_revision: null,
+      next_projection: authorityProjectionFixture("goal-a", todos, [], "native", {handoff_mode: "hard_lease"}),
+      events: [], receipts: []})).status, "applied");
+    const base = {goal_id: "goal-a", claimed_by: "agent-a", actor_agent_id: "agent-a",
+      expected_role: "agent", registered_agents: ["agent-a", "agent-b"], manage_execution: true,
+      dry_run: false, now: new Date("2026-09-13T10:00:00Z")};
+    const source = await claim(store, {...base, todo_id: "todo_source", operation_id: "claim-source"});
+    assert.equal(source.status, "applied", JSON.stringify(source));
+    const beforeSwitch = await loaded(store);
+
+    const implicit = await claim(store, {...base, todo_id: "todo_target", operation_id: "implicit-target"},
+      undefined, undefined, settledSwitch);
+    assert.equal(implicit.status, "failed");
+    assert.deepEqual(await loaded(store), beforeSwitch,
+      "ordinary scheduler-style selection cannot release the current execution");
+
+    const request = {...base, todo_id: "todo_target", operation_id: "explicit-target",
+      allow_settled_execution_switch: true};
+    const switched = await claim(store, request, undefined, undefined, settledSwitch);
+    assert.equal(switched.status, "applied", JSON.stringify(switched));
+    const switchReceipt = switched.execution_switch as JsonObject;
+    assert.equal(switchReceipt.source_todo_id, "todo_source");
+    assert.equal((switchReceipt.source_lease as JsonObject).status, "released");
+    const after = await loaded(store);
+    const leases = after.head.leases as JsonObject[];
+    assert.equal(leases.find(row => row.todo_id === "todo_source")?.status, "released");
+    assert.equal(leases.find(row => row.todo_id === "todo_target")?.status, "active");
+    assert.equal(leases.find(row => row.todo_id === "todo_target")?.owner, "agent-a");
+    assert.equal((after.head.todos as JsonObject[]).find(row => row.todo_id === "todo_target")?.claimed_by, "agent-a");
+    assert.equal((await claim(store, request, undefined, undefined, async () => {
+      throw new Error("replay must use the original atomic receipt");
+    })).status, "replayed");
+    assert.deepEqual(await loaded(store), after);
+  });
+
+  test(`${provider} managed execution: settled switch recovers a lost acknowledgement without split leases`, async t => {
+    const {store} = await factory(t);
+    const repository = "git:github.com/example/project";
+    const todos = ["todo_source", "todo_target"].map(todo_id => ({
+      todo_id, role: "agent", status: "open", done: false,
+      archive_state: "active", text: `Execute ${todo_id}`,
+      task_class: "advancement_task", task_domain: "code", task_repository: repository,
+      required_write_scopes: ["src/**"],
+    }));
+    assert.equal((await store.commitAuthority({operation_id: "seed-lost-switch",
+      expected_provider_revision: null,
+      next_projection: authorityProjectionFixture("goal-a", todos, [], "native", {handoff_mode: "hard_lease"}),
+      events: [], receipts: []})).status, "applied");
+    const base = {goal_id: "goal-a", claimed_by: "agent-a", actor_agent_id: "agent-a",
+      expected_role: "agent", registered_agents: ["agent-a", "agent-b"], manage_execution: true,
+      dry_run: false, now: new Date("2026-09-13T10:00:00Z")};
+    assert.equal((await claim(store, {...base, todo_id: "todo_source",
+      operation_id: "claim-source-lost-switch"})).status, "applied");
+    let commits = 0;
+    const responseLost = new Proxy(store, {get(target, key) {
+      if (key === "commitAuthority") return async (...args: Parameters<AuthorityStore["commitAuthority"]>) => {
+        commits++;
+        const committed = await target.commitAuthority(...args);
+        assert.equal(committed.status, "applied", JSON.stringify(committed));
+        return {status: "ambiguous" as const, reason_code: "synthetic_response_loss",
+          reason: "switch commit response lost"};
+      };
+      const value = Reflect.get(target, key, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    }});
+    const request = {...base, todo_id: "todo_target", operation_id: "switch-lost-response",
+      allow_settled_execution_switch: true};
+    const recovered = await claim(responseLost, request, undefined, undefined, settledSwitch);
+    assert.equal(recovered.status, "recovered", JSON.stringify(recovered));
+    assert.equal(commits, 1, "an ambiguous response must not submit the switch twice");
+    const after = await loaded(store);
+    const leases = after.head.leases as JsonObject[];
+    assert.equal(leases.find(row => row.todo_id === "todo_source")?.status, "released");
+    assert.equal(leases.find(row => row.todo_id === "todo_target")?.status, "active");
+    assert.equal((await claim(store, request, undefined, undefined, async () => {
+      throw new Error("durable receipt must recover before settlement is reread");
+    })).status, "replayed");
+    assert.deepEqual(await loaded(store), after);
+  });
+
+  test(`${provider} managed execution: concurrent settled switches have one winner and no split lease`, async t => {
+    const {store, contender} = await factory(t);
+    const repository = "git:github.com/example/project";
+    const todos = ["todo_source", "todo_target_a", "todo_target_b"].map(todo_id => ({
+      todo_id, role: "agent", status: "open", done: false,
+      archive_state: "active", text: `Execute ${todo_id}`,
+      task_class: "advancement_task", task_domain: "code", task_repository: repository,
+      required_write_scopes: ["src/**"],
+    }));
+    assert.equal((await store.commitAuthority({operation_id: "seed-racing-switch",
+      expected_provider_revision: null,
+      next_projection: authorityProjectionFixture("goal-a", todos, [], "native", {handoff_mode: "hard_lease"}),
+      events: [], receipts: []})).status, "applied");
+    const base = {goal_id: "goal-a", claimed_by: "agent-a", actor_agent_id: "agent-a",
+      expected_role: "agent", registered_agents: ["agent-a", "agent-b"], manage_execution: true,
+      allow_settled_execution_switch: true, dry_run: false,
+      now: new Date("2026-09-13T10:00:00Z")};
+    assert.equal((await claim(store, {...base, allow_settled_execution_switch: false,
+      todo_id: "todo_source", operation_id: "claim-racing-source"})).status, "applied");
+    const originalOnly: ClaimExecutionSwitchVerifier = async input => {
+      if (input.source_todo_id !== "todo_source") {
+        throw new Error("a newly acquired target has no settled Turn");
+      }
+      return settledSwitch(input);
+    };
+    const results = await Promise.all([
+      claim(store, {...base, todo_id: "todo_target_a", operation_id: "switch-target-a"},
+        undefined, undefined, originalOnly),
+      claim(contender, {...base, todo_id: "todo_target_b", operation_id: "switch-target-b"},
+        undefined, undefined, originalOnly),
+    ]);
+    assert.equal(results.filter(result => result.status === "applied").length, 1,
+      JSON.stringify(results));
+    assert.equal(results.filter(result => result.status === "failed").length, 1,
+      JSON.stringify(results));
+    const after = await loaded(store);
+    const leases = after.head.leases as JsonObject[];
+    assert.equal(leases.find(row => row.todo_id === "todo_source")?.status, "released");
+    const activeTargets = leases.filter(row => row.todo_id !== "todo_source" && row.status === "active");
+    assert.equal(activeTargets.length, 1, JSON.stringify(leases));
+    assert.deepEqual(await loaded(contender), after);
+  });
+
+  test(`${provider} managed execution: multiple conflicting sources reject without releasing either`, async t => {
+    const {store} = await factory(t);
+    const repository = "git:github.com/example/project";
+    const todos = [
+      {todo_id: "todo_source", required_write_scopes: ["src/a/**"]},
+      {todo_id: "todo_blocker", required_write_scopes: ["src/b/**"]},
+      {todo_id: "todo_target", required_write_scopes: ["src/**"]},
+    ].map(row => ({...row, role: "agent", status: "open", done: false,
+      archive_state: "active", text: `Execute ${row.todo_id}`,
+      task_class: "advancement_task", task_domain: "code", task_repository: repository}));
+    assert.equal((await store.commitAuthority({operation_id: "seed-ambiguous-switch",
+      expected_provider_revision: null,
+      next_projection: authorityProjectionFixture("goal-a", todos, [], "native", {handoff_mode: "hard_lease"}),
+      events: [], receipts: []})).status, "applied");
+    const common = {goal_id: "goal-a", expected_role: "agent",
+      registered_agents: ["agent-a", "agent-b"], manage_execution: true,
+      dry_run: false, now: new Date("2026-09-13T10:00:00Z")};
+    assert.equal((await claim(store, {...common, todo_id: "todo_source", operation_id: "claim-source-ambiguous",
+      claimed_by: "agent-a", actor_agent_id: "agent-a"})).status, "applied");
+    assert.equal((await claim(store, {...common, todo_id: "todo_blocker", operation_id: "claim-blocker-ambiguous",
+      claimed_by: "agent-b", actor_agent_id: "agent-b"})).status, "applied");
+    const before = await loaded(store);
+    const rejected = await claim(store, {...common, todo_id: "todo_target", operation_id: "switch-ambiguous",
+      claimed_by: "agent-a", actor_agent_id: "agent-a", allow_settled_execution_switch: true},
+    undefined, undefined, settledSwitch);
+    assert.equal(rejected.status, "failed", JSON.stringify(rejected));
+    assert.equal(rejected.reason_code, "settled_execution_switch_ambiguous_source");
+    assert.deepEqual(await loaded(store), before);
+  });
+
+  test(`${provider} managed execution: settled switch rejects missing, stale and foreign proof without release`, async t => {
+    for (const scenario of ["unsettled", "stale", "foreign"] as const) {
+      const {store} = await factory(t);
+      const sourceRepository = "git:github.com/example/project";
+      const targetRepository = sourceRepository;
+      const todos = [
+        {todo_id: "todo_source", task_repository: sourceRepository},
+        {todo_id: "todo_target", task_repository: targetRepository},
+      ].map(row => ({...row, role: "agent", status: "open", done: false,
+        archive_state: "active", text: `Execute ${row.todo_id}`,
+        task_class: "advancement_task", task_domain: "code",
+        required_write_scopes: ["src/**"]}));
+      assert.equal((await store.commitAuthority({operation_id: `seed-${scenario}`, expected_provider_revision: null,
+        next_projection: authorityProjectionFixture("goal-a", todos, [], "native", {handoff_mode: "hard_lease"}),
+        events: [], receipts: []})).status, "applied");
+      const base = {goal_id: "goal-a", claimed_by: "agent-a", actor_agent_id: "agent-a",
+        expected_role: "agent", registered_agents: ["agent-a", "agent-b"], manage_execution: true,
+        dry_run: false, now: new Date("2026-09-13T10:00:00Z")};
+      assert.equal((await claim(store, {...base, todo_id: "todo_source",
+        operation_id: `source-${scenario}`})).status, "applied");
+      const before = await loaded(store);
+      const verifier: ClaimExecutionSwitchVerifier = scenario === "unsettled"
+        ? async input => {throw new ClaimExecutionSwitchRejected(
+          "settled_execution_switch_unsettled_source",
+          "source Turn settlement is incomplete",
+          {source_todo_id: input.source_todo_id,
+            source_turn_instance_id: "source-turn",
+            recovery: {action: "settle_source_turn", next_step: "quota_spend"}},
+        );}
+        : async input => {
+          const proof = await settledSwitch(input);
+          if (scenario === "stale") return {...proof,
+            source_lease_version: proof.source_lease_version + 1};
+          if (scenario === "foreign") return {...proof, agent_id: "agent-b"};
+          return proof;
+        };
+      const result = await claim(store, {...base, todo_id: "todo_target",
+        operation_id: `target-${scenario}`, allow_settled_execution_switch: true},
+      undefined, undefined, verifier);
+      assert.equal(result.status, "failed", `${scenario}: ${JSON.stringify(result)}`);
+      if (scenario === "unsettled") {
+        assert.equal(result.reason_code, "settled_execution_switch_unsettled_source");
+        assert.equal(result.source_todo_id, "todo_source");
+        assert.equal(result.source_turn_instance_id, "source-turn");
+        assert.deepEqual(result.recovery,
+          {action: "settle_source_turn", next_step: "quota_spend"});
+      }
+      assert.deepEqual(await loaded(store), before, scenario);
+    }
+  });
   test(`${provider} managed execution: worktree observation uses canonical code scopes only for new execution`, async t => {
     const {store, request} = await setup(t);
     const before = await loaded(store);
