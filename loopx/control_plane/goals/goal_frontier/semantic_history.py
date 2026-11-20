@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any, cast
 
 
+from ...runtime.time import parse_timestamp
+
 from ..goal_vision_read_model import latest_agent_vision_from_runs as latest_agent_vision_from_runs
 
 from ...work_items.autonomous_replan_ack import (
@@ -203,8 +205,9 @@ def latest_autonomous_replan_ack_from_status_payload(
     goal_id: str,
     agent_id: str | None,
     neutral_classifications: set[str],
+    recorded_before: str | None = None,
 ) -> dict[str, Any] | None:
-    """Return the newest agent-scoped durable replan ACK visible in run history."""
+    """Read the newest agent ACK, optionally bounded to its admission-time view."""
 
     if not agent_id:
         return None
@@ -225,6 +228,24 @@ def latest_autonomous_replan_ack_from_status_payload(
             run
             for run in _latest_runs_for_goal(status_payload, goal_id=goal_id)
             if _run_agent_id_matches(run, agent_id=agent_id)
+        ]
+    if recorded_before is not None:
+        cutoff = parse_timestamp(recorded_before)
+        if cutoff is None:
+            return None
+        # Source reconstruction reads the admission-time view, while current
+        # settlement proofs retain their separate chronology checks. A later
+        # ACK must not replace the predecessor that formed the original digest.
+        # Retained semantic history may hold a row beyond the recent IO window.
+        candidates = (
+            [*latest_runs, *_latest_runs_for_goal(status_payload, goal_id=goal_id)]
+            if semantic_history_present else latest_runs
+        )
+        latest_runs = [
+            run for run in candidates
+            if _run_agent_id_matches(run, agent_id=agent_id)
+            and (stamp := parse_timestamp(run.get("generated_at"))) is not None
+            and stamp < cutoff
         ]
     return latest_autonomous_replan_ack_for_projection(
         latest_runs,

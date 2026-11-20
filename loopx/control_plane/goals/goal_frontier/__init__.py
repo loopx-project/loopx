@@ -1696,6 +1696,7 @@ def build_goal_frontier_projection_context_from_status(
             latest_replan_ack=latest_autonomous_replan_ack_from_status_payload(
                 status_payload, goal_id=goal_id, agent_id=agent_id,
                 neutral_classifications=neutral_replan_ack_classifications,
+                recorded_before=receipt_bound_guard_recorded_at,
             ),
             acceptance_gaps=acceptance_gaps,
             vision_settlement_query=True, _frontier_counts=frontier_counts,
