@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..control_plane.effect_runtime import EffectRuntimeRemoteError
 from ..control_plane.turn_driver import (
     LOOPX_TURN_EXECUTION_SCHEMA_VERSION,
     TurnRecoveryBlockedError,
@@ -72,6 +73,8 @@ def build_turn_error_payload(
     turn_key = str(transaction.get("turn_key") or "")
     run_once = turn_command == "run-once"
     error_code = getattr(exc, "code", None)
+    if not isinstance(error_code, str) and isinstance(exc, EffectRuntimeRemoteError):
+        error_code = exc.diagnostic_code
     error_payload = getattr(exc, "payload", None)
     planned_effects = planned.get("effects")
     planned_effects = planned_effects if isinstance(planned_effects, Mapping) else {}
