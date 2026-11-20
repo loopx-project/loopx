@@ -135,7 +135,8 @@ states and new controls invalidate their containing criterion and remain visible
 An exact unchanged criterion needs no metadata split. Splitting a container adds addresses
 and recovery guidance, so the reader keeps the complete presentation when the
 split would not save enough bytes. This tool-delivery assumption is separate
-from file deltas and provider caching; Partial reads and lost continuity cannot qualify this reuse.
+from file deltas and provider caching; it does not prove model retention or
+lower total cost. Partial reads and lost continuity cannot qualify this reuse.
 Explicit same-capture selections always recover the complete current value.
 
 An unchanged Goal narrative can also be referenced after an exact read of the

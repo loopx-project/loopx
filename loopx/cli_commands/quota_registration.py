@@ -221,12 +221,12 @@ def register_quota_command(
         "--turn-envelope",
         action="store_true",
         help=(
-            "Compatibility alias: quota should-run already returns the complete v1 work contract. "
+            "Select the complete v1 work contract for quota should-run. "
             "Context and Delta delivery remain independent."
         ),
     )
     turn_view.add_argument("--complete-turn", action="store_true",
-        help="Compatibility alias: quota should-run already returns the complete v1 work contract "
+        help="Select the complete v1 work contract for JSON quota should-run "
              "and its shared exact-Turn settlement. Context and Delta delivery remain independent.")
     capture_group = quota_parser.add_mutually_exclusive_group()
     capture_group.add_argument(

@@ -9,7 +9,7 @@ confirmation. If a successful, complete inventory confirms that the task's
 known Agent-created TaskSpace is absent, the same authorization permits one
 replacement and reuse of its initial Page. This covers unexpected loss without
 requiring a normal-closure receipt or another authorization question. Unknown
-cause stays unknown; An existing
+cause stays unknown. An existing
 space, a missing Page label, a refused claim or a stuck/blocked Page does not
 permit replacement. Keep one active space, record its identity and finish once
 per space lifetime.
@@ -87,7 +87,8 @@ HTTPS origins; `LOOPX_EGO_READ_ORIGINS = "*"` selects that mode explicitly.
 Existing comma-separated origin lists retain their restricted behavior. Use an
 explicit list for a community or otherwise restricted host. Do not reserve a Page
 shared with another process. Navigation
-may use the existing browser's session; Follow the browser's installed skill for
+may use the existing browser's session; origin configuration does not prove that
+every page on that origin is public. Follow the browser's installed skill for
 TaskSpace/Page ownership and user consent.
 
 An origin list is insufficient for a public community host that must not reuse

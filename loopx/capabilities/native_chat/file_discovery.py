@@ -1,7 +1,7 @@
 """File-backed Chat journal discovery and bounded reply image artifacts."""
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime
 import base64
@@ -152,7 +152,7 @@ class QuotaBacklogObservationCache:
         self._max_entries = max(1, max_entries)
         self._base: dict[str, tuple[tuple[Any, ...], tuple[bool, str | None]]] = {}
         self._stopped: dict[str, tuple[tuple[Any, ...], bool]] = {}
-        self._interrupt_events: dict[tuple[str, str], tuple[tuple[int, ...], bool]] = {}
+        self._event_summaries: dict[tuple[str, str], tuple[tuple[int, ...], tuple[dict[str, Any] | None, bool, bool]]] = {}
 
     def get_base(self, request_ref: str, key: tuple[Any, ...]) -> tuple[bool, str | None] | None:
         with self._lock:
@@ -188,11 +188,12 @@ class QuotaBacklogObservationCache:
     @staticmethod
     def build_key_prefix(
         root: Path, store: Any, row: dict[str, Any], evaluator_id: int,
+        *, req_fp_override: tuple[int, ...] | None = None,
     ) -> tuple[Any, Path | None, Path | None, tuple[int, ...] | None, tuple[int, ...] | None]:
         try:
             req_path = root / f"{row['request_ref']}.json"
             turn_path = store._turn_path(row["session_id"], row["turn_id"])
-            req_fp = optional_file_fingerprint(req_path)
+            req_fp = req_fp_override if isinstance(req_fp_override, tuple) else optional_file_fingerprint(req_path)
             turn_fp = optional_file_fingerprint(turn_path)
         except (OSError, ValueError):
             return None, None, None, None, None
@@ -215,18 +216,95 @@ class QuotaBacklogObservationCache:
         else:
             self.put_base(request_ref, key, pending, turn_status)
 
-    def get_interrupt(self, session_id: str, turn_id: str, events_fp: tuple[int, ...]) -> bool | None:
+    def get_event_summary(
+        self, session_id: str, turn_id: str, events_fp: tuple[int, ...],
+    ) -> tuple[dict[str, Any] | None, bool, bool] | None:
         with self._lock:
-            entry = self._interrupt_events.get((session_id, turn_id))
-            return entry[1] if entry is not None and entry[0] == events_fp else None
+            entry = self._event_summaries.get((session_id, turn_id))
+            if entry is None or entry[0] != events_fp:
+                return None
+            anchor, steering, interrupted = entry[1]
+            return (deepcopy(anchor) if anchor is not None else None), steering, interrupted
+
+    def put_event_summary(
+        self, session_id: str, turn_id: str, events_fp: tuple[int, ...],
+        summary: tuple[dict[str, Any] | None, bool, bool],
+    ) -> None:
+        anchor, steering, interrupted = summary
+        stored = (deepcopy(anchor) if anchor is not None else None), steering, interrupted
+        with self._lock:
+            _set_bounded_cache(self._event_summaries, (session_id, turn_id), (events_fp, stored), self._max_entries)
+
+    def drop_event_summary(self, session_id: str, turn_id: str) -> None:
+        with self._lock:
+            self._event_summaries.pop((session_id, turn_id), None)
+
+    def get_interrupt(self, session_id: str, turn_id: str, events_fp: tuple[int, ...]) -> bool | None:
+        summary = self.get_event_summary(session_id, turn_id, events_fp)
+        return summary[2] if summary is not None else None
 
     def put_interrupt(self, session_id: str, turn_id: str, events_fp: tuple[int, ...], observed: bool) -> None:
-        with self._lock:
-            _set_bounded_cache(self._interrupt_events, (session_id, turn_id), (events_fp, observed), self._max_entries)
+        self.put_event_summary(session_id, turn_id, events_fp, (None, False, observed))
 
     def drop_interrupt(self, session_id: str, turn_id: str) -> None:
-        with self._lock:
-            self._interrupt_events.pop((session_id, turn_id), None)
+        self.drop_event_summary(session_id, turn_id)
+
+
+def _summarize_turn_events(events: Sequence[dict[str, Any]]) -> tuple[dict[str, Any] | None, bool, bool]:
+    anchors = [
+        item["payload"]["native_input"]
+        for item in events
+        if item.get("kind") == "turn.started" and item.get("payload", {}).get("native_input")
+    ]
+    single_anchor = deepcopy(anchors[0]) if len(anchors) == 1 else None
+    steering = any(e.get("kind") == "turn.steered" for e in events)
+    interrupted = any(e.get("kind") in {"turn.interrupt_requested", "turn.interrupted"} for e in events)
+    return single_anchor, steering, interrupted
+
+
+def observed_turn_event_summary(
+    store: Any,
+    session_id: str,
+    turn_id: str,
+    cache_store: QuotaBacklogObservationCache | None,
+    *,
+    real_events: bool,
+) -> tuple[dict[str, Any] | None, bool, bool]:
+    """Read compact Turn event summary with fingerprint/pending-buffer guard on real stores."""
+    if not real_events or cache_store is None:
+        return _summarize_turn_events(store.events_after(session_id, turn_id, None))
+    key = (session_id, turn_id)
+    try:
+        event_path = store._event_path(session_id, turn_id)
+    except ValueError:
+        return _summarize_turn_events(store.events_after(session_id, turn_id, None))
+    flush_lock = store._event_flush_lock(key)
+    fp_before: tuple[int, ...] | None = None
+    if flush_lock.acquire(blocking=False):
+        try:
+            with store._event_lock:
+                has_pending = bool(store._event_pending.get(key))
+            if not has_pending:
+                fp_before = optional_file_fingerprint(event_path)
+                if fp_before is not None:
+                    cached = cache_store.get_event_summary(session_id, turn_id, fp_before)
+                    if cached is not None:
+                        return cached
+        finally:
+            flush_lock.release()
+    summary = _summarize_turn_events(store.events_after(session_id, turn_id, None))
+    if fp_before is not None and flush_lock.acquire(blocking=False):
+        try:
+            with store._event_lock:
+                has_pending_after = bool(store._event_pending.get(key))
+            fp_after = None if has_pending_after else optional_file_fingerprint(event_path)
+            if fp_after == fp_before:
+                cache_store.put_event_summary(session_id, turn_id, fp_after, summary)
+            else:
+                cache_store.drop_event_summary(session_id, turn_id)
+        finally:
+            flush_lock.release()
+    return summary
 
 
 def observed_turn_interrupt(
@@ -238,41 +316,9 @@ def observed_turn_interrupt(
     real_events: bool,
 ) -> bool:
     """Check Turn interrupt events with fingerprint/pending-buffer guard on real stores."""
-    interrupt_kinds = {"turn.interrupt_requested", "turn.interrupted"}
-    if not real_events or cache_store is None:
-        return any(e.get("kind") in interrupt_kinds for e in store.events_after(session_id, turn_id, None))
-    key = (session_id, turn_id)
-    try:
-        event_path = store._event_path(session_id, turn_id)
-    except ValueError:
-        return any(e.get("kind") in interrupt_kinds for e in store.events_after(session_id, turn_id, None))
-    flush_lock = store._event_flush_lock(key)
-    fp_before: tuple[int, ...] | None = None
-    if flush_lock.acquire(blocking=False):
-        try:
-            with store._event_lock:
-                has_pending = bool(store._event_pending.get(key))
-            if not has_pending:
-                fp_before = optional_file_fingerprint(event_path)
-                if fp_before is not None:
-                    cached = cache_store.get_interrupt(session_id, turn_id, fp_before)
-                    if cached is not None:
-                        return cached
-        finally:
-            flush_lock.release()
-    observed = any(e.get("kind") in interrupt_kinds for e in store.events_after(session_id, turn_id, None))
-    if fp_before is not None and flush_lock.acquire(blocking=False):
-        try:
-            with store._event_lock:
-                has_pending_after = bool(store._event_pending.get(key))
-            fp_after = None if has_pending_after else optional_file_fingerprint(event_path)
-            if fp_after == fp_before:
-                cache_store.put_interrupt(session_id, turn_id, fp_after, observed)
-            else:
-                cache_store.drop_interrupt(session_id, turn_id)
-        finally:
-            flush_lock.release()
-    return observed
+    return observed_turn_event_summary(
+        store, session_id, turn_id, cache_store, real_events=real_events,
+    )[2]
 
 
 def _same_store_method(store: Any, name: str, expected_cls: type[Any]) -> bool:
@@ -300,7 +346,7 @@ def observe_quota_backlog_batch(
     params: list[dict[str, Any] | None] = [None] * len(rows)
     meta: list[tuple[Any, ...]] = [(None, None, None, None, None)] * len(rows)
     for index, row in enumerate(rows):
-        entry = (cache_store.build_key_prefix(root, store, row, evaluator_id)
+        entry = (cache_store.build_key_prefix(root, store, row, evaluator_id, req_fp_override=getattr(row, "req_fp", None))
                  if real_load_turn and cache_store is not None else (None, None, None, None, None))
         meta[index] = entry
         if entry[0] is not None and cache_store is not None and cache_store.has_base_prefix(row["request_ref"], entry[0]):
@@ -381,26 +427,33 @@ class FileChatDiscovery:
         self._lock = Lock()
         self._directories: dict[Path, dict[Path, tuple[tuple[int, ...], dict[str, Any]]]] = {}
 
-    def rows(self, directory: Path, paths: Iterable[Path], *,
-             read: Callable[[Path], dict[str, Any]],
-             project: Callable[[Path, dict[str, Any]], dict[str, Any] | None],
-             ) -> Iterator[tuple[Path, dict[str, Any]]]:
+    def rows_with_fingerprints(
+        self,
+        directory: Path,
+        paths: Iterable[Path],
+        *,
+        read: Callable[[Path], dict[str, Any]],
+        project: Callable[[Path, dict[str, Any]], dict[str, Any] | None],
+        known_fingerprints: Mapping[Path, tuple[int, ...]] | None = None,
+    ) -> Iterator[tuple[Path, dict[str, Any], tuple[int, ...] | None]]:
         seen = set()
         with self._lock:
             entries = self._directories.setdefault(directory, {})
         for path in paths:
             seen.add(path)
-            try:
-                before = file_change_fingerprint(path)
-            except OSError:
-                before = None
+            before = known_fingerprints.get(path) if known_fingerprints is not None else None
+            if before is None:
+                try:
+                    before = file_change_fingerprint(path)
+                except OSError:
+                    before = None
             with self._lock:
                 saved = entries.get(path)
                 if before is None or saved is None or saved[0] != before:
                     entries.pop(path, None)
                     saved = None
             if saved is not None:
-                yield path, deepcopy(saved[1])
+                yield path, deepcopy(saved[1]), before
                 continue
             # Preserve the owning reader's missing/unreadable/strict behavior.
             value = read(path)
@@ -413,10 +466,17 @@ class FileChatDiscovery:
                 if unchanged:
                     with self._lock:
                         entries[path] = before, deepcopy(view)
-            yield path, value if view is None else view
+            yield path, (value if view is None else view), before
         with self._lock:
             for path in entries.keys() - seen:
                 del entries[path]
+
+    def rows(self, directory: Path, paths: Iterable[Path], *,
+             read: Callable[[Path], dict[str, Any]],
+             project: Callable[[Path, dict[str, Any]], dict[str, Any] | None],
+             ) -> Iterator[tuple[Path, dict[str, Any]]]:
+        for path, view, _ in self.rows_with_fingerprints(directory, paths, read=read, project=project):
+            yield path, view
 
 
 _REPLY_IMAGE_TYPES = {

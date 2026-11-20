@@ -379,7 +379,8 @@ CLI quota and native Turn share the
 [participating hook contract](#preference-guidance-belongs-to-the-participating-hook)
 above. Native hosts consume delivered current bodies and execute remaining
 required reads. Every remaining read and its exact executable command survive
-Turn compaction, including long quoted paths and more than five hooks; Scoped quota/Turn `work_context`
+Turn compaction, including long quoted paths and more than five hooks; size
+excess does not authorize dropping obligations. Scoped quota/Turn `work_context`
 may carry owner-private bodies; generic status and public sinks do not receive
 private statements or source quotes.
 

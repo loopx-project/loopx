@@ -12,6 +12,7 @@ from ...install_contract import render_host_cli_command
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..settlement_driver import decode_settlement_result
 from .accounting_admission import quota_accounting_admission
+from .error_codes import HeartbeatReceiptIdentityConflictError
 from .effect_program import (
     SETTLEMENT_IDENTITY_SCHEMA_VERSION,
     SETTLEMENT_PLAN_SCHEMA_VERSION,
@@ -183,6 +184,8 @@ class QuotaSettlementReadback:
     replan_execution_pending: bool = False
     admission_recorded_at: str | None = None
     admission_event_id: str | None = None
+    prepared_lease: dict[str, Any] | None = None
+    prepared_lease_required: bool = False
 
 
 def render_owed_host_command(argv: list[str]) -> str:
@@ -394,6 +397,8 @@ def _read_heartbeat_settlement_payload(
                 large_local_snapshot=True,
             )
         except EffectRuntimeRejected as exc:
+            if exc.diagnostic_code == "heartbeat_receipt_identity_conflict":
+                raise HeartbeatReceiptIdentityConflictError(str(exc)) from None
             raise ValueError(str(exc)) from None
 
     if source_admission is not None:
@@ -582,4 +587,6 @@ def read_heartbeat_settlement(
         ),
         admission_recorded_at=_optional_readback_text(payload.get("admission_recorded_at")),
         admission_event_id=_optional_readback_text(payload.get("admission_event_id")),
+        prepared_lease=_optional_readback_record(payload.get("prepared_lease")),
+        prepared_lease_required=payload.get("prepared_lease_required") is True,
     )

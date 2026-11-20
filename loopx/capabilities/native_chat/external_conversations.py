@@ -40,10 +40,12 @@ from .codex_context import checked_session_home
 from .file_discovery import (
     FileChatDiscovery,
     QuotaBacklogObservationCache,
+    _same_store_method,
     external_source_route_path,
     file_change_fingerprint,
     later_equivalent_source_input,
     observe_quota_backlog_batch,
+    observed_turn_event_summary,
     recovery_journal_fields,
     source_control_fields,
 )
@@ -54,6 +56,23 @@ from .steward_commands import ExternalStewardCommissionMixin
 _REQUEST_JOURNAL_STEM = re.compile(r"[a-f0-9]{24}")
 QUOTA_BACKLOG_BATCH_SIZE = 64
 _QUOTA_BACKLOG_BATCH_BYTES = 1024 * 1024
+
+
+class _DeferredBacklogRequest(dict[str, Any]):
+    """Bounded backlog request view carrying its observed file fingerprint."""
+
+    __slots__ = ("req_fp", "needs_full_read")
+
+    def __init__(
+        self,
+        data: Mapping[str, Any],
+        *,
+        req_fp: tuple[int, ...] | None,
+        needs_full_read: bool,
+    ) -> None:
+        super().__init__(data)
+        self.req_fp = req_fp
+        self.needs_full_read = needs_full_read
 
 
 def _preparation_image_identity(value: Any) -> dict[str, Any] | None:
@@ -142,6 +161,13 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
         self._quota_backlog_cache = QuotaBacklogObservationCache()
         self.actions: Any | None = None
 
+    def _event_summary_cache(self) -> QuotaBacklogObservationCache:
+        cache_store = getattr(self, "_quota_backlog_cache", None)
+        if cache_store is None:
+            cache_store = QuotaBacklogObservationCache()
+            self._quota_backlog_cache = cache_store
+        return cache_store
+
     def _retained_result_review(self, row: dict[str, Any]) -> dict[str, Any] | None:
         """Read correlation only; the typed owner still checks continuation eligibility."""
         reservation = row.get("context_recovery") or {}
@@ -198,7 +224,19 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
             and reservation.get("failed_turn_id") == turn["turn_id"]
             and (retained_review is None or reservation.get("work_attempt") == 1
                  or reservation.get("legacy_result_review")) else None)
-        events, anchors = self._started_native_inputs(session["session_id"], turn["turn_id"])
+        image_failure = turn.get("error_code") == "runtime_error" and bool(row.get("attachments"))
+        runtime_failure = turn.get("error_code") in {"model_auth_unavailable", "resume_failed"}
+        needs_full_events = (not discovery_only or retained_review is not None
+            or turn.get("error_code") == "manager_authorization_unavailable"
+            or image_failure or runtime_failure)
+        if needs_full_events:
+            events, anchors = self._started_native_inputs(session["session_id"], turn["turn_id"])
+            steering_observed = interrupt_observed = False
+        else:
+            single_anchor, steering_observed, interrupt_observed = observed_turn_event_summary(
+                store, session["session_id"], turn["turn_id"], self._event_summary_cache(),
+                real_events=_same_store_method(store, "events_after", ChatSessionStore))
+            events, anchors = [], ([single_anchor] if single_anchor is not None else [])
         session = self._original_native_session(session, anchors)
         unfinished = turn.get("status") == "completed" and bool((turn.get("response") or {}).get("unfinished_work"))
         related_review = (result_review_evidence.collect_related_result_review(self, row, turn, discovery_reads=discovery_reads)
@@ -221,8 +259,6 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
         later_equivalent = None
         read_source_controls = (discovery_reads.source_controls if discovery_reads is not None
                                 else cache(self.source_controls))
-        image_failure = turn.get("error_code") == "runtime_error" and bool(row.get("attachments"))
-        runtime_failure = turn.get("error_code") in {"model_auth_unavailable", "resume_failed"}
         if turn.get("error_code") == "manager_authorization_unavailable" or image_failure or runtime_failure:
             # Collect canonical facts only. The typed planner owns the exact
             # pre-dispatch sequence, retry budget and authority decision.
@@ -275,9 +311,11 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                 "queued_input_present": (discovery_reads.queued(session["session_id"])
                     if discovery_reads is not None else bool(store.queued_turns(session["session_id"]))),
                 "attachments_present": bool(row.get("attachments")),
-                "steering_observed": any(event.get("kind") == "turn.steered" for event in events),
-                "stop_observed": self._source_stop_observed(row, turn, events,
-                    source_controls=read_source_controls),
+                "steering_observed": (any(event.get("kind") == "turn.steered" for event in events)
+                                      if needs_full_events else steering_observed),
+                "stop_observed": (self._source_stop_observed(row, turn, events, source_controls=read_source_controls)
+                    if needs_full_events else (interrupt_observed
+                        or self._source_stop_observed(row, turn, (), source_controls=read_source_controls))),
                 "preparation_observation": preparation,
                 "later_equivalent_input_present": later_equivalent,
                 "preparation_scope_available": preparation_scope_available,
@@ -398,7 +436,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
             "upstream_thread_id": matches[0]["thread_id"]}
 
     def _source_stop_observed(self, row: dict[str, Any], turn: dict[str, Any],
-                              events: list[dict[str, Any]], *,
+                              events: Sequence[dict[str, Any]], *,
                               source_controls: Callable[[], list[dict[str, Any]]] | None = None) -> bool:
         """Read the same durable source controls for recovery and display."""
         return (any(event.get("kind") in {"turn.interrupt_requested", "turn.interrupted"} for event in events)
@@ -410,9 +448,11 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
 
     def quota_backlog_observer(
         self, *, source_controls: Callable[[], list[dict[str, Any]]] | None = None, use_cache: bool = False,
+        observed_fps: Mapping[Path, tuple[int, ...]] | None = None,
     ) -> Callable[[Sequence[dict[str, Any]]], list[bool]]:
         """Read Session state after each batch's Turns and share source controls across batches."""
-        read_controls = cache(source_controls or self.source_controls)
+        read_controls = cache(source_controls or (self.source_controls if observed_fps is None
+            else (lambda: self.source_controls(known_fingerprints=observed_fps))))
 
         @cache
         def stop_controls() -> tuple[tuple[Any, Any, datetime], ...]:
@@ -425,12 +465,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
         def observe(rows: Sequence[dict[str, Any]]) -> list[bool]:
             if len(rows) > QUOTA_BACKLOG_BATCH_SIZE:
                 raise ValueError("select at most 64 pending requests per observation")
-            cache_store = None
-            if use_cache:
-                cache_store = getattr(self, "_quota_backlog_cache", None)
-                if cache_store is None:
-                    cache_store = QuotaBacklogObservationCache()
-                    self._quota_backlog_cache = cache_store
+            cache_store = self._event_summary_cache() if use_cache else None
             return observe_quota_backlog_batch(
                 root=self.root, store=self.controller.store, rows=rows,
                 build_inputs=self._quota_pending_inputs, eval_flags=self._quota_pending_flags,
@@ -477,6 +512,8 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
         return flags
 
     def _quota_pending_inputs(self, row: dict[str, Any]) -> dict[str, Any]:
+        if getattr(row, "needs_full_read", False):
+            row = self.read_request(row["request_ref"])
         turn = self.controller.store.load_turn(row["session_id"], row["turn_id"])
         return {
             "request": {key: value for key, value in row.items() if key != "attachments"},
@@ -1848,28 +1885,52 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
         return [r for _, r in self._recovery_discovery.rows(
             self.root, self._request_paths(), read=_read_json, project=recovery_journal_fields)]
 
-    def source_controls(self) -> list[dict[str, Any]]:
+    def source_controls(self, *, known_fingerprints: Mapping[Path, tuple[int, ...]] | None = None) -> list[dict[str, Any]]:
         """Observe source controls and private text digests without reparsing unchanged bodies."""
-        return [r for _, r in self._source_control_discovery.rows(
-            self.root, self._request_paths(), read=_read_json, project=source_control_fields)]
+        return [r for _, r, _ in self._source_control_discovery.rows_with_fingerprints(
+            self.root, self._request_paths(), read=_read_json, project=source_control_fields,
+            known_fingerprints=known_fingerprints)]
 
     def read_request(self, request_ref: str) -> dict[str, Any]:
         return _read_json(self.root / f"{request_ref}.json")
 
-    def read_backlog_requests(self, request_refs: Iterable[str]) -> Iterator[dict[str, Any]]:
+    def read_backlog_requests(
+        self, request_refs: Iterable[str], *, defer_recovery: bool = False,
+        observed_fps: dict[Path, tuple[int, ...]] | None = None,
+    ) -> Iterator[dict[str, Any]]:
         """Observe settings correlation, without retaining ordinary request bodies."""
         fields = ("request_ref", "binding_id", "source", "session_id", "turn_id",
                   "status", "command", "created_at")
+        fresh: dict[Path, dict[str, Any]] = {}
+
+        def read_current(path: Path) -> dict[str, Any]:
+            payload = _read_json(path)
+            if not defer_recovery:
+                fresh[path] = payload
+            return payload
 
         def project(_path: Path, row: dict[str, Any]) -> dict[str, Any] | None:
-            # Recovery evidence is consumed by the typed pending rule.
-            if any(row.get(k) is not None for k in ("context_recovery", "native_result_recovery")):
+            if not all(key in row for key in fields):
                 return None
-            return {key: row[key] for key in fields} if all(key in row for key in fields) else None
+            return {
+                **{key: row[key] for key in fields},
+                "_has_recovery": any(row.get(k) is not None for k in ("context_recovery", "native_result_recovery")),
+            }
 
         paths = (self.root / f"{ref}.json" for ref in request_refs)
-        for _, row in self._backlog_request_discovery.rows(self.root, paths, read=_read_json, project=project):
-            yield row
+        for path, row, fp in self._backlog_request_discovery.rows_with_fingerprints(
+            self.root, paths, read=read_current, project=project,
+        ):
+            payload = fresh.pop(path, None)
+            is_recovery = bool(row.pop("_has_recovery", False))
+            if observed_fps is not None and fp is not None:
+                observed_fps[path] = fp
+            if is_recovery and not defer_recovery:
+                yield payload if payload is not None else _read_json(path)
+            elif defer_recovery:
+                yield _DeferredBacklogRequest(row, req_fp=fp, needs_full_read=is_recovery)
+            else:
+                yield row
 
     def record_delivery(self, request_ref: str, *, session_id: str | None, turn_id: str | None,
                         message_text: str | None = None) -> None:

@@ -217,7 +217,8 @@ the previously published archive intact. No raw-file fallback is used.
 Each database snapshot is transactionally consistent, including committed WAL
 data. The complete archive is **not one simultaneous snapshot across databases,
 registries, File journals, and project files**. Quiesce writers through the
-existing migration workflow before a coordinated cutover; Restore into an
+existing migration workflow before a coordinated cutover; a successful local
+backup does not grant restoration or promotion authority. Restore into an
 isolated directory first, verify the archived SQLite hashes and complete Goal
 history/receipts through `authority-archive`, and use the supported migration
 route to preserve writes made after the backup. Do not unpack old bytes over an

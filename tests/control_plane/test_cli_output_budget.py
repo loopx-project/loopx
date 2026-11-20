@@ -7,7 +7,7 @@ import os
 import shlex
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -365,9 +365,10 @@ def _surface_commands(
     state_file: Path,
     output_format: str,
     context_delivery: str | None = "off",
+    complete_quota: bool = True,
 ) -> dict[str, list[str]]:
-    # These ceilings characterize the complete inline policy, not its shorter
-    # file-navigation descriptor. Qualify default progressive recovery below.
+    # Keep the Complete Turn budget workload on its declared carrier.
+    quota_view = ["--turn-envelope"] if complete_quota else []
     delivery = ["--context-delivery", context_delivery] if context_delivery else []
     common = [
         "--registry",
@@ -417,7 +418,7 @@ def _surface_commands(
             GOAL_ID,
             "--agent-id",
             AGENT_IDS[0],
-        ] + delivery,
+        ] + quota_view + delivery,
         "loopx_turn_plan": common
         + [
             "turn",
@@ -612,7 +613,7 @@ def _mode_variant_commands(
         "quota_should_run_goal_boundary_detail": quota + ["--include-detail", "goal-boundary"],
         "quota_should_run_vision_detail": quota + ["--include-detail", "vision"],
         "quota_should_run_all_detail": quota + ["--include-detail", "all"],
-        "quota_should_run_turn_envelope": quota + ["--turn-envelope"],
+        "quota_should_run_turn_envelope": quota,
         "loopx_turn_plan_transaction_detail": common
         + [
             "turn",
@@ -1043,6 +1044,34 @@ def test_quota_should_run_no_format_uses_machine_contract_json(
     assert markdown_exit_code == 0, markdown_text
     assert markdown_text.startswith("# LoopX Quota Should Run")
     assert not markdown_text.lstrip().startswith("{")
+
+
+@pytest.mark.parametrize("scenario", SCENARIOS, ids=lambda scenario: scenario.name)
+def test_public_quota_packet_keeps_original_control_keys_and_output_budget(
+    tmp_path: Path, scenario: Scenario,
+) -> None:
+    with _stable_budget_fixture_root(tmp_path / scenario.name) as stable_root:
+        project, runtime, registry_path, state_file = _write_fixture(stable_root, scenario)
+        import_fixture_authority(registry_path, GOAL_ID)
+        command = _surface_commands(
+            project=project, runtime=runtime, registry_path=registry_path, state_file=state_file,
+            output_format="json", complete_quota=False,
+        )["quota_should_run"]
+        exit_code, output = _invoke_cli(command)
+        assert exit_code == 0, output
+        measurement = _measure_context_output(output, output_format="json")
+
+    packet = _measured_payload(measurement)
+    assert packet.get("schema_version") is None
+    assert packet["goal_id"] == GOAL_ID
+    assert packet["interaction_contract"]["schema_version"] == "loopx_interaction_contract_v0"
+    spec = replace(
+        CLI_OUTPUT_BUDGET_BY_ID["quota_should_run"], output_contract_version=None,
+        semantic_json_keys=("interaction_contract", "scheduler_hint", "selected_todo"),
+    )
+    assert_cli_output_baseline(
+        spec, scenario=scenario.name, output_format="json", text=output, measurement=measurement,
+    )
 
 
 def test_quota_cli_keeps_full_agent_todo_diagnostics_on_explicit_cold_path(
@@ -1854,7 +1883,7 @@ def test_thin_json_budget_retains_full_supported_scope(tmp_path: Path) -> None:
         assert payload["interface_budget"]["max_chars"] == 5100
         assert payload["interface_budget"]["within_budget"] is True
         assert "refresh-state --goal-outcome-update-json" in payload["task_body"]
-        assert "Local outcomes never replace root continuation, budget or stop criteria." in payload["task_body"]
+        assert "Honor root continuation, budget and stops." in payload["task_body"]
 
 
 @pytest.mark.parametrize("route_padding, within_budget", [("", True), ("x" * 48, False)])
@@ -1887,7 +1916,7 @@ def test_thin_budget_covers_complete_capability_and_cli_routes(
         assert "--todo-id <id>" in body and "settlement_plan.ordered_steps" in body
         assert "ambiguous effects need readback/recovery, not blind retry" in body
         assert "refresh-state --goal-outcome-update-json" in body
-        assert "Local outcomes never replace root continuation, budget or stop criteria." in body
+        assert "Honor root continuation, budget and stops." in body
         # Preserve the historical 4,500-character failure as a characterized
         # input; the allowance changes, not the complete emitted instructions.
         assert budget["budget_char_count"] > 4500

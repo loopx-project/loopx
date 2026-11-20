@@ -559,12 +559,12 @@ def record_native_execution_preparation(
     event: dict[str, Any],
     *,
     source_sha256: str,
-    receipt: Mapping[str, Any],
+    receipt: Mapping[str, Any] | None,
 ) -> None:
-    """Record a ready receipt only while its source/session is still current."""
+    """Publish readiness, or retire a refused claim, for the same saved source."""
 
     if (directory is None or not native_context_event_eligible(event)
-            or receipt.get("event") != "host_execution_prepared"):
+            or (receipt is not None and receipt.get("event") != "host_execution_prepared")):
         return
     with _locked(directory) as root:
         state = _state(root)
@@ -576,6 +576,15 @@ def record_native_execution_preparation(
             or recovery.get("sha256") != source_sha256
         ):
             raise ValueError("execution-preparation source moved before receipt publication")
+        if receipt is None:
+            recovery.pop("execution_preparation", None)
+            try:
+                _save(root, state)
+            except (OSError, ValueError, TypeError, RecursionError):
+                # Keep the saved capture available without retaining an
+                # apparent claim attempt when the retirement cannot be saved.
+                _discard_recovery(root)
+            return
         request = recovery.get("execution_preparation")
         claim_source_sha256 = request.get("claim_source_sha256") if isinstance(request, dict) else None
         ready_capture = None
@@ -786,7 +795,7 @@ def _preserve_preparation_readback(state: dict[str, Any], recovery: dict[str, An
             or not isinstance(request, dict) or request.get("turn_instance_id") != previous.get("turn_instance_id")):
         return
     previous["retired_context_readback"] = {key: request[key]
-        for key in ("goal_id", "agent_id", "todo_id", "turn_instance_id", "authority_route") if key in request}
+        for key in ("goal_id", "agent_id", "todo_id", "turn_instance_id", "authority_route", "goal_ref") if key in request}
 
 
 def _retire_native_recovery_lookup(root: Path, state: dict[str, Any], *,

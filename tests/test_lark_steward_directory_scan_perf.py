@@ -360,6 +360,32 @@ def test_private_conversations_caches_historical_repairs_and_staggers_recovery_p
     assert all(160.0 <= value < 220.0 for value in deadlines)
 
 
+def _recovery_session_store(tmp_path: Path):
+    from loopx.chat_store import ChatSessionStore
+
+    return ChatSessionStore(tmp_path / "runtime", startup_maintenance=False)
+
+
+def _seed_recovery_inputs(store, session_id: str, turn_id: str) -> dict[str, Path]:
+    """Lay out Turn, session, and events files on the chat store paths."""
+    paths = {
+        "turn": store._turn_path(session_id, turn_id),
+        "session": store._session_path(session_id),
+        "events": store._event_path(session_id, turn_id),
+    }
+    paths["turn"].parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_json(paths["turn"], {"turn_id": turn_id, "status": "failed"})
+    _atomic_write_json(paths["session"], {"session_id": session_id, "status": "ready"})
+    paths["events"].write_text('{"kind":"turn.failed"}\n', encoding="utf-8")
+    return paths
+
+
+def _replace_recovery_input(path: Path, text: str) -> None:
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(text, encoding="utf-8")
+    os.replace(temporary, path)
+
+
 def test_reconcile_request_backs_off_repeated_noop_recovery_and_resets_on_change(tmp_path, monkeypatch):
     import zlib
     from loopx.extensions.lark import private_conversations as private
@@ -371,18 +397,21 @@ def test_reconcile_request_backs_off_repeated_noop_recovery_and_resets_on_change
     ext_dir.mkdir()
 
     ref = _hex_ref(42)
+    session_id = f"sess_{ref}"
+    turn_id = f"turn_{ref}"
     deliv_path = deliv_dir / f"{ref}.json"
     ext_path = ext_dir / f"{ref}.json"
     deliv_row = {
         "status": "delivered",
         "request_ref": ref,
-        "session_id": f"sess_{ref}",
-        "turn_id": f"turn_{ref}",
+        "session_id": session_id,
+        "turn_id": turn_id,
         "profile": "fixture",
         "event": {"message_id": f"om_{ref}"},
     }
     _atomic_write_json(deliv_path, deliv_row)
     _atomic_write_json(ext_path, {"request_ref": ref, "status": "accepted"})
+    store = _recovery_session_store(tmp_path)
 
     clock = [1000.0]
     monkeypatch.setattr(private, "time", SimpleNamespace(monotonic=lambda: clock[0]))
@@ -401,10 +430,11 @@ def test_reconcile_request_backs_off_repeated_noop_recovery_and_resets_on_change
     def fake_recover(_request_ref: str, **_kwargs):
         nonlocal noop_calls
         noop_calls += 1
-        return {"request_ref": ref, "status": "accepted", "turn_id": f"turn_{ref}", "delivery_verified": True}
+        return {"request_ref": ref, "status": "accepted", "turn_id": turn_id, "delivery_verified": True}
 
     transport.core = SimpleNamespace(
         root=ext_dir,
+        controller=SimpleNamespace(store=store),
         context_recovery_observer=lambda: lambda candidate_ref: candidate_ref == ref,
         context_recovery_candidate=lambda candidate_ref: candidate_ref == ref,
         recover_failed_request=fake_recover,
@@ -437,6 +467,100 @@ def test_reconcile_request_backs_off_repeated_noop_recovery_and_resets_on_change
     # Changing the external-request file resets backoff immediately on the next discovery.
     clock[0] += 5.0
     _atomic_write_json(ext_path, {"request_ref": ref, "status": "accepted", "updated": 1})
+    assert transport.pending_delivery_paths() == [deliv_path]
+
+
+def _noop_recovery_transport(tmp_path, monkeypatch):
+    from loopx.extensions.lark import private_conversations as private
+    from loopx.extensions.lark.private_delivery_discovery import PrivateDeliveryDiscovery
+
+    deliv_dir = tmp_path / "lark-private-deliveries"
+    ext_dir = tmp_path / "external-requests"
+    deliv_dir.mkdir()
+    ext_dir.mkdir()
+    ref = _hex_ref(42)
+    session_id = f"sess_{ref}"
+    turn_id = f"turn_{ref}"
+    deliv_path = deliv_dir / f"{ref}.json"
+    ext_path = ext_dir / f"{ref}.json"
+    _atomic_write_json(deliv_path, {
+        "status": "delivered",
+        "request_ref": ref,
+        "session_id": session_id,
+        "turn_id": turn_id,
+        "profile": "fixture",
+        "event": {"message_id": f"om_{ref}"},
+    })
+    _atomic_write_json(ext_path, {"request_ref": ref, "status": "accepted"})
+    store = _recovery_session_store(tmp_path)
+    inputs = _seed_recovery_inputs(store, session_id, turn_id)
+    clock = [1000.0]
+    monkeypatch.setattr(private, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(private, "record_event_timing", lambda *_a, **_kw: None)
+    transport = private.LarkPrivateConversations.__new__(private.LarkPrivateConversations)
+    transport.root = deliv_dir
+    transport.reaction_feedback = False
+    transport._context_recovery_probe_at = {}
+    transport._historical_image_probe_at = {}
+    transport._delivery_discovery = PrivateDeliveryDiscovery(deliv_dir)
+    transport._web_projection_paths = lambda: []
+    transport.core = SimpleNamespace(
+        root=ext_dir,
+        controller=SimpleNamespace(store=store),
+        context_recovery_observer=lambda: lambda candidate_ref: candidate_ref == ref,
+        context_recovery_candidate=lambda candidate_ref: candidate_ref == ref,
+        recover_failed_request=lambda _request_ref, **_kwargs: {
+            "request_ref": ref, "status": "accepted", "turn_id": turn_id, "delivery_verified": True,
+        },
+        recover=lambda **_kwargs: None,
+    )
+    return transport, deliv_path, ext_path, inputs, clock
+
+
+def _arm_noop_backoff(transport, deliv_path, clock):
+    assert transport.pending_delivery_paths() == [deliv_path]
+    assert transport.reconcile_request(deliv_path) == 0
+    clock[0] += 5.0
+    assert transport.pending_delivery_paths() == []
+
+
+def test_noop_recovery_backoff_resets_when_turn_session_or_events_change(tmp_path, monkeypatch):
+    transport, deliv_path, _ext_path, inputs, clock = _noop_recovery_transport(tmp_path, monkeypatch)
+
+    _arm_noop_backoff(transport, deliv_path, clock)
+    _replace_recovery_input(inputs["turn"], '{"turn_id":"changed","status":"failed","marker":"turn"}\n')
+    _arm_noop_backoff(transport, deliv_path, clock)
+    _replace_recovery_input(inputs["session"], '{"session_id":"changed","status":"ready","marker":"session"}\n')
+    _arm_noop_backoff(transport, deliv_path, clock)
+    _replace_recovery_input(inputs["events"], '{"kind":"turn.failed","marker":"events"}\n')
+    assert transport.pending_delivery_paths() == [deliv_path]
+
+
+def test_noop_recovery_backoff_does_not_pin_when_fingerprint_unavailable(tmp_path, monkeypatch):
+    import zlib
+    import loopx.capabilities.native_chat.file_discovery as discovery
+
+    transport, deliv_path, ext_path, _inputs, clock = _noop_recovery_transport(tmp_path, monkeypatch)
+    monkeypatch.setattr(discovery, "file_change_fingerprint", lambda _path: None)
+
+    assert transport.pending_delivery_paths() == [deliv_path]
+    assert transport.reconcile_request(deliv_path) == 0
+    assert transport._context_recovery_probe_at[deliv_path] == clock[0] + 60.0
+
+    clock[0] += 60.0
+    assert transport.pending_delivery_paths() == [deliv_path]
+    assert transport.reconcile_request(deliv_path) == 0
+    # Unavailable tokens are not an identity, so a second no-op stays on the 60s probe.
+    assert transport._context_recovery_probe_at[deliv_path] == clock[0] + 60.0
+    exponential = clock[0] + 120.0 + (zlib.crc32(deliv_path.name.encode("utf-8")) % 60)
+    assert transport._context_recovery_probe_at[deliv_path] < exponential
+
+    clock[0] += 5.0
+    _atomic_write_json(ext_path, {"request_ref": store_read_json(ext_path)["request_ref"], "status": "accepted", "updated": 1})
+    assert transport.pending_delivery_paths() == []
+
+    clock[0] += 55.0
+    assert clock[0] < exponential
     assert transport.pending_delivery_paths() == [deliv_path]
 
 
@@ -773,3 +897,319 @@ def test_backlog_health_cache_invalidates_on_turn_event_recovery_session_and_sto
     sess_path = _store2._session_path(sid2)
     _atomic_write_json(sess_path, {**store_read_json(sess_path), "status": "closed"})
     assert transport2.health()["b" * 24]["pending_count"] == 0
+
+
+def test_listener_snapshot_coalesces_concurrent_watchers_and_invalidates_on_refresh(tmp_path, monkeypatch):
+    import threading
+    from loopx.extensions.lark import goal_topic_runtime_service as svc_mod
+    from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
+
+    clock = [100.0]
+    monkeypatch.setattr(svc_mod.time, "monotonic", lambda: clock[0])
+
+    entered = threading.Event()
+    release = threading.Event()
+    provider_calls = 0
+    snapshot_seq = 0
+    fail_next = False
+
+    def snapshot_provider():
+        nonlocal provider_calls, snapshot_seq, fail_next
+        provider_calls += 1
+        if fail_next:
+            fail_next = False
+            raise RuntimeError("transient snapshot error")
+        if provider_calls == 1:
+            entered.set()
+            assert release.wait(2)
+        snapshot_seq += 1
+        return {
+            "private_profiles": {},
+            "target_payload": {"targets": {}},
+            "binding_payloads": {},
+            "seq": snapshot_seq,
+        }
+
+    service = LarkGoalTopicRuntimeService(
+        snapshot_provider=snapshot_provider,
+        runtime_root=tmp_path,
+        runtime_controller=SimpleNamespace(store=None),
+        profile_poller=lambda _profile, stop: stop.wait(),
+    )
+    results: list[dict[str, object]] = []
+    errors: list[BaseException] = []
+
+    def reader():
+        try:
+            results.append(dict(service._read_listener_snapshot()))
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=reader) for _ in range(3)]
+    for t in threads:
+        t.start()
+    assert entered.wait(2)
+    # Give sibling threads a moment to block on single-flight condition before releasing.
+    threading.Event().wait(0.05)
+    release.set()
+    for t in threads:
+        t.join(2)
+    assert not errors
+    assert provider_calls == 1
+    assert [row["seq"] for row in results] == [1, 1, 1]
+
+    # Within TTL, repeated calls hit the coalesced cache.
+    clock[0] += 4.5
+    assert service._read_listener_snapshot()["seq"] == 1
+    assert provider_calls == 1
+
+    # Past TTL (5.0s), failures are not cached and the following call retries cleanly.
+    clock[0] += 0.6
+    fail_next = True
+    with pytest.raises(RuntimeError, match="transient snapshot error"):
+        service._read_listener_snapshot()
+    assert provider_calls == 2
+    assert service._read_listener_snapshot()["seq"] == 2
+    assert provider_calls == 3
+
+    # refresh() invalidates and seeds the cache atomically.
+    assert service._refresh_profile_workers(resume_queues=False) is False
+    assert provider_calls == 4
+    assert service._read_listener_snapshot()["seq"] == 3
+    assert provider_calls == 4
+    service.close()
+
+
+def test_context_recovery_discovery_caches_turn_event_summary_without_event_lock_churn(tmp_path, monkeypatch):
+    from loopx.chat_manager import MANAGER_CONTEXT_VERSION
+    from loopx.chat_store import CHAT_TURN_SCHEMA_VERSION, ChatSessionStore
+
+    store = ChatSessionStore(tmp_path)
+    binding_id = "b" * 24
+    source_ref = "c" * 24
+    binding = {
+        "schema_version": "loopx_chat_conversation_binding_v0",
+        "binding_id": binding_id,
+        "enabled": True,
+        "transport_ref": "steward-app",
+        "context_kind": "steward",
+        "goal_ids": [],
+        "grant": "portfolio_read",
+        "provider_ref": "a" * 24,
+        "operator_ref": "e" * 24,
+        "project_ref": "f" * 24,
+        "executor_endpoint_id": "antigravity",
+    }
+    session = store.create_session(
+        goal_id="loopx-manager",
+        agent_id="antigravity",
+        adapter_kind="antigravity",
+        upstream_thread_id="thread-recovery-events",
+        upstream_mode="default",
+        session_id="d" * 32,
+        channel_id=f"manager.external.native.{binding_id}.{source_ref}",
+        steward_context={
+            "kind": "bound_steward",
+            "binding_id": binding_id,
+            "audience": "bound_owner",
+            "grant": "portfolio_read",
+            "goal_ids": [],
+            "provider_ref": "a" * 24,
+            "operator_ref": "e" * 24,
+            "project_ref": "f" * 24,
+            "source_ref": source_ref,
+            "workspace_path": str(tmp_path),
+        },
+    )
+    sid = session["session_id"]
+    sess_path = store._session_path(sid)
+    _atomic_write_json(sess_path, {
+        **store.load_session(sid),
+        "session_mode": "managed_runtime",
+        "executor_endpoint_id": "antigravity",
+        "manager_context_version": MANAGER_CONTEXT_VERSION,
+    })
+    controller = SimpleNamespace(
+        store=store,
+        lock=SimpleNamespace(__enter__=lambda s: None, __exit__=lambda s, *a: False),
+        adapters={},
+        codex_home=tmp_path,
+        project_contexts=SimpleNamespace(
+            conversation_bindings=SimpleNamespace(
+                read=lambda: {"bindings": [binding]},
+                resolve=lambda **_: {"binding": binding},
+            ),
+        ),
+    )
+    core = ChatExternalConversations(controller)
+    core.root.mkdir(parents=True, exist_ok=True)
+
+    refs: list[str] = []
+    tids: list[str] = []
+    # 12 failed turns (> ChatEventCache's 8-turn limit) would thrash events_after without summary caching.
+    for idx in range(12):
+        ref = _hex_ref(2000 + idx)
+        tid = f"{2000 + idx:032x}"
+        refs.append(ref)
+        tids.append(tid)
+        _atomic_write_json(store._turn_path(sid, tid), {
+            "schema_version": CHAT_TURN_SCHEMA_VERSION,
+            "session_id": sid,
+            "turn_id": tid,
+            "client_turn_id": f"external-{ref}",
+            "message": f"question {idx}",
+            "origin": "lark",
+            "status": "failed",
+            "error_code": "antigravity_step_error",
+            "delta_count": 0,
+            "upstream_turn_id": f"upstream-{idx}",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "completed_at": "2026-01-01T00:01:00+00:00",
+            "response": None,
+        })
+        store.append_event(sid, tid, kind="turn.started", payload={
+            "native_input": {
+                "thread_id": "thread-recovery-events",
+                "start_step_index": idx,
+                "input_sha256": "a" * 64,
+            },
+        }, buffered=False)
+        if 4 <= idx < 8:
+            store.append_event(sid, tid, kind="turn.steered", payload={}, buffered=False)
+        elif idx >= 8:
+            store.append_event(sid, tid, kind="turn.interrupted", payload={}, buffered=False)
+        _atomic_write_json(core.root / f"{ref}.json", {
+            "request_ref": ref,
+            "binding_id": binding_id,
+            "source": {"source_ref": source_ref, "sender_ref": "e" * 24, "private_human_message": True},
+            "session_id": sid,
+            "turn_id": tid,
+            "command": None,
+            "origin": "lark",
+            "status": "accepted",
+            "delivery_verified": True,
+            "message": f"question {idx}",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        })
+    store.update_session(sid, manager_context_version=MANAGER_CONTEXT_VERSION)
+
+    event_reads: list[str] = []
+    original_events_after = ChatSessionStore.events_after
+
+    def counted_events_after(self_store, session_id: str, turn_id: str, event_id: str | None):
+        event_reads.append(turn_id)
+        return original_events_after(self_store, session_id, turn_id, event_id)
+
+    monkeypatch.setattr(ChatSessionStore, "events_after", counted_events_after)
+
+    observe1 = core.context_recovery_observer()
+    verdicts1 = [observe1(ref) for ref in refs]
+    assert len(event_reads) == 12
+    assert verdicts1 == [True] * 4 + [False] * 8
+
+    # Pass 2 across all 12 historical turns hits _event_summaries with zero events_after reads.
+    event_reads.clear()
+    observe2 = core.context_recovery_observer()
+    assert [observe2(ref) for ref in refs] == verdicts1
+    assert event_reads == []
+
+    # Flushed turn.interrupted event invalidates only that Turn immediately.
+    store.append_event(sid, tids[0], kind="turn.interrupted", payload={}, buffered=False)
+    observe3 = core.context_recovery_observer()
+    assert observe3(refs[0]) is False
+    assert observe3(refs[1]) is True
+    assert event_reads == [tids[0]]
+
+    # Buffered unflushed event in _event_pending bypasses cache immediately.
+    event_reads.clear()
+    store.append_event(sid, tids[1], kind="turn.interrupt_requested", payload={}, buffered=True)
+    observe4 = core.context_recovery_observer()
+    assert observe4(refs[1]) is False
+    assert event_reads == [tids[1]]
+
+    # Non-discovery admission and preparation failures always read fresh full events_after.
+    event_reads.clear()
+    row2 = core.read_request(refs[2])
+    core._context_recovery_plan(row2, discovery_only=False, selected_binding=binding)
+    assert event_reads == [tids[2]]
+
+    event_reads.clear()
+    _atomic_write_json(store._turn_path(sid, tids[3]), {
+        "schema_version": CHAT_TURN_SCHEMA_VERSION,
+        "session_id": sid,
+        "turn_id": tids[3],
+        "client_turn_id": f"external-{refs[3]}",
+        "status": "failed",
+        "error_code": "manager_authorization_unavailable",
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "response": None,
+    })
+    core.context_recovery_observer()(refs[3])
+    assert event_reads == [tids[3]]
+
+
+def test_backlog_health_defers_recovery_body_reads_and_reuses_request_fingerprints(tmp_path, monkeypatch):
+    import loopx.capabilities.native_chat.external_conversations as ext_mod
+    import loopx.capabilities.native_chat.file_discovery as fd_mod
+
+    store, core, transport, sid, failed_rows = _seed_backlog_health_store(tmp_path, failed_count=3, completed_count=2)
+    # Add two requests carrying context_recovery metadata so deferred recovery reads are exercised.
+    for row in failed_rows[:2]:
+        _atomic_write_json(core.root / f"{row['request_ref']}.json", {
+            **row,
+            "context_recovery": {"failed_turn_id": row["turn_id"], "client_turn_id": f"external-{row['request_ref']}-recovery-1"},
+        })
+    # Add an earlier /stop command for an unrelated source so stop_controls() is queried while pending stays 3.
+    _atomic_write_json(core.root / f"{_hex_ref(8888)}.json", {
+        "request_ref": _hex_ref(8888),
+        "binding_id": "b" * 24,
+        "source": {"source_ref": "e" * 24},
+        "session_id": sid,
+        "turn_id": None,
+        "command": "stop",
+        "status": "command_completed",
+        "created_at": "2026-01-01T00:00:00+00:00",
+    })
+
+    # Cold pass warms both FileChatDiscovery and QuotaBacklogObservationCache.
+    assert transport.health()["b" * 24]["pending_count"] == 3
+
+    reads: list[Path] = []
+    stats_by_path: dict[Path, int] = {}
+    original_read = ext_mod._read_json
+    original_fp = fd_mod.file_change_fingerprint
+
+    def counted_read(path: Path):
+        reads.append(path)
+        return original_read(path)
+
+    def counted_fp(path: Path):
+        stats_by_path[path] = stats_by_path.get(path, 0) + 1
+        return original_fp(path)
+
+    monkeypatch.setattr(ext_mod, "_read_json", counted_read)
+    monkeypatch.setattr(fd_mod, "file_change_fingerprint", counted_fp)
+
+    assert transport.health()["b" * 24]["pending_count"] == 3
+    assert reads == [], "warm health() must not re-read recovery requests"
+    for row in failed_rows:
+        req_path = core.root / f"{row['request_ref']}.json"
+        assert stats_by_path.get(req_path) == 1, f"expected 1 stat for {req_path}, got {stats_by_path.get(req_path)}"
+
+    # Mutating a recovery request (marking recovered on row 0) with preserved mtime invalidates and drops pending to 2.
+    target_path = core.root / f"{failed_rows[0]['request_ref']}.json"
+    stamp = target_path.stat()
+    _atomic_write_json(target_path, {
+        **store_read_json(target_path),
+        "native_result_recovery": {
+            "turn_id": failed_rows[0]["turn_id"],
+            "message_id": f"native.{failed_rows[0]['turn_id']}.recovered",
+            "message_text": "recovered ok",
+            "delivery_verified": True,
+            "native_observation": {"response": {"message": "recovered ok", "proposals": []}},
+        },
+    })
+    os.utime(target_path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    reads.clear()
+    assert transport.health()["b" * 24]["pending_count"] == 2
+    assert set(reads) == {target_path}
