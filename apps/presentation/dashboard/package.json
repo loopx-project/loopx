@@ -5,6 +5,7 @@
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
+    "test:native-decision-read": "vite build --ssr src/features/personal-workspace/native-decision-read.test.mjs --outDir node_modules/.cache/native-decision-read --emptyOutDir && node node_modules/.cache/native-decision-read/native-decision-read.test.js",
     "smoke:goal-created-session": "tsc --noEmit --ignoreConfig --target ES2022 --module ES2022 --moduleResolution Bundler --allowImportingTsExtensions --types node --skipLibCheck --strict smoke/goal-created-session-smoke.ts src/vite-env.d.ts && vite build --ssr smoke/goal-created-session-smoke.ts --outDir node_modules/.cache/goal-created-session --emptyOutDir && node node_modules/.cache/goal-created-session/goal-created-session-smoke.js",
     "smoke:goal-created-session-browser": "LOOPX_PLAYWRIGHT_PACKAGE=\"$PWD/node_modules/playwright\" node smoke/goal-created-session-browser-smoke.mjs",
     "smoke:conversation-find": "LOOPX_PLAYWRIGHT_PACKAGE=\"$PWD/node_modules/playwright\" node smoke/conversation-find-browser-smoke.mjs",

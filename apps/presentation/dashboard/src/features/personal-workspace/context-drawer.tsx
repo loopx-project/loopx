@@ -54,8 +54,10 @@ import { formatMonitorDate } from "./monitor-readback";
 import { parseTodoCompletionProof } from "./todo-completion-feedback";
 import { useDrawerOverlay } from "./workspace-shell";
 
+import { GoalStrategyDocument } from "./goal-source-strategies";
+
 function SourceRunHistory({ goal, heading = false }: { goal: WorkspaceGoal; heading?: boolean }) {
-  const { t } = useWorkspaceI18n();
+  const { t, locale } = useWorkspaceI18n();
   const history = goal.sourceRunHistory;
   const recent = history?.recent ?? [];
   const total = history?.total ?? null;
@@ -80,6 +82,11 @@ function SourceRunHistory({ goal, heading = false }: { goal: WorkspaceGoal; head
               {run.vision_checkpoint ? <code>{run.vision_checkpoint.decision}</code> : t("drawer.sourceRunUnrecorded")}
             </dd></div>
           </dl>
+          {run.agent_vision ? <GoalStrategyDocument executionRecord value={run.agent_vision}
+            recordedAt={run.generated_at} agentId={run.agent_id ?? undefined} version={`${run.generated_at} · ${run.turn_instance_id ?? ""}`}
+            originalGoalId={goal.sourceAccess?.original_goal_id ?? goal.goalId}
+            namespace={goal.sourceAccess?.namespace ?? ""} zh={locale === "zh-CN"}/>
+            : <p>{t("drawer.sourceRunDecisionUnavailable")}</p>}
         </details>
       </li>)}</ol>
     </> : <p>{t(total === 0 ? "drawer.noExecutionHistory" : "drawer.sourceRunUnavailable")}</p>}
