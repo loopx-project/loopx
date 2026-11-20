@@ -115,6 +115,13 @@ For ordinary admitted work, matching recognized ready lease preparations stay
 with the launcher and settlement reader. The Worker retains the admitted task,
 scope, required reads and validation conditions. Unready, differing and
 extended preparations stay in the task view.
+For `steering_audit_then_one_step`, the built-in prompt asks the Worker to
+check direction, then choose the largest coherent work segment it can reliably
+complete and verify given its capabilities, budget, admitted task, scope and
+execution profile. A Todo groups related steps toward one verifiable outcome;
+`one_step` is a work segment, not a single operation. The standard mixed
+accounting clause stays with the executor. Unrecognized policy text stays in
+the task view because it can carry additional constraints.
 The model receives the original `source_decision_hash`, reader references and
 `source_schema_version`; that hash commits the original source, not the task
 view. Inline task context does not require a filesystem read of a private
@@ -137,6 +144,10 @@ Goal、Agent 和停用状态。已知的空观察
 两种已登记格式的字段表由 canonical Todo 读取入口提供，未知格式保留其元数据。
 普通任务准入后，完全一致且可识别的就绪租约记录留在启动和结算入口。Worker 保留已准入
 任务、范围、必需读取与验证条件。未就绪、有差异或带扩展字段的记录继续交付给 Worker。
+在 `steering_audit_then_one_step` 模式下，内置提示要求 Worker 先核对方向，再按
+自身能力、预算、已准入任务、范围和执行要求，选择能可靠完成并验证的最大连贯工作段。
+同一可验证结果的相关操作归在一个 Todo；`one_step` 指一个工作段。标准的混合扣额条款
+留在执行器，无法识别的策略原文继续交付给 Worker，因为它可能带有额外约束。
 模型仍收到原始
 `source_decision_hash`、reader 引用和 `source_schema_version`；该 hash 绑定原始
 来源，不绑定任务视图。已内联的任务上下文不要求 sandbox 读取不可访问的私有 capture，

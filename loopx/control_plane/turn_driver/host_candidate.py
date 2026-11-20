@@ -314,6 +314,20 @@ def goal_acceptance_prompt_instruction(authority: Mapping[str, Any]) -> str:
     return GOAL_ACCEPTANCE_READ_RULE if authority.get("vision_continuation_audit") else ""
 
 
+def ordinary_work_segment_instruction(model_input: Mapping[str, Any]) -> str:
+    task = _mapping(model_input.get("task_context"))
+    heartbeat = _mapping(task.get("heartbeat_recommendation"))
+    if task.get("normal_delivery_allowed") is not True or heartbeat.get("recommended_mode") != "steering_audit_then_one_step":
+        return ""
+    return (
+        "Check the direction first. one_step means one work segment, not one operation. "
+        "Within the admitted task, execution_profile, permissions and available budget, "
+        "prefer the largest coherent work segment you can reliably complete and verify with your capabilities. "
+        "Keep related steps toward the same verifiable outcome in one Todo. "
+        "Split work at independent outcomes or necessary dependency, approval or validation boundaries."
+    )
+
+
 def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = False) -> str:
     """Wrap one signed Turn authority packet in a typed JSON result request.
 
@@ -330,6 +344,9 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
     )
     if model_input is not None:
         detail = _mapping(model_input.get("detail_ref"))
+        work_segment = ordinary_work_segment_instruction(model_input)
+        if work_segment:
+            work_segment += "\n"
         input_prompt = (
             "You are executing one bounded LoopX-governed work segment.\n"
             "Use task_context for the admitted work. The outer executor retains "
@@ -347,6 +364,7 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
             "The selected Todo summary is not its full requirements, and Todo "
             "completion cannot close the Goal. Use execution_profile to size and "
             "qualify work, including artifact, validation, outcome and degradation rules.\n"
+            f"{work_segment}"
             "For required additional detail, use detail_ref.full_decision from the "
             "saved original observation identified by detail_ref.captured_decision; "
             "verify Goal/Agent/Turn and source_decision_hash. Never re-enter admission "

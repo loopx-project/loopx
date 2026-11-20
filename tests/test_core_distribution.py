@@ -706,8 +706,7 @@ def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_pytho
         "--expected-version", str(lease["version"])], workspace)
     binary, log = _fake_codex(tmp_path)
     binary.write_text(binary.read_text().replace("prompt = sys.stdin.read()",
-        'prompt = sys.stdin.read()\npathlib.Path("worker-context.json").write_text('
-        'prompt.split("Turn request:\\n", 1)[1], encoding="utf-8")'
+        'prompt = sys.stdin.read()\npathlib.Path("worker-prompt.txt").write_text(prompt, encoding="utf-8")'
     ).replace('output_path = ',
         'pathlib.Path("squares.json").write_text(json.dumps([n*n for n in range(8)]))\noutput_path = '))
     home = tmp_path / "codex-home"
@@ -728,12 +727,25 @@ def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_pytho
         workspace, environment=environment).stdout)
     assert result["status"] == "committed" and result["validation"]["status"] == "passed", result
     assert json.loads((workspace / "squares.json").read_text()) == [0, 1, 4, 9, 16, 25, 36, 49]
-    model_input = json.loads((workspace / "worker-context.json").read_text(encoding="utf-8"))
+    prompt = (workspace / "worker-prompt.txt").read_text(encoding="utf-8")
+    instructions, task_context_json = prompt.split("Turn request:\n", 1)
+    assert "one_step means one work segment, not one operation" in instructions
+    assert "largest coherent work segment you can reliably complete and verify with your capabilities" in instructions
+    assert "same verifiable outcome in one Todo" in instructions
+    assert "dependency, approval or validation boundaries" in instructions
+    model_input = json.loads(task_context_json)
     capture = Path(model_input["detail_ref"]["captured_decision"]["path"])
     original = json.loads(capture.read_text(encoding="utf-8"))
-    assert original["todo_write_hint"]["agent_todo_command_template"].startswith("loopx todo add")
+    for field in ("agent_todo_command_template", "user_action_command_template", "user_gate_command_template"):
+        command_template = original["todo_write_hint"][field]
+        assert command_template.startswith("loopx todo add")
+        assert command_template not in prompt
     assert original["promotion_readiness_warning"]["requires_readiness_run"] is True
-    assert "spend_policy" in original["heartbeat_recommendation"]
+    spend_policy = original["heartbeat_recommendation"]["spend_policy"]
+    assert "append exactly one heartbeat spend" in spend_policy
+    assert "one_step: mode, not an operation limit" in spend_policy
+    assert "append exactly one heartbeat spend" not in prompt
+    captured_bytes = capture.read_bytes()
     assert original["execution_preparation"]["lease_proof"]["expected_version"] > 0
     assert original["interaction_contract"]["cli_channel"]["execution_preparation"] == original["execution_preparation"]
     model_task = model_input["task_context"]
@@ -743,6 +755,7 @@ def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_pytho
     context = assert_host_task_context(model_input, original)
     assert "todo_write_hint" not in context
     assert "spend_policy" not in context["heartbeat_recommendation"]
+    assert context["execution_profile"] == original["execution_profile"]
     users = context["interaction_contract"]["agent_channel"]["work_context"]["user_todos"]
     model_proof = users["authority_read"]["todo_read_model"]
     assert model_proof["schema_version"] == "loopx_todo_domain_read_record_v0"
@@ -758,3 +771,4 @@ def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_pytho
         workspace, environment=environment).stdout)
     assert replay["replayed"] is True and all(value is False for value in replay["effects"].values())
     assert len(log.read_text().splitlines()) == 1 and _spends(runtime) == 1
+    assert capture.read_bytes() == captured_bytes
