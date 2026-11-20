@@ -169,6 +169,7 @@ test("capability retirement verifies its exact receipt and never erases a commit
     await writeFile(index, JSON.stringify(base) + "\n");
     const accepted = await read();
     assert.equal((accepted.progress as any).closeout_kind, "capability_duty_retired_no_spend");
+    assert.equal((accepted.progress as any).no_spend, true);
     assert.equal(accepted.replay_phase, "settled");
     assert.equal((accepted.spend as any).payload.ok, false);
     assert.equal((accepted.terminal_closeout as any).payload.ok, false);
@@ -189,6 +190,7 @@ test("capability retirement verifies its exact receipt and never erases a commit
     const spent = await read();
     assert.equal((spent.progress as any).state, "settled");
     assert.equal((spent.progress as any).closeout_kind, undefined);
+    assert.equal((spent.progress as any).no_spend, undefined);
     assert.equal((spent.spend as any).payload.ok, true);
   } finally {await rm(root, {recursive: true, force: true});}
 });
@@ -228,6 +230,7 @@ test("a service-qualified blocked replan closes only its exact Turn without debi
     const accepted = await read();
     assert.equal(accepted.replay_phase, "settled");
     assert.equal((accepted.progress as any).closeout_kind, "typed_blocked_writeback_no_spend");
+    assert.equal((accepted.progress as any).no_spend, true);
     assert.equal((accepted.spend as any).payload.ok, false);
     assert.equal((accepted.terminal_closeout as any).payload.ok, false);
     const history = async (runs: unknown[]) => (await readQuotaSettlement({

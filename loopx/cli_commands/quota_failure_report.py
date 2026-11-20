@@ -173,13 +173,37 @@ def quota_failure_payload(
             "status": "heartbeat_receipt_identity_conflict",
             "effective_action": EffectiveAction.QUOTA_SKIP.value,
             "recommended_action": (
-                "Rerun quota should-run with the same --turn-instance-id and without "
-                "--todo-id or --replan-obligation-id to read the bound Turn's recovery "
-                "contract. Settle verified work or record its verified blocked closeout; "
-                "do not replace the committed binding, repair receipt storage, or invent "
-                "a new Turn id. Independent work belongs to the next real host Turn."
+                "Read original_settlement_readback below; it reads the original receipt without work requalification. "
+                "If original execution is lost, use explicit refresh-state --execution-loss-closeout only for verified "
+                "blocked no-spend evidence with the exact current control-writer proof. Keep the original Goal, Agent, "
+                "Todo and Turn. A current replacement lease is not original execution; do not replace receipts, "
+                "repeat business work or invent a Turn id."
             ),
         })
+        try:
+            from ..control_plane.goals.first_party_host_admission import capture_first_party_host_goal_ref
+            from ..control_plane.goals.goal_ref_validation import exact_goal_ref
+            from ..control_plane.projects.registry_codec import load_project_registry
+            from ..control_plane.quota.settlement import read_heartbeat_settlement, settlement_result_payload
+            from ..paths import resolve_runtime_root
+            instance = getattr(args, "goal_instance_id", None)
+            ref = (exact_goal_ref(args.goal_id, instance) if instance else
+                capture_first_party_host_goal_ref(registry_path=registry_path, goal_id=args.goal_id))
+            root = resolve_runtime_root(load_project_registry(registry_path), runtime_root_arg, registry_path=registry_path)
+            original = read_heartbeat_settlement(root, goal_id=args.goal_id, agent_id=getattr(args, "agent_id", None),
+                todo_id=None, turn_instance_id=getattr(args, "turn_instance_id", None), resolve_original_binding=True,
+                registry_path=registry_path, goal_ref=ref)
+            if original is None:
+                raise ValueError("original receipt readback is unavailable")
+            payload["original_settlement_readback"] = {
+                "settlement_identity": original.identity.value.as_dict() if original.identity.value is not None else None,
+                "identity": settlement_result_payload(original.identity),
+                "settlement": settlement_result_payload(original.settlement),
+                "settlement_progress": original.progress, "replay_phase": original.replay_phase,
+                "prepared_lease": original.prepared_lease,
+            }
+        except (OSError, ValueError, RuntimeError, TypeError) as exc:
+            payload["original_settlement_readback"] = {"ok": False, "error": str(exc)}
     if isinstance(error, CloseoutQueryUnavailableError):
         payload.update({
             "status": error.diagnostic_code,

@@ -61,6 +61,49 @@ the original `settlement_owed` recovery instead of a second debit. Contract
 composition failure preserves the decided receipt and available original
 capture, reports failure, and grants no work or automatic retry.
 
+`refresh-state --execution-loss-closeout` explicitly closes an original
+prepared Todo Turn after its execution generation was replaced. Supply the
+same Goal, Agent, Todo and Turn, typed `blocked` / `outcome_gap` /
+`semantic_closeout` evidence, and the current control writer's exact lease key
+and version. The TypeScript owner checks original admission and current
+canonical Todo/lease under the real File/SQLite provider fence, retaining the
+original prepared proof. It appends only an administrative blocked no-spend Run
+and refresh receipt. Current control ownership grants no original business
+execution. Vision, replan, Next Action, Explore, usage, external delivery,
+completion, lease mutation and ordinary refresh hooks/sync are unavailable.
+Direct `refresh_state_run` callers set `sync_global=False`; an ordinary sync
+request, including that API's default, is rejected before any write.
+The deterministic immutable Run is the recovery intent for missing index or
+receipt appends within the same authority-store identity. Explicit replay still
+requires a valid current control-writer proof; pure historical settlement readback
+does not. Conflicting or damaged history refuses recovery.
+Repeating `quota spend-slot` on the settled identity returns its TS-qualified
+no-spend progress and appends no debit.
+Ordinary same-generation writeback retains its existing fence. Exact SourceSession
+ownership stays with its original GoalRef. Non-activated legacy projects keep
+their existing stable runtime/Goal alias ownership without an incarnation or
+ABA guarantee; mixed/malformed source ownership never falls back to legacy.
+Identity conflicts return pure original settlement readback, without another
+work guard. Omitting the flag retains the ordinary writer and recovery rules.
+
+`refresh-state --execution-loss-closeout` 显式关闭原 prepared Todo Turn 已失去的
+执行尝试。使用相同 Goal、Agent、Todo、Turn，提供 typed blocked / outcome_gap /
+semantic_closeout 证据及当前 control writer 的确切租约 key/version。TS owner 在真实
+File/SQLite provider fence 内核验原准入与当前 canonical Todo/lease，只追加免扣额
+blocked Run 和 refresh 收据，保留原 prepared proof；当前证明不成为原业务执行证明。
+该路径不执行 Vision、replan、Next Action、Explore、usage、外部投递、completion、
+租约 mutation 或普通 refresh hooks/sync。
+直接调用 `refresh_state_run` 时须设置 `sync_global=False`；普通 sync 请求及该 API
+的默认值在任何写入前被拒绝。
+确定路径的不可变 Run 是同一 authority-store
+identity 内缺失 index/receipt append 的恢复 intent。显式重放仍须有效的当前 control
+writer proof；纯历史结算回读不依赖当前租约。历史冲突或损坏均拒绝。
+在已结算 identity 上重复 `quota spend-slot`，返回 TS 核验的免扣额进度，不追加扣额。
+原 generation 可用时沿普通 fence。
+SourceSession 沿原 GoalRef；未激活项目保留既有稳定 runtime/Goal alias 语义，不新增
+incarnation 或 ABA 保证，混合及非法 ownership 不回退。identity conflict 返回原结算
+的纯 readback，不再运行 work guard。省略该 flag 保持普通 writer 与 recovery 规则。
+
 Newly generated heartbeat and same-Turn commands use the default v1 entry.
 Historical benchmark runs use the recorded runner and contract version.
 User task time requirements remain task context. Caller-private deadlines

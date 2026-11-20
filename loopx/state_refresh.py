@@ -759,7 +759,13 @@ def refresh_state_run(
     goal_ref: dict[str, str] | None = None,
     goal_acceptance_preview: dict[str, Any] | None = None,
     task_lease_proof: dict[str, Any] | None = None,
+    execution_loss_closeout: bool = False,
+    execution_loss_requested_effects: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
+    if execution_loss_closeout:
+        from .control_plane.quota.execution_preparation import commit_execution_loss_closeout_from_refresh
+        # Explicit administrative entry bypasses every ordinary refresh hook.
+        return commit_execution_loss_closeout_from_refresh(locals())
     from .control_plane.todos.provider_projection import recover_refresh_todo_projection
 
     safe_goal_id = validate_goal_id_path_segment(goal_id)

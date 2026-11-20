@@ -1387,10 +1387,7 @@ def spend_quota_slot(
             )
         spent_result = settlement_readback.settlement
         if spent_result.failure is None:
-            no_spend = (
-                _as_dict(settlement_readback.progress).get("closeout_kind")
-                == "capability_duty_retired_no_spend"
-            )
+            no_spend = _as_dict(settlement_readback.progress).get("no_spend") is True
             return _spend_slot_reply(
                 ok=True, execute=execute, goal_id=safe_goal_id, goal_ref=goal_ref,
                 identity=identity, settlement_result=spent_result, idempotent_replay=True,

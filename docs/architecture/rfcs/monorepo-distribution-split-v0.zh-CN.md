@@ -3698,3 +3698,18 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
 - **边界：**本次是源码接线修复。Installed Core 与组合资格、被中断原 Task 的
   恢复、完整 context／closure、真实模型、成本、完整 R1/M3 及 C1 cutover 仍是
   独立验收。
+
+### 2026-11-20 — 收尾失去的执行尝试，不借用替代执行交付
+
+- **缺口：**替代 task lease 不能授权原 prepared Turn 的业务写回。重复同一个
+  work guard 会让原收据持续开放，却没有合法的恢复操作。
+- **增量：**显式行政收尾复用 TS settlement、Goal lifetime 与 File/SQLite
+  provider owner。保留原 identity/prepared proof，独立核验当前 control writer，
+  仅记录 blocked 免扣额证据。不可变 Run 在同一 store identity 内恢复缺失尾部；
+  重放仍须 fresh control proof。普通写回与纯历史回读保留各自边界。
+- **源码证据：**CLI 测试覆盖两个本地 provider、stale/foreign proof、普通路径
+  parity 与零 completion/debit；恢复测试在 JSON、Markdown、index 与 receipt
+  持久化后注入中断。SourceSession 范围是 typed-owner history 加行政 CLI，
+  其通用 Todo/quota 入口仍不可用。
+- **边界：**这是与 C1 单一 TS owner 对齐的 R1 恢复提案。Installed Core、C1
+  组合、原十项要求与完整 R1/M3 回归仍须独立验收；保留既有失败与预算的状态。

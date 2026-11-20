@@ -49,6 +49,9 @@ import {
   type ReceiptBoundReplayPhase,
 } from "./settlement_phase.ts";
 import { isTurnScopedSettlementOutcome } from "../work_items/delivery_outcome.ts";
+import {isExecutionLossCloseout} from "../work_items/execution_preparation.ts";
+import {isDeepStrictEqual} from "node:util";
+import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {
   decodeRefreshRetry,
   isMaterialMonitorPoll,
@@ -86,6 +89,7 @@ import {
 } from "../work_items/replan_semantics.ts";
 import {
   parseQuotaAccountingOwner,
+  quotaGoalRef,
   quotaOwnerOwnsProjection,
   withBorrowedQuotaAccountingOwner,
   withQuotaAccountingOwner,
@@ -209,6 +213,7 @@ function settlementProgress(
     quota_spend_source: source,
     ...(noSpendKind ? {
       closeout_kind: noSpendKind,
+      no_spend: true,
     } : {}),
   };
 }
@@ -1479,6 +1484,38 @@ function readQuotaSettlementFromRequest(
   }
   const completionEvent = findStepEvent(events, identity, "todo_complete");
   const supersedeEvent = findStepEvent(events, identity, "todo_supersede");
+  if (writebackRun?.execution_loss_closeout !== undefined) {
+    const closeout = jsonObject(writebackRun.execution_loss_closeout);
+    const commit = jsonObject(writebackRun.execution_loss_commit);
+    const permittedRunFields = ["generated_at", "goal_id", "agent_id", "todo_id", "turn_instance_id",
+      "settlement_identity", "classification", "delivery_outcome", "delivery_batch_scale", "delivery_boundary",
+      "progress_observation", "blocked_retry", "execution_loss_closeout", "json_path", "markdown_path",
+      "execution_loss_commit", ...(request.owner.kind === "exact_source" ? ["goal_ref"] : [])];
+    if (!closeout || !isExecutionLossCloseout(closeout, identity.todo_id)
+        || Object.keys(writebackRun).sort().join("|") !== permittedRunFields.sort().join("|")
+        || writebackRun.classification !== "execution_loss_closeout"
+        || writebackRun.delivery_outcome !== "outcome_gap" || writebackRun.delivery_boundary !== "semantic_closeout"
+        || writebackRun.delivery_batch_scale !== "single_surface" || writebackRun.generated_at !== closeout.observed_at
+        || closeout.effect_id !== identity.effect_id
+        || closeout.original_receipt_event_id !== heartbeatReceipt.event_id
+        || !isDeepStrictEqual(closeout.original_prepared, preparedLease)
+        || jsonObject(closeout.current_control_writer)?.owner !== identity.agent_id
+        || closeout.observation_fingerprint !== jsonObject(writebackRun.progress_observation)?.fingerprint
+        || !isDeepStrictEqual(writebackRun.blocked_retry, closeout)
+        || !commit || Object.keys(commit).sort().join("|") !== ["schema_version", "request_sha256",
+          "original_receipt_sha256", "event"].sort().join("|")
+        || commit.schema_version !== "quota_execution_loss_closeout_commit_v0"
+        || commit.original_receipt_sha256 !== canonicalAuthoritySha256(heartbeatReceipt)
+        || commit.request_sha256 !== canonicalAuthoritySha256({identity: settlementIdentityPayload(identity),
+          goal_ref: quotaGoalRef(request.owner), intent: {delivery_outcome: "outcome_gap", delivery_boundary: "semantic_closeout",
+            progress_observation: writebackRun.progress_observation}})
+        || !isDeepStrictEqual(jsonObject(commit.event)?.details,
+          {settlement_effect_id: identity.effect_id, execution_loss_closeout: closeout})
+        || (writebackEvent !== null && !isDeepStrictEqual(writebackEvent, commit.event))) {
+      throw new EffectRuntimeRequestError("administrative execution-loss receipt differs from original admission",
+        "malformed_settlement_state");
+    }
+  }
   const closeoutStarted = [writebackRun, writebackEvent, spendRun, spendEvent, completionEvent, supersedeEvent]
     .some((receipt) => receipt !== null);
 

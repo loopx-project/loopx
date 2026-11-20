@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import shlex
 from collections.abc import Iterator, Mapping
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -142,6 +142,109 @@ def _project_execution_facts(facts: dict[str, Any]) -> dict[str, Any]:
 
 class RefreshTaskLeaseUnavailable(ValueError):
     code = "refresh_task_lease_unavailable"
+
+
+def commit_execution_loss_closeout_from_refresh(arguments: Mapping[str, Any]) -> dict[str, Any]:
+    """Map the early refresh entry to its existing typed administrative owner."""
+    # Preserve original CLI requests independently of direct arguments. Only
+    # these explicit input fields cross the transport; caller locals never do.
+    effects = {
+        **dict(arguments["execution_loss_requested_effects"] or {}),
+        **{f"direct_{field}": arguments[field] for field in (
+            "recommended_action", "next_action", "next_action_basis", "replan_obligation_id",
+            "autonomous_replan_recorded", "repair_delta_kinds", "agent_vision_packet",
+            "merge_agent_vision_patch", "vision_unchanged_reason", "checkpoint_read_context_id",
+            "explore_result", "completion_todo_id", "completion_turn_key", "usage_measurement",
+            "dry_run", "external_delivery", "goal_acceptance_preview", "agent_lane", "progress_scope", "sync_global",
+        )},
+        **{f"direct_{field}": str(arguments[field]) if arguments[field] is not None else None
+           for field in ("project", "state_file", "delivery_workspace_path")},
+        "direct_usage_codex_session": str(arguments["usage_codex_session"]) if arguments["usage_codex_session"] else None,
+        "direct_delivery_batch_scale": (arguments["delivery_batch_scale"]
+            if arguments["delivery_batch_scale"] not in (None, "single_surface") else None),
+    }
+    return commit_execution_loss_closeout(
+        registry_path=arguments["registry_path"], runtime_root_override=arguments["runtime_root_override"],
+        goal_id=arguments["goal_id"], agent_id=arguments["agent_id"] or "", todo_id=arguments["todo_id"] or "",
+        turn_instance_id=arguments["turn_instance_id"] or "", goal_ref=arguments["goal_ref"],
+        requested_proof=arguments["task_lease_proof"], progress_observation=arguments["progress_observation"],
+        delivery_outcome=arguments["delivery_outcome"], delivery_boundary=arguments["delivery_boundary"],
+        requested_effects=effects,
+    )
+
+
+def commit_execution_loss_closeout(
+    *, registry_path: Path, runtime_root_override: str | None, goal_id: str, agent_id: str,
+    todo_id: str, turn_instance_id: str, goal_ref: Mapping[str, Any] | None,
+    requested_proof: Mapping[str, Any] | None, progress_observation: Mapping[str, Any] | None,
+    delivery_outcome: str | None, delivery_boundary: str | None,
+    requested_effects: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Transport one explicit administrative intent; TS owns every verdict/write."""
+    from ...file_lock import cross_runtime_lock_witness
+    from ...paths import resolve_runtime_root
+    from ..effect_runtime import EffectRuntimeRejected
+    from ..goals.first_party_host_admission import FirstPartyHostGoalAdmission
+    from ..projects.registry_codec import load_project_registry
+    from ..runtime.time import now_local_iso
+    from ..work_items.progress_observation import normalize_progress_observation
+    from .accounting_admission import quota_accounting_admission
+    from .settlement import SettlementIdentity
+
+    registry_path = registry_path.expanduser().resolve()
+    registry = load_project_registry(registry_path)
+    root = resolve_runtime_root(registry, runtime_root_override, registry_path=registry_path)
+    identity = SettlementIdentity(goal_id=goal_id, agent_id=agent_id, todo_id=todo_id,
+        turn_instance_id=turn_instance_id).as_dict()
+    progress = (normalize_progress_observation(progress_observation, work_item_id=todo_id)
+        if progress_observation is not None else None)
+    admission = FirstPartyHostGoalAdmission.for_plan(registry_path=registry_path,
+        goal_id=goal_id, planned_goal_ref=goal_ref, agent_id=agent_id)
+    with quota_accounting_admission(runtime_root=root, registry_path=registry_path,
+            goal_id=goal_id, goal_ref=goal_ref, operation="execution-loss-closeout",
+            handoff_legacy_index=True) as source_admission:
+        lifetime = (nullcontext() if source_admission is not None
+            else admission._legacy_lifetime(operation="execution-loss-closeout", launch=False))
+        with lifetime, ExitStack() as locks:
+            targets = [shadow_maintenance_lock_target(root, goal_id),
+                root / "goals" / goal_id / "rollout-event-log.jsonl"]
+            for target in targets:
+                # Existing quota requalification can own the rollout lock
+                # before asking for index/source; do not wait in reverse order.
+                locks.enter_context(exclusive_cross_runtime_file_lock(target,
+                    timeout_seconds=0, operation="execution-loss-closeout"))
+            raw = registry_path.read_bytes()
+            witnesses = [cross_runtime_lock_witness(target) for target in targets]
+            lifetime_sources = []
+            if source_admission is None:
+                witnesses.append(cross_runtime_lock_witness(root / "goals" / goal_id / "runs" / "index.jsonl"))
+                witnesses.append(cross_runtime_lock_witness(registry_path))
+                upstream = admission.legacy_source_admission
+                while upstream is not None:
+                    source_path = upstream.registry_path
+                    source_bytes = source_path.read_bytes()
+                    lifetime_sources.append({"path": str(source_path), "sha256": hashlib.sha256(source_bytes).hexdigest(),
+                        "payload": load_project_registry(source_path)})
+                    witnesses.append(cross_runtime_lock_witness(source_path))
+                    upstream = upstream.legacy_source_admission
+            request = {"schema_version": "quota_execution_loss_closeout_commit_v0",
+                "execution_loss_closeout": True, "runtime_root": str(root), "identity": identity,
+                **({"goal_ref": dict(goal_ref)} if goal_ref is not None else {}),
+                **({"source_admission": source_admission} if source_admission is not None else {}),
+                "registry_source": {"path": str(registry_path), "sha256": hashlib.sha256(raw).hexdigest(),
+                    "payload": load_project_registry(registry_path), "lifetime_sources": lifetime_sources}, "locks": witnesses,
+                "intent": {"delivery_outcome": delivery_outcome, "delivery_boundary": delivery_boundary,
+                    "progress_observation": progress}, "control_writer_proof": dict(requested_proof) if requested_proof else None,
+                "requested_effects": dict(requested_effects), "observed_at": now_local_iso()}
+            try:
+                result = effect_runtime_result("quota.execution_loss_closeout.commit", request)
+            except EffectRuntimeRejected as exc:
+                error = RefreshTaskLeaseUnavailable(str(exc))
+                error.code = exc.diagnostic_code
+                raise error from exc
+    if not isinstance(result, dict) or result.get("schema_version") != "quota_execution_loss_closeout_result_v0":
+        raise RuntimeError("typed execution-loss closeout returned an invalid result")
+    return result
 
 
 def prepared_lease_receipt_fields(

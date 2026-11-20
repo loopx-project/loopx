@@ -4788,3 +4788,24 @@ view shows its independently checked result in the same conversation.
 - **Boundary:** this is a source wiring repair. Installed Core and composition
   qualification, interrupted original-Task recovery, complete context/closure,
   actual models, costs, full R1/M3 and C1 cutover remain separate acceptance.
+
+### 2026-11-20 — Close a lost execution attempt without replacement delivery
+
+- **Gap:** a replacement task lease cannot authorize the original prepared
+  Turn's business writeback. Repeating the same work guard can therefore leave
+  the original receipt open without a legal recovery operation.
+- **Delta:** the explicit administrative closeout reuses the TS settlement,
+  Goal lifetime and File/SQLite provider owners. It preserves the original
+  identity and prepared proof, qualifies a distinct current control writer,
+  and records only blocked no-spend evidence. Its immutable Run recovers
+  missing tails within the same store identity; replay requires a fresh control
+  proof. Ordinary writeback and pure historical readback keep their boundaries.
+- **Source evidence:** CLI tests cover both local providers, stale/foreign
+  proofs, ordinary parity and zero completion/debit. Recovery tests inject
+  interruption after JSON, Markdown, index and receipt durability. SourceSession
+  coverage uses typed-owner history plus the administrative CLI; its generic
+  Todo/quota entry remains unavailable.
+- **Boundary:** this is an R1 recovery proposal aligned with C1's single TS
+  owner. Installed Core, C1 composition, the original ten requirements and full
+  R1/M3 regression remain independent acceptance; earlier failures and budgets
+  retain their status.
