@@ -525,6 +525,24 @@ def test_cli_only_discovery_failure_exit_render_and_recovery(monkeypatch, tmp_pa
     assert text.startswith("LoopX upgrade completed.")
 
 
+def test_unchanged_verified_package_keeps_prompt_recovery_available(tmp_path, monkeypatch):
+    from loopx.control_plane.heartbeat import installed_prompt_update
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    monkeypatch.setattr(installed_prompt_update, "snapshot",
+        lambda **_kwargs: {"ok": True, "status": "current", "entries": []})
+    runtime = {"ok": False, "changes_applied": False, "execution": {
+        "package_identity_verified": True, "install_returncode": 0, "doctor_returncode": 0,
+        "extension_doctor_returncode": 1,
+    }}
+    result = installed_prompt_update.update_with_prompts(
+        {}, registry=tmp_path / "registry.json", runtime_root=None, timeout_seconds=1,
+        runtime_update=lambda *_args, **_kwargs: dict(runtime),
+    )
+    assert result["automation_prompt_upgrade"] == {"ok": True, "status": "current"}
+    assert result["upgrade_complete"] is False
+
+
 def test_failed_cli_does_not_restart_the_app(monkeypatch):
     with mock.patch("loopx.cli_commands.support_control_upgrade._upgrade_desktop") as restart:
         result = finish_upgrade(

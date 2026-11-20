@@ -156,7 +156,8 @@ def update_with_prompts(payload: dict, *, registry: Path, runtime_root: str | No
     # but preserve the failed aggregate result and its original repair action.
     runtime_ready = bool(updated.get("ok"))
     execution = updated.get("execution", {})
-    installed = runtime_ready or (updated.get("changes_applied") is True
+    installed = runtime_ready or ((updated.get("changes_applied") is True
+        or execution.get("package_identity_verified") is True)
         and execution.get("install_returncode") == 0
         and execution.get("doctor_returncode") == 0)
     updated["upgrade_complete"] = False
