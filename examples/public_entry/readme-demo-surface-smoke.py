@@ -31,7 +31,7 @@ def main() -> int:
     for required in [
         '<div align="center">',
         "long-horizon goals",
-        "long-running agent teams",
+        "multi-agent teams",
         "## Meet the Personal Agent Workspace",
         "docs/assets/personal-workspace/research-workbench-hero.webp",
         "docs/architecture/rfcs/capable-manager-semantic-handoff-v0.md",
@@ -48,10 +48,8 @@ def main() -> int:
         "## Advanced Paths",
         "200+ hours of elapsed loop lifetime",
         "200+ hour public contribution arc",
-        "Redacted owner-run showcase",
         "not continuous model execution or unattended production autonomy",
         "docs/assets/long-running-loop-openviking-trajectory.png",
-        "docs/assets/long-running-loop-ml-experiment-trajectory.png",
         "### Recurring Work Presets",
         "### Review Agent Work",
         "### App and Projection Paths",
@@ -76,7 +74,6 @@ def main() -> int:
         "docs/assets/control-plane-board.zh.svg",
         "200+ 小时自然时长",
         "超过 200 小时的公开贡献轨迹",
-        "经过脱敏的 owner-run showcase",
         "docs/assets/loopx-lark-developer-group.png",
         "docs/assets/loopx-wechat-contact.png",
         "微信：<code>huangrt00</code>",
@@ -104,12 +101,7 @@ def main() -> int:
             assert '<source media="(max-width: 640px)"' in markdown
 
     for required in [
-        "independent reproduction",
-    ]:
-        assert required in compact_readme, required
-    for required in [
         "不是连续模型执行时长或无人值守的生产自治",
-        "不代表连续算力执行、独立复现或生产结果",
     ]:
         assert required.replace(" ", "") in compact_readme_zh, required
 

@@ -722,6 +722,8 @@ def test_live_packet_builder_preserves_gate_and_vision_contracts(tmp_path: Path)
         "activation_state": "goal_selection_required",
         "activation_allowed": False,
         "activation_required_after_todo_write": False,
+        "host_surface": None,
+        "activation_method": None,
     }
     assert (
         onboarding_entry_semantic_contract(packets["onboarding_goal_selection_gate"])[

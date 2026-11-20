@@ -1365,6 +1365,8 @@ def _build_multi_goal_start_selection_packet(
             "activation_state": "goal_selection_required",
             "activation_allowed": False,
             "activation_required_after_todo_write": False,
+            "host_surface": None,
+            "activation_method": None,
         },
         "available_slash_commands": slash_command_catalog,
         "onboarding_hint": slash_command_catalog["onboarding"],

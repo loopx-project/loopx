@@ -9,6 +9,7 @@ import re
 import subprocess
 from typing import Any, Callable, Mapping, Sequence
 
+from ..issue_fix.repository_snapshot import _REPO_PATTERN as _REPO_SLUG_RE
 from ..pr_review_queue.review_body import (
     author_owned_review_title_matches,
     check_review_body,
@@ -25,17 +26,16 @@ GITHUB_PR_LIST_FIELDS = (
 )
 GITHUB_PR_VIEW_FIELDS = GITHUB_PR_LIST_FIELDS + ",state,mergedAt,mergeCommit"
 
-_REPO_SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _GITHUB_URL_TARGET_RE = re.compile(
-    r"^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/([1-9][0-9]*)(?:[/?#].*)?$"
+    r"^https://github\.com/([^/]+/[^/]+)/pull/([1-9][0-9]*)(?:[/?#].*)?$"
 )
 _REPO_NUM_TARGET_RE = re.compile(
-    r"^(?:git:github\.com/)?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]*)$"
+    r"^(?:git:github\.com/)?([^/#]+/[^/#]+)#([1-9][0-9]*)$"
 )
 _BARE_NUM_TARGET_RE = re.compile(r"^#?([1-9][0-9]*)$")
 _REMOTE_GITHUB_RE = re.compile(
     r"(?:^git:github\.com/|^git@github\.com:|^ssh://git@github\.com/|^https?://github\.com/)"
-    r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$"
+    r"([^/]+/[^/]+?)(?:\.git)?/?$"
 )
 _CHECK_FAIL_CONCLUSIONS = frozenset(
     {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"}
@@ -51,7 +51,9 @@ def normalize_github_repo_slug(value: Any) -> str | None:
     if _REPO_SLUG_RE.fullmatch(raw):
         return raw.removesuffix(".git")
     match = _REMOTE_GITHUB_RE.match(raw)
-    return match.group(1) if match else None
+    if match and _REPO_SLUG_RE.fullmatch(match.group(1)):
+        return match.group(1)
+    return None
 
 
 def parse_github_pr_target(
@@ -62,10 +64,10 @@ def parse_github_pr_target(
         raise ValueError("protected merge target must be a string")
     raw = target.strip()
     url_match = _GITHUB_URL_TARGET_RE.fullmatch(raw)
-    if url_match:
+    if url_match and _REPO_SLUG_RE.fullmatch(url_match.group(1)):
         return url_match.group(1), int(url_match.group(2))
     repo_match = _REPO_NUM_TARGET_RE.fullmatch(raw)
-    if repo_match:
+    if repo_match and _REPO_SLUG_RE.fullmatch(repo_match.group(1)):
         return repo_match.group(1), int(repo_match.group(2))
     bare_match = _BARE_NUM_TARGET_RE.fullmatch(raw)
     if bare_match and default_repository and _REPO_SLUG_RE.fullmatch(default_repository):
