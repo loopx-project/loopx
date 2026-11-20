@@ -123,6 +123,7 @@ async function main(): Promise<void> {
   loopx.attach(manager);
   manager.loopx = loopx;
   manager.sessionIndex = (sessionId) => localSessions.find(sessionId);
+  manager.hiddenSessionDirs = config.hiddenSessionDirs;
   localSessions.start();
   machineUsage?.start();
   manager.recoverInterrupted();

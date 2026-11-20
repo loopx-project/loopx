@@ -72,13 +72,21 @@ export class Workdirs {
     return this.roots().map((path) => ({ path, removable: !this.base.includes(path) }));
   }
 
+  /** Why {@link add} would refuse `input`, or null when it would take it; changes nothing. */
+  refusal(input: string): string | null {
+    if (!input || !isAbsolute(input)) return 'give an absolute path';
+    const dir = resolve(input);
+    if (!existsSync(dir) || !statSync(dir).isDirectory()) return 'no such directory';
+    if (tooWide(dir)) return 'too wide: pick a project folder, not the root or a home directory itself';
+    if (isWithinWorkdirs(dir, this.roots())) return 'already allowed';
+    return null;
+  }
+
   /** Adds a directory from the page. Refuses what does not exist, what is already covered, and what is too wide. */
   add(input: string): void {
-    if (!input || !isAbsolute(input)) throw new Error('give an absolute path');
+    const refused = this.refusal(input);
+    if (refused) throw new Error(refused);
     const dir = resolve(input);
-    if (!existsSync(dir) || !statSync(dir).isDirectory()) throw new Error('no such directory');
-    if (tooWide(dir)) throw new Error('too wide: pick a project folder, not the root or a home directory itself');
-    if (isWithinWorkdirs(dir, this.roots())) throw new Error('already allowed');
     // A new root that holds added ones takes their place.
     this.extra = [...this.extra.filter((p) => !isWithinWorkdirs(p, [dir])), dir];
     this.save();

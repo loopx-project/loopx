@@ -59,6 +59,15 @@ export function isProbeSession(title: string): boolean {
   return title.trim() === '/usage';
 }
 
+/**
+ * Whether a session in `cwd` is offered for import, the one rule both session lists share: not in
+ * a hidden directory, and either in a workdir already or in one importing could add (a home
+ * directory or the root itself never can). Whether the directory still exists is checked apart.
+ */
+export function offeredSessionDir(cwd: string, workdirs: string[], hidden: string[]): boolean {
+  return !!cwd && !(hidden.length && isWithinWorkdirs(cwd, hidden)) && (isWithinWorkdirs(cwd, workdirs) || !tooWide(cwd));
+}
+
 /** A request kicks a scan when the last one is older than this. Asking an agent costs a process,
  *  so a page that stays open rescans every few minutes, not every poll. */
 const FRESH_MS = 5 * 60_000;
@@ -131,8 +140,7 @@ export class LocalSessions {
       if (listed === undefined) {
         // A session whose directory has since been removed, or that could never become a workdir,
         // cannot be continued here, so it is not listed.
-        listed = !!cwd && !(hidden.length && isWithinWorkdirs(cwd, hidden))
-          && (isWithinWorkdirs(cwd, workdirs) || !tooWide(cwd)) && (await isDirectory(cwd));
+        listed = offeredSessionDir(cwd, workdirs, hidden) && (await isDirectory(cwd));
         listable.set(cwd, listed);
       }
       return listed;

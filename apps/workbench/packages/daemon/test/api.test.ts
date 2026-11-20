@@ -1048,6 +1048,40 @@ test('import: Codex reads just the chosen session and rechecks its directory and
   }
 });
 
+test('import: a failed import leaves the workdirs as they were; hidden directories are not offered', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'loochat-test-import-fail-'));
+  const project = join(base, 'project');
+  const child = join(project, 'child');
+  const hidden = join(base, 'hidden');
+  mkdirSync(child, { recursive: true });
+  mkdirSync(hidden);
+  const sessions = [
+    { id: 'in-project', cwd: project, title: 'Unreadable history', updatedAt: '2026-03-02T10:00:00.000Z' },
+    { id: 'in-hidden', cwd: hidden, title: 'Kept out', updatedAt: '2026-03-01T10:00:00.000Z' },
+  ];
+  const adapter = {
+    id: 'stub', capabilities: { history: true },
+    listSessions: async () => sessions,
+    loadHistory: async () => { throw new Error('history unreadable'); },
+  } as unknown as AgentAdapter;
+  const dirs = new Workdirs([workdir], join(base, 'workdirs.json'));
+  dirs.add(child);
+  const m = new ThreadManager(store, new Map([['stub', adapter]]), dirs, new AttachmentStore(dataDir));
+  m.hiddenSessionDirs = [hidden];
+  try {
+    // The per-agent list follows the sidebar's rule: the hidden directory's session is not offered.
+    assert.deepEqual((await m.listAgentSessions('stub')).map((s) => s.id), ['in-project']);
+    // Its history cannot be read: no thread, and the added child is not replaced by its parent.
+    await assert.rejects(() => m.importSession({ agent: 'stub', sessionId: 'in-project', addDirectory: true }), /history unreadable/);
+    assert.deepEqual(m.workdirsConfig().workdirs, [workdir, child]);
+    assert.deepEqual(JSON.parse(readFileSync(join(base, 'workdirs.json'), 'utf8')), [child]);
+    assert.equal(store.findThreadByAgentSession('stub', 'in-project'), null);
+  } finally {
+    await m.shutdown();
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test('import: sessions the agent already has are listed from every existing directory', async () => {
   const outside = mkdtempSync(join(tmpdir(), 'loochat-test-outside-'));
   try {

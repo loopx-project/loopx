@@ -49,7 +49,7 @@ import { HttpError } from './errors.js';
 import { handoverBrief, handoverPrompt, synthesizeBrief, turnMessage } from './handover.js';
 import { McpManager } from './mcp.js';
 import { SkillsManager } from './skills.js';
-import { isWithinWorkdirs, tooWide, Workdirs } from './workdirs.js';
+import { isWithinWorkdirs, Workdirs } from './workdirs.js';
 import { coalesceToolEvents, compactDeltas, toolText, type EmittedEvent, type EventType, type StoredEvent, type TurnChannel } from './events.js';
 import type { SearchHit, SectionRecord, Store, ThreadRecord, ThreadWorktree, TodoProposal, TodoRecord, TodoUrgency } from './store.js';
 import { readBrief, type ThreadBrief } from './brief.js';
@@ -61,7 +61,7 @@ import { aggregateThreadStats, statsOfTrace, type ThreadStats, type TurnStatsRow
 import { askedText } from './util.js';
 import { MessageEdits } from './message-edits.js';
 import { addWorktree, countChanges, findCheckout, initRepository, removeWorktree, samePath, worktreeLeftovers, type Checkout, type Worktree } from './worktrees.js';
-import { isProbeSession } from './local-sessions.js';
+import { isProbeSession, offeredSessionDir } from './local-sessions.js';
 
 /** Why a copy cannot get a worktree of its own, said to whoever asked for one anyway. */
 const WORKTREE_REFUSALS = {
@@ -435,6 +435,8 @@ export class ThreadManager {
   /** The LoopX Goal adapter, when one is attached: a thread it binds is a Goal conversation, every other is ordinary. */
   loopx: LoopxHooks | null = null;
   /** What the last local-session scan knows of a native session: where it came from, and its Goal. */
+  /** Directories whose sessions are not offered for import (`LOOCHAT_HIDDEN_SESSION_DIRS`). */
+  hiddenSessionDirs: string[] = [];
   sessionIndex: ((sessionId: string) => { origin?: 'app' | 'cli' | null; loopx?: import('./session-enrich.js').SessionLoopx } | undefined) | null = null;
 
   /** The skills every agent instance on this machine can reach. Read-mostly, by the skills page. */
@@ -592,8 +594,9 @@ export class ThreadManager {
   }
 
   /**
-   * Conversations the agent already has, in any directory that still exists and could be a
-   * workdir: importing one from outside the workdirs adds its directory (see {@link importSession}).
+   * Conversations the agent already has, in any directory that still exists, is not hidden and
+   * could be a workdir (the sidebar's rule, {@link offeredSessionDir}): importing one from outside
+   * the workdirs adds its directory (see {@link importSession}).
    * `threadId` is set for those that are already a thread here (including archived ones).
    */
   async listAgentSessions(agent: string): Promise<Array<AgentSessionSummary & { threadId: string | null }>> {
@@ -605,12 +608,13 @@ export class ThreadManager {
     const sessions = await adapter.listSessions();
     const offered = new Map<string, boolean>();
     const workdirs = this.workdirs;
+    const hidden = this.hiddenSessionDirs;
     return sessions
       .filter((s) => !isProbeSession(s.title))
       // A session whose directory has since been removed, or that could never become a workdir,
       // cannot be continued, so it is not offered.
       .filter((s) => {
-        if (!offered.has(s.cwd)) offered.set(s.cwd, !!s.cwd && (isWithinWorkdirs(s.cwd, workdirs) || !tooWide(s.cwd)) && isDirectory(s.cwd));
+        if (!offered.has(s.cwd)) offered.set(s.cwd, offeredSessionDir(s.cwd, workdirs, hidden) && isDirectory(s.cwd));
         return offered.get(s.cwd);
       })
       .map((s) => ({ ...s, threadId: this.store.findThreadByAgentSession(agent, s.id)?.id ?? null }))
@@ -625,8 +629,9 @@ export class ThreadManager {
    *
    * A session outside the workdirs is imported only with `addDirectory`, which the person's own
    * import click sets: its directory then becomes a workdir, as if added from the page (a home
-   * directory or the root itself is refused as too wide). Imports nobody clicked, such as the
-   * LoopX Goal sync, never widen where threads may work.
+   * directory or the root itself is refused as too wide). The directory is checked first and
+   * added only once the thread exists, so a failed import leaves the workdirs as they were.
+   * Imports nobody clicked, such as the LoopX Goal sync, never widen where threads may work.
    */
   async importSession(input: { agent?: unknown; sessionId?: unknown; addDirectory?: boolean }): Promise<ThreadView> {
     const agent = String(input.agent ?? '');
@@ -644,7 +649,8 @@ export class ThreadManager {
     const key = `${agent}:${sessionId}`;
     if (this.store.findThreadByAgentSession(agent, sessionId) || this.importing.has(key)) throw new HttpError(409, 'this session is already a thread');
     if (!adapter.loadHistory) throw new HttpError(400, `${agent} has no session history to import`);
-    if (outside) this.addWorkdir(summary.cwd);
+    const refused = outside ? this.dirs.refusal(summary.cwd) : null;
+    if (refused) throw new HttpError(400, refused);
 
     this.importing.add(key);
     try {
@@ -681,6 +687,10 @@ export class ThreadManager {
       } catch (err) {
         this.attachments.removeThread(id);
         throw err;
+      }
+      if (outside) {
+        // Checked above; only a directory removed in between could fail here, and the thread stands either way.
+        try { this.dirs.add(summary.cwd); } catch (err) { console.warn(`import: could not add ${summary.cwd} as a workdir: ${err instanceof Error ? err.message : err}`); }
       }
       for (const ev of events) for (const l of this.listeners) l(ev);
       return this.threadView(id);
