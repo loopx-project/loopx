@@ -41,6 +41,10 @@ is an independent readback and recovery entry point. A provider that still
 fails remains closed until its per-extension doctor result is repaired and the
 command passes. See [Extension lifecycle](../reference/extensions.md#runtime-lifecycle).
 
+For an archive installed with custom directories, keep the same
+`LOOPX_BIN_DIR` and `LOOPX_RELEASES_DIR` overrides when rolling back.
+Unset or empty overrides use the default locations.
+
 Do not collapse package acquisition, host-material delivery, core runtime
 activation, and enabled-extension readiness into one "installed" claim. The
 [installation guide's active-layer checklist](../guides/installing-loopx.md#verify-the-active-layers)

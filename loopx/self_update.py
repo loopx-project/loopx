@@ -333,10 +333,14 @@ def _release_root_from_doctor(doctor_payload: dict[str, Any]) -> str | None:
 
 
 def _user_loopx_bin(home: Path | None = None) -> Path:
+    if home is None and (bin_dir := os.environ.get("LOOPX_BIN_DIR")):
+        return Path(bin_dir) / "loopx"
     return (home or Path.home()) / ".local" / "bin" / "loopx"
 
 
 def _user_releases_dir(home: Path | None = None) -> Path:
+    if home is None and (releases_dir := os.environ.get("LOOPX_RELEASES_DIR")):
+        return Path(releases_dir)
     return (home or Path.home()) / ".local" / "share" / "loopx" / "releases"
 
 
