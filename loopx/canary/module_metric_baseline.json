@@ -91,8 +91,29 @@
       "lines": 826
     },
     "loopx/control_plane/goals/goal_frontier/__init__.py": {
-      "any_count": 115,
-      "dict_any_count": 0
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 968
+    },
+    "loopx/control_plane/goals/goal_frontier/acceptance.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 221
+    },
+    "loopx/control_plane/goals/goal_frontier/ack_policy.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 333
+    },
+    "loopx/control_plane/goals/goal_frontier/projection.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 305
+    },
+    "loopx/control_plane/goals/goal_frontier/replan_rules.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 525
     },
     "loopx/control_plane/goals/goal_frontier/terminal.py": {
       "any_count": 15,
