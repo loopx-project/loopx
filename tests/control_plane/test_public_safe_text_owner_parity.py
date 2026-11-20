@@ -138,6 +138,18 @@ def test_public_output_guard_keeps_remote_urls_and_ordinary_prose() -> None:
         validate_public_safe_value({"value": value})
 
 
+@pytest.mark.parametrize(
+    "value",
+    (
+        "https://docs.example.test./home/overview",
+        "https://[2001:db8::1]/home/overview",
+        "https://docs.example.com/?next=/home/overview",
+    ),
+)
+def test_vision_checkpoint_keeps_http_links_with_path_shaped_parts(value: str) -> None:
+    _vision_text(value)
+
+
 def _boundary_authority_text(text: str) -> None:
     """Drive boundary_authority through its public builder, not its helper."""
 

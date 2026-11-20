@@ -836,6 +836,9 @@ LOCAL_PATH_VIEW_VALUES = (
     "///tmp/a.log",
     "//Users/alex/x",
     "x=/private/a",
+    "/home/",
+    "///var/",
+    "C:\\",
 )
 
 
@@ -855,6 +858,20 @@ def test_opaque_view_keeps_ordinary_remote_urls_and_prose() -> None:
         "body": "the token budget is 1200",
     }
     assert validate_opaque_presentation_view(view) == view
+
+
+PUBLIC_URL_VIEW_VALUES = (
+    "https://docs.example.test./home/overview",
+    "https://[2001:db8::1]/home/overview",
+    "https://docs.example.com/?next=/home/overview",
+)
+
+
+@pytest.mark.parametrize("value", PUBLIC_URL_VIEW_VALUES)
+def test_opaque_view_keeps_http_links_with_path_shaped_url_parts(value: str) -> None:
+    assert validate_opaque_presentation_view({"headline": value}) == {
+        "headline": value
+    }
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX console-script shebang fixture")
@@ -900,3 +917,90 @@ def test_projection_publication_rejects_local_path_without_rewriting(
 
     assert projection_file.read_bytes() == previous_bytes
     assert json.loads(previous_bytes)["payload_sha256"] == first["payload_sha256"]
+
+
+@pytest.mark.parametrize("value", ("/home/", "///var/", "C:\\"))
+@pytest.mark.skipif(os.name == "nt", reason="POSIX console-script shebang fixture")
+def test_projection_publication_rejects_directory_roots_without_rewriting(
+    tmp_path: Path,
+    value: str,
+) -> None:
+    state_file, _ = _installed_projection_extension(tmp_path)
+    first = publish_extension_projection(
+        "test-research-extension",
+        "investment-research",
+        state_file=state_file,
+        request={"schema_version": "synthetic_request_v0"},
+        execute=True,
+    )
+    projection_file = (
+        default_extension_projection_root(state_file)
+        / "test-research-extension"
+        / "investment-research.json"
+    )
+    previous_bytes = projection_file.read_bytes()
+
+    invalid = _provider_projection()
+    projection = invalid["presentation_projection"]
+    assert isinstance(projection, dict)
+    view = projection["view"]
+    assert isinstance(view, dict)
+    view["headline"] = value
+    _projection_provider(tmp_path / "provider", projection=invalid)
+    doctor_installed_extension(
+        "test-research-extension",
+        state_file=state_file,
+        execute=True,
+    )
+
+    with pytest.raises(ValueError, match="must not contain a local path"):
+        publish_extension_projection(
+            "test-research-extension",
+            "investment-research",
+            state_file=state_file,
+            request={"schema_version": "synthetic_request_v0"},
+            execute=True,
+        )
+
+    assert projection_file.read_bytes() == previous_bytes
+    assert json.loads(previous_bytes)["payload_sha256"] == first["payload_sha256"]
+
+
+@pytest.mark.parametrize("value", PUBLIC_URL_VIEW_VALUES)
+@pytest.mark.skipif(os.name == "nt", reason="POSIX console-script shebang fixture")
+def test_projection_publication_accepts_http_link_and_reads_it_back(
+    tmp_path: Path,
+    value: str,
+) -> None:
+    state_file, installed = _installed_projection_extension(tmp_path)
+    accepted = _provider_projection()
+    projection = accepted["presentation_projection"]
+    assert isinstance(projection, dict)
+    view = projection["view"]
+    assert isinstance(view, dict)
+    view["headline"] = value
+    _projection_provider(tmp_path / "provider", projection=accepted)
+    doctor_installed_extension(
+        "test-research-extension",
+        state_file=state_file,
+        execute=True,
+    )
+
+    receipt = publish_extension_projection(
+        "test-research-extension",
+        "investment-research",
+        state_file=state_file,
+        request={"schema_version": "synthetic_request_v0"},
+        execute=True,
+    )
+    assert receipt["status"] == "published"
+    assert receipt["readback_verified"] is True
+
+    envelope = read_extension_projection(
+        state_file=state_file,
+        extension_id="test-research-extension",
+        surface_id="investment-research",
+        extension_revision=str(installed["revision"]),
+        payload_sha256=str(receipt["payload_sha256"]),
+    )
+    assert envelope["view"]["headline"] == value
