@@ -153,6 +153,21 @@ uses `skills/list` before thread creation and fails before model work unless Cod
 actually discovers the installed skill set. A filesystem check alone is not
 treatment-fidelity evidence.
 
+### One read-only Turn with a retained decision
+
+Use the native runner with both `--decision-capture` and `--decision-sha256`
+to test a single ephemeral Codex Turn against an existing LoopX capture. Supply
+the absolute path to the original private `decision.json` and its digest. The
+runner verifies the UTF-8 bytes before sending them as standalone tool data
+with explicit Codex retention. This mode uses a read-only sandbox and ends
+with the first Turn. It does not attach a persistent native Goal.
+
+Use a Codex build that supports wrapped `thread/inject_items` retention, such
+as 0.171.0. Captures above 48,000 bytes and digest mismatches fail before
+`turn/start`. The receipt records the source digest and native Turn status.
+To qualify Compaction, inspect the provider request immediately after a
+mid-Turn window change and compare its tool data to the original bytes.
+
 ## Authority and anti-cheating
 
 Both arms receive the same task-visible filesystem, network, sandbox, approval
