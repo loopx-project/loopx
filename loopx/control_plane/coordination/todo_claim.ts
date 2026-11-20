@@ -477,8 +477,16 @@ async function executeClaimAttempt(
   };
   const recoverProof = async (result: CoordinationTodoClaimResult): Promise<CoordinationTodoClaimResult> => {
     if (input.manage_execution && result.reason_code === "coordination_operation_identity_mismatch") {
-      const original = await store.readReceipt(input.operation_id);
       const legacyIntent = {...requestIdentity};
+      if (input.expected_provider_revision !== undefined) {
+        // An earlier managed claim had no reviewed revision. Decode its exact
+        // historical intent without submitting a new claim without a revision.
+        delete legacyIntent.expected_provider_revision;
+        const historical = new CoordinationCommandReceipt({...receipt.contract,
+          identity: {...receipt.contract.identity, request_sha256: canonicalAuthoritySha256(legacyIntent)}});
+        return currentProof(await historical.read(store) ?? result);
+      }
+      const original = await store.readReceipt(input.operation_id);
       delete legacyIntent.manage_execution;
       if (original.status === "found" && original.receipts.length === 1 &&
           original.receipts[0]?.schema_version === COORDINATION_TODO_CLAIM_RECEIPT_SCHEMA &&
