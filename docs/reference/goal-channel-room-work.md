@@ -107,7 +107,11 @@ Card 2.0 schema (`schema: "2.0"` with `body.elements`): Lark rejects updating
 an existing card with a payload of a different schema, so the first update
 and the committed-receipt recovery share one structure that always matches
 the original card. The same 2.0 confirmation is used for the CLI's
-new-message delivery, keeping one card builder for every room write. The provider idempotency key is likewise derived from the
+new-message delivery, keeping one card builder for every room write.
+Dynamic identifiers interpolated into the Markdown element (Goal id, Agent
+id, Todo id, receipt id, revision) are escaped with the existing card-text
+rules, so CommonMark rendering always shows them literally — a legal Agent id
+like `agent-_ops_` never loses its underscores to emphasis parsing. The provider idempotency key is likewise derived from the
 claim identity (Goal, Todo, Agent, original key), not from card content, so
 an unrelated Todo write between the original send and its recovery cannot
 mint a second key. Recovery checks the original send first — the transport
@@ -354,7 +358,9 @@ canonical 领取提交后，原卡上的回执号直接由不可变接受事实�
 所有房间卡片——受限 offer 卡、已提交确认、未确认提示与每次恢复补丁——统一使用
 Card 2.0 结构（`schema: "2.0"` 加 `body.elements`）：飞书拒绝以不同 schema 就地更新
 既有卡片，首次更新与已提交回执的恢复因此共用同一结构并始终与原卡匹配；CLI 新消息
-投递同样使用这份 2.0 确认卡。
+投递同样使用这份 2.0 确认卡。插入 Markdown 元素的动态标识（Goal、Agent、Todo、
+回执号与 revision）按既有 card-text 规则转义，CommonMark 渲染始终保留字面原串——
+合法的 `agent-_ops_` 不会因强调解析丢失下划线。
 已提供单次授权的 IM 领取按钮、显式撤销和结果卡片恢复；默认不启用 collector。
 恢复在记录锁内复核资格，已撤销、已过期或已送达的记录不消耗投递名额，固定扫描
 顺序中的失效前缀不会饿死排在后面的有效回执。每轮投递预算还在该顺序上轮转：新一轮

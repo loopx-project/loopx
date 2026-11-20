@@ -19,6 +19,7 @@ from ...control_plane.coordination.local_authority import (
 from ...control_plane.effect_runtime import effect_runtime_result
 from ...control_plane.coordination.authority_source_capture import authority_registry_source
 from ...control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
+from .goal_channel_operation import _card_text
 from ...control_plane.runtime.public_safety import validate_public_safe_value
 from ...control_plane.runtime.time import now_utc_iso
 from ...control_plane.projection_envelope_facts import source_fact, seal_projection_envelope
@@ -78,18 +79,22 @@ def build_work_card(packet: dict[str, Any]) -> dict[str, Any]:
         # unrelated work moved the live projection. Current revision, claimable
         # counts and current ownership stay in the separate live projection
         # (`work project`) and the machine readback, never in this identity.
-        body = (f"Goal: {packet['goal_id']}\nAgent: {packet['actor_id']}\n"
-            f"Historical claim receipt: {receipt['acceptance']} · Task: {receipt['todo_id']}\n"
-            f"Receipt: {receipt['receipt_id']}")
+        # Identifiers ride the Markdown element literally: escape them with the
+        # existing card-text rules so CommonMark rendering (e.g. treating
+        # legal underscores as emphasis markers) cannot alter an Agent/Todo/
+        # Goal id or receipt id on the readable card.
+        body = (f"Goal: {_card_text(packet['goal_id'])}\nAgent: {_card_text(packet['actor_id'])}\n"
+            f"Historical claim receipt: {receipt['acceptance']} · Task: {_card_text(receipt['todo_id'])}\n"
+            f"Receipt: {_card_text(receipt['receipt_id'])}")
         body += "\nRead-only orientation. Claim through the scoped Agent CLI; recheck current authority after reconnect."
         return _room_card("LoopX work", body)
     projection = packet.get("projection") or {}
     selected = projection.get("selected_todo") or {}
     counts = projection.get("counts") or {}
-    body = (f"Goal: {packet['goal_id']}\nAgent: {packet['actor_id']}\n"
+    body = (f"Goal: {_card_text(packet['goal_id'])}\nAgent: {_card_text(packet['actor_id'])}\n"
         f"Available tasks: {counts.get('unclaimed', 0)} · User gates: {counts.get('user_gates', 0)}\n"
-        f"Selected task: {selected.get('todo_id') or 'none'}\n"
-        f"Revision: {projection.get('source_revision') or 'unavailable'}")
+        f"Selected task: {_card_text(selected.get('todo_id') or 'none')}\n"
+        f"Revision: {_card_text(projection.get('source_revision') or 'unavailable')}")
     body += "\nRead-only orientation. Claim through the scoped Agent CLI; recheck current authority after reconnect."
     envelope = packet.get("projection_envelope") or {}
     if envelope.get("alert") is not False:

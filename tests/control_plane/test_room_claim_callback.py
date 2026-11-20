@@ -1,5 +1,6 @@
 """Synthetic authenticated Lark ingress, actual canonical File/SQLite work."""
 import json
+import re
 import subprocess
 import sys
 import time
@@ -91,8 +92,15 @@ def offered(room_setup, monkeypatch):  # noqa: F811 - pytest fixture dependency
             principals=["lark:ou_room_owner"], expires_at=expires_at)
 
     def event(result):
+        def request_id_of(message):
+            try:
+                elements = json.loads(message["body"]["content"])["body"]["elements"]
+                return elements[1]["behaviors"][0]["value"]["request_id"]
+            except (KeyError, IndexError, TypeError, json.JSONDecodeError):
+                return None  # a patched result card no longer carries the button
+
         mid = next(m["message_id"] for m in room.messages
-            if json.loads(m["body"]["content"])["body"]["elements"][1]["behaviors"][0]["value"]["request_id"] == result["request_id"])
+            if request_id_of(m) == result["request_id"])
         card = json.loads(next(m for m in room.messages if m["message_id"] == mid)["body"]["content"])
         return {"type": "card.action.trigger", "action_tag": "button", "host": "im_message",
             "operator_id": "ou_room_owner", "message_id": mid, "chat_id": "oc_room_fixture",
@@ -764,3 +772,76 @@ def test_result_updates_match_the_original_card_schema(offered):
     # Exactly one canonical claim; recovery advanced nothing.
     assert snapshot(args)["provider_revision"] == committed
     assert next(t for t in snapshot(args)["todos"] if t["todo_id"] == TODO)["claimed_by"] == "agent-a"
+
+
+def _commonmark_rendered(markdown_text):
+    """A minimal oracle for the declared CommonMark behaviour of Card 2.0
+    markdown elements: emphasis runs on raw delimiter characters only, and
+    numeric character references render as their literal characters without
+    acting as delimiters."""
+    emphasized = re.sub(r"([*_])([^*_]+)\1", r"\2", markdown_text)
+    return re.sub(r"&#(\d+);", lambda m: chr(int(m.group(1))), emphasized)
+
+
+@pytest.mark.parametrize("metacharacter", ["_"])
+def test_rendered_result_card_preserves_identifier_literals(offered, metacharacter):
+    """A registered Agent id may legally contain CommonMark metacharacters
+    (agent ids admit `_`, `.`. `:`, `@` beside alphanumerics — e.g.
+    agent-_ops_). The committed-receipt card must render the identifier
+    literally — in both the first update and the recovery patch — instead of
+    letting emphasis parsing swallow the characters. `*` cannot occur in a
+    legal id; the shared escaping covers it regardless (asserted below)."""
+    args, room, binding, offer_args, _, event, callback_args, transport = offered
+    agent = f"agent-{metacharacter}ops{metacharacter}"
+    registry = json.loads(args["registry_path"].read_text())
+    registry["goals"][0]["coordination"]["registered_agents"] = sorted(
+        {*registry["goals"][0]["coordination"]["registered_agents"], agent})
+    args["registry_path"].write_text(json.dumps(registry))
+    binding["bindings"][GOAL]["connections"][agent] = json.loads(json.dumps(
+        binding["bindings"][GOAL]["connections"]["agent-a"]))
+    binding["bindings"][GOAL]["connections"][agent]["agent_id"] = agent
+    write_goal_channel_binding(args["binding_path"], binding)
+    # The shared escape→render roundtrip also holds for metacharacters that
+    # cannot legally appear in identifiers (documented coverage for `*`).
+    assert _commonmark_rendered("agent-&#42;ops&#42;") == "agent-*ops*"
+    todo = _add_todo(args, "Identifier rendering task")
+    revision = snapshot(args)["provider_revision"]
+    prepared = ingress.run_room_claim_offer(**offer_args, actor_id=agent, command="offer", execute=True,
+        todo_id=todo, expected_revision=revision, idempotency_key="room-identifier-literal",
+        principals=["lark:ou_room_owner"], expires_at="2030-01-01T00:00:00Z")
+    assert prepared["ok"], prepared
+    # The original offer card already escapes identifiers (existing owner).
+    offer_card = json.loads(next(m["body"]["content"] for m in room.messages
+        if "request_id" in m["body"]["content"]))
+    assert agent in _commonmark_rendered(offer_card["body"]["elements"][0]["content"])
+    # Recovery scenario: the first in-place update loses its transport.
+    transport["fail_update"] = True
+    pending = ingress.handle_room_claim_callback(event(prepared), **callback_args)
+    assert pending["canonical_claim_accepted"] is True and pending["ok"] is False, pending
+    message_id = json.loads((args["runtime_root"] / "room-claim-offers"
+        / (prepared["request_id"] + ".json")).read_bytes())["delivery"]["message_id"]
+    transport["fail_update"] = False
+    transport["seen_update_cards"].clear()
+    assert ingress.recover_room_claim_results(**callback_args,
+        allowed_chat_ids={"oc_room_fixture"}) == {"attempted": 1, "delivered": 1, "failed": 0}
+    recovered = transport["seen_update_cards"][0]
+    assert recovered["schema"] == "2.0" and recovered["body"]["elements"]
+    rendered = _commonmark_rendered(recovered["body"]["elements"][0]["content"])
+    assert agent in rendered, rendered
+    message = next(m for m in room.messages if m["message_id"] == message_id)
+    assert agent in _commonmark_rendered(json.loads(message["body"]["content"])["body"]["elements"][0]["content"])
+    # First-update scenario on a second claim: the direct callback update
+    # carries the same literal rendering.
+    transport["seen_update_cards"].clear()
+    second_todo = _add_todo(args, "Identifier rendering task two")
+    revision = snapshot(args)["provider_revision"]
+    second = ingress.run_room_claim_offer(**offer_args, actor_id=agent, command="offer", execute=True,
+        todo_id=second_todo, expected_revision=revision, idempotency_key="room-identifier-literal-2",
+        principals=["lark:ou_room_owner"], expires_at="2030-01-01T00:00:00Z")
+    result = ingress.handle_room_claim_callback(event(second), **callback_args)
+    assert result["ok"] is True and result["canonical_claim_accepted"] is True, result
+    first_update = transport["seen_update_cards"][0]
+    assert first_update["schema"] == "2.0"
+    assert agent in _commonmark_rendered(first_update["body"]["elements"][0]["content"])
+    assert result["receipt"]["receipt_id"] in _commonmark_rendered(
+        first_update["body"]["elements"][0]["content"])
