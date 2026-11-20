@@ -39,12 +39,16 @@ function orderedSettlementSteps(plan: JsonObject | null | undefined): unknown[] 
     && Array.isArray(plan.ordered_steps) ? plan.ordered_steps : undefined;
 }
 
+export function normalWorkReadContext(context: JsonObject): boolean {
+  return context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
+    && jsonObject(jsonObject(context.interaction_contract)?.agent_channel)?.delivery_allowed === true;
+}
+
 function readySettlementIdentity(context: JsonObject, interaction: JsonObject,
     plan: JsonObject | null | undefined): JsonObject | undefined {
   const cli = jsonObject(interaction.cli_channel), prepared = jsonObject(cli?.execution_preparation);
   const identity = jsonObject(plan?.identity);
-  return context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
-    && jsonObject(interaction.agent_channel)?.delivery_allowed === true && cli?.selection_required !== true
+  return normalWorkReadContext(context) && cli?.selection_required !== true
     && prepared?.state === "ready" && typeof identity?.effect_id === "string" && identity.effect_id.length > 0
     && typeof identity.todo_id === "string" && prepared.todo_id === identity.todo_id
     && jsonObject(context.selected_todo)?.todo_id === identity.todo_id
@@ -1004,8 +1008,8 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   const selectingBeforeWork = context.ok === true && context.should_run === true &&
     channel?.delivery_allowed === false && cli?.spend_allowed_now === false &&
     cli.spend_after_validation === false && hasUnboundActionSelection(cli);
-  const normalWork = context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
-    && (channel?.delivery_allowed === true || selectingBeforeWork);
+  const normalWork = normalWorkReadContext(context) || context.effective_action === EffectiveAction.NORMAL_RUN
+    && context.normal_delivery_allowed === true && selectingBeforeWork;
   // The same pending owner read applies before a required replan. Delivery
   // remains disabled while that review is being settled.
   const replanningBeforeWork = replanRequired && context.ok === true && context.should_run === true

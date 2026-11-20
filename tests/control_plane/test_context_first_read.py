@@ -748,15 +748,19 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
     if warm:
         prior = capture("wide-prior")
         _, prior_ref = read_context_read_reference(prior["recovery"]["reference_file"])
-        rows = json.loads(Path(prior_ref["path"]).read_bytes())["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+        prior_source = json.loads(Path(prior_ref["path"]).read_bytes())
+        rows = prior_source["interaction_contract"]["agent_channel"]["work_context"]["sources"]
         index = next(i for i, source in enumerate(rows) if source["source"] == "goal_state")
         body_pointer = f"/interaction_contract/agent_channel/work_context/sources/{index}/content/text"
         prior_pages, prior_facts = read(prior["recovery"]["command"] + " --select " + body_pointer)
         assert narrative in prior_facts[body_pointer]
         deliver(journal, event, prior_pages)
+        proof = prior_source["interaction_contract"]["cli_channel"].get("execution_preparation", {}).get("lease_proof")
+        proof_args = (["--task-lease-idempotency-key", proof["idempotency_key"],
+                       "--task-lease-expected-version", str(proof["expected_version"])] if proof else [])
         cli("refresh-state", *binding, "--turn-instance-id", "wide-prior", "--classification", "fixture_verified",
             "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
-            "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks")
+            "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks", *proof_args)
         cli("quota", "spend-slot", *binding, "--turn-instance-id", "wide-prior",
             "--slots", "1", "--source", "heartbeat", "--execute")
         scopes = [*scopes[:-1], "docs/areas/current-fixture-scope/**"]
@@ -2058,16 +2062,25 @@ def test_native_first_read_reuses_only_observed_write_scope(tmp_path, monkeypatc
     def binding(turn):
         return ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", turn)
 
+    proofs = {}
+
     def capture(turn, registry_path=registry):
-        return cli("quota", "should-run", "--codex-app", "--context-delivery", "auto", "--delta-delivery", "auto",
+        view = cli("quota", "should-run", "--codex-app", "--context-delivery", "auto", "--delta-delivery", "auto",
                    *binding(turn), "--decision-output-root", str(captures), "--codex-context-dir", str(journal),
                    registry_path=registry_path)
+        _, reference = read_context_read_reference(view["recovery"]["reference_file"])
+        source = json.loads(Path(reference["path"]).read_bytes())
+        proofs[turn] = source["interaction_contract"]["cli_channel"]["execution_preparation"]["lease_proof"]
+        return view
 
     def settle(turn, registry_path=registry):
+        proof = proofs[turn]
         cli("refresh-state", *binding(turn), "--classification", "fixture_validated",
             "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
             "--delivery-boundary", "in_flight_continuation", "--delivery-workspace-path", str(project),
-            "--no-global-sync", "--suppress-external-sinks", registry_path=registry_path)
+            "--no-global-sync", "--suppress-external-sinks",
+            "--task-lease-idempotency-key", proof["idempotency_key"],
+            "--task-lease-expected-version", str(proof["expected_version"]), registry_path=registry_path)
         spent = cli("quota", "spend-slot", *binding(turn), "--slots", "1", "--source", "heartbeat", "--execute",
                     registry_path=registry_path)
         assert spent["appended"]
@@ -2222,16 +2235,25 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(
         return ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                 "--todo-id", todo_id, "--turn-instance-id", turn)
 
+    proofs = {}
+
     def capture(turn, todo_id=TODO_ID):
-        return cli("quota", "should-run", "--codex-app", "--context-delivery", "on",
+        view = cli("quota", "should-run", "--codex-app", "--context-delivery", "on",
                    "--delta-delivery", "auto", *binding(turn, todo_id),
                    "--decision-output-root", str(captures), "--codex-context-dir", str(journal))
+        _, reference = read_context_read_reference(view["recovery"]["reference_file"])
+        source = json.loads(Path(reference["path"]).read_bytes())
+        proofs[turn] = source["interaction_contract"]["cli_channel"]["execution_preparation"]["lease_proof"]
+        return view
 
     def settle(turn):
+        proof = proofs[turn]
         cli("refresh-state", *binding(turn), "--classification", "fixture_validated",
             "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
             "--delivery-boundary", "in_flight_continuation", "--delivery-workspace-path", str(project),
-            "--no-global-sync", "--suppress-external-sinks")
+            "--no-global-sync", "--suppress-external-sinks",
+            "--task-lease-idempotency-key", proof["idempotency_key"],
+            "--task-lease-expected-version", str(proof["expected_version"]))
         spent = cli("quota", "spend-slot", *binding(turn), "--slots", "1", "--source", "heartbeat", "--execute")
         assert spent["appended"]
 
