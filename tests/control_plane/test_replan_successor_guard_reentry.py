@@ -397,9 +397,11 @@ def test_real_guard_uses_strict_microsecond_vision_ack(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("later_vision,interleaved_ack", [(False, False), (True, False), (True, True)])
+@pytest.mark.parametrize("later_vision,interleaved_ack", [
+    (False, False), (True, False), (True, "precise"), (True, "same_second"),
+])
 def test_successor_guard_returns_original_settlement_not_repeated_planning(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, later_vision: bool, interleaved_ack: bool,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, later_vision: bool, interleaved_ack: bool | str,
 ) -> None:
     call, runtime, index = _fixture(tmp_path, monkeypatch, provider, later_vision=later_vision)
     original = _guard(call)
@@ -428,7 +430,10 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
         )
         newer = json.loads(json.dumps(prior))
         admitted = datetime.fromisoformat(original["heartbeat_receipt"]["recorded_at"].replace("Z", "+00:00"))
-        newer["generated_at"] = (admitted + timedelta(microseconds=1)).isoformat()
+        newer["generated_at"] = (
+            admitted.replace(microsecond=0) if interleaved_ack == "same_second"
+            else admitted + timedelta(microseconds=1)
+        ).isoformat()
         newer["autonomous_replan_ack"]["semantic_delta"]["obligation_id"] = "replan-2222222222222222"
         with index.open("a") as stream:
             stream.write(json.dumps(newer) + "\n")

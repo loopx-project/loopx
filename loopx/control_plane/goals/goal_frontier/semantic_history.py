@@ -8,6 +8,7 @@ from ...runtime.time import parse_timestamp
 from ..goal_vision_read_model import latest_agent_vision_from_runs as latest_agent_vision_from_runs
 
 from ...work_items.autonomous_replan_ack import (
+    compact_autonomous_replan_ack,
     latest_autonomous_replan_ack_for_projection,
 )
 
@@ -205,9 +206,8 @@ def latest_autonomous_replan_ack_from_status_payload(
     goal_id: str,
     agent_id: str | None,
     neutral_classifications: set[str],
-    recorded_before: str | None = None,
 ) -> dict[str, Any] | None:
-    """Read the newest agent ACK, optionally bounded to its admission-time view."""
+    """Return the newest agent-scoped durable replan ACK visible in run history."""
 
     if not agent_id:
         return None
@@ -229,28 +229,43 @@ def latest_autonomous_replan_ack_from_status_payload(
             for run in _latest_runs_for_goal(status_payload, goal_id=goal_id)
             if _run_agent_id_matches(run, agent_id=agent_id)
         ]
-    if recorded_before is not None:
-        cutoff = parse_timestamp(recorded_before)
-        if cutoff is None:
-            return None
-        # Source reconstruction reads the admission-time view, while current
-        # settlement proofs retain their separate chronology checks. A later
-        # ACK must not replace the predecessor that formed the original digest.
-        # Retained semantic history may hold a row beyond the recent IO window.
-        candidates = (
-            [*latest_runs, *_latest_runs_for_goal(status_payload, goal_id=goal_id)]
-            if semantic_history_present else latest_runs
-        )
-        latest_runs = [
-            run for run in candidates
-            if _run_agent_id_matches(run, agent_id=agent_id)
-            and (stamp := parse_timestamp(run.get("generated_at"))) is not None
-            and stamp < cutoff
-        ]
     return latest_autonomous_replan_ack_for_projection(
         latest_runs,
         neutral_classifications=neutral_classifications,
     )
+
+
+def receipt_bound_replan_source_acks(
+    status_payload: dict[str, Any], *, goal_id: str, agent_id: str | None,
+    recorded_before: str | None,
+) -> list[dict[str, Any] | None]:
+    """Read possible predecessor sources, never historical settlement proofs.
+
+    Second-granular run timestamps cannot order a same-second later ACK against
+    a microsecond guard. Return distinct sources for the existing obligation
+    builder to match to the receipt digest, rather than treating newest as exact.
+    The empty predecessor is also a possible original source.
+    """
+    cutoff = parse_timestamp(recorded_before)
+    if not agent_id or cutoff is None:
+        return []
+    _, context = _semantic_agent_context_for_goal(status_payload, goal_id=goal_id, agent_id=agent_id)
+    retained = context.get("latest_autonomous_replan_ack_run") if isinstance(context, dict) else None
+    rows = ([retained] if isinstance(retained, dict) else []) + _latest_runs_for_goal(status_payload, goal_id=goal_id)
+    candidates: list[dict[str, Any] | None] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not _run_agent_id_matches(row, agent_id=agent_id):
+            continue
+        stamp = parse_timestamp(row.get("generated_at"))
+        if stamp is None or stamp >= cutoff:
+            continue
+        ack = compact_autonomous_replan_ack(row)
+        obligation_id = ((ack or {}).get("semantic_delta") or {}).get("obligation_id")
+        if isinstance(obligation_id, str) and obligation_id not in seen:
+            seen.add(obligation_id)
+            candidates.append(ack)
+    return [*candidates, None]
 
 
 def receipt_bound_replan_ack_history(
