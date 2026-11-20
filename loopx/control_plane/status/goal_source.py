@@ -386,7 +386,7 @@ class GoalSourceReader:
                 raise
             with self._lock:
                 if pages is not self._pages:
-                    raise SourceScopeError("The original Goal source became unavailable during the read")
+                    raise ValueError("The original Goal source became unavailable during the read")
             return {**page, "source": self.source.describe(), "goal_id": goal_id}
 
     def history(self, goal_id, cursor=""):

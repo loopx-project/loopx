@@ -114,7 +114,7 @@ def _git_origin_slug(repo_path: Path) -> str | None:
     try:
         completed = subprocess.run(
             ["git", "-C", str(repo_path), "config", "--get", "remote.origin.url"],
-            capture_output=True, text=True, check=False, timeout=3,
+            capture_output=True, text=True, encoding="utf-8", check=False, timeout=3,
         )
         if completed.returncode == 0:
             return normalize_github_repo_slug(completed.stdout.strip())
