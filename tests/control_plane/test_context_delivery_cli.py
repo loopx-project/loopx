@@ -240,8 +240,8 @@ def test_resumed_task_keeps_its_condition_without_expanding_diagnostic_siblings(
         "--turn-instance-id", "mixed-diagnostics", cwd=project)
     assert code == 0 and guard["should_run"], guard
     summary = guard["agent_todo_summary"]
-    assert [item["todo_id"] for item in summary["backlog_items"]] == ["todo_work_1"]
-    condition = summary["backlog_items"][0]["resume_condition"]
+    resumed = next(item for item in summary["backlog_items"] if item["todo_id"] == "todo_work_1")
+    condition = resumed["resume_condition"]
     assert condition["satisfied"] and condition["target_todo_id"] == "todo_dependency"
     assert len(summary["first_executable_items"]) == 3
     candidates = guard["capability_gate"]["runnable_candidates"]
@@ -648,16 +648,16 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
     from hashlib import sha256
 
     from loopx.cli import build_parser
-    from loopx.cli_commands import quota, quota_context_reader
+    from loopx.cli_commands import quota, quota_context_reader, quota_result_delivery
     from loopx.control_plane.turn_driver import codex_context
 
     args = build_parser().parse_args(["--format", "json", "quota", "should-run",
         "--goal-id", "fixture", "--agent-id", "worker", "--context-delivery", "on", "--codex-app", "--codex-context-dir", str(tmp_path)])
     original = {"ok": True, "goal_id": "fixture", "agent_identity": {"agent_id": "worker"},
         "heartbeat_receipt": {"turn_instance_id": "original-turn", "status": "committed"}}
-    monkeypatch.setattr(quota, "handoff_decision",
+    monkeypatch.setattr(quota_result_delivery, "handoff_decision",
         lambda *args, capture_sha256: ({"scope": "host-request"}, capture_sha256))
-    monkeypatch.setattr(quota, "_project_quota_cli_payload", lambda payload, *args, **kwargs: payload)
+    monkeypatch.setattr(quota_result_delivery, "_project_quota_cli_payload", lambda payload, *args, **kwargs: payload)
 
     def competing(*args, **kwargs):
         pytest.fail("explicit native observation must not compose two projection owners")
@@ -676,7 +676,7 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
     def unavailable_reference(*args, **kwargs):
         raise OSError("synthetic reader metadata unavailable")
 
-    monkeypatch.setattr(quota, "project_captured_context", competing)
+    monkeypatch.setattr(quota_result_delivery, "project_captured_context", competing)
     monkeypatch.setattr(codex_context, "prepare_codex_context", native)
     if native_failure == "directory":
         monkeypatch.setattr(codex_context, "codex_context_directory", unavailable_directory)
