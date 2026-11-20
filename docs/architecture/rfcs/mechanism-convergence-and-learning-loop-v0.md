@@ -346,6 +346,8 @@ unchanged Todo/lease state and once-only replay. This repairs the planning-to-
 writeback composition; installed cutover, actual model adoption and outcome/
 full-cost qualification remain open.
 
+The existing feedback qualification consumer reads a deferred Run path through the settled result's immutable `result_details` reader rather than assuming diagnostics remain inline. The public read selects only the original path and preserves the Vision, feedback, validation and once-only settlement assertions. Ordinary combined settlement verifies its runtime-owned debit; the planning checkpoint follows its returned agent-owned spend command. File/SQLite source and composed-path controls qualify the reader migration; scripted execution remains distinct from model adoption and benefit.
+
 The first task needs an actual feedback or method-choice requirement. Reuse complete existing paths; real consumers must demonstrate gaps before repairing them rather than manufacturing a failure for the example. Experiments, training and procedural publication retain original authority. This document allocates neither another lane's quota nor a prescribed PR count.
 
 ## 12. Consequential choices to confirm

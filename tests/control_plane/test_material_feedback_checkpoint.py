@@ -56,7 +56,9 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(
     def read_stage(command):
         argv = shlex.split(command)
         assert argv[:3] == [sys.executable, "-m", "loopx.entrypoint"]
-        assert argv[3:8] == ["--format", "json", "quota", "replan-view", "--decision-file"]
+        assert argv[3:6] == ["--format", "json", "quota"]
+        assert argv[6] in {"replan-view", "context-read"}
+        assert argv[7] == ("--decision-file" if argv[6] == "replan-view" else "--reference-file")
         result = subprocess.run(argv, cwd=project, capture_output=True, text=True, check=True)
         return json.loads(result.stdout)
 
@@ -149,14 +151,21 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(
     assert fixture._spend_run_count(runtime) == 0
     refreshed = execute(result_command, validated_progress="route_feedback_verified",
         scale="implementation", outcome="outcome_progress", file=vision)
-    execute(result_command, validated_progress="route_feedback_verified",
+    replayed = execute(result_command, validated_progress="route_feedback_verified",
         scale="implementation", outcome="outcome_progress", file=vision)
     assert fixture._classification_count(runtime, "route_feedback_verified") == 1
-    persisted = json.loads(Path(refreshed["json_path"]).read_text())
+    # Settlement controls stay inline; the original Run path is diagnostic
+    # detail. Read that one field from the immutable source without admission.
+    detail = read_stage(refreshed["result_details"]["command"] + " --select /json_path")
+    assert detail["eof"] is True
+    selected = {row["pointer"]: row["value"]
+                for row in json.loads(detail["content"])["selections"]}
+    assert set(selected) == {"/json_path"}
+    persisted = json.loads(Path(selected["/json_path"]).read_text())
     assert persisted["vision_checkpoint"]["delivery_boundary"] == "semantic_closeout"
     assert persisted["agent_vision"]["path_delta"]["evidence_refs"] == [evidence]
-    execute(plan["ordered_steps"][2]["command_template"])
-    execute(plan["ordered_steps"][2]["command_template"])
+    assert refreshed["quota_spend"]["appended"] is True
+    assert replayed["settlement_identity"] == refreshed["settlement_identity"]
     assert fixture._spend_run_count(runtime) == 1
     retained_todo = cli("todo", "list", "--goal-id", fixture.GOAL_ID, "--todo-id", fixture.TODO_ID)["todo"]
     assert retained_todo["status"] == "open" and retained_todo["completion_validation_required"]
@@ -215,6 +224,7 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(
         validated_progress="route_comparison_decided", scale="implementation", outcome="outcome_progress")
     assert acknowledged["autonomous_replan_ack"]["semantic_delta"]["accepted"]
     execute(review_plan["ordered_steps"][2]["command_template"])
+    assert fixture._spend_run_count(runtime) == 2
     next_guard = cli("quota", "should-run", *binding, "--runtime-profile", "generic_cli",
         "--todo-id", fixture.TODO_ID, "--turn-instance-id", "route-feedback-2")
     assert next_guard["should_run"] and next_guard["selected_todo"]["todo_id"] == fixture.TODO_ID
