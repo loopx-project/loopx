@@ -360,6 +360,22 @@ test("observeStewardNativeExecutor admits qualified codex-to-antigravity fallbac
     ...qualifiedFallback,
     session: {...qualifiedFallback.session, upstream_context_history: []},
   }).execution_available, false);
+  const flexiblePrimaryMigrated = {
+    binding: params.binding,
+    session: {
+      ...qualifiedFallback.session,
+      manager_executor_allocation: {
+        schema_version: "manager_executor_allocation_v0",
+        selection_policy: "flexible",
+        configured_endpoint: "antigravity",
+        executor_endpoint: "antigravity",
+        allocation_reason: "flexible_primary_available",
+        configuration_revision: "rev-2",
+        eligible_endpoints: ["antigravity", "codex"],
+      },
+    },
+  };
+  assert.equal(observeStewardNativeExecutor(flexiblePrimaryMigrated).execution_available, true);
 });
 
 test("zero-effect worker exit, storage I/O, and runtime unavailability monitors admit one bounded recovery", () => {

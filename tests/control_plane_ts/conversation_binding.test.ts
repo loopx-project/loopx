@@ -2054,3 +2054,28 @@ test("a steward quota endpoint change preserves its exact bound audience", () =>
   }
   assert.throws(() => resolveBoundConversation({...packet, sender_ref: "f".repeat(24), session, session_context: context}));
 });
+
+
+test("a steward session migrated via flexible_primary_available preserves web and bound intake audience", () => {
+  const codexBinding = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: [], executor_endpoint_id: "codex"};
+  const configured = planConversationBinding({...request, binding: codexBinding}).state;
+  const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
+  const packet = {current: configured, binding_id: row.binding_id, observation, available_projects: [project], ...source};
+  const context = resolveBoundConversation(packet).context;
+  const primaryAllocation = {schema_version: "manager_executor_allocation_v0", selection_policy: "flexible",
+    configured_endpoint: "antigravity", executor_endpoint: "antigravity", configuration_revision: "revision-2",
+    allocation_reason: "flexible_primary_available", eligible_endpoints: ["antigravity", "codex"]};
+  const migratedSession = {session_id: "original", goal_id: "loopx-manager", agent_id: "antigravity", executor_endpoint_id: "antigravity",
+    session_mode: "managed_runtime", status: "ready", upstream_thread_id: "antigravity-native",
+    channel_id: `manager.external.native.${row.binding_id}.${source.source_ref}`, steward_context: context,
+    manager_executor_allocation: primaryAllocation, upstream_context_history: [{agent_id: "codex", thread_id: "original-codex"}]};
+  const webPacket = {...packet, origin: "web", private_human_message: false, session: migratedSession, session_context: context};
+  assert.deepEqual(resolveBoundConversation(webPacket).context, context);
+  for (const invalid of [
+    {upstream_context_history: []},
+    {manager_executor_allocation: {...primaryAllocation, allocation_reason: "flexible_availability_fallback"}},
+    {manager_executor_allocation: {...primaryAllocation, configured_endpoint: "codex"}},
+  ]) {
+    assert.throws(() => resolveBoundConversation({...webPacket, session: {...migratedSession, ...invalid}}));
+  }
+});
