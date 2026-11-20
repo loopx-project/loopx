@@ -6,7 +6,6 @@ Never collect a developer's whole working directory or private local state.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 import gzip
@@ -19,7 +18,8 @@ import tomllib
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from loopx.cli_commands.update_artifact import extract_artifact, validate_default_contract
+from loopx.cli_commands.update_artifact import extract_artifact, file_hash, validate_default_contract
+from loopx.file_lock import exclusive_file_lock
 from scripts.qualify_runtime_artifact import observe_default_contract
 
 
@@ -39,7 +39,33 @@ def build(root: Path) -> None:
         cwd=root,
         check=True,
     )
-    archive = destination / "runtime-source.tar.gz"
+    with tempfile.TemporaryDirectory(prefix=".runtime-candidate-", dir=destination) as raw:
+        staging = Path(raw)
+        archive = _build_archive(root, revision, staging)
+        entries = qualify_archive(archive)
+        # Probe the same archived writer the signed App will install before
+        # replacing either part of the previous Desktop bundle.
+        with tempfile.TemporaryDirectory(prefix="loopx-desktop-contract-") as raw_source:
+            source = extract_artifact(archive, Path(raw_source).resolve())
+            default_contract = validate_default_contract(observe_default_contract(source))
+        identity = {
+            "schema_version": "desktop_runtime_bundle_v1",
+            "source_revision": revision,
+            "package_version": archive_package_version(archive),
+            "default_contract": default_contract,
+            "sha256": file_hash(archive),
+        }
+        identity_file = staging / "identity.json"
+        identity_file.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
+        with exclusive_file_lock(root / ".local/desktop-runtime-bundle", operation="desktop-runtime-publish"):
+            _publish_bundle(destination, archive, identity_file)
+    print(
+        f"Prepared exact desktop runtime: {revision[:12]} ({entries} installable entries)"
+    )
+
+
+def _build_archive(root: Path, revision: str, staging: Path) -> Path:
+    archive = staging / "runtime-source.tar.gz"
     subprocess.run(
         [
             "git",
@@ -91,7 +117,7 @@ def build(root: Path) -> None:
             raise RuntimeError(
                 f"desktop build input differs from committed source: {name}"
             )
-    rebuilt = destination / "runtime-source.staged.tar.gz"
+    rebuilt = staging / "runtime-source.staged.tar.gz"
     with (
         tarfile.open(archive, "r:gz") as source,
         tarfile.open(rebuilt, "w:gz", format=tarfile.PAX_FORMAT) as target,
@@ -111,24 +137,25 @@ def build(root: Path) -> None:
             member.mode = 0o644
             target.addfile(member, io.BytesIO(content))
     rebuilt.replace(archive)
-    entries = qualify_archive(archive)
-    # Inspect the actual archived writer, not dirty checkout files or the
-    # engineering-only installer result. The signed App carries these bytes.
-    with tempfile.TemporaryDirectory(prefix="loopx-desktop-contract-") as raw:
-        source_root = Path(raw).resolve()
-        extract_artifact(archive, source_root)
-        default_contract = validate_default_contract(observe_default_contract(source_root))
-    identity = {
-        "schema_version": "desktop_runtime_bundle_v1",
-        "source_revision": revision,
-        "package_version": archive_package_version(archive),
-        "default_contract": default_contract,
-        "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
-    }
-    (destination / "identity.json").write_text(json.dumps(identity, indent=2) + "\n")
-    print(
-        f"Prepared exact desktop runtime: {revision[:12]} ({entries} installable entries)"
-    )
+    return archive
+
+
+def _publish_bundle(destination: Path, archive: Path, identity: Path) -> None:
+    # The old identity stays in place until the candidate archive is ready.
+    target_archive = destination / archive.name
+    previous_archive = archive.with_name("previous-runtime-source.tar.gz")
+    had_previous = target_archive.is_file() or target_archive.is_symlink()
+    if had_previous:
+        target_archive.rename(previous_archive)
+    try:
+        archive.replace(target_archive)
+        identity.replace(destination / identity.name)
+    except OSError:
+        if had_previous:
+            previous_archive.replace(target_archive)
+        elif not archive.exists():
+            target_archive.unlink()
+        raise
 
 
 def archive_package_version(archive: Path) -> str:
