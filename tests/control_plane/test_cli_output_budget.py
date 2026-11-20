@@ -619,7 +619,7 @@ def _mode_variant_commands(
         "quota_should_run_goal_boundary_detail": quota + ["--include-detail", "goal-boundary"],
         "quota_should_run_vision_detail": quota + ["--include-detail", "vision"],
         "quota_should_run_all_detail": quota + ["--include-detail", "all"],
-        "quota_should_run_turn_envelope": quota,
+        "quota_should_run_turn_envelope": quota + ["--turn-envelope"],
         "loopx_turn_plan_transaction_detail": common
         + [
             "turn",
