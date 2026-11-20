@@ -611,6 +611,31 @@ def test_closeout_rejects_wrong_identity_and_extra_work_intent(tmp_path, monkeyp
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("removed", ["execution_loss_closeout", "execution_loss_commit", "both"])
+def test_administrative_subtype_without_complete_proof_cannot_settle(
+    tmp_path, monkeypatch, capsys, provider, removed,
+):
+    context = _fixture(tmp_path, monkeypatch, capsys, provider, source_profile=False)
+    code, closed = context["cli"](*_closeout_args(context))
+    assert code == 0 and closed["settlement_progress"]["state"] == "settled", closed
+    index = context["runtime"] / "goals" / context["goal_id"] / "runs" / "index.jsonl"
+    records = [json.loads(line) for line in index.read_text().splitlines()]
+    record = next(row for row in records if "execution_loss_closeout" in row)
+    for field in ("execution_loss_closeout", "execution_loss_commit"):
+        if removed in (field, "both"):
+            del record[field]
+    # Keep the matching refresh event and the shaped blocked_retry. Neither
+    # may certify no-spend when the administrative qualification is absent.
+    Path(record["json_path"]).write_text(json.dumps(record) + "\n")
+    index.write_text("".join(json.dumps(row) + "\n" for row in records))
+    before = _unchanged_state(context)
+    with pytest.raises(ValueError, match="administrative execution-loss receipt differs from original admission"):
+        _readback(context)
+    assert _unchanged_state(context) == before
+    _assert_no_completion_or_debit(context)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_current_original_generation_keeps_ordinary_blocked_closeout_semantics(
     tmp_path, monkeypatch, capsys, provider,
 ):

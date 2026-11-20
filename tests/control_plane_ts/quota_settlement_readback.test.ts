@@ -281,6 +281,27 @@ test("a service-qualified blocked replan closes only its exact Turn without debi
   } finally {await rm(root, {recursive: true, force: true});}
 });
 
+test("execution-loss blocked retry without administrative proof cannot certify no-spend", async () => {
+  const progress = {schema_version: "typed_progress_observation_v0", work_item_id: todoId,
+    result_class: "blocked", blocker_id: "execution-lost", evidence_ids: ["evidence:loss"],
+    fingerprint: "a".repeat(16)};
+  const closeout = {schema_version: "quota_execution_loss_closeout_v0", effect_id: identity.effect_id,
+    todo_id: todoId, source: "turn_settlement", observed_at: "2026-01-01T01:02:00Z",
+    original_receipt_event_id: "event-guard", original_prepared: {
+      prepared_lease_key_sha256: "a".repeat(64), prepared_lease_version: 1, prepared_lease_epoch: 1},
+    current_control_writer: {lease_key_sha256: "b".repeat(64), version: 2, lease_epoch: 2,
+      owner: agentId, store_identity: "file:original", provider_revision: "revision-2"},
+    observation_fingerprint: progress.fingerprint};
+  const root = await fixture({writeback: true, writebackOutcome: "outcome_gap",
+    progressObservation: progress, blockedRetry: closeout});
+  try {
+    await assert.rejects(readQuotaSettlement(request(root)), {
+      code: "malformed_settlement_state",
+      message: "administrative execution-loss receipt differs from original admission",
+    });
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
 async function fixture(options: {
   guard?: boolean;
   /**

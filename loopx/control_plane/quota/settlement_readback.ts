@@ -49,7 +49,7 @@ import {
   type ReceiptBoundReplayPhase,
 } from "./settlement_phase.ts";
 import { isTurnScopedSettlementOutcome } from "../work_items/delivery_outcome.ts";
-import {isExecutionLossCloseout} from "../work_items/execution_preparation.ts";
+import {EXECUTION_LOSS_CLOSEOUT_SCHEMA, isExecutionLossCloseout} from "../work_items/execution_preparation.ts";
 import {isDeepStrictEqual} from "node:util";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {
@@ -1484,7 +1484,9 @@ function readQuotaSettlementFromRequest(
   }
   const completionEvent = findStepEvent(events, identity, "todo_complete");
   const supersedeEvent = findStepEvent(events, identity, "todo_supersede");
-  if (writebackRun?.execution_loss_closeout !== undefined) {
+  if (writebackRun !== null && (writebackRun.execution_loss_closeout !== undefined
+      || writebackRun.execution_loss_commit !== undefined
+      || jsonObject(writebackRun.blocked_retry)?.schema_version === EXECUTION_LOSS_CLOSEOUT_SCHEMA)) {
     const closeout = jsonObject(writebackRun.execution_loss_closeout);
     const commit = jsonObject(writebackRun.execution_loss_commit);
     const permittedRunFields = ["generated_at", "goal_id", "agent_id", "todo_id", "turn_instance_id",
