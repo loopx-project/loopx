@@ -272,7 +272,16 @@ jobs:
           decision=advance
           if grep -Fxq desktop-updater.json <<<"$pointer_assets"; then
             mkdir -p dist/current-pointer
-            gh release download "$pointer" --pattern desktop-updater.json --dir dist/current-pointer
+            for attempt in 1 2 3 4; do
+              rm -f dist/current-pointer/desktop-updater.json
+              if gh release download "$pointer" --pattern desktop-updater.json --dir dist/current-pointer; then
+                break
+              fi
+              if [ "$attempt" -eq 4 ]; then
+                exit 1
+              fi
+              sleep "$((1 << (attempt - 1)))"
+            done
             decision="$(python scripts/desktop_update_feed.py \
               --channel-pointer-decision "$CHANNEL" \
               --current-feed dist/current-pointer/desktop-updater.json \

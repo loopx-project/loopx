@@ -474,6 +474,39 @@ def _matching_antigravity_model_config(rows: list[Any], model_id: str) -> list[d
     ]
 
 
+def _extract_user_model_quota(
+    user: Any,
+    model_id: str,
+    *,
+    fallback_rows: list[Any] | None = None,
+) -> tuple[str, float, str] | None:
+    """Validate and extract `(account_ref, remaining_fraction, reset_time)` for one canonical model."""
+    if not isinstance(user, Mapping):
+        return None
+    account = user.get("email")
+    if not isinstance(account, str) or not account.strip():
+        return None
+    rows = (user.get("cascadeModelConfigData") or {}).get("clientModelConfigs")
+    if not isinstance(rows, list):
+        if fallback_rows is None:
+            return None
+        rows = fallback_rows
+    matching = _matching_antigravity_model_config(rows, model_id)
+    if len(matching) != 1:
+        return None
+    quota = matching[0]["quotaInfo"]
+    fraction, reset = quota.get("remainingFraction", 0), quota.get("resetTime")
+    if (type(fraction) not in (int, float) or not math.isfinite(fraction)
+            or not 0 <= fraction <= 1 or not isinstance(reset, str)
+            or datetime.fromisoformat(reset).tzinfo is None):
+        return None
+    return (
+        hashlib.sha256(account.strip().casefold().encode()).hexdigest(),
+        fraction,
+        reset,
+    )
+
+
 def _native_user_input_text(step: dict[str, Any]) -> str | None:
     """Read the one native text item; any redundant response must agree."""
     content = step.get("userInput")
@@ -683,6 +716,7 @@ class AntigravityAdapter:
         native failure alongside the exact model's quota epoch.
         """
         try:
+            canonical_model_id, _ = resolve_antigravity_model_placeholder(model_id)
             found = discover_antigravity_language_server()
             if found is None:
                 return None
@@ -717,25 +751,15 @@ class AntigravityAdapter:
             if not normal and not exhausted:
                 return None  # An unknown native failure is not capacity evidence.
             status = read("GetUserStatus", {})
-            user = status["userStatus"]
-            account = user.get("email")
-            if not isinstance(account, str) or not account.strip():
+            extracted = _extract_user_model_quota(status.get("userStatus"), canonical_model_id)
+            if extracted is None:
                 return None
-            rows = user["cascadeModelConfigData"]["clientModelConfigs"]
-            matching = _matching_antigravity_model_config(rows, model_id)
-            if len(matching) != 1:
-                return None
-            quota = matching[0]["quotaInfo"]
-            fraction, reset = quota.get("remainingFraction", 0), quota.get("resetTime")
-            if (type(fraction) not in (int, float) or not math.isfinite(fraction)
-                    or not 0 <= fraction <= 1 or not isinstance(reset, str)
-                    or datetime.fromisoformat(reset).tzinfo is None):
-                return None
+            account_ref, fraction, reset = extracted
             after = read("GetCascadeTrajectory", {"cascadeId": cascade_id})
             if (after.get("status") != before["status"] or after.get("numTotalSteps") != total
                     or (after.get("trajectory") or {}).get("cascadeId") != cascade_id):
                 return None
-            return {"model_id": model_id, "account_ref": hashlib.sha256(account.strip().casefold().encode()).hexdigest(),
+            return {"model_id": canonical_model_id, "account_ref": account_ref,
                 "remaining_fraction": fraction, "reset_time": reset,
                 "execution_id": (latest[0].get("metadata") or {}).get("executionId"),
                 "observed_at": time.time(), "quota_exhausted": exhausted, "normal_completion": normal}
@@ -746,35 +770,33 @@ class AntigravityAdapter:
     def endpoint_model_capacity(
         *,
         model_id: str,
+        reasoning_effort: str | None = None,
         env: Mapping[str, str] | None = None,
         discovered: Mapping[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Observe the live LS account's quota for one offered model without opening a cascade."""
         try:
+            canonical_model_id, _ = resolve_antigravity_model_placeholder(
+                model_id,
+                reasoning_effort,
+            )
             found = discovered or discover_antigravity_language_server(env=env, include_model_config=True)
             if found is None:
                 return None
             status = _rpc_post(str(found["url"]), str(found["csrf_token"]), "GetUserStatus", {}, timeout=5.0)
-            user = status["userStatus"]
-            account = user.get("email")
-            if not isinstance(account, str) or not account.strip():
+            fallback_rows = (found.get("model_config_data") or {}).get("clientModelConfigs") or []
+            extracted = _extract_user_model_quota(
+                status.get("userStatus"),
+                canonical_model_id,
+                fallback_rows=fallback_rows if isinstance(fallback_rows, list) else [],
+            )
+            if extracted is None:
                 return None
-            rows = (user.get("cascadeModelConfigData") or {}).get("clientModelConfigs")
-            if not isinstance(rows, list):
-                rows = (found.get("model_config_data") or {}).get("clientModelConfigs") or []
-            matching = _matching_antigravity_model_config(rows, model_id)
-            if len(matching) != 1:
-                return None
-            quota = matching[0]["quotaInfo"]
-            fraction, reset = quota.get("remainingFraction", 0), quota.get("resetTime")
-            if (type(fraction) not in (int, float) or not math.isfinite(fraction)
-                    or not 0 <= fraction <= 1 or not isinstance(reset, str)
-                    or datetime.fromisoformat(reset).tzinfo is None):
-                return None
+            account_ref, fraction, reset = extracted
             exhausted = fraction <= 0
             return {
-                "model_id": model_id,
-                "account_ref": hashlib.sha256(account.strip().casefold().encode()).hexdigest(),
+                "model_id": canonical_model_id,
+                "account_ref": account_ref,
                 "remaining_fraction": fraction,
                 "reset_time": reset,
                 "execution_id": f"endpoint-probe:{uuid.uuid4().hex}",

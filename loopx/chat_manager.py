@@ -1008,10 +1008,13 @@ def manager_session_quota_route(controller: Any, session: Mapping[str, Any]) -> 
         else:
             route = accounts.steward_route(**route_inputs, primary_capacity=None, fallback_capacity=None)
             if route.get("endpoint") is None:
-                target_ag_model = manager_model_resolution(
+                target_ag_config = manager_model_config(
                     clean_environment, endpoint="antigravity", machine_defaults=defaults,
-                )[0]
-                capacity = AntigravityAdapter.endpoint_model_capacity(model_id=target_ag_model)
+                )
+                capacity = AntigravityAdapter.endpoint_model_capacity(
+                    model_id=target_ag_config["model"],
+                    reasoning_effort=target_ag_config["reasoning_effort"],
+                )
                 if capacity is not None:
                     route = accounts.steward_route(
                         **route_inputs, primary_capacity=None, fallback_capacity=capacity,
