@@ -266,12 +266,13 @@ def update_canonical_todo_if_promoted(
     authority_reason: str | None = None,
     expected_provider_revision: str | None = None,
     expected_registry_sha256: str | None = None,
+    routing_registry_witness: dict[str, str] | None = None,
     monitor_observation: MonitorPollObservation | None = None,
     completion_validation_revision: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     # The witness brackets fact projection and is rechecked by the native
     # transaction. Reviewed edits additionally bind the preview's registry hash.
-    with authority_registry_source(registry_path) as registry_source:
+    with authority_registry_source(registry_path, routing_registry_witness=routing_registry_witness) as registry_source:
         registered, grants = todo_lifecycle_facts(registry_path, goal_id)
     patch: dict[str, Any] = {}
     if text is not None:
