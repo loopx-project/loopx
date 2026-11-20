@@ -1866,24 +1866,19 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                     # A name supplies presentation metadata only; outbound
                     # provenance and Core recovery/admission keep their own
                     # fresh checks, including on the completed-stop path.
-                    config = self._inbox(record, observation=selected["observation"] if selected else None,
-                                         reuse_display_name=control_receipt_first and selected is None)
+                    config = self._inbox(record, observation=selected["observation"] if selected else None, reuse_display_name=control_receipt_first and selected is None)
                 return config
 
             try:
                 if record["status"] in {"command_queued", "command_completed", "commission_running"}:
                     native = self.core.read_request(record["request_ref"])
                     if native["status"] == "command_queued":
-                        selected = self.bindings.resolve(binding_id=record["binding_id"],
-                                                         include_observation=True, **record["source"])
+                        selected = self.bindings.resolve(binding_id=record["binding_id"], include_observation=True, **record["source"])
                         self._feedback(path, record, inbox=inbox)
                         self._deliver(path, record, "admission", native["response"], inbox=inbox)
                         return 0
-                    record.update(status=native["status"], response=native.get("response"),
-                                  commission_resources=native.get("commission_resources"),
-                                  status_snapshot=native.get("status_snapshot"))
-                    control_receipt_first = (native["status"] == "command_completed"
-                                             and native.get("command") in CHAT_CONTROL_COMMANDS.values())
+                    record.update(status=native["status"], response=native.get("response"), commission_resources=native.get("commission_resources"), status_snapshot=native.get("status_snapshot"))
+                    control_receipt_first = (native["status"] == "command_completed" and native.get("command") in CHAT_CONTROL_COMMANDS.values())
                 # A completed group stop has no Core work left. Its existing
                 # Inbox name is presentation only; sending still runs both
                 # fresh binding/source observations in _source_verified. Do
@@ -1893,8 +1888,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                         and record["source"].get("group_human_message") is True
                         and not record["deliveries"].get("terminal", {}).get("verified")
                         and _same_fields(native, record, "request_ref", "binding_id", "source")):
-                    selected = self.bindings.resolve(binding_id=record["binding_id"],
-                                                     include_observation=True, **record["source"])
+                    selected = self.bindings.resolve(binding_id=record["binding_id"], include_observation=True, **record["source"])
                 if record["status"] == "accepted":
                     native = self.core.read_request(record["request_ref"])
                     if native.get("agent_target"):
@@ -1925,6 +1919,10 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                         turn = self.core.controller.store.load_turn(record["session_id"], record["turn_id"])
                         if turn and turn["status"] in {"starting", "running"}:
                             self._progress(path, record, inbox=inbox)
+                    if turn and turn["status"] == "completing":
+                        # Finish an orphaned completing turn's saved answer under the original request without replaying.
+                        self.core.controller.recover_exited_turn(record["session_id"], record["turn_id"])
+                        turn = self.core.controller.store.load_turn(record["session_id"], record["turn_id"])
                     if not turn or turn["status"] not in TERMINAL_TURN_STATES:
                         return 0
                     if turn["status"] == "failed":
@@ -1977,11 +1975,9 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                         if not self._deliver(path, record, "commission_result", result_text, inbox=inbox):
                             return 0
                     config = inbox()
-                    acknowledge_lark_event_inbox(project=self.runtime_root, config_path=config,
-                        message_ids=[record["event"]["message_id"]], execute=True)
+                    acknowledge_lark_event_inbox(project=self.runtime_root, config_path=config, message_ids=[record["event"]["message_id"]], execute=True)
                     if native_path.exists():
-                        self.core.record_delivery(record["request_ref"], session_id=record.get("session_id"),
-                            turn_id=record.get("turn_id"), message_text=response)
+                        self.core.record_delivery(record["request_ref"], session_id=record.get("session_id"), turn_id=record.get("turn_id"), message_text=response)
                     elif record["status"] != "rejected":
                         raise ValueError("delivery request journal unavailable")
                     record["status"] = "delivered"

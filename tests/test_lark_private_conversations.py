@@ -5156,6 +5156,46 @@ def test_completed_answer_delivery_does_not_prepare_another_execution(ordinary, 
         runtime.close()
 
 
+def test_private_delivery_recovers_saved_answer_after_claim_release(ordinary, monkeypatch):  # noqa: F811
+    import errno
+    from loopx import chat_store
+
+    store, runtime, provider, transport = connect(ordinary)
+    event = provider.event("notes-app", "saved-answer-original", "Complete the original request.")
+    write = chat_store._atomic_write_json
+    lost = threading.Event()
+
+    def fail_final_status(path, value, **kwargs):
+        if path.parent.name == "turns" and value.get("status") == "completed" and not lost.is_set():
+            lost.set()
+            raise OSError(errno.EIO, "Synthetic final status write failure")
+        return write(path, value, **kwargs)
+
+    monkeypatch.setattr(chat_store, "_atomic_write_json", fail_final_status)
+    try:
+        transport.admit("notes-app", event)
+        native, = transport.core.pending()
+        sid, tid = native["session_id"], native["turn_id"]
+        assert lost.wait(10)
+        worker = runtime.session_queue_threads.get(sid)
+        if worker is not None:
+            worker.join(5)
+            assert not worker.is_alive()
+        assert store.load_session(sid)["active_turn_id"] is None
+        assert store.load_turn(sid, tid)["status"] == "completing"
+        path = transport.root / f"{native['request_ref']}.json"
+        assert transport.reconcile_request(path) == 1
+        assert transport.reconcile_request(path) == 0
+        assert provider.writes == [("notes-app", "Runtime response.")]
+        assert store.load_turn(sid, tid)["status"] == "completed"
+        assert json.loads(path.read_text())["deliveries"]["terminal"]["verified"] is True
+        assert [m["text"] for m in store.messages(sid) if m["role"] == "agent"] == ["Runtime response."]
+        packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert sum(row["method"] == "turn/start" for row in packets) == 1
+    finally:
+        runtime.close()
+
+
 def test_unexecuted_request_still_uses_original_queue_recovery(ordinary, monkeypatch):  # noqa: F811
     store, runtime, provider, transport = connect(ordinary)
     resumes = []
