@@ -483,6 +483,12 @@ def normalize_change_quality_result(
     }
 
 
+_GUARDRAIL_QUALIFICATION_PREFIXES = {
+    "test_validation": "validator:",
+    "efficiency": "scope_budget:",
+}
+
+
 def derive_change_quality_guardrails(
     result: dict[str, Any], *, expected_scope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -498,11 +504,25 @@ def derive_change_quality_guardrails(
             for item in category_risks
             if item["severity"] == "blocker" and item["resolved"] is not True
         ]
-        validation_blockers: list[str] = []
-        validation_risks: list[str] = []
-        if guardrail_id == "test_validation":
-            validation_blockers = qualification["blocking_codes"]
-            validation_risks = qualification["risk_codes"]
+        prefix = _GUARDRAIL_QUALIFICATION_PREFIXES.get(guardrail_id)
+        validation_blockers = (
+            [
+                code
+                for code in qualification["blocking_codes"]
+                if isinstance(code, str) and code.startswith(prefix)
+            ]
+            if prefix
+            else []
+        )
+        validation_risks = (
+            [
+                code
+                for code in qualification["risk_codes"]
+                if isinstance(code, str) and code.startswith(prefix)
+            ]
+            if prefix
+            else []
+        )
         current_blockers = [*unresolved_blockers, *validation_blockers]
         blocking_codes.extend(current_blockers)
         unresolved_risks = [

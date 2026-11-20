@@ -65,3 +65,38 @@ for (const mutation of ["dirty", "missing_scope", "same_run", "zero_exit", "sign
     assert.throws(() => qualifyChangeQualityValidation(input));
   });
 }
+
+test("scope_budget large_scope and elevated_scope stay non-blocking diagnostic risks", () => {
+  const large = qualifyChangeQualityValidation({
+    scope: {
+      scope_budget: {
+        status: "large_scope",
+      },
+    },
+    validation: [{validator: "check", status: "passed", required: true}],
+  });
+  assert.deepEqual(large.blocking_codes, []);
+  assert.deepEqual(large.risk_codes, ["scope_budget:large_scope"]);
+
+  const elevated = qualifyChangeQualityValidation({
+    scope: {
+      scope_budget: {
+        status: "elevated_scope",
+      },
+    },
+    validation: [{validator: "check", status: "passed", required: true}],
+  });
+  assert.deepEqual(elevated.blocking_codes, []);
+  assert.deepEqual(elevated.risk_codes, ["scope_budget:elevated_scope"]);
+
+  const subtraction = qualifyChangeQualityValidation({
+    scope: {
+      scope_budget: {
+        status: "net_subtraction",
+      },
+    },
+    validation: [{validator: "check", status: "passed", required: true}],
+  });
+  assert.deepEqual(subtraction.blocking_codes, []);
+  assert.deepEqual(subtraction.risk_codes, []);
+});

@@ -986,3 +986,158 @@ def test_quality_skill_uses_managed_project_delivery(tmp_path: Path) -> None:
     )
     assert readback["status"] == "current"
     assert readback["managed"] is True
+
+
+def test_scope_budget_allows_large_scope_as_diagnostic_risk_and_exempts_net_subtraction(
+    tmp_path: Path,
+) -> None:
+    repo, registry, runtime_root = _fixture(tmp_path)
+    _enable(registry)
+    base = _git(repo, "rev-parse", "HEAD")
+
+    (repo / "blob.bin").write_bytes(b"\x00\x01\x02\xff")
+    _git(repo, "add", "blob.bin")
+    (repo / "elevated.py").write_text(
+        "\n".join(f"line_{i} = {i}" for i in range(1050)) + "\n",
+        encoding="utf-8",
+    )
+    elevated_prepare = build_change_quality_prepare_packet(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        repo_path=repo,
+        base_ref=base,
+    )
+    assert elevated_prepare["scope"]["scope_budget"]["status"] == "elevated_scope"
+    assert "split_required" not in elevated_prepare["scope"]["scope_budget"]
+    elevated_result = _result(
+        tmp_path / "elevated-result.json",
+        elevated_prepare["scope"]["scope_fingerprint"],
+        reuse={
+            "outcome": "retained",
+            "summary": "Direct assignments only.",
+            "evidence_refs": ["path:elevated.py"],
+        },
+        simplification={
+            "outcome": "retained",
+            "summary": "Direct assignments only.",
+            "evidence_refs": ["path:elevated.py"],
+            "safe_fix_applied": False,
+        },
+    )
+    elevated_recorded = record_change_quality_receipt(
+        registry_path=registry,
+        runtime_root=runtime_root,
+        goal_id=GOAL_ID,
+        repo_path=repo,
+        result_path=elevated_result,
+        base_ref=base,
+        execute=False,
+    )
+    assert elevated_recorded["decision"] == "pass"
+    efficiency_state = next(
+        item
+        for item in elevated_recorded["receipt"]["guardrails"]["states"]
+        if item["guardrail_id"] == "efficiency"
+    )
+    assert efficiency_state["status"] == "risk"
+
+    for index in range(35):
+        (repo / f"module_{index}.py").write_text(
+            "\n".join(f"x_{j} = {j}" for j in range(50)) + "\n",
+            encoding="utf-8",
+        )
+    large_prepare = build_change_quality_prepare_packet(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        repo_path=repo,
+        base_ref=base,
+    )
+    assert large_prepare["scope"]["scope_budget"]["status"] == "large_scope"
+    assert large_prepare["scope"]["scope_budget"]["remediation"] == "verify_goal_proportionality"
+    assert "split_required" not in large_prepare["scope"]["scope_budget"]
+    assert any(
+        "large_scope" in line and "cohesive large features" in line and base in line
+        for line in large_prepare["agent_contract"]["instructions"]
+    )
+    large_result = _result(
+        tmp_path / "large-result.json",
+        large_prepare["scope"]["scope_fingerprint"],
+        reuse={
+            "outcome": "retained",
+            "summary": "Cohesive feature modules.",
+            "evidence_refs": ["path:elevated.py"],
+        },
+        simplification={
+            "outcome": "retained",
+            "summary": "Checked feature breadth against goal.",
+            "evidence_refs": ["path:elevated.py"],
+            "safe_fix_applied": False,
+        },
+    )
+    large_recorded = record_change_quality_receipt(
+        registry_path=registry,
+        runtime_root=runtime_root,
+        goal_id=GOAL_ID,
+        repo_path=repo,
+        result_path=large_result,
+        base_ref=base,
+        execute=False,
+    )
+    assert large_recorded["ok"] is True
+    assert large_recorded["decision"] == "pass"
+    assert large_recorded["unresolved_blockers"] == []
+    large_efficiency = next(
+        item
+        for item in large_recorded["receipt"]["guardrails"]["states"]
+        if item["guardrail_id"] == "efficiency"
+    )
+    assert large_efficiency["status"] == "risk"
+    assert large_efficiency["blocking_codes"] == []
+
+    # Net subtraction across >= 35 files stays exempt when additions <= 1500.
+    _git(repo, "reset", "--hard", base)
+    _git(repo, "clean", "-fd")
+    for index in range(40):
+        (repo / f"cleanup_{index}.py").write_text(
+            "\n".join(f"old_{j} = {j}" for j in range(60)) + "\n",
+            encoding="utf-8",
+        )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "legacy surface")
+    deletion_base = _git(repo, "rev-parse", "HEAD")
+    for index in range(40):
+        (repo / f"cleanup_{index}.py").unlink()
+    (repo / "compact.py").write_text("compact = True\n", encoding="utf-8")
+    sub_prepare = build_change_quality_prepare_packet(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        repo_path=repo,
+        base_ref=deletion_base,
+    )
+    assert sub_prepare["scope"]["scope_budget"]["status"] == "net_subtraction"
+    assert "split_required" not in sub_prepare["scope"]["scope_budget"]
+    sub_result = _result(
+        tmp_path / "sub-result.json",
+        sub_prepare["scope"]["scope_fingerprint"],
+        reuse={
+            "outcome": "reused",
+            "summary": "Replaced duplicated files.",
+            "evidence_refs": ["path:compact.py"],
+        },
+        simplification={
+            "outcome": "retained",
+            "summary": "Net deletion cleanup.",
+            "evidence_refs": ["path:compact.py"],
+            "safe_fix_applied": False,
+        },
+    )
+    sub_recorded = record_change_quality_receipt(
+        registry_path=registry,
+        runtime_root=runtime_root,
+        goal_id=GOAL_ID,
+        repo_path=repo,
+        result_path=sub_result,
+        base_ref=deletion_base,
+        execute=False,
+    )
+    assert sub_recorded["decision"] == "pass"

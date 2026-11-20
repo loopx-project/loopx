@@ -13,6 +13,7 @@ from .review_body import (
 )
 from .approval_closeout import approval_closeout_contract
 from .architecture_assessment import ARCHITECTURE_ASSESSMENT
+from .scope_budget import is_large_scope
 from .visual_assessment import VISUAL_ASSESSMENT
 
 # Increment when review requirements change without changing the packet shape.
@@ -1157,7 +1158,14 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                     "approval."
                     " The nested architecture assessment binds mechanism placement, default "
                     "strategy and the useful current-PR boundary to this same verdict, "
-                    "rather than allowing them to remain disconnected commentary."
+                    "rather than allowing them to remain disconnected commentary. "
+                    "When scope_budget.status is large_scope, cohesive large features "
+                    "(including high-addition, multi-commit, multi-review-round, or "
+                    "mainline-merged branches) remain eligible for verdict=proportionate "
+                    "and APPROVE when their scale matches the goal; choose "
+                    "verdict=disproportionate or architecture_assessment.decision=simplify_now "
+                    "only when the diff accumulated accidental shims, duplicate paths, "
+                    "unrelated scope drift, or nit-loop churn."
                 ),
             },
             {
@@ -1524,6 +1532,7 @@ def build_review_plan(item: Mapping[str, Any]) -> dict[str, Any]:
         },
         "applicability": {
             "areas": sorted(areas),
+            "large_scope": is_large_scope(item),
             "code_change": code_change,
             "behavioral_policy_change": behavioral_policy_change,
             "behavior_bearing_change": behavior_bearing_change,

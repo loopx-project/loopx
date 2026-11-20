@@ -1702,3 +1702,60 @@ def test_a_published_mapping_must_carry_its_immutable_revision():
     # Publishing the same mapping with its revision closes the gap.
     result["review_body"] += "Spec revision: " + revision + "\n"
     assert check_review_result(packet, result)["ok"]
+
+
+def test_large_scope_allows_proportionate_approve_and_supports_disproportionate_request_changes():
+    packet, result = _review()
+    packet["pull_requests"][0]["scope_budget"] = {
+        "schema_version": "change_scope_budget_assessment_v0",
+        "status": "large_scope",
+        "triggered_signals": ["excessive_addition_surface"],
+        "remediation": "verify_goal_proportionality",
+    }
+    plan = build_review_plan(packet["pull_requests"][0])
+    assert plan["applicability"]["large_scope"] is True
+    contract = build_review_execution_contract()
+    prop_req = next(
+        row
+        for row in contract["evidence_requirements"]
+        if row["evidence_id"] == "change_proportionality"
+    )
+    assert "large_scope" in prop_req["rule"]
+
+    # Approving a cohesive large feature as proportionate is allowed cleanly.
+    checked_approve = check_review_result(packet, result)
+    assert checked_approve["ok"] is True
+    assert checked_approve["approval_consistent"] is True
+    assert checked_approve["approval_blockers"] == []
+
+    # Reviewers can still flag genuine bloat via REQUEST_CHANGES with disproportionate/simplify_now.
+    result["verdict"] = "REQUEST_CHANGES"
+    result["review_body"] = result["review_body"].replace(
+        "English verdict: APPROVE", "English verdict: REQUEST_CHANGES"
+    )
+    disproportionate_result = copy.deepcopy(result)
+    disproportionate_result["evidence"]["change_proportionality"]["verdict"] = "disproportionate"
+    assert check_review_result(packet, disproportionate_result)["ok"]
+
+    simplify_result = copy.deepcopy(result)
+    simplify_result["evidence"]["change_proportionality"]["architecture_assessment"] = {
+        "decision": "simplify_now",
+        "reason": "Diff accumulated accidental shims beyond the goal.",
+        "current_pr_boundary": "Keep only the primary feature slice.",
+        "validation_evidence": "Synthetic consistency fixture.",
+        "mechanisms": [
+            {
+                "mechanism": "scope_split",
+                "responsibility": "policy",
+                "owning_boundary": "Author branch cleanup.",
+                "activation_and_default": "Diagnostic guidance for disproportionate bloat.",
+                "failure_and_recovery": "Remove accidental shims.",
+                "placement_basis": "Scope budget proportionality review.",
+            }
+        ],
+    }
+    simplify_result["review_body"] = simplify_result["review_body"].replace(
+        "## 改动思路\n",
+        "## 改动思路\n\nDiff accumulated accidental shims beyond the goal.\n\nKeep only the primary feature slice.\n",
+    )
+    assert check_review_result(packet, simplify_result)["ok"]

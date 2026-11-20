@@ -41,6 +41,19 @@ Stop when the packet says `disabled` or `no_changes`. When it says
 `review_required`, review only the files and exact fingerprint in the packet.
 Read repository-local instructions before judging the change.
 
+Each `prepare` packet also assesses `scope.scope_budget`
+(`change_scope_budget_assessment_v0`):
+
+- `net_subtraction` (`deletions > additions` with `additions <= 1500`) is exempt
+  from file-count, commit-churn, and merge-commit accretion penalties;
+- `elevated_scope` (`prefer_smaller_slice`) marks the `efficiency` guardrail as
+  diagnostic `risk` without failing the receipt;
+- `large_scope` (`verify_goal_proportionality`) allows cohesive large features
+  (including high-addition, multi-commit, multi-review-round, or mainline-merged
+  branches): it adds a goal-proportionality review instruction in `prepare` and
+  marks `efficiency` as diagnostic `risk` (`scope_budget:large_scope`) without
+  blocking `record`/`verify` (`canary premerge`).
+
 Run `loopx project-skill status --project . --skill loopx-change-quality` when
 the host depends on skill discovery. If the managed copy is absent or stale,
 preview an explicit project install; do not fall back to a global copy.

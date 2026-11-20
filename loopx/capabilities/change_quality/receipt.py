@@ -190,6 +190,10 @@ def build_change_quality_prepare_packet(
         status = "no_changes"
     else:
         status = "review_required"
+    raw_scope_budget = scope.get("scope_budget")
+    scope_budget = raw_scope_budget if isinstance(raw_scope_budget, dict) else {}
+    is_large_scope = scope_budget.get("status") == "large_scope"
+    resolved_base_ref = str(scope.get("base_ref") or base_ref)
     return {
         "ok": True,
         "schema_version": CHANGE_QUALITY_PREPARE_SCHEMA_VERSION,
@@ -211,6 +215,18 @@ def build_change_quality_prepare_packet(
             ],
             "guardrail_status_owner": "loopx_derived",
             "instructions": [
+                *(
+                    [
+                        (
+                            f"Scope budget is large_scope against {resolved_base_ref}: cohesive large features "
+                            f"(including multi-commit, multi-round, or mainline-merged branches) are allowed "
+                            f"when proportionate to the goal; verify in reuse and simplification that no "
+                            f"accidental shims, duplicate code paths, or unrelated scope drift inflated the diff."
+                        )
+                    ]
+                    if is_large_scope
+                    else []
+                ),
                 "Review only the exact changed scope and resolve the projected repository instruction and ownership references.",
                 "Write one grounded reuse conclusion and one grounded simplification conclusion.",
                 "Prefer deletion, reuse, direct control flow, and established language idioms over redundant state, parameters, branches, wrappers, or speculative abstraction.",
