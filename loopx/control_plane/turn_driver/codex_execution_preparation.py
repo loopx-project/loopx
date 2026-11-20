@@ -344,6 +344,7 @@ def builtin_execution_preparation_claim(
                 settlement_identity,
                 semantic_replan_guard_scoped=False,
                 semantic_replan_obligation_id=None,
+                prepared_lease_required=True,
                 goal_ref=goal_ref,
                 **({"before_bind": before_bind} if admit_start is not None else {}),
             )

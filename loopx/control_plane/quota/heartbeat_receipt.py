@@ -206,6 +206,9 @@ def ensure_turn_heartbeat_settlement_receipt(
     semantic_replan_obligation_id: str | None,
     semantic_replan_capability_guard: Mapping[str, object] | None = None,
     quota_spend_source: str | None = None,
+    task_lease_proof: Mapping[str, object] | None = None,
+    task_lease_epoch: int | None = None,
+    prepared_lease_required: bool = False,
     goal_ref: Mapping[str, object] | None = None,
     before_bind: Callable[[], None] | None = None,
 ) -> dict[str, object]:
@@ -316,6 +319,12 @@ def ensure_turn_heartbeat_settlement_receipt(
             "stall_observation": "not_applicable",
             "source": "loopx_turn_run_once",
         }
+        if identity.todo_id is not None and (prepared_lease_required or task_lease_proof is not None):
+            details["prepared_lease_required"] = True
+        if task_lease_proof is not None and identity.todo_id is not None:
+            from .execution_preparation import prepared_lease_receipt_fields
+
+            details.update(prepared_lease_receipt_fields(task_lease_proof, lease_epoch=task_lease_epoch))
         if semantic_replan_guard_scoped:
             details["semantic_replan_obligation_id"] = (
                 normalized_semantic_replan_obligation_id or ""
@@ -697,14 +706,14 @@ def requalify_bound_heartbeat_receipt(
         receipt_revision = str(
             qualified_details.get("settlement_receipt_revision") or ""
         )
-        summary = (
-            "same-Turn review guard upgraded without rebinding"
-            if receipt_revision == "review_guard_upgrade"
-            else "same-Turn work admission requalified without rebinding"
-        )
+        summary = {
+            "review_guard_upgrade": "same-Turn review guard upgraded without rebinding",
+            "lease_readiness": "same-Turn lease readiness recorded without readmission",
+        }.get(receipt_revision, "same-Turn work admission requalified without rebinding")
         corrected = build_rollout_event(
             goal_id=goal_id, goal_ref=goal_ref, event_kind="quota_should_run",
-            agent_id=agent_id, todo_id=todo_id, run_id=turn_instance_id, status=status,
+            agent_id=agent_id, todo_id=todo_id, run_id=turn_instance_id,
+            status=str(original.get("status") or status) if receipt_revision == "lease_readiness" else status,
             summary=summary,
             source_event_id=event_id, caused_by=event_id, details=dict(qualified_details),
         )

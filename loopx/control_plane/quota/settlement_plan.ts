@@ -12,6 +12,8 @@ import {MATERIAL_DELIVERY_OUTCOMES} from "../work_items/delivery_outcome.ts";
 import {DELIVERY_BOUNDARIES} from "../turn_driver/delivery_continuity.ts";
 import {PROGRESS_RESULT_CLASSES} from "../work_items/replan_history.ts";
 import {HANDOFF_MODES} from "../coordination/handoff_mode_vocabulary.ts";
+import {decodeTaskLeaseProof} from "../coordination/task_lease_proof.ts";
+import {normalizeIdempotencyKey} from "../work_items/task_lease_acquire.ts";
 import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../work_items/execution_preparation.ts";
 import {EffectiveAction} from "./effective_action.generated.ts";
 
@@ -36,7 +38,17 @@ export function composedCliSettlementChannel(cli: JsonObject): JsonObject {
   if (actions.filter(command => command === writebackCommand).length !== 1
       || actions.filter(command => command === spendCommand).length !== 1
       || actions.indexOf(writebackCommand) >= actions.indexOf(spendCommand)) return cli;
-  const composed = (command: string) => command + " --settle-turn --settlement-receipt";
+  const preparation = jsonObject(cli.execution_preparation);
+  const proof = preparation?.handoff_mode === "hard_lease"
+    ? decodeTaskLeaseProof(preparation.lease_proof) : null;
+  if (preparation?.handoff_mode === "hard_lease" && !proof) {
+    throw new Error("Prepared settlement requires the current task lease proof");
+  }
+  const fence = proof
+    ? " --task-lease-idempotency-key=" + normalizeIdempotencyKey(proof.idempotency_key) +
+       " --task-lease-expected-version " + proof.expected_version
+    : "";
+  const composed = (command: string) => command + " --settle-turn --settlement-receipt" + fence;
   const newWriteback = {...writeback, command_template: composed(writebackCommand),
     ...(typeof writeback.semantic_closeout_command_template === "string"
       ? {semantic_closeout_command_template: composed(writeback.semantic_closeout_command_template)} : {})};

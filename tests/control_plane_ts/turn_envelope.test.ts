@@ -1880,6 +1880,10 @@ test("complete execution reads one original selection, task commitment and effec
     complete: true, selected_todo_ref: "selected_todo", selected_todo_text_verified: true};
   (interaction.cli_channel as JsonObject).delivery_workspace_causality = {
     requirement: "required", future: {empty: [], approved: false}};
+  const proof = {idempotency_key: "managed-fixture-lease", expected_version: 7};
+  source.execution_preparation = {schema_version: "execution_preparation_v0", state: "ready",
+    delivery_allowed: true, handoff_mode: "hard_lease", goal_id: source.goal_id, agent_id: source.agent_id,
+    todo_id: selected.todo_id, lease_proof: proof, lease_epoch: 3};
   const contract = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
   const envelope = buildTurnEnvelope({payload: contract, scheduler_execution_args: ""});
   const before = structuredClone({contract, envelope});
@@ -1889,6 +1893,8 @@ test("complete execution reads one original selection, task commitment and effec
   assert.equal((result.selected_todo as JsonObject).text, selected.text);
   assert.equal(result.sha256, createHash("sha256").update(String(selected.text), "utf8").digest("hex"));
   assert.equal(result.effective_action, "normal_run");
+  assert.deepEqual(result.task_lease_proof, proof);
+  assert.equal(result.task_lease_epoch, 3);
   assert.deepEqual((result.writeback as JsonObject).delivery_workspace_causality,
     (interaction.cli_channel as JsonObject).delivery_workspace_causality);
   assert.equal(result.replan_guard_scoped, true);

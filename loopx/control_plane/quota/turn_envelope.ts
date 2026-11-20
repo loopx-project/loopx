@@ -1,4 +1,5 @@
 import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../work_items/execution_preparation.ts";
+import {leaseEpoch} from "../work_items/task_lease_record.ts";
 import {capturedContextSelection} from "./context_selection.ts";
 import {contextReadSectionDigests, initialContextReadPointers, prepareProgressiveContext, prepareProgressiveContextDelivery,
   progressiveContextPlan, scopedReplanYardstickReversal,
@@ -2700,11 +2701,13 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     const work = {selected_todo: object(projection.action).selected_todo,
       task_orchestration_contract: projection.task_orchestration_contract};
     const sha256 = completeTaskTextSha256(decision, selectedWorkTodoId(work) ?? "");
+    const preparation = object(decision.execution_preparation);
     return {selected_todo: selectedWorkTodo(work), sha256,
       selected_work_basis: selectedWorkLaunchBasis(decision, sha256),
       effective_action: decision.effective_action ?? null,
       writeback: object(projection.writeback),
-      task_lease_proof: object(object(decision.execution_preparation).lease_proof),
+      task_lease_proof: object(preparation.lease_proof),
+      ...(preparation.lease_epoch == null ? {} : {task_lease_epoch: leaseEpoch(preparation)}),
       replan_guard_scoped: Object.hasOwn(projection, "replan_action_packet"),
       replan_action_packet: projection.replan_action_packet ?? null};
   }
