@@ -1372,3 +1372,73 @@ def test_signal_unavailable_monitor_recovers_once_and_does_not_starve_other_due_
     recovered_done = finish(runtime, recovered_try[0])
     assert recovered_done["status"] == "completed", recovered_done
     assert local_watch_row(runtime, actor, pr_todo_id)["next_due_at"] != third_due
+
+
+@pytest.mark.parametrize(
+    ("error_code", "error_message", "fail_before_context"),
+    [
+        (
+            "runtime_error",
+            "The LoopX Chat execution worker exited before this turn finished. Your conversation is saved; execution may have occurred. This turn was not retried automatically.",
+            False,
+        ),
+        ("runtime_error", "disk I/O error", False),
+        (
+            "runtime_unavailable",
+            "The Agent runtime could not be prepared. Check the runtime installation and configuration, then retry.",
+            True,
+        ),
+    ],
+)
+def test_transient_zero_effect_monitor_failures_recover_once(
+    steward, tmp_path, monkeypatch, error_code, error_message, fail_before_context,
+):
+    from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
+
+    store, runtime, *_ = steward
+    sid, actor, monitor = prepared(steward, tmp_path, monkeypatch, "sqlite")
+    default_watch = monitor.current(actor)
+    todo_id = default_watch["todo_id"]
+    due = (datetime.now(timezone.utc) - timedelta(seconds=2)).isoformat()
+    edit_local_watch(runtime, actor, todo_id, "--next-due-at", due)
+    with monkeypatch.context() as paused:
+        paused.setattr(runtime, "_start_accepted_turn_worker", lambda **_kw: True)
+        runtime._steward_monitor_next_check.clear()
+        first = pump_steward_monitors(runtime)
+        assert len(first) == 1
+        failed_turn = first[0]
+    turn_id = failed_turn["turn_id"]
+    if fail_before_context:
+        runtime._fail_turn(
+            sid, turn_id, error_code, error_message,
+            status="failed", expected_statuses={"queued", "starting", "running"},
+        )
+    store.append_event(
+        sid, turn_id, kind="agent.phase",
+        payload={"phase": "manager_context", "label": "Reading authorized Goal state"},
+    )
+    store.append_event(
+        sid, turn_id, kind="manager.context",
+        payload={"schema_version": "manager_turn_context_v1", "goals": []},
+    )
+    if not fail_before_context:
+        runtime._fail_turn(
+            sid, turn_id, error_code, error_message,
+            status="failed", expected_statuses={"queued", "starting", "running"},
+        )
+    request = StewardTurnHost.monitor_restart_request(store.load_turn(sid, turn_id))
+    assert request is not None and request["monitor_restart_recovery"]["original_turn_id"] == turn_id
+
+    runtime._steward_monitor_next_check.clear()
+    recovered = pump_steward_monitors(runtime)
+    assert len(recovered) == 1
+    assert recovered[0]["loopx_request"]["monitor_restart_recovery"]["original_turn_id"] == turn_id
+    done = finish(runtime, recovered[0])
+    assert done["status"] == "completed", done
+    assert local_watch_row(runtime, actor, todo_id)["next_due_at"] != due
+
+    # Even if a restart carrier itself fails without polling, it must not spawn a second retry.
+    store.update_turn(sid, done["turn_id"], status="failed", error_code=error_code, error=error_message)
+    carrier = store.load_turn(sid, done["turn_id"])
+    assert carrier is not None and carrier["client_turn_id"].endswith(".restart-recovery")
+    assert StewardTurnHost.monitor_restart_request(carrier) is None

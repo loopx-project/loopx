@@ -1034,6 +1034,113 @@ def test_report_pump_replans_only_proven_refusals_and_retains_unknown_work(stewa
     assert (capture.read_bytes(), bot.writes) == after
 
 
+def test_report_recovers_via_admission_resume_once_blocking_replan_clears_after_contract_failure(steward, tmp_path, monkeypatch):
+    from datetime import timezone
+    from loopx.capabilities.periodic_report import cadence_runtime
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    from loopx.configure_goal import configure_goal
+    import loopx.capabilities.native_chat.steward_reports as report_host
+
+    store, runtime, bot, transport, binding, capture, _ = steward
+    point = datetime.now(timezone.utc).replace(hour=9, minute=1, second=0, microsecond=0) - timedelta(days=2)
+
+    class CalendarClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return point.astimezone(tz) if tz else point.replace(tzinfo=None)
+
+    monkeypatch.setattr(report_host, "datetime", CalendarClock)
+    monkeypatch.setattr(cadence_runtime, "datetime", CalendarClock)
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, "sqlite")
+    owner = binding["binding_id"]
+    assert configure_goal(
+        registry_path=runtime.registry_path, goal_id=actor["goal_id"],
+        execution_replan_after_turns=1, execute=True,
+    )["ok"]
+    install_model(steward, tmp_path, sid)
+    assert finish(runtime, pump_steward_monitors(runtime)[0])["response"]["native_loopx"]["status"] == "committed"
+    assert transport.steward_reports.reconcile() == 1
+
+    point += timedelta(days=1)
+    runtime._steward_monitor_next_check.clear()
+    rejected = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert rejected["response"]["native_loopx"]["error_code"] == "turn_todo_selection_deferred"
+    _, second_window = reports.current_window(owner)
+
+    prompts_seen: list[str] = []
+    # Return invalid host result contract (`replan_required` + `outcome_gap` without typed blocked fields).
+    bad_vision = {
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "active",
+        "vision_patch": {"vision_summary": "Keep reporting.", "acceptance_summary": "Validate full report."},
+        "path_delta": {
+            "outcome": "replan",
+            "prior_assumption": "Old assumption",
+            "observed_reality": "Reality",
+            "retained": ["Same report route"],
+            "changed": ["Updated baseline"],
+            "evidence_refs": ["fixture:evidence"],
+        },
+    }
+    bad_outcome = {
+        "result_kind": "replan_required",
+        "classification": "outcome_gap_without_blocked_fields",
+        "delivery_batch_scale": "implementation",
+        "delivery_outcome": "outcome_gap",
+        "work_evidence": ["Observed gap"],
+        "validation_evidence": ["Validated check"],
+        "path_delta_mode": "material_replan",
+        "agent_vision_json": json.dumps(bad_vision),
+        "summary": "Missing blocked fields trigger host_result_contract validation failure.",
+        "next_action": "Clear replan before resuming report.",
+    }
+    helper = tmp_path / "report_model.py"
+    helper.write_text(
+        _REPORT_MODEL_SOURCE.replace("def fake_report_model(", "def report_only(")
+        + "\ndef fake_report_model(params):\n"
+        + "    import json, pathlib\n"
+        + "    prompt = '\\n'.join(row.get('text', '') for row in params.get('input', []) if isinstance(row, dict))\n"
+        + f"    pathlib.Path({str(tmp_path / 'prompts.jsonl')!r}).open('a').write(json.dumps(prompt) + '\\n')\n"
+        + "    request = json.JSONDecoder().raw_decode(prompt.split('Turn request:', 1)[1].lstrip())[0]\n"
+        + "    if request.get('detail_ref', {}).get('replan_action_packet'):\n"
+        + "        return " + repr(json.dumps(bad_outcome)) + "\n"
+        + "    return report_only(params)\n"
+    )
+    runtime._steward_monitor_next_check.clear()
+    retry_turn = finish(runtime, pump_steward_monitors(runtime)[0])
+    prompts_seen = [json.loads(line) for line in (tmp_path / "prompts.jsonl").read_text().splitlines() if line.strip()]
+    assert any("Governance contract reminder:" in text for text in prompts_seen)
+    replan_events = [row["payload"] for row in store.events_after(sid, retry_turn["turn_id"], None)
+        if row["kind"] == "native_loopx.replan_result"]
+    assert len(replan_events) == 1
+    assert replan_events[0]["status"] == "failed" and replan_events[0]["validation_stage"] == "host_result_contract"
+
+    # While the autonomous replan obligation stays active, pumping must NOT spin or resume.
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+
+    # Once the blocking replan is cleared elsewhere, one .admission-resume carrier completes the original report cleanly.
+    assert configure_goal(
+        registry_path=runtime.registry_path, goal_id=actor["goal_id"],
+        execution_replan_after_turns=6, execute=True,
+    )["ok"]
+    calls = capture.read_bytes()
+    runtime._steward_monitor_next_check.clear()
+    resumed = pump_steward_monitors(runtime)
+    assert len(resumed) == 1
+    done = finish(runtime, resumed[0])
+    assert done["response"]["native_loopx"]["status"] == "committed", done
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+    assert transport.steward_reports.reconcile() == 1
+    assert reports.health(owner)["publication_verified"]
+    task = next(row for row in StewardMonitor(runtime).todos(actor) if row["todo_id"] == done["loopx_request"]["todo_id"])
+    assert task["status"] == "done"
+    tail = [json.loads(line) for line in capture.read_bytes()[len(calls):].splitlines()]
+    assert sum(row.get("method") == "turn/start" for row in tail) == 1
+    assert transport.steward_reports.reconcile() == 0
+
+
 def embedded_report_python(tmp_path, monkeypatch):
     """A real child interpreter without the embedding host's LoopX bootstrap."""
     import subprocess
