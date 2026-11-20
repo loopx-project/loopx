@@ -468,6 +468,7 @@ def test_prose_or_fabricated_todo_does_not_qualify_planning(planning_env):
 @pytest.mark.parametrize("producer", [None, "local_probe"])
 def test_planner_delivers_product_contract_and_only_opted_in_tool_context(planning_env, producer):
     from benchmark.runtime.planning import task_plan_packet
+    from benchmark.runtime.planning_batch import planning_batch_guidance
     from benchmark.runtime.research_probe import execution_observation_guidance
     from benchmark.runtime.worker import loopx_command
 
@@ -488,7 +489,8 @@ def test_planner_delivers_product_contract_and_only_opted_in_tool_context(planni
     packet = json.loads(body.split("Host-supplied planning checkpoint:\n", 1)[1])
     assert packet == before
     prefix = body.split("Host-supplied planning checkpoint:\n", 1)[0]
-    assert prefix.replace(execution_observation_guidance(), "").strip() == "$loopx"
+    assert prefix.count(planning_batch_guidance()) == 1
+    assert prefix.replace(execution_observation_guidance(), "").replace(planning_batch_guidance(), "").strip() == "$loopx"
     assert receipt["planning"]["input_digest"] == before["input_digest"]
     assert env["LOOPX_PHASE_DEADLINE_EPOCH"] == deadline
     assert not list(Path(env["LOOPX_PROJECT"]).iterdir())

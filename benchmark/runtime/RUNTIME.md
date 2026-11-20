@@ -389,13 +389,22 @@ For a task-entry comparison, pin the same source and vary only `task_entry`;
 keep task inputs, scoring, model, budget and evaluation windows fixed. Include
 planning time in the common run budget.
 
-New `loopx-planned` invocations deliver the product planning packet without the
-previous benchmark research-strategy prefix. Only explicitly selected execution
-observation tool context is added. This applies to both Harbor and SForge callers;
-task content, the Core first-delivery contract, identity/readback validation and
-host deadline enforcement remain unchanged. Pin the runner revision when comparing
-planning policies. This adapter change does not qualify model adoption, earlier
-evaluation or outcome improvement.
+New `loopx-planned` invocations deliver the product planning packet, optional
+initial batch authoring and explicitly selected execution observation tool
+context. This applies to both Harbor and SForge callers. Pin the runner revision
+when comparing planning policies. The batch changes how the planner submits its
+decisions. Model adoption, time to a scored candidate and outcome improvements
+require separate run evidence.
+
+For an empty planning frontier, the model can save the same requirement
+declaration and ordered advancement Todos in one JSON proposal and invoke
+`python -m benchmark.runtime.planning_batch PROPOSAL.json` during the planning
+wake. Use the checkpoint's exact input digest and acceptance provider revision.
+The command declares requirements, writes Todos and binds their actual IDs
+through public LoopX operations. Each write has its own receipt. If the command
+is interrupted, reuse the unchanged proposal so the original effects can be
+replayed and missing links completed. Use the ordinary planning steps for
+existing work, changes to requirements and blockers.
 
 The model writes or reuses actual task Todos through the public CLI. The worker
 reads the product packet again and checks the input digest, identity, Todo ids
