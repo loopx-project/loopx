@@ -61,6 +61,13 @@ backup if older code cannot read the current data. Use `loopx update plan
 qualification. Re-running the curl installer remains a repair path when an
 archive wrapper is too broken to run its own updater.
 
+For pip and pipx, `changes_applied` reports an observed change to the installed
+package version or fingerprint. A successful apply can leave the package
+unchanged and still refresh host material or reconcile a stale service.
+`execution.restarted_services` records the services actually restarted. If
+package identity cannot be verified, inspect `loopx doctor --installation-only`
+in the owning Python environment before retrying.
+
 For contributors, keep the clone-plus-canary path:
 
 ```bash

@@ -640,8 +640,9 @@ def test_partial_restart_failure_keeps_the_actual_success_and_unknown_outcome(
 
 
 @pytest.mark.parametrize("driver", ["archive_snapshot", "python_pip", "python_pipx"])
+@pytest.mark.parametrize("package_changed", [True, False])
 def test_update_keeps_install_readback_but_does_not_claim_deferred_service_is_serving(
-    services, driver
+    services, driver, package_changed
 ):
     runtime, _agents, _calls = services
     store = ChatSessionStore(runtime)
@@ -652,15 +653,21 @@ def test_update_keeps_install_readback_but_does_not_claim_deferred_service_is_se
         "plan": {},
         "install_lifecycle": {"execution_driver": driver},
     }
-    passed = subprocess.CompletedProcess([], 0, json.dumps({"ok": True}), "")
+    previous = {"schema_version": "loopx_runtime_identity_v1", "package_version": "2.4.0",
+        "package_fingerprint": "sha256:" + "1" * 64}
+    installed = {**previous, "package_fingerprint": "sha256:" + ("2" if package_changed else "1") * 64}
+    passed = subprocess.CompletedProcess([], 0, json.dumps({"ok": True,
+        "scope": "installation_only", "service_runtime_identity": installed}), "")
     with (
+        mock.patch("loopx.self_update.release_runtime_identity", return_value=previous),
         mock.patch(
             "loopx.self_update.run_archive_installer", return_value=(passed, {})
         ),
         mock.patch("loopx.self_update.subprocess.run", return_value=passed),
     ):
         result = execute_update_plan(payload)
-    assert result["changes_applied"] and not result["ok"]
+    assert result["changes_applied"] is (driver == "archive_snapshot" or package_changed)
+    assert not result["ok"]
     assert result["execution"]["doctor_returncode"] == 0
     assert result["execution"]["restart_status"] == "deferred"
     assert result["next_action"]["kind"] == "retry_runtime_activation"
