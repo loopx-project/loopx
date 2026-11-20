@@ -1925,6 +1925,12 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                         turn = self.core.controller.store.load_turn(record["session_id"], record["turn_id"])
                         if turn and turn["status"] in {"starting", "running"}:
                             self._progress(path, record, inbox=inbox)
+                    if turn and turn["status"] == "completing":
+                        # The final status write can fail after the queue claim
+                        # was released. The original delivery still names the
+                        # exact Turn; recover only its saved answer.
+                        self.core.controller.recover_exited_turn(record["session_id"], record["turn_id"])
+                        turn = self.core.controller.store.load_turn(record["session_id"], record["turn_id"])
                     if not turn or turn["status"] not in TERMINAL_TURN_STATES:
                         return 0
                     if turn["status"] == "failed":
