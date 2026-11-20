@@ -1017,6 +1017,78 @@ assert result['readback_verified']
     assert configured.returncode == 0, configured.stderr
 
 
+@pytest.mark.skipif(os.name != "posix", reason="uses a stand-alone executable checker")
+@pytest.mark.parametrize("provider", ["sqlite", "file"])
+def test_installed_core_retries_saved_first_turn(core_python, tmp_path, monkeypatch, provider):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project = tmp_path / "first-work"
+    project.mkdir()
+    runtime = project / ".loopx/runtime"
+    registry = project / ".loopx/registry.json"
+    check = tmp_path / "independent-check"
+    index = runtime / "goals/first-work-goal/runs/index.jsonl"
+    checker_source = VALIDATOR_SOURCE.replace("json.load(sys.stdin)",
+        "json.load(sys.stdin)\nwith pathlib.Path('checker-invocations').open('a') as f:f.write('checked\\n')")
+    check.write_text(f"#!{core_python}\n{checker_source}")
+    check.chmod(0o700)
+    parts = HOST_SOURCE.split("json.dump({", 1)
+    adapter = f"{parts[0]}pathlib.Path({str(check)!r}).unlink()\njson.dump({{{parts[1]}"
+    arguments = ["--format", "json", "start-goal", "--project", str(project),
+        "--goal-text", "Produce and independently check the first report.", "--execute",
+        "--host-adapter-command-json", json.dumps([core_python, "-I", "-c", adapter]),
+        "--validation-command-json", json.dumps([str(check)])]
+    retry = [*arguments, "--retry-failed-turn"]
+
+    def run(argv, expected=0):
+        return json.loads(_run(core_python, argv, project, expected=expected).stdout)
+
+    refused = run(retry, expected=1)
+    assert "No matching first Turn" in refused["error"]
+    assert not list(project.iterdir())
+    if provider == "file":
+        _configure_first_goal_storage(core_python, project, runtime, provider)
+    first = run(arguments, expected=1)
+    key, todo_id = first["resume_turn_key"], first["todo_id"]
+    assert first["validation"]["status"] == "inconclusive"
+    assert first["effects"]["host_invoked"] and not first["effects"]["quota_spent"]
+    assert "--retry-failed-turn" in first["recommended_action"]
+    assert not (project / "checker-invocations").exists()
+    assert not index.exists() or "quota_slot_spent" not in index.read_text()
+    original_checker = f"#!{core_python}\n{checker_source}"
+    check.write_text(original_checker)
+    check.chmod(0o700)
+    markdown = _run(core_python, ["--format", "markdown", *arguments[2:]], project, expected=1).stdout
+    assert key in markdown and "with --retry-failed-turn" in markdown
+    plain = run(arguments, expected=1)
+    assert plain["replayed"] and not any(plain["effects"].values())
+    assert not (project / "checker-invocations").exists()
+
+    changed = list(retry)
+    changed[changed.index("--validation-command-json") + 1] = json.dumps([str(check), "different-command"])
+    refused = run(changed, expected=1)
+    assert "No matching first Turn" in refused["error"]
+    assert not (project / "checker-invocations").exists()
+    before_registry = registry.read_bytes()
+    recovered = run(retry)
+    assert recovered["status"] == "committed" and recovered["validation"]["status"] == "passed"
+    assert recovered["resume_turn_key"] == key and recovered["todo_id"] == todo_id
+    assert recovered["turn_instance_id"] == first["turn_instance_id"]
+    assert recovered["effects"]["quota_spent"] and not recovered["effects"]["host_invoked"]
+    readback = run(["--registry", str(registry), "--format", "json",
+        "todo", "list", "--goal-id", first["goal_id"], "--todo-id", todo_id])
+    assert readback["todo"]["status"] == "done"
+    assert readback["authority_read"]["source_authority"] == f"{provider}_v0"
+    replay = run(retry)
+    assert replay["replayed"] and not any(replay["effects"].values())
+    assert replay["todo_id"] == todo_id and replay["resume_turn_key"] == key
+    assert registry.read_bytes() == before_registry
+    assert (project / "host-invocations").read_text().splitlines() == ["called"]
+    assert (project / "checker-invocations").read_text().splitlines() == ["checked"]
+    assert index.read_text().count("quota_slot_spent") == 1
+
+
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX SIGKILL")
 @pytest.mark.parametrize("provider", ["sqlite", "file"])
 @pytest.mark.parametrize("phase", ["registration", "initial-source"])

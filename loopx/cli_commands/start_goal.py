@@ -207,6 +207,11 @@ def register_start_goal_command(subparsers: argparse._SubParsersAction[argparse.
         help="Start one checked task in a fresh local project with an independent check.",
     )
     start_goal_parser.add_argument(
+        "--retry-failed-turn",
+        action="store_true",
+        help="With the original --execute request, resume its saved first Turn without rerunning the worker.",
+    )
+    start_goal_parser.add_argument(
         "--host",
         dest="execution_host",
         choices=("codex-cli", "generic-cli"),
@@ -415,10 +420,10 @@ def handle_start_goal_command(
             return 0 if payload["ok"] else 1
         print_payload(payload, args.format, lambda failure: _render_start_goal_markdown(failure, guided=False))
         return 1
-    if any(getattr(args, name, None) is not None for name in (
+    if getattr(args, "retry_failed_turn", False) or any(getattr(args, name, None) is not None for name in (
         "execution_host", "host_adapter_command_json", "validation_command_json", "write_dir",
     )):
-        print_payload({"ok": False, "error": "Host and check options require start-goal --execute."},
+        print_payload({"ok": False, "error": "Host, check and retry options require start-goal --execute."},
                       args.format, _render_start_goal_markdown)
         return 2
     if not bool(getattr(args, "guided", False)):
