@@ -759,6 +759,15 @@ class CodexAppServerAdapter:
     goal_driver: CodexGoalDriver | None = None
     _managed_read_turn_guard: Callable[[], None] | None = field(default=None, repr=False)
 
+    @property
+    def team_plan_context(self) -> Mapping[str, Any] | None:
+        return self.session.team_plan_context
+
+    @team_plan_context.setter
+    def team_plan_context(self, context: Mapping[str, Any] | None) -> None:
+        # The native response parser runs inside the owning Session.
+        self.session.team_plan_context = context
+
     def completed_work_observation(self, *, thread_ids: list[str], turn_id: str,
                                    known_turn_ids: set[str] | None = None) -> dict[str, Any] | None:
         """Read live effects through the adapter that owns the original thread.
