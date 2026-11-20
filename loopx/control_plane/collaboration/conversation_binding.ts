@@ -631,7 +631,7 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
         || turn?.status === "failed"
         && ["usage_limit_exceeded", "response_timeout", "upstream_transport_failure", "context_window_exceeded",
           "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error",
-          "manager_authorization_unavailable", "runtime_error", "server_restarted"].includes(String(turn.error_code)))
+          "manager_authorization_unavailable", "runtime_error", "execution_worker_exited", "server_restarted"].includes(String(turn.error_code)))
       && !(current?.session_id === row.session_id && current?.status === "closed")
       && observation.stop_observed !== true};
   }
