@@ -523,9 +523,25 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
 def test_restored_native_capture_does_not_claim_after_manual_writeback(
     tmp_path, monkeypatch, provider, spend_committed,
 ):
-    from test_quota_settlement_cli import _spend_run_count
+    from test_quota_settlement_cli import _initialize_git_checkout, _spend_run_count
 
-    project = tmp_path.resolve()
+    project = tmp_path / "project"
+    project.mkdir()
+    _initialize_git_checkout(project)
+    (project / ".gitignore").write_text(".loopx/\n.codex/\n", encoding="utf-8")
+    (project / "README.md").write_text("Synthetic native recovery fixture\n", encoding="utf-8")
+    subprocess.run(["git", "add", ".gitignore", "README.md"], cwd=project, check=True)
+    subprocess.run([
+        "git", "-c", "user.name=LoopX Test",
+        "-c", "user.email=loopx-test@example.invalid",
+        "commit", "--quiet", "-m", "fixture",
+    ], cwd=project, check=True)
+    delivery_worktree = tmp_path / "delivery-worktree"
+    subprocess.run(
+        ["git", "worktree", "add", "--quiet", "--detach", str(delivery_worktree)],
+        cwd=project,
+        check=True,
+    )
     monkeypatch.setenv("CODEX_THREAD_ID", "manual-recovery-session")
     native = project / "native"
     native.mkdir(mode=0o700)
@@ -535,8 +551,8 @@ def test_restored_native_capture_does_not_claim_after_manual_writeback(
     host = ["--runtime-profile", scenario, "--context-delivery", "on", "--codex-context-dir", str(native)]
     scope = ["--goal-id", GOAL, "--agent-id", AGENT, "--todo-id", TODO, "--turn-instance-id", turn]
 
-    def invoke(*args):
-        code, payload = run_json_cli_result(*args, registry_path=registry, runtime_root=runtime, cwd=project)
+    def invoke(*args, cwd=project):
+        code, payload = run_json_cli_result(*args, registry_path=registry, runtime_root=runtime, cwd=cwd)
         assert code == 0 and payload["ok"], payload
         return payload
 
@@ -569,7 +585,7 @@ def test_restored_native_capture_does_not_claim_after_manual_writeback(
         "--no-global-sync", "--suppress-external-sinks"]
     if spend_committed:
         refresh += ["--settle-turn", "--settlement-receipt"]
-    assert invoke(*refresh)["settlement_identity"] == identity
+    assert invoke(*refresh, cwd=delivery_worktree)["settlement_identity"] == identity
     assert _spend_run_count(runtime, goal_id=GOAL) == int(spend_committed)
     inspect = ["task-lease", "inspect", "--goal-id", GOAL, "--todo-id", TODO]
     lease = invoke(*inspect)["lease"]
@@ -588,8 +604,8 @@ def test_restored_native_capture_does_not_claim_after_manual_writeback(
     assert invoke(*receipt_args)["receipts"] == manual_receipts
     assert source.read_bytes() == original and events.read_bytes() == old_events
     spend = ["quota", "spend-slot", *scope, "--source", "heartbeat", "--execute"]
-    assert invoke(*spend).get("idempotent_replay", False) is spend_committed
-    assert invoke(*spend)["idempotent_replay"]
+    assert invoke(*spend, cwd=delivery_worktree).get("idempotent_replay", False) is spend_committed
+    assert invoke(*spend, cwd=delivery_worktree)["idempotent_replay"]
     assert _spend_run_count(runtime, goal_id=GOAL) == 1
 
 
