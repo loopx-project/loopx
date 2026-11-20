@@ -289,6 +289,13 @@ PUBLIC_SAFE_LOCAL_PATH_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
+# An explicit ``path:`` locator owns the token that follows it, even when that
+# path contains an HTTP-shaped segment (``path:/https://example.com/doc``).
+EXPLICIT_PATH_PREFIX_AT_END_PATTERN = re.compile(
+    r"(?<![\w:])path:[\\/]$", re.IGNORECASE
+)
+
+
 def mask_http_url_paths(value: str) -> str:
     """Blank ordinary HTTP(S) URLs before applying local-path detectors.
 
@@ -297,10 +304,19 @@ def mask_http_url_paths(value: str) -> str:
     authority. Those are URL syntax, not references to the local filesystem.
     Masking preserves character positions for callers that need a regex match,
     while leaving ``file://`` and ``path:`` forms visible to their local-path
-    arms. Credential detection uses the original value.
+    arms. An explicit ``path:`` locator keeps the whole reference: masking the
+    URL-shaped tail would erase the path tail its local-path arm matches.
+    Credential detection uses the original value.
     """
 
-    return HTTP_URL_SURFACE_PATTERN.sub(lambda match: " " * len(match.group(0)), value)
+    def _mask(match: re.Match[str]) -> str:
+        if EXPLICIT_PATH_PREFIX_AT_END_PATTERN.search(
+            value, 0, match.start()
+        ):
+            return match.group(0)
+        return " " * len(match.group(0))
+
+    return HTTP_URL_SURFACE_PATTERN.sub(_mask, value)
 
 
 # Presentation redaction keeps its historical Unix-root boundary behavior (it
