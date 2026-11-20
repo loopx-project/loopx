@@ -18,6 +18,8 @@ from zipfile import ZipFile
 import pytest
 
 from tests.control_plane.codex_checkpoint_fixture import reference_metadata_oracle, read_cli_policy_payload
+from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+from tests.control_plane.test_peer_source_store import source_request
 from tests.test_core_distribution import AGENT, GOAL, _assert_committed, _environment, _run
 from tests.test_core_distribution import task as task
 
@@ -54,6 +56,8 @@ def test_workspace_wheel_owns_the_complete_bundle_without_core_files(wheels):
         assert all(sha256(workspace_zip.read(prefix + name)).hexdigest() == digest
                    for name, digest in manifest["files"].items())
         assert "loopx/chat_server.py" in workspace_zip.namelist()
+        assert "loopx/chat_store.py" not in core_zip.namelist()
+        assert "loopx/chat_action_store.py" in core_zip.namelist()
         assert "loopx/dashboard_launcher.py" in workspace_zip.namelist()
         assert {
             "loopx/capabilities/native_chat/steward_turn.py",
@@ -74,6 +78,11 @@ def test_core_requests_and_returns_peer_work_without_workspace(core_python, task
     workspace, runtime, registry, _ = task
     route = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
     source = "source-fixture"
+    # Core must still read the typed store left by a previously installed Workspace.
+    from loopx.chat_action_store import ChatActionStore
+
+    actions = ChatActionStore(runtime / "chat" / "actions").path
+    original_actions = actions.read_bytes()
     _run(core_python, [*route, "configure-goal", "--goal-id", GOAL, "--registered-agent", AGENT,
                        "--registered-agent", source, "--execute"], workspace)
     brief = workspace / "brief.json"
@@ -119,6 +128,58 @@ assert "loopx.chat_store" not in sys.modules
         else:
             row = inbox("read", agent)["peer_returns"]["items"][0]
             assert row["request_id"] == request_id and row["text"] == "The checked total is 35."
+    assert actions.read_bytes() == original_actions
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_core_forwards_source_backed_peer_context_without_workspace(core_python, tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    runtime, registry, store, session, turn, receipt = source_request(tmp_path, monkeypatch, provider=provider)
+    route = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
+    brief = tmp_path / "forwarding-brief.json"
+    brief.write_text(json.dumps({
+        "schema_version": "collaboration_brief_v0",
+        "purpose": "Check the exact source",
+        "context": "Preserve the original correction.",
+        "constraints": ["No work launch"],
+        "inputs": [],
+        "acceptance": ["Return evidence and unresolved gaps"],
+        "return_requirement": "Return to the requester.",
+    }), encoding="utf-8")
+    source_session = store._session_dir(session["session_id"])
+
+    def source_records():
+        return {path.relative_to(source_session): path.read_bytes()
+                for path in source_session.rglob("*.json")}
+
+    def inbox(action, agent, *args, expected=0):
+        out = _run(core_python, [*route, "manager-inbox", action, "--goal-id", "goal-a",
+                                 "--agent-id", agent, *args], tmp_path, expected=expected)
+        return json.loads(out.stdout)
+
+    def forward(agent, *, expected=0):
+        return inbox("request", "agent-a", "--peer-agent-id", agent,
+                     "--parent-request-id", receipt["request_id"], "--operation-id", f"review-{agent}",
+                     "--brief-file", str(brief), expected=expected)
+
+    before = source_records()
+    assert not _python_json(core_python, tmp_path, """
+import importlib.util, json
+print(json.dumps(importlib.util.find_spec("loopx.chat_store") is not None))
+""")
+    assert inbox("read", "agent-a")["items"][0]["request_id"] == receipt["request_id"]
+    # The third agent is registered to the same Goal but outside the original audience grant.
+    denied = forward("third", expected=1)
+    assert "not authorized" in str(denied)
+    assert inbox("read", "third")["items"] == []
+    child = forward("reviewer")
+    received = inbox("read", "reviewer")["items"]
+    assert len(received) == 1
+    assert received[0]["request_id"] == child["request_id"]
+    assert received[0]["parent_request_id"] == receipt["request_id"]
+    assert received[0]["inherited_context"]["message"] == turn["message"]
+    assert source_records() == before
+    assert not (runtime / "chat").exists()
 
 
 def _python_json(python, cwd, source):

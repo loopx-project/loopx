@@ -58,8 +58,9 @@ def test_core_staging_excludes_workspace_and_reuses_kernel_bytes(tmp_path):
     staged = _prepare_module().prepare_core_source(tmp_path / "source")
     for name in ("chat", "web", "canary", "cli.py", "chat.py"):
         assert not (staged / "loopx" / name).exists()
-    assert not list((staged / "loopx").glob("chat_*.py"))
-    for name in ("entrypoint.py", "control_plane/turn_driver/executor.py",
+    # Chat UI/store modules are excluded; the typed action authority is Core-owned.
+    assert {path.name for path in (staged / "loopx").glob("chat_*.py")} == {"chat_action_store.py"}
+    for name in ("entrypoint.py", "chat_action_store.py", "control_plane/turn_driver/executor.py",
                  "control_plane/coordination/sqlite_authority_store.ts",
                  "extensions/lark/extension.toml"):
         assert (staged / "loopx" / name).read_bytes() == (REPOSITORY / "loopx" / name).read_bytes()
