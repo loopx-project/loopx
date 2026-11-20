@@ -1251,6 +1251,186 @@ def test_initial_read_uses_current_navigation_without_hiding_peer_constraints(tm
     assert capture_page_range(page, raw=Path(view["recovery"]["path"]).read_bytes(), digest=page["sha256"]) is None
 
 
+@pytest.mark.parametrize(("large", "ready", "known_source", "max_page_output_bytes"), [
+    (False, True, True, None),
+    (True, True, True, None),
+    (True, True, True, 64000),
+    (True, False, True, None),
+    (True, True, False, None),
+])
+def test_native_ready_opening_bounds_suggested_outcomes(
+    tmp_path, monkeypatch, navigated_decision, large, ready, known_source, max_page_output_bytes,
+):
+    from test_codex_context_lifecycle import deliver, setup
+
+    event = setup(tmp_path, monkeypatch)
+    source = navigated_decision
+    source.update(effective_action="normal_run", should_run=True, normal_delivery_allowed=True)
+    interaction = source["interaction_contract"]
+    agent = interaction["agent_channel"]
+    cli = interaction["cli_channel"]
+    agent["delivery_allowed"] = True
+    identity = {"schema_version": "quota_settlement_identity_v0", "effect_id": "original-effect",
+        "goal_id": "fixture", "agent_id": "author", "todo_id": "todo_current", "turn_instance_id": "original"}
+    source["heartbeat_receipt"] = {"settlement_identity": identity}
+    cli["settlement_plan"]["identity"] = identity
+    cli["execution_preparation"] = {"state": "ready" if ready else "claim_required", "todo_id": "todo_current"}
+    outcome_source = agent["work_context"]["sources"][0]["content"]
+    outcomes = outcome_source["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]
+    for index, outcome in enumerate(outcomes[:2]):
+        outcome["objective"] = f"Verify the {outcome['id']} obligation."
+        outcome["sources"] = [{"ref": "fixture:original-evidence", "summary": "Original authority evidence. " * 160}]
+        if known_source or index == 0:
+            outcome["requirements"][0].pop("future_required_fact")
+        if large:
+            outcome["requirements"][0]["description"] *= 160
+    short_opening = large and ready and known_source and max_page_output_bytes is None
+    directory = tmp_path / "capture"
+    directory.mkdir(mode=0o700)
+    prepared = codex_context.prepare_codex_context(source, directory=str(tmp_path),
+        capture_directory=directory, goal_id="fixture", agent_id="author", surface="quota_packet",
+        capture_id="first-read-budget", progressive_enabled=True, max_page_output_bytes=max_page_output_bytes)
+    view = model_context_reference(native_context_capture_view(prepared.delivery, directory,
+        context_directory=str(tmp_path), initial_read_plan=prepared.initial_read_plan,
+        max_page_output_bytes=max_page_output_bytes))
+    opening_pages = []
+    command = view["first_read_command"]
+    while command:
+        words = shlex.split(command)
+        page = json.loads(subprocess.check_output([sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+            *words[words.index("quota"):]]))
+        assert page["ok"], page
+        opening_pages.append(page)
+        command = page.get("next_command")
+    assert opening_pages[-1]["eof"]
+    opening_raw = "".join(page["content"] for page in opening_pages)
+    opening = selected_context_values(opening_raw)
+    prefix = "/interaction_contract/agent_channel/work_context/sources/0/content"
+    outcomes_path = prefix + "/goal_acceptance_contract/outcome_requirements/outcomes"
+    assert opening[prefix + "/outcome_context"] == outcome_source["outcome_context"]
+    assert opening["/goal_boundary"] == source["goal_boundary"]
+    assert opening["/heartbeat_receipt"] == source["heartbeat_receipt"]
+    assert opening["/interaction_contract/agent_channel/required_reads"] == agent["required_reads"]
+    assert opening["/interaction_contract/agent_channel/work_context/sources/2/content/todo/note"] == (
+        agent["work_context"]["sources"][2]["content"]["todo"]["note"]
+    )
+    for index, original in enumerate(outcomes[:2]):
+        outcome = f"{outcomes_path}/{index}"
+        _, detail = read_selection(view["recovery"]["command"] + " --select " + outcome)
+        assert detail[outcome]["requirements"] == original["requirements"]
+        if short_opening:
+            assert outcome not in opening
+            assert opening[outcome + "/id"] == original["id"]
+            assert opening[outcome + "/objective"] == original["objective"]
+            assert opening[outcome + "/revision"] == original["revision"]
+        else:
+            assert opening[outcome] == detail[outcome]
+    if short_opening:
+        instruction = opening["/context_details/instruction"]
+        assert "This view retains complete requirements" not in instruction
+        assert "Before dependent work" in instruction
+        assert "recovery.command" in instruction and "remove /id" in instruction
+        assert f"{outcomes_path}/0" in instruction and f"{outcomes_path}/1" in instruction
+        selection_row = next(row for row in json.loads(opening_raw)["selections"]
+            if row["pointer"] == "/context_details/instruction")
+        assert "presentation" in selection_row
+
+        # Native lifecycle observation must verify the presented opening and
+        # leave omitted parent outcome pointers unconsumed until explicitly read.
+        deliver(tmp_path, event, opening_pages)
+        consumed = codex_context._state(tmp_path).get("consumed_pointers", {})
+        assert "/context_details/instruction" not in consumed
+        assert f"{outcomes_path}/0" not in consumed and f"{outcomes_path}/1" not in consumed
+
+        detail_words = shlex.split(view["recovery"]["command"] + " --select " + f"{outcomes_path}/0")
+        detail_page = json.loads(subprocess.check_output([sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+            *detail_words[detail_words.index("quota"):]]))
+        assert detail_page["ok"] and detail_page["eof"]
+        deliver(tmp_path, event, [detail_page])
+        assert f"{outcomes_path}/0" in codex_context._state(tmp_path).get("consumed_pointers", {})
+
+        # An explicit ordinary initial read and the immutable supporting source
+        # remain lossless. The shorter plan belongs to this native presentation.
+        _, cold = read_selection(view["recovery"]["command"] + " --initial-read")
+        assert cold[outcomes_path + "/0"]["requirements"] == outcomes[0]["requirements"]
+        assert "This view retains complete requirements" in cold["/context_details/instruction"]
+        source_command = opening["/context_details/command_template"]
+        for index, original in enumerate(outcomes[:2]):
+            address = f"{outcomes_path}/{index}"
+            _, evidence = read_selection(source_command.replace("<pointer>", address + "/sources"))
+            assert evidence[address + "/sources"] == original["sources"]
+    elif "/context_details/instruction" in opening:
+        assert "This view retains complete requirements" in opening["/context_details/instruction"]
+
+
+def test_ready_quota_cli_opening_bounds_suggested_outcomes_and_discloses_parents(tmp_path, monkeypatch):
+    from test_codex_context_lifecycle import setup
+    from test_quota_settlement_cli import AGENT_ID, GOAL_ID, TODO_ID, _initialize_fixture_authority, _run_cli, _write_fixture
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state.write_text(state.read_text(encoding="utf-8").replace("status: active-read-only", "status: active"), encoding="utf-8")
+    registry.write_text(registry.read_text(encoding="utf-8").replace('"active-read-only"', '"active"'), encoding="utf-8")
+    _initialize_fixture_authority(project, runtime, provider="sqlite", handoff_mode="hard_lease")
+    code, claim = _run_cli(registry, runtime, "todo", "claim", "--goal-id", GOAL_ID,
+        "--todo-id", TODO_ID, "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID, cwd=project)
+    assert code == 0 and claim["ok"], claim
+    for oid in ("first", "second", "third", "fourth"):
+        for index in range(3):
+            document = tmp_path / f"{oid}-{index}.json"
+            document.write_text(json.dumps({
+                "outcome_id": oid, "owner_agent_id": AGENT_ID, "todo_ids": [TODO_ID],
+                "objective": f"Deliver outcome {oid}.",
+                "requirements": [{
+                    "id": f"req-{oid}-{item}",
+                    "description": f"Requirement {oid}-{item}: preserve complete stop conditions, boundary limits, and independent verification evidence before completion.",
+                } for item in range(25)],
+                "source": {"ref": f"fixture:{oid}-{index}", "summary": ("Supporting source evidence. " * 14).strip()},
+            }), encoding="utf-8")
+            code, inspected = _run_cli(registry, runtime, "goal-acceptance", "inspect", "--goal-id", GOAL_ID, cwd=project)
+            assert code == 0 and inspected["ok"], inspected
+            code, refined = _run_cli(registry, runtime, "goal-acceptance", "refine", "--goal-id", GOAL_ID,
+                "--agent-id", AGENT_ID, "--document", str(document),
+                "--expected-provider-revision", inspected["provider_revision"],
+                "--operation-id", f"op-{oid}-{index}", "--execute", cwd=project)
+            assert code == 0 and refined["ok"], refined
+    journal, captures = tmp_path / "native", tmp_path / "captures"
+    journal.mkdir(mode=0o700)
+    captures.mkdir(mode=0o700)
+    setup(journal, monkeypatch)
+    code, packet = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
+        "--context-delivery", "on", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--todo-id", TODO_ID, "--turn-instance-id", "cli-bounded-opening",
+        "--codex-context-dir", str(journal), "--decision-output-root", str(captures), cwd=project)
+    assert code == 0 and packet["ok"], packet
+
+    def read_all(command):
+        parts = []
+        while command:
+            words = shlex.split(command)
+            rc, page = _run_cli(registry, runtime, *words[words.index("quota"):], cwd=project)
+            assert rc == 0 and page["ok"], page
+            parts.append(page["content"])
+            command = page.get("next_command")
+        return selected_context_values("".join(parts))
+
+    opening = read_all(packet["first_read_command"])
+    key = next(pointer for pointer in opening if pointer.endswith("/id") and "/outcome_requirements/outcomes/" in pointer)
+    outcomes_path = key.rsplit("/", 2)[0]
+    first, second = f"{outcomes_path}/0", f"{outcomes_path}/1"
+    assert first not in opening and second not in opening
+    assert opening[f"{first}/id"] == "first" and opening[f"{second}/id"] == "second"
+    instruction = opening["/context_details/instruction"]
+    assert "This view retains complete requirements" not in instruction
+    assert "Before dependent work" in instruction and first in instruction and second in instruction
+    recovered = read_all(packet["recovery"]["command"] + " --select " + first)
+    assert len(recovered[first]["requirements"]) == 25
+    evidence = read_all(opening["/context_details/command_template"].replace("<pointer>", f"{first}/sources"))
+    assert len(evidence[f"{first}/sources"]) == 3
+
+
 @pytest.mark.parametrize("field,value", [
     ("goal_id", "other-goal"), ("agent_id", "other-agent"), ("todo_id", "other-todo"),
     ("outcome_revision", 6), ("provider_revision", "older-source"),
