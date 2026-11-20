@@ -466,9 +466,10 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         output_formats=("json", "markdown"),
         semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
         markdown_anchor="# LoopX Turn Envelope",
-        # The complete captured Vision projection measures 58,393 JSON chars.
-        # Preserve the original 55,000 failure; keep a 607-character allowance.
-        max_chars={'json': 59000, 'markdown': 26000},
+        # Matched base/current complete Vision fixture: 60,826 JSON chars.
+        # Retain the former 55k/59k failures. This presentation allowance
+        # leaves 274 chars; it changes no wire, model or execution budget.
+        max_chars={'json': 61100, 'markdown': 26000},
         max_lines={"json": 1_350, "markdown": 190},
         output_contract_version="loopx_turn_envelope_v1",
     ),

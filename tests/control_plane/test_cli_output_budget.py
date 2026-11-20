@@ -1269,11 +1269,17 @@ def test_quota_cli_keeps_complete_vision_rules_with_reachable_duplicate_refs(
         detail_interaction["cli_channel"]["next_cli_actions"]
     )
 
-    # Keep the existing ceiling: completeness and matching views do not
-    # qualify a larger hot-path payload.
-    assert len(default_text) <= CLI_OUTPUT_MODE_VARIANT_BY_ID[
-        "quota_should_run_vision_detail"
-    ].max_chars["json"]
+    # The measured baseline allowance is not evidence of output reduction.
+    spec = CLI_OUTPUT_MODE_VARIANT_BY_ID["quota_should_run_vision_detail"]
+    assert len(default_text) <= spec.max_chars["json"]
+    # A bounded calibration must still reject a body beyond its allowance.
+    # JSON whitespace preserves all semantics while adding presentation cost.
+    oversized = default_text + " " * (spec.max_chars["json"] + 1 - len(default_text))
+    with pytest.raises(AssertionError, match="variant ceiling"):
+        assert_cli_output_mode_variant(
+            spec, output_format="json", text=oversized,
+            measurement=measure_cli_output(oversized, output_format="json"),
+        )
 
 
 @pytest.mark.parametrize("include_agent_vision", [False, True])

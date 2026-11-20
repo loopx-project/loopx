@@ -1401,6 +1401,37 @@ workflow costs less.
 
 ### Budget Failure Decisions
 
+The current complete-contract Vision fixture (36 Todos / 12 runs, explicit
+context delivery off) emits 60,826 JSON characters at both target base
+`eb552a8bb0532de117513ee5277a92e74e746309` and ordinary-default cutover
+`6fd0543625ca0203471b9d76c9de49ca11b927f2`. The original 59,000 failure remains a
+failure; the default cutover did not introduce its 1,826-character excess.
+The earlier 58,393 observation described an older complete-body revision.
+Current bodies retain complete replan authoring, settlement and continuation
+instructions; their largest JSON subtrees are interaction and replan context.
+Existing typed references already share equal Vision audits, replan authoring
+and Todo lanes. Remaining repeated action text, trigger and acceptance-gap
+carriers are read through distinct existing consumers; removing their bodies
+would require a separately validated reference/consumer change, not a test-only
+compaction. Preserve those semantics and calibrate only this synthetic Vision
+JSON presentation allowance to 61,100 (274 characters above the measured body),
+with a one-character-over negative case. Markdown, line, collection-growth,
+per-Todo and all other presentation budgets stay unchanged. This changes no
+production bytes, transport/host limit, model budget, execution authority or
+frozen qualification result. It neither resolves the original overrun as an
+optimization nor qualifies C1 outcome/full-cost or installed-Host adoption.
+
+同一 36-Todo／12-run、显式关闭上下文交付的完整 Vision 夹具，在上述原目标主干和
+默认切换候选均为 60,826 JSON 字符；原 59,000 超限失败保留，切换本身没有引入
+这 1,826 字符差额。早先 58,393 是另一完整正文版本的实测。当前正文保留完整重规划
+编写、结算和接续指令；既有 TypeScript 引用已共享相同 Vision audit、编写契约和
+Todo lane。其余重复动作、触发器和验收缺口仍有各自消费者；删正文需要另行验证
+引用及读取链，不能通过测试侧压缩代替。本次仅将该合成 Vision JSON 展示回归预算
+校准为 61,100，留 274 字符余量，并验证超一字符仍拒绝。Markdown、行数、集合增长、
+每 Todo 和其它展示预算不变；不改变生产字节、宿主硬限制、模型预算、执行权限或
+冻结资格结果，也不据此声称输出优化、成果／全成本改善或安装采用已经通过。
+
+
 The thin heartbeat's 4,500-character presentation allowance did not cover the
 complete combination of a 320-character scope, all five runtime capability
 flags, Codex App transport and an explicit CLI route. The existing public CLI
