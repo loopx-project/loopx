@@ -147,7 +147,7 @@ def test_inline_user_context_preserves_full_scoped_gates_without_granting_delive
     assert packet["scoped_user_gate_fallback"]["selected_executable"]["todo_id"] == "todo_inspect"
     assert channel["work_context"]["complete"] is True
     envelope = guard("--turn-envelope")
-    assert envelope["work_context"]["user_todos"] == channel["work_context"]["user_todos"]
+    assert envelope["interaction_contract"]["agent_channel"]["work_context"]["user_todos"] == channel["work_context"]["user_todos"]
     assert state.read_text() == state_text
     # Canonical tasks still exist: the full Goal source must fail closed,
     # rather than silently substituting a Todo summary for missing intent.
@@ -231,8 +231,7 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     full = json.loads(result.stdout)
     assert full["should_run"] is True, full.get("reason")
     channel = full["interaction_contract"]["agent_channel"]
-    assert [read["source"] for read in channel["required_reads"]] == ["goal_state"]
-    goal_read = channel["required_reads"][0]
+    assert channel["required_reads"] == []
     assert "required_reads" not in full["interaction_contract"]["cli_channel"]
     context = channel["work_context"]
     assert context["complete"] and not context.get("failures", [])
@@ -240,8 +239,10 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     assert "unknown, not unchanged" in context["instruction"]
     assert "summaries cannot replace full requirements" in context["instruction"]
     reads = context["sources"]
-    assert [read["source"] for read in reads] == ["selected_todo"]
-    assert not any(read["source"] == "goal_state" for read in reads)
+    assert [read["source"] for read in reads] == ["goal_state", "selected_todo"]
+    goal_read = next(read for read in reads if read["source"] == "goal_state")
+    assert goal_requirements in goal_read["content"]["text"]
+    assert "Stop before an unauthorized deployment." in goal_read["content"]["text"]
     goal_result = subprocess.run(shlex.split(goal_read["command"]), capture_output=True, text=True, check=True)
     assert goal_requirements in goal_result.stdout
     assert "Stop before an unauthorized deployment." in goal_result.stdout
@@ -250,15 +251,11 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     assert "_context_text_sha256" not in full["selected_todo"]
     assert reads[-1]["content"]["todo"]["text"] == expected
     assert json.dumps(context).count(expected) == 1
-    assert envelope["required_reads"] == channel["required_reads"]
+    env_channel = envelope["interaction_contract"]["agent_channel"]
+    assert env_channel["required_reads"] == channel["required_reads"]
     assert context["selected_todo_text_verified"] is True
-    assert envelope["work_context"] == {
-        key: value
-        for key, value in context.items()
-        if key != "selected_todo_text_verified"
-    }
-    assert envelope["action"]["selected_todo"]["text_source_verified"] is True
-    selected = envelope["action"]["selected_todo"]
+    assert env_channel["work_context"] == context
+    selected = envelope["selected_todo"]
     assert selected["todo_id"] == "todo_cursor_work"
     read = reads[-1]
     tokens = shlex.split(read["command"])
@@ -278,7 +275,8 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     assert not {"todos", "agent_todos", "user_todos"}.intersection(detail)
     assert json.dumps(detail).count(expected) == 1
     assert detail["todo"]["claimed_by"] == "agent-a"
-    assert envelope["action_signature"]["matches"] is True
+    assert envelope["contract_binding"]["source_decision_hash"]
+    assert envelope["contract_binding"]["content_hash"]
     assert state.read_bytes() == before
 
     plan = build_loopx_turn_plan(envelope, host="codex-cli", execution_mode="isolated-headless",
@@ -287,10 +285,11 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     assert read["command"] in _prompt(request)
     assert "work_context" in _prompt(request)
     authority = extract_turn_authority(request)
+    auth_channel = authority["interaction_contract"]["agent_channel"]
     assert authority["selected_todo"]["todo_id"] == "todo_cursor_work"
-    assert authority["required_reads"] == channel["required_reads"]
-    assert authority["work_context"] == envelope["work_context"]
-    assert authority["selected_todo"]["text_source_verified"] is True
+    assert auth_channel["required_reads"] == channel["required_reads"]
+    assert auth_channel["work_context"] == env_channel["work_context"]
+    assert auth_channel["work_context"]["selected_todo_text_verified"] is True
     assert read["command"] in render_prompt(authority)
 
     # A fresh CLI process must recover current requirements from the same owner,
@@ -461,7 +460,8 @@ def test_short_selected_todo_deduplicates_body_but_keeps_canonical_note(
     context = channel["work_context"]
     assert context["complete"] is True
     assert context["selected_todo_ref"] == "selected_todo"
-    assert [read["source"] for read in channel["required_reads"]] == ["goal_state"]
+    assert channel["required_reads"] == []
+    assert [read["source"] for read in context["sources"]] == ["goal_state", "selected_todo"]
     selected_source = next(source for source in context["sources"] if source["source"] == "selected_todo")
     source_todo = selected_source["content"]["todo"]
     assert source_todo.get("text") is None
@@ -473,7 +473,7 @@ def test_short_selected_todo_deduplicates_body_but_keeps_canonical_note(
         "--agent-id", "agent-a",  "--turn-envelope",
         registry_path=registry, runtime_root=runtime)
     assert code == 0 and turn["ok"], turn
-    turn_context = turn["work_context"]
+    turn_context = turn["interaction_contract"]["agent_channel"]["work_context"]
     assert turn_context["complete"] is True
     assert turn_context["selected_todo_ref"] == "selected_todo"
     turn_source = next(source for source in turn_context["sources"] if source["source"] == "selected_todo")

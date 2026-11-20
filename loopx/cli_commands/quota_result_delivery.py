@@ -81,8 +81,9 @@ def prepare_quota_result_context(
     *,
     registry_path: Path,
     heartbeat_turn_id: str | None,
+    attach_recall: bool = True,
 ) -> tuple[dict[str, object], dict[str, Any]]:
-    """Resolve presentation and attach recall before composing the work contract."""
+    """Resolve presentation and optionally attach recall before composition."""
     try:
         activation = native_context_activation(args)
     except QuotaCommandValidationError:
@@ -90,7 +91,7 @@ def prepare_quota_result_context(
             raise
         # Keep the original diagnostic on a refused guard.
         activation = {"progressive_enabled": False, "enabled": False}
-    if args.quota_command == "should-run":
+    if attach_recall and args.quota_command == "should-run":
         attach_reward_memory_recall_after_should_run(
             payload,
             quota_command=args.quota_command,
@@ -253,6 +254,7 @@ def _publish_quota_result(
             args,
             registry_path=registry_path,
             heartbeat_turn_id=heartbeat_turn_id,
+            attach_recall=False,
         )
     # Compose optional capability guidance after recovery has chosen the plan,
     # before capture/compaction. The quota decision owner stays capability-neutral.
@@ -318,6 +320,7 @@ def _publish_quota_result(
             "full_decision": context_capture_read_command(source, "",
                 reference_file=source.with_suffix(".reader.json"), reader_argv=reader_argv),
         }}
+    pre_contract_decision = payload
     payload = compose_quota_work_contract(
         payload,
         args,
@@ -325,6 +328,40 @@ def _publish_quota_result(
         capture_directory=capture_directory,
         record_capture=record_capture,
     )
+    if args.quota_command == "should-run":
+        from ..control_plane.quota.turn_envelope import (
+            COMPLETE_TURN_DECISION_VERSION,
+            attach_complete_turn_context,
+        )
+
+        if payload.get("schema_version") == COMPLETE_TURN_DECISION_VERSION:
+            hook_target = dict(payload)
+            attach_reward_memory_recall_after_should_run(
+                hook_target,
+                quota_command=args.quota_command,
+                heartbeat_turn_id=heartbeat_turn_id,
+                registry_path=registry_path,
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+                decision=pre_contract_decision,
+            )
+            additions = {
+                key: value
+                for key, value in hook_target.items()
+                if key not in payload
+            }
+            if additions:
+                payload = attach_complete_turn_context(payload, additions)
+        else:
+            attach_reward_memory_recall_after_should_run(
+                payload,
+                quota_command=args.quota_command,
+                heartbeat_turn_id=heartbeat_turn_id,
+                registry_path=registry_path,
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+                decision=pre_contract_decision,
+            )
     captured_digest = capture_decision(
         capture_directory,
         payload,

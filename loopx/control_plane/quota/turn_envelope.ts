@@ -2046,6 +2046,20 @@ function selectedWorkLaunchBasis(decision: JsonObject, verifiedTextSha256?: stri
     required_capabilities: selected.required_capabilities ?? []});
 }
 
+function sealCompleteTurnDecision(
+  source: JsonObject,
+  schedulerExecutionArgs: string,
+  identity: ReturnType<typeof contextSourceIdentity>,
+): JsonObject {
+  requireCompleteDecisionSource(source);
+  const result: JsonObject = {...source, schema_version: COMPLETE_TURN_DECISION_VERSION,
+    contract_binding: {scheduler_execution_args: schedulerExecutionArgs,
+      hash_codec: COMPLETE_TURN_HASH_CODEC,
+      source_decision_hash: completeSourceHash(source, identity)}};
+  result.contract_binding = {...object(result.contract_binding), content_hash: completeSourceHash(result, identity)};
+  return result;
+}
+
 export function composeCompleteTurnDecision(value: unknown): JsonObject {
   const request = requireJsonObject(value, "complete Turn decision request");
   const payload = requireJsonObject(request.payload, "complete Turn decision source");
@@ -2114,13 +2128,41 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
   source = referenceCurrentTaskTitle(source);
   source = referenceVisionContinuation(source, sourceIdentity);
   source = referenceQuotaSummaryLanes(source, sourceIdentity);
-  requireCompleteDecisionSource(source);
-  const result: JsonObject = {...source, schema_version: COMPLETE_TURN_DECISION_VERSION,
-    contract_binding: {scheduler_execution_args: request.scheduler_execution_args,
-      hash_codec: COMPLETE_TURN_HASH_CODEC,
-      source_decision_hash: completeSourceHash(source, sourceIdentity)}};
-  result.contract_binding = {...object(result.contract_binding), content_hash: completeSourceHash(result, sourceIdentity)};
-  return result;
+  return sealCompleteTurnDecision(source, request.scheduler_execution_args, sourceIdentity);
+}
+
+const CONTEXT_ADDITION_FIELD_PATTERN = /^(?:turn_context_contributions|turn_context_hook_failures|[a-z][a-z0-9_]{2,95})$/;
+
+export function attachCompleteTurnContext(value: unknown): JsonObject {
+  const request = requireJsonObject(value, "complete Turn context request");
+  const decision = requireCompleteTurnDecision(request.payload, request.source_number_tokens);
+  const schedulerExecutionArgs = object(decision.contract_binding).scheduler_execution_args;
+  if (typeof schedulerExecutionArgs !== "string") {
+    throw new EffectRuntimeRequestError("Turn scheduler execution binding must be a string");
+  }
+  const additions = requireJsonObject(request.context_additions, "complete Turn context additions");
+  const additionTokens = Array.isArray(request.context_addition_tokens)
+    ? request.context_addition_tokens : [];
+  const source: JsonObject = {...decision};
+  delete source.schema_version;
+  delete source.contract_binding;
+  for (const [key, item] of Object.entries(additions)) {
+    if (key === "schema_version" || key === "contract_binding"
+        || !CONTEXT_ADDITION_FIELD_PATTERN.test(key)
+        || Object.hasOwn(source, key)) {
+      throw new EffectRuntimeRequestError(`complete Turn context cannot replace or add invalid field: ${key}`);
+    }
+    source[key] = item;
+  }
+  const combinedTokens = [
+    ...(Array.isArray(request.source_number_tokens) ? request.source_number_tokens : []),
+    ...additionTokens,
+  ];
+  const sourceIdentity = contextSourceIdentity(
+    source,
+    combinedTokens.length > 0 ? combinedTokens : undefined,
+  );
+  return sealCompleteTurnDecision(source, schedulerExecutionArgs, sourceIdentity);
 }
 
 export function buildTurnEnvelope(value: unknown): JsonObject {
@@ -2627,6 +2669,11 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     const result = composeCompleteTurnDecision(request);
     return request.source_edits === true
       ? contextProjectionChanges(requireJsonObject(request.payload, "complete Turn source"), result) : result;
+  }
+  if (operation === "attach_complete_turn_context") {
+    const result = attachCompleteTurnContext(request);
+    return request.source_edits === true
+      ? contextProjectionChanges(requireJsonObject(request.payload, "complete Turn decision"), result) : result;
   }
   if (operation === "complete_consumer") {
     requireCompleteTurnDecision(request.payload, request.source_number_tokens);
