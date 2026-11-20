@@ -350,7 +350,26 @@ def test_no_change_review_receipt_is_quiet_and_has_no_gate() -> None:
     assert receipt["quiet_noop"] is True
 
 
-def test_no_change_review_receipt_rejects_user_gate_refs() -> None:
+def test_observed_review_records_facts_without_authorizing_action() -> None:
+    receipt = build_decision_review_receipt(
+        goal_id="goal:example",
+        decision_id="decision:example",
+        evidence_packet_ref="decision-evidence-example",
+        recorded_at=REVIEW_AT,
+        disposition="observed",
+        actor_ref="agent:decision-advisor",
+        reason_code="new_facts_reviewed",
+        summary="New source facts were reviewed; no action was authorized.",
+    )
+    assert receipt["authority_confirmation_required"] is False
+    assert receipt["authority_confirmed"] is False
+    assert receipt["outcome_observation_required"] is False
+    assert receipt["quiet_noop"] is False
+    assert receipt["source_event_id"] is None
+
+
+@pytest.mark.parametrize("disposition", ["no_change", "observed"])
+def test_evidence_only_review_receipt_rejects_user_gate_refs(disposition: str) -> None:
     with pytest.raises(ValueError, match="must not reference"):
         build_decision_review_receipt(
             goal_id="goal:example",
@@ -358,7 +377,7 @@ def test_no_change_review_receipt_rejects_user_gate_refs() -> None:
             evidence_packet_ref="decision-evidence-example",
             proposal_packet_ref="decision-proposal-example",
             recorded_at=REVIEW_AT,
-            disposition="no_change",
+            disposition=disposition,
             actor_ref="agent:decision-advisor",
             reason_code="no_material_change",
             summary="No material change.",

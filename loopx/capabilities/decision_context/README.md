@@ -33,7 +33,7 @@ flowchart LR
     READ["Bounded scan + exact read<br/>freshness · revision · conflicts"]
     EVIDENCE["Evidence packet<br/>accepted · rejected · stale · conflicting"]
     PROPOSAL["Decision proposal<br/>recommendation · alternatives · stop list"]
-    REVIEW["Review settlement<br/>approve · reject · defer · no change"]
+    REVIEW["Review settlement<br/>approve · reject · defer · observed · no change"]
     CORE["LoopX lifecycle<br/>todo · user gate · event"]
     OUTCOME["Outcome receipt<br/>later observed result"]
     MEMORY["Reward Memory<br/>reviewed reusable experience"]
@@ -106,7 +106,7 @@ change touches.
 | `assembler.py` | Deterministic authority rebase, advisory recall assembly, `decision_source_coverage_v0` |
 | `freshness.py` | Per-source freshness reports and capture host health projection |
 | `packets.py` | Public-safe evidence, proposal, review and outcome packets |
-| `review_settlement.py` | Owner-gated or quiet settlement of one assembly |
+| `review_settlement.py` | Owner-gated or evidence-only settlement of one assembly |
 | `cursor_commit.py` | Validated private cursor commit after settlement |
 | `private_state.py` | Private cursor and pending-settlement file IO |
 | `outcome_feedback.py` | Audited feedback from outcomes into Reward Memory |
@@ -137,7 +137,7 @@ To add an observable field:
 |---|---|---|
 | `decision_evidence_packet_v0` | What should the decision trust now? | Changed facts, accepted recall, stale/rejected claims, conflicts, revisions, provider health |
 | `decision_proposal_v0` | What should happen next? | Objective scores, recommendation, alternatives, actions, stop list |
-| `decision_review_receipt_v0` | What did the owner decide about the proposal? | Approve/reject/defer gate evidence, or an explicit quiet no-change settlement |
+| `decision_review_receipt_v0` | How was the evidence or proposal reviewed? | Approve/reject/defer gate evidence, observed facts without action authority, or explicit quiet no-change |
 | `decision_outcome_receipt_v0` | What happened after the decision? | Accepted decision, transitions, outcomes, invalidated assumptions, review time |
 
 The evidence packet is intended to be deterministic and auditable. The
@@ -332,7 +332,11 @@ loopx decision-context settle-review \
 ```
 
 For an explicit semantic `no_change`, omit `--proposal-json` and
-`--source-event-id`; no user gate is created. Preview by omitting `--execute`.
+`--source-event-id`; no user gate is created. For reviewed new facts that do not
+propose an action, also pass `--disposition observed`. This requires a material
+semantic rebase; an empty rebase cannot settle, and collection alone is not
+review. An observed receipt is not a quiet no-op and does not confirm authority
+or approve any proposal. Preview by omitting `--execute`.
 These commands write only the caller-selected private pending/cursor state and
 the existing local rollout event log. They grant no trading, external action,
 or other irreversible authority. Removing the private profile disables the
