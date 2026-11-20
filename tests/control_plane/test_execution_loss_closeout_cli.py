@@ -713,7 +713,7 @@ def test_malformed_original_prepared_receipt_or_mixed_profile_cannot_certify_exe
     assert restored == pure_input
     mixed_profile = deepcopy(pure_input)
     mixed_profile.pop("goal_ref")
-    module = Path(loopx.__file__).resolve().parent / "control_plane" / "work_items" / "execution_preparation.ts"
+    module = Path(loopx.__file__).resolve().parent / "control_plane" / "quota" / "execution_loss_closeout.ts"
     script = (
         "import {qualifyReceiptBoundExecutionLossCloseout as qualify} from "
         + json.dumps(module.as_uri()) + ";"
