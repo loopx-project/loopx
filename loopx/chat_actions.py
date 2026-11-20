@@ -1393,6 +1393,11 @@ class ChatActionService(
         if not isinstance(parameters, Mapping) or not isinstance(context, Mapping):
             raise ValueError("normalized_parameters and context must be objects")
         normalized = self._normalize(action_kind, parameters)
+        if action_kind == "goal.update" and "reason" in normalized:
+            return self._prepare_objective_preview(
+                parameters=normalized, context=context, summary=request.get("summary"),
+                idempotency_key=_opaque(request.get("idempotency_key"), field="idempotency_key"),
+            )
         canonical_update_basis = None
         workspace_binding = None
         if action_kind == "goal.create":
@@ -1410,13 +1415,7 @@ class ChatActionService(
             normalized["workspace_ref"] = workspace_binding["workspace_ref"]
         else:
             eligibility = None
-        if action_kind == "goal.update" and "reason" in normalized:
-            if context.get("kind") != "goal" or context.get("goal_id") != normalized["goal_id"]:
-                raise ValueError("objective proposal context must match its Goal")
-            fingerprint, _ = self._objective_preview(normalized)
-            evidence = ["The typed Goal owner validated this current-objective revision. Root commitments, permissions and existing acceptance remain unchanged; peers must adopt the new revision before new execution."]
-            permission = "durable_write"
-        elif action_kind == "goal.acceptance.check":
+        if action_kind == "goal.acceptance.check":
             if context.get("kind") != "goal" or context.get("goal_id") != normalized["goal_id"]:
                 raise ValueError("check plan context must match its target Goal")
             fingerprint, preview = self._acceptance_preview(normalized)
