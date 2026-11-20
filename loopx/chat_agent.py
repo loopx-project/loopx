@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from .control_plane.turn_driver.codex_worker_identity import CodexWorkerIdentity
 from .presentation.codex_activity import CodexActivitySteps
 from .chat import (
     CHAT_RESPONSE_EXAMPLE_SUFFIX,
@@ -762,6 +763,7 @@ class CodexChatAgentSession:
         launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
         account_runtime_root: Path | None = None,
         account_consumer: str = "worker",
+        worker_identity: CodexWorkerIdentity | None = None,
         _compatibility_catalog_path: Path | None = None,
     ) -> "CodexChatAgentSession":
         resolved = shutil.which(codex_bin)
@@ -822,13 +824,8 @@ class CodexChatAgentSession:
             owner_git_write_roots.append(str(root / ".codex" / "skills"))
         # Pin the host store explicitly, including compatibility retries. Never
         # redirect an existing thread by inheriting a different launch context.
-        base_home = (
-            (codex_home or Path(os.environ.get("CODEX_HOME") or "~/.codex"))
-            .expanduser()
-            .resolve()
-        )
-        runtime_home = codex_context.codex_home(base_home, policy if project_context is not None else None)
-        runtime_env = codex_context.process_environment(runtime_home, isolated=bool(permissions_profile))
+        base_home, runtime_home, runtime_env = codex_context.process_profile(
+            codex_home, policy if project_context is not None else None, bool(permissions_profile), worker_identity)
         # Select an operator-defined native provider for ordinary Chat only.
         # Codex owns its configuration/authentication; never copy credentials
         # or replace a resumed thread to change its upstream transport.
@@ -843,7 +840,7 @@ class CodexChatAgentSession:
             provider=provider_override, eligible=not execution_mode, consumer=account_consumer,
             model=model, environment=runtime_env)
         command = [resolved, "app-server"]
-        if permissions_profile:
+        if permissions_profile or worker_identity is not None:
             # Keep this native store independent even when the account's
             # default credential backend is a shared OS keychain.
             command.extend(["-c", 'cli_auth_credentials_store="file"'])
@@ -857,6 +854,8 @@ class CodexChatAgentSession:
                 ]
             )
         command.extend(["--listen", "stdio://"])
+        if worker_identity is not None:
+            command = [worker_identity.setpriv, "--no-new-privs", "--", *command]
         process = None
         try:
             # The admitting caller owns this short launch fence. Native startup
@@ -874,6 +873,7 @@ class CodexChatAgentSession:
                         encoding="utf-8",
                         bufsize=1,
                         start_new_session=isolate_process_tree and os.name == "posix",
+                        **(worker_identity.process_options if worker_identity is not None else {}),
                     )
                 except OSError as exc:
                     raise CodexChatAgentError(
@@ -1135,7 +1135,7 @@ class CodexChatAgentSession:
             return session
         except _LegacyModelCatalogSchemaError as exc:
             session.close()
-            if _compatibility_catalog_path is not None or fork_thread_id:
+            if _compatibility_catalog_path is not None or fork_thread_id or worker_identity is not None:
                 raise _model_catalog_compatibility_error() from exc
             with _current_builtin_model_catalog(resolved, environment=runtime_env) as catalog_path:
                 return cls.start(

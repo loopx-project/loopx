@@ -522,6 +522,12 @@ def execute_turn_run_once(
         def codex_writeback(
             result: dict[str, object], *, effect_ref: str,
         ) -> dict[str, object]:
+            from ..control_plane.turn_driver.codex_worker_identity import worker_isolation_requested
+
+            if getattr(args, "codex_operation_tools", False) and worker_isolation_requested():
+                if goal_admission is None:
+                    raise ValueError("isolated managed Codex writeback requires current Goal authority")
+                goal_admission.require_running(operation="isolated_codex_durable_writeback")
             # Accountable refresh requires durable controller validation even for
             # a predeclared terminal Todo. Other hosts keep their existing order.
             if result.get("result_kind") == "validated_completion":
