@@ -16,16 +16,6 @@ def compose_quota_work_contract(payload: dict[str, object], args: argparse.Names
     """Compose Complete Turn sources before capture and display."""
     if args.quota_command != "should-run" or not isinstance(payload.get("interaction_contract"), Mapping):
         return payload
-    if (
-        args.format == "json"
-        and scheduler_context is None
-        and not any(getattr(args, option, None) for option in (
-            "complete_turn", "turn_envelope", "codex_context_dir", "codex_context_root",
-            "prepared_capture_reference", "defer_context_presentation", "decision_handoff_socket",
-        ))
-    ):
-        # Undeclared JSON callers use the currently qualified public quota packet.
-        return payload
     from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
     from ..control_plane.quota.error_codes import QuotaDecisionTransportError
     from ..control_plane.quota.turn_envelope import compose_turn_decision
@@ -131,7 +121,6 @@ def _project_quota_cli_payload(
     from ..control_plane.quota.cli_projection import (
         compact_quota_monitor_poll_cli_payload,
         compact_quota_plan_cli_payload,
-        compact_quota_should_run_cli_payload,
     )
 
     reject_retired_quota_format(payload)
@@ -149,18 +138,6 @@ def _project_quota_cli_payload(
         # its unavailable runtime. Decided refusals still need signed views.
         # Keep the decided diagnostic, including its original recovery/receipt.
         return payload
-    if args.quota_command == "should-run":
-        if captured_decision_path is not None and "vision" not in detail_sections:
-            from ..control_plane.quota.turn_envelope import project_captured_replan_cli_view
-
-            payload = project_captured_replan_cli_view(payload, captured_decision_path=captured_decision_path)
-        return compact_quota_should_run_cli_payload(
-            payload,
-            include_todo_summary_detail="agent-todos" in detail_sections,
-            include_user_todo_summary_detail="user-todos" in detail_sections,
-            include_goal_boundary_detail="goal-boundary" in detail_sections,
-            include_vision_detail="vision" in detail_sections,
-        )
     if args.quota_command in {"status", "plan"}:
         return compact_quota_plan_cli_payload(payload, detail_sections=detail_sections)
     if args.quota_command == "monitor-poll":

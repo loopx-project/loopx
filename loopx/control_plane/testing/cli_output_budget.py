@@ -132,7 +132,7 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
     ),
     CliOutputBudgetSpec(
         surface_id="quota_should_run",
-        command="quota should-run --turn-envelope --context-delivery off",
+        command="quota should-run --context-delivery off",
         owner="quota guard",
         consumer_action="inspect the complete inline quota policy",
         qualification_policy="absolute_hot_path",

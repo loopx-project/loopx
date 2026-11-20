@@ -14,6 +14,12 @@ Turn 的 ready 决策。Host 将该原件交给既有 saved-capture 展示/reade
 readiness 路径，不补造 Turn。这只是有界的 Host 交接修复，不代表 C1 切换、已安装
 采用，或模型费用与长程收益已取得资格。
 
+本候选恢复普通 CLI 切换：#9084 曾临时让未声明宿主的 JSON 调用选择历史 packet。
+活跃来源不再根据宿主声明或展示参数选择契约，预算 workload 直接执行无显式标记的
+writer。源码切换不代表公开发布资格：既有分发契约仍拒绝 C1，直至匹配单会话成果／
+完整成本和受支持 profile 采用验收通过。发布探针必须暴露该拒绝，不能把 C1 标成旧
+packet，也不能修改允许列表来让打包通过。
+
 普通 CLI 切换让每个已形成决策的 `quota should-run` 在 capture **之前**复用既有
 TypeScript `composeCompleteTurnDecision` owner。默认调用及兼容别名
 `--turn-envelope` / `--complete-turn` 使用同一来源。显式关闭 context delivery 时，

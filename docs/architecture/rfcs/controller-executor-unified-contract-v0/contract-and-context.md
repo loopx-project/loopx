@@ -20,6 +20,15 @@ unbound request keeps its original readiness route without inventing a Turn.
 This is a bounded Host handoff repair, not C1 cutover, installed adoption or
 qualification of model cost and long-horizon benefit.
 
+This candidate restores the ordinary CLI cutover after #9084 temporarily
+selected the historical packet for undeclared JSON callers. The active source
+no longer chooses a contract from Host declarations or presentation flags; the
+budget workload exercises the unflagged writer. This source change does not
+promote a public release: the existing distribution contract still rejects C1
+until matched single-session outcomes/full cost and supported-profile adoption
+qualify. The release probe must expose that refusal, not label C1 as the old
+packet or change the allowlist to make packaging pass.
+
 The ordinary CLI cutover composes every decided `quota should-run` through the
 existing TypeScript `composeCompleteTurnDecision` owner **before** capture.
 Default calls and the compatibility aliases `--turn-envelope` / `--complete-turn`

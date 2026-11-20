@@ -7,7 +7,7 @@ import os
 import shlex
 import shutil
 import tempfile
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -365,10 +365,7 @@ def _surface_commands(
     state_file: Path,
     output_format: str,
     context_delivery: str | None = "off",
-    complete_quota: bool = True,
 ) -> dict[str, list[str]]:
-    # Keep the Complete Turn budget workload on its declared carrier.
-    quota_view = ["--turn-envelope"] if complete_quota else []
     delivery = ["--context-delivery", context_delivery] if context_delivery else []
     common = [
         "--registry",
@@ -418,7 +415,7 @@ def _surface_commands(
             GOAL_ID,
             "--agent-id",
             AGENT_IDS[0],
-        ] + quota_view + delivery,
+        ] + delivery,
         "loopx_turn_plan": common
         + [
             "turn",
@@ -1047,7 +1044,7 @@ def test_quota_should_run_no_format_uses_machine_contract_json(
 
 
 @pytest.mark.parametrize("scenario", SCENARIOS, ids=lambda scenario: scenario.name)
-def test_public_quota_packet_keeps_original_control_keys_and_output_budget(
+def test_ordinary_quota_uses_complete_contract_with_delivery_off(
     tmp_path: Path, scenario: Scenario,
 ) -> None:
     with _stable_budget_fixture_root(tmp_path / scenario.name) as stable_root:
@@ -1055,22 +1052,20 @@ def test_public_quota_packet_keeps_original_control_keys_and_output_budget(
         import_fixture_authority(registry_path, GOAL_ID)
         command = _surface_commands(
             project=project, runtime=runtime, registry_path=registry_path, state_file=state_file,
-            output_format="json", complete_quota=False,
+            output_format="json",
         )["quota_should_run"]
         exit_code, output = _invoke_cli(command)
         assert exit_code == 0, output
         measurement = _measure_context_output(output, output_format="json")
 
     packet = _measured_payload(measurement)
-    assert packet.get("schema_version") is None
+    assert packet["schema_version"] == "loopx_turn_envelope_v1"
+    assert packet["contract_binding"]
     assert packet["goal_id"] == GOAL_ID
     assert packet["interaction_contract"]["schema_version"] == "loopx_interaction_contract_v0"
-    spec = replace(
-        CLI_OUTPUT_BUDGET_BY_ID["quota_should_run"], output_contract_version=None,
-        semantic_json_keys=("interaction_contract", "scheduler_hint", "selected_todo"),
-    )
     assert_cli_output_baseline(
-        spec, scenario=scenario.name, output_format="json", text=output, measurement=measurement,
+        CLI_OUTPUT_BUDGET_BY_ID["quota_should_run"], scenario=scenario.name,
+        output_format="json", text=output, measurement=measurement,
     )
 
 
