@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .history import load_registry
 from .paths import (
+    registry_project_root,
     resolve_runtime_root,
     validate_goal_id_path_segment as validate_goal_id_path_segment,
 )
@@ -248,9 +249,20 @@ def archive_runtime_goal(
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(source), str(destination))
             archived_state_file = destination / "ACTIVE_GOAL_STATE.md"
-            declared_state_file = (
+            # The payload carries an absolute path: resolve a registered
+            # relative ``state_file`` against the registry's project root, the
+            # same rule the stop path uses. After the move, the archived copy
+            # wins so the consumer can read the file where it now lives.
+            declared_state_file: Path | None = None
+            raw_declared_state_file = (
                 archive_goal.get("state_file") if archive_goal else None
             )
+            if raw_declared_state_file:
+                declared_state_file = Path(str(raw_declared_state_file)).expanduser()
+                if not declared_state_file.is_absolute():
+                    declared_state_file = (
+                        registry_project_root(registry_path) / declared_state_file
+                    )
             # Resolve the hook facts under the snapshot, but run the operator
             # command only after every canonical lock is released.
             closeout_request = {

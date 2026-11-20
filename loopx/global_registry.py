@@ -667,8 +667,14 @@ def retire_global_registry_goals(
             goal_id = str(retired_goal.get("id") or "").strip()
             if not goal_id:
                 continue
-            state_file = retired_goal.get("state_file")
-            if not state_file:
+            # Reuse the registry path rule so a relative ``state_file`` reaches
+            # the hook as the absolute path its consumer contract requires.
+            state_file = _global_goal_path(
+                retired_goal,
+                "state_file",
+                global_path=global_path,
+            )
+            if state_file is None:
                 state_file = runtime_root / "goals" / goal_id / "ACTIVE_GOAL_STATE.md"
             goal_runtime_dir = runtime_root / "goals" / goal_id
             closeout_ledger_dir = (

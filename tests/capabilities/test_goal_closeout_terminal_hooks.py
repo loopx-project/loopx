@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import pytest
 from pathlib import Path
 
 from loopx.capabilities.goal_closeout.machine_defaults import (
@@ -328,3 +329,153 @@ def test_archive_runs_closeout_after_canonical_locks_are_released(tmp_path: Path
     assert result["ok"] is True, result
     assert result["closeout"]["status"] == "success", result
     assert probe_path.read_text(encoding="utf-8").splitlines() == ["FREE", "FREE"]
+
+
+def test_stop_resolves_relative_state_file_to_project_root(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "runtime"
+    project = tmp_path / "project"
+    source_registry = project / ".loopx" / "registry.json"
+    _write_json(
+        source_registry,
+        {
+            "schema_version": "0.1",
+            "common_runtime_root": str(runtime_root),
+            "goals": [
+                {
+                    "id": "relative-stop",
+                    "display_name": "Relative stop fixture",
+                    "repo": str(project),
+                    "state_file": "goals/relative-stop/ACTIVE_GOAL_STATE.md",
+                    "quota": {"compute": 1, "allowed_slots": 4, "spent_slots": 0},
+                }
+            ],
+        },
+    )
+    synced = sync_project_registry_to_global(
+        registry_path=source_registry,
+        runtime_root_override=str(runtime_root),
+        goal_id="relative-stop",
+        dry_run=False,
+    )
+    assert synced["ok"] is True
+    global_registry = runtime_root / "registry.global.json"
+    global_payload = json.loads(global_registry.read_text(encoding="utf-8"))
+    global_payload["goals"][0]["state_file"] = (
+        "goals/relative-stop/ACTIVE_GOAL_STATE.md"
+    )
+    _write_json(global_registry, global_payload)
+    payload_path = tmp_path / "payloads.jsonl"
+    _configure_closeout(runtime_root, payload_path)
+
+    stopped = set_goal_activation_state(
+        registry_path=global_registry,
+        goal_id="relative-stop",
+        state="stopped",
+        actor_kind="owner",
+        execute=True,
+    )
+    assert stopped["ok"] is True, stopped
+    assert stopped["closeout"]["status"] == "success", stopped
+    payload = json.loads(payload_path.read_text(encoding="utf-8").splitlines()[0])
+    assert payload["state_file"] == str(
+        project / "goals" / "relative-stop" / "ACTIVE_GOAL_STATE.md"
+    )
+
+
+def test_stop_keeps_committed_receipt_when_registry_read_fails_after_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from loopx.control_plane.goals import activation_service
+
+    runtime_root = tmp_path / "runtime"
+    project = tmp_path / "project"
+    source_registry = project / ".loopx" / "registry.json"
+    _write_json(
+        source_registry,
+        {
+            "schema_version": "0.1",
+            "common_runtime_root": str(runtime_root),
+            "goals": [
+                {
+                    "id": "masked-stop",
+                    "display_name": "Masked stop fixture",
+                    "repo": str(project),
+                    "quota": {"compute": 1, "allowed_slots": 4, "spent_slots": 0},
+                }
+            ],
+        },
+    )
+    synced = sync_project_registry_to_global(
+        registry_path=source_registry,
+        runtime_root_override=str(runtime_root),
+        goal_id="masked-stop",
+        dry_run=False,
+    )
+    assert synced["ok"] is True
+    global_registry = runtime_root / "registry.global.json"
+    payload_path = tmp_path / "payloads.jsonl"
+    _configure_closeout(runtime_root, payload_path)
+
+    original_load_registry = activation_service.load_registry
+
+    def _flaky_load_registry(path: Path) -> dict[str, object]:
+        snapshot = original_load_registry(path)
+        for goal in snapshot.get("goals", []):
+            if isinstance(goal, dict) and goal.get("state") == "stopped":
+                raise RuntimeError("registry re-read failed after commit")
+        return snapshot
+
+    monkeypatch.setattr(activation_service, "load_registry", _flaky_load_registry)
+
+    stopped = set_goal_activation_state(
+        registry_path=global_registry,
+        goal_id="masked-stop",
+        state="stopped",
+        actor_kind="owner",
+        execute=True,
+    )
+    assert stopped["ok"] is True, stopped
+    assert stopped["written"] is True, stopped
+    assert stopped["after_state"] == "stopped", stopped
+    # The closeout reads the transaction's confirmed snapshot.  A registry
+    # load that only fails once the stop is committed must never run, so the
+    # committed receipt keeps its successful hook result.
+    assert stopped["closeout"]["status"] == "success", stopped
+    ledger_path = runtime_root / "goals" / "masked-stop" / GOAL_CLOSEOUT_LEDGER_FILENAME
+    assert ledger_path.is_file()
+
+
+def test_retire_resolves_relative_state_file_to_registry_root(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "runtime"
+    global_registry = runtime_root / "registry.global.json"
+    project = tmp_path / "project"
+    _write_json(
+        global_registry,
+        {
+            "schema_version": "0.1",
+            "registry_role": "global-local",
+            "goals": [
+                {
+                    "id": "relative-retired",
+                    "display_name": "Relative retire fixture",
+                    "repo": str(project),
+                    "source_registry": str(tmp_path / "missing" / "registry.json"),
+                    "state_file": "goals/relative-retired/ACTIVE_GOAL_STATE.md",
+                }
+            ],
+        },
+    )
+    payload_path = tmp_path / "payloads.jsonl"
+    _configure_closeout(runtime_root, payload_path)
+
+    result = retire_global_registry_goals(
+        runtime_root_override=str(runtime_root),
+        goal_ids=["relative-retired"],
+        execute=True,
+    )
+    assert result["ok"] is True, result
+    assert result["closeouts"][0]["status"] == "success", result
+    payload = json.loads(payload_path.read_text(encoding="utf-8").splitlines()[0])
+    assert payload["state_file"] == str(
+        project / "goals" / "relative-retired" / "ACTIVE_GOAL_STATE.md"
+    )
