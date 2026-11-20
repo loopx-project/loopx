@@ -568,12 +568,32 @@ def _dispatch_common_command(
 		return handle_start_goal_command(
 			args, print_payload, runtime_root_arg=args.runtime_root,
 		)
-	if args.command == "bootstrap-command-pack":
-		from .cli_commands.starter_bootstrap import handle_loopx_bootstrap_command_pack_command
-
-		return handle_loopx_bootstrap_command_pack_command(
-			args, print_payload, runtime_root_arg=args.runtime_root,
+	if args.command in {"bootstrap-command-pack", "agent-onboard"}:
+		from .cli_commands.starter_bootstrap import (
+			handle_agent_onboard_command, handle_loopx_bootstrap_command_pack_command,
 		)
+
+		runtime_root_arg = args.runtime_root
+		# Project commands use a registry anchor only when it was supplied on the CLI.
+		if runtime_root_arg and not allow_missing_registry:
+			from .paths import resolve_runtime_root
+
+			runtime_root_arg = (
+				str(registry_path.parent.absolute())
+				if str(args.registry) == HOST_GLOBAL_REGISTRY_SELECTOR
+				else str(resolve_runtime_root({}, runtime_root_arg, registry_path=registry_path))
+			)
+		handler = (
+			handle_agent_onboard_command if args.command == "agent-onboard"
+			else handle_loopx_bootstrap_command_pack_command
+		)
+		explicit_project_registry = (
+			registry_path
+			if not allow_missing_registry and str(args.registry) != HOST_GLOBAL_REGISTRY_SELECTOR
+			else None
+		)
+		return handler(args, print_payload, runtime_root_arg=runtime_root_arg,
+			explicit_project_registry=explicit_project_registry)
 	if args.command in {"bootstrap", "connect"}:
 		from .cli_commands.bootstrap_connect import handle_bootstrap_connect_command
 
