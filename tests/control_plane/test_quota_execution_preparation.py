@@ -519,6 +519,81 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("spend_committed", [False, True])
+def test_restored_native_capture_does_not_claim_after_manual_writeback(
+    tmp_path, monkeypatch, provider, spend_committed,
+):
+    from test_quota_settlement_cli import _spend_run_count
+
+    project = tmp_path.resolve()
+    monkeypatch.setenv("CODEX_THREAD_ID", "manual-recovery-session")
+    native = project / "native"
+    native.mkdir(mode=0o700)
+    capture = project / "original"
+    registry, runtime = project / "registry.json", project / "runtime"
+    turn, scenario = "manual-recovery-turn", "codex_app_heartbeat"
+    host = ["--runtime-profile", scenario, "--context-delivery", "on", "--codex-context-dir", str(native)]
+    scope = ["--goal-id", GOAL, "--agent-id", AGENT, "--todo-id", TODO, "--turn-instance-id", turn]
+
+    def invoke(*args):
+        code, payload = run_json_cli_result(*args, registry_path=registry, runtime_root=runtime, cwd=project)
+        assert code == 0 and payload["ok"], payload
+        return payload
+
+    def hook(name):
+        event = {"session_id": "manual-recovery-session", "cwd": str(project), "hook_event_name": name}
+        if name == "SessionStart":
+            event["source"] = "resume"
+        result = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+            "--runtime-root", str(runtime), "quota", "context-hook", *host],
+            input=json.dumps(event), cwd=project, check=True, capture_output=True, text=True, timeout=20)
+        return json.loads(result.stdout)
+
+    first = _run(project, monkeypatch, provider, [], "--runtime-profile", scenario,
+        "--todo-id", TODO, "--turn-instance-id", turn, "--decision-output-dir", str(capture),
+        "--defer-context-presentation", "--codex-context-dir", str(native), context_delivery="on")
+    source = capture / "decision.json"
+    original = source.read_bytes()
+    digest = hashlib.sha256(original).hexdigest()
+    assert first["execution_preparation"]["state"] == "claim_required"
+    assert hook("PostToolUse") == {}  # Missing native journal uses ordinary preparation.
+    claim = invoke(*first["execution_preparation"]["claim"]["cli_args"], "--thin")
+    ready = invoke("quota", "should-run", *scope, "--runtime-profile", scenario, "--context-delivery", "off")
+    assert ready["execution_preparation"]["state"] == "ready"
+    identity = ready["heartbeat_receipt"]["settlement_identity"]
+    assert identity == first["heartbeat_receipt"]["settlement_identity"]
+    refresh = ["refresh-state", *scope, "--classification", "fixture_manual_result",
+        "--delivery-batch-scale", "single_surface", "--delivery-outcome", "outcome_progress",
+        "--delivery-boundary", "in_flight_continuation", "--progress-result-class", "advanced",
+        "--progress-work-item-id", TODO, "--progress-evidence-id", "fixture:manual-result",
+        "--no-global-sync", "--suppress-external-sinks"]
+    if spend_committed:
+        refresh += ["--settle-turn", "--settlement-receipt"]
+    assert invoke(*refresh)["settlement_identity"] == identity
+    assert _spend_run_count(runtime, goal_id=GOAL) == int(spend_committed)
+    inspect = ["task-lease", "inspect", "--goal-id", GOAL, "--todo-id", TODO]
+    lease = invoke(*inspect)["lease"]
+    released = invoke("task-lease", "release", "--goal-id", GOAL, "--todo-id", TODO, "--owner", AGENT,
+        "--expected-version", str(lease["version"]), "--idempotency-key", lease["idempotency_key"])["lease"]
+    receipt_args = ["todo", "receipt", "--goal-id", GOAL, "--operation-id", claim["claim_operation_id"]]
+    manual_receipts = invoke(*receipt_args)["receipts"]
+    events = runtime / "goals" / GOAL / "rollout-event-log.jsonl"
+    old_events = events.read_bytes()
+    assert hook("SessionStart") == {}
+    assert _present_saved_guard(project, native, capture, scenario, turn) == digest
+    refused = hook("PostToolUse")["hookSpecificOutput"]["additionalContext"]
+    assert "already settling or settled" in refused
+    assert hook("PostToolUse") == {}
+    assert invoke(*inspect)["lease"] == released
+    assert invoke(*receipt_args)["receipts"] == manual_receipts
+    assert source.read_bytes() == original and events.read_bytes() == old_events
+    spend = ["quota", "spend-slot", *scope, "--source", "heartbeat", "--execute"]
+    assert invoke(*spend).get("idempotent_replay", False) is spend_committed
+    assert invoke(*spend)["idempotent_replay"]
+    assert _spend_run_count(runtime, goal_id=GOAL) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("replace_stage", ["guard", "record", "version"])
 def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     tmp_path, monkeypatch, capsys, provider, replace_stage,
