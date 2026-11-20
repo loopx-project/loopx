@@ -27,7 +27,7 @@ from ...capabilities.native_chat.external_conversations import (
     STEWARD_BINDING_ADOPTION_PENDING,
 )
 from ...capabilities.native_chat.file_discovery import (
-    REPLY_IMAGE_NAME_PATTERN, FileChatDiscovery, file_change_fingerprint, reply_image_workspace,
+    REPLY_IMAGE_NAME_PATTERN, FileChatDiscovery, optional_file_fingerprint, reply_image_workspace,
 )
 from ...chat_attachments import CHAT_IMAGE_MAX_COUNT
 from ...chat_store import TERMINAL_TURN_STATES, _atomic_write_json, _read_json
@@ -123,7 +123,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
         self.steward_callback_streams: dict[tuple[str, str], TeamPlanReviewCallbackStream] = {}
         self.root = controller.store.root / "lark-private-deliveries"
         self._context_recovery_probe_at: dict[Path, float] = {}
-        self._context_recovery_noop_backoff: dict[Path, tuple[tuple[int, ...] | None, tuple[int, ...] | None, int]] = {}
+        self._context_recovery_noop_backoff: dict[Path, tuple[tuple[tuple[int, ...], ...], int]] = {}
         self._historical_image_probe_at: dict[Path, float] = {}
         self._planned_repairs_stamp: tuple[bool, int | None] | None = None
         self._planned_repairs_names: frozenset[str] = frozenset()
@@ -1555,7 +1555,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                  if row["status"] != "delivered" and triage.pending(row) and not _is_answer_image_followup(row)]
         return [*paths, *self._pending_web_projection_paths()]
 
-    def _noop_backoff_cache(self) -> dict[Path, tuple[tuple[int, ...] | None, tuple[int, ...] | None, int]]:
+    def _noop_backoff_cache(self) -> dict[Path, tuple[tuple[tuple[int, ...], ...], int]]:
         cache = getattr(self, "_context_recovery_noop_backoff", None)
         if cache is None:
             cache = {}
@@ -1563,36 +1563,38 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
         return cache
 
     def _context_recovery_fingerprints(
-        self, path: Path, request_ref: str,
-    ) -> tuple[tuple[int, ...] | None, tuple[int, ...] | None]:
+        self, path: Path, request_ref: str, session_id: str, turn_id: str,
+    ) -> tuple[tuple[int, ...], ...] | None:
         core_root = getattr(self.core, "root", None)
-        native_fp: tuple[int, ...] | None = None
-        if isinstance(core_root, Path):
-            try:
-                native_fp = file_change_fingerprint(core_root / f"{request_ref}.json")
-            except OSError:
-                native_fp = None
+        store = getattr(getattr(self.core, "controller", None), "store", None)
+        if not isinstance(core_root, Path) or store is None:
+            return None
         try:
-            delivery_fp = file_change_fingerprint(path)
-        except OSError:
-            delivery_fp = None
-        return delivery_fp, native_fp
+            tokens = tuple(optional_file_fingerprint(item) for item in (
+                path, core_root / f"{request_ref}.json", store._turn_path(session_id, turn_id),
+                store._session_path(session_id), store._event_path(session_id, turn_id)))
+        except (OSError, ValueError, TypeError, AttributeError):
+            return None
+        return None if any(token is None for token in tokens) else tokens
 
     def _clear_context_recovery_noop_backoff(self, path: Path) -> None:
         self._noop_backoff_cache().pop(path, None)
 
-    def _record_context_recovery_noop_backoff(self, path: Path, request_ref: str) -> None:
+    def _record_context_recovery_noop_backoff(self, path: Path, row: Mapping[str, Any]) -> None:
         cache = self._noop_backoff_cache()
-        delivery_fp, native_fp = self._context_recovery_fingerprints(path, request_ref)
+        current = self._context_recovery_fingerprints(path, row["request_ref"], row["session_id"], row["turn_id"])
+        if current is None:
+            # An untrusted token is not a stable backoff identity.
+            cache.pop(path, None)
+            self._context_recovery_probe_at[path] = time.monotonic() + 60.0
+            return
         prev = cache.get(path)
-        streak = prev[2] + 1 if prev is not None and (prev[0], prev[1]) == (delivery_fp, native_fp) else 1
-        cache[path] = (delivery_fp, native_fp, streak)
+        streak = prev[1] + 1 if prev is not None and prev[0] == current else 1
+        cache[path] = (current, streak)
         if streak <= 1:
             delay = 60.0
         else:
-            base = min(1800, 60 * (2 ** min(streak - 1, 5)))
-            jitter = zlib.crc32(path.name.encode("utf-8")) % 60
-            delay = float(base + jitter)
+            delay = float(min(1800, 60 * (2 ** min(streak - 1, 5))) + zlib.crc32(path.name.encode("utf-8")) % 60)
         self._context_recovery_probe_at[path] = time.monotonic() + delay
 
     @effect_runtime_request_scope()
@@ -1614,8 +1616,8 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                 paths.append(path)
             elif row.get("session_id") and row.get("turn_id"):
                 saved_backoff = noop_backoff.get(path)
-                if (saved_backoff is not None
-                        and self._context_recovery_fingerprints(path, row["request_ref"]) != saved_backoff[:2]):
+                if saved_backoff is not None and self._context_recovery_fingerprints(
+                        path, row["request_ref"], row["session_id"], row["turn_id"]) != saved_backoff[0]:
                     noop_backoff.pop(path, None)
                     self._context_recovery_probe_at.pop(path, None)
                 if time.monotonic() >= self._context_recovery_probe_at.get(path, 0):
@@ -1771,7 +1773,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                 if delivered_native:
                     self._clear_context_recovery_noop_backoff(path)
                 else:
-                    self._record_context_recovery_noop_backoff(path, row["request_ref"])
+                    self._record_context_recovery_noop_backoff(path, row)
                 return delivered_native
             if (recovered.get("context_recovery") and not recovered.get("delivery_verified")
                     and recovered.get("turn_id") != row["turn_id"]):
@@ -1784,7 +1786,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                         context_recovery=recovered["context_recovery"])
                     _atomic_write_json(path, row)
             elif row["status"] == "delivered":
-                self._record_context_recovery_noop_backoff(path, row["request_ref"])
+                self._record_context_recovery_noop_backoff(path, row)
         if row["status"] == "captured":
             # Intake may still own this capture. Wait on its existing fence and
             # read its result before retrying admission from a stale snapshot.
