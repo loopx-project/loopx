@@ -12,6 +12,7 @@ from loopx.capabilities.periodic_report import (
     build_periodic_report_generation_bundle,
     build_periodic_report_source_result,
 )
+from loopx.control_plane.goals.activation import build_goal_activation
 from loopx.extensions.lark.goal_channel_contracts import (
     GOAL_CHANNEL_BINDING_SCHEMA_VERSION,
     write_goal_channel_binding,
@@ -873,7 +874,11 @@ def test_goal_channel_delivery_rejects_canonical_stop_before_send(
 ) -> None:
     registry_path = tmp_path / ".loopx" / "registry.json"
     stopped = _goal()
-    stopped["activation_state"] = "stopped"
+    stopped["activation"] = build_goal_activation(
+        state="stopped",
+        updated_at="2026-04-01T00:00:00Z",
+        reason="Fixture goal stopped.",
+    )
     _write_registry(registry_path, goal=stopped)
     _write_binding(registry_path)
     calls: list[list[str]] = []
@@ -981,7 +986,11 @@ def test_goal_channel_delivery_stops_between_writes_then_resumes_without_resend(
         if "+messages-send" in args and not stopped:
             stopped = True
             stopped_goal = _goal()
-            stopped_goal["activation_state"] = "stopped"
+            stopped_goal["activation"] = build_goal_activation(
+                state="stopped",
+                updated_at="2026-04-01T00:00:00Z",
+                reason="Fixture goal stopped.",
+            )
             _write_registry(registry_path, goal=stopped_goal)
         return result
 
