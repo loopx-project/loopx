@@ -4,7 +4,7 @@ import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import { isCanonicalTodoId } from "../todos/identity.ts";
 import { blockedResumeInstant, isBlockedLifecycleWait, isCausalBlockedWait, isMonitorUnavailableWait } from "./blocked_wait.ts";
 import { isTurnScopedSettlementOutcome } from "../work_items/delivery_outcome.ts";
-import {isExecutionLossCloseout} from "../work_items/execution_preparation.ts";
+import {isExecutionLossCloseout} from "./execution_loss_closeout_record.ts";
 
 function retryDelayIsBounded(seconds: number): boolean {
   return Number.isFinite(seconds) && seconds >= 60 && seconds <= 30 * 60;

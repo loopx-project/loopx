@@ -49,7 +49,7 @@ import {
   type ReceiptBoundReplayPhase,
 } from "./settlement_phase.ts";
 import { isTurnScopedSettlementOutcome } from "../work_items/delivery_outcome.ts";
-import {EXECUTION_LOSS_CLOSEOUT_SCHEMA, isExecutionLossCloseout} from "../work_items/execution_preparation.ts";
+import {EXECUTION_LOSS_CLOSEOUT_SCHEMA, isExecutionLossCloseout} from "./execution_loss_closeout_record.ts";
 import {isDeepStrictEqual} from "node:util";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {

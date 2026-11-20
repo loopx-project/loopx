@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {createHash} from "node:crypto";
-import {qualifyReceiptBoundExecutionLossCloseout, isExecutionLossCloseout, EXECUTION_LOSS_QUALIFICATION_SCHEMA}
-  from "../../loopx/control_plane/work_items/execution_preparation.ts";
+import {qualifyReceiptBoundExecutionLossCloseout, EXECUTION_LOSS_QUALIFICATION_SCHEMA}
+  from "../../loopx/control_plane/quota/execution_loss_closeout.ts";
+import {isExecutionLossCloseout} from "../../loopx/control_plane/quota/execution_loss_closeout_record.ts";
 import {decodeExecutionLossCloseoutIntent} from "../../loopx/control_plane/quota/execution_loss_closeout.ts";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {settlementIdentity, settlementIdentityPayload} from "../../loopx/control_plane/effect_program.ts";
