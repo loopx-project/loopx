@@ -104,6 +104,52 @@ test("complete diagnostic lanes share exact arrays without losing distinct facts
     {agent_todo_summary: {first_open_items: [1], first_executable_items: [true]}});
 });
 
+test("complete quota shares only the exact CLI Vision view within the original audit", () => {
+  const source = payload();
+  const interaction = source.interaction_contract as JsonObject;
+  const cli = interaction.cli_channel as JsonObject;
+  const view = {
+    required: true, required_before_closeout: ["check original evidence"],
+    recommended_action: "Inspect the original acceptance before changing work. ".repeat(20),
+    vision_gap_judge: {
+      done: false, decision: "continue", reason: "Missing closeout evidence",
+      agent_judge_instruction: "Assess the proposed result against independently verified acceptance.",
+      done_only_when: ["actual_result"], otherwise: "continue",
+    },
+  };
+  const owner = {
+    ...view, schema_version: "vision_continuation_audit_v0", decision: "acceptance_gap_open",
+    vision_gap_judge: {...view.vision_gap_judge, external_research_instruction: "Read the registry first."},
+  };
+  source.vision_continuation_audit = owner;
+  cli.vision_continuation_audit = view;
+  const compose = (input: JsonObject) => evaluateTurnEnvelope({
+    operation: "compose_complete", payload: input, scheduler_execution_args: "",
+  });
+  const audit = (packet: JsonObject, channel = "cli_channel") =>
+    ((packet.interaction_contract as JsonObject)[channel] as JsonObject).vision_continuation_audit;
+  const complete = compose(source);
+  const reference = {
+    projection_ref: "$.vision_continuation_audit", projection_view: "cli_channel",
+    required: true, vision_gap_judge: {done: false, decision: "continue"},
+  };
+  assert.deepEqual(audit(complete), reference);
+  assert.deepEqual(complete.vision_continuation_audit, owner);
+  assert.doesNotThrow(() => evaluateTurnEnvelope({operation: "complete_consumer", payload: complete}));
+  const legacyProjection = evaluateTurnEnvelope({operation: "reference_context", payload: source, vision_audit: true});
+  assert.deepEqual(legacyProjection.changes, []);
+  for (const variant of [{...view, required: false}, {...view, future: {required: true}},
+    {...view, vision_gap_judge: {...view.vision_gap_judge, reason: "The CLI has a separate obligation"}}]) {
+    cli.vision_continuation_audit = variant;
+    assert.deepEqual(audit(compose(source)), variant);
+  }
+  cli.vision_continuation_audit = {...reference, required: false};
+  assert.throws(() => compose(source), /Vision audit reference/);
+  cli.vision_continuation_audit = view;
+  (interaction.agent_channel as JsonObject).vision_continuation_audit = reference;
+  assert.throws(() => compose(source), /Vision audit reference/);
+});
+
 test("diagnostic references reject ambiguity, chains, wrong roots and missing literal owners", () => {
   const lane = [{todo_id: "task", text: "Complete source. ".repeat(40)}];
   const valid = {agent_todo_summary: {first_executable_items: lane,
