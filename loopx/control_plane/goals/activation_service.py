@@ -241,8 +241,9 @@ def _readback(
     goal_id: str,
     expected_state: GoalActivationState,
     expected_owner_resume_id: str | None,
-) -> dict[str, Any]:
-    source_goal = _goal(load_registry(source_registry), goal_id)
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    source_payload = load_registry(source_registry)
+    source_goal = _goal(source_payload, goal_id)
     target_goal = _goal(load_registry(target_registry), goal_id)
     source_state = goal_activation_state(source_goal)
     target_state = goal_activation_state(target_goal)
@@ -252,7 +253,7 @@ def _readback(
         and goal_owner_resume_id(source_goal) == expected_owner_resume_id
         and goal_owner_resume_id(target_goal) == expected_owner_resume_id
     )
-    return {
+    summary = {
         "schema_version": GOAL_ACTIVATION_READBACK_SCHEMA_VERSION,
         "status": "verified" if verified else "mismatch",
         "verified": verified,
@@ -261,6 +262,7 @@ def _readback(
         "source_state": source_state.value,
         "target_state": target_state.value,
     }
+    return summary, source_payload, source_goal
 
 
 def set_goal_activation_state(
@@ -407,6 +409,7 @@ def set_goal_activation_state(
             return payload
 
     sync_payload: dict[str, Any] | None = None
+    closeout_source: dict[str, Any] | None = None
     with project_registry_transaction(
         source_registry,
         operation="set_goal_activation_state",
@@ -473,7 +476,6 @@ def set_goal_activation_state(
                 )
                 return payload
             locked_goal = _goal(source_payload, normalized_goal_id)
-            closeout_goal = dict(locked_goal)
             locked_state = goal_activation_state(locked_goal)
             if locked_state is not before_state:
                 payload.update(
@@ -516,21 +518,20 @@ def set_goal_activation_state(
                 )
                 payload["global_sync"] = sync_payload
 
-            readback = (
-                {
+            if sync_payload is not None and not sync_payload.get("ok"):
+                readback = {
                     "schema_version": GOAL_ACTIVATION_READBACK_SCHEMA_VERSION,
                     "status": "not_run",
                     "verified": False,
                 }
-                if sync_payload is not None and not sync_payload.get("ok")
-                else _readback(
+            else:
+                readback, closeout_source, closeout_goal = _readback(
                     source_registry=source_registry,
                     target_registry=target_registry,
                     goal_id=normalized_goal_id,
                     expected_state=target_state,
                     expected_owner_resume_id=owner_resume_id,
                 )
-            )
     payload["readback"] = readback
     sync_ok = sync_payload is None or bool(sync_payload.get("ok"))
     payload["ok"] = bool(sync_ok and readback.get("verified"))
@@ -552,12 +553,13 @@ def set_goal_activation_state(
         and changed
         and payload.get("ok")
         and payload.get("written")
-        and closeout_goal is not None
+        and closeout_source is not None
     ):
         payload["closeout"] = _stop_closeout_payload(
             source_registry=source_registry,
             runtime_root_override=runtime_root_override,
             goal_id=normalized_goal_id,
+            closeout_source=closeout_source,
             closeout_goal=closeout_goal,
         )
     return payload
@@ -568,33 +570,45 @@ def _stop_closeout_payload(
     source_registry: Path,
     runtime_root_override: str | None,
     goal_id: str,
+    closeout_source: dict[str, Any],
     closeout_goal: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Run the terminal hook after a committed stop transition."""
 
-    from ...lifecycle.goal_closeout import run_goal_closeout
+    # The stop is already verified. Report any optional hook error separately.
+    try:
+        from ...lifecycle.goal_closeout import run_goal_closeout
 
-    closeout_runtime_root = resolve_runtime_root(
-        load_registry(source_registry),
-        runtime_root_override,
-        registry_path=source_registry,
-    )
-    state_file = closeout_goal.get("state_file")
-    if not state_file:
-        state_file = (
-            source_registry.parent
-            / "goals"
-            / goal_id
-            / "ACTIVE_GOAL_STATE.md"
+        closeout_runtime_root = resolve_runtime_root(
+            closeout_source,
+            runtime_root_override,
+            registry_path=source_registry,
         )
-    return run_goal_closeout(
-        runtime_root=closeout_runtime_root,
-        goal_id=goal_id,
-        repo=str(closeout_goal.get("repo")) if closeout_goal.get("repo") else None,
-        state_file=str(state_file),
-        terminal_reason="stopped",
-        trigger="goal-lifecycle-stop",
-    )
+        state_file = closeout_goal.get("state_file")
+        if not state_file:
+            state_file = (
+                source_registry.parent
+                / "goals"
+                / goal_id
+                / "ACTIVE_GOAL_STATE.md"
+            )
+        return run_goal_closeout(
+            runtime_root=closeout_runtime_root,
+            goal_id=goal_id,
+            repo=str(closeout_goal.get("repo")) if closeout_goal.get("repo") else None,
+            state_file=str(state_file),
+            terminal_reason="stopped",
+            trigger="goal-lifecycle-stop",
+        )
+    except Exception as exc:
+        return {
+            "goal_id": goal_id,
+            "trigger": "goal-lifecycle-stop",
+            "terminal_reason": "stopped",
+            "status": "internal_error",
+            "error": "The closeout hook could not be prepared or run.",
+            "error_type": type(exc).__name__,
+        }
 
 
 def render_goal_activation_markdown(payload: dict[str, Any]) -> str:
@@ -611,6 +625,9 @@ def render_goal_activation_markdown(payload: dict[str, Any]) -> str:
     readback = payload.get("readback")
     if isinstance(readback, dict):
         lines.append(f"- readback: `{readback.get('status')}`")
+    closeout = payload.get("closeout")
+    if isinstance(closeout, dict):
+        lines.append(f"- closeout: `{closeout.get('status')}`")
     if payload.get("error"):
         lines.extend(["", f"Error: {payload.get('error')}"])
     return "\n".join(lines).rstrip() + "\n"

@@ -4,6 +4,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 from loopx.capabilities.goal_closeout.machine_defaults import (
     GOAL_CLOSEOUT_CONFIGURATION_SCHEMA,
 )
@@ -13,6 +15,7 @@ from loopx.capabilities.machine_configuration.builtins import (
 from loopx.capabilities.machine_configuration.store import (
     configure_machine_configuration,
 )
+from loopx.control_plane.goals import activation_service
 from loopx.control_plane.goals.activation_service import set_goal_activation_state
 from loopx.global_registry import retire_global_registry_goals, sync_project_registry_to_global
 from loopx.lifecycle.goal_closeout import GOAL_CLOSEOUT_LEDGER_FILENAME
@@ -135,7 +138,7 @@ def _ledger(root: Path, goal_id: str) -> list[dict[str, object]]:
     ]
 
 
-def test_stop_runs_closeout_once_and_dry_run_does_not(tmp_path: Path) -> None:
+def _registered_closeout_goal(tmp_path: Path) -> tuple[Path, Path, Path]:
     runtime_root = tmp_path / "runtime"
     project = tmp_path / "project"
     source_registry = project / ".loopx" / "registry.json"
@@ -161,7 +164,12 @@ def test_stop_runs_closeout_once_and_dry_run_does_not(tmp_path: Path) -> None:
         dry_run=False,
     )
     assert synced["ok"] is True
-    global_registry = runtime_root / "registry.global.json"
+    return source_registry, runtime_root / "registry.global.json", runtime_root
+
+
+def test_stop_runs_closeout_once_and_dry_run_does_not(tmp_path: Path) -> None:
+    source_registry, global_registry, runtime_root = _registered_closeout_goal(tmp_path)
+    project = source_registry.parent.parent
     payload_path = tmp_path / "payloads.jsonl"
     _configure_closeout(runtime_root, payload_path)
 
@@ -199,6 +207,66 @@ def test_stop_runs_closeout_once_and_dry_run_does_not(tmp_path: Path) -> None:
     )
     assert "closeout" not in repeated
     assert len(_ledger(runtime_root, "goal-one")) == 1
+
+
+@pytest.mark.parametrize("failure", ["extra_registry_read", "hook_preparation", "no_hook_configured"])
+def test_stop_cli_preserves_verified_receipt_after_closeout_failure(tmp_path, monkeypatch, capsys, failure):
+    from loopx.cli import main
+
+    source_registry, global_registry, runtime_root = _registered_closeout_goal(tmp_path)
+    payload_path = tmp_path / "hook-payloads.jsonl"
+    if failure != "no_hook_configured":
+        _configure_closeout(runtime_root, payload_path)
+    original_readback = activation_service._readback
+    original_load_registry = activation_service.load_registry
+    original_resolve_runtime_root = activation_service.resolve_runtime_root
+    readback_complete = False
+
+    def finish_readback(**kwargs):
+        nonlocal readback_complete
+        result = original_readback(**kwargs)
+        readback_complete = True
+        return result
+
+    def read_registry(path):
+        if readback_complete:
+            raise OSError("a late registry read must not be needed")
+        return original_load_registry(path)
+
+    def resolve_runtime_root(*args, **kwargs):
+        if readback_complete:
+            raise OSError("sensitive runtime path from preparation failure")
+        return original_resolve_runtime_root(*args, **kwargs)
+
+    monkeypatch.setattr(activation_service, "_readback", finish_readback)
+    if failure == "hook_preparation":
+        monkeypatch.setattr(activation_service, "resolve_runtime_root", resolve_runtime_root)
+    else:
+        monkeypatch.setattr(activation_service, "load_registry", read_registry)
+    exit_code = main(["--registry", str(global_registry), "--format", "json", "goal-lifecycle",
+        "--operation", "stop", "--goal-id", "goal-one", "--actor-kind", "owner", "--execute"])
+    output = capsys.readouterr()
+    result = json.loads(output.out)
+    assert readback_complete is True
+    for registry in (source_registry, global_registry):
+        (goal,) = json.loads(registry.read_text(encoding="utf-8"))["goals"]
+        assert goal["activation"]["state"] == "stopped"
+    assert exit_code == 0 and result["ok"] and result["written"], result
+    assert result["readback"]["verified"] and not result["partial_write"]
+    if failure == "hook_preparation":
+        assert result["closeout"]["status"] == "internal_error"
+        assert result["closeout"]["error_type"] == "OSError"
+        assert "sensitive runtime path" not in output.out
+        assert not payload_path.exists()
+    elif failure == "no_hook_configured":
+        assert result["closeout"]["status"] == "not_configured"
+        assert not payload_path.exists()
+    else:
+        assert result["closeout"]["status"] == "success"
+        hook_payload = json.loads(payload_path.read_text(encoding="utf-8"))
+        assert hook_payload["repo"] == str(source_registry.parent.parent)
+        assert hook_payload["runtime_root"] == str(runtime_root)
+        assert len(_ledger(runtime_root, "goal-one")) == 1
 
 
 def test_retire_runs_closeout_for_each_retired_goal(tmp_path: Path) -> None:
