@@ -2026,7 +2026,10 @@ def test_native_first_read_reuses_only_observed_writeback_precondition(
     assert facts[goal_text] == narrative
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_native_first_read_reuses_only_observed_write_scope(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("invalidation", ["compact", "journal_write"])
+def test_native_first_read_reuses_only_observed_write_scope(tmp_path, monkeypatch, provider, invalidation):
+    import errno
+
     from test_codex_context_lifecycle import deliver, setup
     from test_quota_settlement_cli import (
         AGENT_ID, GOAL_ID, TODO_ID, _heartbeat_receipt_count,
@@ -2063,25 +2066,31 @@ def test_native_first_read_reuses_only_observed_write_scope(tmp_path, monkeypatc
                    *binding(turn), "--decision-output-root", str(captures), "--codex-context-dir", str(journal),
                    registry_path=registry_path)
 
-    def settle(turn, registry_path=registry):
-        cli("refresh-state", *binding(turn), "--classification", "fixture_validated",
+    def writeback(turn):
+        return ("refresh-state", *binding(turn), "--classification", "fixture_validated",
             "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
             "--delivery-boundary", "in_flight_continuation", "--delivery-workspace-path", str(project),
-            "--no-global-sync", "--suppress-external-sinks", registry_path=registry_path)
+            "--no-global-sync", "--suppress-external-sinks")
+
+    def settle(turn, registry_path=registry):
+        cli(*writeback(turn), registry_path=registry_path)
         spent = cli("quota", "spend-slot", *binding(turn), "--slots", "1", "--source", "heartbeat", "--execute",
                     registry_path=registry_path)
         assert spent["appended"]
 
+    def read_page(command):
+        words = shlex.split(command)
+        result = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+            *words[words.index("quota"):]], cwd=project, capture_output=True)
+        return result.returncode, json.loads(result.stdout), len(result.stdout)
+
     def read(command):
         pages, size, offset = [], 0, 0
         while command:
-            words = shlex.split(command)
-            stdout = subprocess.check_output([sys.executable, "-m", "loopx.entrypoint", "--format", "json",
-                *words[words.index("quota"):]], cwd=project)
-            page = json.loads(stdout)
-            assert page["ok"] and page["offset"] == offset, page
+            code, page, output_bytes = read_page(command)
+            assert code == 0 and page["ok"] and page["offset"] == offset, page
             pages.append(page)
-            size += len(stdout)
+            size += output_bytes
             offset += len(page["content"].encode())
             command = page.get("next_command")
         assert pages[-1]["eof"] and offset == pages[-1]["total_bytes"]
@@ -2119,12 +2128,45 @@ def test_native_first_read_reuses_only_observed_write_scope(tmp_path, monkeypatc
     warm, warm_facts, warm_bytes = read_initial(current)
     _, restored_scope, scope_bytes = read(current["recovery"]["command"] + " --select " + scope_path)
     assert restored_scope[scope_path] == scopes
-    codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostCompact"})
+    recovered_values = {}
+    if invalidation == "journal_write":
+        partial = next(page for page in warm if page["offset"] == 0 and page.get("next_command")
+                       and scope_path in page.get("previously_delivered_fields", []))
+        failed_writes = []
+
+        def exhausted(*_args):
+            failed_writes.append(True)
+            raise OSError(errno.ENOSPC, "synthetic native journal storage exhaustion")
+
+        with monkeypatch.context() as failing_journal:
+            failing_journal.setattr(codex_context, "_save", exhausted)
+            deliver(journal, event, [partial])
+        assert len(failed_writes) == 1 and not (journal / "session.json").exists()
+        code, refused, _ = read_page(partial["next_command"])
+        assert code != 0 and refused["ok"] is False and refused.get("recovery_command"), refused
+        recovered, recovered_values, _ = read(refused["recovery_command"])
+        assert not recovered[0].get("previously_delivered_fields")
+        _, fallback_ref = read_context_read_reference(recovered[0]["reference_file"])
+        assert fallback_ref["path"] == source_ref["path"] and fallback_ref["sha256"] == source_ref["sha256"]
+    else:
+        codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostCompact"})
     restored, restored_facts, restored_bytes = read_initial(current)
     assert scope_path not in restored[0].get("previously_delivered_fields", [])
     assert restored_facts[scope_path] == scopes and original.read_bytes() == raw
+    assert all(restored_facts[key] == value for key, value in recovered_values.items())
     deliver(journal, event, restored)
-    settle("scope-warm")
+    if invalidation == "journal_write":
+        assert _heartbeat_receipt_count(runtime, "scope-warm") == 1 and _spend_run_count(runtime) == 2
+        command = (*writeback("scope-warm"), "--settle-turn", "--settlement-receipt")
+        settled = cli(*command)["settlement_result"]
+        assert settled["ok"]
+        effect = json.loads(raw)["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"]["effect_id"]
+        assert [(receipt["step_kind"], receipt["effect_id"]) for receipt in settled["receipts"]] == [
+            (kind, effect) for kind in ("validation", "durable_writeback", "quota_spend")
+        ]
+        assert cli(*command)["settlement_result"]["receipts"] == settled["receipts"]
+    else:
+        settle("scope-warm")
 
     alternate_registry = registry.with_name("alternate-registry.json")
     alternate_registry.write_bytes(registry.read_bytes())
