@@ -110,6 +110,10 @@ def _turn_envelope_result(
         tokens = source_number_tokens(params)
         if tokens:
             request["source_number_tokens"] = tokens
+    if operation == "attach_complete_turn_context" and isinstance(params.get("context_additions"), Mapping):
+        addition_tokens = source_number_tokens(params["context_additions"])
+        if addition_tokens:
+            request["context_addition_tokens"] = addition_tokens
     if operation == "capability_automation_source" and set(params) == {"payload"} and isinstance(payload, Mapping):
         transport = pack_turn_source(payload)
         if transport is not None:
@@ -329,6 +333,22 @@ def compose_turn_decision(
         scheduler_execution_args=args, source_edits=True,
         **({"composed_settlement": composed_settlement} if composed_settlement is not False else {}))
     return _apply_context_projection_changes(source, result)
+
+
+def attach_complete_turn_context(
+    payload: Mapping[str, Any],
+    context_additions: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Seal validated turn-context fields onto an already-composed decision."""
+    source = dict(payload)
+    additions = dict(context_additions)
+    result = _turn_envelope_result(
+        "attach_complete_turn_context",
+        payload=source,
+        context_additions=additions,
+        source_edits=True,
+    )
+    return _apply_context_projection_changes({**source, **additions}, result)
 
 
 def is_legacy_saved_quota_decision(payload: Mapping[str, Any]) -> bool:

@@ -268,12 +268,21 @@ def apply_selected_todo_execution_preparation(
     receipt_bound: bool = False,
 ) -> None:
     selected = payload.get("selected_todo")
+    scoped_fallback_admitted = (
+        isinstance(payload.get("scoped_user_gate_fallback"), Mapping)
+        and obligation is not None
+        and obligation.get("delivery_allowed") is True
+    )
     if (
         not isinstance(selected, dict)
         or payload.get("should_run") is not True
         # Planning and recovery can retain a Todo without authorizing its
-        # business execution. Preserve their existing typed route.
-        or payload.get("normal_delivery_allowed") is not True
+        # business execution. Preserve their existing typed route, while still
+        # preparing scoped user-gate fallback work whose delivery is admitted.
+        or (
+            payload.get("normal_delivery_allowed") is not True
+            and not scoped_fallback_admitted
+        )
         or action_portfolio_requires_explicit_selection(payload)
     ):
         return

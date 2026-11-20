@@ -9,6 +9,32 @@ from ..control_plane.quota.turn_envelope import COMPLETE_TURN_DECISION_VERSION
 from ..control_plane.scheduler.execution_context import SchedulerExecutionContextResolution
 
 
+UNDECLARED_JSON_COMPLETE_TURN_OPTIONS = (
+    "complete_turn",
+    "turn_envelope",
+    "codex_context_dir",
+    "codex_context_root",
+    "prepared_capture_reference",
+    "defer_context_presentation",
+    "decision_handoff_socket",
+)
+
+
+def is_undeclared_json_quota_caller(
+    args: argparse.Namespace,
+    scheduler_context: Mapping[str, object] | SchedulerExecutionContextResolution | None,
+) -> bool:
+    """Return True when a JSON caller uses the currently qualified public quota packet."""
+    return (
+        getattr(args, "format", None) == "json"
+        and scheduler_context is None
+        and not any(
+            getattr(args, option, None)
+            for option in UNDECLARED_JSON_COMPLETE_TURN_OPTIONS
+        )
+    )
+
+
 def compose_quota_work_contract(payload: dict[str, object], args: argparse.Namespace, *,
                                    scheduler_context: Mapping[str, object] | SchedulerExecutionContextResolution | None,
                                    capture_directory: Path | None,
@@ -16,14 +42,7 @@ def compose_quota_work_contract(payload: dict[str, object], args: argparse.Names
     """Compose Complete Turn sources before capture and display."""
     if args.quota_command != "should-run" or not isinstance(payload.get("interaction_contract"), Mapping):
         return payload
-    if (
-        args.format == "json"
-        and scheduler_context is None
-        and not any(getattr(args, option, None) for option in (
-            "complete_turn", "turn_envelope", "codex_context_dir", "codex_context_root",
-            "prepared_capture_reference", "defer_context_presentation", "decision_handoff_socket",
-        ))
-    ):
+    if is_undeclared_json_quota_caller(args, scheduler_context):
         # Undeclared JSON callers use the currently qualified public quota packet.
         return payload
     from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
