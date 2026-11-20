@@ -718,9 +718,15 @@ def _inspect_bootstrap_connection(
         "registry": str(registry_path),
     }
 
+    def shared_registry_path() -> Path:
+        return global_registry_path(resolve_runtime_root(
+            registry or {}, override=runtime_root, registry_path=registry_path,
+        ))
+
     if registry_error:
         return absent_goal_connection(
             base_connection=base_connection,
+            shared_registry=shared_registry_path(),
             goal_id=inferred_goal_id,
             state_file=state_file,
             registry_exists=registry_exists,
@@ -731,6 +737,7 @@ def _inspect_bootstrap_connection(
     if not registry:
         return absent_goal_connection(
             base_connection=base_connection,
+            shared_registry=shared_registry_path(),
             goal_id=inferred_goal_id,
             state_file=state_file,
             registry_exists=False,
@@ -752,6 +759,7 @@ def _inspect_bootstrap_connection(
     if selected_goal is None:
         return absent_goal_connection(
             base_connection=base_connection,
+            shared_registry=shared_registry_path(),
             goal_id=resolved_goal_id,
             state_file=state_file,
             registry_exists=True,
@@ -1519,7 +1527,9 @@ def build_start_goal_guided_packet(
     display_name: str | None = None,
     runtime_root_arg: str | None = None,
 ) -> dict[str, Any]:
-    snapshot = _inspect_bootstrap_connection(project, goal_id=goal_id, resolve_linked_worktree_alias=False)
+    _, snapshot = resolve_bootstrap_project_route(
+        project, goal_id=goal_id, resolve_linked_worktree_alias=False, runtime_root_arg=runtime_root_arg,
+    )
     if goal_id is None:
         selection_packet = _build_multi_goal_start_selection_packet(
             connection_snapshot=snapshot,
