@@ -31,6 +31,13 @@ try {
         research_reading: "history", research_node: "method-choice", research_finding: "result-11"});
       await page.goto(url.href);
       const saved = page.locator(".research-saved-evidence");
+      await saved.waitFor();
+      const capturePrefix = missing ? "before" : "after";
+      await page.screenshot({path: resolve(output, `${capturePrefix}-${provider}-default-desktop.png`), animations: "disabled"});
+      await page.setViewportSize({width: 390, height: 844});
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "Narrow default page has no horizontal overflow");
+      await page.screenshot({path: resolve(output, `${capturePrefix}-${provider}-default-mobile.png`), animations: "disabled"});
+      await page.setViewportSize({width: 1280, height: 900});
       await saved.locator(":scope > summary").click();
       const evidence = saved.locator(".goal-explore-results");
       const reader = evidence.locator(".goal-team-result-reader");
@@ -56,10 +63,17 @@ try {
       await observation.scrollIntoViewIfNeeded();
       await observation.screenshot({path: resolve(output, `after-${provider}-detail.png`), animations: "disabled"});
       await page.screenshot({path: resolve(output, `after-${provider}-desktop.png`), animations: "disabled"});
+      await page.screenshot({path: resolve(output, `after-${provider}-full-page.png`), fullPage: true, animations: "disabled"});
       await page.setViewportSize({width: 390, height: 844});
       await observation.scrollIntoViewIfNeeded();
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "Narrow reader has no horizontal overflow");
       await page.screenshot({path: resolve(output, `after-${provider}-mobile.png`), animations: "disabled"});
+      // A taller reading viewport keeps the complete narrow detail visible in
+      // the guide image; the real 390x844 viewport remains qualified above.
+      await page.setViewportSize({width: 390, height: 1400});
+      await observation.scrollIntoViewIfNeeded();
+      await observation.screenshot({path: resolve(output, `after-${provider}-mobile-detail.png`), animations: "disabled"});
+      await page.setViewportSize({width: 390, height: 844});
       await evidence.getByRole("combobox", {name: "选择结论"}).selectOption("result-0");
       assert.equal(await observation.count(), 0, "Missing observation adds no invented execution block");
       await evidence.getByRole("combobox", {name: "选择结论"}).selectOption("result-11");

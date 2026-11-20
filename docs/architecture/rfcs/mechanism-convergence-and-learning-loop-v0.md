@@ -345,6 +345,10 @@ projection. Wrong-candidate result references are rejected, failed reads withhol
 old contents, and valid sources recover in place. Isolated File/SQLite HTTP and
 packaged desktop/narrow-browser checks qualify these paths without source-state
 or execution-authority mutations. This delivers product transport and readback,
+with an [illustrated App reading guide](../../../loopx/capabilities/explore/README.md#read-execution-evidence-in-the-app)
+and separate default desktop/narrow and expanded-detail captures from populated
+synthetic records. The guide also identifies the older saved-reader omission;
+installed-client upgrade/readback remains unqualified. This source checkpoint is
 not model adoption or method benefit. Execution convergence, cross-task adoption,
 prediction calibration and matched-budget outcomes remain open. Formal evaluation
 does not block independent implementation or migration.
