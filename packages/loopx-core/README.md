@@ -55,6 +55,11 @@ adapter and check commands on Windows it checks absolute paths. Correct an
 unavailable program in the launch configuration and repeat the same goal.
 Repeat the original invocation after an interruption, including during
 registration. It continues the saved attempt or returns the checked result.
+If the worker finished but the independent check did not pass, the command
+retains the worker's result and reports the original Turn key. Once the checker
+is ready, repeat the same command with `--retry-failed-turn`. This continues
+checking and settling the original Turn without rerunning the worker or
+registering new work. Repeating a completed retry returns the existing receipt.
 The `--guided` route remains available for an existing project or an interactive
 host.
 

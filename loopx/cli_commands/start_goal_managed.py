@@ -16,7 +16,11 @@ from ..control_plane.projects.identity import GoalCreationConflictError, default
 from ..control_plane.quota.turn_envelope import COMPLETE_TURN_HOST_REQUEST_SCHEMA
 from ..control_plane.todos.mutation_api import add_goal_todo, update_goal_todo
 from ..control_plane.turn_driver.command_validation import build_loopx_turn_command_validator, normalize_host_argv
-from ..control_plane.turn_driver.journal_store import find_loopx_turn_key_by_instance
+from ..control_plane.turn_driver.executor import inspect_loopx_turn_journal
+from ..control_plane.turn_driver.journal_store import (
+    find_loopx_turn_key_by_instance,
+    load_loopx_turn_plan_from_journal,
+)
 from ..kunluncode_goal_mode.guards import native_controller_cli_write_block
 from ..paths import resolve_runtime_root
 from ..registry import find_registry_goal
@@ -172,40 +176,75 @@ def execute_managed_start(
         **launch_identity, "validator": validator_argv,
     })
     operation_id = "start-" + digest.removeprefix("sha256:")[:32]
-    _register_first_goal(
-        registry_path=registry_path, runtime_root=runtime_root, project=project,
-        goal_id=goal_id, agent_id=agent_id, objective=objective,
-        display_name=display_name, operation_id=operation_id, write_scope=write_scope,
-    )
-    todo = add_goal_todo(
-        registry_path=registry_path, runtime_root_arg=str(runtime_root),
-        goal_id=goal_id, role="agent", text=objective, priority="P1",
-        claimed_by=agent_id, task_class="advancement_task", action_kind="advance",
-        operation_id=f"{operation_id}:first-task", required_write_scopes=write_scope or None,
-    )
-    if not todo.get("ok") or not todo.get("todo_id"):
-        raise RuntimeError("The goal was registered. Retry the same start request to recover its first task.")
-    todo_id = str(todo["todo_id"])
-    resume = find_loopx_turn_key_by_instance(
-        runtime_root, goal_id=goal_id, agent_id=agent_id, turn_instance_id=operation_id,
-    )
-    if resume:
-        turn_args.resume_turn_key = resume
-    else:
-        claimed = update_goal_todo(
-            registry_path=registry_path, runtime_root_arg=str(runtime_root),
-            goal_id=goal_id, todo_id=todo_id, claimed_by=agent_id, agent_id=agent_id,
-            claim_only=True, manage_execution=True, claim_operation_id=f"{operation_id}:first-claim",
+    if getattr(args, "retry_failed_turn", False):
+        goal = find_registry_goal(registry, goal_id)
+        if goal is None or goal.get("creation_operation_id") != operation_id or goal.get("repo") != str(project):
+            raise ValueError("No matching first Turn. Use the original start-goal --execute request.")
+        resume = find_loopx_turn_key_by_instance(
+            runtime_root, goal_id=goal_id, agent_id=agent_id, turn_instance_id=operation_id,
         )
-        if not claimed.get("ok"):
-            raise RuntimeError(str(claimed.get("error") or "The first task could not be claimed"))
-        turn_args.todo_id = todo_id
-        turn_args.turn_instance_id = operation_id
+        if resume is None:
+            raise ValueError("No saved first Turn. Use the original command without --retry-failed-turn.")
+        inspection = inspect_loopx_turn_journal(
+            runtime_root, goal_id=goal_id, agent_id=agent_id, turn_key=resume, retry_failed=True,
+        )
+        recovery = inspection["recovery_decision"]
+        if not isinstance(recovery, dict) or recovery.get("action") not in {"continue", "return_existing"}:
+            reason = recovery.get("reason") if isinstance(recovery, dict) else "recovery_decision_unavailable"
+            raise ValueError(f"The saved first Turn could not be resumed ({reason}).")
+        if recovery.get("reinvoke_host") is not False:
+            raise ValueError("This recovery would rerun the worker. The saved-result retry does not permit that.")
+        plan = load_loopx_turn_plan_from_journal(runtime_root, goal_id=goal_id, agent_id=agent_id, turn_key=resume)
+        selected_todo = plan["route"].get("selected_todo") or {}
+        todo_id = selected_todo.get("todo_id")
+        if not todo_id:
+            raise ValueError("The saved first Turn has no selected task.")
+        turn_args.resume_turn_key = resume
+        turn_args.retry_failed_turn = True
+    else:
+        _register_first_goal(
+            registry_path=registry_path, runtime_root=runtime_root, project=project,
+            goal_id=goal_id, agent_id=agent_id, objective=objective,
+            display_name=display_name, operation_id=operation_id, write_scope=write_scope,
+        )
+        todo = add_goal_todo(
+            registry_path=registry_path, runtime_root_arg=str(runtime_root),
+            goal_id=goal_id, role="agent", text=objective, priority="P1",
+            claimed_by=agent_id, task_class="advancement_task", action_kind="advance",
+            operation_id=f"{operation_id}:first-task", required_write_scopes=write_scope or None,
+        )
+        if not todo.get("ok") or not todo.get("todo_id"):
+            raise RuntimeError("The goal was registered. Retry the same start request to recover its first task.")
+        todo_id = str(todo["todo_id"])
+        resume = find_loopx_turn_key_by_instance(
+            runtime_root, goal_id=goal_id, agent_id=agent_id, turn_instance_id=operation_id,
+        )
+        if resume:
+            turn_args.resume_turn_key = resume
+        else:
+            claimed = update_goal_todo(
+                registry_path=registry_path, runtime_root_arg=str(runtime_root),
+                goal_id=goal_id, todo_id=todo_id, claimed_by=agent_id, agent_id=agent_id,
+                claim_only=True, manage_execution=True, claim_operation_id=f"{operation_id}:first-claim",
+            )
+            if not claimed.get("ok"):
+                raise RuntimeError(str(claimed.get("error") or "The first task could not be claimed"))
+            turn_args.todo_id = todo_id
+            turn_args.turn_instance_id = operation_id
     result: dict[str, Any] = {}
     handle_turn_command(
         turn_args, registry_path=registry_path, runtime_root_arg=str(runtime_root),
         output_format=lambda _args: "json", print_payload=lambda payload, *_: result.update(payload),
     )
+    if (
+        result.get("status") == "failed"
+        and result.get("validation_stage") == "task_postcondition"
+        and result.get("resume_turn_key")
+    ):
+        result["recommended_action"] = (
+            "Once the independent checker is ready, repeat the original start-goal --execute command "
+            "with --retry-failed-turn to check the saved result without rerunning the worker."
+        )
     return {**result, "goal_id": goal_id, "agent_id": agent_id, "todo_id": todo_id,
             "turn_instance_id": operation_id}
 
@@ -213,7 +252,11 @@ def execute_managed_start(
 def render_managed_start_markdown(payload: dict[str, object]) -> str:
     kind = payload.get("result_kind")
     if payload.get("status") != "committed" or kind not in ("validated_completion", "validated_progress"):
-        return render_loopx_turn_execution_markdown(payload)
+        rendered = render_loopx_turn_execution_markdown(payload)
+        action, key = payload.get("recommended_action"), payload.get("resume_turn_key")
+        if isinstance(action, str) and isinstance(key, str):
+            return f"{rendered}\n\nTurn key: {key}\n{action}"
+        return rendered
     line = (
         "Task completed and checked."
         if kind == "validated_completion"
