@@ -250,6 +250,7 @@ def test_native_selection_opening_fits_before_candidate_scope(tmp_path, monkeypa
     assert opening["/goal_boundary/stop_condition"] == decision["goal_boundary"]["stop_condition"]
     assert opening["/heartbeat_receipt/turn_instance_id"] == turn
     assert "/heartbeat_receipt/settlement_identity" not in opening
+    assert opening["/action_portfolio/suggested_actions"] == decision["action_portfolio"]["suggested_actions"]
     if split:
         assert "/selected_todo" not in opening
         _, opening_ref = read_context_read_reference(page["reference_file"])
@@ -265,7 +266,7 @@ def test_native_selection_opening_fits_before_candidate_scope(tmp_path, monkeypa
         assert opening_ref["sha256"] == remaining_ref["sha256"] == reference["sha256"]
         remaining = selected_context_values(body.decode())
         assert remaining["/selected_todo"] == decision["selected_todo"]
-        assert remaining["/action_portfolio/suggested_actions"] == decision["action_portfolio"]["suggested_actions"]
+        assert "/action_portfolio/suggested_actions" not in remaining
     else:
         assert opening["/selected_todo"] == decision["selected_todo"]
     assert capture.read_bytes() == raw and not registry.exists() and not runtime.exists()

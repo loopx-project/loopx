@@ -773,7 +773,8 @@ function prepareInitialOpening(context: JsonObject, groups: ReturnType<typeof in
     const controls = ["selection_required", "selection_policy_ref", "selection_command",
       "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy"]
       .map(field => pointer(["interaction_contract", "cli_channel", field]));
-    for (const control of [...controls, "/action_portfolio/selection_policy"]) {
+    for (const control of [...controls, "/action_portfolio/selection_policy",
+      "/action_portfolio/suggested_actions"]) {
       const index = groups.remaining.indexOf(control);
       if (index >= 0) groups.opening.push(...groups.remaining.splice(index, 1));
     }
