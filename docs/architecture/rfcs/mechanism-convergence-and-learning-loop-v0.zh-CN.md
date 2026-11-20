@@ -316,6 +316,18 @@ soft claim/hard lease 及历史反馈仅作上下文：保留独立验证的成�
 host Turn。因此这些服务检查不能取得普通 PostgreSQL 反馈 Turn 资格，
 也不构成本切片新增执行 profile 的理由。
 
+普通 Turn 计划与失败 Turn 恢复现在通过既有 Turn RPC 边界使用同一个
+[`TypeScript 会话策略`](../../../loopx/control_plane/turn_driver/session_binding.ts)。
+Python 的新建／恢复／拒绝 producer 已退役，既有会话存储及公开 binding/context
+schema 保留。两个调用方保持 fresh 对旧 binding 的忽略、schema／身份拒绝优先级、
+Agent 与 Todo 会话作用域、request-bound fresh 执行及原恢复事务。保留的 Python
+适配器为既有调用方和已记录 journal 编码历史 `str(value or "")` 身份；随 C1
+历史 reader 退役删除该 codec，不保留第二条正常决策路径。持久化会话键 helper
+仍是 IO 命名空间合同。[边界检查](../../../tests/control_plane/test_turn_session_policy.py)
+及既有 [File/SQLite CLI 与重试检查](../../../tests/control_plane/test_complete_session_binding.py)
+覆盖回读、拒绝无副作用及原来源的一次恢复结算。这是源码迁移 checkpoint；
+已安装 Host 采用、剩余 C1/C4/C9 切换、产品组合及成果／完整成本收益仍开放。
+
 首个任务须确有反馈或方法选择需求。已有链完整时直接复用；有缺口时由真实消费者证明并修复，不为配合示例制造失败。运行实验、训练模型和发布过程各沿原权限，本文不占用其他 lane 配额或预设 PR 数。
 
 ## 12. 待确认的关键选择

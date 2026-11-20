@@ -5,6 +5,7 @@ import {contextReadSectionDigests, initialContextReadPointers, prepareProgressiv
   progressiveContextPlan, scopedReplanYardstickReversal,
   type PreparationScopeDetail, type ReusableExactBody} from "./progressive_context.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
+import {turnSessionPlan} from "../turn_driver/session_binding.ts";
 import { EFFECTIVE_ACTIONS, EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { AGENT_SCOPE_FRONTIER_ACTIONS } from "../agents/agent_scope_frontier.generated.ts";
 import { createHash } from "node:crypto";
@@ -2561,6 +2562,7 @@ export function decodeTurnSource(request: JsonObject, inlineField: "payload" | "
 export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
+  if (operation === "session_plan") return turnSessionPlan(request);
   if (operation === "planning_facts") return completePlanningFacts(request);
   if (operation === "recorded_plan_lineage") {
     const {work, decision} = checkedTurnPlanSource(
