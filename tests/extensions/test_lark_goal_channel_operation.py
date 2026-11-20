@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from collections.abc import Mapping
 import hashlib
+import html
 import json
 import os
 from pathlib import Path
@@ -1139,6 +1140,105 @@ def test_callback_timestamp_normalizes_milliseconds_and_microseconds() -> None:
     ):
         with pytest.raises(ValueError, match="timestamp is invalid"):
             goal_channel_operation._callback_timestamp(invalid)
+
+
+# Legal Goal/Agent/Todo/receipt identifier spellings: the Lark and internal id
+# charsets ([A-Za-z0-9_.:@-] shapes) contain no card-text metacharacter except
+# the underscore. Expected values are pinned byte-for-byte from the shipped
+# behavior so the single-pass rewrite cannot drift on reachable inputs (#9108).
+CARD_TEXT_REACHABLE_IDENTIFIER_SAMPLES = (
+    ("goal_alpha-1.2:3@beta", "goal&#95;alpha-1.2:3@beta"),
+    ("ou_agent.reader:main@v2", "ou&#95;agent.reader:main@v2"),
+    ("om_9f3A_-zzT", "om&#95;9f3A&#95;-zzT"),
+    ("cli_loopx001", "cli&#95;loopx001"),
+    ("not_executed", "not&#95;executed"),
+    ("receipt.2401:tenant-b@us", "receipt.2401:tenant-b@us"),
+)
+
+# Every metacharacter the escaper owns, including the html.escape set, each
+# becoming exactly one entity in a single pass.
+CARD_TEXT_METACHARACTER_SAMPLES = (
+    ("*", "&#42;"),
+    ("~", "&#126;"),
+    ("[", "&#91;"),
+    ("]", "&#93;"),
+    ("(", "&#40;"),
+    (")", "&#41;"),
+    ("#", "&#35;"),
+    ("_", "&#95;"),
+    ("&", "&amp;"),
+    ("<", "&lt;"),
+    (">", "&gt;"),
+    ('"', "&quot;"),
+    ("'", "&#x27;"),
+)
+
+CARD_TEXT_MIXED_SAMPLES = (
+    ("not_executed & *bold*", "not&#95;executed &amp; &#42;bold&#42;"),
+    ("it's #1", "it&#x27;s &#35;1"),
+    ("see [note] (v2)", "see &#91;note&#93; &#40;v2&#41;"),
+    (
+        "a&b*c[d](e)~f#g_h<i>",
+        "a&amp;b&#42;c&#91;d&#93;&#40;e&#41;&#126;f&#35;g&#95;h&lt;i&gt;",
+    ),
+)
+
+REACHABLE_IDENTIFIER_CHARSET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.:@-"
+
+
+def _legacy_sequential_card_text(value: object) -> str:
+    """The pre-#9108 sequential escaper, kept only as the byte-identity oracle
+    for the reachable identifier charset, where rule order was harmless."""
+    text = html.escape(str(value or "").strip(), quote=True)
+    for character, entity in {
+        "*": "&#42;",
+        "~": "&#126;",
+        "[": "&#91;",
+        "]": "&#93;",
+        "(": "&#40;",
+        ")": "&#41;",
+        "#": "&#35;",
+        "_": "&#95;",
+    }.items():
+        text = text.replace(character, entity)
+    return text
+
+
+def test_card_text_reachable_identifier_charset_is_byte_identical() -> None:
+    for value, expected in CARD_TEXT_REACHABLE_IDENTIFIER_SAMPLES:
+        assert goal_channel_operation._card_text(value) == expected
+        assert _legacy_sequential_card_text(value) == expected
+
+    # Every single-character and paired spelling of the reachable charset must
+    # keep its exact pre-rewrite bytes, not just the pinned long samples.
+    chars = list(REACHABLE_IDENTIFIER_CHARSET)
+    samples = chars + [
+        first + second for first in chars[:12] for second in chars[-8:]
+    ]
+    for sample in samples:
+        assert (
+            goal_channel_operation._card_text(sample)
+            == _legacy_sequential_card_text(sample)
+        ), sample
+
+
+def test_card_text_escapes_each_metacharacter_as_a_single_pass_reference() -> None:
+    for metacharacter, expected in CARD_TEXT_METACHARACTER_SAMPLES:
+        escaped = goal_channel_operation._card_text(metacharacter)
+        assert escaped == expected
+        # One CommonMark-level decode (HTML5 entity and numeric references,
+        # via the stdlib decoder) must restore the original character.
+        assert html.unescape(escaped) == metacharacter
+
+
+def test_card_text_mixed_metacharacter_samples_do_not_double_expand() -> None:
+    for sample, expected in CARD_TEXT_MIXED_SAMPLES:
+        escaped = goal_channel_operation._card_text(sample)
+        assert escaped == expected
+        assert html.unescape(escaped) == sample
+        # A second decode must not keep growing: the output is fully expanded
+        # exactly once, so no entity tail can survive a further decode.
+        assert html.unescape(html.unescape(escaped)) == sample
 
 
 def _lark_card_v2_callback_fallback(card: Mapping[str, Any]) -> dict[str, Any]:
