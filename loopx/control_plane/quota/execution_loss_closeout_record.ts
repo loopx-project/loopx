@@ -40,4 +40,3 @@ export function isExecutionLossCloseout(value: unknown, todoId: string | null): 
       && /^[a-f0-9]{16}$/u.test(String(closeout.observation_fingerprint));
   } catch {return false;}
 }
-
