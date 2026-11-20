@@ -50,7 +50,7 @@ from .project_prompt import (
     render_refresh_state_command,
     shell_arg_for_host,
 )
-from .paths import resolve_runtime_root
+from .paths import global_registry_path, resolve_runtime_root
 from .registry import registry_goals, resolve_state_file
 from .slash_commands import build_slash_command_catalog
 from .thread_agent_binding import normalize_thread_id, resolve_thread_agent_binding
@@ -608,6 +608,7 @@ def inspect_bootstrap_connection(
 
 def _inspect_bootstrap_connection(
     project: Path, *, goal_id: str | None, resolve_linked_worktree_alias: bool,
+    runtime_root_arg: str | None = None,
 ) -> _BootstrapConnectionSnapshot:
     """Capture the connection and the registry used to build it together."""
     input_project = _resolve_project(project)
@@ -638,9 +639,14 @@ def _inspect_bootstrap_connection(
         "registry": str(registry_path),
     }
 
+    shared_registry = global_registry_path(resolve_runtime_root(
+        registry or {}, override=runtime_root_arg, registry_path=registry_path,
+    ))
+
     if registry_error:
         return absent_goal_connection(
             base_connection=base_connection,
+            shared_registry=shared_registry,
             goal_id=inferred_goal_id,
             state_file=state_file,
             registry_exists=registry_exists,
@@ -651,6 +657,7 @@ def _inspect_bootstrap_connection(
     if not registry:
         return absent_goal_connection(
             base_connection=base_connection,
+            shared_registry=shared_registry,
             goal_id=inferred_goal_id,
             state_file=state_file,
             registry_exists=False,
@@ -672,6 +679,7 @@ def _inspect_bootstrap_connection(
     if selected_goal is None:
         return absent_goal_connection(
             base_connection=base_connection,
+            shared_registry=shared_registry,
             goal_id=resolved_goal_id,
             state_file=state_file,
             registry_exists=True,
@@ -818,6 +826,7 @@ def build_loopx_bootstrap_command_pack(
 ) -> dict[str, Any]:
     inspection, registry_payload = _connection_snapshot or _inspect_bootstrap_connection(
         project, goal_id=goal_id, resolve_linked_worktree_alias=resolve_linked_worktree_alias,
+        runtime_root_arg=runtime_root_arg,
     )
     resolved_project = str(inspection["project"])
     resolved_goal_id = str(inspection["goal_id"])
@@ -1449,7 +1458,9 @@ def build_start_goal_guided_packet(
     display_name: str | None = None,
     runtime_root_arg: str | None = None,
 ) -> dict[str, Any]:
-    snapshot = _inspect_bootstrap_connection(project, goal_id=goal_id, resolve_linked_worktree_alias=False)
+    snapshot = _inspect_bootstrap_connection(
+        project, goal_id=goal_id, resolve_linked_worktree_alias=False, runtime_root_arg=runtime_root_arg,
+    )
     if goal_id is None:
         selection_packet = _build_multi_goal_start_selection_packet(
             connection_snapshot=snapshot,
