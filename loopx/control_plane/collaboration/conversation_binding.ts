@@ -631,7 +631,8 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
         || turn?.status === "failed"
         && ["usage_limit_exceeded", "response_timeout", "upstream_transport_failure", "context_window_exceeded",
           "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error",
-          "manager_authorization_unavailable", "runtime_error", "execution_worker_exited", "server_restarted"].includes(String(turn.error_code)))
+          "manager_authorization_unavailable", "runtime_error", "execution_worker_exited",
+          "execution_worker_exited_before_dispatch", "server_restarted"].includes(String(turn.error_code)))
       && !(current?.session_id === row.session_id && current?.status === "closed")
       && observation.stop_observed !== true};
   }
@@ -1641,25 +1642,39 @@ function legacyImagePreparation(recovery: JsonObject, failed: JsonObject): boole
  */
 function planRuntimePreparationRecovery(recovery: JsonObject, row: JsonObject, current: JsonObject,
   failed: JsonObject, version: number): JsonObject | null {
-  if (!["model_auth_unavailable", "resume_failed"].includes(String(failed.error_code))) return null;
+  const expectedError = new Map([
+    ["model_auth_unavailable", "Native account API transport is unavailable."],
+    ["resume_failed", "The previous Agent conversation could not be restored."],
+    ["execution_worker_exited_before_dispatch", "The LoopX Chat worker exited before the original request was dispatched."],
+  ]).get(String(failed.error_code));
+  if (expectedError === undefined) return null;
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
-  const expectedError = failed.error_code === "model_auth_unavailable"
-    ? "Native account API transport is unavailable." : "The previous Agent conversation could not be restored.";
+  const lostWorker = failed.error_code === "execution_worker_exited_before_dispatch";
+  const beforeDispatch = lostWorker
+    ? row.origin === "lark" && current.steward_context != null && failed.execution_dispatch === "pending"
+      && failed.loopx_request == null && !failed.loopx_execution
+      && (failed.attachments === undefined || Array.isArray(failed.attachments) && failed.attachments.length === 0)
+      && typeof failed.started_at === "string" && Number.isFinite(Date.parse(failed.started_at))
+    : failed.started_at === null && failed.first_event_at === null;
   if (current.agent_id !== "codex" || failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
-      || failed.status !== "failed" || failed.error !== expectedError || failed.started_at !== null
-      || failed.first_event_at !== null || failed.response !== null || failed.upstream_turn_id !== null
+      || failed.status !== "failed" || failed.error !== expectedError || !beforeDispatch
+      || failed.response !== null || failed.upstream_turn_id !== null
       || failed.delta_count !== 0 || failed.message !== row.message || failed.origin !== row.origin
       || recovery.attachments_present !== false || recovery.steering_observed !== false
       || recovery.native_observation != null || recovery.native_result_present !== false) return no;
   const observed = recovery.preparation_observation == null ? null
     : requireJsonObject(recovery.preparation_observation, "runtime preparation readback");
   if (observed?.kind !== "core_runtime_preparation_failure" || observed.session_id !== failed.session_id
-      || observed.turn_id !== failed.turn_id || !Array.isArray(observed.events) || observed.events.length !== 2) return no;
+      || observed.turn_id !== failed.turn_id || !Array.isArray(observed.events)
+      || observed.events.length < 2 || (!lostWorker && observed.events.length !== 2)) return no;
   const events = observed.events.map(value => requireJsonObject(value, "runtime preparation event"));
+  const failure = events.at(-1)!;
   if (!events.every(item => typeof item.event_id === "string" && item.event_id.length > 0)
-      || events[0].event_id === events[1].event_id || events[0].kind !== "turn.queued"
-      || events[0].delivery_mode !== "session_queue" || events[1].kind !== "turn.failed"
-      || events[1].error_code !== failed.error_code || events[1].message !== expectedError) return no;
+      || new Set(events.map(item => item.event_id)).size !== events.length || events[0].kind !== "turn.queued"
+      || events[0].delivery_mode !== "session_queue" || failure.kind !== "turn.failed"
+      || failure.error_code !== failed.error_code || failure.message !== expectedError
+      || events.slice(1, -1).some(item => item.kind !== "manager.context"
+        && !(item.kind === "agent.phase" && item.phase === "manager_context"))) return no;
   const original = `external-${ref(row.request_ref, "original request")}`;
   const previous = row.context_recovery == null ? null : requireJsonObject(row.context_recovery, "runtime preparation reservation");
   if (row.context_recovery_history != null && !Array.isArray(row.context_recovery_history)) return no;

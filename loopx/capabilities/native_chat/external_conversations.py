@@ -225,7 +225,8 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
             and (retained_review is None or reservation.get("work_attempt") == 1
                  or reservation.get("legacy_result_review")) else None)
         image_failure = turn.get("error_code") == "runtime_error" and bool(row.get("attachments"))
-        runtime_failure = turn.get("error_code") in {"model_auth_unavailable", "resume_failed"}
+        runtime_failure = turn.get("error_code") in {
+            "model_auth_unavailable", "resume_failed", "execution_worker_exited_before_dispatch"}
         needs_full_events = (not discovery_only or retained_review is not None
             or turn.get("error_code") == "manager_authorization_unavailable"
             or image_failure or runtime_failure)
