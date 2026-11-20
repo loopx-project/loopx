@@ -1930,3 +1930,50 @@ test("complete execution keeps the adaptive primary and unbound selection distin
     assert.equal(result.sha256, null);
   }
 });
+
+test("attachCompleteTurnContext preserves tokenless identity and avoids rounding additions on source_edits", () => {
+  const source = payload();
+  const complete = evaluateTurnEnvelope({
+    operation: "compose_complete",
+    payload: source,
+    scheduler_execution_args: "",
+  });
+  const tokenlessAttached = evaluateTurnEnvelope({
+    operation: "attach_complete_turn_context",
+    payload: complete,
+    context_additions: {reward_memory_recall: {status: "empty", guidance: []}},
+  });
+  assert.deepEqual(
+    evaluateTurnEnvelope({operation: "complete_consumer", payload: tokenlessAttached}),
+    {ok: true},
+  );
+  const editResult = evaluateTurnEnvelope({
+    operation: "attach_complete_turn_context",
+    payload: complete,
+    context_additions: {post_attach_recall: {val: 1, big: 2 ** 80}},
+    context_addition_tokens: [
+      [["post_attach_recall", "val"], "1.0"],
+      [["post_attach_recall", "big"], "1208925819614629174706176"],
+    ],
+    source_edits: true,
+  });
+  const changes = editResult.changes as {path: (string | number)[]}[];
+  assert.ok(changes.length > 0);
+  assert.ok(changes.every(change => change.path[0] === "contract_binding"));
+  assert.throws(
+    () => evaluateTurnEnvelope({
+      operation: "attach_complete_turn_context",
+      payload: complete,
+      context_additions: {contract_binding: {}},
+    }),
+    EffectRuntimeRequestError,
+  );
+  assert.throws(
+    () => evaluateTurnEnvelope({
+      operation: "attach_complete_turn_context",
+      payload: complete,
+      context_additions: {goal_id: "overwrite"},
+    }),
+    EffectRuntimeRequestError,
+  );
+});

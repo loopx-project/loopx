@@ -2158,10 +2158,7 @@ export function attachCompleteTurnContext(value: unknown): JsonObject {
     ...(Array.isArray(request.source_number_tokens) ? request.source_number_tokens : []),
     ...additionTokens,
   ];
-  const sourceIdentity = contextSourceIdentity(
-    source,
-    combinedTokens.length > 0 ? combinedTokens : undefined,
-  );
+  const sourceIdentity = contextSourceIdentity(source, combinedTokens);
   return sealCompleteTurnDecision(source, schedulerExecutionArgs, sourceIdentity);
 }
 
@@ -2672,8 +2669,10 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   }
   if (operation === "attach_complete_turn_context") {
     const result = attachCompleteTurnContext(request);
-    return request.source_edits === true
-      ? contextProjectionChanges(requireJsonObject(request.payload, "complete Turn decision"), result) : result;
+    if (request.source_edits !== true) return result;
+    const payload = requireJsonObject(request.payload, "complete Turn decision");
+    const additions = requireJsonObject(request.context_additions, "complete Turn context additions");
+    return contextProjectionChanges({...payload, ...additions}, result);
   }
   if (operation === "complete_consumer") {
     requireCompleteTurnDecision(request.payload, request.source_number_tokens);

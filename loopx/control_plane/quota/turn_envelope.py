@@ -348,7 +348,7 @@ def attach_complete_turn_context(
         context_additions=additions,
         source_edits=True,
     )
-    return _apply_context_projection_changes(source, result)
+    return _apply_context_projection_changes({**source, **additions}, result)
 
 
 def is_legacy_saved_quota_decision(payload: Mapping[str, Any]) -> bool:
