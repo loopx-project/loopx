@@ -54,6 +54,38 @@ import { formatMonitorDate } from "./monitor-readback";
 import { parseTodoCompletionProof } from "./todo-completion-feedback";
 import { useDrawerOverlay } from "./workspace-shell";
 
+function SourceRunHistory({ goal, heading = false }: { goal: WorkspaceGoal; heading?: boolean }) {
+  const { t } = useWorkspaceI18n();
+  const history = goal.sourceRunHistory;
+  const recent = history?.recent ?? [];
+  const total = history?.total ?? null;
+  return <section className="personal-detail-card personal-source-run-history" aria-label={t("drawer.sourceRunHistory")}>
+    {heading ? <h3>{t("drawer.sourceRunHistory")}</h3> : null}
+    <small>{goal.sourceAccess?.label} · {t("common.readOnly")}</small>
+    <dl><div>
+      <dt>{t("drawer.sourceRunOriginalGoal")}</dt><dd><code>{goal.sourceAccess?.original_goal_id ?? goal.goalId}</code></dd>
+    </div></dl>
+    {recent.length ? <>
+      <p>{total === null ? t("drawer.sourceRunRecent", {shown: recent.length})
+        : t("drawer.sourceRunCount", {shown: recent.length, count: total})}</p>
+      <ol>{recent.map((run, index) => <li key={`${run.generated_at}:${run.turn_instance_id ?? ""}:${index}`}>
+        <details>
+          <summary><time dateTime={run.generated_at}>{run.generated_at}</time></summary>
+          <dl>
+            {run.classification ? <div><dt>{t("drawer.sourceRunRecordType")}</dt><dd>{run.classification}</dd></div> : null}
+            <div><dt>{t("drawer.sourceRunOriginalTurn")}</dt><dd>
+              {run.turn_instance_id ? <code>{run.turn_instance_id}</code> : t("drawer.sourceRunUnrecorded")}
+            </dd></div>
+            <div><dt>{t("drawer.sourceRunCheckpoint")}</dt><dd>
+              {run.vision_checkpoint ? <code>{run.vision_checkpoint.decision}</code> : t("drawer.sourceRunUnrecorded")}
+            </dd></div>
+          </dl>
+        </details>
+      </li>)}</ol>
+    </> : <p>{t(total === 0 ? "drawer.noExecutionHistory" : "drawer.sourceRunUnavailable")}</p>}
+  </section>;
+}
+
 function subagentModelRequest(include: boolean, model: string, effort: string) {
   if (!include) return {};
   if (!model.trim()) return { modelConfig: null };
@@ -356,10 +388,13 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
   const decisionFrame = selection.kind === "proposal" ? selection.item.reviewPlan?.decisionFrame : undefined;
   const completedTodoCreation = proposalTarget?.actionKind === "todo.create"
     && proposalTarget.reviewPlan?.interaction === "completed";
+  const sourceRunGoal = selection.kind === "run"
+    ? goals.find(goal => goal.goalId === selection.item.goalId && goal.sourceAccess)
+    : undefined;
   const title = taskExecution ? t("drawer.taskLaunchReceipt")
     : selection.kind === "attention" ? t("drawer.titleAttention")
     : selection.kind === "todo" ? t("drawer.taskDetails")
-      : selection.kind === "run" ? t("drawer.runDetails")
+      : selection.kind === "run" ? t(sourceRunGoal ? "drawer.sourceRunHistory" : "drawer.runDetails")
         : selection.kind === "output" ? t("drawer.titleOutput")
           : selection.kind === "proposal" && selection.item.actionKind === "team.plan" && selection.item.status === "applied" ? t("proposal.teamPlan.resultTitle")
           : selection.kind === "proposal" && selection.item.actionKind === "operation.execute" ? t("drawer.operationReadOnly")
@@ -675,7 +710,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
       role="dialog"
     >
       <header className={`personal-drawer-header${selection.kind === "todo" ? " is-task-inspector" : ""}`}>
-        <div><h2 id="personal-drawer-title" ref={titleRef} tabIndex={-1}>{title}</h2>{selection.kind !== "goal" && !taskExecution ? <p>{contextLabel}</p> : null}</div>
+        <div><h2 id="personal-drawer-title" ref={titleRef} tabIndex={-1}>{title}</h2>{selection.kind !== "goal" && !taskExecution && !sourceRunGoal ? <p>{contextLabel}</p> : null}</div>
         <div className="personal-drawer-header-actions">
           {selection.kind === "todo" && onToggleInspectorSize ? <button aria-label={inspectorExpanded ? t("drawer.inspectorHalf") : t("drawer.inspectorFull")} className="personal-icon-button personal-inspector-size" onClick={onToggleInspectorSize} title={inspectorExpanded ? t("drawer.inspectorHalfView") : t("drawer.inspectorFullView")} type="button">
             {inspectorExpanded ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
@@ -895,21 +930,23 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                 </>
               );
             })()}
-            <section className="personal-detail-card personal-goal-session">
-              <small>{t("drawer.runDetails")}</small>
-              {selectedGoalRun?.sessionId ? (
-                <>
-                  <h3>{localizedSessionStatus(selectedGoalRun.sessionStatus ?? selectedGoalRun.status, t)}</h3>
-                  <p>{selectedGoalRun.title}</p>
-                  {callbacks.onOpenRunSession ? <button className="personal-primary-action" onClick={() => void callbacks.onOpenRunSession?.(selectedGoalRun)} type="button"><Play size={16} />{t("drawer.runLatest")}</button> : null}
-                </>
-              ) : (
-                <>
-                  <h3>{t("drawer.noRun")}</h3>
-                  <ContextHelp label={t("drawer.noRun")}><p>{t("drawer.noRunDescription")}</p></ContextHelp>
-                </>
-              )}
-            </section>
+            {selection.item.sourceAccess
+              ? <SourceRunHistory goal={selection.item} heading />
+              : <section className="personal-detail-card personal-goal-session">
+                  <small>{t("drawer.runDetails")}</small>
+                  {selectedGoalRun?.sessionId ? (
+                    <>
+                      <h3>{localizedSessionStatus(selectedGoalRun.sessionStatus ?? selectedGoalRun.status, t)}</h3>
+                      <p>{selectedGoalRun.title}</p>
+                      {callbacks.onOpenRunSession ? <button className="personal-primary-action" onClick={() => void callbacks.onOpenRunSession?.(selectedGoalRun)} type="button"><Play size={16} />{t("drawer.runLatest")}</button> : null}
+                    </>
+                  ) : (
+                    <>
+                      <h3>{t("drawer.noRun")}</h3>
+                      <ContextHelp label={t("drawer.noRun")}><p>{t("drawer.noRunDescription")}</p></ContextHelp>
+                    </>
+                  )}
+                </section>}
             {selection.item.zcodeGoalEligibleAgentIds?.length ? <ZCodeGoalControl key={selection.item.goalId} goal={selection.item} readOnly={readOnly} /> : null}
             {!readOnly ? <div className="personal-drawer-action-grid">
               <button className="personal-secondary-action" onClick={() => callbacks.onRequestScheduleConfig?.("heartbeat", selection.item.goalId)} type="button"><Radio size={16} />{t("drawer.setupHeartbeat")}</button>
@@ -1080,7 +1117,8 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
           </>
         ) : null}
 
-        {selection.kind === "run" ? (
+        {sourceRunGoal ? <SourceRunHistory goal={sourceRunGoal} /> : null}
+        {selection.kind === "run" && !sourceRunGoal ? (
           <>
             <div aria-label={t("drawer.runView")} className="personal-run-drawer-tabs" role="tablist">
               <button aria-selected={runDrawerTab === "record"} onClick={() => setRunDrawerTab("record")} role="tab" type="button">{t("drawer.executionRecordAndResult")}</button>
@@ -1340,7 +1378,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
           </>
         ) : null}
 
-        {selection.kind === "run" || selection.kind === "proposal" || selection.kind === "schedule" ? (
+        {((selection.kind === "run" && !sourceRunGoal) || selection.kind === "proposal" || selection.kind === "schedule") ? (
           <>
             <button aria-expanded={diagnosticsOpen} className="personal-diagnostics-trigger" onClick={() => setDiagnosticsOpen((value) => !value)} type="button">
               <span>{t("drawer.advancedDiagnostics")}</span><ChevronDown className={diagnosticsOpen ? "is-open" : ""} size={16} />

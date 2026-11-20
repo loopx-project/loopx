@@ -7,7 +7,7 @@ import type { ActionReviewPlan } from "../../../../../../loopx/control_plane/pre
 import type { GoalAcceptanceObservation } from "../../data/goal-acceptance-observation";
 import type { AttentionDetails } from "./attention-details";
 import type { WorkspaceLoadError, WorkspaceReadScope } from "../../data/workspace-progressive-status";
-import type { TodoItem } from "../../data/status";
+import type { RunRecord, TodoItem } from "../../data/status";
 import type { TodoUpdateSourceBasis } from "../../data/action-source-basis";
 import { goalWorkKind, type GoalHostThreadActivity, type WorkspaceGoalExecution } from "./goal-activity";
 import { receiptRetryReadback } from "./monitor-readback";
@@ -166,6 +166,10 @@ export type WorkspaceGoalSubagentConfiguration = {
 
 export type WorkspaceGoal = {
   sourceAccess?: {namespace: string; label: string; readOnly: true; original_goal_id?: string};
+  sourceRunHistory?: {
+    total: number | null;
+    recent: Pick<RunRecord, "generated_at" | "classification" | "turn_instance_id" | "vision_checkpoint">[];
+  };
   sourceStrategy?: {recordedAt: string; summary: string; observation?: string};
   /** Registry organization in this status source; not Agent ownership or execution dependency. */
   parentGoalId?: string | null;
