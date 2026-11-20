@@ -1,9 +1,7 @@
 """Authored requirements must reach the Host, not just agree after projection."""
 import copy
 import json
-import os
 import shlex
-import subprocess
 from urllib.parse import quote
 
 import pytest
@@ -75,6 +73,11 @@ def test_policy_observer_reads_original_signed_capture_after_todo_references(tmp
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
 @pytest.mark.parametrize('repetitions', [1, 40])
 def test_authored_requirements_survive_capture_projection_and_host(tmp_path, monkeypatch, provider, repetitions):
+    from loopx.control_plane.quota.turn_envelope import bind_turn_decision_capture, build_turn_envelope
+    from loopx.control_plane.todos.completed_archive import DEFAULT_MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE
+    from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
+    from tests.control_plane.host_process_fixture import assert_host_task_context
+
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     state = _configure_read_only_todo(project)
@@ -87,7 +90,14 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
         '- [ ] [P1] Validate and settle the selected delivery.', f'- [ ] [P1] {task}',
     ).replace('## Next Action', f'## Acceptance\n\n{goal}\n\n## Next Action')
     # Author only disposable source input, before creating canonical authority.
-    state.write_text(authored.replace(' -->', f' note={quote(note, safe="")} -->'), encoding='utf-8')
+    completed = DEFAULT_MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE + 1
+    completed_inputs = ''.join(
+        f'- [x] [P2] Verify historical artifact {index}.\n'
+        f'  <!-- loopx:todo todo_id=todo_historical_{index:02d} status=done task_class=advancement_task -->\n'
+        for index in range(completed)
+    )
+    state.write_text(authored.replace(' -->', f' note={quote(note, safe="")} -->') + completed_inputs,
+                     encoding='utf-8')
     todos = read_fixture_todos(state)
     source_task = next(item for item in todos if item['todo_id'] == TODO_ID)
     # The fixture helper returns an attention view. Seed the canonical record
@@ -101,12 +111,18 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
             '--todo-id', TODO_ID, '--turn-instance-id', TURN_ID, '--codex-app',
             '--available-capability', 'shell', '--available-capability', 'filesystem_read']
     capture = tmp_path / 'original-context'
-    code, envelope = _run_cli(registry, runtime, *args, '--turn-envelope',
+    code, current = _run_cli(registry, runtime, *args, '--turn-envelope',
                               '--decision-output-dir', str(capture))
-    assert code == 0, envelope
+    assert code == 0, current
     saved = capture / 'decision.json'
     original_bytes = saved.read_bytes()
     full = json.loads(original_bytes)
+    assert current == full and full['schema_version'] == 'loopx_turn_envelope_v1'
+    promotion = full['promotion_readiness_warning']
+    assert promotion['freshness_status'] == 'missing' and promotion['requires_readiness_run'] is True
+    archive = full['completed_todo_archive_warning']
+    assert archive['active_done_count'] == completed and archive['requires_archive'] is True
+    envelope = build_turn_envelope(full, captured_decision_path=str(saved))
     source_context = full['interaction_contract']['agent_channel']['work_context']
     assert source_context['complete'] is True
     assert source_context['instruction']  # Non-vacuous instruction transport.
@@ -139,16 +155,11 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
     assert task_detail['note'] == note
     delivered_task = task_detail.get('text', authority['selected_todo']['text'])
     assert delivered_task == source_task['text']
-    # This fixture has an unregistered Goal narrative: pending read must remain
-    # explicit even when all available inline sources were loaded successfully.
-    goal_read = next(item for item in authority['required_reads'] if item['source'] == 'goal_state')
-    assert goal_read['ordering'] == 'before_work'
-    if os.name != 'nt':
-        readback = subprocess.run(shlex.split(goal_read['command']), capture_output=True,
-                                  text=True, check=True)
-        assert goal in readback.stdout
-    else:
-        assert goal in state.read_text(encoding='utf-8')
+    # The current capture delivers the complete Goal inline. Keep the separate
+    # acceptance text and avoid making the Worker read the same file twice.
+    assert source_by_kind['goal_state']['full_source'] is True
+    assert goal in source_by_kind['goal_state']['text']
+    assert all(item['source'] != 'goal_state' for item in authority['required_reads'])
     # The actual Host prompt must contain the independent source requirements,
     # not merely match an action signature computed by the same projector.
     prompt = render_prompt(authority)
@@ -188,9 +199,42 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
             plan = build_loopx_turn_plan(altered, host='generic-cli', execution_mode='isolated-headless')
             assert plan['route']['kind'] == 'contract_error'
             assert plan['route']['would_invoke_host'] is False
+    plan = build_loopx_turn_plan(full, host='generic-cli', execution_mode='isolated-headless',
+                                turn_instance_id=TURN_ID)
+    request = build_loopx_turn_host_request(plan)
+    assert request['work_contract'] == full
+    request.update(bind_turn_decision_capture(
+        full, captured_decision_path=str(saved), turn_instance_id=TURN_ID, turn_key=request['turn_key'],
+        complete_host_request={key: request[key] for key in ('schema_version', 'turn_key', 'source_decision_hash')},
+    ))
+    structured = render_prompt(extract_turn_authority(request))
+    codex_prompt = _prompt(request)
+    for prompt in (structured, codex_prompt):
+        assert promotion['message'] not in prompt
+        assert archive['archive_command_template'] not in prompt
+    model_input, _ = json.JSONDecoder().raw_decode(structured.split('Turn request:\n', 1)[1])
+    codex_input = json.loads(codex_prompt.split('Turn request:\n', 1)[1])
+    assert model_input == codex_input
+    worker = assert_host_task_context(model_input, full)
+    assert worker["reward_memory_recall"] == {"status": "disabled", "goal_id": GOAL_ID, "agent_id": AGENT_ID}
+    full_dispatch = full["turn_start_capability_hook_dispatch"]
+    assert full_dispatch["results"] and full_dispatch["registered_count"] >= 1
+    assert worker["turn_start_capability_hook_dispatch"] == {"results": [
+        {key: row[key] for key in ("hook_id", "capability_id", "status")} for row in full_dispatch["results"]
+    ]}
+    worker_context = worker['interaction_contract']['agent_channel']['work_context']
+    worker_sources = {source['source']: source['content'] for source in worker_context['sources']}
+    primary = worker_sources['selected_todo']['todo']
+    assert primary['note'] == note
+    assert primary.get('text', worker['selected_todo']['text']) == source_task['text']
+    assert goal in worker_sources['goal_state']['text']
+    if provider == "sqlite" and repetitions == 1:
+        _assert_optional_readbacks_survive_when_relevant(full)
     receipts = _heartbeat_receipt_count(runtime, TURN_ID)
     code, ordinary = _run_cli(registry, runtime, *args)
     assert code == 0, ordinary
+    assert ordinary['promotion_readiness_warning'] == promotion
+    assert ordinary['completed_todo_archive_warning'] == archive
     ordinary_context = ordinary['interaction_contract']['agent_channel']['work_context']
     assert ordinary_context['instruction'] == source_context['instruction']
     ordinary_task = next(source['content']['todo'] for source in ordinary_context['sources']
@@ -202,6 +246,37 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
     assert _heartbeat_receipt_count(runtime, TURN_ID) == receipts
     assert _spend_run_count(runtime) == 0
     assert saved.read_bytes() == original_bytes
+
+
+def _assert_optional_readbacks_survive_when_relevant(full):
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+    from loopx.control_plane.turn_driver.codex_cli import _prompt
+    from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
+    from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
+
+    for case in ("active", "failed", "extended"):
+        source = copy.deepcopy({key: value for key, value in full.items() if key not in {"schema_version", "contract_binding"}})
+        recall = source["reward_memory_recall"]
+        dispatch = source["turn_start_capability_hook_dispatch"]
+        if case == "active":
+            recall["context"] = {"guidance": ["Use independent verification before reporting."]}
+            recall["automatic_recall"] = True
+            recall["experiment"].update(enabled=True, automatic_recall=True)
+            dispatch["results"][0].update(status="observed", observation_count=1,
+                                          readback={"summary_lines": ["A required artifact is available."]})
+        elif case == "failed":
+            recall.update(status="runtime_unavailable", reason_code="runtime_unavailable")
+            dispatch["results"][0].update(status="unavailable", error_code="context_unavailable")
+        else:
+            recall["experiment"]["host_coverage"][0]["future_context"] = {"must_read": "captured evidence"}
+            dispatch["results"][0]["readback"] = {"future_context": {"must_read": "captured evidence"}}
+        decision = compose_turn_decision(source)
+        plan = build_loopx_turn_plan(decision, host="generic-cli", execution_mode="isolated-headless",
+                                    turn_instance_id=TURN_ID)
+        request = build_loopx_turn_host_request(plan)
+        model = json.loads(_prompt(request).split("Turn request:\n", 1)[1])["task_context"]
+        assert model["reward_memory_recall"] == recall, case
+        assert model["turn_start_capability_hook_dispatch"] == dispatch, case
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])

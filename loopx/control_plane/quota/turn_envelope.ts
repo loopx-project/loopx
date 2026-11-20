@@ -1,4 +1,4 @@
-import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../work_items/execution_preparation.ts";
+import {EXECUTION_PREPARATION_SCHEMA_VERSION, isKnownReadyLeasePreparation} from "../work_items/execution_preparation.ts";
 import {capturedContextSelection} from "./context_selection.ts";
 import {contextReadSectionDigests, initialContextReadPointers, prepareProgressiveContext, prepareProgressiveContextDelivery,
   progressiveContextPlan, scopedReplanYardstickReversal,
@@ -30,7 +30,7 @@ import {
   type JsonObject,
 } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
-import { projectTurnStartUnavailableContext } from "../capability_hooks.ts";
+import { projectEmptyTurnStartObservations, projectTurnStartUnavailableContext } from "../capability_hooks.ts";
 import { jsonObject, requireBoolean, requireJsonObject, requireNonEmptyString, requireStringLiteral,
   sourceNumberTokens } from "../runtime_decode.ts";
 import { projectPendingCapabilityIntent } from "../work_items/pending_capability_intent.ts";
@@ -1867,19 +1867,98 @@ export function completeHostSource(request: JsonObject): {decision: JsonObject; 
   return {decision, projection};
 }
 
+/** Collapse the unconfigured recall readback. Known active, failed and extended
+ * records still carry their full context. This only classifies presentation. */
+function disabledRewardMemoryView(value: unknown): JsonObject | null {
+  const readback = jsonObject(value);
+  const experiment = jsonObject(readback?.experiment);
+  const route = jsonObject(experiment?.config_runtime_route);
+  if (!readback || readback.status !== "disabled" || !experiment || !route ||
+      typeof readback.goal_id !== "string" || typeof readback.agent_id !== "string" ||
+      typeof route.registry_role !== "string" || typeof route.runtime_scope !== "string" ||
+      !Array.isArray(experiment.host_coverage)) return null;
+  const coverage = experiment.host_coverage;
+  if (!coverage.every(value => {
+    const host = jsonObject(value);
+    return host && Object.keys(host).length === 3 && typeof host.host_id === "string" &&
+      typeof host.automatic_recall === "string" && typeof host.automatic_ingest === "string";
+  })) return null;
+  const {goal_id, agent_id, status} = readback;
+  const expected = {
+    schema_version: "agent_turn_recall_v0", ok: true, status, goal_id, agent_id,
+    surface_id: "agent_workflow.turn_admission", host_wiring: "agent_turn_admission",
+    reason_code: null, context: null, automatic_recall: false, provider_call_count: 0,
+    fail_open: true, provider_failure_is_user_gate: false, grants_new_action_authority: false,
+    quota_spend_performed: false, external_writes_performed: false, suppress_external_sinks: true,
+    experiment: {
+      schema_version: "reward_memory_experiment_status_v1", ok: true, status, goal_id, agent_id,
+      experimental: false, enabled: false, available: false, configured_for_agent: false,
+      config_pointer_registered: false, automatic_ingest: false, automatic_recall: false,
+      fail_open: true, external_writes_performed: false, host_coverage: coverage,
+      config_runtime_route: {
+        schema_version: "reward_memory_config_runtime_route_v0", registry_source: "invoked_registry",
+        registry_role: route.registry_role, runtime_scope: route.runtime_scope, goal_source: "registry.goals",
+        config_source: "goal_repo_relative_config_pointer", readback_status: "not_attempted",
+        exact_readback_verified: false,
+      },
+    },
+  };
+  return isDeepStrictEqual(value, expected) ? {status, goal_id, agent_id} : null;
+}
+
 /** Task presentation is derived only after full-source validation. Keep task
  * facts (including unknown additions) and original scalar carriers intact;
  * scheduler/effect instructions remain with the outer executor. This view is
  * not a replacement source or a permission/settlement contract. */
 function hostModelContextChanges(decision: JsonObject): JsonObject {
   const context = {...decision};
+  // Maintenance warnings are actionable in the operator's quota/status view.
   for (const field of ["schema_version", "contract_binding", "projection_envelope",
     "scheduler_hint", "automation_cadence_readback", "automation_liveness",
-    "scheduler_execution_context"]) {
+    "scheduler_execution_context", "promotion_readiness_warning", "completed_todo_archive_warning"]) {
     delete context[field];
   }
+  // Todo-authoring directions belong to the outer executor. Preserve other
+  // fields because task context may depend on future additions.
+  const writeHint = object(decision.todo_write_hint);
+  const hintCount = Object.keys(writeHint).length;
+  for (const key of ["rule", "section", "agent_todo_command_template",
+    "user_action_command_template", "user_gate_command_template"]) {
+    if (typeof writeHint[key] === "string") delete writeHint[key];
+  }
+  const retainedHints = Object.keys(writeHint).length;
+  if (retainedHints !== hintCount) {
+    if (retainedHints) context.todo_write_hint = writeHint;
+    else delete context.todo_write_hint;
+  }
+  const heartbeat = object(decision.heartbeat_recommendation);
+  // Other modes can include read, repair or wait conditions inside spend_policy.
+  if (decision.normal_delivery_allowed === true &&
+      heartbeat.recommended_mode === "steering_audit_then_one_step" &&
+      typeof heartbeat.spend_policy === "string") {
+    delete heartbeat.spend_policy;
+    context.heartbeat_recommendation = heartbeat;
+  }
+  const emptyObservations = projectEmptyTurnStartObservations(decision.turn_start_capability_hook_dispatch);
+  if (emptyObservations) context.turn_start_capability_hook_dispatch = emptyObservations;
+  const disabledRecall = disabledRewardMemoryView(decision.reward_memory_recall);
+  if (disabledRecall) context.reward_memory_recall = disabledRecall;
   const interaction = {...object(decision.interaction_contract)};
   const agent = object(interaction.agent_channel);
+  // Start and settlement use the original preparation. Keep unfamiliar
+  // records and disagreements visible even when the rest of the task is ready.
+  const preparation = agent.execution_preparation;
+  if (decision.ok === true && decision.should_run === true &&
+      decision.normal_delivery_allowed === true && decision.effective_action === EffectiveAction.NORMAL_RUN &&
+      agent.must_attempt === true && agent.delivery_allowed === true && object(agent.work_context).complete === true &&
+      object(interaction.user_channel).action_required === false && decision.replan_action_packet == null &&
+      object(decision.goal_boundary).handoff_mode === "hard_lease" &&
+      isKnownReadyLeasePreparation(preparation, object(decision.agent_identity).agent_id, selectedWorkTodoId(decision)) &&
+      isDeepStrictEqual(decision.execution_preparation, preparation) &&
+      isDeepStrictEqual(object(interaction.cli_channel).execution_preparation, preparation)) {
+    delete context.execution_preparation;
+    delete agent.execution_preparation;
+  }
   // The complete source may share task authoring/evidence with its effect
   // owner. Resolve those existing references before omitting that owner.
   if (Object.hasOwn(agent, "work_context")) interaction.agent_channel = {...agent,

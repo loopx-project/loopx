@@ -444,6 +444,27 @@ retained core capability (D2).
    recovery semantics from the unified controller/executor design. Required
    reads and source completeness remain binding.
 
+A Worker launched by a built-in Host receives task requirements, scoped
+authority, and the original read route. Todo-authoring directions and the
+ordinary delivery mode's quota spend instructions stay with the outer executor
+in the complete captured contract. Work, repair, and stop conditions remain
+available to the Worker. Unconfigured memory recall and empty pre-turn
+observations expose their current scoped status in this view. Their full
+receipts stay in the original capture, with observations, failures, required
+reads and unfamiliar data still delivered when present.
+
+Work context carries the selected task, scoped User Todos and their read
+provenance. For both registered Todo read formats, the field dictionary stays
+with the canonical Todo reader. Existing captures remain available under
+their original digests.
+
+An ordinary admitted task presents its work, scope and validation to the Worker.
+Matching ready lease preparations stay with launch and settlement. Unready,
+inconsistent and unfamiliar preparations remain visible.
+Operators read release readiness and completed-work maintenance through
+quota/status or the original capture. Task context omits these maintenance
+directions.
+
 Context reuse must be invalidated by relevant source/requirement revisions,
 session generation changes, compaction or lost acknowledgements. A smaller
 packet cannot be treated as proof the executor has the prior context. Recover

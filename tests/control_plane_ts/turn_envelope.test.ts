@@ -25,6 +25,8 @@ import {projectQuotaDiagnostics, referenceQuotaSummaryLanes, resolveQuotaSummary
   from "../../loopx/control_plane/quota/diagnostic_projection.ts";
 import { controllerRequest } from "../../loopx/control_plane/turn_driver/loop_controller.ts";
 import {turnScopedCliSettlementPlan} from "../../loopx/control_plane/quota/settlement_plan.ts";
+import {EXECUTION_PREPARATION_FACTS_SCHEMA_VERSION, projectExecutionPreparation}
+  from "../../loopx/control_plane/work_items/execution_preparation.ts";
 
 test("complete captures reuse progressive presentation only after source validation", () => {
   const source = payload();
@@ -275,6 +277,47 @@ test("Host task presentation is source-checked and keeps task and backlog facts"
     assert.equal(edits.some(edit => (edit.path as string[])[0] === "agent_todo_summary"), false);
   }
   assert.deepEqual(complete, before);
+});
+
+test("Worker omits a matching ready launch record and keeps unresolved or unfamiliar preparation", () => {
+  const ready = projectExecutionPreparation({
+    schema_version: EXECUTION_PREPARATION_FACTS_SCHEMA_VERSION,
+    goal_id: "goal-turn-envelope", agent_id: "agent-ts", handoff_mode: "hard_lease",
+    authority_available: true, selected_todo: {todo_id: "todo-1", status: "open", claimed_by: "agent-ts"},
+    leases: [{status: "active", active: true, owner: "agent-ts",
+      lease_proof: {idempotency_key: "bound-to-turn", expected_version: 2}}],
+  });
+  for (const [name, preparation, cliPreparation, completeWork] of [
+    ["current", ready, ready, true],
+    ["future field", {...ready, repair_instruction: "Wait for the verifier."},
+      {...ready, repair_instruction: "Wait for the verifier."}, true],
+    ["other task", {...ready, todo_id: "todo-other"}, {...ready, todo_id: "todo-other"}, true],
+    ["different receipts", ready, {...ready, lease_proof: {idempotency_key: "new", expected_version: 3}}, true],
+    ["unresolved", {...ready, state: "claim_required"}, {...ready, state: "claim_required"}, true],
+    ["incomplete work", ready, ready, false],
+  ] as const) {
+    const source = payload();
+    source.normal_delivery_allowed = true;
+    source.execution_preparation = preparation;
+    const interaction = source.interaction_contract as JsonObject;
+    const agent = interaction.agent_channel as JsonObject;
+    agent.execution_preparation = structuredClone(preparation);
+    agent.work_context = {complete: completeWork, sources: [], instruction: "Use the original task scope."};
+    (interaction.cli_channel as JsonObject).execution_preparation = cliPreparation;
+    (source.goal_boundary as JsonObject).handoff_mode = "hard_lease";
+    const captured = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
+    const before = structuredClone(captured);
+    const model = evaluateTurnEnvelope({operation: "host_dispatch_context", payload: captured,
+      complete_host_request: {schema_version: "loopx_turn_host_request_v1", turn_key: `sha256:${"a".repeat(64)}`},
+      include_model_context: true});
+    const changes = (model.model_context_changes as JsonObject).changes as JsonObject[];
+    for (const path of [["execution_preparation"], ["interaction_contract", "agent_channel", "execution_preparation"]]) {
+      const removal = changes.some(change => change.remove === true &&
+        JSON.stringify(change.path) === JSON.stringify(path));
+      assert.equal(removal, name === "current", name);
+    }
+    assert.deepEqual(captured, before);
+  }
 });
 
 test("complete Host recovery preserves the existing driver route and hash preimage", () => {
