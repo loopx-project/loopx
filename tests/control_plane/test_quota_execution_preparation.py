@@ -578,11 +578,14 @@ def test_restored_native_capture_does_not_claim_after_manual_writeback(
     assert ready["execution_preparation"]["state"] == "ready"
     identity = ready["heartbeat_receipt"]["settlement_identity"]
     assert identity == first["heartbeat_receipt"]["settlement_identity"]
+    proof = ready["execution_preparation"]["lease_proof"]
     refresh = ["refresh-state", *scope, "--classification", "fixture_manual_result",
         "--delivery-batch-scale", "single_surface", "--delivery-outcome", "outcome_progress",
         "--delivery-boundary", "in_flight_continuation", "--progress-result-class", "advanced",
         "--progress-work-item-id", TODO, "--progress-evidence-id", "fixture:manual-result",
-        "--no-global-sync", "--suppress-external-sinks"]
+        "--no-global-sync", "--suppress-external-sinks",
+        "--task-lease-idempotency-key", proof["idempotency_key"],
+        "--task-lease-expected-version", str(proof["expected_version"])]
     if spend_committed:
         refresh += ["--settle-turn", "--settlement-receipt"]
     assert invoke(*refresh, cwd=delivery_worktree)["settlement_identity"] == identity

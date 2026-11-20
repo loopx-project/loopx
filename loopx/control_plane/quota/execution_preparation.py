@@ -189,6 +189,12 @@ def guard_first_writeback_execution(
         yield
         return
 
+    # The typed receipt owner positively admits a non-delivery planning review.
+    # A selected Todo supplies context; it is not business execution. Explicit
+    # or previously prepared execution proofs retain the original lease gate.
+    planning_only = (settlement.replan_execution_pending
+                     and not prepared_required and requested_proof is None)
+
     # Legacy spend acquires maintenance before the run index. Try maintenance
     # once here so this order cannot block a competing accounting process.
     with ExitStack() as locks:
@@ -198,49 +204,52 @@ def guard_first_writeback_execution(
             operation="refresh-state-execution",
         ))
         require_shadow_primary_write_allowed(runtime_root, goal_id)
-        snapshot = _read_execution_snapshot(runtime_root, goal_id, todo_id)
-        if snapshot is None:
-            raise RefreshTaskLeaseUnavailable("The selected Todo's execution authority could not be read.")
-        if prepared_required and snapshot.get("handoff_mode") != "hard_lease":
-            raise RefreshTaskLeaseUnavailable("The Todo's original hard-lease authority is unavailable.")
-        if snapshot.get("handoff_mode") == "hard_lease":
-            todo_open = snapshot["todo"].get("status") == "open"
-            facts = _execution_facts(snapshot, goal_id, todo_id, agent_id)
-            current = _project_execution_facts({**facts, "include_retired_lease_for_writeback": not todo_open})
-            current_proof = (current.get("lease_proof") if current.get("state") == "ready"
-                             else current.get("retired_lease_proof"))
-            if todo_open or prepared_required:
-                # Legacy prepared receipts can prove their exact version, but cannot
-                # advance to a later version without a recorded generation.
-                lease_epoch = (current.get("lease_epoch")
-                               if prepared_lease and "prepared_lease_epoch" in prepared_lease else None)
-                # Recovery can read the retired proof from the same locked
-                # snapshot, including a renewal within the admitted generation.
-                proof = current_proof if not todo_open and requested_proof is None else requested_proof
-                execution_bound = False
-                if prepared_lease is not None and proof is not None and proof == current_proof:
-                    observed = prepared_lease_receipt_fields(proof, lease_epoch=lease_epoch)
-                    admitted_version = prepared_lease["prepared_lease_version"]
-                    if (
-                        not todo_open and lease_epoch is not None
-                        and observed["prepared_lease_version"] > admitted_version
-                    ):
-                        observed["prepared_lease_version"] = admitted_version
-                    execution_bound = prepared_lease == observed
-            else:
-                # Older admitted closeouts may predate persisted lease readiness.
-                # Their retired holder still has to match the original binding.
-                admission = settlement.native_child_admission or {}
-                execution_bound = (current_proof is not None
-                    and admission.get("report_permission") in {"new_operation", "existing_operation_only"}
-                    and (requested_proof is None or requested_proof == current_proof))
-            if not execution_bound:
-                raise RefreshTaskLeaseUnavailable(
-                    "The original writeback needs a current task lease recorded for this Turn. "
-                    "Read the same Todo and Turn through its current guard before retrying."
-                )
-            if snapshot["todo"].get("status") == "done" and prepared_required and settlement.completion_event is None:
-                raise RefreshTaskLeaseUnavailable("The completed Todo is missing this Turn's completion receipt.")
+        snapshot = None
+        if not planning_only:
+            snapshot = _read_execution_snapshot(runtime_root, goal_id, todo_id)
+            if snapshot is None:
+                raise RefreshTaskLeaseUnavailable("The selected Todo's execution authority could not be read.")
+            if prepared_required and snapshot.get("handoff_mode") != "hard_lease":
+                raise RefreshTaskLeaseUnavailable("The Todo's original hard-lease authority is unavailable.")
+            if snapshot.get("handoff_mode") == "hard_lease":
+                todo_open = snapshot["todo"].get("status") == "open"
+                facts = _execution_facts(snapshot, goal_id, todo_id, agent_id)
+                current = _project_execution_facts({**facts, "include_retired_lease_for_writeback": not todo_open})
+                current_proof = (current.get("lease_proof") if current.get("state") == "ready"
+                                 else current.get("retired_lease_proof"))
+                if todo_open or prepared_required:
+                    # Legacy prepared receipts can prove their exact version, but cannot
+                    # advance to a later version without a recorded generation.
+                    lease_epoch = (current.get("lease_epoch")
+                                   if prepared_lease and "prepared_lease_epoch" in prepared_lease else None)
+                    # Recovery can read the retired proof from the same locked
+                    # snapshot, including a renewal within the admitted generation.
+                    proof = current_proof if not todo_open and requested_proof is None else requested_proof
+                    execution_bound = False
+                    if prepared_lease is not None and proof is not None and proof == current_proof:
+                        observed = prepared_lease_receipt_fields(proof, lease_epoch=lease_epoch)
+                        admitted_version = prepared_lease["prepared_lease_version"]
+                        if (
+                            not todo_open and lease_epoch is not None
+                            and observed["prepared_lease_version"] > admitted_version
+                        ):
+                            observed["prepared_lease_version"] = admitted_version
+                        execution_bound = prepared_lease == observed
+                else:
+                    # Older admitted closeouts may predate persisted lease readiness.
+                    # Their retired holder still has to match the original binding.
+                    admission = settlement.native_child_admission or {}
+                    execution_bound = (current_proof is not None
+                        and admission.get("report_permission") in {"new_operation", "existing_operation_only"}
+                        and (requested_proof is None or requested_proof == current_proof))
+                if not execution_bound:
+                    raise RefreshTaskLeaseUnavailable(
+                        "The original writeback needs a current task lease recorded for this Turn. "
+                        "Read the same Todo and Turn through its current guard before retrying."
+                    )
+                if snapshot["todo"].get("status") == "done" and prepared_required and settlement.completion_event is None:
+                    raise RefreshTaskLeaseUnavailable("The completed Todo is missing this Turn's completion receipt.")
+        if planning_only or (snapshot is not None and snapshot.get("handoff_mode") == "hard_lease"):
             goal = locked_goal
             if goal is None:
                 source, _ = load_recommendation_source_goal(registry_path, goal_id)

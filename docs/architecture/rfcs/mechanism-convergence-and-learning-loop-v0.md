@@ -335,6 +335,17 @@ read-only quota observation. It admits no ordinary host Turn. These service
 checks therefore do not qualify an ordinary PostgreSQL feedback Turn or justify
 adding another execution profile to this slice.
 
+Todo-bound planning closeout also reuses the existing typed receipt admission.
+A positively admitted non-delivery review does not require a business execution
+lease that its guard deliberately never prepares. Explicit or previously
+prepared execution still requires the original proof; Goal Stop, source locks,
+semantic review and settlement checks remain in force. Isolated
+[File/SQLite CLI controls](../../../tests/control_plane/test_replan_writeback_lease_scope.py)
+cover enabled/off reviews, foreign identity, explicit/prepared execution, Stop,
+unchanged Todo/lease state and once-only replay. This repairs the planning-to-
+writeback composition; installed cutover, actual model adoption and outcome/
+full-cost qualification remain open.
+
 The first task needs an actual feedback or method-choice requirement. Reuse complete existing paths; real consumers must demonstrate gaps before repairing them rather than manufacturing a failure for the example. Experiments, training and procedural publication retain original authority. This document allocates neither another lane's quota nor a prescribed PR count.
 
 ## 12. Consequential choices to confirm
