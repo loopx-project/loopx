@@ -4,7 +4,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
-import pytest
 
 from loopx.capabilities.native_chat.steward_monitor import (
     StewardMonitor,

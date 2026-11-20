@@ -61,6 +61,7 @@ def test_guided_bootstrap_commands_do_not_require_posix_continuations(
     assert len(lines) == 2
     assert lines[0].startswith("cd ")
     assert lines[1].startswith("loopx bootstrap --project .")
+    assert "`bootstrap --force`: `forbidden_in_guided_flow`" in str(packet["message"])
 
     recommended = packet["recommended_next_step"]
     assert isinstance(recommended, dict)
