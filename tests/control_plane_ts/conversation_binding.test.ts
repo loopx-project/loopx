@@ -1968,7 +1968,8 @@ test("quota backlog projection retires explicit lifecycle stops, not unavailable
 });
 
 for (const errorCode of ["response_timeout", "upstream_transport_failure", "context_window_exceeded",
-  "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error", "runtime_error", "execution_worker_exited", "server_restarted"]) {
+  "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error", "runtime_error",
+  "execution_worker_exited", "execution_worker_exited_before_dispatch", "server_restarted"]) {
 test(`delivered ${errorCode} notices retain the exact failed request, including other executors`, () => {
   const request = {request_ref: "f".repeat(24), command: null, status: "accepted",
     session_id: "original", turn_id: "timed-out", delivery_verified: true};

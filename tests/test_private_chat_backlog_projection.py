@@ -98,7 +98,7 @@ def test_unavailable_or_misaligned_batch_result_is_never_empty_work(tmp_path, mo
         core.quota_backlog_observer()(rows)
 
 
-@pytest.mark.parametrize("code", ["runtime_error", "execution_worker_exited", "server_restarted"])
+@pytest.mark.parametrize("code", ["runtime_error", "execution_worker_exited", "execution_worker_exited_before_dispatch", "server_restarted"])
 def test_worker_or_preparation_failure_notice_does_not_answer_the_original_question(tmp_path, code):
     store, _, transport, rows = fixture_history(tmp_path, count=1)
     store.update_turn(rows[0]["session_id"], rows[0]["turn_id"], error_code=code)
