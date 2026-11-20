@@ -154,7 +154,7 @@ def test_cli_opaque_turn_uses_real_timestamp(tmp_path, monkeypatch):
     monkeypatch.setattr(
         cli, "resolve_reward_memory_experiment", lambda **kw: ({}, config)
     )
-    monkeypatch.setattr(cli, "_quota_decision", lambda path: quota)
+    monkeypatch.setattr(cli, "load_turn_quota_decision", lambda path: quota)
     observed = []
 
     def run(config, situation, **kw):
