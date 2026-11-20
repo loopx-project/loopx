@@ -218,6 +218,10 @@ test("Host task presentation is source-checked and keeps task and backlog facts"
   const source = payload();
   source.future_task_data = {instructions: "Preserve the final stop. ".repeat(200), value: -0};
   source.agent_todo_summary = {backlog_items: [{todo_id: "later", text: "Required dependency."}]};
+  source.normal_delivery_allowed = true;
+  source.heartbeat_recommendation = {recommended_mode: "steering_audit_then_one_step",
+    spend_policy: "append exactly one heartbeat spend only after scope-bounded work " +
+      "is validated and written back; one_step: mode, not an operation limit; stop after the readback"};
   const complete = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
   const envelope = buildTurnEnvelope({payload: complete, scheduler_execution_args: ""});
   const before = structuredClone(complete);
@@ -238,6 +242,7 @@ test("Host task presentation is source-checked and keeps task and backlog facts"
     }
     assert.deepEqual(view.future_task_data, complete.future_task_data);
     assert.deepEqual(view.agent_todo_summary, complete.agent_todo_summary);
+    assert.deepEqual(view.heartbeat_recommendation, source.heartbeat_recommendation);
     assert.deepEqual(view.goal_boundary, complete.goal_boundary);
     assert.deepEqual((view.interaction_contract as JsonObject).agent_channel,
       (complete.interaction_contract as JsonObject).agent_channel);

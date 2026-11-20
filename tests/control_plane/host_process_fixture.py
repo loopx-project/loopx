@@ -33,7 +33,10 @@ def assert_host_task_context(model_input, source):
     heartbeat = expected.get("heartbeat_recommendation")
     if (source.get("normal_delivery_allowed") is True and isinstance(heartbeat, dict)
             and heartbeat.get("recommended_mode") == "steering_audit_then_one_step"
-            and isinstance(heartbeat.get("spend_policy"), str)):
+            and heartbeat.get("spend_policy") == (
+                "append exactly one heartbeat spend only after scope-bounded work "
+                "is validated and written back; one_step: mode, not an operation limit"
+            )):
         expected["heartbeat_recommendation"] = {k: v for k, v in heartbeat.items() if k != "spend_policy"}
     observations = expected.get("turn_start_capability_hook_dispatch")
     rendered_observations = context.get("turn_start_capability_hook_dispatch")

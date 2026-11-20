@@ -1932,10 +1932,13 @@ function hostModelContextChanges(decision: JsonObject): JsonObject {
     else delete context.todo_write_hint;
   }
   const heartbeat = object(decision.heartbeat_recommendation);
-  // Other modes can include read, repair or wait conditions inside spend_policy.
+  // Only the standard legacy rule has a known split: accounting stays with
+  // settlement, and the built-in renderers explain the work segment. Keep
+  // unfamiliar text intact; it can carry additional execution conditions.
   if (decision.normal_delivery_allowed === true &&
       heartbeat.recommended_mode === "steering_audit_then_one_step" &&
-      typeof heartbeat.spend_policy === "string") {
+      heartbeat.spend_policy === "append exactly one heartbeat spend only after scope-bounded work " +
+        "is validated and written back; one_step: mode, not an operation limit") {
     delete heartbeat.spend_policy;
     context.heartbeat_recommendation = heartbeat;
   }
