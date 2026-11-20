@@ -204,8 +204,9 @@ const HTTP_URL_SURFACE = /\bhttps?:\/\/[^\s`'"<>]+/giu;
 const maskHttpUrlPaths = (value: string): string =>
   value.replace(HTTP_URL_SURFACE, match => " ".repeat(match.length));
 export const CREDENTIAL_WORD_PATTERNS: RegExp[] = [/\bBearer\b/i, /\bpassword\b/i, /\bsecret\b/i];
+const HOME_DIRECTORY_TEXT_PATTERN = /\/Users\//;
 export const PRIVATE_TEXT_PATTERNS: RegExp[] = [
-  /\/Users\//,
+  HOME_DIRECTORY_TEXT_PATTERN,
   /\/ext[_]data\//, // Preserve the matcher without matching its own policy source.
   /lark[o]ffice/i, // Equivalent matcher avoids matching its own policy source.
   /docs\.internal/i,
@@ -362,7 +363,14 @@ function publicSafeTextGuidance(label: string): string {
 
 function validatePublicSafeText(label: string, value: string): void {
   for (const pattern of INTERNAL_STATE_PRIVATE_TEXT_PATTERNS) {
-    const candidate = pattern === LOCAL_PATH_SHAPE ? maskHttpUrlPaths(value) : value;
+    // The local-path arms read the URL-masked text: an ordinary http(s) link
+    // may legitimately carry a /Users/ or /home/ segment, which is URL syntax
+    // rather than a home-directory reference. Publication-tier callers keep
+    // reading the raw value.
+    const candidate =
+      pattern === LOCAL_PATH_SHAPE || pattern === HOME_DIRECTORY_TEXT_PATTERN
+        ? maskHttpUrlPaths(value)
+        : value;
     if (pattern.test(candidate)) {
       throw new EffectRuntimeRequestError(
         `${label} contains a private-looking value; ${publicSafeTextGuidance(label)}`,

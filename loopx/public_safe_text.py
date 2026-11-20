@@ -680,7 +680,13 @@ def classify_private_text(
         return None
     local_path_value = mask_http_url_paths(value)
     for entry in _CATEGORIZED_PRIVATE_TEXT_PATTERNS:
-        if entry.category in categories and entry.pattern.search(value):
+        if entry.category not in categories:
+            continue
+        # A public URL may carry a ``/Users/`` segment; the local-path arms read
+        # the masked text so URL syntax cannot masquerade as a home-directory
+        # reference. Organization markers and credentials keep the raw value.
+        candidate = local_path_value if entry.category == CATEGORY_LOCAL_PATH else value
+        if entry.pattern.search(candidate):
             return PrivateTextMatch(entry.category, entry.reason, entry.pattern)
     for pattern, category, reason in _SHAPE_DETECTORS:
         candidate = local_path_value if category == CATEGORY_LOCAL_PATH else value

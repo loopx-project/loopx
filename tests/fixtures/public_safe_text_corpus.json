@@ -122,6 +122,12 @@
       "template": "metrics published at https://example.com/run-7/metrics.json",
       "shape": "remote_location_undecided",
       "note": "The internal-state tier does not decide URLs: the rule these four owners enforced before never rejected one either, and per-face URL policy is the caller-migration work still open in #5136."
+    },
+    {
+      "id": "ordinary_public_url_home_directory_segment",
+      "template": "docs live at https://docs.example.test./Users/alice",
+      "shape": "remote_location_undecided",
+      "note": "A home-directory name inside an http(s) URL path is URL syntax; only a file:// or path: reference is a local path."
     }
   ],
   "private_looking": [
