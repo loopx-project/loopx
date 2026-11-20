@@ -79,6 +79,7 @@ def _quota_renderer(
     # Renderers and compaction load only when a route prints a quota view;
     # native context delivery owns its own presentation.
     from ..presentation.renderers.quota_event_markdown import (
+        render_quota_guard_diagnostic_markdown,
         render_quota_monitor_poll_markdown,
         render_quota_slot_preview_markdown,
     )
@@ -93,7 +94,15 @@ def _quota_renderer(
 
     command = args.quota_command
     if command == "should-run":
-        return render_turn_context_markdown
+        if not failure:
+            return render_turn_context_markdown
+
+        def render_failed_guard(payload: dict[str, object]) -> str:
+            if payload.get("schema_version") == COMPLETE_TURN_DECISION_VERSION:
+                return render_turn_context_markdown(payload)
+            return render_quota_guard_diagnostic_markdown(payload)
+
+        return render_failed_guard
     return {
         "monitor-poll": render_quota_monitor_poll_markdown,
         "scheduler-ack": render_quota_scheduler_ack_markdown,
