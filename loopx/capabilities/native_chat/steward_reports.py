@@ -438,7 +438,8 @@ class StewardReports:
         _, window = self.current_window(request["actor"]["goal_id"].removeprefix("steward-agent-"))
         if not window or window["window_id"] != request["report_window_id"]:
             raise ValueError("the admitted original report window is unavailable")
-        reader = getattr(adapter.session, "read_tool_handler", None)
+        reader = (getattr(adapter.session, "read_tool_handler", None)
+            if hasattr(adapter, "session") else getattr(adapter, "_steward_report_reader", None))
         if reader is None or not authorization_scope_id:
             raise ValueError("the original scoped report reader is unavailable")
         session = self.controller.store.load_session(request["actor"]["session_id"])

@@ -43,7 +43,15 @@ LoopX 管家最初只有受限的规划会话：它可以读取 LoopX 提供的�
   planner 模式，不继承上一回合的工具配置。这是 provider 工具限制，不是 Codex 或操作
   系统 sandbox。强能力模式仍限于既有核验过的本人受众。受治理 Task 执行、工作区文件
   系统授权和原生受管理管家身份准备仍由既有 Codex owner 承接；选择 Antigravity 不扩展
-  这些契约。Argon 档位必须由本地账号提供，并与请求的思考深度一致。原始 cascade 丢失
+  这些契约。已注册的 Argon 与 Carbon 档位必须由本地账号提供，并与请求的思考深度
+  （`low`、`medium` 或 `high`）一致。模型发现读取相同的账号元数据，不创建 cascade；
+  目录不可用时明确报错，不用静态清单冒充可用模型。Antigravity 的默认模型仍为 Argon；
+  需要在本机为特定执行器优先指定其他已提供档位（例如 Carbon `gemini-4-carbon-high`）时，
+  可通过 `executor_model` 或 `steward_executor_machine_defaults_v1` 上可选的按执行器映射
+  `endpoint_models` 显式配置。配合有序的 `eligible_endpoints` 与 `codex`、`antigravity` 之间
+  的双向弹性故障转移，可在 Codex 耗尽时按可观测配额切换至配置的回退执行器（并在恢复后
+  切回），同时隔离模型专属的推理强度配置并在合格回退 Session 上保持原生管家 monitor 与报告
+  能力对齐。原始 cascade 丢失
   时续接失败，不静默创建替代会话。停止等待原生 cascade 回到 idle；超时或部分输出
   不代表成功完成。
   执行时，原生 `IDLE` 本身不代表完成：输入、工具与 planner 步骤之间也可能出现此状态。
@@ -106,6 +114,22 @@ profile 或权限状态。原生本人私聊在启动或复用宿主前重新核
 的 M1 私有 Owner 旅程，目标验收为 A1–A3/A12。它不实现 M2 collaboration request、M3
 outbox，也不把管家 session 字段当成工作、请求或送达权威。
 
+保存机器默认配置不会把既有管家移到另一执行器 endpoint。原私有对话的模型菜单提供
+**应用到此对话**，采用已保存的 preferred/pinned 执行器、模型与思考深度。预览不创建
+原生线程。应用要求 Session 空闲，没有活动或已预留的排队工作、注册 worker、停放的
+原生工作或答案复核路径。它先关闭旧空闲 transport、捕获完整可见历史，再准备所选宿主，
+不派发模型 Turn。如果只调整 Codex 内的模型或思考深度，且当前工作检查点可用，应用会
+沿用同一模型续接路径，核验后恢复原生线程，省去重新注入历史。检查点核验失败时，应用在
+关闭原 transport 之前停止。跨执行器迁移会在新的原生线程恢复完整可见历史。
+同一 Session 只保存宿主实际回报的模型与思考深度。来源绑定保持不变；Core 再次校验当前 owner、来源和资源授权，后续输入使用该 Session
+明确接受的 allocation，并保留原始原生执行器的沿革。
+
+Session store 在发布锁内再次核验原身份、选定绑定、已保存配置、队列与捕获的完整文本。
+来源改变、owner 撤权、新排队输入、返回消息或宿主设置未确认都会拒绝发布，并关闭未发布的
+transport。原历史与排队工作仍可恢复。响应丢失后先读取实际 Session；已经应用的 allocation
+无需再次准备。菜单显示实际执行器/模型回读；保存默认值、准备宿主、执行模型 Turn 和安装
+变更后的服务分别记录。其他会话、普通模型设置及 flexible 配额恢复沿用原有 owner。
+
 ### 实现与后继
 
 `43d362532` 引入机器模式。原生本人管家私聊在打开、续接和授权范围刷新时，将 Core
@@ -123,8 +147,9 @@ outbox，也不把管家 session 字段当成工作、请求或送达权威。
    `AGENTS.md` 不再包含只读限制。
 4. profile 改变会旋转上游 thread，但保留 LoopX Session 和可见历史。
 5. 不相关机器配置变化不会旋转 thread。
-6. 非 Codex endpoint 对 `trusted_owner` fail closed，并给出切换 endpoint 或恢复
-   `restricted` 的动作提示。
+6. Codex 与 Antigravity 支持已验证私有本人的 `trusted_owner` 模式，并保留各自原生权限和
+   审批边界。不支持的 endpoint 必须拒绝，并给出切换到受支持执行器或恢复 `restricted`
+   的动作提示。
 7. 桌面和移动 Dashboard 显示有效 profile；配置损坏时显示回退状态。
 8. 外部 audience 在没有既有 scoped grant 时继续 `read-only`，并显示真实降级状态。
 9. 已核验的原生本人管家私聊沿用实际机器策略，模式改变或服务重启保留 Session 与历史；

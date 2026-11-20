@@ -18,6 +18,7 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 import uuid
+from contextlib import AbstractContextManager, nullcontext
 from datetime import datetime
 
 from ...chat import (
@@ -39,6 +40,9 @@ ANTIGRAVITY_MODEL_PLACEHOLDERS: dict[str, str] = {
     "gemini-4-argon-high": "MODEL_PLACEHOLDER_M417",
     "gemini-4-argon-medium": "MODEL_PLACEHOLDER_M418",
     "gemini-4-argon-low": "MODEL_PLACEHOLDER_M419",
+    "gemini-4-carbon-high": "MODEL_PLACEHOLDER_M427",
+    "gemini-4-carbon-medium": "MODEL_PLACEHOLDER_M437",
+    "gemini-4-carbon-low": "MODEL_PLACEHOLDER_M438",
 }
 
 _SETTLED_STEP_STATUSES = {
@@ -64,12 +68,13 @@ def _step_allows_completed_turn(step: dict[str, Any], *, final: dict[str, Any]) 
 
 ANTIGRAVITY_MODEL_OPTIONS: tuple[dict[str, Any], ...] = tuple(
     {
-        "id": f"gemini-4-argon-{effort}",
-        "display_name": f"Gemini 4 Argon ({effort.title()})",
-        "is_default": effort == "high",
+        "id": f"gemini-4-{family}-{effort}",
+        "display_name": f"Gemini 4 {family.title()} ({effort.title()})",
+        "is_default": family == "argon" and effort == "high",
         "default_reasoning_effort": effort,
         "supported_reasoning_efforts": [{"reasoning_effort": effort}],
     }
+    for family in ("argon", "carbon")
     for effort in ("high", "medium", "low")
 )
 
@@ -251,7 +256,7 @@ def _rpc_post(
 
 def discover_antigravity_language_server(
     env: Mapping[str, str] | None = None,
-    *, deadline: float | None = None,
+    *, deadline: float | None = None, include_model_config: bool = False,
 ) -> dict[str, Any] | None:
     """Discover a running local endpoint without reusing an availability verdict.
 
@@ -269,7 +274,7 @@ def discover_antigravity_language_server(
             timeout = 2.5 if deadline is None else min(2.5, deadline - time.monotonic())
             if timeout <= 0:
                 return None
-            _rpc_post(
+            model_data = _rpc_post(
                 explicit_url,
                 explicit_token,
                 "GetCascadeModelConfigData",
@@ -281,6 +286,7 @@ def discover_antigravity_language_server(
                 "csrf_token": explicit_token,
                 "pid": None,
                 "source": "environment",
+                **({"model_config_data": model_data} if include_model_config else {}),
             }
         except (CodexChatAgentError, ValueError):
             return None
@@ -341,12 +347,13 @@ def discover_antigravity_language_server(
                 break
             url = f"http://127.0.0.1:{port}"
             try:
-                _rpc_post(url, token, "GetCascadeModelConfigData", {}, timeout=min(1.5, remaining))
+                model_data = _rpc_post(url, token, "GetCascadeModelConfigData", {}, timeout=min(1.5, remaining))
                 return {
                     "url": url,
                     "csrf_token": token,
                     "pid": pid,
                     "source": "process_discovery",
+                    **({"model_config_data": model_data} if include_model_config else {}),
                 }
             except CodexChatAgentError:
                 continue
@@ -395,22 +402,76 @@ def resolve_antigravity_model_placeholder(
                                   gate=None, error_code="unsupported_configuration")
     if not raw_model or raw_model in {"argon", "gemini-4-argon"}:
         canonical = f"gemini-4-argon-{effort or 'high'}"
+    elif raw_model in {"carbon", "gemini-4-carbon"}:
+        canonical = f"gemini-4-carbon-{effort or 'high'}"
     else:
         canonical = raw_model
     if (canonical not in ANTIGRAVITY_MODEL_PLACEHOLDERS
-            or effort and canonical != f"gemini-4-argon-{effort}"):
-        raise CodexChatAgentError("Choose a supported Argon model and its matching reasoning effort.",
+            or effort and canonical.rsplit("-", 1)[-1] != effort):
+        raise CodexChatAgentError("Choose a supported Antigravity model and its matching reasoning effort.",
                                   gate=None, error_code="unsupported_configuration")
     placeholder = ANTIGRAVITY_MODEL_PLACEHOLDERS[canonical]
     if dynamic_configs is not None:
         match = next((row for row in dynamic_configs
-                      if row.get("modelId") == canonical
-                      or (row.get("modelOrAlias") or {}).get("model") == placeholder), None)
+                      if isinstance(row.get("modelOrAlias") or {}, dict)
+                      and (row.get("modelId") == canonical
+                           or (not row.get("modelId")
+                               and (row.get("modelOrAlias") or {}).get("model") == placeholder))), None)
         if match is None:
-            raise CodexChatAgentError("The local Antigravity account did not offer this Argon model.",
+            raise CodexChatAgentError("The local Antigravity account did not offer this model.",
                                       gate=None, error_code="unsupported_configuration")
         placeholder = str((match.get("modelOrAlias") or {}).get("model") or placeholder)
     return canonical, placeholder
+
+
+def _discovered_model_configs(discovered: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Reuse verified metadata, or read it for an endpoint-only record."""
+    data = discovered.get("model_config_data")
+    if not isinstance(data, dict):
+        data = _rpc_post(discovered["url"], discovered["csrf_token"],
+                         "GetCascadeModelConfigData", {}, timeout=3.0)
+    raw = data.get("clientModelConfigs")
+    return [row for row in raw if isinstance(row, dict)] if isinstance(raw, list) else []
+
+
+def offered_antigravity_model_options(
+    *, discovered: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Read registered choices from the local account without opening a cascade."""
+    if discovered is None:
+        discovered = discover_antigravity_language_server(include_model_config=True)
+    if discovered is None:
+        raise CodexChatAgentError("Antigravity local language_server is not running or reachable",
+                                  gate=None, error_code="antigravity_unavailable")
+    configs = _discovered_model_configs(discovered)
+    options = []
+    for item in ANTIGRAVITY_MODEL_OPTIONS:
+        try:
+            resolve_antigravity_model_placeholder(item["id"], dynamic_configs=configs)
+        except CodexChatAgentError:
+            continue
+        options.append(item)
+    if not options:
+        raise CodexChatAgentError("The local Antigravity account did not offer a supported model. Retry model discovery.",
+                                  gate=None, error_code="unsupported_configuration")
+    return options
+
+
+def _matching_antigravity_model_config(rows: list[Any], model_id: str) -> list[dict[str, Any]]:
+    """Match clientModelConfigs entries by modelId or placeholder when LS omits modelId."""
+    expected_placeholder = ANTIGRAVITY_MODEL_PLACEHOLDERS.get(model_id)
+    return [
+        row for row in rows
+        if isinstance(row, dict) and (
+            row.get("modelId") == model_id
+            or (
+                not row.get("modelId")
+                and expected_placeholder is not None
+                and isinstance(row.get("modelOrAlias"), dict)
+                and row["modelOrAlias"].get("model") == expected_placeholder
+            )
+        )
+    ]
 
 
 def _native_user_input_text(step: dict[str, Any]) -> str | None:
@@ -661,7 +722,7 @@ class AntigravityAdapter:
             if not isinstance(account, str) or not account.strip():
                 return None
             rows = user["cascadeModelConfigData"]["clientModelConfigs"]
-            matching = [row for row in rows if row.get("modelId") == model_id]
+            matching = _matching_antigravity_model_config(rows, model_id)
             if len(matching) != 1:
                 return None
             quota = matching[0]["quotaInfo"]
@@ -678,6 +739,49 @@ class AntigravityAdapter:
                 "remaining_fraction": fraction, "reset_time": reset,
                 "execution_id": (latest[0].get("metadata") or {}).get("executionId"),
                 "observed_at": time.time(), "quota_exhausted": exhausted, "normal_completion": normal}
+        except (KeyError, TypeError, ValueError, AttributeError, CodexChatAgentError):
+            return None
+
+    @staticmethod
+    def endpoint_model_capacity(
+        *,
+        model_id: str,
+        env: Mapping[str, str] | None = None,
+        discovered: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Observe the live LS account's quota for one offered model without opening a cascade."""
+        try:
+            found = discovered or discover_antigravity_language_server(env=env, include_model_config=True)
+            if found is None:
+                return None
+            status = _rpc_post(str(found["url"]), str(found["csrf_token"]), "GetUserStatus", {}, timeout=5.0)
+            user = status["userStatus"]
+            account = user.get("email")
+            if not isinstance(account, str) or not account.strip():
+                return None
+            rows = (user.get("cascadeModelConfigData") or {}).get("clientModelConfigs")
+            if not isinstance(rows, list):
+                rows = (found.get("model_config_data") or {}).get("clientModelConfigs") or []
+            matching = _matching_antigravity_model_config(rows, model_id)
+            if len(matching) != 1:
+                return None
+            quota = matching[0]["quotaInfo"]
+            fraction, reset = quota.get("remainingFraction", 0), quota.get("resetTime")
+            if (type(fraction) not in (int, float) or not math.isfinite(fraction)
+                    or not 0 <= fraction <= 1 or not isinstance(reset, str)
+                    or datetime.fromisoformat(reset).tzinfo is None):
+                return None
+            exhausted = fraction <= 0
+            return {
+                "model_id": model_id,
+                "account_ref": hashlib.sha256(account.strip().casefold().encode()).hexdigest(),
+                "remaining_fraction": fraction,
+                "reset_time": reset,
+                "execution_id": f"endpoint-probe:{uuid.uuid4().hex}",
+                "observed_at": time.time(),
+                "quota_exhausted": exhausted,
+                "normal_completion": not exhausted,
+            }
         except (KeyError, TypeError, ValueError, AttributeError, CodexChatAgentError):
             return None
 
@@ -829,6 +933,8 @@ class AntigravityAdapter:
         self._send_lock = threading.Lock()
         self._active_turn_id: str | None = None
         self._cancel_acknowledged = False
+        self._launch_guard: Callable[[], AbstractContextManager[None]] | None = None
+        self._steward_report_reader: Callable[[str, Any], dict[str, Any]] | None = None
 
     @property
     def current_model_id(self) -> str:
@@ -861,7 +967,7 @@ class AntigravityAdapter:
         # Validate user intent before creating an upstream cascade.
         requested = dict(executor_model or {})
         resolve_antigravity_model_placeholder(requested.get("model"), requested.get("reasoning_effort"))
-        discovered = discover_antigravity_language_server(env=env)
+        discovered = discover_antigravity_language_server(env=env, include_model_config=True)
         if discovered is None:
             raise CodexChatAgentError(
                 "Antigravity local language_server is not running or reachable",
@@ -871,9 +977,7 @@ class AntigravityAdapter:
         ls_url = str(discovered["url"])
         csrf_token = str(discovered["csrf_token"])
 
-        model_data = _rpc_post(ls_url, csrf_token, "GetCascadeModelConfigData", {}, timeout=3.0)
-        raw_configs = model_data.get("clientModelConfigs")
-        dynamic_configs = [item for item in raw_configs if isinstance(item, dict)] if isinstance(raw_configs, list) else []
+        dynamic_configs = _discovered_model_configs(discovered)
 
         requested_model = (
             str(executor_model.get("model") or "").strip()
@@ -1073,15 +1177,16 @@ class AntigravityAdapter:
             **({"media": media} if media else {}),
         }
         with self._send_lock:
-            self._check_interrupted()
-            self._active_turn_id = turn_id
-            if event_sink is not None:
-                event_sink("turn.started", {"upstream_turn_id": turn_id, "threadId": self.cascade_id,
-                    "native_input": {"thread_id": self.cascade_id, "start_step_index": start_step_index,
-                                     "input_sha256": hashlib.sha256(full_prompt.encode()).hexdigest()}})
-            _rpc_post(self.ls_url, self.csrf_token, "SendUserCascadeMessage", send_payload, timeout=15.0)
-            self._system_primed = True
-            self._pending_history.clear()
+            with (self._launch_guard() if self._launch_guard is not None else nullcontext()):
+                self._check_interrupted()
+                self._active_turn_id = turn_id
+                if event_sink is not None:
+                    event_sink("turn.started", {"upstream_turn_id": turn_id, "threadId": self.cascade_id,
+                        "native_input": {"thread_id": self.cascade_id, "start_step_index": start_step_index,
+                                         "input_sha256": hashlib.sha256(full_prompt.encode()).hexdigest()}})
+                _rpc_post(self.ls_url, self.csrf_token, "SendUserCascadeMessage", send_payload, timeout=15.0)
+                self._system_primed = True
+                self._pending_history.clear()
 
         stream_filter = VisibleResponseStreamFilter()
         emitted_visible_delta = False

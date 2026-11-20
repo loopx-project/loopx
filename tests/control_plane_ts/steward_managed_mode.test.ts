@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {admitStewardManagedTurn, bindStewardManagedActor, planStewardManagedMode,
+import {admitStewardManagedTurn, bindStewardManagedActor, observeStewardNativeExecutor, planStewardManagedMode,
   planStewardMonitor, observeStewardPortfolio,
   observeStewardSignalMonitor} from "../../loopx/control_plane/collaboration/steward_managed_mode.ts";
 import {planConversationBinding} from "../../loopx/control_plane/collaboration/conversation_binding.ts";
@@ -324,4 +324,40 @@ test("custom steward signal monitors admit model-free probes while excluding loc
   assert.equal(unavailable.observation_incomplete, true);
   assert.equal(unavailable.material_change, false);
   assert.equal(unavailable.result_hash, first.result_hash);
+});
+
+test("observeStewardNativeExecutor admits qualified codex-to-antigravity fallback while rejecting unallocated antigravity", () => {
+  const {params} = fixture();
+  assert.equal(observeStewardNativeExecutor(params).execution_available, true);
+  const pureAntigravity = {
+    binding: {...params.binding, executor_endpoint_id: "antigravity"},
+    session: {...params.session, agent_id: "antigravity", executor_endpoint_id: "antigravity"},
+  };
+  assert.deepEqual(observeStewardNativeExecutor(pureAntigravity), {
+    execution_available: false,
+    execution_error_code: "unsupported_executor",
+  });
+  const qualifiedFallback = {
+    binding: params.binding,
+    session: {
+      ...params.session,
+      agent_id: "antigravity",
+      executor_endpoint_id: "antigravity",
+      upstream_context_history: [{agent_id: "codex", thread_id: params.session.upstream_thread_id}],
+      manager_executor_allocation: {
+        schema_version: "manager_executor_allocation_v0",
+        selection_policy: "flexible",
+        configured_endpoint: "codex",
+        executor_endpoint: "antigravity",
+        allocation_reason: "flexible_availability_fallback",
+        configuration_revision: "rev-1",
+        eligible_endpoints: ["codex", "antigravity"],
+      },
+    },
+  };
+  assert.equal(observeStewardNativeExecutor(qualifiedFallback).execution_available, true);
+  assert.equal(observeStewardNativeExecutor({
+    ...qualifiedFallback,
+    session: {...qualifiedFallback.session, upstream_context_history: []},
+  }).execution_available, false);
 });

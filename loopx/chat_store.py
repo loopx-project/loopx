@@ -523,7 +523,7 @@ class ChatSessionStore(ChatEventStreamMixin, ChatIngressStore):
                             and str(active.get("client_turn_id")).endswith(
                                 "-metadata-1" if metadata_review else "-review-1" if answer_review_admission else "-quota-1")))
                         or allocation["selection_policy"] != "flexible"
-                        or allocation["configured_endpoint"] != "antigravity"
+                        or allocation["configured_endpoint"] not in {"antigravity", "codex"}
                         or set(allocation["eligible_endpoints"]) != {"antigravity", "codex"}
                         or endpoint not in {"antigravity", "codex"} or endpoint == payload.get("agent_id")
                         or changes.get("executor_endpoint_id") != endpoint or allocation["executor_endpoint"] != endpoint

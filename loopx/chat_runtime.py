@@ -952,6 +952,10 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
                     if conversation_scope(session)["kind"] == "owner_goal"
                     else None
                 )
+            else:
+                from .capabilities.native_chat.antigravity_adapter import AntigravityAdapter
+                if isinstance(adapter, AntigravityAdapter):
+                    adapter._steward_report_reader = None
             native_command = None if current_turn.get("origin") == "peer" else parse_native_goal_command(message)
             if native_command is not None:
                 validate_goal_chat(session, attachments)
