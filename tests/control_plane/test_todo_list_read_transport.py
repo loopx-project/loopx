@@ -8,6 +8,7 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 from canonical_authority_fixture import (
@@ -15,9 +16,11 @@ from canonical_authority_fixture import (
     isolate_sqlite_runtime,
 )
 
+from loopx.chat.manager_details import read_manager_goal_details
 from loopx.control_plane.coordination.runtime_shadow import (
     build_todo_runtime_shadow_projection,
 )
+from loopx.control_plane.todos.list_readback import list_goal_todos
 
 REPO = Path(__file__).resolve().parents[2]
 GOAL = "read-transport"
@@ -210,10 +213,9 @@ def test_todo_help_does_not_load_mutation_owners():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-# Exact retained coordination_state_contract_v0 declaration; inspection only.
-# Keep it literal: deriving it from the current contract would let a removed
-# historical obligation disappear from this regression.
-_RELEASE_131_TODO_FIELDS = (
+# Synthetic retained declaration for the inspection path. This is not the
+# official v1.3.1 writer contract. Keep it independent of the decoder.
+_RETAINED_INSPECTION_TODO_FIELDS = (
     "index done text schema_version todo_id role status priority title archive_state "
     "source_section task_class action_kind task_domain capability_binding_ref "
     "task_repository pr_number pr_events continuation_policy removed_continuation_policy "
@@ -238,7 +240,7 @@ _RELEASE_131_TODO_FIELDS = (
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("record_kind", ["canonical", "domain"])
-def test_list_preserves_released_131_authority_without_migration(
+def test_list_preserves_retained_record_without_migration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, record_kind: str,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -257,7 +259,7 @@ def test_list_preserves_released_131_authority_without_migration(
             "schema_version": "todo_item_v0", "todo_id": "todo_archive",
             "role": "agent", "status": "done", "done": True,
             "text": "[P2] Preserve the historical acceptance receipt.",
-            "priority": "P2", "title": "Preserve the historical acceptance receipt.",
+            "priority": "P2", "title": "Archived acceptance review",
             "archive_state": "archive", "source_section": "Completed Work Archive", "index": 1,
             "completion_receipt_id": "synthetic-completion-receipt",
             "retirement_receipt_id": "synthetic-retirement-receipt",
@@ -268,7 +270,7 @@ def test_list_preserves_released_131_authority_without_migration(
             "schema_version": "todo_item_v0", "todo_id": "todo_pending",
             "role": "agent", "status": "open", "done": False,
             "text": "[P0] Preserve dependencies and paused review before executing.",
-            "priority": "P0", "title": "Preserve dependencies and paused review before executing.",
+            "priority": "P0", "title": "Pending dependency review",
             "archive_state": "active", "source_section": "Agent Todo", "index": 1,
             "task_class": "advancement_task", "claimed_by": "agent-a",
             "depends_on_todo_ids": ["todo_archive"],
@@ -276,7 +278,7 @@ def test_list_preserves_released_131_authority_without_migration(
             "note": "Reading this requirement does not authorize execution.",
         },
     ]
-    fields = list(_RELEASE_131_TODO_FIELDS)
+    fields = list(_RETAINED_INSPECTION_TODO_FIELDS)
     if record_kind == "domain":
         fields = [field for field in fields if field not in ("index", "source_section")]
         for record in records:
@@ -316,6 +318,24 @@ def test_list_preserves_released_131_authority_without_migration(
 
     original_authority = authority_contents()
     original_state = state.read_bytes()
+
+    def assert_read_only() -> None:
+        assert state.read_bytes() == original_state
+        assert authority_contents() == original_authority
+
+    def assert_same_source(listed: dict[str, Any]) -> None:
+        assert listed["ok"] and listed["read_only"] and listed["dry_run"]
+        assert listed["authority_read"]["source_authority"] == f"{provider}_v0"
+        assert listed["authority_read"]["provider_revision"] == initialized["provider_revision"]
+        assert listed["authority_read"]["legacy_fallback_used"] is False
+
+    def read_full(**options: Any) -> dict[str, Any]:
+        listed = list_goal_todos(registry_path=registry, goal_id=GOAL,
+                                 runtime_root_arg=str(runtime), full_text=True, **options)
+        assert_read_only()
+        assert_same_source(listed)
+        return listed
+
     try:
         for expected in records:
             result = subprocess.run(
@@ -325,18 +345,38 @@ def test_list_preserves_released_131_authority_without_migration(
                 cwd=REPO, capture_output=True, text=True, timeout=45,
                 env={**os.environ, "PYTHONPATH": str(REPO)}, check=False,
             )
-            # Check non-mutation even on refusal, before demanding compatibility.
-            assert state.read_bytes() == original_state
-            assert authority_contents() == original_authority
+            assert_read_only()
             assert result.returncode == 0, result.stdout + result.stderr
-            listed = json.loads(result.stdout)
-            assert listed["ok"] and listed["read_only"] and listed["dry_run"]
-            assert listed["todo_detail_projection"]["source_complete"] is True
-            assert listed["authority_read"]["source_authority"] == f"{provider}_v0"
-            assert listed["authority_read"]["provider_revision"] == initialized["provider_revision"]
-            assert listed["authority_read"]["legacy_fallback_used"] is False
-            for field, value in expected.items():
-                assert listed["todo"][field] == value, field
+            exact = json.loads(result.stdout)
+            assert_same_source(exact)
+            for listed in (exact, read_full(todo_id=expected["todo_id"])):
+                assert listed["todo_detail_projection"]["source_complete"] is True
+                for field, value in expected.items():
+                    assert listed["todo"][field] == value, field
+
+        listed = read_full(include_archived=True)
+        by_id = {row["todo_id"]: row for row in listed["todos"]}
+        assert set(by_id) == {"todo_archive", "todo_pending"}
+        for expected in records:
+            assert by_id[expected["todo_id"]]["title"] == expected["title"]
+            assert by_id[expected["todo_id"]]["text"] == expected["text"]
+        assert {row["todo_id"] for row in read_full()["todos"]} == {"todo_pending"}
+        assert read_full(agent_id="agent-b")["todos"] == []
+
+        # Query the actual manager API using text that appears only in the stored title.
+        found = read_manager_goal_details(registry, runtime, GOAL, owner_scope=True,
+                                          query="Pending dependency review")
+        assert_read_only()
+        assert found["status"] == "read"
+        assert [row["todo_id"] for row in found["todos"]] == ["todo_pending"]
+        assert found["todos"][0]["title"] == "Pending dependency review"
+        private_query = "does not authorize execution"
+        for owner, expected_ids in ((True, ["todo_pending"]), (False, [])):
+            result = read_manager_goal_details(registry, runtime, GOAL, owner_scope=owner,
+                                               query=private_query)
+            assert_read_only()
+            assert result["status"] == "read"
+            assert [row["todo_id"] for row in result["todos"]] == expected_ids
     finally:
         subprocess.run(
             [sys.executable, "-c",

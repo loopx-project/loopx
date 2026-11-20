@@ -300,30 +300,40 @@ async function todoListPayload(input: JsonObject, original: JsonObject[], fields
     }
   }
   let todos = projection.todos as JsonObject[];
-  // Restore only already-selected bodies. Scope, status, archive and limits
-  // remain the existing owner's decisions; all bodies share this source head.
-  if (fullText) {
-    const identity = (row: JsonObject) => JSON.stringify([row.todo_id, row.role, row.archive_state ?? "active"]);
-    const bodies = new Map<string, JsonObject | null>();
-    for (const row of original) {
-      const key = identity(row);
-      bodies.set(key, bodies.has(key) ? null : row);
-    }
-    for (const item of todos) {
-      const source = bodies.get(identity(item));
-      if (!source) throw new Error("Todo detail cannot recover an unambiguous full source body");
+  // Restore fields only after scope, status, archive and limits have selected
+  // the rows. Every restored field comes from the same validated source head.
+  const exact = Boolean(query.todo_id) && todos.length === 1;
+  if (fullText || exact) {
+    const retained = retainedTodoReadFields(requireJsonObject(canonical.todo_read_model, "Todo read model")) !== undefined;
+    const restore = (item: JsonObject, source: JsonObject) => {
       item.text = String(source.text ?? "");
-    }
-  } else if (query.todo_id && todos.length === 1) {
-    const item = todos[0]!;
-    const matching = original.filter(row => row.todo_id === query.todo_id && row.role === item.role &&
-      (row.archive_state ?? "active") === (item.archive_state ?? "active"));
-    if (matching.length !== 1) throw new Error("Todo detail cannot recover an unambiguous full source body");
-    item.text = String(matching[0]!.text ?? "");
-    if (retainedTodoReadFields(requireJsonObject(canonical.todo_read_model, "Todo read model")) !== undefined) {
-      // Exact inspection returns the preserved source fields, not today's
-      // lossy presentation vocabulary or a converted executable Todo.
-      Object.assign(item, matching[0]);
+      if (retained && exact) {
+        // Exact inspection delivers the preserved record with or without full_text.
+        Object.assign(item, source);
+      } else if (retained && typeof source.title === "string") {
+        // Full-text list consumers search the stored title. Keep the rest of
+        // the list's presentation and visibility rules intact.
+        item.title = source.title;
+      }
+    };
+    if (exact) {
+      const item = todos[0]!;
+      const matching = original.filter(row => row.todo_id === query.todo_id && row.role === item.role &&
+        (row.archive_state ?? "active") === (item.archive_state ?? "active"));
+      if (matching.length !== 1) throw new Error("Todo detail cannot recover an unambiguous full source body");
+      restore(item, matching[0]!);
+    } else {
+      const identity = (row: JsonObject) => JSON.stringify([row.todo_id, row.role, row.archive_state ?? "active"]);
+      const sources = new Map<string, JsonObject | null>();
+      for (const row of original) {
+        const key = identity(row);
+        sources.set(key, sources.has(key) ? null : row);
+      }
+      for (const item of todos) {
+        const source = sources.get(identity(item));
+        if (!source) throw new Error("Todo detail cannot recover an unambiguous full source body");
+        restore(item, source);
+      }
     }
   }
   const matchedCount = todos.length;
