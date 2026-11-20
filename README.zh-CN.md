@@ -122,7 +122,7 @@ LoopX 适合：
 - 需要 ownership、lease 和 handoff 的平级 agent team；
 - 需要把进展、阻塞和反馈入口清晰呈现给非技术用户的创作、研究或运营工作。
 
-危险权限、生产写入、公开发布和最终 ownership
+LoopX 不是生产自动化控制器。危险权限、生产写入、公开发布和最终 ownership
 仍由人类负责。
 
 </details>
@@ -351,7 +351,7 @@ loopx doctor
 Benchmark 之外，LoopX 也有可检查的长程项目证据。
 OpenViking 的公开贡献序列跨越
 **200+ 小时自然时长**，保留多轮 Todo、决策和证据更新。这里衡量的是项目经过的
-wall-clock 时间。点击原图查看
+wall-clock 时间，不是连续模型执行时长或无人值守的生产自治。点击原图查看
 公开安全的任务图、证据分支和跨轮决策；案例说明了来源与可复现边界。
 
 ### 开源 Issue Fix

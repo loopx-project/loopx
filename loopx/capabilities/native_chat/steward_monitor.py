@@ -12,7 +12,6 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-import re
 import subprocess
 import time
 from typing import Any
@@ -24,6 +23,7 @@ from ...control_plane.todos.list_readback import list_goal_todos
 from ...control_plane.runtime.time import now_utc
 from ...control_plane.goals.activation import goal_is_stopped
 from ...file_lock import exclusive_file_lock
+from ..issue_fix.repository_snapshot import _REPO_PATTERN
 from .github_pr_evidence import observe_github_repository_prs
 from .steward_commands import native_command
 from .steward_managed_mode import StewardManagedMode
@@ -31,7 +31,6 @@ from .steward_managed_mode import StewardManagedMode
 TARGET = "steward-portfolio-watch"
 FOLLOWUP_TARGET_PREFIX = "steward-monitor-followup:"
 _LOG = logging.getLogger(__name__)
-_GITHUB_REPO_URL = re.compile(r"^git:github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)$")
 
 
 class StewardObservationAdapter:
@@ -71,8 +70,11 @@ def advancement_turn_id(todo: dict[str, Any]) -> str:
 def _github_repo_slug(task_repository: Any) -> str | None:
     if not isinstance(task_repository, str):
         return None
-    match = _GITHUB_REPO_URL.fullmatch(task_repository.strip())
-    return match.group(1) if match else None
+    raw = task_repository.strip()
+    if not raw.startswith("git:github.com/"):
+        return None
+    slug = raw.removeprefix("git:github.com/")
+    return slug if _REPO_PATTERN.fullmatch(slug) else None
 
 
 def _observe_github_repository_prs(repo_slug: str) -> dict[str, Any]:
