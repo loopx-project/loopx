@@ -2246,3 +2246,6 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 
 .personal-source-run-history .source-strategy-document .personal-md { font-size: var(--text-lead); line-height: var(--leading-prose); }
 .personal-source-run-history .source-strategy-document dl dl > div { display: block; }
+
+.personal-source-run-history .source-strategy-document .personal-md p,
+.personal-source-run-history .source-strategy-document .personal-md li { font-size: inherit; line-height: inherit; color: var(--pw-text); }
