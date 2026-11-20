@@ -120,10 +120,14 @@ def test_original_capture_retains_the_emitted_poll_observation(
     elif wire == "envelope":
         from loopx.control_plane.quota.turn_envelope import build_turn_envelope
 
-        # Explicitly disabled context delivery keeps the bounded v0 wire view;
-        # the immutable capture may carry the complete v1 source instead.
-        assert emitted["schema_version"] == "loopx_turn_envelope_v0"
-        assert emitted != source
+        # Complete v1 turn envelope carriers preserve the full decision while
+        # build_turn_envelope projects the bounded v0 view with action signatures.
+        assert emitted["schema_version"] in {"loopx_turn_envelope_v0", "loopx_turn_envelope_v1"}
+        envelope = (
+            build_turn_envelope(emitted)
+            if emitted.get("schema_version") == "loopx_turn_envelope_v1"
+            else emitted
+        )
         # Replan readers bind the full observation, including this receipt.
         # Their hash changes without changing the selected work or debit.
         without_poll = deepcopy(source)
@@ -140,24 +144,47 @@ def test_original_capture_retains_the_emitted_poll_observation(
             without_poll, _ = _resign_contract(without_poll)
             assert_complete_turn_decision(without_poll)
         prior = build_turn_envelope(without_poll)
-        actual = emitted["action_signature"]
+        actual = envelope["action_signature"]
         for key in ("decision", "should_run", "effective_action"):
-            assert emitted[key] == prior[key]
-        assert emitted["writeback"]["settlement_identity"] == prior["writeback"]["settlement_identity"]
+            assert envelope[key] == prior[key]
+        assert envelope["writeback"]["settlement_identity"] == prior["writeback"]["settlement_identity"]
         assert actual["source_decision_hash"] != prior["action_signature"]["source_decision_hash"]
         assert actual == build_turn_envelope(source)["action_signature"]
-        review = subprocess.run(shlex.split(emitted["replan_action_packet"]["review"]),
+        review = subprocess.run(shlex.split(envelope["replan_action_packet"]["review"]),
                                 check=True, capture_output=True, text=True, timeout=90)
         assert json.loads(review.stdout)["source_hash"] == actual["source_decision_hash"]
-        reader = shlex.split(emitted["detail_ref"]["full_decision"])
+        reader = shlex.split((emitted.get("detail_ref") or envelope["detail_ref"])["full_decision"])
     else:
         reader = [sys.executable, "-m", "loopx.cli", "--format", "json", "quota", "context-read",
                   "--capture-file", str(capture / "decision.json"),
                   "--capture-sha256", hashlib.sha256(original).hexdigest()]
     if wire == "envelope":
-        recovered = json.loads(subprocess.run(
+        def read_paged_json(page: dict) -> dict:
+            digest = page["sha256"]
+            raw = bytearray()
+            while True:
+                assert page["ok"] and page["sha256"] == digest and page["offset"] == len(raw)
+                raw.extend(page["content"].encode())
+                if page["eof"]:
+                    assert len(raw) == page["total_bytes"]
+                    return json.loads(raw)
+                page = json.loads(subprocess.run(
+                    shlex.split(page["next_command"]),
+                    check=True, capture_output=True, text=True, timeout=90,
+                ).stdout)
+
+        first = json.loads(subprocess.run(
             reader, check=True, capture_output=True, text=True, timeout=90,
         ).stdout)
+        if first.get("schema_version") == "context_capture_page_v1":
+            recovered = read_paged_json(first)
+        elif first.get("schema_version") == "context_capture_navigation_v1":
+            recovered = read_paged_json(json.loads(subprocess.run(
+                shlex.split(first["recovery"]["command"]),
+                check=True, capture_output=True, text=True, timeout=90,
+            ).stdout))
+        else:
+            recovered = first
         assert recovered == source, "The emitted reader must recover the complete original source"
         if source.get("schema_version") == "loopx_turn_envelope_v1":
             assert_complete_turn_decision(recovered)
@@ -185,7 +212,7 @@ def test_failed_capture_discloses_the_already_recorded_poll(
     from unittest.mock import patch
 
     from loopx.cli import main
-    from loopx.cli_commands import quota, quota_capture
+    from loopx.cli_commands import quota_capture, quota_result_delivery
 
     runtime, registry, count, _ = _worker_fixture(tmp_path, monkeypatch, provider)
     original_capture = quota_capture.capture_decision
@@ -195,7 +222,8 @@ def test_failed_capture_discloses_the_already_recorded_poll(
         with patch.object(quota_capture.os, "replace", side_effect=OSError("synthetic capture outage")):
             original_capture(directory, payload, args=args, native_context=native_context)
 
-    monkeypatch.setattr(quota, "capture_decision", failed_publication)
+    monkeypatch.setattr(quota_capture, "capture_decision", failed_publication)
+    monkeypatch.setattr(quota_result_delivery, "capture_decision", failed_publication)
     monkeypatch.chdir(tmp_path / "project")
     capture = tmp_path / "failed-capture"
     code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",

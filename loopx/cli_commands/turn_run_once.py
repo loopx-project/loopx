@@ -278,6 +278,20 @@ def execute_turn_run_once(
             # Do not overwrite task context before refresh can reject a result.
             progress_observation = result.get("progress_observation")
             vision, explore_result = split_candidate_vision(result)
+            recovery_turn_instance_id = (
+                settlement_identity.turn_instance_id
+                if (
+                    bool(args.retry_failed_turn)
+                    and not dry_run
+                    and completion_turn_key == settlement_identity.turn_instance_id
+                )
+                else None
+            )
+            refresh_task_lease_proof = (
+                None
+                if completion_todo_id is not None and (recovery_turn_instance_id is None or rebound_lease_active)
+                else task_lease_proof
+            )
             return refresh_state_run(
                 registry_path=registry_path,
                 runtime_root_override=runtime_root_arg,
@@ -313,7 +327,9 @@ def execute_turn_run_once(
                 dry_run=dry_run,
                 sync_global=not bool(args.no_global_sync),
                 goal_ref=goal_ref,
-                task_lease_proof=None if completion_todo_id is not None else task_lease_proof,
+                task_lease_proof=refresh_task_lease_proof,
+                allow_same_generation_lease_renewal=refresh_task_lease_proof is not None,
+                validation_recovery_turn_instance_id=recovery_turn_instance_id,
             )
         # A Todo-less native governance Turn has no business artifact/argv.
         # Its independent validator is the canonical semantic writeback preview,

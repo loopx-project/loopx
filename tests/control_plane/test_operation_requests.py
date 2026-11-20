@@ -220,10 +220,13 @@ def test_current_goal_lifetime_is_checked_before_frozen_request_io(tmp_path, dri
         session_id="owned-dsh", profile_digest="d" * 64, model="fixture-model",
         reasoning_effort="high", host="dsh", frozen_request=bound, goal_admission=admission)
     assert handler("loopx_operation", {"action": "context"}, native)["ok"]
+    from loopx.control_plane.goals.activation import build_goal_activation
     with source_session_registry_transaction(registry, operation="fixture_revoke") as txn:
         value = txn.payload_copy()
         if drift == "stopped":
-            value["goals"][0]["status"] = "stopped"
+            value["goals"][0]["activation"] = build_goal_activation(
+                state="stopped", updated_at="2026-01-01T00:00:01Z", reason="fixture stopped",
+            )
         else:
             value["goals"][0]["goal_instance_id"] = INSTANCE_B
         txn.commit(value)
