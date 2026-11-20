@@ -167,7 +167,7 @@ class ChatTodoActionMixin:
                     authority_reason="owner-confirmed typed Chat action",
                     update_operation_id=f"chat-assign:{proposal_id}",
                     update_expected_provider_revision=revision,
-                    update_expected_registry_sha256=binding["registry_sha256"],
+                    update_expected_registry_sha256=current_source.registry_sha256,
                     routing_registry_witness=current_source.routing_registry_witness,
                     dry_run=False,
                 )
@@ -445,7 +445,7 @@ class ChatTodoActionMixin:
                     **current_source.writer_scope(), **claim_args,
                     claim_operation_id=task_start_claim_operation_id(proposal_id), dry_run=False,
                     claim_expected_provider_revision=revision,
-                    claim_expected_registry_sha256=binding["registry_sha256"],
+                    claim_expected_registry_sha256=current_source.registry_sha256,
                     routing_registry_witness=current_source.routing_registry_witness,
                 )
 

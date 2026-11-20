@@ -8,7 +8,8 @@ import pytest
 
 import loopx.chat as chat
 from canonical_authority_fixture import (
-    initialize_canonical_authority, isolate_sqlite_runtime, promoted_create_fixture,
+    change_unrelated_goal_title, ensure_unrelated_goal_in_registry, initialize_canonical_authority,
+    isolate_sqlite_runtime, promoted_create_fixture,
 )
 from loopx.chat_action_store import ChatActionStore
 from loopx.chat_actions import ChatActionService
@@ -262,9 +263,10 @@ def test_changed_intent_cannot_apply_another_preview(tmp_path, monkeypatch, prov
 @pytest.mark.parametrize("change", [
     "same", "directory", "runtime", "registration", "store", "unrelated_todo",
     "edited_todo", "lost_assignment_checkpoint", "directory_during_assignment",
+    "unrelated_goal",
     "legacy_same", "legacy_runtime", "legacy_registration", "legacy_store",
     "legacy_unrelated_todo", "legacy_edited_todo", "legacy_saved_assignment",
-    "legacy_wrong_assignment", "legacy_assigned_store",
+    "legacy_unrelated_goal", "legacy_wrong_assignment", "legacy_assigned_store",
     "legacy_lost_assignment_checkpoint", "legacy_independent_reassignment", "legacy_creation_only_note",
 ])
 def test_interrupted_assignment_keeps_the_created_todo_source(tmp_path, monkeypatch, provider, change):
@@ -281,6 +283,8 @@ def test_interrupted_assignment_keeps_the_created_todo_source(tmp_path, monkeypa
     original_registry, original_root, _ = promoted_create_fixture(
         tmp_path / "original", provider=provider, registered_agents=["agent-a", "agent-b"],
     )
+    if change == "unrelated_goal":
+        ensure_unrelated_goal_in_registry(original_registry, goal_id)
     original_registration = original_registry.read_text()
     replacement_root = tmp_path / "replacement" / "runtime"
     replacement_state = replacement_root.parent / "state.md"
@@ -371,6 +375,8 @@ def test_interrupted_assignment_keeps_the_created_todo_source(tmp_path, monkeypa
         path = f"/api/actions/{proposal_id}/apply"
         created = store.load(proposal_id)["checkpoint"]["steps"]["todo_created"]
         todo_id = created["todo_id"]
+        if change == "unrelated_goal":
+            change_unrelated_goal_title(original_registry)
         original = read(original_root)
         original_todo = next(row for row in original["todos"] if row["todo_id"] == todo_id)
         expected_assignee = "agent-b" if change == "independent_reassignment" else ("agent-a" if legacy_assigned else None)

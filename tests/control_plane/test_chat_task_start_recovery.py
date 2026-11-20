@@ -18,7 +18,9 @@ from loopx.chat_runtime import ChatRuntimeController
 from loopx.chat_store import ChatSessionStore
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.todos.mutation_api import add_goal_todo, update_goal_todo
-from tests.control_plane.canonical_authority_fixture import promoted_create_fixture
+from tests.control_plane.canonical_authority_fixture import (
+    change_unrelated_goal_title, ensure_unrelated_goal_in_registry, promoted_create_fixture,
+)
 from test_goal_create_completion import preview_goal
 from test_new_goal_storage_defaults import app, environment  # noqa: F401
 
@@ -211,6 +213,57 @@ def test_task_start_recovers_after_unrelated_todo_write(task_start, monkeypatch)
     }
     assert post(path, {})[1]["proposal"]["receipt"] == receipt
     assert _snapshot(runtime) == final
+    calls = [json.loads(line)["method"] for line in capture.read_text().splitlines()]
+    assert calls.count("turn/start") == 1
+
+
+@pytest.mark.parametrize("interruption", ["queued", "todo_created"])
+def test_task_start_recovers_after_unrelated_goal_title_edit(task_start, monkeypatch, interruption):
+    actions, post, chat, controller, reopen, runtime, capture, proposal_id = task_start
+    unrelated_goal_id = ensure_unrelated_goal_in_registry(controller.registry_path, "report")
+    path = f"/api/actions/{proposal_id}/apply"
+    created = None
+    original_receipt = None
+
+    if interruption == "queued":
+        monkeypatch.setattr(controller, "_start_accepted_turn_worker", lambda **kwargs: True)
+        code, accepted = post(path, {})
+        assert code == 202 and accepted["proposal"]["status"] == "applied", accepted
+        original_receipt = accepted["proposal"]["receipt"]
+        original_ids = original_receipt["resource_ids"]
+        assert chat.load_turn(original_ids["session_id"], original_ids["turn_id"])["status"] == "queued"
+    else:
+        save = actions.save_checkpoint
+
+        def interrupt(proposal_id, *, step, receipt):
+            saved = save(proposal_id, step=step, receipt=receipt)
+            if step == "todo_created":
+                raise OSError("Interrupted before the managed claim")
+            return saved
+
+        with monkeypatch.context() as fault:
+            fault.setattr(actions, "save_checkpoint", interrupt)
+            code, failed = post(path, {})
+        assert code == 424, failed
+        created = actions.load(proposal_id)["checkpoint"]["steps"]["todo_created"]
+
+    change_unrelated_goal_title(controller.registry_path, unrelated_goal_id)
+    chat, controller = reopen()
+    code, recovered = post(path, {})
+    assert code == 202, recovered
+    receipt = recovered["proposal"]["receipt"]
+    ids = receipt["resource_ids"]
+    if created is not None:
+        todo_id = created["todo_id"]
+        assert ids["todo_id"] == todo_id and receipt["canonical_receipt"] == created["canonical_receipt"]
+    else:
+        assert receipt == original_receipt
+        assert ids["session_id"] == original_ids["session_id"]
+        assert ids["turn_id"] == original_ids["turn_id"]
+    assert controller.wait_for_turn(
+        session_id=ids["session_id"], turn_id=ids["turn_id"], timeout_sec=10,
+    )["status"] == "completed"
+    assert post(path, {})[1]["proposal"]["receipt"] == receipt
     calls = [json.loads(line)["method"] for line in capture.read_text().splitlines()]
     assert calls.count("turn/start") == 1
 
