@@ -661,11 +661,13 @@ def test_cli_current_goal_and_action_precede_complete_scoped_preferences(tmp_pat
 
 @pytest.mark.parametrize("warm", [False, True])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize(("scope_count", "page_budget", "checkpoint_count"), [
-    (165, 12000, 0), (290, 12000, 0), (165, 16000, 0), (290, 12000, 30),
+@pytest.mark.parametrize(("scope_count", "page_budget", "checkpoint_count", "requested_count"), [
+    (165, 12000, 0, 0), (290, 12000, 0, 0), (165, 16000, 0, 0), (290, 12000, 30, 0),
+    pytest.param(290, 12000, 0, 355, id="large-goal-and-todo-scopes"),
+    pytest.param(290, 12000, 30, 355, id="large-scopes-with-approvals"),
 ])
 def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
-    tmp_path, monkeypatch, provider, warm, scope_count, page_budget, checkpoint_count,
+    tmp_path, monkeypatch, provider, warm, scope_count, page_budget, checkpoint_count, requested_count,
 ):
     from test_codex_context_lifecycle import deliver, setup
     from test_quota_settlement_cli import (
@@ -683,6 +685,14 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
     state.write_text(state.read_text().replace("## Next Action", narrative + "\n\n## Next Action", 1))
     configuration = json.loads(registry.read_text())
     scopes = [f"docs/areas/{index:03d}/fixture-entrypoints/public/**" for index in range(scope_count)]
+    requested_scopes = [
+        f"{scopes[index % scope_count][:-2]}section-{index:03d}/**" for index in range(requested_count)
+    ]
+    if requested_scopes:
+        state.write_text(state.read_text().replace(
+            "required_capabilities=shell%2Cfilesystem_read -->",
+            f"required_capabilities=shell%2Cfilesystem_read required_write_scopes={','.join(requested_scopes)} -->",
+        ))
     if scope_count == 165:
         assert len(json.dumps(scopes, separators=(",", ":")).encode()) < 8192
     coordination = configuration["goals"][0]["coordination"]
@@ -751,23 +761,31 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
         rows = json.loads(Path(prior_ref["path"]).read_bytes())["interaction_contract"]["agent_channel"]["work_context"]["sources"]
         index = next(i for i, source in enumerate(rows) if source["source"] == "goal_state")
         body_pointer = f"/interaction_contract/agent_channel/work_context/sources/{index}/content/text"
-        prior_pages, prior_facts = read(prior["recovery"]["command"] + " --select " + body_pointer)
+        prior_read = prior["recovery"]["command"] + " --select " + body_pointer
+        if requested_scopes:
+            prior_read += " --select /goal_boundary/write_scope"
+        prior_pages, prior_facts = read(prior_read)
         assert narrative in prior_facts[body_pointer]
+        if requested_scopes:
+            assert prior_facts["/goal_boundary/write_scope"] == scopes
         deliver(journal, event, prior_pages)
         cli("refresh-state", *binding, "--turn-instance-id", "wide-prior", "--classification", "fixture_verified",
             "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
             "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks")
         cli("quota", "spend-slot", *binding, "--turn-instance-id", "wide-prior",
             "--slots", "1", "--source", "heartbeat", "--execute")
-        scopes = [*scopes[:-1], "docs/areas/current-fixture-scope/**"]
-        configuration["goals"][0]["coordination"]["write_scope"] = scopes
-        registry.write_text(json.dumps(configuration))
+        if not requested_scopes:
+            scopes = [*scopes[:-1], "docs/areas/current-fixture-scope/**"]
+            configuration["goals"][0]["coordination"]["write_scope"] = scopes
+            registry.write_text(json.dumps(configuration))
 
     view = capture("wide-ready")
     _, source_ref = read_context_read_reference(view["recovery"]["reference_file"])
     path = Path(source_ref["path"])
     raw = path.read_bytes()
     source = json.loads(raw)
+    if requested_scopes:
+        assert source["selected_todo"]["required_write_scopes"] == requested_scopes
     pages, opening = read(view["first_read_command"])
     if page_budget == 16000:
         # A paged body is not itself a reason to add a second reader. The
@@ -793,7 +811,12 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
     assert opening["/interaction_contract/cli_channel/execution_preparation/state"] == "ready"
     assert opening["/goal_boundary/requires_parent_approval"] == ["publish"]
     assert opening["/goal_boundary/stop_condition"] == source["goal_boundary"]["stop_condition"]
+    required_reads = "/interaction_contract/agent_channel/required_reads"
+    assert opening[required_reads] == source["interaction_contract"]["agent_channel"]["required_reads"]
     assert "/goal_boundary/write_scope" not in opening
+    if requested_scopes:
+        assert "/selected_todo/required_write_scopes" not in opening
+        assert opening["/selected_todo/text"] == source["selected_todo"]["text"]
     authority = "/goal_boundary/checkpointed_boundary_authority"
     if checkpoint_count:
         assert opening[authority + "/active_count"] == checkpoint_count // 2
@@ -804,7 +827,11 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
         deliver(journal, event, pages)
 
     pages, remaining = read(view["remaining_read_command"])
-    assert len(pages) > 1 and remaining["/goal_boundary/write_scope"] == scopes
+    assert len(pages) > 1
+    if requested_scopes:
+        assert remaining["/selected_todo/required_write_scopes"] == requested_scopes
+    if not (warm and requested_scopes):
+        assert remaining["/goal_boundary/write_scope"] == scopes
     if checkpoint_count:
         entries = source["goal_boundary"]["checkpointed_boundary_authority"]["entries"]
         assert len(entries) == checkpoint_count
@@ -818,9 +845,14 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
             if not isinstance(value, (dict, list)) or not value}
     assert not opening.keys() & remaining.keys()
     if warm:
-        assert body_pointer in pages[0]["previously_delivered_fields"] and body_pointer not in remaining
-        assert "/goal_boundary/write_scope" not in pages[0]["previously_delivered_fields"]
-        assert leaves(opening | remaining) == {key: value for key, value in leaves(ordinary).items() if key != body_pointer}
+        expected_reuse = {body_pointer}
+        if requested_scopes:
+            expected_reuse.add("/goal_boundary/write_scope")
+        assert set(pages[0]["previously_delivered_fields"]) == expected_reuse
+        assert leaves(opening | remaining) == {
+            key: value for key, value in leaves(ordinary).items()
+            if not any(key == reused or key.startswith(reused + "/") for reused in expected_reuse)
+        }
         deliver(journal, event, pages)
         assert "/goal_boundary/write_scope" in codex_context._state(journal)["consumed_pointers"]
         codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostCompact"})
@@ -828,6 +860,7 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
         assert "previously_delivered_fields" not in recovery_pages[0]
         assert not opening.keys() & restored.keys()
         assert leaves(opening | restored) == leaves(ordinary)
+        assert restored["/goal_boundary/write_scope"] == scopes
     else:
         assert leaves(opening | remaining) == leaves(ordinary)
     assert path.read_bytes() == raw and hashlib.sha256(raw).hexdigest() == source_ref["sha256"]
