@@ -434,3 +434,43 @@ test("zero-effect worker exit, storage I/O, and runtime unavailability monitors 
     }
   }
 });
+
+test("chained post-context transient watch carriers recover only after cooldown while scope and identity refusals remain one-shot", () => {
+  const {params, goal} = fixture();
+  const actor = bindStewardManagedActor({...params, goal});
+  const baseRequest = {operation: "native_turn", host: "codex-app-server", actor,
+    work_kind: "monitor", turn_instance_id: "monitor.chained", todo_id: "todo_chained_watch", validation_command: null,
+    monitor_deadline: "2026-11-20T07:45:00Z", monitor_lease_version: 0};
+  const completedAt = "2026-11-20T07:45:00Z";
+  const completedSec = Date.parse(completedAt) / 1000;
+  const monitor = {todo_id: "todo_chained_watch", task_class: "continuous_monitor",
+    target_key: "steward-portfolio-watch", watch_only: true, claimed_by: "steward", status: "open",
+    next_due_at: baseRequest.monitor_deadline};
+  const carrier = {turn_id: "6".repeat(32), session_id: params.session.session_id,
+    status: "failed", error_code: "runtime_unavailable",
+    error: "The Agent runtime could not be prepared.",
+    origin: "native_loopx", loopx_execution: true, upstream_turn_id: null, response: null,
+    delta_count: 0, completed_at: completedAt,
+    loopx_request: {...baseRequest, monitor_restart_recovery: {original_turn_id: "5".repeat(32)}}};
+  const basis = {original: carrier, contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
+    phases: [{phase: "manager_context"}],
+    event_kinds: ["turn.queued", "agent.phase", "manager.context", "turn.failed"],
+    poll_absent: true, old_worker_excluded: true, lease_available: true, observed_at: completedSec + 300};
+  const input = {...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor},
+    request: {...baseRequest, monitor_restart_recovery: {original_turn_id: carrier.turn_id}},
+    monitor_todo: monitor, monitor_restart_basis: basis};
+  assert.equal(admitStewardManagedTurn(input).observation_only, true);
+
+  for (const badBasis of [
+    {observed_at: completedSec + 299},
+    {observed_at: undefined},
+    {original: {...carrier, completed_at: undefined}},
+    {original: {...carrier, error_code: "runtime_error", error: "the portfolio observation omitted authorized Goals",
+      contexts: [{schema_version: "manager_turn_context_v1", goals: [], warnings: ["external_authorization_changed"],
+        coverage: {discovered: null, verified: 0, complete: false}}]}, observed_at: completedSec + 600},
+    {original: {...carrier, error_code: "runtime_error", error: "the selected App identity could not be verified"},
+      contexts: [], event_kinds: ["turn.queued", "agent.phase", "turn.failed"], observed_at: completedSec + 600},
+  ]) {
+    assert.throws(() => admitStewardManagedTurn({...input, monitor_restart_basis: {...basis, ...badBasis}}));
+  }
+});

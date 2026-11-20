@@ -9,10 +9,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager, ExitStack, nullcontext
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
 import re
+import time
 from typing import Any
 
 from ...control_plane.goals.activation import goal_is_stopped
@@ -20,11 +22,33 @@ from ...control_plane.goals.first_party_host_admission import FirstPartyHostRunt
 from ...file_lock import exclusive_file_lock
 from .steward_managed_mode import ManagedSessionTurn, ManagedTaskValidationUnavailable, StewardManagedMode
 
+MONITOR_RECOVERY_RETRY_COOLDOWN_SECONDS = 300
+_WORKER_EXITED_ERROR = (
+    "The LoopX Chat execution worker exited before this turn finished. "
+    "Your conversation is saved; execution may have occurred. This turn was not retried automatically."
+)
+_POST_CONTEXT_WATCH_ERRORS = frozenset({
+    "steward monitor external signal source temporarily unavailable",
+    "disk I/O error",
+    _WORKER_EXITED_ERROR,
+})
 _USER_ACTION_DEDUPE_KEY = re.compile(r"^[a-z0-9][a-z0-9._:@/-]{0,119}$")
 _REPORT_VALIDATOR_PREFIX = (
     "from pathlib import Path; from loopx.capabilities.periodic_report.private_generation import validate_private_generation; "
     "validate_private_generation(Path("
 )
+
+
+def _iso_timestamp_seconds(value: Any) -> float | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
 
 
 def _same_report_validator_command(frozen_cmd: Any, request_cmd: Any) -> bool:
@@ -209,18 +233,27 @@ class StewardTurnHost:
                 "event_kinds": [row["kind"] for row in events], "poll_absent": not present,
                 "contexts": [row["payload"] for row in events if row["kind"] == "manager.context"],
                 "phases": [row["payload"] for row in events if row["kind"] == "agent.phase"],
-                "old_worker_excluded": True, "lease_available": available}}
+                "old_worker_excluded": True, "lease_available": available,
+                "observed_at": time.time()}}
 
     @staticmethod
-    def monitor_restart_request(original: Mapping[str, Any]) -> dict[str, Any] | None:
+    def monitor_restart_request(original: Mapping[str, Any], *, now: float | None = None) -> dict[str, Any] | None:
         """Prepare correlation only; current typed admission decides recovery."""
         prior = original.get("loopx_request") or {}
         error = original.get("error_code")
         if (original.get("status") != "failed"
                 or error not in {"server_restarted", "runtime_error", "runtime_unavailable"}
-                or prior.get("work_kind") != "monitor"
-                or (prior.get("monitor_restart_recovery") is not None and error != "server_restarted")):
+                or prior.get("work_kind") != "monitor"):
             return None
+        if prior.get("monitor_restart_recovery") is not None and error != "server_restarted":
+            post_context_error = error == "runtime_unavailable" or (
+                error == "runtime_error" and original.get("error") in _POST_CONTEXT_WATCH_ERRORS
+            )
+            completed_ts = _iso_timestamp_seconds(original.get("completed_at"))
+            current_ts = time.time() if now is None else now
+            if (not post_context_error or completed_ts is None
+                    or current_ts - completed_ts < MONITOR_RECOVERY_RETRY_COOLDOWN_SECONDS):
+                return None
         return {**prior, "monitor_restart_recovery": {"original_turn_id": original["turn_id"]}}
 
     def monitor_restart_carrier(self, original: dict[str, Any], client_id: str) -> dict[str, Any] | None:
@@ -248,7 +281,6 @@ class StewardTurnHost:
         from ...control_plane.turn_driver import inspect_loopx_turn_journal
         from ..periodic_report.private_generation import attempt_directory
         from .steward_reports import report_service
-        import time
         actor = request["actor"]
         original = self.store.load_turn(actor["session_id"], recovery["original_turn_id"])
         result = ((original or {}).get("response") or {}).get("native_loopx") or {}
@@ -615,6 +647,8 @@ class StewardTurnHost:
                     return {"turn": existing, "quota_probe": {"original": existing, "binding": binding}}
                 quota_request = quota_observation["request"]
                 if quota_request is not None:
+                    if _same_report_validator_command(quota_request.get("validation_command"), request.get("validation_command")):
+                        quota_request = {**quota_request, "validation_command": request["validation_command"]}
                     request = quota_request
                     client_id = native_steward_client_id(actor, request["turn_instance_id"])
                     existing = None

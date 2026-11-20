@@ -18,11 +18,42 @@ import {projectTurnBoundary, turnPlanWorkSource} from "../quota/turn_envelope.ts
 import {projectGoalCreationExecutionRequest} from "../goals/creation_execution.ts";
 
 /** A stopped observation may get a new Chat carrier for the same native
- * identity. After a recovery starts, only another proven process restart can
- * continue it. The host reads the stopped worker lock, journals and native poll
- * receipts. Normal admission still checks ownership, deadline, permissions and user work. */
+ * identity. After a recovery starts, only another proven process restart or a
+ * cooldown-bounded pre-poll transient failure can continue it. The host reads
+ * the stopped worker lock, journals and native poll receipts. Normal admission
+ * still checks ownership, deadline, permissions and user work. */
 const WORKER_EXITED_ERROR =
   "The LoopX Chat execution worker exited before this turn finished. Your conversation is saved; execution may have occurred. This turn was not retried automatically.";
+const MONITOR_RECOVERY_RETRY_COOLDOWN_MS = 300_000;
+const REPORT_VALIDATOR_PREFIX =
+  "from pathlib import Path; from loopx.capabilities.periodic_report.private_generation import validate_private_generation; "
+  + "validate_private_generation(Path(";
+
+function sameReportValidatorCommand(frozenCmd: unknown, requestCmd: unknown): boolean {
+  return Array.isArray(frozenCmd) && Array.isArray(requestCmd)
+    && frozenCmd.length === 3 && requestCmd.length === 3
+    && frozenCmd.every(part => typeof part === "string" && part.length > 0 && !part.includes("\0"))
+    && requestCmd.every(part => typeof part === "string" && part.length > 0 && !part.includes("\0"))
+    && frozenCmd[1] === "-c" && requestCmd[1] === "-c"
+    && frozenCmd[2] === requestCmd[2]
+    && frozenCmd[2].startsWith(REPORT_VALIDATOR_PREFIX)
+    && frozenCmd[2].endsWith("))");
+}
+
+function sameReportRequestField(key: string, priorValue: unknown, requestValue: unknown): boolean {
+  if (key === "validation_command" && sameReportValidatorCommand(priorValue, requestValue)) {
+    return true;
+  }
+  return JSON.stringify(priorValue) === JSON.stringify(requestValue);
+}
+
+function sameReportRequest(priorValue: unknown, request: JsonObject): boolean {
+  const prior = jsonObject(priorValue);
+  if (!prior) return false;
+  const keys = Object.keys(request);
+  return Object.keys(prior).length === keys.length
+    && keys.every(key => Object.hasOwn(prior, key) && sameReportRequestField(key, prior[key], request[key]));
+}
 
 function hasSingleManagerContextEvidence(basis: JsonObject, prior: JsonObject, events: unknown): boolean {
   if (requireJsonObject(prior.actor, "original watch actor").schema_version !== "loopx_steward_managed_actor_v0"
@@ -80,8 +111,9 @@ function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, se
     && Array.isArray(events) && events.filter(kind => kind === "agent.phase").length === 1;
   // Post-context monitor failures (external signal outage, daemon worker exit,
   // storage I/O error, or runtime unavailability) before any poll receipt or
-  // upstream model turn may recover at most once when strict single-context
-  // and zero-effect journal proofs hold; pre-context unknown worker launches remain closed.
+  // upstream model turn may recover once immediately and retry only after a
+  // bounded cooldown when strict single-context and zero-effect journal proofs
+  // hold; pre-context unknown worker launches remain closed.
   const postContextWatchRecoverable = hasSingleManagerContextEvidence(basis, prior, events) && (
     original.error_code === "runtime_unavailable"
     || original.error_code === "runtime_error" && (
@@ -90,6 +122,12 @@ function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, se
       || original.error === WORKER_EXITED_ERROR
     )
   );
+  const completedAtMs = typeof original.completed_at === "string" ? Date.parse(original.completed_at) : NaN;
+  const observedAtMs = typeof basis.observed_at === "number" && Number.isFinite(basis.observed_at)
+    ? basis.observed_at * 1000 : NaN;
+  const chainedPostContextWatchRecoverable = postContextWatchRecoverable
+    && Number.isFinite(completedAtMs) && Number.isFinite(observedAtMs)
+    && observedAtMs - completedAtMs >= MONITOR_RECOVERY_RETRY_COOLDOWN_MS;
   if (Object.keys(recovery).join() !== "original_turn_id"
       || recovery.original_turn_id !== original.turn_id || typeof original.turn_id !== "string"
       || !/^[a-f0-9]{32}$/.test(original.turn_id) || original.session_id !== session.session_id
@@ -98,7 +136,7 @@ function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, se
       || original.origin !== "native_loopx" || original.loopx_execution !== true
       || original.response !== null || original.upstream_turn_id !== null || original.delta_count !== 0
       || prior.work_kind !== "monitor" || request.work_kind !== "monitor" || request.validation_command !== null
-      || (predecessor !== null && (original.error_code !== "server_restarted"
+      || (predecessor !== null && (!(original.error_code === "server_restarted" || chainedPostContextWatchRecoverable)
         || Object.keys(predecessor).join() !== "original_turn_id"
         || typeof predecessor.original_turn_id !== "string" || !/^[a-f0-9]{32}$/.test(predecessor.original_turn_id)
         || predecessor.original_turn_id === original.turn_id))
@@ -154,9 +192,9 @@ function admitReportQuotaRecovery(params: JsonObject, request: JsonObject, sessi
       || original.origin !== "native_loopx" || original.loopx_execution !== true || original.status !== "completed"
       || original.delta_count !== 0 || typeof original.upstream_turn_id !== "string" || !original.upstream_turn_id
       || Object.keys(prior).length !== keys.length
-      || keys.some(key => key === "turn_instance_id"
+      || keys.some(key => !Object.hasOwn(prior, key) || (key === "turn_instance_id"
         ? request[key] !== String(prior[key]) + ".quota-recovery"
-        : JSON.stringify(request[key]) !== JSON.stringify(prior[key]))
+        : !sameReportRequestField(key, prior[key], request[key])))
       || result.schema_version !== "loopx_turn_execution_v0" || result.ok !== false || result.mode !== "run_once"
       || result.status !== "failed" || result.result_kind !== "host_failure"
       || failure.schema_version !== "loopx_turn_host_failure_v0" || failure.attempt !== 1
@@ -194,8 +232,7 @@ function admitReportSelectionRecovery(params: JsonObject, request: JsonObject, s
   if (original.session_id !== sessionId || original.origin !== "native_loopx"
       || original.loopx_execution !== true || original.status !== "completed"
       || original.delta_count !== 0 || original.upstream_turn_id !== null
-      || Object.keys(prior).length !== Object.keys(request).length
-      || Object.keys(request).some(key => JSON.stringify(prior[key]) !== JSON.stringify(request[key]))
+      || !sameReportRequest(prior, request)
       || result.schema_version !== "loopx_turn_execution_v0" || result.ok !== false
       || result.mode !== "run_once" || result.effects_scope !== "current_invocation"
       || result.error_code !== "turn_todo_selection_deferred" || result.resume_turn_key != null
@@ -228,7 +265,7 @@ function admitReportSelectionRecovery(params: JsonObject, request: JsonObject, s
     || !/^[a-f0-9]{32}$/.test(observed.turn_id) || observed.turn_id === original.turn_id
     || observed.origin !== "native_loopx" || observed.loopx_execution !== true
     || observed.error_code != null || observed.error != null
-    || JSON.stringify(observed.loopx_request) !== JSON.stringify(request)
+    || !sameReportRequest(observed.loopx_request, request)
     || !(runningHere || observed.status === "completed"
       && JSON.stringify(requireJsonObject(observed.response, "probe response").native_loopx) === JSON.stringify(result))
     || journal.schema_version !== "loopx_turn_journal_v0" || !ENVELOPED_SHA256_PATTERN.test(String(journal.turn_key))
@@ -638,7 +675,7 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
             || original.loopx_execution !== true || original.status !== "completed"
             || original.delta_count !== 0 || original.upstream_turn_id !== null
             || Object.keys(prior).length !== keys.length
-            || keys.some(key => JSON.stringify(prior[key]) !== JSON.stringify(request[key]))
+            || keys.some(key => !Object.hasOwn(prior, key) || !sameReportRequestField(key, prior[key], request[key]))
             || result.schema_version !== "loopx_turn_execution_v0" || result.ok !== false
             || result.mode !== "run_once" || result.status !== "failed" || result.result_kind !== "host_failure"
             || result.reason !== "first-party Host runtime rejected: stale_goal_authority"

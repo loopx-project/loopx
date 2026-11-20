@@ -6,7 +6,11 @@ import logging
 import pytest
 
 from loopx.capabilities.native_chat.steward_monitor import pump_steward_monitors
-from loopx.capabilities.native_chat.steward_turn import StewardTurnHost, _same_report_validator_command
+from loopx.capabilities.native_chat.steward_turn import (
+    StewardTurnHost,
+    _same_report_validator_command,
+    native_steward_client_id,
+)
 from loopx.capabilities.periodic_report import cadence_runtime
 from loopx.capabilities.periodic_report.cadence_journal import read_cadence_journal
 from loopx.capabilities.periodic_report.incremental import read_periodic_report_publication_cursor
@@ -171,3 +175,107 @@ def test_owner_cancel_retires_mid_turn_failed_report_without_editorial_response_
     assert transport.steward_reports.reconcile() == 1
     cursor = read_periodic_report_publication_cursor(runtime_root=reports.root, goal_id=actor["goal_id"], agent_id=actor["agent_id"])
     assert cursor["covered_until"] == old["window"]["next_due_at"]
+
+
+def test_selection_recovery_admission_resume_tolerates_validator_python_upgrade(
+    steward, tmp_path, monkeypatch, caplog,
+):
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    from loopx.configure_goal import configure_goal
+    from test_native_steward_reports import _REPORT_MODEL_SOURCE
+
+    store, runtime, _, transport, binding, _, _ = steward
+    point = datetime.now(timezone.utc).replace(hour=9, minute=1, second=0, microsecond=0) - timedelta(days=2)
+
+    class CalendarClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return point.astimezone(tz) if tz else point.replace(tzinfo=None)
+
+    monkeypatch.setattr(report_host, "datetime", CalendarClock)
+    monkeypatch.setattr(cadence_runtime, "datetime", CalendarClock)
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, "sqlite")
+    owner = binding["binding_id"]
+    assert configure_goal(
+        registry_path=runtime.registry_path, goal_id=actor["goal_id"],
+        execution_replan_after_turns=1, execute=True,
+    )["ok"]
+    install_model(steward, tmp_path, sid)
+    assert finish(runtime, pump_steward_monitors(runtime)[0])["response"]["native_loopx"]["status"] == "committed"
+    assert transport.steward_reports.reconcile() == 1
+
+    point += timedelta(days=1)
+    runtime._steward_monitor_next_check.clear()
+    rejected = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert rejected["response"]["native_loopx"]["error_code"] == "turn_todo_selection_deferred"
+
+    bad_vision = {
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "active",
+        "vision_patch": {"vision_summary": "Keep reporting.", "acceptance_summary": "Validate full report."},
+        "path_delta": {
+            "outcome": "replan",
+            "prior_assumption": "Old assumption",
+            "observed_reality": "Reality",
+            "retained": ["Same report route"],
+            "changed": ["Updated baseline"],
+            "evidence_refs": ["fixture:evidence"],
+        },
+    }
+    bad_outcome = {
+        "result_kind": "replan_required",
+        "classification": "outcome_gap_without_blocked_fields",
+        "delivery_batch_scale": "implementation",
+        "delivery_outcome": "outcome_gap",
+        "work_evidence": ["Observed gap"],
+        "validation_evidence": ["Validated check"],
+        "path_delta_mode": "material_replan",
+        "agent_vision_json": json.dumps(bad_vision),
+        "summary": "Missing blocked fields trigger host_result_contract validation failure.",
+        "next_action": "Clear replan before resuming report.",
+    }
+    helper = tmp_path / "report_model.py"
+    helper.write_text(
+        _REPORT_MODEL_SOURCE.replace("def fake_report_model(", "def report_only(")
+        + "\ndef fake_report_model(params):\n"
+        + "    import json\n"
+        + "    prompt = '\\n'.join(row.get('text', '') for row in params.get('input', []) if isinstance(row, dict))\n"
+        + "    request = json.JSONDecoder().raw_decode(prompt.split('Turn request:', 1)[1].lstrip())[0]\n"
+        + "    if request.get('detail_ref', {}).get('replan_action_packet'):\n"
+        + "        return " + repr(json.dumps(bad_outcome)) + "\n"
+        + "    return report_only(params)\n"
+    )
+    runtime._steward_monitor_next_check.clear()
+    probe = finish(runtime, pump_steward_monitors(runtime)[0])
+
+    # Simulate host Python interpreter path upgrade on both the original refused turn and probe turn.
+    for row_id in (rejected["turn_id"], probe["turn_id"]):
+        row = store.load_turn(sid, row_id)
+        assert row is not None
+        req = json.loads(json.dumps(row["loopx_request"]))
+        req["validation_command"][0] = "/tmp/previous-release/bin/python"
+        row["loopx_request"] = req
+        store._turn_path(sid, row_id).write_text(json.dumps(row))
+
+    assert configure_goal(
+        registry_path=runtime.registry_path, goal_id=actor["goal_id"],
+        execution_replan_after_turns=6, execute=True,
+    )["ok"]
+    runtime._steward_monitor_next_check.clear()
+    with caplog.at_level(logging.WARNING):
+        resumed = pump_steward_monitors(runtime)
+    assert "An original steward report is unavailable" not in caplog.text
+    assert len(resumed) == 1
+    expected_client_id = native_steward_client_id(
+        actor,
+        rejected["loopx_request"]["turn_instance_id"] + ".admission-resume",
+    )
+    assert resumed[0]["client_turn_id"] == expected_client_id
+    done = finish(runtime, resumed[0])
+    assert done["response"]["native_loopx"]["status"] == "committed", done
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+    assert transport.steward_reports.reconcile() == 1
+    assert reports.health(owner)["publication_verified"]
+    task = next(row for row in StewardMonitor(runtime).todos(actor) if row["todo_id"] == done["loopx_request"]["todo_id"])
+    assert task["status"] == "done"
