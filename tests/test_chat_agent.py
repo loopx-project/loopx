@@ -2730,3 +2730,91 @@ def test_native_child_callback_is_scoped_to_owned_thread_and_turn(monkeypatch, t
     observed = []
     session.send("Reply briefly.", on_native_item=observed.append)
     assert observed == [item]
+
+
+def test_turn_retry_keeps_the_adapter_selected_before_failed_start(tmp_path, monkeypatch):
+    import runpy
+    from concurrent.futures import ThreadPoolExecutor
+
+    from loopx.chat_store import ChatSessionStore
+
+    native_calls = tmp_path / "native-calls.jsonl"
+    fixture = Path(__file__).resolve().parents[1] / "examples" / "loopx-chat-runtime-smoke.py"
+    source = runpy.run_path(str(fixture))["FAKE_CODEX"]
+    source = source.replace(
+        '    method = request.get("method")',
+        '    method = request.get("method")\n'
+        f"    with open({str(native_calls)!r}, 'a') as log:\n"
+        '        print(json.dumps(method), file=log)\n',
+        1,
+    )
+    executable = tmp_path / "codex"
+    executable.write_text(source, encoding="utf-8")
+    executable.chmod(0o700)
+    store = ChatSessionStore(tmp_path / "runtime")
+    runtime = chat_runtime.ChatRuntimeController(store=store, codex_bin=str(executable))
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    runtime.codex_home = home
+    first_starting = threading.Event()
+    retry_selected_adapter = threading.Event()
+    first_returned = threading.Event()
+    try:
+        session, _ = runtime.open_session(
+            goal_id="fixture", agent_id="codex", work_dir=tmp_path,
+            objective="Keep this native conversation.", mode="new",
+        )
+        session_id = session["session_id"]
+        adapter = runtime.adapters[session_id]
+        start_worker = runtime._start_accepted_turn_worker
+        start_thread = threading.Thread.start
+
+        def hold_retry_before_worker_registration(**kwargs):
+            if first_starting.is_set():
+                assert kwargs["adapter"] is adapter
+                retry_selected_adapter.set()
+                assert first_returned.wait(timeout=5)
+            return start_worker(**kwargs)
+
+        def fail_first_worker(thread):
+            if getattr(thread, "_target", None) == runtime._run_turn and not first_starting.is_set():
+                first_starting.set()
+                assert retry_selected_adapter.wait(timeout=5)
+                raise RuntimeError("can't start new thread")
+            start_thread(thread)
+
+        monkeypatch.setattr(runtime, "_start_accepted_turn_worker", hold_retry_before_worker_registration)
+        monkeypatch.setattr(threading.Thread, "start", fail_first_worker)
+
+        def submit():
+            return runtime.submit_turn(
+                session_id=session_id, client_turn_id="same-turn", message="complete normally",
+                work_dir=tmp_path, objective="Keep this native conversation.",
+            )
+
+        def submit_first():
+            try:
+                return submit()
+            finally:
+                first_returned.set()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(submit_first)
+            assert first_starting.wait(timeout=5)
+            retry = executor.submit(submit)
+            with pytest.raises(RuntimeError, match="can't start new thread"):
+                first.result(timeout=7)
+            replay, created = retry.result(timeout=7)
+
+        assert created is False
+        completed = runtime.wait_for_turn(session_id=session_id, turn_id=replay["turn_id"], timeout_sec=8)
+        assert completed["status"] == "completed", completed.get("error")
+        assert completed["upstream_turn_id"] == "durable-turn-1"
+        assert runtime.adapters[session_id] is adapter
+        assert adapter.healthcheck()
+        assert store.load_session(session_id)["upstream_thread_id"] == "durable-thread"
+        assert [json.loads(line) for line in native_calls.read_text().splitlines()].count("turn/start") == 1
+        assert runtime.close_session(session_id) is True
+        assert not adapter.healthcheck()
+    finally:
+        runtime.close()

@@ -473,20 +473,13 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
             self.resume_session(session_id=session_id, work_dir=work_dir, objective=objective)
             return self.store.load_turn(session_id, str(accepted.turn["turn_id"])) or accepted.turn, accepted.created
         if accepted.dispatch_required:
-            try:
-                with commit():
-                    self._start_accepted_turn_worker(
-                        session_id=session_id, turn_id=str(accepted.turn["turn_id"]), message=message,
-                        attachments=attachments or [], adapter=adapter, loopx_execution=loopx_execution)
-            except Exception:
-                with self.lock:
-                    has_live_worker = any(
-                        sid == session_id and not done.is_set()
-                        for (sid, _), done in self.turn_done_events.items()
-                    )
-                if not has_live_worker:
-                    self._drop_owned_adapter(session_id, adapter)
-                raise
+            # The session owns the prepared adapter. A retry can select it
+            # before registering its worker, so a failed dispatch attempt only
+            # releases its own worker slot.
+            with commit():
+                self._start_accepted_turn_worker(
+                    session_id=session_id, turn_id=str(accepted.turn["turn_id"]), message=message,
+                    attachments=attachments or [], adapter=adapter, loopx_execution=loopx_execution)
         return accepted.turn, accepted.created
 
     def _start_accepted_turn_worker(
