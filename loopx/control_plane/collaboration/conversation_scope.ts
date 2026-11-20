@@ -223,11 +223,14 @@ export function boundConversationExecutorMatches(row: Record<string, unknown>, s
   const configured = row.executor_endpoint_id;
   if (configured !== "antigravity" && configured !== "codex") return false;
   const fallback = configured === "antigravity" ? "codex" : "antigravity";
+  const flexiblePoolMatch =
+    (allocation?.configured_endpoint === configured && allocation.allocation_reason === "flexible_availability_fallback")
+    || (allocation?.configured_endpoint === fallback && allocation.allocation_reason === "flexible_primary_available");
   return row.context_kind === "steward" && row.audience !== "group"
     && session.agent_id === fallback && session.executor_endpoint_id === fallback
     && allocation?.schema_version === "manager_executor_allocation_v0"
-    && allocation.selection_policy === "flexible" && allocation.configured_endpoint === configured
-    && allocation.executor_endpoint === fallback && allocation.allocation_reason === "flexible_availability_fallback"
+    && allocation.selection_policy === "flexible"
+    && allocation.executor_endpoint === fallback && flexiblePoolMatch
     && typeof allocation.configuration_revision === "string" && allocation.configuration_revision.length > 0
     && Array.isArray(allocation.eligible_endpoints) && allocation.eligible_endpoints.length === 2
     && allocation.eligible_endpoints.includes("antigravity") && allocation.eligible_endpoints.includes("codex")
