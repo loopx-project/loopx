@@ -1753,3 +1753,63 @@ def test_antigravity_launch_guard_runs_pre_publication_once(tmp_path, language_s
     result = adapter.start_turn("guarded turn")
     assert result["message"] == "Argon answer 1"
     assert events == [("guard_enter", 0), ("guard_exit", 1)]
+
+
+def test_antigravity_endpoint_model_capacity_resolves_short_aliases_and_rejects_mismatches(
+    language_server,
+) -> None:
+    from datetime import timedelta
+
+    reset = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+    language_server["user_status_response"] = {
+        "userStatus": {
+            "email": "synthetic@invalid.example",
+            "cascadeModelConfigData": {
+                "clientModelConfigs": [
+                    {
+                        "label": "Gemini 4 Argon (High)",
+                        "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M417"},
+                        "quotaInfo": {"remainingFraction": 0.42, "resetTime": reset},
+                    },
+                    {
+                        "label": "Gemini 4 Carbon (High)",
+                        "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M427"},
+                        "quotaInfo": {"remainingFraction": 0.85, "resetTime": reset},
+                    },
+                    {
+                        "label": "Gemini 4 Carbon (Medium)",
+                        "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M437"},
+                        "quotaInfo": {"remainingFraction": 0.0, "resetTime": reset},
+                    },
+                ]
+            },
+        }
+    }
+
+    for alias, effort, expected_canonical, expected_fraction, expected_exhausted in [
+        ("carbon", None, "gemini-4-carbon-high", 0.85, False),
+        ("CARBON", None, "gemini-4-carbon-high", 0.85, False),
+        ("gemini-4-carbon", None, "gemini-4-carbon-high", 0.85, False),
+        ("argon", None, "gemini-4-argon-high", 0.42, False),
+        ("gemini-4-argon", None, "gemini-4-argon-high", 0.42, False),
+        ("carbon", "medium", "gemini-4-carbon-medium", 0.0, True),
+    ]:
+        observed = AntigravityAdapter.endpoint_model_capacity(
+            model_id=alias,
+            reasoning_effort=effort,
+        )
+        assert observed is not None, (alias, effort)
+        assert observed["model_id"] == expected_canonical
+        assert observed["remaining_fraction"] == expected_fraction
+        assert observed["quota_exhausted"] is expected_exhausted
+        assert observed["normal_completion"] is (not expected_exhausted)
+
+    calls_before = len(language_server["calls"])
+    assert AntigravityAdapter.endpoint_model_capacity(model_id="unknown-model") is None
+    assert AntigravityAdapter.endpoint_model_capacity(
+        model_id="gemini-4-carbon-high", reasoning_effort="medium",
+    ) is None
+    assert AntigravityAdapter.endpoint_model_capacity(
+        model_id="carbon", reasoning_effort="xhigh",
+    ) is None
+    assert len(language_server["calls"]) == calls_before
