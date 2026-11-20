@@ -19,6 +19,7 @@ from ..effect_runtime import effect_runtime_result
 from ...paths import (
     GLOBAL_REGISTRY_FILENAME,
     global_registry_path,
+    registry_project_root,
     resolve_runtime_root,
     select_default_runtime_root,
 )
@@ -556,6 +557,7 @@ def set_goal_activation_state(
     ):
         payload["closeout"] = _stop_closeout_payload(
             source_registry=source_registry,
+            registry_snapshot=source_payload,
             runtime_root_override=runtime_root_override,
             goal_id=normalized_goal_id,
             closeout_goal=closeout_goal,
@@ -566,35 +568,58 @@ def set_goal_activation_state(
 def _stop_closeout_payload(
     *,
     source_registry: Path,
+    registry_snapshot: Mapping[str, Any],
     runtime_root_override: str | None,
     goal_id: str,
     closeout_goal: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Run the terminal hook after a committed stop transition."""
+    """Run the terminal hook after a committed stop transition.
+
+    The stop is already committed when this runs, so the whole boundary is
+    best-effort: argument preparation reads the confirmed registry snapshot
+    taken inside the transaction, and any preparation failure is reported in
+    the hook result instead of raising past the committed receipt.
+    """
 
     from ...lifecycle.goal_closeout import run_goal_closeout
 
-    closeout_runtime_root = resolve_runtime_root(
-        load_registry(source_registry),
-        runtime_root_override,
-        registry_path=source_registry,
-    )
-    state_file = closeout_goal.get("state_file")
-    if not state_file:
-        state_file = (
-            source_registry.parent
-            / "goals"
-            / goal_id
-            / "ACTIVE_GOAL_STATE.md"
+    try:
+        closeout_runtime_root = resolve_runtime_root(
+            registry_snapshot,
+            runtime_root_override,
+            registry_path=source_registry,
         )
-    return run_goal_closeout(
-        runtime_root=closeout_runtime_root,
-        goal_id=goal_id,
-        repo=str(closeout_goal.get("repo")) if closeout_goal.get("repo") else None,
-        state_file=str(state_file),
-        terminal_reason="stopped",
-        trigger="goal-lifecycle-stop",
-    )
+        state_file = closeout_goal.get("state_file")
+        if not state_file:
+            state_file = (
+                source_registry.parent
+                / "goals"
+                / goal_id
+                / "ACTIVE_GOAL_STATE.md"
+            )
+        else:
+            declared = Path(str(state_file)).expanduser()
+            if not declared.is_absolute():
+                declared = registry_project_root(source_registry) / declared
+            state_file = declared
+        return run_goal_closeout(
+            runtime_root=closeout_runtime_root,
+            goal_id=goal_id,
+            repo=str(closeout_goal.get("repo")) if closeout_goal.get("repo") else None,
+            state_file=str(state_file),
+            terminal_reason="stopped",
+            trigger="goal-lifecycle-stop",
+        )
+    except Exception as exc:  # the committed stop must keep its own receipt
+        return {
+            "schema_version": "loopx_goal_closeout_invocation_v0",
+            "goal_id": goal_id,
+            "trigger": "goal-lifecycle-stop",
+            "terminal_reason": "stopped",
+            "status": "preparation_error",
+            "error": f"{type(exc).__name__}: {exc}",
+            "ledger_recorded": False,
+        }
 
 
 def render_goal_activation_markdown(payload: dict[str, Any]) -> str:
