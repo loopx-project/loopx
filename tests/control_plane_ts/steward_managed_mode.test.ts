@@ -361,3 +361,60 @@ test("observeStewardNativeExecutor admits qualified codex-to-antigravity fallbac
     session: {...qualifiedFallback.session, upstream_context_history: []},
   }).execution_available, false);
 });
+
+test("zero-effect worker exit, storage I/O, and runtime unavailability monitors admit one bounded recovery", () => {
+  const {params, goal} = fixture();
+  const actor = bindStewardManagedActor({...params, goal});
+  const prior = {operation: "native_turn", host: "codex-app-server", actor,
+    work_kind: "monitor", turn_instance_id: "monitor.transient", todo_id: "todo_transient_watch", validation_command: null,
+    monitor_deadline: "2026-11-20T07:44:39Z", monitor_lease_version: 0};
+  const monitor = {todo_id: "todo_transient_watch", task_class: "continuous_monitor",
+    target_key: "steward-portfolio-watch", watch_only: true, claimed_by: "steward", status: "open",
+    next_due_at: prior.monitor_deadline};
+  const workerExitedError =
+    "The LoopX Chat execution worker exited before this turn finished. Your conversation is saved; execution may have occurred. This turn was not retried automatically.";
+  for (const scenario of [
+    {
+      error_code: "runtime_error",
+      error: workerExitedError,
+      contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
+      event_kinds: ["turn.queued", "agent.phase", "manager.context", "turn.failed"],
+    },
+    {
+      error_code: "runtime_error",
+      error: "disk I/O error",
+      contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
+      event_kinds: ["turn.queued", "agent.phase", "manager.context", "turn.failed"],
+    },
+    {
+      error_code: "runtime_unavailable",
+      error: "The Agent runtime could not be prepared.",
+      contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
+      event_kinds: ["turn.queued", "turn.failed", "agent.phase", "manager.context"],
+    },
+  ]) {
+    const original = {turn_id: "4".repeat(32), session_id: params.session.session_id,
+      status: "failed", error_code: scenario.error_code, error: scenario.error,
+      origin: "native_loopx", loopx_execution: true, upstream_turn_id: null, response: null,
+      delta_count: 0, loopx_request: prior};
+    const basis = {original, contexts: scenario.contexts, phases: [{phase: "manager_context"}],
+      event_kinds: scenario.event_kinds, poll_absent: true, old_worker_excluded: true, lease_available: true};
+    const input = {...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor},
+      request: {...prior, monitor_restart_recovery: {original_turn_id: original.turn_id}},
+      monitor_todo: monitor, monitor_restart_basis: basis};
+    assert.equal(admitStewardManagedTurn(input).observation_only, true);
+    for (const bad of [
+      {contexts: []},
+      {phases: []},
+      {contexts: [{schema_version: "wrong"}]},
+      {contexts: [{schema_version: "manager_turn_context_v1"}, {schema_version: "manager_turn_context_v1"}]},
+      {poll_absent: false},
+      {old_worker_excluded: false},
+      {lease_available: false},
+      {original: {...original, upstream_turn_id: "started-upstream"}},
+      {original: {...original, loopx_request: {...prior, monitor_restart_recovery: {original_turn_id: "5".repeat(32)}}}},
+    ]) {
+      assert.throws(() => admitStewardManagedTurn({...input, monitor_restart_basis: {...basis, ...bad}}));
+    }
+  }
+});

@@ -21,6 +21,22 @@ import {projectGoalCreationExecutionRequest} from "../goals/creation_execution.t
  * identity. After a recovery starts, only another proven process restart can
  * continue it. The host reads the stopped worker lock, journals and native poll
  * receipts. Normal admission still checks ownership, deadline, permissions and user work. */
+const WORKER_EXITED_ERROR =
+  "The LoopX Chat execution worker exited before this turn finished. Your conversation is saved; execution may have occurred. This turn was not retried automatically.";
+
+function hasSingleManagerContextEvidence(basis: JsonObject, prior: JsonObject, events: unknown): boolean {
+  if (requireJsonObject(prior.actor, "original watch actor").schema_version !== "loopx_steward_managed_actor_v0"
+      || !Array.isArray(basis.contexts) || basis.contexts.length !== 1
+      || !Array.isArray(basis.phases) || basis.phases.length !== 1
+      || requireJsonObject(basis.phases[0], "original watch phase").phase !== "manager_context"
+      || !Array.isArray(events)
+      || events.filter(kind => kind === "agent.phase").length !== 1
+      || events.filter(kind => kind === "manager.context").length !== 1) {
+    return false;
+  }
+  return requireJsonObject(basis.contexts[0], "watch context").schema_version === "manager_turn_context_v1";
+}
+
 function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, session: JsonObject): void {
   if (request.monitor_restart_recovery === undefined) {
     if (params.monitor_restart_basis != null) throw new EffectRuntimeRequestError("watch recovery lacks its original request");
@@ -62,26 +78,23 @@ function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, se
     && Array.isArray(basis.phases) && basis.phases.length === 1
     && requireJsonObject(basis.phases[0], "original watch phase").phase === "manager_context"
     && Array.isArray(events) && events.filter(kind => kind === "agent.phase").length === 1;
-  // A custom signal monitor may fail inside the read-only external signal
-  // check after manager_context completes and before any poll receipt is written.
-  // Allow at most one bounded recovery when zero-effect proofs hold.
-  let signalUnavailable = false;
-  if (original.error_code === "runtime_error"
-      && original.error === "steward monitor external signal source temporarily unavailable"
-      && requireJsonObject(prior.actor, "original watch actor").schema_version === "loopx_steward_managed_actor_v0"
-      && Array.isArray(basis.contexts) && basis.contexts.length === 1
-      && Array.isArray(basis.phases) && basis.phases.length === 1
-      && requireJsonObject(basis.phases[0], "original watch phase").phase === "manager_context"
-      && Array.isArray(events) && events.filter(kind => kind === "agent.phase").length === 1
-      && Array.isArray(events) && events.filter(kind => kind === "manager.context").length === 1) {
-    const context = requireJsonObject(basis.contexts[0], "signal unavailable watch context");
-    signalUnavailable = context.schema_version === "manager_turn_context_v1";
-  }
+  // Post-context monitor failures (external signal outage, daemon worker exit,
+  // storage I/O error, or runtime unavailability) before any poll receipt or
+  // upstream model turn may recover at most once when strict single-context
+  // and zero-effect journal proofs hold; pre-context unknown worker launches remain closed.
+  const postContextWatchRecoverable = hasSingleManagerContextEvidence(basis, prior, events) && (
+    original.error_code === "runtime_unavailable"
+    || original.error_code === "runtime_error" && (
+      original.error === "steward monitor external signal source temporarily unavailable"
+      || original.error === "disk I/O error"
+      || original.error === WORKER_EXITED_ERROR
+    )
+  );
   if (Object.keys(recovery).join() !== "original_turn_id"
       || recovery.original_turn_id !== original.turn_id || typeof original.turn_id !== "string"
       || !/^[a-f0-9]{32}$/.test(original.turn_id) || original.session_id !== session.session_id
       || original.status !== "failed"
-      || !(original.error_code === "server_restarted" || scopeRefused || identityRefused || signalUnavailable)
+      || !(original.error_code === "server_restarted" || scopeRefused || identityRefused || postContextWatchRecoverable)
       || original.origin !== "native_loopx" || original.loopx_execution !== true
       || original.response !== null || original.upstream_turn_id !== null || original.delta_count !== 0
       || prior.work_kind !== "monitor" || request.work_kind !== "monitor" || request.validation_command !== null
@@ -196,8 +209,6 @@ function admitReportSelectionRecovery(params: JsonObject, request: JsonObject, s
     throw new EffectRuntimeRequestError("report selection recovery requires the original proven pre-execution replan refusal");
   }
   if (proof.probe == null) return;
-  // The original host returned before calling its model when a fresh guard
-  // no longer owed governance. Absence of output alone cannot prove that.
   const probe = requireJsonObject(proof.probe, "original host admission probe");
   const observed = requireJsonObject(probe.turn, "original probe Chat Turn");
   const journal = requireJsonObject(probe.journal, "canonical probe journal");
@@ -207,41 +218,71 @@ function admitReportSelectionRecovery(params: JsonObject, request: JsonObject, s
   const plan = requireJsonObject(journal.plan, "probe plan");
   const route = requireJsonObject(plan.route, "probe route");
   const envelope = turnPlanWorkSource(plan, probe.source_number_tokens).work;
-  const action = requireJsonObject(envelope.action, "probe action");
-  const selected = requireJsonObject(action.selected_todo, "probe selected task");
   const identity = requireJsonObject(requireJsonObject(requireJsonObject(plan.transaction, "probe transaction")
     .settlement_plan, "probe settlement").identity, "probe identity");
   const host = requireJsonObject(journal.host, "probe host");
-  const stopped = requireJsonObject(journal.host_result, "probe host result");
+  const actor = requireJsonObject(request.actor, "report actor");
   const runningHere = params.turn != null && requireJsonObject(params.turn, "current Chat Turn").turn_id === observed.turn_id
     && ["starting", "running"].includes(String(observed.status));
-  if (observed.session_id !== sessionId || typeof observed.turn_id !== "string" || !/^[a-f0-9]{32}$/.test(observed.turn_id)
-      || observed.turn_id === original.turn_id
-      || observed.origin !== "native_loopx" || observed.loopx_execution !== true
-      || observed.delta_count !== 0 || observed.upstream_turn_id !== null || observed.error_code != null || observed.error != null
-      || JSON.stringify(observed.loopx_request) !== JSON.stringify(request)
-      || !(runningHere || observed.status === "completed"
-        && JSON.stringify(requireJsonObject(observed.response, "probe response").native_loopx) === JSON.stringify(result))
-      || journal.schema_version !== "loopx_turn_journal_v0" || !ENVELOPED_SHA256_PATTERN.test(String(journal.turn_key))
-      || journal.status !== "stopped" || journal.goal_id !== envelope.goal_id
-      || journal.host_attempt_count !== 1 || journal.result_kind !== "wait"
+  const commonInvalid = observed.session_id !== sessionId || typeof observed.turn_id !== "string"
+    || !/^[a-f0-9]{32}$/.test(observed.turn_id) || observed.turn_id === original.turn_id
+    || observed.origin !== "native_loopx" || observed.loopx_execution !== true
+    || observed.error_code != null || observed.error != null
+    || JSON.stringify(observed.loopx_request) !== JSON.stringify(request)
+    || !(runningHere || observed.status === "completed"
+      && JSON.stringify(requireJsonObject(observed.response, "probe response").native_loopx) === JSON.stringify(result))
+    || journal.schema_version !== "loopx_turn_journal_v0" || !ENVELOPED_SHA256_PATTERN.test(String(journal.turn_key))
+    || journal.goal_id !== envelope.goal_id || journal.host_attempt_count !== 1
+    || host.kind !== "codex-app-server" || host.executable !== "built-in"
+    || inspection.schema_version !== "loopx_turn_journal_inspection_v1" || inspection.ok !== true
+    || inspection.goal_matches !== true || inspection.owner_matches !== true || inspection.turn_key_matches !== true
+    || inspection.journal_consistent !== true
+    || recovery.action !== "return_existing" || recovery.reinvoke_host !== false
+    || recorded.host_invoked !== true
+    || ["state_written", "quota_spent", "scheduler_acknowledged"].some(key => recorded[key] !== false)
+    || identity.goal_id !== envelope.goal_id || identity.agent_id !== envelope.agent_id
+    || identity.goal_id !== actor.goal_id || identity.agent_id !== actor.agent_id
+    || identity.turn_instance_id !== request.turn_instance_id + ".replan";
+  if (commonInvalid) {
+    throw new EffectRuntimeRequestError("report continuation requires its canonical host-only admission stop; retain all model or unknown work");
+  }
+  if (journal.status === "failed" && journal.result_kind === "validation_failed"
+      && journal.validation_stage === "host_result_contract") {
+    // Only once the blocking autonomous replan obligation is cleared elsewhere
+    // may a report whose prior governance probe failed host contract validation
+    // resume cleanly via one bounded .admission-resume carrier.
+    const receipt = requireJsonObject(journal.receipt, "probe receipt");
+    const eligibility = requireJsonObject(receipt.commit_eligibility, "probe commit eligibility");
+    const guard = requireJsonObject(probe.current_guard, "current guard observation");
+    if (inspection.journal_status !== "failed"
+        || JSON.stringify(journal.completed_phases) !== JSON.stringify(["host_execute", "typed_result"])
+        || receipt.ok !== true || receipt.failed_phase !== "validation" || receipt.status !== "failed"
+        || ["writeback", "quota_spend", "scheduler_ack"].some(key => eligibility[key] !== false)
+        || route.kind !== "replan_required"
+        || route.effective_action !== EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED
+        || envelope.effective_action !== EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED
+        || identity.binding_kind !== "autonomous_replan"
+        || guard.effective_action !== EffectiveAction.NORMAL_RUN
+        || guard.replan_action_packet != null) {
+      throw new EffectRuntimeRequestError("report continuation after validation failure requires a zero-write governance refusal and cleared replan");
+    }
+    return;
+  }
+  // The original host returned before calling its model when a fresh guard
+  // no longer owed governance. Absence of output alone cannot prove that.
+  const action = requireJsonObject(envelope.action, "probe action");
+  const selected = requireJsonObject(action.selected_todo, "probe selected task");
+  const stopped = requireJsonObject(journal.host_result, "probe host result");
+  if (observed.delta_count !== 0 || observed.upstream_turn_id !== null
+      || journal.status !== "stopped" || journal.result_kind !== "wait"
       || JSON.stringify(journal.completed_phases) !== JSON.stringify(["host_execute", "typed_result", "validation"])
-      || host.kind !== "codex-app-server" || host.executable !== "built-in"
       || stopped.schema_version !== "loopx_turn_result_v0" || stopped.turn_key !== journal.turn_key
       || stopped.result_kind !== "wait" || stopped.classification !== "report_replan_not_admitted"
-      || inspection.schema_version !== "loopx_turn_journal_inspection_v1" || inspection.ok !== true
-      || inspection.goal_matches !== true || inspection.owner_matches !== true || inspection.turn_key_matches !== true
-      || inspection.journal_consistent !== true || inspection.journal_status !== "stopped"
-      || recovery.action !== "return_existing" || recovery.reinvoke_host !== false
-      || recorded.host_invoked !== true || ["state_written", "quota_spent", "scheduler_acknowledged"].some(key => recorded[key] !== false)
+      || inspection.journal_status !== "stopped"
       || route.kind !== "ready_for_host" || route.effective_action !== EffectiveAction.NORMAL_RUN
       || envelope.effective_action !== EffectiveAction.NORMAL_RUN || envelope.replan_action_packet != null
       || action.must_attempt !== true || action.delivery_allowed !== true || selected.todo_id !== identity.todo_id
-      || identity.goal_id !== envelope.goal_id || identity.agent_id !== envelope.agent_id
-      || identity.goal_id !== requireJsonObject(request.actor, "report actor").goal_id
-      || identity.agent_id !== requireJsonObject(request.actor, "report actor").agent_id
-      || typeof identity.todo_id !== "string" || !/^todo_[A-Za-z0-9_-]{1,100}$/.test(identity.todo_id)
-      || identity.turn_instance_id !== request.turn_instance_id + ".replan") {
+      || typeof identity.todo_id !== "string" || !/^todo_[A-Za-z0-9_-]{1,100}$/.test(identity.todo_id)) {
     throw new EffectRuntimeRequestError("report continuation requires its canonical host-only admission stop; retain all model or unknown work");
   }
 }

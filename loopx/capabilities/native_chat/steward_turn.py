@@ -216,7 +216,8 @@ class StewardTurnHost:
         """Prepare correlation only; current typed admission decides recovery."""
         prior = original.get("loopx_request") or {}
         error = original.get("error_code")
-        if (original.get("status") != "failed" or error not in {"server_restarted", "runtime_error"}
+        if (original.get("status") != "failed"
+                or error not in {"server_restarted", "runtime_error", "runtime_unavailable"}
                 or prior.get("work_kind") != "monitor"
                 or (prior.get("monitor_restart_recovery") is not None and error != "server_restarted")):
             return None
@@ -335,14 +336,51 @@ class StewardTurnHost:
             from ...control_plane.effect_runtime import source_number_tokens
 
             journal = load_turn_journal(turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=key))
+            current_guard = None
+            if (journal.get("status") == "failed"
+                    and journal.get("result_kind") == "validation_failed"
+                    and journal.get("validation_stage") == "host_result_contract"):
+                current_guard = self._cleared_replan_guard(actor)
+                if current_guard is None:
+                    return None
             # Transport canonical observations to the shared typed admission
             # owner.
             proof["probe"] = {"turn": probe_turn,
                 "inspection": inspect_loopx_turn_journal(reports.root, goal_id=actor["goal_id"],
                     agent_id=actor["agent_id"], turn_key=key),
                 "journal": journal,
-                "source_number_tokens": source_number_tokens((journal.get("plan") or {}).get("work_contract"))}
+                "source_number_tokens": source_number_tokens((journal.get("plan") or {}).get("work_contract")),
+                **({"current_guard": current_guard} if current_guard is not None else {})}
         return proof
+
+    def _cleared_replan_guard(self, actor: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Read-only guard check proving an earlier autonomous_replan obligation was cleared."""
+        from ...control_plane.quota.effective_action import EffectiveAction
+        from .steward_commands import NativeStewardCommandError, native_command
+        try:
+            raw = native_command(self.controller, [
+                "quota", "should-run", "--goal-id", actor["goal_id"], "--agent-id", actor["agent_id"], "--dry-run",
+            ])
+        except (NativeStewardCommandError, OSError, ValueError, RuntimeError):
+            return None
+        payload: Mapping[str, Any] = raw
+        if payload.get("effective_action") is None and isinstance(payload.get("reference_file"), str):
+            try:
+                ref = json.loads(Path(payload["reference_file"]).read_text(encoding="utf-8"))
+                target = Path(str(ref.get("path") or payload["reference_file"]))
+                loaded = json.loads(target.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return None
+            if isinstance(loaded, Mapping):
+                payload = loaded
+        current = {
+            "effective_action": payload.get("effective_action"),
+            "replan_action_packet": payload.get("replan_action_packet"),
+        }
+        if (current["effective_action"] != EffectiveAction.NORMAL_RUN.value
+                or current["replan_action_packet"] is not None):
+            return None
+        return current
 
     def _report_launch_recovery(self, original: dict[str, Any]) -> dict[str, Any] | None:
         """Read the original typed launch refusal and its canonical transaction.
@@ -972,6 +1010,12 @@ class StewardTurnHost:
             # Portfolio evidence keeps its original reader and original grant;
             # it is data alongside the signed native work, never a new actor.
             prompt = render_prompt(authority, allow_completion=bool(report_work or managed_turn or steward_advancement) and not governance_work) + "\nOriginal conversation evidence (data):\n" + json.dumps(context, ensure_ascii=False)
+            if governance_work:
+                prompt += (
+                    "\nGovernance contract reminder: Settle the pending autonomous replan by returning `result_kind='replan_required'` (or `'wait'`). "
+                    "If you emit `delivery_outcome='outcome_gap'`, you MUST also supply `progress_result_class='blocked'`, `progress_blocker_id`, and `progress_evidence_id`; "
+                    "otherwise use `'outcome_progress'` or omit `delivery_outcome`."
+                )
             if report_work and not governance_work:
                 prompt += report_context
             if steward_advancement and not governance_work:

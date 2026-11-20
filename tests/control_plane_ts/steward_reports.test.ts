@@ -510,4 +510,33 @@ test("only a proven original pre-execution replan refusal admits one correlated 
       ({...probe, inspection: {...inspection, recorded_effects: {...inspection.recorded_effects, [key]: value}}}))),
     {...probe, inspection: {...inspection, recovery_decision: {...inspection.recovery_decision, reinvoke_host: true}}},
   ]) assert.throws(() => admitStewardManagedTurn({...input, report_selection_recovery: {...proof, probe: changed}}));
+
+  const validationTurnKey = "sha256:" + "d".repeat(64);
+  const validationJournal = {schema_version: "loopx_turn_journal_v0", goal_id: p.actor.goal_id,
+    turn_key: validationTurnKey, status: "failed", validation_stage: "host_result_contract",
+    host: {kind: "codex-app-server", executable: "built-in"},
+    host_attempt_count: 1, result_kind: "validation_failed", completed_phases: ["host_execute", "typed_result"],
+    receipt: {ok: true, failed_phase: "validation", status: "failed",
+      commit_eligibility: {writeback: false, quota_spend: false, scheduler_ack: false}},
+    plan: {route: {kind: "replan_required", effective_action: "autonomous_replan_required"},
+      turn_envelope: {goal_id: p.actor.goal_id, agent_id: p.actor.agent_id, effective_action: "autonomous_replan_required"},
+      transaction: {settlement_plan: {identity: {goal_id: p.actor.goal_id, agent_id: p.actor.agent_id,
+        binding_kind: "autonomous_replan", turn_instance_id: request.turn_instance_id + ".replan"}}}}};
+  const validationInspection = {...inspection, journal_status: "failed"};
+  const clearedGuard = {effective_action: "normal_run", replan_action_packet: null};
+  const clearedProbe = {turn: {...source, turn_id: "d".repeat(32), delta_count: 18, upstream_turn_id: "model-turn"},
+    journal: validationJournal, inspection: validationInspection, current_guard: clearedGuard};
+  assert.equal(admitStewardManagedTurn({...input, report_selection_recovery: {...proof, probe: clearedProbe}}).observation_only, false);
+  for (const badProbe of [
+    {...clearedProbe, current_guard: {effective_action: "autonomous_replan_required", replan_action_packet: {obligation_id: "replan-1"}}},
+    {...clearedProbe, current_guard: {effective_action: "normal_run", replan_action_packet: {obligation_id: "replan-1"}}},
+    {...clearedProbe, journal: {...validationJournal, validation_stage: "task_postcondition"}},
+    {...clearedProbe, journal: {...validationJournal, receipt: {...validationJournal.receipt,
+      commit_eligibility: {writeback: true, quota_spend: false, scheduler_ack: false}}}},
+    {...clearedProbe, inspection: {...validationInspection, recorded_effects: {...inspection.recorded_effects, state_written: true}}},
+    {...clearedProbe, journal: {...validationJournal, plan: {...validationJournal.plan, transaction: {settlement_plan: {
+      identity: {...validationJournal.plan.transaction.settlement_plan.identity, turn_instance_id: "other.replan"}}}}}},
+  ]) {
+    assert.throws(() => admitStewardManagedTurn({...input, report_selection_recovery: {...proof, probe: badProbe}}));
+  }
 });
