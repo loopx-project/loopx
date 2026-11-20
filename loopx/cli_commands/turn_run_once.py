@@ -18,6 +18,7 @@ from ..control_plane.agents.workspace_guard import capture_delivery_workspace
 from ..control_plane.goals.first_party_host_admission import (
     FirstPartyHostGoalAdmission,
 )
+from ..control_plane.quota.execution_preparation import read_active_task_lease_epoch
 from ..control_plane.quota.heartbeat_receipt import (
     ensure_turn_heartbeat_settlement_receipt,
 )
@@ -117,6 +118,29 @@ def execute_turn_run_once(
         selected_todo = execution_context["selected_todo"]
         expected_todo_text_sha256 = execution_context["sha256"]
         task_lease_proof = execution_context.get("task_lease_proof") or None
+        task_lease_epoch = execution_context.get("task_lease_epoch")
+        rebound_lease_active = False
+        if (
+            args.execute
+            and getattr(args, "resume_turn_key", None)
+            and native_completion_lease_resolver is not None
+            and selected_todo.get("todo_id")
+        ):
+            resolved_lease = dict(native_completion_lease_resolver())
+            if resolved_lease.get("task_lease_idempotency_key") is not None:
+                rebound_proof = {
+                    "idempotency_key": resolved_lease["task_lease_idempotency_key"],
+                    "expected_version": resolved_lease["task_lease_expected_version"],
+                }
+                task_lease_epoch = read_active_task_lease_epoch(
+                    runtime_root=runtime_root,
+                    goal_id=args.goal_id,
+                    todo_id=str(selected_todo["todo_id"]),
+                    agent_id=args.agent_id,
+                    requested_proof=rebound_proof,
+                )
+                task_lease_proof = rebound_proof
+                rebound_lease_active = True
         transaction = (
             payload.get("transaction")
             if isinstance(payload.get("transaction"), Mapping)
@@ -289,7 +313,7 @@ def execute_turn_run_once(
                 dry_run=dry_run,
                 sync_global=not bool(args.no_global_sync),
                 goal_ref=goal_ref,
-                task_lease_proof=task_lease_proof,
+                task_lease_proof=None if completion_todo_id is not None else task_lease_proof,
             )
         # A Todo-less native governance Turn has no business artifact/argv.
         # Its independent validator is the canonical semantic writeback preview,
@@ -312,6 +336,8 @@ def execute_turn_run_once(
             effect_ref: str,
         ) -> dict[str, object]:
             require_effect_ref(effect_ref, SettlementStepKind.DURABLE_WRITEBACK)
+            if args.execute and rebound_lease_active:
+                bind_heartbeat_settlement_receipt()
             refresh = refresh_candidate(result, completion_todo_id=completion_todo_id,
                 completion_turn_key=completion_turn_key)
             if refresh.get("ok") and (
@@ -451,6 +477,8 @@ def execute_turn_run_once(
             effect_ref: str,
         ) -> dict[str, object]:
             require_effect_ref(effect_ref, SettlementStepKind.DURABLE_WRITEBACK)
+            if args.execute and rebound_lease_active:
+                bind_heartbeat_settlement_receipt()
             prior = completion_readback()
             if prior is None:
                 # A rejected attachment must not leave the Todo completed.
@@ -742,10 +770,7 @@ def execute_turn_run_once(
 
             settlement_admission = codex_settlement_admission
 
-        def on_managed_start_admitted() -> None:
-            if settlement_identity.request_subject is not None:
-                require_current_request_operation(request_locator, settlement_identity,
-                    registry_path=registry_path, runtime_root=runtime_root, workspace=project)
+        def bind_heartbeat_settlement_receipt() -> None:
             replan_packet = execution_context["replan_action_packet"]
             capability_guard = (
                 replan_packet.get("capability_guard")
@@ -765,8 +790,14 @@ def execute_turn_run_once(
                 ),
                 goal_ref=goal_ref,
                 task_lease_proof=task_lease_proof,
-                task_lease_epoch=execution_context.get("task_lease_epoch"),
+                task_lease_epoch=task_lease_epoch,
             )
+
+        def on_managed_start_admitted() -> None:
+            if settlement_identity.request_subject is not None:
+                require_current_request_operation(request_locator, settlement_identity,
+                    registry_path=registry_path, runtime_root=runtime_root, workspace=project)
+            bind_heartbeat_settlement_receipt()
 
         managed_cadence = managed_cadence_start(
             runtime_root=runtime_root,

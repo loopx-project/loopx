@@ -267,7 +267,8 @@ class ManagedSessionTurn:
 
     def admit(self, request: dict[str, Any], *, turn: dict[str, Any] | None = None,
               settlement_recovery: dict[str, Any] | None = None,
-              selection_recovery: dict[str, Any] | None = None) -> dict[str, Any]:
+              selection_recovery: dict[str, Any] | None = None,
+              frozen_contract_recovery: dict[str, Any] | None = None) -> dict[str, Any]:
         from .conversation_bindings import ChatConversationBindings
         from .steward_turn import StewardTurnHost
         if self.controller.closed.is_set():
@@ -310,6 +311,7 @@ class ManagedSessionTurn:
             "goal_active": bool(goal and goal.get("status") == "active" and not goal_is_stopped(goal)),
             "monitor_todo": monitor, **report, **creation,
             **({"report_settlement_recovery": settlement_recovery} if settlement_recovery is not None else {}),
+            **({"report_frozen_contract_recovery": frozen_contract_recovery} if frozen_contract_recovery is not None else {}),
             **({"report_selection_recovery": selection_recovery} if selection_recovery is not None else {}),
             **StewardTurnHost(self.controller).report_quota_basis(request),
             **StewardTurnHost(self.controller).monitor_restart_basis(request),
