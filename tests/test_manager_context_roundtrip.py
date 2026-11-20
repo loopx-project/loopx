@@ -2718,3 +2718,109 @@ def test_explicit_channel_return_completes_transcript_only_without_sender(flow):
     ]
     assert len(returned) == 1 and returned[0]["turn_id"] == turn["turn_id"]
     assert reply_status(root, receipt)[0]["status"] == "delivered"
+
+
+def test_return_scan_cache_skips_unchanged_terminal_records_and_invalidates_on_change(flow, monkeypatch):
+    from loopx.capabilities.manager_context import roundtrip
+
+    root, registry, store, create = flow
+    _, _, r1 = create()
+    _, _, r2 = create()
+    for rid in (r1["request_id"], r2["request_id"]):
+        acknowledge(root, "research", "worker", rid, "adopt", "Checked")
+        report(root, "research", "worker", rid, "conclusion", f"Conclusion for {rid[:8]}.")
+
+    cache = roundtrip._TerminalReturnScanCache()
+    assert drain(root, registry, store, None, scan_cache=cache) == 2
+
+    scan_batches = []
+    original_rpc = roundtrip.effect_runtime_result
+
+    def spy_rpc(name, payload, *args, **kwargs):
+        if name == "manager.return_delivery.transact" and payload.get("phase") == "scan":
+            scan_batches.append([(row["request_id"], row["result_key"]) for row in payload["candidates"]])
+        return original_rpc(name, payload, *args, **kwargs)
+
+    monkeypatch.setattr(roundtrip, "effect_runtime_result", spy_rpc)
+
+    # First scan with cache sees both terminal .delivery.json files once and caches them.
+    assert drain(root, registry, store, None, scan_cache=cache) == 0
+    assert len(scan_batches) == 1 and len(scan_batches[0]) == 2
+
+    # Subsequent scan skips TS scan completely for unchanged terminal records.
+    scan_batches.clear()
+    assert drain(root, registry, store, None, scan_cache=cache) == 0
+    assert scan_batches == []
+
+    # Direct drain() without scan_cache retains default-off full-scan parity.
+    assert drain(root, registry, store, None) == 0
+    assert len(scan_batches) == 1 and len(scan_batches[0]) == 2
+
+    # Modifying r1's delivery file invalidates only r1 while leaving r2 cached.
+    deliv1 = _root(root) / "replies" / r1["request_id"] / "conclusion.delivery.json"
+    saved1 = json.loads(deliv1.read_text())
+    deliv1.write_text(json.dumps({**saved1, "touched": True}))
+    scan_batches.clear()
+    assert drain(root, registry, store, None, scan_cache=cache) == 0
+    assert scan_batches == [[(r1["request_id"], "conclusion")]]
+
+    # Re-warmed r1 is cached again; unlinking r1 invalidates only r1 immediately.
+    scan_batches.clear()
+    assert drain(root, registry, store, None, scan_cache=cache) == 0
+    assert scan_batches == []
+    deliv1.unlink()
+    assert drain(root, registry, store, None, scan_cache=cache) == 1
+    assert scan_batches == [[(r1["request_id"], "conclusion")]]
+
+
+def test_return_scan_gates_predecessor_blocked_followups_without_locking_or_caching(flow, monkeypatch):
+    from loopx.capabilities.manager_context import roundtrip
+
+    root, registry, store, create = flow
+    _, _, receipt = create(external=True)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Checked")
+    report(root, "research", "worker", rid, "conclusion", "Initial external conclusion.")
+    report(root, "research", "worker", rid, "conclusion", "Follow-up update.", update_id="u1")
+
+    t0 = datetime(2026, 11, 20, 2, 0, 0, tzinfo=timezone.utc)
+    cache = roundtrip._TerminalReturnScanCache()
+
+    deliver_calls = []
+    rpc_phases = []
+    orig_deliver = roundtrip._deliver_return
+    orig_rpc = roundtrip.effect_runtime_result
+
+    def spy_deliver(*args, **kwargs):
+        deliver_calls.append(args[1].name)
+        return orig_deliver(*args, **kwargs)
+
+    def spy_rpc(name, payload, *args, **kwargs):
+        if name == "manager.return_delivery.transact":
+            rpc_phases.append((payload.get("phase"), payload.get("result_key")))
+        return orig_rpc(name, payload, *args, **kwargs)
+
+    monkeypatch.setattr(roundtrip, "_deliver_return", spy_deliver)
+    monkeypatch.setattr(roundtrip, "effect_runtime_result", spy_rpc)
+
+    # Tick 1: conclusion fails without sender -> retry_pending; follow-up is gated before _deliver_return.
+    assert drain(root, registry, store, None, now=t0, scan_cache=cache) == 1
+    assert deliver_calls == ["conclusion.json"]
+
+    # Tick 2 during retry backoff: neither entry invokes _deliver_return or "prepare" RPC.
+    deliver_calls.clear()
+    rpc_phases.clear()
+    assert drain(root, registry, store, None, now=t0 + timedelta(seconds=2), scan_cache=cache) == 0
+    assert deliver_calls == []
+    assert rpc_phases == [("scan", None)]
+
+    # Tick 3 once backoff elapses: conclusion delivers; Tick 4 delivers follow-up; then both cache as terminal.
+    def sender(*_):
+        return {"reply_verified": True, "idempotency_key": "sha256:followup-proof"}
+    t2 = t0 + timedelta(seconds=15)
+    assert drain(root, registry, store, sender, now=t2, scan_cache=cache) == 1
+    assert drain(root, registry, store, sender, now=t2, scan_cache=cache) == 1
+    assert drain(root, registry, store, sender, now=t2, scan_cache=cache) == 0
+    rpc_phases.clear()
+    assert drain(root, registry, store, sender, now=t2, scan_cache=cache) == 0
+    assert rpc_phases == []
