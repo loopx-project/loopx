@@ -200,12 +200,22 @@ def test_ordinary_claim_uses_its_independent_worktree(tmp_path, monkeypatch, cap
             "reason": "independent_worktree_integration_overlap",
         }]
         command = shlex.split(accepted["integration_overlap_detail_command"])
-        assert command[-6:] == ["todo", "receipt", "--goal-id", goal, "--operation-id", "claim-b"]
+        assert command[-7:] == ["todo", "receipt", "--goal-id", goal, "--operation-id", "claim-b", "--thin"]
         observed = subprocess.run(command, capture_output=True, text=True, timeout=30, check=True)
         detail = json.loads(observed.stdout)
         assert detail["ok"] and detail["status"] == "found"
+        assert detail["thin"] is True
         assert detail["provider_revision"] == accepted["provider_revision"]
-        assert detail["receipts"][0]["result"]["integration_overlap_advisories"] == [overlap]
+        original = subprocess.run(command[:-1], capture_output=True, text=True, timeout=30, check=True)
+        full_receipt = json.loads(original.stdout)["receipts"][0]
+        detail_receipt = detail["receipts"][0]
+        assert detail_receipt == {**full_receipt, "result": {
+            "claim_operation_id": "claim-b",
+            "todo_id": "todo_ordinary_b",
+            "integration_overlap_advisories": [overlap],
+        }}
+        assert full_receipt["result"]["lease"]["owner"] == "agent-b"
+        assert len(observed.stdout.encode("utf-8")) < len(original.stdout.encode("utf-8"))
     else:
         assert accepted["integration_overlap_advisories"] == [overlap]
         assert "integration_overlap_detail_command" not in accepted
@@ -226,6 +236,25 @@ def test_ordinary_claim_uses_its_independent_worktree(tmp_path, monkeypatch, cap
         late = json.loads(observed.stdout)
         assert released["provider_revision"] != detail["provider_revision"]
         assert late == detail
+        original = subprocess.run(command[:-1], capture_output=True, text=True, timeout=30, check=True)
+        assert json.loads(original.stdout)["receipts"][0] == full_receipt
+        missing = subprocess.run(
+            [*command[:-2], "missing-claim", "--thin"], capture_output=True, text=True, timeout=30, check=True,
+        )
+        assert json.loads(missing.stdout)["status"] == "missing"
+        subprocess.run([
+            *command[:-7], "todo", "add", "--goal-id", goal, "--role", "agent",
+            "--text", "A different operation", "--operation-id", "add-task",
+        ], capture_output=True, text=True, timeout=30, check=True)
+        original_add = subprocess.run(
+            [*command[:-2], "add-task"], capture_output=True, text=True, timeout=30, check=True,
+        )
+        assert json.loads(original_add.stdout)["status"] == "found"
+        rejected = subprocess.run(
+            [*command[:-2], "add-task", "--thin"], capture_output=True, text=True, timeout=30,
+        )
+        assert rejected.returncode == 1
+        assert "requires an exact managed claim receipt" in json.loads(rejected.stdout)["error"]
     assert claim("b", "claim-b", expected=1)["ok"] is False
     assert not cli(["task-lease", "inspect"], "b")["active"]
 

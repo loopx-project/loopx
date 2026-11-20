@@ -557,9 +557,12 @@ A successful managed `todo claim --thin` JSON reply can show peer worktree
 overlap advice with `write_scope_count` in place of long path lists. It keeps
 the other Todo, owner and overlap reason. Run `integration_overlap_detail_command`
 to read the complete advice under `receipts[].result.integration_overlap_advisories`
-for that claim operation. This read reports what the claim observed and remains
-available after a lease changes. Use `task-lease inspect` for a current grant.
-An ordinary claim reply retains the full path lists.
+for that claim operation. The command uses `todo receipt --thin --format json`
+to return the receipt identity and historical advice without copying the
+claimant's lease. The response includes `thin: true`. This read remains
+available after a lease changes. Omit `--thin` to read the entire receipt.
+Use `task-lease inspect` for a current grant. An ordinary claim reply retains
+the full path lists.
 
 For a selected Todo, preparation reads the canonical Todo and leases at one
 checked provider revision. The internal read returns only that Todo's status,

@@ -172,12 +172,45 @@ def _thin_claim_overlap_advisories(payload: dict[str, object], route: Sequence[s
             for row in advisories
         ],
         "integration_overlap_detail_command": shlex.join([
-            *route, "todo", "receipt", "--goal-id", goal_id, "--operation-id", operation_id,
+            *route, "todo", "receipt", "--goal-id", goal_id, "--operation-id", operation_id, "--thin",
         ]),
     }
     original = {"integration_overlap_advisories": advisories}
     if len(report_json_text(compact).encode("utf-8")) < len(report_json_text(original).encode("utf-8")):
         payload.update(compact)
+
+
+def _thin_claim_receipt(payload: dict[str, object], goal_id: str, operation_id: str) -> None:
+    """Project historical overlap advice from the exact canonical claim receipt."""
+    if payload.get("status") == "found":
+        records = payload.get("receipts")
+        receipt = records[0] if isinstance(records, list) and len(records) == 1 else None
+        result = receipt.get("result") if isinstance(receipt, dict) else None
+        if (
+            not isinstance(receipt, dict)
+            or receipt.get("schema_version") != "loopx_coordination_todo_claim_receipt_v0"
+            or receipt.get("goal_id") != goal_id
+            or receipt.get("operation_id") != operation_id
+            or not isinstance(result, dict)
+            or result.get("claim_operation_id") != operation_id
+            or result.get("execution_managed") is not True
+            or not isinstance(result.get("todo_id"), str)
+            or not result["todo_id"]
+            or not isinstance(result.get("integration_overlap_advisories"), list)
+        ):
+            raise ValueError(
+                "todo receipt --thin requires an exact managed claim receipt with overlap advice. "
+                "Omit --thin for the full receipt."
+            )
+        payload["receipts"] = [{
+            **receipt,
+            "result": {
+                "claim_operation_id": operation_id,
+                "todo_id": result["todo_id"],
+                "integration_overlap_advisories": result["integration_overlap_advisories"],
+            },
+        }]
+    payload["thin"] = True
 
 
 def handle_todo_command(
@@ -249,6 +282,8 @@ def handle_todo_command(
             )
         elif args.todo_command == "receipt":
             validate_todo_receipt_options(args)
+            if args.todo_thin and output_format != "json":
+                raise ValueError("todo receipt --thin requires --format json")
             runtime_root = resolve_runtime_root(
                 load_registry(registry_path), runtime_root_arg
             )
@@ -275,6 +310,8 @@ def handle_todo_command(
                 "command": "receipt",
                 **result,
             }
+            if args.todo_thin:
+                _thin_claim_receipt(payload, args.goal_id, args.operation_id)
         elif args.todo_command == "result-read":
             validate_todo_result_read_options(args)
             registry = load_registry(registry_path)
