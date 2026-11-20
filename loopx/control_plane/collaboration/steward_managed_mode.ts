@@ -464,8 +464,10 @@ export function normalizeStewardManagedActor(value: unknown): JsonObject {
 export function observeStewardNativeExecutor(params: JsonObject): JsonObject {
   const binding = requireJsonObject(params.binding, "steward binding");
   const session = requireJsonObject(params.session, "original steward Session");
-  const supported = session.agent_id === "codex" && (binding.executor_endpoint_id === "codex"
-    || boundConversationExecutorMatches(binding, session));
+  const supported = (session.agent_id === "codex" && (binding.executor_endpoint_id === "codex"
+    || boundConversationExecutorMatches(binding, session)))
+    || (binding.executor_endpoint_id === "codex" && session.agent_id === "antigravity"
+      && boundConversationExecutorMatches(binding, session));
   return {execution_available: supported, ...(!supported ? {execution_error_code: "unsupported_executor"} : {})};
 }
 

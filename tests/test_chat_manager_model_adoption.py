@@ -30,7 +30,7 @@ from loopx.chat_store import ChatSessionStore
 from loopx.extensions.lark.conversation_identity import identity_ref
 
 
-def configure(root, *, model, effort, endpoint="codex", policy="preferred"):
+def configure(root, *, model, effort, endpoint="codex", policy="preferred", endpoint_models=None):
     document = {
         "schema_version": "loopx_machine_configuration_v0",
         "namespaces": {"steward_executor": {
@@ -40,6 +40,7 @@ def configure(root, *, model, effort, endpoint="codex", policy="preferred"):
             "executor_endpoint": endpoint,
             "executor_model": model,
             "executor_reasoning_effort": effort,
+            **({"endpoint_models": endpoint_models} if endpoint_models is not None else {}),
         }},
     }
     registry = build_builtin_machine_configuration_registry()
@@ -748,3 +749,145 @@ def test_manager_session_model_allocation_ignores_partial_pre_v0_record(conversa
     partial_session = {**session, "manager_executor_allocation": partial_allocation}
     assert manager_session_model_allocation(runtime, partial_session) is None
     assert partial_session["manager_executor_allocation"] == partial_allocation
+
+
+def test_codex_primary_flexible_quota_route_selects_carbon_and_restores_codex(conversation, monkeypatch):
+    import sys
+    from datetime import datetime, timedelta, timezone
+    from types import ModuleType
+    from loopx.capabilities.native_chat.antigravity_adapter import AntigravityAdapter
+    from loopx.chat_manager import manager_session_quota_route
+
+    root, store, runtime, session, _starts = conversation
+    configure(root, model="gpt-6.2-sol", effort="xhigh", endpoint="codex", policy="flexible")
+    store.update_session(session["session_id"], upstream_thread_id="codex-thread-1",
+        agent_model_id="gpt-6.2-sol", agent_reasoning_effort="xhigh")
+
+    parent = ModuleType("loopx_codex_provider_routing")
+    module = ModuleType("loopx_codex_provider_routing.native")
+
+    class Accounts:
+        def __init__(self, path):
+            assert path == runtime.coordination_runtime_root
+
+        def model_transport(self, **_parameters):
+            return None
+
+        def steward_route(self, *, codex_home, primary, pool, current, primary_capacity,
+                          fallback_capacity=None, blocked_primary=None, model=None):
+            assert primary == "codex" and set(pool) == {"codex", "antigravity"}
+            if current == "antigravity":
+                return {"endpoint": "codex", "blocked_primary": blocked_primary}
+            if fallback_capacity is None:
+                return {"endpoint": None, "blocked_primary": blocked_primary}
+            return {"endpoint": "antigravity", "blocked_primary": blocked_primary}
+
+    module.NativeAccounts = Accounts
+    monkeypatch.setitem(sys.modules, parent.__name__, parent)
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    monkeypatch.setattr(runtime, "capabilities", lambda: [
+        {"agent_id": "codex", "available": True},
+        {"agent_id": "antigravity", "available": True},
+    ])
+    monkeypatch.setattr(
+        AntigravityAdapter,
+        "endpoint_model_capacity",
+        staticmethod(lambda *, model_id, **_kw: {
+            "observed_at": 1767225600.0,
+            "account_ref": "b" * 64,
+            "model_id": model_id,
+            "execution_id": "probe-1",
+            "remaining_fraction": 0.99,
+            "reset_time": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+            "quota_exhausted": False,
+            "normal_completion": True,
+        }),
+    )
+
+    loaded = store.load_session(session["session_id"])
+    neutral_route = manager_session_quota_route(runtime, loaded)
+    assert neutral_route is not None
+    neutral_alloc = neutral_route["allocation"]
+    assert neutral_alloc["executor_endpoint"] == "antigravity"
+    assert neutral_alloc["model"] == "gemini-4-argon-high"
+    assert neutral_alloc["model_source"] == "vendor_default"
+    assert neutral_alloc["reasoning_effort"] == "high"
+    assert neutral_alloc["configured_model"] is None
+
+    configure(
+        root,
+        model="gpt-6.2-sol",
+        effort="xhigh",
+        endpoint="codex",
+        policy="flexible",
+        endpoint_models={"antigravity": {"model": "gemini-4-carbon-high", "reasoning_effort": "high"}},
+    )
+    routed_to_ag = manager_session_quota_route(runtime, loaded)
+    assert routed_to_ag is not None
+    alloc_ag = routed_to_ag["allocation"]
+    assert alloc_ag["executor_endpoint"] == "antigravity"
+    assert alloc_ag["allocation_reason"] == "flexible_availability_fallback"
+    assert alloc_ag["model"] == "gemini-4-carbon-high"
+    assert alloc_ag["model_source"] == "machine_configuration"
+    assert alloc_ag["reasoning_effort"] == "high"
+    assert alloc_ag["configured_model"] == "gemini-4-carbon-high"
+    assert alloc_ag["configured_reasoning_effort"] == "high"
+
+    # Store transition preserves Codex provenance and allows subsequent recovery back to Codex.
+    turn1, _ = store.create_turn(session["session_id"], client_turn_id="switch-ag", message="Switch to Carbon")
+    store.update_session(
+        session["session_id"],
+        status="ready",
+        active_turn_id=turn1["turn_id"],
+        expected_upstream_thread_id="codex-thread-1",
+        agent_id="antigravity",
+        executor_endpoint_id="antigravity",
+        adapter_kind="antigravity_ls",
+        upstream_mode="default",
+        upstream_thread_id="ag-cascade-1",
+        agent_model_id=alloc_ag["model"],
+        agent_reasoning_effort=alloc_ag["reasoning_effort"],
+        manager_executor_allocation=alloc_ag,
+        upstream_context_history=[{
+            "thread_id": "codex-thread-1",
+            "manager_context_version": loaded.get("manager_context_version"),
+            "agent_id": "codex",
+            "agent_model_id": "gpt-6.2-sol",
+        }],
+    )
+    store.update_turn(session["session_id"], turn1["turn_id"], status="completed")
+    store.update_session(session["session_id"], active_turn_id=None)
+
+    on_ag = store.load_session(session["session_id"])
+    routed_back = manager_session_quota_route(runtime, on_ag)
+    assert routed_back is not None
+    alloc_codex = routed_back["allocation"]
+    assert alloc_codex["executor_endpoint"] == "codex"
+    assert alloc_codex["model"] == "gpt-6.2-sol"
+    assert alloc_codex["reasoning_effort"] == "xhigh"
+
+    turn2, _ = store.create_turn(session["session_id"], client_turn_id="restore-codex", message="Back to Codex")
+    store.update_session(
+        session["session_id"],
+        status="ready",
+        active_turn_id=turn2["turn_id"],
+        expected_upstream_thread_id="ag-cascade-1",
+        agent_id="codex",
+        executor_endpoint_id="codex",
+        adapter_kind="codex_app_server",
+        upstream_mode="chat",
+        upstream_thread_id="codex-thread-2",
+        agent_model_id=alloc_codex["model"],
+        agent_reasoning_effort=alloc_codex["reasoning_effort"],
+        manager_executor_allocation=alloc_codex,
+        upstream_context_history=[
+            *on_ag["upstream_context_history"],
+            {
+                "thread_id": "ag-cascade-1",
+                "manager_context_version": on_ag.get("manager_context_version"),
+                "agent_id": "antigravity",
+                "agent_model_id": "gemini-4-carbon-high",
+            },
+        ],
+    )
+    assert store.load_session(session["session_id"])["agent_id"] == "codex"

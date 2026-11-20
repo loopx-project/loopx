@@ -844,6 +844,7 @@ class StewardTurnHost:
         from ...cli import build_parser
         from ...cli_commands.turn import handle_turn_command
         from ...control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt, parse_model_json, build_result
+        from .antigravity_adapter import AntigravityAdapter
         from .codex_adapter import CodexAppServerAdapter
 
         turn = self.store.load_turn(session_id, turn_id)
@@ -878,8 +879,10 @@ class StewardTurnHost:
             monitor = StewardMonitor(self.controller)
             todo = next((row for row in monitor.todos(actor) if row["todo_id"] == request["todo_id"]), None)
             return monitor.observe(host=self, request=request, turn=turn, context=context, todo=todo)
-        if not isinstance(adapter, CodexAppServerAdapter):
+        if local_session and not isinstance(adapter, CodexAppServerAdapter):
             raise ValueError("native steward work requires the original Codex app-server adapter")
+        if not local_session and not isinstance(adapter, (CodexAppServerAdapter, AntigravityAdapter)):
+            raise ValueError("native steward work requires the original Codex app-server or Antigravity adapter")
         original_thread = adapter.upstream_thread_id
         from .steward_reports import report_service
         reports, report_owner_key = report_service(self.controller, actor) if report_work else (None, None)
@@ -997,7 +1000,8 @@ class StewardTurnHost:
                     "source_todo_id": basis["definition"]["source_task"]["todo_id"],
                     "window_start": basis["window"]["start_at"], "window_end": basis["window"]["due_at"],
                 }, ensure_ascii=False)
-            previous_guard = adapter.session._launch_guard
+            guard_owner = adapter.session if isinstance(adapter, CodexAppServerAdapter) else adapter
+            previous_guard = guard_owner._launch_guard
 
             @contextmanager
             def launch():
@@ -1022,7 +1026,7 @@ class StewardTurnHost:
                         raise BuiltInHostError(str(exc), failure_kind="contract_rejected") from exc
                     yield
 
-            adapter.session._launch_guard = launch
+            guard_owner._launch_guard = launch
             try:
                 if managed_turn and not governance_work:
                     from ...control_plane.effect_runtime import effect_runtime_result
@@ -1033,7 +1037,7 @@ class StewardTurnHost:
                 else:
                     response = adapter.start_turn(prompt, event_sink)
             finally:
-                adapter.session._launch_guard = previous_guard
+                guard_owner._launch_guard = previous_guard
             current()  # Revocation/stop/retarget after a long model call wins.
             candidate = parse_model_json(str(response.get("message") or ""))
             kernel_candidate = dict(candidate) if candidate is not None else None
@@ -1054,7 +1058,8 @@ class StewardTurnHost:
                     # The kernel still runs its independent validator and lease
                     # fence before closing only this window's generation Todo.
                     kernel_candidate["result_kind"] = "validated_completion"
-            built = build_result(native_request, kernel_candidate, host_name="Codex app-server",
+            built = build_result(native_request, kernel_candidate,
+                host_name="Antigravity" if isinstance(adapter, AntigravityAdapter) else "Codex app-server",
                 **({"allow_completion": True} if (report_work or managed_turn or steward_advancement) and not governance_work else {}))
             managed_answer = str(built.get("summary") or "") if (managed_turn or steward_advancement) else ""
             return built
