@@ -279,3 +279,98 @@ def test_selection_recovery_admission_resume_tolerates_validator_python_upgrade(
     assert reports.health(owner)["publication_verified"]
     task = next(row for row in StewardMonitor(runtime).todos(actor) if row["todo_id"] == done["loopx_request"]["todo_id"])
     assert task["status"] == "done"
+
+
+def test_steward_report_normalizes_profile_minimum_scale_shorthand(steward, tmp_path, monkeypatch):
+    _, runtime, _, transport, binding, _, _ = steward
+    sid, _, reports, _ = configured(steward, tmp_path, monkeypatch, "sqlite")
+    install_model(steward, tmp_path, sid)
+    helper = tmp_path / "report_model.py"
+    helper.write_text(
+        helper.read_text(encoding="utf-8").replace(
+            '"delivery_batch_scale": "single_surface"',
+            '"delivery_batch_scale": "multi_surface_or_implementation"',
+        ),
+        encoding="utf-8",
+    )
+
+    done = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert done["response"]["native_loopx"]["status"] == "committed", done
+    assert transport.steward_reports.reconcile() == 1
+    assert reports.health(binding["binding_id"])["publication_verified"]
+
+
+def test_frozen_report_recovers_host_result_contract_failure_without_model_call(
+    steward, tmp_path, monkeypatch, caplog,
+):
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    import loopx.capabilities.native_chat.steward_turn as steward_turn_mod
+    from loopx.configure_goal import configure_goal
+
+    _, runtime, _, transport, binding, _, _ = steward
+    point = datetime.now(timezone.utc).replace(hour=9, minute=1, second=0, microsecond=0) - timedelta(days=2)
+
+    class CalendarClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return point.astimezone(tz) if tz else point.replace(tzinfo=None)
+
+    monkeypatch.setattr(report_host, "datetime", CalendarClock)
+    monkeypatch.setattr(cadence_runtime, "datetime", CalendarClock)
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, "sqlite")
+    owner = binding["binding_id"]
+    assert configure_goal(
+        registry_path=runtime.registry_path, goal_id=actor["goal_id"],
+        execution_replan_after_turns=1, execute=True,
+    )["ok"]
+    install_model(steward, tmp_path, sid)
+    assert finish(runtime, pump_steward_monitors(runtime)[0])["response"]["native_loopx"]["status"] == "committed"
+    assert transport.steward_reports.reconcile() == 1
+
+    point += timedelta(days=1)
+    runtime._steward_monitor_next_check.clear()
+    rejected = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert rejected["response"]["native_loopx"]["error_code"] == "turn_todo_selection_deferred"
+
+    helper = tmp_path / "report_model.py"
+    helper.write_text(
+        helper.read_text(encoding="utf-8").replace(
+            '"delivery_batch_scale": "single_surface"',
+            '"delivery_batch_scale": "multi_surface_or_implementation"',
+        ),
+        encoding="utf-8",
+    )
+    assert configure_goal(
+        registry_path=runtime.registry_path, goal_id=actor["goal_id"],
+        execution_replan_after_turns=6, execute=True,
+    )["ok"]
+    runtime._steward_monitor_next_check.clear()
+    with monkeypatch.context() as unnormalized:
+        unnormalized.setattr(
+            steward_turn_mod,
+            "_normalize_report_kernel_candidate",
+            lambda candidate: {k: v for k, v in candidate.items() if k != "editorial_response"} | {
+                "result_kind": "validated_completion",
+            },
+        )
+        resumed = finish(runtime, pump_steward_monitors(runtime)[0])
+    native = resumed["response"]["native_loopx"]
+    assert native["status"] == "failed"
+    assert native["result_kind"] == "validation_failed"
+    assert native["validation_stage"] == "host_result_contract"
+    window = read_cadence_journal(runtime_root=reports.root, goal_id=actor["goal_id"])["window"]
+    assert (attempt_directory(reports.root, window) / "private-generation.json").is_file()
+
+    model_calls = steward[5].read_bytes()
+    runtime._steward_monitor_next_check.clear()
+    with caplog.at_level(logging.WARNING):
+        assert not pump_steward_monitors(runtime)
+    assert "An original steward report is unavailable" not in caplog.text
+    assert steward[5].read_bytes() == model_calls
+    assert transport.steward_reports.reconcile() == 1
+    assert reports.health(owner)["publication_verified"]
+    task = next(
+        row for row in StewardMonitor(runtime).todos(actor)
+        if row["todo_id"] == resumed["loopx_request"]["todo_id"]
+    )
+    assert task["status"] == "done"

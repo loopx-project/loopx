@@ -434,7 +434,7 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
         || todo.action_kind !== "generate_periodic_report" || !(todo.status === "open" && !recovery || settlementOnly)) {
       throw new EffectRuntimeRequestError("report execution requires the original Session subscription, window and task");
     }
-  } else if (params.report_settlement_recovery != null) {
+  } else if (params.report_settlement_recovery != null || params.report_frozen_contract_recovery != null) {
     throw new EffectRuntimeRequestError("report recovery belongs only to its original calendar report");
   }
   if (scheduledWork) {
@@ -491,9 +491,34 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
 
 /** Both original conversation hosts use the native journal's no-model recovery. */
 function reportSettlementOnly(params: JsonObject, request: JsonObject, todo: JsonObject): boolean {
-  if (params.report_settlement_recovery == null) return false;
+  if (params.report_settlement_recovery == null) {
+    if (params.report_frozen_contract_recovery != null) {
+      throw new EffectRuntimeRequestError("original report recovery requires validated remaining effects without a model");
+    }
+    return false;
+  }
   const recovery = requireJsonObject(params.report_settlement_recovery, "native original report recovery");
   const decision = requireJsonObject(recovery.recovery_decision, "native journal recovery decision");
+  if (params.report_frozen_contract_recovery != null) {
+    const frozen = requireJsonObject(params.report_frozen_contract_recovery, "frozen report contract recovery");
+    const effects = requireJsonObject(recovery.recorded_effects, "native recorded effects");
+    const acceptedFrozen = recovery.schema_version === "loopx_turn_journal_inspection_v1" && recovery.ok === true
+      && recovery.goal_matches === true && recovery.owner_matches === true && recovery.turn_key_matches === true
+      && recovery.journal_consistent === true && todo.status === "open" && recovery.journal_status === "failed"
+      && Array.isArray(recovery.completed_phases) && recovery.completed_phases.length === 2
+      && recovery.completed_phases[0] === "host_execute" && recovery.completed_phases[1] === "typed_result"
+      && decision.action === "continue" && decision.resume_from === "host_execute" && decision.reinvoke_host === true
+      && effects.host_invoked === true && effects.state_written === false
+      && effects.quota_spent === false && effects.scheduler_acknowledged === false
+      && typeof frozen.turn_key === "string" && ENVELOPED_SHA256_PATTERN.test(frozen.turn_key)
+      && frozen.result_kind === "validation_failed" && frozen.validation_stage === "host_result_contract"
+      && frozen.host_attempt_count === 1
+      && frozen.generation_verified === true && frozen.saved_candidate_verified === true;
+    if (!acceptedFrozen || params.preparing_model_context === true) {
+      throw new EffectRuntimeRequestError("original report recovery requires validated remaining effects without a model");
+    }
+    return true;
+  }
   const cachedGeneration = todo.status === "open" && recovery.journal_status === "failed"
     && decision.action === "continue" && decision.resume_from === "validation"
     && Array.isArray(recovery.completed_phases) && recovery.completed_phases.length === 2
@@ -705,7 +730,8 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
       throw new EffectRuntimeRequestError("launch recovery must retain the original native Turn key");
     }
   } else if (request.report_window_id !== undefined || request.report_subscription_revision !== undefined
-      || request.resume_turn_key !== undefined || params.report_settlement_recovery != null || params.report_launch_recovery != null) {
+      || request.resume_turn_key !== undefined || params.report_settlement_recovery != null
+      || params.report_frozen_contract_recovery != null || params.report_launch_recovery != null) {
     throw new EffectRuntimeRequestError("report fields belong only to an original calendar report");
   }
   let refreshScope = false;

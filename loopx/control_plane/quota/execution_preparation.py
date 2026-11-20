@@ -247,6 +247,27 @@ def commit_execution_loss_closeout(
     return result
 
 
+def read_active_task_lease_epoch(
+    *,
+    runtime_root: Path,
+    goal_id: str,
+    todo_id: str,
+    agent_id: str,
+    requested_proof: Mapping[str, Any],
+) -> int | None:
+    """Return the verified current lease epoch for an active resumed execution lease."""
+    snapshot = _read_execution_snapshot(runtime_root, goal_id, todo_id)
+    if snapshot is None:
+        raise RefreshTaskLeaseUnavailable("The selected Todo's execution authority could not be read.")
+    if snapshot.get("handoff_mode") != "hard_lease":
+        return None
+    current = _project_execution_facts(_execution_facts(snapshot, goal_id, todo_id, agent_id))
+    if current.get("state") != "ready" or current.get("lease_proof") != dict(requested_proof):
+        raise RefreshTaskLeaseUnavailable("The resumed Turn's active task lease could not be verified.")
+    epoch = current.get("lease_epoch")
+    return int(epoch) if epoch is not None else None
+
+
 def prepared_lease_receipt_fields(
     proof: Mapping[str, Any], *, lease_epoch: int | None = None,
 ) -> dict[str, Any]:
