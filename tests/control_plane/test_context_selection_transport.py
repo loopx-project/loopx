@@ -1,12 +1,17 @@
 """Selection planning may omit scalar prose; captured values and navigation stay exact."""
 import argparse
+import errno
 import hashlib
 import json
+import shlex
+import tempfile
 
 import pytest
 
+from loopx import cli
 from loopx.cli_commands.quota_capture import read_context_capture
 from loopx.control_plane.quota import turn_envelope
+from loopx.control_plane.turn_driver.decision_capture import context_capture_read_command, write_context_read_reference
 
 
 def captured_reader(tmp_path, value, **options):
@@ -116,3 +121,54 @@ def test_full_reader_stays_independent_of_selection_runtime(tmp_path, transporte
     page = read_context_capture(args)
     assert page["ok"] and page["eof"] and page["content"].encode() == raw
     assert transported_contexts == []
+
+
+@pytest.mark.parametrize("mode", ["direct", "continuation", "reference"])
+def test_selected_reader_retries_exact_capture_after_runtime_tempdir_failure(tmp_path, monkeypatch, capsys, mode):
+    value = {"stop": "Keep the complete original decision. " * 22, "other": 42}
+    path, raw, capture = captured_reader(tmp_path, value)
+    reference = write_context_read_reference(path, capture.capture_sha256) if mode == "reference" else None
+    selected = context_capture_read_command(path, capture.capture_sha256,
+        select=["/stop"], page_bytes=256, max_page_output_bytes=12000, reference_file=reference)
+    whole = context_capture_read_command(path, capture.capture_sha256)
+
+    def read_args(command):
+        words = shlex.split(command)
+        return words[words.index("--format"):]
+
+    def run(command):
+        code = cli.main(read_args(command))
+        return code, json.loads(capsys.readouterr().out)
+
+    first_content = ""
+    if mode == "continuation":
+        code, page = run(selected)
+        assert code == 0 and not page["eof"]
+        first_content = page["content"]
+        selected = page["next_command"]
+
+    def unavailable_tempdir():
+        raise FileNotFoundError(errno.ENOENT, "No usable temporary directory found", "fixture-private-path")
+
+    with monkeypatch.context() as fault:
+        fault.setattr(tempfile, "gettempdir", unavailable_tempdir)
+        code, complete = run(whole)
+        assert code == 0 and complete["eof"] and complete["content"].encode() == raw
+        code, failure = run(selected)
+    assert code == 1 and failure["ok"] is False
+    assert failure["diagnostic_code"] == "runtime_request_failed"
+    assert "temporary directory" in failure["reason"]
+    assert "fixture-private-path" not in json.dumps(failure)
+    assert "content" not in failure
+    assert read_args(failure["recovery_command"]) == read_args(selected)
+
+    pieces = [first_content]
+    next_command = failure["recovery_command"]
+    while next_command:
+        code, page = run(next_command)
+        assert code == 0 and page["offset"] == sum(len(piece.encode()) for piece in pieces)
+        pieces.append(page["content"])
+        next_command = page.get("next_command")
+    assert page["eof"]
+    assert json.loads("".join(pieces))["selections"] == [{"pointer": "/stop", "value": value["stop"]}]
+    assert path.read_bytes() == raw
