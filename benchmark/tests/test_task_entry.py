@@ -1239,7 +1239,8 @@ def test_execute_wake_keeps_host_clocks_out_of_fresh_and_resumed_input(
         assert receipt["session"]["action"] == ("resume" if context == "resume" else "start_new")
         assert "turn_envelope" not in receipt
         assert receipt.get("complete_turn") is (True if complete else None)
-        assert ("--complete-turn" in body) is complete
+        assert "--complete-turn" not in body and "--turn-envelope" not in body
+        assert ("--decision-output-root" in body) is (complete or checkpoint_preflight)
         if checkpoint_preflight:
             original = Path(env["LOOPX_WAKE_LOG_DIR"]) / receipt["turn_id"] / "checkpoint-start-guard.json"
             assert json.loads(original.read_bytes())["schema_version"] == "loopx_turn_envelope_v1"
