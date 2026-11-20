@@ -81,9 +81,9 @@ def read_manager_goal_details(
                 "archive_read": False,
             },
             "limitations": [
-                "These are currently declared Todo records.",
+                "These are currently declared Todo records, not proof of recent execution or renewed owner intent.",
                 "Run-history age does not invalidate this independent Todo read. Do not infer deadlines from priority or list order.",
-                "content_truncated marks an overview excerpt; read view=todos with goal_id and todo_id for the exact record. Resume conditions, lineage and decision scopes are recorded facts.",
+                "content_truncated marks an overview excerpt; read view=todos with goal_id and todo_id for the exact record. Resume conditions, lineage and decision scopes are recorded facts, not new authority or proof of readiness.",
             ],
         }
     except (OSError, ValueError, KeyError, TypeError, RuntimeError):

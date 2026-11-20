@@ -616,7 +616,7 @@ require another repository to use LoopX's S/G/R identifiers.
 
 Reuse `problem_context.observable_outcome`, `walkthroughs` and
 `validation_matrix` instead of writing another evidence report. Small diffs are
-not fragmentation; For collaboration, follow the required dependency,
+not fragmentation. For collaboration, follow the required dependency,
 receiver adoption, artifact acceptance and return through real callers.
 Independent prerequisites and characterization remain valid when their boundary
 and real successor are justified. Do not reward larger diffs or fabricated
@@ -1420,7 +1420,8 @@ advice in actionable review packets. Enable the registered Agent, automatic
 recall and the explicit `pull_request_review.review` surface in its existing
 configuration. See [operation, readback and disable](experiences/README.md).
 The [#5944 comparison](experiences/pr-5944-review-frame.md) is the first stored
-case. Historical verdicts are outside retrieval; Base/off paths, queue selection and review authority retain
+case. Historical verdicts are outside retrieval; packet delivery proves neither
+adoption nor utility. Base/off paths, queue selection and review authority retain
 their existing contracts; the native file reader writes no provider.
 
 已开启的 review Agent 可通过现有 Reward Memory 实验，在可执行 review packet 中

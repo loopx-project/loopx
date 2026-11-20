@@ -229,7 +229,8 @@ Outcome floor 防止 agent 用大量微小动作伪装长期推进。连续 surf
 ## Agent Vision 与 Acceptance Gap
 
 多 agent goal 中，每个 peer 有自己的 bounded vision。对同时承担 advancement 与
-continuous monitor 的长生命周期 lane。Agent profile 会默认把这类 lane 标成 required：
+continuous monitor 的长生命周期 lane，vision 不是可有可无的说明文字，而是恢复和
+replan 的基线。Agent profile 会默认把这类 lane 标成 required：
 
 ```python
 def _vision_requirement(value, *, task_classes):
@@ -651,7 +652,8 @@ loopx todo add \
 
 `run_loopx_turn_once` 会把 plan、host result、task validation、writeback、spend 和 scheduler
 状态写入 `runtime_root/goals/<goal-id>/turns/<turn-key>.json`。这份 journal 的 owner 是
-**单个 Turn 的阶段进度**只有 source state readback 才能证明 todo、vision 或 evidence 已提交。
+**单个 Turn 的阶段进度**，不是 goal truth：只有 `writeback` callback 成功，长期状态才发生
+变化；只有 source state readback 才能证明 todo、vision 或 evidence 已提交。
 
 这一区分让恢复可以按失败阶段精确继续：
 
@@ -869,6 +871,7 @@ CLI/status/quota 并补 smoke；只更新文档不会改变机器的下一次决
 
 ## 课后检查
 
+1. Todo done 为什么不是 acceptance evidence？
 2. Refresh 和 spend 分别证明什么？
 3. Vision unchanged reason 什么时候是诚实的？
 4. Repair delta 必须改变哪些 machine-visible 对象？

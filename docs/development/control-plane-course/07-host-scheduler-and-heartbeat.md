@@ -658,6 +658,7 @@ App tick
 
 ### 读完这一段应能回答
 
+1. 为什么 scheduler hint 不能证明 RRULE 已应用？
 2. 为什么 ACK 不消耗 delivery slot？
 3. 哪些字段变化应 reset stateful backoff？
 4. unchanged monitor 为什么必须写 `next_due_at`？

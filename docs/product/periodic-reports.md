@@ -10,7 +10,8 @@ Changing a previously prepared private steward to an executor without native
 scheduled-work support keeps its original configuration readable in connection
 settings. The monitor deadline, report schedule, retained window and delivery
 state remain visible with an explicit execution-unavailable notice. Configuration
-controls are disabled; Native admission still owns every execution and
+controls are disabled; inspecting retained state neither re-enables the old host
+nor retries a failed window. Native admission still owns every execution and
 configuration change. Restoring a supported executor restores the existing
 configuration view rather than creating a replacement identity or subscription.
 
@@ -258,7 +259,8 @@ edits and reload. The narrow view is a 390×844 viewport emulation.
 | ![Recurrence controls in a narrow viewport](../assets/personal-workspace/report-calendar-start-date/before-narrow.png) | ![First report date in a narrow viewport](../assets/personal-workspace/report-calendar-start-date/after-narrow.png) |
 
 Chat `/goal` transport supervision and a LoopX-managed Turn are distinct. Merely
-relaxing `validate_goal_chat`, changing a Session field, adding a prompt.
+relaxing `validate_goal_chat`, changing a Session field, adding a prompt, or
+starting a Codex native Goal does not establish the LoopX lifecycle below.
 
 ## One persistent steward actor
 
@@ -610,7 +612,8 @@ recorded Core continuation when resolving their private return route. A client
 suffix alone is insufficient: the transport and Core journals must agree on
 the current Session, Turn, source and recovery record. Quota, routing and
 unfinished-work continuations retain the same audience and existing saved-send
-verification; Missing records, changed identity or revoked grants still
+verification; this lookup neither retries model work nor resends an unknown
+provider effect. Missing records, changed identity or revoked grants still
 block delivery.
 
 Portfolio evidence collection finishes before the governed driver captures its

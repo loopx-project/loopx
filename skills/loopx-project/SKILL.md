@@ -14,7 +14,8 @@ does not by itself select the project lifecycle workflow.
 For ordinary task execution, follow the current `interaction_contract`, its
 required reads and ordered settlement commands. Do not repeat onboarding,
 registry synchronization, or lifecycle discovery merely to execute that packet.
-A missing or contradictory contract still needs
+This routing rule does not replace fresh admission, lease checks, required
+reads, or repair instructions. A missing or contradictory contract still needs
 the relevant diagnosis; an explicit request to use this skill still applies.
 
 If the task is mainly about reading,
@@ -122,7 +123,8 @@ opaque source reference. Autonomous replanning may discover this mismatch from
 existing user context; it need not request new intent merely because the Agent
 initiated the review. Surface the existing proposal once as reviewable output,
 not a mandatory question or precondition for continuing authorized work.
-Continue under the current valid Goal; pause only an
+Preparing or reusing a pending proposal changes neither the current objective
+nor execution authority. Continue under the current valid Goal; pause only an
 action that actually depends on missing intent or authority. Use existing
 explicit authorization for the unchanged proposal without asking again. These
 rules also apply in unattended harness and benchmark runs; never create an
