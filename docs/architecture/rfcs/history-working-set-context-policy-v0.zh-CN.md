@@ -5,7 +5,7 @@
 - **Delivery maturity:** Proposal
 - **Authors / owners:** shared context presentation / Turn / continuation / extension 维护者；具体实施切片由维护者认领。
 - **Created:** 2026-11-09
-- **Last normative revision:** 2026-11-09
+- **Last normative revision:** 2026-11-21
 - **Implementation baseline:** 已审阅的 [`241c991794c37627d1bf9e2fa9d83472857c4129`](https://github.com/loopx-project/loopx/commit/241c991794c37627d1bf9e2fa9d83472857c4129)；相关现状代码已与 `701795db237a35b23266588abad6f21857704ccd` 比较，未发生变化。
 - **Related contracts:** [设计讨论 #8450](https://github.com/loopx-project/loopx/issues/8450)、[#4391 / T02 / M1-B](https://github.com/loopx-project/loopx/issues/4391)、[Controller/Executor 契约][lx-controller]、[T02 研究计划][lx-frontier]、[extension 契约][lx-extensions]。
 - **Language mirror:** [English（语义镜像）](history-working-set-context-policy-v0.md)
@@ -150,6 +150,24 @@ D/E 为拟新增能力，不在每轮同步视图构建时临时执行模型调�
 
 在任意两次 `EpochReset` 边界之间，单调追加尾部之前的前缀保持字节级恒定（`100%` 前缀 KV-cache 命中保持）。向上策略层（[联合决策 RFC §5.9](target-yardstick-stride-decisions-v0.zh-CN.md#policy-evolution) 中的 `{KeepRaw, FoldToReceipt, EpochReset} × {grow, switch, verify}`）可提议这些迁移，确定性投影 owner 负责执行回执校验、资格检查与 epoch 不变量。
 
+#### 原子化折叠与预取：Stage-then-Swap `next_command` 装载
+
+纯回收或纯文字性作用域切换（对照 [Spine][SP1] 与 [SpineCodex][SP2] 的 `Next(μ, d)`）会让模型在唤醒时“空手接棒”——不仅要多消耗一轮模型往返去发出下一条读取或探针指令，若文字摘要压丢了精确谓词、行号或失败细节，还会引发过早压缩后的返工重读。为受回执门控的上下文回收扩展可选的 `next_command`（或类型化的 `context-read --select` 列表），即可把“弹栈折叠”与“稠密状态预取”合成为一次原子的 **Stage-then-Swap** 状态迁移（仍保持 `Proposal` 成熟度且默认关闭）：
+
+$$
+Q \mathbin{\Vert} B_{\text{old}} \;\xrightarrow{\;\text{reclaim}(\mu,\; \text{next\_cmd})\;}\; Q \mathbin{\Vert} \mu \mathbin{\Vert} \text{Obs}(\text{next\_cmd})
+$$
+
+当模型已经确定哪条脚本或查询能一次吐出下一阶段所需的高信噪比工作视图时，此原语在单次转换内用精炼的已核验回执（$\mu$）与新鲜的确定性命令输出（$\text{Obs}(\text{next\_cmd})$）替换掉前序密集的探索性工具调用（$B_{\text{old}}$）。规范层面须同时满足以下五条不变量：
+
+1. **Stage-then-Swap 原子交换（先执行后回收）：** 必须在显式的 `timeout_ms` 与 `max_output_bytes` 上限下先执行 `next_command`。仅当命令在预算内成功退出**且**满足净 token 收益门控 $\text{Tokens}(B_{\text{old}}) - \text{Tokens}(\mu + \text{Obs}(\text{next\_cmd})) \ge \Delta_{\min}$（若涉及前缀重定基，还须跨过冷 prefill 回本阈值）时，才提交历史回收。若命令失败、超时、输出超限或净收益为负，则原子回退为 `KeepRaw`，完整保留 $B_{\text{old}}$ 仅在尾部追加有界错误观测。
+2. **前缀 KV-cache 局部性（两类与宿主对齐的承载形式）：** 严禁跨历史中段随机抽删工具调用，避免从最早被删位置起击穿下游 KV-cache。本规范支持两类承载形态：
+   - *可控采样栈宿主的连续尾部 `FoldAndPrefetch`（如 `DSH` / `Pi` / 自管 Agent Loop）：* 弹出 `[since_anchor..now]` 区间内的连续探索后缀，同时保持父前缀 $Q$ 字节级恒定（**100% 前缀 KV-cache 命中保持**），只对 $\mu + \text{Obs}(\text{next\_cmd})$ 做增量 prefill。
+   - *不透明外部 CLI 宿主的 `EpochReset` 预取（如 `codex-cli` / Claude Code）：* 由 `turn_driver` 在 Turn 收尾或 `EpochReset` 边界按契约先执行有界的 `prefetch_command` / `context-read --select` 列表，通过门控后把已装载的观测直接注入 `epoch + 1` 的初始 prompt，省掉冷启动后的首轮空读。
+3. **调用主体权限、副作用边界与重放幂等性（§2.4、§5.3、A7）：** `next_command` 只能由 Agent 显式发起或随 Turn 收尾请求提交——严禁被动的 `HistoryViewPolicy` 插件自行注入命令；其执行须接受与普通工具调用同等的沙箱、租约与权限检查，且默认限定为幂等的只读读取或工作区探针操作（禁止状态写入、`git push` 或配额扣费等副作用）。执行得到的 `Obs(next_command)` 须不可变地固化写入 `decision_capture` / Turn journal，崩溃恢复或重放（`A7`）时直接回填已保存输出**而不二次执行命令**，并严格维持 `tool` 观测信任层级（绝不提权为 `system` 指令）。
+4. **推理项与工具配对完整性：** 严守 OpenAI `reasoning` item 及 Anthropic `thinking` + `tool_use`/`tool_result` 的成对合法性约束；回收时须将闭合后缀 `[since_anchor..reclaim_call]` 整体规约为单组结构合法的调用/结果记录，严禁删空半边配对或把新输出嫁接到旧调用 ID 上，同时将原始 $B_{\text{old}}$ 以 `source_ref` + `sha256` 落盘保留以便按需精确回读（`A2`）。
+5. **受回执背书的防“粉饰太平”头：** Runtime 必须由控制面确定性地从 $B_{\text{old}}$ 提取客观硬事实（例如末次验证退出码、未消解失败/门禁计数及精确 `source_ref` 指针）并置入 $\mu$ 的头部，防止模型借由挑选成功的 `next_command` 掩盖既有失败验证或代理指标反转事实。
+
 ### 5.2 哪些材料允许进入候选集
 
 首版候选来自已存在的 typed attempt/result/evidence 事实与有界来源，不通过“done”“旧日志”等字符串推测完成度。
@@ -186,6 +204,7 @@ interface HistorySummaryProvider {
 ```
 
 - 策略输入可读取当前任务相关性信息，但不能修改当前事实。输出是“对指定候选建议原文/引用/摘要”的声明式计划，不是任意 JSON Patch 或整包替换；不能自定义消息 role、可执行命令、权限结论或宿主路径，最终包装与 provenance 标注由 owner 产生。
+- **Agent 显式预取与被动策略插件的边界：** `HistoryViewPolicy.propose()` 仍保持严格声明式语义，不得输出可执行命令；相对地，由 Agent 主动发起的 `FoldAndPrefetch` 或 Turn 收尾 `EpochReset` `prefetch_command` 请求（§5.1），须在进入投影校验前经由既有的工具/Turn 运行时沙箱与 journal capture 边界执行并固化输出。
 - **没有插件自有的 `approve` / 权威 `validateProposal` 回调。** scope、revision、coverage、保护规则、预算、引用可用性与实际投影均由 shared TypeScript owner 判定。
 - 同步 `propose()` 只进行有界、无外部 IO 的计划计算；需要模型、进程或网络的策略部分提前通过 provider/runtime 生成来源绑定提案。该逻辑接口不授权在共享投影进程内加载任意第三方代码。
 - 首版每个生效 scope 只选择一个历史策略；不开放任意插件链与阶段重排。
@@ -298,8 +317,9 @@ exact codec 可以精确重建一份含摘要的派生视图，但不能据此�
 | A10 | 存储与重启范围真实 | 声明范围内重启/恢复后可展开；provider 完成但发布前崩溃、同绑定并发完成均不重复发布，不同 attempt 不相互覆盖，重复调用成本可见 | 临时 capture 不自动成为长期保存 |
 | A11 | 数值、顺序与未知内容保留 | 复用当前 exact/typed 边界的独立回归；必要事实、数字、列表顺序不因视图转换改变 | TS 往返成功不证明语义等价 |
 | A12 | 产品旅程可使用 | 从既有配置入口启用，实际任务受影响，能查看来源/回退并禁用；packaged 路径验证 | CLI 原型不代表所有 App/Lark 宿主交付 |
+| A13 | Stage-then-Swap 折叠预取原子性与重放幂等 | 若 `next_command` 失败、超时、输出超限或净收益为负，则原子回退为 `KeepRaw` 并完整保留 $B_{\text{old}}$；提交尾部折叠时保持父前缀 $Q$ 字节级恒定、维护推理项与工具调用配对合法性、在 $\mu$ 中保留运行时客观失败事实头、维持 `tool` 观测信任层级，且恢复/重放时直接回填已保存输出而不重跑命令 | 仅执行 `next_command` 不授予写入副作用或提升观测信任等级的权限 |
 
-结构校验只能证明范围/引用一致，语义保真需要 A3 与任务验收。测试优先扩展现有相关 suite，选独立语义反例；不为每个 DTO 字段堆镜像测试，也不把 raw benchmark trajectories 放入 CI。静态审阅不能使运行时或模型资格验收行通过。
+结构校验只能证明范围/引用一致，语义保真需要 A3 与任务验收；`A1–A13` 共同构成完整的运行时与模型验收范围。测试优先扩展现有相关 suite，选独立语义反例；不为每个 DTO 字段堆镜像测试，也不把 raw benchmark trajectories 放入 CI。静态审阅不能使运行时或模型资格验收行通过。
 
 ### 9.2 对照设计与成本口径
 
@@ -344,7 +364,7 @@ CLI、App、适用的 Lark 入口共用 typed owner 与同一状态语义。首�
 
 | 阶段 | 可审查交付 | 进入条件 | 退出证据 | 回滚 |
 | --- | --- | --- | --- | --- |
-| M0：本 RFC 评审 | 明确 owner、候选、首个 caller、来源保留与对照方案 | 固定源码与相关工作核查 | 记录设计接受及本阶段必须决定的选择；D1–D7 按各自最晚决定点处理，未验证项保持未验证 | 保留讨论，不改运行时 |
+| M0：本 RFC 评审 | 明确 owner、候选、首个 caller、来源保留与对照方案 | 固定源码与相关工作核查 | 记录设计接受及本阶段必须决定的选择；D1–D8 按各自最晚决定点处理，未验证项保持未验证 | 保留讨论，不改运行时 |
 | M1：一个真实消费者 | 现有完整来源、shared progressive、同 capture reader 到最终模型输入连通 | 核对当时已合入 C1 切片；reader 可用；限定 host | A1/A2/A7/A8/A11 与完整输入基线；未改变机器接口 | 原有 renderer/投影路径 |
 | M2：一类单层历史视图 | 允许历史单元 → 来源保留 → 有界生成 → 核心校验 → 实际减少输入 → 展开 | M1；选定来源生命周期、scope、预算和有效性；显式 opt-in | A2–A8/A10；B0/B1/T1 的任务与完整成本结果 | 禁用可选策略，保留原文 |
 | M3：外部策略 provider 与产品采用 | 版本化窄端口、已有 extension lifecycle 和配置/readback | M2 证明真实可替换 caller；placement 与兼容契约评审 | A9/A12、旧版本/disabled parity、packaged failure/recovery | disable/rollback，原路径继续 |
@@ -378,6 +398,7 @@ M1 不加入 LLM 摘要、外部 plugin loader、通用层级 store；M2 的首�
 | D5 | 持久选择/配置：建议沿 context_delivery 注册命名空间版本化扩展，语义策略默认关闭 | configuration / frontend owners | v0/v1 兼容、作用范围、packaged readback；M2 启用与 M3 产品化前 |
 | D6 | 公共插件端口：等第一个 caller 成熟后，决定内置 helper 与正式 provider contract 的边界 | extension / typed contract owners | 两个可替换实现或等价 conformance 需求；M3 前 |
 | D7 | 非劣界限与收益门槛：质量优先、完整成本计入；预先固定，不根据结果反改 | T02 / benchmark / context owners | 合法任务、对照、样本和完整预算；任何模型试验前 |
+| D8 | 预取命令准入范围：推荐优先开放 `quota context-read --select` 指针读取与沙箱只读工作区探针，后续再评估通用只读 shell 命令 | Turn / 沙箱 / context owners | 沙箱强约束、`decision_capture` 重放一致性与 Stage-then-Swap 净收益门控；在任何 `FoldAndPrefetch` 运行时切片之前 |
 
 这些推荐不因 RFC 合并而自动成为已批准的实施选择；不指派资源、承诺发布时间或启动实验。相关讨论继续关联 [#8450](https://github.com/loopx-project/loopx/issues/8450) 与 [#4391](https://github.com/loopx-project/loopx/issues/4391)；明确决定及其影响的规范章节记录在附录 B 所述的决定记录中。
 
@@ -387,7 +408,7 @@ M1 不加入 LLM 摘要、外部 plugin loader、通用层级 store；M2 的首�
 - **已完成的静态工作：** 固定版本关键源码、RFC 规范及关联 Issue/PR 读取；上游设计到现有 owner 的映射。
 - **基线比较：** 相对前次研究的 `cffb53fe`，已审阅的 `241c991` 仅增加 native chat metadata recovery 相关 3 文件变化，不影响本文列出的核心接入点。相关现状代码在文档基线 `701795db237a35b23266588abad6f21857704ccd` 仍未变化。文档 PR 的后续基线更新不自动扩大这项审阅声明。
 - **已修正的状态判断：** [#7430](https://github.com/loopx-project/loopx/pull/7430) 的 `merged=true` 不能忽略 [#8265](https://github.com/loopx-project/loopx/pull/8265) 的回退；在本次审阅时，[#8266](https://github.com/loopx-project/loopx/pull/8266)/#8378 均未当作 main 已交付。
-- **未执行：** 本 RFC 的代码实现、源码/安装测试、模型实验、付费摘要调用、UI 验证、部署或默认切换。静态来源不能替代 A1–A12 的实现证据。
+- **未执行：** 本 RFC 的代码实现、源码/安装测试、模型实验、付费摘要调用、UI 验证、部署或默认切换。静态来源不能替代 A1–A13 的实现证据。
 - **工作归属：** [#8450](https://github.com/loopx-project/loopx/issues/8450) 是本设计的讨论与实施跟踪入口；本 RFC 仍是 [#4391](https://github.com/loopx-project/loopx/issues/4391) T02 的有界子方案。
 
 尚无本 RFC 的实现或实验执行记录。首次有实际交付证据时，再按 [ledger 规范](ledger/README.md) 创建 `ledger/history-working-set-context-policy-v0/` 下的日期记录及中文镜像；这里仅维护指针。
@@ -396,7 +417,9 @@ M1 不加入 LLM 摘要、外部 plugin loader、通用层级 store；M2 的首�
 
 原始设计讨论位于 [#8450](https://github.com/loopx-project/loopx/issues/8450)，研究归属为 [#4391](https://github.com/loopx-project/loopx/issues/4391) 的 T02 / M1-B。本 RFC PR 的合并记录设计接受；它不单独批准 §12 的具体选择、模型运行、默认推广或运行时修改。
 
-D1–D7 在对应 owner 明确批准前保持未决。后续决定记录日期、公开批准依据、备选方案及受影响的规范章节，并在两种语言中同步；不能从实现进度、沉默或推荐答案推导批准。没有替代或关闭其他 RFC，也没有删除既有 schema 字段的决定。
+D1–D8 在对应 owner 明确批准前保持未决。后续决定记录日期、公开批准依据、备选方案及受影响的规范章节，并在两种语言中同步；不能从实现进度、沉默或推荐答案推导批准。没有替代或关闭其他 RFC，也没有删除既有 schema 字段的决定。
+
+- **2026-11-21 规范提案细化：** 补入有界的 Stage-then-Swap `FoldAndPrefetch` / `EpochReset` `next_command` 预取装载契约（§5.1、§5.3）、验收条项 `A13`（§9.1）与开放决定 `D8`（§12），`Proposal` 交付成熟度与默认关闭策略保持不变。
 
 ## 附录 C：证据登记与固定来源（非规范性）
 
@@ -405,7 +428,7 @@ D1–D7 在对应 owner 明确批准前保持未决。后续决定记录日期�
 | E1 | billion-context 的可借鉴机制 | `4be21b08...`；BC1–BC5 | 已静态审阅；不证明 LoopX 集成、运行效果或成本收益 |
 | E2 | LoopX 已有 owner 与接入点 | `241c991...`；LX1–LX12；相关代码到 `701795db...` 未变 | 已静态审阅；不是所有宿主已消费 shared view 的声明 |
 | E3 | 相关工作与设计归属 | [#8450](https://github.com/loopx-project/loopx/issues/8450)、[#4391](https://github.com/loopx-project/loopx/issues/4391) 及 §2.3 的关联 PR | 2026-11-09 读取结果；实施前重新核对 |
-| E4 | 本 RFC 的输入、回读、任务质量与完整成本 | A1–A12、B0/B1/T1 | 未验证；不得从静态设计或文档合并推导通过 |
+| E4 | 本 RFC 的输入、回读、任务质量与完整成本 | A1–A13、B0/B1/T1 | 未验证；不得从静态设计或文档合并推导通过 |
 
 ### billion-context
 
@@ -414,6 +437,11 @@ D1–D7 在对应 owner 明确批准前保持未决。后续决定记录日期�
 - [BC3 — 推荐/应用共享的范围判定][BC3]
 - [BC4 — 分层摘要与覆盖关系][BC4]
 - [BC5 — 缓存计量与压缩经济性][BC5]
+
+### Spine
+
+- [SP1 — Spine: Compiling Subtask Trees into Structured Context for Long-Horizon Coding Agents][SP1]
+- [SP2 — SpineCodex 参考仓库][SP2]
 
 ### LoopX
 
@@ -438,6 +466,8 @@ D1–D7 在对应 owner 明确批准前保持未决。后续决定记录日期�
 [BC3]: https://github.com/ranxianglei/billion-context/blob/4be21b08ed3da8b69d1800a10a9c0b9c5a707f71/kernel/src/unit-projection.ts
 [BC4]: https://github.com/ranxianglei/billion-context/blob/4be21b08ed3da8b69d1800a10a9c0b9c5a707f71/kernel/src/types.ts#L68-L109
 [BC5]: https://github.com/ranxianglei/billion-context/blob/4be21b08ed3da8b69d1800a10a9c0b9c5a707f71/kernel/src/cache-report.ts
+[SP1]: https://arxiv.org/abs/2610.37224
+[SP2]: https://github.com/GhabiX/SpineCodex
 [LX1]: https://github.com/loopx-project/loopx/blob/241c991794c37627d1bf9e2fa9d83472857c4129/loopx/control_plane/quota/progressive_context.ts
 [LX2]: https://github.com/loopx-project/loopx/blob/241c991794c37627d1bf9e2fa9d83472857c4129/loopx/control_plane/quota/turn_envelope.ts
 [LX3]: https://github.com/loopx-project/loopx/blob/241c991794c37627d1bf9e2fa9d83472857c4129/loopx/control_plane/turn_driver/decision_capture.py
