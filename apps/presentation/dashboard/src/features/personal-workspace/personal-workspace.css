@@ -1444,6 +1444,10 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-report-detail li strong { font-size: var(--text-caption); line-height: var(--leading-caption); }
 .personal-report-detail li p { margin: 0; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
 .personal-report-detail > footer { display: grid; gap: 4px; margin-top: 10px; color: var(--pw-faint); font: var(--text-caption)/var(--leading-caption) var(--font-mono); overflow-wrap: anywhere; }
+.personal-source-run-history ol { list-style: none; margin: 10px 0 0; padding: 0; }
+.personal-source-run-history li { border-top: 1px solid var(--pw-line); padding: 8px 0; }
+.personal-source-run-history summary { cursor: pointer; overflow-wrap: anywhere; }
+.personal-source-run-history dd { min-width: 0; overflow-wrap: anywhere; }
 .personal-execution-history { margin-top: 18px; }
 .personal-execution-history h3 { margin: 0 0 10px; font-size: var(--text-caption); line-height: var(--leading-caption); font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--pw-faint); }
 .personal-execution-history > p { color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
