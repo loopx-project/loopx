@@ -18,7 +18,17 @@ export interface LeaseWorkspace extends JsonObject {
   worktree: string;
   repository: string;
 }
+export const LEASE_WORKSPACE_DIVERGENCE = {
+  code: "lease_workspace_divergence",
+  reason: "Cannot verify this caller is in the active task lease's worktree. Continue in its original worktree or release the lease before making a new claim.",
+};
+
 const run = promisify(execFile);
+// Git hooks can carry path and temporary config overrides for their parent checkout.
+const WORKSPACE_GIT_OVERRIDES = new Set([
+  "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+  "GIT_IMPLICIT_WORK_TREE", "GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS",
+]);
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 
 /** Only these locally authored, path-free diagnostics may cross the CLI boundary. */
@@ -77,6 +87,15 @@ export function sameLeaseWorkspace(left: unknown, right: unknown): boolean {
     a.common_directory === b.common_directory && a.worktree === b.worktree && a.repository === b.repository;
 }
 
+/** Absent bindings retain ordinary exclusion. Bound grants require an observed match. */
+export async function matchesObservedLeaseWorkspace(retained: unknown,
+  observe: (() => Promise<LeaseWorkspace>) | undefined): Promise<boolean> {
+  if (retained == null) return true;
+  if (observe === undefined) return false;
+  try { return sameLeaseWorkspace(retained, await observe()); }
+  catch { return false; }
+}
+
 /** A known physical checkout collision still rejects cooperative code editing. */
 export function sameLeaseCheckout(left: unknown, right: unknown): boolean {
   const a = leaseWorkspace(left), b = leaseWorkspace(right);
@@ -99,17 +118,7 @@ async function machineIdentity(): Promise<string | undefined> {
   return undefined;
 }
 
-export async function observeLeaseWorktree(path: string, overlaps: (path: string) => boolean): Promise<LeaseWorkspace> {
-  if (!isAbsolute(path)) throw new LeaseWorktreeObservationError("worktree observation requires an absolute caller path");
-  const cwd = await realpath(path);
-  const git = async (...args: string[]) => (await run("git", ["-C", cwd, ...args],
-    {timeout: 5000, maxBuffer: 4 * 1024 * 1024, env: {...process.env, GIT_OPTIONAL_LOCKS: "0"}})).stdout.trim();
-  const root = await realpath(await git("rev-parse", "--show-toplevel"));
-  const directory = await realpath(await git("rev-parse", "--absolute-git-dir"));
-  const common = await realpath(resolve(cwd, await git("rev-parse", "--git-common-dir")));
-  if (root !== cwd || directory === common || !(await stat(resolve(root, ".git"))).isFile()) {
-    throw new LeaseWorktreeObservationError("--write-worktree requires the root of an independent Git worktree");
-  }
+async function requireLocalWorktreeScopes(root: string, overlaps: (path: string) => boolean): Promise<void> {
   // Code-edit leases must not describe shared Git administration or paths
   // redirected out of the checkout. Direct in-scope file links remain local.
   if (overlaps(".git")) throw new LeaseWorktreeObservationError("worktree scopes cannot include Git administration");
@@ -139,6 +148,27 @@ export async function observeLeaseWorktree(path: string, overlaps: (path: string
       }
     }
   }
+}
+
+/** With scopes, validate a new grant at its root. Identity-only reads also accept a subdirectory. */
+export async function observeLeaseWorktree(path: string, overlaps?: (path: string) => boolean): Promise<LeaseWorkspace> {
+  if (!isAbsolute(path)) throw new LeaseWorktreeObservationError("worktree observation requires an absolute caller path");
+  const cwd = await realpath(path);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) =>
+    !WORKSPACE_GIT_OVERRIDES.has(name.toUpperCase())));
+  env.GIT_OPTIONAL_LOCKS = "0";
+  const git = async (...args: string[]) => (await run("git", ["-C", cwd, ...args],
+    {timeout: 5000, maxBuffer: 4 * 1024 * 1024, env})).stdout.trim();
+  const root = await realpath(await git("rev-parse", "--show-toplevel"));
+  const directory = await realpath(await git("rev-parse", "--absolute-git-dir"));
+  const common = await realpath(resolve(cwd, await git("rev-parse", "--git-common-dir")));
+  const fromRoot = relative(root, cwd);
+  const outsideRoot = fromRoot === ".." || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot);
+  if (outsideRoot || overlaps !== undefined && fromRoot !== "" || directory === common ||
+      !(await stat(resolve(root, ".git"))).isFile()) {
+    throw new LeaseWorktreeObservationError("--write-worktree requires the root of an independent Git worktree");
+  }
+  if (overlaps !== undefined) await requireLocalWorktreeScopes(root, overlaps);
   const remote = await git("remote", "get-url", "origin");
   const scp = /^[^@/:]+@([^/:]+):(.+)$/u.exec(remote);
   const url = scp ? new URL(`ssh://${scp[1]}/${scp[2]}`) : new URL(remote);

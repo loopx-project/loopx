@@ -538,7 +538,7 @@ function claimWorkspaceObserver(worktree: unknown): ClaimWorkspaceObserver | und
   }
   return async writeScopes => {
     try {
-      return await observeLeaseWorktree(worktree, path =>
+      return await observeLeaseWorktree(worktree, writeScopes === undefined ? undefined : path =>
         evaluateTaskLeaseWriteScopesOverlap({left: [...writeScopes], right: [path]}).overlap === true);
     } catch (error) {
       throw new Error(error instanceof LeaseWorktreeObservationError ? error.message

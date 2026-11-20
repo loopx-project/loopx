@@ -35,6 +35,7 @@ def project_selected_todo_execution_preparation(
     goal_id: str,
     selected_todo: Mapping[str, Any],
     agent_id: str | None,
+    workspace_path: Path | None = None,
 ) -> dict[str, Any] | None:
     """Read the selected Todo's canonical lease and project one preparation step.
 
@@ -52,7 +53,8 @@ def project_selected_todo_execution_preparation(
             "todo.read",
             {"schema_version": "todo_read_request_v0", "kind": "execution_preparation_source",
              "source": {"runtime_root": str(Path(runtime_root).expanduser().resolve(strict=False)),
-                        "goal_id": goal_id},
+                        "goal_id": goal_id,
+                        "workspace_path": str((workspace_path or Path.cwd()).absolute())},
              "todo_id": todo_id},
             timeout=LOCAL_COORDINATION_TODO_LIST_TIMEOUT_SECONDS,
         )
@@ -83,6 +85,7 @@ def project_selected_todo_execution_preparation(
                     "status": status if status in {"active", "released"} else "unknown",
                     "active": lease_is_active(dict(lease)),
                     **({"owner": lease["owner"]} if normalize_todo_claimed_by(lease.get("owner")) else {}),
+                    **({"workspace_matches": lease["workspace_matches"] is True} if "workspace_matches" in lease else {}),
                     "lease_proof": {"idempotency_key": lease.get("idempotency_key"),
                                     "expected_version": lease.get("version")},
                 })
@@ -121,6 +124,7 @@ def apply_selected_todo_execution_preparation(
     runtime_root: str | Path | None,
     goal_id: str,
     agent_id: str | None,
+    workspace_path: Path | None = None,
     obligation: dict[str, Any] | None = None,
     recommendation: dict[str, Any] | None = None,
     receipt_bound: bool = False,
@@ -146,6 +150,7 @@ def apply_selected_todo_execution_preparation(
         goal_id=goal_id,
         selected_todo=selected,
         agent_id=agent_id,
+        workspace_path=workspace_path,
     )
     # Existing receipt-bound recovery predates this projection and may be
     # reconstructed without canonical lease authority in synthetic/legacy

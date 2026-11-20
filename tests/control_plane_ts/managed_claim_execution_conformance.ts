@@ -46,8 +46,8 @@ export function registerManagedClaimExecutionConformance(provider: string, facto
       clear_claim: false, validation_declaration: null, validation_receipt: null,
       completion_policy_request: null, dry_run: false, now: request.now};
   }
-  test(`${provider} managed execution: worktree observation uses canonical code scopes only for new execution`, async t => {
-    const {store, request} = await setup(t);
+  test(`${provider} managed execution: current claims require the original checkout`, async t => {
+    const {store, request, progress} = await setup(t);
     const before = await loaded(store);
     const todo = (before.head.todos as JsonObject[])[0]!;
     const repository = "git:github.com/example/project";
@@ -55,20 +55,39 @@ export function registerManagedClaimExecutionConformance(provider: string, facto
       operation_id: "declare-code", expected_provider_revision: before.provider_revision, projection: before.head,
       mutations: [{kind: "todo_upsert", todo: {...todo, task_domain: "code", task_repository: repository}}]}))).status, "applied");
     const workspace = {host: "1".repeat(64), common_directory: "2".repeat(64), worktree: "3".repeat(64), repository};
-    const observed: string[][] = [];
-    const accepted = await claim(store, request, undefined, async scopes => {
-      observed.push([...scopes]); return workspace;
-    });
+    const observed: (readonly string[] | undefined)[] = [];
+    const observe = async (scopes?: readonly string[]) => {
+      observed.push(scopes);
+      return workspace;
+    };
+    const accepted = await claim(store, request, undefined, observe);
     assert.equal(accepted.status, "applied", JSON.stringify(accepted));
     assert.deepEqual(observed, [["src/**"]]);
     assert.deepEqual((accepted.lease as JsonObject).write_workspace, workspace);
     const current = await loaded(store);
-    const unexpected = async () => {throw new Error("Recovery must retain the accepted execution, not acquire another workspace");};
-    assert.equal((await claim(store, request, undefined, unexpected)).status, "replayed");
+    const other = async () => ({...workspace, worktree: "4".repeat(64)});
+    const next = {...request, operation_id: "continue-current-execution",
+      now: new Date(request.now.valueOf() + 31 * 60_000)};
+    const blockedReplay = await claim(store, request, undefined, other);
+    assert.equal(blockedReplay.reason_code, "lease_workspace_divergence");
+    assert.ok(blockedReplay.original_receipt);
+    assert.equal((await claim(store, request)).reason_code, "lease_workspace_divergence");
+    assert.equal((await claim(store, next, undefined, other)).reason_code, "lease_workspace_divergence");
+    assert.equal((await update(store, progress, undefined, other)).reason_code,
+      "lease_workspace_divergence");
+    assert.equal((await complete(store, completion(request), undefined, undefined, undefined, other)).reason_code,
+      "lease_workspace_divergence");
     assert.deepEqual(await loaded(store), current);
-    const continuation = await claim(store, {...request, operation_id: "continue-current-execution"}, undefined, unexpected);
-    assert.equal(continuation.status, "no_change");
-    assert.deepEqual((continuation.lease as JsonObject).write_workspace, workspace);
+    assert.equal((await store.readReceipt(next.operation_id)).status, "missing");
+    assert.equal((await claim(store, request, undefined, observe)).status, "replayed");
+    assert.deepEqual(await loaded(store), current);
+    const renewed = await claim(store, next, undefined, observe);
+    assert.equal(renewed.status, "applied");
+    assert.equal((renewed.lease as JsonObject).version, Number((accepted.lease as JsonObject).version) + 1);
+    assert.deepEqual((renewed.lease as JsonObject).write_workspace, workspace);
+    assert.equal((await update(store, progress, undefined, observe)).status, "applied");
+    assert.equal((await complete(store, completion(request), undefined, undefined, undefined, observe)).status, "applied");
+    assert.deepEqual(observed, [["src/**"], undefined, undefined, undefined, undefined]);
   });
   test(`${provider} managed execution: a failed worktree observation cannot grant or assign work`, async t => {
     const {store, request} = await setup(t);

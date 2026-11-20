@@ -117,13 +117,22 @@ redirected paths and a non-worktree root fail closed. Verified machine discovery
 currently supports macOS, Linux and Windows; other hosts retain ordinary
 leases. No workspace path or machine identifier is stored directly: only
 opaque digests and the existing public repository identity enter the private
-authority record.
+authority record. Worktree probes read the checkout named by the caller from
+disk. Parent Git commands, including hooks, cannot redirect these probes
+through inherited repository paths or temporary Git configuration.
 
 Renewal preserves this identity. Acquire retries must use the same worktree,
-scopes and execution key; an alias resolving to the same worktree is valid.
-To change directories or return to ordinary exclusion, release your current
-lease with its version and acquire a new execution key without
-`--write-worktree`. Other holders need not release their grants to admit an
+scopes and execution key. For an active worktree-bound managed claim, the
+delivery guard and claim must verify the caller's checkout before returning
+current execution authority. Updates and completion using that claim reference
+require the same checkout while the grant is active. Subdirectories and aliases
+of the original checkout are valid. A different or unverifiable checkout
+returns `lease_workspace_divergence`. Use `todo receipt` to read claim history
+from any checkout with access to the provider.
+To move work to a different checkout, release the current lease with its
+version, then claim from the new checkout with a new operation ID. For
+standalone acquisition, use a new execution key and pass the new checkout to
+`--write-worktree`, or omit that flag to return to ordinary exclusion. Other holders need not release their grants to admit an
 isolated code editor. Existing records and historical receipts are retained;
 no foreign ownership, shared-runtime permission or merge authority changes.
 
@@ -166,8 +175,14 @@ checkout 的冲突、同一 Todo 的执行归属仍拒绝；软链接、Git 管�
 不再要求双方都先释放、重新绑定 worktree。Todo 实例 lease、CAS、TTL、重放、
 续租及生命周期写入仍按原规则保护。共享运行状态、远端分支和合并权限不由
 此模式授予；未提供经验证的调用者 worktree 时，普通独占规则保持不变。
+已绑定 worktree 的受管认领在租约有效时，执行检查、认领、引用该认领的进度更新和完成
+都必须验证调用者位于原 checkout。原 checkout 的子目录和别名有效。换到其他
+checkout 或无法验证时返回 `lease_workspace_divergence`。有权限读取 provider 的
+调用者可以在其他目录用 `todo receipt` 查询历史认领。换工作区时，按读回版本释放后，
+在新 checkout 用新 operation ID 认领。
 如需恢复普通独占，按读回版本释放自己的 lease，再用新的执行 key、不带
-`--write-worktree` 重新取得；无需修改其他角色的 lease。
+`--write-worktree` 重新取得；无需修改其他角色的 lease。工作区探测读取调用者
+指定目录的实际 Git 信息，父 Git 命令（包括 hook）的仓库路径和临时配置不会改变探测目标。
 
 ## Operate the current lease
 

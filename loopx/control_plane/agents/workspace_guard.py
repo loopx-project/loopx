@@ -11,6 +11,7 @@ from ...agent_registry import registered_agent_ids_for_goal
 from ...repository_identity import (
     normalize_repository_identity,
     resolve_project_identity,
+    workspace_git_environment,
 )
 from ..todos.contract import normalize_todo_claimed_by, normalize_todo_task_repository
 from .delivery_workspace import (
@@ -47,6 +48,7 @@ def _git_command_output(path: Path, *args: str) -> str | None:
             stderr=subprocess.DEVNULL,
             text=True, encoding="utf-8", errors="replace",
             timeout=1.5,
+            env=workspace_git_environment(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -61,9 +63,10 @@ def _git_worktree_root(path: Path) -> Path | None:
     if not output:
         return None
     try:
-        return Path(output).expanduser().resolve()
+        root = Path(output).expanduser().resolve()
     except OSError:
         return None
+    return root if _is_same_or_child_path(path, root) else None
 
 
 def _git_common_dir(root: Path) -> Path | None:
@@ -139,6 +142,7 @@ def _git_origin_is_absent(path: Path) -> bool:
             ["git", "-C", str(path), "config", "--get", "remote.origin.url"],
             check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             timeout=1.5,
+            env=workspace_git_environment(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return False

@@ -15,6 +15,7 @@ import {sealProjectionEnvelope, PROJECTION_ENVELOPE_SEAL_REQUEST} from "../proje
 import {canonicalAuthoritySha256, canonicalAuthorityJson} from "../coordination/authority_store_codec.ts";
 import {decodeTodoReadSource} from "./read_codec.ts";
 import {projectTodoQuotaPlanning} from "./quota_selection.ts";
+import {matchesObservedLeaseWorkspace, observeLeaseWorktree} from "../work_items/task_lease_workspace.ts";
 import type {LocalAuthorityProviderDependencies} from "../coordination/local_authority_provider.ts";
 
 const includesArchivedRows = (query: JsonObject): boolean =>
@@ -238,9 +239,13 @@ export async function readExecutionPreparationSource(input: JsonObject, dependen
   if (canonical.status !== "loaded") return unavailable;
   const todo = originalRecords(canonical.todos).find(row => row.todo_id === todoId);
   if (!todo) return unavailable;
-  const leases = originalRecords(canonical.leases).filter(row => row.todo_id === todoId)
-    .map(({todo_id, schema_version, status, owner, expires_at, idempotency_key, version}) =>
-      ({todo_id, schema_version, status, owner, expires_at, idempotency_key, version}));
+  const workspacePath = source.workspace_path;
+  const observe = typeof workspacePath === "string" ? () => observeLeaseWorktree(workspacePath) : undefined;
+  const leases = await Promise.all(originalRecords(canonical.leases).filter(row => row.todo_id === todoId)
+    .map(async ({todo_id, schema_version, status, owner, expires_at, idempotency_key, version, write_workspace}) =>
+      ({todo_id, schema_version, status, owner, expires_at, idempotency_key, version,
+        ...(status !== "active" || write_workspace == null ? {} :
+          {workspace_matches: await matchesObservedLeaseWorkspace(write_workspace, observe)})})));
   return {schema_version: TODO_READ_RESULT, execution_preparation_source: {
     goal_id: goalId, todo_id: todoId, handoff_mode: canonical.handoff_mode,
     source_authority: canonical.source_authority, provider_revision: canonical.provider_revision,

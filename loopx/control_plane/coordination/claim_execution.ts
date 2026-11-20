@@ -8,7 +8,8 @@ import {indexCoordinationProjection} from "./coordination_projection.ts";
 import {canonicalTaskLease, canonicalTaskLeaseAcquireFacts} from "./task_lease_state.ts";
 import {coordinationTodoWriteScopes} from "./todo_write_scopes.ts";
 import {leaseEpoch, leaseVersion, leaseIsActive, normalizeTtl, type LeaseRecord} from "../work_items/task_lease_acquire.ts";
-import {sameLeaseWorkspace, type LeaseWorkspace} from "../work_items/task_lease_workspace.ts";
+import {LEASE_WORKSPACE_DIVERGENCE, matchesObservedLeaseWorkspace, sameLeaseWorkspace,
+  type LeaseWorkspace} from "../work_items/task_lease_workspace.ts";
 import {leaseWriteRepository} from "../work_items/task_lease_repository.ts";
 import {evaluateTaskLeaseAcquireDecision, materializeTaskLeaseAcquire} from "../work_items/task_lease_acquire_decision.ts";
 import {decideTaskLeaseLifecycle, materializeTaskLeaseLifecycle} from "../work_items/task_lease_lifecycle_decision.ts";
@@ -24,7 +25,13 @@ export function claimExecutionReference(id: unknown, key: unknown, version: unkn
 type ExecutionInput = {goal_id: string; todo_id: string; actor_agent_id: string | null;
   registered_agents: readonly string[]; now: Date};
 
-export type ClaimWorkspaceObserver = (writeScopes: readonly string[]) => Promise<LeaseWorkspace>;
+export type ClaimWorkspaceObserver = (writeScopes?: readonly string[]) => Promise<LeaseWorkspace>;
+
+export class ClaimWorkspaceMismatch extends AuthorityStoreProtocolError {
+  constructor() {
+    super(LEASE_WORKSPACE_DIVERGENCE.reason);
+  }
+}
 
 /** A diagnostic distinction, never permission to renew or adopt another grant. */
 export class ClaimExecutionUnavailable extends AuthorityStoreProtocolError {
@@ -38,7 +45,8 @@ export class ClaimExecutionUnavailable extends AuthorityStoreProtocolError {
 /** Resolve only this accepted execution. No acquisition, adoption of a newer
  * generation, or write retry is hidden behind a progress/completion request. */
 export async function claimExecutionProof(store: AuthorityStore, head: JsonObject,
-  input: ExecutionInput, operationId: string, allowReleasedCloseout = false): Promise<{lease_idempotency_key: string; lease_expected_version: number} | null> {
+  input: ExecutionInput, operationId: string, observeWorkspace?: ClaimWorkspaceObserver,
+  allowReleasedCloseout = false): Promise<{lease_idempotency_key: string; lease_expected_version: number} | null> {
   const receipt = await store.readReceipt(operationId);
   if (receipt.status !== "found" || receipt.receipts.length !== 1) {
     throw new ClaimExecutionUnavailable("Original task claim unavailable; recover that claim before writing");
@@ -73,6 +81,9 @@ export async function claimExecutionProof(store: AuthorityStore, head: JsonObjec
     throw new ClaimExecutionUnavailable("Original task execution changed; reconcile task ownership before a new claim",
       current.status === "active");
   }
+  if (active && !await matchesObservedLeaseWorkspace(current.write_workspace, observeWorkspace)) {
+    throw new ClaimWorkspaceMismatch();
+  }
   return {lease_idempotency_key: String(current.idempotency_key), lease_expected_version: leaseVersion(current)};
 }
 
@@ -106,6 +117,9 @@ export async function prepareClaimExecution(head: JsonObject,
   const current = facts.current;
   if (current && leaseIsActive(current, input.now)) {
     if (current.owner !== input.claimed_by) throw new AuthorityStoreProtocolError("Task is occupied by another actor");
+    if (!await matchesObservedLeaseWorkspace(current.write_workspace, observeWorkspace)) {
+      throw new ClaimWorkspaceMismatch();
+    }
     const renewed = maintainClaimExecution(head, input, current);
     return {lease: renewed ?? current, changed: renewed !== null};
   }

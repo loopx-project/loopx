@@ -126,6 +126,7 @@ def _run(
     context_delivery: str = "off",
     goal_suffix: str = "",
     write_scopes: list[str] | None = None,
+    workspace: Path | None = None,
 ):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     runtime = tmp_path / "runtime"
@@ -167,6 +168,7 @@ def _run(
         "--context-delivery", context_delivery,
         *guard_args,
         registry_path=registry, runtime_root=runtime,
+        cwd=workspace,
     )
     assert code == 0, json.dumps(packet, ensure_ascii=False, indent=2)
     return packet
@@ -222,6 +224,84 @@ def test_matching_active_lease_preserves_delivery(tmp_path, monkeypatch, provide
     }
     assert packet["normal_delivery_allowed"] is True
     assert packet["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+
+
+@pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="independent worktree fixture requires POSIX Git")
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("inherit_git_context", [False, True], ids=["clean_git", "inherited_git"])
+def test_active_managed_claim_stays_with_its_original_worktree(
+    tmp_path, monkeypatch, provider, inherit_git_context,
+):
+    project = tmp_path / "repo"
+    project.mkdir()
+
+    def git(*args):
+        subprocess.run(["git", "-C", str(project), *args], check=True, capture_output=True)
+
+    git("init")
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit",
+        "--allow-empty", "-m", "fixture")
+    git("remote", "add", "origin", "https://github.com/example/project.git")
+    original, sibling = tmp_path / "original", tmp_path / "sibling"
+    git("worktree", "add", "-b", "original", str(original))
+    git("worktree", "add", "-b", "sibling", str(sibling))
+    child = original / "nested"
+    child.mkdir()
+    if inherit_git_context:
+        # A Git hook can launch LoopX in a different checkout while retaining
+        # the parent command's repository selection.
+        git_directory = subprocess.check_output(
+            ["git", "-C", str(sibling), "rev-parse", "--absolute-git-dir"], text=True,
+        ).strip()
+        monkeypatch.setenv("GIT_DIR", git_directory)
+        monkeypatch.setenv("GIT_WORK_TREE", str(sibling))
+        monkeypatch.setenv("GIT_COMMON_DIR", str(project / ".git"))
+
+    todo = {**_todo(), "task_domain": "code", "task_repository": "git:github.com/example/project",
+            "required_write_scopes": ["src/**"]}
+    prepared = _run(tmp_path, monkeypatch, provider, [], todos=[todo], write_scopes=["src/**"], workspace=child)
+    assert prepared.get("execution_preparation", {}).get("state") == "claim_required", prepared.get("reason")
+
+    def cli(workspace, *args):
+        return run_json_cli_result(*args, registry_path=tmp_path / "registry.json",
+                                   runtime_root=tmp_path / "runtime", cwd=workspace)
+
+    claim = ["todo", "claim", "--goal-id", GOAL, "--todo-id", TODO,
+             "--agent-id", AGENT, "--claimed-by", AGENT, "--claim-operation-id"]
+    code, committed = cli(child, *claim, "original-claim")
+    assert code == 0 and committed["execution_managed"], committed
+    runtime = tmp_path / "runtime"
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL, include_leases=True)
+    assert before["leases"][0]["write_workspace"]["repository"] == todo["task_repository"]
+
+    guard = ["quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT]
+    code, ready = cli(child, *guard)
+    assert code == 0 and ready["execution_preparation"]["state"] == "ready", ready
+    gate_code, blocked = cli(sibling, *guard)
+    new_code, new_claim = cli(sibling, *claim, "different-worktree")
+    replay_code, replay = cli(sibling, *claim, "original-claim")
+    assert (gate_code, blocked["normal_delivery_allowed"], new_code, replay_code) == (0, False, 1, 1)
+    assert blocked["execution_preparation"]["reason_code"] == "lease_workspace_divergence"
+    assert not blocked["interaction_contract"]["agent_channel"]["delivery_allowed"]
+    assert new_claim["error_code"] == replay["error_code"] == "lease_workspace_divergence"
+    code, unavailable = cli(tmp_path, *claim, "original-claim")
+    assert code == 1 and unavailable["error_code"] == "lease_workspace_divergence"
+    update = ["todo", "update", "--goal-id", GOAL, "--todo-id", TODO, "--agent-id", AGENT,
+              "--note", "Validated work", "--update-operation-id", "save-progress",
+              "--claim-operation-id", "original-claim"]
+    code, rejected = cli(sibling, *update)
+    assert code == 1 and rejected["error_code"] == "lease_workspace_divergence", rejected
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL, include_leases=True) == before
+    code, historical = cli(sibling, "todo", "receipt", "--goal-id", GOAL, "--operation-id", "original-claim")
+    assert code == 0 and historical["status"] == "found"
+    assert historical["receipts"][0]["result"]["lease"] == before["leases"][0]
+    alias = tmp_path / "original-alias"
+    alias.symlink_to(original, target_is_directory=True)
+    code, retry = cli(alias, *claim, "original-claim")
+    assert code == 0 and retry["status"] == "replayed"
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL, include_leases=True) == before
+    code, saved = cli(child, *update)
+    assert code == 0 and saved["status"] == "applied", saved
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
