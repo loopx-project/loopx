@@ -164,6 +164,44 @@ moats** outside a single model forward pass:
    delivery) so sandbox resets or failures never corrupt control authority or
    expose host credentials.
 
+### Harness-neutral kernel and three-level harness co-design
+
+LoopX keeps its core authority and decision substrate (`AuthorityStore`, `CAS`,
+`claim/lease`, `Turn` fences, once-only `receipt` settlement, and
+`Target/Yardstick/Stride` records) **harness-neutral**: the kernel must never
+embed a single vendor CLI's prompt syntax, private loop driver, or transcript
+layout. Because attached and managed hosts expose very different control
+seams, LoopX pairs that single kernel with a **three-level harness co-design
+surface** rather than forcing one generic wrapper across every environment:
+
+| Co-design level | Target host surface | Primary optimization & boundary mechanism | Source ownership & convergence direction |
+|---|---|---|---|
+| **Level 1 · `BoundaryCLI`** | Boundary-isolated external CLI hosts (`codex-cli`, `claude-code`, `opencode`, `pi`, `zcode`, `kiro-cli`, `kunluncode`, skill-facade CLIs) where LoopX observes only turn boundaries | Keeps routine uncontested steps zero-ceremony (**`Quiet-Turn`**, zero per-Turn schema tax) and preserves native `KeepRaw` prefix KV-cache stability within a phase, deferring prefix rebasing and compact delta/snapshot resets to explicit quiescent **`EpochReset`** boundaries | [`loopx/host_loop_activation.py`](../../../loopx/host_loop_activation.py), [`loopx/hosts/skill_facade.py`](../../../loopx/hosts/skill_facade.py), `context_delivery.ts` ([History working sets](history-working-set-context-policy-v0.md#51-one-projection-owner)) |
+| **Level 2 · `OrchestratedApp`** | Multi-unit app, IDE, IM, and `Controller–Worker` orchestrators coordinating concurrent lanes and handoffs | Enforces **`Subagent Scope`** isolation (`collaboration_brief_v0`, bounded `remaining_work`, per-worker workspace/lease fences, and async wake predicates) so long worker execution neither blocks controller/user interaction nor leaks parent prompt gravity across slices | [`controller-executor-unified-contract-v0.md`](controller-executor-unified-contract-v0.md#router-controller-worker), [`capable-manager-semantic-handoff-v0.md`](capable-manager-semantic-handoff-v0.md) |
+| **Level 3 · `InTree`** | Runtime-embedded harnesses running inside or directly wired to LoopX's process transport (such as `loopx turn run-once --host dsh` for DeepSeek Harness) | Pairs receipt-gated `FoldToReceipt` / `EpochReset` queue compaction with deterministic turn-start context/artifact prefetch (**`FoldAndPrefetch`**) and typed failure-class recovery (`loopx_turn_host_failure_v0`) inside one process boundary | [`loopx/dsh_goal_mode/turn_host_adapter.py`](../../../loopx/dsh_goal_mode/turn_host_adapter.py), [`harness-selection-dsh-pi-v0.md`](harness-selection-dsh-pi-v0.md) |
+
+To prevent host divergence from duplicating control-plane logic across
+top-level packages:
+
+- **Unified `HostHarnessCapabilities` descriptor:** every host binding declares
+  a single typed `HostHarnessCapabilities` contract covering loop-driver
+  ownership, native goal/automation/cron/subagent-scope primitives, `EpochReset`
+  versus `FoldAndPrefetch` support, stdio/encoding requirements, and stop/pause
+  fence fidelity—never claiming autonomous execution or budget enforcement a host
+  cannot verify.
+- **Consolidating `loopx/*_goal_mode/` into `loopx/hosts/`:** migrate the `9`
+  remaining top-level `loopx/*_goal_mode/` packages (`agy_goal_mode`,
+  `claude_goal_mode`, `dsh_goal_mode`, `kiro_cli_goal_mode`,
+  `kunluncode_goal_mode`, `opencode2_goal_mode`, `opencode_goal_mode`,
+  `pi_goal_mode`, `zcode_goal_mode`) into `loopx/hosts/` under shared
+  `HostHarnessCapabilities` projections per
+  [the unified contract's retirement gate](controller-executor-unified-contract-v0.md#3-normative-retirement-backlog-and-ratchet-rules)
+  and [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json),
+  keeping CLI compatibility aliases strictly until caller cutover completes.
+- **Funnel-gated validation:** co-design optimizations across `BoundaryCLI`,
+  `OrchestratedApp`, and `InTree` remain architecture targets until verified
+  through the [Four-Tier Verification Funnel](long-horizon-harness-benchmark-research-program-v0.md#55-four-tier-verification-funnel).
+
 ### App-first conversation delivery
 
 The installed App is the primary interaction and qualification surface; Lark

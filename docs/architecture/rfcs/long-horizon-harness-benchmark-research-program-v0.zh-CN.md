@@ -568,6 +568,17 @@ goal-mode baseline。benchmark-reference scaffold reproduction 是额外 fidelit
 
 内部 control score 可以诊断行为，但不得加到原生 task score 上，也不能把失败任务变成成功。
 
+### 5.5 四层漏斗验证协议
+
+完整长跑（`18h–20h`）重复单元的时钟与算力成本过高，不应作为排查基础设施缺陷、未命中 KV-cache 开销或局部代理指标反序的第一道过滤器。每项新控制机制、运行时优化及 benchmark 实验均按顺序通过闭环阻塞的**四层漏斗验证协议**推进：
+
+| 层级 | 典型范围与时长 | 必需证据与核心指标 | 门禁与不可替代边界 |
+|---|---|---|---|
+| **Tier 0 · 离线不变量与标尺校准** | 零在线模型开销：单测与回归套件、确定性重放与 checkpoint 恢复夹具、`WarmStart` 与评测器 `/context` 预检、容器/认证/网络隔离审计，以及 [`benchmark/proxy_order.py`](../../../benchmark/proxy_order.py) 离线共同面板诊断 | 确定性通过/失败契约、精确产物与源码 digest 绑定、零隐藏评测泄漏，以及共同面板 Kendall $\tau_b$ 与尾部断崖刻画 | 任一项失败即阻止实跑消耗 token；静态与重放验证仅证明 E0–E2 工程就绪度 |
+| **Tier 1 · 快速效率对齐门** | 短周期匹配实验（如标量/多阶段赛道 `--timeout 18000` 的 `5h` 对照），按 §5.1–§5.3 对比 `Raw-Artifact Reset Baseline`、静默单会话执行与 `Controller–Worker` + `EpochReset` 相对于锚定基线的表现 | 原生 `score` 对齐度、`time-to-threshold`、轮间协议延迟缺口压缩（如训练结束至下次提交的等待窗口）、`cached_prefix_tokens` 与 `uncached_input_tokens` 稳定性，以及总 token/耗时比上限 | 尽早拦截协议税膨胀或执行退化；短周期效率对齐不能替代全周期（`18h–20h`）净收益或证明长程无熵增漂移 |
+| **Tier 2 · 有界反事实标定** | 从同一静止封存的 `research-checkpoint`（$s_0$）发起短窗口匹配分叉（如剩余上限 `~3h`），严格固定源码、评测条件（`/context`）与提交冷却 | 决策邻域 Kendall $\tau_b(s; a, a_0, \pi)$、相对原生 incumbent 的代理假提升率、前沿断崖（`Yardstick`）检出，以及计入完整边际控制/评测成本后的条件净收益 $\Delta J(B \mid s_0)$ | 在启动全周期多臂组前隔离后期决策与局部标尺保真度；结果以起点 $s_0$ 为条件，不替代从冷启动到终局的全周期对照 |
+| **Tier 3 · 全周期复现与晋升实验** | 完整预算复现实验（`18h–20h`，准备晋升时满足 `N >= 5`），含 episode 型 RSI / 标量赛道必配的 `Raw-Artifact Reset Baseline`（§5.2）、完整成本核算（§6.2）及独立完整性审计（§6.5） | 计入不确定性与跨族复现后的 benchmark 原生收益提升或成本归一化帕累托占优 | 唯一可支撑 C2/C3 能力主张与 C4 产品 promotion 评估的层级；Tier 0–2 出现退化时须停止归因与重设计，严禁靠堆砌全矩阵掩盖 |
+
 ## 6. 测量模型
 
 ### 6.1 原生结果
@@ -1503,6 +1514,7 @@ promotion 或修改 LoopX default。
 | 2026-08-25 | 把 StartupBench、LoopsBench 与 WideSearch 加入 benchmark primer 与集成计划，作为第二组互补 trio；每个 benchmark 必须在原生 metric space 报告，且 benchmark 材料不得进入可复用的 LoopX state。 |
 | 2026-10-16 | 将[反馈优先观察](https://github.com/loopx-project/loopx/blob/1d60e7edb2a05fe048767444f872934c3adef992/deprecate/benchmark-legacy/edgebench/feedback-first-observations-20261016.md)归入历史报告；运行器源码子集与配置投影修复仍属 E0/E1，混合处理、中断和进行中的观察不关闭 E2/E3，也不分离单一规划效应。通用 guard 重入放宽待受影响调用方独立验证。 |
 | 2026-11-15 | 确立 Bitter-Lesson 边界与五类受治理控制面失败机制（§2.2），要求 episode 型 RSI / 标量优化赛道的 C2/C3 主张纳入匹配且保留完整成本记账的 Raw-Artifact Reset Baseline（新实跑或合格历史复用，§5.2），并采纳 2026-11 Benchmark 组合优先级排序（§3.8）：**P0**（`EdgeBench`、`FrontierCS-2`、`LHTB / LHTB 2.0`、`LoopsBench`）、**P1**（`SWE-Marathon`、`PaperBenchX` 优先于 `PaperBench`、`ALE` 区别于 `ALE-Bench`、`WideSearch`、`KernelBench` / `AlgoTune`）、**P2**（`ALE-Bench`、`StartupBench`、`MLE-bench`、`tb-science` 仅保留单次迁移样本——因 CI 锁定 `28800s` 预算与 100% 二值 `reward.txt` 排除出 RSI），以及 **仅作对照 / 降级**（`DeepSWE`、`SWE-bench Pro`、`CORE-Bench`、`ScienceAgentBench`、`BixBench`、`FrontierScience`、已废弃 `RE-Bench`）；多臂扩展以统一 `benchmark/runtime/` + Stop-hook E0–E2 就绪及 Linux x86\_64 / GPU 宿主机为前置门槛。 |
+| 2026-11-22 | 确立闭环阻塞的**四层漏斗验证协议**（§5.5：Tier 0 离线不变量与 `benchmark/proxy_order.py` 校准 -> Tier 1 `~5h` 快速效率对齐门 -> Tier 2 `~3h` 静止检查点反事实标定 -> Tier 3 `18h–20h` 复现晋升），在不降低 §4 C2–C4 主张门槛与全周期不可替代约束的前提下提前剪枝运行时与协议退化。 |
 
 ## 18. 参考资料
 
