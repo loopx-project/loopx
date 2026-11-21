@@ -825,4 +825,59 @@ test("observeStewardSignalMonitor uses stalled_since, author-reply bypass, and s
   assert.deepEqual(externalObs.scoped_repository_items.map((row: {number: number}) => row.number), [202]);
   assert.equal(externalObs.scoped_repository_items[0].stalled_threshold_met, false);
   assert.equal(externalObs.scoped_repository_items[0].stalled_bucket, "awaiting_maintainer_reply");
+
+  // Scoped monitor WITHOUT min_stalled_hours retains updatedAt sensitivity even when items carry stalled_since.
+  const noAgeScope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+    pr_filter: {
+      exclude_drafts: true,
+      effective_verdicts: ["REQUEST_CHANGES"],
+      author_mode: "include",
+      authors: ["alice"],
+    },
+  };
+  const noAgeInitial = observeStewardSignalMonitor({
+    signal_scope: noAgeScope,
+    repository_snapshot: makeRepo("2026-11-21T08:30:00Z"),
+    observed_at: "2026-11-21T09:00:00Z",
+  });
+  const noAgeUpdated = observeStewardSignalMonitor({
+    signal_scope: noAgeScope,
+    previous_hash: noAgeInitial.result_hash,
+    repository_snapshot: makeRepo("2026-11-21T08:45:00Z"),
+    observed_at: "2026-11-21T09:15:00Z",
+  });
+  assert.equal(noAgeUpdated.material_change, true);
+
+  // Scoped monitor with sub-24h min_stalled_hours (e.g. 6h) emits under_24h at 7h and transitions to 24h_to_72h at 24h.
+  const sixHourScope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+    pr_filter: {
+      exclude_drafts: true,
+      effective_verdicts: ["REQUEST_CHANGES"],
+      author_mode: "include",
+      authors: ["alice"],
+      min_stalled_hours: 6,
+    },
+  };
+  const at7h = observeStewardSignalMonitor({
+    signal_scope: sixHourScope,
+    repository_snapshot: makeRepo("2026-11-20T15:00:00Z"),
+    observed_at: "2026-11-20T16:00:00Z",
+  });
+  assert.equal(at7h.scoped_repository_items.length, 1);
+  assert.equal(at7h.scoped_repository_items[0].stalled_threshold_met, true);
+  assert.equal(at7h.scoped_repository_items[0].stalled_bucket, "under_24h");
+  const at24hFromSixHour = observeStewardSignalMonitor({
+    signal_scope: sixHourScope,
+    previous_hash: at7h.result_hash,
+    repository_snapshot: makeRepo("2026-11-21T08:30:00Z"),
+    observed_at: "2026-11-21T09:00:00Z",
+  });
+  assert.equal(at24hFromSixHour.material_change, true);
+  assert.equal(at24hFromSixHour.scoped_repository_items[0].stalled_bucket, "24h_to_72h");
 });

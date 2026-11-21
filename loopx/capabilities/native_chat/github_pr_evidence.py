@@ -45,6 +45,10 @@ _CHECK_PASS_CONCLUSIONS = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
 _KNOWN_BOT_LOGINS = frozenset(
     {"mergify", "codecov", "codecov-commenter", "github-actions", "dependabot"}
 )
+_MAINTAINER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+_NON_MAINTAINER_ASSOCIATIONS = frozenset(
+    {"NONE", "CONTRIBUTOR", "FIRST_TIMER", "FIRST_TIME_CONTRIBUTOR", "MANNEQUIN"}
+)
 
 
 def _parse_iso_timestamp(value: Any) -> tuple[datetime, str] | None:
@@ -66,6 +70,16 @@ def _parse_iso_timestamp(value: Any) -> tuple[datetime, str] | None:
 def _is_bot_login(login: str) -> bool:
     cleaned = str(login or "").strip().casefold()
     return not cleaned or cleaned.endswith("[bot]") or cleaned in _KNOWN_BOT_LOGINS
+
+
+def _is_bot_actor(raw_user: Any, login: str) -> bool:
+    if _is_bot_login(login):
+        return True
+    if isinstance(raw_user, Mapping):
+        actor_type = str(raw_user.get("__typename") or raw_user.get("type") or "").strip().casefold()
+        if actor_type == "bot":
+            return True
+    return False
 
 
 def normalize_github_repo_slug(value: Any) -> str | None:
@@ -300,6 +314,26 @@ def _actor_actionable_verdict(record: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _post_reply_role(
+    entry: Mapping[str, Any],
+    *,
+    pr_author: str,
+    rc_reviewer_logins: set[str],
+) -> tuple[int, str] | None:
+    raw_user = entry.get("author") or entry.get("user") or {}
+    login = str(raw_user.get("login") if isinstance(raw_user, Mapping) else "").strip()
+    if _is_bot_actor(raw_user, login):
+        return None
+    if pr_author and login.casefold() == pr_author.casefold():
+        return 1, "author"
+    assoc = str(entry.get("authorAssociation") or entry.get("author_association") or "").strip().upper()
+    if assoc in _MAINTAINER_ASSOCIATIONS or (
+        bool(login) and login.casefold() in rc_reviewer_logins and assoc not in _NON_MAINTAINER_ASSOCIATIONS
+    ):
+        return 0, "maintainer"
+    return None
+
+
 def _summarize_request_changes_stall(
     row: Mapping[str, Any],
     *,
@@ -321,6 +355,11 @@ def _summarize_request_changes_stall(
         rc_candidates, key=lambda item: (item[0], item[1])
     )
     latest_rc_review_id = latest_rec.get("id")
+    rc_reviewer_logins = {
+        str(rec.get("author_login") or "").strip().casefold()
+        for _dt, _rid, rec, _iso in rc_candidates
+        if rec.get("author_login") and not rec.get("author_is_pr_author")
+    }
     anchors: list[tuple[datetime, str]] = [(latest_rc_dt, rc_iso)]
     for commit_key in ("headCommitPushedAt", "headCommitCommittedAt"):
         parsed_commit = _parse_iso_timestamp(row.get(commit_key))
@@ -335,12 +374,9 @@ def _summarize_request_changes_stall(
         parsed_ts = _parse_iso_timestamp(comment.get("createdAt") or comment.get("created_at"))
         if parsed_ts is None or parsed_ts[0] <= stalled_anchor_dt:
             continue
-        raw_user = comment.get("author") or comment.get("user") or {}
-        login = str(raw_user.get("login") if isinstance(raw_user, Mapping) else "").strip()
-        if _is_bot_login(login):
-            continue
-        is_author = 1 if (pr_author and login.casefold() == pr_author.casefold()) else 0
-        post_replies.append((parsed_ts[0], is_author, login))
+        role_info = _post_reply_role(comment, pr_author=pr_author, rc_reviewer_logins=rc_reviewer_logins)
+        if role_info is not None:
+            post_replies.append((parsed_ts[0], role_info[0], role_info[1]))
 
     for review in raw_reviews:
         if str(review.get("state") or "").strip().upper() != "COMMENTED":
@@ -348,19 +384,14 @@ def _summarize_request_changes_stall(
         parsed_ts = _parse_iso_timestamp(review.get("submittedAt") or review.get("submitted_at"))
         if parsed_ts is None or parsed_ts[0] <= stalled_anchor_dt:
             continue
-        raw_user = review.get("author") or review.get("user") or {}
-        login = str(raw_user.get("login") if isinstance(raw_user, Mapping) else "").strip()
-        if _is_bot_login(login):
-            continue
         if _extract_review_record(review, head_oid=head_oid, pr_author=pr_author)["valid_verdict_review"]:
             continue
-        is_author = 1 if (pr_author and login.casefold() == pr_author.casefold()) else 0
-        post_replies.append((parsed_ts[0], is_author, login))
+        role_info = _post_reply_role(review, pr_author=pr_author, rc_reviewer_logins=rc_reviewer_logins)
+        if role_info is not None:
+            post_replies.append((parsed_ts[0], role_info[0], role_info[1]))
 
     post_replies.sort(key=lambda item: (item[0], item[1]))
-    author_replied = bool(
-        pr_author and post_replies and post_replies[-1][2].casefold() == pr_author.casefold()
-    )
+    author_replied = bool(pr_author and post_replies and post_replies[-1][2] == "author")
     return latest_rc_review_id, stalled_since, author_replied
 
 
@@ -518,7 +549,9 @@ _GITHUB_OPEN_PRS_GRAPHQL_QUERY = """query($owner: String!, $name: String!, $curs
         comments(last: 20) {
           nodes {
             createdAt
+            authorAssociation
             author {
+              __typename
               login
             }
           }
@@ -529,7 +562,9 @@ _GITHUB_OPEN_PRS_GRAPHQL_QUERY = """query($owner: String!, $name: String!, $curs
             state
             submittedAt
             body
+            authorAssociation
             author {
+              __typename
               login
             }
             commit {

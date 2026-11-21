@@ -1057,7 +1057,8 @@ function classifyStalledBucket(stalledAgeMs: number, authorReplyBypass: boolean)
   if (authorReplyBypass) return "awaiting_maintainer_reply";
   if (stalledAgeMs >= 168 * 3_600_000) return "7d_plus";
   if (stalledAgeMs >= 72 * 3_600_000) return "72h_plus";
-  return "24h_to_72h";
+  if (stalledAgeMs >= 24 * 3_600_000) return "24h_to_72h";
+  return "under_24h";
 }
 
 function filterScopedRepositoryItems(
@@ -1164,14 +1165,19 @@ export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
     : requireJsonObject(params.portfolio_observation, "portfolio observation");
   const inboxItems = Array.isArray(params.inbox_items) ? params.inbox_items : [];
   const rawRepoItems = repo === null ? null : (Array.isArray(repo.items) ? repo.items : []);
+  const prFilter = signalScope === null ? null : jsonObject(signalScope.pr_filter);
+  const rawMinStalledHours = prFilter?.min_stalled_hours;
+  const usesStalledAgeFilter = typeof rawMinStalledHours === "number"
+    && Number.isFinite(rawMinStalledHours)
+    && rawMinStalledHours > 0;
   const scopedRepoItems = signalScope !== null && rawRepoItems !== null
     ? filterScopedRepositoryItems(
       rawRepoItems,
-      signalScope.pr_filter === undefined ? null : jsonObject(signalScope.pr_filter),
+      prFilter,
       params.observed_at ?? repo?.observed_at,
     )
     : null;
-  const hashedRepoItems = signalScope !== null && scopedRepoItems !== null
+  const hashedRepoItems = signalScope !== null && scopedRepoItems !== null && usesStalledAgeFilter
     ? scopedRepoItems.map((item) => {
       const reviewSummary = jsonObject(item.review_summary);
       const hasStalledSinceClock = typeof item.stalled_since === "string"
@@ -1180,7 +1186,7 @@ export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
       const { updatedAt: _ignoredUpdatedAt, ...rest } = item;
       return rest;
     })
-    : rawRepoItems;
+    : (scopedRepoItems ?? rawRepoItems);
   const includePortfolio = signalScope === null ? true : signalScope.include_portfolio === true;
   const includeInbox = signalScope === null ? true : signalScope.include_inbox === true;
   const facts = signalScope === null

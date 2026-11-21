@@ -658,6 +658,73 @@ def test_summarize_pr_stalled_since_and_author_reply_detection(monkeypatch) -> N
     )
     assert maintainer_replied["author_replied_after_request_changes"] is False
 
+    # Visitor (authorAssociation=NONE), suffixless Bot (__typename=Bot), and unknown commenter never clear author reply;
+    # another maintainer (authorAssociation=MEMBER) DOES clear it.
+    visitor_and_bot_ignored = summarize_github_pr_signal(
+        {
+            **_sample_pr(
+                number=305,
+                head_oid=head,
+                author="ext-contributor",
+                review_decision="CHANGES_REQUESTED",
+                reviews=[
+                    {
+                        "id": "PRR_rc5",
+                        "author": {"__typename": "User", "login": "orig-reviewer"},
+                        "authorAssociation": "MEMBER",
+                        "state": "CHANGES_REQUESTED",
+                        "commit": {"oid": head},
+                        "submittedAt": "2030-01-01T08:00:00Z",
+                        "body": _valid_bilingual_body(head_oid=head, verdict="REQUEST_CHANGES", reviewer=gpt_decl),
+                    },
+                    {
+                        "id": "PRR_bystander",
+                        "author": {"__typename": "User", "login": "random-reviewer"},
+                        "authorAssociation": "CONTRIBUTOR",
+                        "state": "COMMENTED",
+                        "commit": {"oid": head},
+                        "submittedAt": "2030-01-01T11:30:00Z",
+                        "body": "Looks interesting!",
+                    },
+                ],
+            ),
+            "comments": [
+                {"createdAt": "2030-01-01T10:00:00Z", "authorAssociation": "NONE", "author": {"__typename": "User", "login": "ext-contributor"}},
+                {"createdAt": "2030-01-01T10:20:00Z", "authorAssociation": "NONE", "author": {"__typename": "User", "login": "random-visitor"}},
+                {"createdAt": "2030-01-01T10:40:00Z", "authorAssociation": "NONE", "author": {"__typename": "Bot", "login": "custom-ci-helper"}},
+                {"createdAt": "2030-01-01T11:00:00Z", "author": {"login": "missing-association-user"}},
+            ],
+        }
+    )
+    assert visitor_and_bot_ignored["author_replied_after_request_changes"] is True
+
+    other_maintainer_replied = summarize_github_pr_signal(
+        {
+            **_sample_pr(
+                number=305,
+                head_oid=head,
+                author="ext-contributor",
+                review_decision="CHANGES_REQUESTED",
+                reviews=[
+                    {
+                        "id": "PRR_rc5",
+                        "author": {"__typename": "User", "login": "orig-reviewer"},
+                        "authorAssociation": "MEMBER",
+                        "state": "CHANGES_REQUESTED",
+                        "commit": {"oid": head},
+                        "submittedAt": "2030-01-01T08:00:00Z",
+                        "body": _valid_bilingual_body(head_oid=head, verdict="REQUEST_CHANGES", reviewer=gpt_decl),
+                    },
+                ],
+            ),
+            "comments": [
+                {"createdAt": "2030-01-01T10:00:00Z", "authorAssociation": "NONE", "author": {"__typename": "User", "login": "ext-contributor"}},
+                {"createdAt": "2030-01-01T12:00:00Z", "authorAssociation": "MEMBER", "author": {"__typename": "User", "login": "second-maintainer"}},
+            ],
+        }
+    )
+    assert other_maintainer_replied["author_replied_after_request_changes"] is False
+
     # Stale-commit CHANGES_REQUESTED after new head commit push leaves stalled_since as None.
     stale_after_push = summarize_github_pr_signal(
         _sample_pr(
@@ -700,7 +767,13 @@ def test_summarize_pr_stalled_since_and_author_reply_detection(monkeypatch) -> N
             ],
         )
     )
-    gql_node["comments"] = {"nodes": [{"createdAt": "2030-01-01T12:00:00Z", "author": {"login": "ext-contributor"}}]}
+    gql_node["comments"] = {
+        "nodes": [
+            {"createdAt": "2030-01-01T12:00:00Z", "authorAssociation": "NONE", "author": {"__typename": "User", "login": "ext-contributor"}},
+            {"createdAt": "2030-01-01T12:15:00Z", "authorAssociation": "NONE", "author": {"__typename": "User", "login": "random-visitor"}},
+            {"createdAt": "2030-01-01T12:30:00Z", "authorAssociation": "NONE", "author": {"__typename": "Bot", "login": "custom-ci-helper"}},
+        ]
+    }
     gql_node["commits"]["nodes"][0]["commit"]["oid"] = head
     gql_node["commits"]["nodes"][0]["commit"]["committedDate"] = "2030-01-01T07:00:00Z"
     gql_node["commits"]["nodes"][0]["commit"]["pushedDate"] = "2030-01-01T09:00:00Z"
