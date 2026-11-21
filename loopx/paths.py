@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import ast
 import os
+import re
 import stat
 from enum import StrEnum
 from pathlib import Path
 
+
+# One alphabet for repository-relative file-name segments. Callers keep their
+# own fallback, truncation and digest policy.
+PATH_SEGMENT_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 DEFAULT_RUNTIME_ROOT = Path.home() / ".loopx"
 LEGACY_RUNTIME_ROOT = Path.home() / ".codex" / "loopx"
