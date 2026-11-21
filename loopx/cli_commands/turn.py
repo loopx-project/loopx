@@ -103,9 +103,10 @@ def handle_turn_command(
             execution_preparer is None
             and args.turn_command == "run-once"
             and bool(getattr(args, "execute", False))
-            and (args.host != "generic-cli" or getattr(args, "validation_command_json", None))
             and uses_effect_bound_start_identity(
-                args.host, getattr(args, "host_adapter_request_schema", None),
+                args.host,
+                getattr(args, "host_adapter_request_schema", None),
+                getattr(args, "validation_command_json", None),
             )
         ):
             from ..control_plane.turn_driver.codex_execution_preparation import (

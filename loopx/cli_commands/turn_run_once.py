@@ -869,7 +869,9 @@ def execute_turn_run_once(
             manual_reason=args.manual_interval_bypass_reason,
             on_admitted=on_managed_start_admitted,
             request_id=settlement_identity.effect_id if uses_effect_bound_start_identity(
-                args.host, getattr(args, "host_adapter_request_schema", None),
+                args.host,
+                getattr(args, "host_adapter_request_schema", None),
+                getattr(args, "validation_command_json", None),
             ) else None,
         )
 
