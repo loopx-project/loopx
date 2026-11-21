@@ -6977,7 +6977,8 @@ def test_private_mention_does_not_target_turn_started_during_provider_read(ordin
         runtime.close()
 
 
-def test_private_steward_app_steering_delivers_once_to_the_original_turn(tmp_path):
+@pytest.mark.parametrize("queued", [False, True], ids=["composer", "queued-input"])
+def test_private_steward_app_steering_delivers_once_to_the_original_turn(tmp_path, queued):
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
     from test_native_steward_private import steward
 
@@ -7009,29 +7010,55 @@ def test_private_steward_app_steering_delivers_once_to_the_original_turn(tmp_pat
         session_path = f"/api/chat/sessions/{sid}"
         endpoint = f"{session_path}/turns/{tid}/steer"
         correction = {"message": "Correct the current inspection.", "client_ingress_id": "app-correction"}
+        body = correction
+        wrong_endpoint = f"{session_path}/turns/old-turn/steer"
+        wrong_body = {**correction, "client_ingress_id": "wrong-turn"}
+        original_queued = None
+        if queued:
+            status, pending = request("POST", f"{session_path}/turns", {
+                "message": correction["message"], "client_turn_id": "queue-original", "delivery": "queue",
+            })
+            assert status == 202 and pending["status"] == "queued"
+            qid = pending["turn_id"]
+            original_queued = store.load_turn(sid, qid)
+            endpoint = wrong_endpoint = f"{session_path}/queue/{qid}/steer"
+            body = {"target_turn_id": tid, "client_ingress_id": "app-correction"}
+            wrong_body = {"target_turn_id": "old-turn", "client_ingress_id": "wrong-turn"}
 
-        status, refused = request("POST", f"{session_path}/turns/old-turn/steer",
-                                  {**correction, "client_ingress_id": "wrong-turn"})
-        assert status == 409 and refused["delivery_state"] == "not_delivered"
+        status, refused = request("POST", wrong_endpoint, wrong_body)
+        assert status == 409 and refused["error_code"] == "live_steering_turn_mismatch"
         provider.owner_ready = False
-        assert request("POST", endpoint, correction)[0] == 400
-        assert store.steering_receipt(sid, "app-correction") is None
+        assert request("POST", endpoint, body)[0] == 400
+        if queued:
+            assert store.load_turn(sid, qid) == original_queued
+        else:
+            assert store.steering_receipt(sid, "app-correction") is None
         provider.owner_ready = True
 
-        status, delivered = request("POST", endpoint, correction)
-        assert status == 200 and delivered["created"] is True and delivered["turn_id"] == tid
+        # Managed Steward admission takes the controller lock before its
+        # binding. Steering already fenced by the binding cannot wait on it.
+        with runtime.lock:
+            status, delivered = request("POST", endpoint, body)
+        assert status == 200 and delivered["turn_id"] == tid
         completed = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
         assert completed["status"] == "completed"
-        status, duplicate = request("POST", endpoint, correction)
-        assert status == 200 and duplicate["created"] is False and duplicate["turn_id"] == tid
+        status, duplicate = request("POST", endpoint, body)
+        assert status == 200 and duplicate["turn_id"] == tid
+        if queued:
+            assert duplicate == delivered and delivered["queued_turn_id"] == qid
+            assert store.load_turn(sid, qid)["status"] == "completed"
+            adoption, = [row for row in store.events_after(sid, qid, None)
+                         if row["kind"] == "turn.completed"]
+            assert adoption["payload"]["steered_into_turn_id"] == tid
+        else:
+            assert delivered["created"] is True and duplicate["created"] is False
         status, history = request("GET", session_path)
         assert status == 200
         entry, = [row for row in history["messages"] if row["text"] == correction["message"]]
-        assert entry["turn_id"] == tid and entry["origin"] == "web"
+        assert entry["turn_id"] == (qid if queued else tid) and entry["origin"] == "web"
 
         transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
-        assert request("POST", endpoint, {**correction, "client_ingress_id": "revoked-input"})[0] == 400
-        assert store.steering_receipt(sid, "revoked-input") is None
+        assert request("POST", endpoint, {**body, "client_ingress_id": "revoked-input"})[0] == 400
         calls = [json.loads(line) for line in capture.read_text().splitlines()]
         steer, = [call["params"] for call in calls if call["method"] == "turn/steer"]
         assert steer["expectedTurnId"] == completed["upstream_turn_id"]
