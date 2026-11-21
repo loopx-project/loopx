@@ -104,7 +104,24 @@ duplicate source rows. A matching cohort name records the analyst's selection;
 the analyst must verify comparable inputs, source digests and timestamps.
 
 The output distinguishes missing coverage, native ties, abstentions, agreements
-and reversals. Each local result must precede acceptance of its own candidate.
+and reversals, and adds two rank/cliff diagnostics across matched candidates:
+
+- `kendall_tau_b`: tie-adjusted Kendall rank correlation (tau-b) across all
+  matched pairs (`null` when fewer than two candidates match or all matched
+  candidates tie on either score), counting joint ties in the tie denominators.
+- `frontier`: top-frontier alignment and high-end proxy cliff counts:
+  - `best_native_count`: number of matched candidates achieving the best native
+    score.
+  - `best_proxy_matches_best_native`: whether at least one matched candidate
+    achieving the best proxy score is also native-optimal (`null` when zero
+    candidates match).
+  - `false_improvements_over_best_native`: count of non-native-optimal matched
+    candidates that strictly beat at least one native-optimal matched candidate
+    on the proxy score. A cohort can show positive `kendall_tau_b` and
+    `agrees > reverses` while still failing at the frontier when an
+    over-optimizing candidate triggers a proxy cliff or tail timeout regression.
+
+Each local result must precede acceptance of its own candidate.
 Pairs share candidates and the solver may already have learned from older
 feedback. Counts describe the selected sequence. They give neither independent
 trials nor a population accuracy estimate. Close scores can change order under

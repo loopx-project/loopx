@@ -1,4 +1,8 @@
 import json
+import math
+import os
+import subprocess
+import sys
 
 import pytest
 
@@ -93,4 +97,205 @@ def test_scores_below_float_precision_are_ordered(tmp_path):
         .replace('"score": 0', '"score": 1.0000000000000000002', 1)
         .replace('"score": 0', '"score": 1.0000000000000000001', 1)
     )
-    assert compare(proxy, native)["rules"]["proxy"]["reverses"] == 1
+    result = compare(proxy, native)
+    assert result["rules"]["proxy"]["reverses"] == 1
+    assert result["kendall_tau_b"] == pytest.approx(-1.0)
+    assert result["frontier"] == dict(
+        best_native_count=1,
+        best_proxy_matches_best_native=False,
+        false_improvements_over_best_native=1,
+    )
+
+
+def test_kendall_tau_b_monotonic_and_pure_reversal(tmp_path):
+    proxy = panel(tmp_path, "proxy", [(1, 30, 1), (2, 20, 1), (3, 10, 1)], "minimize")
+    native_agree = panel(
+        tmp_path, "native", [(1, 1, 2), (2, 2, 3), (3, 3, 4)], "maximize"
+    )
+    agree_result = compare(proxy, native_agree)
+    assert agree_result["kendall_tau_b"] == pytest.approx(1.0)
+    assert agree_result["frontier"] == dict(
+        best_native_count=1,
+        best_proxy_matches_best_native=True,
+        false_improvements_over_best_native=0,
+    )
+
+    native_reverse = panel(
+        tmp_path, "native", [(1, 3, 2), (2, 2, 3), (3, 1, 4)], "maximize"
+    )
+    reverse_result = compare(proxy, native_reverse)
+    assert reverse_result["kendall_tau_b"] == pytest.approx(-1.0)
+    assert reverse_result["frontier"] == dict(
+        best_native_count=1,
+        best_proxy_matches_best_native=False,
+        false_improvements_over_best_native=2,
+    )
+
+
+def test_kendall_tau_b_with_proxy_only_and_joint_ties(tmp_path):
+    proxy_only_tie = panel(
+        tmp_path, "proxy", [(1, 1, 1), (2, 1, 1), (3, 2, 1)], "maximize"
+    )
+    native_strict = panel(
+        tmp_path, "native", [(1, 1, 2), (2, 2, 3), (3, 3, 4)], "maximize"
+    )
+    proxy_tie_result = compare(proxy_only_tie, native_strict)
+    assert proxy_tie_result["kendall_tau_b"] == pytest.approx(2 / math.sqrt(2 * 3))
+
+    # Joint tie (1, 1) has abstains == 0, yet still enters T_p in tau-b.
+    joint_tie_proxy = panel(
+        tmp_path, "proxy", [(1, 1, 1), (2, 1, 1), (3, 2, 1)], "maximize"
+    )
+    joint_tie_native = panel(
+        tmp_path, "native", [(1, 1, 2), (2, 1, 3), (3, 2, 4)], "maximize"
+    )
+    joint_result = compare(joint_tie_proxy, joint_tie_native)
+    assert joint_result["native_tied_pairs"] == 1
+    assert joint_result["rules"]["proxy"]["abstains"] == 0
+    assert joint_result["kendall_tau_b"] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize(
+    "proxy_rows,native_rows,expected_frontier",
+    [
+        (
+            [(1, 1, 5)],
+            [(1, 1, 2)],
+            dict(
+                best_native_count=0,
+                best_proxy_matches_best_native=None,
+                false_improvements_over_best_native=0,
+            ),
+        ),
+        (
+            [(1, 2, 1)],
+            [(1, 5, 2)],
+            dict(
+                best_native_count=1,
+                best_proxy_matches_best_native=True,
+                false_improvements_over_best_native=0,
+            ),
+        ),
+        (
+            [(1, 1, 1), (2, 1, 1), (3, 1, 1)],
+            [(1, 1, 2), (2, 2, 3), (3, 3, 4)],
+            dict(
+                best_native_count=1,
+                best_proxy_matches_best_native=True,
+                false_improvements_over_best_native=0,
+            ),
+        ),
+        (
+            [(1, 1, 1), (2, 2, 1), (3, 3, 1)],
+            [(1, 5, 2), (2, 5, 3), (3, 5, 4)],
+            dict(
+                best_native_count=3,
+                best_proxy_matches_best_native=True,
+                false_improvements_over_best_native=0,
+            ),
+        ),
+    ],
+)
+def test_degenerate_tau_b_and_frontier_cases(
+    tmp_path, proxy_rows, native_rows, expected_frontier
+):
+    result = compare(
+        panel(tmp_path, "proxy", proxy_rows, "maximize"),
+        panel(tmp_path, "native", native_rows, "maximize"),
+    )
+    assert result["kendall_tau_b"] is None
+    assert result["frontier"] == expected_frontier
+
+
+def test_high_end_proxy_cliff_counterexample(tmp_path):
+    proxy = panel(
+        tmp_path,
+        "proxy",
+        [(1, 1, 1), (2, 2, 1), (3, 3, 1), (4, 4, 1), (5, 5, 1)],
+        "maximize",
+    )
+    native = panel(
+        tmp_path,
+        "native",
+        [(1, 1, 2), (2, 2, 3), (3, 3, 4), (4, 10, 5), (5, 0, 6)],
+        "maximize",
+    )
+    result = compare(proxy, native)
+    assert result["rules"]["proxy"] == dict(agrees=6, reverses=4, abstains=0)
+    assert result["kendall_tau_b"] == pytest.approx(0.2)
+    assert result["frontier"] == dict(
+        best_native_count=1,
+        best_proxy_matches_best_native=False,
+        false_improvements_over_best_native=1,
+    )
+
+
+def test_frontier_multiple_native_optima_and_strict_tie_boundary(tmp_path):
+    # Minimize both: native-optimal candidates tie at native=1 with proxies 2 and 5.
+    proxy = panel(
+        tmp_path,
+        "proxy",
+        [(1, 2, 1), (2, 5, 1), (3, 4, 1), (4, 2, 1), (5, 6, 1)],
+        "minimize",
+    )
+    native = panel(
+        tmp_path,
+        "native",
+        [(1, 1, 2), (2, 1, 3), (3, 3, 4), (4, 4, 5), (5, 2, 6)],
+        "minimize",
+    )
+    result = compare(proxy, native)
+    assert result["frontier"] == dict(
+        best_native_count=2,
+        best_proxy_matches_best_native=True,
+        false_improvements_over_best_native=2,
+    )
+
+    # Tying the sole native-optimal candidate on proxy is not a strict false improvement.
+    tie_proxy = panel(tmp_path, "proxy", [(1, 10, 1), (2, 10, 1)], "maximize")
+    tie_native = panel(tmp_path, "native", [(1, 10, 2), (2, 5, 3)], "maximize")
+    tie_result = compare(tie_proxy, tie_native)
+    assert tie_result["frontier"] == dict(
+        best_native_count=1,
+        best_proxy_matches_best_native=True,
+        false_improvements_over_best_native=0,
+    )
+
+
+def test_cli_entrypoint_outputs_json_diagnostics(tmp_path):
+    proxy = panel(
+        tmp_path,
+        "proxy",
+        [(1, 1, 1), (2, 2, 1), (3, 3, 1), (4, 4, 1), (5, 5, 1)],
+        "maximize",
+    )
+    native = panel(
+        tmp_path,
+        "native",
+        [(1, 1, 2), (2, 2, 3), (3, 3, 4), (4, 10, 5), (5, 0, 6)],
+        "maximize",
+    )
+    env = {**os.environ, "LOOPX_USAGE_PING": "0"}
+    proc = subprocess.run(
+        [sys.executable, "-m", "benchmark.proxy_order", str(proxy), str(native)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert set(payload) == {
+        "cohort",
+        "coverage",
+        "native_tied_pairs",
+        "kendall_tau_b",
+        "frontier",
+        "rules",
+    }
+    assert payload["kendall_tau_b"] == pytest.approx(0.2)
+    assert payload["frontier"] == dict(
+        best_native_count=1,
+        best_proxy_matches_best_native=False,
+        false_improvements_over_best_native=1,
+    )

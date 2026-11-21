@@ -3,6 +3,7 @@
 import argparse
 from dataclasses import dataclass
 import json
+import math
 import re
 from decimal import Decimal
 from itertools import combinations
@@ -60,6 +61,61 @@ def order(left, right, direction):
     return sign(left, right) if direction == "maximize" else sign(right, left)
 
 
+def _frontier_summary(matched, proxy_direction, native_direction):
+    """Diagnose top-frontier alignment and high-end proxy cliffs.
+
+    Global pairwise agreement and ``kendall_tau_b`` can stay positive even when
+    an over-optimizing candidate wins the proxy frontier while regressing below
+    the native best (such as a reward hack or tail timeout cliff). A matched
+    candidate counts toward ``false_improvements_over_best_native`` iff it is
+    not native-optimal (``candidate.native != best_native_score``) and strictly
+    beats at least one native-optimal matched candidate on ``proxy``
+    (``order(candidate.proxy, best.proxy, proxy_direction) > 0``).
+    """
+    if not matched:
+        return dict(
+            best_native_count=0,
+            best_proxy_matches_best_native=None,
+            false_improvements_over_best_native=0,
+        )
+
+    best_native_score = (max if native_direction == "maximize" else min)(
+        candidate.native for candidate in matched
+    )
+    best_proxy_score = (max if proxy_direction == "maximize" else min)(
+        candidate.proxy for candidate in matched
+    )
+
+    # Track indices so distinct candidates sharing (proxy, native, accepted_at) stay separate.
+    best_native_indices = {
+        index
+        for index, candidate in enumerate(matched)
+        if candidate.native == best_native_score
+    }
+    best_proxy_indices = {
+        index
+        for index, candidate in enumerate(matched)
+        if candidate.proxy == best_proxy_score
+    }
+    best_proxy_matches_best_native = bool(best_native_indices & best_proxy_indices)
+
+    # Strictly beating any native-optimal candidate on proxy equals beating the worst proxy among them.
+    worst_best_native_proxy = (min if proxy_direction == "maximize" else max)(
+        matched[index].proxy for index in best_native_indices
+    )
+    false_improvements = sum(
+        1
+        for index, candidate in enumerate(matched)
+        if index not in best_native_indices
+        and order(candidate.proxy, worst_best_native_proxy, proxy_direction) > 0
+    )
+    return dict(
+        best_native_count=len(best_native_indices),
+        best_proxy_matches_best_native=best_proxy_matches_best_native,
+        false_improvements_over_best_native=false_improvements,
+    )
+
+
 def compare(proxy_path, native_path):
     cohort, proxy_direction, predictions = load_panel(
         proxy_path, clock="observed_at", allow_unscored=False
@@ -98,13 +154,17 @@ def compare(proxy_path, native_path):
         for rule in ("proxy", "later_submission")
     }
     native_ties = 0
+    proxy_ties = 0
     for left, right in combinations(matched, 2):
         actual = order(left.native, right.native, native_direction)
+        proxy_decision = order(left.proxy, right.proxy, proxy_direction)
+        if proxy_decision == 0:
+            proxy_ties += 1
         if actual == 0:
             native_ties += 1
             continue
         decisions = {
-            "proxy": order(left.proxy, right.proxy, proxy_direction),
+            "proxy": proxy_decision,
             "later_submission": sign(left.accepted_at, right.accepted_at),
         }
         for rule, prediction in decisions.items():
@@ -114,8 +174,23 @@ def compare(proxy_path, native_path):
                 rules[rule]["agrees"] += 1
             else:
                 rules[rule]["reverses"] += 1
+
+    pair_count = len(matched) * (len(matched) - 1) // 2
+    tau_denominator = (pair_count - proxy_ties) * (pair_count - native_ties)
+    kendall_tau_b = (
+        (rules["proxy"]["agrees"] - rules["proxy"]["reverses"])
+        / math.sqrt(tau_denominator)
+        if tau_denominator > 0
+        else None
+    )
+    frontier = _frontier_summary(matched, proxy_direction, native_direction)
     return dict(
-        cohort=cohort, coverage=coverage, native_tied_pairs=native_ties, rules=rules
+        cohort=cohort,
+        coverage=coverage,
+        native_tied_pairs=native_ties,
+        kendall_tau_b=kendall_tau_b,
+        frontier=frontier,
+        rules=rules,
     )
 
 
