@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import fnmatch
 import hashlib
 import importlib.util
 import json
@@ -15,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
@@ -68,18 +70,68 @@ def _is_direct_test_path(rel_path: str) -> bool:
     return rel_path.startswith(("tests/", "benchmark/", "packages/", "scripts/"))
 
 
+def _load_pytest_norecursedirs(repo_root: Path) -> tuple[str, ...]:
+    pyproject = repo_root / "pyproject.toml"
+    if not pyproject.is_file():
+        return ()
+    try:
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return ()
+    tool = data.get("tool")
+    if not isinstance(tool, Mapping):
+        return ()
+    pytest_cfg = tool.get("pytest")
+    if not isinstance(pytest_cfg, Mapping):
+        return ()
+    ini_options = pytest_cfg.get("ini_options")
+    if not isinstance(ini_options, Mapping):
+        return ()
+    raw = ini_options.get("norecursedirs")
+    if not isinstance(raw, list):
+        return ()
+    patterns: list[str] = []
+    for item in raw:
+        if isinstance(item, str):
+            normalized = item.strip().replace("\\", "/").strip("/")
+            if normalized:
+                patterns.append(normalized)
+    return tuple(patterns)
+
+
+def _is_excluded_by_norecursedirs(rel_path: str, patterns: Sequence[str]) -> bool:
+    normalized = rel_path.replace("\\", "/").lstrip("./").strip("/")
+    if not normalized or not patterns:
+        return False
+    parts = Path(normalized).parent.parts
+    if not parts:
+        return False
+    dir_path = "/".join(parts)
+    for raw_pattern in patterns:
+        pattern = raw_pattern.replace("\\", "/").strip("/")
+        if not pattern:
+            continue
+        if "/" in pattern:
+            if dir_path == pattern or dir_path.startswith(f"{pattern}/"):
+                return True
+        elif any(fnmatch.fnmatchcase(part, pattern) for part in parts):
+            return True
+    return False
+
+
 def select_preflight_tests(
     changed_paths: Sequence[str],
     *,
     repo_root: Path,
 ) -> list[str]:
     """Map changed repository paths to existing high-signal pytest modules."""
+    norecursedirs = _load_pytest_norecursedirs(repo_root)
     selected: list[str] = []
     seen: set[str] = set()
 
     def add(rel_path: str) -> None:
         normalized = rel_path.replace("\\", "/").lstrip("./")
-        if normalized in seen:
+        if normalized in seen or _is_excluded_by_norecursedirs(normalized, norecursedirs):
             return
         if (repo_root / normalized).is_file():
             seen.add(normalized)
@@ -87,7 +139,7 @@ def select_preflight_tests(
 
     for raw in changed_paths:
         rel = raw.replace("\\", "/").lstrip("./")
-        if not rel:
+        if not rel or _is_excluded_by_norecursedirs(rel, norecursedirs):
             continue
         if _is_direct_test_path(rel):
             add(rel)
@@ -149,20 +201,58 @@ def _load_runtime_stopper(repo_root: Path) -> Any:
     return getattr(module, "stop_disposable_effect_runtimes", None)
 
 
-def _remove_tree_tolerant(root: Path) -> None:
-    if root.is_symlink() or not root.exists():
+def _is_link_or_junction(path: Path | str) -> bool:
+    is_junction = getattr(os.path, "isjunction", None)
+    return os.path.islink(path) or bool(is_junction and is_junction(path))
+
+
+def _make_owned_tree_removable(root: Path) -> None:
+    """Restore owner access inside a script-owned tree without following links."""
+    user_access = stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR
+    root_stat = os.lstat(root)
+    if not stat.S_ISDIR(root_stat.st_mode):
         return
-
-    def handle_readonly(func: Any, path: str, _exc_info: Any) -> None:
-        target = Path(path)
-        for node in (target.parent, target):
+    os.chmod(root, stat.S_IMODE(root_stat.st_mode) | user_access)
+    for directory, subdirectories, files in os.walk(root, topdown=True, followlinks=False):
+        subdirectories[:] = [
+            name
+            for name in subdirectories
+            if not _is_link_or_junction(os.path.join(directory, name))
+        ]
+        for name in [directory, *(os.path.join(directory, item) for item in subdirectories)]:
             try:
-                os.chmod(node, node.stat().st_mode | stat.S_IWUSR | stat.S_IXUSR)
-            except OSError:
-                pass
-        func(path)
+                status = os.lstat(name)
+                if stat.S_ISDIR(status.st_mode):
+                    os.chmod(name, stat.S_IMODE(status.st_mode) | user_access)
+            except FileNotFoundError:
+                continue
+        for name in files:
+            target = os.path.join(directory, name)
+            if _is_link_or_junction(target):
+                continue
+            try:
+                status = os.lstat(target)
+                # A hard link shares attributes with an entry outside this tree.
+                if stat.S_ISREG(status.st_mode) and status.st_nlink == 1:
+                    os.chmod(target, stat.S_IMODE(status.st_mode) | stat.S_IWUSR)
+            except FileNotFoundError:
+                continue
 
-    shutil.rmtree(root, onexc=handle_readonly)
+
+def _remove_tree_tolerant(root: Path) -> None:
+    try:
+        if _is_link_or_junction(root):
+            root.unlink()
+            return
+        if not root.exists():
+            return
+        try:
+            shutil.rmtree(root)
+        except OSError:
+            _make_owned_tree_removable(root)
+            shutil.rmtree(root)
+    except FileNotFoundError:
+        return
 
 
 def _isolated_env(
@@ -218,6 +308,13 @@ def _isolated_env(
             "HYPOTHESIS_STORAGE_DIRECTORY": str(hypothesis_dir),
         }
     )
+    if env.get("NODE_DISABLE_COMPILE_CACHE") != "1" and not env.get("NODE_V8_COVERAGE"):
+        node_compile_cache = root / "node-compile-cache"
+        node_compile_cache.mkdir(parents=True, exist_ok=True)
+        os.chmod(node_compile_cache, 0o700)
+        env["NODE_COMPILE_CACHE"] = str(node_compile_cache)
+    else:
+        env.pop("NODE_COMPILE_CACHE", None)
     return env
 
 
@@ -411,7 +508,13 @@ def _run_shard(
             if durations_path is not None and durations_path.is_file():
                 shutil.copyfile(durations_path, shard_durations_file)
                 cmd.extend(["--splitting-algorithm", "least_duration"])
-            cmd.extend(["--store-durations", f"--durations-path={shard_durations_file}"])
+            cmd.extend(
+                [
+                    "--clean-durations",
+                    "--store-durations",
+                    f"--durations-path={shard_durations_file}",
+                ]
+            )
         elif durations_path is not None and durations_path.is_file():
             cmd.extend(
                 [
@@ -469,16 +572,31 @@ def _run_shard(
     return receipt, shard_durations_file
 
 
-def _merge_shard_durations(duration_files: Sequence[Path], out_path: Path) -> None:
+def _load_durations_mapping(file_path: Path) -> dict[str, float]:
+    if not file_path.is_file():
+        return {}
+    data = json.loads(file_path.read_text(encoding="utf-8"))
+    if not isinstance(data, Mapping):
+        return {}
+    return {
+        key: float(value)
+        for key, value in data.items()
+        if isinstance(key, str) and isinstance(value, (int, float)) and not isinstance(value, bool)
+    }
+
+
+def _merge_shard_durations(
+    duration_files: Sequence[Path],
+    out_path: Path,
+    *,
+    seed_durations_path: Path | None = None,
+    preserve_seed: bool = False,
+) -> None:
     merged: dict[str, float] = {}
-    for file_path in duration_files:
-        if not file_path.is_file():
-            continue
-        data = json.loads(file_path.read_text(encoding="utf-8"))
-        if isinstance(data, Mapping):
-            for key, value in data.items():
-                if isinstance(key, str) and isinstance(value, (int, float)):
-                    merged[key] = float(value)
+    if preserve_seed and seed_durations_path is not None:
+        merged.update(_load_durations_mapping(seed_durations_path))
+    for file_path in sorted(duration_files):
+        merged.update(_load_durations_mapping(file_path))
         file_path.unlink(missing_ok=True)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(
@@ -509,7 +627,10 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     os.umask(0o022)
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
+    if args.only_preflight and not args.preflight_since:
+        parser.error("--only-preflight requires --preflight-since")
     if args.shards < 1:
         raise ValueError("--shards must be at least 1")
     workers = args.shards if args.max_workers is None else max(1, min(args.shards, args.max_workers))
@@ -581,7 +702,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 duration_files.append(dur_file)
 
     if store_durations and args.durations_out is not None:
-        _merge_shard_durations(duration_files, args.durations_out.expanduser().resolve())
+        _merge_shard_durations(
+            duration_files,
+            args.durations_out.expanduser().resolve(),
+            seed_durations_path=resolved_durations,
+            preserve_seed=any(bool(row.get("resumed")) for row in results),
+        )
 
     final_source = _require_clean_source(repo_root)
     if final_source != source:
