@@ -479,3 +479,139 @@ def test_retire_resolves_relative_state_file_to_registry_root(tmp_path: Path) ->
     assert payload["state_file"] == str(
         project / "goals" / "relative-retired" / "ACTIVE_GOAL_STATE.md"
     )
+
+
+def test_archive_resolves_global_relative_state_file_from_project_repo(
+    tmp_path: Path,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    project = tmp_path / "project"
+    project.mkdir()
+    # The project owns the state file; the runtime holds only artifacts, so a
+    # runtime-relative resolution would hand the hook an unreadable path.
+    project_state = project / "ACTIVE_GOAL_STATE.md"
+    project_state.write_text("project state\n", encoding="utf-8")
+    source = runtime_root / "goals" / "global-archive"
+    source.mkdir(parents=True)
+    (source / "artifact.txt").write_text("kept\n", encoding="utf-8")
+    global_registry = runtime_root / "registry.global.json"
+    _write_json(
+        global_registry,
+        {
+            "schema_version": 0.1,
+            "registry_role": "global-local",
+            "goals": [
+                {
+                    "id": "global-archive",
+                    "display_name": "Global archive fixture",
+                    "repo": str(project),
+                    "state_file": "ACTIVE_GOAL_STATE.md",
+                }
+            ],
+        },
+    )
+    payload_path = tmp_path / "payloads.jsonl"
+    _configure_closeout(runtime_root, payload_path)
+
+    result = archive_runtime_goal(
+        registry_path=global_registry,
+        runtime_root_override=str(runtime_root),
+        goal_id="global-archive",
+        archive_root=None,
+        allow_registered=True,
+        execute=True,
+    )
+    assert result["ok"] is True, result
+    assert result["closeout"]["status"] == "success", result
+    assert not source.exists()
+    payload = json.loads(payload_path.read_text(encoding="utf-8").splitlines()[0])
+    assert payload["state_file"] == str(project_state)
+    assert Path(payload["state_file"]).read_text(encoding="utf-8") == "project state\n"
+
+
+def test_orphaned_global_stop_resolves_relative_state_file_from_repo(
+    tmp_path: Path,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    project = tmp_path / "project"
+    project.mkdir()
+    project_state = project / "ACTIVE_GOAL_STATE.md"
+    project_state.write_text("orphan state\n", encoding="utf-8")
+    global_registry = runtime_root / "registry.global.json"
+    _write_json(
+        global_registry,
+        {
+            "schema_version": 0.1,
+            "registry_role": "global-local",
+            "goals": [
+                {
+                    "id": "orphaned-stop",
+                    "display_name": "Orphaned stop fixture",
+                    "repo": str(project),
+                    "source_registry": str(tmp_path / "missing" / "registry.json"),
+                    "state_file": "ACTIVE_GOAL_STATE.md",
+                    "quota": {"compute": 1, "allowed_slots": 4, "spent_slots": 0},
+                }
+            ],
+        },
+    )
+    payload_path = tmp_path / "payloads.jsonl"
+    _configure_closeout(runtime_root, payload_path)
+
+    stopped = set_goal_activation_state(
+        registry_path=global_registry,
+        goal_id="orphaned-stop",
+        state="stopped",
+        runtime_root_override=str(runtime_root),
+        actor_kind="owner",
+        execute=True,
+    )
+    assert stopped["ok"] is True, stopped
+    assert stopped["closeout"]["status"] == "success", stopped
+    payload = json.loads(payload_path.read_text(encoding="utf-8").splitlines()[0])
+    assert payload["state_file"] == str(project_state)
+    assert Path(payload["state_file"]).read_text(encoding="utf-8") == "orphan state\n"
+
+
+def test_archive_without_hook_keeps_success_for_unusable_state_file(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    registry_path = project / ".loopx" / "registry.json"
+    runtime_root = project / ".loopx" / "runtime"
+    source = runtime_root / "goals" / "stale-state-goal"
+    source.mkdir(parents=True)
+    (source / "artifact.txt").write_text("kept\n", encoding="utf-8")
+    _write_json(
+        registry_path,
+        {
+            "schema_version": 1,
+            "common_runtime_root": ".loopx/runtime",
+            "goals": [
+                {
+                    "id": "stale-state-goal",
+                    "display_name": "Stale state fixture",
+                    "repo": str(project),
+                    # A stale user alias whose expansion raises; with no
+                    # hook configured this must not be touched at all.
+                    "state_file": "~loopx-retired-operator/goals/stale/ACTIVE_GOAL_STATE.md",
+                }
+            ],
+        },
+    )
+
+    result = archive_runtime_goal(
+        registry_path=registry_path,
+        runtime_root_override=None,
+        goal_id="stale-state-goal",
+        archive_root=None,
+        allow_registered=True,
+        execute=True,
+    )
+    assert result["ok"] is True, result
+    archive_path = Path(result["archive_path"])
+    assert not source.exists()
+    assert (archive_path / "artifact.txt").read_text(encoding="utf-8") == "kept\n"
+    assert result["closeout"]["status"] == "not_configured", result
+    assert result["closeout"]["ledger_recorded"] is False
+    assert not (archive_path / GOAL_CLOSEOUT_LEDGER_FILENAME).exists()
