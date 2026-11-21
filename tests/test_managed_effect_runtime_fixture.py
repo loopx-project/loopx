@@ -1,18 +1,21 @@
 """Disposable pytest namespaces must not retain managed runtime processes."""
 from __future__ import annotations
 
-import json
 import errno
+import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 
 import pytest
+from managed_effect_runtime_fixture import (
+    capture_disposable_effect_runtimes,
+    stop_disposable_effect_runtimes,
+)
 
-from managed_effect_runtime_fixture import capture_disposable_effect_runtimes, stop_disposable_effect_runtimes
 from loopx.control_plane import effect_runtime
 
 
@@ -63,6 +66,127 @@ def nested_pytest_environment(tmp_path):
     return {**os.environ, "HOME": str(home), "USERPROFILE": str(home), "PYTHONPATH": os.pathsep.join([
         str(repository / "tests"), str(repository),
     ])}
+
+
+def test_pytest_reclaims_finished_cases_and_keeps_failed_phases(tmp_path, nested_pytest_environment):
+    probe = tmp_path / "test_artifacts.py"
+    evidence_file = tmp_path / "artifacts.json"
+    probe.write_text(textwrap.dedent(f'''
+        import json
+        import os
+        from pathlib import Path
+
+        import pytest
+
+        artifacts = {{}}
+
+        @pytest.fixture
+        def evidence(request, tmp_path, case_mktemp):
+            paths = [tmp_path, case_mktemp("short"), Path(os.environ["HOME"])]
+            for path in paths:
+                (path / "witness").write_text(request.node.name)
+            artifacts[request.node.name] = paths
+            yield
+            # Finalizers must run before per-case cleanup.
+            assert all((path / "witness").exists() for path in paths)
+
+        @pytest.fixture
+        def broken_setup(evidence):
+            pytest.fail("setup failed")
+
+        @pytest.fixture
+        def broken_teardown(evidence):
+            yield
+            pytest.fail("teardown failed")
+
+        def test_success(evidence):
+            pass
+
+        def test_failed_setup(broken_setup):
+            pass
+
+        def test_failed_call(evidence):
+            pytest.fail("call failed")
+
+        def test_failed_teardown(broken_teardown):
+            pass
+
+        def test_observe():
+            assert all(not path.exists() for path in artifacts.pop("test_success"))
+            assert len(artifacts) == 3
+            for name, paths in artifacts.items():
+                assert all((path / "witness").read_text() == name for path in paths)
+            Path({str(evidence_file)!r}).write_text(json.dumps({{
+                name: [str(path) for path in paths] for name, paths in artifacts.items()
+            }}))
+    '''), encoding="utf-8")
+    result = subprocess.run([
+        sys.executable, "-m", "pytest", "-q", "-p", "conftest",
+        "--basetemp", str(tmp_path / "cases"), str(probe),
+    ], cwd=tmp_path, env=nested_pytest_environment, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "1 failed, 3 passed, 2 errors" in result.stdout, result.stdout
+    artifacts = json.loads(evidence_file.read_text(encoding="utf-8"))
+    assert set(artifacts) == {"test_failed_setup", "test_failed_call", "test_failed_teardown"}
+    for name, paths in artifacts.items():
+        assert all((Path(path) / "witness").read_text() == name for path in paths)
+
+
+def test_pytest_reclaims_read_only_trees_without_warning_errors(tmp_path, nested_pytest_environment):
+    probe = tmp_path / "test_read_only_tree.py"
+    evidence_file = tmp_path / "read-only.json"
+    probe.write_text(textwrap.dedent(f'''
+        import json
+        import os
+        from pathlib import Path
+
+        import pytest
+
+        @pytest.mark.filterwarnings("error")
+        def test_read_only(tmp_path):
+            read_only = tmp_path / "read-only"
+            read_only.mkdir()
+            target = read_only / "git-object"
+            target.write_text("synthetic")
+            os.chmod(target, 0o444)
+            os.chmod(read_only, 0o555)
+            Path({str(evidence_file)!r}).write_text(json.dumps({{
+                "root": str(tmp_path), "target": str(target)
+            }}))
+    '''), encoding="utf-8")
+    result = subprocess.run([
+        sys.executable, "-m", "pytest", "-q", "-W", "error", "-p", "conftest",
+        "--basetemp", str(tmp_path / "cases"), str(probe),
+    ], cwd=tmp_path, env=nested_pytest_environment, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    evidence = json.loads(evidence_file.read_text(encoding="utf-8"))
+    assert not Path(evidence["root"]).exists()
+    assert not Path(evidence["target"]).exists()
+
+
+@pytest.mark.parametrize("workers", [0, 2], ids=["serial", "xdist"])
+def test_pytest_stops_before_fixtures_on_low_disk(tmp_path, nested_pytest_environment, workers):
+    probe = tmp_path / "test_disk_guard.py"
+    probe.write_text(textwrap.dedent("""
+        def test_first():
+            raise AssertionError("case must not start")
+
+        def test_second():
+            raise AssertionError("case must not start")
+    """), encoding="utf-8")
+    base = tmp_path / "low-space"
+    parallel = []
+    if workers:
+        pytest.importorskip("xdist")
+        parallel = ["-n", str(workers)]
+    result = subprocess.run([
+        sys.executable, "-m", "pytest", "-q", "-p", "conftest",
+        "--basetemp", str(base), "--loopx-min-free-tmp-mib=1099511627776", *parallel, str(probe),
+    ], cwd=tmp_path, env=nested_pytest_environment, capture_output=True, text=True, timeout=60)
+    assert result.returncode == pytest.ExitCode.INTERRUPTED, result.stdout + result.stderr
+    assert "LoopX pytest temporary storage is low" in result.stdout
+    assert "case must not start" not in result.stdout
+    assert not list(base.glob("**/effect-runtime*"))
 
 
 def _has_exited(pid):

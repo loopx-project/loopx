@@ -61,7 +61,7 @@ import { aggregateThreadStats, statsOfTrace, type ThreadStats, type TurnStatsRow
 import { askedText } from './util.js';
 import { MessageEdits } from './message-edits.js';
 import { addWorktree, countChanges, findCheckout, initRepository, removeWorktree, samePath, worktreeLeftovers, type Checkout, type Worktree } from './worktrees.js';
-import { isProbeSession } from './local-sessions.js';
+import { isProbeSession, offeredSessionDir } from './local-sessions.js';
 
 /** Why a copy cannot get a worktree of its own, said to whoever asked for one anyway. */
 const WORKTREE_REFUSALS = {
@@ -435,6 +435,8 @@ export class ThreadManager {
   /** The LoopX Goal adapter, when one is attached: a thread it binds is a Goal conversation, every other is ordinary. */
   loopx: LoopxHooks | null = null;
   /** What the last local-session scan knows of a native session: where it came from, and its Goal. */
+  /** Directories whose sessions are not offered for import (`LOOCHAT_HIDDEN_SESSION_DIRS`). */
+  hiddenSessionDirs: string[] = [];
   sessionIndex: ((sessionId: string) => { origin?: 'app' | 'cli' | null; loopx?: import('./session-enrich.js').SessionLoopx } | undefined) | null = null;
 
   /** The skills every agent instance on this machine can reach. Read-mostly, by the skills page. */
@@ -592,7 +594,9 @@ export class ThreadManager {
   }
 
   /**
-   * Conversations the agent already has, in directories the hub is allowed to work in.
+   * Conversations the agent already has, in any directory that still exists, is not hidden and
+   * could be a workdir (the sidebar's rule, {@link offeredSessionDir}): importing one from outside
+   * the workdirs adds its directory (see {@link importSession}).
    * `threadId` is set for those that are already a thread here (including archived ones).
    */
   async listAgentSessions(agent: string): Promise<Array<AgentSessionSummary & { threadId: string | null }>> {
@@ -602,14 +606,16 @@ export class ThreadManager {
       throw new HttpError(400, `${agent} has no session history to import`);
     }
     const sessions = await adapter.listSessions();
-    const allowed = new Map<string, boolean>();
+    const offered = new Map<string, boolean>();
     const workdirs = this.workdirs;
+    const hidden = this.hiddenSessionDirs;
     return sessions
       .filter((s) => !isProbeSession(s.title))
-      // A session whose directory has since been removed cannot be continued, so it is not offered.
+      // A session whose directory has since been removed, or that could never become a workdir,
+      // cannot be continued, so it is not offered.
       .filter((s) => {
-        if (!allowed.has(s.cwd)) allowed.set(s.cwd, !!s.cwd && isWithinWorkdirs(s.cwd, workdirs) && isDirectory(s.cwd));
-        return allowed.get(s.cwd);
+        if (!offered.has(s.cwd)) offered.set(s.cwd, offeredSessionDir(s.cwd, workdirs, hidden) && isDirectory(s.cwd));
+        return offered.get(s.cwd);
       })
       .map((s) => ({ ...s, threadId: this.store.findThreadByAgentSession(agent, s.id)?.id ?? null }))
       // Newest first; sessions with no date go last.
@@ -620,8 +626,15 @@ export class ThreadManager {
    * Makes a thread out of a conversation the agent already has. Its past turns are written to the
    * event log once; the thread then continues the same agent session, so the terminal and the hub
    * keep sharing it.
+   *
+   * A session outside the workdirs is imported only with `addDirectory`, which the person's own
+   * import click sets: its directory then becomes a workdir, as if added from the page (a home
+   * directory or the root itself is refused as too wide). The directory and thread are committed
+   * as one recoverable operation: either failure restores the previous workdirs and leaves no
+   * importable thread.
+   * Imports nobody clicked, such as the LoopX Goal sync, never widen where threads may work.
    */
-  async importSession(input: { agent?: unknown; sessionId?: unknown }): Promise<ThreadView> {
+  async importSession(input: { agent?: unknown; sessionId?: unknown; addDirectory?: boolean }): Promise<ThreadView> {
     const agent = String(input.agent ?? '');
     const sessionId = String(input.sessionId ?? '');
     const adapter = this.adapters.get(agent);
@@ -630,12 +643,15 @@ export class ThreadManager {
     const summary = adapter.getSession
       ? await adapter.getSession(sessionId)
       : (await this.listAgentSessions(agent)).find((s) => s.id === sessionId);
-    if (!summary || summary.id !== sessionId || !summary.cwd || !isWithinWorkdirs(summary.cwd, this.workdirs) || !isDirectory(summary.cwd)) {
+    const outside = !!summary?.cwd && !isWithinWorkdirs(summary.cwd, this.workdirs);
+    if (!summary || summary.id !== sessionId || !summary.cwd || (outside && !input.addDirectory) || !isDirectory(summary.cwd)) {
       throw new HttpError(404, 'session not found, or it is outside the allowed workdirs');
     }
     const key = `${agent}:${sessionId}`;
     if (this.store.findThreadByAgentSession(agent, sessionId) || this.importing.has(key)) throw new HttpError(409, 'this session is already a thread');
     if (!adapter.loadHistory) throw new HttpError(400, `${agent} has no session history to import`);
+    const refused = outside ? this.dirs.refusal(summary.cwd) : null;
+    if (refused) throw new HttpError(400, refused);
 
     this.importing.add(key);
     try {
@@ -643,19 +659,25 @@ export class ThreadManager {
       const title = (summary.title || turns[0]?.text || '').split('\n')[0].trim().slice(0, 60) || '导入的会话';
       const permissionMode = 'auto_edit'; // the same default a new thread gets
       const id = randomUUID();
+      let undoWorkdir: (() => void) | null = null;
+      let threadCommitted = false;
 
-      // Images are files, written before the database work so a failure there leaves nothing half-done.
-      const images: StoredAttachment[][] = turns.map((turn) => {
-        if (turn.images.length === 0) return [];
-        try {
-          return this.attachments.save(id, turn.images.slice(0, MAX_IMAGES)).stored;
-        } catch {
-          return []; // an image the hub would not accept is left out; the text still comes across
-        }
-      });
-
-      const events: StoredEvent[] = [];
       try {
+        // Publish the durable root before creating its thread, and keep the undo until the thread
+        // transaction commits. A save failure therefore cannot report success or leave a retry 409.
+        if (outside) undoWorkdir = this.dirs.add(summary.cwd);
+
+        // Images are files, written before the database work so a failure there leaves nothing half-done.
+        const images: StoredAttachment[][] = turns.map((turn) => {
+          if (turn.images.length === 0) return [];
+          try {
+            return this.attachments.save(id, turn.images.slice(0, MAX_IMAGES)).stored;
+          } catch {
+            return []; // an image the hub would not accept is left out; the text still comes across
+          }
+        });
+
+        const events: StoredEvent[] = [];
         this.store.transaction(() => {
           this.store.createThread({ id, agent, cwd: summary.cwd, title, permissionMode, model: null, effort: null });
           this.store.updateThread(id, { agentSessionId: sessionId, hubTurnAt: new Date().toISOString() });
@@ -669,12 +691,31 @@ export class ThreadManager {
             add(turnId, 'turn.done', { stopReason: 'end_turn', imported: true });
           });
         });
+        threadCommitted = true;
+        for (const ev of events) for (const l of this.listeners) l(ev);
+        return this.threadView(id);
       } catch (err) {
-        this.attachments.removeThread(id);
+        if (threadCommitted) {
+          try {
+            this.store.deleteThread(id);
+          } catch (cleanupErr) {
+            console.error(`import: could not remove thread ${id} after failed import: ${cleanupErr instanceof Error ? cleanupErr.message : cleanupErr}`);
+          }
+        }
+        try {
+          this.attachments.removeThread(id);
+        } catch (cleanupErr) {
+          console.error(`import: could not remove attachments after failed import: ${cleanupErr instanceof Error ? cleanupErr.message : cleanupErr}`);
+        }
+        if (undoWorkdir) {
+          try {
+            undoWorkdir();
+          } catch (rollbackErr) {
+            console.error(`import: could not restore workdirs after ${summary.cwd} import failed: ${rollbackErr instanceof Error ? rollbackErr.message : rollbackErr}`);
+          }
+        }
         throw err;
       }
-      for (const ev of events) for (const l of this.listeners) l(ev);
-      return this.threadView(id);
     } finally {
       this.importing.delete(key);
     }

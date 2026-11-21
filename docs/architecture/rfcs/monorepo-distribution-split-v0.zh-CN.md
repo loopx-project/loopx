@@ -528,17 +528,14 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
 
 #### 3. 具名退役清单与棘轮规则
 
-1. **退役 Turn 前置 pilot CLI 子命令与顶层模块。** 删除已被 `loopx turn`（`turn_driver/codex_cli.py`）、
-   `start-goal` 与 `codex_app` heartbeat 替代的 `15` 个 `codex-cli-*` pilot/证明子命令（其中
-   `14` 个在非 pilot 生产调用方中为零引用，另有 `codex-cli-session-probe` 仅作为提示出现在
-   `loopx/project_prompt.py`），以及 `4` 个顶层 `loopx/codex_cli_*.py`（`3,767` 行）和 `6` 个
-   `loopx/cli_commands/starter_*.py` 包装（`859` 行）；保留现役 `codex-cli-bootstrap-message` 与
-   `turn_driver/codex_cli.py`。
-2. **迁完剩余顶层 `chat_*` 与 `*_goal_mode` 并严格单向下调棘轮。** 完成 M1/M2：将剩余 `20` 个顶层
-   `loopx/chat_*.py`（`20,562` 行）迁入 `loopx/chat/`，将 `9` 个 `loopx/*_goal_mode/` 目录
-   （`59` 文件 / `17,655` 行；其中 `33` 个 `.py` / `7,062` 行）迁入 `loopx/hosts/`。任何删除或迁出
-   顶层模块的 PR 都必须在同一 PR 内同步调低 [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json)
-   中的 `max_top_level_modules`（当前 `127`）；靠保留永久顶层 shim 维持计数不变不构成 M1/M2 完成。
+1. **退役 Turn 前置 pilot CLI。** [#8884](https://github.com/loopx-project/loopx/pull/8884)
+   已退役 15 个被替代的试验命令和四个顶层 `loopx/codex_cli_*.py` 模块，顶层预算从 127 降至 124。
+   `codex-cli-bootstrap-message` 与 `turn_driver/codex_cli.py` 仍有现役调用方。
+2. **迁移剩余顶层 `chat_*` 和 `*_goal_mode`。** M1 将动作规范化和 Goal 生命周期动作两个内部模块
+   放入 `loopx/chat/`，移除两个顶层名字，预算由 124 降至 122。M1 剩余 Chat 模块仍按 I3 迁移，
+   M2 继续把宿主模式包迁入 `loopx/hosts/`。每次净减少都在同一 PR 中等量调低
+   [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json)。
+   Core wheel 原已排除这两类 Chat 路径，这次减少的是源码顶层模块数量。
 3. **清理无引用 `examples/` 与源码文本绑定式 smoke。** 清理 `examples/` 中无引用脚本（`main@f15ebdd16b`
    实测 `200` 个无引用 `.py` / `45,504` 行；按 `.py/.sh/.mjs/.js/.ts` 计为 `209` 个 / `47,325` 行），
    并依 [good-smokes](../../development/good-smokes.md) 退役 `14` 个绑定内部 Python 符号而非已交付
