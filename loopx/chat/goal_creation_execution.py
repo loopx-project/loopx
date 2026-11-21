@@ -1,4 +1,4 @@
-"""IO in the existing confirmed Goal-creation saga, not a new execution owner."""
+"""IO in the existing confirmed Goal-creation saga."""
 from __future__ import annotations
 
 from typing import Any

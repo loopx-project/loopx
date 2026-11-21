@@ -16,6 +16,7 @@ import time
 from types import SimpleNamespace
 from pathlib import Path
 
+import loopx.chat as chat
 import loopx.chat_agent as chat_agent
 import loopx.chat_providers as chat_providers
 import loopx.chat_runtime as chat_runtime
@@ -1140,6 +1141,45 @@ def test_routing_failure_readback_allows_only_native_compaction_before_execution
         assert proof is None
 
 
+@pytest.mark.parametrize("compact", [False, True])
+@pytest.mark.parametrize("fault", [None, "external-url", "status-403", "disconnect-variant", "tool", "answer", "older-compaction"])
+def test_loopback_relay_auth_readback_is_strictly_bounded(tmp_path, monkeypatch, compact, fault):
+    session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
+        messages=queue.Queue(), thread_id="relay-thread", work_dir=tmp_path, response_timeout_sec=.2)
+    url = "https://api.openai.com/v1/responses" if fault == "external-url" else "http://127.0.0.1:57500/v1/responses"
+    status = 403 if fault == "status-403" else 401
+    variant = "responseStreamDisconnected" if fault == "disconnect-variant" else "httpConnectionFailed"
+    prefix = "Error running remote compact task: " if compact else ""
+    message = f"{prefix}unexpected status {status}: OpenAI API fallback request could not complete., url: {url}"
+
+    def write(packet):
+        method = packet["method"]
+        if method == "thread/turns/list":
+            rows = [{"id": "failed", "status": "failed", "error": {
+                "codexErrorInfo": {variant: {"httpStatusCode": status}}, "message": message}}]
+            if fault == "older-compaction":
+                rows.insert(0, {"id": "newer", "status": "completed"})
+            result = {"data": rows}
+        else:
+            items = [{"turnId": "failed", "item": {"id": "user", "type": "userMessage"}}]
+            if compact:
+                items.append({"turnId": "failed", "item": {"id": "compact", "type": "contextCompaction"}})
+            if fault in {"tool", "answer"}:
+                items.append({"turnId": "failed", "item": {"id": "extra",
+                    "type": "commandExecution" if fault == "tool" else "agentMessage"}})
+            result = {"data": items}
+        session.messages.put({"id": packet["id"], "result": result})
+
+    monkeypatch.setattr(session, "_write", write)
+    proof = failed_request_readback(session, "failed")
+    if fault is None or (fault == "older-compaction" and not compact):
+        assert proof == {"thread_id": "relay-thread", "turn_id": "failed",
+            "only_original_user_item": not compact, "only_pre_execution_items": True,
+            "codex_error_info": {variant: {"httpStatusCode": 401}}, "loopback_relay_auth_failure": True}
+    else:
+        assert proof is None
+
+
 @pytest.mark.parametrize("message", [None, {}, [], "workspace routing discovery timed out: extra",
     "workspace routing discovery failed: extra", "Please retry: workspace routing discovery failed", "unknown"])
 def test_routing_diagnostic_is_an_exact_provider_diagnostic(message):
@@ -1463,7 +1503,7 @@ def test_project_filesystem_scope_is_verified_on_start_resume_and_pinned_per_tur
         if public_reader:
             assert "requested version's URL" in prompt and "truncation and read coverage" in prompt
         else:
-            assert prompt == chat_agent._turn_prompt("Continue.", context_summary=session.context_summary,
+            assert prompt == chat._turn_prompt("Continue.", context_summary=session.context_summary,
                 runtime_profile=session.runtime_profile, project_work=grant == "workspace_write")
         assert sent[0][1]["threadId"] == session.thread_id == "thread-loopx-chat"
     finally:
@@ -2387,7 +2427,7 @@ def test_focused_edit_guidance_reaches_confirmed_execution_only(tmp_path, monkey
     ):
         assert (competing_route in prompt) is not execution_mode
     if execution_mode:
-        assert chat_agent.WORK_RESULT_VERIFICATION_INSTRUCTION in prompt
+        assert chat.WORK_RESULT_VERIFICATION_INSTRUCTION in prompt
         assert "Never claim the change has been written without a verified control-plane receipt" not in prompt
         assert "keep proposals=[], goal_draft=null and context_handoff=null" in prompt
         assert "protected_action must be null" in prompt
@@ -2397,7 +2437,7 @@ def test_focused_edit_guidance_reaches_confirmed_execution_only(tmp_path, monkey
     {}, {"runtime_profile": "trusted_owner"}, {"project_work": True}, {"execution_mode": True},
 ])
 def test_turn_guidance_scopes_gates_without_cutting_requested_results(mode):
-    prompt = chat_agent._turn_prompt(
+    prompt = chat._turn_prompt(
         "Inspect the seven requested files; publishing still needs owner authorization.", **mode
     )
     assert "stop only actions that depend on the missing authority or tool" in prompt
@@ -2730,3 +2770,91 @@ def test_native_child_callback_is_scoped_to_owned_thread_and_turn(monkeypatch, t
     observed = []
     session.send("Reply briefly.", on_native_item=observed.append)
     assert observed == [item]
+
+
+def test_turn_retry_keeps_the_adapter_selected_before_failed_start(tmp_path, monkeypatch):
+    import runpy
+    from concurrent.futures import ThreadPoolExecutor
+
+    from loopx.chat_store import ChatSessionStore
+
+    native_calls = tmp_path / "native-calls.jsonl"
+    fixture = Path(__file__).resolve().parents[1] / "examples" / "loopx-chat-runtime-smoke.py"
+    source = runpy.run_path(str(fixture))["FAKE_CODEX"]
+    source = source.replace(
+        '    method = request.get("method")',
+        '    method = request.get("method")\n'
+        f"    with open({str(native_calls)!r}, 'a') as log:\n"
+        '        print(json.dumps(method), file=log)\n',
+        1,
+    )
+    executable = tmp_path / "codex"
+    executable.write_text(source, encoding="utf-8")
+    executable.chmod(0o700)
+    store = ChatSessionStore(tmp_path / "runtime")
+    runtime = chat_runtime.ChatRuntimeController(store=store, codex_bin=str(executable))
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    runtime.codex_home = home
+    first_starting = threading.Event()
+    retry_selected_adapter = threading.Event()
+    first_returned = threading.Event()
+    try:
+        session, _ = runtime.open_session(
+            goal_id="fixture", agent_id="codex", work_dir=tmp_path,
+            objective="Keep this native conversation.", mode="new",
+        )
+        session_id = session["session_id"]
+        adapter = runtime.adapters[session_id]
+        start_worker = runtime._start_accepted_turn_worker
+        start_thread = threading.Thread.start
+
+        def hold_retry_before_worker_registration(**kwargs):
+            if first_starting.is_set():
+                assert kwargs["adapter"] is adapter
+                retry_selected_adapter.set()
+                assert first_returned.wait(timeout=5)
+            return start_worker(**kwargs)
+
+        def fail_first_worker(thread):
+            if getattr(thread, "_target", None) == runtime._run_turn and not first_starting.is_set():
+                first_starting.set()
+                assert retry_selected_adapter.wait(timeout=5)
+                raise RuntimeError("can't start new thread")
+            start_thread(thread)
+
+        monkeypatch.setattr(runtime, "_start_accepted_turn_worker", hold_retry_before_worker_registration)
+        monkeypatch.setattr(threading.Thread, "start", fail_first_worker)
+
+        def submit():
+            return runtime.submit_turn(
+                session_id=session_id, client_turn_id="same-turn", message="complete normally",
+                work_dir=tmp_path, objective="Keep this native conversation.",
+            )
+
+        def submit_first():
+            try:
+                return submit()
+            finally:
+                first_returned.set()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(submit_first)
+            assert first_starting.wait(timeout=5)
+            retry = executor.submit(submit)
+            with pytest.raises(RuntimeError, match="can't start new thread"):
+                first.result(timeout=7)
+            replay, created = retry.result(timeout=7)
+
+        assert created is False
+        completed = runtime.wait_for_turn(session_id=session_id, turn_id=replay["turn_id"], timeout_sec=8)
+        assert completed["status"] == "completed", completed.get("error")
+        assert completed["upstream_turn_id"] == "durable-turn-1"
+        assert runtime.adapters[session_id] is adapter
+        assert adapter.healthcheck()
+        assert store.load_session(session_id)["upstream_thread_id"] == "durable-thread"
+        assert [json.loads(line) for line in native_calls.read_text().splitlines()].count("turn/start") == 1
+        assert runtime.close_session(session_id) is True
+        assert not adapter.healthcheck()
+    finally:
+        runtime.close()

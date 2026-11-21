@@ -1,7 +1,5 @@
 # 从一次会话到长程任务
 
-一个 Agent 能在当前会话里改代码、跑测试、解释结果，不代表它能可靠地拥有一项持续数天的工作。本章说明这个差别从哪里来，以及它为什么需要一个不在会话里的东西。
-
 ## 一个看起来很顺利的开头
 
 假设你要给已有 CLI 增加 `--format json`：
@@ -56,7 +54,7 @@
 | 哪个 Agent 拥有当前任务 | 重启或交接后，所有权无法从记忆里恢复 |
 | 外部世界的当前状态 | 昨天读到的 CI 状态今天可能已经变了 |
 
-Host 可以持久保存 transcript，但旧对话本身不提供当前权限、验收或恢复状态。判据是接手者能否从明确的事实源重新核对这些信息，而不依赖原会话的隐含理解。
+判据是接手者能否从明确的事实源重新核对这些信息，而不依赖原会话的隐含理解。
 
 ## 执行面与控制面
 
@@ -76,7 +74,7 @@ Observation / receipt: 返回可验证结果
 Control plane: 接受、拒绝或重规划
 ```
 
-**控制面不替代执行面。** LoopX 不写代码、不托管 Git、也不代替 CI。它让这些系统的结果能被一个跨 Turn 的工作生命周期消费——这正是 10:17 之后缺的那一环。
+它让这些系统的结果能被一个跨 Turn 的工作生命周期消费——这正是 10:17 之后缺的那一环。
 
 ## 三类长程任务为什么能共用同一控制面
 
@@ -100,7 +98,7 @@ LoopX 的控制合同不绑定某一种业务流程。仓库里的 Control-Plane
   → 重新计算 continue | wait | ask | replan | repair | terminal
 ```
 
-复用的是**生命周期不变量**，而非一段通用 prompt。Issue-Fix 理解 `CHANGES_REQUESTED`，Auto ML 理解 matched baseline，Auto Research 理解 holdout——这些领域含义属于 Capability 与 Domain State。而谁能 claim、是否可执行、何时再次唤醒、什么证据允许 writeback、Goal 能否终止，由同一套 Kernel 合同决定。
+复用的是**生命周期不变量**。Issue-Fix 理解 `CHANGES_REQUESTED`，Auto ML 理解 matched baseline，Auto Research 理解 holdout——这些领域含义属于 Capability 与 Domain State。而谁能 claim、是否可执行、何时再次唤醒、什么证据允许 writeback、Goal 能否终止，由同一套 Kernel 合同决定。
 
 这条边界也解释了为什么新增领域能力不该复制一套 runner、queue、retry 和 completion 状态机。领域层提供可判定事实与 proposal，Provider 执行外部调用，Kernel 拥有跨领域生命周期。
 
@@ -108,7 +106,7 @@ LoopX 的控制合同不绑定某一种业务流程。仓库里的 Control-Plane
 
 ## 最小外置状态长什么样
 
-对上面的贯穿任务，最小状态不是完整 transcript，而是一组能回答恢复问题的事实：
+对上面的贯穿任务，最小状态是一组能回答恢复问题的事实：
 
 ```yaml
 # 为解释而简化，不是 LoopX 文件格式
@@ -127,7 +125,7 @@ next_wake:
   when: maintainer decision arrives
 ```
 
-这些字段的价值在于：**下一位执行者不必相信上一位 Agent 的自述**，而能从目标、工作队列、Gate、证据和 fresh environment 重新判断下一步。示例是解释模型，不是 LoopX 的存储格式。
+这些字段的价值在于：**下一位执行者不必相信上一位 Agent 的自述**，而能从目标、工作队列、Gate、证据和 fresh environment 重新判断下一步。示例是解释模型。
 
 ## 代价与边界：什么被放弃了
 
@@ -147,9 +145,9 @@ next_wake:
 
 ## 不变式
 
-1. **Prompt 内容不能独自证明持久写回。** 检查可寻址的记录、身份和版本，而不是窗口是否还开着。
+1. **Prompt 内容不能独自证明持久写回。** 检查可寻址的记录、身份和版本。
 2. **执行面与控制面不能互相替代。** 控制面不写代码，执行面不决定自己是否合法。
-3. **复用的是生命周期不变量，不是 prompt。** 三个不同领域能共用一套控制面，靠的是这条。
+3. **复用的是生命周期不变量。** 三个不同领域能共用一套控制面，靠的是这条。
 4. **下一位执行者不需要相信前一位的自述。** 如果需要，说明外置得不够。
 
 接下来用[会话、Host Goal 与 LoopX](02-session-goal-loopx.md)判断任务需要哪层状态，再读[四个要求](02b-long-horizon-requirements.md)，把这些问题组织成完整的架构视角。

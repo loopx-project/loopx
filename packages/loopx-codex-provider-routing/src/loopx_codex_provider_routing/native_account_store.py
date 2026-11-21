@@ -395,7 +395,7 @@ class Accounts:
                         or actual.get('forced_login_method') not in (None, expected['forced_login_method'])):
                     return None
                 # Use the same complete, validated slot inventory as status;
-                # an unreadable slot is not proof that the match is unique.
+
                 matches = [entry.name for entry in sorted(folder.iterdir())
                            if identity(read_private(self.slot(entry.name))) == current]
                 if len(matches) != 1:

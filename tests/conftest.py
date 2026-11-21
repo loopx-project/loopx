@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import importlib
 import os
+import re
+import shutil
+import stat
 import sys
 import tempfile
+import warnings
 from pathlib import Path
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 # Suppress collection before imports and in inherited test subprocesses.
@@ -15,7 +18,6 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import pytest  # noqa: E402
-
 from managed_effect_runtime_fixture import (  # noqa: E402
     capture_disposable_effect_runtimes,
     stop_disposable_effect_runtimes,
@@ -24,7 +26,6 @@ from managed_effect_runtime_fixture import (  # noqa: E402
 from loopx import paths  # noqa: E402
 from loopx.canary.runner import SMOKE_SUITE_CHOICES  # noqa: E402
 from loopx.semantics.production import NPM_DEV_DEPENDENCIES_MISSING  # noqa: E402
-
 
 # Default runtime routes resolve from HOME at import time. A test that writes
 # either one leaves state behind, and once both hold state every later implicit
@@ -40,6 +41,140 @@ _DEFAULT_ROUTE_REFERENCES = (
     ("loopx.control_plane.runtime.local_state_migration", "LEGACY_RUNTIME_ROOT", (".codex", "loopx")),
 )
 _REAL_DEFAULT_ROUTES = (paths.DEFAULT_RUNTIME_ROOT, paths.LEGACY_RUNTIME_ROOT)
+_CASE_TEMP_DIRS = pytest.StashKey[list[Path]]()
+_CASE_FAILED = pytest.StashKey[bool]()
+_CASE_SEQUENCE = pytest.StashKey[dict[str, int]]()
+_WORKER_TEMP = pytest.StashKey[Path]()
+_TEMP_RETENTION = pytest.StashKey[str]()
+_CLEANUP_FAILURES = pytest.StashKey[list[str]]()
+_TEMP_RETENTION_INI = "tmp_path_retention_policy"
+_MIB = 1024 * 1024
+
+
+def pytest_configure(config):
+    if config.getoption("loopx_min_free_tmp_mib") < 0:
+        raise pytest.UsageError("--loopx-min-free-tmp-mib must be nonnegative")
+    overrides = config.getoption("override_ini") or ()
+    with warnings.catch_warnings():
+        # Pytest 9's getini() returns the same value for absent and explicit "all".
+        warnings.filterwarnings("ignore", message=r"config\.inicfg is deprecated", category=pytest.PytestDeprecationWarning)
+        explicit_policy = _TEMP_RETENTION_INI in config.inicfg or any(
+            override.split("=", 1)[0].strip() == _TEMP_RETENTION_INI for override in overrides
+        )
+    config.stash[_TEMP_RETENTION] = config.getini(_TEMP_RETENTION_INI) if explicit_policy else "failed"
+    config.stash[_CASE_SEQUENCE] = {}
+    config.stash[_CLEANUP_FAILURES] = []
+
+
+@pytest.fixture
+def case_mktemp(request, tmp_path_factory):
+    """Create a named temporary directory owned by the current test case."""
+    def make(name):
+        # Older pytest versions can reuse a factory name once its directory is removed.
+        sequences = request.config.stash[_CASE_SEQUENCE]
+        serial = sequences.get(name, 0)
+        sequences[name] = serial + 1
+        temporary = tmp_path_factory.mktemp(f"{name}-{serial}", numbered=False)
+        request.node.stash.setdefault(_CASE_TEMP_DIRS, []).append(temporary)
+        return temporary
+
+    return make
+
+
+@pytest.fixture
+def tmp_path(request, case_mktemp):
+    # Use pytest's test-name prefix, but own the lifetime through the teardown
+    # report. Pytest's fixture finalizer only knows about setup/call at this point.
+    name = re.sub(r"\W", "_", request.node.name)[:30]
+    return case_mktemp(name)
+
+
+def _is_link_or_junction(path):
+    is_junction = getattr(os.path, "isjunction", None)
+    return os.path.islink(path) or bool(is_junction and is_junction(path))
+
+
+def _make_owned_tree_removable(root):
+    """Restore owner access inside a test-owned tree without following links."""
+    user_access = stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR
+    root_stat = os.lstat(root)
+    if not stat.S_ISDIR(root_stat.st_mode):
+        return
+    os.chmod(root, stat.S_IMODE(root_stat.st_mode) | user_access)
+    for directory, subdirectories, files in os.walk(root, topdown=True, followlinks=False):
+        subdirectories[:] = [
+            name for name in subdirectories
+            if not _is_link_or_junction(os.path.join(directory, name))
+        ]
+        for name in [directory, *(os.path.join(directory, item) for item in subdirectories)]:
+            try:
+                status = os.lstat(name)
+                if stat.S_ISDIR(status.st_mode):
+                    os.chmod(name, stat.S_IMODE(status.st_mode) | user_access)
+            except FileNotFoundError:
+                continue
+        for name in files:
+            target = os.path.join(directory, name)
+            if _is_link_or_junction(target):
+                continue
+            try:
+                status = os.lstat(target)
+                # A hard link shares attributes with an entry outside this tree.
+                if stat.S_ISREG(status.st_mode) and status.st_nlink == 1:
+                    os.chmod(target, stat.S_IMODE(status.st_mode) | stat.S_IWUSR)
+            except FileNotFoundError:
+                continue
+
+
+def _remove_temp_dir(temporary):
+    try:
+        if _is_link_or_junction(temporary):
+            temporary.unlink()
+        else:
+            try:
+                shutil.rmtree(temporary)
+            except OSError:
+                _make_owned_tree_removable(temporary)
+                shutil.rmtree(temporary)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        return f"Could not clean pytest temporary directory {temporary}: {exc}"
+    return None
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_makereport(item, call):
+    report = yield
+    if report.failed:
+        item.stash[_CASE_FAILED] = True
+    if report.when == "teardown":
+        policy = item.config.stash[_TEMP_RETENTION]
+        if policy == "none" or (policy == "failed" and not item.stash.get(_CASE_FAILED, False)):
+            for temporary in item.stash.get(_CASE_TEMP_DIRS, []):
+                if failure := _remove_temp_dir(temporary):
+                    item.config.stash[_CLEANUP_FAILURES].append(failure)
+        for key in (_CASE_TEMP_DIRS, _CASE_FAILED):
+            if key in item.stash:
+                del item.stash[key]
+    return report
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item):
+    minimum = item.config.getoption("loopx_min_free_tmp_mib")
+    if minimum == 0:
+        return
+    configured = item.config.getoption("basetemp") or os.environ.get("PYTEST_DEBUG_TEMPROOT")
+    target = Path(configured or tempfile.gettempdir()).resolve()
+    existing = next(path for path in (target, *target.parents) if path.is_dir())
+    available = shutil.disk_usage(existing).free
+    if available < minimum * _MIB:
+        reason = (f"LoopX pytest temporary storage is low at {existing}: "
+                  f"{available // _MIB} MiB available, {minimum} MiB required.")
+        # Stop scheduling work after this setup report, including on xdist workers.
+        item.session.shouldstop = reason
+        pytest.fail(reason, pytrace=False)
 
 
 @pytest.hookimpl(wrapper=True, tryfirst=True)
@@ -57,11 +192,12 @@ def pytest_runtest_teardown(item):
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _isolated_worker_effect_runtime(tmp_path_factory):
+def _isolated_worker_effect_runtime(tmp_path_factory, request):
     # HOME does not namespace the Effect process on POSIX: its locator uses
     # getuid() and the process temp directory. A restart in one xdist worker
     # must not retire another worker's real runtime.
     temporary = tmp_path_factory.mktemp("effect-runtime")
+    request.config.stash[_WORKER_TEMP] = temporary
     with pytest.MonkeyPatch.context() as patch:
         for variable in ("TMPDIR", "TEMP", "TMP"):
             patch.setenv(variable, str(temporary))
@@ -86,11 +222,14 @@ def isolated_effect_runtime(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _isolated_default_runtime_routes(tmp_path_factory, monkeypatch):
-    home = tmp_path_factory.mktemp("home")
+def _isolated_default_runtime_routes(case_mktemp, monkeypatch):
+    home = case_mktemp("home")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.delenv("CODEX_HOME", raising=False)
+    # Prevent an active Antigravity host conversation from leaking ambient
+    # thread identity into hermetic start-goal / hook template tests.
+    monkeypatch.delenv("ANTIGRAVITY_CONVERSATION_ID", raising=False)
     # Tests opt into provider selection; isolate the operator's Chat route.
     monkeypatch.delenv("LOOPX_CHAT_CODEX_MODEL_PROVIDER", raising=False)
     for module_name, attribute, parts in _DEFAULT_ROUTE_REFERENCES:
@@ -112,6 +251,14 @@ def pytest_sessionfinish(session, exitstatus) -> None:
         if os.path.lexists(root)
     ]
     if not created:
+        temporary = session.config.stash.get(_WORKER_TEMP, None)
+        should_remove = (
+            temporary is not None
+            and exitstatus == pytest.ExitCode.OK
+            and session.config.stash[_TEMP_RETENTION] != "all"
+        )
+        if should_remove and (failure := _remove_temp_dir(temporary)):
+            session.config.stash[_CLEANUP_FAILURES].append(failure)
         return
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     if reporter is not None:
@@ -123,7 +270,22 @@ def pytest_sessionfinish(session, exitstatus) -> None:
     session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
+def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
+    failures = config.stash.get(_CLEANUP_FAILURES, [])
+    if not failures:
+        return
+    terminalreporter.write_sep("=", "LoopX pytest temporary cleanup", yellow=True)
+    for failure in failures:
+        terminalreporter.write_line(failure)
+
+
 def pytest_addoption(parser) -> None:
+    parser.getgroup("loopx-tests").addoption(
+        "--loopx-min-free-tmp-mib",
+        type=int,
+        default=2048,
+        help="Stop starting tests below this many MiB free on the pytest temporary filesystem (0 disables).",
+    )
     group = parser.getgroup("loopx-smoke-suite")
     group.addoption(
         "--loopx-smoke-suite",

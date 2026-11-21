@@ -30,7 +30,7 @@ def test_source_reference_contract_reaches_native_project_turn_without_expanding
     assert "why a result occurred or whether it is expected" in text
     assert "evidence-supported mechanism and what matches or departs from expectations" in text
     assert "Separate confirmed causes from hypotheses and unresolved triggers" in text
-    assert "a data table, test checklist or PR status does not replace it" in text
+    assert "Measurements support that explanation" in text
     assert "repository-relative Markdown destinations are not source URLs in chat" in text
     assert "canonical repository and the exact revision actually read" in text
     assert "private, ignored, unpublished or modified local content" in text
@@ -62,6 +62,6 @@ def test_steward_and_collaboration_preserve_the_same_receiver_source_boundaries(
     assert steward in MANAGER_AGENT_OBJECTIVE
     assert "evidence-supported mechanism and what matches or departs from expectations" in steward
     assert "Separate confirmed causes from hypotheses and unresolved triggers" in steward
-    assert "a data table, test checklist or PR status does not replace it" in collaboration
+    assert "Measurements support that explanation" in collaboration
     assert "Preparation, saving, delivery, adoption, execution and acceptance are distinct" in steward
     assert "Preserve the original author, audience and facts" in steward

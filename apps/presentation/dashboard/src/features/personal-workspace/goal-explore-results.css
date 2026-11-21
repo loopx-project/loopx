@@ -29,6 +29,9 @@
 .explore-reader-details dl { display: grid; gap: 8px; }
 .explore-reader-details dt { color: var(--pw-muted); font-size: var(--text-caption); }
 .explore-reader-details dd { margin-bottom: 12px; }
+.explore-related-measurements > section { padding-block: 8px; }
+.explore-related-measurements > section + section { border-top: 1px solid var(--pw-line); }
+.explore-related-finding-source { display: block; min-height: 44px; max-width: 100%; padding: 8px; text-align: start; overflow-wrap: anywhere; }
 .goal-explore-results .explore-linked-tasks { padding: 0; list-style: none; }
 .explore-linked-tasks > li { border-bottom: 1px solid var(--pw-line); }
 .goal-explore-results .explore-linked-tasks summary { display: flex; align-items: flex-start; gap: 8px; font-size: var(--text-body); line-height: var(--leading-body); }

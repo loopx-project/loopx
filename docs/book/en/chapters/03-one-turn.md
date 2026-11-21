@@ -52,7 +52,7 @@ Evidence becomes an accepted work fact through the relevant lifecycle entrypoint
 | Evidence | Materials supporting a conclusion | A record that a transition was accepted |
 | Receipt | Acceptance of a bound operation under its inputs and conditions | Current execution rights or an unchanging external world |
 
-For example, a `git push` timeout is a call outcome. A remote-ref readback may establish that a commit is present, but not necessarily which invocation caused it, and it does not automatically create a LoopX delivery receipt. Resolve the original operation before its writeback; timeout is not proof of absence.
+For example, a `git push` timeout is a call outcome. A remote-ref readback may establish that a commit is present, but not necessarily which invocation caused it, and it does not automatically create a LoopX delivery receipt. Resolve the original operation before its writeback.
 
 ## Scale one: execute, validate and commit
 
@@ -112,7 +112,7 @@ After obtaining `settlement_owed.command` from a trusted current entrypoint, ver
 
 “Independent work may continue” has a timing boundary. A Turn already bound to T1 does not switch its settlement identity to T2 merely because T1 discovers a dependency.
 
-This is an **advanced source comparison**, grounded in the [original-Turn wait recovery test](https://github.com/loopx-project/loopx/blob/f49b4a00870604d39fa4318da24d6dd35e72bb6e/tests/test_quota_bound_wait_recovery.py) at main `f49b4a00…`. The current source includes that implementation. The pinned link supports verification; it does not establish shipped `v1.2.3` behavior or make the example executable on an older checkout.
+This is an **advanced source comparison**, grounded in the [original-Turn wait recovery test](https://github.com/loopx-project/loopx/blob/f49b4a00870604d39fa4318da24d6dd35e72bb6e/tests/test_quota_bound_wait_recovery.py) at main `f49b4a00…`. The current source includes that implementation. The pinned link supports verification.
 
 ```text
 Original Turn binds T1 and records a monitor_changed / todo_done dependency
@@ -162,7 +162,7 @@ An owner stopping a Goal in the Workspace uses its lifecycle authority; automati
 
 Migrated transactions have TypeScript owners; Python handles adapters or explicit external effects. Known slices include Turn settlement, Todo completion, Host Todo settlement, spend/void/monitor-poll commit, the full local task-lease lifecycle, Vision refresh and receipt-bound scheduler follow-up.
 
-`v0.5.4` still ships `turn plan` / `turn run-once`: this is historical migration context, not a replacement label for the current release or evidence that “Python has been removed.” The [TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/) explains transaction-payoff and ownership boundaries. Diagnose disagreement from the current contract and caller path, not from a blanket preference for one language.
+`v0.5.4` still ships `turn plan` / `turn run-once`: this is historical migration context. The [TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/) explains transaction-payoff and ownership boundaries. Diagnose disagreement from the current contract and caller path.
 
 ## Readback and the chapter's exit condition
 

@@ -33,8 +33,8 @@ caller intent, not authentication against other processes sharing the OS user.
 
 For an already bound App turn, inspect its `quota should-run` scheduler packet
 using that turn's normal identity and selection contract. Do not create a new
-turn solely to observe a timer. `scheduler_hint.app_automation` and its legacy
-`codex_app` projection expose the floor, desired RRULE, apply/ACK state and
+turn solely to observe a timer. `scheduler_hint.app_automation` exposes the
+floor, desired RRULE, apply/ACK state and
 `guarantee`. Apply the desired schedule with the App's `automation_update` tool,
 preserving task binding, prompt, status and notification preference. Then view
 that same automation and compare its actual schedule before running the returned

@@ -3,8 +3,8 @@
 SessionStart(resume) is emitted after native history reconstruction. Reuse still
 assumes the qualified native host replays its selected append-only source. Bind
 that source to the current baseline's reader interval, verify every completed
-read and reject unknown/lossy replay tails. Earlier unrelated history is not a
-dependency of this baseline and its size is not an eligibility condition.
+read and reject unknown/lossy replay tails.
+
 This is not a scan of model inputs or a certificate from a session ID/journal.
 """
 from __future__ import annotations
@@ -66,7 +66,7 @@ def _snapshot(event: dict[str, Any]) -> Iterator[tuple[dict[str, Any], BinaryIO]
                 or meta.get("history_mode") != "paginated"
                 or meta.get("cli_version") not in (
                     "0.153.4", "0.162.1", "0.163.0-alpha.11.1", "0.163.0-alpha.11.2",
-                    "0.166.0-alpha.5.1", "0.167.0-alpha.3.2")
+                    "0.166.0-alpha.5.1", "0.167.0-alpha.3.2", "0.169.0-alpha.11.1")
                 or not event.get("model") or not event.get("permission_mode")):
             raise ValueError("unqualified native replay metadata")
         stream.seek(info.st_size - 1)

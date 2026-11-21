@@ -2002,7 +2002,7 @@ server.
 | CLI-only after the TS CLI cutover | Import and execute the TS kernel in the CLI process; no daemon |
 | App-only | Embed the same kernel in the App runtime |
 | App + CLI + scheduler, or concurrent clients | One managed local authority daemon; clients connect to the active writer |
-| Migration while Python remains the CLI | One idle-exiting loopback runtime bridges Python to the migrated TS kernel |
+| Migration while Python remains the CLI | An idle-exiting loopback runtime bridges Python to the migrated TS kernel by default. On POSIX, an explicit stdio setting uses a child process owned by each CLI invocation. |
 
 If an authority daemon owns a registry/workspace, a CLI process must connect
 to it instead of opening a second direct writer. Runtime discovery and startup
@@ -2016,6 +2016,13 @@ from restarting within the existing lock budget. The real-Node publication
 regression covers first ping and typed write, then abrupt exit and receipt
 replay. This repair preserves lock reclaim ages, startup deadlines and retry
 classification; broader process/storage recovery remains separately qualified.
+
+The stdio bridge lets the Python CLI and its settlement subprocess run when
+the host denies local sockets. It shares the typed dispatcher, bounded file
+snapshots, authority provider and writer fences with the loopback bridge.
+The caller authenticates the child before dispatch. Closing the pipe retires
+the child after its current request. An ambiguous response requires reading
+the exact durable receipt before any retry.
 
 ### 2.3 TypeScript owns migrated effects
 

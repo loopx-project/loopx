@@ -719,6 +719,8 @@ def test_start_goal_guided_requires_explicit_goal_for_multi_goal_project() -> No
             "activation_state": "goal_selection_required",
             "activation_allowed": False,
             "activation_required_after_todo_write": False,
+            "host_surface": None,
+            "activation_method": None,
         }, payload
         assert payload["safety_contract"]["writes_registry"] is False, payload
         assert payload["safety_contract"]["creates_heartbeat"] is False, payload

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -113,7 +114,7 @@ def _ack_state(
 
 def test_apply_needed_projects_fallback_hint_when_automation_id_resolved() -> None:
     hint = _hint(_active_decision(), automation_id="loopx")
-    codex_app = hint["codex_app"]
+    codex_app = hint["app_automation"]
     assert codex_app["stateful_backoff"]["apply_needed"] is True
 
     fallback = codex_app["fallback_hint"]
@@ -136,7 +137,7 @@ def test_apply_needed_projects_fallback_hint_when_automation_id_resolved() -> No
 
 def test_apply_needed_without_automation_id_projects_deterministic_fallback() -> None:
     hint = _hint(_active_decision(), automation_id=None)
-    fallback = hint["codex_app"]["fallback_hint"]
+    fallback = hint["app_automation"]["fallback_hint"]
     assert fallback["available"] is True
     assert fallback["automation_id_projected"] is True
     assert fallback["action"] == "create_then_apply_rrule_via_fallback"
@@ -150,7 +151,7 @@ def test_apply_needed_without_automation_id_projects_deterministic_fallback() ->
 def test_settled_cadence_omits_fallback_hint(tmp_path: Path) -> None:
     now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
     first = _hint(_active_decision(), automation_id="loopx")
-    applied_rrule = first["codex_app"]["recommended_rrule"]
+    applied_rrule = first["app_automation"]["recommended_rrule"]
     settled = _ack_state(
         first,
         runtime_root=tmp_path,
@@ -164,11 +165,11 @@ def test_settled_cadence_omits_fallback_hint(tmp_path: Path) -> None:
         host_rrule=applied_rrule,
         automation_id="loopx",
     )
-    assert second["codex_app"]["stateful_backoff"]["apply_needed"] is False
-    assert "fallback_hint" not in second["codex_app"]
+    assert second["app_automation"]["stateful_backoff"]["apply_needed"] is False
+    assert "fallback_hint" not in second["app_automation"]
 
 
-def test_fallback_hint_cli_route_binds_registry(tmp_path: Path) -> None:
+def test_fallback_hint_cli_route_binds_registry_and_runtime(tmp_path: Path) -> None:
     payload = {
         "scheduler_hint": {
             "app_automation": {
@@ -189,22 +190,25 @@ def test_fallback_hint_cli_route_binds_registry(tmp_path: Path) -> None:
         }
     }
     registry_path = tmp_path / "registry.json"
+    runtime_root = tmp_path / "runtime"
     bind_scheduler_followup_cli_routes(
         payload,
         registry_path=registry_path,
-        runtime_root=tmp_path / "runtime",
+        runtime_root=runtime_root,
     )
     fallback = payload["scheduler_hint"]["app_automation"]["fallback_hint"]
-    assert fallback["cli_args"][:3] == [
+    assert fallback["cli_args"][:5] == [
         "loopx-apply-rrule",
         "--registry",
         str(registry_path.resolve()),
+        "--runtime-root",
+        str(runtime_root.resolve()),
     ]
     assert fallback["route_binding"]["schema_version"] == (
         "codex_app_scheduler_fallback_route_v0"
     )
     assert fallback["route_binding"]["registry_bound"] is True
-    assert fallback["route_binding"]["runtime_root_bound"] is False
+    assert fallback["route_binding"]["runtime_root_bound"] is True
 
 
 def _fallback_payload() -> dict:
@@ -233,6 +237,41 @@ def _fallback_payload() -> dict:
             }
         }
     }
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the co-installed fallback launcher is a shell entrypoint")
+@pytest.mark.parametrize("has_companion", [True, False])
+@pytest.mark.parametrize("cli_bin_kind", ["absolute", "name"])
+def test_fallback_replays_the_bound_cli_and_its_companion(
+    tmp_path: Path, monkeypatch, has_companion: bool, cli_bin_kind: str,
+) -> None:
+    release = tmp_path / "selected release"
+    release.mkdir()
+    executable = release / "loopx"
+    executable.touch()
+    executable.chmod(0o700)
+    alias = tmp_path / "loopx-selected"
+    alias.symlink_to(executable)
+    monkeypatch.setenv("PATH", str(tmp_path), prepend=os.pathsep)
+    cli_bin = alias.name if cli_bin_kind == "name" else str(alias)
+    companion = release / "loopx-apply-rrule"
+    if has_companion:
+        companion.touch()
+        companion.chmod(0o700)
+
+    payload = _fallback_payload()
+    with loopx_cli_route(cli_bin):
+        bind_scheduler_followup_cli_routes(
+            payload,
+            registry_path=tmp_path / "registry.json",
+            runtime_root=tmp_path / "runtime",
+            turn_instance_id="original-turn",
+        )
+
+    fallback = payload["scheduler_hint"]["app_automation"]["fallback_hint"]
+    command = str(companion) if has_companion else "loopx-apply-rrule"
+    assert fallback["cli_args"][:3] == [command, "--loopx", str(executable)]
+    assert fallback["cli_args"][-2:] == ["--turn-instance-id", "original-turn"]
 
 
 def test_fallback_hint_binds_the_receipted_turn(tmp_path: Path) -> None:

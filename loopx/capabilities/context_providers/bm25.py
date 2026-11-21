@@ -1,6 +1,6 @@
 """Read-only local corpus adapter over the existing canonical BM25 scorer.
 
-Placement: specialized lexical/file provider, not another decision owner. The
+Placement: specialized lexical/file provider. The
 shared scorer also serves repair and review; their defaults remain unchanged.
 """
 

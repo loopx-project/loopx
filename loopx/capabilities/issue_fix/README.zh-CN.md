@@ -17,7 +17,7 @@ merged、closed 或明确 no-follow-up。** 这是 Issue-Fix 的核心产品承�
 /loopx Fix https://github.com/owner/repo/issues/123
 ```
 
-它不是“一次 prompt 生成一个 patch”，而是一个可跨模型 turn、聊天线程、CI 等待和
+它是一个可跨模型 turn、聊天线程、CI 等待和
 review 往返持续工作的 issue→PR loop agent。它把四类互补能力组合在同一条交付链路中：
 
 - **LoopX State Kernel** 提供长程持续交付所需的 goal、todo、quota、authority、
@@ -30,7 +30,7 @@ review 往返持续工作的 issue→PR loop agent。它把四类互补能力组
 - **高能力 AgentLoop** 提供理解、推理、工具调用和代码执行能力，可以是 Codex、
   Claude Code 或其他 host agent runtime，LoopX 不绑定某个模型或 agent loop。
 
-四层组合的目标不是把模型包装成“像人”的口号，而是补齐成熟工程交付真正依赖的
+四层组合的目标是补齐成熟工程交付真正依赖的
 连续性、记忆、领域状态和执行智力，让 loop agent 能以接近资深工程师的方式持续推进
 复杂任务，而不是每轮重新开始。
 
@@ -106,7 +106,7 @@ issue→PR 数字员工：
 
 ## 产品定位
 
-LoopX 是 agent-agnostic 控制面，不是 coding model，也不是 GitHub 本身。
+LoopX 是 agent-agnostic 控制面。
 
 | 层次 | 职责 |
 | --- | --- |
@@ -251,7 +251,7 @@ request，或 fallback comment 的语义 review 意图与公开 URL 后才报告
 分类的 provider 错误仍然是 blocker，不会触发 comment。History 固定读取 base
 revision，避免 feature branch 自己的提交把作者推荐回来；
 `--exclude-author-name` 用于排除无法解析成 GitHub handle 的 git-name alias。
-权限不足时的 fallback 是给 reviewer 看的产品文案，不是内部回执。它会说明关联
+权限不足时的 fallback 是给 reviewer 看的产品文案。它会说明关联
 issue 和 PR 标题概括的改动，并指向 PR 描述中的动机、验证与风险；新评论不再暴露
 幂等 marker。
 workflow plan 还会投影 `issue_fix_pr_description_contract_v0`，复用 PR review
@@ -262,7 +262,7 @@ workflow plan 还会投影 `issue_fix_pr_description_contract_v0`，复用 PR re
 
 有明确 Issue 的 PR 还必须包含显式的“关联 Issue”区块。完整修复默认逐条写独立的
 `Fixes #N`；跨仓库写 `Fixes owner/repository#N`。只完成部分工作时写
-`Related to #N`，只建立普通引用，不承诺合并后自动关闭。GitHub 接受 `close`、
+`Related to #N`，只建立普通引用。GitHub 接受 `close`、
 `fix`、`resolve` 三组关键词及其官方列出的时态变体；LoopX 为稳定输出统一成
 `Closes`、`Fixes` 或 `Resolves`。closing reference 必须由调用方显式确认 PR
 目标是默认分支，因为其他 base branch 上的关键词会被 GitHub 忽略。这个功能性区块
@@ -321,8 +321,7 @@ adapter 即将发送之前，LoopX 只执行一次有界召回，并且只接受
 `hard_policy` 发送时窗。通过校验的 application receipt 会把该策略交给现有 send-or-queue
 路径；去重、可重启 queue receipt、provider 执行和远端读回仍由原 sink 负责。实验关闭或
 provider 不可用、没有兼容记忆、召回到冲突策略时，都会 fail open 到调用方当前 sink
-策略；两边都没有策略时默认不限制发送时间。这个 surface 不是通用 preflight 路由器，也
-不会授予新的通知 authority。
+策略；两边都没有策略时默认不限制发送时间。
 
 长程 goal 可以通过
 `configure-goal --issue-fix-reviewer-notification-config` 一次登记本地私有 sink
@@ -343,8 +342,7 @@ agent 常驻，heartbeat 定期 drain 明确发给专用 bot 的消息。只有�
 freshness、观测时间、path prefix/glob route，以及 primary/fallback handle。LoopX 不抓取或保存
 原页面；输出把来源链接留在候选旁边，让 maintainer 能审计“为什么找这个人”。
 
-`CODEOWNERS` 是最强的 repository-native 信号。提交量只说明“可能熟悉”，不代表
-maintainer 身份、可用性或 review authority。评分、身份解析与未来信号详见
+`CODEOWNERS` 是最强的 repository-native 信号。提交量只说明“可能熟悉”。评分、身份解析与未来信号详见
 [Reviewer 推荐协议](docs/protocols/issue-fix-reviewer-recommendation-v0.md)。
 外部写、幂等与回读验证规则见
 [Reviewer 邀请协议](docs/protocols/issue-fix-reviewer-request-v0.md)。二次触达、项目专属 bot
@@ -456,7 +454,7 @@ scope、public-safe 且幂等的 `pr_merge` rollout event。Todo resume 投影�
 alias 只对同一次观察到的 PR number 有效；resume evaluation 仍保持 repository-qualified，
 不会误匹配其他仓库中的同号 PR。
 
-这是一条事件驱动链，而不是 webhook 与业务代码硬耦合：
+这是一条事件驱动链：
 
 ```text
 GitHub 报告 MERGED
@@ -481,7 +479,7 @@ Merged PR 不会直接执行任意 callback，rollout event 也不会授予新�
 - 结构化 no-follow-up。
 
 一个 merged PR 证明一次 delivery slice；在独立 issue 上重复，才能证明它是稳定数字
-员工，而不是 scripted demo。
+员工。
 
 ## 已实现能力面
 
@@ -576,7 +574,7 @@ Packet 保存紧凑分类和 reference，不保存：
 ### 环境问题与产品问题分离
 
 依赖缺失、进程被 kill、服务不可用属于环境证据，可能阻塞某个 validation surface，
-但不能自动推翻产品 bug。反过来，legacy test 失败也不能证明新 patch 有问题；必须对比
+但不能自动推翻产品 bug。必须对比
 pinned base 与改动 hunk 后再归因。
 
 ## Reviewer 路由 Contract
@@ -669,7 +667,7 @@ overview 和正文；exact read 读回 causal 与 boundary 字段。这证明可
 未来 patch，因此只有不同的新 issue 真正使用后才记录 decision influence。
 
 第一次 fresh-issue rolling-index dogfood 的结论是“正向但有限”
-（`positive-but-mixed`），而不是笼统成功。
+（`positive-but-mixed`）。
 对 issue #3152，按症状和 module 的 query 定位了相关源码和附近测试，closeout 前的
 validation query 也找回了 focused test surface；但 causal query 较弱，没有决定 patch。
 所有真正被使用的 locator 都在当前 checkout revision
@@ -743,7 +741,7 @@ event collector lifecycle。权威依据是已合并 revision 与 focused smoke�
 
 ## 成功指标
 
-衡量 outcome，而不是 agent 活跃度：
+衡量 outcome：
 
 - 选中 issue 到 focused PR 的比例；
 - focused PR accepted/merged 比例；
@@ -766,7 +764,7 @@ event collector lifecycle。权威依据是已合并 revision 与 focused smoke�
 原生进入这些行的公开计数。证据缺失时输出 `not_available` 和原因码，绝不偷填 0。
 Memory impact 会明确区分 `memory_retrievals`、
 `memory_verified_decision_influence`、`memory_verified_patch_influence` 与
-`memory_stale_results`；读到或确认一个结果，本身不证明它改变了 issue-fix 决策。
+`memory_stale_results`。
 同一 packet 还提供稳定的 `impact_rows`；通用 Lark sink 会把它们投影到
 `Monthly Impact` 视图，保留 baseline、current、delta、比例分子分母、公开来源、
 更新时间和缺失数据原因。能力增量会把 found、fixed 和
@@ -816,7 +814,7 @@ repo-relative source ref。当前 checkout 证据保持最高权威；memory/exp
 可选的[仓库上下文实验](../../../examples/repository-context-pilot/README.md)在固定版本的
 公开 issue 源码上，对照 Rune 的无模型 MCP 检索与直接搜索。经过源码核验的 advisory
 证据复用同一输入，并通过 `workflow-plan` 读回。这是可复现实验，不启用 Rune、
-不改变默认上下文，也不代表生产 provider 已验收。
+不改变默认上下文。
 
 两者既接受 `--repository-memory-json <compact-search-read-result.json>`，也可以调用已配置的
 context provider。这里采用明确分层：LoopX 通用 context-provider module 负责 OpenViking
@@ -916,7 +914,7 @@ Validated-outcome writeback 是另一条默认关闭的 hook。只有调用方�
 delivery evidence 带有稳定 `recorded_at`、outcome revision 与公开 resource scope 一致，
 并且 `--repo-path` 能通过 git 证明 delivery `commit_ref` 是该 pinned revision 的 ancestor
 时才会执行。Commit 缺失、无法解析或与 revision 分叉时，会在调用 provider 之前阻塞。
-Squash flow 应记录最终 merge/squash commit，而不是已经被替代的 feature-branch commit。
+Squash flow 应记录最终 merge/squash commit。
 Checkout path 与 raw git output 都不会保留。LoopX 只写入一条 distilled fact：
 revision、provenance、freshness、公开产出、风险、稳定 supersession key，以及显式的
 workspace/peer scope。内容 hash 决定 immutable target，因此相同重试会读取并接受已有 fact，
@@ -966,7 +964,7 @@ writeback 已开启，conversation/session 自动捕获仍不在本能力边界�
 是否默认开启必须由真实证据决定，而不是安装即默认。项目应先在多个独立 issue/context
 run 和至少一次重启边界上 dogfood；只有当该 hook 能反复以新颖、经 checkout 验证的证据
 实际改变具体 issue-fix 决策，且没有陈旧、误导或边界越界结果时，才作为打包默认能力。
-Retrieval 数量本身不代表成功；否则保留为显式可选能力，同时继续保持 fail-open。
+否则保留为显式可选能力，同时继续保持 fail-open。
 
 ## PR Lifecycle Monitor
 
@@ -983,7 +981,7 @@ unchanged poll 保持安静且不消耗 delivery quota。
 `hard_lease` 模式的观察／结束先领取 60 秒 execution lease，之后只释放这次执行。
 Agent ID 相同也不能借用另一轮的 lease。原样重试可以恢复自己的活动领取；观察
 提交后进程退出，重试清理残留 lease 而不重复业务写入。到期或已释放的旧执行需要
-重新领取；再激活本身不授予执行权。已有 `--runtime-root` 参数贯穿读取、租约、
+重新领取；已有 `--runtime-root` 参数贯穿读取、租约、
 写入和显示恢复，不新增 provider 或 capability 启用方式。
 
 缺失 ledger、损坏的分组声明、重复活动 target、旧的空组观察都会报错，不能当作
@@ -995,7 +993,6 @@ Agent ID 相同也不能借用另一轮的 lease。原样重试可以恢复自�
 
 不传 `--execute-transition` 即只检查而不对账 Todo。回滚实现时保留 canonical
 state、writer fence 和 receipt，恢复兼容代码，不能复活旧 Markdown authority。
-该过程不授予发布、合并、新 capability 或私有材料访问权限。
 
 持久化 PR lifecycle 时应传入 `--issue-ref`。这个显式、public-safe 的关联让 outcome
 read model 可以把 PR 精确连接到 issue，而不用从分支名、标题或正文中猜测。
@@ -1214,6 +1211,7 @@ loopx issue-fix outcome \
 python3 examples/issue-fix-capability-guide-smoke.py
 python3 examples/issue-fix-reviewer-recommendation-smoke.py
 python3 examples/issue-fix-reviewer-request-smoke.py
+python3 examples/issue-fix-reviewer-notification-drain-postwrite-smoke.py
 python3 examples/issue-fix-reviewer-notification-sink-smoke.py
 python3 examples/issue-fix-workflow-plan-smoke.py
 python3 examples/issue-fix-workflow-contract-smoke.py
@@ -1237,7 +1235,7 @@ loopx canary premerge --from-git-diff
 ## 非目标
 
 - LoopX 不绕过 repository review 或 branch protection。
-- Reviewer recommendation 不等于 reviewer assignment 或 availability proof。
+
 - 默认不自动 merge，也不执行 production action。
 - Public state 不保存 raw transcript、tool log、expert answer、credentials 或私有 issue material。
 - Generic control plane 不加入 `if repo == ...` 一类仓库特判。

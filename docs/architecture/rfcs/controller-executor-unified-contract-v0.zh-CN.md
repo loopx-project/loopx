@@ -183,15 +183,29 @@ Router 只汇总获授权的结果，不能因此读取所有单元的私有会�
 
 | 角色 / owner | 负责的判断与行为 | 不承担的职责 |
 | --- | --- | --- |
-| Router（管家） | 理解用户意图，发现有上下文和能力的单元，选择复用/创建的提议，传递修订，汇总结果及跨任务取舍 | 不逐工具指挥 worker，不替接收方认领/验收，不复制各 Goal 的任务库与预算 |
-| Controller（单元内） | 结合 Goal、planning horizon 与证据选择工作，维护任务连续性，发现并检查 worker 会话，在共享工作环境中读写、核验，与用户/router 交互，判断纠偏与验收并调用 Core | 不成为第二权威，不用自己的聊天笔记代替工作状态；不必为每个工具步骤审批 |
-| Worker（单元内） | 在已准入范围内自主使用工具、实验、产出及报告证据/问题 | 不消费 Core packet，不编造结算，不直接持有 Core 写权限 |
-| Core + 受管执行 + Host adapter | 既有 typed 规则、持久化、身份、派发、观察、停止和恢复 | 不从自然语言猜权限/完成，不替模型决定领域方案 |
+| Router（管家） | 理解用户意图，发现有上下文和能力的单元，选择复用/创建的提议，传递作用域受限的 `collaboration_brief_v0` 契约，持久化有界 `remaining_work` 与类型化 `resume_when` 接续谓词，汇总结果并无轮询地闭合原路异步 inbox | 不逐工具指挥 worker，不执行轮询循环，不替接收方认领/验收，不复制各 Goal 的任务库与预算 |
+| Controller（单元内） | 结合 Goal、planning horizon 与证据选择工作，提出或消费向上自适应步幅与受回执门控上下文策略建议（`{KeepRaw, FoldToReceipt, EpochReset} × {grow, switch, verify}`），维护任务连续性，发现并检查 worker 会话，在共享工作环境中读写、核验，与用户/router 交互，判断纠偏与验收并调用 Core | 不成为第二个 `AuthorityStore` 写入方，不绕过 CAS/租约围栏，不用自己的聊天笔记代替工作状态，不必为每个工具步骤审批 |
+| Worker（单元内） | 在已准入范围内，于隔离的**沙盒执行器 worktree（sandboxed executor worktree）**中自主使用工具、实验、产出补丁/产物及报告证据/问题 | 不消费 Core packet，不编造结算，不接触隐藏 verifier 或凭据，不直接持有 Core 写权限 |
+| Core（`AuthorityStore` + CAS + 单写者租约）+ Host adapter | `AuthorityStore` 事务、条件版本 `CAS`、单写者 `claim/lease` 围栏、仅一次回执、默认拒绝 ACL、沙盒隔离、观察、停止和恢复的唯一确定性权威 | 不从自然语言猜权限/完成，不在缺少回执时改写在线 KV-cache 前缀，不替模型决定领域方案 |
 
 Router 可以直接回答已有证据足够的简单问题，不必每次创建单元。分配工作优先复用
 当前上下文与授权匹配的 Agent；创建新 Agent 仍沿既有生命周期和资源准入。多个候选
 绑定不明时先消歧，不能按标题相似或“最近在线”抢占。Router 给出的优先级是请求；
 controller 结合本地承诺与依赖评估并返回接受、延后或拒绝及理由，Core 执行合法变更。
+
+每个单元严格分离三个架构平面：
+
+1. **确定性内核（`AuthorityStore` + CAS + 单写者租约归属）：** 在默认拒绝 ACL 与树外确定性
+   验证门禁保护下，唯一持有权威 Goal、Todo、`claim/lease`、代际围栏、`remaining_work` /
+   `resume_when` 与仅一次结算回执。
+2. **沙盒执行器 worktree：** 宿主强制隔离的执行沙盒（带归一化补丁交付与凭据排除的 `linked
+   worktree` / 容器），worker 可在其中自由实验而无 Core 凭据或写权限；沙盒重置或丢失不破坏
+   `AuthorityStore` 持久状态。
+3. **向上自适应步幅与上下文策略决策：** 位于 controller 与 `control_plane/work_items` /
+   `progressive_context.ts` 一侧，用于选择 `{KeepRaw, FoldToReceipt, EpochReset} × {grow, switch, verify}`
+   建议（见[历史工作集策略 §5.1](history-working-set-context-policy-v0.zh-CN.md#51-单一投影-owner)、
+   [联合决策 §5.9](target-yardstick-stride-decisions-v0.zh-CN.md#policy-evolution)）；这些建议在
+   Core 验证确定性回执、CAS 前置条件与预算边界前始终仅为建议态。
 
 <a id="agent-binding-unit"></a>
 
@@ -310,10 +324,13 @@ flowchart TB
 完成，都不等于整个 Goal 结束。真实依赖、用户操作、预算、停止或终态条件仍然有效；
 除此之外，有用且已获授权的工作不应停等用户说“继续”。
 
-这个逻辑循环由事件驱动，不是占住 controller 会话的阻塞等待。派发、观察、待评估结果与
-接续仍由各自既有 owner 持久化；结果或已记录唤醒到达后，由 host/runtime 恢复合格处理，
-不让模型空轮询。恢复时先核对原 attempt 以及未完成决策/effect，再继续，不能为了
-“重启循环”另派一个 worker。
+这个逻辑循环由事件驱动，不是占住 controller 会话的阻塞等待。派发、观察、待评估结果、
+有界 `remaining_work`、类型化 `resume_when` 接续谓词（`todo_done`、`pr_merged`、
+`capacity_available`、`monitor_changed`、`resume_at`）与接续状态均由 Core `AuthorityStore`
+owner 持久化；仅当已验证结果、`collaboration_brief_v0` 回传或满足的 `resume_when`
+触发器到达时，才由 host/runtime 唤醒合格处理，**绝不让管家或 controller 模型保持空轮询循环**，
+并在完成或遇可操作阻塞时将管家异步 inbox 原路闭合回请求方。恢复时先核对原 attempt 以及
+未完成决策/effect，再继续，不能为了“重启循环”另派一个 worker。
 
 处理完用户/router 输入后，**从当前主循环待办重新选择**：可能先评估未读结果、补上反馈、
 派发已合格工作或结算，而不是无条件恢复旧汇报。汇报根据已有证据，在执行并行期间或
@@ -583,9 +600,11 @@ digest 保护传输，canonical hash 保护语义内容，既有 effect 身份�
 | Executor 必须知道什么 | 交付任务完整约束、相关反证、原始材料和未完成必读，用任务语言解释判断 | 摘要不是另一份契约，也不证明读过来源；相关性未知时，依赖工作前须补足材料 |
 | 结果改变什么 | 区分发现、已验证产物、受阻尝试与已接受成果，判断继续、调查或 replan | 独立验证与当前 Core 回执决定验收和结算，不能由任一会话的叙述替代 |
 
-区分三种操作：确定性的 composition owner 组合 domain 事实，不另造 policy；既有
-codec 编码可精确恢复的 full/delta 输入；controller 按任务进行语义选择和推理。自然
-语言任务可以省去无关控制语法，不能承诺逐字节等价。其充分性要由约束保留、executor
+区分三种操作：确定性的 composition 与 `AuthorityStore` owner 组合 domain 事实、强制 CAS/单写者
+租约围栏，并以确定性回执门控 `FoldToReceipt` / `EpochReset` 迁移，不另造 policy；既有
+codec 编码可精确恢复的 full/delta 输入，并在 epoch 间维持单调 `KeepRaw` KV-cache 前缀；
+controller 围绕沙盒执行器 worktree 返回的证据按任务进行语义选择、推理及向上的
+`{grow, switch, verify}` 步幅提议。自然语言任务可以省去无关控制语法，不能承诺逐字节等价。其充分性要由约束保留、executor
 实际决策与验收成果检验，同时原始获授权材料仍可到达。不能用第二套 schema、模型编写的
 状态库或按关键词判断相关性的分类器替代这些操作。Controller 笔记是工作上下文，不是
 新的持久权威。

@@ -35,6 +35,14 @@ it does not own or restate their effects. It does not copy capability
 configuration, provider state, evidence, Todo state, authority grants or memory
 into another source of truth.
 
+**A domain capability is defined by the outcome and judgments it owns.** Issue
+Fix interprets reviews, commits and CI to decide when to repair, wait for
+re-review or end follow-up. A fresh session can make that decision from the
+domain record and the current PR. The Kernel admits successor work and owns
+waiting and recovery. A plugin can deliver the capability or one of its
+providers. A built-in implementation can serve the same domain contract.
+[Issue Fix state boundaries](../../../loopx/capabilities/issue_fix/docs/state-kernel-domain-state-case-study.zh-CN.md)
+
 The portfolio composes existing owners:
 
 1. the capability catalog describes what can be considered;
@@ -171,6 +179,16 @@ surface/automation settings. These are reuse boundaries, not proof that every
 capability is already wired into every host. General automatic participation,
 Portfolio state and cross-surface readback remain proposed here.
 
+A DSH plugin can supply a single kind of observation.
+`dsh-session-events` subscribes to session events.
+`reliability-diagnostics` checks stream integrity, interprets signs of stalls,
+repetition and recovery, and returns a read-only diagnosis. The catalog declares
+the provider. Its runtime readiness needs separate evidence. An author adapting
+another host can replace the event source and reuse the diagnostic contract.
+An extension that delivers a complete domain outcome can instead register a
+capability for that outcome. Both paths use the existing catalog and authority
+boundaries. [DSH observer](../../../packages/dsh-loopx-plugin/src/observer.ts) · [Diagnostic capability](../../../loopx/capabilities/reliability_diagnostics/README.md) · [Extension registration](../../reference/extensions.md#registration-model)
+
 ## 5. Proposed architecture
 
 ### Ownership and authority
@@ -246,12 +264,64 @@ reported as unsupported, not as successful activation. Automatic protected-effec
 execution still requires its existing exact admission. Optional ranking advice
 cannot turn a machine-enforced capability obligation into a suggestion.
 
-Composition is justified by a typed input/output dependency, shared constrained
-resource, alternative-provider choice or a named acceptance gap requiring joint
-results. Capability count and keyword matches alone are insufficient. Use known
-effective configuration first; broaden discovery only for an unresolved gap.
-Two independent capabilities stay direct. One operation choosing between costly
-providers may warrant a plan. Existing native hooks continue while planning fails.
+Discovery starts with an observed mistake or a specific acceptance gap. If an
+Agent repeatedly edits a PR after addressing review feedback, check whether
+Issue Fix already has the judgment, whether it is enabled for this Goal, and
+whether the host actually invoked it with current review evidence. Reuse an
+existing judgment, repair a missed invocation at the host, or read the missing
+source evidence. Consider a capability improvement when the domain rule still
+cannot account for the case. An ordinary wake follows its existing route.
+
+Choose the entry point that matches the work. Explore can supply findings at
+Turn start when a fresh session resumes research. After a result is written
+back, an enabled Periodic Report can check whether a report is due. An Agent
+can also start Deep Research directly for a question from the user. A plugin
+author uses the appropriate existing entry point and declares the observations
+it needs and the effects it may produce.
+[Explore Turn entry](../../../loopx/capabilities/explore/catalog_entry.py) · [Report trigger](../../../loopx/capabilities/periodic_report/post_writeback_hook.py) · [Deep Research](../../../loopx/capabilities/deep_research/README.md)
+
+Composition is justified by a typed input/output dependency, a shared limited
+resource, a choice of providers or a gap requiring a joint result. Historical
+co-occurrence can suggest candidates. A plan must identify the fact this work
+depends on and the revision for which it holds. One Issue Fix outcome can feed
+both an Explore finding and a Periodic Report. These consumers can run
+independently. If report delivery fails, resume the report work and preserve the
+completed fix. Reuse such projections directly. Plan only for a real dependency
+or tradeoff, including a single operation choosing between costly providers.
+Existing native hooks continue if planning fails.
+[Explore projection](../../../loopx/capabilities/issue_fix/explore_projection.py) · [Report source](../../../loopx/capabilities/issue_fix/periodic_report.py)
+
+### DSH integration and the capability authoring scaffold
+
+Start with the domain judgment to reuse, then choose the delivery path. For
+session diagnostics, a DSH adapter can map `session/event` to
+`reliability_observer_envelope_v0`, preserving source, session, sequence and
+clock. The diagnostic capability checks for gaps and interprets the result.
+Executing an operation on behalf of a user uses a separate entry point. LoopX
+checks the operation, permission and current binding before dispatch, then
+uses the owner’s receipt to reconcile the outcome.
+The existing DSH native-operation adapter calls for reconciliation after a lost
+response because a retry could repeat a committed effect.
+[Observation contract](../../../loopx/capabilities/reliability_diagnostics/envelope.py) · [DSH operation adapter](../../../packages/dsh-loopx-plugin/src/native-operation.ts)
+
+| Author's outcome | Existing declaration and implementation | What a scaffold could supply |
+| --- | --- | --- |
+| Add a DSH event source to an existing capability | Cordis subscriptions and teardown, the domain observation schema and its validator. The capability catalog declares the npm plugin's provider. | A thin adapter and synthetic events covering duplicates, gaps and detachment while preserving host provenance. |
+| Implement an existing capability through a LoopX extension | `[[implements]]` references the capability ID and protocol. The capability resolves the provider, checks permission and consumes the result. | Request and result fixtures for that protocol and a test through the actual domain entry point. [Existing implementation declaration](../../../packages/loopx-media/extension.toml) |
+| Provide a distinct domain outcome with its own acceptance criteria | `[[provides]]` declares the capability. For Goal-bound invocation, reference the existing `loopx_external_domain_capability_profile_v0` with operation, effect class, permission, request and result schemas. | A runnable provider, a read-only health check and versioned contract fixtures. The domain author owns acceptance, permission mapping and interpretation of execution receipts. [Goal binding protocol](../../reference/extensions.md#goal-bound-external-capability-providers) |
+
+Today `loopx extension init` generates a standalone Python provider, manifest,
+request and response JSON Schemas and a health check. Keep one versioned schema
+with its domain owner. A DSH adapter can derive types from that schema or test
+its mapping against the same fixtures as the independent consumer. A DSH capability generator
+remains an open design choice. Prototype one read-only reference capability
+first. Feed equivalent observations through DSH and an independent entry point.
+Check for the same domain judgment while preserving each source and revision.
+Reject unknown schemas, stop collection when disabled and verify that host
+reload cannot settle work twice. An effectful profile also needs revocation and
+lost-response reconciliation cases. Extract a standard scaffold once both
+authoring paths demonstrably reuse the same conformance cases.
+[Existing scaffold boundary](../../reference/extensions.md#starter-and-scaffold)
 
 ### State model and schema
 
@@ -463,6 +533,15 @@ language or authority, and does not fulfill the portfolio lifecycle or connector
 milestones. Qualification, useful effects, transfer and total development/evaluation
 cost require separate evidence; deterministic tests are not an adoption decision.
 
+Route a proposed improvement to the owner of the change. A new preference for
+which method this Goal selects belongs to its adoption policy. When the same
+judgment fails across tasks, retain the affected decisions and source revisions
+so the capability owner can propose a reversible rule or implementation change.
+Propose a new capability when a caller needs a distinct outcome that can be
+accepted independently. M4 evaluates the change on held-out cases and records gains,
+regressions and full costs. The original owner decides release or rollback.
+[Current trial advice](../../../loopx/control_plane/capabilities/goal_capability_organization.ts)
+
 ### Long-running responsibility, disclosure and memory evolution
 
 **Decision:** unify when context is disclosed and how an update is verified,
@@ -668,6 +747,8 @@ configuration/binding owner. No destructive registry migration is part of v0.
 | Provider binding keeps one owner | existing Goal binding preview/apply/readback plus disable/upgrade/rollback fixtures | portfolio references the exact binding and becomes stale on drift; it writes no parallel binding | extension runtime still proves provider readiness |
 | Self-discovery is useful | fresh finance and non-finance Agents receive the same Goal only | both select a minimal defensible composition or explain empty selection | two cases do not prove universal uplift |
 | Composition improves outcomes | frozen baseline versus portfolio-assisted trials | better first useful action, coverage or decision quality within declared cost; failures retained | no automatic production promotion |
+| Domain judgment survives a session change | Resume held-out open PRs in fresh sessions with the same model and budget. Both groups have passing CI and `CHANGES_REQUESTED`. One has a repair commit newer than the review and a complete read showing all threads resolved. The other has outstanding feedback. | Wait for re-review in the first group and propose follow-up repairs in the second. Compare unnecessary rework and missed repairs against the prior policy, with denominators and run cost for both groups. | [Existing branch tests](../../../tests/capabilities/test_issue_fix_pr_lifecycle_review_response.py) supply the expected decisions. Cross-task benefit needs independent measurement. |
+| Independent consumers share one outcome | Project a fix into Explore and a report, fail report delivery and retry in a fresh session | Resume only the failed delivery, keep the Explore finding idempotent and the completed fix closed | Read back the source and both consumers independently |
 | Three hooks agree | before-plan/delegate/result contract tests | same composition identity and exact route/result lineage | raw model quality excluded |
 | Owner truth is not duplicated | correct and retire one external-evidence receipt and one non-evidence outcome receipt | portfolio follows immutable superseding refs; no copied admission/effect fact survives | each owner still validates its own semantics |
 | Product surfaces agree | existing Goal settings preview/apply/readback in CLI, packaged frontend and Lark; new-session, stale, reconnect and repeated-action cases | same effective enablement, direct/composed mode, optional adoption status and owner refs; no second activation control | release each enabled entry point only with its usable readback; owner facts retain provenance |
@@ -767,6 +848,13 @@ their writers. The inspection slice has no dependency on an unmerged PR.
 4. **Installation proposal UX.** Owner: product and extension maintainers.
    Recommendation: show governed repair/install proposals only after M3 proves
    selection value. It is outside v0 execution authority.
+5. **Which DSH integration layer merits standardization?** DSH adapter,
+   capability and extension maintainers should compare a documented example,
+   shared conformance fixtures and a generator using the Section 5 reference
+   implementation proposal. Record what a second author must handwrite, where
+   schema copies would diverge and who can verify that the current binding is
+   executable. Ship the smallest option that removes observed duplicate work.
+   A universal schema or SDK remains a decision for this comparison.
 
 ---
 

@@ -29,6 +29,8 @@ interface ParsedArgs {
   chunks: string[];
   values: Record<string, string>;
   booleans: Set<string>;
+  /** Invocation routing only: the project registry that owns Goal lifetimes. */
+  registry_path: string | null;
 }
 
 function errorEnvelope(error: unknown) {
@@ -55,6 +57,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   const booleans = new Set<string>();
   const chunks: string[] = [];
   const positionals: string[] = [];
+  let registryPath: string | null = null;
   const valueOptions = new Set([
     "--format",
     "--registry",
@@ -103,7 +106,8 @@ function parseArgs(argv: string[]): ParsedArgs {
         );
       }
       if (option === FACTS_FLAG) chunks.push(value);
-      else if (option !== "--available-capability" && option !== "--registry") {
+      else if (option === "--registry") registryPath = value;
+      else if (option !== "--available-capability") {
         values[option] = value;
       }
       continue;
@@ -150,6 +154,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     chunks,
     values,
     booleans,
+    registry_path: registryPath,
   };
 }
 
@@ -289,6 +294,8 @@ function requestFromArgs(argv: string[]): { request: Record<string, unknown>; fo
     request: {
       schema_version: SCHEDULER_HEARTBEAT_FOLLOWUP_REQUEST_SCHEMA,
       runtime_root: parsed.runtime_root,
+      registry_path: parsed.registry_path,
+      goal_ref: hint.goal_ref ?? null,
       turn_instance_id: parsed.turn_instance_id,
       require_heartbeat_receipt: true,
       before: hint.before ?? {},

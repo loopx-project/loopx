@@ -33,14 +33,12 @@ def test_settled_replay_preserves_schedule_without_new_host_effects(profile, obs
     assert hint["action"] == "preserve_current_schedule"
     assert hint["next_trigger"] == "fresh_turn_identity"
     assert "reset_policy" not in hint
-    for key in ("app_automation", "codex_app"):
-        if key not in hint:
-            continue
-        host = hint[key]
-        assert host.get("host_action") == "none"
-        assert host.get("ack_required") is False
-        assert not {"recommended_rrule", "recommended_interval_minutes", "ack_hint", "failure_hint",
-                    "fallback_hint", "stateful_backoff"}.intersection(host)
+    assert "codex_app" not in hint
+    host = hint["app_automation"]
+    assert host["host_action"] == "none"
+    assert host["ack_required"] is False
+    assert not {"recommended_rrule", "recommended_interval_minutes", "ack_hint", "failure_hint",
+                "fallback_hint", "stateful_backoff"}.intersection(host)
     assert payload["interaction_contract"]["agent_channel"]["must_attempt"] is False
     assert payload["interaction_contract"]["cli_channel"]["spend_after_validation"] is False
     if profile == "ark_managed_agent_goal":

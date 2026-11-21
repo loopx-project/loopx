@@ -488,7 +488,7 @@ def main() -> int:
         "en/chapters/workspace-v1.md",
         (
             ("Personal Workspace milestone", "Personal Workspace milestone"),
-            ("不是一套新的事实源", "not a new source of truth"),
+            ("Workspace 是观察和发起动作的入口", "the Workspace is where you observe and initiate"),
             ("loopx dashboard --no-open", "loopx dashboard --no-open"),
             ("typed preview -> human or policy review -> governed apply -> verified receipt -> refreshed projection", "typed preview -> human or policy review -> governed apply -> verified receipt -> refreshed projection"),
             ("loopx machine-config inspect --format json", "loopx machine-config inspect --format json"),
@@ -496,7 +496,7 @@ def main() -> int:
             ("`session_queue`", "`session_queue`"),
             ("`async_inbox`", "`async_inbox`"),
             ("loopx periodic-report inspect-profile --preset weekly --format json", "loopx periodic-report inspect-profile --preset weekly --format json"),
-            ("Stage 2C authority", "Stage 2C authority"),
+            ("shared-authority provider", "shared-authority provider"),
         ),
     )
     assert_bilingual_concepts(
@@ -506,7 +506,7 @@ def main() -> int:
             (f"LoopX 发布锚点：`{release_tag}`", f"LoopX release anchor: `{release_tag}`"),
             ("运行时前提：Python 3.11+ 与 Node.js 22.22.3+", "Runtime prerequisites: Python 3.11+ and Node.js 22.22.3+"),
             ("TypeScript owner", "TypeScript owners"),
-            ("这不是两套可独立演进的 控制面", "These are not two independently evolving control planes"),
+            ("Python CLI 仍负责", "Python CLI still owns"),
         ),
     )
     assert_bilingual_concepts(
@@ -541,7 +541,7 @@ def main() -> int:
         "chapters/core-state-machines.md",
         "en/chapters/core-state-machines.md",
         (
-            ("不靠一个巨型状态机", "does not advance a Goal through one giant state machine"),
+            ("有明确 owner 的协作状态机", "state machines with explicit owners"),
             ("一条 effectful Agent Loop", "one effectful Agent Loop"),
             ("一条 Loop、三层抽象、九组状态机", "one Loop, three abstraction levels, nine state-machine families"),
             ("状态机通过事实与协议接力", "facts and protocols connect the machines"),
@@ -549,7 +549,7 @@ def main() -> int:
             ("Agent 提交的是 proposal 或 typed effect", "An Agent submits a proposal or typed effect"),
             ("Agent 判断错了怎么办", "What if the Agent is wrong"),
             ("LoopX 怎样体现“闭环”", "What makes LoopX a closed loop"),
-            ("不是 `Todo=done`", "not the same as `Todo=done`"),
+            ("authoritative source", "authoritative source"),
             ("严格合取", "strict conjunction"),
         ),
     )
@@ -566,7 +566,6 @@ def main() -> int:
             ("本地 task-lease 完整生命周期", "full local task-lease lifecycle"),
             ("Vision refresh", "Vision refresh"),
             ("receipt-bound scheduler follow-up", "receipt-bound scheduler follow-up"),
-            ("Python 已被移除", "Python has been removed"),
             ("TypeScript Control-Plane Migration RFC", "TypeScript Control-Plane Migration RFC"),
         ),
     )
@@ -577,7 +576,6 @@ def main() -> int:
             (f"`{migration_baseline_tag}` 的 shared-authority 工作", f"Shared-authority work in `{migration_baseline_tag}`"),
             ("provider-neutral TypeScript `AuthorityStore` contract", "provider-neutral TypeScript `AuthorityStore` contract"),
             ("不自动获得 runtime authority", "do not acquire runtime authority automatically"),
-            ("不应倒推成", "are not evidence that"),
         ),
     )
     assert_bilingual_concepts(
@@ -601,7 +599,7 @@ def main() -> int:
             ("receipt-bound scheduler follow-up", "receipt-bound scheduler follow-up"),
             ("Python facade", "Python facade"),
             ("loopx capability list --format json", "loopx capability list --format json"),
-            ("仅有 目录或 README 不证明能力已经发布", "A directory or README alone does not prove that a capability is shipped"),
+            ("注册与真实 caller contract", "Registration plus a real caller contract"),
         ),
     )
     assert_bilingual_concepts(

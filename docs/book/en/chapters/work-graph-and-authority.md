@@ -44,7 +44,7 @@ Owner operations have lifecycle authority; automated work has quota admission. C
 
 ## Claims, leases and current execution proof
 
-`handoff_mode` determines applicable constraints. Default `legacy` retains soft-claim/hard-lease compatibility; `soft_claim` and `hard_lease` have their own rules. Some legacy terminal paths can return `terminal_fence_not_required`. A regression in one mode is not proof of strong exclusion across every writer.
+`handoff_mode` determines applicable constraints. Default `legacy` retains soft-claim/hard-lease compatibility; `soft_claim` and `hard_lease` have their own rules. Some legacy terminal paths can return `terminal_fence_not_required`.
 
 Promoted File/SQLite authority reads from the selected provider rather than falling back to old lease files. Source selection, registration and current Todo eligibility participate alongside the lease. `task-lease inspect` is an observation, not a lock held across subsequent work.
 
@@ -93,7 +93,7 @@ Handoff is more than sending a message. A recipient must know which work was rec
 
 **Sixth, return the result to its acceptor.** T3 reassesses current artifacts and decisions. Message delivery, recipient input adoption, work acceptance, publication permission and actual external delivery each require appropriate evidence. None alone establishes the whole chain.
 
-This six-step teaching case does not claim automatic coordination across every Host, device or repository. Qualify the relationships the user actually needs.
+Qualify the relationships the user actually needs.
 
 ## Workspace isolation is not integrated correctness {#parallel-editing}
 

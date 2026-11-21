@@ -34,8 +34,7 @@ The three actionable changes requested were:
 
 At recording time the revised RFC, implemented recovery journey and resulting
 benefit were **unverified**. No recall/application receipt from the earlier
-reviews was available. Neither a terminal reward nor a positive/negative memory
-utility observation can be derived from this disagreement alone. Subsequent
+reviews was available. Subsequent
 resolution belongs to a new reviewed revision with new evidence, preserving
 these historical facts.
 

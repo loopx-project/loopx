@@ -31,8 +31,9 @@ from ..control_plane.content_digest import BARE_SHA256_PATTERN as HASH
 from ..capabilities.issue_fix.repository_snapshot import _REPO_PATTERN as REPOSITORY_PATTERN
 
 RUNTIME_ARTIFACT_SCHEMA_VERSION = "loopx_runtime_artifact_v1"
-PUBLIC_DEFAULT_CONTRACT = {"surface": "quota_packet", "schema_version": None,
-                           "interaction_schema_version": "loopx_interaction_contract_v0"}
+PUBLIC_DEFAULT_CONTRACT = json.loads(
+    Path(__file__).with_name("public_default_contract.json").read_text(encoding="utf-8")
+)
 SHA = re.compile(r"[0-9a-f]{40}")
 MAX_MANIFEST = 256 * 1024
 MAX_ARCHIVE = 256 * 1024 * 1024
@@ -61,7 +62,15 @@ def standalone_source() -> str:
         if source.count(old) != 1:
             raise ValueError("Bootstrap grammar binding no longer matches its source import")
         source = source.replace(old, "\n" + binding + "\n", 1)
-    return source
+    # The public installer is one file, so embed the policy that the Python
+    # publishers and the native updater read from the distribution contract.
+    binding_start = source.index("\nPUBLIC_DEFAULT_CONTRACT = ")
+    binding_end = source.index("\nSHA = ", binding_start)
+    return (
+        source[:binding_start]
+        + f"\nPUBLIC_DEFAULT_CONTRACT = {PUBLIC_DEFAULT_CONTRACT!r}"
+        + source[binding_end:]
+    )
 
 
 def safe_url(url: str) -> str:

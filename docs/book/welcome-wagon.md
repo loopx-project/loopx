@@ -260,5 +260,5 @@ problem
 - 想修改 LoopX：读[开发者贡献地图](chapters/source-protocol-map.md)；
 - 想深入 Kernel：进入 [Control-Plane Developer Course](chapters/12-control-plane-course.md)。
 
-完成一条路线以后再选择下一条。Welcome Wagon 的目标不是让新人一次理解所有东西，而是让第一
+完成一条路线以后再选择下一条。Welcome Wagon 的目标是让第一
 次真实行动足够安全、可验证，并且能被社区接住。

@@ -365,15 +365,6 @@ def test_builder_qualifies_committed_default_before_writing_artifacts(tmp_path, 
 def test_release_probe_observes_real_default_without_model_or_active_goal():
     from scripts.qualify_runtime_artifact import observe_default_contract
 
-    # The probe observes the real writer rather than inheriting the intended
-    # distribution profile. Main currently exercises C1, which remains outside
-    # the supported public scope until its original qualification is complete.
+    # Check the actual CLI output against the supported release contract.
     observed = observe_default_contract(ROOT)
-    assert observed == {
-        "surface": "complete_turn",
-        "schema_version": "loopx_turn_envelope_v1",
-        "interaction_schema_version": "loopx_interaction_contract_v0",
-    }
-    assert observed != PUBLIC_DEFAULT_CONTRACT
-    with pytest.raises(ValueError, match="unqualified for public adoption"):
-        validate_default_contract(observed)
+    assert validate_default_contract(observed) == PUBLIC_DEFAULT_CONTRACT

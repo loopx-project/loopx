@@ -15781,7 +15781,13 @@ button.steward-brief-stat:hover { background: var(--hover, rgba(31, 30, 28, 0.08
   gap: 10px;
   padding: 0 20px;
 }
-.steward-chat-failure p { margin: 0; font-size: 13px; }
+.steward-chat-failure p { margin: 0; font-size: 13px; text-align: center; }
+.steward-chat-failure-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
 
 /* The greeting an empty conversation opens on: one question, a few one-tap asks. */
 .steward-greeting {

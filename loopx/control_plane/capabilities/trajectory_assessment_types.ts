@@ -119,7 +119,7 @@ export type TrajectoryLoopXRequests = {method: 'codex_ordered_loopx_requests_v1'
     tokens: TrajectoryRequestTokens;
     /** Unknown when no requests are recognized and any calls are unclassified or unmatched. */
     input_fraction: number | null; uncached_input_fraction: number | null;
-    /** Neither ordered tool records nor token receipts measure generation latency or money. */
+
     model_seconds: null; charged_cost: null;
     requests: Array<{response_id: string; turn_id: string; line: number; call_lines: number[];
       operations: string[]; other_calls: number; tokens: TrajectoryRequestTokens}>}

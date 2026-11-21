@@ -14,7 +14,7 @@ import loopx.control_plane.effect_runtime as runtime
 
 FIXTURE = Path(__file__).parent / "fixtures/global_todo_readiness.json"
 NOW = "2026-11-02T00:00:00+00:00"
-BASE_REVISION = "d4aaaaefbd37a83a30f10681de839b45d631eeb9"
+BASE_REVISION = "d210e4cc1d002f92498b2811c565b9430e79f4c1"
 
 
 def observe(case, monkeypatch, tmp_path):

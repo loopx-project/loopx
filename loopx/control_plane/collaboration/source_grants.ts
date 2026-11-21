@@ -70,7 +70,7 @@ export function configureOriginalConversationGrant(params: JsonObject): JsonObje
 }
 
 /** Retire only this exact native conversation's grants. Historical requests and
- * receipts remain readable; neither another App nor a legacy source is revoked.
+ * receipts remain readable;
  */
 export function revokeConversationSources(params: JsonObject): JsonObject {
   const id = requireNonEmptyString(params.binding_id, "conversation binding identity");
@@ -244,15 +244,15 @@ export function validateSourceIngress(params: JsonObject): JsonObject {
   }
   const origin = turn.origin;
   const scope = resolveConversationScope({...session, origin});
-  if (origin !== "lark" && origin !== "external" && origin !== "web"
+  if (origin !== "lark" && origin !== "external" && origin !== "web" && origin !== "native_loopx"
       || ingress.origin !== undefined && ingress.origin !== origin
       || origin === "external" && !scope.bound_steward
-      || origin === "web" && (!scope.bound_steward || ingress.origin !== "web")) {
+      || (origin === "web" || origin === "native_loopx") && (!scope.bound_steward || ingress.origin !== origin)) {
     throw new EffectRuntimeRequestError("source mismatch");
   }
   const sender = requireNonEmptyString(ingress.sender_id, "verified source sender");
   requireNonEmptyString(ingress.source_id, "source identity");
-  if (origin === "web" && sender !== requireJsonObject(session.steward_context, "bound steward").operator_ref) {
+  if ((origin === "web" || origin === "native_loopx") && sender !== requireJsonObject(session.steward_context, "bound steward").operator_ref) {
     throw new EffectRuntimeRequestError("source mismatch");
   }
   return {verified: true};

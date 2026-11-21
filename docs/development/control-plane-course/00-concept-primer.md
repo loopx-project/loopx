@@ -28,7 +28,7 @@ session 结束、模型切换、Agent 交接和外部世界变化。完整 trans
 | 何时再看，何时停止？ | 周期唤醒会热轮询，空 todo 也可能误停 | monitor、scheduler hint、backoff、terminal audit |
 | 失败或换人后从哪里继续？ | transcript 不能提供稳定 identity 和幂等边界 | event、run history、lineage、replay、repair |
 
-外置状态不是把 transcript 原样搬到磁盘。它只保存下一轮重建正确决定所需的紧凑事实，旧推理
+外置状态只保存下一轮重建正确决定所需的紧凑事实，旧推理
 可以丢弃，当前环境必须重探测。
 
 ### 长程质量同时包含“跑稳”和“跑好”
@@ -74,7 +74,7 @@ Kanban is the picture; the control plane is the contract.
 
 ## 从普通对话、原生 Goal 到 LoopX
 
-理解 LoopX 最容易的方法，不是先背模块，而是看控制信息逐层外置：
+理解 LoopX 最容易的方法：
 
 | 形态 | 外置了什么 | 擅长解决什么 | 仍未覆盖什么 |
 | --- | --- | --- | --- |
@@ -83,13 +83,11 @@ Kanban is the picture; the control plane is the contract.
 | LoopX control plane | 结构化 canonical state，以及由它派生的每轮 CLI packet | 跨 session、Agent、host 和外部系统组织可审计的长期生命周期 | 领域判断、模型推理和外部系统本身的正确性 |
 
 Codex 的自动化基线通过 `thread/goal/set` 持久化 objective/status，通过
-`thread/goal/get` 读回，再用 `turn/start` 继续执行。交互式 `/goal` 是可见的人工入口；仅把
-`/goal` 写在普通 prompt 开头，不等于已经建立了持久 Goal。原生 Goal 的关键价值，是把“这次
+`thread/goal/get` 读回，再用 `turn/start` 继续执行。交互式 `/goal` 是可见的人工入口。原生 Goal 的关键价值，是把“这次
 对话要做什么”提升成 host 可持续维护和判断的 goal lifecycle。抽象来看，它提供的是一个
 稳定 objective，加上 host 对继续、暂停、预算受限或完成的结果判断。
 
-Host 可以自行安排后续 Turn，模型也可以在执行中调整方案；这仍不等于项目已经拥有 typed
-scheduler ACK 或 replan delta。区别不在于系统“会不会再跑、会不会改计划”，而在于 cadence、
+Host 可以自行安排后续 Turn，模型也可以在执行中调整方案；区别不在于系统“会不会再跑、会不会改计划”，而在于 cadence、
 路线变化及其证据是否成为跨 host、跨 Agent 可重放的结构化事实。
 
 LoopX 不否定这层能力，而是继续外置两层：
@@ -114,7 +112,7 @@ objective · lifecycle     goal · todo · authority · quota · evidence · rec
            host/runtime executes the current Turn
 ```
 
-CLI packet 不是第二份 canonical state，也不是把所有历史塞回 prompt。它是带版本、lineage 和
+CLI packet 是带版本、lineage 和
 下一步命令的当前决策投影；下一 Turn 必须重新读取并重新生成，不能靠模型记住上一份 packet。
 Host 中长期保留的是稳定的 re-entry body：它只说明怎样找到 goal、调用 LoopX CLI 并取得
 当前 packet，不承载某一轮的 packet 内容。
@@ -183,11 +181,11 @@ flowchart LR
 - **Capability:** 负责归一化事实、验证结果并提出有限的 typed transition；
 - **Kernel:** 负责接受或拒绝 transition，并持久化 todo、gate、monitor、writeback、quota 与调度。
 
-Domain State、evidence 和 receipt 是这些角色之间传递的工件，不是新的 owner。Extension
-则是 provider 的交付和生命周期边界，也不是第五种运行责任。Host/runtime 承载 session、
+Domain State、evidence 和 receipt 是这些角色之间传递的工件。Extension
+则是 provider 的交付和生命周期边界。Host/runtime 承载 session、
 工具和调用，同样不新增领域 decision owner。
 
-这不是一条永远顺利的流水线。每次 writeback 后，Kernel 都要根据新事实重新决定：
+每次 writeback 后，Kernel 都要根据新事实重新决定：
 
 ```text
 continue | wait | ask | replan | repair | terminal
@@ -281,7 +279,7 @@ Agent 是控制面身份，不等同于某个固定模型或进程。更换 runt
 ### Turn 是一次有界动作
 
 **Turn** 从一份带版本和 lineage 的只读 snapshot 开始，完成一个有界判断或动作，返回 typed
-result。它不是整个长期任务。
+result。
 
 一次 Turn 可以：
 
@@ -307,8 +305,7 @@ canonical state + fresh environment
 ```
 
 Packet 要足够薄，只携带本轮 identity、允许动作、必要 gate、验证条件和 writeback 命令；但又
-不能薄到遗漏 required proof、scope 或 terminal gap。Packet 的压缩质量因此是控制面正确性的一部分，
-不是单纯的 prompt 优化。
+不能薄到遗漏 required proof、scope 或 terminal gap。Packet 的压缩质量因此是控制面正确性的一部分。
 
 ### Scheduler 与 heartbeat 只负责“何时再看”
 
@@ -337,7 +334,7 @@ Kernel 提议下一次 cadence
 | Lease | 当前执行窗口是否被占用，何时过期？ | 短期、可续租、可回收 |
 | Gate | 哪个 scoped decision 尚未满足？ | 由对应 authority 明确解决 |
 
-Claim 不自动授予生产写权限，lease 不代表长期 ownership，普通 user todo 也不自动冻结整个 goal。
+Claim 不自动授予生产写权限。
 Gate 必须带清晰 scope；若 scope 缺失，应修复投影或状态，而不是猜测它约束所有 Agent。
 
 ### Authority 决定谁能提交哪种 transition
@@ -394,7 +391,7 @@ Agent 持续违反运行协议时，**self-repair** 修的是系统规则、状�
 
 ## 人的干预怎样真正改善下一轮
 
-人工输入不是一种统一的“反馈字段”。它对生命周期的含义不同，必须写入对应的结构：
+人工输入对生命周期的含义不同，必须写入对应的结构：
 
 | 人工输入 | 正确落点 | 对下一轮的影响 |
 | --- | --- | --- |
@@ -404,7 +401,7 @@ Agent 持续违反运行协议时，**self-repair** 修的是系统规则、状�
 | “以后这个仓库的 PR 摘要应更短” | reviewed, scoped soft preference candidate | 在匹配 surface 中影响排序或改写 |
 | “这个模块过去常因某类边界失败” | procedural experience candidate | 经当前 artifact 复核后影响诊断与验证计划 |
 
-**Reward Memory** 解决的是“有价值的人类判断怎样跨 run 复用”，不是“谁有权执行动作”。它把
+**Reward Memory** 解决的是“有价值的人类判断怎样跨 run 复用”。它把
 run reward、hard policy、soft preference、procedural experience 与 working context 分开，
 并要求 source、scope、authority、freshness、supersession 和 application receipt。记忆的
 confidence 不会扩大权限，召回的技术经验也必须在当前代码和证据上重新验证。

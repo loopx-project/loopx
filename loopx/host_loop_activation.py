@@ -1285,6 +1285,8 @@ def build_host_loop_activation_packet(
         cadence_args = [cli_bin, "--format", "json"]
         if runtime_root:
             cadence_args.extend(["--runtime-root", runtime_root])
+        if registry:
+            cadence_args.extend(["--registry", registry])
         cadence_args.extend(["automation-cadence", "--goal-id", goal_id])
         if selected_agent_id:
             cadence_args.extend(["--agent-id", str(selected_agent_id)])

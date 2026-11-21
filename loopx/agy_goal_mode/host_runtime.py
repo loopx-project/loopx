@@ -87,7 +87,10 @@ def bootstrap_prompt(args: argparse.Namespace) -> str:
         + "\nFollow task_body only when ok=true, including current scope, stop, "
         "settlement and scheduler backoff. Do not replay the failed user request, "
         "create another Goal/Agent, or reuse an old Turn receipt. Remain quiet "
-        "when the fresh user_channel requests no notification."
+        "when the fresh user_channel requests no notification. Before ending the "
+        "recovered turn (unless stopped), re-arm in-session "
+        "schedule(DurationSeconds>=180, TimerCondition='any', Prompt=...) with "
+        "the current backoff cadence instead of starting a new conversation."
     )
 
 

@@ -9,9 +9,25 @@ from typing import Any
 
 BOOTSTRAP_INSTRUCTION = (
     "读取完整结果；仅 ok=true 时按本次 task_body 推进，不复用旧指令。"
+    "通知与执行分开，等待按当前调度契约，不反复空查。"
+    "入口异常先做权限内恢复；契约仍不可用时不执行任务或记账，并报告阻塞。"
+)
+
+# Frozen published bytes for saved-wrapper recognition. Renderers use only the
+# current instruction; upgrades retain the saved command's explicit inputs.
+_PREVIOUS_BOOTSTRAP_INSTRUCTION = (
+    "读取完整结果；仅 ok=true 时按本次 task_body 推进，不复用旧指令。"
     "一次操作不代表结束；通知与执行分开，等待按当前调度契约，不反复空查。"
     "入口异常先做权限内恢复；契约仍不可用时不执行任务或记账，并报告阻塞。"
 )
+
+
+def _matches_published_bootstrap(prompt: str, expected: str) -> bool:
+    return prompt == expected or (
+        expected.endswith(BOOTSTRAP_INSTRUCTION)
+        and prompt == expected.removesuffix(BOOTSTRAP_INSTRUCTION) + _PREVIOUS_BOOTSTRAP_INSTRUCTION
+    )
+
 
 # Keep the managed heartbeat wrapper in one module.  The host bootstrap and
 # automation-prompt lifecycle both consume this renderer so a new wake-up
@@ -36,7 +52,9 @@ def render_heartbeat_bootstrap(command: list[str]) -> str:
     )
 
 
-def _goal_command(args: Any, *, registry: Path, legacy: bool) -> list[str]:
+def _goal_command(
+    args: Any, *, registry: Path, legacy: bool, saved_view_alias: str | None = None,
+) -> list[str]:
     """Preserve explicit caller inputs, not yesterday's resolved registry values.
 
     The loaded command deliberately omits --bootstrap: one load cannot recurse.
@@ -85,10 +103,8 @@ def _goal_command(args: Any, *, registry: Path, legacy: bool) -> list[str]:
             command += [flag, value]
     if args.cli_bin != "loopx":
         command += ["--cli-bin", args.cli_bin]
-    if getattr(args, "turn_envelope", False):
-        command.append("--turn-envelope")
-    if getattr(args, "complete_turn", False):
-        command.append("--complete-turn")
+    if saved_view_alias is not None:
+        command.append(saved_view_alias)
     if legacy:
         if args.codex_app:
             command.append("--codex-app")
@@ -100,20 +116,28 @@ def _goal_command(args: Any, *, registry: Path, legacy: bool) -> list[str]:
     return command
 
 
-def goal_bootstrap(args: Any, *, registry: Path) -> str:
-    """Use the heartbeat wrapper only for an App heartbeat scheduler."""
-    heartbeat = (
+def _uses_heartbeat_wrapper(args: Any) -> bool:
+    return bool(
         args.codex_app
         or getattr(args, "trae_app", False)
         or getattr(args, "antigravity_app", False)
         or getattr(args, "runtime_profile", None)
         in {"codex_app_heartbeat", "trae_app", "antigravity_app"}
     )
-    command = _goal_command(args, registry=registry, legacy=not heartbeat)
-    if heartbeat:
-        return render_heartbeat_bootstrap(command)
-    return render_bootstrap(command, title=LEGACY_HOST_BOOTSTRAP,
-                            entry=LEGACY_HOST_BOOTSTRAP_ENTRY)
+
+
+def _render_goal_bootstrap(
+    args: Any, *, registry: Path, legacy: bool, saved_view_alias: str | None = None,
+) -> str:
+    command = _goal_command(args, registry=registry, legacy=legacy, saved_view_alias=saved_view_alias)
+    if legacy:
+        return render_bootstrap(command, title=LEGACY_HOST_BOOTSTRAP, entry=LEGACY_HOST_BOOTSTRAP_ENTRY)
+    return render_heartbeat_bootstrap(command)
+
+
+def goal_bootstrap(args: Any, *, registry: Path) -> str:
+    """Use the heartbeat wrapper only for an App heartbeat scheduler."""
+    return _render_goal_bootstrap(args, registry=registry, legacy=not _uses_heartbeat_wrapper(args))
 
 
 def host_bootstrap_binding(prompt: str) -> dict[str, Any] | None:
@@ -161,13 +185,17 @@ def host_bootstrap_binding(prompt: str) -> dict[str, Any] | None:
                 return None
             index += 2
         registry = Path(values.pop("registry"))
-        expected = goal_bootstrap(SimpleNamespace(**values), registry=registry)
-        if prompt.startswith(LEGACY_HOST_BOOTSTRAP + "\n"):
-            expected = render_bootstrap(
-                _goal_command(SimpleNamespace(**values), registry=registry, legacy=True),
-                title=LEGACY_HOST_BOOTSTRAP,
-                entry=LEGACY_HOST_BOOTSTRAP_ENTRY,
-            )
-        return {**values, "registry": registry} if prompt == expected else None
+        args = SimpleNamespace(**values)
+        legacy = prompt.startswith(LEGACY_HOST_BOOTSTRAP + "\n")
+        if not legacy and not _uses_heartbeat_wrapper(args):
+            return None
+        # Reproduce old bytes only when recognizing a saved wrapper. New
+        # bootstraps and upgrades always load the current complete contract.
+        aliases = [flag for flag in ("--turn-envelope", "--complete-turn") if values.get(booleans[flag])]
+        if len(aliases) > 1:
+            return None
+        expected = _render_goal_bootstrap(args, registry=registry, legacy=legacy,
+                                          saved_view_alias=aliases[0] if aliases else None)
+        return {**values, "registry": registry} if _matches_published_bootstrap(prompt, expected) else None
     except (AttributeError, IndexError, KeyError, TypeError, ValueError):
         return None

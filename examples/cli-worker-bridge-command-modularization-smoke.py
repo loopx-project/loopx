@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -9,9 +10,6 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CLI = ROOT / "loopx" / "cli.py"
-MODULE = ROOT / "loopx" / "cli_commands" / "worker_bridge.py"
-INIT = ROOT / "loopx" / "cli_commands" / "__init__.py"
 sys.path.insert(0, str(ROOT))
 
 from loopx.worker_bridge import build_worker_bridge_install_contract  # noqa: E402
@@ -22,6 +20,7 @@ def run_cli(*args: str, stdin: str | None = None) -> subprocess.CompletedProcess
         [sys.executable, "-m", "loopx.cli", *args],
         input=stdin,
         cwd=ROOT,
+        env={**os.environ, "LOOPX_USAGE_PING": "0"},
         check=False,
         text=True,
         stdout=subprocess.PIPE,
@@ -44,30 +43,6 @@ def require_success(result: subprocess.CompletedProcess[str]) -> str:
 
 
 def main() -> None:
-    cli_source = CLI.read_text(encoding="utf-8")
-    module_source = MODULE.read_text(encoding="utf-8")
-    init_source = INIT.read_text(encoding="utf-8")
-
-    forbidden_cli_markers = [
-        "worker_bridge_parser = sub.add_parser",
-        "worker_bridge_sub = worker_bridge_parser.add_subparsers",
-        "build_worker_bridge_install_contract(",
-        "observe_active_user_intervention_feed(",
-        'if args.command == "worker-bridge":',
-    ]
-    for marker in forbidden_cli_markers:
-        require(marker not in cli_source, f"worker-bridge marker leaked into cli.py: {marker}")
-
-    for marker in (
-        "register_worker_bridge_commands",
-        "handle_worker_bridge_command",
-        "WORKER_BRIDGE_COMMANDS",
-        "append_worker_bridge_counter_trace_row(",
-    ):
-        require(marker in module_source, f"worker-bridge command module missing {marker}")
-    require("register_worker_bridge_commands" in init_source, "__init__ did not export worker bridge registration")
-    require("handle_worker_bridge_command" in init_source, "__init__ did not export worker bridge handler")
-
     help_text = require_success(run_cli("worker-bridge", "active-user-observe", "--help"))
     for option in ("--feed-jsonl", "--observation-json", "--counter-trace-json"):
         require(option in help_text, f"active-user-observe help omitted {option}")

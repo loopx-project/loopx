@@ -921,10 +921,11 @@ export function createHttpServer(deps: HttpDeps): Server {
       return sendJson(res, 200, machineUsage.report(hours, url.searchParams.get('model'), url.searchParams.get('launcher')));
     }
 
-    // POST /api/threads/import: turn an existing agent session into a thread
+    // POST /api/threads/import: turn an existing agent session into a thread. The person asked for
+    // this one, so a session from outside the workdirs brings its directory in.
     if (method === 'POST' && path === '/api/threads/import') {
       const body = await readJson(req);
-      return sendJson(res, 201, await manager.importSession({ agent: body.agent, sessionId: body.sessionId }));
+      return sendJson(res, 201, await manager.importSession({ agent: body.agent, sessionId: body.sessionId, addDirectory: true }));
     }
 
     // GET /api/worktree-options?cwd=: whether a new thread there could start in a git worktree

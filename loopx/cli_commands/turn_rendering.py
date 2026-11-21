@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..control_plane.effect_runtime import EffectRuntimeRemoteError
 from ..control_plane.turn_driver import (
     LOOPX_TURN_EXECUTION_SCHEMA_VERSION,
     TurnRecoveryBlockedError,
@@ -72,11 +73,13 @@ def build_turn_error_payload(
     turn_key = str(transaction.get("turn_key") or "")
     run_once = turn_command == "run-once"
     error_code = getattr(exc, "code", None)
+    if not isinstance(error_code, str) and isinstance(exc, EffectRuntimeRemoteError):
+        error_code = exc.diagnostic_code
     error_payload = getattr(exc, "payload", None)
     planned_effects = planned.get("effects")
     planned_effects = planned_effects if isinstance(planned_effects, Mapping) else {}
     # Once the executor was entered an exception can follow a protected effect.
-    # A missing reply is not proof of non-execution. The original journal is
+    #  The original journal is
     # projected separately so a replay never looks like a second host launch.
     effects = {
         key: True if planned_effects.get(key) is True else None if execution_started else False

@@ -676,25 +676,30 @@ def test_poll_profile_direct_unmanaged_call_runs_and_close_sets_stop_under_lock(
         runtime_root=tmp_path / "runtime",
         runtime_controller=object(),
     )
-    direct_stop = threading.Event()
-    service._poll_profile("mew", direct_stop)
-    assert entered == ["mew"]
+    try:
+        direct_stop = threading.Event()
+        service._poll_profile("mew", direct_stop)
+        assert entered == ["mew"]
+        assert service.active_profiles() == []
 
-    entered.clear()
-    other_stop = threading.Event()
-    fingerprint = ProfileWorkerFingerprint(
-        transport=ProfileTransport(
-            cli_bin="fake-lark",
-            app_id="",
-            consumer_lease_key="mew",
-            callback_chats=(),
-            other_binding_id="",
+        entered.clear()
+        other_stop = threading.Event()
+        fingerprint = ProfileWorkerFingerprint(
+            transport=ProfileTransport(
+                cli_bin="fake-lark",
+                app_id="",
+                consumer_lease_key="mew",
+                callback_chats=(),
+                other_binding_id="",
+            )
         )
-    )
-    with service._lock:
-        service._workers["mew"] = (threading.Event(), threading.current_thread(), fingerprint)
-    service._poll_profile("mew", other_stop)
-    assert entered == []
+        with service._lock:
+            service._workers["mew"] = (threading.Event(), threading.current_thread(), fingerprint)
+        service._poll_profile("mew", other_stop)
+        assert entered == []
+        assert service.active_profiles() == []
+    finally:
+        service.close()
 
     worker_started = threading.Event()
     seen_stop: list[threading.Event] = []
@@ -710,10 +715,17 @@ def test_poll_profile_direct_unmanaged_call_runs_and_close_sets_stop_under_lock(
         runtime_controller=object(),
         profile_poller=managed_poller,
     )
-    managed_service.refresh()
-    assert worker_started.wait(5)
-    worker_stop = seen_stop[0]
-    managed_service.close()
+    try:
+        managed_service.refresh()
+        assert worker_started.wait(5)
+        worker_stop = seen_stop[0]
+    finally:
+        managed_service.close()
     assert worker_stop.is_set()
     with managed_service._lock:
         assert managed_service._workers == {}
+    assert [
+        thread.name
+        for thread in threading.enumerate()
+        if thread.name.startswith("loopx-lark-") and thread.is_alive()
+    ] == []

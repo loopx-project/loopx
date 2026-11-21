@@ -1,6 +1,6 @@
 """Best-effort Host observation transport; TS owns union, limits and consent.
 
-Not an execution controller. Only confirmed 60-second prefixes survive a crash;
+Only confirmed 60-second prefixes survive a crash;
 there is no open interval that a later process can extrapolate indefinitely.
 """
 from __future__ import annotations

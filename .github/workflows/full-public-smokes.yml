@@ -60,15 +60,15 @@ jobs:
           - shard: 0
             offset: 0
           - shard: 1
-            offset: 110
+            offset: 80
           - shard: 2
-            offset: 220
+            offset: 160
           - shard: 3
-            offset: 330
+            offset: 240
           - shard: 4
-            offset: 440
+            offset: 320
     env:
-      SHARD_LIMIT: "110"
+      SHARD_LIMIT: "80"
       SMOKE_TIMEOUT_SECONDS: ${{ github.event_name == 'workflow_dispatch' && inputs.timeout_seconds || '360' }}
       SMOKE_JOBS: "4"
     steps:

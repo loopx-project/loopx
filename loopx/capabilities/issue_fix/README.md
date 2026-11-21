@@ -367,7 +367,7 @@ The host agent may perform only the actions covered by current boundary
 authority. Reviewer notification is also an external write, but a standing
 `external_review_request` or `publish` authority lets the agent perform the
 formal request and its permission-only comment fallback automatically without
-another user prompt. This does not authorize arbitrary comments.
+another user prompt.
 Recommendation packets themselves remain read-only.
 
 ### 7. Continuous PR lifecycle
@@ -927,8 +927,7 @@ control path.
 The optional [repository-context pilot](../../../examples/repository-context-pilot/README.md)
 compares Rune's no-model MCP retrieval with direct search on pinned public issue
 source. It exports source-checked advisory evidence through this same input and
-reads it back through `workflow-plan`. This is a reproducible experiment; it
-does not enable Rune, change default context or qualify a production provider.
+reads it back through `workflow-plan`. This is a reproducible experiment.
 
 They also accept either `--repository-memory-json
 <compact-search-read-result.json>` or a configured context provider. The
@@ -1147,7 +1146,7 @@ The existing `--runtime-root` override applies to reads, leases, writes and
 projection recovery. No new provider or capability is enabled.
 
 Missing ledger files, malformed bucket declarations, duplicate current targets,
-and older empty observations are errors, not evidence that all work has ended.
+and older empty observations are errors.
 Restore the ledger or resolve the duplicate before retrying; do not switch to
 legacy state. Buckets commit independently, so after a later failure read back
 `loopx todo list --goal-id GOAL` using the same registry/runtime root, then retry
@@ -1158,8 +1157,7 @@ never rolls back a successful business commit.
 
 Omit `--execute-transition` to inspect without reconciling Todos. To roll back
 this implementation, retain canonical state, writer fences and receipts; restore
-compatible code instead of reviving old Markdown authority. This does not grant
-publication, merge, additional capabilities or access to private material.
+compatible code instead of reviving old Markdown authority.
 
 Pass `--issue-ref` when persisting PR lifecycle state. This explicit public-safe
 link lets the outcome read model join the PR to its issue without guessing from
@@ -1183,8 +1181,7 @@ loopx issue-fix pr-lifecycle \
 
 The correction source is provider-neutral: any public HTTPS or repo-relative
 reference may be used, while the current PR monitor remains the authoritative
-lifecycle source. Exact retries neither add another successor nor rewrite the
-same lifecycle row; `maintainer_correction_admission` in the output names the
+lifecycle source. `maintainer_correction_admission` in the output names the
 operation id, admission basis, disposition and reason for this input.
 
 ## Status And Output View
@@ -1396,6 +1393,7 @@ loopx issue-fix outcome \
 python3 examples/issue-fix-capability-guide-smoke.py
 python3 examples/issue-fix-reviewer-recommendation-smoke.py
 python3 examples/issue-fix-reviewer-request-smoke.py
+python3 examples/issue-fix-reviewer-notification-drain-postwrite-smoke.py
 python3 examples/issue-fix-reviewer-notification-sink-smoke.py
 python3 examples/issue-fix-workflow-plan-smoke.py
 python3 examples/issue-fix-workflow-contract-smoke.py

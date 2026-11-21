@@ -239,7 +239,7 @@ A first review can answer only six questions:
 
 Cross-direction questions may enter an
 [Open Strategy Review](/loopx/docs/community/open-strategy-reviews/). It produces a disposition, owner,
-next artifact, and review trigger; it does not replace the RFC, Issue, or PR path with a meeting vote.
+next artifact, and review trigger.
 
 ## Ask For Help Without Losing The Signal {#ask-for-help}
 

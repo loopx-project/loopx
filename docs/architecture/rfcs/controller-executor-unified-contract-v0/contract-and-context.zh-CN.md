@@ -117,6 +117,13 @@ settlement plan 在投影中保留，改变其 Turn 身份会改变 action signa
 recommendation 属于诊断，未知字段是合成输入，完整来源承诺仍能区分两份输入。
 没有测量模型收益。
 
+发布用宿主提示决策探针的真实 external-wait 场景，经既有完整来源 TypeScript owner
+组合。Thin 与 brief 在每批探针中接收同一份已检查来源，保留完整任务和停止正文；
+场景校验器直接读取来源 portfolio，不再构造旧压缩包。四个独立的小型决策对照仍为
+合成输入，冻结的 raw/v0 模型语料和受支持历史 reader 不变。这只迁移资格验证输入，
+不切换普通 CLI writer，也不证明已安装 Host 采用；provider 执行仍须显式 release
+opt-in，脚本探针通过不代表模型行为、结算、验收成果或完整成本已经取得资格。
+
 ### 差分上下文
 
 复用现有 context-delivery owner 与不可变 capture 机制。目标包含两个正交层，
@@ -430,6 +437,11 @@ Draft，不是仅等待评审。尚无模型或成本收益证据。历史 effec
 | `turn_driver/codex_cli.py::_prompt` 与 `host_candidate.py::extract_turn_authority` / `render_prompt` | 在实际 prompt 边界替换格式特定输入。当前普通 Codex 接收 envelope，分阶段 replan 使用提取的 authority，结构化 host 也使用提取的 authority。共享源字节或签名不能证明这些最终输入保留相同义务。保留 provider 结果编码与外层 effect 归属。 |
 | `turn_driver/decision_capture.py` 与 `cli_commands/quota_capture.py` | 复用不可变 capture、校验读取器和 full/delta 交付。首次交付和保存后恢复必须重建同一契约；不能仅因 Turn 身份相同，就把某投影的 continuity baseline 用于另一投影。 |
 | `benchmark/runtime/worker.py`、`benchmark/runtime/sessions.py` 与 `scripts/external_scheduler_worker.py` | 迁移它们实际调用的产品入口。保留评估配置与外层唤醒归属，不新增 benchmark 专用转换，也不把 managed-host 测试算作 attached-host 验收。 |
+
+当前 heartbeat 生成器通过 `interaction_contract` 交付目标选择、必读和原 Turn
+结算。已保存的 bootstrap 在唤醒时重新调用该生成器。树内所有生成调用都已采用
+此路径，因此退役旧 envelope 专用指令和额外提示词预算。已有 capture 中的工作
+继续由记录的恢复 reader 读取。
 
 替换任一接缝前，实现 PR 记录源路径、字段或指令条款、当前 reader、目标 owner、表示、
 恢复与退役条件。字段搬迁须包含引用解析；删除诊断须证明其中不含动作、权限、必读或

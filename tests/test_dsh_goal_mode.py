@@ -408,6 +408,43 @@ def test_parse_model_json_tolerates_prose_and_fences() -> None:
     assert turn_host_adapter.parse_model_json("no json at all") is None
 
 
+def test_parse_model_json_repairs_minor_delimiters_and_preserves_strings() -> None:
+    complex_payload = {
+        "result_kind": "validated_completion",
+        "details": [
+            {"label": "literal", "text": "Keep ,}, and }]}}]}} intact inside string literals."},
+            {"label": "second", "text": "Trailing text"},
+        ],
+    }
+    raw_trailing_comma = (
+        '{"result_kind": "validated_completion", "details": ['
+        '{"label": "literal", "text": "Keep ,}, and }]}}]}} intact inside string literals.",}, '
+        '{"label": "second", "text": "Trailing text",},'
+        '],}'
+    )
+    assert turn_host_adapter.parse_model_json(raw_trailing_comma) == complex_payload
+    # Extra } inside terminal closer run when outer expectation is ] followed by }
+    raw_extra_before_array_close = (
+        '{"result_kind": "validated_completion", "nested": {"sections": ['
+        '{"items": [{"summary": "ok",}]}]}]}}'
+    )
+    assert turn_host_adapter.parse_model_json(raw_extra_before_array_close) == {
+        "result_kind": "validated_completion",
+        "nested": {"sections": [{"items": [{"summary": "ok"}]}]},
+    }
+    raw_extra_outer_brace = '{"result_kind": "wait", "nested": {"a": [1,]}}}'
+    assert turn_host_adapter.parse_model_json(raw_extra_outer_brace) == {
+        "result_kind": "wait",
+        "nested": {"a": [1]},
+    }
+    # Truncated, unclosed string, mid-object mismatch, or >2 stray closers must fail closed.
+    assert turn_host_adapter.parse_model_json('{"result_kind": "wait", "items": [{"a": 1}') is None
+    assert turn_host_adapter.parse_model_json('{"result_kind": "wait", "items": [{"a": 1}}') is None
+    assert turn_host_adapter.parse_model_json('{"result_kind": "wait", "text": "unterminated}') is None
+    assert turn_host_adapter.parse_model_json('{"a": [1}, "b": 2}') is None
+    assert turn_host_adapter.parse_model_json('{"result_kind": "wait"}}}}') is None
+
+
 def test_build_result_fails_closed_without_a_typed_candidate() -> None:
     request = _signed_request()
     result = turn_host_adapter.build_result(request, None)

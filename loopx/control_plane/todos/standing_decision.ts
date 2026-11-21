@@ -1,5 +1,5 @@
 /** Read-only standing decisions. Storage order is not decision chronology;
- * this projection neither grants a lease nor commits an owner decision. */
+ *  */
 import type {JsonObject} from "../effect_program.ts";
 import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 import {authorityUnicodeCompare} from "../coordination/authority_store_codec.ts";

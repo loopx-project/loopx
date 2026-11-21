@@ -217,5 +217,4 @@ Update theory chapters only when the public contract changes, not when internal 
 - [ ] Internal links and the public-boundary scan pass.
 - [ ] The bilingual first screen has owner approval.
 
-Only after these checks should GitHub Pages publish from `main`. Pages is the display surface, not the source
-of content truth or LoopX state.
+Only after these checks should GitHub Pages publish from `main`. Pages is the display surface.

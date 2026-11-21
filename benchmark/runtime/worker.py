@@ -496,6 +496,7 @@ def native_command(env, execution, stage, wake, session_wake):
         reasoning_effort=env["REASONING_EFFORT"],
         session_id=session_wake.session_id if session_wake else None,
         mcp_server=None,
+        mcp_turn_environment={},
     )
     if execution.context_delivery != "off":
         command[-1:-1] = json.loads(env.get("LOOPX_CODEX_CONTEXT_TRUST_ARGS", "[]"))

@@ -1,6 +1,5 @@
 /** Explicit, quiescent activation of an already staged CLI release.
  * The host observes its physical writer barrier and persists these decisions.
- * This neither grants execution nor changes work, native history, or clocks.
  */
 import type {JsonObject, SettlementIdentityInput} from "../effect_program.ts";
 import {settlementIdentity} from "../effect_program.ts";

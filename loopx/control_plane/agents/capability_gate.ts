@@ -17,7 +17,7 @@ interface Binding {
 const unique = (values: readonly string[]) => [...new Set(values)];
 export const availableCapabilities = (values: readonly string[]): string[] => unique([...DEFAULT_AVAILABLE, ...values]);
 
-/** A repair output is not its own prerequisite; this does not grant that output. */
+/** A repair output is not its own prerequisite; */
 export function missingRequiredCapabilities(required: readonly string[], targets: readonly string[], available: readonly string[]): string[] {
   const present = new Set([...availableCapabilities(available), ...targets]);
   return required.filter(capability => !present.has(capability));

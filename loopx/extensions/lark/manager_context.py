@@ -53,11 +53,13 @@ def manager_failure_reply(
         "hard_timeout": "处理超过时间限制",
         "interrupted": "处理已中断",
         "manager_authorization_unavailable": "当前连接的授权范围不可用",
-        # host_gate is a generic host failure. It does not establish whether
-        # quota, authentication, configuration, or another host condition failed.
+        # host_gate is a generic host failure.
+
         "host_gate": "执行器未能完成本次调用，请检查管家执行器的具体错误",
         "upstream_invalid_request": "上游拒绝了请求参数，请检查所选模型与 Codex CLI、账户的兼容性",
         "server_restarted": "管家服务在处理过程中重启",
+        "execution_worker_exited": "本轮执行任务提前退出",
+        "execution_worker_exited_before_dispatch": "管家在请求交给执行器前中断",
         "runtime_unavailable": "本地运行环境初始化失败，请检查 LoopX 安装与运行配置，修复后重试",
         "resume_failed": "原 Agent 会话恢复失败，请检查执行器状态，修复后重试",
         "model_auth_unavailable": "账户模型连接暂时不可用",
@@ -98,9 +100,15 @@ def manager_failure_reply(
     if code in {"model_auth_unavailable", "resume_failed"} and preparation_recovery:
         return code, ("已收到你的消息，但本轮准备执行器连接时失败。请求已保留；只有核验为模型调用前失败、"
                       "连接恢复且没有后续重交时，原队列才会按剩余次数接续。可用 /status 查看状态。")
+    if code == "execution_worker_exited_before_dispatch" and preparation_recovery:
+        return code, ("管家在请求交给执行器前中断，原请求已保留。系统会重新核验原消息和当前权限；"
+                      "请求未被停止或替换时，原队列会限次接续。可用 /status 查看状态。")
     if code == "server_restarted":
         return code, ("处理被管家服务重启中断，原请求和会话已保留。系统会先核对原执行记录，"
                       "符合条件的由原队列恢复结果回复；执行效果不明的操作不会直接重做。")
+    if code == "execution_worker_exited":
+        return code, ("本轮执行任务在完整答复保存前退出，原请求和会话已保留。"
+                      "已有操作可能已生效，系统不会自动重跑这条请求。可用 /status 查看状态。")
     # Old hosts can terminate with `other` after typed disconnect retries.
     # Describe that observed history without changing the terminal category,
     # inferring an authorization failure, or granting permission to replay.

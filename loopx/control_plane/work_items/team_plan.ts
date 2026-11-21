@@ -1,6 +1,6 @@
 import {planTodoPriority, TODO_PRIORITIES} from "../todos/priority.ts";
-/** Team-plan admission and assignment transaction. A committed assignment is
- * neither receiver adoption nor a lease, quota grant, or execution receipt. */
+/** Team-plan admission and assignment transaction.
+ *  */
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject, requireStringArray} from "../runtime_decode.ts";

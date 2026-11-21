@@ -152,7 +152,10 @@ def check_result_log_contract() -> dict[str, object]:
 
         mermaid = projection["mermaid"]
         assert mermaid.startswith("flowchart TD"), mermaid
-        assert "node_kcg" in mermaid and ":::blocked" in mermaid, mermaid
+        assert (
+            result_log.explore_mermaid_node_id("node_kcg") in mermaid
+            and ":::blocked" in mermaid
+        ), mermaid
         assert "-->|subtopic_of|" in mermaid, mermaid
 
         focused = result_log.build_explore_graph_view(

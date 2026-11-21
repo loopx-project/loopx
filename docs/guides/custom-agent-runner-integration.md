@@ -74,8 +74,7 @@ loopx agent-onboard \
 
 The packet returns the current doctor/install command, bootstrap command pack,
 quota guard, and recheck command. Declare only capabilities the current host
-actually has. `--available-capability` reports observed execution ability; it
-does not grant permission or satisfy a user gate.
+actually has. `--available-capability` reports observed execution ability.
 
 For `other-agent`, doctor intentionally does not inspect `~/.codex/skills`.
 CLI health and workflow delivery are separate checks. The custom host must
@@ -128,7 +127,7 @@ Then follow this loop:
    boundary, compact evidence references, and writeback contract. Let it
    dynamically plan the bounded action.
 5. **Validate:** Read the real repository, test, CI, service, or Provider
-   result. The Agent's completion claim is not proof.
+   result.
 6. **Write back:** Complete, update, block, defer, or add a successor todo;
    record compact evidence; then run `refresh-state`.
 7. **Account:** Spend quota only after validated durable writeback. A failed

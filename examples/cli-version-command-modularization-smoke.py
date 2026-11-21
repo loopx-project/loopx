@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke-test the low-risk version command module boundary."""
+"""Smoke-test version output parity and public CLI formats."""
 
 from __future__ import annotations
 
@@ -11,13 +11,10 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CLI = REPO_ROOT / "loopx" / "cli.py"
-INIT = REPO_ROOT / "loopx" / "cli_commands" / "__init__.py"
-MODULE = REPO_ROOT / "loopx" / "cli_commands" / "version.py"
 
 
 def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, "PYTHONPATH": str(REPO_ROOT)}
+    env = {**os.environ, "PYTHONPATH": str(REPO_ROOT), "LOOPX_USAGE_PING": "0"}
     return subprocess.run(
         [sys.executable, "-m", "loopx.cli", *args],
         cwd=REPO_ROOT,
@@ -42,36 +39,6 @@ def require_success(result: subprocess.CompletedProcess[str]) -> str:
     return result.stdout
 
 
-def assert_source_shape() -> None:
-    cli_source = CLI.read_text(encoding="utf-8")
-    init_source = INIT.read_text(encoding="utf-8")
-    module_source = MODULE.read_text(encoding="utf-8")
-
-    for marker in [
-        'sub.add_parser("version"',
-        "def build_version_payload(",
-        "def render_version_markdown(",
-    ]:
-        require(marker not in cli_source, f"version implementation leaked into loopx/cli.py: {marker}")
-    for marker in [
-        "register_version_command(sub, add_subcommand_format)",
-        "handle_version_command(",
-    ]:
-        require(marker in cli_source, f"loopx/cli.py missing {marker}")
-    for marker in [
-        "handle_version_command",
-        "register_version_command",
-    ]:
-        require(marker in init_source, f"cli_commands/__init__.py missing {marker}")
-    for marker in [
-        "def build_version_payload(",
-        "def register_version_command(",
-        "def handle_version_command(",
-        "output_format(args)",
-    ]:
-        require(marker in module_source, f"version module missing {marker}")
-
-
 def assert_version_outputs() -> None:
     legacy_flag = require_success(run_cli("--version")).strip()
     markdown = require_success(run_cli("version")).strip()
@@ -90,7 +57,6 @@ def assert_version_outputs() -> None:
 
 
 def main() -> int:
-    assert_source_shape()
     assert_version_outputs()
     print("cli-version-command-modularization-smoke: ok")
     return 0

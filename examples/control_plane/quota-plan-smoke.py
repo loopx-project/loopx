@@ -30,7 +30,7 @@ from loopx.control_plane.scheduler.execution_context import (  # noqa: E402
     scheduler_execution_context_for_runtime_profile,
 )
 
-from quota_plan_fixtures import (  # noqa: E402
+from examples.control_plane.quota_plan_fixtures import (  # noqa: E402
     _nested_value,
     _short_hash,
     assert_dry_run_left_cli_fixture_unchanged,
@@ -1020,9 +1020,9 @@ def assert_heartbeat_recommendation_lifecycle() -> None:
     assert mapped_decision["execution_obligation"]["kind"] == "quiet_noop_if_unchanged", mapped_decision
     scheduler = mapped_decision["scheduler_hint"]
     assert scheduler["action"] == "backoff_until_fresh_evidence", mapped_decision
-    assert scheduler["codex_app"]["recommended_interval_minutes"] == 60, mapped_decision
-    assert scheduler["codex_app"]["recommended_rrule"] == "FREQ=MINUTELY;INTERVAL=60", mapped_decision
-    assert scheduler["codex_app"]["example_progression_minutes"] == [60], mapped_decision
+    assert scheduler["app_automation"]["recommended_interval_minutes"] == 60, mapped_decision
+    assert scheduler["app_automation"]["recommended_rrule"] == "FREQ=MINUTELY;INTERVAL=60", mapped_decision
+    assert scheduler["app_automation"]["example_progression_minutes"] == [60], mapped_decision
     assert scheduler["unchanged_poll"]["limits"]["codex_cli_tui"] == 3, mapped_decision
     assert scheduler["unchanged_poll"]["final_quota_replan_check_enabled"] is True, mapped_decision
     assert "local_scheduler" not in scheduler, scheduler

@@ -390,7 +390,7 @@ class CodexAttachedRequestMixin:
                 body["binding_ref"],
             )
             open_conversation(binding["thread_id"])
-            # OS dispatch is not proof of a displayed conversation or a new turn.
+
             http._send_json({"ok": True, "requested": True})
         except (ValueError, KeyError, TypeError):
             http._send_error(
