@@ -800,3 +800,351 @@ def test_scoped_signal_monitor_overlong_work_evidence_commits_and_precommit_retr
     # No third retry is ever dispatched even if open.
     runtime._steward_monitor_next_check.clear()
     assert pump_steward_monitors(runtime) == []
+
+
+def test_resolve_advancement_turn_id_handles_selection_deferral_and_precommit_retries(tmp_path) -> None:
+    from loopx.capabilities.native_chat.steward_monitor import (
+        ADVANCEMENT_ADMISSION_RETRY_SUFFIX,
+        ADVANCEMENT_PRECOMMIT_RETRY_SUFFIX,
+        advancement_turn_id,
+        resolve_advancement_turn_id,
+    )
+    from loopx.capabilities.native_chat.steward_turn import native_steward_client_id
+
+    actor = {"goal_id": "goal-steward-test", "agent_id": "steward", "session_id": "sess-1"}
+    todo = {"todo_id": "todo_adv123", "updated_at": "2026-11-21T08:00:00Z"}
+    base = advancement_turn_id(todo)
+    base_cid = native_steward_client_id(actor, base)
+    adm_tok = base + ADVANCEMENT_ADMISSION_RETRY_SUFFIX
+    adm_cid = native_steward_client_id(actor, adm_tok)
+    pre_tok = base + ADVANCEMENT_PRECOMMIT_RETRY_SUFFIX
+    pre_cid = native_steward_client_id(actor, pre_tok)
+    pre_adm_tok = pre_tok + ADVANCEMENT_ADMISSION_RETRY_SUFFIX
+    pre_adm_cid = native_steward_client_id(actor, pre_adm_tok)
+    old_completed = "2026-11-21T08:00:00Z"
+    now_after_cooldown = datetime(2026, 11, 21, 8, 5, 0, tzinfo=timezone.utc).timestamp()
+    now_in_cooldown = datetime(2026, 11, 21, 8, 0, 20, tzinfo=timezone.utc).timestamp()
+
+    class _FakeStore:
+        def __init__(self, mapping: dict[str, dict]) -> None:
+            self.mapping = mapping
+
+        def turn_for_client(self, session_id: str, cid: str):
+            return self.mapping.get(cid) if session_id == "sess-1" else None
+
+    deferred_turn = {
+        "status": "completed",
+        "completed_at": old_completed,
+        "response": {
+            "native_loopx": {
+                "ok": False,
+                "error_code": "turn_todo_selection_deferred",
+                "selection_rejection": {"state": "deferred", "reason_code": "autonomous_replan"},
+                "effects": {
+                    "host_invoked": False,
+                    "state_written": False,
+                    "quota_spent": False,
+                    "scheduler_acknowledged": False,
+                },
+            },
+        },
+    }
+    precommit_turn = {
+        "status": "completed",
+        "completed_at": old_completed,
+        "response": {
+            "native_loopx": {
+                "ok": False,
+                "status": "failed",
+                "result_kind": "validation_failed",
+                "receipt": {"commit_eligibility": {"writeback": False}},
+                "effects": {
+                    "host_invoked": True,
+                    "state_written": False,
+                    "quota_spent": False,
+                    "scheduler_acknowledged": False,
+                },
+            },
+        },
+    }
+
+    assert resolve_advancement_turn_id(_FakeStore({base_cid: deferred_turn}), actor, todo, now=now_in_cooldown) is None
+    assert resolve_advancement_turn_id(_FakeStore({base_cid: deferred_turn}), actor, todo, now=now_after_cooldown) == adm_tok
+    assert resolve_advancement_turn_id(
+        _FakeStore({base_cid: deferred_turn, adm_cid: precommit_turn}), actor, todo, now=now_after_cooldown
+    ) == (adm_tok + ADVANCEMENT_PRECOMMIT_RETRY_SUFFIX)
+
+    host_invoked_deferred = {
+        **deferred_turn,
+        "response": {
+            "native_loopx": {
+                **deferred_turn["response"]["native_loopx"],
+                "effects": {**deferred_turn["response"]["native_loopx"]["effects"], "host_invoked": True},
+            },
+        },
+    }
+    assert resolve_advancement_turn_id(_FakeStore({base_cid: host_invoked_deferred}), actor, todo, now=now_after_cooldown) is None
+
+    # Pre-commit failure on base followed by zero-effect deferral on .precommit-retry unlocks .precommit-retry.admission-retry once.
+    store_after_precommit_deferred = _FakeStore({base_cid: precommit_turn, pre_cid: deferred_turn})
+    assert resolve_advancement_turn_id(store_after_precommit_deferred, actor, todo, now=now_after_cooldown) == pre_adm_tok
+    store_after_exhausted = _FakeStore({base_cid: precommit_turn, pre_cid: deferred_turn, pre_adm_cid: deferred_turn})
+    assert resolve_advancement_turn_id(store_after_exhausted, actor, todo, now=now_after_cooldown) is None
+
+
+def test_scoped_signal_monitor_settles_autonomous_replan_inline_and_commits_followup(
+    steward, tmp_path, monkeypatch,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    store, runtime, _, transport, binding, _, _ = steward
+    sid, managed = original(steward)
+    storage(runtime, "sqlite")
+    plan = managed.prepare(binding["binding_id"], session_id=sid)["plan"]
+    actor = managed.prepare(
+        binding["binding_id"],
+        session_id=sid,
+        expected_plan_id=plan["plan_id"],
+        execute=True,
+    )["actor"]
+    store.load_session(sid)
+
+    from loopx.configure_goal import configure_goal
+    assert configure_goal(
+        registry_path=runtime.registry_path,
+        goal_id=actor["goal_id"],
+        execution_replan_after_turns=1,
+        execute=True,
+    )["ok"]
+
+    monitor = StewardMonitor(runtime)
+    enable_plan = monitor.configure(binding["binding_id"], operation="enable")["plan"]
+    monitor.configure(
+        binding["binding_id"],
+        operation="enable",
+        execute=True,
+        expected_plan_id=enable_plan["plan_id"],
+    )
+    default_watch = monitor.current(actor)
+    edit_local_watch(
+        runtime,
+        actor,
+        default_watch["todo_id"],
+        "--next-due-at",
+        (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
+    )
+
+    actions = transport.core.actions
+    preview = actions.preview({
+        "action_kind": "monitor.create",
+        "summary": "Track mergeable approved PRs on acme/widgets and send one aggregated report",
+        "normalized_parameters": {
+            "goal_id": actor["goal_id"],
+            "agent_id": actor["agent_id"],
+            "target": "Track mergeable approved PRs on acme/widgets and emit one aggregated report.",
+            "target_key": "steward-gpt-mergeable-pr-monitor",
+            "task_repository": "acme/widgets",
+            "cadence": "every_2_hours",
+            "timezone": "Asia/Shanghai",
+            "stop_condition": "watch_only",
+            "signal_scope": {
+                "schema_version": "steward_signal_monitor_scope_v0",
+                "include_portfolio": False,
+                "include_inbox": False,
+                "pr_filter": {
+                    "exclude_drafts": True,
+                    "exclude_conflicting": True,
+                    "effective_verdicts": ["APPROVE"],
+                    "required_approver_declarations": ["GPT", "OpenAI"],
+                },
+            },
+        },
+        "context": {"kind": "goal", "goal_id": actor["goal_id"]},
+        "idempotency_key": "create-gpt-mergeable-pr-monitor-inline-replan",
+    })
+    assert preview["status"] == "preview_ready"
+    created_todo_id = actions.apply(preview["proposal_id"])["proposal"]["receipt"]["resource_ids"]["todo_id"]
+
+    import loopx.capabilities.native_chat.steward_monitor as monitor_mod
+
+    def _pr_item(number: int) -> dict:
+        return {
+            "number": number,
+            "title": f"Mergeable PR #{number}",
+            "url": f"https://github.com/acme/widgets/pull/{number}",
+            "headRefOid": f"head{number}",
+            "isDraft": False,
+            "mergeable": "MERGEABLE",
+            "updatedAt": "2026-11-20T09:00:00Z",
+            "author": {"login": "alice"},
+            "checks_summary": {"state": "SUCCESS", "total": 1, "passing": 1, "failing": 0, "pending": 0},
+            "bypassed_gates": [],
+            "review_summary": {
+                "effective_verdict": "APPROVE",
+                "has_review_conflict": False,
+                "stale_review_count": 0,
+                "exact_head_reviews": [{
+                    "author_login": "bob",
+                    "reviewer_declaration": "GPT-5.4",
+                    "verdict": "APPROVE",
+                    "valid_verdict_review": True,
+                    "state": "APPROVED",
+                }],
+            },
+        }
+
+    # Route governance replan vs advancement responses in fake_codex via a clean helper module.
+    prompt_log = tmp_path / "captured_gov_prompt.txt"
+    router_file = tmp_path / "codex_router.py"
+    router_file.write_text(
+        f"""import json
+from pathlib import Path
+
+def route(params):
+    txt = "\\n".join(r.get("text", "") for r in (params or {{}}).get("input", []) if isinstance(r, dict))
+    marker = "Steward governance replan context (data):"
+    if marker in txt:
+        Path({str(prompt_log)!r}).write_text(txt, encoding="utf-8")
+        ctx = json.loads(txt.split(marker, 1)[1].lstrip().splitlines()[0])
+        recent = (ctx.get("review") or {{}}).get("recent_evidence") or [{{}}]
+        ev_ref = recent[0].get("evidence_ref", "replan-evidence-inline")
+        todo_delta = [
+            "retain:" + r["todo_id"]
+            for r in (ctx.get("open_agent_todos") or [])[:4]
+            if isinstance(r, dict) and r.get("todo_id")
+        ]
+        sc = (ctx.get("writeback") or {{}}).get("stride_control")
+        vision = {{
+            "schema_version": "goal_vision_replan_contract_v0",
+            "state": "active",
+            "vision_patch": {{
+                "vision_summary": "Maintain private steward PR monitoring and reports.",
+                "acceptance_summary": "Aggregate matching PR signals cleanly without notification spam.",
+            }},
+            "todo_delta": todo_delta,
+            "path_delta": {{
+                "schema_version": "goal_path_delta_v0",
+                "outcome": "replan",
+                "prior_assumption": "Steward monitor followups execute continuously without inline replan.",
+                "observed_reality": "Periodic review became due after first settled turn and cleared inline.",
+                "retained": ["All scoped monitor subscriptions"],
+                "changed": ["Recorded evidence-linked baseline for steward followups"],
+                "evidence_refs": [ev_ref],
+            }},
+        }}
+        if isinstance(sc, dict) and sc.get("reference_context_id"):
+            vision["stride_decision"] = {{
+                "schema_version": sc["schema_version"],
+                "strategy_version": sc["strategy_version"],
+                "reference_context_id": sc["reference_context_id"],
+                "reference_obligation_id": sc["reference_obligation_id"],
+                "basis": "supported_progress",
+                "action": "verify",
+                "axes": {{
+                    "work_slice": {{"plan": "Complete inline replan and queued report.", "reason": "Clear review gate cleanly."}},
+                    "route_distance": {{"plan": "Keep scoped monitor pipeline unchanged.", "reason": "Existing filter matches goal."}},
+                    "validation_scope": {{"plan": "Verify replan writeback and queued delivery.", "reason": "Confirm single-turn recovery."}},
+                }},
+                "next_probe": {{
+                    "scope": "Run blocked monitor followup triage.",
+                    "prediction": "Advancement commits after inline replan.",
+                    "adoption_criterion": "Followup todo closes with queued report.",
+                    "cost_bound": "One inline governance turn plus followup.",
+                    "minimum_evidence": "Committed replan event and delivery json.",
+                }},
+            }}
+        return json.dumps({{
+            "result_kind": "replan_required",
+            "classification": "steward_periodic_review_settled",
+            "summary": "Settled steward autonomous periodic review inline.",
+            "next_action": "Continue scoped PR monitor advancement.",
+            "delivery_batch_scale": "implementation",
+            "delivery_outcome": "outcome_progress",
+            "work_evidence": ["Reviewed recent settled turns and retained active monitor scope"],
+            "validation_evidence": ["Checked replan writeback contract and open monitor todos"],
+            "path_delta_mode": "material_replan",
+            "agent_vision_json": json.dumps(vision),
+        }})
+    return json.dumps({{
+        "result_kind": "validated_completion",
+        "classification": "steward_scoped_pr_report",
+        "summary": "Prepared aggregated mergeable PR report.",
+        "next_action": "Await next monitor cadence.",
+        "delivery_batch_scale": "implementation",
+        "delivery_outcome": "outcome_progress",
+        "work_evidence": ["Synthesized aggregated report for matching PR"],
+        "validation_evidence": ["steward_monitor_snapshot_v0 scoped cleanly"],
+        "path_delta_mode": "unchanged",
+        "vision_unchanged_reason": "Scoped steward monitor report.",
+        "steward_owner_report": "## 可直接合并 PR\\n- #9102 Mergeable PR (GPT-5.4 APPROVE)",
+    }})
+""",
+        encoding="utf-8",
+    )
+    fake = Path(runtime.codex_bin)
+    source = fake.read_text(encoding="utf-8")
+    target = '"message": "Runtime response."'
+    assert target in source
+    route_expr = (
+        f'__import__("importlib.util").util.spec_from_file_location("codex_router", {str(router_file)!r})'
+    )
+    dynamic_msg = (
+        f'(lambda p: (lambda m: (m.loader.exec_module(m_mod := __import__("importlib.util").util.module_from_spec(m)), '
+        f'm_mod.route(p))[1])({route_expr}))(request.get("params"))'
+    )
+    fake.write_text(source.replace(target, f'"message": {dynamic_msg}'), encoding="utf-8")
+    if sid in runtime.adapters:
+        runtime.adapters.pop(sid).close_session()
+
+    # Turn 1: settle first advancement so periodic_review_due threshold=1 is reached.
+    edit_local_watch(
+        runtime,
+        actor,
+        created_todo_id,
+        "--next-due-at",
+        (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat(),
+    )
+    monkeypatch.setattr(monitor_mod, "_observe_github_repository_prs", lambda repo: {
+        "status": "ok", "repository": repo, "items": [_pr_item(9101)],
+    })
+    assert finish(runtime, pump_steward_monitors(runtime)[0])["status"] == "completed"
+    runtime._steward_monitor_next_check.clear()
+    first_adv_done = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert first_adv_done["response"]["native_loopx"]["status"] == "committed"
+
+    # Turn 2: new material change creates a second advancement Todo while periodic_review_due is active.
+    edit_local_watch(
+        runtime,
+        actor,
+        created_todo_id,
+        "--next-due-at",
+        (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat(),
+    )
+    monkeypatch.setattr(monitor_mod, "_observe_github_repository_prs", lambda repo: {
+        "status": "ok", "repository": repo, "items": [_pr_item(9102)],
+    })
+    assert finish(runtime, pump_steward_monitors(runtime)[0])["status"] == "completed"
+
+    runtime._steward_monitor_next_check.clear()
+    second_adv_turns = pump_steward_monitors(runtime)
+    assert len(second_adv_turns) == 1
+    second_done = finish(runtime, second_adv_turns[0])
+    assert second_done["status"] == "completed", second_done
+    assert second_done["response"]["native_loopx"]["status"] == "committed", second_done
+    assert second_done["response"]["steward_owner_report_queued"] is True
+
+    replan_events = [
+        row["payload"] for row in store.events_after(sid, second_done["turn_id"], None)
+        if row.get("kind") == "native_loopx.replan_result"
+    ]
+    assert len(replan_events) == 1
+    assert replan_events[0]["status"] == "committed"
+    assert replan_events[0]["result_kind"] == "replan_required"
+
+    captured_prompt = prompt_log.read_text(encoding="utf-8")
+    assert "Steward governance replan context (data):" in captured_prompt
+    gov_json = json.loads(
+        captured_prompt.split("Steward governance replan context (data):", 1)[1].lstrip().splitlines()[0]
+    )
+    assert "read_action" not in json.dumps(gov_json)
+    assert "next_cli_actions" not in json.dumps(gov_json)
+    assert str(tmp_path) not in json.dumps(gov_json)
