@@ -1148,6 +1148,10 @@ function buildPersonalHomeModel(
       goalId: goal.id,
       parentGoalId: goal.parent_goal_id,
       sourceAccess: goal.source_access ? {...goal.source_access, readOnly: true} : undefined,
+      sourceRunHistory: goal.source_access ? {
+        total: goal.index_exists ? goal.unique_runs : null,
+        recent: goal.latest_runs.filter(run => run.goal_id === goal.id),
+      } : undefined,
       sourceStrategy: sourceStrategies?.sort((left, right) => Date.parse(right.recordedAt) - Date.parse(left.recordedAt))[0],
       latestActivity: row.latestRun?.generated_at ?? "",
       needsYou,
