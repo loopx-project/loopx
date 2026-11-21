@@ -234,6 +234,73 @@ def _source_and_target(
     )
 
 
+def _project_committed_transition(
+    *,
+    source_registry: Path,
+    runtime_root_override: str | None,
+    goal_id: str,
+) -> dict[str, Any]:
+    """Project a transition the source registry already committed.
+
+    The source registry owns the lifecycle transition; the shared registry is
+    a repairable projection of it. A projection writer that raises is the same
+    fixable fault as a failure receipt, so report it here instead of letting it
+    escape and erase the committed transition receipt.
+    """
+
+    try:
+        return sync_project_registry_to_global(
+            registry_path=source_registry,
+            runtime_root_override=runtime_root_override,
+            goal_id=goal_id,
+            dry_run=False,
+            _global_registry_lock_held=True,
+        )
+    except Exception as exc:  # the committed source transition keeps its receipt
+        return {
+            "ok": False,
+            "dry_run": False,
+            "error_kind": "global_sync_failed",
+            "error": f"shared registry projection failed: {exc}",
+            "registry": str(source_registry),
+            "recommended_action": (
+                f"rerun loopx sync-global --goal-id {goal_id} "
+                "after repairing the shared registry route"
+            ),
+        }
+
+def _readback_committed_transition(
+    *,
+    source_registry: Path,
+    target_registry: Path,
+    goal_id: str,
+    expected_state: GoalActivationState,
+    expected_owner_resume_id: str | None,
+) -> dict[str, Any]:
+    """Read back a committed transition without discarding its receipt.
+
+    A read fault after the source commit is reported as an unverified readback
+    so the caller still sees ``written`` and the terminal hook still runs.
+    """
+
+    try:
+        return _readback(
+            source_registry=source_registry,
+            target_registry=target_registry,
+            goal_id=goal_id,
+            expected_state=expected_state,
+            expected_owner_resume_id=expected_owner_resume_id,
+        )
+    except Exception as exc:  # the committed source transition keeps its receipt
+        return {
+            "schema_version": GOAL_ACTIVATION_READBACK_SCHEMA_VERSION,
+            "status": "readback_failed",
+            "verified": False,
+            "goal_id": goal_id,
+            "expected_state": expected_state.value,
+            "error": f"activation readback failed: {exc}",
+        }
+
 def _readback(
     *,
     source_registry: Path,
@@ -507,12 +574,10 @@ def set_goal_activation_state(
                 payload["written"] = True
 
             if registries_are_distinct:
-                sync_payload = sync_project_registry_to_global(
-                    registry_path=source_registry,
+                sync_payload = _project_committed_transition(
+                    source_registry=source_registry,
                     runtime_root_override=sync_runtime_root,
                     goal_id=normalized_goal_id,
-                    dry_run=False,
-                    _global_registry_lock_held=True,
                 )
                 payload["global_sync"] = sync_payload
 
@@ -523,7 +588,7 @@ def set_goal_activation_state(
                     "verified": False,
                 }
                 if sync_payload is not None and not sync_payload.get("ok")
-                else _readback(
+                else _readback_committed_transition(
                     source_registry=source_registry,
                     target_registry=target_registry,
                     goal_id=normalized_goal_id,
@@ -541,7 +606,11 @@ def set_goal_activation_state(
         and readback.get("verified")
     )
     if not payload["ok"]:
-        payload["error"] = "goal activation shared registry readback did not verify"
+        payload["error"] = str(
+            readback.get("error")
+            or (sync_payload or {}).get("error")
+            or "goal activation shared registry readback did not verify"
+        )
         payload["recommended_action"] = (
             (sync_payload or {}).get("recommended_action")
             or f"rerun loopx sync-global --goal-id {normalized_goal_id} after repairing the shared registry route"
