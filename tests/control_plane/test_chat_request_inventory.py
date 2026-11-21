@@ -249,19 +249,29 @@ def test_terminal_return_reconciles_only_matching_original_message(api, capsys):
 
     assert drain_returns() == 1
 
-    def cli_agenda():
+    def cli_inbox(operation, *selectors):
         capsys.readouterr()
         code = main(["--registry", str(fixture["registry"]), "--runtime-root", str(fixture["runtime"]),
-                     "--format", "json", "manager-inbox", "read", "--goal-id", route["goal_id"],
-                     "--agent-id", route["agent_id"]])
+                     "--format", "json", "manager-inbox", operation, "--goal-id", route["goal_id"],
+                     "--agent-id", route["agent_id"], *selectors])
         assert code == 0
-        return json.loads(capsys.readouterr().out)["unfinished_delegations"]["items"]
+        return json.loads(capsys.readouterr().out)
+
+    def cli_agenda():
+        return cli_inbox("read")["unfinished_delegations"]["items"]
+
+    def cli_return():
+        row, = cli_inbox("status", "--request-id", request_id)["rows"]
+        assert row["request_id"] == request_id
+        conclusion, = row["return_replies"]
+        return conclusion
 
     receipt = root / "replies" / request_id / "conclusion.delivery.json"
     original = receipt.read_bytes()
     confirmed = _inventory(api, session_id, view="history")[1]
     assert confirmed["pending_count"] == 0 and confirmed["rows"][0]["returns"][0]["status"] == "delivered"
     assert cli_agenda() == []
+    assert cli_return()["delivered_at"] == confirmed["rows"][0]["returns"][0]["delivered_at"]
 
     message_id = json.loads(original)["message_id"]
     messages = server.chat_store.messages(session_id)
@@ -285,6 +295,9 @@ def test_terminal_return_reconciles_only_matching_original_message(api, capsys):
         agenda, = cli_agenda()
         assert agenda["request_id"] == request_id and agenda["step"] == "recover_evidence"
         assert agenda["returns"][0]["error"] == "manager_return_payload_conflict"
+        cli_return_state = cli_return()
+        for key in ("status", "delivered_at", "error"):
+            assert cli_return_state[key] == row["returns"][0][key] == agenda["returns"][0].get(key)
 
     def change_message(**changes):
         modified = []
@@ -298,6 +311,7 @@ def test_terminal_return_reconciles_only_matching_original_message(api, capsys):
     for corrupted, mismatch in (({"message_id": unrelated["message_id"]}, {"turn_id": turn["turn_id"]}),
                                 ({}, {"text": "A different result in the correct Turn"})):
         incorrect = {key: value for key, value in json.loads(original).items() if key != "message_id"}
+        incorrect["delivered_at"] = "2026-01-01T00:00:00Z"
         receipt.write_text(json.dumps({**incorrect, **corrupted}))
         unchanged = receipt.read_bytes()
         assert_recovery()
@@ -314,7 +328,13 @@ def test_terminal_return_reconciles_only_matching_original_message(api, capsys):
         assert cli_agenda() == []
         recovered = _inventory(api, session_id, view="history")[1]
         assert recovered["pending_count"] == 0
-        assert recovered["rows"][0]["returns"][0]["status"] == "delivered"
+        return_state, = recovered["rows"][0]["returns"]
+        assert return_state["status"] == "delivered"
+        expected_delivery_time = next(row["created_at"] for row in messages if row["message_id"] == message_id)
+        assert return_state["delivered_at"] == expected_delivery_time != incorrect["delivered_at"]
+        detail = cli_return()
+        for key in ("status", "delivered_at", "error"):
+            assert detail[key] == return_state[key]
         assert receipt.read_bytes() == unchanged
         assert journal.read_bytes() == original_journal
     receipt.write_bytes(original)

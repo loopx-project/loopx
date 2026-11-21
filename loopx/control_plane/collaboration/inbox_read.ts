@@ -560,6 +560,9 @@ export async function readCollaborationInbox(params: JsonObject): Promise<JsonOb
   if (operation === "receipt_states") {
     if (!Array.isArray(params.rows) || params.rows.length > 128) fail("bounded inbox requests are required");
     const rows = params.rows.map(row => requireJsonObject(row, "inbox request"));
+    if (params.return_statuses_only === true) {
+      return {return_items: rows.map(row => replyStatuses(root, row))};
+    }
     const items = rows.map(row => receiptState(root, row));
     if (params.include_agenda !== true) return {items};
     const returnItems: JsonObject[][] = [];
