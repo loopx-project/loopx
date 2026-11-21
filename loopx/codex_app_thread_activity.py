@@ -207,6 +207,38 @@ def observe_codex_thread_execution_identity(
     return {"status": "unavailable", "reason": fallback}
 
 
+def _rollout_stamp(stat: os.stat_result) -> tuple[int, int, int, int]:
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns
+
+
+def _confirm_windows_rollout(
+    path: Path, cursor: RolloutCursor, source: os.stat_result,
+    result: HostThreadActivity, reader: Reader,
+) -> bool:
+    if not reader.remaining or result.state is HostThreadState.UNKNOWN:
+        return False
+    # A fresh descriptor and cursor verify the header and independently choose
+    # the marker and latest event, including when the first read used a
+    # retained forward cursor. The repeat uses only the unused read budget.
+    expected = _rollout_stamp(source)
+    with open_rollout(path) as handle:
+        before = os.fstat(handle.fileno())
+        if _rollout_stamp(before) != expected:
+            return False
+        fresh = RolloutCursor(cursor.binding, cursor.thread_id)
+        confirmation = fresh.observe(
+            Reader(handle, reader.remaining, chunk_bytes=reader.chunk_bytes), before,
+        )
+        after = os.fstat(handle.fileno())
+        return (
+            confirmation == result
+            and _rollout_stamp(after) == expected
+            and after.st_ctime_ns == before.st_ctime_ns
+            and Path(os.path.realpath(path)) == path
+            and _rollout_stamp(path.stat()) == expected
+        )
+
+
 def _rollout_activity(
     rollout_path: Any, home: Path, *, thread_id: str, cache_root: Path | None = None,
 ) -> HostThreadActivity:
@@ -246,14 +278,18 @@ def _rollout_activity(
                 if Path(os.path.realpath(path)) != path or (end.st_dev, end.st_ino) != (named.st_dev, named.st_ino) or end.st_size < stat.st_size:
                     _rollout_cache.pop(binding, None)
                     return HostThreadActivity.unknown(HostThreadUnknownReason.STORE_UNAVAILABLE)
-                # Windows ctime-only skew between two stats of one open
-                # descriptor is metadata noise, not a same-size rewrite; drop
-                # ctime from this one-read fence only when both observations
-                # carry a usable volume/file index.
-                fence_ctime = os.name != "nt" or not (stat.st_dev and stat.st_ino and end.st_dev and end.st_ino)
-                if end.st_size == stat.st_size and (end.st_mtime_ns != stat.st_mtime_ns
-                        or (fence_ctime and end.st_ctime_ns != stat.st_ctime_ns)):
+                if end.st_size == stat.st_size and end.st_mtime_ns != stat.st_mtime_ns:
                     _rollout_cache.pop(binding, None)
+                    return HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
+                if end.st_size == stat.st_size and end.st_ctime_ns != stat.st_ctime_ns:
+                    # Don't persist the first cursor across ambiguous metadata.
+                    _rollout_cache.pop(binding, None)
+                    if (
+                        os.name == "nt" and stat.st_dev and stat.st_ino
+                        and _rollout_stamp(stat) == _rollout_stamp(end)
+                        and _confirm_windows_rollout(path, cursor, end, result, reader)
+                    ):
+                        return result
                     return HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
                 cursor.save(cache_root)
                 # An append may contain a newer end/cancel. Do not publish an old

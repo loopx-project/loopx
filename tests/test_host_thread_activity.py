@@ -1200,6 +1200,136 @@ def test_same_size_read_fence_metadata_policy(home, monkeypatch, platform, field
     if platform == "nt" and field == "st_ctime_ns" and unavailable_identity is None:
         assert result.state is HostThreadState.IDLE
         assert result.last_turn_ended_at == T2
+        assert descriptor_observations == 4
     else:
         assert result == HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
-    assert descriptor_observations == 2
+        assert descriptor_observations == 2
+
+
+@pytest.mark.parametrize("warm_cursor", [False, True], ids=["cold", "forward"])
+@pytest.mark.parametrize("change", ["none", "marker", "latest", "append"])
+def test_windows_ctime_skew_checks_current_rollout_records(home, monkeypatch, warm_cursor, change):
+    records = [_event(T1, "task_complete"), _item(T2)]
+    if warm_cursor:
+        path = home.thread("t", [_event(T0, "task_started")])
+        assert _observe(home, "t")["t"].state is HostThreadState.TURN_OPEN
+        with path.open("ab") as handle:
+            handle.write("".join(json.dumps(row) + "\n" for row in records).encode())
+    else:
+        path = home.thread("t", records)
+    initial = path.stat()
+    old_bytes = path.read_bytes()
+    old_identity = (initial.st_dev, initial.st_ino)
+    observed_stats = 0
+
+    def fstat(fd):
+        nonlocal observed_stats
+        observed = os.fstat(fd)
+        if (observed.st_dev, observed.st_ino) != old_identity:
+            return observed
+        observed_stats += 1
+        if observed_stats != 2:
+            return observed
+        if change == "append":
+            with path.open("ab") as handle:
+                handle.write((json.dumps(_event(T3, "task_started")) + "\n").encode())
+            return os.fstat(fd)
+        if change in {"marker", "latest"}:
+            new_bytes = (
+                old_bytes.replace(b'"task_complete"', b'"task_started" ')
+                if change == "marker"
+                else old_bytes.replace(T2.encode(), T3.encode())
+            )
+            assert old_bytes != new_bytes and len(old_bytes) == len(new_bytes)
+            path.write_bytes(new_bytes)
+            os.utime(path, ns=(initial.st_atime_ns, initial.st_mtime_ns))
+        fields = {name: getattr(observed, name) for name in dir(observed) if name.startswith("st_")}
+        fields["st_ctime_ns"] = initial.st_ctime_ns + 1
+        return SimpleNamespace(**fields)
+
+    monkeypatch.setattr(codex_activity, "os", SimpleNamespace(**{**vars(os), "name": "nt", "fstat": fstat}))
+    result = _observe(home, "t")["t"]
+    if change == "none":
+        assert result == HostThreadActivity(
+            state=HostThreadState.IDLE, last_turn_ended_at=T1, last_event_at=T2,
+        )
+    elif change == "append":
+        assert result == HostThreadActivity.unknown(HostThreadUnknownReason.NO_TURN_MARKER)
+        assert _observe(home, "t")["t"].turn_started_at == T3
+    else:
+        assert result == HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
+        refreshed = _observe(home, "t")["t"]
+        if change == "marker":
+            assert refreshed == HostThreadActivity(
+                state=HostThreadState.TURN_OPEN, turn_started_at=T1, last_event_at=T2,
+            )
+        else:
+            assert refreshed == HostThreadActivity(
+                state=HostThreadState.IDLE, last_turn_ended_at=T1, last_event_at=T3,
+            )
+
+
+def test_windows_ctime_skew_does_not_exceed_remaining_read_budget(home, monkeypatch):
+    path = home.thread("t", [_event(T2, "task_complete")])
+    total_bytes = 0
+    read = codex_activity.Reader.read
+
+    def count(reader, offset, count):
+        nonlocal total_bytes
+        data = read(reader, offset, count)
+        total_bytes += len(data)
+        return data
+
+    monkeypatch.setattr(codex_activity.Reader, "read", count)
+    assert _observe(home, "t")["t"].state is HostThreadState.IDLE
+    budget = total_bytes
+    monkeypatch.setattr(codex_activity, "_OBSERVATION_READ_BYTES", budget)
+    codex_activity._rollout_cache.clear()
+    total_bytes = observations = 0
+    original = path.stat()
+
+    def fstat(fd):
+        nonlocal observations
+        observed = os.fstat(fd)
+        if (observed.st_dev, observed.st_ino) != (original.st_dev, original.st_ino):
+            return observed
+        observations += 1
+        if observations != 2:
+            return observed
+        fields = {name: getattr(observed, name) for name in dir(observed) if name.startswith("st_")}
+        fields["st_ctime_ns"] += 1
+        return SimpleNamespace(**fields)
+
+    monkeypatch.setattr(codex_activity, "os", SimpleNamespace(**{**vars(os), "name": "nt", "fstat": fstat}))
+    result = _observe(home, "t")["t"]
+    assert result == HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
+    assert total_bytes == budget
+
+
+@pytest.mark.parametrize(("sample", "field"), [
+    (3, "st_ino"),
+    (4, "st_mtime_ns"),
+    (4, "st_ctime_ns"),
+])
+def test_windows_ctime_skew_requires_a_stable_second_read(home, monkeypatch, sample, field):
+    path = home.thread("t", [_event(T2, "task_complete")])
+    original = path.stat()
+    sampled_descriptors = []
+
+    def fstat(fd):
+        observed = os.fstat(fd)
+        if (observed.st_dev, observed.st_ino) != (original.st_dev, original.st_ino):
+            return observed
+        sampled_descriptors.append(fd)
+        sample_number = len(sampled_descriptors)
+        if sample_number not in {2, sample}:
+            return observed
+        fields = {name: getattr(observed, name) for name in dir(observed) if name.startswith("st_")}
+        fields["st_ctime_ns" if sample_number == 2 else field] += 1
+        return SimpleNamespace(**fields)
+
+    monkeypatch.setattr(codex_activity, "os", SimpleNamespace(**{**vars(os), "name": "nt", "fstat": fstat}))
+    actual = _observe(home, "t")["t"]
+    assert actual == HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
+    assert len(sampled_descriptors) == sample
+    assert sampled_descriptors[0] != sampled_descriptors[2]
