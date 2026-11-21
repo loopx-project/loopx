@@ -288,9 +288,42 @@ fn explicit_nvm_activation_keeps_terminal_launch_precedence() {
     assert_eq!(paths.iter().filter(|p| *p == &activated).count(), 1);
 }
 
+// An inferred nvm candidate may only be selected when no other candidate
+// exists on the host. That rule must hold on any machine, with or without a
+// Homebrew Node, so the oracle checks the host instead of assuming one.
+#[cfg(unix)]
+fn assert_inferred_nvm_never_displaces_existing(
+    nvm_root: &Path,
+    stale_default_bin: &Path,
+    search: &std::ffi::OsStr,
+) {
+    let resolved =
+        resolve_executable_path("node", Some(search)).expect("the search must resolve a Node");
+    let host_has_other_node = env::split_paths(search)
+        .any(|directory| !directory.starts_with(nvm_root) && directory.join("node").is_file());
+    if host_has_other_node {
+        assert_ne!(
+            resolved,
+            stale_default_bin.join("node"),
+            "an inferred stale nvm default must not displace a candidate the host already provides"
+        );
+        assert!(
+            !resolved.starts_with(nvm_root),
+            "resolution must come from an existing candidate, not the inferred default: {}",
+            resolved.display()
+        );
+    } else {
+        assert_eq!(
+            resolved,
+            stale_default_bin.join("node"),
+            "nvm-managed Node stays discoverable when nothing else provides one"
+        );
+    }
+}
+
 // The reviewer's regression: a Finder launch with no NVM_BIN, an nvm `default`
-// that predates the supported minimum, and a qualified Node the host already
-// provides. The inferred default must be discovered, never preferred.
+// that predates the supported minimum, and a Node the host already provides.
+// The inferred default must be discovered, never preferred.
 #[test]
 #[cfg(unix)]
 fn inferred_nvm_default_cannot_shadow_an_existing_qualified_node() {
@@ -302,23 +335,43 @@ fn inferred_nvm_default_cannot_shadow_an_existing_qualified_node() {
     // inherited terminal PATH would.
     let qualified = node_fixture(&home.path().join("qualified/node/bin"), "24.22.1");
     let qualified_bin = qualified.parent().expect("qualified bin").to_path_buf();
-    let path = runtime_search_path_from(
+    let with_candidate = runtime_search_path_from(
         Some(home.path().to_path_buf().into()),
         Some(qualified_bin.to_string_lossy().into_owned().into()),
         Some(&nvm_root),
         None,
     );
-    let resolved = resolve_executable_path("node", Some(path.as_os_str()))
-        .expect("the search must find the qualified Node");
-    assert_eq!(
-        resolved, qualified,
-        "an inferred stale nvm default must not displace a supported Node"
+    assert_inferred_nvm_never_displaces_existing(
+        &nvm_root,
+        &stale_default,
+        with_candidate.as_os_str(),
     );
-    let version = Command::new(&resolved)
-        .arg("--version")
-        .output()
-        .expect("run resolved node");
-    assert_eq!(String::from_utf8_lossy(&version.stdout).trim(), "v24.22.1");
+
+    // The ordering guarantee behind that resolution: every non-nvm candidate,
+    // including the Homebrew entries this App adds, precedes the inferred one.
+    let paths: Vec<_> = env::split_paths(&with_candidate).collect();
+    let position = |candidate: &Path| {
+        paths
+            .iter()
+            .position(|p| p == candidate)
+            .unwrap_or_else(|| panic!("{} missing from tool search", candidate.display()))
+    };
+    for existing in [
+        home.path().join(".local/bin").as_path(),
+        Path::new("/opt/homebrew/bin"),
+        Path::new("/usr/local/bin"),
+        Path::new("/opt/homebrew/opt/node@24/bin"),
+        Path::new("/usr/local/opt/node@24/bin"),
+        Path::new("/opt/homebrew/opt/node@22/bin"),
+        Path::new("/usr/local/opt/node@22/bin"),
+        qualified_bin.as_path(),
+    ] {
+        assert!(
+            position(existing) < position(&stale_default),
+            "inferred nvm must stay behind the existing candidate {}",
+            existing.display()
+        );
+    }
 
     // Without any other Node on the host, the same stale default is still the
     // only candidate, so nvm remains discoverable rather than invisible.
@@ -328,13 +381,8 @@ fn inferred_nvm_default_cannot_shadow_an_existing_qualified_node() {
         Some(&nvm_root),
         None,
     );
-    let paths: Vec<_> = env::split_paths(&isolated).collect();
-    assert!(paths.contains(&stale_default));
-    assert_eq!(
-        resolve_executable_path("node", Some(isolated.as_os_str())),
-        Some(stale_default.join("node")),
-        "nvm-managed Node stays discoverable when nothing else provides one"
-    );
+    assert!(env::split_paths(&isolated).any(|directory| directory == stale_default));
+    assert_inferred_nvm_never_displaces_existing(&nvm_root, &stale_default, isolated.as_os_str());
 }
 
 #[test]
