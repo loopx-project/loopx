@@ -3703,3 +3703,17 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
 - **边界：**本次是源码接线修复。Installed Core 与组合资格、被中断原 Task 的
   恢复、完整 context／closure、真实模型、成本、完整 R1/M3 及 C1 cutover 仍是
   独立验收。
+
+### 2026-11-22 — Checkpoint 回放返回所选 runtime 的产物路径
+
+- **缺口：**从复制的 runtime 回放已提交 checkpoint 时，既有 typed owner
+  已验证迁移后的产物，但公开 `refresh-state` 响应仍返回原 runtime 的路径。
+- **改动：**Python 传输保留该已验证的回放结果，并在幂等响应中使用其 JSON
+  和 Markdown 路径。路径选择、产物验证和拒绝仍由既有 TypeScript checkpoint
+  owner 负责；不新增路径权限，不迁移历史记录。
+- **源码证据：**十项真实 CLI 用例覆盖 File、SQLite、dry-run、重复回放，
+  以及 JSON/Markdown 产物缺失或被符号链接替换。它们核对迁移后的字节、
+  原始与复制历史及 checkpoint 证明不变、结算 identity 保留、回放不追加记录
+  和零消费。修复前，固定 main 基线已复现公开响应路径陈旧。
+- **边界：**这是有界的 V2/V4/R1 恢复修复。原 Goal 完整回归、安装组合、
+  完整默认闭包与成本、真实模型采纳、R1/M3 验收和 C1 切换仍是独立门槛。
