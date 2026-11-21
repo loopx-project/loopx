@@ -353,6 +353,19 @@ read-only quota observation. It admits no ordinary host Turn. These service
 checks therefore do not qualify an ordinary PostgreSQL feedback Turn or justify
 adding another execution profile to this slice.
 
+Todo-bound planning closeout also reuses the existing typed receipt admission.
+A positively admitted non-delivery review does not require a business execution
+lease that its guard deliberately never prepares. Explicit or previously
+prepared execution still requires the original proof; Goal Stop, source locks,
+semantic review and settlement checks remain in force. Isolated
+[File/SQLite CLI controls](../../../tests/control_plane/test_replan_writeback_lease_scope.py)
+cover enabled/off reviews, foreign identity, explicit/prepared execution, Stop,
+unchanged Todo/lease state and once-only replay. This repairs the planning-to-
+writeback composition; installed cutover, actual model adoption and outcome/
+full-cost qualification remain open.
+
+The existing feedback qualification consumer reads a deferred Run path through the settled result's immutable `result_details` reader rather than assuming diagnostics remain inline. The public read selects only the original path and preserves the Vision, feedback, validation and once-only settlement assertions. Ordinary combined settlement verifies its runtime-owned debit; the planning checkpoint follows its returned agent-owned spend command. File/SQLite source and composed-path controls qualify the reader migration; scripted execution remains distinct from model adoption and benefit.
+
 **Source checkpoint: product execution-observation readback (2026-11-19).** Saved
 findings reuse Explore's execution-observation codec and retain the planned and
 actual methods, deviation reason, candidate revision, costs and result reference.
