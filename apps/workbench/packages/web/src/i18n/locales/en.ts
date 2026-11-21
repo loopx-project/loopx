@@ -3,6 +3,20 @@ import type { Messages } from './zh';
 const plural = (n: number, one: string, other: string) => `${n} ${n === 1 ? one : other}`;
 
 export const en: Messages = {
+  "pwa.title": "Install LoopX",
+  "pwa.hint": "Open in its own window, ready to launch from your computer.",
+  "pwa.install": "Install",
+  "pwa.later": "Not now",
+  "pwa.prompting": "Confirm in Chrome…",
+  "pwa.help": "Installation help",
+  "pwa.failed": "Installation could not start. Try the browser menu.",
+  "pwa.installed": "Installed. Open LoopX from your computer’s app list.",
+  "pwa.accepted": "Installation accepted. Waiting for Chrome to finish.",
+  "pwa.unavailable": "The browser has not offered quick installation. Try the Chrome menu; if already installed, open LoopX from your app list.",
+  "pwa.insecure": "Open this site over HTTPS or local localhost, then try installing again.",
+  "pwa.chrome": "In Chrome on macOS or Windows, use the address bar’s install icon, or find “Cast, save, and share” → “Install page as app” in the menu. Labels vary by Chrome version; managed browsers may disable installation.",
+  "pwa.launch": "After installing, find LoopX with Spotlight on Mac or the Windows Start menu. You can pin it to the Dock or taskbar yourself. Installation does not make the remote service available offline.",
+
   "references.message": (value: string) => `Message · ${value}`,
   "references.messageHint": "A snapshot of this message for the agent to read as needed.",
   "messageActions.context": "Use as context",
