@@ -868,3 +868,62 @@ def test_stop_runs_closeout_when_shared_registry_writer_raises_eio(
     assert "closeout" not in second
     assert len(_ledger(runtime_root, "eio-stop")) == 1
     assert len(payload_path.read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_stop_runs_closeout_when_readback_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A read fault after the commit must not erase the committed stop."""
+
+    from loopx.control_plane.goals import activation_service
+
+    runtime_root = tmp_path / "runtime"
+    project = tmp_path / "project"
+    source_registry = project / ".loopx" / "registry.json"
+    _write_json(
+        source_registry,
+        {
+            "schema_version": "0.1",
+            "common_runtime_root": str(runtime_root),
+            "goals": [
+                {
+                    "id": "readback-stop",
+                    "display_name": "Readback stop fixture",
+                    "repo": str(project),
+                    "quota": {"compute": 1, "allowed_slots": 4, "spent_slots": 0},
+                }
+            ],
+        },
+    )
+    synced = sync_project_registry_to_global(
+        registry_path=source_registry,
+        runtime_root_override=str(runtime_root),
+        goal_id="readback-stop",
+        dry_run=False,
+    )
+    assert synced["ok"] is True
+    global_registry = runtime_root / "registry.global.json"
+    payload_path = tmp_path / "payloads.jsonl"
+    _configure_closeout(runtime_root, payload_path)
+
+    def _raising_readback(**kwargs):
+        raise OSError(errno.EIO, "Input/output error")
+
+    monkeypatch.setattr(
+        activation_service, "_readback", _raising_readback
+    )
+
+    first = set_goal_activation_state(
+        registry_path=global_registry,
+        goal_id="readback-stop",
+        state="stopped",
+        actor_kind="owner",
+        execute=True,
+    )
+    assert first["written"] is True, first
+    assert first["ok"] is False, first
+    assert first["partial_write"] is True, first
+    assert first["readback"]["status"] == "readback_failed", first
+    assert "Input/output error" in first["readback"]["error"], first
+    assert first["closeout"]["status"] == "success", first
+    assert len(_ledger(runtime_root, "readback-stop")) == 1
