@@ -7,6 +7,7 @@ events and reserves continuation decisions before replying to the host.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 import hashlib
 import json
@@ -15,20 +16,22 @@ from pathlib import Path
 import subprocess
 import sys
 import time
-from typing import Any
 
 from ..command_invocation import loopx_cli_argv
 from ..entrypoint import pin_utf8_stdio
 from ..file_lock import exclusive_file_lock
 
+_TRAJECTORY_TAIL_WINDOW = 200
+_TRAJECTORY_SCAN_DEADLINE_SECONDS = 8.0
 
-def retryable_native_error(error: Any) -> bool:
+
+def retryable_native_error(error: object) -> bool:
     """Conservative mapping of the native provider's unstructured error field.
 
     Only known Google model transport errors qualify. User/model prose, quota,
     auth, cancellation and permission errors do not establish retry authority.
     """
-    if isinstance(error, dict):
+    if isinstance(error, Mapping):
         error = error.get("shortError")
     if not isinstance(error, str):
         return False
@@ -95,13 +98,14 @@ def bootstrap_prompt(args: argparse.Namespace) -> str:
 
 
 @contextmanager
-def _state(args: argparse.Namespace):
+def _state(args: argparse.Namespace) -> Iterator[dict[str, object]]:
     # Native conversation ids never become path components.
     key = hashlib.sha256(args.conversation_id.encode()).hexdigest()
     path = Path(args.state_dir).expanduser() / (key + ".json")
     path.parent.mkdir(parents=True, exist_ok=True)
     with exclusive_file_lock(path, timeout_seconds=2):
-        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        loaded = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        data: dict[str, object] = dict(loaded) if isinstance(loaded, Mapping) else {}
         yield data
         temporary = path.with_suffix(".tmp")
         with temporary.open("w", encoding="utf-8") as stream:
@@ -112,12 +116,20 @@ def _state(args: argparse.Namespace):
         temporary.replace(path)
 
 
-def _reserve_retry(state: dict[str, Any], input_key: str) -> bool:
+def _reserve_retry(state: dict[str, object], input_key: str) -> bool:
     if state.get("input_key") != input_key:
         state.update(input_key=input_key, retries=0)
-    if state.get("retries", 0) >= 2 or time.time() - state.get("retry_at", 0) < 60:
+    retries_raw = state.get("retries")
+    retries = retries_raw if type(retries_raw) is int else 0
+    retry_at_raw = state.get("retry_at")
+    retry_at = (
+        float(retry_at_raw)
+        if isinstance(retry_at_raw, (int, float)) and not isinstance(retry_at_raw, bool)
+        else 0.0
+    )
+    if retries >= 2 or time.time() - retry_at < 60:
         return False
-    state.update(retries=state.get("retries", 0) + 1, retry_at=time.time())
+    state.update(retries=retries + 1, retry_at=time.time())
     return True
 
 
@@ -156,29 +168,48 @@ def _native_input(args: argparse.Namespace, text: str) -> tuple[str, str, int] |
             or trajectory.get("cascadeId") != args.conversation_id
         ):
             return None
-        raw = _rpc_post(
-            url,
-            token,
-            "GetCascadeTrajectorySteps",
-            {**payload, "startIndex": 0, "endIndex": total},
-            timeout=2,
-        ).get("steps")
-        if not isinstance(raw, list) or len(raw) != total:
+        deadline = time.monotonic() + _TRAJECTORY_SCAN_DEADLINE_SECONDS
+        inputs: list[tuple[int, dict[str, object]]] = []
+        end = total
+        while end > 0:
+            if time.monotonic() >= deadline:
+                return None
+            start = max(0, end - _TRAJECTORY_TAIL_WINDOW)
+            raw = _rpc_post(
+                url,
+                token,
+                "GetCascadeTrajectorySteps",
+                {**payload, "startIndex": start, "endIndex": end},
+                timeout=2,
+            ).get("steps")
+            if not isinstance(raw, list) or not raw:
+                return None
+            if start > 0 and len(raw) == total:
+                # Older servers ignore range bounds and return the whole prefix.
+                indexed, covered = _observed_turn_steps(raw, 0, total)
+                if covered != total:
+                    return None
+                start = 0
+            else:
+                indexed, covered = _observed_turn_steps(raw, start, end)
+                if covered < end:
+                    return None
+            inputs = [
+                (step_index, dict(step))
+                for step_index, step in indexed
+                if isinstance(step, Mapping) and step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"
+            ]
+            if inputs:
+                break
+            end = start
+        if not inputs:
             return None
-        indexed, covered = _observed_turn_steps(raw, 0, total)
-        inputs = [
-            (index, step)
-            for index, step in indexed
-            if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"
-        ]
         after = _rpc_post(url, token, "GetCascadeTrajectory", payload, timeout=2)
     except (ValueError, CodexChatAgentError, OSError):
         return None
     trajectory = after.get("trajectory")
     if (
-        not inputs
-        or covered != total
-        or after.get("status") != status
+        after.get("status") != status
         or after.get("numTotalSteps") != total
         or not isinstance(trajectory, dict)
         or trajectory.get("cascadeId") != args.conversation_id
@@ -199,7 +230,7 @@ def _native_input(args: argparse.Namespace, text: str) -> tuple[str, str, int] |
     return hashlib.sha256(anchor.encode()).hexdigest(), status, total
 
 
-def stop_hook(args: argparse.Namespace, event: dict[str, Any]) -> dict[str, Any]:
+def stop_hook(args: argparse.Namespace, event: Mapping[str, object]) -> dict[str, object]:
     if (
         event.get("conversationId") != args.conversation_id
         or event.get("terminationReason") != "ERROR"
