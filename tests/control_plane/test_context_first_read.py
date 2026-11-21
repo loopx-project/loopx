@@ -758,7 +758,8 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
     if warm:
         prior = capture("wide-prior")
         _, prior_ref = read_context_read_reference(prior["recovery"]["reference_file"])
-        rows = json.loads(Path(prior_ref["path"]).read_bytes())["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+        prior_decision = json.loads(Path(prior_ref["path"]).read_bytes())
+        rows = prior_decision["interaction_contract"]["agent_channel"]["work_context"]["sources"]
         index = next(i for i, source in enumerate(rows) if source["source"] == "goal_state")
         body_pointer = f"/interaction_contract/agent_channel/work_context/sources/{index}/content/text"
         prior_read = prior["recovery"]["command"] + " --select " + body_pointer
@@ -769,8 +770,11 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
         if requested_scopes:
             assert prior_facts["/goal_boundary/write_scope"] == scopes
         deliver(journal, event, prior_pages)
+        proof = prior_decision["execution_preparation"]["lease_proof"]
         cli("refresh-state", *binding, "--turn-instance-id", "wide-prior", "--classification", "fixture_verified",
             "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+            "--task-lease-idempotency-key", proof["idempotency_key"],
+            "--task-lease-expected-version", str(proof["expected_version"]),
             "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks")
         cli("quota", "spend-slot", *binding, "--turn-instance-id", "wide-prior",
             "--slots", "1", "--source", "heartbeat", "--execute")
@@ -2097,9 +2101,13 @@ def test_native_first_read_reuses_only_observed_write_scope(tmp_path, monkeypatc
                    registry_path=registry_path)
 
     def settle(turn, registry_path=registry):
+        lease = cli("task-lease", "inspect", "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
+                    registry_path=registry_path)["lease"]
         cli("refresh-state", *binding(turn), "--classification", "fixture_validated",
             "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
             "--delivery-boundary", "in_flight_continuation", "--delivery-workspace-path", str(project),
+            "--task-lease-idempotency-key", lease["idempotency_key"],
+            "--task-lease-expected-version", str(lease["version"]),
             "--no-global-sync", "--suppress-external-sinks", registry_path=registry_path)
         spent = cli("quota", "spend-slot", *binding(turn), "--slots", "1", "--source", "heartbeat", "--execute",
                     registry_path=registry_path)
@@ -2261,9 +2269,12 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(
                    "--decision-output-root", str(captures), "--codex-context-dir", str(journal))
 
     def settle(turn):
+        lease = cli("task-lease", "inspect", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)["lease"]
         cli("refresh-state", *binding(turn), "--classification", "fixture_validated",
             "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
             "--delivery-boundary", "in_flight_continuation", "--delivery-workspace-path", str(project),
+            "--task-lease-idempotency-key", lease["idempotency_key"],
+            "--task-lease-expected-version", str(lease["version"]),
             "--no-global-sync", "--suppress-external-sinks")
         spent = cli("quota", "spend-slot", *binding(turn), "--slots", "1", "--source", "heartbeat", "--execute")
         assert spent["appended"]

@@ -425,7 +425,10 @@ def test_ordinary_goal_replans_after_first_todo_and_delivers_the_missing_section
         assert result.returncode == 0, result.stdout + result.stderr
         return json.loads(read_cli_context_for_oracle(result.stdout)[0])
 
-    review = read_action(decision["replan_action_packet"]["review"])
+    from loopx.control_plane.quota.turn_envelope import _turn_envelope_result
+    assert "review" not in decision["replan_action_packet"]
+    staged = _turn_envelope_result("replan_cli_view", payload=decision)["replan_action_packet"]
+    review = read_action(staged["review"])
     writeback = read_action(review["next"]["writeback"])
     stride = {**writeback["stride_control"]["minimal_example"],
         "basis": "unexplained_gap", "action": "verify", "axes": {

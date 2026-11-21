@@ -385,6 +385,10 @@ def test_cli_reentry_distinguishes_admission_timer_from_later_wait(
     assert rc == 0, written
     assert written["settlement_progress"]["state"] == "settled"
     assert written["settlement_result"]["ok"] is True
+    assert [row["step_kind"] for row in written["settlement_result"]["receipts"]] == [
+        "validation", "durable_writeback", "quota_spend",
+    ]
+    assert written.get("idempotent_replay", False) is False
     assert "settlement_owed" not in written
     for _ in range(2):
         rc, settled = _run_generated_cli(command, registry_path=registry, cwd=project)

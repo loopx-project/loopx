@@ -419,7 +419,7 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
                     previous = updated.get("host_execution_preparation")
                     ready = previous.get("ready_capture") if isinstance(previous, dict) else None
                     ready_digest = ready.get("sha256") if isinstance(ready, dict) else None
-                    if isinstance(ready_digest, str) and not previous.get("retired_context_readback") and any(
+                    if isinstance(previous, dict) and isinstance(ready_digest, str) and not previous.get("retired_context_readback") and any(
                         page.get("ok") is True
                         and ready_digest in (page.get("sha256"), page.get("source_sha256"))
                         for page in pages
@@ -741,7 +741,7 @@ def _native_context_request(state: dict[str, Any], scope: dict[str, Any], captur
     if isinstance(target, dict) and target.get("capture_id") == capture_id:
         #  A retry may use
         # the original predecessor, but never this offer as its own baseline.
-        previous = previous.get("comparison_base")
+        previous = previous.get("comparison_base") if isinstance(previous, dict) else None
     if isinstance(previous, dict) and isinstance(previous.get("target"), dict):
         try:
             path, raw, payload = read_context_capture_file(previous["path"], previous["sha256"], private=True)
@@ -903,7 +903,7 @@ def _record_native_delivery(root: Path, state: dict[str, Any], result: dict[str,
             if pinned is not None:
                 reference, opening = pinned
                 state["pending"]["observed_first_read"] = reference
-                if opening is not None:
+                if opening is not None and read_plan is not None:
                     read_plan = {**read_plan, "observed_opening": opening}
         _save(root, state)
     if read_plan is None:
@@ -941,7 +941,12 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
         from .decision_capture import capture_progressive_context
 
         return NativeContextPreparation(capture_progressive_context(
-            payload, directory=capture_directory, surface=surface)[0])
+            payload,
+            directory=capture_directory,
+            surface=surface,
+            selection_command_args_template=selection_command_args_template,
+            captured_decision=captured_decision,
+        )[0])
     try:
         with _locked(directory) as root:
             recovery_committed = False
