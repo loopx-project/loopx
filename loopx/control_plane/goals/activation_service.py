@@ -546,11 +546,15 @@ def set_goal_activation_state(
             (sync_payload or {}).get("recommended_action")
             or f"rerun loopx sync-global --goal-id {normalized_goal_id} after repairing the shared registry route"
         )
+    # The stop itself is committed in the source registry, which owns the
+    # transition. A failed shared projection is a separately reported, fixable
+    # fault, and a retry cannot re-enter this branch because the source is
+    # already stopped; the hook therefore runs once for the committed
+    # transition even when the projection has to be repaired afterwards.
     if (
         execute
         and target_state is GoalActivationState.STOPPED
         and changed
-        and payload.get("ok")
         and payload.get("written")
         and closeout_goal is not None
     ):
