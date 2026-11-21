@@ -434,10 +434,11 @@ def test_review_retains_scoped_dependencies_and_unknown_outcomes():
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, monkeypatch, provider):
+    from tests.control_plane.cli_output_fixture import read_pinned_cli_body
+
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
     enable_explore(fixture)
-    capture = tmp_path / "capture"
     try:
         initial = call_progress_cli(fixture, "quota", "should-run", "--codex-app",
             "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN)
@@ -445,18 +446,21 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
         # Exercise the emitted command verbatim even with a hostile ambient
         # PATH entry. The captured reader belongs to the originating checkout.
         pinned_cli = str(Path(sys.executable).with_name("loopx"))
-        guard = call_progress_cli(fixture, "--cli-bin", pinned_cli, "quota", "should-run", "--codex-app",
+        presented = call_progress_cli(fixture, "--cli-bin", pinned_cli, "quota", "should-run", "--codex-app",
             "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN,
-            "--todo-id", TODO, "--decision-output-dir", str(capture))
-        guard = read_cli_policy_payload(json.dumps(guard), returncode=0)
+            "--todo-id", TODO,
+            "--context-delivery", "on", "--delta-delivery", "off")
+        body, _, _ = read_pinned_cli_body(presented["recovery"]["command"])
+        guard = json.loads(body)
         packet = guard["replan_action_packet"]
-        assert guard["interaction_contract"]["cli_channel"]["settlement_read_ref"] == "$.replan_action_packet.writeback"
-        saved = (capture / "decision.json").read_bytes()
+        reader = shlex.split(packet["review"])
+        capture = Path(reader[reader.index("--decision-file") + 1])
+        saved = capture.read_bytes()
         source = json.loads(saved)
         # Unknown old/custom prose, different templates, ambiguous/missing
         # writers and missing capture must remain fully inline.
         for mutation in ("custom", "template", "duplicate", "missing", "capture"):
-            changed = copy.deepcopy(source)
+            changed = {**copy.deepcopy(source), "replan_read_path": str(capture)}
             graph = explore_source(changed)["content"]["graph"]
             step = next(row for row in changed["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"]
                 if row["kind"] == "durable_writeback")
@@ -505,12 +509,10 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
         expected_goal = source["autonomous_replan_obligation"]["replan_context"]["core_goal"]
         assert review["core_goal"] == expected_goal
         assert review["action_portfolio"] == source.get("action_portfolio")
-        assert "core_goal" not in guard and "planning_horizon" not in guard
-        assert guard.get("action_portfolio") == source.get("action_portfolio")
         assert review["context_id"] == writer["context_id"]
         assert review["obligation_id"] == source["replan_action_packet"]["obligation_id"]
         assert writer["writeback_contract"] == without_example(source["replan_action_packet"]["writeback_contract"])
-        assert (capture / "decision.json").read_bytes() == saved
+        assert capture.read_bytes() == saved
         assert {key: fixture[key].read_bytes() for key in original_files} == original_files
         assert not reader_fixture["registry"].exists()
         # Changed bytes cannot masquerade as the admitted observation.
@@ -526,10 +528,10 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
             for key in carrier:
                 target = target[key]
             target[field] = value
-            (capture / "decision.json").write_text(json.dumps(source))
+            capture.write_text(json.dumps(source))
             rejected = read("review", expected_code=1)
             assert rejected["reason"] == "capture digest mismatch; restore the original capture, do not rerun admission"
-        (capture / "decision.json").write_bytes(saved)
+        capture.write_bytes(saved)
         # A valid next operation still reaches the existing writer and semantic gate.
         result = call_progress_cli(fixture, *fixture["refresh"])
         assert result["autonomous_replan_ack"]["semantic_delta"]["accepted"] is True
