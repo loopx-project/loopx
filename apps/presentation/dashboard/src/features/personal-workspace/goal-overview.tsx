@@ -29,7 +29,8 @@ function relativeLookLabel(iso: string, locale: string): string {
   return new Intl.DateTimeFormat(locale === "zh-CN" ? "zh-CN" : "en", { month: "short", day: "numeric" }).format(then);
 }
 
-export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenDetails, onSelect, onView, selectedTodoId, board, proposals, onPreview, historyRefreshRevision, review, digest, railOpen, onCloseRail, onOpenAgentConversation, sinceYouLooked, onMarkSeen }: {
+export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenDetails, onSelect, onView, onOpenVerification, selectedTodoId, board, proposals, onPreview, historyRefreshRevision, review, digest, railOpen, onCloseRail, onOpenAgentConversation, sinceYouLooked, onMarkSeen }: {
+  onOpenVerification: () => void;
   onOpenAgentConversation?: (agentId: string) => void;
   /** Material changes since the owner's last acknowledged look; null when none. */
   sinceYouLooked?: SinceYouLookedDelta | null; onMarkSeen?: () => void;
@@ -109,8 +110,14 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
         {moreAttention ? <button className="goal-overview-more" type="button" onClick={() => onView("tasks")}>{copy.tasks}{totalAttention !== null ? ` (${totalAttention})` : ""}<ArrowRight aria-hidden size={14} /></button> : null}
       </section> : null}
       map={readOnly ? <ContextHelp label={locale === "zh-CN" ? "来源读取范围" : "Source reading scope"} icon={CircleHelp}><p className="goal-work-scope">{copy.remote}</p></ContextHelp> : <DeliveryWorkMap goal={goal} userTodos={userTodos} review={review} onSelect={onSelect} selectedTodoId={selectedTodoId}/>}/>
-    {readOnly ? <GoalAcceptanceObservationCard goal={goal} overview />
+    {readOnly ? <><GoalAcceptanceObservationCard goal={goal} overview />
+      {goal.sourceAccess ? <button className="goal-overview-more" type="button" onClick={onOpenVerification}>
+        {locale === "zh-CN" ? "在研究中查看验证证据" : "Read verification evidence in Research"}<ArrowRight size={14} aria-hidden />
+      </button> : null}</>
       : <OverviewDeliveryEvidence key={`delivery:${goal.goalId}`} review={review} zh={locale === "zh-CN"}>
+        <button className="goal-overview-more" type="button" onClick={onOpenVerification}>
+          {locale === "zh-CN" ? "在研究中查看验证证据" : "Read verification evidence in Research"}<ArrowRight size={14} aria-hidden />
+        </button>
         <DeliveryReviewContent review={review} hideWorkMap hideAcceptanceContract active={active} goal={goal} items={items} userTodos={userTodos} onSelect={onSelect} />
       </OverviewDeliveryEvidence>}
   </section>;

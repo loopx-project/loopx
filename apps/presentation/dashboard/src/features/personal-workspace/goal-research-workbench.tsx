@@ -1,3 +1,4 @@
+import type {GoalVerificationSources} from "./goal-verification-workbench";
 import {useState, type ReactNode} from "react";
 import {GoalResearchHistory} from "./goal-research-history";
 import {GoalExploreResults} from "./goal-explore-results";
@@ -32,7 +33,7 @@ function ResearchGoalNavigation({goalId, goals, zh, onSelect, directoryUrl, acti
 }
 
 /** One read surface for the selected original Goal; opening it never starts research. */
-export function GoalResearchWorkbench(props: {goalId: string; active: boolean; zh: boolean; refreshRevision: number; readSourceUrl?: string; directoryReadSourceUrl?: string; goals?: ResearchGoal[]; onSelectGoal?: (goalId: string) => void; onOpenTasks?: () => void; statusNotice?: ReactNode}) {
+export function GoalResearchWorkbench(props: {goalId: string; active: boolean; zh: boolean; refreshRevision: number; readSourceUrl?: string; directoryReadSourceUrl?: string; goals?: ResearchGoal[]; onSelectGoal?: (goalId: string) => void; onOpenTasks?: () => void; statusNotice?: ReactNode; verification?: GoalVerificationSources; showVerification?: number}) {
   const selected = props.goals?.find(goal => goal.goalId === props.goalId);
   const source = selected?.sourceAccess;
   const [evidenceOpen, setEvidenceOpen] = useState(false);

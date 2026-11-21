@@ -559,7 +559,17 @@ export const runRecordSchema = z.object({
   project_map: projectMapSchema.optional().nullable(),
 });
 
+const goalArtifactLifecycleSchema = z.object({
+  schema_version: z.literal("goal_artifact_lifecycle_projection_v0"),
+  goal_id: z.string(),
+  guards: z.array(z.object({
+    id: z.string(), kind: z.string(), owner: z.string(), blocked: z.boolean(),
+  })),
+});
+export type GoalArtifactLifecycle = z.infer<typeof goalArtifactLifecycleSchema>;
+
 export const runGoalSchema = z.object({
+  artifact_lifecycle: goalArtifactLifecycleSchema.optional().nullable().catch(null),
   source_access: z.object({namespace: z.string(), label: z.string(), read_only: z.literal(true), original_goal_id: z.string().optional()}).optional(),
   parent_goal_id: z.string().nullable().optional().catch(null),
   goal_objective: z.string().nullable().optional().catch(null),

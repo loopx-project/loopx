@@ -9,6 +9,19 @@
 不认证执行真实性或收益；finding、replan 和既有研究历程详情保留相同信息，缺省仍兼容
 旧事件。参见[本地探针生产路径](../../../benchmark/runtime/EXECUTION_OBSERVATIONS.md)。
 
+既有候选执行记录可选携带 `verification_evidence`。`baseline`、`environment`、
+`source` 使用 `{ref, sha256}`，`host` 填实际观测的宿主标识。`proofs` 中
+`external_verifier`、`warm_session_cache`、`white_box_hooks`、`receipt_compaction`
+使用同一版本引用格式并携带对应验收项的 `criterion_id`。`costs` 用 `{value, evidence_ref}` 记录实测的
+`warm_cache_tokens`、`cold_cache_tokens`、`verifier_seconds`、
+`human_confirmations` 或 `tool_interceptions`。引用必须属于该执行记录。
+缺测省略对应字段，实测的零保留。
+
+Goal 的**研究 → 验证证据包**使用这些记录及既有验收和产物生命周期投影。
+当前独立检查把同一候选与回执版本确认为对应验收项的输出后才显示档位。L0 覆盖独立终评，L1 加上温缓存，
+L2 再覆盖工具钩子与回执压缩。工作台按证据展示，打开时只读取已保存的记录和当前
+产物版本。
+
 ## 量化结论
 
 普通结果附件可附带 `measurements`，保存到既有节点所属的 finding。关系图和

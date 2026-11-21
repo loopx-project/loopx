@@ -16,6 +16,25 @@ When the observed execution used the finding's tested input revision, result
 attachments can bind it once and select the evidence to reuse. Readback and
 standalone observations keep the complete observation form. [Execution evidence authoring](../../../docs/reference/protocols/explore-result-from-path-delta-v0.md#execution-evidence-on-the-same-input)
 
+An existing candidate execution observation can also carry optional
+`verification_evidence`. Supply `baseline`, `environment` and `source` as
+`{ref, sha256}` pairs. Use the actual observed `host` identifier. Each
+`proofs` item (`external_verifier`, `warm_session_cache`, `white_box_hooks`,
+`receipt_compaction`) adds its owning `criterion_id` to the versioned reference. In `costs`,
+record measured `{value, evidence_ref}` for `warm_cache_tokens`,
+`cold_cache_tokens`, `verifier_seconds`, `human_confirmations`, or
+`tool_interceptions`. All references belong to the enclosing observation.
+Omit an unmeasured field. A measured zero is a value.
+
+The **Verification evidence packet** on **Research** reads these records and
+the Goal's existing acceptance and lifecycle projections. A current owner-pinned
+check must attest the same candidate and receipt versions as outputs of the
+named criterion to show a verified tier.
+L0 covers independent evaluation, L1 also covers the warm session, and L2 adds
+tool hooks and receipt compaction. The reader works with opaque host names and
+uses existing acceptance reads for local version freshness. Opening the packet
+reads saved evidence without launching a verifier.
+
 ## Read execution evidence in the App
 
 Open a Goal's **Research / 研究** view, select its question in the history,

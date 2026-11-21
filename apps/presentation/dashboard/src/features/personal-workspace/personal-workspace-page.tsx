@@ -983,6 +983,7 @@ export function PersonalWorkspacePage({
   const managerChatOpen = selectedWorkspaceRef !== null || selectedGoalTab === "chat";
   const workspaceUnavailable = selectedWorkspaceRef !== null && workspaceConversations?.projects != null && !selectedWorkspaceProject;
   const workspaceTitle = selectedWorkspaceRef ? selectedWorkspaceProject?.title ?? t("workspace.unknownTitle") : null;
+  const [verificationVisit, setVerificationVisit] = useState<{scope: string; count: number} | null>(null);
   function setSelectedGoalTab(view: WorkspaceGoalTab) {
     if (view === "chat" && originalConversation && workspaceConversations?.onOpenOriginal) {
       workspaceConversations.onOpenOriginal(originalConversation.target);
@@ -2938,7 +2939,14 @@ export function PersonalWorkspacePage({
     ? <GoalResearchWorkbench goalId={selectedGoal.goalId} goals={workspaceGoals} onSelectGoal={id => selectGoal(id, "research")}
         onOpenTasks={() => setSelectedGoalTab("tasks")} active={!settingsOpen && selectedGoalTab === "research"}
         zh={locale === "zh-CN"} refreshRevision={historyRefreshRevision} readSourceUrl={researchReadSourceUrl}
-        directoryReadSourceUrl={directoryReadSourceUrl} statusNotice={goalStatusNotice} />
+        directoryReadSourceUrl={directoryReadSourceUrl} statusNotice={goalStatusNotice}
+        showVerification={verificationVisit?.scope === selectionScope ? verificationVisit.count : undefined}
+        verification={{
+          acceptance: workspaceReview.usable ? workspaceReview.snapshot?.acceptance ?? selectedGoal.acceptanceObservation
+            : selectedGoal.acceptanceObservation,
+          lifecycle: selectedGoal.artifactLifecycle,
+          liveAcceptance: !readOnly && !selectedGoal.sourceAccess,
+        }} />
     : goalStatusNotice ?? <ContextHelp label={locale === "zh-CN" ? "来源无研究读取入口" : "Research source unavailable"} icon={CircleHelp}><p role="status">{locale === "zh-CN" ? "此来源尚未提供研究记录的读取入口。" : "This source does not provide a research history endpoint."}</p></ContextHelp>;
   return (
     <>
@@ -3111,7 +3119,10 @@ export function PersonalWorkspacePage({
                   overview: null, tasks: null, research: researchPanel, files: null, chat: null,
                 } : {
                   overview: <GoalOverview sinceYouLooked={sinceYouLooked?.goalId === selectedGoal.goalId ? sinceYouLooked.delta : null} onMarkSeen={markSeen} onOpenAgentConversation={callbacks.onSelectWorkAgent} railOpen={railScope === selectionScope} onCloseRail={() => setRailScope(null)} digest={workspaceDigest} review={workspaceReview} active={!settingsOpen && selectedGoalTab === "overview"} goal={selectedGoal} items={items} userTodos={model.userTodos} readOnly={readOnly}
-                    onOpenDetails={() => setSelection({ kind: "goal", item: selectedGoal })} onSelect={setSelection} onView={setSelectedGoalTab}
+                    onOpenDetails={() => setSelection({ kind: "goal", item: selectedGoal })} onSelect={setSelection} onView={setSelectedGoalTab} onOpenVerification={() => {
+                      setVerificationVisit(previous => ({scope: selectionScope, count: (previous?.count ?? 0) + 1}));
+                      setSelectedGoalTab("research");
+                    }}
                     selectedTodoId={drawerSelection?.kind === "todo" ? drawerSelection.item.todoId : null}
                     board={taskBoard(!settingsOpen && selectedGoalTab === "overview")}
                     historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={createPreview} />,

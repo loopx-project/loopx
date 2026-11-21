@@ -5,18 +5,21 @@ import type {JsonObject} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
+import {normalizeCandidateVerificationEvidence, type CandidateVerificationEvidence} from "./explore_verification_evidence.ts";
 import {isExploreEvidenceRef} from "./explore_evidence_ref.ts";
 
 export const EXPLORE_EXECUTION_OBSERVATION_SCHEMA = "explore_execution_observation_v0";
 
-export function normalizeExploreExecutionObservation(params: JsonObject): JsonObject {
+export type ExploreExecutionObservation = JsonObject & {verification_evidence?: CandidateVerificationEvidence};
+
+export function normalizeExploreExecutionObservation(params: JsonObject): ExploreExecutionObservation {
   const row = requireJsonObject(params.observation, "execution observation");
   const required = ["schema_version", "candidate_sha256", "input_revision", "planned_method_id",
     "executed_method_id", "change_reason", "elapsed_seconds", "limit_seconds",
     "search_iterations", "stop_reason", "evidence_refs"];
   if (row.schema_version !== EXPLORE_EXECUTION_OBSERVATION_SCHEMA
     || required.some(key => !Object.hasOwn(row, key))
-    || Object.keys(row).some(key => ![...required, "exit_code", "result_ref", "result_candidate_sha256"].includes(key))) {
+    || Object.keys(row).some(key => ![...required, "exit_code", "result_ref", "result_candidate_sha256", "verification_evidence"].includes(key))) {
     throw new EffectRuntimeRequestError("execution observation fields are missing or unsupported");
   }
   const text = (value: unknown, field: string, max: number): string => {
@@ -62,7 +65,7 @@ export function normalizeExploreExecutionObservation(params: JsonObject): JsonOb
   if (!Array.isArray(row.evidence_refs) || !row.evidence_refs.length || row.evidence_refs.length > 8) {
     throw new EffectRuntimeRequestError("execution observation requires one to eight evidence references");
   }
-  const result: JsonObject = {schema_version: row.schema_version,
+  const result: ExploreExecutionObservation = {schema_version: row.schema_version,
     candidate_sha256: sha(row.candidate_sha256), input_revision: text(row.input_revision, "input_revision", 160),
     planned_method_id: planned, executed_method_id: executed, change_reason: change,
     elapsed_seconds: measured(row.elapsed_seconds, "elapsed_seconds"),
@@ -83,6 +86,11 @@ export function normalizeExploreExecutionObservation(params: JsonObject): JsonOb
       || !(result.evidence_refs as string[]).includes(String(result.result_ref))) {
       throw new EffectRuntimeRequestError("result evidence must name this executed candidate and an included evidence reference");
     }
+  }
+  if (Object.hasOwn(row, "verification_evidence")) {
+    result.verification_evidence = normalizeCandidateVerificationEvidence(
+      row.verification_evidence, result.evidence_refs as string[],
+    );
   }
   return result;
 }

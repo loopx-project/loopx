@@ -2,17 +2,16 @@
  * Event kinds/statuses/relationships remain owned by Explore result_log.py.
  * Local display grouping must not turn parentage or time into supporting evidence.
  */
-import {normalizeExploreExecutionObservation} from "../capabilities/explore_execution_observation.ts";
+import {normalizeExploreExecutionObservation, type ExploreExecutionObservation} from "../capabilities/explore_execution_observation.ts";
 import {normalizeExploreMeasurements, projectExploreMeasurementFeedback, type ExploreMeasurement} from "../capabilities/explore_measurements.ts";
 import {normalizeWorkYardstickCapture, type WorkYardstickCapture} from "../work_items/yardstick_decision.ts";
-import type {JsonObject} from "../runtime_decode.ts";
 export type ExploreHistoryEvent = {
   schema_version: string; event_id: string; goal_id: string; event_kind: string;
   result_id: string; recorded_at: string; title: string; summary: string;
   status: string; node_kind: string; blocked_reason: string; parent_id: string;
   node_id: string; from_node: string; to_node: string; edge_type: string;
   agent_id: string; run_id: string; evidence_refs: string[]; supersedes: string; confidence: number | null;
-  execution_observation?: JsonObject;
+  execution_observation?: ExploreExecutionObservation;
   measurements?: ExploreMeasurement[];
   work_yardstick?: WorkYardstickCapture;
 };
