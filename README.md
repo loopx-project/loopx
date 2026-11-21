@@ -1,6 +1,6 @@
 # Workbench installation review evidence
 
-Product revision: `a5cc1fce756f80f9ecfd70d069318ae23268c27b`.
+Product revision: `241d6d09920f5d745d3fe7983505762ca70cddc2`.
 
 Captured by `apps/workbench/packages/e2e/test/pwa-install.spec.mjs` using the packaged UI and isolated real Workbench daemon in Linux Chromium. All conversations and the expiring-credential notice are synthetic. Browser install offers, consent outcomes, and installation receipts are simulated; native macOS and Windows installation is not certified. The served manifest and browser installability check report no errors.
 
