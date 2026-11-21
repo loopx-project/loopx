@@ -181,4 +181,4 @@ no model runs and measures no agent-runtime behavior.
 - A malformed explicit `retirement_basis` value is inert and fails closed; it cannot activate partial policy and may shadow a later valid declaration in the same carrier.
 - Python identifier identity is NFKC-normalized in the candidate gate and AST matching; fullwidth, ligature and combining-mark names are covered. Other non-ASCII normalization forms should use the same AST-backed identity path.
 - Escaped definition names and escapes outside value-position member/identifier references are outside the reference model.
-closing arbitrary expression syntax requires a real parser and remains a bounded follow-up.
+- The hand-rolled lexer is not a complete JavaScript/TypeScript parser; closing arbitrary expression syntax requires a real parser and remains a bounded follow-up.

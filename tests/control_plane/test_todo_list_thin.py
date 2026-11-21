@@ -588,4 +588,4 @@ def test_cli_rejects_thin_outside_todo_list(tmp_path: Path) -> None:
 
     assert result.returncode == 1, result.stdout
     payload = json.loads(result.stdout)
-    assert payload["error"] == "--thin is supported only by todo list"
+    assert payload["error"] == "--thin is supported only by todo list, todo receipt, todo claim"

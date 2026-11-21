@@ -208,6 +208,14 @@ whole Goal/Todo narrative, source availability/revisions and read routes. Detail
 history and optional authoring recipes remain expandable from the same capture.
 Current narrative sources and their provenance precede other sources, including
 large scoped preferences; both retain their complete selected values.
+During an unbound Todo choice, including during workspace repair, the initial
+read keeps the candidate identities and selection command. It points to long
+candidate write scopes in the original capture when those scopes matter to the
+choice. The guard for the same Turn supplies the current scopes before delivery.
+When a selected Todo needs an ordinary managed claim, the initial read keeps
+the claim and continuation instructions. Read long requested scopes at
+`/selected_todo/required_write_scopes` when needed for preparation. Use the
+same-Turn guard's complete current scopes after the claim and before delivery.
 The preference source's complete `current` view also stays in the initial read:
 corrections, retirement/expiry and empty replacements retain their provenance,
 revision and advisory authority. This captured pre-work view does not replace the
@@ -331,13 +339,13 @@ large for one page, the linked remainder contains its full details and the
 suggested alternatives. The selection commands use the original Turn identity.
 
 Native ready decisions from `quota should-run` and saved `quota context-project`
-can link two reads when boundary detail pushes controls past the serialized
+can link two reads when Goal or Todo scope details push controls past the serialized
 first page budget. When those controls fit, the ordinary reader keeps its cursor.
 Read `first_read_command` for the decision, stop conditions and required reads.
-If `remaining_read_command` is present,
-follow it and its cursor before work, even when the opening reports EOF. It
-starts with the complete current write scope and any checkpointed approval
-entries. The opening shows the current approval counts and active scope summary.
+If `remaining_read_command` is present, follow it and its cursor before work,
+even when the opening reports EOF. The remainder supplies deferred Goal write
+scopes, checkpointed approval entries and the selected Todo's requested write
+scopes. The opening shows the current approval counts and active scope summary.
 The remainder can refer to other fully observed, unchanged fields. If the
 observation is lost, its same-capture fallback restores the full remainder.
 
@@ -372,8 +380,8 @@ presentation changes neither admission nor the explicit off view.
 控制信息超出序列化后的首页预算，导航可给出两段读取。控制信息能放进首页时，沿用普通游标。
 先用 `first_read_command` 取得决策、停止条件和必读项。如果给出
 `remaining_read_command`，即使首段已到 EOF，也要在开工前沿该命令及其游标读完。
-续读从完整的当前写入范围和已记录的审批条目开始，两段绑定同一份捕获。首段保留当前审批
-数量和生效范围摘要。
+续读提供延后交付的 Goal 写入范围、已记录的审批条目及选中 Todo 的请求写入范围。
+两段绑定同一份捕获。首段保留当前审批数量和生效范围摘要。
 续读可引用其他已完整送达且未变化的字段。观察失效时，从同一捕获恢复完整续段。
 
 准入检查要求先切换到独立工作树时，首读保留迁移指引和当前决策控制信息。
@@ -552,6 +560,17 @@ required. A retired lease requires a fresh eligible preparation capture.
 The native hook executes only a preparation bound to a captured Turn. An
 ordinary claim recommendation remains available to its caller; reading one
 or reading an original receipt does not trigger an automatic claim.
+
+A successful managed `todo claim --thin` JSON reply can show peer worktree
+overlap advice with `write_scope_count` in place of long path lists. It keeps
+the other Todo, owner and overlap reason. Run `integration_overlap_detail_command`
+to read the complete advice under `receipts[].result.integration_overlap_advisories`
+for that claim operation. The command uses `todo receipt --thin --format json`
+to return the receipt identity and historical advice without copying the
+claimant's lease. The response includes `thin: true`. This read remains
+available after a lease changes. Omit `--thin` to read the entire receipt.
+Use `task-lease inspect` for a current grant. An ordinary claim reply retains
+the full path lists.
 
 For a selected Todo, preparation reads the canonical Todo and leases at one
 checked provider revision. The internal read returns only that Todo's status,

@@ -185,9 +185,9 @@ def test_http_binding_discovery_does_not_hold_publication_fence_during_provider_
 def test_http_binding_discovery_preserves_duplicate_observations_for_the_typed_owner(bound_chat, monkeypatch):
     store, _, _, _, post, open_bound, _, _ = bound_chat
     binding, _ = open_bound()
-    observed = store.list_sessions()
+    observed = list(store.iter_session_metadata())
     # Inject an ambiguous storage read, never duplicate/corrupt a live store.
-    monkeypatch.setattr(store, "list_sessions", lambda **_: observed + observed)
+    monkeypatch.setattr(store, "iter_session_metadata", lambda **_: iter(observed + observed))
     status, denied = _bound_sessions(post, "conversation_binding_id=" + binding["binding_id"])
     assert status == 409 and "sessions" not in denied
 

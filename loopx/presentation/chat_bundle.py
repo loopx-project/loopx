@@ -74,6 +74,27 @@ def source_inputs(root: Path) -> dict[str, str]:
     }
 
 
+def runtime_source_root(root: Path) -> Path | None:
+    """Return the frontend source root when live source-freshness checks apply.
+
+    Immutable installed releases carry a `release.json` manifest with a
+    non-empty `release_id` and no `.git` checkout marker; they already passed
+    build-time source verification and skip redundant 700+ file source hashing
+    at server startup while keeping full served-bundle digest checks.
+    """
+    resolved = root.expanduser().resolve()
+    if (resolved / ".git").exists():
+        return resolved
+    try:
+        manifest = json.loads((resolved / "release.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return resolved
+    release_id = manifest.get("release_id") if isinstance(manifest, dict) else None
+    if isinstance(release_id, str) and release_id.strip():
+        return None
+    return resolved
+
+
 def safe_relative(value: str) -> bool:
     if not isinstance(value, str):
         return False

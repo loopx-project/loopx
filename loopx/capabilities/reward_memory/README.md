@@ -282,7 +282,8 @@ The production Codex CLI Turn performs recall after quota/Todo admission and
 accepts outcome ingestion only after independent validation, durable writeback,
 and quota settlement. A reflection must use `turn_reward_memory_reflection_v1`
 and include an exact configured surface, a distinct research/simulation/real/
-engineering source kind, and opaque evidence refs; It also carries `procedural_experience_contract_v0` with
+engineering source kind, and opaque evidence refs; an ordinary Turn summary is
+not evidence. It also carries `procedural_experience_contract_v0` with
 applicability, observed outcome, attribution, complete future behavior,
 limitations, and the same evidence refs. Legacy v0 reflections remain
 audit-only and cannot become durable memory. When the same Turn delivers recall
@@ -817,7 +818,8 @@ never infers an actor identity from an arbitrary target URI.
 
 The PR-review caller also consumes [Git-owned review experiences](../pr_review_queue/experiences/README.md)
 through a read-only native source adapter. Qualified Agent enablement, automatic
-recall and an explicit `pull_request_review.review` surface are required; Existing corpus/experience qualification and
+recall and an explicit `pull_request_review.review` surface are required; another
+module's route does not enable it. Existing corpus/experience qualification and
 the TypeScript decision owner bind context delivery to the current exact head.
 This adds advisory repository context for that opted-in caller, with no provider
 write, new setting, semantic-adoption claim or utility score. The public #5944

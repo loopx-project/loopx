@@ -192,11 +192,17 @@ def claim_canonical_todo_if_promoted(
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
     manage_execution: bool = False,
+    expected_provider_revision: str | None = None,
+    expected_registry_sha256: str | None = None,
+    routing_registry_witness: dict[str, str] | None = None,
     project: Path | None = None,
     state_file: Path | None = None,
 ) -> dict[str, Any]:
     """Route a claim to the canonical TypeScript transaction owner."""
-    with authority_registry_source(registry_path) as registry_source:
+    reviewed = expected_provider_revision is not None or expected_registry_sha256 is not None
+    if reviewed and not (manage_execution and expected_provider_revision and expected_registry_sha256):
+        raise ValueError("A reviewed managed claim requires both canonical revision and registry digest")
+    with authority_registry_source(registry_path, routing_registry_witness=routing_registry_witness) as registry_source:
         registered = registered_agent_ids_from_registry(registry_path, goal_id)
     # This is only a candidate location. The lease owner observes physical
     # isolation and the current canonical scopes before granting execution.
@@ -204,8 +210,11 @@ def claim_canonical_todo_if_promoted(
     result = effect_runtime_result(
         LOCAL_COORDINATION_TODO_CLAIM_METHOD,
         {
-            "schema_version": ("loopx_local_coordination_todo_claim_request_v2" if manage_execution
-                               else LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA),
+            "schema_version": (
+                "loopx_local_coordination_todo_claim_request_v3" if reviewed
+                else "loopx_local_coordination_todo_claim_request_v2" if manage_execution
+                else LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA
+            ),
             "runtime_root": str(runtime_root.expanduser().resolve(strict=False)),
             "goal_id": goal_id,
             "todo_id": todo_id,
@@ -220,6 +229,11 @@ def claim_canonical_todo_if_promoted(
                 else f"todo-claim:{goal_id}:{todo_id}:{uuid4().hex}"
             ),
             **({"manage_execution": True} if manage_execution else {}),
+            **(
+                {"expected_provider_revision": expected_provider_revision,
+                 "expected_registry_sha256": expected_registry_sha256}
+                if reviewed else {}
+            ),
             **({"write_worktree": str(worktree)} if worktree is not None else {}),
             "lease_request": (
                 {

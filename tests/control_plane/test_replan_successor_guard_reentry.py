@@ -438,8 +438,9 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
     envelope = call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
                     "--agent-id", AGENT, "--turn-instance-id", TURN, "--turn-envelope")
     assert envelope["replan_action_packet"]["settlement_only"] is True
-    assert envelope["writeback"]["next_cli_actions"] == actions
-    assert envelope["action_signature"]["matches"] is True
+    assert envelope["interaction_contract"]["cli_channel"]["next_cli_actions"] == actions
+    assert envelope["contract_binding"]["source_decision_hash"]
+    assert envelope["contract_binding"]["content_hash"]
     premature_spend = call(*shlex.split(actions[1])[1:], expected_code=1)
     assert premature_spend.get("appended") is not True
     assert not any(json.loads(line).get("classification") == "quota_slot_spent"
@@ -464,9 +465,10 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
     assert pending_plan["ordered_steps"] == [cli["settlement_plan"]["ordered_steps"][-1]]
     pending_envelope = call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
         "--agent-id", AGENT, "--turn-instance-id", TURN, "--turn-envelope")
-    assert pending_envelope["writeback"]["next_cli_actions"] == spend_actions
-    assert pending_envelope["writeback"]["settlement_plan"] == pending_plan
-    assert pending_envelope["action_signature"]["matches"] is True
+    assert pending_envelope["interaction_contract"]["cli_channel"]["next_cli_actions"] == spend_actions
+    assert pending_envelope["interaction_contract"]["cli_channel"]["settlement_plan"] == pending_plan
+    assert pending_envelope["contract_binding"]["source_decision_hash"]
+    assert pending_envelope["contract_binding"]["content_hash"]
     spent = call(*shlex.split(spend_actions[0])[1:])
     assert spent["settlement_progress"]["state"] == "settled"
     assert spent["appended"] is True

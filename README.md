@@ -138,7 +138,7 @@ LoopX is useful when you run:
 - creator, research, or operations workflows whose progress must remain
   legible to a non-engineering operator.
 
-Dangerous permissions,
+LoopX is not an autonomous production controller. Dangerous permissions,
 publishing, production writes, and final ownership stay with the human.
 
 </details>

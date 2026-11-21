@@ -165,7 +165,7 @@ independent T2 work remains legal. Follow the reasoning in
 
 This is an editorial and learning standard, not a new schema, runtime obligation, or approval gate. When
 information is insufficient, name what cannot yet be concluded, the missing evidence, and who can confirm
-it. Do not guess to fill a table. reassess when conditions are repaired,
+it. Do not guess to fill a table. Refusal is not the end goal either: reassess when conditions are repaired,
 preserve work that already happened, and find the next legal action.
 
 ## How to read the evidence

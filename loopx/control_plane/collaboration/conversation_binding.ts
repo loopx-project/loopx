@@ -631,7 +631,8 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
         || turn?.status === "failed"
         && ["usage_limit_exceeded", "response_timeout", "upstream_transport_failure", "context_window_exceeded",
           "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error",
-          "manager_authorization_unavailable", "runtime_error", "server_restarted"].includes(String(turn.error_code)))
+          "manager_authorization_unavailable", "runtime_error", "execution_worker_exited",
+          "execution_worker_exited_before_dispatch", "server_restarted"].includes(String(turn.error_code)))
       && !(current?.session_id === row.session_id && current?.status === "closed")
       && observation.stop_observed !== true};
   }
@@ -764,11 +765,15 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
   const pendingTurn = recovery.failed_turn as JsonObject | undefined;
   const pendingResponse = pendingTurn?.response as JsonObject | undefined;
-  // A committed empty answer has no delivered failure to acknowledge first.
-  // It may only adopt its verified native result, never dispatch recovery work.
+  // A committed empty answer or a pre-dispatch preparation failure whose
+  // notice receipt is ambiguous has no delivered failure to acknowledge first.
   const pendingEmpty = current?.agent_id === "antigravity" && pendingTurn?.status === "completed"
     && pendingResponse?.message === "" && pureResultText(pendingResponse, true);
-  if (!current || row.command !== null || row.status !== "accepted" || row.delivery_verified !== true && !pendingEmpty
+  const pendingPreparationNotice = recovery.failure_notice_receipt_unknown === true
+    && pendingTurn?.status === "failed" && pendingTurn?.upstream_turn_id === null
+    && pendingTurn?.delta_count === 0 && pendingTurn?.response === null;
+  if (!current || row.command !== null || row.status !== "accepted"
+      || (row.delivery_verified !== true && !pendingEmpty && !pendingPreparationNotice)
       || row.agent_target != null || current.session_id !== row.session_id
       || !["codex", "antigravity"].includes(String(current.agent_id))
       || current.upstream_mode !== (current.agent_id === "antigravity" ? "default" : "chat") || current.status === "closed"
@@ -798,6 +803,8 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
   if (runtimePreparation !== null) return runtimePreparation;
   const preparation = steward ? planPreparationRecovery(recovery, row, current, failed, version) : null;
   if (preparation !== null) return preparation;
+  // Post-dispatch and read-only recovery families always require a verified prior delivery.
+  if (row.delivery_verified !== true && !pendingEmpty) return no;
   // Once preparation has dispatched, a different terminal category must not
   // switch recovery families and start a fresh business retry budget.
   if ((row.context_recovery != null
@@ -1641,25 +1648,53 @@ function legacyImagePreparation(recovery: JsonObject, failed: JsonObject): boole
  */
 function planRuntimePreparationRecovery(recovery: JsonObject, row: JsonObject, current: JsonObject,
   failed: JsonObject, version: number): JsonObject | null {
-  if (!["model_auth_unavailable", "resume_failed"].includes(String(failed.error_code))) return null;
+  const expectedErrors = new Map<string, string[]>([
+    ["model_auth_unavailable", ["Native account API transport is unavailable."]],
+    ["resume_failed", [
+      "The previous Agent conversation could not be restored.",
+      ...(current.agent_id === "antigravity"
+        ? ["The original Antigravity conversation is still active. Stop it in Antigravity before retrying."]
+        : []),
+    ]],
+    ["execution_worker_exited_before_dispatch", ["The LoopX Chat worker exited before the original request was dispatched."]],
+  ]).get(String(failed.error_code));
+  if (expectedErrors === undefined) return null;
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
-  const expectedError = failed.error_code === "model_auth_unavailable"
-    ? "Native account API transport is unavailable." : "The previous Agent conversation could not be restored.";
-  if (current.agent_id !== "codex" || failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
-      || failed.status !== "failed" || failed.error !== expectedError || failed.started_at !== null
-      || failed.first_event_at !== null || failed.response !== null || failed.upstream_turn_id !== null
+  const lostWorker = failed.error_code === "execution_worker_exited_before_dispatch";
+  const stewardManagerContext = !lostWorker && row.origin === "lark" && current.steward_context != null
+    && failed.execution_dispatch == null && failed.loopx_request == null && !failed.loopx_execution
+    && (failed.attachments === undefined || Array.isArray(failed.attachments) && failed.attachments.length === 0)
+    && typeof failed.started_at === "string" && Number.isFinite(Date.parse(failed.started_at))
+    && typeof failed.first_event_at === "string" && Number.isFinite(Date.parse(failed.first_event_at));
+  const beforeDispatch = lostWorker
+    ? row.origin === "lark" && current.steward_context != null && failed.execution_dispatch === "pending"
+      && failed.loopx_request == null && !failed.loopx_execution
+      && (failed.attachments === undefined || Array.isArray(failed.attachments) && failed.attachments.length === 0)
+      && typeof failed.started_at === "string" && Number.isFinite(Date.parse(failed.started_at))
+    : (failed.started_at === null && failed.first_event_at === null) || stewardManagerContext;
+  if (!["codex", "antigravity"].includes(String(current.agent_id))
+      || failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
+      || failed.status !== "failed" || !expectedErrors.includes(String(failed.error)) || !beforeDispatch
+      || failed.response !== null || failed.upstream_turn_id !== null
       || failed.delta_count !== 0 || failed.message !== row.message || failed.origin !== row.origin
       || recovery.attachments_present !== false || recovery.steering_observed !== false
       || recovery.native_observation != null || recovery.native_result_present !== false) return no;
   const observed = recovery.preparation_observation == null ? null
     : requireJsonObject(recovery.preparation_observation, "runtime preparation readback");
   if (observed?.kind !== "core_runtime_preparation_failure" || observed.session_id !== failed.session_id
-      || observed.turn_id !== failed.turn_id || !Array.isArray(observed.events) || observed.events.length !== 2) return no;
+      || observed.turn_id !== failed.turn_id || !Array.isArray(observed.events)
+      || observed.events.length < 2
+      || (!lostWorker && !stewardManagerContext && observed.events.length !== 2)
+      || (stewardManagerContext && observed.events.length <= 2)) return no;
   const events = observed.events.map(value => requireJsonObject(value, "runtime preparation event"));
+  const failure = events.at(-1)!;
   if (!events.every(item => typeof item.event_id === "string" && item.event_id.length > 0)
-      || events[0].event_id === events[1].event_id || events[0].kind !== "turn.queued"
-      || events[0].delivery_mode !== "session_queue" || events[1].kind !== "turn.failed"
-      || events[1].error_code !== failed.error_code || events[1].message !== expectedError) return no;
+      || new Set(events.map(item => item.event_id)).size !== events.length || events[0].kind !== "turn.queued"
+      || events[0].delivery_mode !== "session_queue" || failure.kind !== "turn.failed"
+      || failure.error_code !== failed.error_code || failure.message !== failed.error
+      || (stewardManagerContext && !events.slice(1, -1).some(item => item.kind === "manager.context"))
+      || events.slice(1, -1).some(item => item.kind !== "manager.context"
+        && !(item.kind === "agent.phase" && item.phase === "manager_context"))) return no;
   const original = `external-${ref(row.request_ref, "original request")}`;
   const previous = row.context_recovery == null ? null : requireJsonObject(row.context_recovery, "runtime preparation reservation");
   if (row.context_recovery_history != null && !Array.isArray(row.context_recovery_history)) return no;
@@ -1773,7 +1808,16 @@ function planRoutingRecovery(recovery: JsonObject, row: JsonObject, current: Jso
   const observed = raw == null ? null : requireJsonObject(raw, "pre-execution failure readback");
   const interrupted = observed?.interrupted_before_execution === true
     && ["host_gate", "upstream_transport_failure"].includes(String(failed.error_code));
-  if (observed && !quota && !preparation && observed.pre_execution_routing_timeout !== true && !interrupted) return null;
+  const info = observed?.codex_error_info;
+  const infoEntries = info && typeof info === "object" && !Array.isArray(info) ? Object.entries(info) : [];
+  const infoDetail = infoEntries.length === 1
+    && ["httpConnectionFailed", "responseStreamConnectionFailed"].includes(infoEntries[0][0])
+    && infoEntries[0][1] !== null && typeof infoEntries[0][1] === "object" && !Array.isArray(infoEntries[0][1])
+    ? infoEntries[0][1] as JsonObject : null;
+  const loopbackRelayAuth = observed?.loopback_relay_auth_failure === true
+    && failed.error_code === "upstream_transport_failure"
+    && infoDetail?.httpStatusCode === 401;
+  if (observed && !quota && !preparation && observed.pre_execution_routing_timeout !== true && !interrupted && !loopbackRelayAuth) return null;
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
   const reserved = previous?.failed_turn_id === failed.turn_id;
   const priorAttempt = previous?.[attemptKey] ?? 0;
@@ -1822,6 +1866,10 @@ function planRoutingRecovery(recovery: JsonObject, row: JsonObject, current: Jso
       && observed.quota_available === true && typeof observed.quota_observed_at === "number"
       && now / 1000 >= observed.quota_observed_at && now / 1000 - observed.quota_observed_at <= 120
       : interrupted ? recovery.stop_observed === false && observed.only_original_user_item === true
+      : loopbackRelayAuth ? observed.only_pre_execution_items === true
+        && observed.relay_transport_ready === true
+        && typeof observed.relay_observed_at === "number" && Number.isFinite(observed.relay_observed_at)
+        && now / 1000 >= observed.relay_observed_at && now / 1000 - observed.relay_observed_at <= 120
       : observed.codex_error_info === "other" && observed.only_pre_execution_items === true)};
 }
 
@@ -1911,7 +1959,8 @@ export function authorizeStewardCreation(params: JsonObject): JsonObject {
   const proposal = requireJsonObject(params.proposal, "creation proposal");
   const audience = requireJsonObject(proposal.context, "creation audience");
   const todoCreation = proposal.action_kind === "todo.create";
-  if ((!todoCreation && proposal.action_kind !== "goal.create") || audience.kind !== "manager"
+  const prMerge = proposal.action_kind === "pr.merge";
+  if ((!todoCreation && !prMerge && proposal.action_kind !== "goal.create") || audience.kind !== "manager"
       || audience.goal_id !== "loopx-manager") throw new EffectRuntimeRequestError("not a steward creation preview");
   for (const field of ["binding_id", "source_ref", "provider_ref", "operator_ref", "project_ref"]) {
     if (audience[field] !== selected[field]) throw new EffectRuntimeRequestError("confirmation audience changed");
@@ -1922,6 +1971,15 @@ export function authorizeStewardCreation(params: JsonObject): JsonObject {
         || parameters.start_execution === true || parameters.agent_id != null
         || ["stop", "resume"].includes(String(params.operation))) {
       throw new EffectRuntimeRequestError("Todo confirmation requires its currently granted Goal and cannot start execution");
+    }
+  }
+  if (prMerge) {
+    const parameters = requireJsonObject(proposal.normalized_parameters, "PR merge parameters");
+    if (["stop", "resume"].includes(String(params.operation))
+        || params.repository_authorized !== true
+        || typeof parameters.repository !== "string" || !parameters.repository.trim()
+        || !Number.isSafeInteger(parameters.pr_number) || Number(parameters.pr_number) < 1) {
+      throw new EffectRuntimeRequestError("PR merge confirmation requires an authorized repository and exact PR target");
     }
   }
   if (["stop", "resume"].includes(String(params.operation))) {

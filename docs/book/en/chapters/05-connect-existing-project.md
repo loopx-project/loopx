@@ -373,7 +373,7 @@ objective content, and credentials before sharing it publicly.
 ## 5. From connection to the first delivery {#first-delivery}
 
 Return here after the Host chapter. The goal is an independently verifiable work segment, not a screen
-that says running. accept actual work using
+that says running. This walkthrough is not an end-to-end test of a real Host; accept actual work using
 evidence from your own run.
 
 ### Scene one: A owns T1, not the entire publication workflow

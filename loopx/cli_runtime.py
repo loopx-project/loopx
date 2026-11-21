@@ -568,12 +568,32 @@ def _dispatch_common_command(
 		return handle_start_goal_command(
 			args, print_payload, runtime_root_arg=args.runtime_root,
 		)
-	if args.command == "bootstrap-command-pack":
-		from .cli_commands.starter_bootstrap import handle_loopx_bootstrap_command_pack_command
-
-		return handle_loopx_bootstrap_command_pack_command(
-			args, print_payload, runtime_root_arg=args.runtime_root,
+	if args.command in {"bootstrap-command-pack", "agent-onboard"}:
+		from .cli_commands.starter_bootstrap import (
+			handle_agent_onboard_command, handle_loopx_bootstrap_command_pack_command,
 		)
+
+		runtime_root_arg = args.runtime_root
+		# Project commands use a registry anchor only when it was supplied on the CLI.
+		if runtime_root_arg and not allow_missing_registry:
+			from .paths import resolve_runtime_root
+
+			runtime_root_arg = (
+				str(registry_path.parent.absolute())
+				if str(args.registry) == HOST_GLOBAL_REGISTRY_SELECTOR
+				else str(resolve_runtime_root({}, runtime_root_arg, registry_path=registry_path))
+			)
+		handler = (
+			handle_agent_onboard_command if args.command == "agent-onboard"
+			else handle_loopx_bootstrap_command_pack_command
+		)
+		explicit_project_registry = (
+			registry_path
+			if not allow_missing_registry and str(args.registry) != HOST_GLOBAL_REGISTRY_SELECTOR
+			else None
+		)
+		return handler(args, print_payload, runtime_root_arg=runtime_root_arg,
+			explicit_project_registry=explicit_project_registry)
 	if args.command in {"bootstrap", "connect"}:
 		from .cli_commands.bootstrap_connect import handle_bootstrap_connect_command
 
@@ -945,9 +965,15 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 
 
 def _standalone_core() -> bool:
-	from importlib.util import find_spec
+	if sys.modules.get("loopx.cli") is not None:
+		return False
+	from importlib.machinery import PathFinder
 
-	if find_spec("loopx.cli") is not None:
+	package = sys.modules.get(__package__ or "loopx")
+	search_path = list(getattr(package, "__path__", ())) or [
+		str(Path(__file__).resolve().parent)
+	]
+	if PathFinder.find_spec("loopx.cli", search_path) is not None:
 		return False
 	from importlib.metadata import PackageNotFoundError, distribution
 	from .python_install_owner import installed_loopx_distribution

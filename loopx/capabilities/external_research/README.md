@@ -303,7 +303,7 @@ Original sources remain available on partial, empty and failed results.
 问题不匹配、已有不相关来源或预算耗尽仍为 blocker。部分下游投影保持 retained，
 直至全部已采纳来源以匹配 lineage 实际回读。省略 `--execute` 可只读回读；省略
 `--public-github` 不探测该 provider。没有持久开关需要卸载。部分、空或失败证据
-保留原始来源退路；
+保留原始来源退路；字面匹配不证明语义结论或证据完整性。
 
 Real qualification (anonymous network reads, disposable synthetic ledger):
 `uv run --extra test python examples/public-github-evidence-live-smoke.py --execute-public-provider --source https://github.com/OWNER/REPO/blob/FULL_COMMIT_SHA/README.md`.
@@ -314,4 +314,4 @@ Live authenticated connector and Lark delivery qualification remain separate;
 this method grants no connector credentials or outbound-message authority.
 
 真实验收会进行匿名网络读取并使用一次性合成账本；打包会话验收沿用上述环境变量和命令。
-真实带凭据 connector 与 Lark 送达资格仍是独立边界；
+真实带凭据 connector 与 Lark 送达资格仍是独立边界；本方法不授予 connector 凭据或外发消息权限。

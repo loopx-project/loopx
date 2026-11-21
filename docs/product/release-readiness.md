@@ -41,22 +41,31 @@ is an independent readback and recovery entry point. A provider that still
 fails remains closed until its per-extension doctor result is repaired and the
 command passes. See [Extension lifecycle](../reference/extensions.md#runtime-lifecycle).
 
+For an archive installed with custom directories, keep the same
+`LOOPX_BIN_DIR` and `LOOPX_RELEASES_DIR` overrides when rolling back.
+Unset or empty overrides use the default locations.
+
 Do not collapse package acquisition, host-material delivery, core runtime
 activation, and enabled-extension readiness into one "installed" claim. The
 [installation guide's active-layer checklist](../guides/installing-loopx.md#verify-the-active-layers)
 names the readback and recovery command for each layer.
 
 For a pip or pipx distribution, apply delegates to that owner. For an archive
-snapshot, apply uses the public `stable` ref by default and preserves atomic
-snapshot rollback. Before replacing the launcher, `loopx update --rollback
-previous` checks that the selected release can read the current authoritative
-Todos for registered local File and SQLite Goals. If it cannot verify the read,
-the running version and Goal state stay in place. Both the registry's configured
-runtime and an explicit runtime override participate in this check. Rollback
-holds the installer's existing promotion lock through Todo checks, activation,
-Doctor and recovery. Recovery restores only the launcher installed by that
-operation, preserving a later replacement. Use a release with a matching state
-backup if older code cannot read the current data. Use `loopx update plan
+snapshot, apply uses the public `stable` ref by default. Before replacing the
+launchers, `loopx update --rollback previous` checks that the selected release
+can read the current authoritative Todos for registered local File and SQLite
+Goals. Both the registry's configured runtime and an explicit runtime override
+participate in this check. Rollback switches `loopx` and an archive-managed
+`loopx-apply-rrule` to the selected release under the installer's promotion lock.
+A selected release must provide an executable scheduler helper if the helper
+is managed by that archive installation. The lock covers Todo checks, both
+replacements, Doctor and recovery. Rollback verifies each destination against
+its original inode immediately before replacing it. A changed destination,
+an interrupted or failed switch, or a failed core Doctor triggers recovery
+only for links still owned by the rollback. A failed extension Doctor leaves
+the selected release active so the extension can be repaired.
+Use a release with a matching state backup if older code cannot read the
+current data. Use `loopx update plan
 --ref main` and `loopx update apply --ref main` only for maintainer/dev archive
 qualification. Re-running the curl installer remains a repair path when an
 archive wrapper is too broken to run its own updater.
@@ -940,7 +949,7 @@ path, and canary route rather than as a user-facing release baseline.
   rendering. At the frozen source, 515 public smokes and 360 affected Python
   checks passed; the authorized DS Flash/high alternative passed all 22
   scenarios twice and six contrasts, with zero failures or skips. Earlier
-  Doubao qualification failures remain unqualified; Windows execution, Apple notarization,
+  Doubao qualification failures remain unqualified. Windows execution, Apple notarization,
   authenticated Host interaction, external backend execution and sustained
   SQLite qualification remain unqualified. No paired-version benchmark uplift
   or isolated Astra causal effect is claimed.
@@ -1279,7 +1288,7 @@ PR numbers in commit titles are navigation, not a completeness check. Confirm
 that metadata coverage reaches the whole range, resolving unmatched integration
 commits through their associated merged PRs. Check an author's earlier merged
 PR history before calling a contribution first-time. Reconcile both language
-lists and their summary counts against that verified set; Refresh this evidence when the final
+lists and their summary counts against that verified set. Refresh this evidence when the final
 release range changes.
 
 Organize the remaining release note into the following stable groups. Omit an

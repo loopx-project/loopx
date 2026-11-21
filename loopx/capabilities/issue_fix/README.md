@@ -344,7 +344,8 @@ does not fetch or persist the raw page. The output keeps the URL beside each
 candidate so a maintainer can audit why that person was selected.
 
 `CODEOWNERS` remains the strongest repository-native signal. Commit volume is
-only evidence of familiarity; See the [reviewer recommendation contract](docs/protocols/issue-fix-reviewer-recommendation-v0.md) for scoring,
+only evidence of familiarity; it is not proof of maintainership, availability,
+or review authority. See the [reviewer recommendation contract](docs/protocols/issue-fix-reviewer-recommendation-v0.md) for scoring,
 identity, and future-signal details, and the [reviewer request contract](docs/protocols/issue-fix-reviewer-request-v0.md) for the external-write,
 idempotency, and verification rules. Secondary delivery, dedicated-bot
 isolation, local-private identity mapping, and readback are defined by the
@@ -658,7 +659,8 @@ Packets preserve compact classifications and references. They do not preserve:
 
 An unavailable dependency, killed process, or missing service is environment
 evidence. It may block a validation surface without refuting the product bug.
-Conversely compare the pinned base and changed hunks before attribution.
+Conversely, a failing legacy test does not prove the new patch caused the
+failure; compare the pinned base and changed hunks before attribution.
 
 ## Reviewer Routing Contract
 

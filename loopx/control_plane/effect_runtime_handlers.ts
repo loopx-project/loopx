@@ -630,6 +630,8 @@ export function createEffectRuntimeHandlers(
     ["collaboration.source.original_conversation_grants", lazyHandler(() => import("./collaboration/source_grants.ts"), ({inspectOriginalConversationGrants}) => inspectOriginalConversationGrants)],
     ["collaboration.project.session_identity", lazyHandler(() => import("./collaboration/conversation_scope.ts"), ({projectConversationIdentity}) => projectConversationIdentity)],
     ["collaboration.steward.session_identity", lazyHandler(() => import("./collaboration/conversation_scope.ts"), ({stewardConversationIdentity}) => stewardConversationIdentity)],
+    ["collaboration.steward.memory_policy", lazyHandler(() => import("./collaboration/steward_memory.ts"), ({planStewardMemoryTurn}) => planStewardMemoryTurn)],
+    ["collaboration.steward.memory_preferences", lazyHandler(() => import("./collaboration/steward_memory.ts"), ({normalizeStewardMemoryPreferences}) => (params) => ({preferences: normalizeStewardMemoryPreferences(params?.memory_preferences)}))],
     ["collaboration.steward.command", lazyHandler(() => import("./collaboration/conversation_binding.ts"), ({stewardCommand}) => stewardCommand)],
     ["collaboration.steward.authorize_creation", lazyHandler(() => import("./collaboration/conversation_binding.ts"), ({authorizeStewardCreation}) => authorizeStewardCreation)],
     ["collaboration.steward.managed_mode.plan", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({planStewardManagedMode}) => planStewardManagedMode)],

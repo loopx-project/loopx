@@ -169,7 +169,11 @@ def test_sealed_pending_basis_reuses_original_guard_and_rejects_replacements(tmp
     original_runs = runs.read_bytes()
     pending = {"capture": True, "obligation_id": identity["replan_obligation_id"],
                "settlement_effect_id": identity["effect_id"], "execution_authority_granted": False}
-    complete = compose_turn_decision({**source, "future_observation": {"exact": 2**53 + 1, "decimal": 1.0}})
+    complete_source = {
+        key: value for key, value in source.items()
+        if key not in {"schema_version", "contract_binding"}
+    }
+    complete = compose_turn_decision({**complete_source, "future_observation": {"exact": 2**53 + 1, "decimal": 1.0}})
     packet = tmp_path / "held-decision.json"
     packet.touch(mode=0o600)
     evidence = [{"id": "held_decision", "source_path": str(packet)}]
@@ -265,11 +269,16 @@ def test_successor_review_needs_checkpoint_linked_settlement(tmp_path, monkeypat
     from loopx.control_plane.quota.settlement import read_heartbeat_settlement
 
     call, runtime, _ = _fixture(tmp_path, monkeypatch, provider)
+    from loopx.control_plane.quota.turn_envelope import project_captured_replan_cli_view
     original = call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
         "--agent-id", AGENT, "--turn-instance-id", TURN,
         "--codex-app-current-rrule", "FREQ=MINUTELY;INTERVAL=3",
         "--decision-output-dir", str(tmp_path / "decision"))
-    read = subprocess.run(shlex.split(original["replan_action_packet"]["writeback"]),
+    packet = original["replan_action_packet"]
+    writeback_cmd = packet.get("writeback") or project_captured_replan_cli_view(
+        original, captured_decision_path=str(tmp_path / "decision" / "decision.json"),
+    )["replan_action_packet"]["writeback"]
+    read = subprocess.run(shlex.split(writeback_cmd),
         capture_output=True, text=True, check=True)
     writer = json.loads(read.stdout)
     successor_binding = shlex.split(writer["writeback_contract"]["successor_binding_args"])
@@ -289,12 +298,15 @@ def test_successor_review_needs_checkpoint_linked_settlement(tmp_path, monkeypat
     assert successor["settlement_identity"] == original["heartbeat_receipt"]["settlement_identity"]
     # Follow only the returned receipt; no fresh guard or successor admission.
     steps = successor["settlement_plan"]["ordered_steps"]
-    actions = [step["command_template"] for step in steps if step["kind"] in {"durable_writeback", "quota_spend"}]
+    actions = [
+        step["command_template"] for step in steps
+        if step["kind"] in {"durable_writeback", "quota_spend"} and "command_template" in step
+    ]
     from loopx.control_plane.todos.markdown import render_todo_markdown
     rendered = render_todo_markdown(successor)
     assert successor["instruction"] in rendered
     assert all(command in rendered for command in actions)
-    actions[0] = actions[0].replace("<validated_progress>", "source_review").replace("<scale>", "single_surface").replace("<outcome>", "outcome_progress")
+    writeback_action = actions[0].replace("<validated_progress>", "source_review").replace("<scale>", "single_surface").replace("<outcome>", "outcome_progress")
     sha = "a" * 64
 
     def capture():
@@ -317,18 +329,29 @@ def test_successor_review_needs_checkpoint_linked_settlement(tmp_path, monkeypat
             "evidence_refs": ["checkpoint:" + sha if cited else "evidence:source-review"]}}
     vision = tmp_path / "checkpoint-review.json"
     vision.write_text(json.dumps(packet))
-    refresh_args = (*shlex.split(actions[0])[1:], "--agent-vision-json", str(vision),
-                    "--no-global-sync", "--suppress-external-sinks")
     if cited:
-        settled = call(*refresh_args, "--settle-turn")
+        settled = call(
+            *shlex.split(writeback_action)[1:],
+            "--agent-vision-json", str(vision), "--no-global-sync", "--suppress-external-sinks",
+        )
         assert settled["settlement_progress"]["state"] == "settled"
     else:
-        call(*refresh_args)
+        written = call(
+            *shlex.split(writeback_action.replace(" --settle-turn --settlement-receipt", ""))[1:],
+            "--agent-vision-json", str(vision), "--no-global-sync", "--suppress-external-sinks",
+        )
         assert capture()["capture_allowed"] is False  # Writeback alone is not settled.
-        call(*shlex.split(actions[1])[1:])
+        spend_cmd = shlex.split(written["settlement_owed"]["command"])[1:]
+        call(*spend_cmd)
     assert capture()["capture_allowed"] is cited
     # Retrying the original debit repairs/replays its receipt, never starts the successor.
-    call(*shlex.split(actions[1])[1:])
+    if cited:
+        call(
+            *shlex.split(writeback_action)[1:],
+            "--agent-vision-json", str(vision), "--no-global-sync", "--suppress-external-sinks",
+        )
+    else:
+        call(*spend_cmd)
     assert capture()["capture_allowed"] is cited
     assert call("todo", "list", "--goal-id", GOAL,
                 "--todo-id", successor["todo_id"])["todo"]["status"] == "open"

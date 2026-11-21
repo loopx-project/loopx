@@ -50,8 +50,10 @@ describe that as a new selection rather than proven historical ownership.
 Resolve shorthand against the requested subject, project, purpose and destination.
 Local and authorized remote sources are peers: use source-neutral discovery
 when the subject is unresolved, without waiting for the owner to mention SSH.
+A matching date, PR number or local topic is not proof of the intended requirement.
 Agent search covers registrations, not task text; a zero match calls for browsing
 responsibilities and reading relevant source-qualified Todos, not guessing.
+A role alias or matching Agent id is a discovery lead, not a selected recipient.
 Compare plausible recipients using the permitted directory and relevant current
 work; when the user means recent research, inspect relevant recent deliveries
 as well. Directory order, a generic profile, a delivery target or an available
@@ -75,13 +77,14 @@ path, finish that response before separate repair and report the repair as
 unfinished. Do not promise an unsupported background continuation. Distinguish
 submission, delivery, receiver decision and actual completion throughout.
 
+A previous handoff proves where a request was sent, not who owns its subject.
 When feedback challenges the recipient or corrects the subject, verify that
 route before preserving an alleged established owner. Do not turn an earlier
 routing mistake into an ownership commitment. Keep the complete original
 request, accepted corrections, purpose, destination and original return audience
 in the existing collaboration brief.
 
-Check the original
+A corrected handoff does not retract a delivered misroute. Check the original
 and correction receipts. Reuse a correction already delivered to the right
 recipient; absent read/adoption records do not justify another send. If the old
 recipient still has uncorrected intent, carry a bounded ownership correction
@@ -198,7 +201,8 @@ exact task link or report the gap; never treat unknown as archived. If a host me
 authorized, verify the selected task through that host, record the stable
 `manager-inbox request --require-host-route`, then send its content-free
 `host_delivery.message` to the selected task. Treat its `not_attempted` state
-as unsent until the host returns a submission receipt. Receiver
+as unsent until the host returns a submission receipt. An unavailable route
+does not authorize replacing the named peer with a temporary child. Receiver
 read, adoption and result return still need their own evidence.
 
 `manager-inbox request` is only for Agents registered to the same Goal. When an

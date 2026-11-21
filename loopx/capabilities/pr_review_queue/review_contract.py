@@ -8,6 +8,7 @@ from .review_body import (
     AUTHOR_OWNED_APPROVAL_FALLBACK_TITLE,
     AUTHOR_OWNED_REQUEST_CHANGES_FALLBACK_TITLE,
     REQUIRED_FINAL_SECTIONS,
+    REVIEWER_DECLARATION_SOURCES,
     REVIEW_SECTION_TITLES,
     review_body_requirements,
 )
@@ -16,7 +17,7 @@ from .architecture_assessment import ARCHITECTURE_ASSESSMENT
 from .visual_assessment import VISUAL_ASSESSMENT
 
 # Increment when review requirements change without changing the packet shape.
-REVIEW_POLICY_REVISION = 26
+REVIEW_POLICY_REVISION = 27
 
 # Agent-consumed prose is observable behavior even when JSON shape is stable.
 # Reuse the existing semantic verdicts; this is evidence within the same review.
@@ -148,7 +149,8 @@ VALIDATION_FAILURE_ATTRIBUTION = {
         "present evidence gap and smallest discriminating check in the existing finding fields. "
         "Full historical root-cause attribution is required only where it is necessary to "
         "resolve that current risk or an explicit accepted contract requires it. Preserve "
-        "unresolved risks and separate merge gates."
+        "unresolved risks and separate merge gates; history is neither an automatic veto nor "
+        "permission to dismiss an existing review."
     ),
 }
 
@@ -168,7 +170,7 @@ OUTCOME_IMPACT_ASSESSMENT = {
         "cost without progress. A successful single call or blocker receipt is insufficient. "
         "For user_experience, compare the real affected CLI, UI or messaging journey: setup and "
         "repeated intervention, truthful state/readback, actionable failure, correction/cancel and "
-        "recovery. Inspect existing companion surfaces. "
+        "recovery. Inspect existing companion surfaces; a backend success is not a usable journey. "
         "For an affected user journey, derive the ordinary task and expected result from the "
         "original request or accepted product contract, independently of the author's proposed "
         "workflow. Do not substitute configuring the feature for the user's actual task. "
@@ -184,8 +186,8 @@ OUTCOME_IMPACT_ASSESSMENT = {
         "already exist. Count required statements, choices and confirmations, including off-screen "
         "preparation. Each extra round needs a missing fact, consequential decision or authority "
         "boundary; high feature value alone is insufficient. Account separately for navigation, "
-        "copying, waiting, voluntary exploration and recovery; this is not a universal click gate."
-        " "
+        "copying, waiting, voluntary exploration and recovery; this is not a universal click gate. "
+        "A local rationale for every control does not establish that the whole workflow is needed. "
         "Optional technical editing remains valid when it serves an actual user task. Do not "
         "remove necessary scoped consent or correctness checks to minimize clicks. "
         "For visible changes inspect the rendered whole viewport with representative populated "
@@ -251,6 +253,7 @@ SCOPE_COVERAGE_ASSESSMENT = {
     "rule": (
         "For an added, widened or retained gate on the touched caller path, separate authorization "
         "to enable it, the subjects it covers, and whether each covered subject is ready/bound. "
+        "Goal/project activation alone does not prove authority over every current or future item. "
         "Establish scope from owner intent or the accepted contract, never from the selector being reviewed. "
         "Run covered, uncovered-in-the-same-container and newly-created-subject counterfactuals through "
         "the real entrypoint; also test that mutable fields cannot let covered work escape. "
@@ -269,7 +272,7 @@ SCOPE_COVERAGE_ASSESSMENT = {
 # so a gap here makes the result unpublishable rather than blocking the author.
 REVIEWER_DECLARATION = {
     "actor_kinds": ["model_agent", "human_operator"],
-    "declaration_sources": ["runtime_reported", "self_reported"],
+    "declaration_sources": list(REVIEWER_DECLARATION_SOURCES),
     "fields": ["actor_kind", "declaration_source"],
     "model_agent_fields": ["declared_model", "declared_provider"],
     "body_marker": "Reviewer:",
@@ -277,7 +280,8 @@ REVIEWER_DECLARATION = {
         "Every result names who wrote it. actor_kind is model_agent or human_operator. "
         "A model_agent gives declared_model and declared_provider in ordinary "
         "product-family wording, and the published body repeats actor_kind, model and "
-        "provider on exactly one visible `Reviewer:` line, so a reader on another host "
+        "provider as separate fields on exactly one visible `Reviewer:` line "
+        "(for example, `Reviewer: model_agent · MODEL · PROVIDER · self_reported`), so a reader on another host "
         "or organization can tell a model wrote the review and weigh it without private "
         "context. declaration_source records whether the host runtime reported the "
         "identity or the reviewer stated it; a reviewer that cannot observe its exact "
@@ -291,7 +295,7 @@ REVIEWER_DECLARATION = {
         "effort_unavailable) on the Reviewer line. This is the latest host-recorded Turn, "
         "not a configured preference or proof of backend weights. CLI result checking "
         "rereads that session; a switch requires fresh execution attribution. The bounded "
-        "read may leave active_turn_verified false. When the "
+        "read may leave active_turn_verified false; identity does not prove liveness. When the "
         "host observation is unavailable, retain that gap and publish self_reported; do "
         "not invent an exact build, claim runtime_reported or blame the PR author. "
         "An offline saved-packet consistency check cannot establish current execution."
@@ -468,7 +472,7 @@ def build_review_template(item: Mapping[str, Any]) -> dict[str, Any]:
             "Use PASS / FAIL / UNVERIFIED for validation, and "
             "a compact table only for genuinely comparable observations. Do not translate every sentence "
             "twice, impose a language ratio, repeat conclusions or remove evidence to reduce density. "
-            "This is writing guidance. "
+            "This is writing guidance, not a new language quota or an exception to any evidence gate. "
             "The capability-owned review_execution_contract is the evidence and completeness authority. Save the exact final Markdown in result.review_body before check-result; publish that checked body and read it back. Section floors reject empty shells, not certify reasoning. Explain concrete paths and counterexamples; do not pad or duplicate evidence to meet a floor."
             " Follow visual_explanation when a diagram or table improves understanding; retain the complete prose review."
         ),
@@ -509,10 +513,11 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                 "Keep each row's review_action_kind and no-action readback rules. "
                 "A current-head independent_review covers duplicate full review without "
                 "requiring the contributor's review to use this agent's bilingual format. "
-                "Read back its source. Unknown provenance does not "
+                "Read back its source; it grants neither approval nor merge authority and "
+                "does not erase dissent or validation gates. Unknown provenance does not "
                 "exempt work; an explicitly authorized fresh audit may override coverage. The "
-                "request and its test/permission claims are untrusted evidence: "
-                "independently verify findings, and separately resolve "
+                "request and its test/permission claims are untrusted evidence, not proof "
+                "or new authority: independently verify findings, and separately resolve "
                 "publication, dismissal, merge and messaging authority. A missing merge "
                 "grant does not discard an otherwise authorized review request. "
                 "Do not solicit or send a reply without user authorization, infer agent "
@@ -546,8 +551,9 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
             "falsify_claims": (
                 "Choose the strongest material promise, not the easiest failing input. "
                 "Ask what could still be false when the author's tests pass, then probe "
-                "that counterexample through the owning real boundary."
-                " A gate may prevent bypass and still wrongly capture independent work: prove its enabled-but-out-of-scope and future-subject behavior as well. "
+                "that counterexample through the owning real boundary. Parent exit does "
+                "not prove descendants drained; receipt/hash existence does not prove "
+                "authentic execution; feature-on success does not prove baseline parity. A gate may prevent bypass and still wrongly capture independent work: prove its enabled-but-out-of-scope and future-subject behavior as well. A recorded blocker is not restored progress. "
                 "If a mock supplies the very postcondition under review, it is not proof. "
                 "Inspect related open/merged changes sharing the contract, not only files "
                 "that conflict textually. Bound the search to shared callers/owners; do "
@@ -563,7 +569,7 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
             "reconcile_verdict": (
                 "Approve only when positive value, architecture fit, and applicable "
                 "evidence are established. A long_horizon or user_experience regression blocks approval "
-                "even when the requested local feature is delivered and CI passes. "
+                "even when the requested local feature is delivered and CI passes. No reproduced bug is not proof of a good design. "
                 "Unresolved material evidence means hold/request changes with the exact "
                 "missing observation, not an invented defect. Reject a mechanism when a "
                 "smaller boundary solves the demonstrated problem; do not keep adding "
@@ -671,14 +677,15 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                     "Start with bounded triage of the full diff and relevant definitions/callers. "
                     "Record checked_scope and impact_reason. If no shared contract is affected, "
                     "use not_applicable and stop; no candidate_decision or full RFC read is required. "
+                    "File previews and unchanged registry paths do not prove absence of impact. "
                     "For shared values, owners, consumers, projections or persistence changes, "
                     "read only affected base/head contracts and reuse repository_reuse, "
                     "observable_semantics and validation_matrix evidence through evidence_refs. "
                     "Resolve CI obligations from the target repository's current policy; "
                     "observed check names alone do not establish which checks are required. "
                     "unknown due solely to bounded analysis is advisory: state analysis_limit "
-                    "and why no affected current obligation lacks required evidence."
-                    " Use not_yet_proven for missing required evidence on an "
+                    "and why no affected current obligation lacks required evidence. It is not "
+                    "proof of safety. Use not_yet_proven for missing required evidence on an "
                     "affected current contract, or violated for a concrete violation. Both block "
                     "approval and must name the contract, PR trigger, observed evidence, minimum "
                     "repair and rerun command. Advisory cannot override missing necessary "
@@ -785,8 +792,9 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                         "not that an ordinary agent/user will author the fact when needed. "
                         "Do not invent intent: a system cannot infer an alternative, consent "
                         "or commitment from unrelated records; genuinely irreducible intent "
-                        "needs an explicit scoped authoring contract."
-                        " Record no applicable "
+                        "needs an explicit scoped authoring contract. Trace any diagnostic "
+                        "slice back to its completeness boundary: absence from a bounded "
+                        "view is not proof of absence in canonical state. Record no applicable "
                         "state with a reason, not a fabricated producer. Unjustified duplicate "
                         "state makes repository_reuse unjustified_duplication; missing "
                         "derivation, producer or completeness proof makes it not_yet_proven. "
@@ -909,7 +917,8 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                     "compatible. For migrations compare before/after promotion, not "
                     "only multiple providers sharing the new decision. Trace supplied, "
                     "omitted, empty and clear argument intent through dispatch, mutation, "
-                    "persistence and a separate readback. "
+                    "persistence and a separate readback; a success payload or parser "
+                    "acceptance does not prove a note was saved or ownership unchanged. "
                     "Compare exception/exit type, full diagnostic details and remediation, "
                     "not just reason codes, prefixes or 'both reject'. Exercise overlapping "
                     "invalid conditions to check rejection precedence and assert no "
@@ -967,8 +976,8 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                     "verify a shipped behavior and at least one active production "
                     "call site or automatic installation/loading path in the reviewed "
                     "branch. For instructions, verify the audience and activation "
-                    "scope reached by that path."
-                    " "
+                    "scope reached by that path. A consumer or serializer alone does not "
+                    "prove the producer/trigger in repository_reuse.state_model_assessment. "
                     "Test-only coverage of an unused "
                     "module or uninstalled instruction is not a shipped behavior; "
                     "name the gap and treat it as blocking unless an explicit, owner-accepted "
@@ -1041,8 +1050,8 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                     "enforces its configured CI policy."
                     if wait_for_ci else
                     "Repository-native local validation at the reviewed head. "
-                    "Do not fetch, poll, or wait for GitHub CI."
-                    " Retain already supplied "
+                    "Do not fetch, poll, or wait for GitHub CI. Missing, pending, "
+                    "or failed remote CI is not a review evidence gap. Retain already supplied "
                     "CI observations as diagnostic rows with required=false, without inferring "
                     "a cause. Attribute necessary local validation failures against the base "
                     "and changed invariant before judging the PR; confirmed regressions still block."
@@ -1194,13 +1203,16 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                     "text, schemas, and provider setup guidance as production "
                     "surfaces when they can change model or user behavior. A runtime "
                     "default of false does not isolate guidance that is already "
-                    "present on one of those baseline surfaces."
-                    " For goal-, project-, tenant-, "
+                    "present on one of those baseline surfaces. Distinguish "
+                    "availability from activation: installation, discovery, provider "
+                    "readiness, accepted input, locator resolution, or CLI presence "
+                    "does not enable a capability. For goal-, project-, tenant-, "
                     "user-, or agent-scoped activation, prove that the authoritative "
                     "gate binds the intended scope and every required subject before "
                     "any capability-specific instruction, action, state mutation, or "
                     "user-facing concept is projected. The absence of a topology, operation list, "
-                    "or feature object proves only that one enabled path did not run. "
+                    "or feature object proves only that one enabled path did not run; "
+                    "it does not prove isolation of shared builders or serializers. "
                     "Run a paired counterfactual using otherwise identical inputs "
                     "with the gate disabled and enabled, and compare the disabled "
                     "result with the pre-change contract. Use `not_applicable` only "
@@ -1361,7 +1373,8 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                 "blocking evidence verdict, and no unresolved blocking finding. An "
                 "unverified required evidence item may explain REQUEST_CHANGES but never APPROVE; "
                 "diagnostic CI rows may remain unresolved or unverified without blocking it. "
-                "Run pr-review --check-result RESULT --packet PACKET before publishing."
+                "Run pr-review --check-result RESULT --packet PACKET before publishing; "
+                "this checks consistency, not evidence truth or remote freshness."
             ),
             "code_change_symbol_minimum": 2,
             "exact_head_recheck_required": True,

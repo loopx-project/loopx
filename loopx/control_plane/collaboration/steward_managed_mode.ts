@@ -18,9 +18,56 @@ import {projectTurnBoundary, turnPlanWorkSource} from "../quota/turn_envelope.ts
 import {projectGoalCreationExecutionRequest} from "../goals/creation_execution.ts";
 
 /** A stopped observation may get a new Chat carrier for the same native
- * identity. After a recovery starts, only another proven process restart can
- * continue it. The host reads the stopped worker lock, journals and native poll
- * receipts. Normal admission still checks ownership, deadline, permissions and user work. */
+ * identity. After a recovery starts, only another proven process restart or a
+ * cooldown-bounded pre-poll transient failure can continue it. The host reads
+ * the stopped worker lock, journals and native poll receipts. Normal admission
+ * still checks ownership, deadline, permissions and user work. */
+const WORKER_EXITED_ERROR =
+  "The LoopX Chat execution worker exited before this turn finished. Your conversation is saved; execution may have occurred. This turn was not retried automatically.";
+const MONITOR_RECOVERY_RETRY_COOLDOWN_MS = 300_000;
+const REPORT_VALIDATOR_PREFIX =
+  "from pathlib import Path; from loopx.capabilities.periodic_report.private_generation import validate_private_generation; "
+  + "validate_private_generation(Path(";
+
+function sameReportValidatorCommand(frozenCmd: unknown, requestCmd: unknown): boolean {
+  return Array.isArray(frozenCmd) && Array.isArray(requestCmd)
+    && frozenCmd.length === 3 && requestCmd.length === 3
+    && frozenCmd.every(part => typeof part === "string" && part.length > 0 && !part.includes("\0"))
+    && requestCmd.every(part => typeof part === "string" && part.length > 0 && !part.includes("\0"))
+    && frozenCmd[1] === "-c" && requestCmd[1] === "-c"
+    && frozenCmd[2] === requestCmd[2]
+    && frozenCmd[2].startsWith(REPORT_VALIDATOR_PREFIX)
+    && frozenCmd[2].endsWith("))");
+}
+
+function sameReportRequestField(key: string, priorValue: unknown, requestValue: unknown): boolean {
+  if (key === "validation_command" && sameReportValidatorCommand(priorValue, requestValue)) {
+    return true;
+  }
+  return JSON.stringify(priorValue) === JSON.stringify(requestValue);
+}
+
+function sameReportRequest(priorValue: unknown, request: JsonObject): boolean {
+  const prior = jsonObject(priorValue);
+  if (!prior) return false;
+  const keys = Object.keys(request);
+  return Object.keys(prior).length === keys.length
+    && keys.every(key => Object.hasOwn(prior, key) && sameReportRequestField(key, prior[key], request[key]));
+}
+
+function hasSingleManagerContextEvidence(basis: JsonObject, prior: JsonObject, events: unknown): boolean {
+  if (requireJsonObject(prior.actor, "original watch actor").schema_version !== "loopx_steward_managed_actor_v0"
+      || !Array.isArray(basis.contexts) || basis.contexts.length !== 1
+      || !Array.isArray(basis.phases) || basis.phases.length !== 1
+      || requireJsonObject(basis.phases[0], "original watch phase").phase !== "manager_context"
+      || !Array.isArray(events)
+      || events.filter(kind => kind === "agent.phase").length !== 1
+      || events.filter(kind => kind === "manager.context").length !== 1) {
+    return false;
+  }
+  return requireJsonObject(basis.contexts[0], "watch context").schema_version === "manager_turn_context_v1";
+}
+
 function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, session: JsonObject): void {
   if (request.monitor_restart_recovery === undefined) {
     if (params.monitor_restart_basis != null) throw new EffectRuntimeRequestError("watch recovery lacks its original request");
@@ -62,14 +109,34 @@ function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, se
     && Array.isArray(basis.phases) && basis.phases.length === 1
     && requireJsonObject(basis.phases[0], "original watch phase").phase === "manager_context"
     && Array.isArray(events) && events.filter(kind => kind === "agent.phase").length === 1;
+  // Post-context monitor failures (external signal outage, daemon worker exit,
+  // storage I/O error, or runtime unavailability) before any poll receipt or
+  // upstream model turn may recover once immediately and retry only after a
+  // bounded cooldown when strict single-context and zero-effect journal proofs
+  // hold; pre-context unknown worker launches remain closed.
+  const postContextWatchRecoverable = hasSingleManagerContextEvidence(basis, prior, events) && (
+    original.error_code === "runtime_unavailable"
+    || original.error_code === "runtime_error" && (
+      original.error === "steward monitor external signal source temporarily unavailable"
+      || original.error === "disk I/O error"
+      || original.error === WORKER_EXITED_ERROR
+    )
+  );
+  const completedAtMs = typeof original.completed_at === "string" ? Date.parse(original.completed_at) : NaN;
+  const observedAtMs = typeof basis.observed_at === "number" && Number.isFinite(basis.observed_at)
+    ? basis.observed_at * 1000 : NaN;
+  const chainedPostContextWatchRecoverable = postContextWatchRecoverable
+    && Number.isFinite(completedAtMs) && Number.isFinite(observedAtMs)
+    && observedAtMs - completedAtMs >= MONITOR_RECOVERY_RETRY_COOLDOWN_MS;
   if (Object.keys(recovery).join() !== "original_turn_id"
       || recovery.original_turn_id !== original.turn_id || typeof original.turn_id !== "string"
       || !/^[a-f0-9]{32}$/.test(original.turn_id) || original.session_id !== session.session_id
-      || original.status !== "failed" || !(original.error_code === "server_restarted" || scopeRefused || identityRefused)
+      || original.status !== "failed"
+      || !(original.error_code === "server_restarted" || scopeRefused || identityRefused || postContextWatchRecoverable)
       || original.origin !== "native_loopx" || original.loopx_execution !== true
       || original.response !== null || original.upstream_turn_id !== null || original.delta_count !== 0
       || prior.work_kind !== "monitor" || request.work_kind !== "monitor" || request.validation_command !== null
-      || (predecessor !== null && (original.error_code !== "server_restarted"
+      || (predecessor !== null && (!(original.error_code === "server_restarted" || chainedPostContextWatchRecoverable)
         || Object.keys(predecessor).join() !== "original_turn_id"
         || typeof predecessor.original_turn_id !== "string" || !/^[a-f0-9]{32}$/.test(predecessor.original_turn_id)
         || predecessor.original_turn_id === original.turn_id))
@@ -125,9 +192,9 @@ function admitReportQuotaRecovery(params: JsonObject, request: JsonObject, sessi
       || original.origin !== "native_loopx" || original.loopx_execution !== true || original.status !== "completed"
       || original.delta_count !== 0 || typeof original.upstream_turn_id !== "string" || !original.upstream_turn_id
       || Object.keys(prior).length !== keys.length
-      || keys.some(key => key === "turn_instance_id"
+      || keys.some(key => !Object.hasOwn(prior, key) || (key === "turn_instance_id"
         ? request[key] !== String(prior[key]) + ".quota-recovery"
-        : JSON.stringify(request[key]) !== JSON.stringify(prior[key]))
+        : !sameReportRequestField(key, prior[key], request[key])))
       || result.schema_version !== "loopx_turn_execution_v0" || result.ok !== false || result.mode !== "run_once"
       || result.status !== "failed" || result.result_kind !== "host_failure"
       || failure.schema_version !== "loopx_turn_host_failure_v0" || failure.attempt !== 1
@@ -165,8 +232,7 @@ function admitReportSelectionRecovery(params: JsonObject, request: JsonObject, s
   if (original.session_id !== sessionId || original.origin !== "native_loopx"
       || original.loopx_execution !== true || original.status !== "completed"
       || original.delta_count !== 0 || original.upstream_turn_id !== null
-      || Object.keys(prior).length !== Object.keys(request).length
-      || Object.keys(request).some(key => JSON.stringify(prior[key]) !== JSON.stringify(request[key]))
+      || !sameReportRequest(prior, request)
       || result.schema_version !== "loopx_turn_execution_v0" || result.ok !== false
       || result.mode !== "run_once" || result.effects_scope !== "current_invocation"
       || result.error_code !== "turn_todo_selection_deferred" || result.resume_turn_key != null
@@ -180,8 +246,6 @@ function admitReportSelectionRecovery(params: JsonObject, request: JsonObject, s
     throw new EffectRuntimeRequestError("report selection recovery requires the original proven pre-execution replan refusal");
   }
   if (proof.probe == null) return;
-  // The original host returned before calling its model when a fresh guard
-  // no longer owed governance. Absence of output alone cannot prove that.
   const probe = requireJsonObject(proof.probe, "original host admission probe");
   const observed = requireJsonObject(probe.turn, "original probe Chat Turn");
   const journal = requireJsonObject(probe.journal, "canonical probe journal");
@@ -191,41 +255,71 @@ function admitReportSelectionRecovery(params: JsonObject, request: JsonObject, s
   const plan = requireJsonObject(journal.plan, "probe plan");
   const route = requireJsonObject(plan.route, "probe route");
   const envelope = turnPlanWorkSource(plan, probe.source_number_tokens).work;
-  const action = requireJsonObject(envelope.action, "probe action");
-  const selected = requireJsonObject(action.selected_todo, "probe selected task");
   const identity = requireJsonObject(requireJsonObject(requireJsonObject(plan.transaction, "probe transaction")
     .settlement_plan, "probe settlement").identity, "probe identity");
   const host = requireJsonObject(journal.host, "probe host");
-  const stopped = requireJsonObject(journal.host_result, "probe host result");
+  const actor = requireJsonObject(request.actor, "report actor");
   const runningHere = params.turn != null && requireJsonObject(params.turn, "current Chat Turn").turn_id === observed.turn_id
     && ["starting", "running"].includes(String(observed.status));
-  if (observed.session_id !== sessionId || typeof observed.turn_id !== "string" || !/^[a-f0-9]{32}$/.test(observed.turn_id)
-      || observed.turn_id === original.turn_id
-      || observed.origin !== "native_loopx" || observed.loopx_execution !== true
-      || observed.delta_count !== 0 || observed.upstream_turn_id !== null || observed.error_code != null || observed.error != null
-      || JSON.stringify(observed.loopx_request) !== JSON.stringify(request)
-      || !(runningHere || observed.status === "completed"
-        && JSON.stringify(requireJsonObject(observed.response, "probe response").native_loopx) === JSON.stringify(result))
-      || journal.schema_version !== "loopx_turn_journal_v0" || !ENVELOPED_SHA256_PATTERN.test(String(journal.turn_key))
-      || journal.status !== "stopped" || journal.goal_id !== envelope.goal_id
-      || journal.host_attempt_count !== 1 || journal.result_kind !== "wait"
+  const commonInvalid = observed.session_id !== sessionId || typeof observed.turn_id !== "string"
+    || !/^[a-f0-9]{32}$/.test(observed.turn_id) || observed.turn_id === original.turn_id
+    || observed.origin !== "native_loopx" || observed.loopx_execution !== true
+    || observed.error_code != null || observed.error != null
+    || !sameReportRequest(observed.loopx_request, request)
+    || !(runningHere || observed.status === "completed"
+      && JSON.stringify(requireJsonObject(observed.response, "probe response").native_loopx) === JSON.stringify(result))
+    || journal.schema_version !== "loopx_turn_journal_v0" || !ENVELOPED_SHA256_PATTERN.test(String(journal.turn_key))
+    || journal.goal_id !== envelope.goal_id || journal.host_attempt_count !== 1
+    || host.kind !== "codex-app-server" || host.executable !== "built-in"
+    || inspection.schema_version !== "loopx_turn_journal_inspection_v1" || inspection.ok !== true
+    || inspection.goal_matches !== true || inspection.owner_matches !== true || inspection.turn_key_matches !== true
+    || inspection.journal_consistent !== true
+    || recovery.action !== "return_existing" || recovery.reinvoke_host !== false
+    || recorded.host_invoked !== true
+    || ["state_written", "quota_spent", "scheduler_acknowledged"].some(key => recorded[key] !== false)
+    || identity.goal_id !== envelope.goal_id || identity.agent_id !== envelope.agent_id
+    || identity.goal_id !== actor.goal_id || identity.agent_id !== actor.agent_id
+    || identity.turn_instance_id !== request.turn_instance_id + ".replan";
+  if (commonInvalid) {
+    throw new EffectRuntimeRequestError("report continuation requires its canonical host-only admission stop; retain all model or unknown work");
+  }
+  if (journal.status === "failed" && journal.result_kind === "validation_failed"
+      && journal.validation_stage === "host_result_contract") {
+    // Only once the blocking autonomous replan obligation is cleared elsewhere
+    // may a report whose prior governance probe failed host contract validation
+    // resume cleanly via one bounded .admission-resume carrier.
+    const receipt = requireJsonObject(journal.receipt, "probe receipt");
+    const eligibility = requireJsonObject(receipt.commit_eligibility, "probe commit eligibility");
+    const guard = requireJsonObject(probe.current_guard, "current guard observation");
+    if (inspection.journal_status !== "failed"
+        || JSON.stringify(journal.completed_phases) !== JSON.stringify(["host_execute", "typed_result"])
+        || receipt.ok !== true || receipt.failed_phase !== "validation" || receipt.status !== "failed"
+        || ["writeback", "quota_spend", "scheduler_ack"].some(key => eligibility[key] !== false)
+        || route.kind !== "replan_required"
+        || route.effective_action !== EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED
+        || envelope.effective_action !== EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED
+        || identity.binding_kind !== "autonomous_replan"
+        || guard.effective_action !== EffectiveAction.NORMAL_RUN
+        || guard.replan_action_packet != null) {
+      throw new EffectRuntimeRequestError("report continuation after validation failure requires a zero-write governance refusal and cleared replan");
+    }
+    return;
+  }
+  // The original host returned before calling its model when a fresh guard
+  // no longer owed governance. Absence of output alone cannot prove that.
+  const action = requireJsonObject(envelope.action, "probe action");
+  const selected = requireJsonObject(action.selected_todo, "probe selected task");
+  const stopped = requireJsonObject(journal.host_result, "probe host result");
+  if (observed.delta_count !== 0 || observed.upstream_turn_id !== null
+      || journal.status !== "stopped" || journal.result_kind !== "wait"
       || JSON.stringify(journal.completed_phases) !== JSON.stringify(["host_execute", "typed_result", "validation"])
-      || host.kind !== "codex-app-server" || host.executable !== "built-in"
       || stopped.schema_version !== "loopx_turn_result_v0" || stopped.turn_key !== journal.turn_key
       || stopped.result_kind !== "wait" || stopped.classification !== "report_replan_not_admitted"
-      || inspection.schema_version !== "loopx_turn_journal_inspection_v1" || inspection.ok !== true
-      || inspection.goal_matches !== true || inspection.owner_matches !== true || inspection.turn_key_matches !== true
-      || inspection.journal_consistent !== true || inspection.journal_status !== "stopped"
-      || recovery.action !== "return_existing" || recovery.reinvoke_host !== false
-      || recorded.host_invoked !== true || ["state_written", "quota_spent", "scheduler_acknowledged"].some(key => recorded[key] !== false)
+      || inspection.journal_status !== "stopped"
       || route.kind !== "ready_for_host" || route.effective_action !== EffectiveAction.NORMAL_RUN
       || envelope.effective_action !== EffectiveAction.NORMAL_RUN || envelope.replan_action_packet != null
       || action.must_attempt !== true || action.delivery_allowed !== true || selected.todo_id !== identity.todo_id
-      || identity.goal_id !== envelope.goal_id || identity.agent_id !== envelope.agent_id
-      || identity.goal_id !== requireJsonObject(request.actor, "report actor").goal_id
-      || identity.agent_id !== requireJsonObject(request.actor, "report actor").agent_id
-      || typeof identity.todo_id !== "string" || !/^todo_[A-Za-z0-9_-]{1,100}$/.test(identity.todo_id)
-      || identity.turn_instance_id !== request.turn_instance_id + ".replan") {
+      || typeof identity.todo_id !== "string" || !/^todo_[A-Za-z0-9_-]{1,100}$/.test(identity.todo_id)) {
     throw new EffectRuntimeRequestError("report continuation requires its canonical host-only admission stop; retain all model or unknown work");
   }
 }
@@ -340,7 +434,7 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
         || todo.action_kind !== "generate_periodic_report" || !(todo.status === "open" && !recovery || settlementOnly)) {
       throw new EffectRuntimeRequestError("report execution requires the original Session subscription, window and task");
     }
-  } else if (params.report_settlement_recovery != null) {
+  } else if (params.report_settlement_recovery != null || params.report_frozen_contract_recovery != null) {
     throw new EffectRuntimeRequestError("report recovery belongs only to its original calendar report");
   }
   if (scheduledWork) {
@@ -397,14 +491,48 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
 
 /** Both original conversation hosts use the native journal's no-model recovery. */
 function reportSettlementOnly(params: JsonObject, request: JsonObject, todo: JsonObject): boolean {
-  if (params.report_settlement_recovery == null) return false;
+  if (params.report_settlement_recovery == null) {
+    if (params.report_frozen_contract_recovery != null) {
+      throw new EffectRuntimeRequestError("original report recovery requires validated remaining effects without a model");
+    }
+    return false;
+  }
   const recovery = requireJsonObject(params.report_settlement_recovery, "native original report recovery");
   const decision = requireJsonObject(recovery.recovery_decision, "native journal recovery decision");
+  if (params.report_frozen_contract_recovery != null) {
+    const frozen = requireJsonObject(params.report_frozen_contract_recovery, "frozen report contract recovery");
+    const effects = requireJsonObject(recovery.recorded_effects, "native recorded effects");
+    const commonProof = recovery.schema_version === "loopx_turn_journal_inspection_v1" && recovery.ok === true
+      && recovery.goal_matches === true && recovery.owner_matches === true && recovery.turn_key_matches === true
+      && recovery.journal_consistent === true && todo.status === "open"
+      && effects.host_invoked === true && effects.state_written === false
+      && effects.quota_spent === false && effects.scheduler_acknowledged === false
+      && typeof frozen.turn_key === "string" && ENVELOPED_SHA256_PATTERN.test(frozen.turn_key)
+      && frozen.host_attempt_count === 1
+      && frozen.generation_verified === true && frozen.saved_candidate_verified === true;
+    const acceptedFrozen = commonProof && recovery.journal_status === "failed"
+      && Array.isArray(recovery.completed_phases) && recovery.completed_phases.length === 2
+      && recovery.completed_phases[0] === "host_execute" && recovery.completed_phases[1] === "typed_result"
+      && decision.action === "continue" && decision.resume_from === "host_execute" && decision.reinvoke_host === true
+      && frozen.result_kind === "validation_failed" && frozen.validation_stage === "host_result_contract";
+    const acceptedStoppedCandidate = commonProof && recovery.journal_status === "stopped"
+      && Array.isArray(recovery.completed_phases) && recovery.completed_phases.length === 3
+      && recovery.completed_phases[0] === "host_execute" && recovery.completed_phases[1] === "typed_result"
+      && recovery.completed_phases[2] === "validation"
+      && decision.action === "return_existing" && decision.resume_from === null && decision.reinvoke_host === false
+      && frozen.result_kind === "wait" && frozen.classification === "no_typed_host_result"
+      && !Object.hasOwn(frozen, "validation_stage");
+    if ((!acceptedFrozen && !acceptedStoppedCandidate) || params.preparing_model_context === true) {
+      throw new EffectRuntimeRequestError("original report recovery requires validated remaining effects without a model");
+    }
+    return true;
+  }
   const cachedGeneration = todo.status === "open" && recovery.journal_status === "failed"
     && decision.action === "continue" && decision.resume_from === "validation"
     && Array.isArray(recovery.completed_phases) && recovery.completed_phases.length === 2
     && recovery.completed_phases[0] === "host_execute" && recovery.completed_phases[1] === "typed_result";
-  const completedGeneration = todo.status === "done" && todo.completion_turn_key === request.turn_instance_id
+  const completedGeneration = todo.status === "done"
+    && [request.turn_instance_id, `${String(request.turn_instance_id)}.saved-candidate`].includes(String(todo.completion_turn_key))
     && (decision.action === "continue" && ["durable_writeback", "quota_spend", "scheduler_apply", "scheduler_ack"].includes(String(decision.resume_from))
       || decision.action === "return_existing" && recovery.journal_status === "committed");
   const accepted = recovery.schema_version === "loopx_turn_journal_inspection_v1" && recovery.ok === true
@@ -448,8 +576,10 @@ export function normalizeStewardManagedActor(value: unknown): JsonObject {
 export function observeStewardNativeExecutor(params: JsonObject): JsonObject {
   const binding = requireJsonObject(params.binding, "steward binding");
   const session = requireJsonObject(params.session, "original steward Session");
-  const supported = session.agent_id === "codex" && (binding.executor_endpoint_id === "codex"
-    || boundConversationExecutorMatches(binding, session));
+  const supported = (session.agent_id === "codex" && (binding.executor_endpoint_id === "codex"
+    || boundConversationExecutorMatches(binding, session)))
+    || (binding.executor_endpoint_id === "codex" && session.agent_id === "antigravity"
+      && boundConversationExecutorMatches(binding, session));
   return {execution_available: supported, ...(!supported ? {execution_error_code: "unsupported_executor"} : {})};
 }
 
@@ -579,7 +709,7 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
             || original.loopx_execution !== true || original.status !== "completed"
             || original.delta_count !== 0 || original.upstream_turn_id !== null
             || Object.keys(prior).length !== keys.length
-            || keys.some(key => JSON.stringify(prior[key]) !== JSON.stringify(request[key]))
+            || keys.some(key => !Object.hasOwn(prior, key) || !sameReportRequestField(key, prior[key], request[key]))
             || result.schema_version !== "loopx_turn_execution_v0" || result.ok !== false
             || result.mode !== "run_once" || result.status !== "failed" || result.result_kind !== "host_failure"
             || result.reason !== "first-party Host runtime rejected: stale_goal_authority"
@@ -609,7 +739,8 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
       throw new EffectRuntimeRequestError("launch recovery must retain the original native Turn key");
     }
   } else if (request.report_window_id !== undefined || request.report_subscription_revision !== undefined
-      || request.resume_turn_key !== undefined || params.report_settlement_recovery != null || params.report_launch_recovery != null) {
+      || request.resume_turn_key !== undefined || params.report_settlement_recovery != null
+      || params.report_frozen_contract_recovery != null || params.report_launch_recovery != null) {
     throw new EffectRuntimeRequestError("report fields belong only to an original calendar report");
   }
   let refreshScope = false;

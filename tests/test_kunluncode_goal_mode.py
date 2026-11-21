@@ -179,6 +179,12 @@ def test_mcp_uses_kunluncode_profile_and_rejects_agent_impersonation(
                         ),
                         "settlement_identity": identity.as_dict(),
                         "settlement_result": {"failure": None},
+                        "settlement_progress": {
+                            "schema_version": "quota_settlement_progress_v0",
+                            "state": "settled",
+                            "next_step": None,
+                            "quota_spend_source": "heartbeat",
+                        },
                     }
                 )
             else:
@@ -188,6 +194,12 @@ def test_mcp_uses_kunluncode_profile_and_rejects_agent_impersonation(
                         "appended": True,
                         "settlement_identity": identity.as_dict(),
                         "settlement_result": {"failure": None},
+                        "settlement_progress": {
+                            "schema_version": "quota_settlement_progress_v0",
+                            "state": "settled",
+                            "next_step": None,
+                            "quota_spend_source": "heartbeat",
+                        },
                     }
                 )
         return subprocess.CompletedProcess(command, 0, payload, "")
@@ -281,6 +293,12 @@ def test_fastmcp_complete_task_forwards_complete_task_lease_fence(
                         "completion_continuation": "active_goal",
                         "settlement_identity": identity.as_dict(),
                         "settlement_result": {"failure": None},
+                        "settlement_progress": {
+                            "schema_version": "quota_settlement_progress_v0",
+                            "state": "settled",
+                            "next_step": None,
+                            "quota_spend_source": "heartbeat",
+                        },
                     }
                 )
             else:
@@ -290,6 +308,12 @@ def test_fastmcp_complete_task_forwards_complete_task_lease_fence(
                         "appended": True,
                         "settlement_identity": identity.as_dict(),
                         "settlement_result": {"failure": None},
+                        "settlement_progress": {
+                            "schema_version": "quota_settlement_progress_v0",
+                            "state": "settled",
+                            "next_step": None,
+                            "quota_spend_source": "heartbeat",
+                        },
                     }
                 )
         return subprocess.CompletedProcess(command, 0, payload, "")
@@ -408,6 +432,12 @@ def test_complete_task_spends_bound_to_selected_todo_and_refreshes_state(
                     "status": "done",
                     "settlement_identity": identity.as_dict(),
                     "settlement_result": {"failure": None},
+                    "settlement_progress": {
+                        "schema_version": "quota_settlement_progress_v0",
+                        "state": "settled",
+                        "next_step": None,
+                        "quota_spend_source": "heartbeat",
+                    },
                 }
             )
         else:
@@ -417,6 +447,12 @@ def test_complete_task_spends_bound_to_selected_todo_and_refreshes_state(
                     "appended": True,
                     "settlement_identity": identity.as_dict(),
                     "settlement_result": {"failure": None},
+                    "settlement_progress": {
+                        "schema_version": "quota_settlement_progress_v0",
+                        "state": "settled",
+                        "next_step": None,
+                        "quota_spend_source": "heartbeat",
+                    },
                 }
             )
         return subprocess.CompletedProcess(command, 0, payload, "")

@@ -20,12 +20,7 @@ if TYPE_CHECKING:
     from .capabilities.native_chat.transports import ChatConversationTransports
 from .attached_session_api import AttachedSessionRequestMixin
 from .zcode_goal_mode.api import ZCodeGoalRequestMixin
-from .chat import (
-    TodoReviewPreviewConflict,
-    apply_todo_review_preview,
-    build_todo_review_preview,
-    redact_local_paths,
-)
+from .chat import TodoReviewPreviewConflict, redact_local_paths
 from .chat_agent import CodexChatAgentError
 from .capabilities.native_chat.project_context import ChatProjectContexts
 from .chat_attachments import (
@@ -45,6 +40,7 @@ from .chat.result_files_api import ChatResultFilesRequestMixin
 from .capabilities.native_chat.model_settings_api import ChatModelSettingsRequestMixin
 from .capabilities.native_chat.queue_api import ChatQueueRequestMixin
 from .chat.status_api import ChatStatusRequestMixin
+from .chat.todo_source import review_todo_create
 from .chat_runtime import (
     STEERING_NOT_DELIVERED_CODES,
     ChatRuntimeController,
@@ -1179,19 +1175,10 @@ class ChatRequestHandler(
             if not goal_id:
                 raise ValueError("goal_id is required")
             self._registry_and_goal(goal_id)
-            if apply:
-                payload = apply_todo_review_preview(
-                    registry_path=self.server.registry_path,
-                    goal_id=goal_id,
-                    text=text,
-                    preview_id=str(body.get("preview_id") or ""),
-                )
-            else:
-                payload = build_todo_review_preview(
-                    registry_path=self.server.registry_path,
-                    goal_id=goal_id,
-                    text=text,
-                )
+            payload = review_todo_create(
+                self.server, goal_id=goal_id, text=text,
+                preview_id=str(body.get("preview_id") or "") if apply else None,
+            )
         except TodoReviewPreviewConflict as exc:
             self._send_error(str(exc), status=409, todo_receipt=exc.receipt)
             return
@@ -1412,7 +1399,7 @@ class ChatRequestHandler(
             {
                 "ok": True,
                 "schema_version": "loopx_chat_action_v1",
-                "proposal": proposal,
+                "proposal": self.server.action_service.project_task_dispatch(proposal),
             }
         )
 
@@ -1436,7 +1423,7 @@ class ChatRequestHandler(
             {
                 "ok": True,
                 "schema_version": "loopx_chat_action_list_v1",
-                "proposals": proposals,
+                "proposals": [self.server.action_service.project_task_dispatch(item) for item in proposals],
             }
         )
 
@@ -1881,8 +1868,11 @@ def serve_chat(
         raise ValueError("loopx chat requires a loopback --host such as 127.0.0.1")
     resolved_assets = (assets_dir or default_chat_assets_dir()).expanduser().resolve()
     if assets_dir is None:
-        from .presentation.chat_bundle import validate_bundle
-        validate_bundle(resolved_assets, source_root=Path(__file__).resolve().parents[1])
+        from .presentation.chat_bundle import runtime_source_root, validate_bundle
+        validate_bundle(
+            resolved_assets,
+            source_root=runtime_source_root(Path(__file__).resolve().parents[1]),
+        )
     if not (resolved_assets / "index.html").is_file():
         raise FileNotFoundError("LoopX Chat web assets are unavailable; reinstall LoopX or rebuild the chat bundle")
     resolved_registry_path = registry_path or (Path.home() / ".loopx" / "registry.json")

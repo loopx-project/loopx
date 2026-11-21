@@ -51,7 +51,7 @@ OpenCode idle event -> loopx quota should-run
 
 Use `/goal pause` to pause this session and `/goal resume` to re-arm it. Core
 Goal stop or zero compute must also be resolved through its owning Goal/quota
-settings; Idle events and ordinary chat do not
+settings; host resume does not grant work. Idle events and ordinary chat do not
 clear an explicit pause. Permission denial or host errors also disarm the bridge.
 An interrupted tool's result/settlement remains the original operation's duty.
 The bridge disarms its local continuation before awaiting a pause/block tool or
