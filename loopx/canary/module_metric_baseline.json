@@ -65,9 +65,8 @@
       "dict_any_count": 0
     },
     "loopx/chat_server.py": {
-      "any_count": 25,
-      "dict_any_count": 0,
-      "lines": 2058
+      "any_count": 16,
+      "dict_any_count": 0
     },
     "loopx/control_plane/agents/agent_lane_recommendation.py": {
       "any_count": 0,
