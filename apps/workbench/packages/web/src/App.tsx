@@ -2445,6 +2445,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const agentLabel = (id: string) => agents.find((a) => a.id === id)?.label ?? id;
   const capsOf = (id: string) => agents.find((a) => a.id === id)?.capabilities;
   const activeCaps = capsOf(activeAgent);
+  const sideAgent = sideAsk?.source?.agent ?? activeAgent;
+  const sideAgentInfo = agents.find(agent => agent.id === sideAgent);
   const models = modelsByAgent[activeAgent] ?? [];
   const permissionModes = activeCaps?.permissionModes ?? [];
   const effortLevels = activeCaps?.effortLevels ?? [];
@@ -3593,6 +3595,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           note={noteSignal?.draftKey === composerDraftKey ? noteSignal.note : null}
           onNoteConsumed={consumeNote}
           onNotesChange={onNotesChange}
+          quoteSource={(threadId, turnId, sourceHost) => sourceHost === (hostId ?? null) && threadId !== selectedId && threads.some(thread => thread.id === threadId)
+            ? { threadId, turnId, elsewhere: true } : undefined}
           lastSent={selected ? lastSent : null}
         />}
         </>}
@@ -3762,8 +3766,13 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
       {sideAsk && (
         <SideChat
           api={api}
-          agent={sideAsk.source?.agent ?? activeAgent}
-          agentLabel={agentLabel(sideAsk.source?.agent ?? activeAgent)}
+          agent={sideAgent}
+          agentInfo={sideAgentInfo}
+          models={modelsByAgent[sideAgent] ?? []}
+          savedPreference={modelPreferences.preferences[sideAgent]}
+          onModelsLoaded={(list) => acceptModelCatalog(sideAgent, list)}
+          onPreferenceChanged={() => void modelPreferences.refresh()}
+          agentLabel={agentLabel(sideAgent)}
           cwd={sideAsk.source?.cwd ?? activeCwd}
           permissionMode={sideAsk.source?.permissionMode ?? permission}
           model={sideAsk.source ? sideAsk.source.model : model}
@@ -3771,7 +3780,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           quoteText={sideAsk.text}
           sourceTitle={(sideAsk.source ?? selected)?.title ?? null}
           forkSourceId={sideAsk.source ? (capsOf(sideAsk.source.agent)?.fork && !forkBlocked(sideAsk.source) ? sideAsk.source.id : null) : selected && activeCaps?.fork && !forkBlocked(selected) ? selected.id : null}
-          attachBlocked={sideAsk.source ? (capsOf(sideAsk.source.agent)?.images ? null : t('app.noImages', agentLabel(sideAsk.source.agent))) : attachBlocked}
+          attachBlocked={sideAgentInfo?.capabilities.images === false ? t('app.noImages', agentLabel(sideAgent)) : null}
           onClose={() => setSideAsk(null)}
           onError={handleError}
           onThreadCreated={(t) => setThreads((prev) => [t, ...prev.filter((x) => x.id !== t.id)])}
