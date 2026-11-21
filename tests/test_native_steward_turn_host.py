@@ -832,8 +832,8 @@ def test_native_submission_history_read_allows_input_and_rejects_changed_binding
         store.update_session(sid, status="ready", active_turn_id=None)
         observe_quota = host.report_quota_request
 
-        def checked_quota(turn):
-            result = observe_quota(turn)
+        def checked_quota(turn, *, report_window=None):
+            result = observe_quota(turn, report_window=report_window)
             quota_checked.set()
             return result
 

@@ -1049,6 +1049,102 @@ def test_historical_context_recovery_reads_only_proven_pre_execution_failure(tmp
     assert set(calls) <= {"thread/turns/list", "thread/items/list"}
 
 
+@pytest.mark.parametrize("case", ["valid", "answer", "completed", "active", "policy", "empty", "pruned", "rpc-error"])
+def test_failed_request_readback_distinguishes_contradiction_from_unavailable_history(tmp_path, monkeypatch, case):
+    session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
+        messages=queue.Queue(), thread_id="original-thread", work_dir=tmp_path, response_timeout_sec=.2)
+
+    def write(packet):
+        method = packet["method"]
+        if case == "rpc-error":
+            session.messages.put({"id": packet["id"], "error": {"code": -32000, "message": "history unavailable"}})
+            return
+        if method == "thread/turns/list":
+            if case == "empty":
+                rows = []
+            elif case == "pruned":
+                rows = [{"id": "other-turn", "status": "completed"}]
+            else:
+                status = "completed" if case == "completed" else "failed"
+                info = "cyberPolicy" if case == "policy" else "other"
+                rows = [{"id": "failed", "status": status, "error": {"codexErrorInfo": info}}]
+                if case == "active":
+                    rows.insert(0, {"id": "later", "status": "inProgress"})
+            result = {"data": rows}
+        else:
+            rows = [{"turnId": "failed", "item": {"id": "input", "type": "userMessage"}}]
+            if case == "answer":
+                rows.append({"turnId": "failed", "item": {"id": "reply", "type": "agentMessage"}})
+            result = {"data": rows}
+        session.messages.put({"id": packet["id"], "result": result})
+
+    monkeypatch.setattr(session, "_write", write)
+    default_proof = failed_request_readback(session, "failed")
+    marked_proof = failed_request_readback(session, "failed", include_contradiction=True)
+    if case == "valid":
+        expected = {"thread_id": "original-thread", "turn_id": "failed",
+            "only_original_user_item": True, "codex_error_info": "other"}
+        assert default_proof == expected and marked_proof == expected
+    elif case in {"answer", "completed", "active", "policy"}:
+        assert default_proof is None
+        assert marked_proof == {"contradicted": True}
+    else:
+        assert default_proof is None
+        assert marked_proof is None
+
+
+@pytest.mark.parametrize("newer_state", ["contradicted", "empty"])
+def test_failed_request_observation_stops_immediately_on_contradiction(tmp_path, monkeypatch, newer_state):
+    import loopx.capabilities.native_chat.codex_adapter as codex_adapter
+
+    script = tmp_path / "fake_codex.py"
+    queried_threads = tmp_path / "queried.jsonl"
+    script.write_text(f"""import json, sys
+from pathlib import Path
+log = Path({str(queried_threads)!r})
+for raw in sys.stdin:
+    req = json.loads(raw)
+    method = req.get("method")
+    if method == "initialize":
+        print(json.dumps({{"id": req["id"], "result": {{}}}}), flush=True)
+    elif method == "thread/turns/list":
+        tid = req["params"]["threadId"]
+        with log.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({{"method": method, "threadId": tid}}) + "\\n")
+        if tid == "newer-thread":
+            rows = [] if {newer_state!r} == "empty" else [{{"id": "target-turn", "status": "failed", "error": {{"codexErrorInfo": "other"}}}}]
+        else:
+            rows = [{{"id": "target-turn", "status": "failed", "error": {{"codexErrorInfo": "other"}}}}]
+        print(json.dumps({{"id": req["id"], "result": {{"data": rows}}}}), flush=True)
+    elif method == "thread/items/list":
+        tid = req["params"]["threadId"]
+        items = [{{"turnId": "target-turn", "item": {{"id": "u1", "type": "userMessage"}}}}]
+        if tid == "newer-thread":
+            items.append({{"turnId": "target-turn", "item": {{"id": "a1", "type": "agentMessage"}}}})
+        print(json.dumps({{"id": req["id"], "result": {{"data": items}}}}), flush=True)
+""", encoding="utf-8")
+    real_popen = codex_adapter.subprocess.Popen
+
+    def launch(command, *args, **kwargs):
+        if command and command[0] == "fake-codex":
+            command = [sys.executable, str(script)]
+        return real_popen(command, *args, **kwargs)
+
+    monkeypatch.setattr(codex_adapter.subprocess, "Popen", launch)
+    result = codex_adapter.CodexAppServerAdapter.failed_request_observation(
+        codex_bin="fake-codex", codex_home=tmp_path,
+        thread_ids=["newer-thread", "older-thread"], turn_id="target-turn",
+        include_contradiction=True)
+    observed = [json.loads(line)["threadId"] for line in queried_threads.read_text(encoding="utf-8").splitlines()]
+    if newer_state == "contradicted":
+        assert result == {"contradicted": True, "thread_id": "newer-thread", "turn_id": "target-turn"}
+        assert observed == ["newer-thread"]
+    else:
+        assert result == {"thread_id": "older-thread", "turn_id": "target-turn",
+            "only_original_user_item": True, "codex_error_info": "other"}
+        assert observed == ["newer-thread", "older-thread", "older-thread"]
+
+
 @pytest.mark.parametrize("fault", [None, "older", "active", "tool", "answer", "reasoning", "compaction",
     "unknown", "correction", "foreign", "duplicate", "changed-items", "changed-turn", "native-error"])
 def test_disconnected_latest_interruption_requires_stable_user_only_inventory(tmp_path, monkeypatch, fault):

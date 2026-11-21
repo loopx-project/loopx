@@ -451,7 +451,7 @@ class ManagedSessionTurn:
                     retained = report_turn(self.store, request["actor"], report_window)
                     if retained is not None and retained["turn_id"] != existing["turn_id"]:
                         return retained, False
-                    quota_request = host.report_quota_request(existing)
+                    quota_request = host.report_quota_request(existing, report_window=report_window)
                     if quota_request is not None:
                         request = quota_request
                         client_id += ".quota-recovery"
