@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import threading
 from collections.abc import Mapping
 from hashlib import sha256
 from pathlib import Path
@@ -56,11 +57,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout-seconds", type=float, default=90.0)
     parser.add_argument("--required-vision-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
+    parser.add_argument("--max-workers", type=int, default=1)
     return parser
 
 
 def main() -> int:
     args = _parser().parse_args()
+    if args.max_workers < 1:
+        raise ValueError("--max-workers must be at least 1")
     source = collect_release_source_identity(args.repo_root)
     if source["git_dirty"]:
         raise RuntimeError(
@@ -68,14 +72,17 @@ def main() -> int:
         )
     provider_call_count = 0
     provider_models: set[str] = set()
+    transport_lock = threading.Lock()
 
     def counted_transport(
         *, endpoint: str, headers: Mapping[str, str], body: bytes,
         timeout_seconds: float,
     ) -> Mapping[str, Any]:
         nonlocal provider_call_count
-        provider_call_count += 1
-        provider_models.add(json.loads(body)["model"])
+        model_id = json.loads(body)["model"]
+        with transport_lock:
+            provider_call_count += 1
+            provider_models.add(model_id)
         return _direct_ark_transport(
             endpoint=endpoint, headers=headers, body=body,
             timeout_seconds=timeout_seconds,
@@ -162,6 +169,7 @@ def main() -> int:
             scoped_gate_successor_actor=qualify_scoped_gate_successor,
             capability_monitor_repair_actor=qualify_capability_monitor_repair,
             terminal_settlement_actor=qualify_terminal_settlement,
+            max_workers=args.max_workers,
         )
     result["source"] = source
     # An actor invocation can make several HTTP calls while using tools.

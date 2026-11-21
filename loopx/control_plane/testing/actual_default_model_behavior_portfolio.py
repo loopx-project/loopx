@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import re
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -1388,6 +1390,21 @@ def _contrast_result(
     }
 
 
+def _aborted_scenario_result(spec: _ScenarioSpec) -> dict[str, Any]:
+    return {
+        "scenario_id": spec.scenario_id,
+        "actor_kind": spec.actor_kind,
+        "phase": spec.phase,
+        "expected_route": spec.expected_route,
+        "status": "not_run",
+        "repeats_required": ACTUAL_DEFAULT_MODEL_BEHAVIOR_REPEAT_ATTEMPTS,
+        "repeats_completed": 0,
+        "observed_routes": [],
+        "failure_codes": ["portfolio_aborted_after_actor_error"],
+        "receipt_digests": [],
+    }
+
+
 def run_actual_default_model_behavior_portfolio(
     scenario_packets: Mapping[str, Mapping[str, Any]],
     *,
@@ -1400,8 +1417,11 @@ def run_actual_default_model_behavior_portfolio(
     scoped_gate_successor_actor: Callable[[str], Mapping[str, Any]],
     capability_monitor_repair_actor: Callable[[str], Mapping[str, Any]],
     terminal_settlement_actor: Callable[[str], Mapping[str, Any]],
+    max_workers: int = 1,
 ) -> dict[str, Any]:
     """Run the fixed low-frequency one-arm portfolio with bounded receipts."""
+    if isinstance(max_workers, bool) or not isinstance(max_workers, int) or max_workers < 1:
+        raise ValueError("max_workers must be a positive integer")
     expected_ids = {spec.scenario_id for spec in _SCENARIOS}
     supplied_ids = set(scenario_packets)
     if supplied_ids != expected_ids:
@@ -1429,28 +1449,9 @@ def run_actual_default_model_behavior_portfolio(
         for spec in _SCENARIOS
     }
     _validate_contrast_source_contracts(contracts)
-    results: list[dict[str, Any]] = []
-    observations: dict[str, list[dict[str, Any]]] = {}
-    actor_call_count = 0
-    aborted = False
-    for spec in _SCENARIOS:
-        if aborted:
-            results.append(
-                {
-                    "scenario_id": spec.scenario_id,
-                    "actor_kind": spec.actor_kind,
-                    "phase": spec.phase,
-                    "expected_route": spec.expected_route,
-                    "status": "not_run",
-                    "repeats_required": ACTUAL_DEFAULT_MODEL_BEHAVIOR_REPEAT_ATTEMPTS,
-                    "repeats_completed": 0,
-                    "observed_routes": [],
-                    "failure_codes": ["portfolio_aborted_after_actor_error"],
-                    "receipt_digests": [],
-                }
-            )
-            continue
-        result, actor_error, scenario_observations = _scenario_result(
+
+    def _run_one(spec: _ScenarioSpec) -> tuple[dict[str, Any], bool, list[dict[str, Any]]]:
+        return _scenario_result(
             spec,
             scenario_packets[spec.scenario_id],
             expected=contracts[spec.scenario_id],
@@ -1463,12 +1464,48 @@ def run_actual_default_model_behavior_portfolio(
             capability_monitor_repair_actor=capability_monitor_repair_actor,
             terminal_settlement_actor=terminal_settlement_actor,
         )
-        actor_call_count += int(result["repeats_completed"])
-        if actor_error:
-            actor_call_count += 1
-            aborted = True
-        results.append(result)
-        observations[spec.scenario_id] = scenario_observations
+
+    results: list[dict[str, Any]] = []
+    observations: dict[str, list[dict[str, Any]]] = {}
+    actor_call_count = 0
+    if max_workers == 1:
+        aborted = False
+        for spec in _SCENARIOS:
+            if aborted:
+                results.append(_aborted_scenario_result(spec))
+                continue
+            result, actor_error, scenario_observations = _run_one(spec)
+            actor_call_count += int(result["repeats_completed"])
+            if actor_error:
+                actor_call_count += 1
+                aborted = True
+            results.append(result)
+            observations[spec.scenario_id] = scenario_observations
+    else:
+        lock = threading.Lock()
+        aborted = False
+
+        def _worker(
+            spec: _ScenarioSpec,
+        ) -> tuple[_ScenarioSpec, dict[str, Any], bool, list[dict[str, Any]]]:
+            nonlocal aborted
+            with lock:
+                if aborted:
+                    return spec, _aborted_scenario_result(spec), False, []
+            result, actor_error, scenario_observations = _run_one(spec)
+            if actor_error:
+                with lock:
+                    aborted = True
+            return spec, result, actor_error, scenario_observations
+
+        worker_count = min(max_workers, len(_SCENARIOS))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as pool:
+            completed = list(pool.map(_worker, _SCENARIOS))
+        for spec, result, actor_error, scenario_observations in completed:
+            actor_call_count += int(result["repeats_completed"]) + (1 if actor_error else 0)
+            results.append(result)
+            if result["status"] != "not_run":
+                observations[spec.scenario_id] = scenario_observations
 
     contrast_results = [_contrast_result(spec, observations) for spec in _CONTRASTS]
     passed = all(result["status"] == "passed" for result in results) and all(

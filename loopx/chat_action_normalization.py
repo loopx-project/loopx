@@ -761,6 +761,7 @@ class ChatActionNormalizationMixin:
                 ),
             }
         if action_kind == "monitor.create":
+            from .capabilities.native_chat.steward_monitor import normalize_steward_monitor_scope
             values = self._allowed_parameters(
                 parameters,
                 allowed={
@@ -773,6 +774,7 @@ class ChatActionNormalizationMixin:
                     "timezone",
                     "stop_condition",
                     "notification_rule",
+                    "signal_scope",
                 },
             )
             goal_id = _opaque(values.get("goal_id"), field="goal_id")
@@ -785,6 +787,10 @@ class ChatActionNormalizationMixin:
                 "cadence": _normalize_cadence(values.get("cadence")),
                 "timezone": _text(values.get("timezone"), field="timezone", limit=80),
             }
+            if values.get("signal_scope") is not None:
+                if not isinstance(values["signal_scope"], Mapping):
+                    raise ValueError("signal_scope must be an object")
+                result["signal_scope"] = normalize_steward_monitor_scope(values["signal_scope"])
             if values.get("task_repository"):
                 raw_repo = _text(values["task_repository"], field="task_repository", limit=200)
                 if _REPO_PATTERN.fullmatch(raw_repo):
@@ -805,6 +811,7 @@ class ChatActionNormalizationMixin:
                 )
             return result
         if action_kind == "monitor.update":
+            from .capabilities.native_chat.steward_monitor import normalize_steward_monitor_scope
             values = self._allowed_parameters(
                 parameters,
                 allowed={
@@ -819,6 +826,7 @@ class ChatActionNormalizationMixin:
                     "stop_condition",
                     "session_id",
                     "endpoint_id",
+                    "signal_scope",
                 },
             )
             goal_id = _opaque(values.get("goal_id"), field="goal_id")
@@ -834,6 +842,10 @@ class ChatActionNormalizationMixin:
                 "agent_id": _opaque(values.get("agent_id"), field="agent_id"),
                 "operation": operation,
             }
+            if values.get("signal_scope") is not None:
+                if not isinstance(values["signal_scope"], Mapping):
+                    raise ValueError("signal_scope must be an object")
+                result["signal_scope"] = normalize_steward_monitor_scope(values["signal_scope"])
             if values.get("endpoint_id"):
                 endpoint_id = _opaque(values["endpoint_id"], field="endpoint_id")
                 result["endpoint_id"] = endpoint_id
@@ -863,7 +875,7 @@ class ChatActionNormalizationMixin:
                 result["session_id"] = _opaque(values["session_id"], field="session_id")
             if operation == "edit" and len(result) == 4:
                 raise ValueError(
-                    "monitor edit requires target, target_key, cadence, or stop_condition"
+                    "monitor edit requires target, target_key, cadence, stop_condition, or signal_scope"
                 )
             return result
         if action_kind == "pr.merge":

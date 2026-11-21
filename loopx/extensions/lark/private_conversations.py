@@ -1144,7 +1144,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
             **({"image_keys": image_keys} if image_keys else {}),
             **({"reply_placement": reply_placement} if reply_placement is not None else {}),
             **({"delivery_id": delivery_id} if delivery_id is not None else {}),
-            finalize_reactions=finalize_source and not edit_only and kind not in {"admission", "progress", "periodic_report"} and not (kind == "terminal" and record.get("commission_resources")),
+            finalize_reactions=finalize_source and not edit_only and kind not in {"admission", "progress", "periodic_report", "steward_monitor_report"} and not (kind == "terminal" and record.get("commission_resources")),
             source_authority_verifier=lambda profile, chat, message: (
                 source_authority(profile, chat, message)
                 if authorization_check is None or authorization_check() else (None, False)))

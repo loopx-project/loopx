@@ -45,8 +45,8 @@ VISION_HOST_INSTRUCTION = (
     "Use the supplied Vision schema version and a proposed vision_patch with acceptance_summary. "
     "Write path_delta using its schema, outcome, prior_assumption, observed_reality, "
     "one retained, changed or stopped item, and the evidence_id or source_ref actually read. "
-    "If required_fields includes agent_vision.stride_decision, use stride_control.minimal_example "
-    "for its shape and bind independent axes and minimum_evidence to this same source. "
+    "If required_fields includes agent_vision.stride_decision, set top-level stride_decision "
+    "from stride_control.minimal_example and bind independent axes and minimum_evidence to this same source. "
     "Keep prose strings under 80 characters and cite the observed source. "
     "Add optional fields only when the evidence requires them. "
     "Fill the projected refresh-state action with the draft path and keep the original Turn and obligation binding. "
@@ -133,6 +133,46 @@ def _rows(state: _QualificationState) -> list[dict[str, Any]]:
     return [json.loads(line) for line in index.read_text(encoding="utf-8").split("\n") if line]
 
 
+def _verify_vision_settlement(
+    state: _QualificationState,
+    *,
+    binding: Mapping[str, Any],
+    execute: Callable[..., str],
+) -> None:
+    replay = QuotaToolContext.from_output(
+        execute(
+            state.fixture.quota_guard_command,
+            fixture=state.fixture,
+            turn_instance_id=state.turn_instance_id,
+        )
+    ).packet
+    following = QuotaToolContext.from_output(
+        execute(
+            state.fixture.quota_guard_command,
+            fixture=state.fixture,
+            turn_instance_id=f"{state.turn_instance_id}-readback",
+        )
+    ).packet
+    spends = [row for row in _rows(state) if row.get("classification") == "quota_slot_spent"]
+    if replay.get("effective_action") != EffectiveAction.HEARTBEAT_SETTLED_SKIP.value or len(spends) != 1:
+        raise ValueError("vision_closeout_settlement_readback_failed")
+    remaining = dict(following.get("autonomous_replan_obligation") or {})
+    remaining_kinds = {item["kind"] for item in remaining.get("triggers", [])}
+    if remaining.get("obligation_id") == binding["id"] or remaining_kinds.intersection(
+        {"required_agent_vision_missing", "vision_checkpoint_missing"}
+    ):
+        raise ValueError("vision_closeout_rearmed_after_settlement")
+    # A real successor requirement may follow a newly authored continuing
+    # vision. Do not force the model to declare as_needed or no_followup just
+    # to obtain a quiet next wake.
+    assert state.vision_closeout is not None
+    state.vision_closeout.update(settled=True, spend_count=1, original_obligation_closed=True)
+    state.semantic_reentry_observation = {
+        "effective_action": following.get("effective_action"),
+        "trigger_kinds": sorted(remaining_kinds),
+    }
+
+
 def dispatch_vision_closeout(
     command: str, state: _QualificationState, *, execute: Callable[..., str],
 ) -> tuple[str, str, bool] | None:
@@ -166,12 +206,13 @@ def dispatch_vision_closeout(
             raise VisionHostAdmissionRejected("vision_closeout_evidence_not_observed", "No refresh was executed: path_delta.evidence_refs must identify the source evidence actually read. Accepted references: " + json.dumps(sorted(observed_refs)))
         output = execute(command, fixture=state.fixture, turn_instance_id=state.turn_instance_id)
         rows = _rows(state)
-        if not rows:
+        writebacks = [row for row in rows if row.get("classification") != "quota_slot_spent"]
+        if not writebacks:
             raise VisionHostAdmissionRejected(
                 "vision_closeout_durable_writeback_missing",
                 "No run receipt was written; revise the vision decision and retry.",
             )
-        row = rows[-1]
+        row = writebacks[-1]
         semantic = dict(row.get("autonomous_replan_ack") or {}).get("semantic_delta") or {}
         checkpoint = dict(row.get("vision_checkpoint") or {})
         identity = dict(row.get("settlement_identity") or {})
@@ -181,25 +222,14 @@ def dispatch_vision_closeout(
             raise ValueError("vision_closeout_durable_writeback_incomplete")
         state.semantic_delta = semantic
         state.vision_closeout = {"checkpoint_satisfied": True, "bound_writeback": True, "settled": False}
+        if any(row.get("classification") == "quota_slot_spent" for row in rows):
+            _verify_vision_settlement(state, binding=binding, execute=execute)
+            return output, "semantic_replan_writeback", True
         return output, "semantic_replan_writeback", False
     if state.vision_closeout is None:
         raise ValueError("vision_closeout_spend_before_writeback")
+    if state.vision_closeout.get("settled"):
+        raise ValueError("vision_closeout_already_settled")
     output = execute(command, fixture=state.fixture, turn_instance_id=state.turn_instance_id)
-    replay = QuotaToolContext.from_output(execute(state.fixture.quota_guard_command, fixture=state.fixture,
-                                turn_instance_id=state.turn_instance_id)).packet
-    following = QuotaToolContext.from_output(execute(state.fixture.quota_guard_command, fixture=state.fixture,
-                                   turn_instance_id=f"{state.turn_instance_id}-readback")).packet
-    spends = [row for row in _rows(state) if row.get("classification") == "quota_slot_spent"]
-    if replay.get("effective_action") != EffectiveAction.HEARTBEAT_SETTLED_SKIP.value or len(spends) != 1:
-        raise ValueError("vision_closeout_settlement_readback_failed")
-    remaining = dict(following.get("autonomous_replan_obligation") or {})
-    remaining_kinds = {item["kind"] for item in remaining.get("triggers", [])}
-    if remaining.get("obligation_id") == binding["id"] or remaining_kinds.intersection({"required_agent_vision_missing", "vision_checkpoint_missing"}):
-        raise ValueError("vision_closeout_rearmed_after_settlement")
-    # A real successor requirement may follow a newly authored continuing
-    # vision. Do not force the model to declare as_needed or no_followup just
-    # to obtain a quiet next wake.
-    state.vision_closeout.update(settled=True, spend_count=1, original_obligation_closed=True)
-    state.semantic_reentry_observation = {"effective_action": following.get("effective_action"),
-                                          "trigger_kinds": sorted(remaining_kinds)}
+    _verify_vision_settlement(state, binding=binding, execute=execute)
     return output, "quota_spend_slot", True

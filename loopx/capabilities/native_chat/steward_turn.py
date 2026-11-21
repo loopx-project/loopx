@@ -94,6 +94,110 @@ def _normalize_report_kernel_candidate(candidate: Mapping[str, Any]) -> dict[str
     return normalized
 
 
+def _split_evidence_text_chunks(text: str, max_item_chars: int) -> list[str]:
+    """Split a single normalized evidence string cleanly at natural boundaries."""
+    if len(text) <= max_item_chars:
+        return [text]
+    chunks: list[str] = []
+    rest = text
+    delimiters = ("; ", ". ", "；", "。", ", ", "，", " ")
+    while len(rest) > max_item_chars:
+        split_at = -1
+        matched_delim = ""
+        for delim in delimiters:
+            pos = rest.rfind(delim, 1, max_item_chars)
+            if pos > 0:
+                split_at = pos
+                matched_delim = delim
+                break
+        if split_at <= 0:
+            chunks.append(rest[:max_item_chars])
+            rest = rest[max_item_chars:].lstrip()
+        elif matched_delim in ("；", "。", "，"):
+            end = min(split_at + len(matched_delim), max_item_chars)
+            chunks.append(rest[:end].strip())
+            rest = rest[end:].lstrip()
+        else:
+            head = rest[:split_at].rstrip()
+            if matched_delim == ". " and len(head) + 1 <= max_item_chars:
+                head += "."
+            chunks.append(head)
+            rest = rest[split_at + len(matched_delim) :].lstrip()
+    if rest:
+        chunks.append(rest)
+    return [chunk for chunk in chunks if chunk]
+
+
+def _append_bounded_ellipsis(text: str, limit: int) -> str:
+    if limit <= 0:
+        return ""
+    if limit <= 3:
+        return text[:limit]
+    if len(text) + 3 <= limit and not text.endswith("..."):
+        return text + "..."
+    trimmed = text[: max(1, limit - 3)].rstrip()
+    return (trimmed or text[: max(1, limit - 3)]) + "..."
+
+
+def _split_bounded_evidence_items(
+    raw: Any,
+    *,
+    max_items: int = 8,
+    max_item_chars: int = 240,
+    max_total_chars: int = 1_200,
+) -> Any:
+    """Split over-long Steward evidence strings without masking invalid shapes."""
+    if not isinstance(raw, list) or not raw:
+        return raw
+    if not all(isinstance(item, str) and item.strip() for item in raw):
+        return raw
+    chunks: list[str] = []
+    for item in raw:
+        normalized = " ".join(item.split()).strip()
+        chunks.extend(_split_evidence_text_chunks(normalized, max_item_chars))
+    if len(chunks) > max_items:
+        merged: list[str] = []
+        for chunk in chunks:
+            if merged and len(merged[-1]) + 2 + len(chunk) <= max_item_chars:
+                merged[-1] = f"{merged[-1]}; {chunk}"
+            else:
+                merged.append(chunk)
+        chunks = merged
+    clipped = len(chunks) > max_items
+    if clipped:
+        chunks = chunks[:max_items]
+    bounded: list[str] = []
+    used = 0
+    for idx, chunk in enumerate(chunks):
+        remaining = max_total_chars - used
+        if remaining <= 0:
+            clipped = True
+            break
+        if len(chunk) > remaining or len(chunk) > max_item_chars:
+            cap = min(max_item_chars, remaining)
+            bounded.append(_append_bounded_ellipsis(chunk, cap))
+            used += len(bounded[-1])
+            clipped = True
+            break
+        bounded.append(chunk)
+        used += len(chunk)
+    if clipped and bounded and not bounded[-1].endswith("..."):
+        room = min(max_item_chars, len(bounded[-1]) + (max_total_chars - used))
+        bounded[-1] = _append_bounded_ellipsis(bounded[-1], room)
+    return bounded
+
+
+def _normalize_steward_advancement_kernel_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep Steward advancement evidence within kernel per-item and total limits."""
+    normalized = dict(candidate)
+    if normalized.get("delivery_batch_scale") == "multi_surface_or_implementation":
+        normalized["delivery_batch_scale"] = "multi_surface"
+    for field in ("work_evidence", "validation_evidence"):
+        if field in normalized:
+            normalized[field] = _split_bounded_evidence_items(normalized[field])
+    return normalized
+
+
 class StewardTurnHost:
     def __init__(self, controller: Any) -> None:
         self.controller = controller
@@ -1130,7 +1234,7 @@ class StewardTurnHost:
     @staticmethod
     def _normalize_steward_actions(candidate: Mapping[str, Any], context: Mapping[str, Any]) -> dict[str, Any]:
         from ...control_plane.collaboration.inbox import normalize_handoff
-        state: dict[str, Any] = {"context_handoff": None, "user_actions": [], "validation_error": None}
+        state: dict[str, Any] = {"context_handoff": None, "user_actions": [], "owner_report": None, "validation_error": None}
         allowed_targets = {
             (row["goal_id"], row["agent_id"])
             for row in ((context.get("context_delegation") or {}).get("targets") or [])
@@ -1171,6 +1275,17 @@ class StewardTurnHost:
                 seen_keys.add(key)
                 cleaned.append({"dedupe_key": key, "priority": prio, "text": text})
             state["user_actions"] = cleaned
+        raw_report = candidate.get("steward_owner_report")
+        if raw_report is not None:
+            markdown = raw_report.get("markdown") if isinstance(raw_report, Mapping) else raw_report
+            if not isinstance(markdown, str):
+                state["validation_error"] = "steward_owner_report must be a markdown string or {markdown}"
+                return state
+            normalized_report = markdown.strip()
+            if not normalized_report or len(normalized_report) > 24000:
+                state["validation_error"] = "steward_owner_report markdown must be 1..24000 characters"
+                return state
+            state["owner_report"] = normalized_report
         return state
 
     def _apply_steward_user_actions(self, actor: Mapping[str, Any], actions: Sequence[Mapping[str, str]],
@@ -1269,7 +1384,7 @@ class StewardTurnHost:
         managed_answer = ""
         managed_lease, managed_lease_request = None, None
         preparation_status = None
-        steward_actions_state: dict[str, Any] = {"context_handoff": None, "user_actions": [], "validation_error": None}
+        steward_actions_state: dict[str, Any] = {"context_handoff": None, "user_actions": [], "owner_report": None, "validation_error": None}
 
         def report_lease_proof():
             return self._task_lease_proof(request, report_lease)
@@ -1370,7 +1485,8 @@ class StewardTurnHost:
                     "When `signal_snapshot.repository_snapshot.items` is present, each PR carries `mergeable`, `checks_summary`, `bypassed_gates`, and `review_summary` (`effective_verdict`, `has_review_conflict`, `stale_review_count`, `exact_head_reviews` with `reviewer_declaration`, `valid_verdict_review`, `author_owned_fallback`). Keep triage read-only; never execute merges here. "
                     "You may include optional top-level JSON fields alongside the normal kernel fields: "
                     "`context_handoff` (single object or array <=32 of {goal_id, agent_id, brief} with `schema_version='collaboration_brief_v0'` and `inputs=[]` when referencing URLs/PRs, restricted to `context_delegation.targets`), "
-                    "and `steward_user_actions` (array <=16 of {dedupe_key, priority:'P0'|'P1'|'P2', text}). Set `result_kind='validated_completion'` when triage/handoff/user-action preparation is complete.\n"
+                    "`steward_owner_report` (optional non-empty Markdown string <=24000 chars or `{markdown}` delivered once directly to the bound Steward App and Feishu conversation; omit or set `null` when silent/no report should be sent), "
+                    "and `steward_user_actions` (array <=16 of {dedupe_key, priority:'P0'|'P1'|'P2', text}; do NOT emit per-PR `steward_user_actions` when the monitor prompt asks for an aggregated report). Keep each `work_evidence` and `validation_evidence` item <=200 chars (1-8 items, <=1200 chars total per field). Set `result_kind='validated_completion'` when triage/handoff/report/user-action preparation is complete.\n"
                     "Steward monitor & dedupe context (data):\n" + json.dumps(followup_ctx, ensure_ascii=False)
                 )
             if request.get("work_kind") == "scheduled_task":
@@ -1429,6 +1545,8 @@ class StewardTurnHost:
                 steward_actions_state.update(self._normalize_steward_actions(kernel_candidate, context))
                 kernel_candidate.pop("context_handoff", None)
                 kernel_candidate.pop("steward_user_actions", None)
+                kernel_candidate.pop("steward_owner_report", None)
+                kernel_candidate = _normalize_steward_advancement_kernel_candidate(kernel_candidate)
             if governance_work and kernel_candidate and kernel_candidate.get("result_kind") not in {"replan_required", "wait", "user_action_required", "iteration_failed"}:
                 kernel_candidate = {"result_kind": "wait", "classification": "report_replan_not_settled",
                     "next_action": "Retain the original report until its native semantic replan is settled."}
@@ -1587,13 +1705,33 @@ class StewardTurnHost:
                             observed=observed, selection_recovery=selection_recovery)
                 user_action_receipts = self._apply_steward_user_actions(
                     actor, steward_actions_state["user_actions"], request["turn_instance_id"])
+        owner_report = (steward_actions_state["owner_report"]
+            if steward_advancement and result.get("status") == "committed" else None)
+        if owner_report:
+            from ...registry import atomic_write_json
+            from .steward_monitor import steward_monitor_delivery_dir
+            delivery_path = steward_monitor_delivery_dir(self.controller.coordination_runtime_root, actor["goal_id"]) / f"{turn_id}.json"
+            atomic_write_json(delivery_path, {
+                "schema_version": "steward_monitor_report_delivery_v0",
+                "goal_id": actor["goal_id"],
+                "agent_id": actor["agent_id"],
+                "session_id": actor["session_id"],
+                "turn_id": turn_id,
+                "turn_instance_id": request["turn_instance_id"],
+                "todo_id": (managed_lease_request or request).get("todo_id"),
+                "markdown": owner_report,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "delivery_status": "pending",
+                "deliveries": {},
+            })
         committed_handoff = (steward_actions_state["context_handoff"]
             if steward_advancement and result.get("status") == "committed" else None)
         return {"schema_version": "loopx_chat_agent_response_v0", "message":
             "当前没有可执行且已配置独立验收的原生任务，尚未启动模型；请检查原任务的验收配置。" if managed_turn and managed_turn.validation_unavailable else
-            (managed_answer or "本轮任务已完成结果回写。") if result.get("status") == "committed" else
+            (owner_report or managed_answer or "本轮任务已完成结果回写。") if result.get("status") == "committed" else
             "本轮等待后续执行条件。" if result.get("status") == "stopped" and result.get("result_kind") == "wait" else
             "本轮任务尚未完成；执行状态已保留。",
             "proposals": [], "gate": None, "native_loopx": result,
             **({"context_handoff": committed_handoff} if committed_handoff else {}),
+            **({"steward_owner_report_queued": True} if owner_report else {}),
             **({"steward_user_action_receipts": user_action_receipts} if user_action_receipts else {})}

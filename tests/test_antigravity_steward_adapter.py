@@ -1813,3 +1813,50 @@ def test_antigravity_endpoint_model_capacity_resolves_short_aliases_and_rejects_
         model_id="carbon", reasoning_effort="xhigh",
     ) is None
     assert len(language_server["calls"]) == calls_before
+
+
+def test_discover_antigravity_ls_address_with_explicit_token(language_server, monkeypatch) -> None:
+    from loopx.capabilities.native_chat.antigravity_adapter import discover_antigravity_language_server
+
+    monkeypatch.delenv("ANTIGRAVITY_LS_URL", raising=False)
+    monkeypatch.setenv("ANTIGRAVITY_LS_ADDRESS", language_server["url"].removeprefix("http://"))
+    found = discover_antigravity_language_server()
+    assert found is not None
+    assert found["url"] == language_server["url"]
+    assert found["source"] == "environment"
+
+
+def test_repeated_native_error_plus_thinking_only_planner_retry_times_out_and_cancels(
+    tmp_path, language_server, monkeypatch
+) -> None:
+    from loopx.chat_agent import CodexChatAgentError
+
+    user = {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
+            "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 0}}}
+    frames = []
+    steps = [user]
+    step_idx = 1
+    for at in (1.0, 120.0, 240.0, 305.0):
+        steps = [
+            *steps,
+            {
+                "type": "CORTEX_STEP_TYPE_ERROR_MESSAGE",
+                "status": "CORTEX_STEP_STATUS_DONE",
+                "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": step_idx}},
+                "errorMessage": {"error": {"shortError": "The stream was interrupted."}},
+            },
+            {
+                "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                "status": "CORTEX_STEP_STATUS_DONE",
+                "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": step_idx + 1}},
+                "plannerResponse": {"thinking": f"retrying thinking attempt {step_idx}"},
+            },
+        ]
+        step_idx += 2
+        frames.append({"at": at, "steps": steps, "status": "CASCADE_RUN_STATUS_RUNNING"})
+    _native_clock(monkeypatch, language_server, frames)
+    with pytest.raises(CodexChatAgentError) as raised:
+        adapter_for(tmp_path).start_turn("original task")
+    assert raised.value.error_code == "response_timeout"
+    assert language_server["now"] == 305.0
+    assert language_server["cancelled"].is_set()
