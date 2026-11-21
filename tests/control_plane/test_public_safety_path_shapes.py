@@ -39,6 +39,7 @@ EXPORT_LOCAL_REFERENCES = [
     "~/evidence.txt",
     "~" + chr(92) + "evidence.txt",
     "path:/srv/evidence.txt",
+    "path:/https://example.com/doc",
     "PATH:" + chr(92) + "evidence.txt",
     "file:///tmp/evidence.txt",
     "FILE://localhost/share/evidence.txt",

@@ -482,8 +482,14 @@ def test_multi_goal_source_registry_sync_and_health_prevent_sibling_false_positi
     )
 
     # Modify goal-synced and goal-drifted in source_registry, then sync ONLY goal-synced
+    from loopx.control_plane.goals.activation import build_goal_activation
     goals_in_source[0] = {**goals_in_source[0], "domain": "updated-domain"}
-    goals_in_source[2] = {**goals_in_source[2], "status": "paused"}
+    goals_in_source[2] = {
+        **goals_in_source[2],
+        "activation": build_goal_activation(
+            state="stopped", updated_at="2026-01-01T00:00:01+00:00", reason="fixture drifted",
+        ),
+    }
     source_registry = {
         "schema_version": 1,
         "common_runtime_root": str(runtime),

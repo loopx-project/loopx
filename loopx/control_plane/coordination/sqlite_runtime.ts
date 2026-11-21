@@ -86,7 +86,8 @@ let cached: {driver: typeof import("node:sqlite"); info: SqliteRuntimeInfo} | un
  */
 function servingManagedRuntime(): boolean {
   const token = process.env.LOOPX_EFFECT_RUNTIME_TOKEN;
-  return typeof token === "string" && token.length > 0;
+  return typeof token === "string" && token.length > 0 &&
+    process.env.LOOPX_EFFECT_RUNTIME_TRANSPORT !== "stdio";
 }
 
 /** Probe only an in-memory database before any authority path is created. */

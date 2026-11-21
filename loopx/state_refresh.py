@@ -759,6 +759,8 @@ def refresh_state_run(
     goal_ref: dict[str, str] | None = None,
     goal_acceptance_preview: dict[str, Any] | None = None,
     task_lease_proof: dict[str, Any] | None = None,
+    allow_same_generation_lease_renewal: bool = False,
+    validation_recovery_turn_instance_id: str | None = None,
 ) -> dict[str, Any]:
     from .control_plane.todos.provider_projection import recover_refresh_todo_projection
 
@@ -1614,6 +1616,8 @@ def refresh_state_run(
                         requested_proof=task_lease_proof,
                         settlement=settlement_readback,
                         locked_goal=current_goal if normalized_next_action else None,
+                        allow_same_generation_lease_renewal=allow_same_generation_lease_renewal,
+                        validation_recovery_turn_instance_id=validation_recovery_turn_instance_id,
                     ))
                 if settlement_readback is not None:
                     persist_external_delivery_pause(

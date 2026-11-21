@@ -176,9 +176,11 @@ release remains the original typed transport failure, without publishing an
 optimized result or rerunning the guard. An interrupted guard continues with
 the original full packet; no delta is required for checkpoint recovery. Native
 cursor verification binds the context-directory/root option and the worker's
-original `--complete-turn` and `--turn-envelope` choices. A checkpoint without
-a complete-mode binding cannot verify a pending command that uses
-`--complete-turn`. Historical ordinary and envelope guards remain readable.
+original `--complete-turn` and `--turn-envelope` choices. Current generated
+heartbeat guards use the default complete v1 contract without emitting either
+alias. A checkpoint without a complete-mode binding cannot verify a pending
+command that uses `--complete-turn`. Historical ordinary and envelope guards
+remain readable.
 The existing Darwin native-checkpoint refusal remains in force.
 
 Restoring a pending replan for a fresh native conversation and checking whether

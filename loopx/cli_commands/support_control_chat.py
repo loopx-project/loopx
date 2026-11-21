@@ -15,7 +15,10 @@ from typing import Any
 from ..chat_server import DEFAULT_CHAT_HOST, DEFAULT_CHAT_PORT
 from ..kiro_cli_goal_mode import KIRO_CLI_BIN
 from ..paths import default_public_scan_root
-from .support_control_agent_runtime import register_agent_runtime_arguments
+from .support_control_agent_runtime import (
+    ensure_agent_runtime_path,
+    register_agent_runtime_arguments,
+)
 from .support_control_chat_endpoint import register_chat_endpoint_command
 from .support_control_registry import explicit_global_registry
 
@@ -31,6 +34,7 @@ def chat_server_options(
     """
     if args.command != "chat":
         raise ValueError("native Chat options require the chat command")
+    ensure_agent_runtime_path()
     chat_registry_path = (
         explicit_global_registry(args.runtime_root, registry_path=registry_path)
         if args.global_registry else registry_path

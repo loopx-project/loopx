@@ -71,10 +71,10 @@ export const RUN_IDENTITY_FIELDS = [
 const IDENTITY_TOKEN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,120}$/u
 const SUMMARY_TOKEN = /^[A-Za-z0-9][A-Za-z0-9_./:-]{0,79}$/u
 const LOCAL_PATH_SURFACES = [
-  /(?<![:/A-Za-z0-9])\/(?:Users|home|Volumes|private|tmp|var|etc|opt|srv|mnt|root|data|workspace|workspaces)\/[^\s`'"<>]+/iu,
-  /(?<![:/A-Za-z0-9])[A-Za-z]:[\\/][^\s`'"<>]+/iu,
+  /(?<![:/A-Za-z0-9])\/(?:Users|home|Volumes|private|tmp|var|etc|opt|srv|mnt|root|data|workspace|workspaces)\/(?:[^\s`'"<>]+)?/iu,
+  /(?<![:/A-Za-z0-9])[A-Za-z]:[\\/](?:[^\s`'"<>]+)?/iu,
   /(?<![:/A-Za-z0-9])\\\\[A-Za-z0-9_.-]+\\[^\s`'"<>]+/iu,
-  /(?<![\w~])~[\\/][^\s`'"<>]+/iu,
+  /(?<![\w~])~[\\/](?:[^\s`'"<>]+)?/iu,
   /(?<![\w:])path:[\\/][^\s`'"<>]+/iu,
   /\bfile:\/+/iu,
 ] as const

@@ -10,8 +10,8 @@ from loopx.control_plane.collaboration.inbox import pending
 from loopx.control_plane.collaboration.peers import request, returns
 
 
-def test_sidecars(tmp_path_factory):
-    tmp_path = tmp_path_factory.mktemp("x")
+def test_sidecars(case_mktemp):
+    tmp_path = case_mktemp("x")
     registry = tmp_path / "registry.json"
     registry.write_text(
         json.dumps(

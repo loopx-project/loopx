@@ -12,10 +12,8 @@ from .capabilities.issue_fix.command_templates import (
     build_issue_fix_goal_command_templates,
 )
 from .control_plane.goals.orphaned_goal_state import (
-    ORPHANED_GOAL_STATE_CONNECTION,
     absent_goal_connection,
     fence_command_pack,
-    fenced_standalone_message,
     guided_fence,
 )
 from .control_plane.goals.start_contract import (
@@ -36,6 +34,9 @@ from .host_loop_activation import (
 )
 from .history import load_registry
 from .presentation.renderers.start_goal_markdown import (
+    CANONICAL_SLASH_COMMAND as CANONICAL_SLASH_COMMAND,
+    render_loopx_bootstrap_command_pack_markdown as render_loopx_bootstrap_command_pack_markdown,
+    render_loopx_bootstrap_command_pack_message as render_loopx_bootstrap_command_pack_message,
     render_start_goal_guided_markdown as render_start_goal_guided_markdown,
 )
 from .project_alias import resolve_canonical_project_alias
@@ -56,7 +57,6 @@ from .slash_commands import build_slash_command_catalog
 from .thread_agent_binding import normalize_thread_id, resolve_thread_agent_binding
 
 SCHEMA_VERSION = "loopx_bootstrap_command_pack_v0"
-CANONICAL_SLASH_COMMAND = "/loopx"
 GUIDED_START_SCHEMA_VERSION = "loopx_start_goal_guided_v0"
 PACKET_SUMMARY_SCHEMA_VERSION = "loopx_start_goal_packet_summary_v0"
 PACKET_MEASUREMENT_SCHEMA_VERSION = "loopx_packet_duplication_measurement_v0"
@@ -221,6 +221,68 @@ def _build_packet_summary(
     }
 
 
+_SLASH_FORMS = (
+    {"form": "/loopx", "mode": "inspect_or_connect_preview"},
+    {"form": "/loopx <goal text>", "mode": "goal_plan_write_and_activate"},
+)
+_PRESERVE_TODOS_POLICY = {
+    "force_bootstrap_default": "forbidden_in_guided_flow",
+    "before_destructive_reconnect": "run backup-state and stop for an explicit preserve-todos confirmation",
+    "preferred_scope_change": "use configure-goal incremental updates instead of force bootstrap when state already exists",
+}
+
+
+def _slash_forms() -> list[dict[str, str]]:
+    return [dict(form) for form in _SLASH_FORMS]
+
+
+def _guided_safety_contract(
+    *,
+    mutation_commands_are_previewed: bool,
+    orphaned_goal_state_blocks_continuation: bool | None = None,
+) -> dict[str, bool]:
+    contract = {
+        "writes_registry": False,
+        "writes_state_file": False,
+        "creates_heartbeat": False,
+        "spends_quota": False,
+        "mutation_commands_are_previewed": mutation_commands_are_previewed,
+        "force_bootstrap_allowed": False,
+    }
+    if orphaned_goal_state_blocks_continuation is not None:
+        contract["orphaned_goal_state_blocks_continuation"] = (
+            orphaned_goal_state_blocks_continuation
+        )
+    return contract
+
+
+def _start_goal_common_tail(
+    *,
+    agent_id: str | None,
+    thread_id: str | None,
+    new_peer: bool,
+    host_surface: str | None,
+    available_capabilities: list[str] | None,
+    fine_grained: bool,
+    capability_route: str | None,
+    goal_text: str | None,
+    display_name: str | None = None,
+    include_command_pack_detail: bool = False,
+) -> str:
+    return (
+        (f" --agent-id {shell_arg_for_host(agent_id)}" if agent_id else "")
+        + (f" --thread-id {shell_arg_for_host(thread_id)}" if thread_id else "")
+        + (" --new-peer" if new_peer else "")
+        + (f" --host-surface {shell_arg_for_host(host_surface)}" if host_surface else "")
+        + render_available_capability_args(available_capabilities)
+        + (" --fine-grained" if fine_grained else "")
+        + (f" --capability-route {shell_arg_for_host(capability_route)}" if capability_route else "")
+        + (f" --goal-text {shell_arg_for_host(goal_text)}" if goal_text else "")
+        + render_optional_cli_arg("--display-name", display_name)
+        + (" --include-command-pack-detail" if include_command_pack_detail else "")
+    )
+
+
 def _start_goal_command(
     *,
     project: str,
@@ -230,67 +292,32 @@ def _start_goal_command(
     new_peer: bool,
     cli_bin: str,
     runtime_root: str | None = None,
-    host_surface: str,
+    host_surface: str | None,
     goal_text: str,
     available_capabilities: list[str] | None,
     capability_route: str | None,
     fine_grained: bool,
-    include_command_pack_detail: bool,
+    include_command_pack_detail: bool = False,
     display_name: str | None = None,
+    include_format_json: bool = True,
 ) -> str:
     return (
         f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
-        f"--format json start-goal --guided "
-        f"--project {shell_arg_for_host(project)}"
+        + ("--format json " if include_format_json else "")
+        + f"start-goal --guided --project {shell_arg_for_host(project)}"
         + (f" --goal-id {shell_arg_for_host(goal_id)}" if goal_id else "")
-        + (f" --agent-id {shell_arg_for_host(agent_id)}" if agent_id else "")
-        + (f" --thread-id {shell_arg_for_host(thread_id)}" if thread_id else "")
-        + (" --new-peer" if new_peer else "")
-        + f" --host-surface {shell_arg_for_host(host_surface)}"
-        + render_available_capability_args(available_capabilities)
-        + (" --fine-grained" if fine_grained else "")
-        + (
-            f" --capability-route {shell_arg_for_host(capability_route)}"
-            if capability_route
-            else ""
+        + _start_goal_common_tail(
+            agent_id=agent_id,
+            thread_id=thread_id,
+            new_peer=new_peer,
+            host_surface=host_surface,
+            available_capabilities=available_capabilities,
+            fine_grained=fine_grained,
+            capability_route=capability_route,
+            goal_text=goal_text,
+            display_name=display_name,
+            include_command_pack_detail=include_command_pack_detail,
         )
-        + f" --goal-text {shell_arg_for_host(goal_text)}"
-        + render_optional_cli_arg("--display-name", display_name)
-        + (" --include-command-pack-detail" if include_command_pack_detail else "")
-    )
-
-
-def _start_goal_detail_command(
-    *,
-    project: str,
-    goal_id: str | None,
-    agent_id: str | None,
-    thread_id: str | None,
-    new_peer: bool,
-    cli_bin: str,
-    runtime_root: str | None = None,
-    host_surface: str,
-    goal_text: str,
-    available_capabilities: list[str] | None,
-    capability_route: str | None,
-    fine_grained: bool,
-    display_name: str | None = None,
-) -> str:
-    return _start_goal_command(
-        project=project,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        thread_id=thread_id,
-        new_peer=new_peer,
-        cli_bin=cli_bin,
-        runtime_root=runtime_root,
-        host_surface=host_surface,
-        goal_text=goal_text,
-        available_capabilities=available_capabilities,
-        capability_route=capability_route,
-        fine_grained=fine_grained,
-        include_command_pack_detail=True,
-        display_name=display_name,
     )
 
 
@@ -389,61 +416,30 @@ def build_start_goal_host_surface_selection_packet(
         "other-agent": "custom agent host using the returned activation contract",
     }
 
-    def rerun_command_for(host_surface: str, *, include_detail: bool) -> str:
-        return (
-            f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=command_runtime_root)} "
-            f"start-goal --guided "
-            f"--project {shell_arg_for_host(resolved_project)}"
-            + (f" --goal-id {shell_arg_for_host(goal_id)}" if goal_id else "")
-            + (f" --agent-id {shell_arg_for_host(agent_id)}" if agent_id else "")
-            + (f" --thread-id {shell_arg_for_host(thread_id)}" if thread_id else "")
-            + (" --new-peer" if new_peer else "")
-            + f" --host-surface {shell_arg_for_host(host_surface)}"
-            + render_available_capability_args(available_capabilities)
-            + (" --fine-grained" if fine_grained else "")
-            + (
-                f" --capability-route {shell_arg_for_host(capability_route)}"
-                if capability_route
-                else ""
-            )
-            + f" --goal-text {shell_arg_for_host(normalized_goal_text)}"
-            + render_optional_cli_arg("--display-name", display_name)
-            + (" --include-command-pack-detail" if include_detail else "")
-        )
-
-    def detail_command() -> str:
-        return (
-            f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=command_runtime_root)} "
-            f"start-goal --guided "
-            f"--project {shell_arg_for_host(resolved_project)}"
-            + (f" --goal-id {shell_arg_for_host(goal_id)}" if goal_id else "")
-            + (f" --agent-id {shell_arg_for_host(agent_id)}" if agent_id else "")
-            + (f" --thread-id {shell_arg_for_host(thread_id)}" if thread_id else "")
-            + (" --new-peer" if new_peer else "")
-            + render_available_capability_args(available_capabilities)
-            + (" --fine-grained" if fine_grained else "")
-            + (
-                f" --capability-route {shell_arg_for_host(capability_route)}"
-                if capability_route
-                else ""
-            )
-            + f" --goal-text {shell_arg_for_host(normalized_goal_text)}"
-            + render_optional_cli_arg("--display-name", display_name)
-            + " --include-command-pack-detail"
-        )
-
-    all_choices: list[dict[str, Any]] = []
-    for host_surface in START_GOAL_HOST_SURFACES:
-        all_choices.append(
-            {
-                "host_surface": host_surface,
-                "description": host_descriptions[host_surface],
-                "rerun_command": rerun_command_for(
-                    host_surface,
-                    include_detail=include_command_pack_detail,
-                ),
-            }
-        )
+    all_choices: list[dict[str, Any]] = [
+        {
+            "host_surface": host_surface,
+            "description": host_descriptions[host_surface],
+            "rerun_command": _start_goal_command(
+                project=resolved_project,
+                goal_id=goal_id,
+                agent_id=agent_id,
+                thread_id=thread_id,
+                new_peer=new_peer,
+                cli_bin=cli_bin,
+                runtime_root=command_runtime_root,
+                host_surface=host_surface,
+                goal_text=normalized_goal_text,
+                available_capabilities=available_capabilities,
+                capability_route=capability_route,
+                fine_grained=fine_grained,
+                include_command_pack_detail=include_command_pack_detail,
+                display_name=display_name,
+                include_format_json=False,
+            ),
+        }
+        for host_surface in START_GOAL_HOST_SURFACES
+    ]
     default_host_surfaces = set(DEFAULT_HOST_SURFACE_SELECTION_CHOICES)
     choices = (
         all_choices
@@ -457,7 +453,23 @@ def build_start_goal_host_surface_selection_packet(
     reason = (
         "LoopX needs to know where this agent is running before it can start a durable goal."
     )
-    detail = detail_command()
+    detail = _start_goal_command(
+        project=resolved_project,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        thread_id=thread_id,
+        new_peer=new_peer,
+        cli_bin=cli_bin,
+        runtime_root=command_runtime_root,
+        host_surface=None,
+        goal_text=normalized_goal_text,
+        available_capabilities=available_capabilities,
+        capability_route=capability_route,
+        fine_grained=fine_grained,
+        include_command_pack_detail=True,
+        display_name=display_name,
+        include_format_json=False,
+    )
     gate = {
         "schema_version": HOST_SURFACE_SELECTION_SCHEMA_VERSION,
         "state": "selection_required",
@@ -494,7 +506,7 @@ def build_start_goal_host_surface_selection_packet(
         ],
         "idempotency_policy": {"safe_to_rerun_preview": True},
         "preserve_todos_policy": {
-            "force_bootstrap_default": "forbidden_in_guided_flow",
+            **_PRESERVE_TODOS_POLICY,
             "before_destructive_reconnect": "select a host before any mutation",
             "preferred_scope_change": "select a host before any mutation",
         },
@@ -521,14 +533,7 @@ def build_start_goal_host_surface_selection_packet(
         },
         "guided_transaction": transaction,
         "command_pack_detail_included": include_command_pack_detail,
-        "safety_contract": {
-            "writes_registry": False,
-            "writes_state_file": False,
-            "creates_heartbeat": False,
-            "spends_quota": False,
-            "mutation_commands_are_previewed": False,
-            "force_bootstrap_allowed": False,
-        },
+        "safety_contract": _guided_safety_contract(mutation_commands_are_previewed=False),
     }
     payload["message"] = render_start_goal_guided_markdown(payload)
     payload["packet_summary"] = _build_packet_summary(
@@ -1076,38 +1081,21 @@ def build_loopx_bootstrap_command_pack(
         "ok": True,
         "schema_version": SCHEMA_VERSION,
         "slash_command": CANONICAL_SLASH_COMMAND,
-        "slash_forms": [
-            {"form": "/loopx", "mode": "inspect_or_connect_preview"},
-            {"form": "/loopx <goal text>", "mode": "goal_plan_write_and_activate"},
-        ],
+        "slash_forms": _slash_forms(),
         "canonical_cli_command": (
             f"{command_prefix} bootstrap-command-pack --project {shell_arg_for_host(resolved_project)} "
             f"--goal-id {shell_arg_for_host(resolved_goal_id)}"
-            + (
-                f" --agent-id {shell_arg_for_host(str(selected_agent_id))}"
-                if selected_agent_id
-                else ""
+            + _start_goal_common_tail(
+                agent_id=str(selected_agent_id) if selected_agent_id else None,
+                thread_id=normalized_thread_id,
+                new_peer=new_peer,
+                host_surface=host_surface,
+                available_capabilities=available_capabilities,
+                fine_grained=fine_grained,
+                capability_route=capability_route,
+                goal_text=normalized_goal_text,
+                display_name=display_name,
             )
-            + (
-                f" --thread-id {shell_arg_for_host(normalized_thread_id)}"
-                if normalized_thread_id
-                else ""
-            )
-            + (" --new-peer" if new_peer else "")
-            + f" --host-surface {shell_arg_for_host(host_surface)}"
-            + render_available_capability_args(available_capabilities)
-            + (" --fine-grained" if fine_grained else "")
-            + (
-                f" --capability-route {shell_arg_for_host(capability_route)}"
-                if capability_route
-                else ""
-            )
-            + (
-                f" --goal-text {shell_arg_for_host(normalized_goal_text)}"
-                if normalized_goal_text
-                else ""
-            )
-            + render_optional_cli_arg("--display-name", display_name)
         ),
         "read_only": True,
         "goal_text": normalized_goal_text,
@@ -1279,27 +1267,20 @@ def _build_multi_goal_start_selection_packet(
         candidate_goal_id = str(goal.get("id") or "").strip()
         if not candidate_goal_id:
             continue
-        rerun_command = (
-            f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=command_runtime_root)} "
-            f"start-goal --guided "
-            f"--project {shell_arg_for_host(resolved_project)} "
-            f"--goal-id {shell_arg_for_host(candidate_goal_id)}"
-            + (f" --agent-id {shell_arg_for_host(agent_id)}" if agent_id else "")
-            + (
-                f" --thread-id {shell_arg_for_host(normalized_thread_id)}"
-                if normalized_thread_id
-                else ""
-            )
-            + (" --new-peer" if new_peer else "")
-            + f" --host-surface {shell_arg_for_host(host_surface)}"
-            + render_available_capability_args(available_capabilities)
-            + (" --fine-grained" if fine_grained else "")
-            + (
-                f" --capability-route {shell_arg_for_host(capability_route)}"
-                if capability_route
-                else ""
-            )
-            + f" --goal-text {shell_arg_for_host(normalized_goal_text)}"
+        rerun_command = _start_goal_command(
+            project=resolved_project,
+            goal_id=candidate_goal_id,
+            agent_id=agent_id,
+            thread_id=normalized_thread_id,
+            new_peer=new_peer,
+            cli_bin=cli_bin,
+            runtime_root=command_runtime_root,
+            host_surface=host_surface,
+            goal_text=normalized_goal_text,
+            available_capabilities=available_capabilities,
+            capability_route=capability_route,
+            fine_grained=fine_grained,
+            include_format_json=False,
         )
         choices.append(
             {
@@ -1346,10 +1327,7 @@ def _build_multi_goal_start_selection_packet(
         "ok": True,
         "schema_version": SCHEMA_VERSION,
         "slash_command": CANONICAL_SLASH_COMMAND,
-        "slash_forms": [
-            {"form": "/loopx", "mode": "inspect_or_connect_preview"},
-            {"form": "/loopx <goal text>", "mode": "goal_plan_write_and_activate"},
-        ],
+        "slash_forms": _slash_forms(),
         "canonical_cli_command": None,
         "read_only": True,
         "goal_text": normalized_goal_text,
@@ -1365,6 +1343,8 @@ def _build_multi_goal_start_selection_packet(
             "activation_state": "goal_selection_required",
             "activation_allowed": False,
             "activation_required_after_todo_write": False,
+            "host_surface": None,
+            "activation_method": None,
         },
         "available_slash_commands": slash_command_catalog,
         "onboarding_hint": slash_command_catalog["onboarding"],
@@ -1437,13 +1417,9 @@ def _build_multi_goal_start_selection_packet(
             "safe_to_rerun_preview": True,
             "reuse_connected_goal": True,
         },
-        "preserve_todos_policy": {
-            "force_bootstrap_default": "forbidden_in_guided_flow",
-            "before_destructive_reconnect": "run backup-state and stop for an explicit preserve-todos confirmation",
-            "preferred_scope_change": "use configure-goal incremental updates instead of force bootstrap when state already exists",
-        },
+        "preserve_todos_policy": dict(_PRESERVE_TODOS_POLICY),
     }
-    detail_command = _start_goal_detail_command(
+    detail_command = _start_goal_command(
         project=resolved_project,
         goal_id=None,
         agent_id=agent_id,
@@ -1455,6 +1431,7 @@ def _build_multi_goal_start_selection_packet(
         available_capabilities=available_capabilities,
         capability_route=capability_route,
         fine_grained=fine_grained,
+        include_command_pack_detail=True,
         display_name=display_name,
     )
     selected_command_pack = (
@@ -1481,14 +1458,7 @@ def _build_multi_goal_start_selection_packet(
         "guided_transaction": guided_transaction,
         "command_pack": selected_command_pack,
         "command_pack_detail_included": include_command_pack_detail,
-        "safety_contract": {
-            "writes_registry": False,
-            "writes_state_file": False,
-            "creates_heartbeat": False,
-            "spends_quota": False,
-            "mutation_commands_are_previewed": False,
-            "force_bootstrap_allowed": False,
-        },
+        "safety_contract": _guided_safety_contract(mutation_commands_are_previewed=False),
     }
     payload["message"] = render_start_goal_guided_markdown(payload)
     payload["packet_summary"] = _build_packet_summary(
@@ -1750,11 +1720,7 @@ def build_start_goal_guided_packet(
                 "Only regenerate or update automation when the host loop is missing, unknown, stale, or agent type changed."
             ),
         },
-        "preserve_todos_policy": {
-            "force_bootstrap_default": "forbidden_in_guided_flow",
-            "before_destructive_reconnect": "run backup-state and stop for an explicit preserve-todos confirmation",
-            "preferred_scope_change": "use configure-goal incremental updates instead of force bootstrap when state already exists",
-        },
+        "preserve_todos_policy": dict(_PRESERVE_TODOS_POLICY),
     }
     if isinstance(identity_selection_gate, dict):
         guided_transaction["blocked_by"] = "agent_identity_selection"
@@ -1826,7 +1792,7 @@ def build_start_goal_guided_packet(
             }
         )
         guided_transaction["selected_capability_route"] = selected_capability_route
-    detail_command = _start_goal_detail_command(
+    detail_command = _start_goal_command(
         project=str(command_pack.get("project") or project),
         goal_id=str(command_pack.get("goal_id") or "") or None,
         agent_id=str(command_pack.get("agent_id") or "") or None,
@@ -1839,6 +1805,7 @@ def build_start_goal_guided_packet(
         available_capabilities=available_capabilities,
         capability_route=capability_route,
         fine_grained=fine_grained,
+        include_command_pack_detail=True,
         display_name=str(command_pack.get("display_name") or display_name or ""),
     )
     selected_command_pack = (
@@ -1876,15 +1843,10 @@ def build_start_goal_guided_packet(
         "guided_transaction": guided_transaction,
         "command_pack": selected_command_pack,
         "command_pack_detail_included": include_command_pack_detail,
-        "safety_contract": {
-            "writes_registry": False,
-            "writes_state_file": False,
-            "creates_heartbeat": False,
-            "spends_quota": False,
-            "mutation_commands_are_previewed": True,
-            "force_bootstrap_allowed": False,
-            "orphaned_goal_state_blocks_continuation": isinstance(orphaned_gate, dict),
-        },
+        "safety_contract": _guided_safety_contract(
+            mutation_commands_are_previewed=True,
+            orphaned_goal_state_blocks_continuation=isinstance(orphaned_gate, dict),
+        ),
     }
     if command_pack.get("thread_id"):
         payload["thread_id"] = command_pack["thread_id"]
@@ -1908,308 +1870,3 @@ def build_start_goal_guided_packet(
         compact_projection_default=not include_command_pack_detail,
     )
     return payload
-
-
-def render_loopx_bootstrap_command_pack_message(payload: dict[str, Any]) -> str:
-    connection = payload.get("project_connection")
-    connection = connection if isinstance(connection, dict) else {}
-    if connection.get("connection_state") == ORPHANED_GOAL_STATE_CONNECTION:
-        return fenced_standalone_message(payload)
-    commands = payload.get("commands")
-    commands = commands if isinstance(commands, dict) else {}
-    next_step = payload.get("recommended_next_step")
-    next_step = next_step if isinstance(next_step, dict) else {}
-    requires_confirmation = bool(next_step.get("requires_user_confirmation"))
-    project = payload.get("project")
-    goal_id = payload.get("goal_id")
-    goal_text = payload.get("goal_text")
-    state = connection.get("connection_state")
-    reason = connection.get("reason")
-    alias = connection.get("canonical_project_alias")
-    alias = alias if isinstance(alias, dict) else {}
-    alias_note = (
-        f"\nInput project: `{connection.get('input_project')}`\n"
-        f"Canonical route: `{alias.get('canonical_project')}` via `{alias.get('source_registry')}`\n"
-        if alias.get("applied")
-        else ""
-    )
-    goal_start_contract = payload.get("goal_start_contract")
-    goal_start_contract = goal_start_contract if isinstance(goal_start_contract, dict) else {}
-    selected_capability_route = goal_start_contract.get(
-        "selected_capability_route"
-    )
-    selected_capability_route = (
-        selected_capability_route
-        if isinstance(selected_capability_route, dict)
-        else {}
-    )
-    issue_fix_action = ""
-    if selected_capability_route.get("capability_id") == "issue-fix":
-        issue_fix_action = f"""
-
-The explicit capability route selects issue-fix. Preview its capability-owned admission:
-
-```bash
-{commands.get("issue_fix_workflow_plan_template", "")}
-```
-
-Persist candidate preflight. Non-proceed: write its successor/no-follow-up; skip feasibility. Proceed: run feasibility and write its successor:
-
-```bash
-{commands.get("issue_fix_feasibility_template", "")}
-```
-
-Private repro material, issue body/comment reads, external comments, PR creation, merge, publish, destructive git, and production actions stay explicit gates.
-
-After a PR exists and external-review-request authority is active, request the default top requestable non-author reviewer and require post-write verification:
-
-```bash
-{commands.get("issue_fix_reviewer_request_template", "")}
-```
-
-After a PR exists, reconcile compact public PR state through the capability-owned lifecycle command:
-
-```bash
-{commands.get("issue_fix_pr_lifecycle_template", "")}
-```"""
-    onboarding = payload.get("onboarding_hint")
-    onboarding = onboarding if isinstance(onboarding, dict) else {}
-    activation = payload.get("host_loop_activation")
-    activation = activation if isinstance(activation, dict) else {}
-    identity_gate = activation.get("identity_selection_gate")
-    identity_gate = identity_gate if isinstance(identity_gate, dict) else {}
-
-    if identity_gate:
-        choices = "\n".join(
-            f"- explicit takeover `{choice.get('agent_id')}`: rerun with "
-            f"`--agent-id {choice.get('agent_id')}`"
-            for choice in identity_gate.get("choices") or []
-            if isinstance(choice, dict)
-        )
-        fresh_registration = identity_gate.get("fresh_agent_registration")
-        fresh_registration = (
-            fresh_registration if isinstance(fresh_registration, dict) else {}
-        )
-        if fresh_registration:
-            action = f"""Resolve agent identity before planning writes or host-loop activation.
-No unscoped heartbeat or quota command is advertised for a new agent connection.
-
-Reason: {identity_gate.get("reason")}
-
-Default fresh-agent registration:
-```bash
-{fresh_registration.get("preview_command") or ""}
-{fresh_registration.get("execute_command") or ""}
-```
-
-Only with explicit takeover intent, choose one existing identity:
-{choices}
-
-Rerun `{payload.get("canonical_cli_command")} --agent-id <selected-agent-id>`
-after fresh registration or exact takeover selection before continuing."""
-        else:
-            action = f"""Select one registered agent lane before planning writes or host-loop activation.
-No unscoped heartbeat or quota command is advertised for this multi-agent goal.
-
-Reason: {identity_gate.get("reason")}
-
-Identity-aware choices:
-{choices}
-
-Rerun `{payload.get("canonical_cli_command")} --agent-id <registered-agent-id>`
-with the selected identity before continuing."""
-    elif goal_text:
-        action = f"""This is an explicit goal-start invocation. Connect project-local LoopX state if needed:
-
-```bash
-{commands.get("goal_start_connect_if_needed", "")}
-```
-
-Then plan before writing todos. Preserve relative priority by write order:
-
-````text
-{commands.get("goal_start_plan_prompt", "")}
-````
-
-Write the planned todos with `loopx todo add` in the exact planned order. Same-priority items use that write order as the tie-breaker.
-{issue_fix_action}
-
-After todo writeback:
-
-```bash
-{commands.get("goal_start_refresh_state", "")}
-{commands.get("goal_start_host_loop_activation", "")}
-{commands.get("goal_start_quota_should_run", "")}
-```
-
-Host loop activation is part of setup, not a nice-to-have:
-- agent_type: `{payload.get("agent_type")}`
-- host_surface: `{activation.get("host_surface")}`
-- activation_method: `{activation.get("activation_method")}`
-
-If the host loop is already proven current, skip the mutation. If it is missing,
-unknown, or stale, use the command above to obtain `task_body` and activate the
-right host loop: Codex App automation, Codex CLI `/goal <task_body>`, Claude
-Code `/loop`, OpenCode bridge, or the custom host-loop gate.
-If this session cannot mutate that
-host surface, report the exact gate; do not claim autonomous setup complete.
-Use `{commands.get("goal_start_agent_onboard_recheck", "")}` only when
-activation state is missing/unknown/stale or the agent type changed."""
-    elif requires_confirmation:
-        action = f"""First show this dry-run preview, then ask me before running the mutation:
-
-```bash
-{commands.get("bootstrap_dry_run_preview", "")}
-```
-
-If I confirm, run:
-
-```bash
-{commands.get("bootstrap_after_user_confirmation", "")}
-```"""
-    else:
-        action = f"""Start with the current LoopX status and do not reconnect:
-
-```bash
-{commands.get("status", "")}
-```
-
-Only after I ask for a recurring loop surface, generate the heartbeat body:
-
-```bash
-{commands.get("heartbeat_prompt", "")}
-```"""
-
-    return f"""Handle `{CANONICAL_SLASH_COMMAND}` for this project with explicit mutation boundaries.
-
-Project: `{project}`
-Goal id: `{goal_id}`
-Detected state: `{state}` ({reason})
-{alias_note}
-
-Rules:
-- This command pack preview is read-only. Do not run bootstrap/connect, create heartbeat automation, or spend quota while only previewing it.
-- Bare `/loopx` is read/status-first: if the project is not fully connected, ask for explicit user confirmation before any command that writes `.loopx/` (or legacy `.codex/goals/`).
-- `/loopx <goal text>` is explicit goal-start intent: it may create project-local LoopX state, but it must run the profile-appropriate planning checkpoint before writing todos, then activate the correct host loop if missing/stale.
-- Same-priority todos are ranked by planner order, then by `todo add` write order; preserve the order exactly.
-- If the project is connected, reuse the existing state and show the status/gate/todo snapshot.
-
-Goal-start contract: `{goal_start_contract.get("schema_version")}`
-
-Suggested new-user note:
-
-```text
-{onboarding.get("suggested_user_note", "")}
-```
-
-{action}
-
-For ongoing work after the project is connected, use the quota guard:
-
-```bash
-{commands.get("quota_guard", "")}
-```
-"""
-
-
-def render_loopx_bootstrap_command_pack_markdown(payload: dict[str, Any]) -> str:
-    connection = payload.get("project_connection")
-    connection = connection if isinstance(connection, dict) else {}
-    next_step = payload.get("recommended_next_step")
-    next_step = next_step if isinstance(next_step, dict) else {}
-    safety = payload.get("safety_contract")
-    safety = safety if isinstance(safety, dict) else {}
-    commands = payload.get("commands")
-    commands = commands if isinstance(commands, dict) else {}
-    onboarding = payload.get("onboarding_hint")
-    onboarding = onboarding if isinstance(onboarding, dict) else {}
-    slash_catalog = payload.get("available_slash_commands")
-    slash_catalog = slash_catalog if isinstance(slash_catalog, dict) else {}
-    goal_start = payload.get("goal_start_contract")
-    goal_start = goal_start if isinstance(goal_start, dict) else {}
-    activation = payload.get("host_loop_activation")
-    activation = activation if isinstance(activation, dict) else {}
-    ordering = goal_start.get("priority_ordering")
-    ordering = ordering if isinstance(ordering, dict) else {}
-    return f"""# /loopx Bootstrap Command Pack
-
-Canonical slash command: `{payload.get("slash_command")}`
-Supported forms: `/loopx`, `/loopx <goal text>`
-
-## Detected Project State
-
-- project: `{payload.get("project")}`
-- input_project: `{connection.get("input_project")}`
-- goal_id: `{payload.get("goal_id")}`
-- agent_type: `{payload.get("agent_type")}`
-- goal_text: `{payload.get("goal_text") or ""}`
-- connection_state: `{connection.get("connection_state")}`
-- reason: `{connection.get("reason")}`
-- registry: `{connection.get("registry")}`
-- state_file: `{connection.get("state_file")}`
-- canonical_project_alias: `{(connection.get("canonical_project_alias") or {}).get("kind") if isinstance(connection.get("canonical_project_alias"), dict) else None}`
-
-## Recommended Next Step
-
-- kind: `{next_step.get("kind")}`
-- requires_user_confirmation: `{next_step.get("requires_user_confirmation")}`
-- summary: {next_step.get("summary")}
-
-## New User Command Hint
-
-````text
-{onboarding.get("suggested_user_note", "")}
-````
-
-- CLI help: `{(slash_catalog.get("help") or {}).get("cli_command") if isinstance(slash_catalog.get("help"), dict) else "loopx slash-commands"}`
-
-## Paste Message
-
-````text
-{payload.get("message", "")}
-````
-
-## Goal Start Contract
-
-- schema: `{goal_start.get("schema_version")}`
-- planner_required_before_todo_write: `{(goal_start.get("planner") or {}).get("required_before_todo_write") if isinstance(goal_start.get("planner"), dict) else None}`
-- same_priority_tie_breaker: `{ordering.get("same_priority_tie_breaker")}`
-- prompt_constraint: {ordering.get("prompt_constraint")}
-- host_loop_required_after_todo_writeback: `{(goal_start.get("activation") or {}).get("host_loop_required_after_todo_writeback") if isinstance(goal_start.get("activation"), dict) else None}`
-
-## Host Loop Activation
-
-- host_surface: `{activation.get("host_surface")}`
-- activation_method: `{activation.get("activation_method")}`
-- entry_command_hint: `{activation.get("entry_command_hint")}`
-- activation_input_command: `{activation.get("activation_input_command")}`
-- recheck_command: `{commands.get("goal_start_agent_onboard_recheck")}`
-
-## Key Commands
-
-```bash
-{commands.get("status", "")}
-```
-
-```bash
-{commands.get("bootstrap_dry_run_preview", "")}
-```
-
-```bash
-{commands.get("goal_start_connect_if_needed", "")}
-```
-
-```bash
-{commands.get("issue_fix_workflow_plan_template", "")}
-```
-
-## Safety Contract
-
-- read_only: `{payload.get("read_only")}`
-- writes_registry: `{safety.get("writes_registry")}`
-- writes_state_file: `{safety.get("writes_state_file")}`
-- creates_heartbeat: `{safety.get("creates_heartbeat")}`
-- spends_quota: `{safety.get("spends_quota")}`
-- explicit_goal_start_may_write_project_local_state: `{safety.get("explicit_goal_start_may_write_project_local_state")}`
-- explicit_goal_start_must_activate_host_loop: `{safety.get("explicit_goal_start_must_activate_host_loop")}`
-"""

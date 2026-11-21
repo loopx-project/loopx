@@ -40,7 +40,7 @@ LEGACY_PATTERN = re.compile(
     r"\bprimary_agent\b|\bprimary_review\b|\bside_agent\b|\bhandoff_agent\b|"
     r"\bagent_profile_v0\b|\bprimary_checkout\b|"
     r"\bprimary agent\b|\bside agent\b|\bside-agent\b|\bmain controller\b|"
-    r"controller/sub-agent|controller-subagent|controller owns|"
+    r"controller/sub-agent|controller-subagent|"
     r'"role"\s*:\s*"(?:controller|subagent)"',
     re.IGNORECASE,
 )
@@ -52,14 +52,6 @@ def hierarchy_scan_line(path: Path, line: str) -> str:
     if (path == REPO_ROOT / "loopx/control_plane/todos/read_codec.ts"
             and line.strip() == '["removed_continuation_policy", ["primary_review", "review_handoff"]]] as const) {'):
         return line.replace('"primary_review"', '').replace('"review_handoff"', '')
-    # This accepted RFC names native session roles, not Agent hierarchy.
-    if (path == REPO_ROOT / "docs/architecture/rfcs/controller-executor-unified-contract-v0.md"
-            and line.strip() == 'the current single Agent-scoped slot. One controller owns control dialogue;'):
-        return line.replace("controller owns", "native session role owns")
-    # Benchmark recovery assigns retries to the experiment provider or controller.
-    if (path == REPO_ROOT / "loopx/capabilities/benchmark_toolkit/README.md"
-            and line.strip() == "grading alive until it drains. The provider/controller owns bounded retry after"):
-        return line.replace("provider/controller owns", "benchmark provider or controller handles")
     return line
 
 
@@ -83,10 +75,20 @@ def main() -> int:
         "handoff_agent",
         "agent_profile_v0",
         "primary_checkout",
-        "controller owns",
+        "main controller",
+        "controller/sub-agent",
+        "controller-subagent",
+        '"role": "controller"',
+        '"role": "subagent"',
     ):
         assert LEGACY_PATTERN.search(token), token
-    for domain_term in ("primary_reviewers", "primary_review_score"):
+    # Owning a domain resource does not describe an Agent hierarchy.
+    for domain_term in (
+        "primary_reviewers",
+        "primary_review_score",
+        "The benchmark controller owns the worker lock.",
+        "One controller owns control dialogue.",
+    ):
         assert not LEGACY_PATTERN.search(domain_term), domain_term
 
     decoder = REPO_ROOT / "loopx/control_plane/todos/read_codec.ts"

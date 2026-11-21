@@ -228,6 +228,7 @@ class LoopxCodex(Codex):
         # option.  Packed once per run rather than once per task would be nicer
         # still, but the tar is ~13 MB and building it is far cheaper than the
         # model turn that follows.
+        runner_source = getattr(self, "_goal_runner_source", None)
         with tempfile.TemporaryDirectory() as tmp:
             tarball = Path(tmp) / "loopx.tar.gz"
             subprocess.run(

@@ -965,9 +965,15 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 
 
 def _standalone_core() -> bool:
-	from importlib.util import find_spec
+	if sys.modules.get("loopx.cli") is not None:
+		return False
+	from importlib.machinery import PathFinder
 
-	if find_spec("loopx.cli") is not None:
+	package = sys.modules.get(__package__ or "loopx")
+	search_path = list(getattr(package, "__path__", ())) or [
+		str(Path(__file__).resolve().parent)
+	]
+	if PathFinder.find_spec("loopx.cli", search_path) is not None:
 		return False
 	from importlib.metadata import PackageNotFoundError, distribution
 	from .python_install_owner import installed_loopx_distribution

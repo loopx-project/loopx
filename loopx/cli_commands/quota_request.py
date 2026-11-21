@@ -126,7 +126,7 @@ def register_quota_monitor_poll_request_arguments(
 def validate_quota_command_request(args: argparse.Namespace) -> None:
     command = args.quota_command
     if getattr(args, "material_change_scope", None) and (
-        command != "monitor-poll" or not args.material_change
+        command != "monitor-poll" or not bool(getattr(args, "material_change", False))
     ):
         raise QuotaCommandValidationError(
             "--material-change-scope requires quota monitor-poll --material-change"
@@ -139,9 +139,13 @@ def validate_quota_command_request(args: argparse.Namespace) -> None:
     lease_version = getattr(args, "task_lease_expected_version", None)
     use_current_lease = bool(getattr(args, "use_current_task_lease", False))
     if use_current_lease:
-        if command != "monitor-poll" or not args.execute:
+        if command != "monitor-poll" or not bool(getattr(args, "execute", False)):
             raise QuotaCommandValidationError("--use-current-task-lease requires executing quota monitor-poll")
-        if not args.todo_id or not args.turn_instance_id or not args.agent_id:
+        if (
+            not getattr(args, "todo_id", None)
+            or not getattr(args, "turn_instance_id", None)
+            or not getattr(args, "agent_id", None)
+        ):
             raise QuotaCommandValidationError(
                 "--use-current-task-lease requires --todo-id, --turn-instance-id, and --agent-id"
             )
@@ -154,14 +158,14 @@ def validate_quota_command_request(args: argparse.Namespace) -> None:
             raise QuotaCommandValidationError("task lease proof is only valid with quota monitor-poll")
         if not lease_key or lease_version is None or lease_version < 1 or lease_version > 9007199254740991:
             raise QuotaCommandValidationError("Monitor lease proof requires an execution key and positive safe-integer version")
-        if not (args.todo_id or args.target_key):
+        if not (getattr(args, "todo_id", None) or getattr(args, "target_key", None)):
             raise QuotaCommandValidationError("Monitor lease proof requires --todo-id or --target-key")
     if getattr(args, "delivery_workspace_path", None) is not None and command != "spend-slot":
         raise QuotaCommandValidationError(
             "--delivery-workspace-path is only valid with `loopx quota spend-slot`"
         )
     begin_turn = bool(getattr(args, "begin_turn", False))
-    if command not in {"status", "plan"} and not args.goal_id:
+    if command not in {"status", "plan"} and not getattr(args, "goal_id", None):
         raise QuotaCommandValidationError(
             f"`loopx quota {command}` requires --goal-id"
         )
@@ -170,15 +174,19 @@ def validate_quota_command_request(args: argparse.Namespace) -> None:
         "scheduler-ack-current",
         "scheduler-fail-current",
     }
-    if command in scheduler_commands and not args.agent_id:
+    if command in scheduler_commands and not getattr(args, "agent_id", None):
         raise QuotaCommandValidationError(
             f"`loopx quota {command}` requires --agent-id"
         )
-    if command == "void-slot" and not args.void_generated_at:
+    if command == "void-slot" and not getattr(args, "void_generated_at", None):
         raise QuotaCommandValidationError(
             "`loopx quota void-slot` requires --void-generated-at"
         )
-    if command == "should-run" and args.todo_id and not (args.turn_instance_id or begin_turn):
+    if (
+        command == "should-run"
+        and getattr(args, "todo_id", None)
+        and not (getattr(args, "turn_instance_id", None) or begin_turn)
+    ):
         raise QuotaCommandValidationError(
             "`loopx quota should-run --todo-id` requires --turn-instance-id or --begin-turn"
         )
@@ -186,18 +194,18 @@ def validate_quota_command_request(args: argparse.Namespace) -> None:
         raise QuotaCommandValidationError(
             "--begin-turn is only valid with `loopx quota should-run`"
         )
-    if begin_turn and args.turn_instance_id:
+    if begin_turn and getattr(args, "turn_instance_id", None):
         raise QuotaCommandValidationError(
             "--begin-turn cannot be combined with --turn-instance-id"
         )
-    if begin_turn and not args.agent_id:
+    if begin_turn and not getattr(args, "agent_id", None):
         raise QuotaCommandValidationError(
             "--begin-turn requires exact --agent-id identity"
         )
     if (
         command not in {"status", "plan", "should-run"}
-        and args.dry_run
-        and args.execute
+        and bool(getattr(args, "dry_run", False))
+        and bool(getattr(args, "execute", False))
     ):
         raise QuotaCommandValidationError(
             f"`loopx quota {command}` accepts only one of --dry-run or --execute"

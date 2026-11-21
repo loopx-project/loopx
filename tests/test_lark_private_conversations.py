@@ -5156,6 +5156,46 @@ def test_completed_answer_delivery_does_not_prepare_another_execution(ordinary, 
         runtime.close()
 
 
+def test_private_delivery_recovers_saved_answer_after_claim_release(ordinary, monkeypatch):  # noqa: F811
+    import errno
+    from loopx import chat_store
+
+    store, runtime, provider, transport = connect(ordinary)
+    event = provider.event("notes-app", "saved-answer-original", "Complete the original request.")
+    write = chat_store._atomic_write_json
+    lost = threading.Event()
+
+    def fail_final_status(path, value, **kwargs):
+        if path.parent.name == "turns" and value.get("status") == "completed" and not lost.is_set():
+            lost.set()
+            raise OSError(errno.EIO, "Synthetic final status write failure")
+        return write(path, value, **kwargs)
+
+    monkeypatch.setattr(chat_store, "_atomic_write_json", fail_final_status)
+    try:
+        transport.admit("notes-app", event)
+        native, = transport.core.pending()
+        sid, tid = native["session_id"], native["turn_id"]
+        assert lost.wait(10)
+        worker = runtime.session_queue_threads.get(sid)
+        if worker is not None:
+            worker.join(5)
+            assert not worker.is_alive()
+        assert store.load_session(sid)["active_turn_id"] is None
+        assert store.load_turn(sid, tid)["status"] == "completing"
+        path = transport.root / f"{native['request_ref']}.json"
+        assert transport.reconcile_request(path) == 1
+        assert transport.reconcile_request(path) == 0
+        assert provider.writes == [("notes-app", "Runtime response.")]
+        assert store.load_turn(sid, tid)["status"] == "completed"
+        assert json.loads(path.read_text())["deliveries"]["terminal"]["verified"] is True
+        assert [m["text"] for m in store.messages(sid) if m["role"] == "agent"] == ["Runtime response."]
+        packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert sum(row["method"] == "turn/start" for row in packets) == 1
+    finally:
+        runtime.close()
+
+
 def test_unexecuted_request_still_uses_original_queue_recovery(ordinary, monkeypatch):  # noqa: F811
     store, runtime, provider, transport = connect(ordinary)
     resumes = []
@@ -6935,6 +6975,101 @@ def test_private_mention_does_not_target_turn_started_during_provider_read(ordin
         assert not any(call["method"] == "turn/steer" for call in calls)
     finally:
         runtime.close()
+
+
+@pytest.mark.parametrize("queued", [False, True], ids=["composer", "queued-input"])
+def test_private_steward_app_steering_delivers_once_to_the_original_turn(tmp_path, queued):
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from test_native_steward_private import steward
+
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, capture, _ = next(fixture)
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.runtime_controller = store, runtime
+    server.runtime_root, server.registry_path = store.root.parent, runtime.registry_path
+    server.selected_goal_id, server.verbose = None, False
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+
+    def request(method, path, body=None):
+        connection = http.client.HTTPConnection(*server.server_address, timeout=15)
+        try:
+            connection.request(method, path, None if body is None else json.dumps(body),
+                               headers={"Content-Type": "application/json"})
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    try:
+        event = provider.event("steward-app", "original-private-input", "wait for steer")
+        assert transport.admit("steward-app", event)["status"] == "durably_accepted"
+        original, = transport.core.pending()
+        _wait_private_upstream(store, original)
+        sid, tid = original["session_id"], original["turn_id"]
+        session_path = f"/api/chat/sessions/{sid}"
+        endpoint = f"{session_path}/turns/{tid}/steer"
+        correction = {"message": "Correct the current inspection.", "client_ingress_id": "app-correction"}
+        body = correction
+        wrong_endpoint = f"{session_path}/turns/old-turn/steer"
+        wrong_body = {**correction, "client_ingress_id": "wrong-turn"}
+        original_queued = None
+        if queued:
+            status, pending = request("POST", f"{session_path}/turns", {
+                "message": correction["message"], "client_turn_id": "queue-original", "delivery": "queue",
+            })
+            assert status == 202 and pending["status"] == "queued"
+            qid = pending["turn_id"]
+            original_queued = store.load_turn(sid, qid)
+            endpoint = wrong_endpoint = f"{session_path}/queue/{qid}/steer"
+            body = {"target_turn_id": tid, "client_ingress_id": "app-correction"}
+            wrong_body = {"target_turn_id": "old-turn", "client_ingress_id": "wrong-turn"}
+
+        status, refused = request("POST", wrong_endpoint, wrong_body)
+        assert status == 409 and refused["error_code"] == "live_steering_turn_mismatch"
+        provider.owner_ready = False
+        assert request("POST", endpoint, body)[0] == 400
+        if queued:
+            assert store.load_turn(sid, qid) == original_queued
+        else:
+            assert store.steering_receipt(sid, "app-correction") is None
+        provider.owner_ready = True
+
+        # Managed Steward admission takes the controller lock before its
+        # binding. Steering already fenced by the binding cannot wait on it.
+        with runtime.lock:
+            status, delivered = request("POST", endpoint, body)
+        assert status == 200 and delivered["turn_id"] == tid
+        completed = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert completed["status"] == "completed"
+        status, duplicate = request("POST", endpoint, body)
+        assert status == 200 and duplicate["turn_id"] == tid
+        if queued:
+            assert duplicate == delivered and delivered["queued_turn_id"] == qid
+            assert store.load_turn(sid, qid)["status"] == "completed"
+            adoption, = [row for row in store.events_after(sid, qid, None)
+                         if row["kind"] == "turn.completed"]
+            assert adoption["payload"]["steered_into_turn_id"] == tid
+        else:
+            assert delivered["created"] is True and duplicate["created"] is False
+        status, history = request("GET", session_path)
+        assert status == 200
+        entry, = [row for row in history["messages"] if row["text"] == correction["message"]]
+        assert entry["turn_id"] == (qid if queued else tid) and entry["origin"] == "web"
+
+        transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+        assert request("POST", endpoint, {**body, "client_ingress_id": "revoked-input"})[0] == 400
+        calls = [json.loads(line) for line in capture.read_text().splitlines()]
+        steer, = [call["params"] for call in calls if call["method"] == "turn/steer"]
+        assert steer["expectedTurnId"] == completed["upstream_turn_id"]
+        assert steer["input"] == [{"type": "text", "text": correction["message"]}]
+        assert sum(call["method"] == "turn/start" for call in calls) == 1
+        assert not store.queued_turns(sid)
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=2)
+        fixture.close()
 
 
 def test_private_steward_native_mention_uses_original_manager_turn(tmp_path, monkeypatch):
@@ -9096,3 +9231,102 @@ def test_due_discovery_progresses_when_only_free_slot_keeps_retrying_a_body(tmp_
         release.set()
         service.close()
         service._delivery_thread.join(5)
+
+
+@pytest.mark.parametrize("relay_ready_initially", [False, True])
+def test_project_workspace_write_recovers_loopback_relay_auth_once_ready(
+    ordinary, monkeypatch, tmp_path, relay_ready_initially,  # noqa: F811
+):
+    from datetime import timedelta, timezone
+    from pathlib import Path
+    from loopx.capabilities.native_chat import codex_adapter as adapter_module
+    from loopx.capabilities.native_chat import external_conversations
+
+    ordinary[2].workspace_grant = "workspace_write"
+    store, runtime, provider, transport = connect(ordinary)
+    try:
+        capture, fake = ordinary[-3:-1]
+        binding = next(row for row in transport.bindings.read()["bindings"] if row["transport_ref"] == "notes-app")
+        assert binding["grant"] == "workspace_write"
+        source = fake.read_text().replace(
+            '"codexErrorInfo": "cyberPolicy"',
+            '"codexErrorInfo": {"httpConnectionFailed": {"httpStatusCode": 401}}',
+        ).replace(
+            '"private-fixture-upstream-detail"',
+            '"unexpected status 401 Unauthorized: OpenAI API fallback request could not complete., url: http://127.0.0.1:57500/v1/responses"',
+        ).replace(
+            '            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n',
+            "",
+        )
+        fake.write_text(source)
+        event = provider.event("notes-app", "relay-401", "typed terminal failure")
+        transport.admit("notes-app", event)
+        ref = identity_ref(binding["provider_ref"], event["message_id"])
+        original = transport.core.read_request(ref)
+        failed = runtime.wait_for_turn(session_id=original["session_id"], turn_id=original["turn_id"], timeout_sec=10)
+        assert failed["status"] == "failed" and failed["error_code"] == "upstream_transport_failure" and failed["delta_count"] == 0
+        transport.reconcile()
+        delivery_path = transport.root / f"{ref}.json"
+        old_notice = json.loads(delivery_path.read_text())["deliveries"]["terminal"]
+        runtime.adapters.pop(original["session_id"]).close_session()
+        Path(store.load_session(original["session_id"])["codex_home"]).mkdir(parents=True, exist_ok=True)
+        inventory = tmp_path / "relay-inventory.json"
+        inventory.write_text(json.dumps({
+            "turns": [{"id": failed["upstream_turn_id"], "status": "failed", "error": {
+                "codexErrorInfo": {"httpConnectionFailed": {"httpStatusCode": 401}},
+                "message": "unexpected status 401 Unauthorized: OpenAI API fallback request could not complete., url: http://127.0.0.1:57500/v1/responses",
+            }}],
+            "items": [{"turnId": failed["upstream_turn_id"], "item": {"type": "userMessage", "id": "user-1"}}],
+        }))
+        begin = source.index('    elif method == "thread/turns/list":')
+        end = source.index('    else:\n        result = {}', begin)
+        reader = f'''    elif method in {{"thread/turns/list", "thread/items/list"}}:
+        with open({str(inventory)!r}) as observed:
+            snapshot = json.load(observed)
+        result = {{"data": snapshot["turns" if method == "thread/turns/list" else "items"]}}
+    elif method == "thread/backgroundTerminals/list":
+        result = {{"data": []}}
+'''
+        fake.write_text((source[:begin] + reader + source[end:]).replace(
+            'if "typed terminal failure" in json.dumps(request.get("params") or {}):',
+            "if False:",
+        ))
+        clock = [datetime.now(timezone.utc) + timedelta(seconds=61)]
+
+        class AfterBackoff(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return clock[0]
+
+        ready_state = [relay_ready_initially]
+        monkeypatch.setattr(external_conversations, "datetime", AfterBackoff)
+        monkeypatch.setattr(
+            adapter_module,
+            "_loopback_relay_transport_ready",
+            lambda *_a, **_kw: (ready_state[0], int(clock[0].timestamp())),
+        )
+        from loopx.extensions.lark.private_progress import presentation_phase
+
+        worker = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+            runner=provider, cli_bin="lark-cli")
+        worker.reconcile()
+        row = worker.core.read_request(ref)
+        if not relay_ready_initially:
+            assert row["turn_id"] == original["turn_id"] and not row.get("context_recovery")
+            ready_state[0] = True
+            clock[0] += timedelta(minutes=1)
+            worker = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+                runner=provider, cli_bin="lark-cli")
+            worker.reconcile()
+            row = worker.core.read_request(ref)
+        assert row["turn_id"] != original["turn_id"]
+        assert row["context_recovery"]["routing_attempt"] == 1
+        assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)["status"] == "completed"
+        worker.reconcile()
+        delivered = json.loads(delivery_path.read_text())
+        assert delivered["deliveries"]["terminal"] == old_notice
+        assert delivered["deliveries"][presentation_phase(row, "terminal")]["verified"]
+        starts = [json.loads(line) for line in capture.read_text().splitlines() if json.loads(line).get("method") == "turn/start"]
+        assert len(starts) == 2
+    finally:
+        runtime.close()

@@ -348,6 +348,7 @@ def test_leased_delivery_settlement_and_recovery_without_source_todo_writers(tmp
         offline.rename(backend)
 
     refreshed = run("refresh-state", *identity, "--turn-instance-id", settlement.TURN_ID,
+                    *proof,
                     "--classification", "validated_progress", "--delivery-batch-scale", "implementation",
                     "--delivery-outcome", "outcome_progress", "--no-global-sync", "--suppress-external-sinks",
                     "--vision-state", "vision_on_track", "--vision-summary", "Continue canonical delivery.",

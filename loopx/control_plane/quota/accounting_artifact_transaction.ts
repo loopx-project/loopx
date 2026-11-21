@@ -538,16 +538,41 @@ export async function readQuotaSpendEventFromRun(
     return inline;
   }
   if (typeof run.json_path !== "string" || !run.json_path.trim()) return null;
+  const runsDirReal = await realpath(runsDir);
+  const rawPath = run.json_path.trim();
+  const relocatedCandidate = (() => {
+    if (!isAbsolute(rawPath)) return null;
+    const normalized = resolve(rawPath);
+    const fileName = basename(normalized);
+    const runsParent = dirname(normalized);
+    const goalDir = dirname(runsParent);
+    const goalsDir = dirname(goalDir);
+    if (
+      !fileName || fileName === "." || fileName === ".." || extname(fileName) !== ".json" ||
+      basename(runsParent) !== "runs" || basename(goalDir) !== goalId || basename(goalsDir) !== "goals"
+    ) {
+      return null;
+    }
+    return join(runsDirReal, fileName);
+  })();
+  const initialRelative = relative(runsDirReal, resolve(rawPath));
+  const staysInsideInitial = Boolean(
+    initialRelative && initialRelative !== ".." &&
+    !initialRelative.startsWith(`..${sep}`) && !isAbsolute(initialRelative)
+  );
+  const candidatePath = staysInsideInitial || relocatedCandidate === null
+    ? resolve(rawPath)
+    : relocatedCandidate;
   let targetPath: string;
   try {
-    targetPath = await realpath(resolve(run.json_path.trim()));
+    targetPath = await realpath(candidatePath);
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
       return null;
     }
     throw error;
   }
-  const relativePath = relative(await realpath(runsDir), targetPath);
+  const relativePath = relative(runsDirReal, targetPath);
   if (
     !relativePath ||
     relativePath === ".." ||

@@ -240,6 +240,7 @@ def test_cli_generated_guard_selection_and_settlement_ignore_conflicting_cwd_reg
             _route(step["command_template"], registry, runtime)
     assert cli._spend_run_count(runtime) == 0
 
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
     refresh = next(c for c in channel["next_cli_actions"] if "refresh-state" in c)
     replacements = {
         "<validated_progress>": "validated_progress", "<scale>": "implementation",
@@ -247,19 +248,20 @@ def test_cli_generated_guard_selection_and_settlement_ignore_conflicting_cwd_reg
     }
     for placeholder, value in replacements.items():
         refresh = refresh.replace(placeholder, value)
-    code, refreshed = _execute(shlex.split(refresh)[1:] + [
+    refresh_args = shlex.split(refresh)[1:] + [
         "--vision-state", "vision_on_track",
         "--vision-summary", "Keep validating the selected work.",
         "--vision-acceptance", "The same Turn settles once against the selected authority.",
         "--no-global-sync", "--suppress-external-sinks",
-    ], project)
-    assert code == 0 and refreshed["settlement_result"]["ok"], refreshed
-    spend = next(c for c in channel["next_cli_actions"] if "spend-slot" in c)
+    ]
     for replay in (False, True):
-        code, spent = _execute(shlex.split(spend)[1:], project)
-        assert code == 0 and spent["settlement_result"]["ok"], spent
-        if replay:
-            assert spent["idempotent_replay"] and not spent["appended"]
+        code, refreshed = _execute(refresh_args, project)
+        assert code == 0 and refreshed["settlement_result"]["ok"], refreshed
+        assert refreshed["settlement_progress"]["state"] == "settled"
+        assert [row["step_kind"] for row in refreshed["settlement_result"]["receipts"]] == [
+            "validation", "durable_writeback", "quota_spend",
+        ]
+        assert refreshed.get("idempotent_replay", False) is replay
     assert cli._spend_run_count(runtime) == 1
     code, settled = _execute(guard_argv, project)
     assert code == 0 and settled["effective_action"] == "heartbeat_settled_skip", settled

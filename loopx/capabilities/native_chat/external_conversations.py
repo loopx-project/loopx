@@ -10,12 +10,14 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from functools import cache
 from pathlib import Path
-import hashlib
 import json
 import re
 import threading
+import time
 from datetime import datetime as datetime, timezone as timezone
 from typing import Any
+
+from ...chat_attachments import normalize_chat_image_attachments
 
 from ...chat_ingress import (
     STEWARD_BINDING_ADOPTION_PENDING as STEWARD_BINDING_ADOPTION_PENDING,
@@ -28,7 +30,6 @@ from ...chat_store import (
     _read_json as _read_json,
     RESUMABLE_SESSION_STATES,
 )
-from ...chat_attachments import normalize_chat_image_attachments
 from ...control_plane import effect_runtime
 from ...control_plane.quota.automation_cadence_readback import (
     automation_cadence_readback,
@@ -40,6 +41,11 @@ from .codex_context import checked_session_home
 from .file_discovery import (
     FileChatDiscovery,
     QuotaBacklogObservationCache,
+    _DeferredBacklogRequest,
+    _RecoveryDiscoveryReads,
+    _preparation_image_identity,
+    _project_source_request_digest,
+    _project_user_message_hint,
     _same_store_method,
     external_source_route_path,
     file_change_fingerprint,
@@ -56,94 +62,6 @@ from .steward_commands import ExternalStewardCommissionMixin
 _REQUEST_JOURNAL_STEM = re.compile(r"[a-f0-9]{24}")
 QUOTA_BACKLOG_BATCH_SIZE = 64
 _QUOTA_BACKLOG_BATCH_BYTES = 1024 * 1024
-
-
-class _DeferredBacklogRequest(dict[str, Any]):
-    """Bounded backlog request view carrying its observed file fingerprint."""
-
-    __slots__ = ("req_fp", "needs_full_read")
-
-    def __init__(
-        self,
-        data: Mapping[str, Any],
-        *,
-        req_fp: tuple[int, ...] | None,
-        needs_full_read: bool,
-    ) -> None:
-        super().__init__(data)
-        self.req_fp = req_fp
-        self.needs_full_read = needs_full_read
-
-
-def _preparation_image_identity(value: Any) -> dict[str, Any] | None:
-    """Fingerprint already normalized Core images without exporting their bytes."""
-    if not isinstance(value, list) or not value:
-        return None
-    try:
-        images = normalize_chat_image_attachments(value)
-        if images != value:
-            return None
-        encoded = json.dumps(images, sort_keys=True, separators=(",", ":")).encode()
-        return {"count": len(images), "sha256": hashlib.sha256(encoded).hexdigest()}
-    except (ValueError, TypeError, OverflowError):
-        return None
-
-
-def _project_source_request_digest(_path: Path, item: dict[str, Any]) -> dict[str, Any]:
-    canonical = json.dumps(item, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-    return {
-        "request_ref": item.get("request_ref"),
-        "binding_id": item.get("binding_id"),
-        "source": item.get("source"),
-        "sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
-    }
-
-
-def _project_user_message_hint(message: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        key: message[key]
-        for key in ("role", "turn_id", "text", "origin", "created_at")
-        if key in message
-    }
-
-
-class _RecoveryDiscoveryReads:
-    """Lazy facts for one queue-discovery pass, never recovery admission.
-
-    Historical requests share Session history. Retain queue/control/history
-    hints, never provider identity or a recovery decision. A new
-    pass builds new observations; normal admission never receives this object.
-    """
-
-    def __init__(self, core: ChatExternalConversations) -> None:
-        self.core = core
-        self.queues: dict[str, bool] = {}
-        self.histories: dict[str, list[dict[str, Any]]] = {}
-        self.message_indexes: dict[str, dict[str, list[dict[str, Any]]]] = {}
-        self.controls: list[dict[str, Any]] | None = None
-
-    def queued(self, session_id: str) -> bool:
-        if session_id not in self.queues:
-            self.queues[session_id] = bool(self.core.controller.store.queued_turns(session_id))
-        return self.queues[session_id]
-
-    def user_messages(self, session_id: str) -> list[dict[str, Any]]:
-        if session_id not in self.histories:
-            self.histories[session_id] = list(self.core._cached_user_messages(session_id))
-        return self.histories[session_id]
-
-    def source_controls(self) -> list[dict[str, Any]]:
-        if self.controls is None:
-            self.controls = self.core.source_controls()
-        return self.controls
-
-    def matching_user_messages(self, session_id: str, text: str) -> list[dict[str, Any]]:
-        if session_id not in self.message_indexes:
-            index: dict[str, list[dict[str, Any]]] = {}
-            for row in self.user_messages(session_id):
-                index.setdefault(row.get("text", ""), []).append(row)
-            self.message_indexes[session_id] = index
-        return self.message_indexes[session_id].get(text, [])
 
 
 class ChatExternalConversations(ExternalStewardCommissionMixin):
@@ -192,6 +110,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                                discovery_only: bool = False,
                                preparation_scope_available: bool = False,
                                metadata_capacity: dict[str, Any] | None = None,
+                               failure_notice_receipt_unknown: bool = False,
                                discovery_reads: _RecoveryDiscoveryReads | None = None) -> dict[str, Any]:
         from ...chat_manager import MANAGER_CONTEXT_VERSION
 
@@ -225,7 +144,8 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
             and (retained_review is None or reservation.get("work_attempt") == 1
                  or reservation.get("legacy_result_review")) else None)
         image_failure = turn.get("error_code") == "runtime_error" and bool(row.get("attachments"))
-        runtime_failure = turn.get("error_code") in {"model_auth_unavailable", "resume_failed"}
+        runtime_failure = turn.get("error_code") in {
+            "model_auth_unavailable", "resume_failed", "execution_worker_exited_before_dispatch"}
         needs_full_events = (not discovery_only or retained_review is not None
             or turn.get("error_code") == "manager_authorization_unavailable"
             or image_failure or runtime_failure)
@@ -319,6 +239,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                 "preparation_observation": preparation,
                 "later_equivalent_input_present": later_equivalent,
                 "preparation_scope_available": preparation_scope_available,
+                "failure_notice_receipt_unknown": bool(failure_notice_receipt_unknown),
                 "later_source_input_present": any(item.get("binding_id") == row["binding_id"]
                     and item.get("source") == row["source"] and item.get("command") is None
                     and datetime.fromisoformat(item["created_at"]) > datetime.fromisoformat(row["created_at"])
@@ -529,13 +450,15 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
         """Retain quota and declared unfinished work without admitting recovery."""
         return self.quota_backlog_observer(source_controls=source_controls)([row])[0]
 
-    def context_recovery_observer(self) -> Callable[[str], bool]:
+    def context_recovery_observer(self) -> Callable[..., bool]:
         """Reuse scan-local hints; reread each request, Turn and binding."""
         reads = _RecoveryDiscoveryReads(self)
-        return lambda ref: self.context_recovery_candidate(ref, discovery_reads=reads)
+        return lambda ref, *, failure_notice_receipt_unknown=False: self.context_recovery_candidate(
+            ref, discovery_reads=reads, failure_notice_receipt_unknown=failure_notice_receipt_unknown)
 
     def context_recovery_candidate(self, request_ref: str, *,
-                                   discovery_reads: _RecoveryDiscoveryReads | None = None) -> bool:
+                                   discovery_reads: _RecoveryDiscoveryReads | None = None,
+                                   failure_notice_receipt_unknown: bool = False) -> bool:
         """Discovery only; every authority and native fact is re-read at admission."""
         try:
             row = self.read_request(request_ref)
@@ -550,6 +473,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                 return True
             if not row.get("delivery_verified"):
                 return self._context_recovery_plan(row, discovery_only=True,
+                    failure_notice_receipt_unknown=failure_notice_receipt_unknown,
                     discovery_reads=discovery_reads).get("recovery_candidate") is True
             turn = self.controller.store.load_turn(row["session_id"], row["turn_id"])
             if not turn or turn.get("status") not in {"failed", "completed"}:
@@ -562,12 +486,14 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                         and result_review_evidence.collect_related_result_review(self, row, turn, discovery_reads=discovery_reads) is None):
                     return False  # A lexical probe hint, never permission to adopt or send.
             return self._context_recovery_plan(row, discovery_only=True,
+                failure_notice_receipt_unknown=failure_notice_receipt_unknown,
                 discovery_reads=discovery_reads).get("recovery_candidate") is True
         except (KeyError, ValueError, RuntimeError, OSError):
             return False
 
     def recover_failed_request(self, request_ref: str, *,
-                               source_observation: Callable[[dict[str, Any]], dict[str, Any] | None]) -> dict[str, Any]:
+                               source_observation: Callable[[dict[str, Any]], dict[str, Any] | None],
+                               failure_notice_receipt_unknown: bool = False) -> dict[str, Any]:
         """Reserve/admit one same-source continuation through the existing queue.
 
         The failed Turn and its original notice remain immutable. The new Turn
@@ -581,7 +507,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
         path = self.root / f"{request_ref}.json"
         with exclusive_file_lock(path, operation="admit_external_chat_request"):
             row = self.read_request(request_ref)
-            plan = self._context_recovery_plan(row)
+            plan = self._context_recovery_plan(row, failure_notice_receipt_unknown=failure_notice_receipt_unknown)
             if not plan.get("recovery_candidate"):
                 return row
             session = self.controller.store.load_session(row["session_id"])
@@ -659,6 +585,8 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                     proof = CodexAppServerAdapter.failed_request_observation(
                         codex_bin=self.controller.codex_bin, codex_home=Path(session["codex_home"]),
                         model_auth_home=model_auth_home,
+                        runtime_root=self.controller.coordination_runtime_root,
+                        consumer="steward" if session.get("steward_context") else "worker",
                         read_only_review=bool(plan.get("read_only_review")) and not quota_answer,
                         thread_ids=plan["native_thread_ids"], turn_id=turn["upstream_turn_id"])
                     if (proof is not None and proof.get("codex_error_info") == "usageLimitExceeded"
@@ -706,7 +634,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                     return row
                 plan = self._context_recovery_plan(row, observation=proof, source_verified=source is not None,
                     selected_binding=selected["binding"], preparation_scope_available=scope_available,
-                    metadata_capacity=capacity)
+                    metadata_capacity=capacity, failure_notice_receipt_unknown=failure_notice_receipt_unknown)
                 if plan.get("retain_metadata_result") and facts and not self.controller.store.native_result(row["session_id"], turn["turn_id"]):
                     try:
                         self.controller.store.retain_native_result(row["session_id"], turn["turn_id"],
@@ -717,7 +645,8 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                         return row  # Preserve the delivered answer and unspent review.
                     proof = self._original_native_result(row, session, turn, context, include_raw_response=True)
                     plan = self._context_recovery_plan(row, observation=proof, source_verified=source is not None,
-                        selected_binding=selected["binding"], metadata_capacity=capacity)
+                        selected_binding=selected["binding"], metadata_capacity=capacity,
+                        failure_notice_receipt_unknown=failure_notice_receipt_unknown)
                 if not plan.get("recovery_eligible"):
                     if plan.get("metadata_quota_wait") is not None and row.get("metadata_quota_wait") != plan["metadata_quota_wait"]:
                         row["metadata_quota_wait"] = plan["metadata_quota_wait"]
@@ -730,13 +659,13 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                     recovery = {"version": MANAGER_CONTEXT_VERSION, "failed_turn_id": turn["turn_id"],
                         "native_observation": proof, "source_observation": source,
                         "client_turn_id": plan["client_turn_id"],
-                        "failure_notice_delivery_verified": row["delivery_verified"]}
+                        "failure_notice_delivery_verified": row.get("delivery_verified") is True}
                     if plan.get("read_only_review"):
                         recovery.update(read_only_review=True, presentation_key=f"{MANAGER_CONTEXT_VERSION}.review.1")
                         if plan.get("unfinished_work") or plan.get("legacy_result_review"):
                             recovery.pop("failure_notice_delivery_verified", None)
                             recovery.update(original_turn=deepcopy(turn), binding_snapshot=selected["binding"],
-                                prior_result_delivery_verified=row["delivery_verified"])
+                                prior_result_delivery_verified=row.get("delivery_verified") is True)
                             if plan.get("unfinished_work"):
                                 recovery["unfinished_work"] = deepcopy(plan["unfinished_work"])
                             else:
@@ -758,7 +687,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                     if plan.get("work_attempt"):
                         recovery.pop("failure_notice_delivery_verified", None)
                         recovery.update(work_attempt=1, unfinished_work=plan["unfinished_work"],
-                            prior_result_delivery_verified=row["delivery_verified"],
+                            prior_result_delivery_verified=row.get("delivery_verified") is True,
                             presentation_key=f"{MANAGER_CONTEXT_VERSION}.work.1", not_before=plan["not_before"])
                         if plan.get("completed_review_turn_id"):
                             recovery.update(completed_review_turn_id=plan["completed_review_turn_id"],
@@ -800,11 +729,34 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
             if runtime_preparation:
                 # Preparation never starts a model request. Check the same
                 # optional transport owner before reserving a bounded retry.
-                from .codex_auth import native_api_transport
-                native_api_transport(self.controller.coordination_runtime_root,
-                    checked_session_home(self.controller.codex_home, session),
-                    consumer="worker" if session.get("project_context") is not None else "steward",
-                    model=session.get("requested_agent_model_id") or session.get("agent_model_id"))
+                if session.get("agent_id") == "antigravity":
+                    from .antigravity_adapter import _rpc_post, discover_antigravity_language_server
+
+                    discovered = discover_antigravity_language_server(deadline=time.monotonic() + 3.0)
+                    if discovered is None:
+                        return False
+                    cascade_id = str(session.get("upstream_thread_id") or "").strip()
+                    if cascade_id:
+                        from ...chat_agent import CodexChatAgentError
+
+                        try:
+                            trajectory = _rpc_post(
+                                str(discovered["url"]),
+                                str(discovered["csrf_token"]),
+                                "GetCascadeTrajectory",
+                                {"cascadeId": cascade_id},
+                                timeout=2.5,
+                            )
+                        except CodexChatAgentError:
+                            return False
+                        if not isinstance(trajectory, dict) or trajectory.get("status") != "CASCADE_RUN_STATUS_IDLE":
+                            return False
+                else:
+                    from .codex_auth import native_api_transport
+                    native_api_transport(self.controller.coordination_runtime_root,
+                        checked_session_home(self.controller.codex_home, session),
+                        consumer="worker" if session.get("project_context") is not None else "steward",
+                        model=session.get("requested_agent_model_id") or session.get("agent_model_id"))
             if session.get("project_context") is not None:
                 # Resolve the existing project grant again; a project assistant
                 # has no manager portfolio scope to borrow.
@@ -1129,7 +1081,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
         continuation = self._checked_metadata_review(session, turn, observe_native=True)
         if continuation is None:
             return None
-        from ...chat_agent import COLLABORATION_INPUTS_GUIDANCE
+        from ...chat import COLLABORATION_INPUTS_GUIDANCE
 
         return (
             "Core admitted ONE text-only FORMAT REVIEW of an already completed original result. "

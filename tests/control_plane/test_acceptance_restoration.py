@@ -76,8 +76,6 @@ def test_cli_restore_then_reacquire_preserves_acceptance_and_exact_retry(tmp_pat
     assert first["acquired"]
     turn_binding = ["--agent-id", "agent-a", "--todo-id", target,
                     "--turn-instance-id", "turn-restore-acceptance"]
-    guard = cli("quota", "should-run", "--codex-app", *turn_binding, )
-    assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == target
     cli("todo", "update", "--todo-id", target, "--agent-id", "agent-a", "--clear-resume-when",
         "--task-lease-idempotency-key", "execution-one", "--task-lease-expected-version", "1")
     assert inspect()["goal_acceptance_contract"]["tasks"][0]["state"] == "stale"
@@ -112,6 +110,8 @@ def test_cli_restore_then_reacquire_preserves_acceptance_and_exact_retry(tmp_pat
     next_lease = cli("task-lease", "acquire", "--todo-id", target, "--owner", "agent-a",
                      "--idempotency-key", "execution-two", "--expected-version", "1", "--ttl-seconds", "600")
     assert next_lease["acquired"] and next_lease["lease"]["version"] == 2
+    guard = cli("quota", "should-run", "--codex-app", *turn_binding, )
+    assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == target
     # Recovery replay remains historical after a fresh execution starts; it
     # cannot release or acquire another generation, complete work or spend quota.
     after_acquire = inspect()
