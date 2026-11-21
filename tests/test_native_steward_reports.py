@@ -2365,17 +2365,22 @@ def test_saved_report_requires_real_original_closeout_then_its_own_fresh_native_
     from loopx.capabilities.native_chat.steward_reports import ManagedSessionReports
     from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
     from loopx.control_plane.quota.execution_preparation import RefreshTaskLeaseUnavailable
-    from loopx.control_plane.quota.settlement import ReceiptBoundReplayPhase, read_heartbeat_settlement
+    from loopx.control_plane.goals.goal_ref_validation import exact_goal_ref
+    from loopx.control_plane.projects.registry_codec import SOURCE_SESSION_PROFILE_ID
+    from loopx.control_plane.quota.settlement import (
+        ReceiptBoundReplayPhase, SettlementFailureKind, read_heartbeat_settlement,
+    )
+    from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
     from loopx.control_plane.turn_driver import executor, host_candidate
     from loopx.control_plane.turn_driver.journal_store import (
-        find_loopx_turn_key_by_settlement_identity, load_turn_journal, turn_journal_path,
+        find_loopx_turn_key_by_settlement_identity, load_loopx_turn_plan_from_journal,
+        load_turn_journal, turn_journal_path,
     )
 
     session, reports, _, _ = configured_local_report(steward, tmp_path, monkeypatch, provider)
     store, runtime, bot, _, _, capture, _ = steward
     sid = session["session_id"]
     actor = reports.selected(sid)["actor"]
-    goal_ref = {"goal_id": actor["goal_id"], "goal_instance_id": actor["goal_instance_id"]}
     install_model(steward, tmp_path, sid)
     runtime.project_contexts.conversation_bindings = None
     with monkeypatch.context() as old_parser:
@@ -2383,10 +2388,26 @@ def test_saved_report_requires_real_original_closeout_then_its_own_fresh_native_
         first = finish(runtime, pump_steward_monitors(runtime)[0])
     native, request = first["response"]["native_loopx"], first["loopx_request"]
     assert native["status"] == "stopped" and native["result_kind"] == "wait"
+    actor = request["actor"]
     _, window = reports.current_window(sid)
     folder = attempt_directory(reports.root, window)
     original_journal = turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=native["resume_turn_key"])
     original_journal_bytes = original_journal.read_bytes()
+    original_plan = load_loopx_turn_plan_from_journal(reports.root,
+        goal_id=actor["goal_id"], agent_id=actor["agent_id"], turn_key=native["resume_turn_key"])
+    goal_ref = original_plan.get("goal_ref")
+    registry = json.loads(runtime.registry_path.read_bytes())
+    registered_goal = next(goal for goal in registry["goals"] if goal["id"] == actor["goal_id"])
+    if goal_ref is None:
+        # This fixture's registered bounded alias has no incarnation. A
+        # missing exact Source reference must never take this alias branch.
+        assert "goal_ref" not in original_plan
+        assert registry.get("profile_id") != SOURCE_SESSION_PROFILE_ID
+        assert not registered_goal.get("goal_instance_id")
+        assert actor.get("goal_instance_id") is None
+    else:
+        assert goal_ref == exact_goal_ref(actor["goal_id"], goal_ref["goal_instance_id"])
+        assert actor["goal_instance_id"] == goal_ref["goal_instance_id"]
     saved_instance = request["turn_instance_id"] + ".saved-candidate"
 
     def readback(turn_instance):
@@ -2407,15 +2428,33 @@ def test_saved_report_requires_real_original_closeout_then_its_own_fresh_native_
     assert original.original_prepared_receipt.get("source_event_id") is None
     task = next(row for row in StewardMonitor(runtime).todos(actor) if row["todo_id"] == request["todo_id"])
     calls, writes = capture.read_bytes(), list(bot.writes)
+    route = ["--goal-id", actor["goal_id"], "--todo-id", request["todo_id"]]
+    p1 = native_command(runtime, ["task-lease", "inspect", *route])["lease"]
+    event_path = rollout_event_log_path(reports.root, actor["goal_id"])
+    events_before = event_path.read_bytes()
     with pytest.raises(RefreshTaskLeaseUnavailable):
         StewardTurnHost(runtime).recover_report_settlement(actor, window, task)
-    assert readback(saved_instance) is None
+    absent = readback(saved_instance)
+    assert absent is not None and absent.identity.value is None
+    assert absent.identity.failure is not None and absent.identity.failure.kind is SettlementFailureKind.RECEIPT_MISSING
+    assert absent.progress["state"] == "identity_required"
+    assert absent.progress["next_step"] == "validation"
+    assert absent.heartbeat_receipt is None and absent.original_prepared_receipt is None
+    assert absent.prepared_lease is None and absent.prepared_lease_required is False
+    assert absent.resume_lease_qualification is None and absent.native_child_admission is None
+    assert absent.writeback_run is None and absent.writeback_event is None
+    assert absent.spend_run is None and absent.spend_event is None and absent.completion_event is None
+    assert event_path.read_bytes() == events_before
+    assert all(event.get("run_id") != saved_instance
+        and (event.get("details") or {}).get("turn_instance_id") != saved_instance
+        for event in load_rollout_events(event_path))
+    assert find_loopx_turn_key_by_settlement_identity(reports.root, goal_id=actor["goal_id"],
+        agent_id=actor["agent_id"], todo_id=request["todo_id"], turn_instance_id=saved_instance) is None
+    assert native_command(runtime, ["task-lease", "inspect", *route])["lease"] == p1
     assert not (folder / "private-generation.json").exists()
     assert original_journal.read_bytes() == original_journal_bytes
     assert capture.read_bytes() == calls and bot.writes == writes
 
-    route = ["--goal-id", actor["goal_id"], "--todo-id", request["todo_id"]]
-    p1 = native_command(runtime, ["task-lease", "inspect", *route])["lease"]
     assert original.prepared_lease == {
         "prepared_lease_key_sha256": sha256(p1["idempotency_key"].encode()).hexdigest(),
         "prepared_lease_version": p1["version"], "prepared_lease_epoch": p1["lease_epoch"],
@@ -2430,7 +2469,8 @@ def test_saved_report_requires_real_original_closeout_then_its_own_fresh_native_
     # The supported administrative owner explicitly settles only P1's debt.
     # P2's control proof does not by itself authorize the saved business Run.
     closed = cli(runtime, "refresh-state", "--goal-id", actor["goal_id"],
-        "--goal-instance-id", actor["goal_instance_id"], "--agent-id", actor["agent_id"],
+        *(["--goal-instance-id", goal_ref["goal_instance_id"]] if goal_ref is not None else []),
+        "--agent-id", actor["agent_id"],
         "--todo-id", request["todo_id"], "--turn-instance-id", request["turn_instance_id"],
         "--execution-loss-closeout", "--classification", "execution_loss_closeout",
         "--delivery-batch-scale", "single_surface", "--delivery-outcome", "outcome_gap",
@@ -2488,6 +2528,8 @@ def test_saved_report_requires_real_original_closeout_then_its_own_fresh_native_
         agent_id=actor["agent_id"], todo_id=request["todo_id"], turn_instance_id=saved_instance)
     saved_path = turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=saved_key)
     saved_journal = load_turn_journal(saved_path)
+    assert ("goal_ref" in saved_journal["plan"]) == ("goal_ref" in original_plan)
+    assert saved_journal["plan"].get("goal_ref") == goal_ref
     if saved_lease_loss is not None:
         from dataclasses import replace
         from loopx.capabilities.native_chat import steward_commands
@@ -2548,11 +2590,12 @@ def test_saved_report_requires_real_original_closeout_then_its_own_fresh_native_
             runtime._steward_monitor_next_check.clear()
             assert not pump_steward_monitors(runtime)
         assert readonly_reads and all(row["turn_instance_id"] == saved_instance
-            and row["goal_ref"] == saved_journal["plan"]["goal_ref"] for row in readonly_reads)
+            and row["goal_ref"] == saved_journal["plan"].get("goal_ref") for row in readonly_reads)
         if recovery_attachment == "exact":
             gate = payload["settlement_recovery"]
             assert gate["settlement_identity"] == saved.identity.value.as_dict()
-            assert gate["goal_ref"] == saved_journal["plan"]["goal_ref"]
+            assert ("goal_ref" in gate) == ("goal_ref" in saved_journal["plan"])
+            assert gate.get("goal_ref") == saved_journal["plan"].get("goal_ref")
             assert gate["next_cli_actions_argv"][0] == ["turn", "inspect-journal", "--goal-id", actor["goal_id"],
                 "--agent-id", actor["agent_id"], "--turn-key", saved_key]
             assert gate["original_settlement_readback"]["prepared_lease"] == saved.prepared_lease

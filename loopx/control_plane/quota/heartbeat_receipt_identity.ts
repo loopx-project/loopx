@@ -384,11 +384,13 @@ function heartbeatSemanticWorkAdmission(event: JsonObject, identity: SettlementI
   const fact = heartbeatReceiptFactFromEvent(event), receiptDetails = heartbeatReceiptDetails(event);
   const binding = heartbeatReceiptBinding(identity.goal_id, identity.agent_id, fact);
   const selected = normalizeHeartbeatReplanObligationId(receiptDetails.semantic_replan_obligation_id);
+  // Business-delivery closeout debt is a recorded boolean. Semantic report
+  // permission comes from the exact obligation and typed admission below.
   if (selected === null || event.schema_version !== "loopx_rollout_event_v0"
       || event.event_kind !== "quota_should_run" || event.goal_id !== identity.goal_id
       || event.agent_id !== identity.agent_id || fact.run_id !== identity.turn_instance_id
       || fact.todo_id !== identity.todo_id || binding?.binding_kind !== "todo"
-      || binding.binding_id !== identity.todo_id || fact.closeout_required !== true
+      || binding.binding_id !== identity.todo_id || typeof receiptDetails.closeout_required !== "boolean"
       || (fact.settlement_effect_id !== null && !effectIdsMatch(fact.settlement_effect_id, identity.effect_id))
       || receiptDetails.interaction_mode !== "autonomous_replan" || receiptDetails.delivery_allowed !== false
       || receiptDetails.ok !== true || receiptDetails.should_run !== true
@@ -402,6 +404,42 @@ export function heartbeatSemanticAdmissionEvent(events: readonly JsonObject[], r
   identity: SettlementIdentity, allowLegacyPrepared = false): JsonObject | null {
   const selected = selectHeartbeatValidationEvent(events, receipt, identity, allowLegacyPrepared, true);
   return selected !== null && heartbeatSemanticWorkAdmission(selected, identity) !== null ? selected : null;
+}
+
+function ordinarySelectionReservationParent(parent: JsonObject, upgrade: JsonObject,
+  identity: SettlementIdentity, allowLegacyPrepared: boolean): boolean {
+  const reservation = heartbeatReceiptDetails(parent), bound = heartbeatReceiptDetails(upgrade);
+  const empty = (value: unknown): boolean => value === undefined || value === null || value === "";
+  const workFacts = (fields: JsonObject): boolean => fields.command === "quota"
+    && fields.quota_command === "should-run" && fields.turn_instance_id === identity.turn_instance_id
+    && fields.ok === true && fields.should_run === true && fields.must_attempt_work === true
+    && fields.selection_required === true && fields.quiet_noop_allowed === false
+    && ["request_id", "request_revision", "request_digest", "execution_scope_sha256"]
+      .every(field => !Object.hasOwn(fields, field));
+  const negative = (fields: JsonObject): boolean => workFacts(fields)
+    && fields.delivery_allowed === false && fields.closeout_required === false
+    && ["prepared_lease_key_sha256", "prepared_lease_version", "prepared_lease_epoch"]
+      .every(field => !Object.hasOwn(fields, field));
+  // quota_rollout_details records selected_todo_id before a portfolio choice.
+  // It is a recommendation, not this identity's eventual settlement binding.
+  return identity.binding_kind === "todo" && parent.schema_version === "loopx_rollout_event_v0"
+    && upgrade.schema_version === "loopx_rollout_event_v0" && parent.status === "normal_run"
+    && negative(reservation) && workFacts(bound) && reservation.interaction_mode === "bounded_delivery"
+    && (empty(reservation.selected_todo_id)
+      || normalizeHeartbeatTodoId(reservation.selected_todo_id) === reservation.selected_todo_id)
+    && empty(parent.todo_id) && ["todo_id", "replan_obligation_id", "settlement_effect_id",
+      "semantic_replan_obligation_id"].every(field => empty(reservation[field]))
+    && ["settlement_receipt_revision", "prepared_lease_required", "pending_action_selection_state",
+      "pending_action_selection_todo_id"].every(field => !Object.hasOwn(reservation, field))
+    && !Object.hasOwn(parent, "causality") && bound.todo_id === identity.todo_id
+    && bound.selected_todo_id === identity.todo_id
+    && typeof bound.settlement_effect_id === "string" && effectIdsMatch(bound.settlement_effect_id, identity.effect_id)
+    && empty(bound.replan_obligation_id) && empty(bound.semantic_replan_obligation_id)
+    && (!Object.hasOwn(bound, "prepared_lease_required") || bound.prepared_lease_required === true)
+    // An already-held canonical lease can make the first identity binding
+    // positive. Reuse the strict prepared-admission owner for that case.
+    && (negative(bound) || (bound.prepared_lease_required === true
+      && heartbeatPreparedWorkAdmission(upgrade, identity, allowLegacyPrepared) !== null));
 }
 
 function selectHeartbeatValidationEvent(
@@ -505,7 +543,11 @@ function selectHeartbeatValidationEvent(
       && parentDetails.pending_action_selection_state === "deferred"
       && parentDetails.pending_action_selection_todo_id === identity.todo_id
       && normalizeHeartbeatTodoId(parentDetails.pending_action_selection_todo_id) === identity.todo_id;
-    if ((!pendingParent && fact.todo_id !== identity.todo_id)
+    const selectionParent = revision === "identity_upgrade"
+      && ordinarySelectionReservationParent(parent, validation, identity, allowLegacyPrepared);
+    // A first binding cannot skip an earlier positive prepared admission.
+    if (selectionParent && [...positivePrepared.keys()].some(index => index < position)) return null;
+    if ((!pendingParent && !selectionParent && fact.todo_id !== identity.todo_id)
         || (fact.settlement_effect_id !== null && !effectIdsMatch(fact.settlement_effect_id, identity.effect_id))) return null;
     validation = parent;
     position = parentPositions[0]!;

@@ -37,7 +37,7 @@ import {
   PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
   preflightPriorHostTurnCloseout,
 } from "../../loopx/control_plane/quota/unsettled_host_turn_recovery.ts";
-import {heartbeatSemanticAdmissionEvent} from "../../loopx/control_plane/quota/heartbeat_receipt_identity.ts";
+import {heartbeatPreparedWorkAdmission, heartbeatSemanticAdmissionEvent, heartbeatValidationEvent} from "../../loopx/control_plane/quota/heartbeat_receipt_identity.ts";
 import {QUOTA_NATIVE_ADMISSION_SCHEMA} from "../../loopx/control_plane/quota/source_admission.ts";
 import {shadowMaintenanceLockPath} from "../../loopx/control_plane/coordination/shadow_management.ts";
 import {buildVisionCheckpoint, VISION_REFRESH_REQUEST_SCHEMA, visionAuthoringContract}
@@ -639,6 +639,222 @@ function request(runtimeRoot: string, overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+function ordinarySelectionReceipts(chosenTodo = todoId) {
+  const chosenIdentity = settlementIdentity({goal_id: goalId, agent_id: agentId,
+    todo_id: chosenTodo, turn_instance_id: turnId});
+  // Public-safe quota_rollout_details shapes: the first row recommends Todo A
+  // while requiring an explicit choice; the second binds that actual choice.
+  const reservation: JsonObject = {schema_version: "loopx_rollout_event_v0", event_kind: "quota_should_run",
+    event_id: "selection-reservation", goal_id: goalId, agent_id: agentId, run_id: turnId, status: "normal_run",
+    details: {command: "quota", quota_command: "should-run", turn_instance_id: turnId,
+      ok: true, should_run: true, must_attempt_work: true, selection_required: true,
+      delivery_allowed: false, quiet_noop_allowed: false, closeout_required: false,
+      interaction_mode: "bounded_delivery", todo_id: null, replan_obligation_id: null,
+      semantic_replan_obligation_id: null, settlement_effect_id: null, selected_todo_id: todoId}};
+  const bound: JsonObject = {schema_version: "loopx_rollout_event_v0", event_kind: "quota_should_run",
+    event_id: "selection-bound", goal_id: goalId, agent_id: agentId, run_id: turnId, status: "normal_run",
+    todo_id: chosenTodo, causality: {source_event_id: reservation.event_id, caused_by: reservation.event_id},
+    details: {command: "quota", quota_command: "should-run", turn_instance_id: turnId,
+      ok: true, should_run: true, must_attempt_work: true, selection_required: true,
+      delivery_allowed: false, quiet_noop_allowed: false, closeout_required: false,
+      interaction_mode: "skip", todo_id: chosenTodo, selected_todo_id: chosenTodo,
+      replan_obligation_id: null, semantic_replan_obligation_id: null,
+      settlement_effect_id: chosenIdentity.effect_id, settlement_receipt_revision: "identity_upgrade",
+      prepared_lease_required: true}};
+  return {reservation, bound, chosenIdentity};
+}
+
+for (const chosenTodo of [todoId, "todo_second_candidate"]) {
+  test(`ordinary negative selection reservation admits the explicit ${chosenTodo} and preserves first preparation`, async () => {
+    const root = await fixture({guard: false});
+    try {
+      const {reservation, bound, chosenIdentity} = ordinarySelectionReceipts(chosenTodo);
+      const events: JsonObject[] = [reservation, bound];
+      const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
+      const save = () => writeFile(log, events.map(event => JSON.stringify(event)).join("\n") + "\n");
+      await save();
+      const originalBytes = await readFile(log, "utf8");
+      const input = request(root, {todo_id: chosenTodo});
+      const before = await readQuotaSettlement(input);
+      assert.deepEqual(requireJsonObject(requireJsonObject(before.identity, "identity").result, "result").value,
+        settlementIdentityPayload(chosenIdentity));
+      assert.deepEqual(before.heartbeat_receipt, bound);
+      assert.equal(before.original_prepared_receipt, null);
+      assert.equal(Object.hasOwn(before, "prepared_lease"), false);
+      assert.equal(await readFile(log, "utf8"), originalBytes);
+
+      const proof = {prepared_lease_key_sha256: "a".repeat(64), prepared_lease_version: 7, prepared_lease_epoch: 3};
+      const ready = {...requireJsonObject(bound.details, "bound details"), ...proof,
+        interaction_mode: "bounded_delivery", delivery_allowed: true, closeout_required: true};
+      const afterClaim = await readQuotaSettlement({...input, heartbeat_reentry_guard: ready});
+      const qualification = requireJsonObject(afterClaim.heartbeat_reentry_qualification, "qualification");
+      assert.equal(qualification.append, true);
+      const admittedDetails = requireJsonObject(qualification.details, "admitted details");
+      assert.equal(admittedDetails.settlement_receipt_revision, "work_admission");
+      assert.equal(admittedDetails.todo_id, chosenTodo);
+      assert.equal(admittedDetails.settlement_effect_id, chosenIdentity.effect_id);
+      assert.equal(afterClaim.original_prepared_receipt, null);
+      assert.equal(await readFile(log, "utf8"), originalBytes);
+
+      const admitted: JsonObject = {...bound, event_id: "selection-work", status: "normal_run", details: admittedDetails,
+        causality: {source_event_id: bound.event_id, caused_by: bound.event_id}};
+      events.push(admitted);
+      await save();
+      const replay = await readQuotaSettlement({...input, heartbeat_reentry_guard: ready});
+      assert.equal(requireJsonObject(replay.heartbeat_reentry_qualification, "replay qualification").append, false);
+      assert.deepEqual(replay.original_prepared_receipt, admitted);
+      assert.deepEqual(replay.prepared_lease, proof);
+
+      const readiness: JsonObject = {...admitted, event_id: "selection-readiness", details: {...admittedDetails,
+        prepared_lease_version: 8, settlement_receipt_revision: "lease_readiness"},
+        causality: {source_event_id: admitted.event_id, caused_by: admitted.event_id}};
+      events.push(readiness);
+      await save();
+      const renewed = await readQuotaSettlement(input);
+      assert.deepEqual(renewed.original_prepared_receipt, admitted);
+      assert.deepEqual(renewed.prepared_lease, proof);
+      const replacement = {...readiness, event_id: "selection-replacement", details: {...requireJsonObject(readiness.details, "readiness"),
+        prepared_lease_epoch: 4}};
+      assert.throws(() => heartbeatValidationEvent([...events, replacement], replacement, chosenIdentity),
+        {code: "heartbeat_receipt_identity_conflict"});
+    } finally {await rm(root, {recursive: true, force: true});}
+  });
+}
+
+test("ordinary selection lineage rejects incomplete, bound or positive reservations", () => {
+  const {reservation, bound, chosenIdentity} = ordinarySelectionReceipts();
+  const details = requireJsonObject(reservation.details, "reservation");
+  for (const patch of [
+    {selection_required: undefined}, {selection_required: "true"}, {ok: false}, {should_run: false},
+    {must_attempt_work: undefined}, {quiet_noop_allowed: true}, {delivery_allowed: true},
+    {closeout_required: undefined}, {closeout_required: "false"}, {closeout_required: true},
+    {command: "turn"}, {quota_command: "ensure"}, {turn_instance_id: "foreign-turn"},
+    {interaction_mode: "autonomous_replan"}, {todo_id: []}, {todo_id: "todo_foreign"},
+    {settlement_effect_id: []}, {settlement_effect_id: "foreign-effect"},
+    {replan_obligation_id: "replan-0000000000000001"}, {semantic_replan_obligation_id: "replan-0000000000000001"},
+    {selected_todo_id: "malformed"}, {prepared_lease_required: false},
+    {prepared_lease_key_sha256: "a".repeat(64), prepared_lease_version: 7, prepared_lease_epoch: 3},
+    {settlement_receipt_revision: "work_admission"}, {pending_action_selection_state: "bound"},
+  ]) {
+    const invalid = {...reservation, details: {...details, ...patch}};
+    if (patch.settlement_effect_id === "foreign-effect") {
+      assert.throws(() => heartbeatValidationEvent([invalid, bound], bound, chosenIdentity),
+        {code: "heartbeat_receipt_identity_conflict"});
+    } else assert.equal(heartbeatValidationEvent([invalid, bound], bound, chosenIdentity), null, JSON.stringify(patch));
+  }
+  for (const patch of [{schema_version: "unknown"}, {status: "turn_run_once"}, {todo_id: todoId},
+    {goal_id: "foreign-goal"}, {agent_id: "foreign-agent"}, {run_id: "foreign-turn"},
+    {goal_ref: {goal_id: goalId, goal_instance_id: instanceB}},
+    {causality: {source_event_id: "earlier-work", caused_by: "earlier-work"}}]) {
+    const invalid = {...reservation, ...patch};
+    assert.equal(heartbeatValidationEvent([invalid, bound], bound, chosenIdentity), null, JSON.stringify(patch));
+  }
+});
+
+test("ordinary selection upgrade rejects partial work facts and requires one exact causal parent", () => {
+  const {reservation, bound, chosenIdentity} = ordinarySelectionReceipts();
+  for (const patch of [{delivery_allowed: true}, {closeout_required: true}, {selection_required: undefined},
+    {selected_todo_id: "todo_second_candidate"}, {prepared_lease_required: false},
+    {prepared_lease_key_sha256: "a".repeat(64), prepared_lease_version: 7, prepared_lease_epoch: 3}]) {
+    const invalid = {...bound, details: {...requireJsonObject(bound.details, "bound"), ...patch}};
+    assert.equal(heartbeatValidationEvent([reservation, invalid], invalid, chosenIdentity), null, JSON.stringify(patch));
+  }
+  for (const causality of [{source_event_id: "missing", caused_by: "missing"},
+    {source_event_id: reservation.event_id, caused_by: "foreign-parent"}]) {
+    const invalid = {...bound, causality};
+    assert.equal(heartbeatValidationEvent([reservation, invalid], invalid, chosenIdentity), null);
+  }
+  for (const patch of [{schema_version: "unknown"}, {goal_id: "foreign-goal"}, {agent_id: "foreign-agent"},
+    {run_id: "foreign-turn"}, {goal_ref: {goal_id: goalId, goal_instance_id: instanceB}}]) {
+    const invalid = {...bound, ...patch};
+    assert.equal(heartbeatValidationEvent([reservation, invalid], invalid, chosenIdentity), null, JSON.stringify(patch));
+  }
+  const foreignEffect = {...bound, details: {...requireJsonObject(bound.details, "bound"), settlement_effect_id: "foreign-effect"}};
+  assert.equal(heartbeatValidationEvent([reservation, foreignEffect], foreignEffect, chosenIdentity), null);
+  assert.equal(heartbeatValidationEvent([reservation, reservation, bound], bound, chosenIdentity), null);
+  assert.equal(heartbeatValidationEvent([bound, reservation], bound, chosenIdentity), null);
+
+  const deferred: JsonObject = {...reservation, status: "action_selection_deferred", details: {
+    pending_action_selection_state: "deferred", pending_action_selection_todo_id: todoId,
+    todo_id: "", replan_obligation_id: "", settlement_effect_id: ""}};
+  assert.deepEqual(heartbeatValidationEvent([deferred, bound], bound, chosenIdentity), deferred);
+});
+
+test("selecting an already-prepared candidate permits its first positive identity binding", async () => {
+  for (const chosenTodo of [todoId, "todo_second_candidate"]) {
+    const root = await fixture({guard: false});
+    try {
+      const {reservation, bound, chosenIdentity} = ordinarySelectionReceipts(chosenTodo);
+      const proof = {prepared_lease_key_sha256: "b".repeat(64), prepared_lease_version: 12, prepared_lease_epoch: 6};
+      const admitted: JsonObject = {...bound, details: {...requireJsonObject(bound.details, "bound"), ...proof,
+        interaction_mode: "bounded_delivery", delivery_allowed: true, closeout_required: true}};
+      const events = [reservation, admitted];
+      const original = structuredClone(events);
+      assert.deepEqual(heartbeatValidationEvent(events, admitted, chosenIdentity), admitted);
+      const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
+      await writeFile(log, events.map(event => JSON.stringify(event)).join("\n") + "\n");
+      const encoded = await readFile(log, "utf8");
+      const result = await readQuotaSettlement(request(root, {todo_id: chosenTodo}));
+      assert.deepEqual(requireJsonObject(requireJsonObject(result.identity, "identity").result, "result").value,
+        settlementIdentityPayload(chosenIdentity));
+      assert.deepEqual(result.original_prepared_receipt, admitted);
+      assert.deepEqual(result.prepared_lease, proof);
+      assert.equal(await readFile(log, "utf8"), encoded);
+      assert.deepEqual(events, original);
+
+      const readiness: JsonObject = {...admitted, event_id: "active-selection-readiness", details: {
+        ...requireJsonObject(admitted.details, "admitted"), settlement_receipt_revision: "lease_readiness",
+        prepared_lease_version: 13}, causality: {source_event_id: admitted.event_id, caused_by: admitted.event_id}};
+      assert.deepEqual(heartbeatValidationEvent([...events, readiness], readiness, chosenIdentity), admitted);
+      const rebound = {...readiness, event_id: "second-identity-upgrade", details: {...requireJsonObject(readiness.details, "readiness"),
+        settlement_receipt_revision: "identity_upgrade"},
+        causality: {source_event_id: reservation.event_id, caused_by: reservation.event_id}};
+      assert.equal(heartbeatValidationEvent([...events, readiness, rebound], rebound, chosenIdentity), null);
+
+      const partial = {...admitted, details: {...requireJsonObject(bound.details, "bound"),
+        interaction_mode: "bounded_delivery", delivery_allowed: true, closeout_required: true,
+        prepared_lease_key_sha256: proof.prepared_lease_key_sha256}};
+      assert.throws(() => heartbeatValidationEvent([reservation, partial], partial, chosenIdentity),
+        {code: "malformed_settlement_state"});
+    } finally {await rm(root, {recursive: true, force: true});}
+  }
+});
+
+test("selection histories retain no-epoch exact-version proofs and existing alias legacy policy", async () => {
+  const root = await fixture({guard: false});
+  try {
+    const {reservation, bound, chosenIdentity} = ordinarySelectionReceipts("todo_second_candidate");
+    const proof = {prepared_lease_key_sha256: "c".repeat(64), prepared_lease_version: 5};
+    const modern: JsonObject = {...bound, details: {...requireJsonObject(bound.details, "bound"), ...proof,
+      interaction_mode: "bounded_delivery", delivery_allowed: true, closeout_required: true}};
+    const legacy: JsonObject = {...bound, event_id: "selection-legacy-prepared", status: "turn_run_once",
+      details: {source: "loopx_turn_run_once", turn_instance_id: turnId, todo_id: chosenIdentity.todo_id,
+        settlement_effect_id: chosenIdentity.effect_id, prepared_lease_required: true, ...proof}};
+    const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
+    for (const admitted of [modern, legacy]) {
+      await writeFile(log, [reservation, admitted].map(event => JSON.stringify(event)).join("\n") + "\n");
+      const encoded = await readFile(log, "utf8");
+      const result = await readQuotaSettlement(request(root, {todo_id: chosenIdentity.todo_id}));
+      assert.deepEqual(result.original_prepared_receipt, admitted);
+      assert.deepEqual(result.prepared_lease, proof);
+      assert.equal(Object.hasOwn(requireJsonObject(result.prepared_lease, "prepared"), "prepared_lease_epoch"), false);
+      assert.equal(await readFile(log, "utf8"), encoded);
+      const readiness: JsonObject = {...admitted, event_id: "same-version-readiness", details: {
+        ...requireJsonObject(admitted.details, "admitted"), settlement_receipt_revision: "lease_readiness"},
+        causality: {source_event_id: admitted.event_id, caused_by: admitted.event_id}};
+      assert.deepEqual(heartbeatValidationEvent([reservation, admitted, readiness], readiness, chosenIdentity, true), admitted);
+      const replacement = {...readiness, details: {...requireJsonObject(readiness.details, "readiness"), prepared_lease_version: 6}};
+      assert.throws(() => heartbeatValidationEvent([reservation, admitted, replacement], replacement, chosenIdentity, true),
+        {code: "heartbeat_receipt_identity_conflict"});
+    }
+    assert.deepEqual(heartbeatPreparedWorkAdmission(modern, chosenIdentity, false), proof);
+    assert.equal(heartbeatPreparedWorkAdmission(legacy, chosenIdentity, false), null);
+    assert.deepEqual(heartbeatPreparedWorkAdmission(legacy, chosenIdentity, true), proof);
+    assert.equal(heartbeatPreparedWorkAdmission({...legacy, details: {...requireJsonObject(legacy.details, "legacy"),
+      delivery_allowed: false}}, chosenIdentity, true), null);
+  } finally {await rm(root, {recursive: true, force: true});}
+});
 
 test("pending closeout survives maintenance and reads one original receipt snapshot", async t => {
   for (const entry of [
@@ -3185,6 +3401,24 @@ for (const provider of ["file", "sqlite"] as const) {
     try {
       const logBefore = await readFile(f.log), authorityBefore = await f.store.loadAuthority();
       const input: JsonObject = {...request(f.root), ...todoSemanticWriteback()};
+      for (const closeoutRequired of [false, true]) {
+        const recorded = {...f.admission, details: {...requireJsonObject(f.admission.details, "admission"),
+          closeout_required: closeoutRequired}};
+        await writeFile(f.log, JSON.stringify(recorded) + "\n");
+        const original = await readFile(f.log);
+        const qualified = await readQuotaSettlement(input);
+        assert.deepEqual(requireJsonObject(requireJsonObject(qualified.writeback_qualification, "qualification").result, "result").value, {
+          step_kind: "durable_writeback", effect_ref: `${identity.effect_id}#durable_writeback`,
+          delivery_boundary: "semantic_closeout", original_prepared: null,
+          selected_obligation_id: selectedWritebackObligation});
+        assert.equal(qualified.original_prepared_receipt, null);
+        assert.equal(Object.hasOwn(qualified, "prepared_lease"), false);
+        assert.equal(qualified.resume_lease_qualification, undefined);
+        assert.equal(qualified.completion_event, null);
+        assert.deepEqual(await readFile(f.log), original);
+        assert.deepEqual(await f.store.loadAuthority(), authorityBefore);
+      }
+      await writeFile(f.log, logBefore);
       const result = await readQuotaSettlement(input);
       assert.deepEqual((result.writeback_qualification as any).result.value, {
         step_kind: "durable_writeback", effect_ref: `${identity.effect_id}#durable_writeback`,
@@ -3257,13 +3491,27 @@ for (const provider of ["file", "sqlite"] as const) {
     try {
       const input: JsonObject = {...request(f.root), ...todoSemanticWriteback()};
       for (const patch of [{must_attempt_work: false}, {should_run: false}, {ok: false},
-        {quiet_noop_allowed: true}, {closeout_required: false}, {delivery_allowed: true},
+        {quiet_noop_allowed: true}, {closeout_required: undefined}, {closeout_required: null},
+        {closeout_required: "false"}, {closeout_required: 0}, {delivery_allowed: true},
         {interaction_mode: "control_plane_self_repair"}, {semantic_replan_obligation_id: ""},
         {semantic_replan_review_kind: undefined}, {prepared_lease_required: true},
         {prepared_lease_key_sha256: "a".repeat(64)}, {prepared_lease_version: 119}, {prepared_lease_epoch: 50}]) {
         await writeFile(f.log, JSON.stringify({...f.admission, details: {...f.admission.details as JsonObject, ...patch}}) + "\n");
         await assert.rejects(readQuotaSettlement(input), JSON.stringify(patch));
       }
+      const business: JsonObject = {...f.admission, event_id: "earlier-business-preparation", details: {
+        ...requireJsonObject(f.admission.details, "admission"), delivery_allowed: true, closeout_required: true,
+        prepared_lease_required: true, prepared_lease_key_sha256: "a".repeat(64),
+        prepared_lease_version: 119, prepared_lease_epoch: 50}};
+      const review: JsonObject = {...f.admission, event_id: "later-semantic-review", details: {
+        ...requireJsonObject(f.admission.details, "admission"), closeout_required: false,
+        settlement_receipt_revision: "review_guard_upgrade"},
+        causality: {source_event_id: business.event_id, caused_by: business.event_id}};
+      await writeFile(f.log, [business, review].map(event => JSON.stringify(event)).join("\n") + "\n");
+      const before = await readFile(f.log), authorityBefore = await f.store.loadAuthority();
+      await assert.rejects(readQuotaSettlement(input), {code: "refresh_task_lease_unavailable"});
+      assert.deepEqual(await readFile(f.log), before);
+      assert.deepEqual(await f.store.loadAuthority(), authorityBefore);
     } finally {await rm(f.root, {recursive: true, force: true});}
     const {todo} = await import("./shadow_file_fixture.ts");
     for (const selected of [{...todo(todoId), claimed_by: "foreign-agent"},

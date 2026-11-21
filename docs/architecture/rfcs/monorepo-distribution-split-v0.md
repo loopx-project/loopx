@@ -4846,6 +4846,12 @@ view shows its independently checked result in the same conversation.
   remain outside that guarantee.
   Uncaused repeats preserve the complete typed review/capability source and
   earliest admission; the same obligation id cannot authorize a source rewrite.
+  Integration remains held for final writeback of aggregate replan duties
+  whose original receipt has no scalar review source. Early and final
+  qualification must share a complete canonical-source reader and the existing
+  TS semantic owner; a caller-authored obligation or a digest-only snapshot
+  cannot replace that provenance. This unresolved path is not qualified by
+  passing claim, report, cached-result or TypeScript controls.
 - **Recovery readback:** a frozen report retains the typed original-lease
   refusal. An optional, default-off settlement attachment verifies its original
   owner, identity and journal before providing journal and task-lease inspection

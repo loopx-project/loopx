@@ -1634,7 +1634,7 @@ def refresh_state_run(
                         normalized_delivery_boundary == "semantic_closeout"
                         and completion_todo_id is None
                         and completion_turn_key is None
-                        and not isinstance(record.get("delivery_workspace"), Mapping)
+                        and delivery_workspace_path is None
                     ):
                         # Project the final Run without replacing its observed
                         # work identity, semantic delta or recovery metadata.

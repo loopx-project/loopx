@@ -31,6 +31,10 @@ from ..control_plane.quota.settlement import (
     SettlementStepKind,
     read_heartbeat_settlement,
 )
+from ..control_plane.quota.settlement_workspace_causality import (
+    build_delivery_workspace_causality,
+    resolve_settlement_workspace_requirement,
+)
 from ..control_plane.quota.spend_sources import quota_spend_source_for_execution_context
 from ..control_plane.work_items.autonomous_replan_obligation import (
     replan_obligation_id_from_packet,
@@ -215,15 +219,17 @@ def execute_turn_run_once(
                 raise RefreshTaskLeaseUnavailable("The qualified Turn has no current task lease proof.")
             return dict(proof)
 
-        if resume_execution:
+        execution_preparation_needed = True
+        if args.execute and getattr(args, "resume_turn_key", None):
             inspection = inspect_loopx_turn_journal(
                 runtime_root, goal_id=args.goal_id, agent_id=args.agent_id,
                 turn_key=args.resume_turn_key, retry_failed=bool(args.retry_failed_turn),
             )
             recovery = inspection.get("recovery_decision")
             # Retained results and the typed continuation to accounting need
-            # no execution resolver. Spend still uses its fresh receipt owner.
-            if not isinstance(recovery, Mapping) or not (
+            # no execution lease or workspace preparation. Spend still uses
+            # its fresh receipt owner; this grants no workspace contract waiver.
+            execution_preparation_needed = not (isinstance(recovery, Mapping) and (
                 recovery.get("action") == "return_existing"
                 or (
                     recovery.get("action") == "continue"
@@ -231,8 +237,9 @@ def execute_turn_run_once(
                     and recovery.get("reinvoke_host") is False
                     and recovery.get("resume_from") == "quota_spend"
                 )
-            ):
-                current_execution_lease()
+            ))
+        if resume_execution and execution_preparation_needed:
+            current_execution_lease()
         replan_guard_scoped = execution_context["replan_guard_scoped"]
         replan_obligation_id = (
             replan_obligation_id_from_packet(
@@ -272,13 +279,36 @@ def execute_turn_run_once(
             )
 
         writeback_contract = execution_context["writeback"]
-        delivery_workspace_path = (
-            project
-            if isinstance(
-                writeback_contract.get("delivery_workspace_causality"), dict
-            ) and not (settlement_identity.replan_obligation_id and not selected_todo)
-            else None
-        )
+        delivery_workspace_path = None
+        if execution_preparation_needed:
+            if getattr(args, "resume_turn_key", None):
+                # Recovery uses the journal's original identity and saved Goal Ref,
+                # never the current Todo contract or a presentation hint.
+                original_settlement = read_heartbeat_settlement(
+                    runtime_root, goal_id=settlement_identity.goal_id,
+                    agent_id=settlement_identity.agent_id,
+                    todo_id=settlement_identity.todo_id,
+                    turn_instance_id=settlement_identity.turn_instance_id,
+                    replan_obligation_id=settlement_identity.replan_obligation_id,
+                    registry_path=registry_path, goal_ref=goal_ref,
+                )
+                workspace_causality = (
+                    original_settlement.workspace_causality
+                    if original_settlement is not None else None
+                )
+            else:
+                workspace_causality = build_delivery_workspace_causality(selected_todo)
+            workspace_requirement = resolve_settlement_workspace_requirement(
+                workspace_causality,
+                settlement_binding_kind=settlement_identity.binding_kind.value,
+            )["requirement"]
+            delivery_workspace_path = (
+                project
+                if workspace_requirement != "not_required" and isinstance(
+                    writeback_contract.get("delivery_workspace_causality"), dict
+                ) and not (settlement_identity.replan_obligation_id and not selected_todo)
+                else None
+            )
         completion_delivery_workspace = (
             capture_delivery_workspace(
                 delivery_workspace_path,

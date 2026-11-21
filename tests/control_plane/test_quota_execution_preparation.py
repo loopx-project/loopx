@@ -1994,22 +1994,102 @@ def test_todo_semantic_writeback_is_operation_scoped_without_business_lease(
     refresh = refresh.replace(
         "<path-to-evidence-linked-goal-vision-replan-contract-v0.json>", str(vision),
     )
-    for key, value in {
-        "<advanced|blocked|exploration_exhausted|no_followup>": "advanced",
-        "<surface-id>": "semantic-writeback-surface",
-        "<hypothesis-id>": "semantic-writeback-hypothesis",
-        "<probe-kind>": "semantic-writeback-probe",
-        "<evidence-id>": "evidence:semantic-writeback",
-    }.items():
-        refresh = refresh.replace(key, value)
+    # The projected recipe owns settlement identity and semantic boundary.
+    # Author the actual observation independently through the existing CLI.
+    refresh_args = (
+        *_projected_cli_args(refresh, turn_instance_id=turn),
+        "--progress-result-class", "advanced",
+        "--progress-work-item-id", SELECTED_REPLAN_TODO_ID,
+        "--progress-surface-id", "semantic-writeback-surface",
+        "--progress-hypothesis-id", "semantic-writeback-hypothesis",
+        "--progress-probe-kind", "semantic-writeback-probe",
+        "--progress-evidence-id", "evidence:semantic-writeback",
+    )
+    context = {
+        "project": project, "runtime": runtime, "registry": registry,
+        "state": project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md",
+        "goal_id": GOAL_ID, "agent_id": AGENT_ID,
+        "todo": SELECTED_REPLAN_TODO_ID, "turn": turn,
+    }
+    before = _writeback_side_effect_snapshot(context)
+    assert before["authority"]["leases"] == []
+    assert before["original_prepared"] is None
+    # An explicit producing-workspace operation still needs business authority;
+    # it cannot borrow this Turn's planning-only semantic writeback scope.
+    refused_code, refused = _run_cli(
+        registry, runtime, *refresh_args,
+        "--delivery-workspace-path", str(project), cwd=project,
+    )
+    assert refused_code == 1 and refused["error_code"] == "refresh_task_lease_unavailable", refused
+    assert refused["appended"] is False
+    assert _writeback_side_effect_snapshot(context) == before
     code, result = _run_cli(
-        registry, runtime, *_projected_cli_args(refresh, turn_instance_id=turn), cwd=project,
+        registry, runtime, *refresh_args, cwd=project,
     )
     assert code == 0 and result["settlement_result"]["ok"] is True, result
-    run = json.loads(Path(result["json_path"]).read_text(encoding="utf-8"))
-    semantic = run["autonomous_replan_ack"]["semantic_delta"]
-    assert semantic["accepted"] is True
-    assert semantic["observation_fingerprint"] == run["progress_observation"]["fingerprint"]
+    runs_dir = runtime / "goals" / GOAL_ID / "runs"
+    run_path = Path(result["json_path"])
+    markdown_path = Path(result["markdown_path"])
+    assert run_path.parent == runs_dir
+    assert list(runs_dir.glob("*.json")) == [run_path]
+    assert markdown_path == run_path.with_suffix(".md")
+    assert markdown_path.exists()
+    run = json.loads(run_path.read_text(encoding="utf-8"))
+    index_path = runs_dir / "index.jsonl"
+    assert Path(result["index_path"]) == index_path
+    [index_row] = [json.loads(line) for line in index_path.read_text(encoding="utf-8").splitlines()]
+    assert Path(index_row["json_path"]) == run_path
+    assert Path(index_row["markdown_path"]) == markdown_path
+    assert run["state"]["path"] == str(context["state"])
+    expected_identity = {
+        "schema_version": "quota_settlement_identity_v0",
+        "effect_id": (
+            "settlement-cli-fixture:codex-settlement-cli:todo_chain_000000000000:"
+            "turn-operation-scoped-semantic-writeback"
+        ),
+        "goal_id": "settlement-cli-fixture",
+        "agent_id": "codex-settlement-cli",
+        "todo_id": "todo_chain_000000000000",
+        "turn_instance_id": "turn-operation-scoped-semantic-writeback",
+    }
+    assert admitted["heartbeat_receipt"]["settlement_identity"] == expected_identity
+    # The physical Run retains adapter presentation. Settlement readback owns
+    # the persisted index row; qualify both carriers against the authored slice.
+    for record in (run, index_row):
+        assert record["settlement_identity"] == expected_identity
+        assert record["goal_id"] == "settlement-cli-fixture"
+        assert record["agent_id"] == "codex-settlement-cli"
+        assert record["todo_id"] == "todo_chain_000000000000"
+        assert record["turn_instance_id"] == "turn-operation-scoped-semantic-writeback"
+        assert record["delivery_outcome"] == "outcome_progress"
+        assert record["delivery_batch_scale"] == "single_surface"
+        progress = record["progress_observation"]
+        assert progress["schema_version"] == "typed_progress_observation_v0"
+        assert progress["result_class"] == "advanced"
+        assert progress["work_item_id"] == "todo_chain_000000000000"
+        assert progress["surface_id"] == "semantic-writeback-surface"
+        assert progress["hypothesis_id"] == "semantic-writeback-hypothesis"
+        assert progress["probe_kind"] == "semantic-writeback-probe"
+        assert progress["evidence_ids"] == ["evidence:semantic-writeback"]
+        assert record["delivery_workspace"] == {
+            "schema_version": "delivery_workspace_v1",
+            "workspace_identity": "loopx:settlement-cli-fixture",
+            "identity_kind": "local_goal",
+            "task_repository": None,
+            "repository_source": "goal_id_fallback",
+            "workspace_kind": "local_goal_workspace",
+            "peer_independent_worktree_required": False,
+        }
+        ack = record["autonomous_replan_ack"]
+        assert ack["schema_version"] == "autonomous_replan_ack_v0"
+        assert ack["recorded"] is True and ack["source"] == "refresh_state"
+        semantic = ack["semantic_delta"]
+        assert semantic["schema_version"] == "replan_semantic_delta_v0"
+        assert semantic["accepted"] is True
+        assert "new_surface" in semantic["outcomes"]
+        assert semantic["observation_fingerprint"] == progress["fingerprint"]
+    assert index_row["progress_observation"] == run["progress_observation"]
+    assert index_row["autonomous_replan_ack"] == run["autonomous_replan_ack"]
     readback = read_heartbeat_settlement(
         runtime, goal_id=GOAL_ID, agent_id=AGENT_ID,
         todo_id=SELECTED_REPLAN_TODO_ID, turn_instance_id=turn,
@@ -2017,8 +2097,10 @@ def test_todo_semantic_writeback_is_operation_scoped_without_business_lease(
     )
     assert readback is not None
     assert readback.prepared_lease is None
+    assert readback.original_prepared_receipt is None
+    assert readback.resume_lease_qualification is None
     assert readback.completion_event is None
-    assert readback.writeback_run == run
+    assert readback.writeback_run == index_row
     with pytest.raises(RefreshTaskLeaseUnavailable):
         read_heartbeat_settlement(
             runtime, goal_id=GOAL_ID, agent_id=AGENT_ID,
@@ -2026,6 +2108,11 @@ def test_todo_semantic_writeback_is_operation_scoped_without_business_lease(
             registry_path=registry,
             resume_lease_candidate={"requested_proof": None},
         )
+    after = _writeback_side_effect_snapshot(context)
+    assert after["authority"] == before["authority"]
+    assert after["authority"]["leases"] == []
+    assert after["original_prepared"] is None
+    assert after["goal_file"] == before["goal_file"]
 
 
 def test_scoped_user_gate_fallback_execution_preparation_excludes_deferred_replan(monkeypatch):

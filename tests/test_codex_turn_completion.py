@@ -881,6 +881,71 @@ def test_native_resume_qualifies_fresh_authority_without_replacing_prepared_rece
     if accounting_only:
         assert final_readback.writeback_run == original_readback.writeback_run
         assert final_readback.spend_event is not None and final_readback.spend_run is not None
+        from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission
+
+        turns_dir = runtime / "goals" / goal_id / "turns"
+        [committed_journal_path] = list(turns_dir.glob("*.json"))
+        committed_journal_bytes = committed_journal_path.read_bytes()
+        committed_journal = json.loads(committed_journal_bytes)
+        assert committed_journal["status"] == "committed"
+        assert committed_journal["host_attempt_count"] == 1
+        assert committed_journal["host_result"] == frozen_result
+        capture_path = turns_dir / "decisions" / committed_journal_path.name
+        capture_bytes = capture_path.read_bytes()
+        committed_receipt_bytes = event_path.read_bytes()
+        state_path = project / ".codex" / "goals" / goal_id / "ACTIVE_GOAL_STATE.md"
+        state_bytes, registry_bytes = state_path.read_bytes(), registry.read_bytes()
+        assert json.loads(registry_bytes)["goals"][0]["status"] == "active"
+        run_files = {path: path.read_bytes() for path in index_path.parent.iterdir()
+                     if path.suffix in {".json", ".md"}}
+        calls_before_cache = (
+            len(host_calls), len(resolver_calls), len(resolver_errors),
+            len(qualification_requests), len(qualifications), len(completion_calls),
+            len(refresh_requests), len(spend_requests),
+        )
+        index_bytes = index_path.read_bytes()
+        assert index_bytes.endswith(b"\n")
+        # This unrelated, newline-terminated malformed row must remain visible.
+        # Returning a committed Turn does not require or repair its Run history.
+        malformed_row = b'{"goal_id":"unrelated-cached-resume-fixture","classification": }\n'
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(malformed_row)
+        with index_path.open("ab") as index:
+            index.write(malformed_row)
+
+        actual_lifetime = FirstPartyHostGoalAdmission.launch_lifetime
+        lifetime_checks = []
+
+        @contextlib.contextmanager
+        def observe_current_lifetime(admission, *, operation):
+            with actual_lifetime(admission, operation=operation):
+                lifetime_checks.append(operation)
+                yield
+
+        with monkeypatch.context() as cached_observation:
+            cached_observation.setattr(FirstPartyHostGoalAdmission, "launch_lifetime", observe_current_lifetime)
+            code, cached = invoke("--resume-turn-key", committed_journal["turn_key"])
+        assert code == 0 and cached["status"] == "committed" and cached["replayed"] is True, cached
+        assert cached["resume_turn_key"] == committed_journal["turn_key"]
+        assert cached["receipt"] == committed_journal["receipt"]
+        assert not any(cached["effects"].values())
+        assert "turn_recovery_lifetime" in lifetime_checks
+        assert committed_journal_path.read_bytes() == committed_journal_bytes
+        assert _turn_journal(runtime)["plan"] == committed_journal["plan"]
+        assert capture_path.read_bytes() == capture_bytes
+        assert event_path.read_bytes() == committed_receipt_bytes
+        assert original_receipt_lines() == receipt_bytes
+        assert state_path.read_bytes() == state_bytes and registry.read_bytes() == registry_bytes
+        assert index_path.read_bytes() == index_bytes + malformed_row
+        assert {path: path.read_bytes() for path in index_path.parent.iterdir()
+                if path.suffix in {".json", ".md"}} == run_files
+        assert calls_before_cache == (
+            len(host_calls), len(resolver_calls), len(resolver_errors),
+            len(qualification_requests), len(qualifications), len(completion_calls),
+            len(refresh_requests), len(spend_requests),
+        )
+        assert host_calls == [committed_journal["turn_key"]]
+        assert _turn_journal(runtime)["host_attempt_count"] == 1
 
 
 def test_builtin_codex_advertises_explicit_completion_without_promoting_progress() -> (

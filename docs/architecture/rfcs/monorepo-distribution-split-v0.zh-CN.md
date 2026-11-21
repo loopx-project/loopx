@@ -3742,6 +3742,11 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
   写仍不属于此保证。
   无因果链接的重复记录保留完整 typed review／capability 来源与最早准入；相同
   obligation id 不能授权来源改写。
+  原 receipt 没有 scalar review source 的 aggregate replan duty，其最终写回
+  仍阻塞整合。早期与最终资格核验必须共用完整 canonical-source reader 和既有
+  TS semantic owner；caller 自行构造的 obligation 或只有 digest 的 snapshot
+  不能替代来源证明。领取、报告、缓存结果或 TypeScript 控制通过，不构成这条
+  未解决路径的资格。
 - **恢复回读：**frozen report 保留 typed 原租约拒绝。默认关闭的可选 settlement
   attachment 核验原 owner、identity 与 journal 后，仅提供 journal 与 task-lease
   检查命令；证据缺失或冲突时不提供命令。receiver 记录幂等的本地提示与同一
