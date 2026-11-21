@@ -2,13 +2,16 @@
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ...chat_attachments import require_text_document_route
 from ...attached_session import enqueue_attached_agent_turn
 from ...chat_store import CHAT_SESSION_MODE_ATTACHED
 from ...control_plane.collaboration import conversation_scope
 from . import project_context as project_context_policy
+
+if TYPE_CHECKING:
+    from ...chat_runtime import ChatRuntimeController
 
 
 def enqueue_turn(controller: Any, *, session_id: str, client_turn_id: str, message: str,
@@ -67,14 +70,14 @@ def enqueue_turn(controller: Any, *, session_id: str, client_turn_id: str, messa
     return turn, created
 
 
-def steer_web_turn(controller: Any, *, session_id: str, expected_turn_id: str,
+def steer_web_turn(controller: "ChatRuntimeController", *, session_id: str, expected_turn_id: str,
                    client_ingress_id: str, message: str) -> tuple[dict[str, Any], bool]:
     """Apply the loopback App's steering input to its existing private Session."""
     session = controller.store.load_session(session_id)
-    saved = (session or {}).get("steward_context") or {}
-    if saved.get("audience") != "bound_owner":
+    if session is None or (session.get("steward_context") or {}).get("audience") != "bound_owner":
         return controller.steer_active_turn(session_id=session_id, expected_turn_id=expected_turn_id,
                                             client_ingress_id=client_ingress_id, message=message)
+    saved = session["steward_context"]
     contexts = controller.project_contexts
     bindings = contexts.conversation_bindings
     if bindings is None or controller.registry_path is None:
