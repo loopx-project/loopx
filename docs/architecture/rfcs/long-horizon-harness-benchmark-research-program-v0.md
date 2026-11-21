@@ -721,6 +721,20 @@ Every experiment report keeps these layers separate:
 An internal control score may diagnose behavior. It must not be added to the
 native task score or used to turn a failed task into a success.
 
+### 5.5 Four-tier verification funnel
+
+Full-horizon (`18h–20h`) replicated runs are too slow and expensive to act as the
+first filter for runtime regressions, uncached KV-prefill overhead, or local
+proxy-to-native inversions. Every new control mechanism, runtime optimization,
+and benchmark study advances sequentially through a fail-closed four-tier funnel:
+
+| Tier | Typical scope & horizon | Required evidence & gating metrics | Gate & non-substitution boundary |
+|---|---|---|---|
+| **Tier 0 · Offline invariants & calibration** | Zero live model spend: unit/regression suites, replay fixtures, `WarmStart` / evaluator `/context` preflight, container/auth/network boundary audits, and offline [`benchmark/proxy_order.py`](../../../benchmark/proxy_order.py) common-panel checks | Deterministic pass/fail contracts, exact artifact/source digest binding, zero judge leakage, and common-panel Kendall $\tau_b$ + tail-cliff characterization | Fails closed before any live token spend; passing static/replay checks proves only E0–E2 readiness |
+| **Tier 1 · Fast efficiency-parity gate** | Short matched runs (for example `--timeout 18000` `5h` controls on bounded scalar/multi-stage tracks) contrasting `Raw-Artifact Reset Baseline`, quiet single-session execution, and `Controller–Worker` + `EpochReset` against an anchored baseline under §5.1–§5.3 | Native `score` parity, `time-to-threshold` parity, compression of inter-turn protocol latency gaps (such as training-to-next-submission gaps), `cached_prefix_tokens` vs. `uncached_input_tokens` stability, and bounded total token/time ratio | Prunes protocol overhead or execution regressions early; short-horizon parity never certifies full-horizon (`18h–20h`) net uplift or absence of late-horizon context drift |
+| **Tier 2 · Bounded counterfactual calibration** | Short matched forks (`~3h` remaining cap) from one quiescent sealed `research-checkpoint` ($s_0$) with identical pinned source, evaluator conditions (`/context`), and submission cooldowns | Decision-neighborhood Kendall $\tau_b(s; a, a_0, \pi)$, false-improvement rate over the native incumbent, proxy-cliff (`Yardstick`) detection, and conditional $\Delta J(B \mid s_0)$ charging complete marginal control/evaluation cost | Isolates late-horizon decision and proxy fidelity before launching multi-arm `18h` suites; conditioned on $s_0$ and does not replace cold-start to terminal full-horizon comparisons |
+| **Tier 3 · Full-horizon replicated promotion** | Full-budget replicated studies (`18h–20h`, `N >= 5` where promoted), including the matched `Raw-Artifact Reset Baseline` on episodic RSI / scalar optimization tracks (§5.2), full cost accounting (§6.2), and independent integrity audits (§6.5) | Benchmark-native outcome uplift or cost-normalized Pareto superiority with uncertainty bounds and cross-family replication | Only tier eligible for C2/C3 capability claims and C4 product-promotion consideration; regressions at Tier 0–2 trigger diagnosis rather than full-matrix padding |
+
 ## 6. Measurement Model
 
 ### 6.1 Native outcomes
@@ -1884,6 +1898,7 @@ This is a living research RFC, not a frozen benchmark snapshot.
 | 2026-08-25 | Add StartupBench, LoopsBench, and WideSearch to the benchmark primer and integration plan as a second, complementary trio; require native metrics per benchmark and keep benchmark material out of reusable LoopX state. |
 | 2026-10-16 | Archive [feedback-first observations](https://github.com/loopx-project/loopx/blob/1d60e7edb2a05fe048767444f872934c3adef992/deprecate/benchmark-legacy/edgebench/feedback-first-observations-20261016.md) separately from active practice. Runner source-subset and configuration-projection corrections remain E0/E1 work; mixed-profile, interrupted and running observations do not close E2/E3 or isolate a planning effect. General guard re-entry relaxation is deferred pending affected-caller validation. |
 | 2026-11-15 | Codify the Bitter-Lesson boundary and five governed control-plane failure regimes (§2.2), require a matched, fully costed Raw-Artifact Reset Baseline (newly run or qualified historical reuse) for C2/C3 claims on episodic RSI / scalar optimization tracks (§5.2), and adopt the 2026-11 benchmark portfolio ranking (§3.8): **P0** (`EdgeBench`, `FrontierCS-2`, `LHTB / LHTB 2.0`, `LoopsBench`), **P1** (`SWE-Marathon`, `PaperBenchX` over `PaperBench`, `ALE` distinct from `ALE-Bench`, `WideSearch`, `KernelBench` / `AlgoTune`), **P2** (`ALE-Bench`, `StartupBench`, `MLE-bench`, `tb-science` episodic transfer samples only—excluded from RSI due to CI-locked `28800s` budget and 100% binary `reward.txt`), and **Control-Only / Deprioritized** (`DeepSWE`, `SWE-bench Pro`, `CORE-Bench`, `ScienceAgentBench`, `BixBench`, `FrontierScience`, deprecated `RE-Bench`), gating multi-arm expansion on unified `benchmark/runtime/` + Stop-hook E0–E2 readiness and Linux x86\_64 / GPU hosts. |
+| 2026-11-22 | Codify the fail-closed **Four-Tier Verification Funnel** (§5.5: Tier 0 offline invariants & `benchmark/proxy_order.py` calibration -> Tier 1 `~5h` fast efficiency-parity gate -> Tier 2 `~3h` quiescent checkpoint counterfactual calibration -> Tier 3 `18h–20h` replicated promotion) so runtime/protocol optimizations prune regressions cheaply without weakening §4 C2–C4 claim thresholds or full-horizon non-substitution rules. |
 
 ## 18. References
 
