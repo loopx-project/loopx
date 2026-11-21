@@ -9136,3 +9136,102 @@ def test_due_discovery_progresses_when_only_free_slot_keeps_retrying_a_body(tmp_
         release.set()
         service.close()
         service._delivery_thread.join(5)
+
+
+@pytest.mark.parametrize("relay_ready_initially", [False, True])
+def test_project_workspace_write_recovers_loopback_relay_auth_once_ready(
+    ordinary, monkeypatch, tmp_path, relay_ready_initially,  # noqa: F811
+):
+    from datetime import timedelta, timezone
+    from pathlib import Path
+    from loopx.capabilities.native_chat import codex_adapter as adapter_module
+    from loopx.capabilities.native_chat import external_conversations
+
+    ordinary[2].workspace_grant = "workspace_write"
+    store, runtime, provider, transport = connect(ordinary)
+    try:
+        capture, fake = ordinary[-3:-1]
+        binding = next(row for row in transport.bindings.read()["bindings"] if row["transport_ref"] == "notes-app")
+        assert binding["grant"] == "workspace_write"
+        source = fake.read_text().replace(
+            '"codexErrorInfo": "cyberPolicy"',
+            '"codexErrorInfo": {"httpConnectionFailed": {"httpStatusCode": 401}}',
+        ).replace(
+            '"private-fixture-upstream-detail"',
+            '"unexpected status 401 Unauthorized: OpenAI API fallback request could not complete., url: http://127.0.0.1:57500/v1/responses"',
+        ).replace(
+            '            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n',
+            "",
+        )
+        fake.write_text(source)
+        event = provider.event("notes-app", "relay-401", "typed terminal failure")
+        transport.admit("notes-app", event)
+        ref = identity_ref(binding["provider_ref"], event["message_id"])
+        original = transport.core.read_request(ref)
+        failed = runtime.wait_for_turn(session_id=original["session_id"], turn_id=original["turn_id"], timeout_sec=10)
+        assert failed["status"] == "failed" and failed["error_code"] == "upstream_transport_failure" and failed["delta_count"] == 0
+        transport.reconcile()
+        delivery_path = transport.root / f"{ref}.json"
+        old_notice = json.loads(delivery_path.read_text())["deliveries"]["terminal"]
+        runtime.adapters.pop(original["session_id"]).close_session()
+        Path(store.load_session(original["session_id"])["codex_home"]).mkdir(parents=True, exist_ok=True)
+        inventory = tmp_path / "relay-inventory.json"
+        inventory.write_text(json.dumps({
+            "turns": [{"id": failed["upstream_turn_id"], "status": "failed", "error": {
+                "codexErrorInfo": {"httpConnectionFailed": {"httpStatusCode": 401}},
+                "message": "unexpected status 401 Unauthorized: OpenAI API fallback request could not complete., url: http://127.0.0.1:57500/v1/responses",
+            }}],
+            "items": [{"turnId": failed["upstream_turn_id"], "item": {"type": "userMessage", "id": "user-1"}}],
+        }))
+        begin = source.index('    elif method == "thread/turns/list":')
+        end = source.index('    else:\n        result = {}', begin)
+        reader = f'''    elif method in {{"thread/turns/list", "thread/items/list"}}:
+        with open({str(inventory)!r}) as observed:
+            snapshot = json.load(observed)
+        result = {{"data": snapshot["turns" if method == "thread/turns/list" else "items"]}}
+    elif method == "thread/backgroundTerminals/list":
+        result = {{"data": []}}
+'''
+        fake.write_text((source[:begin] + reader + source[end:]).replace(
+            'if "typed terminal failure" in json.dumps(request.get("params") or {}):',
+            "if False:",
+        ))
+        clock = [datetime.now(timezone.utc) + timedelta(seconds=61)]
+
+        class AfterBackoff(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return clock[0]
+
+        ready_state = [relay_ready_initially]
+        monkeypatch.setattr(external_conversations, "datetime", AfterBackoff)
+        monkeypatch.setattr(
+            adapter_module,
+            "_loopback_relay_transport_ready",
+            lambda *_a, **_kw: (ready_state[0], int(clock[0].timestamp())),
+        )
+        from loopx.extensions.lark.private_progress import presentation_phase
+
+        worker = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+            runner=provider, cli_bin="lark-cli")
+        worker.reconcile()
+        row = worker.core.read_request(ref)
+        if not relay_ready_initially:
+            assert row["turn_id"] == original["turn_id"] and not row.get("context_recovery")
+            ready_state[0] = True
+            clock[0] += timedelta(minutes=1)
+            worker = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+                runner=provider, cli_bin="lark-cli")
+            worker.reconcile()
+            row = worker.core.read_request(ref)
+        assert row["turn_id"] != original["turn_id"]
+        assert row["context_recovery"]["routing_attempt"] == 1
+        assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)["status"] == "completed"
+        worker.reconcile()
+        delivered = json.loads(delivery_path.read_text())
+        assert delivered["deliveries"]["terminal"] == old_notice
+        assert delivered["deliveries"][presentation_phase(row, "terminal")]["verified"]
+        starts = [json.loads(line) for line in capture.read_text().splitlines() if json.loads(line).get("method") == "turn/start"]
+        assert len(starts) == 2
+    finally:
+        runtime.close()

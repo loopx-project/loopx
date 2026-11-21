@@ -1795,7 +1795,16 @@ function planRoutingRecovery(recovery: JsonObject, row: JsonObject, current: Jso
   const observed = raw == null ? null : requireJsonObject(raw, "pre-execution failure readback");
   const interrupted = observed?.interrupted_before_execution === true
     && ["host_gate", "upstream_transport_failure"].includes(String(failed.error_code));
-  if (observed && !quota && !preparation && observed.pre_execution_routing_timeout !== true && !interrupted) return null;
+  const info = observed?.codex_error_info;
+  const infoEntries = info && typeof info === "object" && !Array.isArray(info) ? Object.entries(info) : [];
+  const infoDetail = infoEntries.length === 1
+    && ["httpConnectionFailed", "responseStreamConnectionFailed"].includes(infoEntries[0][0])
+    && infoEntries[0][1] !== null && typeof infoEntries[0][1] === "object" && !Array.isArray(infoEntries[0][1])
+    ? infoEntries[0][1] as JsonObject : null;
+  const loopbackRelayAuth = observed?.loopback_relay_auth_failure === true
+    && failed.error_code === "upstream_transport_failure"
+    && infoDetail?.httpStatusCode === 401;
+  if (observed && !quota && !preparation && observed.pre_execution_routing_timeout !== true && !interrupted && !loopbackRelayAuth) return null;
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
   const reserved = previous?.failed_turn_id === failed.turn_id;
   const priorAttempt = previous?.[attemptKey] ?? 0;
@@ -1844,6 +1853,10 @@ function planRoutingRecovery(recovery: JsonObject, row: JsonObject, current: Jso
       && observed.quota_available === true && typeof observed.quota_observed_at === "number"
       && now / 1000 >= observed.quota_observed_at && now / 1000 - observed.quota_observed_at <= 120
       : interrupted ? recovery.stop_observed === false && observed.only_original_user_item === true
+      : loopbackRelayAuth ? observed.only_pre_execution_items === true
+        && observed.relay_transport_ready === true
+        && typeof observed.relay_observed_at === "number" && Number.isFinite(observed.relay_observed_at)
+        && now / 1000 >= observed.relay_observed_at && now / 1000 - observed.relay_observed_at <= 120
       : observed.codex_error_info === "other" && observed.only_pre_execution_items === true)};
 }
 
