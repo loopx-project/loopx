@@ -238,3 +238,78 @@ def test_steward_worker_loss_only_continues_verified_undispatched_input(steward,
         assert resumed["turn_id"] == key[1] and not resumed.get("context_recovery")
         assert not any(json.loads(line)["method"] == "turn/start" for line in capture.read_text().splitlines())
     assert store.load_turn(*key) == failed
+
+
+def test_antigravity_steward_recovers_pre_dispatch_resume_failed_after_lost_notice_receipt_without_disk_churn(
+    steward, language_server, monkeypatch  # noqa: F811
+):
+    from loopx.capabilities.steward_executor import STEWARD_EXECUTOR_SCHEMA, effective_steward_executor_defaults
+    from loopx.chat_agent import CodexChatAgentError
+
+    store, runtime, provider, transport, binding, capture, _ = steward
+    defaults = effective_steward_executor_defaults({"schema_version": "loopx_machine_configuration_v0",
+        "namespaces": {"steward_executor": {"schema_version": STEWARD_EXECUTOR_SCHEMA, "selection_policy": "preferred",
+            "executor_endpoint": "antigravity", "eligible_endpoints": [],
+            "executor_model": "gemini-4-argon-high", "executor_reasoning_effort": "high"}}})
+    monkeypatch.setattr(runtime, "steward_executor_defaults", lambda: defaults)
+    transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+        executor_endpoint_id="antigravity", context_kind="steward")
+
+    ensure = runtime._ensure_adapter
+
+    def resume_unavailable(*_args, **_kwargs):
+        raise CodexChatAgentError("The previous Agent conversation could not be restored.",
+            error_code="resume_failed", gate=None)
+
+    monkeypatch.setattr(runtime, "_ensure_adapter", resume_unavailable)
+    assert transport.admit("steward-app", provider.event("steward-app", "antigravity-resume-loss", "Analyze repo execution value"))["status"] == "durably_accepted"
+    row = transport.core.pending()[0]
+    failed = finish(runtime, row)
+    assert failed["status"] == "failed" and failed["error_code"] == "resume_failed"
+    assert failed["started_at"] is None and failed["upstream_turn_id"] is None
+
+    provider.lose_next_reply = True
+    transport.reconcile()
+    path = transport.root / f"{row['request_ref']}.json"
+    record = _read_json(path)
+    assert record["status"] == "accepted"
+    assert record["deliveries"]["terminal"]["started"] is True
+    assert not record["deliveries"]["terminal"].get("attempt")
+    assert not transport.core.read_request(row["request_ref"]).get("delivery_verified")
+
+    # Second reconcile records provider_delivery_receipt_unknown without resending;
+    # subsequent ticks before cooldown neither queue it as an unsent body nor rewrite disk.
+    writes_before = list(provider.writes)
+    transport.reconcile()
+    assert provider.writes == writes_before
+    record = _read_json(path)
+    assert record["deliveries"]["terminal"]["blocker"] == "provider_delivery_receipt_unknown"
+    bytes_before = path.read_bytes()
+    mtime_before = path.stat().st_mtime_ns
+    assert transport.pending_body_paths() == []
+    transport._context_recovery_probe_at.clear()
+    transport.reconcile()
+    assert provider.writes == writes_before
+    assert path.read_bytes() == bytes_before
+    assert path.stat().st_mtime_ns == mtime_before
+
+    monkeypatch.setattr(runtime, "_ensure_adapter", ensure)
+    advance_recovery_clock(monkeypatch)
+    transport._context_recovery_probe_at.clear()
+    transport.reconcile()
+
+    resumed = transport.core.read_request(row["request_ref"])
+    assert resumed["turn_id"] != failed["turn_id"]
+    assert resumed["context_recovery"]["preparation_attempt"] == 1
+    assert resumed["context_recovery"]["failure_notice_delivery_verified"] is False
+    continued = finish(runtime, resumed)
+    assert continued["status"] == "completed"
+    transport.reconcile()
+
+    final_record = _read_json(path)
+    assert final_record["status"] == "delivered"
+    assert final_record["deliveries"]["terminal"] == record["deliveries"]["terminal"]
+    assert any(key.startswith("terminal.recovery.") and key.endswith(".preparation.1") and value.get("verified") is True
+               for key, value in final_record["deliveries"].items())
+    assert language_server["sent_count"] == 1
+    assert store.load_turn(row["session_id"], failed["turn_id"]) == failed
