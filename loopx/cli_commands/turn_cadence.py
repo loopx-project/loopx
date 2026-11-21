@@ -22,10 +22,16 @@ class ManagedCadenceStart(NamedTuple):
     confirm: Callable[[], None]
 
 
-def uses_effect_bound_start_identity(host: str, adapter_request_schema: str | None) -> bool:
+def uses_effect_bound_start_identity(
+    host: str,
+    adapter_request_schema: str | None,
+    validation_command_json: str | None = None,
+) -> bool:
     """These Host routes can reserve the same start before a Turn plan exists."""
     return host == "codex-cli" or (
-        host == "generic-cli" and adapter_request_schema == COMPLETE_TURN_HOST_REQUEST_SCHEMA
+        host == "generic-cli"
+        and adapter_request_schema == COMPLETE_TURN_HOST_REQUEST_SCHEMA
+        and bool(validation_command_json)
     )
 
 

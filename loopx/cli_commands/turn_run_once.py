@@ -965,7 +965,9 @@ def execute_turn_run_once(
             manual_reason=args.manual_interval_bypass_reason,
             on_admitted=on_managed_start_admitted,
             request_id=settlement_identity.effect_id if uses_effect_bound_start_identity(
-                args.host, getattr(args, "host_adapter_request_schema", None),
+                args.host,
+                getattr(args, "host_adapter_request_schema", None),
+                getattr(args, "validation_command_json", None),
             ) else None,
         )
 
@@ -984,6 +986,7 @@ def execute_turn_run_once(
             timeout_seconds=args.timeout_seconds,
             execute=bool(args.execute),
             retry_failed=bool(args.retry_failed_turn),
+            resume_existing_turn=args.host == "generic-cli" and bool(getattr(args, "resume_turn_key", None)),
             task_validator=task_validator,
             settlement_admission=settlement_admission,
             writeback=(codex_writeback if args.host == "codex-cli" else writeback)

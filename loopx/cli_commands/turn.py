@@ -106,9 +106,10 @@ def handle_turn_command(
             execution_preparer is None
             and args.turn_command == "run-once"
             and bool(getattr(args, "execute", False))
-            and (args.host != "generic-cli" or getattr(args, "validation_command_json", None))
             and uses_effect_bound_start_identity(
-                args.host, getattr(args, "host_adapter_request_schema", None),
+                args.host,
+                getattr(args, "host_adapter_request_schema", None),
+                getattr(args, "validation_command_json", None),
             )
         ):
             from ..control_plane.turn_driver.codex_execution_preparation import (
@@ -284,7 +285,7 @@ def handle_turn_command(
             operator_inbox_urgency_projector = build_lark_operator_inbox_urgency_projector(
                 runtime_root_arg=runtime_root,
             )
-            operator_environ = operator_provider_environ()
+            operator_environ = operator_provider_environ(bound_runtime_root=runtime_root)
         else:
             # Planning and dry-run execution inspect existing admitted intents.
             # Only an executing wake may sync inboxes or reserve a calendar window.
@@ -446,7 +447,7 @@ def handle_turn_command(
                 # Turn keeps this locator and its original captured request.
                 payload["delegation_operation_locator"] = json.loads(args.delegation_context_json)
             # Resolve machine authentication once for the readback and host launch.
-            operator_environ = operator_provider_environ()
+            operator_environ = operator_provider_environ(bound_runtime_root=runtime_root)
             payload["managed_executor"] = managed_executor_cli_binding(args, environ=operator_environ)
             if (
                 args.turn_command == "run-once"

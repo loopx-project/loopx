@@ -5163,3 +5163,15 @@ def test_claim_effect_remains_visible_when_codex_is_unavailable(tmp_path, monkey
         code = cli_main([*prefix, "task-lease", "inspect", "--goal-id", "loopx-turn-fixture", "--todo-id", "todo_fixture0001"])
     assert code == 0 and json.loads(output.getvalue())["active"] is True
     assert result["effects"]["quota_spent"] is False
+
+
+def test_uses_effect_bound_start_identity_requires_validator_for_generic_cli() -> None:
+    from loopx.cli_commands.turn_cadence import uses_effect_bound_start_identity
+    from loopx.control_plane.quota.turn_envelope import COMPLETE_TURN_HOST_REQUEST_SCHEMA
+
+    assert uses_effect_bound_start_identity("codex-cli", None) is True
+    assert uses_effect_bound_start_identity("generic-cli", COMPLETE_TURN_HOST_REQUEST_SCHEMA, None) is False
+    assert uses_effect_bound_start_identity("generic-cli", COMPLETE_TURN_HOST_REQUEST_SCHEMA, "") is False
+    assert uses_effect_bound_start_identity(
+        "generic-cli", COMPLETE_TURN_HOST_REQUEST_SCHEMA, '["python3", "-c", "pass"]',
+    ) is True

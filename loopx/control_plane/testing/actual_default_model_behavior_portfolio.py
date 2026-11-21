@@ -779,15 +779,6 @@ def build_actual_default_model_behavior_scenario_inputs(
     return sources, _compose_actual_default_model_behavior_scenario_sources(sources)
 
 
-def build_actual_default_model_behavior_scenario_packets(
-    root: Path,
-) -> dict[str, dict[str, Any]]:
-    """Build the default packets used by Codex App automation qualification."""
-
-    _, packets = build_actual_default_model_behavior_scenario_inputs(root)
-    return packets
-
-
 def _turn_expected_contract(packet: Mapping[str, Any]) -> dict[str, Any]:
     if packet.get("mode") != "should-run":
         raise ValueError("turn scenarios require the default quota should-run packet")

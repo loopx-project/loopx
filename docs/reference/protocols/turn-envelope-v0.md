@@ -782,7 +782,7 @@ diagnostic remain unchanged. This is an output qualification, not a full-cost SL
 The benchmark heartbeat worker verifies a historical `turn_envelope` request
 against the pinned CLI's v0 response before launching a model. Its read-only
 preview and eligibility are recorded in the wake receipt. See the [runtime
-guide](../../../benchmark/runtime/RUNTIME.md) for supported configurations.
+guide](https://github.com/loopx-project/loopx/blob/main/benchmark/runtime/RUNTIME.md) for supported configurations.
 Model cost, decision quality and long-run adoption require a separately pinned
 experiment. A capture carries its original read and recovery scope.
 

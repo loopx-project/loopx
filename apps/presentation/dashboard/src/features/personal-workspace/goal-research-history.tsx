@@ -4,7 +4,7 @@ import {exploreFindingCopy} from "./explore-finding-copy";
 import {AlertCircle, ArrowLeft, ArrowRight, Circle, CircleHelp, FlaskConical, GitBranch, RefreshCw, Search} from "lucide-react";
 import {Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {defaultParseSearch} from "@tanstack/react-router";
-import {ResearchRecordSearch} from "./research-record-browser";
+import {ResearchRecordSearch, useResearchRecordsLocation} from "./research-record-browser";
 import {ResearchAnalysisButton, ResearchAnalysisPanel, ResearchAnalysisStatus, ResearchCitationPanel, ResearchProgressSummary, ResearchReportSummary, ResearchCaseReading, useResearchAnalysis} from "./goal-research-analysis";
 import {buildExploreTimeline, latestExploreFindingInPhase, parseExploreFindingSections, type TimelineFinding} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
 import {GoalResearchTimeline} from "./goal-research-timeline";
@@ -123,7 +123,9 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const [selection, setSelection] = useState(() => selectedFromUrl(goalId));
   // The same finding can be read directly or as part of its complete question.
   const questionExpanded = selection.question ?? !selection.finding;
-  const [recordsOpen, setRecordsOpen] = useState(false);
+  const recordReading = useResearchRecordsLocation(historySource);
+  const recordsOpen = recordReading.value.open;
+  const setRecordsOpen = (open: boolean) => recordReading.update({open});
   const records = useRef<HTMLDetailsElement>(null);
   const [lens, setLens] = useState<Lens>(() => viewFromUrl(goalId).lens);
   const [requestedPhase, setPhase] = useState<number | null>(() => viewFromUrl(goalId).phase);
@@ -725,8 +727,11 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
     {value?.unknownTimeCount ? <p className="research-history-note">{copy.unknown} · {value.unknownTimeCount}</p> : null}
     {value?.unknownKindCount ? <p className="research-history-note">{zh ? "未识别类型保留于已读记录" : "Unrecognized types remain in loaded records"} · {value.unknownKindCount}</p> : null}
     </ContextHelp> : null}
-    {value?.events.length ? <details ref={records} className="research-history-all-records" open={recordsOpen} onToggle={event => setRecordsOpen(event.currentTarget.open)}><summary>{zh ? "全部已读记录" : "All loaded records"} · {value.events.length}</summary>
-      {recordsOpen ? <ResearchRecordSearch key={JSON.stringify([goalId, readSourceUrl])} goalId={originalGoalId} events={history.canonical?.events ?? []}
+    {value?.events.length ? <details ref={records} className="research-history-all-records" open={recordsOpen} onToggle={event => {
+      const open = event.currentTarget.open;
+      if (open !== recordsOpen) setRecordsOpen(open);
+    }}><summary>{zh ? "全部已读记录" : "All loaded records"} · {value.events.length}</summary>
+      {recordsOpen ? <ResearchRecordSearch key={JSON.stringify([goalId, readSourceUrl])} reading={recordReading} goalId={originalGoalId} events={history.canonical?.events ?? []}
         nodes={history.canonical?.nodes ?? []}
         displayEvents={currentDisplay && !originalDisplay ? value.events : undefined}
         displaySections={currentDisplay && !originalDisplay ? displayProjection.sections : undefined}

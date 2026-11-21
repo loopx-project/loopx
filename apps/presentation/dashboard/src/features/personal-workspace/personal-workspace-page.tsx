@@ -2217,7 +2217,7 @@ export function PersonalWorkspacePage({
       setActionFeedback(completedActionFeedback(applied, t));
       // Keep the success receipt visible for reviewed actions. Direct actions
       // surface the same result through the persistent feedback receipt.
-      if (applied.actionKind === "todo.create" || applied.actionKind === "goal.create") {
+      if (applied.actionKind === "todo.create" || applied.actionKind === "goal.create" || applied.actionKind === "team.plan") {
         await callbacks.onRefresh?.();
       }
       if (applied.actionKind === "goal.lifecycle" && (applied.lifecycleOperation === "delete" || (applied.lifecycleOperation === "stop" && !options.keepGoalSelected))) {

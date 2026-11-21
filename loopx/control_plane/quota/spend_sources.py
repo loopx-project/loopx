@@ -95,9 +95,10 @@ def host_goal_turn_start_args(
     profile = scheduler_runtime_profile_for_execution_context(scheduler_execution_context)
     if profile is SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE:
         return " --begin-turn"
-    if profile not in VISIBLE_GOAL_SETTLEMENT_RUNTIME_PROFILES:
-        return ""
-    # CLI/managed Goal hosts own their iteration identity.
+    # Every other host owns its iteration identity. This also covers an
+    # unprofiled/manual guard: an explicit Todo selection must not project a
+    # follow-up command that the quota validator will reject for lacking a
+    # Turn identity.
     return " --turn-instance-id '<unique-work-iteration-id-reuse-on-retry>'"
 
 

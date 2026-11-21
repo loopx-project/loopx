@@ -18,6 +18,10 @@
 
 </div>
 
+https://github.com/user-attachments/assets/eeb95ecd-6e5b-43d7-a8aa-b3d1b4449423
+
+<p align="center"><sub><b>60 秒看懂 LoopX</b>：一句话设定长程目标，跨 Codex、Claude Code、Gemini 与 DeepSeek 分工协作、未过校验自动重规划、关键决策人类拍板、首读上下文压至 3% 跨会话续跑 200+ 小时（社区贡献者 <a href="https://x.com/lemomo_ai">@lemomo_ai</a> 制作 · <a href="#看看-loopx-如何工作">更多实录演示见下文</a>）。</sub></p>
+
 ---
 
 <a id="快速开始"></a>
