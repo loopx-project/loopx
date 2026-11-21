@@ -1298,6 +1298,9 @@ def test_inbox_uses_shared_recovery_priority_and_explicit_overflow(
     request_cursor = first["next_cursor"]
     operation_cursor = first["operation_handoff_next_cursor"]
     assert request_cursor and operation_cursor
+    # The overflow instruction resumes operation paging without --attention-only.
+    assert operation_cursor == cursor
+    resumed = read_inbox("--operation-cursor", operation_cursor)
     outgoing = read_inbox("--attention-only", "--cursor", request_cursor)
     operation = read_inbox("--attention-only", "--operation-cursor", operation_cursor)
     combined = read_inbox("--attention-only", "--cursor", request_cursor, "--operation-cursor", operation_cursor)
@@ -1305,6 +1308,7 @@ def test_inbox_uses_shared_recovery_priority_and_explicit_overflow(
     assert [row["request_id"] for row in combined["open_request_summaries"]] == [peer_id]
     assert "operation_handoffs" not in outgoing
     assert len(operation["operation_handoffs"]) == 2
+    assert resumed["operation_handoffs"] == operation["operation_handoffs"]
     assert combined["operation_handoffs"] == operation["operation_handoffs"]
     assert combined["operation_handoff_next_cursor"] is None and combined["operation_handoff_pending_count"] == 22
     assert combined["items"] == [] and "peer_returns" not in combined

@@ -242,10 +242,11 @@ async function pendingPage(source: InboxSource, params: JsonObject): Promise<Jso
     return {ok: true, request_id: params.request_id, items: [inboxItem(row, receiptState(source.root, row))],
       has_more: false, next_cursor: null, instruction: TRIAGE + " This is an exact source read, including concluded requests; it does not reopen their work."};
   }
-  const cursorKind = attentionOnly ? "pending_attention_v2" : "pending_requests_v1";
   const scopeFor = (kind: string) => digest(source.exact ? [kind, params.runtime_root, target(source)]
     : [kind, params.runtime_root, source.goal, source.agent]);
-  const scope = scopeFor(cursorKind);
+  // Operation handoffs retain their existing Goal/Agent cursor scope in both views.
+  const operationCursorScope = scopeFor("pending_requests_v1");
+  const scope = attentionOnly ? scopeFor("pending_attention_v2") : operationCursorScope;
   const outgoingScope = attentionOnly ? scopeFor("pending_outgoing_v1") : null;
   let after = "";
   if (params.cursor != null) {
@@ -256,7 +257,8 @@ async function pendingPage(source: InboxSource, params: JsonObject): Promise<Jso
     if (outgoingScope === suppliedScope) {
       const outgoing = await outgoingSummaryPage(source, outgoingScope, suppliedAfter === "start" ? "" : suppliedAfter, INBOX_PAGE_SIZE);
       return {ok: true, items: [], open_request_summaries: outgoing.items, has_more: outgoing.next_cursor !== null,
-        next_cursor: outgoing.next_cursor, unavailable_count: outgoing.unavailable_count, _cursor_scope: scope,
+        next_cursor: outgoing.next_cursor, unavailable_count: outgoing.unavailable_count,
+        _cursor_scope: operationCursorScope,
         _outgoing_continuation: true,
         instruction: "Review these sent request summaries against the current work. Follow next_cursor when supplied. " +
           "An unavailable_count above zero requires receipt recovery. This page records no request reads, result delivery or consumption."};
@@ -282,7 +284,7 @@ async function pendingPage(source: InboxSource, params: JsonObject): Promise<Jso
     : outgoingScope === null ? null : (await outgoingSummaryPage(source, outgoingScope, "", 0)).next_cursor;
   return {ok: true, items: page.filter(entry => !entry.summary).map(entry => entry.item),
     ...(attentionOnly ? {open_request_summaries: page.filter(entry => entry.summary).map(entry => entry.item)} : {}),
-    has_more: nextCursor !== null, next_cursor: nextCursor, _cursor_scope: scope,
+    has_more: nextCursor !== null, next_cursor: nextCursor, _cursor_scope: operationCursorScope,
     instruction: TRIAGE + (attentionOnly ? ATTENTION_GUIDANCE : "") +
       " Follow next_cursor to read later pending requests. Restart without a cursor to discover new " +
       "requests before it. The end of a page sequence is not work completion."};
