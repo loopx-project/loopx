@@ -1641,7 +1641,19 @@ class StewardTurnHost:
                         "validation": managed_turn.validation_basis["plan"], "task_lease": managed_lease})
                     response = adapter.start_native_task_turn(prompt, event_sink, policy)
                 else:
-                    response = adapter.start_turn(prompt, event_sink)
+                    # Inline governance (.replan) shares the outer Chat turn_id; suppress
+                    # terminal answer and native-result capture so the primary turn keeps
+                    # the sole immutable native-results/{turn_id}.json and visible stream.
+                    invocation_sink = (
+                        (
+                            lambda kind, payload: event_sink(kind, payload)
+                            if kind not in {"answer.delta", "answer.final", "turn.native_result"}
+                            else None
+                        )
+                        if (governance_work and event_sink is not None)
+                        else event_sink
+                    )
+                    response = adapter.start_turn(prompt, invocation_sink)
             finally:
                 guard_owner._launch_guard = previous_guard
             current()  # Revocation/stop/retarget after a long model call wins.
