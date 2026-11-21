@@ -430,7 +430,7 @@ apply、ignore 或 refute，并复用共享 application receipt；ingest seam �
   repository/action authority scope 被独立验证后，内容才能成为 LoopX `hard_policy`。
   内容可以推导，authority 不能推导。
 - Account、user、peer、session 和 repository-revision boundary 始终属于 scope 与
-  privacy。
+  privacy。Peer label 不授予 cross-user 或 cross-agent authority。
 
 Provider health 拆成 `corpus_present`、`index_present`、
 `retrieval_query_succeeded`、`result_readback_verified` 和

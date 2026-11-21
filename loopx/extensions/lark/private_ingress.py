@@ -232,8 +232,7 @@ def project_private_reply_history(store: Any, session: dict[str, Any],
                     raise ValueError("unreadable original event")
                 source = lark_private_source(provider_ref=saved["provider_ref"], event=record["event"])
                 # Recovery moves the correlation journal forward, retaining its
-                # original failed Turn. Read those exact recorded identities;
-
+                # original failed Turn. Read those exact recorded identities.
                 recoveries = [native.get("context_recovery") or {}, *native.get("context_recovery_history", [])]
                 if any(not isinstance(row, dict) for row in recoveries):
                     raise ValueError("unreadable recovery identities")
@@ -464,7 +463,7 @@ class PrivateIngressObserver:
                     **{key: canonical.get(key) for key in ("root_id", "parent_id", "thread_id")}}
                 yield binding["transport_ref"], history
             except (OSError, ValueError, KeyError, TypeError):
-                continue  # Preserve every gap;
+                continue  # Preserve every gap.
 
     def _records(self) -> list[dict[str, Any]]:
         paths = sorted(self.transport.root.glob("*.json"))

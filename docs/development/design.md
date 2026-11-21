@@ -583,8 +583,7 @@ keys do not define tokens. PostCSS and its declared value parser distinguish
 stylesheet declarations and variable functions from quoted examples, comments
 and other declaration values. Parse errors fail the check.
 
-Tokens
-that are genuinely optional may keep a fallback (`var(--pw-surface, #fff)`).
+Tokens that are genuinely optional may keep a fallback (`var(--pw-surface, #fff)`).
 
 ### Type Scale
 

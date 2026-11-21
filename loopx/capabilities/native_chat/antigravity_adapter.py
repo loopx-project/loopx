@@ -649,9 +649,8 @@ class AntigravityAdapter:
                                   input_anchor: dict[str, Any]) -> dict[str, Any] | None:
         """Prove one native input ended at quota before any model/tool output.
 
-        Read
-        the exact original input twice from a stable idle cascade instead. Only
-        the latest two-step input/quota-error sequence qualifies; any output,
+        Read the exact original input twice from a stable idle cascade instead.
+        Only the latest two-step input/quota-error sequence qualifies; any output,
         tool, later input, cleared step or unknown native state fails closed.
         """
         try:

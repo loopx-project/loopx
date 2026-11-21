@@ -266,7 +266,7 @@ implementations share the new rule is not a before/after compatibility test.
 
 重构评审必须区分“相同判定”和“相同可观察语义”：同样拒绝但丢失对象状态或修复
 提示仍是回归；新增认领前提可能阻断旧实现允许的未认领文案修正；`--note` 被 parser
-接受或出现在成功响应中。先从旧调用
+接受或出现在成功响应中，也不能证明它经过 dispatch 后落盘并能独立回读。先从旧调用
 方及公开契约列出合法／非法分支，再运行基线与精确 head 的对照，不从新实现生成期望。
 
 Show regression sensitivity: the focused case must fail on the historical
@@ -1183,7 +1183,8 @@ the daily full-public sweep, and high-risk release profiles. It aggregates
 duration, failures, timeouts, current-inventory coverage, and targeted profile
 ownership without copying stdout/stderr tails or repository-local paths.
 
-full-public workflow 还会把各 shard 回执聚合成一个紧凑健康产物。报告区分四种频率。它会统计耗时、失败、超时、当前
+full-public workflow 还会把各 shard 回执聚合成一个紧凑健康产物。报告区分四种频率：
+显式 PR 快速 smoke、catalog 选择的 canary、每日 full-public 全量，以及高风险 release profile。它会统计耗时、失败、超时、当前
 清单覆盖率和定向 profile owner，同时不会复制 stdout/stderr tail 或仓库本地路径。
 
 ```bash
@@ -1693,7 +1694,7 @@ ceiling to 9,336, retaining the former 694 characters of headroom. Compare
 complete authoring bounds and parsed semantic-closeout arguments with the
 original admitted contract; recovery specializes the completed Task's boundary.
 Spend and settled
-recovery keep their 2,000-character ceilings. This preserves useful guidance;
+recovery keep their 2,000-character ceilings. This preserves useful guidance.
 Candidate measurements must still pass.
 
 辅助 Monitor 的恢复夹具用缩进 JSON 测量完整的原始 writeback 步骤，File 与 SQLite
@@ -1830,7 +1831,7 @@ provider permission and does not rewrite frozen experiment/promotion results.
    完整性、安全或结算语义，不能只为过线缩字段名，也不为微小收益制造引用框架。
    agent 读取的文字也是决策语义：逐条核对执行者、触发、时序、义务强度、证据来源、
    范围限定、继续和停止条件。字段、命令、枚举和
-   合法结果未变。不能为字符上限损害有用语义；未证明无损压缩时，
+   合法结果未变，不能证明指令等价。不能为字符上限损害有用语义；未证明无损压缩时，
    优先基于证据调整回归预算。真实硬上限需要明确的无损调用方设计和读回，不能默删义务。
 3. **选择并披露取舍。** 比较压缩、保持上限、合理扩容，也可组合使用。扩容需说明
    保留信息的价值与成本、新旧上限、实测余量和预期波动或规模，不规定统一余量比例。
@@ -2122,7 +2123,7 @@ The complete required-vision journey has a 40-call bound; the narrow
 single-semantic-action qualifier retains seven. The increased budget covers
 evidence discovery, JSON authoring, refresh, settlement and bounded recovery,
 including multiple field-validation corrections before a final spend;
-
+it does not authorize more effects or weaken the checkpoint/readback oracle.
 Each receipt records `tool_call_limit` beside actual usage. Earlier seven- and sixteen-call
 failures remain failures; the revised budget defines a new qualification, not
 a retrospective pass. Limit exhaustion after refresh but before spend still
@@ -2436,7 +2437,7 @@ MCP 可随完成操作携带 vision 判断，也可用 `review_task_vision` 在�
 复用 TS 的既有恢复规则，不新增结算引擎、不重扣额度；已提交的判断不能偷偷改写。
 格式和预算预检在 Todo 完成前拒绝非法输入；若旧宿主已部分完成，则修正未提交的
 vision 并重试原 `complete_task`，不能用仅补 checkpoint 的操作替代未完成结算。
-
+`vision_closed` 只结束当前阶段，活跃 Goal 仍须继续规划后续缺口。
 外层任务只描述业务验收，LoopX 协议由宿主内层指令和工具承接。
 
 ## Exact Release Commit Gate / 精确发布 Commit 门

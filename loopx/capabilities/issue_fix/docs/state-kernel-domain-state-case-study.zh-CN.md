@@ -146,7 +146,7 @@ Issue-Fix 向 Kernel 返回有限几种 transition：
 | newer repair commit 已覆盖反馈且 threads 全 resolved | `monitor_continuation` | 等待 re-review，不重复生成 patch |
 | PR `MERGED` 或 `CLOSED` | `no_followup` / terminal transition | 完成 monitor，恢复显式 successor 或记录 no-follow-up |
 
-它只是生成 typed proposal；
+Domain transition 只生成 typed proposal；
 todo writer、gate scope、quota、authority 与 scheduler 仍会再次检查。
 
 ## 五、以一次 OpenViking Issue-Fix 运行为例
