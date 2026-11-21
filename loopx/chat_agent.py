@@ -13,7 +13,7 @@ import time
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Mapping
 
 from .presentation.codex_activity import CodexActivitySteps
 from .chat import (
@@ -473,6 +473,7 @@ class CodexChatAgentSession:
     next_request_id: int = 5
     current_turn_id: str = ""
     model_catalog_compatibility_applied: bool = False
+    team_plan_context: Mapping[str, Any] | None = field(default=None, repr=False)
     read_tool_handler: Callable[[str, Any], dict[str, Any]] | None = field(
         default=None, repr=False
     )
