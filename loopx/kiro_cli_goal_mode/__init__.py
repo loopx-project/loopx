@@ -27,7 +27,7 @@ KIRO_CLI_ACCEPTED_INPUTS = (
 # `kiro-cli acp` starts the host as an Agent Client Protocol agent over stdio.
 # Probed on 2.21.1: it answers `initialize` with protocolVersion 1 and
 # `loadSession: true`, and `session/new` returns a session id — exactly the
-# shape `loopx.chat_acp.ACPStdioAdapter` already speaks, so LoopX Chat and the
+# shape `loopx.chat.acp.ACPStdioAdapter` already speaks, so LoopX Chat and the
 # dashboard reach Kiro CLI through that adapter instead of a second transport.
 #
 # The argv carries no `--trust-all-tools`: LoopX Chat answers every ACP
