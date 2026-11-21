@@ -443,12 +443,23 @@ def execute_turn_run_once(
                 )
             return completion_payload
 
+        def require_isolated_codex_writeback() -> None:
+            if args.host != "codex-cli" or not getattr(args, "codex_operation_tools", False):
+                return
+            from ..control_plane.turn_driver.codex_worker_identity import worker_isolation_requested
+
+            if worker_isolation_requested():
+                if goal_admission is None:
+                    raise ValueError("isolated managed Codex writeback requires current Goal authority")
+                goal_admission.require_running(operation="isolated_codex_durable_writeback")
+
         def completion_writeback(
             result: dict[str, object],
             *,
             effect_ref: str,
         ) -> dict[str, object]:
             require_effect_ref(effect_ref, SettlementStepKind.DURABLE_WRITEBACK)
+            require_isolated_codex_writeback()
             prior = completion_readback()
             if prior is None:
                 # A rejected attachment must not leave the Todo completed.
@@ -522,16 +533,11 @@ def execute_turn_run_once(
         def codex_writeback(
             result: dict[str, object], *, effect_ref: str,
         ) -> dict[str, object]:
-            from ..control_plane.turn_driver.codex_worker_identity import worker_isolation_requested
-
-            if getattr(args, "codex_operation_tools", False) and worker_isolation_requested():
-                if goal_admission is None:
-                    raise ValueError("isolated managed Codex writeback requires current Goal authority")
-                goal_admission.require_running(operation="isolated_codex_durable_writeback")
             # Accountable refresh requires durable controller validation even for
             # a predeclared terminal Todo. Other hosts keep their existing order.
             if result.get("result_kind") == "validated_completion":
                 return completion_writeback(result, effect_ref=effect_ref)
+            require_isolated_codex_writeback()
             return writeback(result, effect_ref=effect_ref)
 
         def current_status() -> dict[str, object]:
