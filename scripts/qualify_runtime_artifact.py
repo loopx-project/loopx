@@ -20,7 +20,7 @@ def observe_default_contract(source: Path) -> dict:
     """Observe the candidate's real default writer in an isolated release fixture.
 
     No model runs, active Goal or saved operator configuration participates.
-    Explicit complete-contract opt-in is intentionally not the default probe.
+    Probe the ordinary invocation, with inline transport for direct schema inspection.
     """
     source = source.resolve()
     with tempfile.TemporaryDirectory(prefix="loopx-default-contract-") as raw:
