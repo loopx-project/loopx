@@ -244,12 +244,18 @@ def fetch_complete_pr_reviews(*, repository: str, number: str, cwd: Path | None,
 
 def _attach_review_provenance(row: dict[str, Any], details: dict[str, Any], *,
                               repository: str, number: str, cwd: Path | None,
-                              run_gh_json: GitHubJsonRunner) -> bool:
+                              run_gh_json: GitHubJsonRunner,
+                              model_review_coverage: bool = False) -> bool:
     author = row.get("author")
     author = author.get("login") if isinstance(author, dict) else None
     # This only avoids unnecessary provider reads. Eligibility belongs to TS;
     # no association, state or actor-type policy is duplicated here.
-    if not author or not any(isinstance(review, dict)
+    if not author or not details["reviews"]:
+        return True
+    model_history_needed = (
+        model_review_coverage and row.get("state") == "OPEN" and row.get("isDraft") is not True
+    )
+    if not model_history_needed and not any(isinstance(review, dict)
             and isinstance(review.get("author"), dict) and review["author"].get("login")
             and review["author"]["login"].casefold() != author.casefold()
             for review in details["reviews"]):
@@ -292,6 +298,7 @@ def attach_pr_review_details(
     cwd: Path | None = None,
     run_gh_json: GitHubJsonRunner = run_gh_json,
     wait_for_ci: bool = True,
+    model_review_coverage: bool = False,
 ) -> bool:
     """Attach complete per-PR details after the lightweight list scan."""
 
@@ -348,7 +355,8 @@ def attach_pr_review_details(
             return False
         details["files"] = detail_files
     if not _attach_review_provenance(row, details, repository=repository, number=number,
-                                    cwd=cwd, run_gh_json=run_gh_json):
+                                    cwd=cwd, run_gh_json=run_gh_json,
+                                    model_review_coverage=model_review_coverage):
         return False
     for key in detail_fields:
         row[key] = details[key]
@@ -362,6 +370,7 @@ def scan_github_pull_request_targets(
     cwd: Path | None = None,
     run_gh_json: GitHubJsonRunner = run_gh_json,
     wait_for_ci: bool = True,
+    model_review_coverage: bool = False,
 ) -> dict[str, Any]:
     """Read only explicitly requested exact heads, without scanning a queue."""
 
@@ -402,6 +411,7 @@ def scan_github_pull_request_targets(
             repository=repository,
             cwd=cwd,
             **({"wait_for_ci": False} if not wait_for_ci else {}),
+            **({"model_review_coverage": True} if model_review_coverage else {}),
             run_gh_json=run_gh_json,
         )
         if not details_ok:
@@ -440,6 +450,7 @@ def attach_pr_review_details_concurrently(
     attach: Callable[..., bool] = attach_pr_review_details,
     run_gh_json: GitHubJsonRunner = run_gh_json,
     wait_for_ci: bool = True,
+    model_review_coverage: bool = False,
 ) -> list[bool]:
     """Read per-PR details concurrently while preserving queue order."""
 
@@ -454,6 +465,7 @@ def attach_pr_review_details_concurrently(
             cwd=cwd,
             run_gh_json=run_gh_json,
             **({"wait_for_ci": False} if not wait_for_ci else {}),
+            **({"model_review_coverage": True} if model_review_coverage else {}),
         )
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:

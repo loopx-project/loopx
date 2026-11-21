@@ -54,6 +54,7 @@ REPLAN_SEMANTIC_ACTION_BEHAVIOR_RECEIPT_SCHEMA_VERSION = (
 REPLAN_SEMANTIC_ACTION_BEHAVIOR_MAX_CALLS = 7
 REPLAN_SEMANTIC_ACTION_NATIVE_READ_MAX_CALLS = 3
 _NATIVE_CONTEXT_READ_KINDS = frozenset({"context_read", "replan_context_read"})
+_MAX_HOST_TOOL_ERROR_OUTPUT_CHARS = 8192
 
 
 class _HostToolError(RuntimeError):
@@ -1760,7 +1761,8 @@ def _run_qualification_loop(
                               exit_code=exc.exit_code, error_code=exc.code)
             _append_tool_response(state, tool_call=tool_call, output=json.dumps({
                 "error_code": exc.code, "exit_code": exc.exit_code,
-                "output": exc.output[:4096], "truncated": len(exc.output) > 4096,
+                "output": exc.output[:_MAX_HOST_TOOL_ERROR_OUTPUT_CHARS],
+                "truncated": len(exc.output) > _MAX_HOST_TOOL_ERROR_OUTPUT_CHARS,
             }))
             continue
         except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
