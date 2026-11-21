@@ -735,10 +735,12 @@ const overview = source("./goal-overview.tsx");
 const overviewCss = source("./goal-overview.css");
 const researchHistory = source("./goal-research-history.tsx");
 const researchHistoryCss = source("./goal-research-history.css");
+const yardstickReadback = source("./work-yardstick-readback.tsx");
 
 assert.match(overview, /goal-overview-worker-status[\s\S]*?<ContextHelp/, "WorkerReadback puts explanation into ContextHelp beside status");
 assert.match(overview, /details className="goal-overview-worker-details"/, "WorkerReadback technical details start collapsed");
 assert.match(overviewCss, /\.goal-overview-worker-status\s*\{[^}]*display:\s*flex/, "Worker status row is structured via flex");
 assert.match(overviewCss, /@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?\.goal-overview-worker-state dl/, "Worker state has narrow mobile grid rules");
-assert.match(researchHistory, /execution_observation[\s\S]*?<ContextHelp label=\{zh \? "执行观测说明"/, "Execution observation explanation is attached to summary ContextHelp");
+assert.match(researchHistory, /execution_observation[\s\S]*?<ExecutionObservationReadback/, "Research history delegates execution_observation rendering to ExecutionObservationReadback");
+assert.match(yardstickReadback, /export function ExecutionObservationReadback[\s\S]*?<summary>[\s\S]*?<ContextHelp label=\{zh \? "执行观测说明"/, "Execution observation explanation is attached to summary ContextHelp");
 assert.match(researchHistoryCss, /margin-inline-start:\s*0;\s*margin-top:\s*8px;/, "Research history mobile action wraps cleanly on 390px");
