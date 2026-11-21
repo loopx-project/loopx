@@ -422,7 +422,19 @@ def capture_docker_worker(
                         if time.time() >= prepared["deadline_epoch"]:
                             raise TimeoutError("Worker handoff expired before evaluator capture")
                     phase = _archive(container, phase_deadline_path, stage / "phase", deadline=deadline) if phase_deadline_path else None
-                    native = capture_native(stage / "native", phase, _remaining(deadline))
+                    native_root = stage / "native"
+                    native = capture_native(native_root, phase, _remaining(deadline))
+                    if not isinstance(native, dict):
+                        raise ValueError("Native capture callback must return a verified checkpoint receipt")
+                    raw_native = {key: value for key, value in dict.items(native)}
+                    raw_native_sha256 = raw_native.get("sha256")
+                    if (type(raw_native_sha256) is not str or
+                            not re.fullmatch(r"[0-9a-f]{64}", raw_native_sha256) or
+                            raw_native.get("integrity_verified") is not True):
+                        raise ValueError("Native capture receipt must carry an integrity-verified 64-hex digest")
+                    # Copy the callback digest into an immutable string at the
+                    # barrier before unpausing or sealing touches shared state.
+                    native_capsule_sha256 = str(raw_native_sha256)
                     container.reload()
                     if not container.attrs["State"]["Running"] or not container.attrs["State"]["Paused"]:
                         raise RuntimeError("Worker writer barrier changed during capture")
@@ -446,14 +458,23 @@ def capture_docker_worker(
                     phase_end = read_phase_deadline(phase.read_bytes()) if phase is not None else None
                     completion = controller_completion_deadline(prepared["deadline_epoch"], phase_end)
                     deadline = time.monotonic() + completion - time.time()
+                verified_native = effect_runtime_result(
+                    "runtime.checkpoint_artifacts",
+                    {"action": "verify", "root": str(native_root), "expected_sha256": native_capsule_sha256},
+                    timeout=_remaining(deadline), retry_safe=False, large_local_snapshot=True,
+                )
+                if (not isinstance(verified_native, dict) or
+                        verified_native.get("integrity_verified") is not True or
+                        verified_native.get("sha256") != native_capsule_sha256):
+                    raise ValueError("Materialized native capsule does not match the barrier callback receipt")
                 sealing_epoch_ms = (time.time() + _remaining(deadline)) * 1000
                 native_component = _participant_id(components, "native_capsule")
-                components.append({"id": native_component, "source_path": str(stage / "native")})
+                components.append({"id": native_component, "source_path": str(native_root)})
                 metadata = {**(prepared["point_metadata"] if prepared is not None else {}), "worker_file_snapshot": {
                     "container_id": container_id, "image_id": container.attrs["Image"],
                     "components": [dict(entry) for entry in requested_components],
                     "phase_deadline_path": phase_deadline_path,
-                    "native_capsule_sha256": native["sha256"],
+                    "native_capsule_sha256": native_capsule_sha256,
                     "native_capsule_component_id": native_component,
                     "writer_barrier": "docker_pause", "process_memory_captured": False,
                     "native_cursor_qualified": False,
