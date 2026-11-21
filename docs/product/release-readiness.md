@@ -1056,6 +1056,26 @@ path, and canary route rather than as a user-facing release baseline.
   Check the installation owner and read back an existing Goal after updating.
   [Versioned upgrade guide](https://github.com/loopx-project/loopx/blob/v2.3.0/docs/product/releases/v2.3.0.md#upgrade).
 
+- `v2.4.0` release at commit
+  `a6ffb3be6e7bdb48e02311ec58d618200fe0501c` (2026-11-22).
+  The Git `stable` ref, CLI archive
+  (`loopx-runtime-a6ffb3be6e7bdb48e02311ec58d618200fe0501c.tar.gz`) and bundled
+  macOS runtime match the tag with verified GitHub artifact attestations.
+  GitHub and PyPI carry matching Python wheel and source packages.
+  The signed `desktop-stable` feed serves Apple Silicon macOS
+  (`LoopX_2.4.0_aarch64.dmg`, `LoopX.app.zip`, and `LoopX.app.tar.gz`).
+  Windows stable upgrades use `LoopX_2.4.0_x64-setup.exe` or
+  `LoopX_2.4.0_x64_en-US.msi`.
+  The companion `dsh-loopx-plugin 0.1.1-beta.7` GitHub prerelease tarball
+  targets LoopX 2.4.0+ and DSH `0.2.2-rc.1..rc.3` (npm trusted publishing
+  remains pending workflow `./output/` path alignment and owner npmjs setup).
+  [Published release](https://github.com/loopx-project/loopx/releases/tag/v2.4.0),
+  [PyPI packages](https://pypi.org/project/loopx/2.4.0/#files),
+  [Illustrated Feishu upgrade guide](https://my.feishu.cn/docx/JXvbdWcFDoZJgvxktvScYfJwnRf).
+  Run `loopx authority-archive upgrade --all-known --require-current` first,
+  check the installation owner, and read back an existing Goal after updating.
+  [Versioned upgrade guide](https://github.com/loopx-project/loopx/blob/v2.4.0/docs/product/releases/v2.4.0.md#upgrade).
+
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.
 
