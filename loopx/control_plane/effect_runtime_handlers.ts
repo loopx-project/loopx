@@ -279,6 +279,7 @@ export function createEffectRuntimeHandlers(
     ["capabilities.periodic_report.approval_retry.select", lazyHandler(() => import("./capabilities/periodic_report_progress.ts"), ({selectPeriodicReportApprovalRetry}) => selectPeriodicReportApprovalRetry)],
     ["todo.succession.project", lazyHandler(() => import("./todos/succession.ts"), ({projectTodoSuccession}) => projectTodoSuccession)],
     ["todo.work_counts.project", lazyHandler(() => import("./todos/summary_lanes.ts"), ({projectLegacyTodoWorkCounts}) => projectLegacyTodoWorkCounts)],
+    ["agent.directory.project", lazyHandler(() => import("./agents/directory.ts"), ({projectPeerAgentDirectory}) => projectPeerAgentDirectory)],
     ["projection.envelope.seal", lazyHandler(() => import("./projection_envelope.ts"), ({sealProjectionEnvelope}) => sealProjectionEnvelope)],
     ["todo.global_readiness.project", lazyHandler(() => import("./todos/decision_scope.ts"), ({projectGlobalTodoReadiness}) => projectGlobalTodoReadiness)],
     ["todo.decision_scope.evaluate", lazyHandler(() => import("./todos/decision_scope.ts"), ({evaluateDecisionScope}) => evaluateDecisionScope)],

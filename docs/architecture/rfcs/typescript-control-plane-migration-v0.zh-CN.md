@@ -2118,3 +2118,4 @@ SQLite 中位数略升，收益不能外推为全面加速。这只资格化本�
 - 进度评审 receipt 资格判定：[2026-11-02 检查点](ledger/typescript-control-plane-migration-v0/2026-11-02-progress-review-qualification.zh-CN.md)。
 - Global Todo 就绪分类完整 owner 切换（两个消费者）：[2026-11-02 记录](ledger/typescript-control-plane-migration-v0/2026-11-02-global-todo-readiness.zh-CN.md)。
 - 当前 Todo 来源读取并入上下文事务：[2026-11-04](ledger/typescript-control-plane-migration-v0/2026-11-04-selected-context-source-read.zh-CN.md).
+- Peer Agent 目录投影与上游来源依据：[2026-11-06 检查点](ledger/typescript-control-plane-migration-v0/2026-11-06-peer-directory.zh-CN.md)。
