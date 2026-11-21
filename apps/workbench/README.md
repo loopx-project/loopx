@@ -121,6 +121,29 @@ loopx workbench stop
 `loopx workbench stop --force`。Core 仍独立管理，以上命令不会启动、替换或停止 Core。
 Core 不可达会明确提示，普通 Agent 会话仍可使用；连通性不代表 Goal 功能已验收。
 
+需要登录电脑后自动运行时，显式启用：
+
+```bash
+loopx workbench start --autostart
+loopx workbench status
+# 本次停止；下次登录仍自动启动
+loopx workbench stop
+# 停止并取消自启动，保留会话和配置
+loopx workbench stop --disable-autostart
+```
+
+macOS 使用当前用户的 LaunchAgent，登录后启动、异常退出后恢复；不承诺未登录时运行。
+Linux 使用 `systemd --user`，需要可用的用户服务管理器；不自动启用 linger 或申请 root 权限。
+`status` 从系统服务管理器读取自启动状态，无法核实会明确报错。普通 `start` 不主动开启自启动；
+已有注册时沿用该服务。为已运行的 CLI 实例启用自启动需要一次空闲重启，运行中的任务会阻止迁移。
+系统服务只读取已有配置，不签发登录链接；交互执行 `start` 就会输出带 token 的私密登录链接。
+默认地址只适用于同机浏览器；异机访问仍需已有的可达域名或代理。
+
+注册使用 Node 和当前 CLI 的绝对路径。应从稳定安装位置启用，保留 Node、CLI、应用及配置文件；
+移动安装位置或更换 Node 后，先用原安装执行 `stop --disable-autostart`，再从新安装启用。
+若服务文件被外部修改，CLI 会拒绝覆盖或删除，需先核对并恢复原注册；服务管理器不可用时不假报成功。
+服务文件只保存启动路径和必要环境，不复制登录 token；密钥仍由已有 `.env` 管理。
+
 默认数据目录与 `scripts/workbench.sh` 相同：
 `${XDG_STATE_HOME:-~/.local/state}/loochat-workbench`。
 可以用 `WORKBENCH_STATE_DIR` 或每次传入 `--state-dir` 指定已有目录。
