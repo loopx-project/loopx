@@ -36,7 +36,7 @@ before(async () => {
   mkdirSync(join(source, 'projects')); writeFileSync(join(source, 'projects', 'old.jsonl'), 'old conversation');
   registry = new AgentRegistry([{ id: 'claude', adapter: 'claude', command: [process.execPath, acp], env: { CLAUDE_CONFIG_DIR: source, LOOCHAT_CLAUDE_BIN: fixture } }], join(root, 'agents.json'));
   store = new Store(root);
-  manager = new ThreadManager(store, registry.adapters, [root], new AttachmentStore(root), () => registry.list());
+  manager = new ThreadManager(store, registry.adapters, [root], new AttachmentStore(root), () => registry.list().map(item => ({ ...item, activeLogin: registry.activeLogin(item.id) })));
   server = createHttpServer({ manager, registry, token, webDir: null, version: 'test' });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -117,6 +117,7 @@ test('bad codes can restart; stale sessions and cancelled sessions cannot accept
   assert.equal((await api(`${path}/${second.id}`, 'DELETE')).status, 204);
   assert.equal((await api(`${path}/${second.id}`, 'POST', { code: 'test-code#test-state' })).status, 409);
   assert.equal((await (await api(`${path}/${second.id}`)).json() as any).status, 'cancelled');
+  assert.equal(registry.activeLogin('claude-3'), undefined);
 });
 
 test('native login times out, refuses unsuccessful status, and handles missing CLI', async () => {
@@ -205,11 +206,21 @@ test('agy native login accepts a callback URL, persists identity, and uses that 
   assert.equal(new URL(waiting.url).hostname, 'accounts.google.com');
   assert.equal(new URL(waiting.url).searchParams.get('redirect_uri'), 'https://antigravity.google/oauth-callback');
   assert.equal(waiting.input, 'code-or-url');
+  const listed = await api('/api/agents');
+  assert.equal(listed.headers.get('Cache-Control'), 'no-store');
+  const resumed = (await listed.json() as any[]).find(item => item.id === 'agy-2').activeLogin;
+  assert.deepEqual(resumed, waiting, 'another client can recover the same pending login');
+  assert.equal(JSON.stringify(resumed).includes('fixture-agy-access'), false);
+  assert.equal((await api('/api/agents', 'GET', undefined, false)).status, 401);
+  assert.equal(JSON.stringify(JSON.parse(readFileSync(join(root, 'agents.json'), 'utf8'))).includes('activeLogin'), false);
+
   assert.equal((await api(sessionPath, 'POST', { code: 'code\ncommand' })).status, 400);
   assert.equal((await api(sessionPath, 'POST', { code: 'https://antigravity.google/oauth-callback?code=test-agy-code&state=fixture' })).status, 200);
   const done = await waitFor(async () => (await api(sessionPath)).json() as any, item => item.status === 'success');
   assert.equal(done.url, undefined); assert.doesNotMatch(JSON.stringify(done), /fixture-agy/);
   assert.equal(registry.get('agy-2').account, 'agy-new@example.com');
+  assert.equal(registry.activeLogin('agy-2'), undefined);
+  assert.equal((await (await api('/api/agents')).json() as any[]).find(item => item.id === 'agy-2').activeLogin, undefined);
   const saved = JSON.parse(readFileSync(join(root, 'agents.json'), 'utf8')).agents.find((a: any) => a.id === 'agy-2');
   assert.equal(saved.account, 'agy-new@example.com');
   assert.deepEqual(saved.env, registry.get('agy-2').env);

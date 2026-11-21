@@ -124,7 +124,10 @@ async function main(): Promise<void> {
   // Directories added from the page are kept next to the hub's data; threads in no project work in
   // a scratch area there too.
   const dirs = new Workdirs(workdirs, join(config.dataDir, 'workdirs.json'), join(config.dataDir, 'scratch'));
-  const manager = new ThreadManager(store, adapters, dirs, new AttachmentStore(config.dataDir), () => registry.list());
+  const manager = new ThreadManager(store, adapters, dirs, new AttachmentStore(config.dataDir), () => registry.list().map((item) => {
+    const activeLogin = registry.activeLogin(item.id);
+    return activeLogin ? { ...item, activeLogin } : item;
+  }));
   // The session list scans once here and then only when a request finds it stale; the meter keeps
   // its own timer, files only. Stopped in shutdown with everything else.
   // LoopX Goal conversations: bindings, the core client and the Goal context; ordinary threads never touch it.

@@ -14,7 +14,7 @@ import type { VoiceTransport } from './voice-sessions.js';
 import { VoiceConversation } from './voice-conversation.js';
 import { turnOutcome } from './lifecycle.js';
 import { UserInputs } from './user-input.js';
-import type { SystemPrompt, WorkMode } from './adapters/types.js';
+import type { LoginState, SystemPrompt, WorkMode } from './adapters/types.js';
 import { diagnosticFailure } from './adapters/diagnostics.js';
 import { turnAnswer, type CoordinationManager, type CoordinationSetup } from './coordination.js';
 import { Injections, type InjectionGate } from './injections.js';
@@ -275,6 +275,8 @@ export interface AgentInfo {
   streamBridgeEnabled?: boolean;
   /** How it can be signed in from the hub, when its adapter can start the CLI's login. */
   login?: 'terminal' | 'wizard';
+  /** In-progress login owned by the daemon, recoverable after page navigation. */
+  activeLogin?: { id: string } & LoginState;
   capabilities: AgentAdapter['capabilities'];
 }
 
@@ -394,7 +396,7 @@ export class ThreadManager {
     workdirs: string[] | Workdirs,
     private readonly attachments: AttachmentStore,
     /** What each instance is beyond its adapter: its adapter kind and linked account. */
-    private readonly agentMeta: () => Array<{ id: string; adapter?: string; account?: string | null; hidden?: boolean }> = () => [],
+    private readonly agentMeta: () => Array<{ id: string; adapter?: string; account?: string | null; hidden?: boolean; activeLogin?: { id: string } & LoginState }> = () => [],
   ) {
     this.dirs = Array.isArray(workdirs) ? new Workdirs(workdirs) : workdirs;
     this.references = new ContextReferences(store, this);
@@ -476,6 +478,7 @@ export class ThreadManager {
         ...(m?.hidden !== undefined ? { hidden: m.hidden } : {}),
         available: await a.available(),
         ...(a.startLogin ? { login: 'wizard' as const } : a.loginCommand ? { login: 'terminal' as const } : {}),
+        ...(m?.activeLogin ? { activeLogin: m.activeLogin } : {}),
         capabilities: a.capabilities,
         ...(a.capabilities.streamBridge ? { streamBridgeEnabled: a.streamBridgeEnabled ?? false } : {}),
       });

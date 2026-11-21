@@ -1158,6 +1158,11 @@ export const ja: Messages = {
   "agentLogin.expired": "ログインリンクの有効期限が切れました。再試行してください。",
   "agentLogin.unavailable": "ログインを開始できません。ホストにエージェントがインストールされているか確認してください。",
   "agentLogin.verification": "ログイン状態を確認できませんでした。再試行してください。",
+  "agentLogin.resume": "ログインを続ける",
+  "agentLogin.collapse": "折りたたむ",
+  "agentLogin.cancel": "ログインをキャンセル",
+  "agentLogin.waitingBadge": "コード入力待ち",
+  "agentLogin.keepHint": "折りたたんだりページを離れてもログインは10分間保持されます。",
   'agentLogin.title': (name: string) => `${name} にログイン`,
 
   'agentAccount.needsLogin': 'ログインが必要',

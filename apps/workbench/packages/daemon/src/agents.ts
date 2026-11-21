@@ -420,6 +420,15 @@ export class AgentRegistry {
     return login.session;
   }
 
+  /** Returns the in-progress login session for an agent, so any client can resume entering its code. */
+  activeLogin(agent: string): ({ id: string } & ReturnType<LoginSession['state']>) | undefined {
+    const entry = this.logins.get(agent);
+    if (!entry) return undefined;
+    const state = entry.session.state();
+    if (!['starting', 'waiting', 'submitting'].includes(state.status)) return undefined;
+    return { id: entry.id, ...state };
+  }
+
   dispose(): void {
     if (this.autoJoinTimer) clearInterval(this.autoJoinTimer);
     this.autoJoinTimer = null;

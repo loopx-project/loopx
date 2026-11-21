@@ -1160,6 +1160,11 @@ export const zh = {
   "agentLogin.expired": "登录链接已过期，请重新登录。",
   "agentLogin.unavailable": "无法启动登录，请检查主机上的 agent 是否已安装。",
   "agentLogin.verification": "未能确认登录状态，请重试。",
+  "agentLogin.resume": "继续登录",
+  "agentLogin.collapse": "收起",
+  "agentLogin.cancel": "取消登录",
+  "agentLogin.waitingBadge": "等待验证码",
+  "agentLogin.keepHint": "收起或离开页面不会取消登录，10 分钟内可回来继续输入。",
   'agentLogin.title': (name: string) => `登录 ${name}`,
 
   'agentAccount.needsLogin': '待登录',

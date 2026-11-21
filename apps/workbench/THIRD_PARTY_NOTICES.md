@@ -29,8 +29,9 @@ SOFTWARE.
 ## Calli
 
 Antigravity account isolation and native OAuth login (`packages/daemon/src/adapters/agy-account.ts`,
-`code-login.ts`, related login UI strings and account tests) are adapted from Calli
-(`maxliux5/calli`, revision `d2a6d6f1dc524dd0ce36a73f6674bd74967c950c`).
+`code-login.ts`, inline login UI and related account tests) are adapted from Calli
+(`maxliux5/calli`, account flow at `d2a6d6f1dc524dd0ce36a73f6674bd74967c950c`,
+inline/resumable login at `c9802662b5219395b14e65ba30dfff21230df91b`).
 
 MIT License
 

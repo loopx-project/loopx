@@ -1160,6 +1160,11 @@ export const en: Messages = {
   "agentLogin.expired": "The sign-in link expired. Start again.",
   "agentLogin.unavailable": "Could not start sign-in. Check that the agent is installed on the host.",
   "agentLogin.verification": "Could not verify the sign-in status. Please retry.",
+  "agentLogin.resume": "Continue sign-in",
+  "agentLogin.collapse": "Collapse",
+  "agentLogin.cancel": "Cancel sign-in",
+  "agentLogin.waitingBadge": "Waiting for code",
+  "agentLogin.keepHint": "Collapsing or leaving this page keeps sign-in active for 10 minutes.",
   'agentLogin.title': (name: string) => `Sign in to ${name}`,
 
   'agentAccount.needsLogin': 'Sign-in required',
