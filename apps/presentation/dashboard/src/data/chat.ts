@@ -659,10 +659,20 @@ export async function readTodoRequest(goalId: string, todoId: string, signal: Ab
     ok: z.literal(true), goal_id: z.string(), todo_id: z.string(), text: z.string(),
     status: z.string(), archive_state: z.string(), updated_at: z.string().nullable(),
     evidence: z.string().nullable().optional(), note: z.string().nullable().optional(),
+    stride_meta_goal: z.union([z.object({unavailable: z.literal(true)}), z.object({
+      decision_ref: z.string(), agent_id: z.string(), action: z.string(),
+      meta_goal: z.object({todo_id: z.string(), objective: z.string(), resolution_criterion: z.string(),
+        resolution: z.string().optional(), previous_decision_ref: z.string().optional()}),
+      next_probe: z.object({scope: z.string(), prediction: z.string(), adoption_criterion: z.string(),
+        cost_bound: z.string(), minimum_evidence: z.string()}),
+      evidence: z.array(z.object({evidence_ref: z.string(), summary: z.string().nullish()})),
+    })]).optional(),
     review_basis: todoUpdateSourceBasisSchema.optional(),
     source_access: z.object({namespace: z.string()}).optional(),
   }).parse(await requestJson<unknown>(url, {signal}));
   if (result.goal_id !== goalId || result.todo_id !== todoId) throw new Error("Task source changed");
+  if (result.stride_meta_goal && "meta_goal" in result.stride_meta_goal &&
+      result.stride_meta_goal.meta_goal.todo_id !== todoId) throw new Error("Meta-goal source changed");
   if (expectedNamespace && result.source_access?.namespace !== expectedNamespace) throw new Error("Task source changed");
   return result;
 }
