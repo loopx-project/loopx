@@ -368,6 +368,14 @@ def test_web_result_adopts_original_mirror_and_recovers_readback_without_send(
     capture = store.root.parent.parent / "requests.jsonl"
     starts = capture.read_bytes()
     frozen_turn = store._turn_path(session["session_id"], turn["turn_id"]).read_bytes()
+    question = next(item for item in store.messages(session["session_id"])
+                    if item["role"] == "user" and item["turn_id"] == turn["turn_id"])
+    question_phase = _read_json(mirror)["deliveries"]["web." + question["message_id"]]
+    question_ref = question_phase["attempt"]["message_ref"]
+    question_link = ("https://applink.feishu.cn/client/chat/open?openChatId="
+                     f"{provider.messages[question_ref]['chat_id']}&position=23")
+    if not legacy_result:
+        provider.messages[question_ref]["message_app_link"] = question_link
     remainder = {"summary": "Validate installation", "resume_when": "The same worker has the original installation proof"}
     body = ("完整结果与独立证据。\n" * 1200 if long_result else "Concrete original result.") + "UNIQUE_RESULT_END"
     report(sender.root, route["goal_id"], route["agent_id"], route["request_id"], "conclusion", body,
@@ -419,7 +427,10 @@ def test_web_result_adopts_original_mirror_and_recovers_readback_without_send(
             marker = f"（{index}/{len(parts)}）\n\n"
             assert text.startswith(marker)
             parts[index - 1] = text[len(marker):]
-    remaining = f"**LoopX（App）**\n\n{expected}"
+    prefix = "**LoopX（App）**\n\n"
+    if not legacy_result:
+        prefix += f"[查看对应提问]({question_link})\n\n"
+    remaining = prefix + expected
     for index, text in enumerate(parts):
         assert remaining.startswith(text)
         remaining = remaining[len(text):]
@@ -430,6 +441,9 @@ def test_web_result_adopts_original_mirror_and_recovers_readback_without_send(
     assert remaining == ""
     original_mirror = mirror.read_bytes()
     phase = _read_json(mirror)["deliveries"]["web." + message["message_id"]]
+    if not legacy_result:
+        assert phase["question_link"] == question_link
+        del provider.messages[question_ref]["message_app_link"]
     writes = list(provider.writes)
     runner = transport.runner
 

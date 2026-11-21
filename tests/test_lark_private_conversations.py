@@ -4049,11 +4049,29 @@ def test_unreadable_private_delivery_does_not_hold_other_original_replies(ordina
         runtime.close()
 
 
-def test_app_messages_and_answers_reach_the_original_chat_once_without_new_execution(ordinary):  # noqa: F811
+@pytest.mark.parametrize("source_link", ["original", "foreign", "unavailable"])
+def test_app_messages_and_answers_reach_the_original_chat_once_without_new_execution(ordinary, source_link):  # noqa: F811
     store, runtime, provider, transport, original, turns, before = _app_projection_journey(ordinary)
     sid = original["session_id"]
     canonical = [message for message in store.messages(sid) if message.get("turn_id") in turns]
     requests_before = ordinary[4].read_text()
+
+    def with_source_links(args, cwd=None, timeout=None):
+        response = provider(args, cwd, timeout)
+        if "+messages-mget" not in args:
+            return response
+        payload = json.loads(response["stdout"])
+        for row in payload.get("data", {}).get("items", []):
+            ref = row["message_id"]
+            if ref.startswith("om_out_") and source_link != "unavailable":
+                chat = row["chat_id"] if source_link == "original" else "oc_a_different_private_chat"
+                position = int(ref.removeprefix("om_out_"))
+                row["message_app_link"] = (
+                    f"https://applink.feishu.cn/client/chat/open?openChatId={chat}&position={position}"
+                )
+        return {**response, "stdout": json.dumps(payload, ensure_ascii=False)}
+
+    transport.runner = with_source_links
     try:
         _drain_app_projection(transport, lambda: len(provider.writes) >= before + len(canonical))
         projected = provider.writes[before:]
@@ -4062,6 +4080,20 @@ def test_app_messages_and_answers_reach_the_original_chat_once_without_new_execu
         for (profile, text), message in zip(projected, canonical):
             assert profile == "notes-app" and message["text"] in text
             assert ("你（App）" if message["role"] == "user" else "LoopX（App）") in text
+        journal, = (transport.root / "web-projections").glob("*.json")
+        deliveries = json.loads(journal.read_text())["deliveries"]
+        canonical_inputs = {m["turn_id"]: m["message_id"] for m in canonical if m["role"] == "user"}
+        for message in canonical:
+            current = deliveries["web." + message["message_id"]]
+            if source_link == "original" and message["role"] == "agent":
+                parent = deliveries["web." + canonical_inputs[message["turn_id"]]]
+                position = int(parent["attempt"]["message_ref"].removeprefix("om_out_"))
+                expected = f"https://applink.feishu.cn/client/chat/open?openChatId=oc_notes_app&position={position}"
+                provider_message = provider.messages[current["attempt"]["message_ref"]]
+                contents = json.loads(provider_message["body"]["content"])["zh_cn"]["content"]
+                assert f"[查看对应提问]({expected})" in contents[0][0]["text"]
+            else:
+                assert "查看对应提问" not in current["text"]
         restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
             runner=provider, cli_bin="lark-cli")
         for _ in range(3):
@@ -4608,6 +4640,64 @@ def test_app_long_input_feedback_uses_its_last_verified_post(ordinary):  # noqa:
                 if "Long App input" in json.dumps(message.get("body", {})) or "END_APP_INPUT" in json.dumps(message.get("body", {}))}
         last = next(ref for ref in refs if "END_APP_INPUT" in json.dumps(provider.messages[ref]))
         assert [entry for entry in provider.reaction_creates if entry[1] in refs] == [("notes-app", last, "Get")]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("question_parts", ["available", "empty", "missing_attempt"])
+def test_app_long_input_mirror_delivers_answer_when_question_parts_unavailable(ordinary, question_parts):  # noqa: F811
+    from loopx.extensions.lark.post_delivery import POST_PARTS_LOCATOR, _path
+
+    store, runtime, provider, transport, original, turns, before = _app_projection_journey(ordinary)
+    text = "Long App input with complete source.\n" * 900 + "END_APP_INPUT"
+    sid = original["session_id"]
+    try:
+        status, turn = ordinary[3](f"/api/chat/sessions/{sid}/turns",
+            {"message": text, "client_turn_id": f"long-app-mirror-{question_parts}"})
+        assert status == 202
+        assert runtime.wait_for_turn(session_id=sid, turn_id=turn["turn_id"], timeout_sec=10)["status"] == "completed"
+        _drain_app_projection(transport, lambda: any("END_APP_INPUT" in body for _, body in provider.writes[before:]))
+        refs = {ref for ref, message in provider.messages.items()
+                if "Long App input" in json.dumps(message.get("body", {})) or "END_APP_INPUT" in json.dumps(message.get("body", {}))}
+        last = next(ref for ref in refs if "END_APP_INPUT" in json.dumps(provider.messages[ref]))
+
+        question, answer = [message for message in store.messages(sid) if message["turn_id"] == turn["turn_id"]]
+        journal, = (transport.root / "web-projections").glob("*.json")
+        row = json.loads(journal.read_text())
+        question_key, answer_key = ("web." + message["message_id"] for message in (question, answer))
+        question_phase = row["deliveries"][question_key]
+        assert question_phase["verified"] and answer_key not in row["deliveries"]
+        link = "https://applink.feishu.cn/client/chat/open?openChatId=oc_notes_app&position=23"
+        provider.messages[last]["message_app_link"] = link
+        match = POST_PARTS_LOCATOR.fullmatch(question_phase["attempt"]["message_ref"])
+        assert match is not None
+        state_path = _path(transport.runtime_root, transport._inbox(row), match[1])
+        if question_parts == "empty":
+            state = json.loads(state_path.read_text())
+            state["delivery_parts"] = []
+            state_path.write_text(json.dumps(state))
+        elif question_parts == "missing_attempt":
+            state = json.loads(state_path.read_text())
+            state.pop("delivery_part_attempts", None)
+            state_path.write_text(json.dumps(state))
+        frozen_parts = state_path.read_bytes()
+        original_requests = ordinary[4].read_bytes()
+        writes = len(provider.writes)
+
+        _drain_app_projection(transport, lambda: json.loads(journal.read_text())["deliveries"].get(answer_key, {}).get("verified"))
+        phase = json.loads(journal.read_text())["deliveries"][answer_key]
+        expected = "**LoopX（App）**\n\n"
+        if question_parts == "available":
+            expected += f"[查看对应提问]({link})\n\n"
+        assert provider.writes[writes:] == [("notes-app", expected + answer["text"])]
+        assert phase.get("question_link") == (link if question_parts == "available" else None)
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        for _ in range(3):
+            restarted.reconcile()
+        assert len(provider.writes) == writes + 1
+        assert state_path.read_bytes() == frozen_parts
+        assert ordinary[4].read_bytes() == original_requests
     finally:
         runtime.close()
 
