@@ -126,7 +126,7 @@
     "loopx/extensions/lark/manager_returns.py": {
       "any_count": 0,
       "dict_any_count": 0,
-      "lines": 443
+      "lines": 500
     },
     "loopx/extensions/lark/presentation/explore_results.py": {
       "any_count": 45,
