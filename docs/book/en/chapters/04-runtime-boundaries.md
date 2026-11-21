@@ -150,7 +150,7 @@ A writeback may mark the vision unchanged only when all of the following hold:
   vision as the baseline automatically, so no separate revision is passed.
 
 If the baseline is missing but the agent still claims unchanged, quota will produce a
-`vision_checkpoint_missing` gap. a guard against the agent accumulating
+`vision_checkpoint_missing` gap. This is not a punishment, but a guard against the agent accumulating
 wrong assumptions on a never-checked state. For the full failure replay, see
 [Control-Plane Course Lesson 8](/loopx/docs/development/control-plane-course/08-evidence-refresh-and-self-repair/).
 

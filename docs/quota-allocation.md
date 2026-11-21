@@ -1205,7 +1205,10 @@ an external-evidence observation, or a due `continuous_monitor` todo selected
 by `work_lane_contract.obligation=attempt_due_monitor`. For due monitor todos,
 pass `--todo-id` or `--target-key` plus a public `--result-hash`; unchanged
 polls update `last_checked_at`, `next_due_at`, and
-`consecutive_no_change` without appending `quota_slot_spent`:
+`consecutive_no_change` without appending `quota_slot_spent`.
+For an `attempt_due_monitor` lane, a target key identifies the selected Todo.
+To observe another due Monitor claimed by the same Agent, supply its exact
+`--todo-id`. Existing User gates and Turn bindings still apply.
 
 ```bash
 loopx quota monitor-poll --goal-id <GOAL_ID> \

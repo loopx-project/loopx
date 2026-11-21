@@ -1077,8 +1077,8 @@ def test_held_complete_guard_checkpoint_binds_original_settlement_mode(tmp_path,
         block = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
         command = shlex.join(["/bin/bash", "-lc", block])
         original = _guard_cli_arguments(command, {"cli": str(cli), "turn_instance_id": TURN_ID})
-        assert "--complete-turn" in original and "--turn-envelope" not in original
-        observed = original if mode_matches else [word for word in original if word != "--complete-turn"]
+        assert "--complete-turn" not in original and "--turn-envelope" not in original
+        observed = original if mode_matches else [*original, "--complete-turn"]
         item = {"type": "commandExecution", "id": "pending-guard", "cwd": str(project),
                 "command": shlex.join(["/bin/bash", "-lc", shlex.join([str(cli), *observed])]),
                 "status": "failed", "exitCode": 137, "aggregatedOutput": None}
@@ -1092,6 +1092,7 @@ def test_held_complete_guard_checkpoint_binds_original_settlement_mode(tmp_path,
                     agent_id=AGENT_ID, turn_instance_id=TURN_ID,
                     deadline=time.monotonic() + 30) as held:
                 assert held["quota"]["ok"] is True and held["intent"]["capture"] is True
+                assert held["quota"]["schema_version"] == "loopx_turn_envelope_v1"
                 quota = held["quota"]["heartbeat_receipt"]
                 assert quota["turn_instance_id"] == TURN_ID
                 digest = hashlib.sha256(held["path"].read_bytes()).hexdigest()
@@ -1105,7 +1106,7 @@ def test_held_complete_guard_checkpoint_binds_original_settlement_mode(tmp_path,
                     assert result["sha256"] == captured["sha256"]
                     manifest = json.loads((point / "checkpoint.json").read_bytes())["point_metadata"]
                     stored = manifest["native_session"]["interrupted_guard"]
-                    assert stored["complete_turn"] is True and stored["turn_envelope"] is False
+                    assert stored["complete_turn"] is False and stored["turn_envelope"] is False
                     assert stored["turn_instance_id"] == TURN_ID and stored["native_call_id"] == item["id"]
                     assert stored["decision_sha256"] == digest
                     assert (point / "components" / manifest["held_decision_component_id"]).read_bytes() == held["path"].read_bytes()

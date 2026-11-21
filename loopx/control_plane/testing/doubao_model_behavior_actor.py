@@ -506,9 +506,12 @@ For phase=entry, derive the contract from the start-goal packet:
   infer this boolean from activation_allowed or the selected route.
 - host_loop_activation_after_todo_write: copy
   activation_required_after_todo_write from that activation object, else false.
-- requested_host_surface: copy the packet's top-level host_surface, including
-  null. Copy host_surface and activation_method from the activation object,
-  including null.
+- requested_host_surface: copy ONLY the packet's top-level host_surface
+  (including null).
+- host_surface and activation_method: copy ONLY from that activation object
+  (top-level host_loop_activation or command_pack.host_loop_activation),
+  never from the packet's top-level host_surface; return null when omitted or
+  null.
 - visible_goal_command_available: true exactly when
   activation.host_mutation.host_command is `/goal <task_body>`.
 - writes_now and spends_quota_now: copy the corresponding booleans from

@@ -123,6 +123,14 @@ test('setup preserves current and historical tokens without appending a second c
   }
 });
 
+test('help works when the installer is supplied on stdin', () => {
+  const installer = readFileSync(join(repo, 'install.sh'), 'utf8');
+  const result = spawnSync('bash', ['-s', '--', '--help'], { input: installer, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /--dry-run/);
+  assert.match(result.stdout, /--no-service/);
+});
+
 test('a dry run changes nothing', (t) => {
   const { run, read, home } = fixture(t);
   const r = run('--dry-run');

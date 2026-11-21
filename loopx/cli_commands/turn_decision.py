@@ -417,9 +417,20 @@ def current_turn_host_launch_decision(
     )
     # Reuse the existing side-effect-free Host route projection, including
     # delivery, user-gate and protocol checks. No plan/session is persisted.
+    host = getattr(args, "host", "generic-cli")
+    session_scope = (
+        getattr(args, "session_scope", None)
+        if host in {"codex-cli", "codex-app-server"}
+        and not getattr(args, "codex_operation_tools", False)
+        else "todo"
+    )
+    if host in {"codex-cli", "codex-app-server"} and identity.request_subject is not None:
+        session_scope = "agent"
     plan = build_loopx_turn_plan(
         current_contract, host=args.host, execution_mode=args.execution_mode,
         scheduler_owner=args.scheduler_owner, turn_instance_id=identity.turn_instance_id,
+        iteration_context_policy=getattr(args, "iteration_context", "resume"),
+        session_scope=session_scope,
         goal_ref=goal_ref, include_selected_work_basis=planned_selected_work_basis is not None,
     )
     route = plan["route"]

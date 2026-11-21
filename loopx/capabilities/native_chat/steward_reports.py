@@ -426,7 +426,8 @@ class StewardReports:
             rows = [row for row in StewardMonitor(self.controller).todos(actor) if row.get("target_key") == window["window_id"]]
         folder = attempt_directory(self.root, window)
         if len(rows) == 1 and (rows[0]["status"] == "done"
-                or rows[0]["status"] == "open" and (folder / "private-generation.json").exists()):
+                or rows[0]["status"] == "open" and ((folder / "private-generation.json").exists()
+                    or StewardTurnHost(self.controller).has_recoverable_stopped_report(actor, window, rows[0]))):
             StewardTurnHost(self.controller).recover_report_settlement(actor, window, rows[0])
             return None, False
         if len(rows) != 1 or rows[0]["status"] != "open":
@@ -438,7 +439,8 @@ class StewardReports:
         _, window = self.current_window(request["actor"]["goal_id"].removeprefix("steward-agent-"))
         if not window or window["window_id"] != request["report_window_id"]:
             raise ValueError("the admitted original report window is unavailable")
-        reader = getattr(adapter.session, "read_tool_handler", None)
+        reader = (getattr(adapter.session, "read_tool_handler", None)
+            if hasattr(adapter, "session") else getattr(adapter, "_steward_report_reader", None))
         if reader is None or not authorization_scope_id:
             raise ValueError("the original scoped report reader is unavailable")
         session = self.controller.store.load_session(request["actor"]["session_id"])
@@ -580,10 +582,11 @@ class ManagedSessionReports(StewardReports):
         subscription, window = self.current_window(session_id)
         if subscription is None:
             return None, False
-        if window and (attempt_directory(self.root, window) / "private-generation.json").exists():
+        if window:
             todo = next((row for row in StewardMonitor(self.controller).todos(actor)
                 if row.get("target_key") == window["window_id"]), None)
-            if todo:
+            if todo and ((attempt_directory(self.root, window) / "private-generation.json").exists()
+                    or StewardTurnHost(self.controller).has_recoverable_stopped_report(actor, window, todo)):
                 StewardTurnHost(self.controller).recover_report_settlement(actor, window, todo)
                 self.publish(session_id, window)
         return self._frontier(session_id, actor)

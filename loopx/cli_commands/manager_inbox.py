@@ -110,7 +110,11 @@ def _render_read_markdown(result: dict) -> str:
 
 def _read_markdown(result: dict, *, runtime_root: Path) -> tuple[str, bool]:
     """Deliver the already-recorded scoped read without repeating its effects."""
-    from ..control_plane.turn_driver.native_context_profile import NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES
+    from ..control_plane.turn_driver.native_context_profile import (
+        NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES,
+        NATIVE_CONTEXT_OUTPUT_ENV,
+        native_context_page_budget,
+    )
 
     limit = NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES
     view = _share_item_guidance(result)
@@ -135,8 +139,13 @@ def _read_markdown(result: dict, *, runtime_root: Path) -> tuple[str, bool]:
             path = Path(reference["path"])
             digest = reference["sha256"]
             reader_argv = current_loopx_cli_argv()
+            page_bytes, output_bytes = native_context_page_budget()
+            # Use the generated host declaration only for the captured reader.
+            # The Markdown opening also has to fit when no tool budget is known.
+            if os.environ.get(NATIVE_CONTEXT_OUTPUT_ENV) != str(output_bytes):
+                page_bytes = output_bytes = limit
             direct_command = context_capture_read_command(path, digest,
-                page_bytes=limit, max_page_output_bytes=limit, reader_argv=reader_argv)
+                page_bytes=page_bytes, max_page_output_bytes=output_bytes, reader_argv=reader_argv)
             opening = {"ok": True, "read_complete": False, "sha256": digest, "command": direct_command,
                 "instruction": "Run command to read this exact Inbox page; do not call manager-inbox read again for it. "
                     "Follow next_command through eof in UTF-8 byte-offset order. Compare each reported digest with "
@@ -154,7 +163,7 @@ def _read_markdown(result: dict, *, runtime_root: Path) -> tuple[str, bool]:
                     reader = None
                 if reader is not None:
                     short_command = context_capture_read_command(path, digest, reference_file=reader,
-                        page_bytes=limit, max_page_output_bytes=limit, reader_argv=reader_argv)
+                        page_bytes=page_bytes, max_page_output_bytes=output_bytes, reader_argv=reader_argv)
                     short_opening = _render_read_markdown({**opening, "command": short_command,
                         "recovery_command": direct_command,
                         "instruction": opening["instruction"] + " If the reader reference is unavailable or the "

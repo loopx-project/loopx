@@ -41,8 +41,8 @@ def test_explicit_ordinary_goal_capture_preserves_context_without_activation(tmp
     todo = cli('todo', 'add', '--goal-id', 'source', '--role', 'agent', '--claimed-by', 'researcher',
         '--task-class', 'advancement_task', '--text', 'Retain rejected candidate evidence.')['todo_id']
     actor = ['--goal-id', 'source', '--agent-id', 'researcher', '--todo-id', todo, '--turn-instance-id', 'captured-work']
+    lease = cli('task-lease', 'acquire', '--goal-id', 'source', '--todo-id', todo, '--owner', 'researcher', '--idempotency-key', 'source-work')['lease']
     cli('quota', 'should-run', *actor, '--runtime-profile', 'generic_cli', '--available-capability', 'shell')
-    cli('task-lease', 'acquire', '--goal-id', 'source', '--todo-id', todo, '--owner', 'researcher', '--idempotency-key', 'source-work')
     code = workspace / 'candidate.txt'
     code.write_text('7')
     from loopx.capabilities.explore.result_log import (
@@ -58,6 +58,7 @@ def test_explicit_ordinary_goal_capture_preserves_context_without_activation(tmp
     vision.write_text(json.dumps({'schema_version': 'goal_vision_replan_contract_v0', 'state': 'vision_patch_proposed',
         'vision_patch': {'acceptance_summary': 'Preserve rejected candidates and continue complete experiments.'}}))
     cli('refresh-state', *actor, '--classification', 'captured_research', '--delivery-outcome', 'outcome_progress',
+        '--task-lease-idempotency-key', lease['idempotency_key'], '--task-lease-expected-version', str(lease['version']),
         '--agent-vision-json', str(vision), '--no-global-sync', '--suppress-external-sinks')
     cli('quota', 'spend-slot', *actor, '--slots', '1', '--source', 'heartbeat', '--execute')
     pending = {'command': ''}

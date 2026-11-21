@@ -299,6 +299,19 @@ soft claim/hard lease 及历史反馈仅作上下文：保留独立验证的成�
 并验证重放无副作用及新捕获拒绝。这修复既有恢复合同，不新增 owner 或 activation；
 已安装 Host、其它后端及收益仍沿各自门禁。
 
+原生故障分配与外部 worker 的 Host 观测现在共用既有
+[`typed 故障 owner`](../../../loopx/control_plane/turn_driver/host_failure.ts)。
+Python 重试表及 worker 的成功／同会话／失败选择已退役。原生错误对象创建、
+Mapping 拒绝顺序、精确整数 IO、会话 ID 解码、轮询时钟及 pending-intent witness
+仍归原适配器。Host 成功观测只确认传输，不代表 Turn 完成、ACK 或扣额许可。
+自动重试资格仍窄于显式修复后的重试；仅本次调用的查询标记不增加配置或启用，
+省略／false 保留原显式查询语义。[原 worker 检查](../../../tests/test_external_scheduler_worker.py)、
+[边界检查](../../../tests/control_plane/test_host_failure_policy_transport.py)及
+[File/SQLite managed CLI](../../../tests/test_loopx_turn_managed_step.py)保持原会话重试、
+未知／其他会话／损坏结果、拒绝优先级、丢失响应恢复和一次重放结算。改变重试
+上限会使独立 SQLite CLI 观测失败。这是源码 checkpoint，不取得已安装 worker
+采用、剩余 C1/C4/C9 切换、产品组合或验收成果及完整成本资格。
+
 重放和新捕获断言现于恢复 fixture 内执行。此前测试更新将该块放在无证据测试中：
 恢复用例未执行这些断言，普通结算则因 fixture 名称未定义而失败。将既有断言块
 移回所属作用域恢复两类检查，不改变 runtime 逻辑。File/SQLite 恢复、无副作用
@@ -315,6 +328,28 @@ soft claim/hard lease 及历史反馈仅作上下文：保留独立验证的成�
 另经真实 TLS、受限角色、任务生命周期和只读 quota 观察验证，仍不准入普通
 host Turn。因此这些服务检查不能取得普通 PostgreSQL 反馈 Turn 资格，
 也不构成本切片新增执行 profile 的理由。
+
+**源码 checkpoint：产品执行观察读回（2026-11-19）。** 已保存结论现在复用
+Explore 的执行观察 codec，保留原方法、实际方法、改向原因、候选版本、成本和
+结果引用。结论页与历史页复用同一展开式读回；现有 Lark finding Summary 同步
+展示这些源事实，缺失测量保持未知。没有执行观察的结论保持原展示与投影，错误
+候选结果关联被拒绝，失效读取不能留下旧内容，有效来源可在原页面重试。
+隔离 File/SQLite HTTP 和打包浏览器检查覆盖这些路径及桌面/窄屏，读回不改变源
+状态或执行权限。这只交付产品传输与读回，包含
+[App 图示读回指南](../../../loopx/capabilities/explore/README.md#read-execution-evidence-in-the-app)，
+并用填充的合成记录分别捕获默认桌面/窄屏和展开详情。指南也说明旧保存结论读回
+遗漏的识别方式；已安装客户端的升级与读回仍未资格化。此源码 checkpoint
+不证明模型采用或方法收益；执行融合、
+跨任务采用、预测校准与可比预算结果仍开放。正式评测不阻塞独立的实现和迁移。
+
+**源码 checkpoint：无会话读回所有权（2026-11-20）。** 无会话捕获适配器通过
+`context_select` 将正常工作初始导航交给既有 TypeScript Progressive owner，
+Python 保留发布、字节预算与 fallback。仅用于本次调用的选项保留通用选择及其
+校验顺序。File/SQLite 捕获在后续认领后仍保留原 preparation 与结算事实；
+实际选中展示、关闭及摘要拒绝路径有不可变基线／当前候选对照。既有大 scope
+与 note 复用测试调用将原捕获的 lease proof 带入手动写回，保留分页、恢复和
+只结算一次的断言。这退役一个重复读回分类器；完整 C1/C4/C9 切换、已安装／
+原生采用及方法／成果收益仍开放。
 
 首个任务须确有反馈或方法选择需求。已有链完整时直接复用；有缺口时由真实消费者证明并修复，不为配合示例制造失败。运行实验、训练模型和发布过程各沿原权限，本文不占用其他 lane 配额或预设 PR 数。
 

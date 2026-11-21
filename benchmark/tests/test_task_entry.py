@@ -468,6 +468,7 @@ def test_prose_or_fabricated_todo_does_not_qualify_planning(planning_env):
 @pytest.mark.parametrize("producer", [None, "local_probe"])
 def test_planner_delivers_product_contract_and_only_opted_in_tool_context(planning_env, producer):
     from benchmark.runtime.planning import task_plan_packet
+    from benchmark.runtime.planning_batch import planning_batch_guidance
     from benchmark.runtime.research_probe import execution_observation_guidance
     from benchmark.runtime.worker import loopx_command
 
@@ -488,7 +489,8 @@ def test_planner_delivers_product_contract_and_only_opted_in_tool_context(planni
     packet = json.loads(body.split("Host-supplied planning checkpoint:\n", 1)[1])
     assert packet == before
     prefix = body.split("Host-supplied planning checkpoint:\n", 1)[0]
-    assert prefix.replace(execution_observation_guidance(), "").strip() == "$loopx"
+    assert prefix.count(planning_batch_guidance()) == 1
+    assert prefix.replace(execution_observation_guidance(), "").replace(planning_batch_guidance(), "").strip() == "$loopx"
     assert receipt["planning"]["input_digest"] == before["input_digest"]
     assert env["LOOPX_PHASE_DEADLINE_EPOCH"] == deadline
     assert not list(Path(env["LOOPX_PROJECT"]).iterdir())
@@ -1237,7 +1239,8 @@ def test_execute_wake_keeps_host_clocks_out_of_fresh_and_resumed_input(
         assert receipt["session"]["action"] == ("resume" if context == "resume" else "start_new")
         assert "turn_envelope" not in receipt
         assert receipt.get("complete_turn") is (True if complete else None)
-        assert ("--complete-turn" in body) is complete
+        assert "--complete-turn" not in body and "--turn-envelope" not in body
+        assert ("--decision-output-root" in body) is (complete or checkpoint_preflight)
         if checkpoint_preflight:
             original = Path(env["LOOPX_WAKE_LOG_DIR"]) / receipt["turn_id"] / "checkpoint-start-guard.json"
             assert json.loads(original.read_bytes())["schema_version"] == "loopx_turn_envelope_v1"

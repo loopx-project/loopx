@@ -360,6 +360,32 @@ def test_private_conversations_caches_historical_repairs_and_staggers_recovery_p
     assert all(160.0 <= value < 220.0 for value in deadlines)
 
 
+def _recovery_session_store(tmp_path: Path):
+    from loopx.chat_store import ChatSessionStore
+
+    return ChatSessionStore(tmp_path / "runtime", startup_maintenance=False)
+
+
+def _seed_recovery_inputs(store, session_id: str, turn_id: str) -> dict[str, Path]:
+    """Lay out Turn, session, and events files on the chat store paths."""
+    paths = {
+        "turn": store._turn_path(session_id, turn_id),
+        "session": store._session_path(session_id),
+        "events": store._event_path(session_id, turn_id),
+    }
+    paths["turn"].parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_json(paths["turn"], {"turn_id": turn_id, "status": "failed"})
+    _atomic_write_json(paths["session"], {"session_id": session_id, "status": "ready"})
+    paths["events"].write_text('{"kind":"turn.failed"}\n', encoding="utf-8")
+    return paths
+
+
+def _replace_recovery_input(path: Path, text: str) -> None:
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(text, encoding="utf-8")
+    os.replace(temporary, path)
+
+
 def test_reconcile_request_backs_off_repeated_noop_recovery_and_resets_on_change(tmp_path, monkeypatch):
     import zlib
     from loopx.extensions.lark import private_conversations as private
@@ -371,18 +397,21 @@ def test_reconcile_request_backs_off_repeated_noop_recovery_and_resets_on_change
     ext_dir.mkdir()
 
     ref = _hex_ref(42)
+    session_id = f"sess_{ref}"
+    turn_id = f"turn_{ref}"
     deliv_path = deliv_dir / f"{ref}.json"
     ext_path = ext_dir / f"{ref}.json"
     deliv_row = {
         "status": "delivered",
         "request_ref": ref,
-        "session_id": f"sess_{ref}",
-        "turn_id": f"turn_{ref}",
+        "session_id": session_id,
+        "turn_id": turn_id,
         "profile": "fixture",
         "event": {"message_id": f"om_{ref}"},
     }
     _atomic_write_json(deliv_path, deliv_row)
     _atomic_write_json(ext_path, {"request_ref": ref, "status": "accepted"})
+    store = _recovery_session_store(tmp_path)
 
     clock = [1000.0]
     monkeypatch.setattr(private, "time", SimpleNamespace(monotonic=lambda: clock[0]))
@@ -401,10 +430,11 @@ def test_reconcile_request_backs_off_repeated_noop_recovery_and_resets_on_change
     def fake_recover(_request_ref: str, **_kwargs):
         nonlocal noop_calls
         noop_calls += 1
-        return {"request_ref": ref, "status": "accepted", "turn_id": f"turn_{ref}", "delivery_verified": True}
+        return {"request_ref": ref, "status": "accepted", "turn_id": turn_id, "delivery_verified": True}
 
     transport.core = SimpleNamespace(
         root=ext_dir,
+        controller=SimpleNamespace(store=store),
         context_recovery_observer=lambda: lambda candidate_ref: candidate_ref == ref,
         context_recovery_candidate=lambda candidate_ref: candidate_ref == ref,
         recover_failed_request=fake_recover,
@@ -437,6 +467,100 @@ def test_reconcile_request_backs_off_repeated_noop_recovery_and_resets_on_change
     # Changing the external-request file resets backoff immediately on the next discovery.
     clock[0] += 5.0
     _atomic_write_json(ext_path, {"request_ref": ref, "status": "accepted", "updated": 1})
+    assert transport.pending_delivery_paths() == [deliv_path]
+
+
+def _noop_recovery_transport(tmp_path, monkeypatch):
+    from loopx.extensions.lark import private_conversations as private
+    from loopx.extensions.lark.private_delivery_discovery import PrivateDeliveryDiscovery
+
+    deliv_dir = tmp_path / "lark-private-deliveries"
+    ext_dir = tmp_path / "external-requests"
+    deliv_dir.mkdir()
+    ext_dir.mkdir()
+    ref = _hex_ref(42)
+    session_id = f"sess_{ref}"
+    turn_id = f"turn_{ref}"
+    deliv_path = deliv_dir / f"{ref}.json"
+    ext_path = ext_dir / f"{ref}.json"
+    _atomic_write_json(deliv_path, {
+        "status": "delivered",
+        "request_ref": ref,
+        "session_id": session_id,
+        "turn_id": turn_id,
+        "profile": "fixture",
+        "event": {"message_id": f"om_{ref}"},
+    })
+    _atomic_write_json(ext_path, {"request_ref": ref, "status": "accepted"})
+    store = _recovery_session_store(tmp_path)
+    inputs = _seed_recovery_inputs(store, session_id, turn_id)
+    clock = [1000.0]
+    monkeypatch.setattr(private, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(private, "record_event_timing", lambda *_a, **_kw: None)
+    transport = private.LarkPrivateConversations.__new__(private.LarkPrivateConversations)
+    transport.root = deliv_dir
+    transport.reaction_feedback = False
+    transport._context_recovery_probe_at = {}
+    transport._historical_image_probe_at = {}
+    transport._delivery_discovery = PrivateDeliveryDiscovery(deliv_dir)
+    transport._web_projection_paths = lambda: []
+    transport.core = SimpleNamespace(
+        root=ext_dir,
+        controller=SimpleNamespace(store=store),
+        context_recovery_observer=lambda: lambda candidate_ref: candidate_ref == ref,
+        context_recovery_candidate=lambda candidate_ref: candidate_ref == ref,
+        recover_failed_request=lambda _request_ref, **_kwargs: {
+            "request_ref": ref, "status": "accepted", "turn_id": turn_id, "delivery_verified": True,
+        },
+        recover=lambda **_kwargs: None,
+    )
+    return transport, deliv_path, ext_path, inputs, clock
+
+
+def _arm_noop_backoff(transport, deliv_path, clock):
+    assert transport.pending_delivery_paths() == [deliv_path]
+    assert transport.reconcile_request(deliv_path) == 0
+    clock[0] += 5.0
+    assert transport.pending_delivery_paths() == []
+
+
+def test_noop_recovery_backoff_resets_when_turn_session_or_events_change(tmp_path, monkeypatch):
+    transport, deliv_path, _ext_path, inputs, clock = _noop_recovery_transport(tmp_path, monkeypatch)
+
+    _arm_noop_backoff(transport, deliv_path, clock)
+    _replace_recovery_input(inputs["turn"], '{"turn_id":"changed","status":"failed","marker":"turn"}\n')
+    _arm_noop_backoff(transport, deliv_path, clock)
+    _replace_recovery_input(inputs["session"], '{"session_id":"changed","status":"ready","marker":"session"}\n')
+    _arm_noop_backoff(transport, deliv_path, clock)
+    _replace_recovery_input(inputs["events"], '{"kind":"turn.failed","marker":"events"}\n')
+    assert transport.pending_delivery_paths() == [deliv_path]
+
+
+def test_noop_recovery_backoff_does_not_pin_when_fingerprint_unavailable(tmp_path, monkeypatch):
+    import zlib
+    import loopx.capabilities.native_chat.file_discovery as discovery
+
+    transport, deliv_path, ext_path, _inputs, clock = _noop_recovery_transport(tmp_path, monkeypatch)
+    monkeypatch.setattr(discovery, "file_change_fingerprint", lambda _path: None)
+
+    assert transport.pending_delivery_paths() == [deliv_path]
+    assert transport.reconcile_request(deliv_path) == 0
+    assert transport._context_recovery_probe_at[deliv_path] == clock[0] + 60.0
+
+    clock[0] += 60.0
+    assert transport.pending_delivery_paths() == [deliv_path]
+    assert transport.reconcile_request(deliv_path) == 0
+    # Unavailable tokens are not an identity, so a second no-op stays on the 60s probe.
+    assert transport._context_recovery_probe_at[deliv_path] == clock[0] + 60.0
+    exponential = clock[0] + 120.0 + (zlib.crc32(deliv_path.name.encode("utf-8")) % 60)
+    assert transport._context_recovery_probe_at[deliv_path] < exponential
+
+    clock[0] += 5.0
+    _atomic_write_json(ext_path, {"request_ref": store_read_json(ext_path)["request_ref"], "status": "accepted", "updated": 1})
+    assert transport.pending_delivery_paths() == []
+
+    clock[0] += 55.0
+    assert clock[0] < exponential
     assert transport.pending_delivery_paths() == [deliv_path]
 
 

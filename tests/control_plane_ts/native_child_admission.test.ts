@@ -259,6 +259,37 @@ test("a retained binding cannot replace fresh same-Todo executable selection", a
   } finally {await rm(root, {recursive: true, force: true});}
 });
 
+test("one prepared Turn admits only renewal of its original lease generation", async () => {
+  const {root, identity, event} = await fixture();
+  try {
+    const originalDetails = {...event.details, prepared_lease_key_sha256: "a".repeat(64),
+      prepared_lease_version: 3, prepared_lease_epoch: 2};
+    const original = {...event, details: originalDetails};
+    const renewal = {...originalDetails, prepared_lease_version: 4};
+    assert.deepEqual(heartbeatWorkRequalification(original, renewal, identity, "open", false), {
+      append: true,
+      details: {...renewal, settlement_receipt_revision: "lease_readiness"},
+    });
+    for (const changed of [
+      {prepared_lease_epoch: 3},
+      {prepared_lease_key_sha256: "b".repeat(64)},
+      {prepared_lease_epoch: undefined},
+    ]) {
+      const replacement = Object.fromEntries(Object.entries({...renewal, ...changed})
+        .filter(([, value]) => value !== undefined));
+      assert.throws(() => heartbeatWorkRequalification(original, replacement, identity, "open", false),
+        /original task lease generation/);
+      assert.equal(heartbeatWorkRequalification(original, replacement, identity, "settlement_pending", false).append, false);
+      assert.equal(heartbeatWorkRequalification(original, replacement, identity, "open", true).append, false);
+    }
+    const {prepared_lease_epoch: _, ...historicalDetails} = originalDetails;
+    const historical = {...event, details: historicalDetails};
+    assert.equal(heartbeatWorkRequalification(historical, historicalDetails, identity, "open", false).append, false);
+    assert.throws(() => heartbeatWorkRequalification(historical, renewal, identity, "open", false),
+      /original task lease generation/);
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
 test("work requalification fails closed on binding and semantic guard conflicts", async () => {
   const {root, identity, event} = await fixture();
   try {

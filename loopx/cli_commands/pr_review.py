@@ -18,6 +18,7 @@ from ..capabilities.machine_configuration.builtins import (
     build_builtin_machine_configuration_registry,
 )
 from ..capabilities.machine_configuration.store import read_machine_configuration
+from ..capabilities.pr_review_queue.model_coverage import current_review_model_family
 from ..capabilities.pr_review_queue.result_check import check_review_result
 from ..capabilities.pr_review_queue.readiness_observation import (
     observation_key,
@@ -247,6 +248,7 @@ def handle_pr_review_command(
     if args.command != "pr-review":
         return None
     checkpoint_path: Path | None = None
+    execution: dict[str, Any] | None = None
     resolved_review_priority = DEFAULT_REVIEW_PRIORITY
     target_exact_heads = list(getattr(args, "target_exact_head", []) or [])
     readiness_observations: dict[str, dict[str, object]] = {}
@@ -491,6 +493,7 @@ def handle_pr_review_command(
         repository = args.repo
         source = "github_cli"
         reviewer_login = None
+        reviewer_model_family = None
         if args.fixture:
             repository_from_fixture, pull_requests, reviewer_login = load_pr_fixture(
                 Path(args.fixture).expanduser()
@@ -514,6 +517,10 @@ def handle_pr_review_command(
         else:
             repository = repository or resolve_current_github_repository()
             reviewer_login = resolve_current_github_login()
+            if goal_id and review_agent_id and reviewer_login:
+                execution = current_codex_execution_identity()
+                reviewer_model_family = current_review_model_family(execution)
+            scan_options = ci_options | ({"model_review_coverage": True} if reviewer_model_family else {})
             if args.autonomous_observation and not reviewer_login:
                 raise RuntimeError(
                     "authenticated GitHub reviewer identity is required for "
@@ -525,7 +532,7 @@ def handle_pr_review_command(
                 source_scan = scan_github_pull_request_targets(
                     repository=repository,
                     exact_heads=target_exact_heads,
-                    **ci_options,
+                    **scan_options,
                 )
                 source = "github_cli_exact_targets"
             else:
@@ -534,7 +541,7 @@ def handle_pr_review_command(
                     limit=max(1, args.limit) + 1,
                     state_filter=resolved_state_filter,
                     since=args.since,
-                    **ci_options,
+                    **scan_options,
                 )
             pull_requests = source_scan["pull_requests"]
         if readiness_observations:
@@ -599,6 +606,7 @@ def handle_pr_review_command(
             owner_logins=review_configuration.get("owner_logins", []),
             wait_for_ci=wait_for_ci,
             readiness_observations=readiness_observations,
+            reviewer_model_family=reviewer_model_family,
         )
         payload["request"]["goal_id"] = goal_id
         payload["request"]["review_configuration"] = review_configuration
@@ -685,10 +693,10 @@ def handle_pr_review_command(
             },
             "error": error,
         }
-    # Queue inventory does not need execution metadata. Bind the invoking
-    # session only when this packet actually asks a reviewer to execute work.
+    # Publish execution provenance only on packets that ask for work.
     if not args.fixture and any(item.get("review_action_kind") for item in payload.get("pull_requests", [])):
-        execution = current_codex_execution_identity()
+        if execution is None:
+            execution = current_codex_execution_identity()
         payload["reviewer_execution"] = execution
         if execution["status"] == "runtime_reported":
             for item in payload["pull_requests"]:

@@ -742,6 +742,15 @@ ordered by request id; restart without a cursor to find new requests sorted
 before the last position. Peer results retain their separate consumption flow
 and are not paginated by this cursor. `status --offset/--limit` remains separate.
 
+Large Markdown Inbox responses open with a reference to a private capture.
+The generated native context configuration declares
+`LOOPX_CONTEXT_PAGE_OUTPUT_BYTES=64000` for tools that can retain that size.
+The Inbox uses that profile for both capture reader commands and keeps the
+opening within 12,000 bytes. Without that declaration the reader also stays
+within 12,000 bytes. Follow the capture's byte cursors and verify coverage before
+using the Inbox cursor. If a reader output is truncated, reduce both page
+limits and recover the affected range of the same capture.
+
 After `acknowledge`, the request remains visible until the answer obligation is
 resolved. `pending.items` describes the current reply obligation: an ordinary
 conclusion resolves it, while an explicitly reported remainder keeps it open.

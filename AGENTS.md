@@ -19,7 +19,7 @@ Agent 团队的长程效果和长程效率：在可比预算下取得更好的�
 - **Governed continuation:** heartbeat, scheduling, quota and explicit stop/wait
   conditions decide when authorized work can continue.
 - **Peer collaboration:** claims, leases, scoped handoffs, dependent artifacts,
-  receiver adoption and result return.
+  receiver adoption and result return; a coordinator gains no implicit authority.
 - **Personal Workspace:** App/frontend, Lark and CLI expose conversations,
   settings, work, decisions, artifacts and readback over the same typed owners.
 - **Capabilities and extensions:** reusable engineering, research, knowledge,
@@ -168,7 +168,9 @@ Before staging non-trivial changes:
 
 Before approval or merge, read the repository-kept
 [merge workflow](skills/loopx-pr-merge/SKILL.md) and its
-[self-merge rules](skills/loopx-pr-merge/SKILL.md#self-merge-eligibility-and-benchmark-exceptions).
+[self-merge rules](skills/loopx-pr-merge/SKILL.md#self-merge-eligibility-and-benchmark-exceptions);
+installing it is optional and does not replace repository policy or the current
+capability-owned review.
 
 Control-plane, runtime and product surfaces (`loopx/**`, `apps/**`, `packages/**`,
 permissions/authority, persisted state/receipts, quota/scheduler/todo rules, and

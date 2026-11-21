@@ -440,10 +440,11 @@ def test_complete_turn_composition_failure_preserves_original_guard_and_recovers
     assert original_packet.get("schema_version") is None
     assert failed["heartbeat_receipt"]["settlement_identity"] == original_packet["heartbeat_receipt"]["settlement_identity"]
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0
+    page_bytes = min(8000, len(original) // 2)
     recovered_bytes, page_count = b"", 0
     while True:
         rc, page = _run_cli(registry, runtime, "quota", "context-read", "--capture-file", str(saved),
-            "--capture-sha256", hashlib.sha256(original).hexdigest(), "--page-bytes", "8000",
+            "--capture-sha256", hashlib.sha256(original).hexdigest(), "--page-bytes", str(page_bytes),
             "--max-page-output-bytes", "12000", "--offset", str(len(recovered_bytes)), cwd=project)
         assert rc == 0 and page["ok"], page
         assert page["offset"] == len(recovered_bytes)

@@ -6,8 +6,8 @@ from hashlib import sha256
 from pathlib import Path
 
 from ...heartbeat_prompt import build_heartbeat_prompt
-from ..quota.cli_projection import compact_quota_should_run_cli_payload
 from ..quota.effective_action import EffectiveAction
+from ..quota.turn_envelope import compose_turn_decision
 from .action_portfolio_scenarios import external_wait_fallback_scenario_source
 from .model_tool_behavior import DoubaoExecToolClient
 
@@ -47,7 +47,9 @@ def cases() -> list[dict]:
     } for name, work, notify, replan, action in rows]
     probes.append({
         "id": "wait_fallback_work",
-        "packet": compact_quota_should_run_cli_payload(external_wait_fallback_scenario_source()),
+        "packet": compose_turn_decision(
+            external_wait_fallback_scenario_source(), composed_settlement=True,
+        ),
         "expected": {"action": "work", "notify": True, "finish_goal": False},
     })
     return probes
@@ -83,9 +85,10 @@ def probe_messages(mode: str, packet: dict) -> list[dict]:
 def run_probe(client: DoubaoExecToolClient, *, repeats: int = 2) -> dict:
     if not 1 <= repeats <= 5:
         raise ValueError("repeats must be between 1 and 5")
+    probes = cases()
     results = []
     for mode in ("thin", "brief"):
-        for case in cases():
+        for case in probes:
             messages = probe_messages(mode, case["packet"])
             for attempt in range(repeats):
                 # Each repetition is independent; failed attempts are not

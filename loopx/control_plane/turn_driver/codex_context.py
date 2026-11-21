@@ -419,7 +419,7 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
                     previous = updated.get("host_execution_preparation")
                     ready = previous.get("ready_capture") if isinstance(previous, dict) else None
                     ready_digest = ready.get("sha256") if isinstance(ready, dict) else None
-                    if isinstance(ready_digest, str) and not previous.get("retired_context_readback") and any(
+                    if isinstance(previous, dict) and isinstance(ready_digest, str) and not previous.get("retired_context_readback") and any(
                         page.get("ok") is True
                         and ready_digest in (page.get("sha256"), page.get("source_sha256"))
                         for page in pages
@@ -559,12 +559,12 @@ def record_native_execution_preparation(
     event: dict[str, Any],
     *,
     source_sha256: str,
-    receipt: Mapping[str, Any],
+    receipt: Mapping[str, Any] | None,
 ) -> None:
-    """Record a ready receipt only while its source/session is still current."""
+    """Publish readiness, or retire a refused claim, for the same saved source."""
 
     if (directory is None or not native_context_event_eligible(event)
-            or receipt.get("event") != "host_execution_prepared"):
+            or (receipt is not None and receipt.get("event") != "host_execution_prepared")):
         return
     with _locked(directory) as root:
         state = _state(root)
@@ -576,6 +576,15 @@ def record_native_execution_preparation(
             or recovery.get("sha256") != source_sha256
         ):
             raise ValueError("execution-preparation source moved before receipt publication")
+        if receipt is None:
+            recovery.pop("execution_preparation", None)
+            try:
+                _save(root, state)
+            except (OSError, ValueError, TypeError, RecursionError):
+                # Keep the saved capture available without retaining an
+                # apparent claim attempt when the retirement cannot be saved.
+                _discard_recovery(root)
+            return
         request = recovery.get("execution_preparation")
         claim_source_sha256 = request.get("claim_source_sha256") if isinstance(request, dict) else None
         ready_capture = None
@@ -732,7 +741,7 @@ def _native_context_request(state: dict[str, Any], scope: dict[str, Any], captur
     if isinstance(target, dict) and target.get("capture_id") == capture_id:
         #  A retry may use
         # the original predecessor, but never this offer as its own baseline.
-        previous = previous.get("comparison_base")
+        previous = previous.get("comparison_base") if isinstance(previous, dict) else None
     if isinstance(previous, dict) and isinstance(previous.get("target"), dict):
         try:
             path, raw, payload = read_context_capture_file(previous["path"], previous["sha256"], private=True)
@@ -786,7 +795,7 @@ def _preserve_preparation_readback(state: dict[str, Any], recovery: dict[str, An
             or not isinstance(request, dict) or request.get("turn_instance_id") != previous.get("turn_instance_id")):
         return
     previous["retired_context_readback"] = {key: request[key]
-        for key in ("goal_id", "agent_id", "todo_id", "turn_instance_id", "authority_route") if key in request}
+        for key in ("goal_id", "agent_id", "todo_id", "turn_instance_id", "authority_route", "goal_ref") if key in request}
 
 
 def _retire_native_recovery_lookup(root: Path, state: dict[str, Any], *,
@@ -894,7 +903,7 @@ def _record_native_delivery(root: Path, state: dict[str, Any], result: dict[str,
             if pinned is not None:
                 reference, opening = pinned
                 state["pending"]["observed_first_read"] = reference
-                if opening is not None:
+                if opening is not None and read_plan is not None:
                     read_plan = {**read_plan, "observed_opening": opening}
         _save(root, state)
     if read_plan is None:
@@ -932,7 +941,12 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
         from .decision_capture import capture_progressive_context
 
         return NativeContextPreparation(capture_progressive_context(
-            payload, directory=capture_directory, surface=surface)[0])
+            payload,
+            directory=capture_directory,
+            surface=surface,
+            selection_command_args_template=selection_command_args_template,
+            captured_decision=captured_decision,
+        )[0])
     try:
         with _locked(directory) as root:
             recovery_committed = False

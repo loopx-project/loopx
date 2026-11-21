@@ -87,6 +87,16 @@ test('files and search work inside the demo threads', async () => {
   assert.ok(hits.some((h) => h.threadId === 'demo-dark-mode'));
 });
 
+test('demo files and previews resolve pictures with no prior workspace read', async () => {
+  const api = new DemoApi();
+  const picture = await api.threadFile('demo-dark-mode', 'preview-light.svg');
+  assert.equal(picture.type, 'image/svg+xml');
+  assert.match(await picture.text(), /<svg/);
+  assert.match((await api.previewLink('demo-dark-mode', 'preview-light.svg')).url, /^data:image\/svg\+xml;/);
+  assert.match((await api.previewLink('demo-dark-mode', 'index.html')).url, /^data:text\/html;/);
+  await assert.rejects(api.threadFile('demo-dark-mode', 'missing.svg'), DemoError);
+});
+
 test('the machines tab has demo data to read, whatever it filters', async () => {
   const api = demoApi();
   const day = await api.machineUsage(24);

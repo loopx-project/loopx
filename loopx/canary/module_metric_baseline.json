@@ -11,9 +11,8 @@
       "lines": 686
     },
     "loopx/bootstrap_command_pack.py": {
-      "any_count": 32,
-      "dict_any_count": 0,
-      "lines": 2240
+      "any_count": 26,
+      "dict_any_count": 0
     },
     "loopx/canary/planner.py": {
       "any_count": 22,
@@ -42,9 +41,6 @@
       "any_count": 5,
       "dict_any_count": 0
     },
-    "loopx/capabilities/issue_fix/pr_lifecycle.py": {
-      "lines": 2056
-    },
     "loopx/capabilities/reward_memory/utility_reducer.py": {
       "any_count": 0,
       "dict_any_count": 0,
@@ -64,17 +60,13 @@
       "any_count": 52,
       "dict_any_count": 0
     },
-    "loopx/chat_agent.py": {
-      "lines": 2047
-    },
     "loopx/chat_runtime.py": {
       "any_count": 29,
       "dict_any_count": 0
     },
     "loopx/chat_server.py": {
-      "any_count": 25,
-      "dict_any_count": 0,
-      "lines": 2058
+      "any_count": 16,
+      "dict_any_count": 0
     },
     "loopx/control_plane/agents/agent_lane_recommendation.py": {
       "any_count": 0,
@@ -158,8 +150,9 @@
       "dict_any_count": 0
     },
     "loopx/presentation/renderers/status_markdown.py": {
-      "any_count": 47,
-      "dict_any_count": 0
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1102
     },
     "loopx/quota.py": {
       "any_count": 0,

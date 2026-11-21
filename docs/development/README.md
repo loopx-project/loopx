@@ -88,15 +88,15 @@ issue or regression
   -> focused implementation
   -> focused tests, durable smoke, and catalog-selected canary (`loopx canary premerge`)
   -> Goal-bound exact-head review (`loopx pr-review --goal-id GOAL`, respecting `wait_for_ci=false` without polling remote CI)
-  -> immediate eligible self-merge or maintainer handoff
+  -> maintainer handoff by default (or separately authorized merge/self-merge)
   -> release outcome observation when needed
 ```
 
-通常闭环为：问题或回归 -> 确定性刻画 -> 聚焦实现 -> 单测、durable smoke 与 catalog 选择的 canary（`loopx canary premerge`）-> 绑定 Goal 的精确头评审（`loopx pr-review --goal-id GOAL`，遵守 `wait_for_ci=false`，不等待也不轮询远端 CI）-> 满足自合并资格时立即合并或交由维护者合入 -> 必要时观察发布结果。
+通常闭环为：问题或回归 -> 确定性刻画 -> 聚焦实现 -> 单测、durable smoke 与 catalog 选择的 canary（`loopx canary premerge`）-> 绑定 Goal 的精确头评审（`loopx pr-review --goal-id GOAL`，遵守 `wait_for_ci=false`，不等待也不轮询远端 CI）-> 默认交由维护者合入（或在另行取得授权时执行合入/自合并）-> 必要时观察发布结果。
 
-When the owning Goal sets `pull_request_review.wait_for_ci=false`, deterministic local checks plus Goal-bound exact-head review and readiness (`--registry <repo>/.loopx/registry.json --goal-id <goal>`) form the complete pre-merge gate; never wait for or poll asynchronous GitHub Actions CI before finishing review or eligible self-merge.
+When the owning Goal sets `pull_request_review.wait_for_ci=false`, deterministic local checks plus Goal-bound exact-head review and readiness (`--registry <repo>/.loopx/registry.json --goal-id <goal>`) remove remote CI waiting during review, readiness checks, or when a merge/self-merge is separately authorized; `wait_for_ci=false` and `ready=true` never grant merge authority or mean ready PRs auto-self-merge (leaving PRs open for maintainer handoff remains the default).
 
-当所属 Goal 配置了 `pull_request_review.wait_for_ci=false` 时，本地确定性验证加上显式绑定 Goal 的精确头评审与就绪检查（`--registry <repo>/.loopx/registry.json --goal-id <goal>`）即构成完整合入前门禁；不得为等待或轮询异步 GitHub Actions CI 而阻塞评审结论或符合条件的自合并。
+当所属 Goal 配置了 `pull_request_review.wait_for_ci=false` 时，本地确定性验证加上显式绑定 Goal 的精确头评审与就绪检查（`--registry <repo>/.loopx/registry.json --goal-id <goal>`）可在评审、就绪检查以及另行获授权执行合入或自合并时免除对远端异步 GitHub Actions CI 的等待或轮询；`wait_for_ci=false` 与 `ready=true` 均不授予合入权限，也不意味着就绪 PR 会自动自合并（默认仍保持开启并交由维护者处理）。
 
 ## Engineering Scope And Refactoring
 
@@ -303,9 +303,10 @@ and unknown model cost/adoption rather than inferring benefit from fewer bytes.
 日志和完整证据在核验、争议、重规划、收口等需要它们的环节展开。默认仍显示相关
 失败或过期信号；验收声明必须读取对应证据，索引和旧 Agent 结论不代替核验。
 入口指引保留核心义务，详细流程以明确触发条件链接，不急切加载全部文档/Skill。
-移动指导须保留主体、顺序、义务强度、范围、例外和停止条件；
+移动指导须保留主体、顺序、义务强度、范围、例外和停止条件；源文件更新不证明
+当前宿主已加载，也不证明模型实际遵从。
 
-产品侧按选择、继续执行、重规划区分需要的信息；
+产品侧按选择、继续执行、重规划区分需要的信息；`selected_todo` 不证明模型已选择。
 合格的已绑定任务接续可保留当前工作全文和其他候选的可发现入口，但不能在仍要求
 全读的接口外手动裁剪。范围 owner、必读指引、详情接口、实际输入及恢复绑定应一起
 替换；未交付正文不能进入保留基线，丢失上下文须恢复原决定而非重新准入。

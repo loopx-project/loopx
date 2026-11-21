@@ -94,11 +94,11 @@ function comparisonReadback() {
   return snapshot;
 }
 
-export async function startHistoryOwner(fixture, {workspaceDirectory = false} = {}) {
+export async function startHistoryOwner(fixture, {workspaceDirectory = false, provider = "sqlite", assetsDir} = {}) {
   const fixtures = Array.isArray(fixture) ? fixture : fixture ? [fixture] : [];
   const backendCommand = testPythonCommand(`
 import runpy
-sys.argv = ${JSON.stringify(["examples/personal-workspace-browser/research-history-backend.py", ...fixtures.flatMap(path => ["--fixture", path]), ...(workspaceDirectory ? ["--workspace-directory"] : [])])}
+sys.argv = ${JSON.stringify(["examples/personal-workspace-browser/research-history-backend.py", ...fixtures.flatMap(path => ["--fixture", path]), "--provider", provider, ...(assetsDir ? ["--assets-dir", assetsDir] : []), ...(workspaceDirectory ? ["--workspace-directory"] : [])])}
 runpy.run_path(sys.argv[0], run_name="__main__")
 `);
   const child = spawn(backendCommand.command, backendCommand.args,

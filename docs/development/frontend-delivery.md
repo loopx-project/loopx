@@ -16,7 +16,8 @@ the control plane or change the installed runtime.
 
 For owner-authorized reads of existing runtimes, shared access lives in
 `loopx.control_plane.status.goal_source`. Native status and Explore owners retain
-their semantics; Connection (`local` or a configured `ssh` alias) is independent of
+their semantics; this Python IO provider adds neither decisions nor lifecycle
+authority. Connection (`local` or a configured `ssh` alias) is independent of
 environment (`host` or a container pinned by its full physical id), so a remote
 container uses the same reader. It never starts a container, tunnel or worker.
 
@@ -149,6 +150,14 @@ questions. The focused reader supports exact-version links, reload, Back/Forward
 and unavailable-version recovery; missing versions never select the latest one
 silently. Plans and recorded adoption claims remain distinct from demonstrated
 subsequent action or benefit. Opening or switching records starts no analysis.
+The loaded-record reader also carries its open state, filters, display page and
+expanded entries through the existing research URL. Reading controls update the
+current history entry so Back/Forward can navigate between Goals and sources.
+Changing or clearing filters starts the new result list collapsed on its first
+page. Reload and Back/Forward restore saved selections within the same Goal and
+source. Missing group identities remain visibly unavailable. The native App
+keeps its own window-reopen preferences.
+
 The App and prepared workspace share `GET /api/chat/goal-source-strategies`;
 prepared readers also expose `/api/goal-source/strategies` and the existing
 source-read CLI's `strategies` operation. These reads retain physical namespace
@@ -588,7 +597,7 @@ order only, without changing Goal priority, lifecycle or execution.
 
 The existing TypeScript ordering functions remain the semantic owner. The
 Python presentation adapter validates and atomically stores the list under a
-file lock; Existing same-origin
+file lock; it is not a capability configuration namespace. Existing same-origin
 browser preferences migrate only when the durable source has no value. An old
 origin's inaccessible browser storage cannot be recovered automatically. Read
 or save failure keeps the current page usable and displays unsaved feedback;

@@ -24,7 +24,7 @@ export function isWithinWorkdirs(dir: string, workdirs: string[]): boolean {
 }
 
 /** Too wide to hand to an agent as a whole: the filesystem root, and a home directory itself. */
-function tooWide(dir: string): boolean {
+export function tooWide(dir: string): boolean {
   const target = real(dir);
   return target === sep || target === real(homedir());
 }
@@ -72,16 +72,28 @@ export class Workdirs {
     return this.roots().map((path) => ({ path, removable: !this.base.includes(path) }));
   }
 
-  /** Adds a directory from the page. Refuses what does not exist, what is already covered, and what is too wide. */
-  add(input: string): void {
-    if (!input || !isAbsolute(input)) throw new Error('give an absolute path');
+  /** Why {@link add} would refuse `input`, or null when it would take it; changes nothing. */
+  refusal(input: string): string | null {
+    if (!input || !isAbsolute(input)) return 'give an absolute path';
     const dir = resolve(input);
-    if (!existsSync(dir) || !statSync(dir).isDirectory()) throw new Error('no such directory');
-    if (tooWide(dir)) throw new Error('too wide: pick a project folder, not the root or a home directory itself');
-    if (isWithinWorkdirs(dir, this.roots())) throw new Error('already allowed');
+    if (!existsSync(dir) || !statSync(dir).isDirectory()) return 'no such directory';
+    if (tooWide(dir)) return 'too wide: pick a project folder, not the root or a home directory itself';
+    if (isWithinWorkdirs(dir, this.roots())) return 'already allowed';
+    return null;
+  }
+
+  /**
+   * Adds a directory from the page and returns a rollback for a larger operation that cannot
+   * complete. The in-memory list is restored too when persistence itself fails.
+   */
+  add(input: string): () => void {
+    const refused = this.refusal(input);
+    if (refused) throw new Error(refused);
+    const dir = resolve(input);
+    const previous = this.extra;
     // A new root that holds added ones takes their place.
-    this.extra = [...this.extra.filter((p) => !isWithinWorkdirs(p, [dir])), dir];
-    this.save();
+    this.commit([...this.extra.filter((p) => !isWithinWorkdirs(p, [dir])), dir]);
+    return () => this.commit(previous);
   }
 
   /** Removes a directory added from the page. The fixed ones stay. */
@@ -97,5 +109,17 @@ export class Workdirs {
     if (!this.file) return;
     mkdirSync(dirname(this.file), { recursive: true });
     writeFileSync(this.file, JSON.stringify(this.extra, null, 2) + '\n');
+  }
+
+  /** Publish and persist one list, restoring the previous in-memory view if the write fails. */
+  private commit(next: string[]): void {
+    const previous = this.extra;
+    this.extra = next;
+    try {
+      this.save();
+    } catch (err) {
+      this.extra = previous;
+      throw err;
+    }
   }
 }

@@ -523,7 +523,7 @@ class ChatSessionStore(ChatEventStreamMixin, ChatIngressStore):
                             and str(active.get("client_turn_id")).endswith(
                                 "-metadata-1" if metadata_review else "-review-1" if answer_review_admission else "-quota-1")))
                         or allocation["selection_policy"] != "flexible"
-                        or allocation["configured_endpoint"] != "antigravity"
+                        or allocation["configured_endpoint"] not in {"antigravity", "codex"}
                         or set(allocation["eligible_endpoints"]) != {"antigravity", "codex"}
                         or endpoint not in {"antigravity", "codex"} or endpoint == payload.get("agent_id")
                         or changes.get("executor_endpoint_id") != endpoint or allocation["executor_endpoint"] != endpoint
@@ -1313,13 +1313,25 @@ class ChatSessionStore(ChatEventStreamMixin, ChatIngressStore):
                 "delta_count", "sse_reconnect_count", "expires_at", "host_claim_id",
                 "completion_id", "loopx_execution", "loopx_request",
                 "collaboration_answer",
-                "native_context_preparation",
+                "native_context_preparation", "execution_dispatch",
             }
             unknown = set(changes) - allowed
             if unknown:
                 raise ValueError(f"unsupported chat turn fields: {sorted(unknown)}")
             if expected_statuses is not None and payload.get("status") not in expected_statuses:
                 return None
+            if "execution_dispatch" in changes:
+                previous = payload.get("execution_dispatch")
+                dispatch = changes["execution_dispatch"]
+                if (dispatch == "pending" and previous is None and payload.get("status") == "queued"
+                        and changes.get("status") == "starting"):
+                    # This is established in the same write that starts the worker.
+                    # Legacy records never acquire evidence about whether they dispatched.
+                    if payload.get("origin") != "lark" or not str(payload.get("client_turn_id") or "").startswith("external-"):
+                        changes.pop("execution_dispatch")
+                elif (dispatch != "committed" or previous not in {"pending", "committed"}
+                      or payload.get("status") not in {"starting", "running"} or "status" in changes):
+                    raise ValueError("invalid chat execution dispatch transition")
             if "native_context_preparation" in changes:
                 observation = changes["native_context_preparation"]
                 flags = {"native_checkpoint_requested", "working_checkpoint_available", "manager_context_migration",

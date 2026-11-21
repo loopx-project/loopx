@@ -12,7 +12,6 @@ import re
 import threading
 import time
 from enum import StrEnum
-from pathlib import Path
 
 import requests
 from sforge.harness.run_agent import _extract_archive_from_container

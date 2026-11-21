@@ -17,6 +17,7 @@ from ...public_safe_text import (
     REMOTE_LOCATION_SURFACE_PATTERN as REMOTE_LOCATION_SURFACE_PATTERN,
     SECRET_LIKE_SURFACE_PATTERN as SECRET_LIKE_SURFACE_PATTERN,
     find_public_safe_local_path as find_public_safe_local_path,
+    mask_http_url_paths as mask_http_url_paths,
 )
 
 NormalizeText = Callable[..., str]
@@ -145,9 +146,14 @@ def public_safe_compact_text(
     text = normalize(str(value or ""), limit=limit)
     if not text:
         return None
-    if local_path_surface_pattern.search(text) or secret_like_surface_pattern.search(
-        text
-    ):
+    local_path_text = (
+        mask_http_url_paths(text)
+        if local_path_surface_pattern is LOCAL_PATH_SURFACE_PATTERN
+        else text
+    )
+    if local_path_surface_pattern.search(
+        local_path_text
+    ) or secret_like_surface_pattern.search(text):
         return None
     return text
 

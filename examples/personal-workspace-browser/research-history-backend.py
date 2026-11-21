@@ -48,6 +48,7 @@ def materialize_analysis(source_root: Path, analysis: dict) -> Path:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--provider", choices=("file", "sqlite"), default="sqlite")
     parser.add_argument("--assets-dir", type=Path, help="Frozen packaged UI for before/after inspection.")
     parser.add_argument("--fixture", type=Path, action="append",
         help="Captured-event wrapper; repeat for independently selectable Goals.")
@@ -92,7 +93,7 @@ def main():
             log.parent.mkdir(parents=True)
             log.write_bytes("".join(json.dumps(event, ensure_ascii=False) + "\n" for event in capture["events"]).encode("utf-8"))
             initialize_canonical_authority(runtime, captured_goal, build_todo_runtime_shadow_projection(
-                goal_id=captured_goal, todos=capture.get("todos", []), handoff_mode="soft_claim"), state_path=state, provider="sqlite")
+                goal_id=captured_goal, todos=capture.get("todos", []), handoff_mode="soft_claim"), state_path=state, provider=args.provider)
             original.update({path: path.read_bytes() for path in (state, log)})
         registry = root / "registry.json"
         registry.write_text(json.dumps({"schema_version": 1, "common_runtime_root": str(runtime), "goals": goals}))

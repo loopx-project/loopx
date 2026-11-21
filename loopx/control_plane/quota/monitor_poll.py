@@ -50,10 +50,6 @@ class _NativeMonitorPollRejected(ValueError):
         self.diagnostic_code = diagnostic_code
 
 
-def _now_local() -> str:
-    return now_local_iso()
-
-
 def _mapping(value: object) -> Payload:
     return {str(key): entry for key, entry in value.items()} if isinstance(value, Mapping) else {}
 
@@ -254,6 +250,7 @@ def _decision_packet(
     registry_path: Path | None = None,
     runtime_root: Path | None = None,
     authorized_due_monitor_poll: bool | None = None,
+    todo_id_explicit: bool = False,
 ) -> Payload:
     before_dict = _mapping(before)
     agent_id = quota_decision_agent_id(before_dict)
@@ -266,6 +263,8 @@ def _decision_packet(
         todo_id=todo_id,
         target_key=target_key,
     )
+    if registry_due:
+        registry_due["todo_id_explicit"] = todo_id_explicit and todo_id is not None
     if authorized_due_monitor_poll is False:
         due_candidates = []
         registry_due = {}
@@ -477,7 +476,7 @@ def build_quota_monitor_poll_event(
             runtime_root=None,
             goal_id=goal_id,
             source=source,
-            generated_at=generated_at or _now_local(),
+            generated_at=generated_at or now_local_iso(),
             execute=False,
             expected_index_digest=None,
             turn_instance_id=normalized_turn_id,
@@ -804,7 +803,7 @@ def record_quota_monitor_poll_for_decision(
     *,
     goal_id: str,
     after_decision: Callable[[Payload], PayloadView],
-    render_markdown: Callable[[Payload], str],
+    render_markdown: Callable[[Payload], str] | None = None,  # Retained for existing callers.
     registry_path: Path | None = None,
     execute: bool = False,
     source: str = DEFAULT_SLOT_SPEND_SOURCE,
@@ -838,8 +837,8 @@ def record_quota_monitor_poll_for_decision(
     status_reloader: Callable[[], PayloadView] | None = None,
     goal_ref: PayloadView | None = None,
     recovery_effect_id: str | None = None,
+    todo_id_explicit: bool = True,
 ) -> Payload:
-    del render_markdown
     safe_todo_id, safe_target_key, safe_result_hash, normalized_turn_id = _normalized_poll_targets(
         todo_id=todo_id, target_key=target_key, result_hash=result_hash,
         turn_instance_id=turn_instance_id,
@@ -896,6 +895,7 @@ def record_quota_monitor_poll_for_decision(
         target_key=safe_target_key,
         registry_path=registry_path,
         runtime_root=runtime_root,
+        todo_id_explicit=todo_id_explicit,
     )
     if auxiliary_settlement_todo is not None:
         decision["auxiliary_settlement_todo"] = {
@@ -928,7 +928,7 @@ def record_quota_monitor_poll_for_decision(
         task_lease_idempotency_key=task_lease_idempotency_key,
         task_lease_expected_version=task_lease_expected_version,
     )
-    generated_at = _now_local()
+    generated_at = now_local_iso()
 
     def failure(reason: str, *, include_capability_retry: bool = False) -> Payload:
         payload = _monitor_poll_failure(

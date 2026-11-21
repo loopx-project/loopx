@@ -67,14 +67,20 @@ sets `pull_request_review.wait_for_ci=false`, callers pass `--registry` and
 `--goal-id GOAL` to `loopx pr-review` and `--check-merge-readiness`, resolving
 `ci_policy="not_consulted"` so local `pytest`/`ruff`/`mypy` checks,
 `loopx canary premerge --from-git-diff --git-diff-base "$PR_BASE_REF"`, and
-exact-head review complete merge readiness without waiting on or polling CI.
-Standalone or unconfigured callers keep the safe default `wait_for_ci=true`.
+exact-head review complete merge readiness without waiting on or polling remote CI
+once local gates pass. `ci_policy="not_consulted"` separates CI waiting from
+merge and self-merge authority: it never authorizes merging or auto-self-merging
+ready PRs, and the default remains leaving PRs open for maintainer/owner
+authorization. Standalone or unconfigured callers keep the safe default
+`wait_for_ci=true`.
 
 当本地确定性验证已完整通过时，远端 CI 作为异步安全兜底，而不应成为串行阻塞点。对于配置了
 `pull_request_review.wait_for_ci=false` 的受管 Goal，调用 `loopx pr-review` 与
 `--check-merge-readiness` 时须显式传入 `--registry` 与 `--goal-id GOAL`（解析为
-`ci_policy="not_consulted"`），以本地测试、`loopx canary premerge` 和精确头评审直接完成
-就绪判断与合入，不再等待或轮询远端 CI；未配置 Goal 的独立调用保持默认 `wait_for_ci=true`。
+`ci_policy="not_consulted"`），在本地测试、`loopx canary premerge` 与精确头评审等本地
+门禁通过后即可完成就绪判断，不再等待或轮询远端 CI。`ci_policy="not_consulted"` 仅控制
+CI 等待策略，合入与自合并授权仍保持独立：它不会自动批准或触发自合并，默认仍保持 PR 开启等待
+维护者或所有者授权；未配置 Goal 的独立调用保持默认 `wait_for_ci=true`。
 
 Tests first judge whether the state and rule are correct, then whether the
 implementation conforms. Expected outcomes come from an independently reviewed
@@ -451,7 +457,7 @@ the process exits and its parent reaps it. The ordinary restart action still
 uses serving-locator retirement.
 
 删除隔离目录前，调用 `restart_effect_runtime(wait_for_exit=True)` 并确认返回
-`stopped`。端口关闭或进程组长成为僵尸进程。
+`stopped`。端口关闭或进程组长成为僵尸进程，都不能证明其他线程已经退出。
 PID 仍存在时返回 `shutdown_pending`；保留目录，等进程退出并由父进程回收后再试。
 普通重启操作仍按服务 locator 的退役状态判断。
 
@@ -530,7 +536,8 @@ Windows 文件锁只在已观察到争用后，对独占创建返回的 `EPERM` 
 Smoke cleanup owns every valid runtime locator in its newly created private
 temporary namespace, including runtimes loaded by temporary base checkouts.
 It uses the existing authenticated shutdown protocol, then observes actual
-process exit before deleting the namespace; Namespace
+process exit before deleting the namespace; serving-locator turnover alone
+does not establish that Node has finished its exit-time cache writes. Namespace
 and locator symlinks are not followed. A cleanup failure retains the fixture
 and reports a failed check with the original command output. Operator restart
 keeps its existing serving-handoff semantics. This fixture repair does not
@@ -1290,7 +1297,8 @@ local-private; the workflow adds no profiler service or receipt gate.
 - **Locate the cost before selecting an abstraction.** Separate caller repeats,
   output/context expansion, process/bridge/serialization cost, shared semantic
   work, and backend IO/verification/contention. A display filter does not reduce
-  upstream work; Name the real consumer and measure its useful outcome.
+  upstream work; a short response or fast isolated query does not establish a
+  faster recovery loop. Name the real consumer and measure its useful outcome.
 - **Share contracts, qualify implementations.** Put common selection, bounded
   reads and observation reuse at the existing consumer/typed owner boundary.
   Preserve completeness, current authority, receipt replay and lease/CAS checks.
@@ -1321,12 +1329,13 @@ TS RFC 管语义 owner 与跨语言成本，shared-authority RFC 管后端容量
 沿用现有任务、PR 证据和验收记录，不增加审批、回执或无关里程碑前置条件。
 
 - **先定位成本。** 区分重复调用、输出与上下文展开、进程与序列化、公共语义计算、
-  后端 IO／校验／竞争。输出过滤不减少上游计算；
+  后端 IO／校验／竞争。输出过滤不减少上游计算；单次查询变快不等于恢复闭环变快。
 - **共用合同，分别验证实现。** 选择、有界读取和观测复用归现有调用方或 typed owner；
   保留完整性、当前权限、回执重放及 lease/CAS。缓存失效、索引和历史布局可以因后端
   而异，不能在 Python 复制权威，也不强造统一缓存。受影响后端遵循上文真实路径验证。
 - **迁移是待验证的原因。** 尽量控制操作、版本、数据与历史规模、配置、并发；按影响
-  区分冷／热读、多存储交替、写入与恢复。没有受控前后对照就披露不确定性；
+  区分冷／热读、多存储交替、写入与恢复。没有受控前后对照就披露不确定性；晋升成功
+  不证明长程延迟、容量和恢复等价。
 - **验证实际目标。** 检索用独立标注、歧义／无命中和语言边界验证；运行时优化保留原失败负载和语义／规模检查，预算按下节处理。
 - **区分缓解与闭环。** 写明消除了所属瓶颈，还是只减轻调用方影响；剩余真实缺口复用
   已有后续任务并指明验收。提示词缩短不算后端验证，修复 PR 数量不算默认切换就绪。
@@ -1452,7 +1461,7 @@ performance criteria, and does not qualify a model by itself.
 真实模型组合门的同一组三个 noisy fixture 现保留完整的 56 个 capability 候选及其
 正文。仅按上述实测把该合成 fixture 的 pretty-JSON UTF-8 字节预算从 40,000 调整到
 90,000；原超限失败保留。新增候选丢失/正文缩短的零模型调用负例，原选择、人工门禁、
-结算、重复次数、对照及生产硬边界不变；
+结算、重复次数、对照及生产硬边界不变；本次预算修正不等于真实模型通过。
 
 This allowance is not a target architecture. A source-level attribution at
 `d4980a0e9aa8acf8b847e2fec73d29454c23690d` reproduces those three output sizes.
@@ -1705,7 +1714,7 @@ Native progressive-context qualification found an existing default-output
 budget failure: immutable base `fb331f45c` and candidate `edbd56b14` both emit
 25,836 JSON characters for `quota_should_run/multi_agent` with the unchanged
 18-Todo, 3-Agent, 12-run fixture. Recursive comparison differs only in observation
-timestamps and the rollout event id. Preserve the previous 25,500-ceiling failure.
+timestamps and the rollout event id. Preserve the previous 25,500-ceiling failure;
 calibrate this one regression allowance to 26,500 (664 characters of headroom)
 without dropping fields. Markdown, line, semantic, bootstrap duplication,
 per-Todo/fixed growth and all other surface ceilings remain unchanged. This
@@ -2301,8 +2310,9 @@ explicit release qualification. It defaults to no calls; missing credentials
 report `skipped`, not a live pass. With securely injected `ARK_API_KEY`, it uses
 Doubao evolving for two independent repetitions of quiet-work, notifying-wait,
 quiet-wait, required-vision-replan and typed external-wait fallback cases in
-each mode. The fallback case uses the real compact quota projection: its wait
-transition already exists, so the host must advance the selected independent
+each mode. The fallback case composes the complete quota source through the
+shared TypeScript owner and reuses that checked instance in both modes. Its
+wait transition already exists, so the host must advance the selected independent
 successor and notify rather than authoring another transition. Expected
 decisions remain outside model input. All attempts must pass; no answer
 correction or retry-until-pass is used. Ordinary pytest only checks the probe
@@ -2313,8 +2323,9 @@ as separate evidence. Only hashes and pass/fail receipts are emitted, not raw
 prompts/responses. Model transport failures fail qualification rather than
 becoming environment skips.
 
-仅发布前显式执行，普通 CI 不调用模型。检查静默不等于空转、等待不能擅自执行、
-vision replan 未关闭时不能提前结束 Goal；
+回退场景使用完整 C1 来源，thin 与 brief 每批共享同一份已检查契约；原四个小型
+决策对照仍为合成输入。仅发布前显式执行，普通 CI 不调用模型。检查静默不等于空转、等待不能擅自执行、
+vision replan 未关闭时不能提前结束 Goal；这不是完整 Claude/Codex 行为验收的替代。
 
 ```bash
 # No provider call by default. Explicit release opt-in uses ARK_API_KEY from the environment.
