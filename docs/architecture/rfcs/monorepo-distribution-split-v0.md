@@ -4861,6 +4861,14 @@ view shows its independently checked result in the same conversation.
   positive prepared admission may explain the existing explicit administrative
   closeout and its separate current-control-writer requirement; bounded legacy
   evidence supports inspection only.
+- **Validated report checkpoint:** an open Todo with a consistent in-progress
+  journal, complete validation prefix and cached material result may continue
+  only its original durable writeback without a model. Compact inspection
+  binds the Goal, Agent, Todo, Turn and inspected key to the packet headers
+  and recorded passed task receipt. The executor's full result validation and
+  original saved-generation lease qualification still precede business effects.
+  Python transport accepts the old inspection shape or the strict paired
+  optional fields; it neither decides continuation nor supplies authority.
 - **Fresh native admission:** a new native Turn records its own genuine typed
   work admission before Host execution. The shared owner checks prior debt
   before preparation and rereads it with current CAS at publication. A saved

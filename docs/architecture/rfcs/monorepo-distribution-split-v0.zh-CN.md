@@ -3753,6 +3753,13 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
   health packet；检查不授予 execution 或行政写权限。现代 positive prepared
   admission 可以说明既有显式行政收尾及其独立的当前 control-writer 要求；
   有限 legacy 证据仅支持检查。
+- **已验证报告 checkpoint：**开放 Todo 的 in-progress journal 若一致、具备
+  完整 validation prefix 和缓存 material result，仅可在不调用模型的情况下
+  继续原 durable writeback。compact inspection 将 Goal、Agent、Todo、Turn
+  与被检查 key 绑定到 packet header 和已记录的 passed task receipt；业务
+  effect 前仍须通过 executor 完整结果验证和原 saved-generation lease 资格。
+  Python transport 仅接受旧 inspection shape 或严格成对的可选字段，不决定
+  continuation，也不提供权限。
 - **首次 native 准入：**新 native Turn 在 Host 执行前记录自己的真实 typed
   work admission。共享 owner 在 preparation 前检查原债务，并在 publication
   时连同当前 CAS 复读。saved candidate 仅提供内容证据，不能借原 Turn 的

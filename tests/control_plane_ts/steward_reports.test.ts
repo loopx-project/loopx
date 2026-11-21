@@ -3,6 +3,152 @@ import test from "node:test";
 import {planStewardReport} from "../../loopx/control_plane/collaboration/steward_reports.ts";
 import {admitManagedSessionIdentity, admitManagedSessionTurn, admitStewardManagedTurn, bindStewardManagedActor, observeManagedWork} from "../../loopx/control_plane/collaboration/steward_managed_mode.ts";
 import {resolveConversationScope} from "../../loopx/control_plane/collaboration/conversation_scope.ts";
+import {interpretTurnJournal, type TurnJournalInspectionRequest} from "../../loopx/control_plane/turn_driver/turn_journal.ts";
+
+type JsonObject = Record<string, unknown>;
+
+function localReportRecovery() {
+  const goal = {goal_id: "project", goal_instance_id: null, registered_agents: ["writer"], workspace_path: "/workspace"};
+  const session = {goal_id: goal.goal_id, goal_instance_id: null, session_id: "a".repeat(32),
+    channel_id: "agent.writer", session_mode: "managed_runtime", managed_agent_id: "writer", agent_id: "codex",
+    executor_endpoint_id: "codex", adapter_kind: "codex_app_server", managed_workspace_path: goal.workspace_path};
+  const actor = {schema_version: "loopx_managed_session_actor_v0", goal_id: goal.goal_id, goal_instance_id: null,
+    session_id: session.session_id, agent_id: "writer", workspace_path: goal.workspace_path};
+  const request = {operation: "native_turn", host: "codex-app-server", work_kind: "report", actor,
+    turn_instance_id: "managed-session.report.original", todo_id: "todo_report", validation_command: null,
+    report_window_id: "original-window", report_subscription_revision: "original-subscription"};
+  const window = {goal_id: goal.goal_id, agent_id: actor.agent_id, window_id: request.report_window_id,
+    subscription_revision: request.report_subscription_revision};
+  const todo = {todo_id: request.todo_id, target_key: window.window_id, action_kind: "generate_periodic_report",
+    claimed_by: actor.agent_id, status: "open"};
+  return {actor, request, todo, params: {session, goal, request, goal_active: true, queued_turn_count: 0,
+    report_window: window, report_todo: todo, report_subscription: {enabled: true, profile_preset: "weekly-progress",
+      route_ref: `managed-session:${session.session_id}`, effective_revision: request.report_subscription_revision}}};
+}
+
+function portfolioReportRecovery() {
+  const p = original();
+  const window = {window_id: "cadence_original", subscription_revision: "sha256:original",
+    goal_id: p.actor.goal_id, agent_id: p.actor.agent_id};
+  const request = {operation: "native_turn", host: "codex-app-server", actor: p.actor,
+    turn_instance_id: "report.cadence_original", todo_id: "todo_report", validation_command: ["validate"],
+    work_kind: "report", report_window_id: window.window_id, report_subscription_revision: window.subscription_revision};
+  const todo = {todo_id: request.todo_id, target_key: window.window_id, action_kind: "generate_periodic_report",
+    claimed_by: p.actor.agent_id, status: "open"};
+  return {actor: p.actor, request, todo, params: {...p, request, report_window: window, report_todo: todo,
+    report_subscription: {enabled: true, profile_preset: "portfolio-progress",
+      route_ref: `steward-private:${p.binding.binding_id}:${p.source}`, effective_revision: window.subscription_revision}}};
+}
+
+function pendingReportJournal(actor: JsonObject, todoId: string, turnInstance: string): TurnJournalInspectionRequest {
+  const goalId = actor.goal_id as string, agentId = actor.agent_id as string;
+  const key = "sha256:" + "d".repeat(64);
+  return {schema_version: "loopx_turn_journal_interpretation_request_v0",
+    goal_id: goalId, agent_id: agentId, turn_key: key,
+    journal: {schema_version: "loopx_turn_journal_v0", goal_id: goalId, turn_key: key,
+      status: "in_progress", completed_phases: ["host_execute", "typed_result", "validation"],
+      host_attempt_count: 1, result_kind: "validated_completion", validation_stage: "task_postcondition",
+      plan: {turn_envelope: {goal_id: goalId, agent_id: agentId, action: {selected_todo: {todo_id: todoId}}},
+        transaction: {turn_key: key, turn_instance_id: turnInstance,
+          settlement_plan: {schema_version: "quota_settlement_plan_v1", identity: {
+            schema_version: "quota_settlement_identity_v0", effect_id: `${goalId}:${agentId}:${todoId}:${turnInstance}`,
+            goal_id: goalId, agent_id: agentId, todo_id: todoId, turn_instance_id: turnInstance}}}},
+      host_result: {schema_version: "loopx_turn_result_v0", turn_key: key, result_kind: "validated_completion",
+        completed_phases: ["host_execute", "typed_result"], classification: "periodic_report_generation",
+        recommended_action: "Retain the original report.", next_action: "Read back the original report.",
+        delivery_batch_scale: "single_surface", delivery_outcome: "outcome_progress",
+        vision_unchanged_reason: "Keep the original reporting goal.", path_delta_mode: "unchanged",
+        summary: "private cached report body"},
+      task_validation: {schema_version: "loopx_turn_task_validation_v0", ok: true, status: "passed",
+        validator_kind: "callback", summary: "private validation details", recovery_kind: null, exit_code: null, errors: []}}};
+}
+
+for (const host of [
+  {name: "original managed Session", fixture: localReportRecovery, admit: admitManagedSessionTurn},
+  {name: "original portfolio Session", fixture: portfolioReportRecovery, admit: admitStewardManagedTurn},
+]) {
+  test(`${host.name} admits only the inspected validated checkpoint's no-model continuation`, () => {
+    const fixture = host.fixture();
+    for (const instance of [fixture.request.turn_instance_id, fixture.request.turn_instance_id + ".saved-candidate"]) {
+      const inspection = interpretTurnJournal(pendingReportJournal(fixture.actor, fixture.todo.todo_id, instance));
+      const input = {...fixture.params, report_settlement_recovery: inspection};
+      const before = structuredClone(input);
+      assert.equal(inspection.cached_validation_state?.turn_instance_id, instance);
+      assert.deepEqual(host.admit(input).actor, fixture.actor);
+      assert.equal(JSON.stringify(inspection).includes("private cached report body"), false);
+      assert.equal(JSON.stringify(inspection).includes("private validation details"), false);
+      assert.equal("current_task_lease_proof" in host.admit(input), false);
+      assert.deepEqual(input, before);
+    }
+  });
+
+  test(`${host.name} rejects mismatched, incomplete, mutating or model checkpoint recovery`, () => {
+    const fixture = host.fixture();
+    const inspection = interpretTurnJournal(pendingReportJournal(fixture.actor, fixture.todo.todo_id,
+      fixture.request.turn_instance_id + ".saved-candidate"));
+    const recovery = (input: JsonObject) => input.report_settlement_recovery as JsonObject;
+    const cached = (input: JsonObject) => recovery(input).cached_validation_state as JsonObject;
+    const decision = (input: JsonObject) => recovery(input).recovery_decision as JsonObject;
+    const effects = (input: JsonObject) => recovery(input).recorded_effects as JsonObject;
+    const invalid: Array<[string, (input: JsonObject) => void]> = [
+      ["wrong Goal", input => { cached(input).goal_id = "foreign-goal"; }],
+      ["wrong Agent", input => { cached(input).agent_id = "foreign-agent"; }],
+      ["wrong Todo", input => { cached(input).todo_id = "todo_other"; }],
+      ["foreign native Turn", input => { cached(input).turn_instance_id = "foreign-turn"; }],
+      ["missing inspected key", input => { delete recovery(input).turn_key; }],
+      ["different inspected key", input => { recovery(input).turn_key = "sha256:" + "a".repeat(64); }],
+      ["different packet key", input => { cached(input).turn_key = "sha256:" + "a".repeat(64); }],
+      ["missing cache state", input => { delete recovery(input).cached_validation_state; }],
+      ["nonmaterial packet", input => { cached(input).result_kind = "wait"; }],
+      ["non-string material kind", input => { cached(input).result_kind = ["validated_completion"]; }],
+      ["missing validation", input => { delete cached(input).task_validation; }],
+      ["unpassed validation", input => { (cached(input).task_validation as JsonObject).status = "not_required"; }],
+      ["invalid receipt", input => { (cached(input).task_validation as JsonObject).ok = false; }],
+      ["wrong receipt schema", input => { (cached(input).task_validation as JsonObject).schema_version = "unverified"; }],
+      ["Goal mismatch", input => { recovery(input).goal_matches = false; }],
+      ["owner mismatch", input => { recovery(input).owner_matches = false; }],
+      ["key mismatch", input => { recovery(input).turn_key_matches = false; }],
+      ["inconsistent journal", input => { recovery(input).journal_consistent = false; }],
+      ["wrong journal status", input => { recovery(input).journal_status = "failed"; }],
+      ["missing phase prefix", input => { delete recovery(input).completed_phases; }],
+      ["wrong phase", input => { recovery(input).completed_phases = ["host_execute", "validation", "typed_result"]; }],
+      ["already written phase", input => { recovery(input).completed_phases = ["host_execute", "typed_result", "validation", "durable_writeback"]; }],
+      ["cannot continue", input => { decision(input).can_continue = false; }],
+      ["missing continue fact", input => { delete decision(input).can_continue; }],
+      ["different resume phase", input => { decision(input).resume_from = "validation"; }],
+      ["different recovery action", input => { decision(input).action = "return_existing"; }],
+      ["Host replay", input => { decision(input).reinvoke_host = true; }],
+      ["Host not observed", input => { effects(input).host_invoked = false; }],
+      ["Host unknown", input => { effects(input).host_invoked = null; }],
+      ["state already written", input => { effects(input).state_written = true; }],
+      ["state unknown", input => { effects(input).state_written = null; }],
+      ["quota already spent", input => { effects(input).quota_spent = true; }],
+      ["quota unknown", input => { effects(input).quota_spent = null; }],
+      ["scheduler acknowledged", input => { effects(input).scheduler_acknowledged = true; }],
+      ["scheduler unknown", input => { effects(input).scheduler_acknowledged = null; }],
+      ["model context", input => { input.preparing_model_context = true; }],
+    ];
+    for (const [name, change] of invalid) {
+      const input: JsonObject = structuredClone({...fixture.params, report_settlement_recovery: inspection});
+      change(input);
+      assert.throws(() => host.admit(input), name);
+    }
+    for (const [name, change] of [
+      ["missing cached packet", (journal: JsonObject) => { delete journal.host_result; }],
+      ["invalid packet schema", (journal: JsonObject) => { (journal.host_result as JsonObject).schema_version = "unverified"; }],
+      ["invalid packet kind", (journal: JsonObject) => { (journal.host_result as JsonObject).result_kind = "unverified"; }],
+      ["different packet key", (journal: JsonObject) => { (journal.host_result as JsonObject).turn_key = "sha256:" + "a".repeat(64); }],
+      ["missing actual validation", (journal: JsonObject) => { delete journal.task_validation; }],
+      ["contradictory actual validation", (journal: JsonObject) => { (journal.task_validation as JsonObject).errors = ["not passed"]; }],
+    ] as Array<[string, (journal: JsonObject) => void]>) {
+      const raw = pendingReportJournal(fixture.actor, fixture.todo.todo_id, fixture.request.turn_instance_id);
+      change(raw.journal);
+      const corrupted = interpretTurnJournal(raw);
+      assert.equal(corrupted.cached_validation_state, undefined, name);
+      assert.throws(() => host.admit({...fixture.params, report_settlement_recovery: corrupted}), name);
+    }
+  });
+}
 
 test("a managed work identity is registration-bound and never chosen from the executor or legacy history", () => {
   const goal = {goal_id: "project", goal_instance_id: "original", registered_agents: ["writer", "reviewer"], workspace_path: "/workspace"};
