@@ -362,8 +362,7 @@ class ManagedSessionTurn:
     def _original_task_entry(self, session_id: str) -> dict[str, Any]:
         """Observe the existing creation/validation owners without any effects.
 
-        Native
-        submit still rechecks current admission and every validation source.
+        Native submit still rechecks current admission and every validation source.
         """
         from ...control_plane.effect_runtime import effect_runtime_result
         from ...control_plane.goals.acceptance import inspect_goal_acceptance

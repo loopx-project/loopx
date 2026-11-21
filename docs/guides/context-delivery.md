@@ -12,8 +12,7 @@ benchmark heartbeat callers when no machine preference is saved. Saved or explic
 off disables it; ordinary CLI, other hosts and unsupported platforms inherit full
 delivery.
 
-The
-complete C1 caller migration and long-horizon cost/outcome qualification remain
+The complete C1 caller migration and long-horizon cost/outcome qualification remain
 open. Broad default adoption and old-path retirement need the evidence below.
 
 - To understand a work session, start with [the example](#one-task-four-situations).

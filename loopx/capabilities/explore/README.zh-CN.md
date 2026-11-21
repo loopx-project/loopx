@@ -58,7 +58,7 @@
 `measurement_context` 对象。写入前会展开成原有完整记录，不保存可变上下文引用。
 观测重复填写比较字段（即使值相同）、上下文字段缺失或多余都会在记录前拒绝。
 原有完整条目格式继续可用。复用声明不认证可比性；任务、数据、评测器、模型或预算
-改变时另选上下文，条件未知时保持分开。
+改变时另选上下文，条件未知时保持分开。此便捷输入不授予评测、纠正或执行权限。
 
 比较条件与候选、单次结果分别记录：
 
@@ -154,13 +154,13 @@ loopx explore worker-branch-plan --goal-id <id> --harness-profile adaptive-resil
 两个门控相互独立且默认关闭（见下文“每 goal 独立 Opt-In 门控”）。以下是详细契约。
 当已闭环、有证据的多个面之间存在显式理由需要组合验证时，下一次 `quota should-run` / turn packet 会投影 composition gap，并可衍生 joint experiment 后继 todo（见下文“Composition Frontier”）。
 
-长程探索目标（例如通过 LoopX 研究某个外部软件领域的 Codex loop）产生的结果，operator 希望读成**拓扑**。
+长程探索目标（例如通过 LoopX 研究某个外部软件领域的 Codex loop）产生的结果，operator 希望读成**拓扑**：探索过什么、循环卡在哪里以及为什么、发现了什么。
 
 ## 角色边界
 
 一句话概括：
 
-- **Explore 能力（本层）** 拥有结构化探索**证据**：紧凑、public-safe、append-only 的 node/edge/finding/blocked-frontier 日志，以及有界读模型投影。因此日志位于 `loopx/capabilities/explore/`。
+- **Explore 能力（本层）** 拥有结构化探索**证据**：紧凑、public-safe、append-only 的 node/edge/finding/blocked-frontier 日志，以及有界读模型投影。下游消费者首先是 vision checkpoint、replan、后继 todo 生成和 user gate，其次才是展示，因此日志位于 `loopx/capabilities/explore/`。
 - **展示（Presentation）** 把 public-safe 探索投影渲染成 operator 界面（Mermaid 图、飞书/Lark Base 行、卡片）。可复用展示实现位于 `loopx.extensions.lark.presentation.explore_results`；核心不保留 Lark 能力外观。兼容 CLI 委托在调用 provider 所属展示行为前必须显式激活扩展。
 - **Value connectors** 仍是外部信号输入、权限和来源权威的边界。Lark 探索 sink 仅用于展示，绝不可与 connector 混为一谈。
 
