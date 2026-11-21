@@ -1176,6 +1176,38 @@ describe('same-session LoopX driver', () => {
     await driver.dispose()
   })
 
+  it('activates on the DSH 0.2.2 tool-role result shape and still rejects its error results', async () => {
+    // Shape recorded by DSH 0.2.2-rc.3: role "tool", call id and error flag on the message, text content.
+    const toolRoleResult = (callId: string, isError = false): SessionEvent => sessionEvent('tool/result', {
+      turn: 0,
+      step: 0,
+      message: {
+        id: randomUUID(),
+        role: 'tool',
+        toolCallId: callId,
+        isError,
+        content: [{ type: 'text', text: '<skill_content name="loopx">' }],
+        source: { kind: 'tool', callId },
+      },
+    })
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const driver = makeDriver(fixture)
+
+    driver.observeAgent(host.agent)
+    publishEvent(driver, host, modelSkillCallEvent('failed-load', '{"name":"loopx"}'))
+    publishEvent(driver, host, toolRoleResult('failed-load', true))
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+    expect(fixture.calls).toHaveLength(0)
+
+    publishEvent(driver, host, modelSkillCallEvent('call-loopx', '{"name":"loopx"}'))
+    publishEvent(driver, host, toolRoleResult('call-loopx'))
+    await waitFor(() => host.nextTurn.length === 1)
+
+    expect(fixture.heartbeatCalls).toBe(1)
+    await driver.dispose()
+  })
+
   it('injects reviewed Reward Memory guidance into the admitted task body', async () => {
     const fixture = runnerFixture({
       rewardMemoryGuidance: 'Reuse the verified exact-readback sequence.',

@@ -349,11 +349,18 @@ function foldActivationEvent(
   const block = Array.isArray(content) && content.length === 1
     ? record(content[0])
     : undefined
-  const successful = source?.kind === 'tool'
-    && message?.role === 'user'
+  // DSH 0.2.2 records a tool result as a tool-role message whose call id and
+  // error flag sit on the message; older hosts used a user-role message
+  // carrying one tool-result block. Accept both.
+  const legacyResult = message?.role === 'user'
     && block?.type === 'tool-result'
     && block.toolCallId === callId
     && (block.isError === undefined || block.isError === false)
+  const toolRoleResult = message?.role === 'tool'
+    && message.toolCallId === callId
+    && (message.isError === undefined || message.isError === false)
+  const successful = source?.kind === 'tool'
+    && (legacyResult || toolRoleResult)
     && data?.error === undefined
   if (matched && successful) {
     projection.activated = true
