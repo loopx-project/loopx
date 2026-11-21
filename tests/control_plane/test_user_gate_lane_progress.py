@@ -579,3 +579,44 @@ def test_acked_human_gate_advances_despite_unrelated_historical_host_failure(
     assert next_app["stateful_backoff"]["progression_index"] == 1
     assert next_app["recommended_rrule"] == "FREQ=MINUTELY;INTERVAL=60"
     assert next_app["stateful_backoff"]["apply_needed"] is True
+
+
+@pytest.mark.parametrize("gate_action_kind", ["approve_benchmark_run", "request_credential", "", None])
+def test_runtime_capability_repair_skips_owner_gate_and_empty_action_kinds(
+    gate_action_kind: str | None,
+) -> None:
+    status = _runtime_recovery_gate_status()
+    item = status["attention_queue"]["items"][0]
+    user_items = [dict(entry, action_kind=gate_action_kind) for entry in item["user_todos"]["items"]]
+
+    repair = build_runtime_capability_user_gate_repair_hint(
+        user_todo_summary={"open_count": len(user_items), "items": user_items},
+        agent_todo_summary=item["agent_todos"],
+        user_todo_source_items=user_items,
+        agent_todo_source_items=item["agent_todos"]["items"],
+        agent_id=AGENT_ID,
+        available_capabilities=["shell", "filesystem_write", "network", "benchmark_runner"],
+    )
+    assert repair is None
+
+
+@pytest.mark.parametrize("gate_action_kind", ["provision_sandbox", "修复本地端点"])
+def test_runtime_capability_repair_accepts_non_owner_and_cjk_action_kinds_without_word_bag(
+    gate_action_kind: str,
+) -> None:
+    status = _runtime_recovery_gate_status()
+    item = status["attention_queue"]["items"][0]
+    user_items = [dict(entry, action_kind=gate_action_kind) for entry in item["user_todos"]["items"]]
+
+    repair = build_runtime_capability_user_gate_repair_hint(
+        user_todo_summary={"open_count": len(user_items), "items": user_items},
+        agent_todo_summary=item["agent_todos"],
+        user_todo_source_items=user_items,
+        agent_todo_source_items=item["agent_todos"]["items"],
+        agent_id=AGENT_ID,
+        available_capabilities=["shell", "filesystem_write", "network", "benchmark_runner"],
+    )
+    assert repair is not None
+    assert repair["trigger"] == "runtime_capability_user_gate_overreach"
+    assert repair["gate_todo_id"] == "todo_restore_runtime"
+    assert repair["target_todo_id"] == "todo_runtime_recovery"

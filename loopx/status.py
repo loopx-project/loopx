@@ -280,21 +280,6 @@ EVENT_LEDGER_EVIDENCE_CLASSIFICATIONS = {
     "needs_more_read_only_evidence",
     "read_only_project_map",
 }
-EVENT_LEDGER_EVIDENCE_HINTS = (
-    "artifact",
-    "blocker",
-    "ci",
-    "data",
-    "deploy",
-    "done",
-    "eval",
-    "evidence",
-    "failure",
-    "fail",
-    "metric",
-    "monitor",
-    "validation",
-)
 
 
 RUN_COMPACT_FIELDS = RUN_BASE_COMPACT_FIELDS
@@ -1238,7 +1223,6 @@ def build_status_runtime_summary_context() -> StatusRuntimeSummaryContext:
         run_has_external_evidence_watch_signal=run_has_external_evidence_watch_signal,
         decision_classifications=EVENT_LEDGER_DECISION_CLASSIFICATIONS,
         evidence_classifications=EVENT_LEDGER_EVIDENCE_CLASSIFICATIONS,
-        evidence_hints=EVENT_LEDGER_EVIDENCE_HINTS,
         state_classifications=EVENT_LEDGER_STATE_CLASSIFICATIONS,
         promotion_readiness_classifications=PROMOTION_READINESS_CLASSIFICATIONS,
         add_promotion_readiness_freshness=add_promotion_readiness_freshness,

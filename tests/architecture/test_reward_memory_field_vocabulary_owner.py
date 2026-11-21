@@ -10,16 +10,15 @@ vocabulary                          owner                             also state
 ``_REASONING_FIELDS``               ``reward_memory/scoped_feedback.py:42``  ``issue_fix/reward_memory.py:68``
 ``_GUARD_FIELDS``                   ``reward_memory/scoped_feedback.py:43``  ``issue_fix/reward_memory.py:69``
 ``_SCOPE_FIELDS``                   ``reward_memory/memory_utility.py:76``   ``reward_memory/utility_reducer.py:42``
-``TOKEN_PATTERN``                   ``explore/todo_branch_plan.py:46``       ``explore/worker_branch_plan.py:279``
 ``_REPO_PATTERN``                   ``issue_fix/repository_snapshot.py:19``  ``issue_fix/repository_commit_evidence.py:15``
 =================================  ==================================  ====================
 
 Owner choice is evidence, not taste.  ``issue_fix/reward_memory.py`` already
 imports five names from ``..reward_memory.*``, and ``scoped_feedback.py`` is the
 module that declares the event schema those field sets gate.
-``utility_reducer.py:19`` and ``worker_branch_plan.py:33`` each *already import
-from the module whose constant they restated* -- the strongest form of the
-"duplicate knowledge" case in this repository's own #4447 rule.
+``utility_reducer.py:19`` *already imports from the module whose constant it
+restated* -- the strongest form of the "duplicate knowledge" case in this
+repository's own #4447 rule.
 ``repository_snapshot.py`` builds and stamps the ``repo`` field, while
 ``repository_commit_evidence.py`` only checks a declared one against it.
 
@@ -54,7 +53,6 @@ from types import ModuleType
 
 import pytest
 
-from loopx.capabilities.explore import todo_branch_plan, worker_branch_plan
 from loopx.capabilities.issue_fix import pr_description
 from loopx.capabilities.issue_fix import repository_commit_evidence as commit_evidence
 from loopx.capabilities.issue_fix import repository_snapshot
@@ -94,12 +92,6 @@ SET_DECISIONS: dict[str, tuple[frozenset[str], str, ModuleType, list[tuple[str, 
 }
 
 PATTERN_DECISIONS: dict[str, tuple[str, str, ModuleType, list[tuple[str, ModuleType]]]] = {
-    "TOKEN_PATTERN": (
-        r"[A-Za-z0-9_:\-]{3,}",
-        "loopx/capabilities/explore/todo_branch_plan.py",
-        todo_branch_plan,
-        [("loopx/capabilities/explore/worker_branch_plan.py", worker_branch_plan)],
-    ),
     "_REPO_PATTERN": (
         r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",
         "loopx/capabilities/issue_fix/repository_snapshot.py",
@@ -332,18 +324,6 @@ def test_repo_shape_is_checked_by_the_producer_and_the_verifier() -> None:
     assert str(refused.value) == "repo must use owner/name"
     assert commit_evidence._REPO_PATTERN is repository_snapshot._REPO_PATTERN
     assert not commit_evidence._REPO_PATTERN.fullmatch("loopx-project/loopx/two")
-
-
-def test_tokenizer_and_worker_share_one_token_rule() -> None:
-    """The bound and the character class are the rule; both files must read one copy."""
-
-    tokens = todo_branch_plan._tokenize("sync loopx_core:v2 across agents")
-    assert {"sync", "across", "agents", "loopx_core:v2"} == tokens
-    assert todo_branch_plan._tokenize("ab cd") == set()  # the {3,} bound, not the class
-    assert todo_branch_plan._tokenize("abc de") == {"abc"}
-    assert worker_branch_plan.TOKEN_PATTERN is todo_branch_plan.TOKEN_PATTERN
-    assert worker_branch_plan.TOKEN_PATTERN.findall("ab") == []
-    assert worker_branch_plan.TOKEN_PATTERN.findall("abc") == ["abc"]
 
 
 def test_architecture_field_contracts_are_a_different_question() -> None:

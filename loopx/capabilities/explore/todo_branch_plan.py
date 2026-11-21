@@ -1,17 +1,20 @@
 from __future__ import annotations
 
-import re
-from typing import Any, Mapping, Sequence
+from typing import AbstractSet, Any, Mapping, Sequence
 
 from ...control_plane.todos.contract import (
     TODO_STATUS_OPEN,
     TODO_TASK_CLASS_ADVANCEMENT,
     TODO_TASK_CLASS_MONITOR,
+    normalize_explore_result_node_refs,
     normalize_required_capabilities,
     normalize_required_write_scopes,
+    normalize_target_capabilities,
+    normalize_todo_capability_binding_ref,
     normalize_todo_claimed_by,
     normalize_todo_id,
     normalize_todo_status,
+    normalize_todo_task_domain,
 )
 from ...control_plane.todos.todo_semantics import (
     todo_item_is_actionable_open,
@@ -43,31 +46,72 @@ from .todo_evidence import build_todo_typed_evidence_audit
 TODO_BRANCH_PLAN_SCHEMA_VERSION = "loopx_explore_todo_branch_plan_v0"
 DEFAULT_BRANCH_WIDTH = 3
 MAX_BRANCH_WIDTH = 8
-TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_:\-]{3,}")
 SHARED_DEPENDENCY_CAPABILITY_PREFIXES = (
     "shared_artifact:",
     "shared_implementation:",
 )
 
 
-def _tokenize(value: Any) -> set[str]:
-    return {match.group(0).lower() for match in TOKEN_PATTERN.finditer(str(value or ""))}
+def _add_typed_ref(refs: set[str], prefix: str, value: Any) -> None:
+    if normalized := str(value or "").strip().lower():
+        refs.add(f"{prefix}:{normalized}")
 
 
-def _frontier_tokens(projection: Mapping[str, Any] | None) -> set[str]:
-    tokens: set[str] = set()
+def _collect_item_typed_refs(
+    refs: set[str],
+    item: Mapping[str, Any],
+    *,
+    node_values: Sequence[Any],
+    capability_values: Sequence[Any],
+) -> None:
+    for value in node_values:
+        _add_typed_ref(refs, "node", value)
+    _add_typed_ref(refs, "target", item.get("target_key") or item.get("scope_key"))
+    _add_typed_ref(refs, "binding", normalize_todo_capability_binding_ref(item.get("capability_binding_ref")))
+    _add_typed_ref(refs, "domain", normalize_todo_task_domain(item.get("task_domain")))
+    for value in capability_values:
+        _add_typed_ref(refs, "capability", value)
+
+
+def _frontier_refs(projection: Mapping[str, Any] | None) -> frozenset[str]:
+    """Extract typed structured frontier/stuck reference keys from explore projection."""
+
+    refs: set[str] = set()
     if not isinstance(projection, Mapping):
-        return tokens
+        return frozenset(refs)
     for lane in ("frontier", "stuck"):
         for item in projection.get(lane) or []:
             if not isinstance(item, Mapping):
                 continue
-            tokens.update(_tokenize(item.get("node_id")))
-            tokens.update(_tokenize(item.get("title")))
-            tokens.update(_tokenize(item.get("summary")))
-            for tag in item.get("tags") or []:
-                tokens.update(_tokenize(tag))
-    return tokens
+            caps = [
+                v
+                for k in ("required_capabilities", "target_capabilities", "capabilities", "tags")
+                if isinstance(vals := item.get(k), (list, tuple, set))
+                for v in vals
+            ]
+            _collect_item_typed_refs(refs, item, node_values=(item.get("node_id"),), capability_values=caps)
+    return frozenset(refs)
+
+
+def _todo_frontier_refs(item: Mapping[str, Any]) -> frozenset[str]:
+    """Extract typed structured frontier reference keys from a Todo item."""
+
+    refs: set[str] = set()
+    raw_nodes = (
+        item.get("explore_result_node_refs")
+        or item.get("result_node_refs")
+        or item.get("frontier_node_ids")
+        or item.get("node_refs")
+    )
+    caps: list[Any] = [
+        *normalize_required_capabilities(item.get("required_capabilities")),
+        *normalize_target_capabilities(item.get("target_capabilities")),
+        *(vals if isinstance(vals := item.get("tags"), (list, tuple, set)) else ()),
+    ]
+    _collect_item_typed_refs(
+        refs, item, node_values=normalize_explore_result_node_refs(raw_nodes), capability_values=caps,
+    )
+    return frozenset(refs)
 
 
 def _compact_text(value: Any, *, limit: int = 240) -> str:
@@ -109,7 +153,7 @@ def _branch_score(
     item: Mapping[str, Any],
     *,
     agent_id: str | None,
-    frontier: set[str],
+    frontier: AbstractSet[str],
 ) -> tuple[float, list[str], list[str]]:
     reason_codes: list[str] = []
     hazards: list[str] = []
@@ -164,8 +208,7 @@ def _branch_score(
     if capabilities:
         reason_codes.append("declared_capabilities")
 
-    text_tokens = _tokenize(item.get("text")) | _tokenize(item.get("title"))
-    overlap = sorted(text_tokens & frontier)
+    overlap = sorted(_todo_frontier_refs(item) & frontier)
     if overlap:
         score += min(12.0, 2.5 * len(overlap))
         reason_codes.append("explore_frontier_overlap")
@@ -339,7 +382,7 @@ def build_explore_todo_branch_plan(
     if gate["state"] == GATE_STATE_DISABLED:
         return _disabled_todo_branch_plan(goal_id=goal_id, agent_id=normalized_agent, gate=gate)
     normalized_width = int(gate["effective_width"])
-    frontier = _frontier_tokens(projection)
+    frontier = _frontier_refs(projection)
 
     candidates: list[dict[str, Any]] = []
     for item in todos:

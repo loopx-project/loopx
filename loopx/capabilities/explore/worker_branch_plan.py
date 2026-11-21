@@ -2,12 +2,16 @@ from __future__ import annotations
 
 from copy import deepcopy
 import re
-from typing import Any, Mapping, Sequence
+from typing import AbstractSet, Any, Mapping, Sequence
 
 from ...control_plane.todos.contract import (
     TODO_TASK_CLASS_MONITOR,
+    normalize_todo_action_kind,
+    normalize_todo_capability_binding_ref,
     normalize_todo_claimed_by,
     normalize_todo_id,
+    normalize_todo_task_domain,
+    normalize_todo_task_repository,
 )
 from .harness_gate import (
     GATE_STATE_ANALYSIS_ONLY,
@@ -33,14 +37,13 @@ from .speculative_scheduler import (
 from .todo_branch_plan import (
     DEFAULT_BRANCH_WIDTH,
     MAX_BRANCH_WIDTH,
-    TOKEN_PATTERN,
     _branch_confidence,
     _branch_expected_evidence_units,
     _branch_score,
     _candidate_readiness,
     _claim_command,
     _compact_text,
-    _frontier_tokens,
+    _frontier_refs,
     _execution_exclusion,
     _required_capabilities,
     _required_write_scopes,
@@ -230,55 +233,6 @@ WORKER_HARNESS_PROFILES: dict[str, dict[str, Any]] = {
     },
 }
 
-COMMON_TOPIC_TOKENS = {
-    "add",
-    "after",
-    "agent",
-    "against",
-    "and",
-    "audit",
-    "before",
-    "between",
-    "branch",
-    "build",
-    "check",
-    "codex",
-    "continue",
-    "current",
-    "deliver",
-    "existing",
-    "explore",
-    "fix",
-    "from",
-    "goal",
-    "inspect",
-    "into",
-    "latest",
-    "loopx",
-    "new",
-    "next",
-    "one",
-    "p0",
-    "p1",
-    "p2",
-    "recent",
-    "review",
-    "run",
-    "test",
-    "the",
-    "then",
-    "this",
-    "through",
-    "todo",
-    "update",
-    "validate",
-    "when",
-    "while",
-    "with",
-    "without",
-}
-
-
 def worker_harness_profile_names() -> tuple[str, ...]:
     return tuple(sorted(WORKER_HARNESS_PROFILES))
 
@@ -325,20 +279,6 @@ def _resolve_todo_bundle_ceiling(
     return max(1, min(MAX_TODOS_PER_WORKER_BRANCH, default_ceiling)), False, "profile_default"
 
 
-def _ordered_topic_tokens(value: Any) -> list[str]:
-    """Return meaningful topic tokens in their original textual order."""
-
-    tokens: list[str] = []
-    seen: set[str] = set()
-    for match in TOKEN_PATTERN.finditer(str(value or "")):
-        token = match.group(0).lower()
-        if token in COMMON_TOPIC_TOKENS or token in seen:
-            continue
-        seen.add(token)
-        tokens.append(token)
-    return tokens
-
-
 def _scope_family(scope: str) -> str:
     clean = str(scope or "").replace("\\", "/").strip()
     for marker in ("/**", "/*"):
@@ -363,9 +303,16 @@ def _affinity_key(candidate: Mapping[str, Any]) -> str:
     ]
     if capabilities:
         return f"capability:{str(capabilities[0]).strip()}"
-    tokens = _ordered_topic_tokens(candidate.get("text"))
-    if tokens:
-        return f"topic:{tokens[0]}"
+    for prefix, raw_value in (
+        ("target", candidate.get("target_key") or candidate.get("scope_key")),
+        ("binding", candidate.get("capability_binding_ref")),
+        ("domain", candidate.get("task_domain")),
+        ("action", candidate.get("action_kind")),
+        ("repo", candidate.get("task_repository")),
+    ):
+        value = str(raw_value or "").strip().lower()
+        if value:
+            return f"{prefix}:{value}"
     return "topic:general"
 
 
@@ -383,7 +330,7 @@ def _todo_candidate(
     item: Mapping[str, Any],
     *,
     agent_id: str | None,
-    frontier: set[str],
+    frontier: AbstractSet[str],
 ) -> dict[str, Any] | None:
     todo_id = normalize_todo_id(item.get("todo_id"))
     if not todo_id:
@@ -419,6 +366,16 @@ def _todo_candidate(
         "claim_bucket": _claim_bucket(item, agent_id=agent_id),
         "source_index": item.get("index"),
     }
+    if target_key := str(item.get("target_key") or item.get("scope_key") or "").strip():
+        candidate["target_key"] = target_key
+    if binding_ref := normalize_todo_capability_binding_ref(item.get("capability_binding_ref")):
+        candidate["capability_binding_ref"] = binding_ref
+    if task_domain := normalize_todo_task_domain(item.get("task_domain")):
+        candidate["task_domain"] = task_domain
+    if action_kind := normalize_todo_action_kind(item.get("action_kind")):
+        candidate["action_kind"] = action_kind
+    if task_repo := normalize_todo_task_repository(item.get("task_repository")):
+        candidate["task_repository"] = task_repo
     candidate["affinity_key"] = _affinity_key(candidate)
     return candidate
 
@@ -499,7 +456,7 @@ def _branch_candidate(
         "branch_id": branch_id,
         "todo_id": branch_id,
         "affinity_key": affinity_key,
-        "objective_slice": affinity_key.removeprefix("scope:").removeprefix("capability:").removeprefix("topic:"),
+        "objective_slice": affinity_key.partition(":")[2] or affinity_key,
         "todo_ids": todo_ids,
         "todo_bundle": todo_bundle,
         "required_write_scopes": write_scopes,
@@ -616,7 +573,7 @@ def _build_worker_branch_candidates(
     router_state: Mapping[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     normalized_agent = normalize_todo_claimed_by(agent_id)
-    frontier = _frontier_tokens(projection)
+    frontier = _frontier_refs(projection)
     todo_candidates = [
         candidate
         for item in todos
