@@ -1082,6 +1082,75 @@ test('import: a failed import leaves the workdirs as they were; hidden directori
   }
 });
 
+test('import: a workdir save failure creates no thread and can be retried', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'loochat-test-import-retry-'));
+  const outside = join(base, 'outside');
+  const workdirsFile = join(base, 'workdirs.json');
+  mkdirSync(outside);
+  // A directory at the file path makes the durable workdir write fail.
+  mkdirSync(workdirsFile);
+  const sessionId = 'outside-retry';
+  const adapter = {
+    id: 'stub', capabilities: { history: true },
+    listSessions: async () => [{ id: sessionId, cwd: outside, title: 'Retry me' }],
+    loadHistory: async () => [{ text: 'Retry me', images: [], events: [] }],
+    resumeCommand: () => 'stub --resume',
+  } as unknown as AgentAdapter;
+  const dirs = new Workdirs([workdir], workdirsFile);
+  const m = new ThreadManager(store, new Map([['stub', adapter]]), dirs, new AttachmentStore(dataDir));
+  try {
+    await assert.rejects(
+      () => m.importSession({ agent: 'stub', sessionId, addDirectory: true }),
+      /EISDIR|illegal operation on a directory/i,
+    );
+    assert.deepEqual(m.workdirsConfig().workdirs, [workdir]);
+    assert.equal(store.findThreadByAgentSession('stub', sessionId), null);
+
+    rmSync(workdirsFile, { recursive: true, force: true });
+    const imported = await m.importSession({ agent: 'stub', sessionId, addDirectory: true });
+    assert.equal(imported.cwd, outside);
+    assert.deepEqual(m.workdirsConfig().workdirs, [workdir, outside]);
+    assert.deepEqual(JSON.parse(readFileSync(workdirsFile, 'utf8')), [outside]);
+  } finally {
+    await m.shutdown();
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('import: a thread transaction failure restores the newly saved workdir', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'loochat-test-import-rollback-'));
+  const outside = join(base, 'outside');
+  const workdirsFile = join(base, 'workdirs.json');
+  mkdirSync(outside);
+  const localData = mkdtempSync(join(tmpdir(), 'loochat-test-import-store-'));
+  const localStore = new Store(localData);
+  const sessionId = 'outside-rollback';
+  const adapter = {
+    id: 'stub', capabilities: { history: true },
+    listSessions: async () => [{ id: sessionId, cwd: outside, title: 'Rollback me' }],
+    loadHistory: async () => [{ text: 'Rollback me', images: [], events: [] }],
+  } as unknown as AgentAdapter;
+  const dirs = new Workdirs([workdir], workdirsFile);
+  const m = new ThreadManager(localStore, new Map([['stub', adapter]]), dirs, new AttachmentStore(localData));
+  const transaction = localStore.transaction;
+  localStore.transaction = () => { throw new Error('thread transaction failed'); };
+  try {
+    await assert.rejects(
+      () => m.importSession({ agent: 'stub', sessionId, addDirectory: true }),
+      /thread transaction failed/,
+    );
+    assert.deepEqual(m.workdirsConfig().workdirs, [workdir]);
+    assert.deepEqual(JSON.parse(readFileSync(workdirsFile, 'utf8')), []);
+    assert.equal(localStore.findThreadByAgentSession('stub', sessionId), null);
+  } finally {
+    localStore.transaction = transaction;
+    await m.shutdown();
+    localStore.close();
+    rmSync(base, { recursive: true, force: true });
+    rmSync(localData, { recursive: true, force: true });
+  }
+});
+
 test('import: sessions the agent already has are listed from every existing directory', async () => {
   const outside = mkdtempSync(join(tmpdir(), 'loochat-test-outside-'));
   try {

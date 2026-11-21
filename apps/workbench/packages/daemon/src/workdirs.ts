@@ -82,14 +82,18 @@ export class Workdirs {
     return null;
   }
 
-  /** Adds a directory from the page. Refuses what does not exist, what is already covered, and what is too wide. */
-  add(input: string): void {
+  /**
+   * Adds a directory from the page and returns a rollback for a larger operation that cannot
+   * complete. The in-memory list is restored too when persistence itself fails.
+   */
+  add(input: string): () => void {
     const refused = this.refusal(input);
     if (refused) throw new Error(refused);
     const dir = resolve(input);
+    const previous = this.extra;
     // A new root that holds added ones takes their place.
-    this.extra = [...this.extra.filter((p) => !isWithinWorkdirs(p, [dir])), dir];
-    this.save();
+    this.commit([...this.extra.filter((p) => !isWithinWorkdirs(p, [dir])), dir]);
+    return () => this.commit(previous);
   }
 
   /** Removes a directory added from the page. The fixed ones stay. */
@@ -105,5 +109,17 @@ export class Workdirs {
     if (!this.file) return;
     mkdirSync(dirname(this.file), { recursive: true });
     writeFileSync(this.file, JSON.stringify(this.extra, null, 2) + '\n');
+  }
+
+  /** Publish and persist one list, restoring the previous in-memory view if the write fails. */
+  private commit(next: string[]): void {
+    const previous = this.extra;
+    this.extra = next;
+    try {
+      this.save();
+    } catch (err) {
+      this.extra = previous;
+      throw err;
+    }
   }
 }

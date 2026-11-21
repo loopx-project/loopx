@@ -629,8 +629,9 @@ export class ThreadManager {
    *
    * A session outside the workdirs is imported only with `addDirectory`, which the person's own
    * import click sets: its directory then becomes a workdir, as if added from the page (a home
-   * directory or the root itself is refused as too wide). The directory is checked first and
-   * added only once the thread exists, so a failed import leaves the workdirs as they were.
+   * directory or the root itself is refused as too wide). The directory and thread are committed
+   * as one recoverable operation: either failure restores the previous workdirs and leaves no
+   * importable thread.
    * Imports nobody clicked, such as the LoopX Goal sync, never widen where threads may work.
    */
   async importSession(input: { agent?: unknown; sessionId?: unknown; addDirectory?: boolean }): Promise<ThreadView> {
@@ -658,19 +659,25 @@ export class ThreadManager {
       const title = (summary.title || turns[0]?.text || '').split('\n')[0].trim().slice(0, 60) || '导入的会话';
       const permissionMode = 'auto_edit'; // the same default a new thread gets
       const id = randomUUID();
+      let undoWorkdir: (() => void) | null = null;
+      let threadCommitted = false;
 
-      // Images are files, written before the database work so a failure there leaves nothing half-done.
-      const images: StoredAttachment[][] = turns.map((turn) => {
-        if (turn.images.length === 0) return [];
-        try {
-          return this.attachments.save(id, turn.images.slice(0, MAX_IMAGES)).stored;
-        } catch {
-          return []; // an image the hub would not accept is left out; the text still comes across
-        }
-      });
-
-      const events: StoredEvent[] = [];
       try {
+        // Publish the durable root before creating its thread, and keep the undo until the thread
+        // transaction commits. A save failure therefore cannot report success or leave a retry 409.
+        if (outside) undoWorkdir = this.dirs.add(summary.cwd);
+
+        // Images are files, written before the database work so a failure there leaves nothing half-done.
+        const images: StoredAttachment[][] = turns.map((turn) => {
+          if (turn.images.length === 0) return [];
+          try {
+            return this.attachments.save(id, turn.images.slice(0, MAX_IMAGES)).stored;
+          } catch {
+            return []; // an image the hub would not accept is left out; the text still comes across
+          }
+        });
+
+        const events: StoredEvent[] = [];
         this.store.transaction(() => {
           this.store.createThread({ id, agent, cwd: summary.cwd, title, permissionMode, model: null, effort: null });
           this.store.updateThread(id, { agentSessionId: sessionId, hubTurnAt: new Date().toISOString() });
@@ -684,16 +691,31 @@ export class ThreadManager {
             add(turnId, 'turn.done', { stopReason: 'end_turn', imported: true });
           });
         });
+        threadCommitted = true;
+        for (const ev of events) for (const l of this.listeners) l(ev);
+        return this.threadView(id);
       } catch (err) {
-        this.attachments.removeThread(id);
+        if (threadCommitted) {
+          try {
+            this.store.deleteThread(id);
+          } catch (cleanupErr) {
+            console.error(`import: could not remove thread ${id} after failed import: ${cleanupErr instanceof Error ? cleanupErr.message : cleanupErr}`);
+          }
+        }
+        try {
+          this.attachments.removeThread(id);
+        } catch (cleanupErr) {
+          console.error(`import: could not remove attachments after failed import: ${cleanupErr instanceof Error ? cleanupErr.message : cleanupErr}`);
+        }
+        if (undoWorkdir) {
+          try {
+            undoWorkdir();
+          } catch (rollbackErr) {
+            console.error(`import: could not restore workdirs after ${summary.cwd} import failed: ${rollbackErr instanceof Error ? rollbackErr.message : rollbackErr}`);
+          }
+        }
         throw err;
       }
-      if (outside) {
-        // Checked above; only a directory removed in between could fail here, and the thread stands either way.
-        try { this.dirs.add(summary.cwd); } catch (err) { console.warn(`import: could not add ${summary.cwd} as a workdir: ${err instanceof Error ? err.message : err}`); }
-      }
-      for (const ev of events) for (const l of this.listeners) l(ev);
-      return this.threadView(id);
     } finally {
       this.importing.delete(key);
     }
