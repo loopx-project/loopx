@@ -396,6 +396,22 @@ proof into their manual writeback, retaining pagination, recovery and once-only
 settlement assertions. This retires a duplicate read classifier; full C1/C4/C9
 cutover, installed/native adoption and method/outcome benefit remain open.
 
+**Source checkpoint: heartbeat binding ownership (2026-11-21).** Python receipt
+readers and locked binders now reuse the existing TypeScript heartbeat binding
+and effective-receipt rules. Their file/GoalRef filtering and append-only IO stay
+local. One pure batch projection returns an index and binding; Python returns
+the original record, retaining unknown details and exact numbers. Repeated
+binding-fact projections may be cached, while files, lease readiness, admission
+and settlement are read under their original owners. This retires Python's
+parallel binding-conflict and effective-receipt reductions. The prior reader
+accepted noncanonical Todo ids that the existing settlement owner rejected;
+the reader now reports that same identity conflict without changing the log.
+File/SQLite public CLI controls retain selection, obligations, state bytes,
+original identity and zero extra spend. These source controls do not qualify
+C1 default-channel adoption, installed behavior or model/outcome benefit.
+The visible-Goal hard-lease control carries the same guard's proof into manual
+writeback and retains rejection of unproven writeback without changing the log.
+
 The first task needs an actual feedback or method-choice requirement. Reuse complete existing paths; real consumers must demonstrate gaps before repairing them rather than manufacturing a failure for the example. Experiments, training and procedural publication retain original authority. This document allocates neither another lane's quota nor a prescribed PR count.
 
 ## 12. Consequential choices to confirm
