@@ -53,6 +53,7 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
       if (state.context_epoch !== previousEpoch) {
         delete state.epoch_prefetch;
         delete state.quiet_turn;
+        delete state.compact_hook_wake;
       }
     }
     delete state.candidate;

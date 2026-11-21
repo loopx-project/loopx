@@ -1120,6 +1120,14 @@ def _locator_projection_after_probe(
     return state, recorded_pid_alive, diagnostic_code
 
 
+def runtime_currently_serving() -> bool:
+    """Non-blocking probe reporting whether an HTTP control-plane daemon is alive now."""
+    if _uses_stdio_runtime():
+        return False
+    fingerprint = _runtime_fingerprint()
+    return _read_info(_runtime_info_path(fingerprint), fingerprint=fingerprint) is not None
+
+
 def _read_local_snapshot_response(
     envelope: dict[str, Any], sink: Path | None, *, method: str, request_id: str, timeout: float,
 ) -> dict[str, Any]:

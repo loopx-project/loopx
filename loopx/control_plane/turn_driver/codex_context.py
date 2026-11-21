@@ -326,7 +326,8 @@ def codex_context_recovery_instructions(directory: str, *, goal_id: str, agent_i
 
 def codex_context_configuration(directory: str, *, goal_id: str, agent_id: str,
                                  cli_argv: list[str], scenario: str, session_root: bool = False,
-                                 inherit_machine: bool = False, progressive_enabled: bool = True) -> dict[str, Any]:
+                                 inherit_machine: bool = False, progressive_enabled: bool = True,
+                                 compact_direct_read: bool = False) -> dict[str, Any]:
     """Native configuration data shared by the worker and CLI setup journey.
 
     This renders no trust hashes and writes no host configuration. The native
@@ -346,6 +347,7 @@ def codex_context_configuration(directory: str, *, goal_id: str, agent_id: str,
     handler = {"type": "command", "command": shlex.join([
         *cli_argv, "--format", "json", "quota", "context-hook",
         *([] if inherit_machine else activation_args),
+        *(["--compact-direct-read"] if compact_direct_read else []),
         *(["--codex-app"] if scenario == "codex_app_heartbeat" else
           ["--runtime-profile", "codex_app_ssh_goal" if scenario == "codex_app_ssh_goal" else "generic_cli"]),
         option, directory]), "timeout": 10}
@@ -362,6 +364,118 @@ def codex_context_configuration(directory: str, *, goal_id: str, agent_id: str,
             page_output_bytes=NATIVE_CONTEXT_LARGE_OUTPUT_BYTES)}
 
 
+def _reduce_hook_lifecycle(
+    read_state: dict[str, Any],
+    state: dict[str, Any],
+    event: dict[str, Any],
+    *,
+    name: Any,
+    session: str,
+    same: bool,
+    pages: list[dict[str, Any]],
+    direct_read_cfg: Mapping[str, Any] | None,
+    update_fn: Callable[..., dict[str, Any]],
+    native_resume_verified_fn: Callable[[dict[str, Any], dict[str, Any]], bool],
+    native_resume_sections_fn: Callable[[dict[str, Any], dict[str, Any]], Any],
+) -> dict[str, Any]:
+    """Run TS lifecycle reduction, or fail-closed lock-free compact invalidation under contention."""
+    from ..effect_runtime import (
+        EffectRuntimeRemoteError,
+        EffectRuntimeStartupError,
+        runtime_currently_serving,
+    )
+    from .codex_hook_direct_read import apply_fail_closed_compact_invalidation
+
+    is_compact = name in ("PreCompact", "PostCompact") or (
+        name == "SessionStart" and event.get("source") == "compact"
+    )
+    lifecycle_unpatched = (
+        getattr(update_fn, "__module__", "") == "loopx.control_plane.quota.turn_envelope"
+    )
+    if (
+        direct_read_cfg is not None
+        and direct_read_cfg["lock_free"]
+        and is_compact
+        and same
+        and lifecycle_unpatched
+        and not runtime_currently_serving()
+    ):
+        return apply_fail_closed_compact_invalidation(
+            read_state,
+            session=session,
+            cwd=str(event.get("cwd") or ""),
+            new_epoch=uuid.uuid4().hex,
+        )
+    resume_verified = name == "SessionStart" and native_resume_verified_fn(state, event)
+    try:
+        return update_fn(
+            read_state,
+            event,
+            new_epoch=uuid.uuid4().hex,
+            pages=pages,
+            pages_verified=True,
+            resume_verified=resume_verified,
+            resume_sections=(
+                native_resume_sections_fn(state, event)
+                if name == "SessionStart" and not resume_verified
+                else None
+            ),
+        )
+    except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
+        if direct_read_cfg is not None and is_compact and same:
+            return apply_fail_closed_compact_invalidation(
+                read_state,
+                session=session,
+                cwd=str(event.get("cwd") or ""),
+                new_epoch=uuid.uuid4().hex,
+            )
+        raise
+
+
+def _maybe_resolve_compact_direct_read(
+    root: Path,
+    updated: dict[str, Any],
+    *,
+    name: Any,
+    event: dict[str, Any],
+    recovery: Any,
+    recovery_needed: bool,
+    direct_read_cfg: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Resolve Phase-2 compact hook direct-read and persist updated wake/telemetry state."""
+    from .codex_hook_direct_read import resolve_compact_hook_direct_read
+
+    if direct_read_cfg is None or name not in ("PostCompact", "SessionStart"):
+        return None
+    saved = updated.get("recovery")
+    active_recovery = (
+        recovery
+        if isinstance(recovery, Mapping)
+        else (saved if isinstance(saved, Mapping) else None)
+    )
+    cmd = str(active_recovery.get("command") or "") if isinstance(active_recovery, Mapping) else ""
+    continuation_text = _context_continuation_instructions(cmd) if cmd else ""
+    raw_guidance_text = (
+        CONTEXT_CAPTURE_SELECTION_GUIDANCE
+        + _NATIVE_CONTEXT_OUTPUT_GUIDANCE
+        + "If you choose to read an entire file: "
+        + CONTEXT_CAPTURE_PAGE_GUIDANCE
+    ) if cmd else ""
+    direct_state = dict(updated)
+    reply = resolve_compact_hook_direct_read(
+        hook_name=name,
+        state=direct_state,
+        event=event,
+        recovery=active_recovery,
+        recovery_needed=recovery_needed,
+        continuation_text=continuation_text,
+        raw_guidance_text=raw_guidance_text,
+    )
+    if reply is not None and direct_state != updated:
+        _save(root, direct_state)
+    return reply
+
+
 def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str, Any]:
     """Native IO around the shared typed lifecycle owner, without input tracing.
 
@@ -375,6 +489,7 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
         checkpoint_native_read, checkpoint_native_selection, native_resume_sections, native_resume_verified,
         observe_native_read,
     )
+    from .codex_hook_direct_read import resolve_compact_direct_read_config
 
     if directory is None:
         return {}
@@ -389,6 +504,7 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
         return {}  # ordinary tool use neither invalidates nor rewrites the journal
     state: dict[str, Any] = {}
     recovery = None
+    direct_reply: dict[str, Any] | None = None
     try:
         with _locked(directory) as root:
             try:
@@ -396,6 +512,7 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
                 read_state = state
                 same_session = state.get("session_id") == session
                 same = same_session and state.get("cwd") == event.get("cwd")
+                direct_read_cfg = resolve_compact_direct_read_config(state, event)
                 if same:
                     recovery = state.get("recovery")
                     if name == "PostToolUse":
@@ -408,11 +525,19 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
                     pages = _verified_context_pages(state, pages, selected_only=True)
                     if not pages or not isinstance(event.get("cwd"), str) or not event["cwd"]:
                         return {}
-                resume_verified = name == "SessionStart" and native_resume_verified(state, event)
-                updated = update_native_context_lifecycle(read_state, event,
-                    new_epoch=uuid.uuid4().hex, pages=pages, pages_verified=True,
-                    resume_verified=resume_verified,
-                    resume_sections=native_resume_sections(state, event) if name == "SessionStart" and not resume_verified else None)
+                updated = _reduce_hook_lifecycle(
+                    read_state,
+                    state,
+                    event,
+                    name=name,
+                    session=session,
+                    same=same,
+                    pages=pages,
+                    direct_read_cfg=direct_read_cfg,
+                    update_fn=update_native_context_lifecycle,
+                    native_resume_verified_fn=native_resume_verified,
+                    native_resume_sections_fn=native_resume_sections,
+                )
                 if name == "PostToolUse" and same:
                     checkpoint_native_read(read_state, updated, event,
                         [page for page in pages if "read_sections" not in page])
@@ -440,6 +565,15 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
                     and isinstance(saved.get("target"), dict)
                     and saved["target"].get("context_epoch") == updated.get("context_epoch"))
                 recovery_needed = same and not updated.get("candidate") and not current_file_epoch
+                direct_reply = _maybe_resolve_compact_direct_read(
+                    root,
+                    updated,
+                    name=name,
+                    event=event,
+                    recovery=recovery,
+                    recovery_needed=recovery_needed,
+                    direct_read_cfg=direct_read_cfg,
+                )
             except (OSError, ValueError, TypeError, RecursionError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
                 # A transient read/reduction failure can miss invalidation just
                 # as a failed write can. While holding the same lock, retire
@@ -449,6 +583,8 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
                 raise
     except (OSError, ValueError, TypeError, RecursionError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
         recovery_needed = True
+    if direct_reply is not None:
+        return direct_reply
     if (name == "SessionStart" and recovery_needed
             and isinstance(recovery, dict) and recovery.get("command")):
         from .epoch_prefetch import resolve_codex_context_epoch_prefetch_hook

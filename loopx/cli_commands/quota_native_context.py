@@ -372,7 +372,8 @@ def _handle_context_config(
             cli_argv += ["--runtime-root", str(Path(hook_runtime).expanduser().resolve())]
         config = codex_context_configuration(directory, goal_id=args.goal_id, agent_id=args.agent_id,
             cli_argv=cli_argv, scenario=activation["scenario"], session_root=bool(getattr(args, "codex_context_root", None)),
-            inherit_machine=bool(machine_runtime), progressive_enabled=activation["progressive_enabled"])
+            inherit_machine=bool(machine_runtime), progressive_enabled=activation["progressive_enabled"],
+            compact_direct_read=bool(getattr(args, "compact_direct_read", False)))
         explicit_options = "--context-delivery on" if activation["progressive_enabled"] else "--context-delivery off --delta-delivery auto"
         payload = {"ok": True, "context_delivery": activation, "native_config": config,
             "activation": "Apply config_overrides, merge hooks and append developer_instructions to the existing native configuration; "
@@ -428,6 +429,8 @@ def _handle_context_hook(args: argparse.Namespace, *, activation: dict[str, Any]
                 raise ValueError("context directory unavailable")
             scenario = activation["scenario"]
             progressive_enabled = activation["progressive_enabled"]
+            if getattr(args, "compact_direct_read", False) and "compact_direct_read" not in event:
+                event = {**event, "compact_direct_read": True}
             payload = codex_context_hook(directory, event)
             request = None
             preparation_context = ""
@@ -507,7 +510,13 @@ def _handle_context_hook(args: argparse.Namespace, *, activation: dict[str, Any]
             if preparation_context:
                 existing = payload.get("hookSpecificOutput")
                 existing_context = str(existing.get("additionalContext") or "") if isinstance(existing, dict) else ""
+                preserved = (
+                    {k: v for k, v in existing.items() if k not in ("hookEventName", "additionalContext")}
+                    if isinstance(existing, dict)
+                    else {}
+                )
                 payload["hookSpecificOutput"] = {
+                    **preserved,
                     "hookEventName": event["hook_event_name"],
                     "additionalContext": " ".join(filter(None, [existing_context, preparation_context])),
                 }
@@ -526,6 +535,10 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
 
     if getattr(args, "prepared_claim_operation_id", None) is not None and args.quota_command != "context-project":
         print_payload({"ok": False, "reason": "--prepared-claim-operation-id requires quota context-project"},
+                      args.format, str)
+        return 1
+    if getattr(args, "compact_direct_read", False) and args.quota_command not in ("context-config", "context-hook"):
+        print_payload({"ok": False, "reason": "--compact-direct-read is only supported by context-config or context-hook"},
                       args.format, str)
         return 1
     if getattr(args, "complete_turn", False) and (args.quota_command != "should-run" or args.format != "json"):

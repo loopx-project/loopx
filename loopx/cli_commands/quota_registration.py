@@ -273,6 +273,8 @@ def register_quota_command(
         help="Existing private native context root, with independent journals per native session. "
              "Use for shared Codex App hook configuration; cannot combine with --codex-context-dir. "
              "context-config renders native configuration for the exact Goal/Agent; no host configuration, trust, guard or spend are changed.")
+    quota_parser.add_argument("--compact-direct-read", action="store_true",
+        help="Opt-in Phase-2 lock-free in-process JSON pointer read, wake deduplication, and automatic failure/obligation extraction for native compact hooks.")
     quota_parser.add_argument("--capture-sha256",
         help="For context-read, context-project or replan-view: exact SHA-256 supplied with the capture reference.")
     quota_parser.add_argument("--initial-read", action="store_true",
