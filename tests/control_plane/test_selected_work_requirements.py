@@ -152,12 +152,14 @@ def test_inline_user_context_preserves_full_scoped_gates_without_granting_delive
     # Canonical tasks still exist: the full Goal source must fail closed,
     # rather than silently substituting a Todo summary for missing intent.
     state.unlink()
-    failed = guard(expected_exit=1)
-    assert failed["ok"] is False and failed["status_health_ok"] is False
-    failed_channel = failed["interaction_contract"]["agent_channel"]
-    assert failed_channel["delivery_allowed"] is False
-    assert failed_channel["work_context"]["complete"] is False
-    assert any(read["source"] == "goal_state" for read in failed_channel["required_reads"])
+    for flags in ((), ("--turn-envelope",), ("--complete-turn",)):
+        failed = guard(*flags, expected_exit=1)
+        assert failed["ok"] is False
+        assert failed["decision"] == "skip" and failed["should_run"] is False
+        assert failed["diagnostic_code"] == "invalid_request"
+        assert failed["reason"] == "Complete Goal source is required before host dispatch"
+        assert "interaction_contract" not in failed
+        assert "reference_file" not in failed
     state.write_text(state_text)
     assert guard()["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
 

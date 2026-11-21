@@ -365,6 +365,10 @@ def test_builder_qualifies_committed_default_before_writing_artifacts(tmp_path, 
 def test_release_probe_observes_real_default_without_model_or_active_goal():
     from scripts.qualify_runtime_artifact import observe_default_contract
 
-    # Check the actual CLI output against the supported release contract.
+    # Observe the new ordinary writer without disguising it as the qualified
+    # historical default. Engineering cutover does not grant release adoption.
     observed = observe_default_contract(ROOT)
-    assert validate_default_contract(observed) == PUBLIC_DEFAULT_CONTRACT
+    assert observed["surface"] == "complete_turn"
+    assert observed["schema_version"] == "loopx_turn_envelope_v1"
+    with pytest.raises(ValueError, match="unqualified for public adoption"):
+        validate_default_contract(observed)
