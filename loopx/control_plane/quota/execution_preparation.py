@@ -253,6 +253,8 @@ def read_turn_execution_lease_qualification(
     goal_ref: Mapping[str, Any] | None = None,
     source_admission: Mapping[str, Any] | None = None,
     provider_context: Mapping[str, Any] | None = None,
+    allow_same_generation_lease_renewal: bool = False,
+    validation_recovery_turn_instance_id: str | None = None,
 ) -> QuotaSettlementReadback:
     """Read a fresh TS verdict bound to the original prepared Turn admission.
 
@@ -271,6 +273,10 @@ def read_turn_execution_lease_qualification(
         resume_lease_candidate={
             "requested_proof": dict(requested_proof) if requested_proof is not None else None,
             **({"provider_context": dict(provider_context)} if provider_context is not None else {}),
+            **({"allow_same_generation_lease_renewal": allow_same_generation_lease_renewal}
+               if allow_same_generation_lease_renewal is not False else {}),
+            **({"validation_recovery_turn_instance_id": validation_recovery_turn_instance_id}
+               if validation_recovery_turn_instance_id is not None else {}),
         },
     )
     if readback is None:
@@ -320,6 +326,8 @@ def guard_first_writeback_execution(
     locked_goal: dict[str, Any] | None,
     goal_ref: Mapping[str, Any] | None = None,
     source_admission: Mapping[str, Any] | None = None,
+    allow_same_generation_lease_renewal: bool = False,
+    validation_recovery_turn_instance_id: str | None = None,
 ) -> Iterator[None]:
     prepared_lease = settlement.prepared_lease
     prepared_required = settlement.prepared_lease_required or prepared_lease is not None
@@ -346,6 +354,8 @@ def guard_first_writeback_execution(
                 runtime_root=runtime_root, registry_path=registry_path,
                 identity=identity, requested_proof=requested_proof,
                 goal_ref=goal_ref, source_admission=source_admission,
+                allow_same_generation_lease_renewal=allow_same_generation_lease_renewal,
+                validation_recovery_turn_instance_id=validation_recovery_turn_instance_id,
             )
             if (qualified.resume_lease_qualification or {}).get("state") != "ready":
                 raise RefreshTaskLeaseUnavailable("The Todo's original hard-lease authority is unavailable.")

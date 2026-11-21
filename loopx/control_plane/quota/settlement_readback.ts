@@ -1178,23 +1178,26 @@ function resolveIdentity(
       details(guard).pending_action_selection_todo_id,
     );
     if (!originalTodoId && !originalReplanId && !requestSubject) {
-      return failedIdentity("the original Turn guard has no settlement binding", "receipt_unbound");
+      if (todoId === null && replanObligationId === null) {
+        return failedIdentity("the original Turn guard has no settlement binding", "receipt_unbound");
+      }
+    } else {
+      const requestedTodoMatchesOriginal = request.todo_id === null ||
+        (todoId !== null && (
+          todoId === originalTodoId ||
+          (originalReplanId !== null && todoId === retainedTodoId)
+        ));
+      if (!requestedTodoMatchesOriginal ||
+          (request.replan_obligation_id !== null &&
+            (replanObligationId === null || replanObligationId !== originalReplanId))) {
+        return failedIdentity(
+          "settlement binding does not match: requested binding differs from the original Turn guard",
+          "identity_mismatch",
+        );
+      }
+      todoId = originalTodoId;
+      replanObligationId = originalReplanId;
     }
-    const requestedTodoMatchesOriginal = request.todo_id === null ||
-      (todoId !== null && (
-        todoId === originalTodoId ||
-        (originalReplanId !== null && todoId === retainedTodoId)
-      ));
-    if (!requestedTodoMatchesOriginal ||
-        (request.replan_obligation_id !== null &&
-          (replanObligationId === null || replanObligationId !== originalReplanId))) {
-      return failedIdentity(
-        "settlement binding does not match: requested binding differs from the original Turn guard",
-        "identity_mismatch",
-      );
-    }
-    todoId = originalTodoId;
-    replanObligationId = originalReplanId;
   }
   if (!agentId || !turnInstanceId || [todoId, replanObligationId, requestSubject].filter(Boolean).length !== 1) {
     return failedIdentity(
@@ -1447,7 +1450,7 @@ function readPendingCloseoutFromRequest(
   // immutable snapshot and admitted owner. Maintenance Run classifications
   // cannot conceal the guard's debt or select another Agent's work.
   const result = readQuotaSettlementFromRequest({...request, turn_instance_id: turn,
-    pending_closeout: false, resolve_original_binding: true}, snapshot, false);
+    pending_closeout: false, resolve_original_binding: true}, snapshot, request.turn_instance_id !== null);
   const identity = jsonObject(jsonObject(jsonObject(result.identity)?.result)?.value);
   const admission = jsonObject(result.native_child_admission);
   const originalReceipt = jsonObject(result.heartbeat_receipt);
@@ -1769,6 +1772,7 @@ function readQuotaSettlementFromRequestBase(
     writeback_event: includeRecords ? writebackEvent : null,
     spend_event: includeRecords ? spendEvent : null,
     completion_event: includeRecords ? completionEvent : null,
+    ...(includeRecords && supersedeEvent ? {supersede_event: supersedeEvent} : {}),
     monitor_phase: monitorPhase,
     replay_phase: replayPhase,
     replan_execution_pending: replayPhase === "open" &&

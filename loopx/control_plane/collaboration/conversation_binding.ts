@@ -765,11 +765,15 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
   const pendingTurn = recovery.failed_turn as JsonObject | undefined;
   const pendingResponse = pendingTurn?.response as JsonObject | undefined;
-  // A committed empty answer has no delivered failure to acknowledge first.
-  // It may only adopt its verified native result, never dispatch recovery work.
+  // A committed empty answer or a pre-dispatch preparation failure whose
+  // notice receipt is ambiguous has no delivered failure to acknowledge first.
   const pendingEmpty = current?.agent_id === "antigravity" && pendingTurn?.status === "completed"
     && pendingResponse?.message === "" && pureResultText(pendingResponse, true);
-  if (!current || row.command !== null || row.status !== "accepted" || row.delivery_verified !== true && !pendingEmpty
+  const pendingPreparationNotice = recovery.failure_notice_receipt_unknown === true
+    && pendingTurn?.status === "failed" && pendingTurn?.upstream_turn_id === null
+    && pendingTurn?.delta_count === 0 && pendingTurn?.response === null;
+  if (!current || row.command !== null || row.status !== "accepted"
+      || (row.delivery_verified !== true && !pendingEmpty && !pendingPreparationNotice)
       || row.agent_target != null || current.session_id !== row.session_id
       || !["codex", "antigravity"].includes(String(current.agent_id))
       || current.upstream_mode !== (current.agent_id === "antigravity" ? "default" : "chat") || current.status === "closed"
@@ -799,6 +803,8 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
   if (runtimePreparation !== null) return runtimePreparation;
   const preparation = steward ? planPreparationRecovery(recovery, row, current, failed, version) : null;
   if (preparation !== null) return preparation;
+  // Post-dispatch and read-only recovery families always require a verified prior delivery.
+  if (row.delivery_verified !== true && !pendingEmpty) return no;
   // Once preparation has dispatched, a different terminal category must not
   // switch recovery families and start a fresh business retry budget.
   if ((row.context_recovery != null
@@ -1656,7 +1662,8 @@ function planRuntimePreparationRecovery(recovery: JsonObject, row: JsonObject, c
       && (failed.attachments === undefined || Array.isArray(failed.attachments) && failed.attachments.length === 0)
       && typeof failed.started_at === "string" && Number.isFinite(Date.parse(failed.started_at))
     : failed.started_at === null && failed.first_event_at === null;
-  if (current.agent_id !== "codex" || failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
+  if (!["codex", "antigravity"].includes(String(current.agent_id))
+      || failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
       || failed.status !== "failed" || failed.error !== expectedError || !beforeDispatch
       || failed.response !== null || failed.upstream_turn_id !== null
       || failed.delta_count !== 0 || failed.message !== row.message || failed.origin !== row.origin

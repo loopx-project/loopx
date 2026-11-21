@@ -175,6 +175,7 @@ class QuotaSettlementReadback:
     completion_event: dict[str, Any] | None
     monitor_phase: ReceiptBoundMonitorPhase | None
     replay_phase: ReceiptBoundReplayPhase | None
+    supersede_event: dict[str, Any] | None = None
     refresh_recovery: dict[str, Any] | None = None
     external_delivery: dict[str, Any] | None = None
     progress: dict[str, Any] | None = None
@@ -596,6 +597,7 @@ def read_heartbeat_settlement(
         writeback_event=_optional_readback_record(payload.get("writeback_event")),
         spend_event=_optional_readback_record(payload.get("spend_event")),
         completion_event=_optional_readback_record(payload.get("completion_event")),
+        supersede_event=_optional_readback_record(payload.get("supersede_event")),
         monitor_phase=(
             ReceiptBoundMonitorPhase(str(monitor_phase))
             if monitor_phase is not None

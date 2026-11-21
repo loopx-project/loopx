@@ -175,10 +175,11 @@ def emit_quota_result(
     capture_sha256: str | None = None
     saved_decision = payload
 
-    def record_capture(decision: dict[str, object], digest: str) -> None:
+    def record_capture(decision: dict[str, object], digest: str | None) -> None:
         nonlocal saved_decision, capture_sha256
         saved_decision = decision
-        capture_sha256 = digest
+        if digest is not None:
+            capture_sha256 = digest
 
     try:
         return _publish_quota_result(
@@ -225,7 +226,7 @@ def _publish_quota_result(
     capture_directory: Path | None,
     detail_sections: frozenset[str],
     print_payload: PrintPayload,
-    record_capture: Callable[[dict[str, object], str], None],
+    record_capture: Callable[[dict[str, object], str | None], None],
 ) -> int:
     from ..command_invocation import current_loopx_cli_argv
 
@@ -305,6 +306,7 @@ def _publish_quota_result(
         quota_module._export("attach_host_poll_receipt")(
             context.status_payload, args, payload, registry_path=registry_path,
         )
+    record_capture(payload, None)
     native_context = context_delivery_enabled and bool(
         getattr(args, "codex_context_dir", None)
         or getattr(args, "codex_context_root", None)

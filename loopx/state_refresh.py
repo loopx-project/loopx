@@ -761,6 +761,8 @@ def refresh_state_run(
     task_lease_proof: dict[str, Any] | None = None,
     execution_loss_closeout: bool = False,
     execution_loss_requested_effects: Mapping[str, object] | None = None,
+    allow_same_generation_lease_renewal: bool = False,
+    validation_recovery_turn_instance_id: str | None = None,
 ) -> dict[str, Any]:
     if execution_loss_closeout:
         from .control_plane.quota.execution_preparation import commit_execution_loss_closeout_from_refresh
@@ -1622,6 +1624,8 @@ def refresh_state_run(
                         locked_goal=current_goal if normalized_next_action else None,
                         goal_ref=goal_ref,
                         source_admission=source_admission,
+                        allow_same_generation_lease_renewal=allow_same_generation_lease_renewal,
+                        validation_recovery_turn_instance_id=validation_recovery_turn_instance_id,
                     ))
                 if settlement_readback is not None:
                     persist_external_delivery_pause(
