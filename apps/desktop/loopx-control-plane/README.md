@@ -498,6 +498,35 @@ Self-service:
 serves your terminal runtime) checks that host's installation. It cannot
 diagnose this Mac App's local bootstrap; only the App's own diagnostics do.
 
+### Fresh Mac without a usable Node.js stays on the boot screen
+
+The App's automatic runtime installation can also fail with
+`runtime_install_exit_1` when no usable Node.js is reachable: the candidate's
+`doctor --deep --installation-only` validation treats the managed TypeScript
+Effect runtime as required, and it fails closed while `node` is missing. The
+App does not bundle Node; Node.js 22.22.3 or newer is required and 24 LTS is
+recommended, matching the CLI installation guide.
+
+The installer and the owned services resolve `node` through the same bounded
+search path (`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, the
+Homebrew keg-only `node@24`/`node@22` prefixes, then the inherited process
+PATH). Finder does not load the interactive shell profile, so Node installed
+through nvm/fnm/volta stays invisible to the App even though it works in a
+terminal.
+
+Self-service:
+
+1. Check the boot screen error code or Recovery & updates → Diagnostics
+   (`error_code: runtime_install_exit_1`, `environment.node_found` /
+   `node_version` confirm the missing runtime).
+2. Install Node.js 22.22.3+ — for example `brew install node` (the keg-only
+   `brew install node@24` is also covered by the search path) or via the
+   official nodejs.org installer. An nvm/fnm/volta installation needs a plain
+   installation or a `~/.local/bin` symlink the App can resolve.
+3. Press **Repair this version** (or reopen the App); the environment probe
+   refreshes and the live supervisor reconnects the same window without a
+   second App restart.
+
 The updater accepts only fixed official HTTPS channels, not browser-provided
 commands, paths or download URLs. Its signing private key is confined to the
 release secret; the App embeds the public key. PR validation has no signing
@@ -606,7 +635,10 @@ Session 与委派受众保持不变，不混合不同私聊或扩大权限。借
 - A working Python interpreter for runtime installation; existing managed
   installations preserve their interpreter. Windows requires a separately
   installed LoopX CLI. Set `LOOPX_BIN` only for deliberate runtime overrides.
-- Node.js 20.19+ or 22.12+ for dashboard builds.
+- Node.js 22.22.3 or newer (24 LTS recommended) for the managed TypeScript
+  runtime the installed App bootstraps; Node.js 20.19+ or 22.12+ only covers
+  dashboard builds. See Known Issues when a fresh Mac stops on the boot screen
+  without it.
 - Rust stable and the platform-specific Tauri build dependencies.
 
 Linux requires WebKitGTK 4.1 and GTK 3 development packages. See the
