@@ -86,33 +86,60 @@ def qualify_export_storage(destination: Path) -> None:
 
 
 def validate_worker_request(value: dict, *, allow_open_phase: bool = False) -> dict:
-    if (not isinstance(value, dict) or
-            set(value) not in ({"container_id", "components", "phase_deadline_path"},
-                              {"container_id", "components", "phase_deadline_path", "handoff"}) or
-            not re.fullmatch(r"[0-9a-f]{64}", value.get("container_id", "")) or
-            not isinstance(value["components"], list) or not value["components"]):
+    if not isinstance(value, dict):
         raise ValueError("Worker request requires a full container ID, explicit components and phase_deadline_path")
-    ids = set()
-    paths = []
-    for entry in value["components"]:
-        if (not isinstance(entry, dict) or set(entry) != {"id", "source_path"} or
+    # Snapshot caller-owned mutable containers before validating so concurrent
+    # mutations cannot pair checked fields with different later values.
+    raw = {key: item for key, item in dict.items(value)}
+    expected_keys = {"container_id", "components", "phase_deadline_path"}
+    if set(raw) not in (expected_keys, expected_keys | {"handoff"}):
+        raise ValueError("Worker request requires a full container ID, explicit components and phase_deadline_path")
+    container_id = raw["container_id"]
+    raw_components = raw["components"]
+    if (not isinstance(container_id, str) or not re.fullmatch(r"[0-9a-f]{64}", container_id) or
+            not isinstance(raw_components, list) or not raw_components):
+        raise ValueError("Worker request requires a full container ID, explicit components and phase_deadline_path")
+    raw_components = list(raw_components)
+    ids: set[str] = set()
+    paths: list[PurePosixPath] = []
+    components: list[dict[str, str]] = []
+    for item in raw_components:
+        if not isinstance(item, dict):
+            raise ValueError("Worker components require unique IDs")
+        entry = {key: val for key, val in dict.items(item)}
+        if (set(entry) != {"id", "source_path"} or
                 not isinstance(entry["id"], str) or
                 not _COMPONENT_ID.fullmatch(entry["id"]) or entry["id"] in ids):
             raise ValueError("Worker components require unique IDs")
-        ids.add(entry["id"])
-        paths.append(_guest_path(entry["source_path"]))
-    if value["phase_deadline_path"] is not None or not allow_open_phase:
-        paths.append(_guest_path(value["phase_deadline_path"]))
-    if "handoff" in value:
-        handoff = value["handoff"]
-        if (not isinstance(handoff, dict) or set(handoff) != {"source_path", "sha256"} or
-                not re.fullmatch(r"[0-9a-f]{64}", handoff.get("sha256", ""))):
+        component_id = str(entry["id"])
+        source_path = entry["source_path"]
+        ids.add(component_id)
+        paths.append(_guest_path(source_path))
+        components.append({"id": component_id, "source_path": str(source_path)})
+    phase_deadline_path = raw["phase_deadline_path"]
+    if phase_deadline_path is not None or not allow_open_phase:
+        paths.append(_guest_path(phase_deadline_path))
+    snapshot: dict = {
+        "container_id": str(container_id),
+        "components": components,
+        "phase_deadline_path": None if phase_deadline_path is None else str(phase_deadline_path),
+    }
+    if "handoff" in raw:
+        raw_handoff = raw["handoff"]
+        if not isinstance(raw_handoff, dict):
             raise ValueError("Worker handoff requires the exact private request digest")
-        paths.append(_guest_path(handoff["source_path"]))
+        handoff = {key: val for key, val in dict.items(raw_handoff)}
+        sha256 = handoff.get("sha256")
+        if (set(handoff) != {"source_path", "sha256"} or
+                not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256)):
+            raise ValueError("Worker handoff requires the exact private request digest")
+        handoff_source = handoff["source_path"]
+        paths.append(_guest_path(handoff_source))
+        snapshot["handoff"] = {"source_path": str(handoff_source), "sha256": str(sha256)}
     if any(a == b or a in b.parents or b in a.parents
            for index, a in enumerate(paths) for b in paths[index + 1:]):
         raise ValueError("Worker components and phase clock must not overlap")
-    return value
+    return snapshot
 
 
 def _guest_path(value: str) -> PurePosixPath:
@@ -295,10 +322,14 @@ def capture_docker_worker(
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("Worker capture timeout must be finite and positive")
     deadline = time.monotonic() + timeout
-    request = validate_worker_request(request, allow_open_phase=allow_open_phase)
-    if seal_within_phase and "handoff" not in request:
+    snapshot = validate_worker_request(request, allow_open_phase=allow_open_phase)
+    container_id = snapshot["container_id"]
+    requested_components = snapshot["components"]
+    phase_deadline_path = snapshot["phase_deadline_path"]
+    handoff = snapshot.get("handoff")
+    if seal_within_phase and handoff is None:
         raise ValueError("Post-release sealing requires an exact prepared handoff")
-    if components_at_barrier is not None and "handoff" in request:
+    if components_at_barrier is not None and handoff is not None:
         raise ValueError("Terminal phase discovery cannot change a prepared handoff")
     native_bank = _physical(native_bank)
     destination = Path(destination)
@@ -318,12 +349,12 @@ def capture_docker_worker(
         else docker.DockerClient(base_url=docker_host, timeout=_remaining(deadline))
     )
     try:
-        with exclusive_file_lock(_worker_lock(client, request["container_id"]), timeout_seconds=_remaining(deadline),
+        with exclusive_file_lock(_worker_lock(client, container_id), timeout_seconds=_remaining(deadline),
                                  operation="checkpoint_worker_capture"):
-            container = client.containers.get(request["container_id"])
+            container = client.containers.get(container_id)
             container.reload()
             state = container.attrs["State"]
-            if container.id != request["container_id"] or not state["Running"] or state["Paused"]:
+            if container.id != container_id or not state["Running"] or state["Paused"]:
                 raise ValueError("Worker must be the exact running, unpaused container owned by this controller")
             with tempfile.TemporaryDirectory(prefix=".worker-capture-", dir=destination.parent) as directory:
                 stage = Path(directory)
@@ -344,25 +375,29 @@ def capture_docker_worker(
                     if not container.attrs["State"]["Paused"]:
                         raise RuntimeError("Worker writer barrier was not established")
                     if components_at_barrier is not None:
-                        request = validate_worker_request({
-                            **request, "components": components_at_barrier(
-                                container, request["components"], stage, deadline=deadline),
+                        barrier_components = components_at_barrier(
+                            container, [dict(entry) for entry in requested_components], stage, deadline=deadline)
+                        snapshot = validate_worker_request({
+                            "container_id": container_id,
+                            "components": barrier_components,
+                            "phase_deadline_path": phase_deadline_path,
                         }, allow_open_phase=allow_open_phase)
-                    if "handoff" in request:
-                        held = _archive(container, request["handoff"]["source_path"], stage / "held", deadline=deadline)
+                        requested_components = snapshot["components"]
+                    if handoff is not None:
+                        held = _archive(container, handoff["source_path"], stage / "held", deadline=deadline)
                         raw = held.read_bytes()
-                        if hashlib.sha256(raw).hexdigest() != request["handoff"]["sha256"]:
+                        if hashlib.sha256(raw).hexdigest() != handoff["sha256"]:
                             raise ValueError("Worker handoff changed before its writer barrier")
                         prepared = json.loads(raw)
                         if (set(prepared) != {"capture_id", "components", "point_metadata", "source_sha256", "source_witness", "deadline_epoch"} or
-                                prepared["capture_id"] != capture_id or prepared["components"] != request["components"] or
+                                prepared["capture_id"] != capture_id or prepared["components"] != requested_components or
                                 not isinstance(prepared["point_metadata"], dict) or not isinstance(prepared["source_witness"], dict) or
                                 type(prepared["deadline_epoch"]) not in (int, float) or
                                 not math.isfinite(prepared["deadline_epoch"]) or time.time() >= prepared["deadline_epoch"]):
                             raise ValueError("Worker handoff is expired or differs from the original capture")
                     if prepared is not None:
                         deadline = min(deadline, time.monotonic() + prepared["deadline_epoch"] - time.time())
-                    for entry in request["components"]:
+                    for entry in requested_components:
                         client.api.timeout = _remaining(deadline)
                         try:
                             copied = _archive_component(
@@ -386,8 +421,7 @@ def capture_docker_worker(
                             raise ValueError("Worker source changed after native/research preparation: " + ", ".join(changed))
                         if time.time() >= prepared["deadline_epoch"]:
                             raise TimeoutError("Worker handoff expired before evaluator capture")
-                    phase_path = request["phase_deadline_path"]
-                    phase = _archive(container, phase_path, stage / "phase", deadline=deadline) if phase_path else None
+                    phase = _archive(container, phase_deadline_path, stage / "phase", deadline=deadline) if phase_deadline_path else None
                     native = capture_native(stage / "native", phase, _remaining(deadline))
                     container.reload()
                     if not container.attrs["State"]["Running"] or not container.attrs["State"]["Paused"]:
@@ -416,13 +450,14 @@ def capture_docker_worker(
                 native_component = _participant_id(components, "native_capsule")
                 components.append({"id": native_component, "source_path": str(stage / "native")})
                 metadata = {**(prepared["point_metadata"] if prepared is not None else {}), "worker_file_snapshot": {
-                    "container_id": container.id, "image_id": container.attrs["Image"],
-                    "components": request["components"], "phase_deadline_path": request["phase_deadline_path"],
+                    "container_id": container_id, "image_id": container.attrs["Image"],
+                    "components": [dict(entry) for entry in requested_components],
+                    "phase_deadline_path": phase_deadline_path,
                     "native_capsule_sha256": native["sha256"],
                     "native_capsule_component_id": native_component,
                     "writer_barrier": "docker_pause", "process_memory_captured": False,
                     "native_cursor_qualified": False,
-                    **({"handoff_sha256": request["handoff"]["sha256"],
+                    **({"handoff_sha256": handoff["sha256"],
                         "prepared_source_verified": True} if prepared is not None else {}),
                 }}
                 if prepared is not None:
