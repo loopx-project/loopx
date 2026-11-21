@@ -451,3 +451,239 @@ def test_live_doubao_timeout_extension_is_scoped_to_required_vision(
     assert json.loads(capsys.readouterr().out)["qualification_passed"] is True
     assert observed["DoubaoReplanSemanticActionBehaviorActor"] == vision_timeout
     assert all(observed[name] == ordinary_timeout for name in actor_names if name != "DoubaoReplanSemanticActionBehaviorActor")
+
+
+def test_pyproject_pytest_norecursedirs_prunes_dotfiles_and_node_modules() -> None:
+    import tomllib
+
+    config = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    norecursedirs = config["tool"]["pytest"]["ini_options"]["norecursedirs"]
+    assert ".*" in norecursedirs
+    assert "node_modules" in norecursedirs
+    assert "packages/loopx-ark-turn" in norecursedirs
+    assert "packages/loopx-memt-turn" in norecursedirs
+
+
+def test_live_doubao_script_defaults_max_workers_to_six_and_allows_serial(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    script = runpy.run_path(str(REPO_ROOT / "scripts" / "qualify-doubao-model-behavior-live.py"))
+    main = script["main"]
+    globals_ = main.__globals__
+    observed_workers: list[int] = []
+    actor_names = (
+        "DoubaoModelBehaviorActor",
+        "DoubaoOnboardingModelBehaviorActor",
+        "DoubaoSelectedTodoToolBehaviorActor",
+        "DoubaoReplanSemanticActionBehaviorActor",
+        "DoubaoScopedGateSuccessorToolBehaviorActor",
+        "DoubaoCapabilityMonitorRepairToolBehaviorActor",
+        "DoubaoTerminalSettlementToolBehaviorActor",
+    )
+    for name in actor_names:
+        monkeypatch.setitem(
+            globals_,
+            name,
+            SimpleNamespace(from_environment=lambda **_: SimpleNamespace(qualify=lambda **__: {})),
+        )
+    monkeypatch.setitem(globals_, "collect_release_source_identity", lambda _root: {"git_dirty": False})
+    monkeypatch.setitem(globals_, "build_actual_default_model_behavior_scenario_inputs", lambda _root: ({}, {}))
+
+    def fake_portfolio(*_args: object, **kwargs: object) -> dict[str, object]:
+        observed_workers.append(int(kwargs["max_workers"]))
+        return {"qualification_passed": True}
+
+    monkeypatch.setitem(globals_, "run_actual_default_model_behavior_portfolio", fake_portfolio)
+
+    monkeypatch.setattr(sys, "argv", ["qualify-doubao-model-behavior-live.py", "--qualification-id", "default-workers"])
+    assert main() == 0
+    capsys.readouterr()
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["qualify-doubao-model-behavior-live.py", "--qualification-id", "serial-workers", "--max-workers", "1"],
+    )
+    assert main() == 0
+    capsys.readouterr()
+    assert observed_workers == [6, 1]
+
+
+def test_qualify_release_commit_parallelism_and_preflight_selection(tmp_path: Path) -> None:
+    runner = runpy.run_path(str(REPO_ROOT / "scripts" / "qualify_release_commit.py"))
+    parallelism = runner["default_pytest_parallelism"]
+    assert parallelism(4) == 3
+    assert parallelism(12) == 8
+    assert parallelism(18) == 12
+    assert parallelism(32) == 12
+    assert parallelism(1) == 1
+
+    repo = tmp_path / "repo"
+    for rel in (
+        "tests/capabilities/test_reliability_diagnostics_dsh_provider.py",
+        "tests/control_plane/test_public_safe_local_path_owner.py",
+        "tests/test_chat_path_redaction.py",
+        "tests/test_custom.py",
+    ):
+        target = repo / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("def test_ok(): pass\n", encoding="utf-8")
+
+    selected = runner["select_preflight_tests"](
+        [
+            "packages/dsh-loopx-plugin/src/observer.ts",
+            "tests/test_custom.py",
+            "tests/test_missing.py",
+        ],
+        repo_root=repo,
+    )
+    assert selected == [
+        "tests/capabilities/test_reliability_diagnostics_dsh_provider.py",
+        "tests/control_plane/test_public_safe_local_path_owner.py",
+        "tests/test_chat_path_redaction.py",
+        "tests/test_custom.py",
+    ]
+
+
+def test_qualify_release_commit_resume_requires_exact_source_and_reduces_junit(tmp_path: Path) -> None:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "qualify_release_commit", REPO_ROOT / "scripts" / "qualify_release_commit.py"
+    )
+    assert spec is not None and spec.loader is not None
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+
+    summary_path = tmp_path / "pytest-shard-1-process-summary.json"
+    xml_path = tmp_path / "pytest-shard-1.xml"
+    xml_path.write_text(
+        '<?xml version="1.0" encoding="utf-8"?><testsuites>'
+        '<testsuite name="pytest" tests="10" errors="0" failures="0" skipped="2" time="1.0"/>'
+        "</testsuites>\n",
+        encoding="utf-8",
+    )
+    expected = _source()
+    selection_fp = runner.shard_selection_fingerprint(
+        shards=12, use_pytest_split=True, durations_path=None, extra_pytest_args=[]
+    )
+    summary_path.write_text(
+        json.dumps(
+            {
+                "source": expected,
+                "current_source": expected,
+                "selection_fingerprint": selection_fp,
+                "exit_code": 0,
+                "groups": 12,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert (
+        runner.can_reuse_shard_receipt(
+            summary_path,
+            xml_path,
+            expected_source=expected,
+            expected_groups=12,
+            expected_selection_fingerprint=selection_fp,
+        )
+        is True
+    )
+    assert (
+        runner.can_reuse_shard_receipt(
+            summary_path,
+            xml_path,
+            expected_source=expected,
+            expected_groups=12,
+            expected_selection_fingerprint="sha256:" + "0" * 64,
+        )
+        is False
+    )
+    assert runner.can_reuse_shard_receipt(summary_path, xml_path, expected_source=expected, expected_groups=6) is False
+    assert (
+        runner.can_reuse_shard_receipt(
+            summary_path, xml_path, expected_source=_source(commit="9" * 40), expected_groups=12
+        )
+        is False
+    )
+    assert (
+        runner.can_reuse_shard_receipt(
+            summary_path, xml_path, expected_source=_source(tree="9" * 40), expected_groups=12
+        )
+        is False
+    )
+    assert (
+        runner.can_reuse_shard_receipt(
+            summary_path, xml_path, expected_source=_source(dirty=True), expected_groups=12
+        )
+        is False
+    )
+
+    xml_two = tmp_path / "pytest-shard-2.xml"
+    xml_two.write_text(
+        '<testsuite name="pytest" tests="5" errors="0" failures="0" skipped="1" time="0.5"/>\n',
+        encoding="utf-8",
+    )
+    counts = runner.summarize_junit_xml_files([xml_path, xml_two])
+    assert counts == {"passed_count": 12, "failed_count": 0, "skipped_count": 3}
+
+    receipt_check = {
+        "schema_version": "exact_release_check_receipt_v0",
+        "source": expected,
+        "status": "passed",
+        "result_schema_version": "pytest_summary_v0",
+        "result_digest": runner._canonical_sha256(counts),
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "summary": counts,
+    }
+    manifest = _manifest(source=expected)
+    manifest["qualifications"]["pytest"] = receipt_check  # type: ignore[index]
+    evaluated = build_exact_release_commit_qualification(manifest, observed_source=expected)
+    assert evaluated["ready_for_release"] is True
+    assert evaluated["qualifications"]["pytest"]["summary"] == counts
+
+
+def test_qualify_release_commit_runs_end_to_end_on_clean_repo(tmp_path: Path) -> None:
+    repo = tmp_path / "clean-repo"
+    (repo / "loopx").mkdir(parents=True)
+    (repo / "tests").mkdir(parents=True)
+    (repo / ".gitignore").write_text("__pycache__/\n*.pyc\n", encoding="utf-8")
+    (repo / "pyproject.toml").write_text(f'[project]\nname = "loopx"\nversion = "{__version__}"\n', encoding="utf-8")
+    (repo / "loopx" / "__init__.py").write_text(f'__version__ = "{__version__}"\n', encoding="utf-8")
+    (repo / "tests" / "test_sample.py").write_text(
+        "import pytest\ndef test_pass_a(): assert 1 + 1 == 2\ndef test_skip_b(): pytest.skip('ok')\n",
+        encoding="utf-8",
+    )
+    for args in (
+        ("init",),
+        ("config", "user.email", "loopx@example.invalid"),
+        ("config", "user.name", "LoopX Test"),
+        ("add", "."),
+        ("commit", "-m", "init"),
+    ):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
+
+    out_dir = tmp_path / "out"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "qualify_release_commit.py"),
+            "--repo-root",
+            str(repo),
+            "--output-dir",
+            str(out_dir),
+            "--shards",
+            "1",
+            "--no-pytest-split",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    receipt = json.loads((out_dir / "receipt-pytest.json").read_text(encoding="utf-8"))
+    assert receipt["status"] == "passed"
+    assert receipt["summary"] == {"passed_count": 1, "failed_count": 0, "skipped_count": 1}
+    assert str(tmp_path) not in json.dumps(receipt)

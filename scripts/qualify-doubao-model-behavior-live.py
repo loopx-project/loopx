@@ -57,7 +57,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout-seconds", type=float, default=90.0)
     parser.add_argument("--required-vision-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
-    parser.add_argument("--max-workers", type=int, default=1)
+    parser.add_argument("--max-workers", type=int, default=6)
     return parser
 
 
