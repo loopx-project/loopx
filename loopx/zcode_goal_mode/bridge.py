@@ -17,6 +17,7 @@ from ..control_plane.goals.acceptance import inspect_goal_acceptance
 from ..control_plane.goals.activation import goal_is_stopped
 from ..control_plane.goals.goal_ref_validation import exact_goal_ref, require_goal_id
 from ..control_plane.runtime.goal_project_route import resolve_goal_project_route
+from ..control_plane.runtime.node_probe import node_typescript_flags
 from ..control_plane.projects.registry_codec import load_registry
 from ..host_loop_activation import normalize_agent_type
 from ..registry import registry_goals
@@ -274,7 +275,11 @@ def zcode_goal_operation(
         request["task_body"] = _heartbeat_task(binding, loopx_command)
     if action in {"bind", "start", "resume"}:
         request["goal_basis"] = _goal_basis(binding)
-    payload = _run_json([node, "--experimental-strip-types", str(Path(__file__).with_name("cli.ts"))], project=binding["project"], request=request)
+    payload = _run_json(
+        [node, "--experimental-strip-types", *node_typescript_flags(), str(Path(__file__).with_name("cli.ts"))],
+        project=binding["project"],
+        request=request,
+    )
     for key in ("goal_id", "goal_ref", "goal_creation_operation_id", "agent_id"):
         if key not in payload or payload[key] != binding[key]:
             raise ZCodeGoalBridgeError("ZCode readback did not match the exact Goal and Agent requested.", code="zcode_goal_invalid_readback", status=409)
