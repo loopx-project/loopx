@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from loopx.control_plane.quota.spend_commit import (
     QuotaRunIndexConflict,
     build_quota_slot_spend_event,
     record_quota_slot_spend_from_preview,
+    replay_quota_spend_by_effect_ref,
 )
 from loopx.control_plane.projects.registry_codec import (
     source_session_registry_transaction,
@@ -208,6 +210,53 @@ def test_python_facade_serializes_concurrent_exact_effect_retries(
     assert sum(bool(result["idempotent_replay"]) for result in results) == 1
     index_path = Path(results[0]["index_path"])
     assert len(index_path.read_text(encoding="utf-8").splitlines()) == 1
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX pipes")
+def test_stdio_lost_spend_response_recovers_exact_receipt_without_a_second_debit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_TRANSPORT", "stdio")
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path / "runtime")
+    effect_ref = "stdio-ambiguous-spend#quota_spend"
+    preview = _preview(effect_ref=effect_ref)
+    exchange = effect_runtime.EffectRuntimeStdio.exchange
+    delivered: list[str] = []
+
+    def lose_commit_reply(pipe, frame, timeout, limit):
+        response = exchange(pipe, frame, timeout, limit)
+        request = json.loads(frame)
+        if request["method"] == "quota.spend.commit" and request["params"].get("execute") is True:
+            delivered.append(request["request_id"])
+            if len(delivered) == 1:
+                assert json.loads(response)["result"]["payload"]["appended"] is True
+                raise EOFError("simulated disconnect after the durable commit")
+        return response
+
+    monkeypatch.setattr(effect_runtime.EffectRuntimeStdio, "exchange", lose_commit_reply)
+    try:
+        original = effect_runtime.effect_runtime_result("runtime.ping", {})
+        with pytest.raises(effect_runtime.EffectRuntimeResponseAmbiguous, match="quota.spend.commit"):
+            _commit(tmp_path, preview)
+        assert len(delivered) == 1
+        recovered = replay_quota_spend_by_effect_ref(
+            tmp_path, goal_id=GOAL_ID, effect_ref=effect_ref, agent_id=AGENT_ID, read_only=True,
+        )
+        assert recovered["ok"] and recovered["replay_found"]
+        assert recovered["effect_ref"] == effect_ref
+        assert recovered["appended"] is False and recovered["idempotent_replay"] is True
+        current = effect_runtime.effect_runtime_result("runtime.ping", {})
+        assert current["pid"] != original["pid"]
+        index = tmp_path / "goals" / GOAL_ID / "runs" / "index.jsonl"
+        rows = index.read_bytes()
+        assert len(rows.splitlines()) == 1
+        assert json.loads(rows)["quota_spend_commit"]["effect_id"] == effect_ref
+        assert len(delivered) == 1
+        replayed = _commit(tmp_path, preview)
+        assert replayed["appended"] is False and replayed["idempotent_replay"] is True
+        assert index.read_bytes() == rows and len(delivered) == 2
+    finally:
+        effect_runtime.restart_effect_runtime(wait_for_exit=True)
 
 
 @pytest.mark.parametrize("context_size", [128, 1_100_000])

@@ -26,6 +26,7 @@ import {
 } from "./effect_program.ts";
 
 import { EffectRuntimeRequestError } from "./effect_runtime_errors.ts";
+import type { SqliteRuntimeIdentity } from "./coordination/sqlite_runtime.ts";
 import {
   optionalNonEmptyString as optionalString,
   requireBoolean,
@@ -38,7 +39,7 @@ import {
 
 import type {TurnJournalInspectionRequest} from "./turn_driver/turn_journal.ts";
 
-type EffectRuntimeHandler = (params: JsonObject) => unknown | Promise<unknown>;
+export type EffectRuntimeHandler = (params: JsonObject) => unknown | Promise<unknown>;
 
 // Resolve only the selected module/handler, never cache its params or decision.
 // Node owns module caching; the existing runtime fingerprint owns invalidation.
@@ -57,6 +58,7 @@ export interface EffectRuntimeHandlerContext {
   fingerprint: string;
   /** Physical publication path observed by the managed server, not its caller. */
   readonly infoPath?: string;
+  readonly localRuntimeIdentity?: SqliteRuntimeIdentity;
   requestShutdown: () => void;
 }
 
@@ -254,7 +256,9 @@ export function createEffectRuntimeHandlers(
     [
       "runtime.ping",
       () => ({ ready: true, pid: process.pid, fingerprint: context.fingerprint,
-        ...(context.infoPath === undefined ? {} : {info_path: context.infoPath}) }),
+        ...(context.infoPath === undefined ? {} : {info_path: context.infoPath}),
+        ...(context.localRuntimeIdentity === undefined
+          ? {} : {runtime_identity: context.localRuntimeIdentity}) }),
     ],
     [
       "runtime.shutdown",
