@@ -1255,3 +1255,36 @@ def test_execute_wake_keeps_host_clocks_out_of_fresh_and_resumed_input(
         assert current["LOOPX_PHASE_DEADLINE_EPOCH"] == deadline
     # Runtime clocks remain internal and never change task/completion authority.
     assert Path(env["LOOPX_REGISTRY"]).with_name("state.md").read_bytes() == before
+
+
+def test_plan_native_command_exposes_runtime_root_only_during_workspace_write_plan(tmp_path):
+    from types import SimpleNamespace
+    from benchmark.runtime.codex import Execution
+    from benchmark.runtime.worker import native_command
+
+    project = tmp_path / "project"
+    runtime_root = tmp_path / "runtime"
+    wake = tmp_path / "wake"
+    codex_bin = tmp_path / "codex"
+    codex_bin.write_text("#!/bin/sh\nexit 0\n")
+    codex_bin.chmod(0o755)
+    for directory in (project, runtime_root, wake):
+        directory.mkdir()
+    env = {
+        "CODEX_BIN": str(codex_bin),
+        "LOOPX_PROJECT": str(project),
+        "LOOPX_RUNTIME_ROOT": str(runtime_root),
+        "MODEL_NAME": "gpt-5.4",
+        "REASONING_EFFORT": "low",
+    }
+    expected_flag = f"sandbox_workspace_write.writable_roots={json.dumps(list(dict.fromkeys([str(runtime_root), str(runtime_root.resolve())])))}"
+    ws_exec = Execution(mode="turn", context="fresh", sandbox="workspace-write", validation_command=("true",))
+    for session_wake in (None, SimpleNamespace(session_id="sess-1")):
+        plan_cmd = native_command(env, ws_exec, "plan", wake, session_wake)
+        assert expected_flag in plan_cmd
+        execute_cmd = native_command(env, ws_exec, "execute", wake, session_wake)
+        assert not any("writable_roots" in arg for arg in execute_cmd)
+    ro_exec = Execution(mode="turn", context="fresh", sandbox="read-only", validation_command=("true",))
+    assert not any("writable_roots" in arg for arg in native_command(env, ro_exec, "plan", wake, None))
+    dfa_exec = Execution(mode="heartbeat", context="resume", sandbox="danger-full-access")
+    assert not any("writable_roots" in arg for arg in native_command(env, dfa_exec, "plan", wake, None))

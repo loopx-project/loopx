@@ -476,13 +476,24 @@ def run_native_goal(
                 receipt["native_goal"] = compact_native_goal_receipt(observed[-1])
 
 
+def _plan_sandbox_args(env: dict[str, str], execution: Execution, stage: str) -> list[str]:
+    if stage != "plan" or execution.sandbox != "workspace-write":
+        return []
+    runtime_root = env.get("LOOPX_RUNTIME_ROOT")
+    if not runtime_root:
+        return []
+    roots = list(dict.fromkeys([str(Path(runtime_root)), str(Path(runtime_root).resolve())]))
+    return ["-c", f"sandbox_workspace_write.writable_roots={json.dumps(roots)}"]
+
+
 def native_command(env, execution, stage, wake, session_wake):
     if session_wake is None:
         # Preserve the baseline/Goal-planning entrypoint and its transport inputs.
         return [
             env["CODEX_BIN"], "exec", "--json", "--skip-git-repo-check",
             "--sandbox", execution.sandbox, "--cd", env["LOOPX_PROJECT"],
-            *(["-c", "features.goals=false", "--output-schema", str(wake / "planning-schema.json"),
+            *(["-c", "features.goals=false", *_plan_sandbox_args(env, execution, stage),
+               "--output-schema", str(wake / "planning-schema.json"),
                "--output-last-message", str(wake / "planning-result.json")] if stage == "plan" else []),
             "-",
         ]
@@ -505,7 +516,7 @@ def native_command(env, execution, stage, wake, session_wake):
             # native shell whose frozen settings still record the requested on.
             command[-1:-1] = ["-c", 'shell_environment_policy.set.LOOPX_CONTEXT_DELIVERY="off"']
     if stage == "plan":
-        command[-1:-1] = ["-c", "features.goals=false"]
+        command[-1:-1] = ["-c", "features.goals=false", *_plan_sandbox_args(env, execution, stage)]
     return command
 
 
