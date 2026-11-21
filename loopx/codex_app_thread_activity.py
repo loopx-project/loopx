@@ -246,7 +246,13 @@ def _rollout_activity(
                 if Path(os.path.realpath(path)) != path or (end.st_dev, end.st_ino) != (named.st_dev, named.st_ino) or end.st_size < stat.st_size:
                     _rollout_cache.pop(binding, None)
                     return HostThreadActivity.unknown(HostThreadUnknownReason.STORE_UNAVAILABLE)
-                if end.st_size == stat.st_size and (end.st_mtime_ns != stat.st_mtime_ns or end.st_ctime_ns != stat.st_ctime_ns):
+                # Windows ctime-only skew between two stats of one open
+                # descriptor is metadata noise, not a same-size rewrite; drop
+                # ctime from this one-read fence only when both observations
+                # carry a usable volume/file index.
+                fence_ctime = os.name != "nt" or not (stat.st_dev and stat.st_ino and end.st_dev and end.st_ino)
+                if end.st_size == stat.st_size and (end.st_mtime_ns != stat.st_mtime_ns
+                        or (fence_ctime and end.st_ctime_ns != stat.st_ctime_ns)):
                     _rollout_cache.pop(binding, None)
                     return HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
                 cursor.save(cache_root)
