@@ -315,8 +315,12 @@ shell, and a shell update does not certify Goal acceptance or provider readiness
 The release workflow packages both layers from one Git revision.
 
 The installer and App-owned services use the same bounded tool search,
-including standard Homebrew locations on macOS, without loading interactive
-shell profiles. Finder launches therefore do not depend on terminal PATH setup.
+including standard Homebrew locations on macOS and nvm-managed Node
+directories on Unix, without loading interactive shell profiles. Finder
+launches therefore do not depend on terminal PATH setup. nvm resolution is
+read-only and never runs nvm or sources a startup file: an `NVM_BIN` activated
+in the App's own environment wins, then the `default` alias chain, then the
+installed versions newest-first behind the supported Homebrew runtimes.
 When preparing the first App-owned snapshot, an already selected managed CLI's
 recorded Python is reused if the App has no interpreter record of its own.
 This leaves that CLI's launcher and installation owner unchanged.

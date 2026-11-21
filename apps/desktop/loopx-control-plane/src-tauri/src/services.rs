@@ -1088,13 +1088,135 @@ fn configure_codex_chat_home(
     }
 }
 
+// Alias files chain (`default` -> `lts/*` -> `lts/krypton` -> `v24.22.1`).
+// Read a bounded chain instead of running nvm, so a missing, cyclic or
+// malformed chain just falls through to installed-version discovery.
+#[cfg(unix)]
+const NVM_ALIAS_DEPTH_LIMIT: usize = 8;
+
+// `v24.22.1`, `24.22.1` and the alias targets that name them are the only
+// accepted forms; anything else is a non-version alias name to follow.
+#[cfg(unix)]
+fn nvm_version(name: &str) -> Option<(u64, u64, u64)> {
+    let trimmed = name.trim().strip_prefix('v').unwrap_or(name.trim());
+    let mut fields = trimmed.split('.');
+    let major = fields.next()?.parse().ok()?;
+    let minor = fields.next()?.parse().ok()?;
+    let patch = fields.next()?.parse().ok()?;
+    fields.next().is_none().then_some((major, minor, patch))
+}
+
+// Alias names are file names under `$NVM_DIR/alias`; keep the read inside that
+// directory instead of letting a crafted alias escape it.
+#[cfg(unix)]
+fn is_bounded_nvm_alias(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains('\0')
+        && Path::new(name)
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+}
+
+#[cfg(unix)]
+fn resolve_nvm_alias(root: &Path, alias: &str, depth: usize) -> Option<String> {
+    if depth >= NVM_ALIAS_DEPTH_LIMIT {
+        return None;
+    }
+    let name = alias.trim();
+    if !is_bounded_nvm_alias(name) {
+        return None;
+    }
+    if let Some((major, minor, patch)) = nvm_version(name) {
+        // nvm names its version directories with the `v` prefix, whatever
+        // form the alias chain used to reach them.
+        return Some(format!("v{major}.{minor}.{patch}"));
+    }
+    let target = fs::read_to_string(root.join("alias").join(name)).ok()?;
+    resolve_nvm_alias(root, &target, depth + 1)
+}
+
+#[cfg(unix)]
+fn installed_nvm_versions(root: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(root.join("versions/node")) else {
+        return Vec::new();
+    };
+    let mut versions: Vec<_> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            nvm_version(&name).map(|version| (version, name))
+        })
+        .collect();
+    versions.sort_by_key(|(version, _)| std::cmp::Reverse(*version));
+    versions.into_iter().map(|(_, name)| name).collect()
+}
+
+// nvm activates a Node by prepending `$NVM_BIN` to the interactive shell PATH.
+// Finder/launchd never load that activation, so a host whose only Node is
+// nvm-managed looks Node-less to the private installer and the owned services.
+// Resolve the same bounded locations the Lark CLI resolver uses, without
+// executing nvm or sourcing any startup file: the version activated in this
+// App's environment, then the recorded `default` alias.
+#[cfg(unix)]
+fn activated_nvm_directories(nvm_root: &Path, nvm_bin: Option<&std::ffi::OsStr>) -> Vec<PathBuf> {
+    let mut directories = Vec::new();
+    if let Some(active) = nvm_bin.filter(|value| !value.is_empty()) {
+        push_tool_directory(&mut directories, PathBuf::from(active));
+    }
+    if let Some(version) = resolve_nvm_alias(nvm_root, "default", 0) {
+        push_tool_directory(
+            &mut directories,
+            nvm_root.join("versions/node").join(version).join("bin"),
+        );
+    }
+    directories
+}
+
+// A host can have nvm-managed versions without a usable `default` alias. Keep
+// them discoverable newest-first, behind the activated selection and the
+// supported Homebrew LTS runtimes, so an outdated default cannot hide them.
+#[cfg(unix)]
+fn installed_nvm_directories(nvm_root: &Path) -> Vec<PathBuf> {
+    let mut directories = Vec::new();
+    for version in installed_nvm_versions(nvm_root) {
+        push_tool_directory(
+            &mut directories,
+            nvm_root.join("versions/node").join(version).join("bin"),
+        );
+    }
+    directories
+}
+
+#[cfg(unix)]
+fn push_tool_directory(directories: &mut Vec<PathBuf>, candidate: PathBuf) {
+    if candidate.is_dir() && !directories.contains(&candidate) {
+        directories.push(candidate);
+    }
+}
+
+#[cfg(unix)]
+fn nvm_root(home: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+    if let Some(configured) = env::var_os("NVM_DIR").filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(configured));
+    }
+    home.map(|home| PathBuf::from(home).join(".nvm"))
+}
+
 fn runtime_search_path(
     home: Option<std::ffi::OsString>,
     inherited: Option<std::ffi::OsString>,
 ) -> std::ffi::OsString {
     let mut paths = Vec::new();
-    if let Some(home) = home {
+    if let Some(ref home) = home {
         paths.push(PathBuf::from(home).join(".local/bin"));
+    }
+    #[cfg(unix)]
+    let nvm_root = nvm_root(home.as_deref());
+    #[cfg(unix)]
+    let nvm_bin = env::var_os("NVM_BIN").filter(|value| !value.is_empty());
+    #[cfg(unix)]
+    if let Some(nvm_root) = &nvm_root {
+        paths.extend(activated_nvm_directories(nvm_root, nvm_bin.as_deref()));
     }
     if cfg!(target_os = "macos") {
         paths.extend([
@@ -1109,6 +1231,10 @@ fn runtime_search_path(
             PathBuf::from("/opt/homebrew/opt/node@22/bin"),
             PathBuf::from("/usr/local/opt/node@22/bin"),
         ]);
+    }
+    #[cfg(unix)]
+    if let Some(nvm_root) = &nvm_root {
+        paths.extend(installed_nvm_directories(nvm_root));
     }
     for path in inherited
         .as_deref()

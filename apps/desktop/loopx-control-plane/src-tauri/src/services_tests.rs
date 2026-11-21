@@ -107,6 +107,12 @@ fn status_readiness_is_explicit_and_fails_closed() {
 #[test]
 #[cfg(target_os = "macos")]
 fn finder_runtime_path_includes_tools_without_loading_shell_profiles() {
+    // An nvm-activated test shell would prepend its own NVM_BIN to this
+    // fixture home's search path, so the fixed-position assertions below only
+    // hold for a process started without that activation.
+    if env::var_os("NVM_BIN").is_some() {
+        return;
+    }
     let path = runtime_search_path(
         Some("/fixture/user".into()),
         Some("/usr/bin:/bin:/usr/sbin:/sbin".into()),
@@ -132,6 +138,137 @@ fn finder_runtime_path_includes_tools_without_loading_shell_profiles() {
     assert!(paths.contains(&PathBuf::from("/sbin")));
     let again = runtime_search_path(Some("/fixture/user".into()), Some(path.clone()));
     assert_eq!(again, path, "tool search must be idempotent");
+}
+
+#[cfg(unix)]
+fn nvm_fixture(root: &Path) -> PathBuf {
+    let versions = root.join("versions/node");
+    for version in ["v24.22.1", "v22.14.0", "v18.20.8"] {
+        fs::create_dir_all(versions.join(version).join("bin")).expect("nvm version bin");
+    }
+    let alias = root.join("alias");
+    fs::create_dir_all(alias.join("lts")).expect("nvm alias directory");
+    fs::write(alias.join("default"), "lts/*\n").expect("default alias");
+    fs::write(alias.join("lts/*"), "lts/krypton\n").expect("lts alias");
+    fs::write(alias.join("lts/krypton"), "v24.22.1\n").expect("lts codename alias");
+    root.to_path_buf()
+}
+
+#[test]
+#[cfg(unix)]
+fn finder_runtime_path_finds_nvm_managed_node() {
+    // A test process started inside an nvm-activated shell would otherwise
+    // resolve this fixture home against the developer's own NVM_DIR/NVM_BIN.
+    if env::var_os("NVM_DIR").is_some() || env::var_os("NVM_BIN").is_some() {
+        return;
+    }
+    let home = tempfile::tempdir().expect("home fixture");
+    let nvm_root = nvm_fixture(&home.path().join(".nvm"));
+    let path = runtime_search_path(
+        Some(home.path().to_path_buf().into()),
+        Some("/usr/bin:/bin:/usr/sbin:/sbin".into()),
+    );
+    let paths: Vec<_> = env::split_paths(&path).collect();
+    let default_bin = nvm_root.join("versions/node/v24.22.1/bin");
+    let position = |candidate: &Path| {
+        paths
+            .iter()
+            .position(|p| p == candidate)
+            .unwrap_or_else(|| panic!("{} missing from tool search", candidate.display()))
+    };
+    assert_eq!(paths[0], home.path().join(".local/bin"));
+    assert_eq!(
+        position(&default_bin),
+        1,
+        "the nvm default alias is the Node the user's shell activates"
+    );
+    assert!(
+        position(&default_bin) < position(Path::new("/opt/homebrew/bin")),
+        "an explicitly selected nvm runtime outranks Homebrew"
+    );
+    assert_eq!(
+        position(&nvm_root.join("versions/node/v22.14.0/bin")),
+        position(Path::new("/usr/local/opt/node@22/bin")) + 1,
+        "installed-but-not-selected nvm versions stay behind supported Homebrew runtimes"
+    );
+    assert!(
+        position(&nvm_root.join("versions/node/v18.20.8/bin"))
+            > position(&nvm_root.join("versions/node/v22.14.0/bin")),
+        "installed nvm versions are discovered newest-first"
+    );
+    let again = runtime_search_path(Some(home.path().to_path_buf().into()), Some(path.clone()));
+    assert_eq!(again, path, "tool search must be idempotent");
+}
+
+#[test]
+#[cfg(unix)]
+fn activated_nvm_bin_outranks_the_recorded_default_alias() {
+    let root = tempfile::tempdir().expect("nvm fixture");
+    let nvm_root = nvm_fixture(root.path());
+    let activated = nvm_root.join("versions/node/v18.20.8/bin");
+    let directories = activated_nvm_directories(&nvm_root, Some(activated.as_os_str()));
+    assert_eq!(
+        directories,
+        vec![
+            activated.clone(),
+            nvm_root.join("versions/node/v24.22.1/bin"),
+        ]
+    );
+    assert_eq!(
+        activated_nvm_directories(&nvm_root, None),
+        vec![nvm_root.join("versions/node/v24.22.1/bin")],
+        "without an activation only the default alias resolves"
+    );
+    assert_eq!(
+        activated_nvm_directories(&nvm_root, Some(std::ffi::OsStr::new("/absent/bin"))),
+        vec![nvm_root.join("versions/node/v24.22.1/bin")],
+        "a stale NVM_BIN must not shadow the recorded default"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn nvm_alias_chain_resolves_versions_and_rejects_escapes() {
+    let root = tempfile::tempdir().expect("nvm fixture");
+    let nvm_root = nvm_fixture(root.path());
+    assert_eq!(
+        resolve_nvm_alias(&nvm_root, "default", 0).as_deref(),
+        Some("v24.22.1")
+    );
+    assert_eq!(
+        resolve_nvm_alias(&nvm_root, "22.14.0", 0).as_deref(),
+        Some("v22.14.0"),
+        "a version without the v prefix still names nvm's directory"
+    );
+    for alias in ["", "missing", "../outside", "/etc/passwd", "lts/../default"] {
+        assert_eq!(
+            resolve_nvm_alias(&nvm_root, alias, 0),
+            None,
+            "alias {alias:?} must not resolve"
+        );
+    }
+    fs::write(nvm_root.join("alias/cycle"), "cycle").expect("cyclic alias");
+    assert_eq!(resolve_nvm_alias(&nvm_root, "cycle", 0), None);
+    assert!(installed_nvm_versions(&nvm_root)
+        .iter()
+        .zip(["v24.22.1", "v22.14.0", "v18.20.8"])
+        .all(|(found, expected)| found == expected));
+    assert_eq!(nvm_version("v24.22.1"), Some((24, 22, 1)));
+    assert_eq!(nvm_version("not-a-version"), None);
+    assert_eq!(nvm_version("v24.22"), None);
+}
+
+#[test]
+#[cfg(unix)]
+fn nvm_root_follows_configured_directory_and_conventional_home() {
+    match env::var_os("NVM_DIR").filter(|value| !value.is_empty()) {
+        Some(configured) => assert_eq!(nvm_root(None), Some(PathBuf::from(configured))),
+        None => assert_eq!(
+            nvm_root(Some(std::ffi::OsStr::new("/fixture/user"))),
+            Some(PathBuf::from("/fixture/user/.nvm")),
+            "an unset NVM_DIR keeps the conventional location"
+        ),
+    }
 }
 
 #[cfg(not(windows))]
