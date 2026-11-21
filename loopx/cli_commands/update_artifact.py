@@ -31,9 +31,11 @@ from ..control_plane.content_digest import BARE_SHA256_PATTERN as HASH
 from ..capabilities.issue_fix.repository_snapshot import _REPO_PATTERN as REPOSITORY_PATTERN
 
 RUNTIME_ARTIFACT_SCHEMA_VERSION = "loopx_runtime_artifact_v1"
-PUBLIC_DEFAULT_CONTRACT = json.loads(
+_ARTIFACT_DEFAULT_CONTRACTS = json.loads(
     Path(__file__).with_name("public_default_contract.json").read_text(encoding="utf-8")
 )
+PUBLIC_DEFAULT_CONTRACT = _ARTIFACT_DEFAULT_CONTRACTS["current"]
+HISTORICAL_DEFAULT_CONTRACT = _ARTIFACT_DEFAULT_CONTRACTS["historical"]
 SHA = re.compile(r"[0-9a-f]{40}")
 MAX_MANIFEST = 256 * 1024
 MAX_ARCHIVE = 256 * 1024 * 1024
@@ -64,11 +66,11 @@ def standalone_source() -> str:
         source = source.replace(old, "\n" + binding + "\n", 1)
     # The public installer is one file, so embed the policy that the Python
     # publishers and the native updater read from the distribution contract.
-    binding_start = source.index("\nPUBLIC_DEFAULT_CONTRACT = ")
-    binding_end = source.index("\nSHA = ", binding_start)
+    binding_start = source.index("\n_ARTIFACT_DEFAULT_CONTRACTS = ")
+    binding_end = source.index("\nPUBLIC_DEFAULT_CONTRACT = ", binding_start)
     return (
         source[:binding_start]
-        + f"\nPUBLIC_DEFAULT_CONTRACT = {PUBLIC_DEFAULT_CONTRACT!r}"
+        + f"\n_ARTIFACT_DEFAULT_CONTRACTS = {_ARTIFACT_DEFAULT_CONTRACTS!r}"
         + source[binding_end:]
     )
 
@@ -108,17 +110,11 @@ def read_json(url: str) -> dict[str, Any]:
 
 
 def validate_default_contract(value: object) -> dict[str, Any]:
-    """Keep public artifacts within the currently supported single-session default.
-
-    This is a distribution compatibility boundary, not a model-benefit verdict.
-    A new complete-contract default needs its original matched outcome/full-cost
-    qualification before this supported scope can be extended. Engineering
-    installation checks cannot authorize that extension.
-    """
+    """Require the current engineering default on newly published artifacts."""
     if not isinstance(value, dict) or value != PUBLIC_DEFAULT_CONTRACT:
         raise ValueError(
             "Runtime default contract is unqualified for public adoption; "
-            "the C1 single-session outcome/full-cost and supported-profile qualification is required"
+            "the observed default must match the complete Turn distribution contract"
         )
     return dict(value)
 
@@ -141,9 +137,9 @@ def validate_manifest(value: dict[str, Any], *, revision: str | None = None) -> 
         raise ValueError("Runtime artifact has no bounded download sources")
     for url in urls:
         safe_url(url)
-    # Historical v1 snapshots remain readable. Newly produced artifacts and
-    # the publisher require the observed contract; absence is not qualification.
-    if "default_contract" in value:
+    # Published v1 snapshots can omit the attestation or carry the old default.
+    # New archives must pass validate_default_contract on their observed writer.
+    if "default_contract" in value and value["default_contract"] != HISTORICAL_DEFAULT_CONTRACT:
         validate_default_contract(value["default_contract"])
     return dict(value)
 

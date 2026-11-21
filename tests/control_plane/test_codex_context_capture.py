@@ -140,14 +140,12 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         "--decision-output-root", str(root), "--context-delivery", "on", *host_args, context_option, str(lifecycle)]
     if handoff_socket:
         command += ["--decision-handoff-socket", handoff_socket]
-    display_args = {"turn_envelope": ["--turn-envelope"], "complete_turn": ["--complete-turn"]}.get(surface, [])
-    command.extend(display_args)
     generated_guard = None
     if shared_root:
         generated = subprocess.run([*cli, "--registry", str(registry), "--runtime-root", str(runtime),
             "--format", "json", "heartbeat-prompt", "--thin",
             "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--decision-output-root", str(root),
-            "--context-delivery", "on", *host_args, context_option, str(lifecycle), *display_args],
+            "--context-delivery", "on", *host_args, context_option, str(lifecycle)],
             capture_output=True, text=True, timeout=15)
         assert generated.returncode == 0, generated.stderr or generated.stdout
         prompt = json.loads(generated.stdout)
@@ -554,7 +552,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             project_hooks.write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [{
                 "type": "command", "command": shlex.join(["touch", str(unrelated)])}]}]}}))
             # Current benchmark delivery exercises default and explicit Complete.
-            env.update(LOOPX_CONTEXT_DELIVERY="on", LOOPX_COMPLETE_TURN=str(int(surface == "complete_turn")),
+            env.update(LOOPX_CONTEXT_DELIVERY="on",
                 LOOPX_EXECUTION_MODE="heartbeat", LOOPX_ITERATION_CONTEXT="resume",
                 LOOPX_TASK_ENTRY="seeded-todo", LOOPX_TASK_STAGE="execute",
                 LOOPX_CODEX_HOME=str(home), LOOPX_PROJECT=str(project), LOOPX_SHARED_SKILLS=str(skills),

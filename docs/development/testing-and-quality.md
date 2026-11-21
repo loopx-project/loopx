@@ -1401,6 +1401,19 @@ workflow costs less.
 
 ### Budget Failure Decisions
 
+The complete Vision fixture with 36 Todos, 12 runs and inline delivery measured
+60,826 JSON characters on the explicit C1 path before the default switched.
+That body exceeded both earlier fixture allowances of 55,000 and 59,000.
+The current 61,100-character allowance covers this fixture while preserving
+the replan authoring, settlement and continuation content. Keep the earlier
+overruns in measurement history. Transport limits and total model cost are
+measured independently.
+
+36 个 Todo、12 次 run 的 Vision 内联夹具，在默认切换前通过显式 C1 得到
+60,826 个 JSON 字符，超过当时的 55,000 和 59,000 上限。现有 61,100 字符预算
+覆盖该夹具，保留重规划编写、结算和续接内容。测量记录保留原超限结果，传输
+限制与模型完整成本另行核对。
+
 The thin heartbeat's 4,500-character presentation allowance did not cover the
 complete combination of a 320-character scope, all five runtime capability
 flags, Codex App transport and an explicit CLI route. The existing public CLI

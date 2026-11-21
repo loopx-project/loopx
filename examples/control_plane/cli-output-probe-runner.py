@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import importlib.util
 import hashlib
 import shlex
@@ -390,6 +391,29 @@ def _assert_output_contract(
         raise AssertionError(f"JSON output lost semantic key(s): {', '.join(missing)}")
 
 
+def _historical_ordinary_quota_carrier(spec, measurement: dict, output_format: str, text: str):
+    """Describe a frozen old caller; the 19-control oracle still validates it.
+
+    Only measurement-only base probes call this. Candidate C1 shape and
+    budgets remain mandatory, including when the old carrier looks valid.
+    """
+    payload = measurement.get("resolved_payload", measurement.get("payload"))
+    historical_json = (output_format == "json" and isinstance(payload, dict)
+        and payload.get("mode") == "should-run" and "schema_version" not in payload)
+    historical_markdown = (output_format == "markdown"
+        and text.startswith("# LoopX Quota Should Run\n"))
+    if (output_format == "json" and isinstance(payload, dict)
+            and payload.get("schema_version") == "loopx_turn_envelope_v0"):
+        return replace(spec, semantic_json_keys=("goal_id", "agent_id", "action", "writeback",
+            "boundary", "contract_capsule", "required_reads"), output_contract_version=None)
+    if historical_json or historical_markdown:
+        return replace(spec,
+            semantic_json_keys=("goal_id", "decision", "should_run", "interaction_contract",
+                "scheduler_hint", "selected_todo"),
+            markdown_anchor="# LoopX Quota Should Run", output_contract_version=None)
+    return spec
+
+
 def _default_rows(
     probe: ModuleType,
     semantics: ModuleType,
@@ -427,6 +451,8 @@ def _default_rows(
                         surface_id, {}
                     )[output_format] = measurement
                     surface = probe.CLI_OUTPUT_BUDGET_BY_ID[surface_id]
+                    if not enforce_budget and surface_id == "quota_should_run":
+                        surface = _historical_ordinary_quota_carrier(surface, measurement, output_format, text)
                     if enforce_budget:
                         if (surface_id, scenario.name, output_format) == (
                             "loopx_turn_plan", "crowded", "json"
@@ -506,6 +532,8 @@ def _variant_rows(
             if exit_code != 0:
                 raise AssertionError(f"{variant_id}/{output_format} failed")
             measurement = probe._measure_context_output(text, output_format=output_format)
+            if not enforce_budget and variant.parent_surface_id == "quota_should_run":
+                variant = _historical_ordinary_quota_carrier(variant, measurement, output_format, text)
             if enforce_budget:
                 probe.assert_cli_output_mode_variant(
                     variant,
@@ -575,6 +603,8 @@ def _blocking_gate_rows(
     variant = probe.CLI_OUTPUT_MODE_VARIANT_BY_ID[
         "quota_should_run_turn_envelope"
     ]
+    if not enforce_budget:
+        variant = _historical_ordinary_quota_carrier(variant, measurement, "json", output)
     if enforce_budget:
         probe.assert_cli_output_mode_variant(
             variant,
@@ -633,6 +663,8 @@ def _multi_subagent_rows(probe, semantics, fixture_root, *, enforce_budget=True)
         raise AssertionError("enabled multi_subagent turn envelope failed")
     measurement = probe._measure_context_output(output, output_format="json")
     variant = probe.CLI_OUTPUT_MODE_VARIANT_BY_ID[variant_id]
+    if not enforce_budget:
+        variant = _historical_ordinary_quota_carrier(variant, measurement, "json", output)
     if enforce_budget:
         probe.assert_cli_output_mode_variant(
             variant, output_format="json", text=output, measurement=measurement,

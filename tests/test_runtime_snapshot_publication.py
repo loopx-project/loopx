@@ -13,7 +13,11 @@ import tarfile
 
 import pytest
 import yaml
-from loopx.cli_commands.update_artifact import PUBLIC_DEFAULT_CONTRACT, validate_default_contract
+from loopx.cli_commands.update_artifact import (
+    HISTORICAL_DEFAULT_CONTRACT,
+    PUBLIC_DEFAULT_CONTRACT,
+    validate_default_contract,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = "a" * 40
@@ -136,7 +140,7 @@ def publish(root):
 @pytest.mark.parametrize("failure", [
     "missing", "invalid_json", "failed", "incomplete", "wrong_revision", "wrong_channel",
     "wrong_size", "wrong_digest", "archive_changed", "manifest_changed", "frozen_manifest_changed", "truthy_status",
-    "missing_contract", "unknown_contract", "c1_default", "mismatched_contract", "missing_observed_contract",
+    "missing_contract", "unknown_contract", "historical_default", "mismatched_contract", "missing_observed_contract",
 ])
 def test_unqualified_runtime_never_changes_remote_state(publication, failure):
     qualification = publication / "runtime" / f"qualification-{REVISION}.json"
@@ -147,14 +151,14 @@ def test_unqualified_runtime_never_changes_remote_state(publication, failure):
         qualification.write_text("{", encoding="utf-8")
     elif failure == "frozen_manifest_changed":
         (publication / "runtime" / f"loopx-runtime-{REVISION}.json").write_text("{}", encoding="utf-8")
-    elif failure in {"missing_contract", "unknown_contract", "c1_default"}:
+    elif failure in {"missing_contract", "unknown_contract", "historical_default"}:
         path = publication / "runtime/loopx-runtime.json"
         data = json.loads(path.read_text(encoding="utf-8"))
         if failure == "missing_contract":
             data.pop("default_contract")
         else:
-            profile = {"surface": "complete_turn", "schema_version": "loopx_turn_envelope_v1",
-                       "interaction_schema_version": "loopx_interaction_contract_v0"} if failure == "c1_default" else {"surface": "future"}
+            profile = (HISTORICAL_DEFAULT_CONTRACT
+                       if failure == "historical_default" else {"surface": "future"})
             data["default_contract"] = record["default_contract"] = profile
         # All engineering checks, identities and frozen bytes still agree.
         for name in ["loopx-runtime.json", f"loopx-runtime-{REVISION}.json"]:
@@ -334,8 +338,7 @@ def test_builder_qualifies_committed_default_before_writing_artifacts(tmp_path, 
         assert (source / "loopx/fixture.txt").read_text(encoding="utf-8") == "public fixture"
         if supported:
             return dict(PUBLIC_DEFAULT_CONTRACT)
-        return {"surface": "complete_turn", "schema_version": "loopx_turn_envelope_v1",
-                "interaction_schema_version": "loopx_interaction_contract_v0"}
+        return dict(HISTORICAL_DEFAULT_CONTRACT)
 
     monkeypatch.setattr(builder, "observe_default_contract", observe)
     output = tmp_path / "runtime"
@@ -365,6 +368,6 @@ def test_builder_qualifies_committed_default_before_writing_artifacts(tmp_path, 
 def test_release_probe_observes_real_default_without_model_or_active_goal():
     from scripts.qualify_runtime_artifact import observe_default_contract
 
-    # Check the actual CLI output against the supported release contract.
-    observed = observe_default_contract(ROOT)
-    assert validate_default_contract(observed) == PUBLIC_DEFAULT_CONTRACT
+    observed = validate_default_contract(observe_default_contract(ROOT))
+    assert observed == {"surface": "complete_turn", "schema_version": "loopx_turn_envelope_v1",
+                        "interaction_schema_version": "loopx_interaction_contract_v0"}

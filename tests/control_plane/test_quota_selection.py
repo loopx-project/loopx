@@ -335,9 +335,8 @@ def test_quota_uses_complete_owned_commitment_count_before_display_cap(reverse):
 @pytest.mark.parametrize("display", ["current", "empty", "stale"])
 @pytest.mark.parametrize("scope", ["global_gate=true", "blocks_agent=agent-b"])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("complete_turn", [False, True], ids=["ordinary", "complete-turn"])
 def test_public_quota_keeps_gate_from_real_canonical_provider(
-    tmp_path: Path, monkeypatch, display: str, scope: str, provider: str, complete_turn: bool
+    tmp_path: Path, monkeypatch, display: str, scope: str, provider: str
 ):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
@@ -362,15 +361,13 @@ def test_public_quota_keeps_gate_from_real_canonical_provider(
     elif display == "stale":
         state.write_text("# Stale projection\n## User Todo\n- [x] Old approval.\n")
     before = state.read_bytes() if state.exists() else None
-    view_args = ("--complete-turn",) if complete_turn else ()
     code, packet = run_json_cli_result(
         "quota", "should-run", "--goal-id", "goal-scope", "--agent-id", "agent-b",
-        "--context-delivery", "off", *view_args, registry_path=registry, runtime_root=runtime,
+        "--context-delivery", "off", registry_path=registry, runtime_root=runtime,
     )
     assert code == 0, packet
     assert packet["requires_user_action"] is True
-    if complete_turn:
-        assert_complete_turn_decision(packet)
+    assert_complete_turn_decision(packet)
     summary = packet["user_todo_summary"]
     if "gate_open_items_ref" in summary:
         assert summary["gate_open_items_ref"] == "$.user_todo_summary.first_open_items"

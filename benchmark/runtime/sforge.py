@@ -138,7 +138,6 @@ class SForgeWorker(CodexAgent):
             complete_turn=complete_turn, validation_command=validation_command,
             native_child_limit=native_child_limit,
         )
-        self.turn_envelope = self.execution.turn_envelope
         self.context_delivery = self.execution.context_delivery
         self.task_entry = self.execution.task_entry
         self.native_child_limit = self.execution.native_child_limit
@@ -421,8 +420,6 @@ class SForgeWorker(CodexAgent):
                 turn_timeout_sec=None,
                 scheduler_timeout_sec=self.timeout_seconds,
                 task_entry=self.task_entry,
-                turn_envelope=self.turn_envelope,
-                **({"complete_turn": True} if self.execution.complete_turn else {}),
                 context_delivery=self.context_delivery,
                 **({"execution_observation": self.execution_observation}
                    if self.execution_observation is not None else {}),
@@ -530,7 +527,7 @@ class SForgeWorker(CodexAgent):
             "stop_hook": self.profile == "official",
             **({"native_child_limit": self.native_child_limit}
                if self.native_child_limit is not None else {}),
-            **(self.runtime._turn_envelope_receipt() if self.runtime is not None else {}),
+            **(self.runtime._host_context_receipt() if self.runtime is not None else {}),
             **({"provider_request_admission": "on"} if self.provider_request_admission else {}),
             **({"native_goal_continue": True} if self.native_goal_continue else {}),
             **({"native_readiness_budget": dict(zip(("total_seconds", "attempt_seconds"),

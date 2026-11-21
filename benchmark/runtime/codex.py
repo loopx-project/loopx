@@ -44,10 +44,8 @@ class Execution:
             object.__setattr__(self, "context_delivery", "on" if self.mode == "heartbeat" else "off")
         if self.context_delivery not in ("off", "on") or (self.context_delivery != "off" and self.mode != "heartbeat"):
             raise ValueError("context_delivery supports only off or on with heartbeat execution")
-        if not isinstance(self.turn_envelope, bool) or (self.turn_envelope and self.mode != "heartbeat"):
-            raise ValueError("turn_envelope requires heartbeat execution and a boolean opt-in")
-        if type(self.complete_turn) is not bool or (self.complete_turn and (self.mode != "heartbeat" or self.turn_envelope)):
-            raise ValueError("complete_turn requires heartbeat execution without legacy turn_envelope")
+        if self.turn_envelope is not False or self.complete_turn is not False:
+            raise ValueError("Historical turn_envelope and complete_turn treatments require the recorded product and runner revisions")
         if self.mode not in MODES or self.context not in CONTEXTS:
             raise ValueError("unsupported execution mode or iteration context")
         if self.task_entry is None:
@@ -89,22 +87,11 @@ class Execution:
         return self.mode in {"native-goal", "loopx-goal"}
 
 
-def turn_envelope_receipt(*, explicit: bool, complete: bool = False) -> dict:
-    """Record only the explicit display opt-in; checkpoint capture is independent."""
-    return {**({"turn_envelope": True, "turn_envelope_source": "explicit"} if explicit else {}),
-        **({"complete_turn": True, "complete_turn_source": "explicit"} if complete else {})}
-
-
-def explicit_turn_display(env: dict[str, str]) -> Execution:
-    """Decode the shared explicit display request through its Execution owner."""
-    selected = {}
-    for variable, field in (("LOOPX_TURN_ENVELOPE", "turn_envelope"),
-                            ("LOOPX_COMPLETE_TURN", "complete_turn")):
-        value = env.get(variable, "0")
-        if value not in {"0", "1"}:
-            raise ValueError(f"{variable} must be 0 or 1")
-        selected[field] = value == "1"
-    return Execution(**selected)
+def reject_retired_turn_display(env: dict[str, str]) -> None:
+    """Fail historical requests before a new benchmark can use the wrong treatment."""
+    for variable in ("LOOPX_TURN_ENVELOPE", "LOOPX_COMPLETE_TURN"):
+        if env.get(variable, "0") != "0":
+            raise ValueError(f"{variable} requires the recorded historical product and runner revisions")
 
 
 def native_child_instructions(limit: int | None) -> str:

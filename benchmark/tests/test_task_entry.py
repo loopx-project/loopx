@@ -1187,16 +1187,13 @@ def test_sforge_planning_entry_stops_retrying_after_the_attempt_limit(planning_e
 
 @pytest.mark.parametrize("context", ["fresh", "resume"])
 @pytest.mark.parametrize("producer", [None, "local_probe"])
-@pytest.mark.parametrize("complete", [False, True])
 @pytest.mark.parametrize("checkpoint_preflight", [False, True])
 def test_execute_wake_keeps_host_clocks_out_of_fresh_and_resumed_input(
-        planning_env, context, producer, complete, checkpoint_preflight):
+        planning_env, context, producer, checkpoint_preflight):
     """Exercise the real worker/heartbeat CLI and capture its model transport input."""
     from benchmark.runtime.research_probe import execution_observation_guidance
 
     env = planning_env | {"LOOPX_ITERATION_CONTEXT": context}
-    if complete:
-        env["LOOPX_COMPLETE_TURN"] = "1"
     if producer is not None:
         env["LOOPX_EXECUTION_OBSERVATION"] = producer
     if checkpoint_preflight:
@@ -1238,9 +1235,9 @@ def test_execute_wake_keeps_host_clocks_out_of_fresh_and_resumed_input(
         assert "Research-loop execution evidence:" not in body
         assert receipt["session"]["action"] == ("resume" if context == "resume" else "start_new")
         assert "turn_envelope" not in receipt
-        assert receipt.get("complete_turn") is (True if complete else None)
+        assert "complete_turn" not in receipt
         assert "--complete-turn" not in body and "--turn-envelope" not in body
-        assert ("--decision-output-root" in body) is (complete or checkpoint_preflight)
+        assert ("--decision-output-root" in body) is checkpoint_preflight
         if checkpoint_preflight:
             original = Path(env["LOOPX_WAKE_LOG_DIR"]) / receipt["turn_id"] / "checkpoint-start-guard.json"
             assert json.loads(original.read_bytes())["schema_version"] == "loopx_turn_envelope_v1"

@@ -169,17 +169,6 @@ def register_heartbeat_control_commands(
              "or codex-context-root with the normal per-wake LOOPX_TURN binding.",
     )
 
-    turn_view = heartbeat_prompt_parser.add_mutually_exclusive_group()
-    turn_view.add_argument(
-        "--turn-envelope",
-        action="store_true",
-        help="Compatibility input for saved thin prompts with --decision-output-root. "
-             "Generated guards use the complete v1 work contract.",
-    )
-    turn_view.add_argument("--complete-turn", action="store_true",
-        help="Compatibility input for saved thin host-owned prompts. "
-             "Generated guards use the complete v1 work contract.")
-
     heartbeat_prompt_parser.add_argument(
         "--decision-handoff-socket",
         help="Retain the explicit private Host handoff on generated guards; requires --decision-output-root.",

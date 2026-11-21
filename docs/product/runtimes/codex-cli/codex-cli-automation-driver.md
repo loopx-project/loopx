@@ -143,7 +143,7 @@ the host-neutral mechanism.
 
 ```text
 1. Resolve project, goal, registered agent, execution mode, and Codex capability.
-2. Run live quota should-run --turn-envelope with observed capabilities.
+2. Run live quota should-run with observed capabilities.
 3. Route user notification, quiet wait, repair, or delivery exactly as decided.
 4. Claim/preserve the selected todo and satisfy workspace guard.
 5. Start or resume one Codex turn with the thin task body and TurnEnvelope.

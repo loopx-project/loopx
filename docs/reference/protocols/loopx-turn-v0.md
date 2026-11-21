@@ -467,7 +467,7 @@ One driver tick has exactly these ordered phases:
 1. **Wake**: resolve `goal_id`, registered `agent_id`, host kind, explicit
    execution mode, available capabilities, and an optional opaque session
    handle.
-2. **Decide**: run live `quota should-run --turn-envelope` with the observed
+2. **Decide**: run live `quota should-run` with the observed
    capabilities. A fixture is valid only in tests and shadow replay.
 3. **Route**: obey the envelope without invoking the host when the user channel
    requires action, work is throttled, a monitor is unchanged, or delivery is

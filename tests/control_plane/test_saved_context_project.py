@@ -79,7 +79,7 @@ def test_saved_complete_quota_projection_rejects_invalid_source_without_legacy_f
     binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", TURN_ID]
     directory = tmp_path / "capture"
     code, result = _run_cli(registry, runtime, "quota", "should-run", *binding, "--todo-id", TODO_ID,
-        "--complete-turn", "--context-delivery", "off", "--decision-output-dir", str(directory), cwd=project)
+        "--context-delivery", "off", "--decision-output-dir", str(directory), cwd=project)
     assert code == 0, result
     original = directory / "decision.json"
     raw = original.read_bytes()
