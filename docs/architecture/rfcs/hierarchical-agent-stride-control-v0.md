@@ -640,33 +640,64 @@ delivery; execution quality and goal benefit still require separate evidence.
 
 <a id="work-meta-goal"></a>
 
-#### Meta-goal within a Todo (proposal)
+#### Meta-goals and single-Todo acceptance (proposal)
 
-A **meta-goal** covers one local decision about how to advance a Todo. It
-states what to establish about the method, measurement, or next investment,
-which choice the answer informs, and what evidence would settle the question.
-The Todo carries the deliverable, acceptance, dependencies and ownership. A
-Todo can have successive meta-goals, and a question can span Turns while it
-remains relevant.
+A **meta-goal** is a planning objective for pursuing one or more existing goals.
+It specifies what should be true of a plan, a choice among candidate plans, or
+the relationship between plans, and how to tell when that condition is met.
+A decision question identifies an uncertainty that could change the choice.
+The same meta-goal can span Turns as questions and actions change.
+[Wilensky, §2.2](https://www2.eecs.berkeley.edu/Pubs/TechRpts/1980/Archive/ERL-m-80-33.pdf)
 
-`grow`, `switch`, and `verify` are **meta-decision actions** the agent can choose
-to pursue that objective. `next_probe` specifies the first work slice and its
-prediction, minimum evidence, adoption criterion and cost bound. New evidence
-may justify a different action for the same question.
+| Meta-goal | Example and success condition | Possible Stride action |
+|---|---|---|
+| Resolve a conflict between goals | Two Goals may need the same limited test window. Find an order or alternative route that meets both sets of acceptance criteria and deadlines. If the commitments cannot both be met, the authorized Goal owners decide the trade-off. | `verify` whether the windows overlap, or `switch` to test a mechanism that can run independently. |
+| Combine overlapping plans | Two plans require equivalent validation against the same input revision. Run it once with coverage for both sets of criteria, and let each acceptance decision reference the shared result. | `verify` coverage if it is uncertain. Confirmed coverage can support `grow` on the shared route within its validated scope. |
+| Choose the least costly feasible plan | Compare routes that meet the same acceptance and deadline constraints. Choose the lowest supported total cost among the feasible candidates assessed, including execution, validation, switching and human effort. | `verify` a cost difference that could change the ranking. Evidence favoring a different mechanism can justify `switch`. |
 
-For a Todo to deliver a faster scheduler with the same correctness constraints,
-the meta-goal could be to determine whether the current route's gains carry
-over to peak workloads and justify further investment. The agent could choose
-`verify` and compare the candidate and incumbent under matched peak conditions.
-Evidence of remaining headroom can support `grow`. Evidence favoring a
-different mechanism can support `switch`. Record the answer when the evidence
-supports a choice, including a decision to abandon a route. If the cost bound
-arrives with insufficient evidence, record the question as unresolved.
+Stride chooses the next action in pursuit of the meta-goal. `verify` gathers
+evidence that can change the choice at a justified cost. `grow` expands work on
+a supported route. `switch` tests a materially different mechanism. The same
+meta-goal can call for different actions as evidence arrives. Plan changes
+such as reordering work or sharing a dependency use the existing Todo paths.
+Goal commitments, acceptance, budget and authority remain with their owners.
 
-The proposed first use would state this objective in the existing Stride plan
-and probe, and connect the observed result to the next choice through decision
-followthrough. Existing Todo authoring, Turn admission and settlement govern any
-resulting change to the work.
+**First acceptance trial.** Use one Todo to deliver a faster scheduler under
+its existing correctness and budget constraints. The meta-goal is to select
+the optimization route that warrants further investment. The decision
+question is whether the candidate's gains carry over to peak load. State the
+objective and choice in the existing Stride plan and reasons. Choose `verify`
+and use `next_probe` to compare the candidate and incumbent under matched peak
+conditions, with a prediction, minimum evidence, adoption criterion and cost bound.
+
+In a later authorized Turn, use `decision_followthrough` and `previous_review`
+to tie the next choice to the exact candidate, workload and observed result.
+Read back all three outcomes across the trial cases.
+
+- The evidence supports the current route and shows useful headroom. Choose
+  `grow` and execute a larger coherent slice within the remaining budget.
+- The evidence favors testing a different mechanism. Choose `switch` and run a
+  bounded test of that mechanism.
+- The cost bound is reached with insufficient evidence. Record the choice as
+  unresolved and handle settlement or waiting through the existing owner.
+
+Use the existing Todo, Turn admission and settlement paths. Independently
+verify the action taken. For executed follow-up work, check whether it
+followed the decision and how its result compares with the original acceptance
+criteria. Record complete costs, including inconclusive probes, in all three cases.
+
+**Follow-up work.** For cross-Todo planning, start with two Todos within one
+Goal. Check that shared validation covers each Todo's acceptance criteria and
+read back both consumers' use. Cross-Goal changes follow the authority of the
+affected Goals.
+
+For cross-task strategy evolution, use verified decision episodes to propose a
+bounded, versioned Stride strategy change through its owner. An independent
+evaluator compares it with the current version on held-out tasks under the same
+model, starting conditions and budget. Read back actual adoption and outcomes
+in later authorized work. Use those observations and the evaluation verdict to
+decide whether to revise, retain or withdraw the candidate and what to try next.
+[Capability evolution research](frontier-science-research-program-v0.md#t07-diversity-preserving-capability-evolution)
 
 #### An iterative strategy and engineering boundary
 
