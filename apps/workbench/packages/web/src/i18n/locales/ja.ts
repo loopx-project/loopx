@@ -1,6 +1,20 @@
 import type { Messages } from './zh';
 
 export const ja: Messages = {
+  "pwa.title": "LoopX をインストール",
+  "pwa.hint": "独立したウィンドウで開き、パソコンからすぐに起動できます。",
+  "pwa.install": "インストール",
+  "pwa.later": "後で",
+  "pwa.prompting": "Chrome で確認してください…",
+  "pwa.help": "インストール方法",
+  "pwa.failed": "インストールを開始できませんでした。ブラウザのメニューから再試行してください。",
+  "pwa.installed": "インストール済みです。パソコンのアプリ一覧から LoopX を開けます。",
+  "pwa.accepted": "インストールを承認しました。Chrome の処理をお待ちください。",
+  "pwa.unavailable": "ブラウザからインストールの案内がまだ届いていません。Chrome のメニューをお試しください。インストール済みならアプリ一覧から開けます。",
+  "pwa.insecure": "HTTPS またはローカルの localhost で開いてから、再度インストールしてください。",
+  "pwa.chrome": "macOS または Windows の Chrome で、アドレスバーのインストールアイコン、またはメニューの「キャスト、保存、共有」→「ページをアプリとしてインストール」を選びます。名称は Chrome のバージョンによって異なります。管理対象のブラウザではインストールが禁止されている場合があります。",
+  "pwa.launch": "インストール後は Mac の Spotlight または Windows のスタートメニューで LoopX を検索できます。Dock やタスクバーへの固定は手動で行えます。リモートサービスがオフラインで使えるようになるわけではありません。",
+
   "references.message": (value: string) => `メッセージ · ${value}`,
   "references.messageHint": "このメッセージの本文を保存し、必要に応じてエージェントが読みます。",
   "messageActions.context": "コンテキストにする",

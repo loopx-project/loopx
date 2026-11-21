@@ -4507,6 +4507,32 @@ input.picker-search {
   margin-left: auto;
 }
 
+/* Install offers reserve space instead of covering the last conversations or access notice. */
+.sidebar-inner:has(.pwa-install-promo) .sidebar-scroll { padding-bottom: 12px; }
+.sidebar-float:has(.pwa-install-promo) {
+  position: static;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 8px;
+}
+.sidebar-float:has(.pwa-install-promo) .link-login-notice { position: static; width: 100%; }
+.pwa-install-promo {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.pwa-install-promo strong { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.pwa-install-promo p { color: var(--muted); margin: 6px 0 10px; }
+.pwa-install-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pwa-install-actions button { min-height: 32px; padding: 5px 10px; font-size: 12px; }
+.pwa-install-help { margin-top: 20px; color: var(--muted); line-height: 1.7; }
+.pwa-install-help summary { cursor: pointer; color: var(--text); }
+
 /* ---------- Sidebar on a phone ---------- */
 
 /* A page of its own, laid out for thumbs: large rows, round buttons, the one main action floating

@@ -3,6 +3,20 @@
  * a key added here has to be added to them too. Messages with values are functions.
  */
 export const zh = {
+  "pwa.title": "安装 LoopX",
+  "pwa.hint": "用独立窗口打开，随时从电脑启动。",
+  "pwa.install": "安装",
+  "pwa.later": "以后再说",
+  "pwa.prompting": "请在 Chrome 中确认…",
+  "pwa.help": "安装说明",
+  "pwa.failed": "安装未能启动，请通过浏览器菜单重试。",
+  "pwa.installed": "已安装，可从电脑的应用列表打开 LoopX。",
+  "pwa.accepted": "已接受安装，请等待 Chrome 完成。",
+  "pwa.unavailable": "浏览器尚未提供快捷安装。可以尝试从 Chrome 菜单安装；如果已安装，直接从应用列表打开。",
+  "pwa.insecure": "请通过 HTTPS 或本机 localhost 打开，再尝试安装。",
+  "pwa.chrome": "在 macOS 或 Windows 的 Chrome 中，点击地址栏的安装图标，或在菜单中找到「投放、保存和分享」→「将网页安装为应用」。菜单名称可能随 Chrome 版本变化；受管理的浏览器可能禁用安装。",
+  "pwa.launch": "安装后可在 Mac 的 Spotlight 或 Windows 开始菜单搜索 LoopX，也可以自行固定到 Dock 或任务栏。安装不会让远程服务离线可用。",
+
   "references.message": (value: string) => `消息 · ${value}`,
   "references.messageHint": "保存这条消息的正文快照，供 agent 按需读取。",
   "messageActions.context": "作为上下文",
