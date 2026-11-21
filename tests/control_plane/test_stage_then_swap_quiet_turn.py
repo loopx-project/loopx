@@ -1265,3 +1265,136 @@ def test_collect_context_policy_telemetry_prefers_usage_prefix_kv_and_compacted_
         "uncached_prefix_kv_tokens": 30,
         "cached_prefix_kv_tokens": 90,
     }
+
+
+def test_real_cli_context_read_nonzero_offset_tail_fails_closed_vs_zero_offset_select(
+    tmp_path: Path,
+) -> None:
+    cap = tmp_path / "large_capture.json"
+    cap_obj = {"summary": "concise executive summary", "noise": "n" * 14100}
+    cap_raw = json.dumps(cap_obj, separators=(",", ":"))
+    cap.write_text(cap_raw, encoding="utf-8")
+    cap_sha = hashlib.sha256(cap_raw.encode("utf-8")).hexdigest()
+    total_len = len(cap_raw.encode("utf-8"))
+    assert total_len > 14095
+
+    # 1) Exact A2 repro: real `loopx quota context-read --offset 14095 --page-bytes 512`
+    # yields eof=true on the final 80B tail! Must STILL fail closed to KeepRaw.
+    tail_receipt = resolve_or_execute_epoch_prefetch(
+        epoch_prefetch={
+            "enabled": True,
+            "prefetch_command": [
+                sys.executable,
+                "-m",
+                "loopx.cli",
+                "--format",
+                "json",
+                "quota",
+                "context-read",
+                "--capture-file",
+                str(cap),
+                "--capture-sha256",
+                cap_sha,
+                "--offset",
+                "14095",
+                "--page-bytes",
+                "512",
+            ],
+            "timeout_ms": 10000,
+            "max_output_bytes": 16384,
+        },
+        scope_key="offset-tail-guard:tail",
+        context_epoch="epoch-tail-1",
+        file_store_dir=tmp_path / "ep_tail",
+        sqlite_path=tmp_path / "ep_tail.sqlite",
+        source_ref={"path": str(cap), "sha256": cap_sha},
+        baseline_bytes=total_len,
+        cwd=Path.cwd(),
+    )
+    assert tail_receipt is not None
+    assert tail_receipt["operator"] == "KeepRaw"
+    assert tail_receipt["fallback_reason"] == "incomplete_output"
+    assert tail_receipt["preserves_raw_state"] is True
+    assert tail_receipt["round_trips_saved"] == 0
+    assert tail_receipt["bytes_saved"] == 0
+
+    # 2) Paired --offset 0 --select /summary complete compact page commits EpochReset!
+    zero_select_receipt = resolve_or_execute_epoch_prefetch(
+        epoch_prefetch={
+            "enabled": True,
+            "prefetch_command": [
+                sys.executable,
+                "-m",
+                "loopx.cli",
+                "--format",
+                "json",
+                "quota",
+                "context-read",
+                "--capture-file",
+                str(cap),
+                "--capture-sha256",
+                cap_sha,
+                "--select",
+                "/summary",
+                "--offset",
+                "0",
+                "--page-bytes",
+                "4096",
+            ],
+            "timeout_ms": 10000,
+            "max_output_bytes": 16384,
+        },
+        scope_key="offset-tail-guard:select-zero",
+        context_epoch="epoch-tail-2",
+        file_store_dir=tmp_path / "ep_zero_select",
+        sqlite_path=tmp_path / "ep_zero_select.sqlite",
+        source_ref={"path": str(cap), "sha256": cap_sha},
+        baseline_bytes=total_len,
+        cwd=Path.cwd(),
+    )
+    assert zero_select_receipt is not None
+    assert zero_select_receipt["operator"] == "EpochReset"
+    assert zero_select_receipt["status"] == "committed"
+    assert zero_select_receipt["round_trips_saved"] == 1
+    assert zero_select_receipt["bytes_saved"] > 10_000
+
+    # 3) Paired --offset 0 with mismatched source_ref sha256 fails closed to KeepRaw.
+    wrong_sha = ("0" if cap_sha[0] != "0" else "1") + cap_sha[1:]
+    mismatch_receipt = resolve_or_execute_epoch_prefetch(
+        epoch_prefetch={
+            "enabled": True,
+            "prefetch_command": [
+                sys.executable,
+                "-m",
+                "loopx.cli",
+                "--format",
+                "json",
+                "quota",
+                "context-read",
+                "--capture-file",
+                str(cap),
+                "--capture-sha256",
+                cap_sha,
+                "--select",
+                "/summary",
+                "--offset",
+                "0",
+                "--page-bytes",
+                "4096",
+            ],
+            "timeout_ms": 10000,
+            "max_output_bytes": 16384,
+        },
+        scope_key="offset-tail-guard:digest-mismatch",
+        context_epoch="epoch-tail-3",
+        file_store_dir=tmp_path / "ep_digest_mismatch",
+        sqlite_path=tmp_path / "ep_digest_mismatch.sqlite",
+        source_ref={"path": str(cap), "sha256": wrong_sha},
+        baseline_bytes=total_len,
+        cwd=Path.cwd(),
+    )
+    assert mismatch_receipt is not None
+    assert mismatch_receipt["operator"] == "KeepRaw"
+    assert mismatch_receipt["fallback_reason"] == "source_digest_mismatch"
+    assert mismatch_receipt["round_trips_saved"] == 0
+    assert mismatch_receipt["bytes_saved"] == 0

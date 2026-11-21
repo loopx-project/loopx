@@ -295,3 +295,93 @@ test("D8 safety admission rejects attached -O flag on git grep", () => {
   assert.equal(attached.allowed, false);
   assert.equal(attached.reason, "policy_violation:git_output_or_external_diff_forbidden");
 });
+
+test("evaluateEpochPrefetchSwap enforces offset === 0, contiguous length, and source sha256 on capture pages", () => {
+  const digest = "c".repeat(64);
+  const base = {
+    epoch_prefetch: {enabled: true, prefetch_command: ["loopx", "--format", "json", "quota", "context-read"]},
+    context_epoch: "epoch-page-guard",
+    reclaimed_turns: 4,
+    failure_facts: ["build failed"],
+    open_obligations: ["keep failing tests"],
+    source_ref: {path: "/tmp/capture.json", sha256: digest},
+    baseline_bytes: 14_175,
+    latency_ms: 5,
+    exit_code: 0,
+    truncated: false,
+  };
+
+  // Tail slice (--offset > 0) with eof=true MUST fail closed to KeepRaw rather than truncating prefix!
+  const nonZeroOffset = evaluateEpochPrefetchSwap({
+    ...base,
+    prefetched_output: JSON.stringify({
+      ok: true,
+      schema_version: "context_capture_page_v1",
+      sha256: digest,
+      offset: 14095,
+      next_offset: null,
+      total_bytes: 14175,
+      eof: true,
+      content: "t".repeat(80),
+    }),
+  });
+  assert.equal(nonZeroOffset.operator, "KeepRaw");
+  assert.equal(nonZeroOffset.fallback_reason, "incomplete_output");
+  assert.equal(nonZeroOffset.truncated, true);
+  assert.equal(nonZeroOffset.preserves_raw_state, true);
+  assert.equal(nonZeroOffset.round_trips_saved, 0);
+  assert.equal(nonZeroOffset.bytes_saved, 0);
+
+  // Content byte count < total_bytes MUST also fail closed.
+  const truncatedContent = evaluateEpochPrefetchSwap({
+    ...base,
+    prefetched_output: JSON.stringify({
+      ok: true,
+      schema_version: "context_capture_page_v1",
+      sha256: digest,
+      offset: 0,
+      next_offset: null,
+      total_bytes: 500,
+      eof: true,
+      content: "short",
+    }),
+  });
+  assert.equal(truncatedContent.operator, "KeepRaw");
+  assert.equal(truncatedContent.fallback_reason, "incomplete_output");
+
+  // Mismatched sha256 vs source_ref.sha256 MUST fail closed.
+  const wrongDigest = evaluateEpochPrefetchSwap({
+    ...base,
+    prefetched_output: JSON.stringify({
+      ok: true,
+      schema_version: "context_capture_page_v1",
+      sha256: "b".repeat(64),
+      offset: 0,
+      next_offset: null,
+      total_bytes: 8,
+      eof: true,
+      content: "full-cap",
+    }),
+  });
+  assert.equal(wrongDigest.operator, "KeepRaw");
+  assert.equal(wrongDigest.fallback_reason, "source_digest_mismatch");
+
+  // Complete offset=0, next_offset=null, matching total_bytes and sha256 commits EpochReset cleanly.
+  const validFull = evaluateEpochPrefetchSwap({
+    ...base,
+    prefetched_output: JSON.stringify({
+      ok: true,
+      schema_version: "context_capture_page_v1",
+      sha256: digest,
+      offset: 0,
+      next_offset: null,
+      total_bytes: 8,
+      eof: true,
+      content: "full-cap",
+    }),
+  });
+  assert.equal(validFull.operator, "EpochReset");
+  assert.equal(validFull.status, "committed");
+  assert.equal(validFull.round_trips_saved, 1);
+  assert.ok(Number(validFull.bytes_saved) > 0);
+});

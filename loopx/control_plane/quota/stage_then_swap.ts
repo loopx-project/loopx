@@ -490,27 +490,91 @@ export function buildAntiWhitewashingReceiptHeader(params: {
   return {header, fields};
 }
 
-function inspectStructuredPrefetchOutput(output: string): {
+function inspectStructuredPrefetchOutput(
+  output: string,
+  sourceRef: {path: string; sha256: string} | null = null,
+): {
   failed: boolean;
   incomplete: boolean;
+  sourceMismatch: boolean;
 } {
   const trimmed = output.trim();
-  if (!trimmed.startsWith("{")) return {failed: false, incomplete: false};
+  if (!trimmed.startsWith("{")) {
+    return {failed: false, incomplete: false, sourceMismatch: false};
+  }
   try {
     const parsed = JSON.parse(trimmed) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return {failed: false, incomplete: false};
+      return {failed: false, incomplete: false, sourceMismatch: false};
     }
     const obj = parsed as Record<string, unknown>;
-    return {
-      failed: obj.ok === false,
-      incomplete: obj.eof === false || obj.truncated === true,
-    };
-  } catch {
-    if (trimmed.includes("context_capture_page_v1") && !trimmed.includes('"eof":true')) {
-      return {failed: false, incomplete: true};
+    const failed = obj.ok === false;
+    const schema = typeof obj.schema_version === "string" ? obj.schema_version : "";
+    const isPageSchema =
+      schema === "context_capture_page_v1"
+      || schema === "context_capture_selection_page_v1"
+      || "eof" in obj
+      || "offset" in obj
+      || "next_offset" in obj
+      || "total_bytes" in obj;
+    if (!isPageSchema) {
+      return {failed, incomplete: false, sourceMismatch: false};
     }
-    return {failed: false, incomplete: false};
+    let incomplete = obj.eof === false || obj.truncated === true;
+    if (
+      !failed
+      && (schema === "context_capture_page_v1" || schema === "context_capture_selection_page_v1")
+    ) {
+      const hasZeroOffset =
+        typeof obj.offset === "number"
+        && Number.isInteger(obj.offset)
+        && obj.offset === 0;
+      const hasClosedNextOffset =
+        obj.next_offset === null || obj.next_offset === undefined;
+      const hasCompleteEof = obj.eof === true && obj.truncated !== true;
+      const hasContiguousLength =
+        typeof obj.total_bytes !== "number"
+        || (
+          typeof obj.content === "string"
+          && Buffer.byteLength(obj.content, "utf8") === obj.total_bytes
+        );
+      if (!hasZeroOffset || !hasClosedNextOffset || !hasCompleteEof || !hasContiguousLength) {
+        incomplete = true;
+      }
+    } else {
+      if (typeof obj.offset === "number" && (!Number.isInteger(obj.offset) || obj.offset !== 0)) {
+        incomplete = true;
+      }
+      if (obj.next_offset !== null && obj.next_offset !== undefined) {
+        incomplete = true;
+      }
+    }
+    const reportedDigest =
+      typeof obj.sha256 === "string"
+        ? obj.sha256
+        : typeof obj.capture_sha256 === "string"
+          ? obj.capture_sha256
+          : null;
+    const sourceMismatch = Boolean(
+      !failed
+      && sourceRef?.sha256
+      && (
+        (reportedDigest !== null && reportedDigest !== sourceRef.sha256)
+        || (
+          (schema === "context_capture_page_v1" || schema === "context_capture_selection_page_v1")
+          && reportedDigest === null
+        )
+      ),
+    );
+    return {failed, incomplete, sourceMismatch};
+  } catch {
+    if (
+      trimmed.includes("context_capture_page_v1")
+      || trimmed.includes("context_capture_selection_page_v1")
+    ) {
+      return {failed: false, incomplete: true, sourceMismatch: false};
+    }
+    return {failed: false, incomplete: false, sourceMismatch: false};
   }
 }
 
@@ -553,7 +617,7 @@ export function evaluateEpochPrefetchSwap(rawRequest: JsonObject): JsonObject {
     prefetch_command: config.prefetch_command,
     initiator: config.initiator,
   });
-  const pageStatus = inspectStructuredPrefetchOutput(prefetched_output);
+  const pageStatus = inspectStructuredPrefetchOutput(prefetched_output, source_ref);
   const effectiveTruncated = truncated || pageStatus.incomplete;
 
   const {header, fields} = buildAntiWhitewashingReceiptHeader({
@@ -580,6 +644,8 @@ export function evaluateEpochPrefetchSwap(rawRequest: JsonObject): JsonObject {
     fallback_reason = "command_failed";
   } else if (pageStatus.incomplete) {
     fallback_reason = "incomplete_output";
+  } else if (pageStatus.sourceMismatch) {
+    fallback_reason = "source_digest_mismatch";
   } else if (config.reject_on_truncation && effectiveTruncated) {
     fallback_reason = "output_truncated";
   } else if (retained_bytes > config.max_output_bytes) {
