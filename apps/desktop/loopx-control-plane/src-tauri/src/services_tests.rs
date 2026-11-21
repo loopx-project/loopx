@@ -199,16 +199,18 @@ fn finder_runtime_path_finds_nvm_managed_node() {
     assert!(paths.contains(&default_bin));
     // Inferred nvm is the last resort: behind every candidate the host already
     // provides, and behind the inherited PATH a terminal launch contributes.
-    for existing in [
+    // The Homebrew entries are only added on macOS, so they are asserted there.
+    let mut existing: Vec<&Path> = vec![Path::new("/usr/bin"), Path::new("/bin")];
+    #[cfg(target_os = "macos")]
+    existing.extend([
         Path::new("/opt/homebrew/bin"),
         Path::new("/usr/local/bin"),
         Path::new("/opt/homebrew/opt/node@24/bin"),
         Path::new("/usr/local/opt/node@24/bin"),
         Path::new("/opt/homebrew/opt/node@22/bin"),
         Path::new("/usr/local/opt/node@22/bin"),
-        Path::new("/usr/bin"),
-        Path::new("/bin"),
-    ] {
+    ]);
+    for existing in existing {
         assert!(
             position(existing) < position(&default_bin),
             "inferred nvm must stay behind the existing candidate {}",
@@ -246,46 +248,95 @@ fn finder_runtime_path_finds_nvm_managed_node() {
     assert_eq!(again, path, "tool search must be idempotent");
 }
 
+// A terminal activation is authoritative only while it still matches the Node
+// the inherited PATH selects. A shell that put another Node first after `nvm
+// use` leaves a stale `NVM_BIN` behind, and preferring it would replace a
+// working Node with an unsupported one.
 #[test]
 #[cfg(unix)]
-fn explicit_nvm_activation_keeps_terminal_launch_precedence() {
+fn stale_nvm_bin_yields_to_the_node_the_shell_selected() {
     let home = tempfile::tempdir().expect("home fixture");
     let nvm_root = nvm_fixture(&home.path().join(".nvm"), "v24.22.1");
-    let activated = nvm_root.join("versions/node/v20.18.0/bin");
-    assert_eq!(
-        explicit_nvm_directories(Some(activated.as_os_str())),
-        vec![activated.clone()],
-        "an activation exported by the launching shell is explicit intent"
-    );
-    assert!(
-        explicit_nvm_directories(None).is_empty(),
-        "without an activation nothing is explicit"
-    );
-    assert!(
-        explicit_nvm_directories(Some(std::ffi::OsStr::new("/absent/bin"))).is_empty(),
-        "a stale NVM_BIN contributes nothing"
-    );
-    let path = runtime_search_path_from(
+    let stale = nvm_root.join("versions/node/v20.18.0/bin");
+    node_fixture(&stale, "20.18.0");
+    let selected = node_fixture(&home.path().join("selected/node/bin"), "24.22.1");
+    let selected_bin = selected.parent().expect("selected bin").to_path_buf();
+
+    // Still the selected Node: the activation keeps terminal-launch precedence.
+    let agreed = runtime_search_path_from(
         Some(home.path().to_path_buf().into()),
-        Some("/usr/bin:/bin".into()),
+        Some(selected_bin.to_string_lossy().into_owned().into()),
         Some(&nvm_root),
-        Some(activated.as_os_str()),
+        Some(selected_bin.as_os_str()),
     );
-    let paths: Vec<_> = env::split_paths(&path).collect();
+    let agreed_paths: Vec<_> = env::split_paths(&agreed).collect();
     let position = |candidate: &Path| {
-        paths
+        agreed_paths
             .iter()
             .position(|p| p == candidate)
             .unwrap_or_else(|| panic!("{} missing from tool search", candidate.display()))
     };
     assert_eq!(
-        position(&activated),
+        position(selected_bin.as_path()),
         1,
-        "an exported activation keeps the precedence the inherited PATH already had"
+        "an activation that still matches the selected Node keeps its precedence"
     );
-    assert!(position(&activated) < position(Path::new("/opt/homebrew/bin")));
-    // The same activation is also an installed version, so it must not repeat.
-    assert_eq!(paths.iter().filter(|p| *p == &activated).count(), 1);
+    assert_eq!(
+        resolve_executable_path("node", Some(agreed.as_os_str())),
+        Some(selected.clone()),
+        "the selected Node still wins"
+    );
+
+    // No longer the selected Node: the stale directory becomes a last resort.
+    let stale_nvm_bin = stale.as_os_str();
+    let demoted = runtime_search_path_from(
+        Some(home.path().to_path_buf().into()),
+        Some(selected_bin.to_string_lossy().into_owned().into()),
+        Some(&nvm_root),
+        Some(stale_nvm_bin),
+    );
+    let demoted_paths: Vec<_> = env::split_paths(&demoted).collect();
+    let demoted_position = |candidate: &Path| {
+        demoted_paths
+            .iter()
+            .position(|p| p == candidate)
+            .unwrap_or_else(|| panic!("{} missing from tool search", candidate.display()))
+    };
+    assert!(
+        demoted_position(selected_bin.as_path()) < demoted_position(&stale),
+        "a stale NVM_BIN must not precede the Node the shell selected"
+    );
+    assert!(
+        demoted_position(&nvm_root.join("versions/node/v24.22.1/bin")) < demoted_position(&stale),
+        "a newer installed version outranks a demoted NVM_BIN"
+    );
+    assert_eq!(
+        resolve_executable_path("node", Some(demoted.as_os_str())),
+        Some(selected.clone()),
+        "the stale NVM_BIN must not displace the selected Node"
+    );
+
+    // Nothing else on the PATH: the activation is the only candidate, so it
+    // stays authoritative and nvm-only hosts keep working.
+    let only_nvm = runtime_search_path_from(
+        Some(home.path().to_path_buf().into()),
+        Some("/usr/bin:/bin".into()),
+        Some(&nvm_root),
+        Some(stale_nvm_bin),
+    );
+    let only_nvm_paths: Vec<_> = env::split_paths(&only_nvm).collect();
+    assert!(
+        only_nvm_paths.contains(&stale),
+        "an activation with no competing Node stays in the search"
+    );
+    let mut unique = only_nvm_paths.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        only_nvm_paths.len(),
+        "no duplicate directories"
+    );
 }
 
 // An inferred nvm candidate may only be selected when no other candidate
@@ -356,16 +407,19 @@ fn inferred_nvm_default_cannot_shadow_an_existing_qualified_node() {
             .position(|p| p == candidate)
             .unwrap_or_else(|| panic!("{} missing from tool search", candidate.display()))
     };
-    for existing in [
-        home.path().join(".local/bin").as_path(),
+    // The Homebrew entries only exist on macOS, so they are asserted there.
+    let local_bin = home.path().join(".local/bin");
+    let mut existing: Vec<&Path> = vec![local_bin.as_path(), qualified_bin.as_path()];
+    #[cfg(target_os = "macos")]
+    existing.extend([
         Path::new("/opt/homebrew/bin"),
         Path::new("/usr/local/bin"),
         Path::new("/opt/homebrew/opt/node@24/bin"),
         Path::new("/usr/local/opt/node@24/bin"),
         Path::new("/opt/homebrew/opt/node@22/bin"),
         Path::new("/usr/local/opt/node@22/bin"),
-        qualified_bin.as_path(),
-    ] {
+    ]);
+    for existing in existing {
         assert!(
             position(existing) < position(&stale_default),
             "inferred nvm must stay behind the existing candidate {}",

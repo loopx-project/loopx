@@ -1157,25 +1157,51 @@ fn installed_nvm_versions(root: &Path) -> Vec<String> {
 // services. Resolve the same bounded locations the Lark CLI resolver uses,
 // without executing nvm or sourcing any startup file.
 //
-// Only an activation inherited from the launching shell (`nvm use`, or a
-// terminal-launched App) is explicit intent, and it keeps the precedence the
-// inherited PATH already had. Everything this App infers from disk is a
-// fallback and must never shadow a candidate the host already provides.
+// An activation inherited from the launching shell (`nvm use`, or a
+// terminal-launched App) is explicit intent, but only while it still matches
+// the Node that PATH selects. A shell can keep a stale `NVM_BIN` after putting
+// another Node first, and preferring the stale directory there would replace a
+// working Node with an unsupported one. Without that agreement the directory is
+// only a fallback, ranked behind every discovered nvm location.
 #[cfg(unix)]
-fn explicit_nvm_directories(nvm_bin: Option<&std::ffi::OsStr>) -> Vec<PathBuf> {
-    let mut directories = Vec::new();
-    if let Some(active) = nvm_bin.filter(|value| !value.is_empty()) {
-        push_tool_directory(&mut directories, PathBuf::from(active));
+fn explicit_nvm_directories(
+    nvm_bin: Option<&std::ffi::OsStr>,
+    inherited: Option<&std::ffi::OsStr>,
+) -> Vec<PathBuf> {
+    let Some(active) = nvm_bin.filter(|value| !value.is_empty()) else {
+        return Vec::new();
+    };
+    let directory = PathBuf::from(active);
+    if !nvm_bin_agrees_with_inherited_node(&directory, inherited) {
+        return Vec::new();
     }
+    let mut directories = Vec::new();
+    push_tool_directory(&mut directories, directory);
     directories
+}
+
+// `NVM_BIN` agrees when the inherited PATH has no Node of its own, or when the
+// Node it resolves to is the same executable nvm activated. Anything else means
+// the shell moved on and left the variable behind.
+#[cfg(unix)]
+fn nvm_bin_agrees_with_inherited_node(nvm_bin: &Path, inherited: Option<&std::ffi::OsStr>) -> bool {
+    match resolve_executable_path("node", inherited) {
+        Some(inherited_node) => paths_refer_to_same_file(
+            &inherited_node.to_string_lossy(),
+            &nvm_bin.join("node").to_string_lossy(),
+        ),
+        None => true,
+    }
 }
 
 // Discovered, never activated: the recorded `default` alias first, then the
 // installed versions newest-first. Appended behind the known runtimes and the
 // inherited PATH, so a stale default cannot hide a supported Homebrew or
-// inherited Node, and a host without any other Node still finds nvm.
+// inherited Node, and a host without any other Node still finds nvm. A
+// demoted `NVM_BIN` ranks last: it is an explicit location the host no longer
+// selects, so a newer installed version must win before it.
 #[cfg(unix)]
-fn discovered_nvm_directories(nvm_root: &Path) -> Vec<PathBuf> {
+fn discovered_nvm_directories(nvm_root: &Path, demoted_nvm_bin: Option<&Path>) -> Vec<PathBuf> {
     let mut directories = Vec::new();
     if let Some(version) = resolve_nvm_alias(nvm_root, "default", 0) {
         push_tool_directory(
@@ -1188,6 +1214,9 @@ fn discovered_nvm_directories(nvm_root: &Path) -> Vec<PathBuf> {
             &mut directories,
             nvm_root.join("versions/node").join(version).join("bin"),
         );
+    }
+    if let Some(demoted) = demoted_nvm_bin {
+        push_tool_directory(&mut directories, demoted.to_path_buf());
     }
     directories
 }
@@ -1249,10 +1278,17 @@ fn runtime_search_path_from(
         paths.push(PathBuf::from(home).join(".local/bin"));
     }
     // An activation the launching shell exported keeps the precedence the
-    // inherited PATH already gave it.
+    // inherited PATH already gave it, but only while it still agrees with the
+    // Node that PATH selects.
     #[cfg(unix)]
-    if let Some(nvm_bin) = nvm_bin {
-        extend_unique(&mut paths, explicit_nvm_directories(Some(nvm_bin)));
+    let explicit_nvm_bin = nvm_bin.and_then(|nvm_bin| {
+        explicit_nvm_directories(Some(nvm_bin), inherited.as_deref())
+            .into_iter()
+            .next()
+    });
+    #[cfg(unix)]
+    if let Some(nvm_bin) = explicit_nvm_bin.as_deref() {
+        extend_unique(&mut paths, [nvm_bin.to_path_buf()]);
     }
     if cfg!(target_os = "macos") {
         extend_unique(
@@ -1271,8 +1307,16 @@ fn runtime_search_path_from(
             ],
         );
     }
+    // A `NVM_BIN` the host no longer selects is demoted to the last resort,
+    // behind the discovered versions so a newer install still wins over it.
     #[cfg(unix)]
-    let discovered = nvm_root.map(discovered_nvm_directories).unwrap_or_default();
+    let demoted_nvm_bin = nvm_bin
+        .filter(|nvm_bin| explicit_nvm_bin.as_deref() != Some(Path::new(nvm_bin)))
+        .map(PathBuf::from);
+    #[cfg(unix)]
+    let discovered = nvm_root
+        .map(|nvm_root| discovered_nvm_directories(nvm_root, demoted_nvm_bin.as_deref()))
+        .unwrap_or_default();
     extend_unique(
         &mut paths,
         inherited
