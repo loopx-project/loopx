@@ -1139,6 +1139,8 @@ export const ja: Messages = {
   "agentAccount.copyHint": "設定・スキル・MCP を専用ディレクトリへコピーします。元の認証情報や会話はコピーしません。",
   "agentAccount.create": "アカウントを追加",
   "agentAccount.creating": "コピー中…",
+  "agentLogin.hintCodeOrUrl": "リンク先で Google 認証を行い、認証コードまたはブラウザに最後に表示された URL 全体を貼り付けてください。",
+  "agentLogin.codeOrUrl": "認証コードまたはリダイレクト URL",
   "agentLogin.hint": "リンク先で認証し、表示されたコードをここに貼り付けてください。",
   "agentLogin.open": "ログインリンクを開く",
   "agentLogin.copy": "リンクをコピー",

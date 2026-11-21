@@ -1141,6 +1141,8 @@ export const en: Messages = {
   "agentAccount.copyHint": "Copies settings, skills and MCP into a separate directory, without the original credentials or conversations.",
   "agentAccount.create": "Add account",
   "agentAccount.creating": "Copying…",
+  "agentLogin.hintCodeOrUrl": "Open the link to authorize with Google, then paste the authorization code or the full URL shown in your browser.",
+  "agentLogin.codeOrUrl": "Authorization code or redirect URL",
   "agentLogin.hint": "Open the link to authorize, then paste the code from that page here.",
   "agentLogin.open": "Open sign-in link",
   "agentLogin.copy": "Copy link",

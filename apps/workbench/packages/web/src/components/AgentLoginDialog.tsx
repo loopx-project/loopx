@@ -14,6 +14,7 @@ export function AgentLoginDialog({ api, agent, initial, onReload, onClose }: {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const reload = useRef(onReload); reload.current = onReload;
+  const codeOrUrl = login.input === 'code-or-url';
   const active = ['starting', 'waiting', 'submitting'].includes(login.status);
 
   useEffect(() => {
@@ -65,10 +66,10 @@ export function AgentLoginDialog({ api, agent, initial, onReload, onClose }: {
     }
   };
   return <DialogSurface className="agent-login-dialog" labelledBy="agent-login-title" onClose={() => void close()} busy={busy}>
-    <div className="agent-login-heading">{agent.icon && <AgentMark path={agent.icon} size={26} />}<div><h2 id="agent-login-title" className="dialog-title">{t('agentLogin.title', agent.label)}</h2><p className="dialog-message">{t('agentLogin.hint')}</p></div></div>
+    <div className="agent-login-heading">{agent.icon && <AgentMark path={agent.icon} size={26} />}<div><h2 id="agent-login-title" className="dialog-title">{t('agentLogin.title', agent.label)}</h2><p className="dialog-message">{t(codeOrUrl ? 'agentLogin.hintCodeOrUrl' : 'agentLogin.hint')}</p></div></div>
     {login.status === 'waiting' && login.url && <>
       <div className="agent-login-link"><a className="primary" href={login.url} target="_blank" rel="noopener noreferrer"><IconExternal size={16} />{t('agentLogin.open')}</a><button className="ghost" onClick={async () => { if (await copyText(login.url!)) setCopied(true); else setError(t('agentLogin.copyFailed')); }}>{copied ? <IconCheck size={16} /> : <IconCopy size={16} />}{t(copied ? 'agentLogin.copied' : 'agentLogin.copy')}</button></div>
-      <label className="dialog-field"><span>{t('agentLogin.code')}</span><input autoFocus value={code} placeholder={t('agentLogin.codeHint')} autoComplete="off" autoCapitalize="none" spellCheck={false} onChange={event => setCode(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) void submit(); }} /></label>
+      <label className="dialog-field"><span>{t(codeOrUrl ? 'agentLogin.codeOrUrl' : 'agentLogin.code')}</span><input autoFocus value={code} placeholder={t(codeOrUrl ? 'agentLogin.codeOrUrl' : 'agentLogin.codeHint')} autoComplete="off" autoCapitalize="none" spellCheck={false} onChange={event => setCode(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) void submit(); }} /></label>
     </>}
     {login.status !== 'waiting' && <p className={`agent-login-status${login.status === 'error' ? ' teams-error' : ''}`} role={login.status === 'error' ? 'alert' : 'status'}>{login.status === 'success' && <IconCheck size={20} />}{login.status === 'error' ? t(`agentLogin.${login.error ?? 'failed'}`) : t(`agentLogin.${login.status}`)}</p>}
     {error && <p className="teams-error" role="alert">{error}</p>}

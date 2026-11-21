@@ -39,7 +39,19 @@ LooChat 不动 agent 本身的目录、配置和会话，装好即用。LooChat 
 | zcode | `zcode app-server` 精简接入 | 有 | 按原生模型能力 | 暂无 |
 | DeepSeek Harness | `dsh --profile acp`（ACP） | 有（仅允许一次/拒绝） | 有（按当前模型路由） | 暂无 |
 
-各家 agent CLI 需要先在主机上装好并完成登录或鉴权。没装的 agent 在界面里显示为不可用。
+各家 agent CLI 需要先在主机上装好。没装的 agent 在界面里显示为不可用；已安装的 Claude Code 和 Antigravity 可从 Agents 页发起登录。
+
+### Antigravity 登录
+
+在 Agents 页点击 Antigravity 的「登录」，打开 Google 授权链接，授权后把验证码或浏览器最后显示的完整回跳地址粘贴回来，点击「提交验证码」。出现登录成功后，账号邮箱会显示在列表中。取消会结束本次登录；链接过期或授权失败时点「重试」获取新链接。
+
+另加账号时，选择「添加 agent → Antigravity → 添加账号」。新账号使用独立目录，只复制可移植设置、指令和技能，不复制原账号的凭据、历史或项目信任。原生 CLI 负责 OAuth 和保存凭据。安装器留下的 `.old` 等备份不会作为可用账号展示，原文件保留。
+
+下面是同一登录入口在桌面与手机上的示意（使用测试账号）：
+
+![桌面 Antigravity 登录](docs/images/antigravity-login-desktop.png)
+
+<img src="docs/images/antigravity-login-phone.png" alt="手机 Antigravity 登录：打开链接后粘贴授权码或回跳地址" width="390" />
 
 ## 插件与参与
 

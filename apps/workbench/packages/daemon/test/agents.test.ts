@@ -180,7 +180,7 @@ test('discover finds extra CLIs on PATH and leaves lookalikes alone', async () =
   const bin = join(dir, 'bin');
   mkdirSync(bin);
   const oldPath = process.env.PATH;
-  for (const name of ['agy2', 'claude2', 'ping', 'pix', 'pi', 'traecli']) {
+  for (const name of ['agy2', 'claude2', 'ping', 'pix', 'pi', 'traecli', 'agy.123.old', 'agy2.bak', 'agy3.backup', 'agy4.orig', 'agy5.tmp', 'agy6~']) {
     writeFileSync(join(bin, name), '#!/bin/sh\nexit 0\n');
     chmodSync(join(bin, name), 0o755);
   }
@@ -579,4 +579,18 @@ test('a removed account instance is remembered by its env, never by the binary i
     rmSync(home, { recursive: true, force: true });
     machine.restore();
   }
+});
+
+test('previously discovered backups stay on disk but leave the active registry; explicit accounts remain', async () => {
+  const backup = { id: 'agy.123.old', adapter: 'agy' as const, command: ['/opt/bin/agy.123.old'] };
+  const account = { ...backup, id: 'agy2.bak', command: ['/opt/bin/agy2.bak'], env: { HOME: '/custom-account' } };
+  const file = join(dir, 'backup-agents.json');
+  const registry = new AgentRegistry([...defaults, backup, account], file);
+  assert.equal(registry.adapters.has(backup.id), false);
+  assert.equal(registry.adapters.has(account.id), true);
+  await registry.update('agy', { label: 'Antigravity' });
+  const saved = JSON.parse(readFileSync(file, 'utf8')).agents;
+  assert.deepEqual(saved.find((entry: any) => entry.id === backup.id), backup);
+  assert.equal(new AgentRegistry(saved, file).adapters.has(backup.id), false);
+  registry.dispose();
 });

@@ -860,6 +860,7 @@ export interface AgentLogin {
   id: string;
   status: 'starting' | 'waiting' | 'submitting' | 'success' | 'error' | 'cancelled';
   url?: string;
+  input?: 'code-or-url';
   error?: 'failed' | 'expired' | 'unavailable' | 'verification';
 }
 
