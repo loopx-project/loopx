@@ -29,7 +29,7 @@ from ...capabilities.native_chat.external_conversations import (
 from ...capabilities.native_chat.file_discovery import (
     FileChatDiscovery, optional_file_fingerprint, reply_image_workspace,
 )
-from ...chat_attachments import CHAT_IMAGE_MAX_COUNT
+from ...chat.attachments import CHAT_IMAGE_MAX_COUNT
 from ...chat_store import TERMINAL_TURN_STATES, _atomic_write_json, _read_json
 from ...control_plane.collaboration import conversation_reply_context
 from ...control_plane.effect_runtime import effect_runtime_request_scope

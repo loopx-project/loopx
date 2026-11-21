@@ -1542,7 +1542,7 @@ class CodexChatAgentSession:
                 reply_image_directory=image_dir,
             )
         turn_input: list[dict[str, Any]] = [{"type": "text", "text": text}]
-        from .chat_attachments import native_attachment_inputs
+        from .chat.attachments import native_attachment_inputs
         turn_input.extend(native_attachment_inputs(attachments))
         # A running app-server is not permission for a new native Turn. Hold
         # the caller's fence through its write, then release before waiting for

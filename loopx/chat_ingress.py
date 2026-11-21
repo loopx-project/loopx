@@ -452,7 +452,7 @@ class ChatIngressStore:
         from .chat_store import _opaque_id, _atomic_write_json, utc_now, CHAT_TURN_SCHEMA_VERSION
 
         client_id = _opaque_id(client_turn_id, field="client_turn_id")
-        from .chat_attachments import normalize_chat_attachments, validate_chat_turn_envelope
+        from .chat.attachments import normalize_chat_attachments, validate_chat_turn_envelope
         normalized_attachments = normalize_chat_attachments(attachments) or None
         if normalized_attachments:
             validate_chat_turn_envelope({"message": message, "attachments": normalized_attachments})
