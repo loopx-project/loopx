@@ -248,7 +248,7 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
     capture = tmp_path / "decision"
     guard = ("quota", "should-run", "--goal-id", goal, "--agent-id", agent, "--codex-app")
     first = cli(*guard, "--todo-id", selected, "--turn-instance-id", "original-delivery",
-        "--turn-envelope", "--decision-output-dir", str(capture))
+        "--decision-output-dir", str(capture))
     first = read_cli_policy_payload(json.dumps(first), returncode=0)
     saved = (capture / "decision.json").read_bytes()
     full = json.loads(saved)

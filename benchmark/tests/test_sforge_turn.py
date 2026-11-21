@@ -31,8 +31,8 @@ def test_unsupported_arm_rejected_before_trial_reservation(tmp_path, args, capsy
               "--run-id", "fixture", "--model", "fixture", "--effort", "high",
               "--judge-url", "http://example.invalid", *args])
     assert error.value.code == 2
-    if "--complete-turn" in args:
-        assert "complete_turn requires heartbeat execution" in capsys.readouterr().err
+    for retired in {"--complete-turn", "--turn-envelope"}.intersection(args):
+        assert retired in capsys.readouterr().err
     assert not (tmp_path / "runs").exists()
 
 

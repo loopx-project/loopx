@@ -649,8 +649,6 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
 
     def observe_guard(command, **kwargs):
         prepared = "--prepared-capture-reference" in command
-        if prepared and replace_stage == "version":
-            command = [*command, "--complete-turn"]
         result = run(command, **kwargs)
         if prepared:
             verified["writer"] = json.loads(result.stdout)

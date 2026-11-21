@@ -1220,16 +1220,10 @@ def test_default_execution_has_no_independent_turn_deadline(tmp_path):
     assert "--timeout-seconds" not in turn_command(env, execution, "wake-default")
 
 
-@pytest.mark.parametrize("enabled,trigger,expected", [
-    (False, None, None),
-    (True, None, "explicit"),
-    (False, "after_wake", None),
-    (False, "fresh_replan", None),
-    (True, "fresh_replan", "explicit"),
-])
+@pytest.mark.parametrize("trigger", [None, "after_wake", "fresh_replan"])
 @pytest.mark.parametrize("context_delivery", ["off", "on"])
 @pytest.mark.parametrize("provider_request_admission", [False, True])
-def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path, monkeypatch, enabled, trigger, expected, context_delivery, provider_request_admission):
+def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path, monkeypatch, trigger, context_delivery, provider_request_admission):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex, CodexOffline
     from benchmark.runtime.checkpoint_wake import CheckpointWake
@@ -1249,7 +1243,7 @@ def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path,
                            "checkpoint_request": request.read_bytes()}
     provider_env = {"OPENAI_BASE_URL": "https://provider.invalid/v1",
                     "OPENAI_API_KEY": "synthetic-provider-key", "CODEX_WIRE_API": "responses"}
-    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", turn_envelope=enabled,
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture",
                            context_delivery=context_delivery,
                            provider_request_admission=provider_request_admission,
                            extra_env=provider_env,
@@ -1260,7 +1254,6 @@ def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path,
         # Real declaration parser and socket lifecycle, independent of the
         # metadata helper. Omitted trigger is legal after-wake capture.
         assert bool(wake.socket_path) is (trigger == "fresh_replan")
-        assert enabled is (expected is not None)
     commands = []
     command_envs = {}
     async def no_op(*args, **kwargs):
@@ -1294,8 +1287,7 @@ def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path,
         if "install-local.sh" in command or " doctor " in command:
             assert command_envs[command]["LOOPX_USAGE_PING"] == "0"
     assert agent._worker_env(cwd="/task")["LOOPX_USAGE_PING"] == "0"
-    assert ("turn_envelope" in receipt) is (expected is not None)
-    assert receipt.get("turn_envelope_source") == expected
+    assert "turn_envelope" not in receipt
     assert receipt.get("context_delivery") == (context_delivery if context_delivery != "off" else None)
     assert agent._worker_env(cwd="/task")["LOOPX_CONTEXT_DELIVERY"] == context_delivery
     assert receipt.get("provider_request_admission") == ("on" if provider_request_admission else None)
@@ -1304,90 +1296,18 @@ def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path,
     assert worker_env["OPENAI_BASE_URL"] == provider_env["OPENAI_BASE_URL"]
     assert worker_env["OPENAI_API_KEY"] == provider_env["OPENAI_API_KEY"]
     assert provider_env["OPENAI_API_KEY"] not in json.dumps(receipt)
-    if expected:
-        assert receipt["turn_envelope"] is True
 
 
+@pytest.mark.parametrize("setting", ["LOOPX_TURN_ENVELOPE", "LOOPX_COMPLETE_TURN"])
 @pytest.mark.parametrize("stage", ["plan", "execute"])
-@pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_short_wake_rejects_c1_before_host_preparation(tmp_path, monkeypatch, stage, provider):
-    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
-    from tests.control_plane.test_quota_settlement_cli import (
-        AGENT_ID, GOAL_ID, _heartbeat_receipt_count, _write_fixture,
-    )
-
-    isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry = _write_fixture(tmp_path, provider=provider)
-    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
-    original_state = state.read_bytes()
-    wakes = tmp_path / "wakes"
-    home = tmp_path / "codex-home"
-    source = Path(__file__).resolve().parents[2]
-    env = dict(
-        os.environ,
-        PYTHONPATH=str(source), LOOPX_PYTHON=sys.executable, LOOPX_USAGE_PING="0",
-        LOOPX_CLI=str(Path(sys.executable).parent / "loopx"),
-        LOOPX_PROJECT=str(project), LOOPX_REGISTRY=str(registry), LOOPX_RUNTIME_ROOT=str(runtime),
-        LOOPX_GOAL_ID=GOAL_ID, LOOPX_AGENT_ID=AGENT_ID, LOOPX_WAKE_LOG_DIR=str(wakes),
-        LOOPX_CODEX_HOME=str(home), LOOPX_EXECUTION_MODE="heartbeat",
-        LOOPX_SHARED_SKILLS=str(tmp_path / "shared-skills"),
-        LOOPX_TASK_STAGE=stage, LOOPX_TURN_ENVELOPE="1", LOOPX_CONTEXT_DELIVERY="off",
-        MODEL_NAME="fixture", REASONING_EFFORT="low",
-    )
-
-    def unexpected_host_preparation(*args, **kwargs):
-        pytest.fail("A C1 response cannot start the Short envelope arm")
-
-    monkeypatch.setattr(worker, "prepare_codex_home", unexpected_host_preparation)
-    with pytest.raises(ValueError, match="Short envelope requires"):
-        run_once(env)
-    receipt_path, = wakes.glob("*/receipt.json")
-    receipt = json.loads(receipt_path.read_text())
-    assert receipt["ok"] is False and receipt["host_invoked"] is False
-    assert receipt["quota_input_contract"] == {
-        "expected_schema_version": "loopx_turn_envelope_v0",
-        "observed_schema_version": "loopx_turn_envelope_v1",
-        "eligible": False,
-    }
-    assert "turn_envelope_source" not in receipt
-    assert _heartbeat_receipt_count(runtime, receipt["turn_id"]) == 0
-    assert state.read_bytes() == original_state
-    assert not home.exists()
-
-
-@pytest.mark.parametrize("enabled", [False, True])
-def test_wake_receipt_preserves_opt_out(tmp_path, monkeypatch, enabled):
+def test_retired_turn_display_rejected_before_worker_preparation(tmp_path, monkeypatch, setting, stage):
     from benchmark.tests.test_resume_sessions import resume_env
-    env = resume_env(tmp_path, monkeypatch)
-    env["LOOPX_TURN_ENVELOPE"] = "1" if enabled else "0"
-    original_run = subprocess.run
-    previews = []
 
-    def legacy_preview(argv, **kwargs):
-        if argv[0] != "loopx" or "--dry-run" not in argv:
-            return original_run(argv, **kwargs)
-        previews.append(argv)
-        return subprocess.CompletedProcess(argv, 0, json.dumps({
-            "ok": True, "schema_version": "loopx_turn_envelope_v0",
-        }), "")
-
-    monkeypatch.setattr(worker.subprocess, "run", legacy_preview)
-    receipt = run_once(env)
-    assert receipt["ok"], receipt
-    assert ("turn_envelope" in receipt) is enabled
-    assert ("turn_envelope_source" in receipt) is enabled
-    assert ("quota_input_contract" in receipt) is enabled
-    assert len(previews) == int(enabled)
-    if enabled:
-        assert receipt["turn_envelope"] is True
-        assert receipt["turn_envelope_source"] == "explicit"
-        assert receipt["quota_input_contract"] == {
-            "expected_schema_version": "loopx_turn_envelope_v0",
-            "observed_schema_version": "loopx_turn_envelope_v0",
-            "eligible": True,
-        }
-        assert "should-run" in previews[0] and "--turn-envelope" in previews[0]
-        assert "--turn-instance-id" not in previews[0] and "--decision-output-root" not in previews[0]
+    env = resume_env(tmp_path, monkeypatch) | {setting: "1", "LOOPX_TASK_STAGE": stage}
+    monkeypatch.setattr(worker, "prepare_codex_home",
+        lambda *_a, **_k: pytest.fail("Historical selection must fail before Host setup"))
+    with pytest.raises(ValueError, match="recorded historical product and runner revisions"):
+        run_once(env)
 
 
 @pytest.mark.parametrize("observed", [

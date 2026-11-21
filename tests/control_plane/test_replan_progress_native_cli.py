@@ -336,14 +336,13 @@ def test_stateless_progressive_replan_uses_the_saved_decision(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("envelope", [(), ("--complete-turn",)], ids=["quota", "complete"])
-def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch, provider, envelope):
+def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     # An installed CLI can carry a long, quoted registry and runtime path.
     root = tmp_path / ("source with apostrophe's permission " + "x" * 110)
     root.mkdir()
     fixture = make_progress_cli_fixture(root, provider, "advanced")
-    scope = ("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT, *envelope)
+    scope = ("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT)
 
     def read(command, expected=0):
         result = subprocess.run(shlex.split(command), cwd=fixture["project"], capture_output=True,

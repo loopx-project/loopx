@@ -453,7 +453,7 @@ def test_first_inline_result_binds_the_complete_replan_contract(tmp_path, discov
         rc, first = _run_cli(registry, runtime, *guard)
         assert rc == 0 and first["interaction_contract"]["cli_channel"]["selection_required"]
     rc, decision = _run_cli(registry, runtime, *guard,
-                            "--todo-id", SELECTED_REPLAN_TODO_ID, "--turn-envelope")
+                            "--todo-id", SELECTED_REPLAN_TODO_ID)
     assert rc == 0, decision
     assert_complete_turn_decision(decision)
     contract = decision["interaction_contract"]
@@ -837,7 +837,7 @@ def test_captured_direct_replan_command_composes_semantic_writeback_once(tmp_pat
     codex_context_hook(str(native), dict(session_id="captured-composed-replan", cwd=str(project),
         hook_event_name="SessionStart", source="startup"))
     cli = str(Path(sys.executable).with_name("loopx"))
-    rc, shown = _run_cli(registry, runtime, "--cli-bin", cli, "quota", "should-run", "--codex-app", "--complete-turn",
+    rc, shown = _run_cli(registry, runtime, "--cli-bin", cli, "quota", "should-run", "--codex-app",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn,
         "--todo-id", retained, "--context-delivery", "on", "--codex-context-dir", str(native),
         "--decision-output-dir", str(capture), "--max-page-output-bytes", "64000", cwd=project)

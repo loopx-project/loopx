@@ -30,7 +30,7 @@ from sforge.harness.constants import get_admin_secret
 from sforge.harness.run_agent import run_agent
 from sforge.harness.task_spec import make_task_spec
 
-from benchmark.runtime.codex import TASK_ENTRIES, turn_envelope_receipt
+from benchmark.runtime.codex import TASK_ENTRIES
 from loopx.reasoning_effort import REASONING_EFFORTS
 from loopx.control_plane.work_items.stride_policy_codec import stride_strategy_options
 from benchmark.runtime.sforge import (
@@ -124,11 +124,6 @@ def main(argv=None):
                         help="New-run default: native public feedback; blind/best-only are explicit controls")
     parser.add_argument("--managed-run-json", type=Path,
                         help="Opt-in private binding for native terminal proof, consumed by the controller")
-    turn_view = parser.add_mutually_exclusive_group()
-    turn_view.add_argument("--turn-envelope", action="store_true",
-                        help="Historical Short envelope treatment; the worker requires a verified v0 quota response")
-    turn_view.add_argument("--complete-turn", action="store_true",
-                        help="Explicit complete v1 Turn contract with shared exact-Turn settlement; heartbeat workers only")
     parser.add_argument("--context-delivery", choices=("off", "on"),
                         help="Native Codex context delivery: on by default for heartbeat workers; pass off to disable")
     parser.add_argument("--execution-observation", choices=("local_probe",),
@@ -213,8 +208,7 @@ def main(argv=None):
     try:
         execution = profile_execution(
             args.worker, task_entry=args.task_entry,
-            context_delivery=args.context_delivery, turn_envelope=args.turn_envelope,
-            complete_turn=args.complete_turn, validation_command=args.validation_command_json,
+            context_delivery=args.context_delivery, validation_command=args.validation_command_json,
             native_child_limit=args.native_child_limit,
         )
     except ValueError as error:
@@ -462,8 +456,6 @@ def main(argv=None):
                          task_objective=task_objective,
                          task_entry=args.task_entry,
                          validation_command=execution.validation_command,
-                         turn_envelope=args.turn_envelope,
-                         **({"complete_turn": True} if args.complete_turn else {}),
                          context_delivery=args.context_delivery,
                          **({"execution_observation": args.execution_observation}
                             if args.execution_observation is not None else {}),
@@ -548,7 +540,6 @@ def main(argv=None):
         "loopx_commit": pins[0], "runner_commit": pins[1],
         "sforge_source": sforge_source if native_result_scope is not None else active_source_receipt(),
         "local_docker_images": local_docker_images,
-        **turn_envelope_receipt(explicit=args.turn_envelope, complete=args.complete_turn),
         **({"context_delivery": "on"} if args.context_delivery != "off" else {}),
         **({"execution_observation": args.execution_observation}
            if args.execution_observation is not None else {}),

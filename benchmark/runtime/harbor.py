@@ -21,7 +21,7 @@ from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_
 from loopx.control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL
 
 from .codex_offline import MODEL_CATALOG_REMOTE, CodexOffline, stage_portable_python
-from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, turn_envelope_receipt
+from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution
 from .layout import _ROOT, _SRC, _CONTROL, _CODEX_HOME, _REGISTRY, _LOOPX_RUNTIME
 from .scheduler import phase_work_reserve
 
@@ -195,9 +195,8 @@ class BenchmarkCodex(CodexOffline):
             if (self._get_env("CODEX_WIRE_API") or "responses") != "responses":
                 raise ValueError("provider_request_admission requires the Responses wire API")
 
-    def _turn_envelope_receipt(self) -> dict:
-        return {**turn_envelope_receipt(explicit=self.execution.turn_envelope, complete=self.execution.complete_turn),
-                **({"native_child_limit": self.execution.native_child_limit}
+    def _host_context_receipt(self) -> dict:
+        return {**({"native_child_limit": self.execution.native_child_limit}
                    if self.execution.native_child_limit is not None else {}),
                 **({"context_delivery": "on"} if self.execution.context_delivery != "off" else {})}
 
@@ -414,7 +413,7 @@ class BenchmarkCodex(CodexOffline):
             "task_entry": self.execution.task_entry,
             **({"execution_observation": self.execution_observation}
                if self.execution_observation is not None else {}),
-            **self._turn_envelope_receipt(),
+            **self._host_context_receipt(),
             **self._planning_receipt(),
             **({"official_stop_hook": True} if self.execution.official_stop_hook else {}),
             **({"provider_request_admission": "on"} if self.provider_request_admission else {}),
@@ -695,8 +694,6 @@ class BenchmarkCodex(CodexOffline):
                    if self.execution_observation is not None else {}),
                 **({"LOOPX_CHECKPOINT_REQUEST": self.checkpoint_request_path}
                    if self.checkpoint_request_path is not None else {}),
-                **({"LOOPX_TURN_ENVELOPE": "1"} if self.execution.turn_envelope else {}),
-                "LOOPX_COMPLETE_TURN": "1" if self.execution.complete_turn else "0",
                 "LOOPX_CONTEXT_DELIVERY": self.execution.context_delivery,
                 "LOOPX_OFFICIAL_STOP_HOOK": "1" if self.execution.official_stop_hook else "0",
                 # A trial's explicit None must not inherit a container opt-in.
@@ -833,7 +830,7 @@ class BenchmarkCodex(CodexOffline):
             "execution_mode": self.execution.mode,
             "iteration_context": self.execution.context,
             "task_entry": self.execution.task_entry,
-            **self._turn_envelope_receipt(),
+            **self._host_context_receipt(),
             **self._planning_receipt(),
             **({"official_stop_hook": True} if self.execution.official_stop_hook else {}),
             **({"provider_request_admission": "on"} if self.provider_request_admission else {}),

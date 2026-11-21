@@ -381,8 +381,6 @@ def build_heartbeat_prompt(
     codex_context_root: str | None = None,
     context_delivery: str | None = None,
     delta_delivery: str | None = None,
-    turn_envelope: bool = False,
-    complete_turn: bool = False,
 ) -> dict[str, Any]:
     if not (full or compact or brief or thin):
         thin = True
@@ -454,8 +452,6 @@ def build_heartbeat_prompt(
         codex_context_dir=codex_context_dir,
         codex_context_root=codex_context_root,
         context_delivery=effective_context_delivery,
-        turn_envelope=turn_envelope,
-        complete_turn=complete_turn,
     )
     explicit_agent_scopes = normalize_agent_scopes(agent_scopes)
     if explicit_agent_scopes:

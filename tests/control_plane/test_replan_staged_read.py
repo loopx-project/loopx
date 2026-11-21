@@ -433,15 +433,14 @@ def test_review_retains_scoped_dependencies_and_unknown_outcomes():
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("explicit_envelope", [False, True])
-def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, monkeypatch, provider, explicit_envelope):
+def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, monkeypatch, provider):
     from loopx.control_plane.quota.turn_envelope import project_captured_replan_cli_view
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
     enable_explore(fixture)
     capture = tmp_path / "capture"
-    host = ["--codex-app", *(["--turn-envelope"] if explicit_envelope else [])]
+    host = ["--codex-app"]
     try:
         initial = call_progress_cli(fixture, "quota", "should-run", *host,
             "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN)
@@ -455,8 +454,7 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
         source_path = capture / "decision.json"
         saved = source_path.read_bytes()
         source = json.loads(saved)
-        # Both Codex App declarations return the signed decision. Verify that
-        # binding before asking the existing reader owner for its staged view.
+        # Verify the bound Complete Turn before reading its staged view.
         assert guard["schema_version"] == "loopx_turn_envelope_v1"
         assert guard["contract_binding"] == source["contract_binding"]
         assert guard["interaction_contract"]["cli_channel"] == source["interaction_contract"]["cli_channel"]

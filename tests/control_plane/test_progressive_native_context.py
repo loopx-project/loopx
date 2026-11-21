@@ -447,8 +447,7 @@ def test_numeric_type_difference_cannot_hide_a_duplicate_rows_original_value(tmp
     assert "context_reference_instruction" not in required
 
 
-@pytest.mark.parametrize("complete", [False, True])
-def test_public_quota_cli_delivers_required_view_and_original_evidence(acceptance_goal, tmp_path, monkeypatch, complete):
+def test_public_quota_cli_delivers_required_view_and_original_evidence(acceptance_goal, tmp_path, monkeypatch):
     workspace, document, cli, run = acceptance_goal
     original = {"outcome_id": "export", "owner_agent_id": "agent-a", "todo_ids": ["todo_export"],
         "objective": "Deliver the complete export.", "requirements": [
@@ -482,7 +481,7 @@ def test_public_quota_cli_delivers_required_view_and_original_evidence(acceptanc
     setup(lifecycle, monkeypatch)
     # Use the raw CLI response here. The acceptance fixture's policy reader
     # unwraps the navigation before returning the authoritative document.
-    code, packet = run_json_cli_result("quota", "should-run", *(["--complete-turn"] if complete else []),
+    code, packet = run_json_cli_result("quota", "should-run",
         "--goal-id", "goal-acceptance", "--agent-id", "agent-a",
         "--todo-id", "todo_export", "--context-delivery", "on", "--codex-app",
         "--codex-context-dir", str(lifecycle), "--decision-output-root", str(tmp_path / "captures"),
