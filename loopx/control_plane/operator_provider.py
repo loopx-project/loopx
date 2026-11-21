@@ -46,7 +46,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from ..file_lock import exclusive_file_lock
-from ..paths import select_default_runtime_root
+from ..paths import RuntimeRouteStatus, default_runtime_route, select_default_runtime_root
 from ..registry import atomic_write_json, read_json
 from .operator_credential import (
     OPERATOR_CREDENTIAL_ENV_VARS,
@@ -402,6 +402,7 @@ def operator_credential_source(
 def operator_provider_environ(
     runtime_root: Path | None = None,
     *,
+    bound_runtime_root: Path | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Return an environment mapping with the stored credential resolved in.
@@ -409,12 +410,24 @@ def operator_provider_environ(
     Every surface that resolves a credential already reads a mapping rather than
     ``os.environ`` directly, so resolving the machine store here is what lets
     the steward channel and the managed host pick up a key an operator stored
-    without editing a launch file or restarting a service. The input mapping is
-    never mutated.
+    without editing a launch file or restarting a service. A bound runtime may
+    disambiguate two default machine roots, but a Goal-local store remains
+    ineligible. The input mapping is never mutated.
     """
 
     resolved = dict(_process_environ(environ))
     try:
+        if runtime_root is None and bound_runtime_root is not None:
+            route = default_runtime_route()
+            if route["status"] == RuntimeRouteStatus.CONFLICT:
+                bound_root = bound_runtime_root.expanduser().resolve()
+                if bound_root in {
+                    Path(str(route["target_runtime_root"])),
+                    Path(str(route["legacy_runtime_root"])),
+                }:
+                    runtime_root = bound_root
+            elif route["status"] != RuntimeRouteStatus.INVALID:
+                runtime_root = Path(str(route["selected_runtime_root"]))
         record = read_operator_provider(runtime_root)
     except (OSError, TypeError, ValueError):
         # A damaged record resolves to "no credential" rather than falling back

@@ -97,6 +97,25 @@ def test_invalid_machine_store_cannot_fall_back_to_goal_or_environment(tmp_path,
     assert plan["managed_executor"]["unavailable_reason"] == "operator_credential_unconfigured"
 
 
+def test_explicit_machine_binding_disambiguates_dual_default_roots(tmp_path, machine, monkeypatch):
+    project, runtime, registry = _write_live_fixture(tmp_path / "managed")
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", runtime)
+    provider.write_operator_provider(runtime_root=runtime, api_key=KEY)
+    provider.write_operator_provider(runtime_root=paths.LEGACY_RUNTIME_ROOT, api_key=GOAL_KEY)
+    assert paths.default_runtime_route()["status"] == paths.RuntimeRouteStatus.CONFLICT
+
+    host_options = ("--host", "dsh", "--execution-mode", "isolated-headless")
+    code, plan = turn(project, runtime, registry, *host_options)
+    assert code == 0, plan.get("error")
+    assert plan["managed_executor"]["available"] is True
+    assert provider.operator_provider_environ(bound_runtime_root=runtime, environ={})["DEEPSEEK_API_KEY"] == KEY
+
+    other_project, other_runtime, other_registry = _write_live_fixture(tmp_path / "other")
+    provider.write_operator_provider(runtime_root=other_runtime, api_key=GOAL_KEY)
+    _, plan = turn(other_project, other_runtime, other_registry, *host_options)
+    assert plan["managed_executor"]["unavailable_reason"] == "operator_credential_unconfigured"
+
+
 def test_explicit_codex_selection_survives_machine_credential(tmp_path, machine):
     project, runtime, registry = _write_live_fixture(tmp_path / "goal")
     _, plan = turn(project, runtime, registry, "--host", "codex-cli")

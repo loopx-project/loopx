@@ -21,12 +21,13 @@ The credential is its own file, not a machine-configuration namespace:
 The canonical machine runtime is `~/.loopx` for new installations; a
 legacy-only machine stays on `~/.codex/loopx` until the
 [explicit migration](../product/migrations/local-state-path-migration.md).
-This selection is independent of `CODEX_HOME`
-and any Goal's `common_runtime_root` or Turn `--runtime-root`. Turn planning,
-default host selection, dispatch and delegation readiness use this machine
-store. A Goal-local credential file does not override it. Explicit machine
-credential APIs retain their root parameter for operating an isolated machine
-store; a Goal runtime override is not that parameter.
+Turn planning, default host selection, dispatch and delegation readiness use
+the machine store independently of `CODEX_HOME` and Goal-local credentials.
+When both machine roots contain state, a managed Turn or confirmation callback
+can resolve the credential only if its bound runtime selects one of those two
+roots. Specify `--host dsh` and the intended machine `--runtime-root` for a
+standalone managed Turn in that situation. Explicit machine credential APIs
+retain their root parameter for operating an isolated machine store.
 
 This corrects the previous behavior where isolated Goal runtimes missed an
 already configured machine credential, and parser defaults consulted only the
@@ -39,6 +40,8 @@ interpreter separately from credential availability.
 隔离 Goal 的运行目录不再遮蔽已配置的机器凭证；未指定 Turn host 时，
 有效的机器凭证会按既有规则选择 `dsh`。显式 host 选择保持优先，
 DSH SDK 是否安装仍按实际执行的 Python 环境检查。
+两个默认机器目录同时存在时，已绑定其中一个目录的托管 Turn 和卡片回调读取该目录
+的凭证。任意项目目录中的凭证文件仍不能覆盖机器凭证。
 
 The directory is mode `0700` and the file is mode `0600`, written atomically.
 It is deliberately **not** part of `machine/configuration.json`: that document
