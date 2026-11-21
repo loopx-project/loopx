@@ -10,7 +10,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import threading
 from typing import Any, Iterator
 import uuid
@@ -37,12 +36,16 @@ from .control_plane.chat_turn_acceptance import (
     AcceptedManagedTurn,
     plan_managed_turn_acceptance,
 )
+from .control_plane.collaboration.source_chat_observation import (
+    CHAT_SESSION_SCHEMA_VERSION,
+    CHAT_TURN_SCHEMA_VERSION,
+    _opaque_id,
+    _read_json,
+)
 from .file_lock import exclusive_file_lock, try_exclusive_file_lock, write_json_atomic
 
 
 CHAT_STORE_SCHEMA_VERSION = "loopx_chat_store_v1"
-CHAT_SESSION_SCHEMA_VERSION = "loopx_chat_session_state_v1"
-CHAT_TURN_SCHEMA_VERSION = "loopx_chat_turn_state_v1"
 CHAT_EVENT_SCHEMA_VERSION = "loopx_chat_event_v1"
 CHAT_MESSAGE_SCHEMA_VERSION = "loopx_chat_message_v1"
 CHAT_INGRESS_SCHEMA_VERSION = "loopx_chat_ingress_receipt_v1"
@@ -54,7 +57,6 @@ TERMINAL_TURN_STATES = {"completed", "interrupted", "timed_out", "failed"}
 TERMINAL_EVENT_KINDS = {"turn.completed", "turn.failed", "turn.interrupted"}
 REPLAY_ONLY_EVENT_KINDS = {"answer.delta", "assistant.delta", "agent.phase", "turn.activity"}
 
-_OPAQUE_ID = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
 _SESSION_RELEASE_UNSET = object()
 
 # Keep active steward and project conversation journals warm across multi-MB image histories.
@@ -74,26 +76,11 @@ def _instant(value: Any) -> datetime | None:
         return None
 
 
-def _opaque_id(value: Any, *, field: str) -> str:
-    token = str(value or "").strip()
-    if not _OPAQUE_ID.fullmatch(token):
-        raise ValueError(f"{field} must be a compact opaque id")
-    return token
-
-
 def _upstream_id(value: Any) -> str:
     token = str(value or "").strip()
     if not token or len(token) > 1024 or any(ord(character) < 32 for character in token):
         raise ValueError("upstream_thread_id must be a bounded opaque string")
     return token
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
 
 
 def _read_jsonl(

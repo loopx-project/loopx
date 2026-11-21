@@ -97,6 +97,9 @@ def _optional_capability_sources(sources: list[Path]) -> dict[str, set[Path]]:
 
 
 def _workspace_source(path: Path) -> bool:
+    # Core owns typed action receipts, including operation handoffs read by its Inbox.
+    if path.as_posix() == "loopx/chat_action_store.py":
+        return False
     return (
         path.as_posix() in WORKSPACE_MODULES
         or path.is_relative_to("loopx/chat")
