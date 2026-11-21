@@ -18,7 +18,10 @@ from ..control_plane.agents.workspace_guard import capture_delivery_workspace
 from ..control_plane.goals.first_party_host_admission import (
     FirstPartyHostGoalAdmission,
 )
-from ..control_plane.quota.execution_preparation import read_active_task_lease_epoch
+from ..control_plane.quota.execution_preparation import (
+    prepared_lease_receipt_fields,
+    read_active_task_lease_epoch,
+)
 from ..control_plane.quota.heartbeat_receipt import (
     ensure_turn_heartbeat_settlement_receipt,
 )
@@ -117,8 +120,10 @@ def execute_turn_run_once(
         )
         selected_todo = execution_context["selected_todo"]
         expected_todo_text_sha256 = execution_context["sha256"]
-        task_lease_proof = execution_context.get("task_lease_proof") or None
-        task_lease_epoch = execution_context.get("task_lease_epoch")
+        initial_lease_proof = execution_context.get("task_lease_proof") or None
+        initial_lease_epoch = execution_context.get("task_lease_epoch")
+        task_lease_proof = initial_lease_proof
+        task_lease_epoch = initial_lease_epoch
         rebound_lease_active = False
         cached_completion_lease: dict[str, Any] | None = None
 
@@ -511,6 +516,7 @@ def execute_turn_run_once(
             *,
             effect_ref: str,
         ) -> dict[str, object]:
+            nonlocal rebound_lease_active
             require_effect_ref(effect_ref, SettlementStepKind.DURABLE_WRITEBACK)
             prior = completion_readback()
             if prior is None:
@@ -542,6 +548,26 @@ def execute_turn_run_once(
                     registry_path=registry_path, goal_ref=goal_ref)
                 if retained is None:
                     raise RuntimeError(EXACT_SETTLEMENT_READBACK_NOT_FOUND)
+                if retained.prepared_lease is not None:
+                    if not isinstance(initial_lease_proof, Mapping):
+                        rebound_lease_active = True
+                    else:
+                        initial_epoch_int = (
+                            int(initial_lease_epoch)
+                            if isinstance(initial_lease_epoch, int)
+                            and not isinstance(initial_lease_epoch, bool)
+                            else None
+                        )
+                        initial_fields = prepared_lease_receipt_fields(
+                            initial_lease_proof, lease_epoch=initial_epoch_int,
+                        )
+                        if (
+                            retained.prepared_lease.get("prepared_lease_key_sha256")
+                            != initial_fields.get("prepared_lease_key_sha256")
+                            or retained.prepared_lease.get("prepared_lease_epoch")
+                            != initial_fields.get("prepared_lease_epoch")
+                        ):
+                            rebound_lease_active = True
                 if retained.completion_event is None:
                     append_settlement_event({"ok": True, "appended": True}, event_kind="todo_complete",
                         status="terminal_no_followup" if prior["continuation"] == "no_followup" else "completed",

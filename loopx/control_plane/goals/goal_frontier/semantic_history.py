@@ -332,6 +332,22 @@ def latest_replan_ack_feedback_from_status_payload(
     return None
 
 
+def acknowledged_replan_obligation_id(
+    latest_replan_ack: dict[str, Any] | None,
+) -> str | None:
+    """Return the exact obligation generation closed by the latest ACK."""
+
+    raw_delta = (
+        latest_replan_ack.get("semantic_delta")
+        if isinstance(latest_replan_ack, dict)
+        else None
+    )
+    semantic_delta = (
+        cast(dict[str, Any], raw_delta) if isinstance(raw_delta, dict) else {}
+    )
+    return normalize_todo_replan_obligation_id(semantic_delta.get("obligation_id"))
+
+
 def resolve_replan_ack_history_state(
     status_payload: dict[str, Any],
     *,
@@ -373,16 +389,8 @@ def resolve_replan_ack_history_state(
             agent_id=agent_id,
             neutral_classifications=neutral_classifications,
         )
-        raw_delta = (
-            candidate_prior_ack.get("semantic_delta")
-            if isinstance(candidate_prior_ack, dict)
-            else None
-        )
-        semantic_delta = (
-            cast(dict[str, Any], raw_delta) if isinstance(raw_delta, dict) else {}
-        )
         if (
-            normalize_todo_replan_obligation_id(semantic_delta.get("obligation_id"))
+            acknowledged_replan_obligation_id(candidate_prior_ack)
             != receipt_bound_replan_obligation_id
         ):
             prior_rearm_ack = candidate_prior_ack

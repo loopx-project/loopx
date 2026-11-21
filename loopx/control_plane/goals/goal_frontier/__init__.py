@@ -18,7 +18,7 @@ from ...runtime.time import parse_timestamp
 from ...todos.contract import (
     TODO_TASK_CLASS_ADVANCEMENT,
     TODO_TASK_CLASS_MONITOR,
-    normalize_todo_replan_obligation_id,
+    normalize_todo_replan_obligation_id as normalize_todo_replan_obligation_id,
 )
 from ...todos.todo_semantics import (
     todo_advancement_frontier_counts,
@@ -88,6 +88,7 @@ from .replan_rules import (
 )
 from .semantic_history import (
     _latest_runs_for_goal,
+    acknowledged_replan_obligation_id as _acknowledged_replan_obligation_id,
     latest_agent_vision_from_runs as latest_agent_vision_from_runs,
     latest_agent_vision_from_status_payload,
     latest_autonomous_replan_ack_from_status_payload as latest_autonomous_replan_ack_from_status_payload,
@@ -876,22 +877,6 @@ def _vision_gap_acknowledged(
         "acceptance_gaps": acceptance_gaps,
         "ack": latest_replan_ack,
     })["acknowledged"] is True
-
-
-def _acknowledged_replan_obligation_id(
-    latest_replan_ack: dict[str, Any] | None,
-) -> str | None:
-    """Return the exact obligation generation closed by the latest ACK."""
-
-    semantic_delta = (
-        cast(dict[str, Any], latest_replan_ack.get("semantic_delta"))
-        if isinstance(latest_replan_ack, dict)
-        and isinstance(latest_replan_ack.get("semantic_delta"), dict)
-        else {}
-    )
-    return normalize_todo_replan_obligation_id(
-        semantic_delta.get("obligation_id")
-    )
 
 
 def derive_goal_frontier_replan_obligation_from_summaries(

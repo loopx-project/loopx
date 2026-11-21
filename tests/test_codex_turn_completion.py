@@ -512,12 +512,17 @@ def test_builtin_codex_advertises_explicit_completion_without_promoting_progress
     assert "validated_completion" in kinds and "validated_progress" in kinds
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("fail_refresh_after_rebind", [False, True])
 def test_resumed_turn_rebinds_updated_lease_once_without_rereading_after_retire(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    fail_refresh_after_rebind: bool,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_live_fixture(
-        tmp_path, provider="sqlite", handoff_mode="hard_lease"
+        tmp_path, provider=provider, handoff_mode="hard_lease"
     )
     goal_id, agent_id, todo_id = "loopx-turn-fixture", "codex-fixture", "todo_fixture0001"
     # Keep a second open Todo so completion_writeback handles non-terminal completion.
@@ -628,12 +633,41 @@ def test_resumed_turn_rebinds_updated_lease_once_without_rereading_after_retire(
     assert lease["lease_epoch"] == 2
 
     monkeypatch.setattr(turn_run_once, "write_turn_validated_completion", complete)
+    if fail_refresh_after_rebind:
+        original_refresh = turn_run_once.refresh_state_run
+
+        def fail_non_dry_refresh(*args, **kwargs):
+            if not kwargs.get("dry_run"):
+                raise OSError("interrupted after completion before refresh")
+            return original_refresh(*args, **kwargs)
+
+        monkeypatch.setattr(turn_run_once, "refresh_state_run", fail_non_dry_refresh)
+        code, second_failed = invoke(
+            "--resume-turn-key", journal["turn_key"], "--retry-failed-turn"
+        )
+        assert code == 1, second_failed
+        assert lease_reads == [1, 2]
+        assert _cli(registry, runtime, *lease_argv)[1]["active"] is False
+        _, todos_after_second = _cli(registry, runtime, "todo", "list", "--goal-id", goal_id)
+        assert next(t for t in todos_after_second["todos"] if t["todo_id"] == todo_id)["status"] == "done"
+        monkeypatch.setattr(turn_run_once, "refresh_state_run", original_refresh)
+
     code, resumed = invoke("--resume-turn-key", journal["turn_key"], "--retry-failed-turn")
     assert code == 0 and resumed["status"] == "committed", resumed
     assert lease_reads == [1, 2]
     assert _cli(registry, runtime, *lease_argv)[1]["active"] is False
+    assert _effect_kinds(runtime, journal) == [
+        "todo_complete",
+        "refresh_state",
+        "quota_spend",
+    ]
 
     code, replay = invoke("--resume-turn-key", journal["turn_key"])
     assert code == 0 and replay["replayed"] is True, replay
     assert lease_reads == [1, 2]
     assert host_calls == [journal["turn_key"]]
+    assert _effect_kinds(runtime, journal) == [
+        "todo_complete",
+        "refresh_state",
+        "quota_spend",
+    ]
