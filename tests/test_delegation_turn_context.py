@@ -216,7 +216,8 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path,
     def invoke(argv):
         result = subprocess.run(argv, cwd=project, capture_output=True, timeout=40)
         assert result.returncode == 0, result.stderr
-        assert 0 < len(result.stdout) <= 12_000
+        # This view and its continuation run through the native shell tool.
+        assert 0 < len(result.stdout) <= 5_000
         return result.stdout.decode()
 
     def read_receipts():
@@ -257,7 +258,7 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path,
             if logical_pages == 1:
                 reference_path.unlink()
                 failed = subprocess.run(shlex.split(page["command"]), cwd=project, capture_output=True, timeout=40)
-                assert failed.returncode == 1 and len(failed.stdout) <= 12_000
+                assert failed.returncode == 1 and len(failed.stdout) <= 5_000
                 assert "content" not in json.loads(failed.stdout)
                 recovered = json.loads(invoke(direct))
                 assert recovered["offset"] == 0 and recovered["sha256"] == pinned
@@ -294,7 +295,7 @@ def test_large_inbox_does_not_fall_back_to_unbounded_output(flow):
     invocation = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry), "--runtime-root", str(root),
         "manager-inbox", "read", "--format", "markdown", "--goal-id", "research", "--agent-id", "worker"]
     result = subprocess.run(invocation, cwd=root, capture_output=True, timeout=40)
-    assert result.returncode == 1 and len(result.stdout) <= 12_000
+    assert result.returncode == 1 and len(result.stdout) <= 5_000
     output = result.stdout.decode()
     failure = json.loads(output.split("\n```json\n", 1)[1].removesuffix("\n```\n"))
     assert not failure["ok"] and not failure["read_complete"]
@@ -331,7 +332,7 @@ def test_large_inbox_reader_commands_run_verbatim_in_powershell(flow, directory)
     opening = subprocess.run([*powershell, "-Command", required_read["command"]], cwd=root, env=environment,
         capture_output=True, timeout=60)
     assert opening.returncode == 0, opening.stderr
-    assert 0 < len(opening.stdout) <= 12_000
+    assert 0 < len(opening.stdout) <= 5_000
     markdown = opening.stdout.decode().replace("\r\n", "\n")
     view = json.loads(markdown.split("\n```json\n", 1)[1].removesuffix("\n```\n"))
     before = {p.relative_to(root): p.read_bytes() for p in _root(root).rglob("*.json")}
@@ -342,7 +343,7 @@ def test_large_inbox_reader_commands_run_verbatim_in_powershell(flow, directory)
         output = subprocess.run([*powershell, "-Command", command], cwd=root, env=environment,
             capture_output=True, timeout=60)
         assert output.returncode == 0, output.stderr
-        assert 0 < len(output.stdout) <= 12_000
+        assert 0 < len(output.stdout) <= 5_000
         page = json.loads(output.stdout)
         assert page["ok"] and page["offset"] == len(original) and page["sha256"] == view["sha256"]
         original.extend(page["content"].encode())
