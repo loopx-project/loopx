@@ -4,7 +4,7 @@ if (process.argv.includes('--version')) { process.stdout.write('fixture 1.2.3\n'
 // Prompt text drives behaviour: "slow" waits until abort, "fail" ends with an error.
 import { personalFixture } from './personal.mjs';
 import { coordinationFixture } from './coordination.mjs';
-import { appendFileSync, readFileSync, watchFile, unwatchFile } from 'node:fs';
+import { existsSync, appendFileSync, readFileSync, watchFile, unwatchFile } from 'node:fs';
 import { basename } from 'node:path';
 import { createInterface } from 'node:readline';
 
@@ -163,6 +163,8 @@ rl.on('line', (line) => {
 
   switch (cmd.type) {
     case 'get_available_models':
+      if (process.env.FAKE_PI_EMPTY_MODELS === '1' && !existsSync(process.env.FAKE_LOGIN_FILE ?? '')) return reply({ models: [] });
+      if (process.env.FAKE_LOGIN_FILE && !existsSync(process.env.FAKE_LOGIN_FILE)) return reply(null, false, 'No API key found for fixture-provider');
       // Probes must not create sessions in pi's session list.
       if (!ephemeral) return reply(null, false, 'probe ran without --no-session');
       if (process.env.FAKE_PI_REQUIRE_NO_MCP === '1' && !args.includes('--no-mcp')) return reply(null, false, 'catalog probe must disable MCP');

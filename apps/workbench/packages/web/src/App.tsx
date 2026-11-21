@@ -814,7 +814,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const [writingBusy, setWritingBusy] = useState(false);
   const [draftPermission, setDraftPermission] = useState('auto_edit');
   const modelPreferences = useModelPreferences(api, error => setError(message(error)));
-  const [modelLogin, setModelLogin] = useState<{ agent: string; label: string; key: string; client: Api; scope: Api } | null>(null);
+  const [modelLogin, setModelLogin] = useState<{ agent: string; label: string; login?: AgentInfo['login']; empty?: boolean; key: string; client: Api; scope: Api } | null>(null);
   const [modelsByAgent, setModelsByAgent] = useState<Record<string, ModelOption[]>>(() => (keepThreads ? cachedModels(hostId) ?? {} : {}));
   const draftCaps = agents.find(agent => agent.id === draftAgent)?.capabilities;
   const goalCap = goalCaps.find(cap => cap.agent === draftAgent);
@@ -971,6 +971,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   }, [api, demo]);
   /** The terminal a login started; null attaches to the newest live one. */
   const [terminalTarget, setTerminalTarget] = useState<string | null>(null);
+  const [terminalClient, setTerminalClient] = useState<Api | null>(null);
   const [observabilityTab, setObservabilityTab] = useState<'usage' | 'diagnostics'>('usage');
   const [observabilityFocus, setObservabilityFocus] = useState<string | undefined>(undefined);
   // Bumped on every visit so the page opens on the requested tab, even when it is already showing.
@@ -1495,7 +1496,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
                 const { agent, models } = ev.data as { agent: string; models: ModelOption[] };
                 modelVersions.current[agent] = (modelVersions.current[agent] ?? 0) + 1;
                 setModelsByAgent(previous => ({ ...previous, [agent]: models }));
-                setModelLogin(current => current?.scope === api && current.client === api && current.key === agent ? null : current);
+                setModelLogin(current => models.length && current?.scope === api && current.client === api && current.key === agent ? null : current);
               } else refresh();
             },
             ctrl.signal,
@@ -1762,15 +1763,24 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const activeAgent = selected?.agent ?? draftTeamDefinition?.entryAgent ?? draftAgent;
   const activeCwd = selected?.cwd ?? draftCwd;
   const commandsKey = `${activeAgent}\n${activeCwd}`;
-  const acceptModelCatalog = (agent: string, list: ModelOption[]) => {
+  const activeCatalog = useRef({ api, agent: activeAgent });
+  activeCatalog.current = { api, agent: activeAgent };
+  useEffect(() => { setModelLogin(null); }, [api, activeAgent]);
+  const acceptModelCatalog = (agent: string, list: ModelOption[], client = api, id = agent) => {
     setModelsByAgent(previous => ({ ...previous, [agent]: list }));
+    const info = agents.find(item => item.id === agent) ?? remoteAgents.find(item => item.id === agent);
+    if (!list.length && info?.available && info.capabilities.modelCatalog !== false) {
+      setModelLogin({ agent: id, key: agent, client, scope: api, label: info.label, login: info.login, empty: true });
+      return;
+    }
     setModelLogin(current => current?.scope === api && current.key === agent ? null : current);
   };
   const handleModelError = (error: unknown, agent: string, client = api, key = agent, report = true) => {
     if (!needsAgentLogin(error)) { if (report) handleError(error); return; }
     modelVersions.current[key] = (modelVersions.current[key] ?? 0) + 1;
     setModelsByAgent(previous => { const next = { ...previous }; delete next[key]; return next; });
-    setModelLogin({ agent, key, client, scope: api, label: agents.find(item => item.id === key)?.label ?? remoteAgents.find(item => item.id === key)?.label ?? agent });
+    const info = agents.find(item => item.id === key) ?? remoteAgents.find(item => item.id === key);
+    setModelLogin({ agent, key, client, scope: api, label: info?.label ?? agent, login: info?.login });
   };
   const lastFocusModelRefresh = useRef<{ agent: string; at: number } | null>(null);
   const refreshActiveModels = useCallback((force = false) => {
@@ -1783,9 +1793,9 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     void api
       .models(activeAgent, force)
       .then((list) => {
-        if ((modelVersions.current[activeAgent] ?? 0) === version) acceptModelCatalog(activeAgent, list);
+        if (activeCatalog.current.api === api && activeCatalog.current.agent === activeAgent && (modelVersions.current[activeAgent] ?? 0) === version) acceptModelCatalog(activeAgent, list);
       })
-      .catch(error => { if ((modelVersions.current[activeAgent] ?? 0) === version) handleModelError(error, activeAgent, api, activeAgent, force); });
+      .catch(error => { if (activeCatalog.current.api === api && activeCatalog.current.agent === activeAgent && (modelVersions.current[activeAgent] ?? 0) === version) handleModelError(error, activeAgent, api, activeAgent, force); });
   }, [api, activeAgent]);
 
   // Models of an agent other than the thread's own, for choosing what its members start with.
@@ -1799,20 +1809,22 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     const client = remote && token ? new Api(token, '', remote.host) : api;
     const id = remote && token ? agent.slice(0, -(remote.host.length + 1)) : agent;
     client.models(id, refresh).then((list) => {
-      if ((modelVersions.current[agent] ?? 0) === version) acceptModelCatalog(agent, list);
+      if ((modelVersions.current[agent] ?? 0) === version) acceptModelCatalog(agent, list, client, id);
     }).catch(error => { if ((modelVersions.current[agent] ?? 0) === version) handleModelError(error, id, client, agent, refresh); }).finally(() => { modelsAsked.current.delete(agent); });
   };
 
   // Models for that agent, loaded once per agent.
   useEffect(() => {
-    if (!api || !activeAgent || modelsByAgent[activeAgent]) return;
+    if (!api || !activeAgent || modelsByAgent[activeAgent]?.length) return;
+    let live = true;
     const version = modelVersions.current[activeAgent] ?? 0;
     api
       .models(activeAgent)
       .then((list) => {
-        if ((modelVersions.current[activeAgent] ?? 0) === version) acceptModelCatalog(activeAgent, list);
+        if (live && (modelVersions.current[activeAgent] ?? 0) === version) acceptModelCatalog(activeAgent, list);
       })
-      .catch(error => { if ((modelVersions.current[activeAgent] ?? 0) === version) handleModelError(error, activeAgent); });
+      .catch(error => { if (live && (modelVersions.current[activeAgent] ?? 0) === version) handleModelError(error, activeAgent); });
+    return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, activeAgent]);
 
@@ -2339,12 +2351,13 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
 
   const openAgents = () => { openSettings('agents'); void reloadAgents().catch(handleError); };
 
-  const openTerminal = () => { setTerminalTarget(null); setTermOpen(true); };
+  const openTerminal = () => { setTerminalTarget(null); setTerminalClient(null); setTermOpen(true); };
 
   /** Starts an instance's CLI login in a fresh terminal and shows that terminal. */
-  const openAgentLogin = async (agent: AgentInfo) => {
-    const { terminalId } = await api.loginAgentTerminal(agent.id);
+  const openAgentLogin = async (agent: Pick<AgentInfo, 'id'>, client = api) => {
+    const { terminalId } = await client.loginAgentTerminal(agent.id);
     setTerminalTarget(terminalId);
+    setTerminalClient(client);
     setTermOpen(true);
   };
 
@@ -3201,7 +3214,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         {demo && (showcase ? showcase.notice(selectedId, extWant) : <DemoBar compact={compact} onConnect={askToConnect} />)}
 
         {modelLogin?.scope === api && <AgentLoginRecovery key={`${modelLogin.key}:${hostId ?? 'local'}`}
-          api={modelLogin.client} agent={{ id: modelLogin.agent, label: modelLogin.label }} onRecovered={list => {
+          api={modelLogin.client} agent={{ id: modelLogin.agent, label: modelLogin.label, login: modelLogin.login }} empty={modelLogin.empty}
+          onTerminalLogin={() => openAgentLogin({ id: modelLogin.agent }, modelLogin.client)} onRecovered={list => {
             modelVersions.current[modelLogin.key] = (modelVersions.current[modelLogin.key] ?? 0) + 1;
             setModelsByAgent(previous => ({ ...previous, [modelLogin.key]: list }));
             setModelLogin(current => current === modelLogin ? null : current);
@@ -3664,10 +3678,10 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
       )}
       {termOpen && (
         <TerminalPanel
-          api={api}
+          api={terminalClient ?? api}
           cwd={selected?.cwd || draftCwd || workdirs[0] || ''}
           terminalId={terminalTarget}
-          onClose={() => { setTermOpen(false); setTerminalTarget(null); }}
+          onClose={() => { setTermOpen(false); setTerminalTarget(null); setTerminalClient(null); }}
           onError={handleError}
         />
       )}
@@ -3782,7 +3796,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           forkSourceId={sideAsk.source ? (capsOf(sideAsk.source.agent)?.fork && !forkBlocked(sideAsk.source) ? sideAsk.source.id : null) : selected && activeCaps?.fork && !forkBlocked(selected) ? selected.id : null}
           attachBlocked={sideAgentInfo?.capabilities.images === false ? t('app.noImages', agentLabel(sideAgent)) : null}
           onClose={() => setSideAsk(null)}
-          onError={handleError}
+          onError={error => handleModelError(error, sideAgent)}
           onThreadCreated={(t) => setThreads((prev) => [t, ...prev.filter((x) => x.id !== t.id)])}
           threads={threads}
           onOpenThread={(id) => { setSideAsk(null); openThreadById(id); }}

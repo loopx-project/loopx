@@ -33,7 +33,7 @@ test('successful authorization retries a failed catalog read without starting OA
   let view!: ReactTestRenderer;
   const button = (label: string) => view.root.findAllByType('button').find(node => node.children.includes(label))!;
   try {
-    await act(async () => { view = create(createElement(AgentLoginRecovery, { api, agent: { id: 'secondary', label: 'Antigravity' }, onRecovered: list => { recovered = list; } })); });
+    await act(async () => { view = create(createElement(AgentLoginRecovery, { api, agent: { id: 'secondary', label: 'Antigravity', login: 'wizard' }, onRecovered: list => { recovered = list; } })); });
     assert.equal(starts, 0);
     await act(async () => { await button('去登录').props.onClick(); });
     await act(async () => { view.root.findByType('input').props.onChange({ target: { value: 'test-code' } }); });
@@ -45,5 +45,55 @@ test('successful authorization retries a failed catalog read without starting OA
     assert.deepEqual(recovered, models);
     assert.equal(starts, 1);
     assert.equal(reads, 2);
+  } finally { await act(async () => view?.unmount()); }
+});
+
+
+test('terminal recovery opens the selected account once and waits for catalog verification', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  let starts = 0, reads = 0, recovered = false;
+  const api = { models: async (id: string, refresh: boolean) => {
+    assert.equal(id, 'codex-secondary'); assert.equal(refresh, true); reads++;
+    if (reads === 1) throw new ApiError('signed out', { code: 'agent_login_required' }, 409);
+    return [{ id: 'ready', label: 'Ready' }];
+  }, startAgentLogin: () => assert.fail('terminal login must not call the wizard API') } as unknown as Api;
+  let view!: ReactTestRenderer;
+  try {
+    await act(async () => { view = create(createElement(AgentLoginRecovery, { api, agent: { id: 'codex-secondary', label: 'Codex secondary', login: 'terminal' },
+      onTerminalLogin: async () => { starts++; }, onRecovered: () => { recovered = true; } })); });
+    assert.equal(reads, 0);
+    await act(async () => { await view.root.findAllByType('button').find(node => node.children.includes('去登录'))!.props.onClick(); });
+    assert.equal(starts, 1); assert.equal(recovered, false);
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 2100)); });
+    assert.equal(recovered, true); assert.equal(starts, 1);
+  } finally { await act(async () => view?.unmount()); }
+});
+
+test('agents without a native login operation offer credential guidance and retry', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  let recovered = false;
+  const api = { models: async () => [{ id: 'ready', label: 'Ready' }], startAgentLogin: () => assert.fail('unsupported login must not be started') } as unknown as Api;
+  let view!: ReactTestRenderer;
+  try {
+    await act(async () => { view = create(createElement(AgentLoginRecovery, { api, agent: { id: 'dsh', label: 'DeepSeek Harness' }, onRecovered: () => { recovered = true; } })); });
+    assert.match(JSON.stringify(view.toJSON()), /配置凭据/);
+    assert.equal(view.root.findAllByType('button').some(node => node.children.includes('去登录')), false);
+    await act(async () => { await view.root.findByType('button').props.onClick(); });
+    assert.equal(recovered, true);
+  } finally { await act(async () => view?.unmount()); }
+});
+
+
+test('an empty catalog offers setup without claiming logout or a successful recovery', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const api = { models: async () => [] } as unknown as Api;
+  let view!: ReactTestRenderer;
+  try {
+    await act(async () => { view = create(createElement(AgentLoginRecovery, { api, agent: { id: 'pi', label: 'pi' }, empty: true,
+      onRecovered: () => assert.fail('an empty catalog must keep its recovery entry') })); });
+    assert.match(JSON.stringify(view.toJSON()), /暂无可用模型/);
+    assert.doesNotMatch(JSON.stringify(view.toJSON()), /尚未登录/);
+    await act(async () => { await view.root.findByType('button').props.onClick(); });
+    assert.match(JSON.stringify(view.toJSON()), /仍未获取到可用模型/);
   } finally { await act(async () => view?.unmount()); }
 });

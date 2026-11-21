@@ -15,7 +15,7 @@ import { VoiceConversation } from './voice-conversation.js';
 import { turnOutcome } from './lifecycle.js';
 import { UserInputs } from './user-input.js';
 import type { LoginState, SystemPrompt, WorkMode } from './adapters/types.js';
-import { diagnosticFailure } from './adapters/diagnostics.js';
+import { diagnosticFailure, modelLoginFailure } from './adapters/diagnostics.js';
 import { turnAnswer, type CoordinationManager, type CoordinationSetup } from './coordination.js';
 import { Injections, type InjectionGate } from './injections.js';
 import type { LoopxHooks } from './adapters/loopx/service.js';
@@ -1095,7 +1095,7 @@ export class ThreadManager {
         ts: new Date().toISOString(), data: { agent, models } };
       for (const listener of this.listeners) listener(event);
     };
-    return adapter.models(refresh);
+    return adapter.models(refresh).catch(error => { throw modelLoginFailure(error, adapter.label); });
   }
 
   async listModels(agent: string, refresh = false): Promise<ModelOption[]> {

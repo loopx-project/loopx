@@ -322,3 +322,53 @@ test('non-authentication model failures retain their error meaning', async () =>
   assert.equal(body.code, undefined);
   assert.match(body.error, /upstream timed out/);
 });
+
+// Each native protocol must reach the shared recovery UI, including non-default account ids.
+for (const adapter of ['claude', 'codex', 'traex', 'zcode', 'pi', 'dsh'] as const) {
+  test(`${adapter}: missing authentication returns recovery and refresh uses that same account`, async () => {
+    const id = `${adapter}-signed-out`;
+    const marker = join(root, `${id}-authenticated`);
+    const script = adapter === 'codex' ? 'fake-codex.mjs' : adapter === 'zcode' ? 'fake-zcode.mjs' : adapter === 'pi' ? 'fake-pi.mjs' : 'fake-acp.mjs';
+    await registry.add({ id, adapter, label: `${adapter} secondary`, command: [process.execPath, fileURLToPath(new URL(`./fixtures/${script}`, import.meta.url))],
+      env: { FAKE_LOGIN_FILE: marker, ...(adapter === 'traex' || adapter === 'dsh' ? { FAKE_ACP_FLAVOR: adapter } : {}) } });
+    const response = await api(`/api/agents/${id}/models`);
+    assert.equal(response.status, 409, await response.clone().text());
+    assert.equal((await response.json() as any).code, 'agent_login_required');
+    assert.equal(existsSync(marker), false, 'a catalog read never signs in');
+    writeFileSync(marker, 'fixture-authenticated');
+    const restored = await api(`/api/agents/${id}/models?refresh=1`);
+    assert.equal(restored.status, 200, await restored.clone().text());
+    assert.ok((await restored.json() as any[]).length > 0);
+  });
+}
+
+test('Codex custom providers and older account protocols keep their model catalog', async () => {
+  const command = [process.execPath, fileURLToPath(new URL('./fixtures/fake-codex.mjs', import.meta.url))];
+  for (const [id, env] of [
+    ['custom-provider', { FAKE_LOGIN_FILE: join(root, 'no-account'), FAKE_CUSTOM_PROVIDER: '1' }],
+    ['older-account-protocol', { FAKE_ACCOUNT_READ_UNSUPPORTED: '1' }],
+  ] as const) {
+    await registry.add({ id, adapter: 'codex', command, env });
+    const response = await api(`/api/agents/${id}/models`);
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.ok((await response.json() as any[]).length > 0);
+  }
+});
+
+
+test('non-login ACP failures and unsupported subscriptions retain their meaning', async () => {
+  const command = [process.execPath, acp];
+  for (const [index, message, reason, code] of [
+    [0, 'Upstream timed out', undefined, undefined],
+    [1, 'Usage limit reached', undefined, undefined],
+    [2, 'Authentication required: this integration does not support claude.ai subscriptions', 'claude_subscription_not_supported', undefined],
+    [3, 'Malformed RPC failure', undefined, 'invalid'],
+  ] as const) {
+    const id = `claude-non-login-${index}`;
+    await registry.add({ id, adapter: 'claude', command, env: { FAKE_ACP_START_ERROR: message, ...(code ? { FAKE_ACP_ERROR_CODE: code } : {}), ...(reason ? { FAKE_ACP_ERROR_CODE: '-32000', FAKE_ACP_ERROR_REASON: reason } : {}) } });
+    const response = await api(`/api/agents/${id}/models`);
+    assert.equal(response.status, 500);
+    const body = await response.json() as any;
+    assert.equal(body.code, undefined); assert.equal(body.error, message);
+  }
+});

@@ -43,6 +43,28 @@ LooChat 不动 agent 本身的目录、配置和会话，装好即用。LooChat 
 
 各家 agent CLI 需要先在主机上装好。没装的 agent 在界面里显示为不可用；已安装的 Claude Code 和 Antigravity 可从 Agents 页发起登录。
 
+### Agent 未登录时恢复
+
+读取模型时，所有 Agent 明确返回的原生认证失败都会在工作区显示「账号名 尚未登录」。恢复方式按该实例支持的能力提供：
+
+| Agent | 恢复入口 |
+| --- | --- |
+| Claude Code、Antigravity | 「去登录」展开行内授权面板；验证后自动刷新模型 |
+| Codex、TRAE CLI、ZCode | 「去登录」打开该账号的原生终端登录；模型读取确认可用后自动恢复 |
+| pi、DeepSeek Harness | 显示原生客户端凭据配置指引和「重试」；pi 在原生客户端使用 `/login` |
+
+空目录单独提示「暂无可用模型，请检查登录或模型配置」；空列表本身不作为未登录证据。配置型 Agent 在原生客户端配置后点击「重试」，已有草稿保留。网络故障、额度耗尽、不受支持的订阅和 Workbench 自身的访问令牌错误保留各自含义。
+
+以下为构建页面与隔离测试账号的实际界面；原生授权结果由测试 CLI 提供，不代表真实账号授权已验收。
+
+![Claude Code 未登录时的恢复入口](docs/images/agent-login-claude.png)
+
+<img src="docs/images/agent-login-codex-phone.png" alt="手机上的 Codex 登录与重试入口，原草稿保留" width="390" />
+
+![pi 空模型目录的配置指引](docs/images/agent-login-empty-models.png)
+
+认证识别遵循原生协议：[ACP 的认证错误](https://agentclientprotocol.com/protocol/v1/authentication)、Codex 的 `account/read`（仅在 `requiresOpenaiAuth` 为真且账号为空时判断未登录），以及 CLI 明确的登录或缺失凭据诊断。Codex 自定义服务和旧版账号协议保留原有目录行为。
+
 ### Antigravity 登录
 
 若读取模型时尚未登录，当前页面会显示「Antigravity 尚未登录」和「去登录」。点击后在原位置展开授权面板；登录验证成功后自动加载模型列表，无需刷新页面。若此时模型读取暂时失败，可以重试读取，不必重复授权。网络或 CLI 故障仍单独显示为错误。
