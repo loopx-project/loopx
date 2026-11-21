@@ -44,7 +44,10 @@ New canonical acquisitions freeze the canonical Todo's normalized
 override and no inference from the CLI working directory. Within one Goal,
 overlapping relative paths conflict unless **both** execution grants have known,
 different repository identities, or the caller uses the verified cooperative
-code-edit mode below. Host/path case aliases remain overlapping.
+code-edit mode below. Host/path case aliases remain overlapping. Unicode
+canonical equivalents (NFC/NFD) of one path are host aliases too: the
+comparison folds them to NFC while the stored scope and request spelling stay
+unchanged.
 The existing complete-head scan, owner eligibility, TTL, generations, CAS and
 receipt identities are unchanged; an empty scope set still does not conflict.
 
@@ -57,6 +60,7 @@ Equivalent strings in an accepted Todo declaration do not require a declaration
 revision before atomic claim/acquire.
 
 冲突比较会归并相对路径的词法别名，但保留 glob 字符类中的斜杠、点与字面量右括号。
+同一路径的 NFC/NFD 规范等价写法也按主机别名折叠为 NFC；存储范围与请求拼写不变。
 新租约保存规范范围；原请求的拼写仍参与不可变请求身份，旧请求在升级或续租后按原参数
 重试会恢复原回执与当前执行证明。已有 Todo 声明中的等价字符串不会要求用户先重录声明。
 

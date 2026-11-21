@@ -13,6 +13,8 @@ from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_s
 
 REPO = Path(__file__).resolve().parents[2]
 ALIASES = ["src//main.ts", "src/./main.ts"]
+NFC_SCOPE = "src/caf\u00e9.ts"
+NFD_SCOPE = "src/cafe\u0301.ts"
 
 
 @pytest.fixture(params=["file", "sqlite"])
@@ -112,6 +114,58 @@ def test_case_aliases_remain_exclusive_write_scopes(scope_goal):
         expected_exit=1)
     assert rejected["error_code"] == "write_scope_conflict"
     assert current() == before
+
+
+def test_unicode_normalization_aliases_remain_exclusive_write_scopes(scope_goal):
+    cli, current = scope_goal
+    acquired = cli("task-lease", "acquire", "--todo-id", "todo_scope_a", "--owner", "agent-a",
+        "--idempotency-key", "normalization-a", "--expected-version", "0", "--write-scope", NFD_SCOPE)
+    assert acquired["lease"]["write_scopes"] == [NFD_SCOPE]
+    before = current()
+    rejected = cli("task-lease", "acquire", "--todo-id", "todo_scope_b", "--owner", "agent-b",
+        "--idempotency-key", "normalization-b", "--expected-version", "0", "--write-scope", NFC_SCOPE,
+        expected_exit=1)
+    assert rejected["error_code"] == "write_scope_conflict"
+    assert current() == before
+
+
+def test_unicode_normalization_aliases_conflict_at_atomic_todo_claim(scope_goal):
+    cli, current = scope_goal
+    repository = "git:github.com/example/project"
+
+    def add_todo(label, scope):
+        return cli("todo", "add", "--role", "agent", "--priority", "P1",
+            "--text", f"Normalization scope {label}", "--task-repository", repository,
+            "--required-write-scope", scope,
+            "--operation-id", f"normalization-add-{label}")["todo_id"]
+
+    first = add_todo("a", NFD_SCOPE)
+    claimed = cli("todo", "claim", "--todo-id", first, "--claimed-by", "agent-a", "--agent-id", "agent-a",
+        "--claim-operation-id", "normalization-claim-a",
+        "--task-lease-idempotency-key", "normalization-claim-a",
+        "--task-lease-expected-version", "0")
+    assert claimed["ok"]
+    assert cli("task-lease", "inspect", "--todo-id", first)["lease"]["write_scopes"] == [NFD_SCOPE]
+
+    second = add_todo("b", NFC_SCOPE)
+    before = current()
+    rejected = cli("todo", "claim", "--todo-id", second, "--claimed-by", "agent-b", "--agent-id", "agent-b",
+        "--claim-operation-id", "normalization-claim-b",
+        "--task-lease-idempotency-key", "normalization-claim-b",
+        "--task-lease-expected-version", "0", expected_exit=1)
+    assert rejected["error_code"] == "write_scope_conflict"
+    assert current() == before
+
+
+def test_unicode_normalization_distinct_paths_do_not_conflict(scope_goal):
+    cli, _ = scope_goal
+    cli("task-lease", "acquire", "--todo-id", "todo_scope_a", "--owner", "agent-a",
+        "--idempotency-key", "normalization-distinct-a", "--expected-version", "0",
+        "--write-scope", "src/cafe.ts")
+    allowed = cli("task-lease", "acquire", "--todo-id", "todo_scope_b", "--owner", "agent-b",
+        "--idempotency-key", "normalization-distinct-b", "--expected-version", "0",
+        "--write-scope", NFC_SCOPE)
+    assert allowed["acquired"]
 
 
 @pytest.mark.parametrize("first_scope,second_scope", [
