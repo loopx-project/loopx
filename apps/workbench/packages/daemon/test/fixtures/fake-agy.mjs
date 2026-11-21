@@ -1,15 +1,47 @@
 #!/usr/bin/env node
+import { createInterface } from 'node:readline';
 if (process.argv.includes('--version')) { process.stdout.write('fixture 1.2.3\n'); process.exit(0); }
 // A stand-in for the Antigravity CLI in headless stream-json mode, for tests.
 // Prompt text drives behaviour: "tool" runs a command, "command" needs a permission that headless
 // mode cannot ask for, "slow" waits until interrupted, "crash" exits.
-import { existsSync, readFileSync, writeFileSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, symlinkSync } from 'node:fs';
 import { agyUsage } from './live-usage.mjs';
 import { coordinationFixture } from './coordination.mjs';
 import { join } from 'node:path';
 const args = process.argv.slice(2);
 
+if (args[0] === 'acp' && args[1] === '--login') {
+  const directory = join(process.env.HOME, '.gemini', 'antigravity-cli');
+  if (process.env.LOOCHAT_AGY_HOME !== directory || process.env.ANTIGRAVITY_REMOTE_OOB_AUTH !== '1') process.exit(2);
+  // Ignore unrelated links and wait for a complete authorization URL across output chunks.
+  process.stdout.write('https://accounts.google.com.evil.invalid/o/oauth2/auth\nhttps://accounts.google.com/o/oauth2/auth?redirect_uri=https%3A%2F%2Fevil.invalid\n');
+  process.stdout.write('Open this link in a browser to log in with Google:\nhttps://accounts.google.com/o/oauth2/');
+  setTimeout(() => process.stdout.write('auth?redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&state=fixture\nThen paste the authorization code or full URL:\n'), 20);
+  createInterface({ input: process.stdin }).on('line', code => {
+    const valid = code === 'test-agy-code' || code === 'https://antigravity.google/oauth-callback?code=test-agy-code&state=fixture';
+    if (!valid) process.exit(1);
+    mkdirSync(directory, { recursive: true });
+    if (process.env.FAKE_AGY_AUTH_BAD_STATUS !== '1') writeFileSync(join(directory, 'antigravity-oauth-token'), JSON.stringify({
+      token: { access_token: 'fixture-agy-access', refresh_token: 'fixture-agy-refresh' }, id_token_email: 'agy-new@example.com', auth_method: 'oauth-personal',
+    }), { mode: 0o600 });
+    process.stdout.write('Logged in as agy-new@example.com.\n');
+    process.exit(0);
+  });
+  await new Promise(() => {});
+}
+
+if (process.env.FAKE_AGY_ACCOUNT_CHECK === '1') {
+  const directory = join(process.env.HOME, '.gemini', 'antigravity-cli');
+  if (directory !== process.env.LOOCHAT_AGY_HOME || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY ||
+      process.env.GOOGLE_APPLICATION_CREDENTIALS || !existsSync(join(directory, 'antigravity-oauth-token'))) process.exit(2);
+}
+
 if (args[0] === 'models') {
+  if (process.env.FAKE_AGY_MODELS_ERROR) { process.stderr.write(process.env.FAKE_AGY_MODELS_ERROR + '\n'); process.exit(1); }
+  if (process.env.FAKE_AGY_LOGIN_REQUIRED === '1' && !existsSync(join(process.env.HOME, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'))) {
+    process.stderr.write('Fetching available models...\nError: Please sign in to view available models. Launch the CLI without arguments to sign in.\n'); process.exit(1);
+  }
+
   if (process.env.FAKE_HANDOVER_QUOTA) { process.stdout.write('gemini-pro\tGemini Pro\nclaude-sonnet\tClaude Sonnet\n'); process.exit(0); }
   process.stderr.write('Fetching available models...\n');
   process.stdout.write('fast-low\tFast (Low)\nfast-high\tFast (High)\nnot a model line\nbig-thinking\tBig (Thinking)\n');

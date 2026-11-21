@@ -4507,6 +4507,32 @@ input.picker-search {
   margin-left: auto;
 }
 
+/* Install offers reserve space instead of covering the last conversations or access notice. */
+.sidebar-inner:has(.pwa-install-promo) .sidebar-scroll { padding-bottom: 12px; }
+.sidebar-float:has(.pwa-install-promo) {
+  position: static;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 8px;
+}
+.sidebar-float:has(.pwa-install-promo) .link-login-notice { position: static; width: 100%; }
+.pwa-install-promo {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.pwa-install-promo strong { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.pwa-install-promo p { color: var(--muted); margin: 6px 0 10px; }
+.pwa-install-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pwa-install-actions button { min-height: 32px; padding: 5px 10px; font-size: 12px; }
+.pwa-install-help { margin-top: 20px; color: var(--muted); line-height: 1.7; }
+.pwa-install-help summary { cursor: pointer; color: var(--text); }
+
 /* ---------- Sidebar on a phone ---------- */
 
 /* A page of its own, laid out for thumbs: large rows, round buttons, the one main action floating
@@ -12579,12 +12605,15 @@ button.trace-step-head:hover { background: var(--hover); }
 .agents-list { margin-top: 28px; border-top: 1px solid var(--border); }
 .agents-group { margin-top: 22px; }
 .agents-group-title { color: var(--muted); font-size: 12px; font-weight: 600; margin: 0 0 8px; }
-.agents-row { display: flex; align-items: center; gap: 14px; padding: 14px 4px; border-bottom: 1px solid var(--border); }
+.agents-row-wrap { border-bottom: 1px solid var(--border); }
+.agents-row { display: flex; align-items: center; gap: 14px; padding: 14px 4px; }
 .agents-mark { display: flex; color: var(--muted); flex-shrink: 0; }
 .agents-row-main { flex: 1; min-width: 0; }
-.agents-row-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.agents-row-name { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
 .agents-row-name strong { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agents-unavailable { color: var(--warn); font-size: 12px; white-space: nowrap; }
+.agents-unavailable, .agents-login-pending { color: var(--warn); font-size: 12px; white-space: nowrap; }
+.agents-login-pending { display: inline-flex; align-items: center; gap: 5px; font-weight: 500; }
+.agents-login-dot { width: 7px; height: 7px; border-radius: var(--radius-pill); background: var(--warn); flex: none; }
 .agents-hidden { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .agents-row-meta { display: block; color: var(--muted); font-size: 13px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agents-row-id { color: var(--faint); }
@@ -13175,13 +13204,13 @@ button.trace-step-head:hover { background: var(--hover); }
 .takeover-note > .icon-btn { flex: none; }
 
 /* Independent agent accounts and native browser sign-in. */
-.agent-account-dialog, .agent-login-dialog, .agent-settings-dialog { width: min(460px, 100%); max-height: 100%; overflow-y: auto; border-radius: var(--radius-lg); }
+.agent-account-dialog, .agent-settings-dialog { width: min(460px, 100%); max-height: 100%; overflow-y: auto; border-radius: var(--radius-lg); }
 .agent-account-choices { display: flex; flex-direction: column; gap: 8px; margin: 18px 0; }
 .agent-account-choices .choice-row { width: 100%; padding: 16px 12px; border: 1px solid var(--border); border-radius: var(--radius); }
 .agent-account-discover { margin: 0 0 20px; width: 100%; white-space: normal; text-align: left; font-size: 13px; color: var(--muted); }
 .agent-account-selected { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
-.agent-account-dialog .dialog-field > span, .agent-login-dialog .dialog-field > span { display: block; margin-bottom: 8px; color: var(--muted); font-size: 13px; }
-.agent-account-dialog input, .agent-login-dialog input { font-size: 16px; }
+.agent-account-dialog .dialog-field > span, .agent-login-panel .dialog-field > label { display: block; margin-bottom: 8px; color: var(--muted); font-size: 13px; }
+.agent-account-dialog input, .agent-login-panel input { font-size: 16px; }
 .agent-account-source { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; font-size: 13px; color: var(--muted); }
 .agent-account-source .ghost { max-width: 240px; overflow-wrap: anywhere; }
 .agent-account-note { font-size: 12px; }
@@ -13194,11 +13223,24 @@ button.trace-step-head:hover { background: var(--hover); }
 .agent-cli-install { color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .onboard-entry-options { padding: 8px 14px 12px 44px; }
 
-.agent-login-heading { display: flex; align-items: flex-start; gap: 12px; }
-.agent-login-heading > svg { flex: none; margin-top: 3px; color: var(--muted); }
-.agent-login-link { display: flex; align-items: center; gap: 8px; margin: 10px 0 24px; flex-wrap: wrap; }
-.agent-login-link a { display: inline-flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none; padding: 10px 14px; border-radius: var(--radius-pill); }
-.agent-login-status { display: flex; align-items: center; gap: 10px; padding: 20px 0; font-size: 14px; line-height: 1.6; }
+.agent-login-panel { margin: 2px 0 16px 32px; padding: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-card); }
+.agent-login-hint { margin: 0 0 12px; color: var(--muted); line-height: 1.5; }
+.agent-login-link { display: flex; align-items: center; gap: 8px; margin: 0 0 16px; flex-wrap: wrap; }
+.agent-login-link a, .agent-login-link button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none; padding: 9px 14px; border-radius: var(--radius-pill); }
+.agent-login-code { display: block; margin: 0; }
+.agent-login-code-row { display: flex; align-items: stretch; gap: 8px; }
+.agent-login-code-row input { flex: 1; min-width: 0; }
+.agent-login-code-row button { flex: none; white-space: nowrap; }
+.agent-login-status { display: flex; align-items: center; gap: 10px; padding: 12px 0; line-height: 1.6; margin: 0; }
+.agent-login-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); flex-wrap: wrap; }
+.agent-login-keep { color: var(--muted); font-size: .85em; line-height: 1.5; }
+.agent-login-foot-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.agent-login-foot-actions .danger { color: var(--danger); }
+@media (max-width: 640px) {
+  .agent-login-panel { margin-left: 0; padding: 14px; }
+  .agent-login-code-row { flex-direction: column; }
+  .agent-login-code-row input { flex: none; }
+}
 
 /* Desk */
 .desk-segment button, .desk-chart-day, .desk-first li button, .desk-pile, .desk-checklist button, .desk-thread-link {
@@ -15953,3 +15995,9 @@ button.steward-brief-stat:hover { background: var(--hover, rgba(31, 30, 28, 0.08
 
 /* wb-sessions: the grey line above the composer while the desktop app still wakes this conversation. */
 .loopx-driven { margin: 0 4px 6px; font-size: 12px; line-height: 1.45; color: var(--muted); }
+
+/* Recover a signed-out model catalog in the workspace, without an error-colored modal. */
+.agent-login-recovery { width: min(var(--content-w), calc(100% - 32px)); margin: 4px auto 0; }
+.agent-login-required { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.agent-login-required button { flex: none; }
+.agent-login-recovery .agent-login-panel { margin: 8px 0 0; }

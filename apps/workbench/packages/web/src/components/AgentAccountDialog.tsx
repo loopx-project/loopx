@@ -7,7 +7,7 @@ import { StreamBridgeOption } from './StreamBridgeOption';
 import { AgentMark, IconChevron, IconPlus } from './icons';
 
 export function AgentAccountDialog({ api, agents, onCreated, onDiscover, onClose }: {
-  api: Api; agents: AgentInfo[]; onCreated: () => Promise<void>; onDiscover: () => void; onClose: () => void;
+  api: Api; agents: AgentInfo[]; onCreated: (accountId?: string) => Promise<void>; onDiscover: () => void; onClose: () => void;
 }) {
   const [supported, setSupported] = useState<SupportedAgent[] | null>(null);
   const [selected, setSelected] = useState<SupportedAgent | null>(null);
@@ -32,9 +32,11 @@ export function AgentAccountDialog({ api, agents, onCreated, onDiscover, onClose
   const create = async () => {
     if (!selected || busy) return;
     setBusy(true); setError('');
+    let accountId: string | undefined;
     try {
       if (selected.capabilities?.createAccount) {
-        await api.createAgentAccount({ adapter: selected.adapter, sourceId: sourceId || undefined, label: label.trim() || undefined });
+        const account = await api.createAgentAccount({ adapter: selected.adapter, sourceId: sourceId || undefined, label: label.trim() || undefined });
+        accountId = account.id;
       } else if (sourceId) {
         await api.updateAgent(sourceId, { streamBridge, ...(label.trim() ? { label: label.trim() } : {}) });
       } else {
@@ -45,7 +47,7 @@ export function AgentAccountDialog({ api, agents, onCreated, onDiscover, onClose
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e)); setBusy(false); return;
     }
-    await onCreated();
+    await onCreated(accountId);
   };
   return <DialogSurface className="agent-account-dialog" labelledBy="agent-account-title" onClose={onClose} busy={busy}>
     <h2 id="agent-account-title" className="dialog-title">{t('agents.add')}</h2>
