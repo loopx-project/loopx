@@ -744,9 +744,14 @@ delivery checks pass: readable counter-evidence durably invalidates that Turn's
 retained proof under the generation lock and holds the original window across
 subsequent history outages unless fresh same-Turn evidence explains the
 contradiction, and an un-contradicted retained proof is used only when Codex
-history is unavailable. Quota continuation for the original period still
-requires a live observation. Missing or mismatched evidence still leaves a
-window held when the original failure cannot be verified.
+history is unavailable. Empty or unstable readbacks stay `unavailable` rather
+than writing a permanent contradiction, so a subsequent complete user-only
+observation for that same Turn can recover; if persisting a contradiction fails,
+the prior retained proof is invalidated first and the error surfaces to the
+cadence recovery boundary while holding the original window. Quota continuation
+for the original period still requires a live observation. Missing or
+mismatched evidence still leaves a window held when the original failure cannot
+be verified.
 
 | Cancelled failure on the original settings page | Narrow retained-failure state |
 | --- | --- |

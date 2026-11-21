@@ -142,19 +142,24 @@ def contradict_report_failure(
     """Durably invalidate a report Turn's failure proof after live contradiction."""
     binding = report_failure_binding(original, window)
     if binding is None:
-        return
+        raise ValueError("contradiction requires a valid report failure binding")
     if (isinstance(proof, Mapping) and proof.get("turn_id") is not None
             and proof.get("turn_id") != binding["provider_turn_id"]):
-        return
+        raise ValueError("contradiction proof turn does not match original report failure")
     folder = attempt_directory(runtime_root, window)
     if folder.is_symlink() or not folder.is_dir():
-        return
+        raise OSError("report attempt directory is unavailable for contradiction proof")
     path = folder / REPORT_FAILURE_PROOF
     with _failure_proof_lock(
         folder, operation="contradict_report_failure_observation", generation_locked=generation_locked,
     ) as ownership:
         if ownership is None or path.is_symlink():
-            return
+            raise OSError("report failure proof lock or path is unavailable")
+        # Read the original again after metadata I/O before recording the
+        # contradiction for this exact Turn, window and native result digest.
+        current = store.load_turn(original["session_id"], original["turn_id"])
+        if current is None or report_failure_binding(current, window) != binding:
+            raise RuntimeError("original report failure binding changed before contradiction persistence")
         existing = _read_report_failure_record(runtime_root, window)
         thread_id = proof.get("thread_id") if isinstance(proof, Mapping) else None
         if not isinstance(thread_id, str) or not thread_id:
@@ -162,16 +167,17 @@ def contradict_report_failure(
             thread_id = existing_thread if isinstance(existing_thread, str) and existing_thread else None
         if _is_contradicted_proof(existing, binding) and existing.get("provider_thread_id") == thread_id:
             return
-        # Read the original again after metadata I/O before recording the
-        # contradiction for this exact Turn, window and native result digest.
-        current = store.load_turn(original["session_id"], original["turn_id"])
-        if current is not None and report_failure_binding(current, window) == binding:
-            atomic_write_json(path, {
-                "binding": binding,
-                "provider_thread_id": thread_id,
-                "only_original_user_item": False,
-                "contradicted": True,
-            })
+        if not _is_contradicted_proof(existing, binding) and path.exists():
+            path.unlink(missing_ok=True)
+        atomic_write_json(path, {
+            "binding": binding,
+            "provider_thread_id": thread_id,
+            "only_original_user_item": False,
+            "contradicted": True,
+        })
+        persisted = _read_report_failure_record(runtime_root, window)
+        if not _is_contradicted_proof(persisted, binding) or persisted.get("provider_thread_id") != thread_id:
+            raise OSError("contradicted report failure proof failed readback verification")
 
 
 def valid_report_failure_proof(
@@ -186,15 +192,12 @@ def valid_report_failure_proof(
 def proof_targets_original_turn(
     original: Mapping[str, Any], threads: Sequence[str], proof: Mapping[str, Any] | None,
 ) -> bool:
-    """Ensure a contradicted observation refers to this exact original thread/turn."""
+    """Ensure an observation refers to this exact original thread/turn."""
     if not isinstance(proof, Mapping):
         return False
     thread_id = proof.get("thread_id")
     turn_id = proof.get("turn_id")
-    if proof.get("contradicted") is True:
-        return ((thread_id is None or thread_id in threads)
-            and (turn_id is None or turn_id == original.get("upstream_turn_id")))
-    return thread_id in threads and turn_id == original.get("upstream_turn_id")
+    return isinstance(thread_id, str) and thread_id in threads and turn_id == original.get("upstream_turn_id")
 
 
 def probe_report_failure(
@@ -249,18 +252,6 @@ def _try_retain_report_failure(
         _LOG.warning("An original report's terminal failure proof could not be retained")
 
 
-def _try_contradict_report_failure(
-    runtime_root: Path, store: Any, original: Mapping[str, Any], window: dict[str, Any],
-    proof: Mapping[str, Any] | None = None, *, generation_locked: bool = False,
-) -> None:
-    try:
-        contradict_report_failure(
-            runtime_root, store, original, window, proof, generation_locked=generation_locked,
-        )
-    except (OSError, ValueError, TypeError, KeyError):
-        _LOG.warning("An original report's terminal failure contradiction could not be retained")
-
-
 def handle_contradicted_report_observation(
     runtime_root: Path, store: Any, original: Mapping[str, Any], window: dict[str, Any] | None,
     threads: Sequence[str], proof: Mapping[str, Any], *, generation_locked: bool = False,
@@ -270,13 +261,14 @@ def handle_contradicted_report_observation(
         return
     if proof.get("in_progress") is True:
         if proof.get("target_in_progress") is True and read_retained_report_failure(runtime_root, original, window):
-            _try_contradict_report_failure(
+            contradict_report_failure(
                 runtime_root, store, original, window, proof, generation_locked=generation_locked,
             )
         return
-    _try_contradict_report_failure(
-        runtime_root, store, original, window, proof, generation_locked=generation_locked,
-    )
+    if proof.get("explicit_contradiction") is True:
+        contradict_report_failure(
+            runtime_root, store, original, window, proof, generation_locked=generation_locked,
+        )
 
 
 def verify_report_window_failure(

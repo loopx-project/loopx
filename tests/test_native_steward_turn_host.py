@@ -1273,12 +1273,14 @@ def test_native_steward_advancement_and_report_run_on_qualified_antigravity_fall
     assert capture.read_bytes() == before_codex
 
 
-def test_report_failure_proof_lock_and_contradiction_lifecycle(tmp_path):
+def test_report_failure_proof_lock_and_contradiction_lifecycle(tmp_path, monkeypatch):
     from datetime import datetime, timezone
     from types import SimpleNamespace
+    import loopx.capabilities.native_chat.report_failure_proof as proof_module
     from loopx.capabilities.native_chat.report_failure_proof import (
         REPORT_FAILURE_PROOF,
         contradict_report_failure,
+        handle_contradicted_report_observation,
         is_report_failure_contradicted,
         read_retained_report_failure,
         retain_report_failure,
@@ -1342,9 +1344,47 @@ def test_report_failure_proof_lock_and_contradiction_lifecycle(tmp_path):
         assert read_retained_report_failure(tmp_path, original, window) is True
         assert is_report_failure_contradicted(tmp_path, original, window) is False
 
-    # Contradiction invalidates the retained proof and cannot be overwritten back by retain_report_failure.
+    # Contradiction write failure neutralizes any prior retained positive proof before raising OSError.
+    with monkeypatch.context() as broken:
+        def fail_write(*_args, **_kwargs):
+            raise OSError("disk full")
+
+        broken.setattr(proof_module, "atomic_write_json", fail_write)
+        with pytest.raises(OSError, match="disk full"):
+            contradict_report_failure(tmp_path, store, original, window, {"contradicted": True, "turn_id": "codex-turn-1"})
+        assert not proof_path.exists()
+        assert read_retained_report_failure(tmp_path, original, window) is False
+        assert is_report_failure_contradicted(tmp_path, original, window) is False
+
+    # Re-retain positive proof, verify missing readback raises OSError, then succeed cleanly.
+    retain_report_failure(tmp_path, store, original, window, valid_proof)
+    assert read_retained_report_failure(tmp_path, original, window) is True
+    with monkeypatch.context() as noop_write:
+        noop_write.setattr(proof_module, "atomic_write_json", lambda *_a, **_kw: None)
+        with pytest.raises(OSError, match="readback"):
+            contradict_report_failure(tmp_path, store, original, window, {"contradicted": True, "turn_id": "codex-turn-1"})
+        assert not proof_path.exists()
+    retain_report_failure(tmp_path, store, original, window, valid_proof)
+
+    # Non-explicit contradiction observations never persist contradiction.
+    handle_contradicted_report_observation(
+        tmp_path, store, original, window, ["thread-1"],
+        {"contradicted": True, "thread_id": "thread-1", "turn_id": "codex-turn-1"},
+    )
+    assert read_retained_report_failure(tmp_path, original, window) is True
+    assert is_report_failure_contradicted(tmp_path, original, window) is False
+
+    # Contradiction fails loudly on lock contention, invalid inputs, or changed original Turn.
+    with pytest.raises(ValueError):
+        contradict_report_failure(tmp_path, store, original, window, {"contradicted": True, "turn_id": "other-turn"})
+    with pytest.raises(RuntimeError):
+        contradict_report_failure(
+            tmp_path, SimpleNamespace(load_turn=lambda _s, _t: None), original, window,
+            {"contradicted": True, "turn_id": "codex-turn-1"},
+        )
     with exclusive_file_lock(folder / "generation.lock", operation="busy"):
-        contradict_report_failure(tmp_path, store, original, window, {"contradicted": True, "turn_id": "codex-turn-1"})
+        with pytest.raises(OSError):
+            contradict_report_failure(tmp_path, store, original, window, {"contradicted": True, "turn_id": "codex-turn-1"})
         assert read_retained_report_failure(tmp_path, original, window) is True
         contradict_report_failure(
             tmp_path, store, original, window, {"contradicted": True, "turn_id": "codex-turn-1"},
@@ -1357,10 +1397,11 @@ def test_report_failure_proof_lock_and_contradiction_lifecycle(tmp_path):
     assert read_retained_report_failure(tmp_path, original, window) is False
     assert is_report_failure_contradicted(tmp_path, original, window) is True
 
-    # Symlink proof paths are never read or overwritten.
+    # Symlink proof paths are never read, unlinked, or overwritten.
     proof_path.unlink()
     proof_path.symlink_to("foreign-target")
-    contradict_report_failure(tmp_path, store, original, window, {"contradicted": True, "turn_id": "codex-turn-1"})
+    with pytest.raises(OSError):
+        contradict_report_failure(tmp_path, store, original, window, {"contradicted": True, "turn_id": "codex-turn-1"})
     assert proof_path.is_symlink()
     assert read_retained_report_failure(tmp_path, original, window) is False
     assert is_report_failure_contradicted(tmp_path, original, window) is False

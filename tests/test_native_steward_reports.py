@@ -1739,6 +1739,7 @@ def _setup_missed_report_failure(steward, tmp_path, monkeypatch, provider, local
     fail_once = tmp_path / "fail-next-report"
     history_unavailable = tmp_path / "report-history-unavailable"
     history_rpc_error = tmp_path / "report-history-rpc-error"
+    items_unavailable = tmp_path / "report-items-unavailable"
     contradicted_items = tmp_path / "report-contradicted-items"
     other_turn_active = tmp_path / "report-other-turn-active"
     fail_once.touch()
@@ -1762,6 +1763,9 @@ def _setup_missed_report_failure(steward, tmp_path, monkeypatch, provider, local
         print(json.dumps({{"id": request["id"], "result": {{"data": rows}}}}), flush=True)
         continue
     if method == "thread/items/list":
+        if __import__("pathlib").Path({str(items_unavailable)!r}).exists():
+            print(json.dumps({{"id": request["id"], "result": {{"data": []}}}}), flush=True)
+            continue
         items = [{{"turnId": "report-failed-after-launch", "item": {{"id": "original-user", "type": "userMessage"}}}}]
         if __import__("pathlib").Path({str(contradicted_items)!r}).exists():
             items.append({{"turnId": "report-failed-after-launch", "item": {{"id": "extra-agent", "type": "agentMessage"}}}})
@@ -1794,6 +1798,7 @@ def _setup_missed_report_failure(steward, tmp_path, monkeypatch, provider, local
         "old_artifacts": old_artifacts, "original_bytes": original_bytes,
         "sent": sent, "calls_before": calls_before,
         "history_unavailable": history_unavailable, "history_rpc_error": history_rpc_error,
+        "items_unavailable": items_unavailable,
         "contradicted_items": contradicted_items, "other_turn_active": other_turn_active,
     }
 
@@ -2068,6 +2073,156 @@ def test_contradicted_quota_observation_and_active_thread_hold_safely(
         assert restarted_reports.current_window(ctx["owner"])[1]["window_id"] == old["window_id"]
     finally:
         restarted.close()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("local_session", [False, True])
+def test_contradiction_write_failure_invalidates_prior_proof_across_restart(
+        steward, tmp_path, monkeypatch, provider, local_session):
+    import os
+    from loopx.capabilities.native_chat.steward_reports import ManagedSessionReports
+    from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
+
+    store, runtime, bot, _, _, capture, _ = steward
+    ctx = _setup_missed_report_failure(steward, tmp_path, monkeypatch, provider, local_session, "failed")
+    clock, reports = ctx["clock"], ctx["reports"]
+    original, old, old_folder = ctx["original"], ctx["old"], ctx["old_folder"]
+    cadence, previous = ctx["cadence"], ctx["previous"]
+    old_artifacts, original_bytes = ctx["old_artifacts"], ctx["original_bytes"]
+    sent, calls_before = ctx["sent"], ctx["calls_before"]
+    history_unavailable, contradicted_items = ctx["history_unavailable"], ctx["contradicted_items"]
+
+    def wake(target_runtime=runtime):
+        cache = getattr(target_runtime, "_steward_monitor_next_check", None)
+        if cache is not None:
+            cache.clear()
+        return pump_steward_monitors(target_runtime)
+
+    def starts():
+        return [row for row in map(json.loads, capture.read_text().splitlines()) if row.get("method") == "turn/start"]
+
+    original_starts = [row for row in map(json.loads, calls_before.splitlines()) if row.get("method") == "turn/start"]
+
+    # Phase 1: user-only failure proof is retained on the original window.
+    assert wake() == []
+    failure_proof = old_folder / "native-terminal-failure.json"
+    retained = json.loads(failure_proof.read_text(encoding="utf-8"))
+    assert retained["only_original_user_item"] is True
+
+    # Phase 2: live contradiction encounters a write failure; the old positive
+    # proof is removed before surfacing to the cadence recovery boundary.
+    clock["now"] += timedelta(days=3)
+    contradicted_items.touch()
+    real_replace = os.replace
+    with monkeypatch.context() as broken:
+        def failing_replace(src, dst):
+            if Path(dst).name == failure_proof.name:
+                raise OSError("injected proof replace failure")
+            return real_replace(src, dst)
+
+        broken.setattr(os, "replace", failing_replace)
+        assert wake() == []
+    assert not failure_proof.exists()
+    assert starts() == original_starts
+    assert json.loads(cadence.read_text()) == previous
+    assert reports.current_window(ctx["owner"])[1]["window_id"] == old["window_id"]
+
+    # Phase 3: immediate restart with history offline still holds the original window.
+    contradicted_items.unlink()
+    history_unavailable.touch()
+    restarted = _restart_steward_runtime(store, runtime)
+    try:
+        restarted_reports = ManagedSessionReports(restarted) if local_session else StewardReports(restarted)
+        restarted_host = StewardTurnHost(restarted)
+        assert wake(restarted) == []
+        assert starts() == original_starts
+        assert json.loads(cadence.read_text()) == previous
+        assert restarted_reports.current_window(ctx["owner"])[1]["window_id"] == old["window_id"]
+        assert restarted_host.report_window_failure_verified(original, old) is False
+
+        # Phase 4: once write succeeds on the next live contradicted tick, durable
+        # contradiction is written, read back, and holds permanently.
+        history_unavailable.unlink()
+        contradicted_items.touch()
+        assert wake(restarted) == []
+        contradicted = json.loads(failure_proof.read_text(encoding="utf-8"))
+        assert contradicted["binding"] == retained["binding"]
+        assert contradicted["only_original_user_item"] is False
+        assert contradicted["contradicted"] is True
+        assert starts() == original_starts
+        assert json.loads(cadence.read_text()) == previous
+        assert [path.read_bytes() for path in old_artifacts] == original_bytes
+        assert bot.writes == sent
+    finally:
+        restarted.close()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("local_session", [False, True])
+@pytest.mark.parametrize("followup", ["user_only", "agent_message"])
+def test_empty_items_readback_recovers_on_same_turn_unless_explicitly_contradicted(
+        steward, tmp_path, monkeypatch, provider, local_session, followup):
+    from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
+
+    store, runtime, bot, transport, _, capture, _ = steward
+    ctx = _setup_missed_report_failure(steward, tmp_path, monkeypatch, provider, local_session, "failed")
+    clock, sid, reports = ctx["clock"], ctx["sid"], ctx["reports"]
+    original, old, old_folder = ctx["original"], ctx["old"], ctx["old_folder"]
+    cadence, previous = ctx["cadence"], ctx["previous"]
+    sent, calls_before = ctx["sent"], ctx["calls_before"]
+    items_unavailable, contradicted_items = ctx["items_unavailable"], ctx["contradicted_items"]
+
+    def wake():
+        cache = getattr(runtime, "_steward_monitor_next_check", None)
+        if cache is not None:
+            cache.clear()
+        return pump_steward_monitors(runtime)
+
+    def starts():
+        return [row for row in map(json.loads, capture.read_text().splitlines()) if row.get("method") == "turn/start"]
+
+    original_starts = [row for row in map(json.loads, calls_before.splitlines()) if row.get("method") == "turn/start"]
+    failure_proof = old_folder / "native-terminal-failure.json"
+
+    # Tick 1: empty thread/items/list is unavailable, never a permanent contradiction.
+    clock["now"] += timedelta(days=3)
+    items_unavailable.touch()
+    assert wake() == []
+    assert not failure_proof.exists()
+    assert json.loads(cadence.read_text()) == previous
+    assert starts() == original_starts
+    assert reports.current_window(ctx["owner"])[1]["window_id"] == old["window_id"]
+    host = StewardTurnHost(runtime)
+    assert host.report_failure_contradicted(original, old) is False
+
+    # Tick 2: same Turn returns either full userMessage-only inventory or agentMessage.
+    items_unavailable.unlink()
+    if followup == "user_only":
+        pending = wake()
+        assert len(pending) == 1
+        done = finish(runtime, pending[0])
+        assert done["response"]["native_loopx"]["status"] == "committed", done
+        retained = json.loads(failure_proof.read_text(encoding="utf-8"))
+        assert retained["only_original_user_item"] is True
+        _, latest = reports.current_window(ctx["owner"])
+        assert latest["window_id"] != old["window_id"]
+        if local_session:
+            body = (attempt_directory(reports.root, latest) / "report.md").read_text()
+            assert any(msg["text"] == body and msg["turn_id"] == done["turn_id"] for msg in store.messages(sid))
+        else:
+            assert transport.steward_reports.reconcile() == 1
+            assert len(bot.writes) > len(sent)
+    else:
+        contradicted_items.touch()
+        assert wake() == []
+        contradicted = json.loads(failure_proof.read_text(encoding="utf-8"))
+        assert contradicted["contradicted"] is True and contradicted["only_original_user_item"] is False
+        assert starts() == original_starts
+        assert json.loads(cadence.read_text()) == previous
+        contradicted_items.unlink()
+        assert wake() == []
+        assert starts() == original_starts
+        assert reports.current_window(ctx["owner"])[1]["window_id"] == old["window_id"]
 
 
 def test_consecutive_missed_windows_keep_the_first_unreported_deadline(tmp_path):
