@@ -502,19 +502,27 @@ function reportSettlementOnly(params: JsonObject, request: JsonObject, todo: Jso
   if (params.report_frozen_contract_recovery != null) {
     const frozen = requireJsonObject(params.report_frozen_contract_recovery, "frozen report contract recovery");
     const effects = requireJsonObject(recovery.recorded_effects, "native recorded effects");
-    const acceptedFrozen = recovery.schema_version === "loopx_turn_journal_inspection_v1" && recovery.ok === true
+    const commonProof = recovery.schema_version === "loopx_turn_journal_inspection_v1" && recovery.ok === true
       && recovery.goal_matches === true && recovery.owner_matches === true && recovery.turn_key_matches === true
-      && recovery.journal_consistent === true && todo.status === "open" && recovery.journal_status === "failed"
-      && Array.isArray(recovery.completed_phases) && recovery.completed_phases.length === 2
-      && recovery.completed_phases[0] === "host_execute" && recovery.completed_phases[1] === "typed_result"
-      && decision.action === "continue" && decision.resume_from === "host_execute" && decision.reinvoke_host === true
+      && recovery.journal_consistent === true && todo.status === "open"
       && effects.host_invoked === true && effects.state_written === false
       && effects.quota_spent === false && effects.scheduler_acknowledged === false
       && typeof frozen.turn_key === "string" && ENVELOPED_SHA256_PATTERN.test(frozen.turn_key)
-      && frozen.result_kind === "validation_failed" && frozen.validation_stage === "host_result_contract"
       && frozen.host_attempt_count === 1
       && frozen.generation_verified === true && frozen.saved_candidate_verified === true;
-    if (!acceptedFrozen || params.preparing_model_context === true) {
+    const acceptedFrozen = commonProof && recovery.journal_status === "failed"
+      && Array.isArray(recovery.completed_phases) && recovery.completed_phases.length === 2
+      && recovery.completed_phases[0] === "host_execute" && recovery.completed_phases[1] === "typed_result"
+      && decision.action === "continue" && decision.resume_from === "host_execute" && decision.reinvoke_host === true
+      && frozen.result_kind === "validation_failed" && frozen.validation_stage === "host_result_contract";
+    const acceptedStoppedCandidate = commonProof && recovery.journal_status === "stopped"
+      && Array.isArray(recovery.completed_phases) && recovery.completed_phases.length === 3
+      && recovery.completed_phases[0] === "host_execute" && recovery.completed_phases[1] === "typed_result"
+      && recovery.completed_phases[2] === "validation"
+      && decision.action === "return_existing" && decision.resume_from === null && decision.reinvoke_host === false
+      && frozen.result_kind === "wait" && frozen.classification === "no_typed_host_result"
+      && !Object.hasOwn(frozen, "validation_stage");
+    if ((!acceptedFrozen && !acceptedStoppedCandidate) || params.preparing_model_context === true) {
       throw new EffectRuntimeRequestError("original report recovery requires validated remaining effects without a model");
     }
     return true;
@@ -523,7 +531,8 @@ function reportSettlementOnly(params: JsonObject, request: JsonObject, todo: Jso
     && decision.action === "continue" && decision.resume_from === "validation"
     && Array.isArray(recovery.completed_phases) && recovery.completed_phases.length === 2
     && recovery.completed_phases[0] === "host_execute" && recovery.completed_phases[1] === "typed_result";
-  const completedGeneration = todo.status === "done" && todo.completion_turn_key === request.turn_instance_id
+  const completedGeneration = todo.status === "done"
+    && [request.turn_instance_id, `${String(request.turn_instance_id)}.saved-candidate`].includes(String(todo.completion_turn_key))
     && (decision.action === "continue" && ["durable_writeback", "quota_spend", "scheduler_apply", "scheduler_ack"].includes(String(decision.resume_from))
       || decision.action === "return_existing" && recovery.journal_status === "committed");
   const accepted = recovery.schema_version === "loopx_turn_journal_inspection_v1" && recovery.ok === true
