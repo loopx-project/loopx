@@ -179,15 +179,14 @@ def test_failed_guard_keeps_host_recovery_without_runtime_presentation(
     ) == 1
     output = capsys.readouterr().out
     assert "host-approved" in output
-    if output_format == "json":
-        payload = json.loads(output)
-        assert payload["ok"] is False and payload["should_run"] is False
-        assert payload["error_code"] == "quota_runtime_permission_denied"
-    else:
-        assert "# LoopX Turn Envelope" in output
-        assert '"ok":false' in output
-        assert '"should_run":false' in output
-        assert '"error_code":"quota_runtime_permission_denied"' in output
+    if output_format == "markdown":
+        assert output.startswith("# LoopX Quota Should Run\n")
+        assert "- ok: `False`" in output
+        output = output.split("```json\n", 1)[1].rsplit("\n```", 1)[0]
+    payload = json.loads(output)
+    assert payload["ok"] is False and payload["should_run"] is False
+    assert payload["error_code"] == "quota_runtime_permission_denied"
+    assert "schema_version" not in payload and "interaction_contract" not in payload
     assert registry.read_text() == "{}"
 
 
