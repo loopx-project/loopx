@@ -901,6 +901,9 @@ The read-only command paginates GitHub review history and uses the latest submit
 opinion per reviewer; a comment/pending review does not erase a blocker, and a
 dismissed review does not resurrect older history. Its typed TS read model reports
 `clear`, `verification_required`, or `hold`; these are not merge decisions.
+Closeout checks that the base commit and changed-file count are stable across
+the history read when the head is unchanged. If that comparison changes,
+retry closeout with the current PR snapshot.
 Review age or a different commit only identifies a finding to inspect, never proof
 of resolution. The host independently verifies every old finding and inline comment,
 checks owner authorization and GitHub/branch dismissal permissions, rechecks the
