@@ -116,6 +116,14 @@ class ChatMonitorActionMixin:
                         monitor_metadata=base_metadata,
                     )
             result = update_goal_todo(**kwargs)
+            if not dry_run and parameters.get("signal_scope") is not None:
+                from ..capabilities.native_chat.steward_monitor import write_steward_monitor_scope
+                target_key = str(
+                    parameters.get("target_key") or (result.get("todo") or {}).get("target_key") or ""
+                ).strip()
+                if not target_key:
+                    raise ValueError("signal_scope update requires target_key")
+                write_steward_monitor_scope(source.runtime_root, goal_id, target_key, parameters["signal_scope"])
         return result
 
     def _apply_monitor_update(

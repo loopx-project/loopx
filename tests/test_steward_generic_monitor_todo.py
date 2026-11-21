@@ -8,6 +8,8 @@ from pathlib import Path
 from loopx.capabilities.native_chat.steward_monitor import (
     StewardMonitor,
     pump_steward_monitors,
+    steward_monitor_delivery_dir,
+    steward_monitor_scope_path,
     steward_monitor_snapshot_path,
 )
 from loopx.control_plane.collaboration.inbox import pending as inbox_pending
@@ -325,3 +327,204 @@ def test_generic_signal_monitor_triggers_handoff_and_deduped_user_actions(
     assert poll3_done["status"] == "failed"
     assert capture.read_bytes() == calls_before_poll3
     assert local_watch_row(runtime, actor, created_todo_id)["result_hash"] == first_hash
+
+
+def test_scoped_signal_monitor_queues_aggregated_owner_report_without_user_todos(
+    steward, tmp_path, monkeypatch,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    store, runtime, _, transport, binding, capture, _ = steward
+    sid, managed = original(steward)
+    storage(runtime, "sqlite")
+    plan = managed.prepare(binding["binding_id"], session_id=sid)["plan"]
+    actor = managed.prepare(
+        binding["binding_id"],
+        session_id=sid,
+        expected_plan_id=plan["plan_id"],
+        execute=True,
+    )["actor"]
+    store.load_session(sid)
+
+    monitor = StewardMonitor(runtime)
+    enable_plan = monitor.configure(binding["binding_id"], operation="enable")["plan"]
+    monitor.configure(
+        binding["binding_id"],
+        operation="enable",
+        execute=True,
+        expected_plan_id=enable_plan["plan_id"],
+    )
+    default_watch = monitor.current(actor)
+    edit_local_watch(
+        runtime,
+        actor,
+        default_watch["todo_id"],
+        "--next-due-at",
+        (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
+    )
+
+    actions = transport.core.actions
+    scope_spec = {
+        "schema_version": "steward_signal_monitor_scope_v0",
+        "include_portfolio": False,
+        "include_inbox": False,
+        "pr_filter": {
+            "exclude_drafts": True,
+            "exclude_conflicting": True,
+            "effective_verdicts": ["APPROVE"],
+            "required_approver_declarations": ["GPT", "OpenAI"],
+        },
+    }
+    preview = actions.preview({
+        "action_kind": "monitor.create",
+        "summary": "Track mergeable approved PRs on acme/widgets and send one aggregated report",
+        "normalized_parameters": {
+            "goal_id": actor["goal_id"],
+            "agent_id": actor["agent_id"],
+            "target": "Track mergeable approved PRs on acme/widgets and emit one aggregated report without creating per-PR user todos.",
+            "target_key": "steward-gpt-mergeable-pr-monitor",
+            "task_repository": "acme/widgets",
+            "cadence": "every_2_hours",
+            "timezone": "Asia/Shanghai",
+            "stop_condition": "watch_only",
+            "signal_scope": scope_spec,
+        },
+        "context": {"kind": "goal", "goal_id": actor["goal_id"]},
+        "idempotency_key": "create-gpt-mergeable-pr-monitor",
+    })
+    assert preview["status"] == "preview_ready"
+    assert preview["normalized_parameters"]["signal_scope"]["pr_filter"]["required_approver_declarations"] == ["gpt", "openai"]
+    applied = actions.apply(preview["proposal_id"])
+    created_todo_id = applied["proposal"]["receipt"]["resource_ids"]["todo_id"]
+    scope_file = steward_monitor_scope_path(runtime.coordination_runtime_root, actor["goal_id"], "steward-gpt-mergeable-pr-monitor")
+    assert scope_file.is_file()
+    persisted_scope = json.loads(scope_file.read_text(encoding="utf-8"))
+    assert persisted_scope == preview["normalized_parameters"]["signal_scope"]
+
+    edit_local_watch(
+        runtime,
+        actor,
+        created_todo_id,
+        "--next-due-at",
+        (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat(),
+    )
+
+    import loopx.capabilities.native_chat.steward_monitor as monitor_mod
+    from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
+
+    host = StewardTurnHost(runtime)
+    assert host._normalize_steward_actions({"steward_owner_report": "   "}, {"context_delegation": {"targets": []}})["validation_error"]
+    assert host._normalize_steward_actions({"steward_owner_report": {"markdown": "x" * 24001}}, {"context_delegation": {"targets": []}})["validation_error"]
+    assert host._normalize_steward_actions({"steward_owner_report": {}}, {"context_delegation": {"targets": []}})["validation_error"]
+
+    repo_payload = {
+        "status": "ok",
+        "repository": "acme/widgets",
+        "items": [
+            {
+                "number": 9101,
+                "title": "Mergeable PR",
+                "url": "https://github.com/acme/widgets/pull/9101",
+                "headRefOid": "head9101",
+                "isDraft": False,
+                "mergeable": "MERGEABLE",
+                "updatedAt": "2026-11-20T09:00:00Z",
+                "author": {"login": "alice"},
+                "checks_summary": {"state": "SUCCESS", "total": 1, "passing": 1, "failing": 0, "pending": 0},
+                "bypassed_gates": [],
+                "review_summary": {
+                    "effective_verdict": "APPROVE",
+                    "has_review_conflict": False,
+                    "stale_review_count": 0,
+                    "exact_head_reviews": [
+                        {"author_login": "bob", "reviewer_declaration": "GPT-5.4", "verdict": "APPROVE", "valid_verdict_review": True, "state": "APPROVED"},
+                    ],
+                },
+            },
+            {
+                "number": 9102,
+                "title": "Conflicting PR excluded",
+                "url": "https://github.com/acme/widgets/pull/9102",
+                "headRefOid": "head9102",
+                "isDraft": False,
+                "mergeable": "CONFLICTING",
+                "updatedAt": "2026-11-20T09:00:00Z",
+                "author": {"login": "alice"},
+                "review_summary": {"effective_verdict": "APPROVE", "has_review_conflict": False, "exact_head_reviews": []},
+            },
+            {
+                "number": 9103,
+                "title": "Dismissed GPT review excluded",
+                "url": "https://github.com/acme/widgets/pull/9103",
+                "headRefOid": "head9103",
+                "isDraft": False,
+                "mergeable": "MERGEABLE",
+                "updatedAt": "2026-11-20T09:00:00Z",
+                "author": {"login": "alice"},
+                "review_summary": {
+                    "effective_verdict": "APPROVE",
+                    "has_review_conflict": False,
+                    "exact_head_reviews": [
+                        {"author_login": "bob", "reviewer_declaration": "GPT-5.4", "verdict": "APPROVE", "valid_verdict_review": True, "state": "APPROVED"},
+                        {"author_login": "bob", "reviewer_declaration": "GPT-5.4", "verdict": None, "valid_verdict_review": False, "state": "DISMISSED"},
+                        {"author_login": "alice", "reviewer_declaration": "Author Fallback", "verdict": "APPROVE", "valid_verdict_review": True, "state": "COMMENTED", "author_owned_fallback": True},
+                    ],
+                },
+            },
+        ],
+    }
+    monkeypatch.setattr(monitor_mod, "_observe_github_repository_prs", lambda repo: repo_payload)
+
+    calls_before_poll = capture.read_bytes()
+    poll_turns = pump_steward_monitors(runtime)
+    assert len(poll_turns) == 1
+    poll_done = finish(runtime, poll_turns[0])
+    assert poll_done["status"] == "completed"
+    assert poll_done["response"]["native_loopx"]["monitor"]["material_change"] is True
+    assert capture.read_bytes() == calls_before_poll
+
+    snapshot_file = steward_monitor_snapshot_path(runtime.coordination_runtime_root, actor["goal_id"], created_todo_id)
+    snapshot_data = json.loads(snapshot_file.read_text(encoding="utf-8"))
+    assert [row["number"] for row in snapshot_data["repository_snapshot"]["items"]] == [9101]
+    assert snapshot_data["inbox_items"] == []
+    assert snapshot_data["signal_scope"] == persisted_scope
+
+    aggregated_md = "## 可直接合并 PR\n- #9101 Mergeable PR (author: alice, GPT-5.4 APPROVE)"
+    _configure_codex_response(runtime, sid, {
+        "result_kind": "validated_completion",
+        "classification": "steward_scoped_pr_report",
+        "summary": "Prepared aggregated mergeable PR report.",
+        "next_action": "Await next monitor cadence.",
+        "evidence": ["PR #9101 matched scoped GPT-approved filter"],
+        "delivery_batch_scale": "implementation",
+        "delivery_outcome": "outcome_progress",
+        "work_evidence": ["Synthesized 1 aggregated report instead of per-PR user todos"],
+        "validation_evidence": ["steward_monitor_snapshot_v0 scoped to 1 matching PR"],
+        "path_delta_mode": "unchanged",
+        "vision_unchanged_reason": "Scoped steward monitor report.",
+        "steward_owner_report": {"markdown": f"  {aggregated_md}  "},
+    })
+
+    runtime._steward_monitor_next_check.clear()
+    adv_turns = pump_steward_monitors(runtime)
+    assert len(adv_turns) == 1
+    adv_done = finish(runtime, adv_turns[0])
+    assert adv_done["status"] == "completed", adv_done
+    assert adv_done["response"]["native_loopx"]["status"] == "committed"
+    assert adv_done["response"]["message"] == aggregated_md
+    assert adv_done["response"]["steward_owner_report_queued"] is True
+
+    delivery_file = steward_monitor_delivery_dir(runtime.coordination_runtime_root, actor["goal_id"]) / f"{adv_turns[0]['turn_id']}.json"
+    assert delivery_file.is_file()
+    delivery = json.loads(delivery_file.read_text(encoding="utf-8"))
+    assert delivery["schema_version"] == "steward_monitor_report_delivery_v0"
+    assert delivery["delivery_status"] == "pending"
+    assert delivery["markdown"] == aggregated_md
+    assert delivery["turn_id"] == adv_turns[0]["turn_id"]
+
+    user_todos = list_goal_todos(
+        registry_path=runtime.registry_path,
+        runtime_root_arg=str(runtime.coordination_runtime_root),
+        goal_id=actor["goal_id"],
+        role="user",
+    )["todos"]
+    assert user_todos == []

@@ -12,12 +12,14 @@ import hashlib
 import json
 import logging
 from pathlib import Path
+import re
 import subprocess
 import time
-from typing import Any
+from typing import Any, Mapping
 
 from ...agent_registry import load_goal_from_registry
 from ...chat_store import _atomic_write_json
+from ...control_plane.effect_runtime import effect_runtime_result
 from ...control_plane.scheduler.monitor_todo import monitor_todo_is_due
 from ...control_plane.todos.list_readback import list_goal_todos
 from ...control_plane.runtime.time import now_utc
@@ -82,8 +84,62 @@ def _observe_github_repository_prs(repo_slug: str) -> dict[str, Any]:
     return observe_github_repository_prs(repo_slug, runner=subprocess.run)
 
 
+_MONITOR_TARGET_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
+
+
 def steward_monitor_snapshot_path(runtime_root: Path, goal_id: str, todo_id: str) -> Path:
     return Path(runtime_root).expanduser().resolve() / "steward-monitors" / goal_id / f"{todo_id}.latest.json"
+
+
+def steward_monitor_scope_path(runtime_root: Path, goal_id: str, target_key: str) -> Path:
+    safe_goal = str(goal_id or "").strip()
+    safe_key = str(target_key or "").strip()
+    if not safe_goal or "/" in safe_goal or "\\" in safe_goal or ".." in safe_goal:
+        raise ValueError("invalid monitor scope goal_id")
+    if not _MONITOR_TARGET_KEY_RE.fullmatch(safe_key):
+        raise ValueError("invalid monitor scope target_key")
+    return Path(runtime_root).expanduser().resolve() / "steward-monitors" / safe_goal / "scopes" / f"{safe_key}.json"
+
+
+def steward_monitor_delivery_dir(runtime_root: Path, goal_id: str) -> Path:
+    safe_goal = str(goal_id or "").strip()
+    if not safe_goal or "/" in safe_goal or "\\" in safe_goal or ".." in safe_goal:
+        raise ValueError("invalid monitor delivery goal_id")
+    return Path(runtime_root).expanduser().resolve() / "steward-monitors" / safe_goal / "deliveries"
+
+
+def normalize_steward_monitor_scope(signal_scope: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if signal_scope is None:
+        return None
+    normalized = effect_runtime_result(
+        "collaboration.steward.monitor.signal_scope.normalize",
+        {"signal_scope": dict(signal_scope)},
+    ).get("signal_scope")
+    return dict(normalized) if isinstance(normalized, Mapping) else None
+
+
+def write_steward_monitor_scope(
+    runtime_root: Path, goal_id: str, target_key: str, signal_scope: Mapping[str, Any],
+) -> dict[str, Any]:
+    normalized = normalize_steward_monitor_scope(signal_scope)
+    if normalized is None:
+        raise ValueError("signal_scope cannot be empty")
+    path = steward_monitor_scope_path(runtime_root, goal_id, target_key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_json(path, normalized)
+    return normalized
+
+
+def read_steward_monitor_scope(runtime_root: Path, goal_id: str, target_key: str) -> dict[str, Any] | None:
+    if not target_key or not _MONITOR_TARGET_KEY_RE.fullmatch(str(target_key)):
+        return None
+    path = steward_monitor_scope_path(runtime_root, goal_id, target_key)
+    if not path.is_file():
+        return None
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, Mapping):
+        raise ValueError("invalid persisted steward monitor scope")
+    return normalize_steward_monitor_scope(raw)
 
 
 class StewardMonitor:
@@ -298,27 +354,47 @@ class StewardMonitor:
                 "monitor": self.current(actor), "model_invoked": False}
 
     def _collect_signal_monitor(self, actor: dict[str, Any], context: dict[str, Any], todo: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
-        portfolio = self.bindings._core("collaboration.steward.monitor.observation", {
-            "context": context, "goal_ids": self.bindings.steward_scope(self.controller.store.load_session(actor["session_id"])),
-            "actor_goal_id": actor["goal_id"], "previous_hash": None})
+        target_key = str(todo.get("target_key") or "")
+        signal_scope = read_steward_monitor_scope(
+            self.controller.coordination_runtime_root, actor["goal_id"], target_key,
+        )
+        include_portfolio = True if signal_scope is None else signal_scope.get("include_portfolio", True) is True
+        include_inbox = True if signal_scope is None else signal_scope.get("include_inbox", True) is True
+        portfolio = (
+            self.bindings._core("collaboration.steward.monitor.observation", {
+                "context": context, "goal_ids": self.bindings.steward_scope(self.controller.store.load_session(actor["session_id"])),
+                "actor_goal_id": actor["goal_id"], "previous_hash": None})
+            if include_portfolio else None
+        )
         from ...control_plane.collaboration.inbox import pending as inbox_pending
-        try:
-            inbox_raw = inbox_pending(self.controller.coordination_runtime_root,
-                goal_id=actor["goal_id"], agent_id=actor["agent_id"])
-            inbox_items = [{"request_id": row["request_id"], "source_id": row.get("source_id")}
-                           for row in inbox_raw if isinstance(row, dict) and row.get("request_id")]
-        except (OSError, ValueError):
+        if include_inbox:
+            try:
+                inbox_raw = inbox_pending(self.controller.coordination_runtime_root,
+                    goal_id=actor["goal_id"], agent_id=actor["agent_id"])
+                inbox_items = [{"request_id": row["request_id"], "source_id": row.get("source_id")}
+                               for row in inbox_raw if isinstance(row, dict) and row.get("request_id")]
+            except (OSError, ValueError):
+                inbox_items = []
+        else:
             inbox_items = []
         repo_slug = _github_repo_slug(todo.get("task_repository"))
         repo_snapshot = _observe_github_repository_prs(repo_slug) if repo_slug else None
-        observation = self.bindings._core("collaboration.steward.monitor.signal_observation", {
+        observed_at = now_utc().isoformat()
+        signal_request: dict[str, Any] = {
             "portfolio_observation": portfolio,
             "inbox_items": inbox_items,
             "repository_snapshot": repo_snapshot,
             "previous_hash": todo.get("result_hash"),
-        })
+        }
+        if signal_scope is not None:
+            signal_request["signal_scope"] = signal_scope
+            signal_request["observed_at"] = observed_at
+        observation = self.bindings._core("collaboration.steward.monitor.signal_observation", signal_request)
         if observation.get("observation_incomplete") is True:
             raise RuntimeError("steward monitor external signal source temporarily unavailable")
+        persisted_repo_snapshot = repo_snapshot
+        if isinstance(repo_snapshot, Mapping) and "scoped_repository_items" in observation:
+            persisted_repo_snapshot = {**repo_snapshot, "items": list(observation["scoped_repository_items"])}
         snapshot_path = steward_monitor_snapshot_path(
             self.controller.coordination_runtime_root, actor["goal_id"], todo["todo_id"])
         snapshot_path.parent.mkdir(parents=True, exist_ok=True)
@@ -329,10 +405,11 @@ class StewardMonitor:
             "target_key": todo.get("target_key"),
             "monitor_text": todo.get("text"),
             "task_repository": todo.get("task_repository"),
+            **({"signal_scope": signal_scope} if signal_scope is not None else {}),
             "result_hash": observation["result_hash"],
             "material_change": observation["material_change"],
-            "observed_at": now_utc().isoformat(),
-            "repository_snapshot": repo_snapshot,
+            "observed_at": observed_at,
+            "repository_snapshot": persisted_repo_snapshot,
             "inbox_items": inbox_items,
         })
         followup_key = f"{FOLLOWUP_TARGET_PREFIX}{todo['todo_id']}"
