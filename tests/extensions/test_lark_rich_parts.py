@@ -289,12 +289,13 @@ def test_attachments_stay_on_last_concrete_post(tmp_path):
     "mutation",
     [
         lambda state: state.update(delivery_parts=[]),
+        lambda state: state.pop("delivery_parts", None),
         lambda state: state.pop("delivery_part_attempts", None),
         lambda state: state["delivery_part_attempts"].pop(
             str(len(state["delivery_parts"]) - 1), None
         ),
     ],
-    ids=["empty-parts", "missing-attempts", "missing-last-attempt"],
+    ids=["empty-parts", "missing-parts", "missing-attempts", "missing-last-attempt"],
 )
 def test_attachment_reply_rejects_empty_or_missing_part_attempts(tmp_path, mutation):
     provider = RichProvider()

@@ -481,6 +481,73 @@ def test_web_result_adopts_original_mirror_and_recovers_readback_without_send(
     assert actual["text"] == returned[0]["text"] and actual["return_delivery"]["status"] == "delivered"
 
 
+def test_web_result_recovers_negative_question_link_with_plain_text_downgrade(web_return, monkeypatch):
+    import threading
+    import time
+    from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
+
+    sender, session, turn, route, provider, transport, mirror, _, request = web_return
+    runtime, store = transport.core.controller, transport.core.controller.store
+    question = next(item for item in store.messages(session["session_id"])
+                    if item["role"] == "user" and item["turn_id"] == turn["turn_id"])
+    question_ref = _read_json(mirror)["deliveries"]["web." + question["message_id"]]["attempt"]["message_ref"]
+    question_link = ("https://applink.feishu.cn/client/chat/open?openChatId="
+                     f"{provider.messages[question_ref]['chat_id']}&position=-1")
+    provider.messages[question_ref]["message_app_link"] = question_link
+    body = r"Concrete result for @contributor.\nDetails: <at unsupported>quoted</at>"
+    downgraded = "Concrete result for ＠contributor.\nDetails: ‹at unsupported>quoted‹/at>"
+    report(sender.root, route["goal_id"], route["agent_id"], route["request_id"], "conclusion", body)
+    provenance = f"协作回复 · {route['agent_id']} · 委托 {route['request_id'][:8]}"
+    writes = list(provider.writes)
+    drain(sender.root, runtime.registry_path, store, sender)
+    assert provider.writes == writes
+    message = next(item for item in store.messages(session["session_id"])
+                   if item.get("origin") == "manager_followup" and item["turn_id"] == turn["turn_id"])
+    service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=transport.runtime_root,
+        runtime_controller=runtime, private_conversations=transport)
+    worker = threading.Thread(target=service._reconcile_private, daemon=True)
+    transport._web_projection_scan_at = 0
+    worker.start()
+    try:
+        deadline = time.monotonic() + 20
+        while not _read_json(mirror)["deliveries"].get("web." + message["message_id"], {}).get("verified"):
+            assert time.monotonic() < deadline
+            time.sleep(.02)
+    finally:
+        service.close()
+        worker.join(10)
+    assert not worker.is_alive()
+    expected_sent = f"**LoopX（App）**\n\n[查看对应提问]({question_link})\n\n{downgraded}\n\n{provenance}"
+    assert provider.writes[len(writes):] == [("steward-app", expected_sent)]
+    original_mirror = mirror.read_bytes()
+    phase = _read_json(mirror)["deliveries"]["web." + message["message_id"]]
+    assert phase["question_link"] == question_link and phase["text"] == expected_sent
+    del provider.messages[question_ref]["message_app_link"]
+    writes = list(provider.writes)
+    runner = transport.runner
+
+    def unavailable(args, cwd=None, timeout=None):
+        if "+messages-mget" in args and args[args.index("--message-ids") + 1].startswith("om_out_"):
+            return {"returncode": 1, "stdout": ""}
+        return runner(args, cwd, timeout)
+
+    monkeypatch.setattr(transport, "runner", unavailable)
+    clock = datetime.now(timezone.utc) + timedelta(minutes=10)
+    drain(sender.root, runtime.registry_path, store, sender, now=clock)
+    state = _read_json(_root(sender.root) / "replies" / route["request_id"] / "conclusion.delivery.json")
+    assert state["status"] == "verification_required" and state["attempt"] == phase["attempt"]
+    monkeypatch.setattr(transport, "runner", runner)
+    recovered = ChatSessionStore(store.root.parent)
+    restarted = LarkManagerReturnTransport(sender.server, sender.root)
+    drain(sender.root, runtime.registry_path, recovered, restarted, now=clock + timedelta(minutes=10))
+    assert reply_status(sender.root, route)[0]["status"] == "delivered"
+    assert provider.writes == writes and mirror.read_bytes() == original_mirror
+    code, snapshot = request(f"/api/chat/sessions/{session['session_id']}")
+    assert code == 200
+    actual = next(item for item in snapshot["messages"] if item["message_id"] == message["message_id"])
+    assert body in actual["text"] and actual["return_delivery"]["status"] == "delivered"
+
+
 @pytest.mark.parametrize("fault", ["unknown", "revoked", "revoked-after-read", "scope", "scope-after-read", "audience", "body", "receipt"])
 def test_web_result_keeps_unknown_or_revoked_mirror_without_duplicate_delivery(web_return, monkeypatch, fault):
     sender, session, turn, route, provider, transport, mirror, flush, _ = web_return

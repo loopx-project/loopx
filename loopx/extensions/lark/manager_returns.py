@@ -142,9 +142,9 @@ def _private_return_authority(
 
 
 def _private_message_link(link: object, chat_id: str) -> bool:
-    return isinstance(link, str) and re.fullmatch(
+    return bool(chat_id) and isinstance(link, str) and re.fullmatch(
         r"https://applink\.(?:feishu\.cn|larksuite\.com)/client/chat/open"
-        r"\?openChatId=" + re.escape(chat_id) + r"&position=[0-9]+", link,
+        r"\?openChatId=" + re.escape(chat_id) + r"&position=-?[0-9]+", link,
     ) is not None
 
 
