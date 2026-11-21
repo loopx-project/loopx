@@ -72,7 +72,7 @@ def _original_operation_turn(
         "goal_id": parameters["goal_id"], "agent_id": parameters["agent_id"],
         "todo_id": executor["todo_id"],
     }, host=host) or {}
-    profile = managed_execution_profile(operator_provider_environ(),
+    profile = managed_execution_profile(operator_provider_environ(bound_runtime_root=runtime_root),
         provider=selected.dsh_provider, model=selected.dsh_model,
         reasoning_effort=selected.dsh_reasoning_effort) if host == "dsh" else {
             "model": selected.codex_model, "reasoning_effort": selected.codex_reasoning_effort}
@@ -193,7 +193,7 @@ def dispatch_confirmed_operation_wake(
             "todo_id": binding["todo_id"],
         }, host=host) or {}
         profile = managed_execution_profile(
-            operator_provider_environ(),
+            operator_provider_environ(bound_runtime_root=service.root),
             provider=turn_host_arg_option(argv, "--dsh-provider"),
             model=turn_host_arg_option(argv, "--dsh-model"),
             reasoning_effort=turn_host_arg_option(argv, "--dsh-reasoning-effort"),
