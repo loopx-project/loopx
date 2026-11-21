@@ -18,6 +18,7 @@ from queue import Empty, SimpleQueue
 import subprocess
 import tempfile
 import threading
+from time import monotonic
 
 import loopx
 
@@ -26,6 +27,7 @@ _WORKER_LOCK = threading.Lock()
 _WORKERS: dict[tuple[int, str, bool], _CanonicalAuthorityWorker] = {}
 _SHUTDOWN_REGISTERED = False
 _WORKER_REQUEST_TIMEOUT_SECONDS = 45.0
+_WORKER_SHUTDOWN_TIMEOUT_SECONDS = 3.0
 
 
 class _CanonicalAuthorityWorker:
@@ -89,6 +91,7 @@ class _CanonicalAuthorityWorker:
         assert stdout is not None and stderr is not None
         responses: SimpleQueue[bytes | OSError] = SimpleQueue()
         stderr_tail: deque[str] = deque(maxlen=64)
+        self._closed = False
         self._responses = responses
         self._stderr_tail = stderr_tail
 
@@ -96,17 +99,18 @@ class _CanonicalAuthorityWorker:
         # readers owned by this child, and apply the deadline to the queue.
         def _drain_stdout() -> None:
             try:
-                for line in stdout:
-                    if not line.endswith(b"\n"):
-                        break
-                    responses.put(line)
+                with stdout:
+                    for line in stdout:
+                        if not line.endswith(b"\n"):
+                            break
+                        responses.put(line)
             except OSError as exc:
                 responses.put(exc)
             else:
                 responses.put(b"")
 
         def _drain_stderr() -> None:
-            with suppress(OSError):
+            with suppress(OSError), stderr:
                 for raw_line in stderr:
                     stderr_tail.append(raw_line.decode("utf-8", errors="replace").rstrip())
 
@@ -133,7 +137,7 @@ class _CanonicalAuthorityWorker:
         encoded = (json.dumps(payload) + "\n").encode("utf-8")
         with self.call_lock:
             for attempt in range(2):
-                if self._process.poll() is not None:
+                if self._closed or self._process.poll() is not None:
                     self.close()
                     self._process = self._spawn(Path(self.key[1]))
                 try:
@@ -158,28 +162,28 @@ class _CanonicalAuthorityWorker:
         raise AssertionError("unreachable")
 
     def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         proc = self._process
+        deadline = monotonic() + _WORKER_SHUTDOWN_TIMEOUT_SECONDS
         if proc.stdin is not None:
             with suppress(OSError):
                 proc.stdin.close()
-        if proc.poll() is None:
-            try:
-                proc.wait(timeout=1.5)
-            except subprocess.TimeoutExpired:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=1.5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
-        # Exit closes the child's pipe ends so the readers can finish before
-        # this process closes its buffered streams or starts a new child.
+        grace = _WORKER_SHUTDOWN_TIMEOUT_SECONDS / 3
+        for stop, wait_seconds in ((None, grace), (proc.terminate, grace), (proc.kill, _WORKER_SHUTDOWN_TIMEOUT_SECONDS)):
+            if proc.poll() is not None:
+                break
+            if stop is not None:
+                with suppress(ProcessLookupError):
+                    stop()
+            with suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=min(wait_seconds, max(0.0, deadline - monotonic())))
+                break
+        # A descendant may still hold the output pipes after the worker exits.
+        # Let each reader close its own stream when its pipe is released.
         for reader in self._readers:
-            reader.join()
-        for stream in (proc.stdout, proc.stderr):
-            if stream is not None:
-                with suppress(OSError):
-                    stream.close()
+            reader.join(timeout=max(0.0, deadline - monotonic()))
 
 
 def _shutdown_canonical_fixture_workers() -> None:

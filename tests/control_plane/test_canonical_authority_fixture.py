@@ -1,6 +1,8 @@
 """Canonical CLI fixtures retain runtime isolation and actual backend identity."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -121,5 +123,62 @@ def test_canonical_worker_reaps_silent_child_without_retry(tmp_path, monkeypatch
             worker.request({"op": "silent"})
         assert worker._process is original_process
         assert original_process.poll() is not None
+    finally:
+        worker.close()
+
+
+def test_canonical_worker_timeout_returns_while_descendant_holds_output(tmp_path, monkeypatch):
+    import canonical_authority_fixture as fixture_mod
+
+    release_file = tmp_path / "release-pipes"
+    holder_script = """
+        const {existsSync} = require("node:fs");
+        setInterval(() => {
+            if (existsSync(process.argv[1])) process.exit(0);
+        }, 20);
+        setTimeout(() => process.exit(0), 10000);
+    """
+    worker_script = """
+        import {spawn} from "node:child_process";
+        import {createInterface} from "node:readline";
+        for await (const line of createInterface({input: process.stdin})) {
+            if (JSON.parse(line).op === "exit-with-held-pipes") {
+                const holder = spawn(process.execPath,
+                  ["--input-type=commonjs", "-e", HOLDER_SCRIPT, RELEASE_FILE],
+                  {stdio: ["ignore", 1, 2]});
+                holder.once("spawn", () => process.exit(0));
+            } else {
+                console.log(JSON.stringify({ok: true, result: {pid: process.pid}}));
+            }
+        }
+    """.replace("HOLDER_SCRIPT", json.dumps(holder_script)).replace("RELEASE_FILE", json.dumps(str(release_file)))
+    worker_type = fixture_mod._CanonicalAuthorityWorker
+    monkeypatch.setattr(worker_type, "_build_script", staticmethod(lambda _: worker_script))
+    monkeypatch.setattr(fixture_mod, "_WORKER_SHUTDOWN_TIMEOUT_SECONDS", 0.4, raising=False)
+    monkeypatch.setattr(fixture_mod, "_WORKER_REQUEST_TIMEOUT_SECONDS", 5.0)
+    worker = worker_type((os.getpid(), str(tmp_path), False))
+    original = worker._process
+    old_readers = worker._readers
+    try:
+        assert worker.request({"op": "ready"}) == {"pid": original.pid}
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            try:
+                monkeypatch.setattr(fixture_mod, "_WORKER_REQUEST_TIMEOUT_SECONDS", 0.5)
+                pending = executor.submit(worker.request, {"op": "exit-with-held-pipes"})
+                assert original.wait(timeout=3) == 0
+                with pytest.raises(TimeoutError, match="canonical authority worker timed out waiting for response"):
+                    pending.result(timeout=3)
+                assert all(reader.is_alive() for reader in old_readers)
+
+                monkeypatch.setattr(fixture_mod, "_WORKER_REQUEST_TIMEOUT_SECONDS", 5.0)
+                replacement = worker.request({"op": "ready"})
+                assert replacement["pid"] != original.pid
+            finally:
+                release_file.touch()
+        for reader in old_readers:
+            reader.join(timeout=3)
+        assert all(not reader.is_alive() for reader in old_readers)
+        assert original.stdout is not None and original.stdout.closed
+        assert original.stderr is not None and original.stderr.closed
     finally:
         worker.close()
