@@ -374,22 +374,22 @@ def test_cli_reentry_distinguishes_admission_timer_from_later_wait(
     # Both routes still owe the same result, writeback and exactly one debit.
     (project / "validated-result.txt").write_text("Synthetic result validated before closeout.\n")
     plan = reentry["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
     command = next(s["command_template"] for s in plan["ordered_steps"] if s["kind"] == "durable_writeback")
     command = command.replace("<validated_progress>", "admission_timer_validated").replace(
         "<scale>", "single_surface").replace("<outcome>", "outcome_progress")
     command += (" --delivery-boundary in_flight_continuation --progress-result-class advanced"
                 f" --progress-work-item-id {work} --progress-evidence-id evidence:synthetic-result"
                 " --no-global-sync --suppress-external-sinks")
-    rc, written = _run_generated_cli(command, registry_path=registry, cwd=project)
-    assert rc == 0, written
-    spend = written["settlement_owed"]["command"]
     for attempt in range(2):
-        rc, settled = _run_generated_cli(spend, registry_path=registry, cwd=project)
-        assert rc == 0, settled
-        assert settled["settlement_result"]["ok"] is True
-        if attempt:
-            assert settled["idempotent_replay"] is True
-            assert settled["appended"] is False
+        rc, written = _run_generated_cli(command, registry_path=registry, cwd=project)
+        assert rc == 0, written
+        assert written["settlement_result"]["ok"] is True
+        assert written["settlement_progress"]["state"] == "settled"
+        assert [row["step_kind"] for row in written["settlement_result"]["receipts"]] == [
+            "validation", "durable_writeback", "quota_spend",
+        ]
+        assert written.get("idempotent_replay", False) is bool(attempt)
     assert _spend_run_count(runtime) == 1
     rc, replay = _run_cli(registry, runtime, *guard)
     assert rc == 0, replay

@@ -1029,7 +1029,7 @@ def _attach_auxiliary_monitor_settlement_resume(
         goal_id=identity.goal_id, agent_id=identity.agent_id, todo_id=identity.todo_id,
         turn_instance_id=identity.turn_instance_id, replan_obligation_id=identity.replan_obligation_id,
         command_prefix=prefix, scoped_cli_args=scoped_args, lifecycle_actor_args="",
-        quota_spend_source=str(progress["quota_spend_source"]), goal_ref=goal_ref,
+        quota_spend_source=str(progress["quota_spend_source"]), goal_ref=goal_ref, composed_settlement=True,
     )
     ordered_steps = _dict_items(plan.as_dict().get("ordered_steps"))
     result["settlement_resume"] = {
