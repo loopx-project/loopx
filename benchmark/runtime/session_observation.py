@@ -304,28 +304,46 @@ def collect_context_policy_telemetry(
     cold = {"requests": 0, "uncached_prefix_kv_tokens": 0, "cached_prefix_kv_tokens": 0}
     warm = {"requests": 0, "uncached_prefix_kv_tokens": 0, "cached_prefix_kv_tokens": 0}
     if isinstance(usage, dict):
-        coverage = usage.get("request_coverage")
-        requests = coverage.get("requests") if isinstance(coverage, dict) else None
-        if isinstance(requests, list):
-            for req in requests:
-                if not isinstance(req, dict):
-                    continue
-                inp = req.get("input_tokens")
-                cached = req.get("cached_input_tokens")
-                if not isinstance(inp, int) or not isinstance(cached, int) or inp < cached:
-                    continue
-                uncached = inp - cached
-                bucket = cold if (cached == 0 or req.get("cache_regime") == "cold") else warm
-                bucket["requests"] += 1
-                bucket["uncached_prefix_kv_tokens"] += uncached
-                bucket["cached_prefix_kv_tokens"] += cached
-        elif isinstance(usage.get("input_tokens"), int) and isinstance(usage.get("cached_input_tokens"), int):
-            cached = usage["cached_input_tokens"]
-            uncached = max(0, usage["input_tokens"] - cached)
-            bucket = cold if cached == 0 else warm
-            bucket["requests"] = int(usage.get("completed_turns") or 1)
-            bucket["uncached_prefix_kv_tokens"] = uncached
-            bucket["cached_prefix_kv_tokens"] = cached
+        embedded = usage.get("context_policy_telemetry")
+        embedded_kv = embedded.get("prefix_kv") if isinstance(embedded, dict) else None
+        if (
+            isinstance(embedded_kv, dict)
+            and isinstance(embedded_kv.get("cold"), dict)
+            and isinstance(embedded_kv.get("warm"), dict)
+        ):
+            for dst, src in ((cold, embedded_kv["cold"]), (warm, embedded_kv["warm"])):
+                for key in ("requests", "uncached_prefix_kv_tokens", "cached_prefix_kv_tokens"):
+                    val = src.get(key)
+                    if isinstance(val, int) and not isinstance(val, bool) and val >= 0:
+                        dst[key] = val
+        else:
+            coverage = usage.get("request_coverage")
+            requests = coverage.get("requests") if isinstance(coverage, dict) else None
+            if isinstance(requests, list):
+                for req in requests:
+                    if not isinstance(req, dict):
+                        continue
+                    inp = req.get("input_tokens")
+                    cached = req.get("cached_input_tokens")
+                    if not isinstance(inp, int) or not isinstance(cached, int) or inp < cached:
+                        continue
+                    uncached = inp - cached
+                    is_cold = (
+                        cached == 0
+                        or req.get("cache_regime") == "cold"
+                        or req.get("compacted") is True
+                    )
+                    bucket = cold if is_cold else warm
+                    bucket["requests"] += 1
+                    bucket["uncached_prefix_kv_tokens"] += uncached
+                    bucket["cached_prefix_kv_tokens"] += cached
+            elif isinstance(usage.get("input_tokens"), int) and isinstance(usage.get("cached_input_tokens"), int):
+                cached = usage["cached_input_tokens"]
+                uncached = max(0, usage["input_tokens"] - cached)
+                bucket = cold if cached == 0 else warm
+                bucket["requests"] = int(usage.get("completed_turns") or 1)
+                bucket["uncached_prefix_kv_tokens"] = uncached
+                bucket["cached_prefix_kv_tokens"] = cached
 
     return {
         "schema_version": "loopx_context_policy_telemetry_v0",

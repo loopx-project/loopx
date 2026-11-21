@@ -1105,3 +1105,163 @@ def test_committed_turn_replay_with_altered_epoch_prefetch_never_reexecutes_and_
     assert replay_cli["epoch_prefetch"]["executed"] is False
     assert replay_cli["epoch_prefetch"]["replayed"] is True
     assert replay_cli["epoch_prefetch"]["receipt_sha256"] == first_cli["epoch_prefetch"]["receipt_sha256"]
+
+
+def test_inflight_quiet_turn_settlement_recovery_after_spend_failure_never_skips(
+    tmp_path: Path,
+) -> None:
+    from loopx.control_plane.turn_driver.epoch_prefetch import commit_quiet_turn_state
+    from loopx.control_plane.turn_driver.executor import run_loopx_turn_once
+
+    project, runtime, registry = _write_live_fixture(tmp_path)
+    route = ["--registry", str(registry), "--runtime-root", str(runtime)]
+    c, plan = _invoke_cli(
+        route,
+        [
+            "turn",
+            "plan",
+            "--goal-id",
+            "loopx-turn-fixture",
+            "--agent-id",
+            "codex-fixture",
+            "--turn-instance-id",
+            "qt-inflight-settle",
+            "--host",
+            "generic-cli",
+            "--execution-mode",
+            "isolated-headless",
+            "--scheduler-owner",
+            "outer_controller",
+            "--include-transaction-detail",
+        ],
+    )
+    assert c == 0, plan
+
+    digest = hashlib.sha256(b"same-digest-after-host").hexdigest()
+    qt_cfg = {
+        "enabled": True,
+        "quiet_noop_allowed": True,
+        "current_state_digest": digest,
+    }
+    scope_key = "turn_driver:loopx-turn-fixture:codex-fixture"
+    goal_root = runtime / "goals" / "loopx-turn-fixture"
+    host_calls = {"n": 0}
+    spend_calls = {"n": 0}
+
+    def fake_host(req: dict) -> dict:
+        host_calls["n"] += 1
+        return {
+            "schema_version": "loopx_turn_result_v0",
+            "turn_key": req["turn_key"],
+            "result_kind": "validated_progress",
+            "completed_phases": ["host_execute", "typed_result"],
+            "classification": "quiet_probe",
+            "recommended_action": "wait",
+            "next_action": "wait",
+            "delivery_batch_scale": "single_surface",
+            "delivery_outcome": "outcome_progress",
+            "vision_unchanged_reason": "Unchanged state.",
+            "summary": "Host completed before transient spend error.",
+            "work_evidence": ["artifact:inflight"],
+            "validation_evidence": ["check:inflight"],
+        }
+
+    def ok_noop(*_a: object, **_k: object) -> dict[str, object]:
+        return {"ok": True, "appended": True, "classification": "quiet_probe", "recommended_action": "wait"}
+
+    def flaky_spend(*_a: object, **_k: object) -> dict[str, object]:
+        spend_calls["n"] += 1
+        if spend_calls["n"] == 1:
+            raise RuntimeError("transient spend interruption")
+        return {"ok": True, "appended": True, "receipt": {"status": "committed"}}
+
+    with pytest.raises(RuntimeError, match="transient spend interruption"):
+        run_loopx_turn_once(
+            plan,
+            host_runner=fake_host,
+            project=project,
+            runtime_root=runtime,
+            goal_id="loopx-turn-fixture",
+            timeout_seconds=10.0,
+            execute=True,
+            task_validator=lambda p, r: {"status": "passed", "validator_kind": "callback", "summary": "ok"},
+            writeback=ok_noop,
+            spend=flaky_spend,
+            scheduler=lambda *a, **k: {"ok": True, "acknowledged": True, "completed": True},
+            quiet_turn=qt_cfg,
+        )
+    assert host_calls["n"] == 1
+    assert spend_calls["n"] == 1
+
+    # Even if quiet_turn_state already records the exact same state_digest on disk
+    # while this Turn's journal sits in flight waiting on settlement (needs_host=False),
+    # resuming the in-flight journal MUST finish spend() instead of skipping!
+    commit_quiet_turn_state(
+        scope_key=scope_key,
+        file_path=goal_root / "quiet_turn" / f"{hashlib.sha256(scope_key.encode()).hexdigest()}.json",
+        sqlite_path=goal_root / "turn_prefetch_state.sqlite",
+        state_digest=digest,
+        metadata={"enabled": True},
+    )
+    r2 = run_loopx_turn_once(
+        plan,
+        host_runner=fake_host,
+        project=project,
+        runtime_root=runtime,
+        goal_id="loopx-turn-fixture",
+        timeout_seconds=10.0,
+        execute=True,
+        task_validator=lambda p, r: {"status": "passed", "validator_kind": "callback", "summary": "ok"},
+        writeback=ok_noop,
+        spend=flaky_spend,
+        spend_resolver=lambda _ref: {"kind": "absent"},
+        scheduler=lambda *a, **k: {"ok": True, "acknowledged": True, "completed": True},
+        quiet_turn=qt_cfg,
+    )
+    assert host_calls["n"] == 1
+    assert spend_calls["n"] == 2
+    assert r2["status"] == "committed" and r2["ok"] is True
+    tel = collect_context_policy_telemetry(runtime, goal_id="loopx-turn-fixture")
+    assert tel["quiet_turn_skips"] == 0
+
+
+def test_collect_context_policy_telemetry_prefers_usage_prefix_kv_and_compacted_cold(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "runtime"
+    (runtime / "goals" / "g1").mkdir(parents=True)
+    # 1) Prefers usage["context_policy_telemetry"]["prefix_kv"] over flat/request fallback
+    usage_with_cpt = {
+        "context_policy_telemetry": {
+            "prefix_kv": {
+                "cold": {"requests": 2, "uncached_prefix_kv_tokens": 500, "cached_prefix_kv_tokens": 100},
+                "warm": {"requests": 3, "uncached_prefix_kv_tokens": 90, "cached_prefix_kv_tokens": 900},
+            }
+        },
+        "request_coverage": {
+            "requests": [{"input_tokens": 100, "cached_input_tokens": 80}],
+        },
+    }
+    tel = collect_context_policy_telemetry(runtime, goal_id="g1", usage=usage_with_cpt)
+    assert tel["prefix_kv"] == usage_with_cpt["context_policy_telemetry"]["prefix_kv"]
+
+    # 2) Fallback on request_coverage classifies compacted=True as cold even when cached_input_tokens > 0
+    usage_requests = {
+        "request_coverage": {
+            "requests": [
+                {"input_tokens": 200, "cached_input_tokens": 150, "compacted": True},
+                {"input_tokens": 120, "cached_input_tokens": 90, "compacted": False},
+            ]
+        }
+    }
+    tel2 = collect_context_policy_telemetry(runtime, goal_id="g1", usage=usage_requests)
+    assert tel2["prefix_kv"]["cold"] == {
+        "requests": 1,
+        "uncached_prefix_kv_tokens": 50,
+        "cached_prefix_kv_tokens": 150,
+    }
+    assert tel2["prefix_kv"]["warm"] == {
+        "requests": 1,
+        "uncached_prefix_kv_tokens": 30,
+        "cached_prefix_kv_tokens": 90,
+    }

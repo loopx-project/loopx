@@ -351,6 +351,7 @@ export function validatePrefetchCommandSafety(params: {
       gitSubArgs.some(
         (flag) =>
           GIT_FORBIDDEN_OUTPUT_FLAGS.has(flag)
+          || flag.startsWith("-O")
           || flag.startsWith("--output=")
           || flag.startsWith("--ext-diff=")
           || flag.startsWith("--open-files-in-pager=")

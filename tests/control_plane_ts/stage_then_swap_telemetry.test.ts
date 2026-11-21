@@ -289,3 +289,9 @@ test('trajectory usage telemetry tracks operator counts, prefetch latency/bytes,
   assert.deepEqual(tel.prefix_kv?.cold, {requests: 2, uncached_prefix_kv_tokens: 140, cached_prefix_kv_tokens: 40});
   assert.deepEqual(tel.prefix_kv?.warm, {requests: 1, uncached_prefix_kv_tokens: 30, cached_prefix_kv_tokens: 90});
 });
+
+test("D8 safety admission rejects attached -O flag on git grep", () => {
+  const attached = validatePrefetchCommandSafety({prefetch_command: ["git", "grep", "-Otouch /tmp/git-grep-o-poc", "loopx"]});
+  assert.equal(attached.allowed, false);
+  assert.equal(attached.reason, "policy_violation:git_output_or_external_diff_forbidden");
+});

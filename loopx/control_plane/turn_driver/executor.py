@@ -1802,12 +1802,16 @@ def run_loopx_turn_once(
                 plan, {"status": "unavailable", "host": host_projection, "reason": reason},
                 execute=True, replayed=False, effects=empty_effects,
             )
-        if (quiet_skip_payload := maybe_skip_quiet_turn_before_admission(
-            plan=plan, journal_path=journal_path, goal_id=goal_id, turn_key=turn_key,
-            settlement_lineage=settlement_lineage, host_projection=host_projection,
-            empty_effects=empty_effects, payload_builder=execution_payload,
-            options={"epoch_prefetch": epoch_prefetch, "quiet_turn": quiet_turn, "decision_capture_payload": decision_capture_payload},
-        )) is not None:
+        if (
+            journal is None
+            and needs_host
+            and (quiet_skip_payload := maybe_skip_quiet_turn_before_admission(
+                plan=plan, journal_path=journal_path, goal_id=goal_id, turn_key=turn_key,
+                settlement_lineage=settlement_lineage, host_projection=host_projection,
+                empty_effects=empty_effects, payload_builder=execution_payload,
+                options={"epoch_prefetch": epoch_prefetch, "quiet_turn": quiet_turn, "decision_capture_payload": decision_capture_payload},
+            )) is not None
+        ):
             return quiet_skip_payload
         capture = stage_turn_decision_capture(
             journal["plan"] if journal is not None else plan, journal_path=journal_path,
