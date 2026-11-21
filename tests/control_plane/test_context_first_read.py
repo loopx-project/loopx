@@ -923,12 +923,12 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
         if requested_scopes:
             assert prior_facts["/goal_boundary/write_scope"] == scopes
         deliver(journal, event, prior_pages)
-        proof = prior_decision["execution_preparation"]["lease_proof"]
+        proof = prior_decision["interaction_contract"]["cli_channel"].get("execution_preparation", {}).get("lease_proof")
+        proof_args = (["--task-lease-idempotency-key", proof["idempotency_key"],
+                       "--task-lease-expected-version", str(proof["expected_version"])] if proof else [])
         cli("refresh-state", *binding, "--turn-instance-id", "wide-prior", "--classification", "fixture_verified",
             "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
-            "--task-lease-idempotency-key", proof["idempotency_key"],
-            "--task-lease-expected-version", str(proof["expected_version"]),
-            "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks")
+            "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks", *proof_args)
         cli("quota", "spend-slot", *binding, "--turn-instance-id", "wide-prior",
             "--slots", "1", "--source", "heartbeat", "--execute")
         if not requested_scopes:
@@ -2248,10 +2248,16 @@ def test_native_first_read_reuses_only_observed_write_scope(tmp_path, monkeypatc
     def binding(turn):
         return ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", turn)
 
+    proofs = {}
+
     def capture(turn, registry_path=registry):
-        return cli("quota", "should-run", "--codex-app", "--context-delivery", "auto", "--delta-delivery", "auto",
+        view = cli("quota", "should-run", "--codex-app", "--context-delivery", "auto", "--delta-delivery", "auto",
                    *binding(turn), "--decision-output-root", str(captures), "--codex-context-dir", str(journal),
                    registry_path=registry_path)
+        _, reference = read_context_read_reference(view["recovery"]["reference_file"])
+        source = json.loads(Path(reference["path"]).read_bytes())
+        proofs[turn] = source["interaction_contract"]["cli_channel"]["execution_preparation"]["lease_proof"]
+        return view
 
     def settle(turn, registry_path=registry):
         lease = cli("task-lease", "inspect", "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
@@ -2416,10 +2422,16 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(
         return ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                 "--todo-id", todo_id, "--turn-instance-id", turn)
 
+    proofs = {}
+
     def capture(turn, todo_id=TODO_ID):
-        return cli("quota", "should-run", "--codex-app", "--context-delivery", "on",
+        view = cli("quota", "should-run", "--codex-app", "--context-delivery", "on",
                    "--delta-delivery", "auto", *binding(turn, todo_id),
                    "--decision-output-root", str(captures), "--codex-context-dir", str(journal))
+        _, reference = read_context_read_reference(view["recovery"]["reference_file"])
+        source = json.loads(Path(reference["path"]).read_bytes())
+        proofs[turn] = source["interaction_contract"]["cli_channel"]["execution_preparation"]["lease_proof"]
+        return view
 
     def settle(turn):
         lease = cli("task-lease", "inspect", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)["lease"]
