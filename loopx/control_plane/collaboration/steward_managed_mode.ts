@@ -853,6 +853,198 @@ function monitorObservation(facts: unknown, previousHash: unknown): JsonObject {
   return {result_hash: resultHash, material_change: previousHash != null && previousHash !== resultHash};
 }
 
+const PR_SIGNAL_VERDICTS = new Set(["APPROVE", "REQUEST_CHANGES", "NONE"]);
+const PR_AUTHOR_MODES = new Set(["include", "exclude"]);
+const SIGNAL_SCOPE_SCHEMA = "steward_signal_monitor_scope_v0";
+
+export function normalizeStewardSignalMonitorScope(value: unknown): JsonObject | null {
+  if (value === undefined || value === null) return null;
+  const scope = requireJsonObject(value, "steward monitor signal scope");
+  const allowedKeys = new Set(["schema_version", "include_portfolio", "include_inbox", "pr_filter"]);
+  for (const key of Object.keys(scope)) {
+    if (!allowedKeys.has(key)) {
+      throw new EffectRuntimeRequestError(`unsupported signal_scope field: ${key}`);
+    }
+  }
+  if (scope.schema_version !== SIGNAL_SCOPE_SCHEMA) {
+    throw new EffectRuntimeRequestError(`signal_scope requires schema_version=${SIGNAL_SCOPE_SCHEMA}`);
+  }
+  const includePortfolio = scope.include_portfolio === undefined ? true : scope.include_portfolio;
+  const includeInbox = scope.include_inbox === undefined ? true : scope.include_inbox;
+  if (typeof includePortfolio !== "boolean" || typeof includeInbox !== "boolean") {
+    throw new EffectRuntimeRequestError("signal_scope include_portfolio and include_inbox must be booleans");
+  }
+  let normalizedFilter: JsonObject | null = null;
+  if (scope.pr_filter !== undefined && scope.pr_filter !== null) {
+    const rawFilter = requireJsonObject(scope.pr_filter, "PR signal filter");
+    const allowedFilterKeys = new Set([
+      "exclude_drafts",
+      "exclude_conflicting",
+      "effective_verdicts",
+      "required_approver_declarations",
+      "author_mode",
+      "authors",
+      "min_stalled_hours",
+    ]);
+    for (const key of Object.keys(rawFilter)) {
+      if (!allowedFilterKeys.has(key)) {
+        throw new EffectRuntimeRequestError(`unsupported pr_filter field: ${key}`);
+      }
+    }
+    const nextFilter: JsonObject = {};
+    for (const boolKey of ["exclude_drafts", "exclude_conflicting"] as const) {
+      if (rawFilter[boolKey] !== undefined) {
+        if (typeof rawFilter[boolKey] !== "boolean") {
+          throw new EffectRuntimeRequestError(`pr_filter.${boolKey} must be a boolean`);
+        }
+        nextFilter[boolKey] = rawFilter[boolKey];
+      }
+    }
+    if (rawFilter.required_approver_declarations !== undefined) {
+      if (!Array.isArray(rawFilter.required_approver_declarations) || rawFilter.required_approver_declarations.length === 0) {
+        throw new EffectRuntimeRequestError("pr_filter.required_approver_declarations must be a non-empty array");
+      }
+      const tokens = rawFilter.required_approver_declarations.map((entry) =>
+        requireNonEmptyString(entry, "pr_filter.required_approver_declarations[]").toLowerCase(),
+      );
+      nextFilter.required_approver_declarations = [...new Set(tokens)].sort();
+    }
+    if (rawFilter.effective_verdicts !== undefined) {
+      if (!Array.isArray(rawFilter.effective_verdicts) || rawFilter.effective_verdicts.length === 0) {
+        throw new EffectRuntimeRequestError("pr_filter.effective_verdicts must be a non-empty array");
+      }
+      const verdicts = rawFilter.effective_verdicts.map((item) => {
+        if (typeof item !== "string" || !PR_SIGNAL_VERDICTS.has(item)) {
+          throw new EffectRuntimeRequestError(`invalid pr_filter.effective_verdicts entry: ${String(item)}`);
+        }
+        return item;
+      });
+      nextFilter.effective_verdicts = [...new Set(verdicts)];
+    }
+    if (rawFilter.author_mode !== undefined || rawFilter.authors !== undefined) {
+      if (typeof rawFilter.author_mode !== "string" || !PR_AUTHOR_MODES.has(rawFilter.author_mode)) {
+        throw new EffectRuntimeRequestError("pr_filter.author_mode must be include or exclude");
+      }
+      if (!Array.isArray(rawFilter.authors) || rawFilter.authors.length === 0) {
+        throw new EffectRuntimeRequestError("pr_filter.authors must be a non-empty array when author_mode is set");
+      }
+      const authors = rawFilter.authors.map((entry) => requireNonEmptyString(entry, "pr_filter.authors[]").toLowerCase());
+      nextFilter.author_mode = rawFilter.author_mode;
+      nextFilter.authors = [...new Set(authors)].sort();
+    }
+    if (rawFilter.min_stalled_hours !== undefined) {
+      if (
+        typeof rawFilter.min_stalled_hours !== "number"
+        || !Number.isFinite(rawFilter.min_stalled_hours)
+        || rawFilter.min_stalled_hours <= 0
+      ) {
+        throw new EffectRuntimeRequestError("pr_filter.min_stalled_hours must be a positive finite number");
+      }
+      nextFilter.min_stalled_hours = rawFilter.min_stalled_hours;
+    }
+    normalizedFilter = nextFilter;
+  }
+  return {
+    schema_version: SIGNAL_SCOPE_SCHEMA,
+    include_portfolio: includePortfolio,
+    include_inbox: includeInbox,
+    ...(normalizedFilter !== null ? { pr_filter: normalizedFilter } : {}),
+  };
+}
+
+function prAuthorLogin(item: JsonObject): string {
+  const authorObj = jsonObject(item.author);
+  const raw = authorObj ? authorObj.login : item.author;
+  return typeof raw === "string" ? raw.trim().toLowerCase() : "";
+}
+
+function hasMatchingApprovedReviewerDeclaration(item: JsonObject, requiredTokens: string[]): boolean {
+  const reviewSummary = jsonObject(item.review_summary);
+  if (!reviewSummary || reviewSummary.effective_verdict !== "APPROVE" || reviewSummary.has_review_conflict === true) {
+    return false;
+  }
+  const exactReviews = Array.isArray(reviewSummary.exact_head_reviews) ? reviewSummary.exact_head_reviews : [];
+  const latestByActor = new Map<string, { verdict: string; declaration: string }>();
+  for (const entry of exactReviews) {
+    const review = jsonObject(entry);
+    if (!review) continue;
+    const actorKey = `${String(review.author_login ?? "").trim().toLowerCase()}\0${String(review.reviewer_declaration ?? "").trim().toLowerCase()}`;
+    if (review.state === "DISMISSED") {
+      latestByActor.delete(actorKey);
+    } else if (
+      review.valid_verdict_review === true
+      && (review.verdict === "APPROVE" || review.verdict === "REQUEST_CHANGES")
+    ) {
+      latestByActor.set(actorKey, {
+        verdict: review.verdict,
+        declaration: String(review.reviewer_declaration ?? "").toLowerCase(),
+      });
+    }
+  }
+  return Array.from(latestByActor.values()).some(
+    (entry) => entry.verdict === "APPROVE" && requiredTokens.some((tok) => entry.declaration.includes(tok)),
+  );
+}
+
+function filterScopedRepositoryItems(
+  rawItems: unknown[],
+  filter: JsonObject | null,
+  observedAtValue: unknown,
+): JsonObject[] {
+  const minStalledHours = typeof filter?.min_stalled_hours === "number" ? filter.min_stalled_hours : null;
+  let observedAtMs = NaN;
+  if (minStalledHours !== null) {
+    observedAtMs = typeof observedAtValue === "string" ? Date.parse(observedAtValue) : NaN;
+    if (!Number.isFinite(observedAtMs)) {
+      throw new EffectRuntimeRequestError("scoped monitor min_stalled_hours requires a valid observed_at timestamp");
+    }
+  }
+  const effectiveVerdicts = Array.isArray(filter?.effective_verdicts)
+    ? new Set(filter.effective_verdicts.map(String))
+    : null;
+  const requiredApprovers = Array.isArray(filter?.required_approver_declarations)
+    ? filter.required_approver_declarations.map(String)
+    : null;
+  const authorMode = typeof filter?.author_mode === "string" ? filter.author_mode : null;
+  const authors = Array.isArray(filter?.authors) ? new Set(filter.authors.map(String)) : null;
+
+  const matched: JsonObject[] = [];
+  for (const rawItem of rawItems) {
+    const item = jsonObject(rawItem);
+    if (!item) continue;
+    if (filter?.exclude_drafts === true && item.isDraft === true) continue;
+    const reviewSummary = jsonObject(item.review_summary);
+    if (
+      filter?.exclude_conflicting === true
+      && (String(item.mergeable ?? "").toUpperCase() === "CONFLICTING" || reviewSummary?.has_review_conflict === true)
+    ) {
+      continue;
+    }
+    if (effectiveVerdicts !== null) {
+      const verdict = String(reviewSummary?.effective_verdict ?? "NONE");
+      if (!effectiveVerdicts.has(verdict)) continue;
+    }
+    if (requiredApprovers !== null && !hasMatchingApprovedReviewerDeclaration(item, requiredApprovers)) {
+      continue;
+    }
+    if (authorMode !== null && authors !== null) {
+      const login = prAuthorLogin(item);
+      if (authorMode === "include" && (!login || !authors.has(login))) continue;
+      if (authorMode === "exclude" && login && authors.has(login)) continue;
+    }
+    if (minStalledHours !== null) {
+      const updatedMs = typeof item.updatedAt === "string" ? Date.parse(item.updatedAt) : NaN;
+      if (!Number.isFinite(updatedMs) || observedAtMs - updatedMs < minStalledHours * 3_600_000) {
+        continue;
+      }
+      matched.push({ ...item, stalled_threshold_met: true });
+    } else {
+      matched.push(item);
+    }
+  }
+  return matched;
+}
+
 /** Combine authorized local portfolio, inbox and optional repository signal
  * snapshots into one deterministic change gate for custom Steward monitors.
  * Unavailable external signal reads fail closed so transient provider errors
@@ -860,6 +1052,7 @@ function monitorObservation(facts: unknown, previousHash: unknown): JsonObject {
 export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
   const previousHash = typeof params.previous_hash === "string" && params.previous_hash
     ? params.previous_hash : null;
+  const signalScope = normalizeStewardSignalMonitorScope(params.signal_scope);
   const repo = params.repository_snapshot == null ? null : requireJsonObject(params.repository_snapshot, "repository signal");
   if (repo !== null && repo.status === "unavailable") {
     return {
@@ -872,11 +1065,28 @@ export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
   const portfolio = params.portfolio_observation == null ? null
     : requireJsonObject(params.portfolio_observation, "portfolio observation");
   const inboxItems = Array.isArray(params.inbox_items) ? params.inbox_items : [];
-  const facts = {
-    portfolio_hash: portfolio?.result_hash ?? null,
-    inbox_items: inboxItems,
-    repository_items: repo === null ? null : (Array.isArray(repo.items) ? repo.items : []),
-  };
+  const rawRepoItems = repo === null ? null : (Array.isArray(repo.items) ? repo.items : []);
+  const scopedRepoItems = signalScope !== null && rawRepoItems !== null
+    ? filterScopedRepositoryItems(
+      rawRepoItems,
+      signalScope.pr_filter === undefined ? null : jsonObject(signalScope.pr_filter),
+      params.observed_at ?? repo?.observed_at,
+    )
+    : null;
+  const includePortfolio = signalScope === null ? true : signalScope.include_portfolio === true;
+  const includeInbox = signalScope === null ? true : signalScope.include_inbox === true;
+  const facts = signalScope === null
+    ? {
+      portfolio_hash: portfolio?.result_hash ?? null,
+      inbox_items: inboxItems,
+      repository_items: rawRepoItems,
+    }
+    : {
+      signal_scope: signalScope,
+      portfolio_hash: includePortfolio ? (portfolio?.result_hash ?? null) : null,
+      inbox_items: includeInbox ? inboxItems : [],
+      repository_items: scopedRepoItems,
+    };
   const clocks = new Set(["snapshot_id", "portfolio_snapshot_id", "collected_at",
     "collection_completed_at", "generated_at", "evaluated_at", "age_seconds", "observed_at"]);
   function canonical(value: unknown): unknown {
@@ -892,6 +1102,7 @@ export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
     material_change: previousHash !== resultHash,
     observation_incomplete: false,
     own_monitor_bookkeeping_excluded: true,
+    ...(scopedRepoItems !== null ? { scoped_repository_items: scopedRepoItems } : {}),
   };
 }
 
