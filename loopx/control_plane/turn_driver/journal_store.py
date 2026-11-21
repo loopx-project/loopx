@@ -216,3 +216,36 @@ def turn_journal_observed_capabilities(
     if not isinstance(observed, list) or not all(isinstance(item, str) for item in observed):
         return None
     return observed
+
+
+def turn_journal_evidence_chain(
+    runtime_root: Path,
+    *,
+    settlement_identity: Mapping[str, Any],
+    goal_ref: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Read the exact journal-backed evaluation spine without inferring progress."""
+
+    request = {
+        "runtime_root": str(runtime_root.resolve()),
+        "settlement_identity": dict(settlement_identity),
+    }
+    if goal_ref is not None:
+        request["goal_ref"] = dict(goal_ref)
+    payload = effect_runtime_result("turn_journal.evidence_chain", request)
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"schema_version", "availability", "evidence_chain"}
+        or payload.get("schema_version") != "loopx_turn_journal_evidence_chain_v0"
+        or payload.get("availability") not in {"recorded", "missing"}
+        or (
+            payload["availability"] == "recorded"
+            and not isinstance(payload.get("evidence_chain"), dict)
+        )
+        or (
+            payload["availability"] == "missing"
+            and payload.get("evidence_chain") is not None
+        )
+    ):
+        raise RuntimeError("TypeScript Turn journal evidence-chain shape mismatch")
+    return dict(payload)

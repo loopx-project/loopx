@@ -23,11 +23,48 @@ import { jsonObject, parseJsonSource, parsedSourceNumberTokens, requireJsonObjec
 import {
   interpretTurnJournal,
   parseTurnJournalGoalBinding,
+  transactionPhases,
 } from "./turn_journal.ts";
 
 interface JournalEvidence {
   turn_key: string;
   observed_capabilities: string[] | null;
+  evidence_chain: TurnJournalEvidenceChain;
+}
+
+export const TURN_JOURNAL_EVIDENCE_CHAIN_SCHEMA_VERSION =
+  "loopx_turn_journal_evidence_chain_v0";
+
+type EvidenceAvailability = "recorded" | "missing" | "unknown" | "not_applicable";
+
+interface JournalEvidenceFact {
+  availability: EvidenceAvailability;
+  value: JsonObject | null;
+}
+
+export interface TurnJournalEvidenceChain {
+  settlement_identity: JsonObject;
+  turn_key: string;
+  status: string;
+  result_kind: string | null;
+  completed_phases: string[];
+  failed_phase: string | null;
+  phases: Array<{
+    phase: string;
+    completed: boolean;
+    failed: boolean;
+  }>;
+  host_result: JournalEvidenceFact;
+  task_validation: JournalEvidenceFact;
+  writeback: JournalEvidenceFact;
+  settlement_result: JournalEvidenceFact;
+  receipt: JournalEvidenceFact;
+}
+
+export interface TurnJournalEvidenceChainReadback {
+  schema_version: typeof TURN_JOURNAL_EVIDENCE_CHAIN_SCHEMA_VERSION;
+  availability: "recorded" | "missing";
+  evidence_chain: TurnJournalEvidenceChain | null;
 }
 
 function decodeIdentity(value: unknown): BoundSettlementIdentity {
@@ -73,6 +110,83 @@ function observedCapabilities(envelope: JsonObject): string[] {
     append(gate.required_capabilities);
   }
   return [...observed];
+}
+
+function journalEvidenceFact(
+  value: unknown,
+  phase: string,
+  completedPhases: readonly string[],
+  journalStatus: string,
+  failedPhase: string | null,
+): JournalEvidenceFact {
+  const recorded = jsonObject(value);
+  const completed = completedPhases.includes(phase);
+  if (recorded !== null && (completed || failedPhase === phase)) {
+    return { availability: "recorded", value: recorded };
+  }
+  if (completed || failedPhase === phase) {
+    return { availability: "missing", value: null };
+  }
+  const phaseIndex = transactionPhases.indexOf(phase);
+  const failedIndex = failedPhase === null ? -1 : transactionPhases.indexOf(failedPhase);
+  if (
+    journalStatus === "stopped" ||
+    (journalStatus === "failed" && failedIndex >= 0 && failedIndex < phaseIndex)
+  ) {
+    return { availability: "not_applicable", value: null };
+  }
+  return { availability: "unknown", value: null };
+}
+
+function receiptFact(
+  value: unknown,
+  journalStatus: string,
+): JournalEvidenceFact {
+  const recorded = jsonObject(value);
+  if (recorded !== null) return { availability: "recorded", value: recorded };
+  if (["committed", "stopped", "failed", "scheduler_action_required"].includes(journalStatus)) {
+    return { availability: "missing", value: null };
+  }
+  return { availability: "unknown", value: null };
+}
+
+function projectEvidenceChain(
+  journal: JsonObject,
+  turnKey: string,
+  identity: BoundSettlementIdentity,
+  completedPhases: string[],
+  journalStatus: string,
+): TurnJournalEvidenceChain {
+  const receipt = jsonObject(journal.receipt);
+  const failedPhase = typeof receipt?.failed_phase === "string"
+    ? receipt.failed_phase
+    : null;
+  return {
+    settlement_identity: settlementIdentityPayload(identity),
+    turn_key: turnKey,
+    status: journalStatus,
+    result_kind: typeof journal.result_kind === "string" ? journal.result_kind : null,
+    completed_phases: [...completedPhases],
+    failed_phase: failedPhase,
+    phases: transactionPhases.map(phase => ({
+      phase,
+      completed: completedPhases.includes(phase),
+      failed: failedPhase === phase,
+    })),
+    host_result: journalEvidenceFact(
+      journal.host_result, "typed_result", completedPhases, journalStatus, failedPhase,
+    ),
+    task_validation: journalEvidenceFact(
+      journal.task_validation, "validation", completedPhases, journalStatus, failedPhase,
+    ),
+    writeback: journalEvidenceFact(
+      journal.writeback, "durable_writeback", completedPhases, journalStatus, failedPhase,
+    ),
+    settlement_result: journalEvidenceFact(
+      journal.settlement_result, "durable_writeback", completedPhases, journalStatus, failedPhase,
+    ),
+    receipt: receiptFact(journal.receipt, journalStatus),
+  };
 }
 
 // A lost Host acknowledgement may retain the wake address before the caller
@@ -140,6 +254,13 @@ function evidenceForJournal(
       ? observedCapabilities(turnPlanWorkSource(plan ?? {}, sourceNumberTokens(journal,
         parsedSourceNumberTokens(journal, numbers)).filter(({path}) => path[0] === "plan" && path[1] === "work_contract")
         .map(({path, token}) => [path.slice(2), token])).work) : null,
+    evidence_chain: projectEvidenceChain(
+      journal,
+      turnKey,
+      actual,
+      inspection.completed_phases,
+      inspection.journal_status,
+    ),
   };
 }
 
@@ -235,4 +356,25 @@ export async function readTurnJournalCapabilities(params: JsonObject): Promise<{
     goalRef,
   );
   return { observed_capabilities: evidence?.observed_capabilities ?? null };
+}
+
+/** Exact, read-only facts for evaluators; no field implies execution, progress, or causality. */
+export async function readTurnJournalEvidenceChain(
+  params: JsonObject,
+): Promise<TurnJournalEvidenceChainReadback> {
+  const identity = decodeIdentity(params.settlement_identity);
+  const goalRef = Object.hasOwn(params, "goal_ref")
+    ? decodeGoalRef(params.goal_ref)
+    : null;
+  if (goalRef !== null && goalRef.goalId.value !== identity.goal_id) {
+    throw new EffectRuntimeRequestError(
+      "Turn journal query GoalRef conflicts with its settlement identity",
+    );
+  }
+  const evidence = await queryTurnJournal(params.runtime_root, identity, goalRef);
+  return {
+    schema_version: TURN_JOURNAL_EVIDENCE_CHAIN_SCHEMA_VERSION,
+    availability: evidence === null ? "missing" : "recorded",
+    evidence_chain: evidence?.evidence_chain ?? null,
+  };
 }
