@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 import type { AgentAdapter, AgentSessionSummary } from './adapters/types.js';
-import { isWithinWorkdirs } from './workdirs.js';
+import { isWithinWorkdirs, tooWide } from './workdirs.js';
 import type { SessionEnricher, SessionLoopx } from './session-enrich.js';
 
 /** A conversation an agent on this machine already has, that is not a thread here yet. */
@@ -28,7 +28,12 @@ export interface LocalSessionPage {
 
 export interface LocalSessionsDeps {
   adapters: Map<string, AgentAdapter>;
+  /** Where threads may work now. A session elsewhere is still listed, since importing it adds its
+   *  directory; only one in a directory too wide to add (a home directory itself) needs to be in here. */
   workdirs: () => string[];
+  /** Directories whose sessions (and those below them) are not listed: the person's way to keep a
+   *  project out of the list. Every other directory on the machine is listed. */
+  hidden?: () => string[];
   /** Every thread's agent session, sessionId → instance id, read once per page call: a session
    *  that is a thread anywhere is not external. */
   importedSessions: () => Map<string, string>;
@@ -54,6 +59,15 @@ export function isProbeSession(title: string): boolean {
   return title.trim() === '/usage';
 }
 
+/**
+ * Whether a session in `cwd` is offered for import, the one rule both session lists share: not in
+ * a hidden directory, and either in a workdir already or in one importing could add (a home
+ * directory or the root itself never can). Whether the directory still exists is checked apart.
+ */
+export function offeredSessionDir(cwd: string, workdirs: string[], hidden: string[]): boolean {
+  return !!cwd && !(hidden.length && isWithinWorkdirs(cwd, hidden)) && (isWithinWorkdirs(cwd, workdirs) || !tooWide(cwd));
+}
+
 /** A request kicks a scan when the last one is older than this. Asking an agent costs a process,
  *  so a page that stays open rescans every few minutes, not every poll. */
 const FRESH_MS = 5 * 60_000;
@@ -67,8 +81,10 @@ const MAX_PER_AGENT = 2000;
  * from — asking an agent costs a process, so a scan runs once after startup and then only when a
  * request finds the list stale. Only the outline is kept (agent, session id, directory, title,
  * last activity); the past turns are read by the existing import only when one is opened.
- * Sessions outside the allowed directories, in removed directories, or already a thread here are
- * left out. Together with machine-usage.ts this is the one subsystem that reads what the agents
+ * Every directory on the machine is listed, as the agents' own pickers do: the allowed workdirs
+ * bound where a thread may work, not what can be found, and importing a session from elsewhere
+ * adds its directory then. Sessions in hidden or removed directories, in a home directory or the
+ * root that no workdir covers, or already a thread here, are left out; the newest MAX_PER_AGENT of each store bound the rest. Together with machine-usage.ts this is the one subsystem that reads what the agents
  * on this machine have been doing; `LOOCHAT_LOCAL_SCAN=off` stands both down.
  */
 export class LocalSessions {
@@ -117,15 +133,17 @@ export class LocalSessions {
     if (!this.enabled) return;
     const now = this.deps.now?.() ?? Date.now();
     const workdirs = this.deps.workdirs();
-    const allowed = new Map<string, boolean>();
+    const hidden = this.deps.hidden?.() ?? [];
+    const listable = new Map<string, boolean>();
     const ok = async (cwd: string): Promise<boolean> => {
-      let within = allowed.get(cwd);
-      if (within === undefined) {
-        // A session whose directory has since been removed cannot be continued, so it is not listed.
-        within = !!cwd && isWithinWorkdirs(cwd, workdirs) && (await isDirectory(cwd));
-        allowed.set(cwd, within);
+      let listed = listable.get(cwd);
+      if (listed === undefined) {
+        // A session whose directory has since been removed, or that could never become a workdir,
+        // cannot be continued here, so it is not listed.
+        listed = offeredSessionDir(cwd, workdirs, hidden) && (await isDirectory(cwd));
+        listable.set(cwd, listed);
       }
-      return within;
+      return listed;
     };
 
     // One representative per store: instances of one adapter that share the store's env list the

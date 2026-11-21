@@ -712,6 +712,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         setExternalSessions((prev) => prev.filter((s) => `${s.agent}:${s.sessionId}` !== key));
         setSelectedId(thread.id);
         setImportingExternal(null);
+        // Importing a session from outside the project roots adds its directory there: show it.
+        api.workdirs().then(applyWorkdirs).catch(() => undefined);
       })
       .catch((e) => {
         setImportingExternal(null);
