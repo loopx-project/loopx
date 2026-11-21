@@ -1221,6 +1221,10 @@ def test_original_worker_answers_interrupted_steward_question_once(tmp_path, lan
 
     monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
     monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("LOOPX_CHAT_CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
     fixture = steward.__wrapped__(tmp_path)
     store, runtime, provider, transport, binding, capture, workspace = next(fixture)
     try:

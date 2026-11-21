@@ -1140,6 +1140,45 @@ def test_routing_failure_readback_allows_only_native_compaction_before_execution
         assert proof is None
 
 
+@pytest.mark.parametrize("compact", [False, True])
+@pytest.mark.parametrize("fault", [None, "external-url", "status-403", "disconnect-variant", "tool", "answer", "older-compaction"])
+def test_loopback_relay_auth_readback_is_strictly_bounded(tmp_path, monkeypatch, compact, fault):
+    session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
+        messages=queue.Queue(), thread_id="relay-thread", work_dir=tmp_path, response_timeout_sec=.2)
+    url = "https://api.openai.com/v1/responses" if fault == "external-url" else "http://127.0.0.1:57500/v1/responses"
+    status = 403 if fault == "status-403" else 401
+    variant = "responseStreamDisconnected" if fault == "disconnect-variant" else "httpConnectionFailed"
+    prefix = "Error running remote compact task: " if compact else ""
+    message = f"{prefix}unexpected status {status}: OpenAI API fallback request could not complete., url: {url}"
+
+    def write(packet):
+        method = packet["method"]
+        if method == "thread/turns/list":
+            rows = [{"id": "failed", "status": "failed", "error": {
+                "codexErrorInfo": {variant: {"httpStatusCode": status}}, "message": message}}]
+            if fault == "older-compaction":
+                rows.insert(0, {"id": "newer", "status": "completed"})
+            result = {"data": rows}
+        else:
+            items = [{"turnId": "failed", "item": {"id": "user", "type": "userMessage"}}]
+            if compact:
+                items.append({"turnId": "failed", "item": {"id": "compact", "type": "contextCompaction"}})
+            if fault in {"tool", "answer"}:
+                items.append({"turnId": "failed", "item": {"id": "extra",
+                    "type": "commandExecution" if fault == "tool" else "agentMessage"}})
+            result = {"data": items}
+        session.messages.put({"id": packet["id"], "result": result})
+
+    monkeypatch.setattr(session, "_write", write)
+    proof = failed_request_readback(session, "failed")
+    if fault is None or (fault == "older-compaction" and not compact):
+        assert proof == {"thread_id": "relay-thread", "turn_id": "failed",
+            "only_original_user_item": not compact, "only_pre_execution_items": True,
+            "codex_error_info": {variant: {"httpStatusCode": 401}}, "loopback_relay_auth_failure": True}
+    else:
+        assert proof is None
+
+
 @pytest.mark.parametrize("message", [None, {}, [], "workspace routing discovery timed out: extra",
     "workspace routing discovery failed: extra", "Please retry: workspace routing discovery failed", "unknown"])
 def test_routing_diagnostic_is_an_exact_provider_diagnostic(message):

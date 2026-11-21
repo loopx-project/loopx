@@ -2133,3 +2133,51 @@ test("antigravity and flexible-pool steward sessions recover pre-dispatch resume
       context_recovery: {...packet.context_recovery, failed_turn: {...failed, ...postDispatch}}}).recovery_candidate, false);
   }
 });
+
+for (const [kind, grant] of [["project", "workspace_write"], ["steward", "portfolio_read"]] as const) {
+  test(`${kind} loopback relay 401 failure (${grant}) recovers only while fresh relay readiness holds`, () => {
+    const selected = kind === "steward"
+      ? {...row, context_kind: "steward", grant, goal_ids: []}
+      : {...row, context_kind: "project", grant};
+    const availableProjects = [kind === "steward" ? project : {...project, grant}];
+    const configured = planConversationBinding({...request, binding: selected, available_projects: availableProjects}).state;
+    const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
+    const context = resolveBoundConversation({current: configured, binding_id: row.binding_id,
+      observation, available_projects: availableProjects, ...source}).context;
+    const session = {session_id: "original", goal_id: kind === "steward" ? "loopx-manager" : null,
+      agent_id: "codex", upstream_mode: "chat", status: "ready",
+      upstream_thread_id: "native", active_turn_id: null, manager_context_version: 23,
+      channel_id: `${kind === "steward" ? "manager.external.native" : "project.external"}.${row.binding_id}.${source.source_ref}`,
+      ...(kind === "steward" ? {steward_context: context} : {project_context: context})};
+    const failed = {session_id: "original", turn_id: "failed", status: "failed", delta_count: 0,
+      response: null, error_code: "upstream_transport_failure", upstream_turn_id: "native-failed",
+      completed_at: "2026-01-01T00:00:00Z"};
+    const observedAt = Date.parse("2026-01-01T00:10:00Z") / 1000;
+    const observed = {thread_id: "native", turn_id: "native-failed",
+      codex_error_info: {httpConnectionFailed: {httpStatusCode: 401}},
+      loopback_relay_auth_failure: true, only_pre_execution_items: true, only_original_user_item: true,
+      relay_transport_ready: true, relay_observed_at: observedAt};
+    const packet = {request: {request_ref: "f".repeat(24), command: null, status: "accepted", delivery_verified: true,
+      message: "Original synthetic request", origin: "lark",
+      binding_id: row.binding_id, session_id: "original", turn_id: "failed", source},
+      binding: selected, current_session: session, context_recovery: {version: 23, failed_turn: failed,
+        observed_at: "2026-01-01T00:10:00Z", steering_observed: false, source_verified: true, native_observation: observed}};
+    const plan = planBoundConversationRequest(packet);
+    assert.equal(plan.recovery_eligible, true);
+    assert.equal(plan.routing_attempt, 1);
+    assert.equal(plan.client_turn_id, `external-${"f".repeat(24)}-recovery-23-routing-1`);
+    for (const change of [{source_verified: false}, {stop_observed: true}, {steering_observed: true},
+      {later_equivalent_input_present: true},
+      {native_observation: {...observed, relay_transport_ready: false}},
+      {native_observation: {...observed, relay_observed_at: observedAt - 121}},
+      {native_observation: {...observed, relay_observed_at: observedAt + 1}},
+      {native_observation: {...observed, loopback_relay_auth_failure: false}},
+      {native_observation: {...observed, only_pre_execution_items: false}},
+      {native_observation: {...observed, codex_error_info: {httpConnectionFailed: {httpStatusCode: 403}}}},
+      {native_observation: {...observed, codex_error_info: {responseStreamDisconnected: {httpStatusCode: 401}}}},
+      {failed_turn: {...failed, error_code: "host_gate"}}]) {
+      assert.notEqual(planBoundConversationRequest({...packet,
+        context_recovery: {...packet.context_recovery, ...change}}).recovery_eligible, true);
+    }
+  });
+}

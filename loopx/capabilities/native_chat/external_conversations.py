@@ -585,6 +585,8 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                     proof = CodexAppServerAdapter.failed_request_observation(
                         codex_bin=self.controller.codex_bin, codex_home=Path(session["codex_home"]),
                         model_auth_home=model_auth_home,
+                        runtime_root=self.controller.coordination_runtime_root,
+                        consumer="steward" if session.get("steward_context") else "worker",
                         read_only_review=bool(plan.get("read_only_review")) and not quota_answer,
                         thread_ids=plan["native_thread_ids"], turn_id=turn["upstream_turn_id"])
                     if (proof is not None and proof.get("codex_error_info") == "usageLimitExceeded"
