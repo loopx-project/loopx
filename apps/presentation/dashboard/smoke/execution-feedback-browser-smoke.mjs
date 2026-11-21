@@ -59,7 +59,13 @@ try {
       assert.match(text, /未测量/);
       assert.match(text, /input-v1/);
       assert.match(text, /artifact:negative-result/);
-      assert.match(text, /不等于方法有效/);
+      const helpTrigger = observation.getByRole("button", {name: "执行观测说明"});
+      await helpTrigger.click();
+      const helpPopover = observation.locator(".context-help-popover");
+      await helpPopover.waitFor({state: "visible"});
+      assert.match(await helpPopover.innerText(), /不等于方法有效/);
+      await page.keyboard.press("Escape");
+      await helpPopover.waitFor({state: "hidden"});
       await observation.scrollIntoViewIfNeeded();
       await observation.screenshot({path: resolve(output, `after-${provider}-detail.png`), animations: "disabled"});
       await page.screenshot({path: resolve(output, `after-${provider}-desktop.png`), animations: "disabled"});
