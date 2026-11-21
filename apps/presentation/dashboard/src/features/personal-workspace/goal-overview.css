@@ -151,6 +151,9 @@
 
 .goal-outcomes { margin-top: 12px; min-width: 0; }
 .goal-outcomes-heading { display: flex; align-items: center; gap: 8px; }
+.goal-outcomes-search { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-block: 8px; }
+.goal-outcomes-search input { min-width: 0; flex: 1 1 16rem; min-height: 36px; padding: 6px 10px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-bg); color: var(--pw-text); }
+.goal-outcomes-search [role="status"] { color: var(--pw-muted); font-size: var(--text-caption); }
 .goal-outcomes-heading h4 { margin: 0; font-size: var(--text-body); font-weight: 600; }
 .goal-outcomes-heading h4 > span { margin-left: 6px; color: var(--pw-muted); font-weight: 400; font-variant-numeric: tabular-nums; }
 .goal-outcomes-counts { display: flex; flex-wrap: wrap; gap: 6px 18px; padding-block: 8px 12px; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
