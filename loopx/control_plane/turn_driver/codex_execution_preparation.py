@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
 from ...command_invocation import command_argv, current_loopx_cli_argv
 from ...turn_identity import mint_turn_instance_id, normalize_turn_instance_id
+from ..agents.capability_gate import runtime_capabilities_for_cli_projection
 from ..content_digest import BARE_SHA256_PATTERN
 
 
@@ -49,7 +50,7 @@ class NativePreparationTurnUnavailable(ValueError):
 def compact_execution_preparation_request(
     payload: Mapping[str, Any], *, claim_source_sha256: str | None = None,
 ) -> dict[str, Any] | None:
-    """Retain only the exact Host-executable action beside a private capture."""
+    """Retain the exact Host claim and same-Turn readiness inputs."""
 
     preparation = payload.get("execution_preparation")
     selected = payload.get("selected_todo")
@@ -86,6 +87,10 @@ def compact_execution_preparation_request(
         return None
     receipt = payload.get("heartbeat_receipt")
     goal_ref = payload.get("goal_ref")
+    identity = payload.get("agent_identity")
+    runtime_capabilities = runtime_capabilities_for_cli_projection(
+        identity.get("runtime_available_capabilities") if isinstance(identity, Mapping) else None
+    )
     turn_instance_id = (
         str(receipt.get("turn_instance_id") or "").strip()
         if isinstance(receipt, Mapping)
@@ -110,6 +115,7 @@ def compact_execution_preparation_request(
         },
         **({"turn_instance_id": turn_instance_id} if turn_instance_id else {}),
         **({"goal_ref": dict(goal_ref)} if isinstance(goal_ref, Mapping) else {}),
+        **({"runtime_available_capabilities": runtime_capabilities} if runtime_capabilities else {}),
         **claim_binding,
     }
 
@@ -394,6 +400,7 @@ def _native_context_argv(scenario: str, directory: Path, *, progressive_enabled:
 def _native_readiness_guard(
     goal: str, agent: str, todo: str, turn: str, *, context_argv: Sequence[str],
     goal_ref: Mapping[str, Any] | None = None,
+    runtime_available_capabilities: Any = None,
 ) -> list[str]:
     instance = []
     if goal_ref is not None:
@@ -403,6 +410,11 @@ def _native_readiness_guard(
         instance = ["--goal-instance-id", instance_id]
     return [
         "quota", "should-run", "--goal-id", goal, "--agent-id", agent,
+        *[
+            word
+            for capability in runtime_capabilities_for_cli_projection(runtime_available_capabilities)
+            for word in ("--available-capability", capability)
+        ],
         *context_argv, "--defer-context-presentation",
         "--todo-id", todo, "--turn-instance-id", turn,
         *instance,
@@ -545,7 +557,8 @@ def codex_execution_preparation_readback_context(
         goal_ref = request.get("goal_ref")
         facts["readiness_command"] = shlex.join([
             *base, *_native_readiness_guard(goal, agent, todo, turn, context_argv=guard_context,
-                goal_ref=goal_ref if isinstance(goal_ref, Mapping) else None),
+                goal_ref=goal_ref if isinstance(goal_ref, Mapping) else None,
+                runtime_available_capabilities=request.get("runtime_available_capabilities")),
             "--decision-output-dir", str(staged), "--prepared-capture-reference",
         ])
         facts["ready_context_command_template"] = shlex.join([
@@ -684,6 +697,7 @@ def execute_codex_execution_preparation(
             goal_id, agent_id, todo_id, turn_instance_id,
             context_argv=_native_context_argv(scenario, context_directory, progressive_enabled=progressive_enabled),
             goal_ref=goal_ref,
+            runtime_available_capabilities=request.get("runtime_available_capabilities"),
         ),
         "--decision-output-dir", str(capture_directory), "--prepared-capture-reference",
     ]
