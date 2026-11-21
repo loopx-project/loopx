@@ -1151,33 +1151,38 @@ fn installed_nvm_versions(root: &Path) -> Vec<String> {
     versions.into_iter().map(|(_, name)| name).collect()
 }
 
-// nvm activates a Node by prepending `$NVM_BIN` to the interactive shell PATH.
-// Finder/launchd never load that activation, so a host whose only Node is
-// nvm-managed looks Node-less to the private installer and the owned services.
-// Resolve the same bounded locations the Lark CLI resolver uses, without
-// executing nvm or sourcing any startup file: the version activated in this
-// App's environment, then the recorded `default` alias.
+// nvm activates a Node by prepending `$NVM_BIN` to the interactive shell
+// PATH. Finder/launchd never load that activation, so a host whose only Node
+// is nvm-managed looks Node-less to the private installer and the owned
+// services. Resolve the same bounded locations the Lark CLI resolver uses,
+// without executing nvm or sourcing any startup file.
+//
+// Only an activation inherited from the launching shell (`nvm use`, or a
+// terminal-launched App) is explicit intent, and it keeps the precedence the
+// inherited PATH already had. Everything this App infers from disk is a
+// fallback and must never shadow a candidate the host already provides.
 #[cfg(unix)]
-fn activated_nvm_directories(nvm_root: &Path, nvm_bin: Option<&std::ffi::OsStr>) -> Vec<PathBuf> {
+fn explicit_nvm_directories(nvm_bin: Option<&std::ffi::OsStr>) -> Vec<PathBuf> {
     let mut directories = Vec::new();
     if let Some(active) = nvm_bin.filter(|value| !value.is_empty()) {
         push_tool_directory(&mut directories, PathBuf::from(active));
     }
+    directories
+}
+
+// Discovered, never activated: the recorded `default` alias first, then the
+// installed versions newest-first. Appended behind the known runtimes and the
+// inherited PATH, so a stale default cannot hide a supported Homebrew or
+// inherited Node, and a host without any other Node still finds nvm.
+#[cfg(unix)]
+fn discovered_nvm_directories(nvm_root: &Path) -> Vec<PathBuf> {
+    let mut directories = Vec::new();
     if let Some(version) = resolve_nvm_alias(nvm_root, "default", 0) {
         push_tool_directory(
             &mut directories,
             nvm_root.join("versions/node").join(version).join("bin"),
         );
     }
-    directories
-}
-
-// A host can have nvm-managed versions without a usable `default` alias. Keep
-// them discoverable newest-first, behind the activated selection and the
-// supported Homebrew LTS runtimes, so an outdated default cannot hide them.
-#[cfg(unix)]
-fn installed_nvm_directories(nvm_root: &Path) -> Vec<PathBuf> {
-    let mut directories = Vec::new();
     for version in installed_nvm_versions(nvm_root) {
         push_tool_directory(
             &mut directories,
@@ -1194,6 +1199,17 @@ fn push_tool_directory(directories: &mut Vec<PathBuf>, candidate: PathBuf) {
     }
 }
 
+// One tool search, one copy of each directory: a candidate discovered twice
+// (an activated version that is also the recorded default, or an inherited
+// entry this App also adds) must not appear twice in the search path.
+fn extend_unique(paths: &mut Vec<PathBuf>, candidates: impl IntoIterator<Item = PathBuf>) {
+    for candidate in candidates {
+        if !paths.contains(&candidate) {
+            paths.push(candidate);
+        }
+    }
+}
+
 #[cfg(unix)]
 fn nvm_root(home: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
     if let Some(configured) = env::var_os("NVM_DIR").filter(|value| !value.is_empty()) {
@@ -1206,46 +1222,69 @@ fn runtime_search_path(
     home: Option<std::ffi::OsString>,
     inherited: Option<std::ffi::OsString>,
 ) -> std::ffi::OsString {
-    let mut paths = Vec::new();
-    if let Some(ref home) = home {
-        paths.push(PathBuf::from(home).join(".local/bin"));
-    }
     #[cfg(unix)]
     let nvm_root = nvm_root(home.as_deref());
     #[cfg(unix)]
     let nvm_bin = env::var_os("NVM_BIN").filter(|value| !value.is_empty());
+    runtime_search_path_from(
+        home,
+        inherited,
+        #[cfg(unix)]
+        nvm_root.as_deref(),
+        #[cfg(unix)]
+        nvm_bin.as_deref(),
+    )
+}
+
+// The nvm inputs are parameters so a test can pin them without mutating the
+// process environment that parallel tests read.
+fn runtime_search_path_from(
+    home: Option<std::ffi::OsString>,
+    inherited: Option<std::ffi::OsString>,
+    #[cfg(unix)] nvm_root: Option<&Path>,
+    #[cfg(unix)] nvm_bin: Option<&std::ffi::OsStr>,
+) -> std::ffi::OsString {
+    let mut paths = Vec::new();
+    if let Some(ref home) = home {
+        paths.push(PathBuf::from(home).join(".local/bin"));
+    }
+    // An activation the launching shell exported keeps the precedence the
+    // inherited PATH already gave it.
     #[cfg(unix)]
-    if let Some(nvm_root) = &nvm_root {
-        paths.extend(activated_nvm_directories(nvm_root, nvm_bin.as_deref()));
+    if let Some(nvm_bin) = nvm_bin {
+        extend_unique(&mut paths, explicit_nvm_directories(Some(nvm_bin)));
     }
     if cfg!(target_os = "macos") {
-        paths.extend([
-            PathBuf::from("/opt/homebrew/bin"),
-            PathBuf::from("/usr/local/bin"),
-            // Homebrew's supported LTS Node formulae are keg-only. Finder
-            // does not inherit the shell PATH that activates those runtimes.
-            // Use the same bounded search for the private installer and the
-            // services it starts; Core still qualifies the actual version.
-            PathBuf::from("/opt/homebrew/opt/node@24/bin"),
-            PathBuf::from("/usr/local/opt/node@24/bin"),
-            PathBuf::from("/opt/homebrew/opt/node@22/bin"),
-            PathBuf::from("/usr/local/opt/node@22/bin"),
-        ]);
+        extend_unique(
+            &mut paths,
+            [
+                PathBuf::from("/opt/homebrew/bin"),
+                PathBuf::from("/usr/local/bin"),
+                // Homebrew's supported LTS Node formulae are keg-only. Finder
+                // does not inherit the shell PATH that activates those runtimes.
+                // Use the same bounded search for the private installer and the
+                // services it starts; Core still qualifies the actual version.
+                PathBuf::from("/opt/homebrew/opt/node@24/bin"),
+                PathBuf::from("/usr/local/opt/node@24/bin"),
+                PathBuf::from("/opt/homebrew/opt/node@22/bin"),
+                PathBuf::from("/usr/local/opt/node@22/bin"),
+            ],
+        );
     }
     #[cfg(unix)]
-    if let Some(nvm_root) = &nvm_root {
-        paths.extend(installed_nvm_directories(nvm_root));
-    }
-    for path in inherited
-        .as_deref()
-        .map(env::split_paths)
-        .into_iter()
-        .flatten()
-    {
-        if !paths.contains(&path) {
-            paths.push(path);
-        }
-    }
+    let discovered = nvm_root.map(discovered_nvm_directories).unwrap_or_default();
+    extend_unique(
+        &mut paths,
+        inherited
+            .as_deref()
+            .map(env::split_paths)
+            .into_iter()
+            .flatten(),
+    );
+    // Inferred nvm locations are the last resort: they extend the search for a
+    // host that has no other Node, and never displace one that already exists.
+    #[cfg(unix)]
+    extend_unique(&mut paths, discovered);
     env::join_paths(paths).unwrap_or_else(|_| inherited.unwrap_or_default())
 }
 

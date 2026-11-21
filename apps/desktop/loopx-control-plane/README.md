@@ -318,9 +318,13 @@ The installer and App-owned services use the same bounded tool search,
 including standard Homebrew locations on macOS and nvm-managed Node
 directories on Unix, without loading interactive shell profiles. Finder
 launches therefore do not depend on terminal PATH setup. nvm resolution is
-read-only and never runs nvm or sources a startup file: an `NVM_BIN` activated
-in the App's own environment wins, then the `default` alias chain, then the
-installed versions newest-first behind the supported Homebrew runtimes.
+read-only and never runs nvm or sources a startup file. An `NVM_BIN` the
+launching shell exported stays first, keeping the precedence the inherited
+PATH already had. nvm locations this App discovers on disk — the recorded
+`default` alias, then the installed versions newest-first — are appended last,
+behind Homebrew and the inherited PATH, so an inferred stale default cannot
+displace a Node the host already provides, while a host whose only Node is
+nvm-managed still gets one. Each directory appears once in the search.
 When preparing the first App-owned snapshot, an already selected managed CLI's
 recorded Python is reused if the App has no interpreter record of its own.
 This leaves that CLI's launcher and installation owner unchanged.
