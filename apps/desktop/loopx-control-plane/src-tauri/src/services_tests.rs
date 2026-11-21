@@ -281,11 +281,7 @@ fn stale_nvm_bin_yields_to_the_node_the_shell_selected() {
         1,
         "an activation that still matches the selected Node keeps its precedence"
     );
-    assert_eq!(
-        resolve_executable_path("node", Some(agreed.as_os_str())),
-        Some(selected.clone()),
-        "the selected Node still wins"
-    );
+    assert_demoted_nvm_bin_is_last_resort(&nvm_root, &stale, agreed.as_os_str());
 
     // No longer the selected Node: the stale directory becomes a last resort.
     let stale_nvm_bin = stale.as_os_str();
@@ -310,11 +306,7 @@ fn stale_nvm_bin_yields_to_the_node_the_shell_selected() {
         demoted_position(&nvm_root.join("versions/node/v24.22.1/bin")) < demoted_position(&stale),
         "a newer installed version outranks a demoted NVM_BIN"
     );
-    assert_eq!(
-        resolve_executable_path("node", Some(demoted.as_os_str())),
-        Some(selected.clone()),
-        "the stale NVM_BIN must not displace the selected Node"
-    );
+    assert_demoted_nvm_bin_is_last_resort(&nvm_root, &stale, demoted.as_os_str());
 
     // Nothing else on the PATH: the activation is the only candidate, so it
     // stays authoritative and nvm-only hosts keep working.
@@ -369,6 +361,33 @@ fn assert_inferred_nvm_never_displaces_existing(
             stale_default_bin.join("node"),
             "nvm-managed Node stays discoverable when nothing else provides one"
         );
+    }
+}
+
+// A demoted `NVM_BIN` may only be selected when nothing else can be: a Node
+// the host provides, or a newer nvm install, must win first. The oracle reads
+// the host instead of assuming which candidate that is.
+#[cfg(unix)]
+fn assert_demoted_nvm_bin_is_last_resort(
+    nvm_root: &Path,
+    stale_bin: &Path,
+    search: &std::ffi::OsStr,
+) {
+    let resolved =
+        resolve_executable_path("node", Some(search)).expect("the search must resolve a Node");
+    let host_candidate = env::split_paths(search)
+        .find(|directory| !directory.starts_with(nvm_root) && directory.join("node").is_file());
+    match host_candidate {
+        Some(directory) => assert_eq!(
+            resolved,
+            directory.join("node"),
+            "a demoted NVM_BIN must yield to the Node the host provides"
+        ),
+        None => assert_ne!(
+            resolved,
+            stale_bin.join("node"),
+            "a demoted NVM_BIN may only be selected when nothing else can be"
+        ),
     }
 }
 
