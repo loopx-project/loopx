@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import replace
+from datetime import datetime, timedelta
 
 import pytest
 
 from loopx.capabilities.decision_context import (
     DecisionEvidenceRecords,
     settle_profile_decision_review,
+    write_private_pending_decision_settlement,
 )
 from loopx.cli import main
 from loopx.capabilities.decision_context.capture import (
@@ -118,6 +120,72 @@ def test_stale_revision_cannot_be_silently_consumed(setup):
         )
     assert capture_profile_sources(**args)["pending_batch_count"] == 1
     assert not args["cursor_path"].exists()
+
+
+def test_material_review_cli_releases_capture_without_authorizing_action(setup, capsys, monkeypatch):
+    args, _, authority = setup
+    captured = capture_profile_sources(**args, execute=True)
+    assert captured["pending_batch_count"] == 1
+    reads = []
+
+    def rebase(collection):
+        current = collection.authority[0]
+        reads.append(current.content)
+        return DecisionEvidenceRecords(changed_facts=({
+            "fact_id": "fact:status",
+            "summary": "The source reports a new status.",
+            "source_ref": current.source_ref,
+            "source_revision": current.source_revision,
+            "observed_at": current.observed_at,
+            "freshness": "current",
+            "authority": "first_party",
+        },))
+
+    assembly = assemble_captured_decision_evidence(
+        **args, batch_id=1, decision_id="review-facts", rebase=rebase,
+    )
+    assert reads == ["private-body-not-for-spool"]
+    assert not args["cursor_path"].exists()
+    pending = args["spool_path"].parent / "pending.json"
+    events = args["spool_path"].parent / "events.jsonl"
+    write_private_pending_decision_settlement(pending, assembly)
+    command = [
+        "--format", "json", "decision-context", "settle-review",
+        "--goal-id", args["goal_id"], "--agent-id", args["agent_id"],
+        "--profile", str(args["profile_path"]),
+        "--cursor-state", str(args["cursor_path"]),
+        "--pending-settlement", str(pending), "--event-log", str(events),
+        "--disposition", "observed", "--actor-ref", "agent:example-agent",
+        "--reason-code", "new_facts_reviewed",
+        "--summary", "New facts were reviewed without proposing an action.",
+    ]
+    assert main(command) == 0
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["executed"] is False
+    assert not events.exists()
+    assert not args["cursor_path"].exists()
+    assert main([*command, "--execute"]) == 0
+    settled = json.loads(capsys.readouterr().out)
+    assert settled["disposition"] == "observed"
+    assert settled["quiet_noop"] is False
+    assert settled["review_receipt"]["authority_confirmed"] is False
+    assert settled["review_receipt"]["gate_todo_id"] is None
+    assert settled["cursor_commit"]["readback_verified"] is True
+    assert "private-body-not-for-spool" not in json.dumps(settled)
+    assert str(authority) not in json.dumps(settled)
+    assert all(json.loads(line)["event_kind"] == "validation"
+               for line in events.read_text().splitlines())
+    assert capture_profile_sources(**args, execute=True)["pending_batch_count"] == 0
+    authority.write_text("another-private-change")
+    next_at = datetime.fromisoformat(captured["sources"][0]["last_checked_at"]) + timedelta(hours=1)
+
+    class NextCaptureClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return next_at
+
+    monkeypatch.setattr("loopx.capabilities.decision_context.capture.datetime", NextCaptureClock)
+    assert capture_profile_sources(**args, execute=True)["pending_batch_count"] == 1
 
 
 def test_binding_change_holds_existing_state(setup):
