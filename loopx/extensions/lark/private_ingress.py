@@ -16,6 +16,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from ...capabilities.native_chat.file_discovery import FileChatDiscovery
 from ...file_lock import try_exclusive_file_lock
 from ...chat_store import _read_json
 from .conversation_identity import identity_ref, lark_private_source
@@ -232,7 +233,7 @@ def project_private_reply_history(store: Any, session: dict[str, Any],
                 source = lark_private_source(provider_ref=saved["provider_ref"], event=record["event"])
                 # Recovery moves the correlation journal forward, retaining its
                 # original failed Turn. Read those exact recorded identities;
-                # suffix spelling is not evidence of an admitted continuation.
+
                 recoveries = [native.get("context_recovery") or {}, *native.get("context_recovery_history", [])]
                 if any(not isinstance(row, dict) for row in recoveries):
                     raise ValueError("unreadable recovery identities")
@@ -261,10 +262,18 @@ def project_private_reply_history(store: Any, session: dict[str, Any],
     return result
 
 
+def _project_capture(_path: Path, row: Any) -> dict[str, Any]:
+    """Validate required private-capture fields before caching an unchanged row."""
+    if not isinstance(row, dict) or not isinstance(row.get("event"), dict) or not isinstance(row.get("binding_id"), str):
+        raise ValueError("private capture read is incomplete")
+    return row
+
+
 class PrivateIngressObserver:
     def __init__(self, transport: Any) -> None:
         self.transport = transport
         self.root = transport.root.parent / "lark-private-ingress"
+        self._capture_discovery = FileChatDiscovery()
 
     def _path(self, binding_id: str) -> Path:
         return self.root / f"{identity_ref(binding_id)}.json"
@@ -455,14 +464,14 @@ class PrivateIngressObserver:
                     **{key: canonical.get(key) for key in ("root_id", "parent_id", "thread_id")}}
                 yield binding["transport_ref"], history
             except (OSError, ValueError, KeyError, TypeError):
-                continue  # Preserve every gap; neither absence nor failure is an answer.
+                continue  # Preserve every gap;
 
     def _records(self) -> list[dict[str, Any]]:
-        records = [json.loads(path.read_text(encoding="utf-8")) for path in self.transport.root.glob("*.json")]
-        if any(not isinstance(row, dict) or not isinstance(row.get("event"), dict)
-               or not isinstance(row.get("binding_id"), str) for row in records):
-            raise ValueError("private capture read is incomplete")
-        return records
+        paths = sorted(self.transport.root.glob("*.json"))
+        return [row for _path, row in self._capture_discovery.rows(
+            self.transport.root, paths,
+            read=lambda path: json.loads(path.read_text(encoding="utf-8")),
+            project=_project_capture)]
 
     def _page(self, profile: str, chat: str, end: float, *, start: float | None = None,
               token: str | None = None) -> tuple[list[Mapping[str, Any]], bool, str | None]:
@@ -510,7 +519,7 @@ class PrivateIngressObserver:
         now = time.time()
         end = now - 5  # Leave live stream/admission a short race window.
         # Keep the live edge responsive. A separate bounded read below covers
-        # earlier history; neither cursor grants historical execution authority.
+        # earlier history.
         cursor = state.get("last_complete_at")
         start = (float(cursor) - 60) if cursor is not None else (now - 86400)
         window_end = min(end, start + 86400)

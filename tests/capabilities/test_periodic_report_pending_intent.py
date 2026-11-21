@@ -236,7 +236,7 @@ def test_calendar_reporter_replacement_uses_admitted_window_state(tmp_path, prep
 
 
 @pytest.mark.parametrize(
-    "change", ["reporter", "schedule", "disabled", "stopped", "activation_stopped"]
+    "change", ["reporter", "schedule", "disabled", "archived", "activation_stopped"]
 )
 def test_calendar_hook_rechecks_live_authority_after_construction(tmp_path, change):
     from datetime import datetime
@@ -256,8 +256,8 @@ def test_calendar_hook_rechecks_live_authority_after_construction(tmp_path, chan
         goal["control_plane"]["periodic_report"]["schedule"]["rrule"] = "FREQ=WEEKLY;BYDAY=FR;BYHOUR=17"
     elif change == "disabled":
         goal["control_plane"]["periodic_report"]["enabled"] = False
-    elif change == "stopped":
-        goal["status"] = "stopped"
+    elif change == "archived":
+        goal["status"] = "archived"
     else:
         goal["activation"] = {
             "schema_version": "loopx_goal_activation_v1",
@@ -303,6 +303,8 @@ def test_inactive_goal_does_not_reactivate_an_admitted_report(tmp_path, field, v
         periodic_report_cadence_hooks,
     )
     from loopx.capabilities.periodic_report.cadence_journal import read_cadence_journal
+    from loopx.control_plane.goals.activation_service import upgrade_goal_activation_registries
+    from loopx.control_plane.projects.registry_codec import ProjectRegistryProtocolError
 
     registry, runtime = _calendar_fixture(tmp_path)
     kwargs = dict(registry_path=registry, runtime_root=runtime, goal_id=GOAL_ID, agent_id=AGENT_ID)
@@ -311,6 +313,13 @@ def test_inactive_goal_does_not_reactivate_an_admitted_report(tmp_path, field, v
     config = json.loads(registry.read_text())
     config["goals"][0][field] = value
     registry.write_text(json.dumps(config))
+    if field == "status" and value in ("stopped", "paused"):
+        with pytest.raises(ProjectRegistryProtocolError):
+            periodic_report_cadence_hooks(**kwargs)
+        with pytest.raises(ProjectRegistryProtocolError):
+            pending_periodic_report_intents(**kwargs)
+        assert read_cadence_journal(runtime_root=runtime, goal_id=GOAL_ID) == original
+        upgrade_goal_activation_registries([registry], execute=True)
     assert periodic_report_cadence_hooks(**kwargs) == ()
     assert pending_periodic_report_intents(**kwargs) == []
     assert consume_pending_periodic_report_intent(**kwargs, execute=True)["status"] == "no_pending_intent"

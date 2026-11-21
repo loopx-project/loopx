@@ -1,7 +1,7 @@
 """One read-only Todo/lease source per alignment or amendment decision.
 
 Read both collections at one provider revision; never consult or repair display.
-This is an adapter over the canonical summary, not a second Todo inventory.
+This is an adapter over the canonical summary.
 """
 from dataclasses import dataclass
 from datetime import datetime, timezone

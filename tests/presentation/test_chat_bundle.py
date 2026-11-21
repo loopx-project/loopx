@@ -12,7 +12,7 @@ import time
 import zipfile
 
 import pytest
-from loopx.presentation.chat_bundle import MANIFEST, validate_bundle
+from loopx.presentation.chat_bundle import MANIFEST, runtime_source_root, validate_bundle
 
 spec = importlib.util.spec_from_file_location(
     "chat_builder", Path(__file__).resolve().parents[2] / "scripts/chat_bundle.py"
@@ -405,3 +405,143 @@ def test_provider_contract_update_invalidates_packaged_frontend(source, tmp_path
     contract.write_text("changed contract", encoding="utf-8")
     with pytest.raises(RuntimeError, match="source changed"):
         validate_bundle(builder.OUTPUT, source_root=tmp_path)
+
+
+def test_runtime_source_root_skips_source_scan_only_for_immutable_installed_release(
+    source, tmp_path, monkeypatch,
+):
+    builder.build(None)
+    (tmp_path / "release.json").write_text(
+        '{"release_id": "20261120T000000Z"}\n',
+        encoding="utf-8",
+    )
+
+    assert runtime_source_root(tmp_path) is None
+
+    def fail_source_inputs(_root):
+        raise AssertionError("installed releases must not re-hash source inputs")
+
+    monkeypatch.setattr("loopx.presentation.chat_bundle.source_inputs", fail_source_inputs)
+    manifest = validate_bundle(builder.OUTPUT, source_root=runtime_source_root(tmp_path))
+    assert manifest["schema_version"] == "loopx_chat_bundle_v1"
+
+    # Served asset integrity checks remain active even when source scanning is skipped.
+    index = builder.OUTPUT / "index.html"
+    index.write_text("tampered", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="bundle file changed: index.html"):
+        validate_bundle(builder.OUTPUT, source_root=runtime_source_root(tmp_path))
+
+
+@pytest.mark.parametrize("git_kind", ["dir", "file"])
+def test_runtime_source_root_retains_checkout_verification_when_git_present(tmp_path, git_kind):
+    (tmp_path / "release.json").write_text(
+        '{"release_id": "20261120T000000Z"}\n',
+        encoding="utf-8",
+    )
+    git_marker = tmp_path / ".git"
+    if git_kind == "dir":
+        git_marker.mkdir()
+    else:
+        git_marker.write_text("gitdir: /tmp/worktree\n", encoding="utf-8")
+
+    assert runtime_source_root(tmp_path) == tmp_path.resolve()
+
+
+@pytest.mark.parametrize(
+    "release_json",
+    [None, "{invalid json", "[]", "{}", '{"release_id": ""}', '{"release_id": "   "}'],
+)
+def test_runtime_source_root_fails_closed_without_valid_release_manifest(tmp_path, release_json):
+    if release_json is not None:
+        (tmp_path / "release.json").write_text(release_json, encoding="utf-8")
+
+    assert runtime_source_root(tmp_path) == tmp_path.resolve()
+
+
+def test_release_build_retries_transient_gh_errors_with_clean_download_dir(monkeypatch):
+    releases = [[{
+        "tag_name": "v2.3.0",
+        "draft": False,
+        "prerelease": False,
+        "assets": [{"name": "loopx-2.3.0-py3-none-any.whl"}],
+    }]]
+    sleeps = []
+    monkeypatch.setattr(builder.time, "sleep", sleeps.append)
+
+    api_attempts = 0
+
+    def flaky_check_output(command, **kwargs):
+        nonlocal api_attempts
+        api_attempts += 1
+        if api_attempts < 2:
+            raise subprocess.CalledProcessError(1, command, stderr="HTTP 500")
+        return json.dumps(releases)
+
+    monkeypatch.setattr(builder.subprocess, "check_output", flaky_check_output)
+
+    download_attempts = 0
+    saw_partial_marker = []
+
+    def flaky_download(command, **kwargs):
+        nonlocal download_attempts
+        download_attempts += 1
+        directory = Path(command[command.index("--dir") + 1])
+        saw_partial_marker.append((directory / "partial.tmp").exists())
+        if download_attempts < 4:
+            (directory / "partial.tmp").write_bytes(b"corrupt partial download")
+            raise subprocess.CalledProcessError(1, command)
+        wheel = directory / "loopx-2.3.0-py3-none-any.whl"
+        with zipfile.ZipFile(wheel, "w") as archive:
+            archive.writestr(
+                "loopx/web/chat/index.html",
+                '<script src="/chat/assets/prev.js"></script>',
+            )
+            archive.writestr("loopx/web/chat/assets/prev.js", "prev code")
+        (directory / "SHA256SUMS").write_text(
+            f"{builder.contract.digest(wheel)}  {wheel.name}\n"
+        )
+
+    monkeypatch.setattr(builder.subprocess, "run", flaky_download)
+    builds = []
+    monkeypatch.setattr(
+        builder,
+        "build",
+        lambda previous, **kwargs: builds.append((previous / "assets/prev.js").read_text()),
+    )
+
+    builder.release_build("v2.4.0", "fixture/repository")
+
+    assert api_attempts == 2
+    assert download_attempts == 4
+    assert saw_partial_marker == [False, False, False, False]
+    assert sleeps == [1.0, 1.0, 2.0, 4.0]
+    assert builds == ["prev code"]
+
+
+def test_release_build_exhausts_bounded_gh_download_retries(monkeypatch):
+    releases = [[{
+        "tag_name": "v2.3.0",
+        "draft": False,
+        "prerelease": False,
+        "assets": [{"name": "loopx-2.3.0-py3-none-any.whl"}],
+    }]]
+    sleeps = []
+    monkeypatch.setattr(builder.time, "sleep", sleeps.append)
+    monkeypatch.setattr(
+        builder.subprocess, "check_output", lambda *a, **k: json.dumps(releases)
+    )
+
+    download_attempts = 0
+
+    def always_fail(command, **kwargs):
+        nonlocal download_attempts
+        download_attempts += 1
+        raise subprocess.CalledProcessError(1, command)
+
+    monkeypatch.setattr(builder.subprocess, "run", always_fail)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        builder.release_build("v2.4.0", "fixture/repository")
+
+    assert download_attempts == 4
+    assert sleeps == [1.0, 2.0, 4.0]

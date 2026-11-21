@@ -208,13 +208,39 @@ def test_captured_replan_preserves_scoped_memory_without_trusting_reader_locatio
         source = json.loads(captured)
         assert source["replan_action_packet"]["decision"] == "replan_required"
         assert source["reward_memory_recall"]["status"] == "applied" and memory.calls == 1
+        from loopx.capabilities.turn_context import attach_turn_context
+        from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
+
         projected = project_turn_context(source)
         assert projected["reward_memory_recall"]["context"]["guidance"]
-        relocated = {**source, "replan_read_path": str(tmp_path / "other-location.json")}
-        assert project_turn_context(relocated) == projected
+        # Signed complete captures reject direct top-level edits, while Host plan
+        # carrier detail_ref relocation preserves exact capability binding.
+        assert project_turn_context({**source, "replan_read_path": str(tmp_path / "other-location.json")}) == {}
+        plan = build_loopx_turn_plan(source, host="codex-cli", execution_mode="isolated-headless")
+        attach_turn_context(
+            plan,
+            registry_path=registry,
+            goal_id=GOAL,
+            agent_id=AGENT,
+            decision=source,
+            turn_instance_id=TURN,
+        )
+        plan_projected = project_turn_context(plan)
+        assert plan_projected["reward_memory_recall"]["context"]["guidance"]
+        relocated = deepcopy(plan)
+        relocated["detail_ref"] = {
+            "captured_decision": {
+                "path": str(tmp_path / "other-location.json"),
+                "turn_key": plan["transaction"]["turn_key"],
+                "goal_id": GOAL,
+                "agent_id": AGENT,
+                "source_hash_ref": "$.source_decision_hash",
+            }
+        }
+        assert project_turn_context(relocated) == plan_projected
         changed = deepcopy(relocated)
-        plan = changed["interaction_contract"]["cli_channel"]["settlement_plan"]
-        plan["ordered_steps"][1]["command_template"] += " --evidence substituted"
+        settlement = changed["work_contract"]["interaction_contract"]["cli_channel"]["settlement_plan"]
+        settlement["ordered_steps"][1]["command_template"] += " --evidence substituted"
         assert project_turn_context(changed) == {}
     finally:
         restart_effect_runtime(wait_for_exit=True)
@@ -253,25 +279,13 @@ def test_stateless_progressive_replan_uses_the_saved_decision(tmp_path, monkeypa
 
     try:
         initial = call_progress_cli(fixture, "quota", "should-run", *scope, "--todo-id", TODO,
-            "--decision-output-dir", str(capture), *delivery)
+            "--decision-output-dir", str(capture), "--context-delivery", "off")
+        assert initial["ok"]
         original = capture / "decision.json"
         raw = original.read_bytes()
         source = json.loads(raw)
         receipt = source["heartbeat_receipt"]
         authority = _authority(fixture)
-        review_command = review_for(read_pages(read_stage(shlex.split(initial["first_read_command"]))))
-        assert review_command[review_command.index("--decision-file") + 1] == str(original)
-        review = read_stage(review_command)
-        assert review["planning_guidance"] == source["replan_action_packet"]["planning_guidance"]
-        writer = read_stage(shlex.split(review["next"]["writeback"]))
-        assert writer["writeback"]["settlement_plan"]["identity"] == receipt["settlement_identity"]
-        assert writer["required_outcome"] == source["replan_action_packet"]["required_outcome"]
-
-        explore_command = review_command.copy()
-        explore_command[explore_command.index("--replan-stage") + 1] = "explore"
-        explore = read_stage(explore_command)
-        assert explore["explore_basis"] is None
-        assert explore["source_hash"] == review["source_hash"]
 
         recovered_path = original.with_name("recovered.json")
         original.rename(recovered_path)
@@ -286,7 +300,27 @@ def test_stateless_progressive_replan_uses_the_saved_decision(tmp_path, monkeypa
         assert read_pages(read_stage(shlex.split(nav["first_read_command"])), 8192) == body
         recovered_review = review_for(body)
         assert recovered_review[recovered_review.index("--decision-file") + 1] == str(recovered_path)
-        assert read_stage(recovered_review)["source_hash"] == review["source_hash"]
+        assert recovered_review[recovered_review.index("--capture-sha256") + 1] == digest
+        recovered = read_stage(recovered_review)
+        assert recovered["source_hash"] == source["contract_binding"]["content_hash"]
+        assert recovered["planning_guidance"] == source["replan_action_packet"]["planning_guidance"]
+        recovered_writer = shlex.split(recovered["next"]["writeback"])
+        assert recovered_writer[recovered_writer.index("--capture-sha256") + 1] == digest
+        writer = read_stage(recovered_writer)
+        assert writer["writeback"]["settlement_plan"]["identity"] == receipt["settlement_identity"]
+        assert writer["required_outcome"] == source["replan_action_packet"]["required_outcome"]
+        explore_command = recovered_review.copy()
+        explore_command[explore_command.index("--replan-stage") + 1] = "explore"
+        explore = read_stage(explore_command)
+        assert explore["explore_basis"] is None
+        assert explore["source_hash"] == recovered["source_hash"]
+        try:
+            # A different encoding of the same JSON keeps the semantic source hash.
+            recovered_path.write_bytes(raw + b"\n")
+            wrong_bytes = read_stage(recovered_review, status=1)
+            assert wrong_bytes["ok"] is False and "capture digest mismatch" in wrong_bytes["reason"]
+        finally:
+            recovered_path.write_bytes(raw)
         recovered_review[recovered_review.index("--source-hash") + 1] = "sha256:" + "0" * 64
         refused = read_stage(recovered_review, status=1)
         assert refused["ok"] is False and "matching source hash" in refused["reason"]

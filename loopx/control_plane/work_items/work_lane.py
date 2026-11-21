@@ -10,7 +10,7 @@ from ..todos.todo_semantics import todo_priority_label, todo_priority_rank
 
 @dataclass(frozen=True)
 class WorkLaneObservation:
-    """Read-only work facts; neither a scheduling decision nor execution authority."""
+    """Read-only work facts."""
 
     lane: str | None
     must_attempt: bool

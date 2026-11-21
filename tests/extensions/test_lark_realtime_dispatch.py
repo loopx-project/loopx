@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import threading
+import time
 
 import pytest
 
@@ -14,7 +15,11 @@ from loopx.extensions.lark import goal_topic_runtime as runtime
 from loopx.extensions.lark.event_inbox import inspect_lark_event_inbox
 from loopx.extensions.lark.goal_channel_contracts import read_goal_channel_binding
 from loopx.extensions.lark.goal_channel_targets import read_goal_channel_targets
-from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
+from loopx.extensions.lark.goal_topic_runtime_service import (
+    LarkGoalTopicRuntimeService,
+    ProfileTransport,
+    ProfileWorkerFingerprint,
+)
 from test_lark_goal_topic_runtime import _reply_runner, _seed_legacy_topic
 
 
@@ -633,7 +638,7 @@ def test_profile_without_steerable_binding_keeps_four_ordinary_workers(
     stream = runtime.stream_lark_goal_topic_profile
 
     def owned_stream(**kwargs):
-        result = stream(**kwargs, process_factory=lambda _args: _Consumer(lines()))
+        result = stream(**{**kwargs, "process_factory": lambda _args: _Consumer(lines())})
         service._closed.set()
         return result
 
@@ -642,7 +647,8 @@ def test_profile_without_steerable_binding_keeps_four_ordinary_workers(
         future = executor.submit(service._poll_profile, "mew", stop)
         try:
             deadline = threading.Event()
-            while len(entered) < 4 and not deadline.wait(0.02):
+            started = time.monotonic()
+            while len(entered) < 4 and time.monotonic() - started < 5.0 and not deadline.wait(0.02):
                 pass
             assert len(entered) == 4
         finally:
@@ -650,3 +656,76 @@ def test_profile_without_steerable_binding_keeps_four_ordinary_workers(
             stop.set()
             service._closed.set()
         future.result(timeout=6)
+
+
+def test_poll_profile_direct_unmanaged_call_runs_and_close_sets_stop_under_lock(
+    tmp_path: Path, monkeypatch
+) -> None:
+    snapshot = _snapshot(tmp_path)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    entered: list[str] = []
+
+    def fake_stream(*, profile: str, stop: threading.Event, **_kwargs: object) -> dict[str, object]:
+        entered.append(profile)
+        stop.set()
+        return {"ok": True, "status": "stopped"}
+
+    monkeypatch.setattr(runtime, "stream_lark_goal_topic_profile", fake_stream)
+    service = LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: snapshot,
+        runtime_root=tmp_path / "runtime",
+        runtime_controller=object(),
+    )
+    try:
+        direct_stop = threading.Event()
+        service._poll_profile("mew", direct_stop)
+        assert entered == ["mew"]
+        assert service.active_profiles() == []
+
+        entered.clear()
+        other_stop = threading.Event()
+        fingerprint = ProfileWorkerFingerprint(
+            transport=ProfileTransport(
+                cli_bin="fake-lark",
+                app_id="",
+                consumer_lease_key="mew",
+                callback_chats=(),
+                other_binding_id="",
+            )
+        )
+        with service._lock:
+            service._workers["mew"] = (threading.Event(), threading.current_thread(), fingerprint)
+        service._poll_profile("mew", other_stop)
+        assert entered == []
+        assert service.active_profiles() == []
+    finally:
+        service.close()
+
+    worker_started = threading.Event()
+    seen_stop: list[threading.Event] = []
+
+    def managed_poller(_profile: str, stop: threading.Event) -> None:
+        seen_stop.append(stop)
+        worker_started.set()
+        assert stop.wait(5)
+
+    managed_service = LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: snapshot,
+        runtime_root=tmp_path / "runtime-managed",
+        runtime_controller=object(),
+        profile_poller=managed_poller,
+    )
+    try:
+        managed_service.refresh()
+        assert worker_started.wait(5)
+        worker_stop = seen_stop[0]
+    finally:
+        managed_service.close()
+    assert worker_stop.is_set()
+    with managed_service._lock:
+        assert managed_service._workers == {}
+    assert [
+        thread.name
+        for thread in threading.enumerate()
+        if thread.name.startswith("loopx-lark-") and thread.is_alive()
+    ] == []

@@ -15,7 +15,7 @@ SOCIAL_BROWSER_X_PROVIDER_MODULE = "loopx.capabilities.content_ops.social_browse
 
 
 def build_social_browser_x_provider_packet() -> dict[str, Any]:
-    # Public packaged guidance, not a second memory store or an import side effect.
+    # Public packaged guidance.
     seed_bytes = (
         files("loopx.capabilities.content_ops")
         .joinpath("experiences/x-composer-preflight-v1.json")

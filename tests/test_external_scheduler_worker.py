@@ -725,7 +725,13 @@ def test_core_deadline_during_retry_backoff_does_not_launch_again(tmp_path, monk
 
 
 @pytest.mark.parametrize("stdout,returncode", [(b'{"ok":true}', 0), (b'{"ok":false}', 1),
-                                               (b'{"ok":true,"session":', 0), (b'{}', 0)])
+    (b'{"ok":true,"session":', 0), (b'{}', 0),
+    pytest.param(b'{"ok":true,"session":{"binding_scope":"agent","session_id":"session-b"}}',
+        0, id="foreign-success"),
+    pytest.param(json.dumps({"ok": False, "session": {"binding_scope": "agent", "session_id": "session-b"},
+        "host_failure": {"schema_version": "loopx_turn_host_failure_v0", "kind": "provider_capacity",
+            "attempt": 1, "retryable": True, "retry": {"strategy": "same_configuration",
+                "max_attempts": 3, "backoff_seconds": 30}}}).encode(), 1, id="foreign-capacity")])
 def test_unconfirmed_receipt_never_clears_original_session(tmp_path, monkeypatch, stdout, returncode):
     from loopx.extensions.process_runtime import CappedProcessResult
     args, count = _guarded_host(tmp_path, kind="provider_capacity")

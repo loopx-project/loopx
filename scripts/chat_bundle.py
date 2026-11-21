@@ -14,6 +14,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+from typing import Callable, TypeVar
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -224,19 +226,52 @@ def _ensure(previous: Path | None) -> None:
         )
 
 
+_T = TypeVar("_T")
+
+
+def _retry_gh(
+    operation: Callable[[], _T],
+    *,
+    label: str,
+    attempts: int = 4,
+    base_delay: float = 1.0,
+    before_attempt: Callable[[], None] | None = None,
+) -> _T:
+    """Retry transient GitHub CLI failures with bounded exponential backoff."""
+    for attempt in range(1, attempts + 1):
+        if before_attempt is not None:
+            before_attempt()
+        try:
+            return operation()
+        except subprocess.CalledProcessError as exc:
+            if attempt >= attempts:
+                raise
+            delay = base_delay * (2 ** (attempt - 1))
+            print(
+                f"Retrying {label} after gh exit {exc.returncode} "
+                f"(attempt {attempt}/{attempts}, sleep {delay:.1f}s)",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
+    raise AssertionError("unreachable")
+
+
 def release_build(tag: str, repository: str) -> None:
     # Use the preceding published version, never the latest desktop prerelease
     # or a future release when rebuilding an older tag.
     pages = json.loads(
-        subprocess.check_output(
-            [
-                "gh",
-                "api",
-                "--paginate",
-                "--slurp",
-                f"repos/{repository}/releases?per_page=100",
-            ],
-            text=True,
+        _retry_gh(
+            lambda: subprocess.check_output(
+                [
+                    "gh",
+                    "api",
+                    "--paginate",
+                    "--slurp",
+                    f"repos/{repository}/releases?per_page=100",
+                ],
+                text=True,
+            ),
+            label=f"gh release listing for {repository}",
         )
     )
     versions = [
@@ -278,23 +313,33 @@ def release_build(tag: str, repository: str) -> None:
     if len(wheels) != 1:
         raise RuntimeError("preceding release must contain exactly one LoopX wheel")
     with tempfile.TemporaryDirectory(prefix="loopx-previous-release-") as temporary:
-        directory = Path(temporary)
-        subprocess.run(
-            [
-                "gh",
-                "release",
-                "download",
-                previous["tag_name"],
-                "--repo",
-                repository,
-                "--pattern",
-                wheels[0],
-                "--pattern",
-                "SHA256SUMS",
-                "--dir",
-                str(directory),
-            ],
-            check=True,
+        root = Path(temporary)
+        directory = root / "download"
+
+        def reset_download_dir() -> None:
+            shutil.rmtree(directory, ignore_errors=True)
+            directory.mkdir(parents=True, exist_ok=True)
+
+        _retry_gh(
+            lambda: subprocess.run(
+                [
+                    "gh",
+                    "release",
+                    "download",
+                    previous["tag_name"],
+                    "--repo",
+                    repository,
+                    "--pattern",
+                    wheels[0],
+                    "--pattern",
+                    "SHA256SUMS",
+                    "--dir",
+                    str(directory),
+                ],
+                check=True,
+            ),
+            label=f"gh release download {previous['tag_name']}",
+            before_attempt=reset_download_dir,
         )
         checksums = (directory / "SHA256SUMS").read_text().splitlines()
         matches = [
@@ -305,7 +350,7 @@ def release_build(tag: str, repository: str) -> None:
         ]
         if matches != [contract.digest(directory / wheels[0])]:
             raise RuntimeError("previous release wheel checksum mismatch")
-        old_bundle = directory / "chat"
+        old_bundle = root / "chat"
         extract_wheel(directory / wheels[0], old_bundle)
         build(old_bundle, install=True)
 

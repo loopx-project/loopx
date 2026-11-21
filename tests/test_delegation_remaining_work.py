@@ -70,9 +70,11 @@ def test_partial_peer_result_is_consumed_once_while_work_stays_owed(tmp_path):
     acknowledge(root, "research", "reviewer", rid, "adopt", "Own the repair and validation")
     report(root, "research", "reviewer", rid, "conclusion", "The implementation is ready.", remaining_work=REMAINDER)
     assert agenda(root, registry)["items"][0]["step"] == "consume_peer_result"
-    result = read_inbox(root, registry, "research", "worker")["peer_returns"]["items"][0]
+    result = read_inbox(root, registry, "research", "worker",
+        turn_instance_id="turn-partial")["peer_returns"]["items"][0]
     assert result["remaining_work"] == REMAINDER
-    consume_return(root, "research", "worker", rid, registry=registry)
+    consume_return(root, "research", "worker", rid, registry=registry,
+        turn_instance_id="turn-partial", disposition="accepted")
     assert agenda(root, registry)["items"][0]["step"] == "await_peer_result"
     assert agenda(root, registry, "reviewer")["items"][0]["step"] == "review_request_work"
 

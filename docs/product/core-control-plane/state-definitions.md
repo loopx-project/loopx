@@ -41,7 +41,7 @@ second enum registry or writer.
 Todo completion, Turn settlement, Goal completion and result delivery are
 separate facts. A validated in-flight writeback can settle a Turn while its Todo
 remains open; a committed monitor observation can close without spending quota.
-A historical receipt records what happened and does not grant a new execution.
+
 `Running` remains derived from execution facts, not a new persisted Todo status.
 Legacy wire flags retain their codec semantics: for example, the canonical Todo
 record currently maps both `done` and `deferred` to `done=true`; callers must use

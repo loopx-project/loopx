@@ -7,8 +7,8 @@
 - **交付成熟度：** 单 Worker 的 EdgeBench 入口已合入。#8484 在 C1 上验收通用双角色 Turn；跨准入延续、多题效果与成本、对话产品接入待验证。
 - **作者 / 负责人：** LoopX 维护者、控制面与运行时 owner
 - **创建日期：** 2026-10-27
-- **最近规范性修订：** 2026-11-13
-- **源码版本：** main `9508f4de93`、C1 `9d283862e3`。§11 区分实现 PR 的实测、原始对照及待验收边界。
+- **最近规范性修订：** 2026-11-17
+- **源码版本：** main `f15ebdd16b`（§4–10 基线 `9508f4de93`，C1 `9d283862e3`）。§11 区分实现 PR 的实测、原始对照、减法治理及待验收边界。
 - **相关契约：** [Effect interpreter](agent-loop-effect-interpreter-v0.zh-CN.md)、[会话执行模式](agent-session-execution-modes-v0.zh-CN.md)、[语义交接](capable-manager-semantic-handoff-v0.zh-CN.md)、[整体路线图](loopx-overall-roadmap-v0.zh-CN.md)
 - **语言镜像：** [English](controller-executor-unified-contract-v0.md)
 
@@ -52,7 +52,7 @@ flowchart TB
 | Controller 如何了解 worker、在哪里读写 | [会话发现与证据读取](#worker-session-discovery)、[共享工作环境与读写](#shared-workspace-and-tools) |
 | 没有用户新消息时，工作怎么持续推进 | [执行主循环](#controller-worker-main-loop) |
 | 干活时怎么交流、停止、恢复 | [异步时序](#asynchronous-control)、[注意力与插队](#controller-attention-and-preemption)、[故障隔离](#router-failure-recovery) |
-| 怎么交付、验证和删代码 | [依赖与切片](#delivery-path-from-current-state)、[产品验收](#superagent-acceptance)、第 8–11 节 |
+| 怎么交付、验证和删代码 | [依赖与切片](#delivery-path-from-current-state)、[产品验收](#superagent-acceptance)、[减法门禁](#subtraction-gate)、第 8–11 节 |
 | C1 字段、上下文、wire 与基线细节 | [技术附录](controller-executor-unified-contract-v0/contract-and-context.zh-CN.md) |
 
 中英互为语义镜像。主文维护当前设计；技术附录保留迁移细节，日期 ledger 保留历史证据。
@@ -183,15 +183,29 @@ Router 只汇总获授权的结果，不能因此读取所有单元的私有会�
 
 | 角色 / owner | 负责的判断与行为 | 不承担的职责 |
 | --- | --- | --- |
-| Router（管家） | 理解用户意图，发现有上下文和能力的单元，选择复用/创建的提议，传递修订，汇总结果及跨任务取舍 | 不逐工具指挥 worker，不替接收方认领/验收，不复制各 Goal 的任务库与预算 |
-| Controller（单元内） | 结合 Goal、planning horizon 与证据选择工作，维护任务连续性，发现并检查 worker 会话，在共享工作环境中读写、核验，与用户/router 交互，判断纠偏与验收并调用 Core | 不成为第二权威，不用自己的聊天笔记代替工作状态；不必为每个工具步骤审批 |
-| Worker（单元内） | 在已准入范围内自主使用工具、实验、产出及报告证据/问题 | 不消费 Core packet，不编造结算，不直接持有 Core 写权限 |
-| Core + 受管执行 + Host adapter | 既有 typed 规则、持久化、身份、派发、观察、停止和恢复 | 不从自然语言猜权限/完成，不替模型决定领域方案 |
+| Router（管家） | 理解用户意图，发现有上下文和能力的单元，选择复用/创建的提议，传递作用域受限的 `collaboration_brief_v0` 契约，持久化有界 `remaining_work` 与类型化 `resume_when` 接续谓词，汇总结果并无轮询地闭合原路异步 inbox | 不逐工具指挥 worker，不执行轮询循环，不替接收方认领/验收，不复制各 Goal 的任务库与预算 |
+| Controller（单元内） | 结合 Goal、planning horizon 与证据选择工作，提出或消费向上自适应步幅与受回执门控上下文策略建议（`{KeepRaw, FoldToReceipt, EpochReset} × {grow, switch, verify}`），维护任务连续性，发现并检查 worker 会话，在共享工作环境中读写、核验，与用户/router 交互，判断纠偏与验收并调用 Core | 不成为第二个 `AuthorityStore` 写入方，不绕过 CAS/租约围栏，不用自己的聊天笔记代替工作状态，不必为每个工具步骤审批 |
+| Worker（单元内） | 在已准入范围内，于隔离的**沙盒执行器 worktree（sandboxed executor worktree）**中自主使用工具、实验、产出补丁/产物及报告证据/问题 | 不消费 Core packet，不编造结算，不接触隐藏 verifier 或凭据，不直接持有 Core 写权限 |
+| Core（`AuthorityStore` + CAS + 单写者租约）+ Host adapter | `AuthorityStore` 事务、条件版本 `CAS`、单写者 `claim/lease` 围栏、仅一次回执、默认拒绝 ACL、沙盒隔离、观察、停止和恢复的唯一确定性权威 | 不从自然语言猜权限/完成，不在缺少回执时改写在线 KV-cache 前缀，不替模型决定领域方案 |
 
 Router 可以直接回答已有证据足够的简单问题，不必每次创建单元。分配工作优先复用
 当前上下文与授权匹配的 Agent；创建新 Agent 仍沿既有生命周期和资源准入。多个候选
 绑定不明时先消歧，不能按标题相似或“最近在线”抢占。Router 给出的优先级是请求；
 controller 结合本地承诺与依赖评估并返回接受、延后或拒绝及理由，Core 执行合法变更。
+
+每个单元严格分离三个架构平面：
+
+1. **确定性内核（`AuthorityStore` + CAS + 单写者租约归属）：** 在默认拒绝 ACL 与树外确定性
+   验证门禁保护下，唯一持有权威 Goal、Todo、`claim/lease`、代际围栏、`remaining_work` /
+   `resume_when` 与仅一次结算回执。
+2. **沙盒执行器 worktree：** 宿主强制隔离的执行沙盒（带归一化补丁交付与凭据排除的 `linked
+   worktree` / 容器），worker 可在其中自由实验而无 Core 凭据或写权限；沙盒重置或丢失不破坏
+   `AuthorityStore` 持久状态。
+3. **向上自适应步幅与上下文策略决策：** 位于 controller 与 `control_plane/work_items` /
+   `progressive_context.ts` 一侧，用于选择 `{KeepRaw, FoldToReceipt, EpochReset} × {grow, switch, verify}`
+   建议（见[历史工作集策略 §5.1](history-working-set-context-policy-v0.zh-CN.md#51-单一投影-owner)、
+   [联合决策 §5.9](target-yardstick-stride-decisions-v0.zh-CN.md#policy-evolution)）；这些建议在
+   Core 验证确定性回执、CAS 前置条件与预算边界前始终仅为建议态。
 
 <a id="agent-binding-unit"></a>
 
@@ -310,10 +324,13 @@ flowchart TB
 完成，都不等于整个 Goal 结束。真实依赖、用户操作、预算、停止或终态条件仍然有效；
 除此之外，有用且已获授权的工作不应停等用户说“继续”。
 
-这个逻辑循环由事件驱动，不是占住 controller 会话的阻塞等待。派发、观察、待评估结果与
-接续仍由各自既有 owner 持久化；结果或已记录唤醒到达后，由 host/runtime 恢复合格处理，
-不让模型空轮询。恢复时先核对原 attempt 以及未完成决策/effect，再继续，不能为了
-“重启循环”另派一个 worker。
+这个逻辑循环由事件驱动，不是占住 controller 会话的阻塞等待。派发、观察、待评估结果、
+有界 `remaining_work`、类型化 `resume_when` 接续谓词（`todo_done`、`pr_merged`、
+`capacity_available`、`monitor_changed`、`resume_at`）与接续状态均由 Core `AuthorityStore`
+owner 持久化；仅当已验证结果、`collaboration_brief_v0` 回传或满足的 `resume_when`
+触发器到达时，才由 host/runtime 唤醒合格处理，**绝不让管家或 controller 模型保持空轮询循环**，
+并在完成或遇可操作阻塞时将管家异步 inbox 原路闭合回请求方。恢复时先核对原 attempt 以及
+未完成决策/effect，再继续，不能为了“重启循环”另派一个 worker。
 
 处理完用户/router 输入后，**从当前主循环待办重新选择**：可能先评估未读结果、补上反馈、
 派发已合格工作或结算，而不是无条件恢复旧汇报。汇报根据已有证据，在执行并行期间或
@@ -583,9 +600,11 @@ digest 保护传输，canonical hash 保护语义内容，既有 effect 身份�
 | Executor 必须知道什么 | 交付任务完整约束、相关反证、原始材料和未完成必读，用任务语言解释判断 | 摘要不是另一份契约，也不证明读过来源；相关性未知时，依赖工作前须补足材料 |
 | 结果改变什么 | 区分发现、已验证产物、受阻尝试与已接受成果，判断继续、调查或 replan | 独立验证与当前 Core 回执决定验收和结算，不能由任一会话的叙述替代 |
 
-区分三种操作：确定性的 composition owner 组合 domain 事实，不另造 policy；既有
-codec 编码可精确恢复的 full/delta 输入；controller 按任务进行语义选择和推理。自然
-语言任务可以省去无关控制语法，不能承诺逐字节等价。其充分性要由约束保留、executor
+区分三种操作：确定性的 composition 与 `AuthorityStore` owner 组合 domain 事实、强制 CAS/单写者
+租约围栏，并以确定性回执门控 `FoldToReceipt` / `EpochReset` 迁移，不另造 policy；既有
+codec 编码可精确恢复的 full/delta 输入，并在 epoch 间维持单调 `KeepRaw` KV-cache 前缀；
+controller 围绕沙盒执行器 worktree 返回的证据按任务进行语义选择、推理及向上的
+`{grow, switch, verify}` 步幅提议。自然语言任务可以省去无关控制语法，不能承诺逐字节等价。其充分性要由约束保留、executor
 实际决策与验收成果检验，同时原始获授权材料仍可到达。不能用第二套 schema、模型编写的
 状态库或按关键词判断相关性的分类器替代这些操作。Controller 笔记是工作上下文，不是
 新的持久权威。
@@ -1083,6 +1102,12 @@ owner。列明后续切换消费者；不能添加无人使用的基础设施或
 可按独立可审查的边界拆分，在既有任务和 PR 中记录依赖。拆分交付不代表 C1 完成，
 也不豁免第 9 节相对原 quota 基线的验证。
 
+公开分发隔离现在复用 runtime 制品元数据 owner：runtime 资格检查观察已安装的普通
+writer，桌面打包观察归档 writer，发布要求声明的支持契约与观察一致。现有 quota
+packet 默认保持支持；未资格化的完整契约默认不能只凭安装检查通过。此改动不证明
+第 9 节的成果/成本，不替换已安装 writer、不增加当前 producer，也不退役历史 reader。
+扩大支持 profile 仍须原采用证据，详见[发布边界](../../product/release-readiness.md)。
+
 原生启动重查只从原 `SettlementIdentity` 取得 Todo/obligation 绑定。
 `codex-cli` 和 `codex-app-server` 都调用既有
 `current_turn_host_launch_decision` owner；观察到的 replan packet 是上下文，
@@ -1155,6 +1180,71 @@ C1/C2 组合/capture/最终输入工作与这些精简同属一个候选前沿�
 及 [smoke 合并规则](../../development/good-smokes.md)。内部行为保持替换需要真实调用方/
 后端证据，无需新设置页面。改变调用方操作/readback 时，仍需 C8 的打包前端失败/恢复
 旅程及首屏证据。C1/默认采用的完整成本与收益资格不变；有界重构不代表完整 RFC 验收。
+
+<a id="subtraction-gate"></a>
+
+### 减法门禁与反上下文重力规则
+
+基于 `main@f15ebdd16b` 与 C1 PR `#8266`（跨 `289` 个文件 `+26,672 / -4,561`，净增
+`+22,111` 行）的实测表明：除非设立显式的减法门禁，否则名义上的“统一”工作仍会默认导致
+代码库净膨胀。
+
+#### 1. “统一”PR 为何反而推高净代码量（四类实测驱动因素）
+
+在 `#8266` 中，所有主要目录均出现净扩张而非缩减：
+
+| `#8266` 实测驱动因素 | 变更体量 | 观测到的根因机制 |
+| --- | --- | --- |
+| 只增不减的双语 RFC 与台账日志 | `docs/` 净增 `+9,564` 行（`+9,715 / -151`，含 `14` 个 `ledger/` 文件 `+7,749` 行及 RFC/附录 `+1,218 / -35` 行；仅 `2026-10-30-c1-source-convergence.{md,zh-CN.md}` 即 `+5,874` 行） | 把数千行按时间追加的执行流水账当作收敛证据，而非紧凑的边界与实证表。 |
+| 旧 × 新模式组合矩阵测试 | `tests/` 净增 `+9,976` 行（跨 `142` 个文件 `+12,074 / -2,098`） | 在重复的端到端 fixture 上对 `loopx_turn_envelope_v0`、`--context-delivery off` 与统一 schema 做笛卡尔积扩展，而未抽提共享不变量 oracle。 |
+| 运行时与 CLI 增补兼容适配层 | `loopx/` 净增 `+2,236` 行（跨 `92` 个文件 `+4,224 / -1,988`） | 在 `loopx/cli_commands/quota.py`、`quota_presentation.py`、`quota_capture.py`、`quota_context_reader.py` 增补推导 shim（如 `raw_quota_turn_view`、`compose_turn_decision_with_raw_envelope`、`--context-delivery off` 分支），保留旧视图而非退役被替代的 producer。 |
+| 跨语言 Python ↔ TS 包装重复 | `loopx/cli_commands/`（`+1,639 / -645`）、`loopx/control_plane/*.py`（`+1,167 / -685`）、`loopx/control_plane/*.ts`（`+1,080 / -532`） | 在 TypeScript owner 旁长期保留 Python 投影与编排包装。 |
+
+相同的“门面叠加”模式也出现在开放中的统一 PR `#8484`（`+1,979 / -174`，`41` 个文件）和
+`#7568`（`+6,230 / -349`，`56` 个文件）上，与聚焦规范修订的 `#8749`（`+538 / -2`，已合入）
+以及 `#5072`、`#8787` 所跟踪的结构/CI 膨胀问题形成对照。
+
+#### 2. 上下文重力 vs. 保留伤疤的减法
+
+在 `main@f15ebdd16b` 上，仓库受跟踪代码/脚本总计约 `1.79M` 行（`1,785,239` 行，覆盖
+`loopx/`：`1,864` 文件 / 约 `658k` 行；`tests/`：`1,956` 文件 / 约 `727k` 行；`examples/`：
+`688` 文件 / 约 `204k` 行，以及 `apps/`、`packages/`、`scripts/` 与 `benchmark/`），另有
+`docs/architecture/rfcs/ledger/` 下的 `152` 个文件（约 `11.5k` 行）及[小内核 RFC](monorepo-distribution-split-v0.zh-CN.md)
+附录 A 中约 `3,990` 行历史台账。
+
+- **上下文重力：** 当强模型被置入 `1.79M` 行规模的代码树中，往往默认把既有模块、CLI 开关
+  与历史投影视作不可移除的前提，从而在旧代码外层包裹兼容适配器，而不是化简退役。
+- **保留伤疤的减法：** LoopX 的持久护城河不是包装面或代码行数，而是**四项不可替代的内核
+  不变量**——（1）排他租约与写入/代际围栏、（2）默认拒绝的权限与 ACL/受众隔离、（3）一次性
+  幂等结算回执、（4）同源反事实检查点与评估台账——以及**失败反例测试集**（负例、变异与
+  恢复反例）。合法的减法删除失效 pilot、冗余包装与无引用脚本，同时完整保留全部内核不变量
+  与失败反例。
+
+#### 3. 具名退役清单与棘轮规则
+
+所有 C1–C9 及相关收敛 PR 均执行以下门禁（与[小内核减法门禁](monorepo-distribution-split-v0.zh-CN.md#subtraction-gate)联动）：
+
+1. **退役 Turn 前置 pilot CLI 子命令与顶层模块。** 删除已被 `loopx turn`（`turn_driver/codex_cli.py`）、
+   `start-goal` 与 `codex_app` heartbeat 替代的 `codex-cli-*` pilot/证明子命令（共 `15` 个
+   pilot/证明子命令，其中 `14` 个在非 pilot 生产路径中零调用方，另有 `codex-cli-session-probe`
+   仅在 `loopx/project_prompt.py` 中作为提示字符串引用），连同 `4` 个顶层 `loopx/codex_cli_*.py`
+   模块（`3,767` 行）与 `6` 个 `loopx/cli_commands/starter_*.py` 包装（`859` 行）；保留正在使用的
+   `codex-cli-bootstrap-message` 与 `turn_driver/codex_cli.py`。
+2. **归并剩余顶层目录并严格单向下调棘轮。** 将剩余 `20` 个顶层 `loopx/chat_*.py`（`20,562` 行）
+   迁入 `loopx/chat/`，将 `9` 个 `loopx/*_goal_mode/` 目录（`59` 文件 / `17,655` 行；其中
+   `33` 个 `.py` / `7,062` 行）迁入 `loopx/hosts/`，并在删除或迁出顶层模块同一 PR 内同步下调
+   [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json) 中的
+   `max_top_level_modules`（当前 `127`）（见[小内核 RFC 减法门禁](monorepo-distribution-split-v0.zh-CN.md#subtraction-gate)）。
+3. **清理无引用 `examples/` 与源码文本绑定式 smoke。** 清理 `examples/` 中无引用脚本（`main@f15ebdd16b`
+   测得 `200` 个无引用 `.py` / `45,504` 行；按 `.py/.sh/.mjs/.js/.ts` 计为 `209` 个 / `47,325` 行），
+   并按 [good-smokes](../../development/good-smokes.md) 退役 `14` 个绑定内部 Python 符号而非已交付
+   CLI 行为的 `examples/cli-*-command-modularization-smoke.py`。
+4. **约束 RFC 与台账体量。** 规范文档与 `ledger/` 条目仅保留紧凑的边界、不变量、退役清单与
+   实证表，不再追加数千行时间流水账。
+5. **所有兼容视图必须自带退出门禁（C1/C9 完成硬门槛）。** 任何过渡性 `v0` 投影
+   （`loopx_turn_envelope_v0`、`raw_quota_turn_view`）、`legacy_fallback` 路径或关闭模式开关
+   （`--context-delivery off`）都必须具名活跃消费者、运行时可观测计数与确切删除里程碑。
+   在被替代的重复 producer 与组合开关真正删除前，C1/C9 收敛均未完成。
 
 ## 12. 待决事项
 

@@ -82,7 +82,28 @@ def test_hidden_completed_source_recovers_its_original_guard_after_new_work(
         *(["--replan-obligation-id", obligation["obligation_id"]]
           if new_work == "bound_before_closeout" else []))
     later = None
-    if new_work != "after_closeout":
+    if new_work == "bound_before_closeout":
+        later = add_work()
+        assert later["replan_transition"]["recorded"] is True
+        assert later["replan_transition"]["outcome"] == "new_runnable_successor"
+        pending = _guard(call, turn)
+        assert pending["heartbeat_receipt"]["settlement_identity"] == identity
+        assert pending.get("selected_todo") is None
+        assert pending["autonomous_replan_obligation"]["resolution_mode"] == "receipt_bound_replan_settlement"
+        assert pending["replan_action_packet"]["decision"] == "successor_transition_recorded"
+        assert pending["replan_action_packet"]["successor_todo_id"] == later["todo_id"]
+        denied = call("quota", "spend-slot", "--goal-id", GOAL, "--agent-id", AGENT,
+            "--codex-app", "--turn-instance-id", turn, "--replan-obligation-id",
+            obligation["obligation_id"], "--source", "heartbeat", "--execute", expected_code=1)
+        assert denied.get("appended") is not True
+        actions = pending["interaction_contract"]["cli_channel"]["next_cli_actions"]
+        refreshed = call(*shlex.split(actions[0])[1:], "--no-global-sync", "--suppress-external-sinks")
+        assert refreshed["settlement_progress"]["state"] == "spend_required"
+        assert call(*shlex.split(actions[1])[1:])["settlement_progress"]["state"] == "settled"
+        assert call(*shlex.split(actions[1])[1:])["appended"] is False
+        assert call("todo", "list", "--goal-id", GOAL, "--todo-id", later["todo_id"])["todo"]["status"] == "open"
+        return
+    if new_work == "before_closeout":
         later = add_work()
         for _ in range(2):
             pending = _guard(call, turn)
@@ -177,14 +198,22 @@ def test_native_cli_context_exposes_the_same_bound_lifecycle_reentry(
     entry = call("quota", "should-run", "--runtime-profile", "generic_cli", "--goal-id", GOAL,
         "--agent-id", AGENT, "--turn-instance-id", turn, "--context-delivery", delivery,
         "--decision-output-dir", str(tmp_path / "capture"))
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+
     if delivery == "auto":
         assert entry["schema_version"] == "context_capture_navigation_v1"
         selected = call("quota", "context-read", "--reference-file", entry["recovery"]["reference_file"],
-            "--select", "/replan_action_packet/writeback", "--page-bytes", "8000")
+            "--select", "/interaction_contract/cli_channel/next_cli_actions", "--page-bytes", "8000")
         assert selected["eof"] is True
-        writer_command = json.loads(selected["content"])["selections"][0]["value"]
+        selected_actions = json.loads(selected["content"])["selections"][0]["value"]
+        full_page = call("quota", "context-read", "--reference-file", entry["recovery"]["reference_file"],
+            "--page-bytes", "64000", "--max-page-output-bytes", "64000")
+        assert full_page["eof"] is True
+        projected = json.loads(full_page["content"])
+        assert projected["interaction_contract"]["cli_channel"]["next_cli_actions"] == selected_actions
     else:
-        writer_command = entry["replan_action_packet"]["writeback"]
+        projected = entry
+    writer_command = build_turn_envelope(projected)["replan_action_packet"]["writeback"]
     result = subprocess.run(shlex.split(writer_command), capture_output=True, text=True, check=True)
     writer = json.loads(result.stdout)
     actions = writer["writeback"]["next_cli_actions"]

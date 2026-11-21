@@ -24,6 +24,17 @@ from unittest.mock import patch
 from types import SimpleNamespace
 import uuid
 
+# The verifier runs as a script from a checkout that need not install the research adapter.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from trial_limits import (  # noqa: E402
+    LIMITS_SLOT,
+    SUBMISSION_POLICY_SLOT,
+    TrialLimits,
+    render_submission_skill,
+    render_task_instructions,
+)
+
 SOURCE: Path
 DOCKER_IMAGE: str | None = None
 
@@ -89,8 +100,95 @@ class Compatibility(unittest.TestCase):
         port = self.server.server_address[1]
         self.stop_server()
         self.jobs = queue.Queue()
-        self.trial = self.bridge_module.Trial(self.root / 'trial', 'fixture', self.jobs)
+        self.trial = self.bridge_module.Trial(self.trial.root, 'fixture', self.jobs, limits=self.trial.limits)
         self.start_server(port)
+
+    def start_configured(self, limits, *, started_at=None):
+        port = self.server.server_address[1]
+        self.stop_server()
+        self.trial = self.bridge_module.Trial(self.root / 'configured', 'fixture', self.jobs, limits=limits)
+        self.trial.start(started_at=started_at)
+        self.token_file.write_text(self.trial.token)
+        self.start_server(port)
+        self.client = self.client_module.Client()
+
+    def test_natural_uses_task_archive_and_train_limits_across_restart(self):
+        limits = TrialLimits(None, 2, 240, 15, 700_000)
+        self.start_configured(limits)
+        large = archive(self.root / 'large.tar', b'x' * 610_000)
+        oversize = archive(self.root / 'oversize.tar', b'x' * 710_000)
+        with self.assertRaisesRegex(self.client_module.SubmitError, 'HTTP 413'):
+            self.client.request('POST', '/v1/payloads', headers={'Content-Length': '700001'})
+        with patch.dict(os.environ, {'FRONTIER_MAX_PAYLOAD_BYTES': '700000'}):
+            client = self.client_module.Client()
+        with self.assertRaisesRegex(self.client_module.SubmitError, '700000-byte submission limit'):
+            self.client_module.run_store_final(client, oversize)
+        train, _ = self.client_module.run_train(self.client, large)
+        self.assertEqual(train['remaining_train_calls'], 1)
+        with self.assertRaisesRegex(self.client_module.SubmitError, 'HTTP 429'):
+            self.client_module.run_train(self.client, self.payload)
+        self.assertEqual(self.trial.train_calls, 1)
+        self.assertEqual(self.trial.train_timeout(), 240)
+        stored = self.client_module.run_store_final(self.client, large)
+        self.assertIsNone(stored['remaining_runtime_s'])
+        self.restart()
+        self.assertFalse(self.trial.is_finished())
+        self.assertEqual(self.trial.train_calls, 1)
+        self.assertEqual(self.trial.saved, stored['payload_id'])
+        with self.assertRaisesRegex(ValueError, 'trial limits mismatch'):
+            self.bridge_module.Trial(self.trial.root, 'fixture', queue.Queue(),
+                                     limits=TrialLimits(None, 2, 240, 16, 700_000))
+        self.assertIsNone(self.trial.close_answering(cancelled=False))
+        self.assertIsNone(self.trial.final)
+        self.assertEqual(self.trial.saved, stored['payload_id'])
+        self.assertEqual(self.trial.jobs[train['verification_id']]['state'], 'failed')
+
+    def test_fixed_clock_bounds_train_and_selects_the_saved_candidate(self):
+        clock = SimpleNamespace(time=lambda: 1_100)
+        limits = TrialLimits(60, 2, 240, 15, 524_288)
+        with patch.object(self.bridge_module, 'time', clock):
+            self.start_configured(limits, started_at=1_080)
+            self.assertEqual(self.trial.deadline, 1_140)
+            self.assertEqual(self.trial.train_timeout(), 40)
+            self.trial.train_wall_seconds = 223
+            self.assertEqual(self.trial.train_timeout(), 17)
+            stored = self.client_module.run_store_final(self.client, self.payload)
+            self.assertEqual(stored['remaining_runtime_s'], 40)
+            self.restart()
+            self.assertEqual(self.trial.deadline, 1_140)
+            clock.time = lambda: 1_140
+            self.assertTrue(self.trial.is_finished())
+            with self.assertRaisesRegex(self.client_module.SubmitError, 'HTTP 409'):
+                self.client_module.run_store_final(self.client, self.payload)
+            selected = self.trial.close_answering(cancelled=False)
+            self.assertEqual(selected['mode'], 'eval')
+            self.assertEqual(selected['payload_id'], stored['payload_id'])
+            self.assertEqual(self.trial.limits.eval_timeout_seconds, 15)
+
+    def test_manifest_overrides_feed_both_solver_inputs(self):
+        defaults = self.root / 'defaults.toml'
+        defaults.write_text(
+            '[quota]\nwall_time_seconds=120\nmax_train_calls=10\nmax_train_wall_seconds=90\n'
+            'eval_timeout_seconds=20\n[submission]\nmax_bytes=65536\n',
+        )
+        task = self.root / 'task.toml'
+        task.write_text('schema="frontier.task/v1"\n[quota]\nmax_train_calls=3\n[submission]\nmax_bytes=98304\n')
+        natural = TrialLimits.from_task(task, defaults, natural=True)
+        fixed = TrialLimits.from_task(task, defaults, answering_seconds=75)
+        self.assertEqual(natural, TrialLimits(None, 3, 90, 20, 98304))
+        self.assertEqual(fixed, TrialLimits(75, 3, 90, 20, 98304))
+        with self.assertRaisesRegex(ValueError, 'natural trial'):
+            TrialLimits.from_task(task, defaults, natural=True, answering_seconds=75)
+        for limits, deadline_wording in ((natural, 'no overall answering deadline'), (fixed, '75 seconds')):
+            with self.subTest(limits=limits):
+                task_text = render_task_instructions(f'# A task\n{LIMITS_SLOT}\n## Feedback\nUse Train.\n', limits)
+                self.assertIn(deadline_wording, task_text)
+                self.assertIn('20-second', task_text)
+                self.assertIn('98304 bytes', task_text)
+                self.assertIn('## Feedback\nUse Train.', task_text)
+                skill = render_submission_skill(f'# Submit\n{SUBMISSION_POLICY_SLOT}', limits)
+                self.assertEqual('`null`' in skill, limits.answering_seconds is None)
+                self.assertEqual('use the last accepted save' in skill, limits.answering_seconds is not None)
 
     def test_repeat_final_reuses_receipt_and_remote_selection(self):
         first = self.client_module.run_final(self.client, self.payload)

@@ -1,4 +1,4 @@
-"""Versioned ownership of generated Todo regions, not a general Markdown parser.
+"""Versioned ownership of generated Todo regions.
 
 Legacy import accepts the actual LoopX-produced H2/list/metadata grammar.
 New projections have paired markers, shared by the writer and readers.

@@ -6,17 +6,22 @@ import shlex
 import stat
 import subprocess
 import sys
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence, Set as AbstractSet
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
 from .doubao_model_behavior_actor import (
+    ALLOWED_DEEPSEEK_BEHAVIOR_MODELS,
     ALLOWED_MODEL_BEHAVIOR_MODELS,
+    DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT,
+    DEEPSEEK_FLASH_MODEL,
     DOUBAO_CHAT_COMPLETIONS_ENDPOINT,
     DoubaoActorTransport,
     DoubaoActorTransportError,
+    _deepseek_env_config,
+    _direct_deepseek_transport,
 )
 
 EXEC_COMMAND_TOOL: dict[str, Any] = {
@@ -201,7 +206,7 @@ class ScriptedDoubaoExecTransport:
 
 
 class DoubaoExecToolClient:
-    """One bounded Ark function-tool transport shared by real behavior gates."""
+    """One bounded function-tool transport shared by real behavior gates."""
 
     def __init__(
         self,
@@ -210,21 +215,28 @@ class DoubaoExecToolClient:
         model: str,
         timeout_seconds: float,
         transport: DoubaoActorTransport,
+        endpoint: str = DOUBAO_CHAT_COMPLETIONS_ENDPOINT,
+        allowed_models: AbstractSet[str] = ALLOWED_MODEL_BEHAVIOR_MODELS,
+        provider_prefix: str = "ark",
     ) -> None:
+        provider_label = "DeepSeek" if provider_prefix == "deepseek" else "Doubao"
         if not api_key.strip():
-            raise RuntimeError("Doubao actor requires a runtime-injected API key")
-        if model not in ALLOWED_MODEL_BEHAVIOR_MODELS:
-            raise ValueError("Doubao actor model must be explicitly allowlisted")
+            raise RuntimeError(f"{provider_label} actor requires a runtime-injected API key")
+        if model not in allowed_models:
+            raise ValueError(f"{provider_label} actor model must be explicitly allowlisted")
         if timeout_seconds <= 0 or timeout_seconds > 300:
-            raise ValueError("Doubao actor timeout must be between 0 and 300 seconds")
+            raise ValueError(f"{provider_label} actor timeout must be between 0 and 300 seconds")
         self._api_key = api_key
         self._model = model
         self._timeout_seconds = timeout_seconds
         self._transport = transport
+        self._endpoint = endpoint
+        self._provider_prefix = provider_prefix
+        self._provider_label = provider_label
 
     @property
     def actor_ref(self) -> str:
-        return f"ark:{self._model}"
+        return f"{self._provider_prefix}:{self._model}"
 
     def next_tool_call(
         self,
@@ -261,7 +273,7 @@ class DoubaoExecToolClient:
         }
         try:
             response = self._transport(
-                endpoint=DOUBAO_CHAT_COMPLETIONS_ENDPOINT,
+                endpoint=self._endpoint,
                 headers={
                     "Authorization": f"Bearer {self._api_key}",
                     "Content-Type": "application/json",
@@ -279,7 +291,7 @@ class DoubaoExecToolClient:
             raise
         except Exception:  # noqa: BLE001 - custom transports may raise any error.
             raise DoubaoActorTransportError(
-                "Doubao tool behavior provider transport failed",
+                f"{self._provider_label} tool behavior provider transport failed",
                 error_code="provider_transport_failed",
             ) from None
 
@@ -299,7 +311,7 @@ class DoubaoExecToolClient:
         }
         try:
             response = self._transport(
-                endpoint=DOUBAO_CHAT_COMPLETIONS_ENDPOINT,
+                endpoint=self._endpoint,
                 headers={
                     "Authorization": f"Bearer {self._api_key}",
                     "Content-Type": "application/json",
@@ -315,7 +327,7 @@ class DoubaoExecToolClient:
             step = provider_exec_tool_step(response)
             if step.tool_call is not None:
                 raise DoubaoActorTransportError(
-                    "Doubao finalization returned an unavailable tool call",
+                    f"{self._provider_label} finalization returned an unavailable tool call",
                     error_code="provider_invalid_tool_call",
                 )
             return step.assistant_content
@@ -323,9 +335,58 @@ class DoubaoExecToolClient:
             raise
         except Exception:  # noqa: BLE001 - custom transports may raise any error.
             raise DoubaoActorTransportError(
-                "Doubao finalization provider transport failed",
+                f"{self._provider_label} finalization provider transport failed",
                 error_code="provider_transport_failed",
             ) from None
+
+
+class DeepSeekExecToolClient(DoubaoExecToolClient):
+    """One bounded DeepSeek function-tool transport shared by real behavior gates."""
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str = DEEPSEEK_FLASH_MODEL,
+        timeout_seconds: float = 90.0,
+        transport: DoubaoActorTransport = _direct_deepseek_transport,
+        endpoint: str = DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT,
+    ) -> None:
+        if endpoint != DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT:
+            raise DoubaoActorTransportError(
+                "DeepSeek actor endpoint is not the canonical DeepSeek endpoint",
+                error_code="noncanonical_endpoint",
+            )
+        super().__init__(
+            api_key=api_key,
+            model=model,
+            timeout_seconds=timeout_seconds,
+            transport=transport,
+            endpoint=endpoint,
+            allowed_models=ALLOWED_DEEPSEEK_BEHAVIOR_MODELS,
+            provider_prefix="deepseek",
+        )
+
+    @classmethod
+    def from_environment(
+        cls,
+        *,
+        environ: Mapping[str, str] | None = None,
+        transport: DoubaoActorTransport = _direct_deepseek_transport,
+        timeout_seconds: float = 90.0,
+        model: str | None = None,
+    ) -> DeepSeekExecToolClient:
+        api_key, resolved_model, endpoint = _deepseek_env_config(
+            environ=environ,
+            model=model,
+        )
+        return cls(
+            api_key=api_key,
+            model=resolved_model,
+            timeout_seconds=timeout_seconds,
+            transport=transport,
+            endpoint=endpoint,
+        )
 
 
 def digest_text(value: str) -> str:
@@ -637,7 +698,10 @@ class QuotaToolContext:
             if path or digest:
                 raise ValueError("context reader cannot mix reference and capture arguments")
             reader = Path(reference_file).expanduser()
-            _, reference = read_context_read_reference(str(reader if reader.is_absolute() else project_root / reader))
+            try:
+                _, reference = read_context_read_reference(str(reader if reader.is_absolute() else project_root / reader))
+            except OSError as exc:
+                raise ValueError("context reader reference could not be read") from exc
             path, digest = reference["path"], reference["sha256"]
         source = Path(path).expanduser() if path else None
         source = (source if source.is_absolute() else project_root / source) if source else None
@@ -697,7 +761,7 @@ def execute_loopx_cli(
 
 
 class LoopxCliExecutionError(RuntimeError):
-    """An executed CLI returned nonzero; this does not imply state rollback."""
+    """An executed CLI returned nonzero;"""
 
     def __init__(self, returncode: int, detail: str, *, stdout: str = "") -> None:
         super().__init__(f"LoopX CLI command failed with exit={returncode}: {detail}")

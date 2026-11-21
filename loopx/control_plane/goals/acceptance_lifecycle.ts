@@ -3,6 +3,7 @@ import {AuthorityStoreProtocolError, canonicalAuthorityObject} from "../coordina
 import {parseExactGoalRef} from "./goal_instance_identity.ts";
 
 export const GOAL_ACCEPTANCE_LIFECYCLE_SCHEMA = "loopx_goal_acceptance_lifecycle_v0";
+export const GOAL_ACCEPTANCE_LIFECYCLE_OPERATION_SCHEMA = "loopx_goal_acceptance_lifecycle_operation_v0";
 
 export interface WireExactGoalRef extends JsonObject {
   goal_id: string;

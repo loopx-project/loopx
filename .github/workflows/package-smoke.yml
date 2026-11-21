@@ -47,7 +47,7 @@ jobs:
           python-version: "3.11"
       - uses: actions/setup-node@v6
         with:
-          node-version: "26.0.0"
+          node-version: "24"
       - uses: astral-sh/setup-uv@v7
       - name: Prepare source validation environment
         run: uv sync --extra test

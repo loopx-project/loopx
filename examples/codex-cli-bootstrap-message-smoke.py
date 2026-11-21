@@ -193,13 +193,12 @@ def assert_docs_surface_codex_cli_quickstart() -> None:
     assert "Codex App gets a heartbeat automation body that starts at 3 minutes" in normalized_getting_started, getting_started
     assert "transcript-free validation checklist" in normalized_getting_started, getting_started
     assert "installs the generated LoopX goal/heartbeat loader immediately" in normalized_product_contract, product_contract
-    assert "optional automation checks after the setup path works" in normalized_getting_started, getting_started
     assert "first useful TUI response should be a control-plane snapshot" in normalized_product_contract, product_contract
     assert "setup-only work" in normalized_product_contract, product_contract
-    assert "loopx codex-cli-session-probe" in getting_started, getting_started
-    assert "loopx codex-cli-exec-handoff --project . --goal-id <goal-id>" in getting_started, getting_started
+    assert "loopx turn plan" in getting_started, getting_started
+    assert "loopx turn run-once" in getting_started, getting_started
     assert "headless-disabled boundary" in normalized_getting_started, getting_started
-    assert "This command no longer prints a runnable `codex exec` handoff script" in product_contract, product_contract
+    assert "default Codex CLI LoopX setup-then-`/goal` path does not expose a headless fallback" in normalized_product_contract, product_contract
 
 
 def main() -> int:

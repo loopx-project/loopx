@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
-import { projectReplanSemantics, requiredSemanticOutcomes } from "../../loopx/control_plane/work_items/replan_semantics.ts";
+import {
+  AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION,
+  AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID,
+  projectReplanSemantics,
+  requiredSemanticOutcomes,
+} from "../../loopx/control_plane/work_items/replan_semantics.ts";
 
 test("capability evidence is not a default exit or a generic progress claim", () => {
   for (const outcome of ["capability_evidence_observed", "capability_duty_retired"]) {
@@ -32,8 +38,10 @@ test("open-work review guidance does not require configured checks or outcome de
       assert.deepEqual(retired, ordinary);
       assert.deepEqual(current, ordinary, "default review and its authority do not depend on an outcome declaration");
       const guidance = (ordinary.planning_guidance as string[]).join(" ");
-      for (const clause of ["even with open Todos", "revisable planning choices", "never forces a pivot"]) {
-        assert.ok(guidance.includes(clause));
+      for (const clause of ["even with open Todos",
+        "Todo order and provisional agent-created candidate rules are revisable",
+        "A due review can keep the path or reorder or replace unfinished work", "never forces a pivot"]) {
+        assert.ok(guidance.includes(clause), clause);
       }
     }
   }
@@ -52,7 +60,12 @@ test("autonomous checkpoints reuse owner review while ordinary checkpoints keep 
       const guidance = (projection.planning_guidance as string[]).join(" ");
       for (const clause of ["original intent", "every requirement", "full marginal cost",
         "Before no_followup, review unmet acceptance", "reasonable in-scope next step remains, continue or replan",
-        "evidence and judgment in existing Vision/path_delta", "budget or stops", "planning grant no authority",
+        "existing Vision/path_delta for evidence, judgment and justified no-change", "budget or stops", "planning grant no authority",
+        "direct user changes to this Goal's purpose or lasting duties", "Keep commitments. Reconcile its Todos.",
+        "Explicit new Goals use creation", "Distinguish scope conflicts, evidence gaps and stale display",
+        "Read only missing context", "No polls or per-Turn revision receipts",
+        "Continue authorized work. Proposing forces no question", "owner apply and each peer's adoption",
+        "Proposals and adoption grant no authority",
         "never forces a pivot", "do not invent work or consume budget merely to stay active"]) {
         assert.ok(guidance.includes(clause), clause);
       }
@@ -175,7 +188,7 @@ test("an open Vision reconstruction must come from the exact scoped receipt sour
   }
 });
 
-test("scalar review sources exclude evidence windows and restricted duties", () => {
+test("scalar and digest review sources exclude evidence windows and restricted duties", () => {
   const source = {schema_version: "autonomous_replan_obligation_v0", required: true,
     obligation_id: "replan-1111111111111111", agent_id: "reviewer", trigger_count: 1,
     stop_condition: "Stop at owner-only decisions.",
@@ -184,9 +197,11 @@ test("scalar review sources exclude evidence windows and restricted duties", () 
   const request = {operation: "receipt_review_source", agent_id: "reviewer", obligation: source};
   assert.deepEqual(projectReplanSemantics(request), {review_source: {
     kind: "goal_outcome_uncovered", stop_condition: source.stop_condition}});
+  assert.deepEqual(projectReplanSemantics({...request, obligation: {...source,
+    stop_condition: "s".repeat(241), triggers: [{kind: "periodic_review_due"}]}}), {review_source: {
+    kind: "periodic_review_due", stop_condition: "s".repeat(241)}});
   for (const patch of [{required: false}, {schema_version: "unknown"}, {agent_id: "another-agent"},
     {triggers: []}, {trigger_count: 2}, {trigger_count: undefined},
-    {triggers: [{kind: "periodic_review_due"}]},
     {triggers: [{kind: "goal_outcome_uncovered"}, {kind: "external_progress_review_drift"}]},
     {trigger_count: 2, triggers: [{kind: "vision_acceptance_gap"}, {kind: "periodic_review_due"}]},
     {trigger_count: 2, triggers: [{kind: "vision_acceptance_gap"}, {kind: "external_progress_review_drift"}]},
@@ -195,10 +210,63 @@ test("scalar review sources exclude evidence windows and restricted duties", () 
     {progress_baseline: {}}, {progress_window: []},
     {triggers: [{kind: "goal_outcome_uncovered", progress_baseline: {}}]},
     {triggers: [{kind: "goal_outcome_uncovered", progress_window: []}]},
-    {stop_condition: null}, {stop_condition: "s".repeat(241)},
+    {stop_condition: null},
     {resolution_mode: "todo_lifecycle_settlement"},
     {capability_guard: {schema_version: "semantic_replan_capability_guard_v0"}}]) {
     assert.deepEqual(projectReplanSemantics({...request, obligation: {...source, ...patch}}), {review_source: null});
+  }
+});
+
+test("a digest-bound review keeps its receipt id across equivalent frontier regeneration", () => {
+  const originalId = "replan-1111111111111111";
+  const currentId = "replan-2222222222222222";
+  const stop = "Review current acceptance evidence before changing the route. ".repeat(6).trim();
+  const digest = createHash("sha256").update(stop, "utf8").digest("hex");
+  const current = {schema_version: "autonomous_replan_obligation_v0", required: true,
+    obligation_id: currentId, agent_id: "reviewer", trigger_count: 1,
+    triggers: [{kind: "periodic_review_due"}], stop_condition: stop,
+    replan_context: {context_id: "latest-review-context"}};
+  const request = {operation: "receipt_bound_obligation", guard_scoped: true,
+    replay_phase: "open", selected_obligation_id: originalId, agent_id: "reviewer",
+    current_obligation: current, transition_candidates: [], receipt_review: {
+      kind: "periodic_review_due", stop_condition_sha256: digest}};
+  const recovered = projectReplanSemantics(request).obligation as JsonObject;
+  assert.equal(recovered.obligation_id, originalId);
+  assert.equal(recovered.stop_condition, stop);
+  assert.equal(recovered.replan_context, undefined,
+    "the caller must rebuild current context under the retained settlement id");
+  assert.equal(recovered.selection_binding, "heartbeat_receipt");
+  for (const patch of [
+    {receipt_review: {...request.receipt_review, kind: "vision_acceptance_gap"}},
+    {receipt_review: {...request.receipt_review, stop_condition_sha256: "0".repeat(64)}},
+    {current_obligation: {...current, stop_condition: `${stop} changed`}},
+    {current_obligation: {...current, triggers: [{kind: "goal_outcome_uncovered"}]}},
+    {current_obligation: {...current, agent_id: "another-agent"}},
+  ]) {
+    assert.throws(() => projectReplanSemantics({...request, ...patch}), /identity conflicts/);
+  }
+});
+
+test("a canonical periodic review reconstructs after its live frontier disappears", () => {
+  const originalId = "replan-1111111111111111";
+  const digest = createHash("sha256").update(
+    AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION, "utf8").digest("hex");
+  const request = {operation: "receipt_bound_obligation", guard_scoped: true,
+    replay_phase: "open", selected_obligation_id: originalId, agent_id: "reviewer",
+    current_obligation: null, transition_candidates: [], receipt_review: {
+      kind: "periodic_review_due", stop_condition_sha256: digest,
+      stop_contract_id: AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID}};
+  assert.deepEqual(projectReplanSemantics(request).obligation, {
+    schema_version: "autonomous_replan_obligation_v0", required: true,
+    obligation_id: originalId, agent_id: "reviewer",
+    stop_condition: AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION,
+    triggers: [{kind: "periodic_review_due"}], selection_binding: "heartbeat_receipt"});
+  for (const receipt_review of [
+    {...request.receipt_review, stop_condition_sha256: "0".repeat(64)},
+    {...request.receipt_review, stop_contract_id: "unknown"},
+    {...request.receipt_review, kind: "external_progress_review_drift"},
+  ]) {
+    assert.throws(() => projectReplanSemantics({...request, receipt_review}), /identity conflicts/);
   }
 });
 
@@ -254,6 +322,34 @@ test("Monitor lifecycle changes retain the admitted review without discharging i
     {satisfying_semantic_outcomes: ["new_runnable_successor"]}]) {
     assert.equal(projectReplanSemantics({operation: "receipt_review_source", agent_id: "reviewer",
       obligation: {...source, ...restriction}}).review_source, null);
+  }
+});
+
+test("Monitor receipt recovery preserves mixed-review precedence and the complete stop contract", () => {
+  const monitor = {kind: "monitor_no_change_streak", todo_id: "todo_monitor", run_count: 5, threshold: 5};
+  const cases: [JsonObject[], string, boolean][] = [
+    [[monitor], "monitor_no_change_streak", true],
+    [[monitor, {kind: "goal_outcome_uncovered"}], "goal_outcome_uncovered", true],
+    [[monitor, {kind: "vision_acceptance_gap"}], "vision_acceptance_gap", false],
+    [[{kind: "vision_acceptance_gap"}, monitor], "vision_acceptance_gap", false],
+  ];
+  for (const [triggers, kind, acceptsProgress] of cases) {
+    const source = {schema_version: "autonomous_replan_obligation_v0", required: true,
+      obligation_id: "replan-1111111111111111", agent_id: "reviewer",
+      trigger_count: triggers.length, triggers, stop_condition: AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION};
+    assert.deepEqual(projectReplanSemantics({operation: "receipt_review_source", agent_id: "reviewer",
+      obligation: source}).review_source, {kind, stop_condition: source.stop_condition});
+    const recovered = projectReplanSemantics({operation: "receipt_bound_obligation", guard_scoped: true,
+      replay_phase: "open", selected_obligation_id: source.obligation_id, agent_id: "reviewer",
+      current_obligation: null, transition_candidates: [], receipt_review: {kind,
+        stop_condition_sha256: createHash("sha256").update(source.stop_condition, "utf8").digest("hex"),
+        stop_contract_id: AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID}}).obligation as JsonObject;
+    assert.equal(recovered.obligation_id, source.obligation_id);
+    assert.equal(recovered.stop_condition, source.stop_condition);
+    assert.deepEqual(recovered.triggers, [{kind}]);
+    assert.equal(projectReplanSemantics({operation: "qualify", obligation: recovered}).accepted, false);
+    assert.equal(projectReplanSemantics({operation: "qualify", obligation: recovered,
+      observation_delta: {delta_kinds: ["new_surface"]}}).accepted, acceptsProgress);
   }
 });
 

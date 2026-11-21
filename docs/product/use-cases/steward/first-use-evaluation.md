@@ -89,8 +89,7 @@ same work and ask:
 The repeat request should reuse the retained work and its constraints. It needs
 checked calculations and limits, not a guaranteed investment forecast. Declining
 or not returning is recorded with a volunteered reason, not replaced by another
-user. This handout does not authorize public posting, trading, broader account
-access or additional background work.
+user.
 
 ## What counts as a useful result
 
@@ -161,8 +160,7 @@ attempted count out of the **frozen five**, accepted count out of five, each
 failure/blocked/not-run row, later-day accepted repeat count out of those same
 five, times, interventions and measured/unknown costs. Report timing coverage;
 do not omit slow/failed samples or impute zero cost. For the 4/5 and 3/5 targets,
-blocked, abandoned and not-run slots stay in the denominator. A useful-artifact
-rate alone does not prove all safety, budget or advertised-platform gates passed.
+blocked, abandoned and not-run slots stay in the denominator.
 Five users provide diagnostic feedback, not a statistical reliability claim.
 
 ## Existing feedback route and next repair

@@ -2,7 +2,7 @@
 
 This page records the public milestones that changed LoopX's identity,
 governance, or stable product direction. It is not a commit-by-commit changelog.
-Ordinary release changes belong in [GitHub Releases](https://github.com/huangruiteng/loopx/releases)
+Ordinary release changes belong in [GitHub Releases](https://github.com/loopx-project/loopx/releases)
 and the [update notes](../update-notes/README.md).
 
 ## Public Timeline
@@ -54,7 +54,7 @@ and explicit handoff state.
 [LoopX v0.2.0](https://github.com/huangruiteng/loopx/releases/tag/v0.2.0)
 promoted the peer-agent runtime and expanded long-lived issue-fix, PR lifecycle,
 Explore, and control-plane validation surfaces. The v0.2 line continues in the
-public [release archive](https://github.com/huangruiteng/loopx/releases).
+public [release archive](https://github.com/loopx-project/loopx/releases).
 
 ## How This History Is Maintained
 
@@ -66,7 +66,7 @@ public [release archive](https://github.com/huangruiteng/loopx/releases).
 - Keep private operating context, raw trajectories, internal links, and local
   paths out of the public timeline.
 
-See [AUTHORS.md](https://github.com/huangruiteng/loopx/blob/main/docs/project/authors.md) for
+See [AUTHORS.md](https://github.com/loopx-project/loopx/blob/main/docs/project/authors.md) for
 creator and contributor attribution and
-[Governance](https://github.com/huangruiteng/loopx/blob/main/.github/GOVERNANCE.md)
+[Governance](https://github.com/loopx-project/loopx/blob/main/.github/GOVERNANCE.md)
 for the current maintainer model.

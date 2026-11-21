@@ -79,6 +79,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v7
         with:
           name: loopx-runtime
@@ -89,7 +90,45 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          revision="$(python -c 'import json; print(json.load(open("runtime/loopx-runtime.json"))["source_revision"])')"
+          # Validate the downloaded qualification before any remote mutation.
+          # Successful installation alone does not qualify outcome/cost claims.
+          revision="$(python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import re
+          import sys
+          sys.path.insert(0, str(Path.cwd()))
+          from loopx.cli_commands.update_artifact import validate_default_contract
+          root = Path("runtime")
+          manifest_bytes = (root / "loopx-runtime.json").read_bytes()
+          manifest = json.loads(manifest_bytes)
+          revision = manifest["source_revision"]
+          if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
+              raise SystemExit("Invalid runtime source revision")
+          qualification = json.loads((root / f"qualification-{revision}.json").read_bytes())
+          checks = ("ok", "clean_install", "upgrade", "doctor", "skills", "frontend_bundle_contract",
+                    "frontend_http", "no_frontend_build_tools", "license_notices", "activation_failure_restored")
+          if any(qualification.get(check) is not True for check in checks):
+              raise SystemExit("Runtime installation qualification is missing or failed")
+          default_contract = validate_default_contract(manifest.get("default_contract"))
+          if qualification.get("default_contract") != default_contract:
+              raise SystemExit("Runtime default-contract qualification is missing or mismatched")
+          if manifest["channel"] != "main" or any(qualification.get(key) != manifest[key]
+                  for key in ("source_revision", "channel", "sha256")):
+              raise SystemExit("Runtime qualification does not match the candidate")
+          archive = root / f"loopx-runtime-{revision}.tar.gz"
+          with archive.open("rb") as stream:
+              digest = hashlib.file_digest(stream, "sha256").hexdigest()
+          if type(manifest["size"]) is not int or type(qualification.get("bytes")) is not int or (
+                  archive.stat().st_size != manifest["size"] or qualification["bytes"] != manifest["size"]
+                  or digest != manifest["sha256"]):
+              raise SystemExit("Qualified runtime bytes differ from the candidate")
+          if (root / f"loopx-runtime-{revision}.json").read_bytes() != manifest_bytes:
+              raise SystemExit("Immutable runtime metadata differs from the channel candidate")
+          print(revision)
+          PY
+          )"
           # Keep each immutable snapshot below GitHub's per-release asset cap.
           # The existing channel release retains its historical assets and URL.
           tag="runtime-main-${revision}"

@@ -1,4 +1,4 @@
-/** Verbatim public capture reader, not an Explore state reducer or validator.
+/** Verbatim public capture reader.
  * Explore owns v0 semantics. Pinned bytes prevent a different capture or edited
  * record from silently acquiring these editorial scenes. Status stays source text.
  */

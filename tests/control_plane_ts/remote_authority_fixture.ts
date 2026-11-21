@@ -88,6 +88,7 @@ export async function postgresRemoteFixture(t: TestContext, connectionString: st
   await setup.query(`GRANT CONNECT ON DATABASE ${name} TO ${role}`);
   await setup.query(`GRANT USAGE ON SCHEMA loopx_control_plane TO ${role}`);
   await setup.query(`GRANT SELECT ON loopx_control_plane.authority_store_metadata TO ${role}`);
+  await setup.query(`GRANT SELECT ON loopx_control_plane.authority_checkpoints TO ${role}`);
   await setup.query(`GRANT SELECT, INSERT, UPDATE ON loopx_control_plane.authority_heads TO ${role}`);
   await setup.query(`GRANT SELECT, INSERT ON loopx_control_plane.authority_commits,
     loopx_control_plane.authority_events, loopx_control_plane.authority_receipts TO ${role}`);
@@ -102,7 +103,7 @@ export async function postgresRemoteFixture(t: TestContext, connectionString: st
     });
   }
   const policyPath = join(tls.root, "policy.json");
-  async function writePolicy(policy = servicePolicy()) {
+  async function writePolicy(policy: unknown = servicePolicy()) {
     await writeFile(`${policyPath}.next`, JSON.stringify(policy), {mode: 0o600});
     await rename(`${policyPath}.next`, policyPath);
   }

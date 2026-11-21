@@ -298,6 +298,11 @@ it or starts model work. Before every write and receipt recovery, Core rechecks
 the Session, current binding and audience, and the provider verifies the original
 source. Posts identify the App speaker, stay in canonical append order within
 that outbox and retain complete long text through the existing rich-post parts.
+When Lark supplies a message link for the verified App input mirror, a new
+answer includes a link to the question from the same Turn. Multipart inputs
+use the last concrete post. The outbox retains the link before the first send
+and reuses it when recovering the same attempt. If Lark cannot supply a link in
+the original private chat, the existing body delivery proceeds.
 An exact App-origin terminal error also projects a public-safe failure notice
 with the original completion time. The notice is derived from the stored Turn
 and its matching error row, without exporting raw diagnostics. It uses the same
@@ -336,10 +341,10 @@ actual provider presentation remain separate acceptance work.
 
 Use **Continue original conversation** or the explicitly selected App steward
 entry above to reach this path. Old ordinary history is retained separately.
-This checkpoint covers text and bounded App image projection, not reply/thread
-relation mirroring, retroactive insertion into Lark chronology or all-channel
-broadcast. Canonical App images reuse the existing resource uploader and post
-sender, retaining caption and ordered inline images in the original private
+This checkpoint covers text, question links and bounded App image projection.
+Native reply and topic placement, retroactive insertion into Lark chronology,
+and all-channel broadcast remain open. Canonical App images reuse the existing
+resource uploader and post sender, retaining caption and ordered inline images in the original private
 chat. Long captions keep images on the final concrete post only. Every upload
 and send rechecks the original source and current Core message/grant. Sends and
 edits check again after provider preview, before recording the write intent;
@@ -733,6 +738,28 @@ Missing execution evidence and unknown states stay explicitly unavailable.
 These commands open no Session, invoke no model and create no Goal. `/help`
 shows role-specific commands and the existing Settings → Lark entry for workspace,
 executor and revocation, including supported images and unavailable media/attached-host boundaries.
+
+The bound Steward's `/triage`, `/gates`, `/todos` and `/triage all` use the
+existing scoped query and durable delivery path without starting a model Turn.
+Its App callback consumer dispatches both Steward query cards and typed operation
+confirmation cards; it does not create another subscription. Query callbacks
+retain the original Chat binding, source grants and Session. Operation callbacks
+use the existing operation handler and the controller's coordination root,
+including its original proposal, confirmation, claim and result-card readback.
+The Chat action store is not a fallback operation authority. An unavailable or
+changed App fails closed. Unknown callback shapes are ignored, and source
+validation and duplicate handling remain with each protocol's existing owner.
+An explicitly configured standalone operation consumer must be coordinated before
+cutover; this routing slice neither stops it nor transfers a configured managed
+wake policy. An unconfigured managed wake remains unauthorized.
+
+The mixed-protocol regression uses one physical callback stream and a separate
+Chat/coordination-root fixture with the real Core operation store and synthetic
+provider/executor. It verifies wrong-chat rejection, one execution on replay,
+original-card result readback, binding revocation and no extra query model Turn.
+File and SQLite source-query regressions remain required. This is source and
+packaged-path qualification; installed-service cutover and real client clicks
+remain open acceptance.
 
 Regression coverage uses the production native filesystem store, durable queue,
 bound request and provider admission/reconciliation paths with a synthetic

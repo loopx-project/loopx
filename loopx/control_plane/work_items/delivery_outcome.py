@@ -229,11 +229,6 @@ def require_delivery_outcome(value: Any) -> DeliveryOutcome:
     return outcome
 
 
-def delivery_outcome_value(value: Any) -> str | None:
-    outcome = normalize_delivery_outcome(value)
-    return outcome.value if outcome else None
-
-
 def normalize_delivery_turn_kind(value: Any) -> DeliveryTurnKind | None:
     if isinstance(value, DeliveryTurnKind):
         return value

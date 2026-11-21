@@ -291,6 +291,7 @@ Run:
 ```bash
 python3 examples/issue-fix-reviewer-notification-sink-smoke.py
 python3 examples/issue-fix-reviewer-request-smoke.py
+python3 examples/issue-fix-reviewer-notification-drain-postwrite-smoke.py
 ```
 
 The provider-neutral fixture covers preview, dedicated-identity enforcement,

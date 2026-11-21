@@ -46,7 +46,7 @@ question for the coordinator when useful independent work exists. Before
 launch, identify that question and its dependencies alongside the child briefs;
 continue it while children work. After results return, validate decisive sources,
 reconcile findings and revisit uncovered questions. Reviewing children is still
-necessary, but does not replace the coordinator's own parallel investigation.
+necessary.
 Wait when the remaining useful work depends on child results; do not invent
 work, require a minimum child count, or duplicate evidence to fill capacity.
 These are guidance-only instructions, not a new scheduler or completion gate.
@@ -55,8 +55,7 @@ These are guidance-only instructions, not a new scheduler or completion gate.
 独立、影响决策的证据问题；委派前说明自己的问题、依赖和子任务边界，并在
 子 Agent 工作期间推进；回收后核验原件、整合结果、重审尚未覆盖的问题。
 核验子任务不能替代主 Agent 自己的并行研究。剩余工作确实依赖子任务时可以
-等待，不要求凑满并发、重复取证或制造工作。这些是引导，不是新增调度器或
-完成门禁；等待某一候选也不意味着其他可执行研究必须停止。
+等待，不要求凑满并发、重复取证或制造工作。等待某一候选也不意味着其他可执行研究必须停止。
 
 Keep tightly coupled decisions in one peer lane. Do not launch workers merely
 to make the activity graph look busy, and never let worker count override
@@ -324,8 +323,7 @@ if no peer lane can run, the bundle has
 When native child admission succeeds, its adaptive contract remains actionable
 and retains the blocked peer contract as `peer_activation_diagnostic`. Neither
 path grants permission to use a different entrypoint.
-That blocked diagnostic does not replace the coordinator's own runnable lane or
-re-arm an activation obligation on every heartbeat. If the coordinator also
+If the coordinator also
 has no in-scope runnable fallback, the final interaction mode is
 `peer_coordination_blocked`: schedulers keep a no-spend observer alive with a
 10/20/30/60 minute stateful backoff. Peer capability/readiness, coordinator
@@ -343,8 +341,7 @@ loopx configure-goal \
   --execute
 ```
 
-This opt-in grants neither cross-owner Todo mutation nor broader repository,
-publication, credential, or production authority. Read it back with
+Read it back with
 `loopx configure-goal --goal-id example-peer-task-goal` before relying on it.
 
 ## Run History And Observation
@@ -404,9 +401,7 @@ registry wins over an older project-asset model snapshot. Clearing the setting
 cannot resurrect a model preference from that snapshot.
 
 This is a per-Goal preference, not a global vendor default. Existing Goals with
-no model configuration retain their previous behavior. Setting a model alone
-does not enable spawning, change the coordinator model, register a peer, or
-supply a host capability. Disabling spawning retains the preference for later
+no model configuration retain their previous behavior. Disabling spawning retains the preference for later
 use. Remove both model and effort with:
 
 ```bash
@@ -436,7 +431,7 @@ model from response style.
 中文操作要点：示例显式配置 Luna/max，仅作用于当前 Goal 的子任务偏好；
 未配置的 Goal 不改变默认行为。宿主启动时仍须显式传参并核验支持情况，
 不支持时不能悄悄继承主模型。只读研究拆分不同证据问题，子任务返回来源、
-反证和未知项，主任务复核并决定是否采纳。配置生效不等于研究结果有效。
+反证和未知项，主任务复核并决定是否采纳。
 
 ### Frontend configuration
 
@@ -506,8 +501,7 @@ not run the execution preflight: `execution_scope=bound_delegation` and
 `preflight=required` accompany `readiness=unknown` (or `blocked` for a known
 runtime failure). Use `loopx delegation inspect` on the selected binding to
 check canonical authority, task validation and Turn admission before dispatch.
-A peer-activation blocker does not assess this route or native children; neither
-does a successful runtime probe bypass authority promotion or another gate.
+A peer-activation blocker does not assess this route or native children.
 Before dispatch, recheck runtime/model/budget and record a stable operation id;
 never silently substitute a runtime or model. User preferences guide independent
 batch selection; no heartbeat must relaunch every route. Lark and other managed
@@ -520,7 +514,7 @@ surfaces consume this same capability context, not another route configuration.
 通过独立准入，使用 adaptive 合约并保留 `peer_activation_diagnostic`，不因另一个
 入口受阻而提前返回。运行库/凭据可用只记为 `runtime_readiness`；委派入口尚未预检时
 `readiness=unknown`、`preflight=required`，通过现有 `loopx delegation inspect`
-核验权威状态、任务验证与 Turn 准入。未知不等于禁用，ready 运行库也不等于可执行。
+核验权威状态、任务验证与 Turn 准入。
 用户的异构偏好影响批次选择，不要求每次心跳重启所有路线，不绕过任一真实门禁。
 投影保留 host owner 非空 probe 的 `probe_scope`，完整 probe 与修复代码通过原
 绑定预检渐进式披露，不额外发起探测或决定准入。`probing_interpreter` 的模块缺失只针对本次检查的解释器，不能
@@ -584,10 +578,9 @@ retries, mark unlaunched work incomplete and continue useful parent work until
 capacity changes. It does not delete, import, resume or rebind sessions, lower
 the configured ceiling, or claim that a completed child freed a slot. Raw host
 errors and session identities are never accepted by this interface. A
-`succeeded` observation proves only that operation; it does not authorize
-another same-Turn attempt or claim that additional capacity remains.
+`succeeded` observation proves only that operation.
 
-中文：`max_children` 只是 Goal 配置上限，不代表宿主此刻有同样数量的可用槽位。
+中文：`max_children` 只是 Goal 配置上限。
 当原生 `spawn` 或 `followup` 返回 `agent_thread_limit_reached` 时，使用上述
 `after_delegate_result` 调用提交有界类型化观察；返回的
 `native_host_capacity` 会要求本 Turn 停止重复派发、把未启动工作标记为未完成，

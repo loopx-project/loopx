@@ -319,7 +319,7 @@ def execute_native_task_lease_lifecycle(
         if normalized_operation in {"renew", "transfer", "release"}:
             from ..coordination.local_authority import local_authority_is_promoted
 
-            # Select the recorded authority, not a fresh-work policy. The
+            # Select the recorded authority. The
             # retained typed lifecycle owner validates original source receipts
             # before refusing new renew/transfer operations. A promoted Goal
             # stays canonical even when its selected provider is unavailable.

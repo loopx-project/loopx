@@ -275,6 +275,7 @@ def test_generated_deferred_resume_keeps_proof_fences_with_planning_note(
 
     rc, reentry = cli(*reentry_args)
     assert rc == 0 and reentry["normal_delivery_allowed"], reentry
+    lease_proof = reentry["execution_preparation"]["lease_proof"]
     assert (
         reentry["heartbeat_receipt"]["settlement_identity"]
         == guard["heartbeat_receipt"]["settlement_identity"]
@@ -328,6 +329,8 @@ def test_generated_deferred_resume_keeps_proof_fences_with_planning_note(
         "--todo-id", TODO_ID, "--turn-instance-id", "resume-command-turn",
         "--classification", "resumed_work_verified", "--delivery-batch-scale", "single_surface",
         "--delivery-outcome", "outcome_progress", "--agent-vision-json", str(vision),
+        "--task-lease-idempotency-key", lease_proof["idempotency_key"],
+        "--task-lease-expected-version", str(lease_proof["expected_version"]),
         "--no-global-sync", "--suppress-external-sinks", "--settle-turn")
     for _ in range(2):
         rc, settled = cli(*settlement)

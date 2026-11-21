@@ -53,7 +53,7 @@ Claude Code では `/loopx <complex task>` を使います。その他のラン�
      not news. Keep both languages aligned, newest first, using verified publication
      dates (UTC). -->
 
-- **2026-11-01 · 📘 [24/7 エージェントのための段階的コンテキスト配信](https://loopx-project.github.io/loopx/blog/context-delivery/)** — コンパクションサイクル単位の構造化差分と段階的ビューにより、モデル向けの 213 回の起床にわたってコントロールプレーンのバイト数を削減しました（単層の段階的ビューで `32.5%`、サイクル内の 112 回の継続にわたる積み重ね型の初回読み取りエントリで本文 `3.0%` / CLI `5.0%`）。同時に、ロスレスなベースライン復元も維持しています（[47 日間の鮮度に関するポストモーテム](https://loopx-project.github.io/loopx/blog/five-freshness-incidents/)）。
+- **2026-11-01 · 📘 [24/7 エージェントのための段階的コンテキスト配信](https://loopx-project.github.io/loopx/blog/context-delivery/)** — コンパクションサイクル単位の構造化差分と段階的ビューにより、モデル向けの 213 回の起床にわたってコントロールプレーンのバイト数を削減しました（単層の段階的ビューで `32.5%`、サイクル内の 112 回の継続にわたる積み重ね型の初回読み取りエントリで本文 `3.0%` / CLI `5.0%`）。同時に、ロスレスなベースライン復元も維持しています。
 - **2026-10-25 · 🤝 [長期タスク向けエージェント研究：共同研究者を募集中](https://loopx-project.github.io/loopx/blog/edgebench-feedback-and-memory/)** — EdgeBench と実世界のタスクにおけるフィードバック、再計画、再現可能な評価を通じて、**同一予算下での長期的な成果のブレークスルー**を探求しています。学術研究室や企業のチームとの共同研究を歓迎し、成果と総コストを比較していきます。[共同研究について話し合う](https://github.com/loopx-project/loopx/discussions)。
 - **2026-10-20 · 🚀 [LoopX 2.0](https://github.com/loopx-project/loopx/releases/tag/v2.0.0)** — 共有の TypeScript 状態レイヤーと、長期研究用ワークベンチ。[移行ガイド](docs/product/releases/v2.0.0.md) · [エンジニアリングの舞台裏](https://loopx-project.github.io/loopx/blog/typescript-control-plane-refactor/)。
 - **2026-10-14 · 🤖 [エージェント型ソフトウェア](https://loopx-project.github.io/loopx/blog/semantic-software-development/)** — ゴール、エビデンス、人間のフィードバックをエンジニアリングの成果物につなげます。
@@ -105,8 +105,7 @@ LoopX は、永続的な作業状態を 1 つのコンパクトなレイヤー�
 </picture>
 
 作業を実行するのは Agent ランタイムです。LoopX は、エンジニアリング、研究、探索、
-運用のループが実行をまたいで継続できるようにするための状態を保持します。これは
-新たなエージェントフレームワークでも、特定プロバイダー向けのオーケストレーションランタイムでもありません。
+運用のループが実行をまたいで継続できるようにするための状態を保持します。
 
 <details>
 <summary>詳細：コントロールレイヤーの仕組みと位置付け</summary>
@@ -161,7 +160,7 @@ LoopX はそのオープンでハーネス非依存のコントロールレイ�
 | --- | --- | --- |
 | **Event Inbox** | シングルフライトの **Goal / Todo / Hard Lease** キュー、非同期のアプリ受信箱、接続済みの Lark / GitHub リスナー | 同じリポジトリの状態を重複したワーカーが変更すること、実行中に人間の入力が失われること |
 | **Timers & Wakeups** | **Guarded Heartbeat** と安全な定期プリセット（`daily-triage`、`changelog-draft`、`pr-watch`。`loopx preset list` で確認） | 何も変わっていない、またはゲートがまだ人間を待っているのに、やみくもな cron ループがトークンを浪費すること |
-| **Memory & Compaction** | [`Decision Context`](loopx/capabilities/decision_context/README.md) によるソース追跡、コンパクションサイクル単位の **Progressive + Delta** [`context_delivery`](https://loopx-project.github.io/loopx/blog/context-delivery/)（213 回の起床にわたるビューで `32.5%`、サイクル内の 112 回の起床にわたる初回読み取りエントリで `3.0% / 5.0%`）、およびオプションの [`Reward Memory`](loopx/capabilities/reward_memory/README.md) | 気付かないうちのソースの陳腐化（[47 日間・253 ターンで 5 件のインシデント](https://loopx-project.github.io/loopx/blog/five-freshness-incidents/)）、コンパクションをまたいだプロンプトの再送の累積や差分の破損 |
+| **Memory & Compaction** | [`Decision Context`](loopx/capabilities/decision_context/README.md) によるソース追跡、コンパクションサイクル単位の **Progressive + Delta** [`context_delivery`](https://loopx-project.github.io/loopx/blog/context-delivery/)（213 回の起床にわたるビューで `32.5%`、サイクル内の 112 回の起床にわたる初回読み取りエントリで `3.0% / 5.0%`）、およびオプションの [`Reward Memory`](loopx/capabilities/reward_memory/README.md) | 気付かないうちのソースの陳腐化、コンパクションをまたいだプロンプトの再送の累積や差分の破損 |
 | **Permissions & Deferred Calls** | 明示的な**オーナー、安全性、公開、プライベートデータのゲート**、分離されたワークツリー、レビュー可能な引き継ぎ | 自律的な cron 実行による外部への公開、強制マージ、プライベートなコンテキストの漏洩 |
 | **Outbox** | 本当の完了、ブロッカー、未解決のゲートを示す、共有 Workspace と Lark の Goal/Decision/Evidence ビュー | 断片化したターミナルログや、人間に実行の子守りを強いるノイズの多い通知 |
 
@@ -867,8 +866,7 @@ LoopX は、長時間稼働するエージェントのエコシステムを築�
 ## 現在のステータス
 
 LoopX は、長時間にわたるエージェントの作業のための実用的なローカルコントロールプレーンであり、
-より広い導入の段階に入りつつあります。完全なエージェントプラットフォーム、エージェントランタイム、
-自律的な本番コントローラーではありません。
+より広い導入の段階に入りつつあります。
 
 現在の LoopX は、ゴール、型付きの todo と意思決定の
 スコープ、対等な claim とリース、エビデンスと writeback、クォータを考慮したスケジューリング、

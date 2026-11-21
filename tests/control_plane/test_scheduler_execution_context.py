@@ -240,10 +240,9 @@ def test_scheduler_execution_context_decision_table(
     if values not in VALID_COMBINATIONS:
         assert hint["execution_phase"]["disposition"] == "contract_error"
         assert hint["execution_phase"]["completed"] is False
-        packet_key = "app_automation" if neutral_app_surface else "codex_app"
-        assert hint[packet_key]["applicability"] == "blocked_invalid_context"
-        assert ("app_automation" in hint) is neutral_app_surface
-        assert ("codex_app" in hint) is (not neutral_app_surface)
+        assert hint["app_automation"]["applicability"] == "blocked_invalid_context"
+        assert "stateful_backoff" not in hint["app_automation"]
+        assert "codex_app" not in hint
         return
 
     app_expected = values in {
@@ -251,13 +250,11 @@ def test_scheduler_execution_context_decision_table(
         ("trae_app", "host_automation", "hosted_automation"),
         ("antigravity_app", "host_automation", "hosted_automation"),
     }
-    packet_key = "app_automation" if app_expected else "codex_app"
-    assert hint[packet_key]["applicability"] == (
+    assert hint["app_automation"]["applicability"] == (
         "applicable" if app_expected else "not_applicable"
     )
-    assert ("stateful_backoff" in hint[packet_key]) is app_expected
-    assert ("app_automation" in hint) is app_expected
-    assert ("codex_app" in hint) is (not neutral_app_surface)
+    assert ("stateful_backoff" in hint["app_automation"]) is app_expected
+    assert "codex_app" not in hint
     if app_expected:
         assert "execution_context" not in hint
         assert "execution_phase" not in hint
@@ -275,8 +272,8 @@ def test_partial_scheduler_context_fails_closed_without_app_action() -> None:
     )
 
     assert hint["action"] == "repair_scheduler_execution_context"
-    assert hint["codex_app"]["applicability"] == "blocked_invalid_context"
-    assert "stateful_backoff" not in hint["codex_app"]
+    assert hint["app_automation"]["applicability"] == "blocked_invalid_context"
+    assert "stateful_backoff" not in hint["app_automation"]
     assert hint["execution_phase"]["apply_needed"] is False
 
 
@@ -287,7 +284,7 @@ def test_missing_scheduler_context_fails_closed() -> None:
 
     assert hint["action"] == "repair_scheduler_execution_context"
     assert hint["execution_context"]["valid"] is False
-    assert hint["codex_app"]["applicability"] == "blocked_invalid_context"
+    assert hint["app_automation"]["applicability"] == "blocked_invalid_context"
     assert hint["execution_phase"]["disposition"] == "contract_error"
 
 
@@ -329,9 +326,8 @@ def test_codex_app_runtime_profile_preserves_host_backoff_and_authority() -> Non
         == "applicable"
     )
     canonical = hint["app_automation"]
-    legacy = hint["codex_app"]
-    assert canonical is not legacy
-    assert legacy["applicability"] == "applicable"
+    assert "codex_app" not in hint
+    assert canonical["applicability"] == "applicable"
     assert canonical["stateful_backoff"]["schema_version"] == (
         "app_automation_stateful_backoff_v0"
     )
@@ -341,21 +337,12 @@ def test_codex_app_runtime_profile_preserves_host_backoff_and_authority() -> Non
     assert canonical["ack_hint"]["schema_version"] == (
         "app_automation_scheduler_ack_hint_v0"
     )
-    assert legacy["stateful_backoff"]["schema_version"] == (
-        "codex_app_stateful_backoff_v0"
-    )
-    assert legacy["stateful_backoff"]["state_key"] == (
-        "scheduler_hint.app_automation.stateful_backoff"
-    )
-    assert legacy["ack_hint"]["args"]["state_key"] == (
-        canonical["ack_hint"]["args"]["state_key"]
-    )
-    assert legacy["ack_hint"]["schema_version"] == (
-        "codex_app_scheduler_ack_hint_v0"
-    )
-    assert legacy["rrule_source"] == "scheduler_hint.codex_app.recommended_rrule"
-    assert legacy["stateful_backoff"]["apply_needed"] is True
-    assert legacy["recommended_interval_minutes"] == 3
+    assert canonical["ack_hint"]["args"]["state_key"] == canonical["stateful_backoff"]["state_key"]
+    assert canonical["rrule_source"] == "scheduler_hint.app_automation.recommended_rrule"
+    assert canonical["stateful_backoff"]["apply_needed"] is True
+    assert canonical["recommended_interval_minutes"] == 3
+    assert "codex_app_initial_rrule" not in hint["reset_policy"]
+    assert "codex_app_apply" not in hint["cold_path_detail"]["reset_policy_detail"]
     assert hint["reset_policy"]["reset_token"] == "3e649fb65bf246f9"
     assert hint["cold_path_detail"]["execution_phase"]["apply_needed"] is True
 
@@ -933,7 +920,7 @@ def test_quota_payload_compaction_preserves_earliest_frontier_deadline() -> None
     assert continuation["disposition"] == "defer"
     assert continuation["recheck_after_seconds"] == 10 * 60
     assert continuation["recheck_source"] == "frontier_earliest_material_transition"
-    assert codex_hint["codex_app"]["recommended_rrule"] == (
+    assert codex_hint["app_automation"]["recommended_rrule"] == (
         "FREQ=MINUTELY;INTERVAL=10"
     )
 
@@ -966,7 +953,7 @@ def test_codex_app_monitor_wait_uses_canonical_cadence_forms(
         scheduler_execution_context=context,
     )
 
-    assert hint["codex_app"]["recommended_rrule"] == (
+    assert hint["app_automation"]["recommended_rrule"] == (
         f"FREQ=MINUTELY;INTERVAL={expected_minutes}"
     )
     assert hint["cold_path_detail"]["cadence_context"]["cadence_minutes"] == (
@@ -1470,7 +1457,7 @@ def test_persisted_capabilities_do_not_enter_scheduler_ack() -> None:
         persisted_capabilities=["subagent_spawn", "subagent_resume"],
     )
 
-    ack_cli_args = quota["scheduler_hint"]["codex_app"]["ack_hint"]["cli_args"]
+    ack_cli_args = quota["scheduler_hint"]["app_automation"]["ack_hint"]["cli_args"]
 
     assert _runtime_capabilities_from_cli_args(ack_cli_args) == []
 
@@ -1480,7 +1467,7 @@ def test_observed_spawn_enters_scheduler_ack() -> None:
         available_capabilities=["subagent_spawn"],
     )
 
-    ack_cli_args = quota["scheduler_hint"]["codex_app"]["ack_hint"]["cli_args"]
+    ack_cli_args = quota["scheduler_hint"]["app_automation"]["ack_hint"]["cli_args"]
 
     assert _runtime_capabilities_from_cli_args(ack_cli_args) == ["subagent_spawn"]
 
@@ -1490,7 +1477,7 @@ def test_persisted_capabilities_do_not_enter_scheduler_failure() -> None:
         persisted_capabilities=["subagent_spawn", "subagent_resume"],
     )
 
-    failure_cli_args = quota["scheduler_hint"]["codex_app"]["failure_hint"]["cli_args"]
+    failure_cli_args = quota["scheduler_hint"]["app_automation"]["failure_hint"]["cli_args"]
 
     assert _runtime_capabilities_from_cli_args(failure_cli_args) == []
 
@@ -1500,7 +1487,7 @@ def test_observed_spawn_enters_scheduler_failure() -> None:
         available_capabilities=["subagent_spawn"],
     )
 
-    failure_cli_args = quota["scheduler_hint"]["codex_app"]["failure_hint"]["cli_args"]
+    failure_cli_args = quota["scheduler_hint"]["app_automation"]["failure_hint"]["cli_args"]
 
     assert _runtime_capabilities_from_cli_args(failure_cli_args) == [
         "subagent_spawn"
@@ -1606,18 +1593,10 @@ def test_stale_unbound_guard_converges_after_profile_regeneration(
         SchedulerRuntimeProfile.TRAE_APP,
         SchedulerRuntimeProfile.ANTIGRAVITY_APP,
     }
-    packet_key = "app_automation" if app_profile else "codex_app"
-    assert regenerated_hint[packet_key]["applicability"] == (
+    assert regenerated_hint["app_automation"]["applicability"] == (
         "applicable" if app_profile else "not_applicable"
     )
-    assert ("app_automation" in regenerated_hint) is app_profile
-    assert ("codex_app" in regenerated_hint) is (
-        profile
-        not in {
-            SchedulerRuntimeProfile.TRAE_APP,
-            SchedulerRuntimeProfile.ANTIGRAVITY_APP,
-        }
-    )
+    assert "codex_app" not in regenerated_hint
 
 
 def test_generic_outer_controller_rerun_actions_are_typed() -> None:

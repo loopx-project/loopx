@@ -5,7 +5,10 @@ from pathlib import Path
 from typing import Any
 
 from .agent_registry import registered_agent_ids_from_registry
-from .bootstrap_command_pack import inspect_bootstrap_connection
+from .bootstrap_command_pack import (
+    resolve_bootstrap_activation_registry,
+    resolve_bootstrap_project_route,
+)
 from .capabilities.change_quality.policy import change_quality_goal_policy
 from .host_loop_activation import (
     agent_type_uses_host_managed_skills,
@@ -29,6 +32,7 @@ from .project_prompt import (
     host_command,
     render_available_capability_args,
     render_codex_cli_install_preflight,
+    render_optional_cli_arg,
     render_quota_guard_command,
     shell_arg,
     shell_arg_for_host,
@@ -284,6 +288,7 @@ def _bootstrap_pack_command(
     cli_bin: str,
     task_text: str | None,
     available_capabilities: list[str] | None,
+    runtime_root: str | None,
 ) -> str:
     surface_by_type = {
         "codex-app": "codex-app",
@@ -308,7 +313,7 @@ def _bootstrap_pack_command(
         "other-agent": "other-agent",
     }
     parts = [
-        host_command(cli_bin),
+        host_command(cli_bin) + render_optional_cli_arg("--runtime-root", runtime_root),
         "bootstrap-command-pack",
         "--project",
         shell_arg_for_host(project),
@@ -437,9 +442,14 @@ def build_agent_onboarding_packet(
     cli_bin: str = "loopx",
     task_text: str | None = None,
     available_capabilities: list[str] | None = None,
+    runtime_root_arg: str | None = None,
+    explicit_project_registry: Path | None = None,
 ) -> dict[str, Any]:
     canonical_agent_type = normalize_agent_type(agent_type)
-    inspection = inspect_bootstrap_connection(project, goal_id=goal_id)
+    runtime_root_override, (inspection, _) = resolve_bootstrap_project_route(
+        project, goal_id=goal_id, runtime_root_arg=runtime_root_arg,
+        explicit_project_registry=explicit_project_registry if canonical_agent_type == "codex-app" else None,
+    )
     resolved_project = str(inspection["project"])
     resolved_goal_id = str(inspection["goal_id"])
     registry_path = Path(str(inspection["registry"]))
@@ -460,6 +470,7 @@ def build_agent_onboarding_packet(
 
     runtime_root = resolve_runtime_root(
         registry,
+        override=runtime_root_override,
         registry_path=registry_path,
     )
     goal = project_goal_with_builtin_machine_configuration(
@@ -482,12 +493,17 @@ def build_agent_onboarding_packet(
         registry_path,
         resolved_goal_id,
     )
-    activation_registry = str(registry_path) if canonical_agent_type == "antigravity-app" else None
+    activation_registry = resolve_bootstrap_activation_registry(
+        canonical_agent_type, registry_path,
+        connected=inspection.get("connection_state") == "connected",
+        runtime_root_override=runtime_root_override,
+    )
     host_loop_activation = build_host_loop_activation_packet(
         agent_type=canonical_agent_type,
         goal_id=resolved_goal_id,
         cli_bin=cli_bin,
         registry=activation_registry,
+        runtime_root=runtime_root_override,
         agent_id=agent_id,
         registered_agents=registered_agents,
         available_capabilities=available_capabilities,
@@ -507,6 +523,7 @@ def build_agent_onboarding_packet(
         cli_bin=cli_bin,
         task_text=task_text,
         available_capabilities=normalized_available_capabilities,
+        runtime_root=runtime_root_override,
     )
     commands: dict[str, Any] = {
         "doctor_or_install": render_codex_cli_install_preflight(
@@ -519,6 +536,7 @@ def build_agent_onboarding_packet(
                 resolved_goal_id,
                 cli_bin=cli_bin,
                 registry_path=activation_registry,
+                runtime_root=runtime_root_override,
                 agent_id=str(selected_agent_id) if selected_agent_id else None,
                 available_capabilities=normalized_available_capabilities,
                 **scheduler_command_binding_for_agent_type(canonical_agent_type),
@@ -527,7 +545,8 @@ def build_agent_onboarding_packet(
             else None
         ),
         "agent_onboard_recheck": (
-            f"{host_command(cli_bin)} agent-onboard "
+            f"{host_command(cli_bin)}{render_optional_cli_arg('--runtime-root', runtime_root_override)}"
+            " agent-onboard "
             f"--agent-type {shell_arg_for_host(canonical_agent_type)} "
             f"--project {shell_arg_for_host(resolved_project)} "
             f"--goal-id {shell_arg_for_host(resolved_goal_id)}"

@@ -1,6 +1,6 @@
 /** Plan the Todo half of an explicit lease/claim handover on the same head.
  * The lifecycle owner must still verify the lease tuple and commit both halves.
- * This grants neither delegated Todo administration nor external-effect fencing. */
+ *  */
 import {carryContinuationAcrossClaimTransfer} from "./continuation_note.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {registeredTodoMutationRejection} from "./todo_lifecycle_decision.ts";

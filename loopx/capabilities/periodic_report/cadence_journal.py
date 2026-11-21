@@ -145,7 +145,7 @@ def retire_failed_cadence_window(*, runtime_root: Path, goal_id: str,
 
     The original execution owner must prove a terminal failed generation with
     no generated report or delivery attempt before calling this transition.
-    This retires admission only; it neither retries a model nor drops evidence.
+    This retires admission only.
     """
     path = cadence_journal_path(runtime_root, goal_id)
     with exclusive_file_lock(path, policy=LockAcquisitionPolicy.MUTATION,

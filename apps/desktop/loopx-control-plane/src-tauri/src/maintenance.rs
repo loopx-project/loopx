@@ -896,14 +896,27 @@ async fn perform(
     let bytes = if let Some(cached) = cached {
         cached.bytes
     } else {
-        download_update(&update, |chunk, total| {
+        let bytes = download_update(&update, |chunk, total| {
             received += chunk as u64;
             state.publish(
                 "downloading",
                 json!({"received":received,"total":total,"version":update.version}),
             );
         })
-        .await?
+        .await?;
+        #[cfg(target_os = "macos")]
+        {
+            let version = update.version.clone();
+            let channel = channel.to_owned();
+            tauri::async_runtime::spawn_blocking(move || {
+                crate::macos_update::qualify_candidate(&channel, &version, &bytes)?;
+                Ok::<_, String>(bytes)
+            })
+            .await
+            .map_err(|_| "runtime_bundle_invalid".to_string())??
+        }
+        #[cfg(not(target_os = "macos"))]
+        bytes
     };
     let target = update.version.clone();
     install_verified_app(app, target, move || {

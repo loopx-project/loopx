@@ -1,3 +1,4 @@
+import {normalizeExploreExecutionObservation} from "../../../../../loopx/control_plane/capabilities/explore_execution_observation.js";
 import {normalizeWorkYardstickCapture} from "../../../../../loopx/control_plane/work_items/yardstick_decision.js";
 import {sourceReadApiUrl} from "./local-status-query";
 import type {OracleEvidence} from "./goal-acceptance-observation";
@@ -16,7 +17,6 @@ import {
   type CollaborationReadback,
   type LoopXModeSettings,
   type TodoApplyResult,
-  type TodoPreview,
 } from "./chat-model.js";
 import type {DelegationPreflight} from "./delegation-preflight.js";
 
@@ -471,6 +471,7 @@ export const typedActionProposalSchema = z.object({
   validation_evidence: z.array(z.string().refine((value) => value.trim().length > 0, "Validation evidence must be non-blank text")),
   available_transitions: z.array(z.enum(["apply", "cancel", "regenerate", "reject", "defer"])),
   status: z.enum(["preview_ready", "applying", "gated", "failed", "rejected", "deferred", "cancelled", "stale", "applied"]),
+  task_execution_dispatch_pending: z.literal(true).optional(),
   receipt: z.record(z.string(), z.unknown()).nullable(),
   stale: z.record(z.string(), z.unknown()).nullable(),
   gate: z.record(z.string(), z.unknown()).nullable().optional(),
@@ -1009,15 +1010,16 @@ const chatQueuedInputSchema = z.object({input_revision: z.number().int().nonnega
   attachments: z.array(z.object({id: z.string(), name: z.string(), size: z.number(),
     mime_type: z.string(), data_url: z.string()})),
 });
-export type ChatQueuedInput = z.infer<typeof chatQueuedInputSchema>;
+export type ChatQueuedInput = z.infer<typeof chatQueuedInputSchema> & Pick<ChatVisibleMessage, "reply_context">;
 export async function fetchQueuedChatInput(sessionId: string, turnId: string, signal?: AbortSignal) {
   // Keep original-source audience projection and complete paging. The visible
   // input and its revision come from one canonical user row, never raw model context.
   const history = await fetchChatSessionHistory(sessionId, signal, turnId);
   const original = history.messages.find(row => row.role === "user" && row.turn_id === turnId);
   if (!original) throw new Error("Original queued input is unavailable");
-  return chatQueuedInputSchema.parse({input_revision: original.queue_input_revision ?? 0,
-    message: original.reply_context?.source_text ?? original.text, attachments: original.attachments ?? []});
+  return {...chatQueuedInputSchema.parse({input_revision: original.queue_input_revision ?? 0,
+    message: original.reply_context?.source_text ?? original.text, attachments: original.attachments ?? []}),
+    reply_context: original.reply_context};
 }
 const chatQueueSchema = z.object({
   ok: z.literal(true), schema_version: z.literal("loopx_chat_store_v1"), session_id: z.string().min(1),
@@ -3353,6 +3355,7 @@ const exploreResultPageSchema = z.object({
     evidence_refs: z.array(z.string()), last_updated_at: z.string(),
     measurements: z.unknown().transform(value => normalizeExploreMeasurements(value)).optional(),
     measurement_error: z.string().optional(),
+    execution_observation: z.unknown().transform(observation => normalizeExploreExecutionObservation({observation})).optional(),
     work_yardstick: z.unknown().transform(capture => normalizeWorkYardstickCapture({capture})).optional(),
     linked_todos_available: z.boolean().optional(),
     linked_todos: z.array(z.object({

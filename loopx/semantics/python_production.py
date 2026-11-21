@@ -1,6 +1,5 @@
 """Bounded Python production evidence; never execute inspected source.
 
-Known values are syntactic result possibilities, not proof of reachable traces.
 Unresolved expressions retain their source locations. Owner definitions alone,
 comparison operands, comments and quoted examples are not production evidence.
 """
@@ -883,7 +882,7 @@ def scan_python_production(
                 # A bare annotation declares the field; there is no value to resolve.
                 blocker = 'annotation_only'
             if form == 'keyword_unproved':
-                # Argument name alone does not prove an output role.
+
                 unknown, blocker = True, 'argument_name_only'
             result.append(Production(f'{source.path}::{scope}', location.lineno, form,
                                      frozenset(values), unknown, blocker if unknown else None))

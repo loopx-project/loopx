@@ -67,12 +67,70 @@ def test_outgoing_request_and_return_require_explicit_consumption(tmp_path):
     acknowledge(root, "research", "reviewer", rid, "adopt", "Inspect current source")
     report(root, "research", "reviewer", rid, "conclusion", "One boundary requires correction.")
     assert agenda(root, registry)["items"][0]["step"] == "consume_peer_result"
-    read_inbox(root, registry, "research", "worker")
+    turn = "turn-review-return"
+    read_inbox(root, registry, "research", "worker", turn_instance_id=turn)
     assert agenda(root, registry)["items"][0]["step"] == "consume_peer_result"
     assert agenda(root, registry, "reviewer")["items"][0]["step"] == "await_peer_consumption"
-    consume_return(root, "research", "worker", rid, registry=registry)
+    consume_return(root, "research", "worker", rid, registry=registry,
+        turn_instance_id=turn, disposition="accepted")
     assert agenda(root, registry)["items"] == []
     assert agenda(root, registry, "reviewer")["items"] == []
+
+
+def test_peer_return_deferral_survives_until_a_later_turn(flow):
+    root, registry, _store, _create = flow
+    configured = json.loads(registry.read_text())
+    configured["goals"][0]["coordination"]["registered_agents"].append("reviewer")
+    registry.write_text(json.dumps(configured))
+    brief = {"schema_version": "collaboration_brief_v0", "purpose": "Review the boundary",
+        "context": "Keep requester authority", "constraints": [], "inputs": [],
+        "acceptance": ["Return findings"], "return_requirement": "Return to requester"}
+    receipt = request(root, registry, "research", "worker", "reviewer", "review-round", brief)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "reviewer", rid, "adopt", "Review")
+    report(root, "research", "reviewer", rid, "conclusion", "Use this result next Turn.")
+
+    hook = dispatch_turn_start_hooks([turn_start_hook(root, registry, "research", "worker")])
+    assert "--turn-instance-id" not in hook["required_reads"][0]["command"]
+    assert not (_root(root) / "replies" / rid / "conclusion.delivery.json").exists()
+
+    # A transport-only read is not proof that a model Turn received the result.
+    read_inbox(root, registry, "research", "worker")
+    with pytest.raises(ValueError, match="in this work Turn"):
+        consume_return(root, "research", "worker", rid, registry=registry,
+            turn_instance_id="turn-a", disposition="accepted")
+
+    first = read_inbox(root, registry, "research", "worker", turn_instance_id="turn-a")
+    assert "--turn-instance-id turn-a" in first["peer_returns"]["items"][0]["acknowledge_command"]
+    delivery = _root(root) / "replies" / rid / "conclusion.delivery.json"
+    supplied = delivery.read_bytes()
+    read_inbox(root, registry, "research", "worker", turn_instance_id="turn-a")
+    assert delivery.read_bytes() == supplied
+    deferred = consume_return(root, "research", "worker", rid, registry=registry,
+        turn_instance_id="turn-a", disposition="deferred")
+    replay = consume_return(root, "research", "worker", rid, registry=registry,
+        turn_instance_id="turn-a", disposition="deferred")
+    assert deferred["status"] == "deferred" and deferred["replay"] is False
+    assert replay["replay"] is True
+    assert agenda(root, registry)["return_attention"]["count"] == 1
+
+    read_inbox(root, registry, "research", "worker", turn_instance_id="turn-b")
+    acknowledgement = _root(root) / "replies" / rid / "conclusion.acknowledgement.json"
+    saved_acknowledgement = acknowledgement.read_bytes()
+    acknowledgement.write_text(json.dumps({**json.loads(saved_acknowledgement), "agent_id": "other"}))
+    with pytest.raises(ValueError, match="deferred acknowledgement is invalid"):
+        consume_return(root, "research", "worker", rid, registry=registry,
+            turn_instance_id="turn-b", disposition="accepted")
+    acknowledgement.write_bytes(saved_acknowledgement)
+    accepted = consume_return(root, "research", "worker", rid, registry=registry,
+        turn_instance_id="turn-b", disposition="accepted")
+    replayed = consume_return(root, "research", "worker", rid, registry=registry,
+        turn_instance_id="turn-b", disposition="accepted")
+    assert accepted["status"] == "consumed" and replayed["replay"] is True
+    with pytest.raises(ValueError, match="scope mismatch"):
+        consume_return(root, "research", "worker", rid, registry=registry,
+            turn_instance_id="turn-b", disposition="deferred")
+    assert agenda(root, registry)["return_attention"]["count"] == 0
 
 
 def test_invalid_receipt_and_invalid_entries_are_visible_as_unavailable(flow):
@@ -100,7 +158,10 @@ def test_separate_agent_has_no_access_to_another_receivers_agenda(flow):
 
 @pytest.mark.skipif(os.name != "posix", reason="native context delivery requires POSIX")
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("reader_output_bytes", [12_000, 64_000])
+def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(
+    tmp_path, monkeypatch, provider, reader_output_bytes,
+):
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
     from tests.control_plane.test_context_first_read import read_selection
     from tests.control_plane.test_quota_settlement_cli import (
@@ -111,6 +172,10 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path,
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    if reader_output_bytes == 64_000:
+        monkeypatch.setenv("LOOPX_CONTEXT_PAGE_OUTPUT_BYTES", str(reader_output_bytes))
+    else:
+        monkeypatch.delenv("LOOPX_CONTEXT_PAGE_OUTPUT_BYTES", raising=False)
     project, runtime, registry = _write_fixture(tmp_path)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     with state.open("a", encoding="utf-8") as stream:
@@ -155,10 +220,10 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path,
     read, = (row for row in first["/interaction_contract/agent_channel/required_reads"] if row.get("kind") == "operator_inbox")
     command = shlex.split(read["command"])
     assert command[0] == str(console)
-    def invoke(argv):
+    def invoke(argv, output_limit=12_000):
         result = subprocess.run(argv, cwd=project, capture_output=True, timeout=40)
         assert result.returncode == 0, result.stderr
-        assert 0 < len(result.stdout) <= 12_000
+        assert 0 < len(result.stdout) <= output_limit
         return result.stdout.decode()
 
     def read_receipts():
@@ -166,6 +231,7 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path,
         return {file.relative_to(root): file.read_bytes() for file in root.rglob("*.json")}
 
     cursor, seen, captured_pages, logical_pages = None, set(), 0, 0
+    largest_reader_output = 0
     while True:
         stdout = invoke([*command, *(["--cursor", cursor] if cursor else [])])
         page = json.loads(stdout.split("\n```json\n", 1)[1].removesuffix("\n```\n"))
@@ -182,10 +248,15 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path,
             direct = shlex.split(page["recovery_command"])
             assert direct[:3] == reader[:3]
             assert direct[direct.index("--capture-sha256") + 1] == pinned
+            for argv in (reader, direct):
+                for option in ("--page-bytes", "--max-page-output-bytes"):
+                    assert int(argv[argv.index(option) + 1]) == reader_output_bytes
             before = read_receipts()
             raw = bytearray()
             while reader:
-                part = json.loads(invoke(reader))
+                stdout = invoke(reader, reader_output_bytes)
+                largest_reader_output = max(largest_reader_output, len(stdout.encode("utf-8")))
+                part = json.loads(stdout)
                 assert part["ok"] and part["offset"] == len(raw) and part["sha256"] == pinned
                 raw.extend(part["content"].encode("utf-8"))
                 assert len(raw) > part["offset"]
@@ -194,6 +265,7 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path,
                 if reader:
                     assert reader[:3] == direct[:3] and "--capture-sha256" not in reader
                     assert Path(reader[reader.index("--reference-file") + 1]) == reference_path
+                    assert int(reader[reader.index("--max-page-output-bytes") + 1]) == reader_output_bytes
                 captured_pages += 1
             assert raw == saved.read_bytes()
             if logical_pages == 1:
@@ -201,7 +273,7 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path,
                 failed = subprocess.run(shlex.split(page["command"]), cwd=project, capture_output=True, timeout=40)
                 assert failed.returncode == 1 and len(failed.stdout) <= 12_000
                 assert "content" not in json.loads(failed.stdout)
-                recovered = json.loads(invoke(direct))
+                recovered = json.loads(invoke(direct, reader_output_bytes))
                 assert recovered["offset"] == 0 and recovered["sha256"] == pinned
                 assert raw.startswith(recovered["content"].encode("utf-8"))
             assert read_receipts() == before
@@ -215,6 +287,7 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path,
         if cursor is None:
             break
     assert seen == request_ids and logical_pages == 2 and captured_pages > 1
+    assert (largest_reader_output > 12_000) is (reader_output_bytes > 12_000)
     _, saved = read_selection(view["recovery"]["command"] + " --select " + shlex.quote(address))
     assert saved[address] == channel["work_context"]["sources"][index]["content"]["unfinished_delegations"]
     assert path.read_bytes() == original
@@ -424,10 +497,11 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
                 "read_complete": values[pointer.removesuffix("unfinished_delegations") + "read_complete"]}
             required_reads = values["/interaction_contract/agent_channel/required_reads"]
         else:
-            assert packet["schema_version"] == "loopx_turn_envelope_v0"
-            source = next(row for row in packet["work_context"]["sources"] if row.get("hook_id") == "manager.context_inbox")
-            content, required_reads = source["content"], packet["required_reads"]
-            assert packet["work_context"]["complete"] is True
+            assert packet["schema_version"] == "loopx_turn_envelope_v1"
+            channel = packet["interaction_contract"]["agent_channel"]
+            source = next(row for row in channel["work_context"]["sources"] if row.get("hook_id") == "manager.context_inbox")
+            content, required_reads = source["content"], channel["required_reads"]
+            assert channel["work_context"]["complete"] is True
         assert content["read_complete"] is False
         rows = {row["request_id"]: row for row in content["unfinished_delegations"]["items"]}
         assert set(rows) == {receipt["request_id"], queued["request_id"], peer["request_id"]}
@@ -440,7 +514,8 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
         manager_read = next(item for item in required_reads if item["hook_id"] == "manager.context_inbox")
         manager_argv = shlex.split(manager_read["command"])
         assert "manager-inbox" in manager_argv and "read" in manager_argv
-        assert ("markdown" in manager_argv) == (delivery == "native_files")
+        assert "--turn-instance-id" not in manager_argv
+        assert "markdown" in manager_argv
         assert "Continue the linked work" not in json.dumps(content)
         assert os.environ["LOOPX_CONTEXT_DELIVERY"] == parent_context
     if delivery == "native_files":
@@ -449,6 +524,19 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
         assert result.returncode == 0, result.stderr
         body = result.stdout.split("\n```json\n", 1)[1].removesuffix("\n```\n")
         rendered = json.loads(body)
+        if "command" in rendered:
+            assert rendered["ok"] and rendered["read_complete"] is False
+            digest = rendered["sha256"]
+            reader = rendered["command"]
+            raw = bytearray()
+            while reader:
+                code, part = run(*shlex.split(reader))
+                assert code == 0 and part["ok"] and part["sha256"] == digest
+                assert part["offset"] == len(raw)
+                raw.extend(part["content"].encode("utf-8"))
+                assert len(raw) == (part["total_bytes"] if part["eof"] else part["next_offset"])
+                reader = None if part["eof"] else part["next_command"]
+            rendered = json.loads(raw)
         common = rendered.pop("shared_item_guidance", {})
         rendered["items"] = [{**common, **row} for row in rendered["items"]]
         # Both commands perform the same scoped read. Each reports its own

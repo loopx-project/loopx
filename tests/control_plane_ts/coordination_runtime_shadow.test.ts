@@ -266,7 +266,7 @@ test("rollback can archive invalid cursor and pending entries without reading or
 });
 
 test("archiving a Todo drops its retained lease from the candidate head", async (t) => {
-  const f = await fixture(t);
+  await fixture(t);
   const lease = { schema_version: "task_lease_v0", goal_id: "goal-a", todo_id: "todo_one", owner: "agent-a",
     idempotency_key: "k1", version: 1, lease_epoch: 1, status: "released", updated_at: "2026-09-06T00:00:00Z" };
   const base = { ...projection([todo("todo_one")]), leases: [lease] };

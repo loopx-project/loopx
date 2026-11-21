@@ -2,16 +2,16 @@
 
 - **RFC 状态：** Accepted（合并后生效；合并前是讨论提案）
 - **替代 / 关闭：** 无
-- **交付成熟度：** Proposal；本文交付源码盘点与目标架构，不改变运行行为。
+- **交付成熟度：** 合并后 Partial：既有源码读取链路支持普通执行关联；方法收益及剩余目标架构尚未取得资格。
 - **作者 / 归属：** LoopX maintainers；源码事实由路径支持，目标架构和取舍为 AI 辅助提案，待维护者审阅确认。
-- **创建日期 / 最近规范修订：** 2026-11-14
+- **创建日期 / 最近规范修订：** 2026-11-14 / 2026-11-15
 - **实现基线：** `8d7d234c6f55fa45fa5db0ad5a156dcaaf726d32`（第 4 节的 `main` 均指此版本）。
 - **语义镜像：** [English](mechanism-convergence-and-learning-loop-v0.md)
 - **关联：** [总体路线](loopx-overall-roadmap-v0.zh-CN.md)、[小内核](monorepo-distribution-split-v0.zh-CN.md)、[Controller/统一契约](controller-executor-unified-contract-v0.zh-CN.md)、[Target/Yardstick/Stride](target-yardstick-stride-decisions-v0.zh-CN.md)、[研究探索](research-exploration-control-plane-v0.zh-CN.md)、[记忆效用](post-outcome-memory-utility-attribution-v0.zh-CN.md)、[Goal 契约演化](goal-contract-evolution-v0.zh-CN.md)。
 
 ## 文档地图与维护契约
 
-第 4 节记录固定版本的实现，4.3 单列未合入工作。第 5–11 节定义拟议的收敛后结构、调用关系、迁移和组合验收；它们不是当前已交付行为。本文持有跨机制的组合设计，单个能力的 schema、权限、默认值和晋升门仍归原规范；涉及改变时须同步修订所属规范，不能用本文覆盖。实施证据沿原 RFC/任务及 ledger 记录，不另建路线图或执行队列。维护者须核实并确认关键设计选择；本文不推定人工贡献比例或未确认观点的归属。
+第 4 节记录固定版本的实现，4.3 单列未合入工作。第 5–11 节定义拟议的收敛后结构、调用关系、迁移和组合验收；只有显式实施 checkpoint 说明已取得资格的源码行为。本文持有跨机制的组合设计，单个能力的 schema、权限、默认值和晋升门仍归原规范；涉及改变时须同步修订所属规范，不能用本文覆盖。实施证据沿原 RFC/任务及 ledger 记录，不另建路线图或执行队列。维护者须核实并确认关键设计选择；本文不推定人工贡献比例或未确认观点的归属。
 
 ## 1. 决策摘要
 
@@ -172,6 +172,8 @@ flowchart TD
 
 允许为这个终态重塑内部 API，并同步迁移真实调用方；不为保留旧代码而永久加 adapter。独立演进的规则仍分别负责。临时共存必须写明调用方、退出条件和恢复用途；完成时修改共同规则只有一个 owner。#8516 的在途原语先按其自身审阅与合入边界处理，不复制另一份实现或预建“机制组合器”。
 
+**遵守减法门禁。** 机制收敛遵循规范性的[减法门禁与反上下文重力规则](controller-executor-unified-contract-v0.zh-CN.md#subtraction-gate)（及其[小内核配套规则](monorepo-distribution-split-v0.zh-CN.md#subtraction-gate)）：只要统一门面仍与未退役的正常 producer、`raw_quota_turn_view` 类 `v0` 兼容适配器或永久关闭开关（`--context-delivery off`）并存，或验证通过组合式旧 × 新模式矩阵测试与数千行只增不减台账膨胀（如 `main@f15ebdd16b` 与 PR `#8266` 所测），收敛即未完成。每个过渡性适配器或 `legacy_fallback` 路径都必须写明活跃消费者与删除里程碑；每次重构切片都必须在删除被替代的 producer 及 Python/TS 重复包装的同时，完整保留 LoopX 的内核不变量（排他租约/围栏、默认拒绝的权限与 ACL 隔离、一次性幂等结算回执、同源反事实检查点）与失败反例测试集。
+
 ### 5.6 完整场景：预算改变，方法也应改变
 
 以下时间均为**合成设计假设**，不是实测成本。已有有效 incumbent；新候选代理更好，但权威结果不变。剩余预算 90 分钟，最终确认预计需 25 分钟，读取/控制/恢复另留 20 分钟。
@@ -248,6 +250,128 @@ flowchart TD
 | 匹配成果与预测校准 | 原研究实验 owner 先按既有 pilot 比较完整预算成果；有合格事前预测时分别检验耗时/结果等子预测。 | 冻结条件、缺失处理与留出边界；没有收益证据时改进方案，不把更准的预测称作更好的分配。 |
 | 有证据支持的跨任务改进 | Reward Memory 传递条件性经验，原策略 owner 决定是否采用校准/学习值；Skill 另行资格化。 | 新任务中的真实选择、执行与结果，包含失配/反例/撤销及完整成本；application 扩展仅为缺失关联的 caller 实施。 |
 | 执行融合 | C1/C4/C9、#8266/#8484 迁移入口、结果及恢复。 | 对照原单会话的语义、成果/成本和恢复；删除重复正常路径，双角色独立验收。 |
+
+**源码 checkpoint：普通执行关联（2026-11-15）。** 既有
+[`work Yardstick 读取模块`](../../../loopx/control_plane/work_items/yardstick_decision.ts)
+直接消费 confirmed 的普通执行 finding，无需重复声明决策。复用 canonical 历史
+排序和既有测量工作窗口规则，保留原选择，并在下一选择后关联此前执行。
+既有 Explore 适配器只向显式启用的工作读取模块补充缺失来源序号；公开历史及
+关闭状态保留原 wire。[File/SQLite CLI 回归](../../../tests/control_plane/test_work_yardstick_cli.py)
+覆盖原省略失败、独立候选回读、后续选择、重放及关闭；typed 检查拒绝其他归属、
+tentative、过时和迟到证据的错误关联。这只取得源码传输和记录关联资格，尚不证明
+当前模型采用、预测校准、跨任务收益或可比预算下的效果提升。对应要求与
+C1/C4/C9 集成继续开放；没有新增决策 owner、执行入口、schema 或默认启用。
+
+普通 [`Turn 消费者`](../../../loopx/cli_commands/turn_run_once.py)也在解码后的
+Vision packet 中保留已有内联 `explore_result`，由原 Explore owner 解析和交付。
+File/SQLite [公开 Turn 检查](../../../tests/control_plane/test_explore_settlement_attachment.py)
+覆盖独立验证的产物、关闭/省略及非法输入、已提交重放，以及从原 Run 恢复中断的交付。
+恢复保持原 Run 不变、Host 调用一次，且仅在请求的交付完成后扣额一次。
+覆盖最后一个 Todo 及带后继的完成路径；完成 Todo 前先执行原附件预检。
+被该预检拒绝的非法或未启用输入使 Todo 保持 open，且不产生主写回或扣额。
+这些检查取得调用边界资格；native 模型采用、完整预算收益、其他后端资格及在途
+执行提案的集成仍开放。
+
+同一源码 checkpoint 还拒绝附件待交付时经公开 quota CLI 提前扣额。普通 Turn 与
+`refresh-state` 的回执写入都先完成附件交付；普通及组合 refresh 恢复先交付已验证的
+原 Run，再修复回执。File/SQLite 故障对照覆盖 progress、completion、terminal 和
+successor Run，以及首次 CLI 交付中断。失败时不发写回回执、不扣额；恢复保持
+原 Run 不变，Host 调用一次且扣额一次。
+关闭 Yardstick 后，回执修复仍保留已提交捕获的重放语义；先完成原交付和结算，
+再开始下一 Turn。显式启用的读取模块在时钟
+回拨时采用已验证的后继历史前缀，保留原工作窗口及缺少前缀时的严格退路。
+File/SQLite 回归覆盖拒绝提前扣额和保留原候选/finding 回读；这些是正确性边界，
+不证明模型采用或收益。
+
+既有[已释放反馈消费者](../../../tests/control_plane/test_material_feedback_checkpoint.py)
+现沿普通选择入口返回的 captured review、Explore 证据和 writeback reader，
+不再期待 raw guard 字段。同一 File/SQLite 检查覆盖 Stride 关闭/启用、
+soft claim/hard lease 及历史反馈仅作上下文：保留独立验证的成本二路线，
+根据已释放证据记录前瞻比较，实际执行成本一路线，并在原完成验证缺失时
+拒绝终态收口。Reader 保持原结算身份且不扣额。固定基线与作者/组合源码中
+未变的 runtime 已支持该路径；迁移 reader 前失败的是过时测试消费者。
+这取得脚本式本地执行与调用方资格；实际模型采用、校准、同预算与跨任务
+收益仍未证明。
+
+直接 `run-once` 恢复现经普通 writeback callback 及其 resolver 保留已提交的
+重放标记。经验证的原回执修复可在 Yardstick 关闭后完成，新 typed 捕获仍被拒绝。
+聚焦的 File/SQLite 回归保留原 Run 和 Host，只写一个 finding 与回执、扣额一次，
+并验证重放无副作用及新捕获拒绝。这修复既有恢复合同，不新增 owner 或 activation；
+已安装 Host、其它后端及收益仍沿各自门禁。
+
+原生故障分配与外部 worker 的 Host 观测现在共用既有
+[`typed 故障 owner`](../../../loopx/control_plane/turn_driver/host_failure.ts)。
+Python 重试表及 worker 的成功／同会话／失败选择已退役。原生错误对象创建、
+Mapping 拒绝顺序、精确整数 IO、会话 ID 解码、轮询时钟及 pending-intent witness
+仍归原适配器。Host 成功观测只确认传输，不代表 Turn 完成、ACK 或扣额许可。
+自动重试资格仍窄于显式修复后的重试；仅本次调用的查询标记不增加配置或启用，
+省略／false 保留原显式查询语义。[原 worker 检查](../../../tests/test_external_scheduler_worker.py)、
+[边界检查](../../../tests/control_plane/test_host_failure_policy_transport.py)及
+[File/SQLite managed CLI](../../../tests/test_loopx_turn_managed_step.py)保持原会话重试、
+未知／其他会话／损坏结果、拒绝优先级、丢失响应恢复和一次重放结算。改变重试
+上限会使独立 SQLite CLI 观测失败。这是源码 checkpoint，不取得已安装 worker
+采用、剩余 C1/C4/C9 切换、产品组合或验收成果及完整成本资格。
+
+重放和新捕获断言现于恢复 fixture 内执行。此前测试更新将该块放在无证据测试中：
+恢复用例未执行这些断言，普通结算则因 fixture 名称未定义而失败。将既有断言块
+移回所属作用域恢复两类检查，不改变 runtime 逻辑。File/SQLite 恢复、无副作用
+重放、新 disabled 捕获拒绝及普通无证据结算现经公开 CLI 执行；此前结果保留
+其原有、更窄的覆盖范围。
+
+后端名称也须有实际 provider 证据。共享的
+[本地 authority fixture](../../../tests/control_plane/canonical_authority_fixture.py)
+现于存储或 writer-fence 副作用前拒绝不支持的 provider；
+[CLI 对照](../../../tests/control_plane/test_canonical_authority_fixture.py)
+验证真实 File/SQLite 回读及拒绝时状态不变。此前 PostgreSQL 标签会静默
+初始化 File authority。既有
+[PostgreSQL remote task 候选](../../reference/remote-authority-task-service-v0.md)
+另经真实 TLS、受限角色、任务生命周期和只读 quota 观察验证，仍不准入普通
+host Turn。因此这些服务检查不能取得普通 PostgreSQL 反馈 Turn 资格，
+也不构成本切片新增执行 profile 的理由。
+
+绑定 Todo 的规划结算也复用既有 typed receipt 准入。明确获准的非交付复核
+不要求其 guard 本来就不准备的业务执行租约；显式或先前已准备的执行仍须
+具备原证明。Goal Stop、源锁、语义复核及结算检查继续生效。隔离的
+[File/SQLite CLI 对照](../../../tests/control_plane/test_replan_writeback_lease_scope.py)
+覆盖启用/关闭复核、外国身份、显式/已准备执行、Stop、Todo/租约状态不变
+和仅一次重放结算。这修复规划到写回的组合边界；安装态切换、真实模型采用
+及成果/完整成本资格仍开放。
+
+既有反馈资格消费者通过已结算结果的不可变 `result_details` reader 读取被延后展示的 Run 路径，不再假设诊断字段总在内联结果中。公开读取仅选择原路径，保留 Vision、反馈、验收及只结算一次的断言。普通组合结算验证运行时负责的扣额；规划 checkpoint 按返回的 Agent 负责命令结算。File/SQLite 源码与组合路径对照资格化该 reader 迁移；脚本执行仍不同于模型采用及收益。
+
+**源码 checkpoint：产品执行观察读回（2026-11-19）。** 已保存结论现在复用
+Explore 的执行观察 codec，保留原方法、实际方法、改向原因、候选版本、成本和
+结果引用。结论页与历史页复用同一展开式读回；现有 Lark finding Summary 同步
+展示这些源事实，缺失测量保持未知。没有执行观察的结论保持原展示与投影，错误
+候选结果关联被拒绝，失效读取不能留下旧内容，有效来源可在原页面重试。
+隔离 File/SQLite HTTP 和打包浏览器检查覆盖这些路径及桌面/窄屏，读回不改变源
+状态或执行权限。这只交付产品传输与读回，包含
+[App 图示读回指南](../../../loopx/capabilities/explore/README.md#read-execution-evidence-in-the-app)，
+并用填充的合成记录分别捕获默认桌面/窄屏和展开详情。指南也说明旧保存结论读回
+遗漏的识别方式；已安装客户端的升级与读回仍未资格化。此源码 checkpoint
+不证明模型采用或方法收益；执行融合、
+跨任务采用、预测校准与可比预算结果仍开放。正式评测不阻塞独立的实现和迁移。
+
+**源码 checkpoint：无会话读回所有权（2026-11-20）。** 无会话捕获适配器通过
+`context_select` 将正常工作初始导航交给既有 TypeScript Progressive owner，
+Python 保留发布、字节预算与 fallback。仅用于本次调用的选项保留通用选择及其
+校验顺序。File/SQLite 捕获在后续认领后仍保留原 preparation 与结算事实；
+实际选中展示、关闭及摘要拒绝路径有不可变基线／当前候选对照。既有大 scope
+与 note 复用测试调用将原捕获的 lease proof 带入手动写回，保留分页、恢复和
+只结算一次的断言。这退役一个重复读回分类器；完整 C1/C4/C9 切换、已安装／
+原生采用及方法／成果收益仍开放。
+
+**源码 checkpoint：heartbeat 绑定所有权（2026-11-21）。** Python 回执读者与
+锁内绑定器现复用既有 TypeScript heartbeat 绑定和有效回执规则，文件／GoalRef
+过滤与 append-only IO 仍在本地。一份纯批量投影返回索引和绑定；Python 返回
+原记录，保留未知详情与精确数值。重复的绑定事实投影可以缓存，文件、租约
+readiness、准入和结算仍由原 owner 读取。这退役 Python 的平行绑定冲突判断和
+有效回执 reduction。旧读者会接受既有结算 owner 拒绝的非规范 Todo id；新读者
+报告同一身份冲突，不修改日志。File/SQLite 真实 CLI 对照保留选择、义务、
+状态字节、原身份和零额外扣额。这些源码对照不取得 C1 默认渠道采用、已安装
+行为或模型／成果收益资格。
+可见 Goal 的硬租约对照把同一 guard 返回的证明带入手工写回，并保留未带
+证明时的拒绝与日志不变。
 
 首个任务须确有反馈或方法选择需求。已有链完整时直接复用；有缺口时由真实消费者证明并修复，不为配合示例制造失败。运行实验、训练模型和发布过程各沿原权限，本文不占用其他 lane 配额或预设 PR 数。
 

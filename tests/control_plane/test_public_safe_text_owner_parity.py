@@ -27,12 +27,14 @@ from loopx.authority import validate_public_safe_text as validate_authority_text
 from loopx.boundary_authority import build_checkpointed_boundary_authority_entry
 from loopx.control_plane.goals.vision_checkpoint import build_vision_checkpoint
 from loopx.feedback import validate_public_safe_text as validate_feedback_text
+from loopx.control_plane.runtime.public_safety import validate_public_safe_value
 from loopx.public_safe_text import (
     ALL_CATEGORIES,
     CATEGORY_CREDENTIAL_WORD,
     TEXT_OWNER_CATEGORIES,
     classify_private_text,
     find_private_text_match,
+    find_public_safe_local_path,
 )
 
 CORPUS_PATH = (
@@ -71,6 +73,7 @@ def _samples(group: str) -> list[tuple[str, str]]:
 PUBLIC_SAFE_SAMPLES = _samples("public_safe")
 PRIVATE_LOOKING_SAMPLES = _samples("private_looking")
 INTERNAL_STATE_PROSE_SAMPLES = _samples("internal_state_prose")
+LOCAL_PATH_SHAPES = _load_corpus()["local_path_shapes"]
 
 
 def _shaped_samples(group: str) -> list[tuple[str, str, str]]:
@@ -110,6 +113,43 @@ def _ids(samples: list[tuple[str, str]]) -> list[str]:
     return [sample_id for sample_id, _ in samples]
 
 
+@pytest.mark.parametrize(
+    "sample",
+    LOCAL_PATH_SHAPES,
+    ids=[str(sample["id"]) for sample in LOCAL_PATH_SHAPES],
+)
+def test_local_path_shapes_are_pinned_in_both_directions(
+    sample: dict[str, Any],
+) -> None:
+    # The corpus is the contract, so the table in #5136 is pinned here rather
+    # than rediscovered by a reviewer. The text-owner publication helper keeps
+    # its narrower boundary-assignment verdict; the public-output guard is the
+    # destination that must reject every row.
+    value = str(sample["value"])
+    assert bool(find_public_safe_local_path(value)) is sample["public_safe_local_path"]
+    assert bool(find_private_text_match(value)) is sample["publication_tier_path"]
+    assert bool(classify_private_text(value)) is sample["classify_path"]
+    with pytest.raises(ValueError, match="local path"):
+        validate_public_safe_value({"value": value})
+
+
+def test_public_output_guard_keeps_remote_urls_and_ordinary_prose() -> None:
+    for value in ("https://example.com/docs", "the token budget is 1200"):
+        validate_public_safe_value({"value": value})
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        "https://docs.example.test./home/overview",
+        "https://[2001:db8::1]/home/overview",
+        "https://docs.example.com/?next=/home/overview",
+    ),
+)
+def test_vision_checkpoint_keeps_http_links_with_path_shaped_parts(value: str) -> None:
+    _vision_text(value)
+
+
 def _boundary_authority_text(text: str) -> None:
     """Drive boundary_authority through its public builder, not its helper."""
 
@@ -139,6 +179,26 @@ OWNERS = (
     ("vision_checkpoint_ts", _vision_text),
 )
 OWNER_IDS = [owner_id for owner_id, _ in OWNERS]
+
+@pytest.mark.parametrize(
+    "owner", [check for _, check in OWNERS[:3]], ids=OWNER_IDS[:3]
+)
+@pytest.mark.parametrize(
+    "sample",
+    LOCAL_PATH_SHAPES,
+    ids=[str(sample["id"]) for sample in LOCAL_PATH_SHAPES],
+)
+def test_local_path_shapes_are_rejected_by_the_python_text_owners(
+    owner: Any,
+    sample: dict[str, Any],
+) -> None:
+    # The acceptance asks for a named subset, not an argument. These three
+    # Python owners all publish LoopX state, and every row is a local reference
+    # their destination must not carry.
+    with pytest.raises(ValueError, match="private-looking value"):
+        owner(str(sample["value"]))
+
+
 
 EXTENDED_WINDOWS_PATHS = (
     r"\\?\UNC\fileserver\share\a.md",

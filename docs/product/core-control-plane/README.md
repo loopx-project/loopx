@@ -63,8 +63,7 @@ uses four runtime responsibilities:
 | Kernel | Owns durable todo, gate, monitor, accepted writeback, quota, recovery, and scheduling. |
 
 Domain state, evidence, receipts, and projections are exchanged or derived
-artifacts, not additional owners. An extension may deliver a provider, but its
-installation lifecycle does not grant Kernel authority. See the full
+artifacts, not additional owners. An extension may deliver a provider. See the full
 [runtime responsibility model](../../architecture.md#runtime-responsibility-model).
 
 ## Three-Lens Contract

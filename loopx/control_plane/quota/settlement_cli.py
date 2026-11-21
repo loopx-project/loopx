@@ -1,25 +1,31 @@
 """CLI rollout helpers for heartbeat settlement identity and receipt wiring."""
 
 from __future__ import annotations
-from .effective_action import EffectiveAction
 
 import argparse
+import hashlib
 from collections.abc import Mapping
 from pathlib import Path
 
+from ..scheduler.execution_context import SchedulerExecutionContextResolution
 from ..todos.contract import (
     normalize_todo_id,
     normalize_todo_replan_obligation_id,
 )
 from ..work_items.autonomous_replan_obligation import (
+    AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION,
+    AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID,
+    AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION,
     replan_obligation_id_from_packet,
 )
 from .effect_program import SettlementIdentity
+from .effective_action import EffectiveAction
 from .error_codes import HeartbeatReceiptIdentityConflictError
+from .execution_preparation import quota_prepared_lease_receipt_fields
 from .heartbeat_receipt import (
     heartbeat_receipt_view,
-    upgrade_identityless_heartbeat_receipt,
     requalify_bound_heartbeat_receipt,
+    upgrade_identityless_heartbeat_receipt,
 )
 from .settlement import (
     QuotaSettlementReadback,
@@ -31,6 +37,7 @@ from .settlement_workspace_causality import (
     build_delivery_workspace_causality,
     delivery_workspace_causality_event_fields,
 )
+from .spend_sources import quota_spend_source_for_execution_context
 
 
 def reconcile_existing_heartbeat_receipt(
@@ -41,28 +48,47 @@ def reconcile_existing_heartbeat_receipt(
     turn_instance_id: str,
     existing: dict[str, object],
     goal_ref: Mapping[str, object] | None = None,
+    scheduler_execution_context: (
+        Mapping[str, object] | SchedulerExecutionContextResolution | None
+    ) = None,
 ) -> tuple[dict[str, object], str, bool, str]:
     """Bind or qualify same-Turn work without replacing its settlement identity."""
 
     receipt = existing
     receipt_status = "replayed"
     receipt_appended = False
-    rollout_todo_id = quota_rollout_todo_id(payload, args)
-    rollout_replan_obligation_id = quota_rollout_replan_obligation_id(payload, args)
+    existing_details_value = receipt.get("details")
+    existing_details = (
+        existing_details_value
+        if isinstance(existing_details_value, Mapping)
+        else {}
+    )
+    existing_todo_id = normalize_todo_id(existing_details.get("todo_id"))
+    existing_replan_obligation_id = normalize_todo_replan_obligation_id(
+        existing_details.get("replan_obligation_id")
+    )
+    existing_effect_id = str(
+        existing_details.get("settlement_effect_id") or ""
+    ).strip()
+    receipt_has_bound_identity = bool(
+        (existing_todo_id or existing_replan_obligation_id)
+        and existing_effect_id
+    )
+    if receipt_has_bound_identity:
+        # A committed heartbeat receipt is the authority for this Turn's
+        # settlement identity.  The current projection can rotate from Todo
+        # delivery into autonomous replan (or the reverse) while the host is
+        # interrupted, but that later projection must not rebind the original
+        # effect.  Explicit retry arguments are checked below against the
+        # receipt and its retained planning selection.
+        rollout_todo_id = existing_todo_id
+        rollout_replan_obligation_id = existing_replan_obligation_id
+    else:
+        rollout_todo_id = quota_rollout_todo_id(payload, args)
+        rollout_replan_obligation_id = quota_rollout_replan_obligation_id(
+            payload, args
+        )
     if rollout_todo_id or rollout_replan_obligation_id:
-        existing_details_value = receipt.get("details")
-        existing_details = (
-            existing_details_value
-            if isinstance(existing_details_value, Mapping)
-            else {}
-        )
-        existing_todo_id = normalize_todo_id(existing_details.get("todo_id"))
-        existing_replan_obligation_id = normalize_todo_replan_obligation_id(
-            existing_details.get("replan_obligation_id")
-        )
-        existing_effect_id = str(
-            existing_details.get("settlement_effect_id") or ""
-        ).strip()
         expected_effect_id = SettlementIdentity(
             goal_id=args.goal_id,
             agent_id=args.agent_id,
@@ -70,7 +96,7 @@ def reconcile_existing_heartbeat_receipt(
             turn_instance_id=turn_instance_id,
             replan_obligation_id=rollout_replan_obligation_id,
         ).effect_id
-        if (existing_todo_id or existing_replan_obligation_id) and existing_effect_id:
+        if receipt_has_bound_identity:
             # A fully settled Turn owns its immutable receipt regardless of a
             # later explicit CLI choice.  The live decision has already read
             # the exact settlement and projected ``heartbeat_settled_skip``;
@@ -82,14 +108,30 @@ def reconcile_existing_heartbeat_receipt(
             )
             if not settled_replay:
                 requested_todo_id = normalize_todo_id(args.todo_id)
-                if requested_todo_id and requested_todo_id != existing_todo_id:
-                    raise HeartbeatReceiptIdentityConflictError(
-                        "heartbeat receipt settlement identity conflicts with the "
-                        "current selected Todo: explicitly requested Todo differs"
-                    )
                 requested_replan_obligation_id = normalize_todo_replan_obligation_id(
                     getattr(args, "replan_obligation_id", None)
                 )
+                if requested_todo_id and requested_replan_obligation_id:
+                    raise ValueError(
+                        "quota rollout cannot bind both todo_id and "
+                        "replan_obligation_id"
+                    )
+                if requested_todo_id:
+                    if existing_todo_id and requested_todo_id != existing_todo_id:
+                        raise HeartbeatReceiptIdentityConflictError(
+                            "heartbeat receipt settlement identity conflicts with the "
+                            "current selected Todo: explicitly requested Todo differs"
+                        )
+                    if existing_replan_obligation_id:
+                        retained_todo_id = normalize_todo_id(
+                            existing_details.get("pending_action_selection_todo_id")
+                        )
+                        if requested_todo_id != retained_todo_id:
+                            raise HeartbeatReceiptIdentityConflictError(
+                                "heartbeat receipt settlement identity conflicts with "
+                                "the retained Todo selection: explicitly requested "
+                                "Todo differs"
+                            )
                 if (
                     requested_replan_obligation_id
                     and requested_replan_obligation_id
@@ -99,38 +141,59 @@ def reconcile_existing_heartbeat_receipt(
                         "heartbeat receipt settlement identity conflicts with the "
                         "explicitly requested autonomous replan obligation"
                     )
-                if (
-                    existing_todo_id != rollout_todo_id
-                    or existing_replan_obligation_id != rollout_replan_obligation_id
-                    or existing_effect_id != expected_effect_id
-                ):
+                if existing_effect_id != expected_effect_id:
                     raise HeartbeatReceiptIdentityConflictError(
-                        "heartbeat receipt settlement identity conflicts with the "
-                        "current settlement binding: receipt="
-                        f"{existing_todo_id or existing_replan_obligation_id}, "
-                        "current="
-                        f"{rollout_todo_id or rollout_replan_obligation_id}"
+                        "heartbeat receipt effect identity does not match its "
+                        "persisted settlement binding"
                     )
-                rollout_details = quota_rollout_details(payload, args,
-                    todo_id=rollout_todo_id, replan_obligation_id=rollout_replan_obligation_id)
-                rollout_details["settlement_effect_id"] = expected_effect_id
-                receipt, qualified = requalify_bound_heartbeat_receipt(
-                    runtime_root, goal_id=args.goal_id, agent_id=args.agent_id,
-                    turn_instance_id=turn_instance_id, todo_id=rollout_todo_id,
+                rollout_details = quota_rollout_details(
+                    payload,
+                    args,
+                    todo_id=rollout_todo_id,
                     replan_obligation_id=rollout_replan_obligation_id,
-                    status=str(payload.get("effective_action") or payload.get("decision") or "should-run"),
-                    details=rollout_details,
-                    registry_path=Path(str(payload["registry"])) if payload.get("registry") else None,
-                    goal_ref=goal_ref,
+                    scheduler_execution_context=scheduler_execution_context,
                 )
-                if qualified:
-                    receipt_status, receipt_appended = "upgraded", True
+                rollout_details["settlement_effect_id"] = expected_effect_id
+                replan_packet = (
+                    payload.get("replan_action_packet")
+                    if isinstance(payload.get("replan_action_packet"), Mapping)
+                    else {}
+                )
+                current_replan_obligation_id = replan_obligation_id_from_packet(
+                    replan_packet
+                )
+                # A later frontier can rotate to a new replan identity after
+                # this Turn's historical ACK was accepted.  That projection
+                # cannot requalify or replace the original receipt.  Only the
+                # same open replan may append compatible review-source facts;
+                # a settlement-only packet already carries the exact evidence
+                # needed to close this immutable receipt.
+                if (
+                    replan_packet.get("settlement_only") is not True
+                    and (
+                        not existing_replan_obligation_id
+                        or current_replan_obligation_id
+                        == existing_replan_obligation_id
+                    )
+                ):
+                    receipt, qualified = requalify_bound_heartbeat_receipt(
+                        runtime_root, goal_id=args.goal_id, agent_id=args.agent_id,
+                        turn_instance_id=turn_instance_id, todo_id=rollout_todo_id,
+                        replan_obligation_id=rollout_replan_obligation_id,
+                        status=str(payload.get("effective_action") or payload.get("decision") or "should-run"),
+                        details=rollout_details,
+                        registry_path=Path(str(payload["registry"])) if payload.get("registry") else None,
+                        goal_ref=goal_ref,
+                    )
+                    if qualified:
+                        receipt_status, receipt_appended = "upgraded", True
         else:
             rollout_details = quota_rollout_details(
                 payload,
                 args,
                 todo_id=rollout_todo_id,
                 replan_obligation_id=rollout_replan_obligation_id,
+                scheduler_execution_context=scheduler_execution_context,
             )
             receipt, upgraded = upgrade_identityless_heartbeat_receipt(
                 runtime_root,
@@ -168,6 +231,9 @@ def reconcile_existing_heartbeat_receipt_for_turn(
     turn_instance_id: str,
     existing: dict[str, object],
     goal_ref: Mapping[str, object] | None = None,
+    scheduler_execution_context: (
+        Mapping[str, object] | SchedulerExecutionContextResolution | None
+    ) = None,
 ) -> tuple[dict[str, object], str, bool, str, bool]:
     """Reconcile an existing receipt and report whether the turn is receipt-ready."""
 
@@ -178,6 +244,7 @@ def reconcile_existing_heartbeat_receipt_for_turn(
         turn_instance_id=turn_instance_id,
         existing=existing,
         goal_ref=goal_ref,
+        scheduler_execution_context=scheduler_execution_context,
     )
     return receipt, status, appended, stall_observation, True
 
@@ -321,12 +388,54 @@ def quota_rollout_replan_obligation_id(
     return replan_obligation_id
 
 
+def _cli_rollout_details(
+    payload: Mapping[str, object],
+    args: argparse.Namespace,
+    *,
+    cli_channel: object,
+    todo_id: str | None,
+    replan_obligation_id: str | None,
+    scheduler_execution_context: (
+        Mapping[str, object] | SchedulerExecutionContextResolution | None
+    ),
+) -> dict[str, object]:
+    details: dict[str, object] = {}
+    if (
+        isinstance(cli_channel, Mapping)
+        and cli_channel.get("selection_required") is True
+        and payload.get("ok") is True
+        and payload.get("should_run") is True
+        and not todo_id
+        and not replan_obligation_id
+    ):
+        details["selection_required"] = True
+    spend_source = (
+        cli_channel.get("quota_spend_source")
+        if isinstance(cli_channel, Mapping)
+        else None
+    )
+    if not spend_source and args.quota_command == "should-run" and (
+        todo_id or replan_obligation_id
+    ):
+        # An explicit selection can bind a Turn before its hard lease creates a
+        # settlement plan. Preserve the host source for post-claim readback.
+        spend_source = quota_spend_source_for_execution_context(
+            scheduler_execution_context
+        )
+    if spend_source:
+        details["quota_spend_source"] = spend_source
+    return details
+
+
 def quota_rollout_details(
     payload: Mapping[str, object],
     args: argparse.Namespace,
     *,
     todo_id: str | None,
     replan_obligation_id: str | None = None,
+    scheduler_execution_context: (
+        Mapping[str, object] | SchedulerExecutionContextResolution | None
+    ) = None,
 ) -> dict[str, object]:
     successor_todo_ids = (
         payload.get("successor_todo_ids")
@@ -411,24 +520,51 @@ def quota_rollout_details(
     replan_packet = payload.get("replan_action_packet")
     obligation = payload.get("autonomous_replan_obligation")
     if semantic_replan_obligation_id and isinstance(obligation, Mapping) and obligation.get("obligation_id") == semantic_replan_obligation_id:
-        from ..work_items.replan_semantics_codec import project_replan_semantics
         from ...rollout_event_log import _safe_details
+        from ..work_items.replan_semantics_codec import project_replan_semantics
 
         source = project_replan_semantics({"operation": "receipt_review_source",
             "agent_id": getattr(args, "agent_id", None),
             "obligation": {key: value for key, value in obligation.items() if key != "replan_context"}})
         review = source["review_source"]
         if isinstance(review, Mapping):
-            # Retain the original stop clause only when the existing public
-            # metadata serializer preserves it exactly. Unsafe/lossy sources
-            # keep legacy strict recovery; never truncate a governing clause.
+            # Retain a short public stop clause verbatim.  A longer clause can
+            # still preserve its semantic identity through a digest, but only
+            # when the public metadata serializer accepts the entire source
+            # without private markers or whitespace normalization.  Unsafe or
+            # otherwise lossy sources keep legacy strict recovery.
             try:
                 safe = _safe_details({"semantic_replan_review_kind": review["kind"],
                     "semantic_replan_review_stop_condition": review["stop_condition"]})
             except ValueError:
                 safe = {}
-            if safe.get("semantic_replan_review_stop_condition") == review["stop_condition"]:
+            stop_condition = review.get("stop_condition")
+            if safe.get("semantic_replan_review_stop_condition") == stop_condition:
                 details.update(safe)
+            elif (
+                safe.get("semantic_replan_review_kind") == review.get("kind")
+                and isinstance(stop_condition, str)
+                and len(stop_condition) > 240
+                and " ".join(stop_condition.split()) == stop_condition
+            ):
+                stop_details = {
+                    "semantic_replan_review_kind": safe["semantic_replan_review_kind"],
+                    # Older readers require the scalar stop field.  Keep them
+                    # fail-closed on this path while a current reader verifies
+                    # the full clause through its digest (and known contract,
+                    # when available).
+                    "semantic_replan_review_stop_condition": (
+                        AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION
+                    ),
+                    "semantic_replan_review_stop_condition_sha256": hashlib.sha256(
+                        stop_condition.encode("utf-8")
+                    ).hexdigest(),
+                }
+                if stop_condition == AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION:
+                    stop_details["semantic_replan_review_stop_contract_id"] = (
+                        AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID
+                    )
+                details.update(stop_details)
     receipt = payload.get("heartbeat_receipt")
     capability_guard = (replan_packet.get("capability_guard") if isinstance(replan_packet, Mapping) else None) or (
         receipt.get("semantic_replan_capability_guard") if isinstance(receipt, Mapping) else None
@@ -438,8 +574,16 @@ def quota_rollout_details(
         details["semantic_replan_gap_id"] = capability_guard["gap_id"]
         details["semantic_replan_frontier_revision"] = capability_guard["frontier_revision"]
     cli_channel = interaction.get("cli_channel")
-    if isinstance(cli_channel, Mapping) and cli_channel.get("quota_spend_source"):
-        details["quota_spend_source"] = cli_channel["quota_spend_source"]
+    details.update(
+        _cli_rollout_details(
+            payload,
+            args,
+            cli_channel=cli_channel,
+            todo_id=todo_id,
+            replan_obligation_id=replan_obligation_id,
+            scheduler_execution_context=scheduler_execution_context,
+        )
+    )
     retained_todo_id = normalize_todo_id(retained_selection.get("retained_todo_id"))
     if retained_todo_id:
         retained_bound = retained_disposition == "preserve_retained_todo"
@@ -459,6 +603,13 @@ def quota_rollout_details(
         )
     if workspace_causality:
         details.update(delivery_workspace_causality_event_fields(workspace_causality))
+    details.update(quota_prepared_lease_receipt_fields(
+        agent_channel.get("execution_preparation"),
+        todo_id=todo_id,
+        selected_todo_id=details["selected_todo_id"],
+        agent_id=getattr(args, "agent_id", None),
+        delivery_admitted=closeout_required,
+    ))
     return details
 
 

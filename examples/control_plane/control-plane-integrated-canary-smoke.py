@@ -32,6 +32,7 @@ AGENT_ID = "codex-product-capability"
 PRIMARY_AGENT_ID = "codex-main-control"
 CANARY_TODO_ID = "todo_integrated_canary"
 CANARY_TODO_TITLE = "Design bounded status/quota/review-packet/Todo/read-path canary"
+DURABLE_NEXT_ACTION = "Keep the fixture-only integrated canary under two minutes."
 SUCCESSOR_TODO_TITLE = "Continue integrated canonical successor routing canary"
 CONTINUATION_TITLE = "[P1] Continue same-agent canonical continuation through status and quota."
 MONITOR_TODO_ID = "todo_integrated_due_monitor"
@@ -54,7 +55,7 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
         "---\n\n"
         "# Control Plane Integrated Canary\n\n"
         "## Next Action\n\n"
-        "- Keep the fixture-only integrated canary under two minutes.\n\n"
+        f"- {DURABLE_NEXT_ACTION}\n\n"
         "## Agent Todo\n\n"
         "- [ ] [P2] Markdown fallback todo that should lose to the event log.\n"
         "  <!-- loopx:todo todo_id=todo_markdown_fallback status=open "
@@ -176,17 +177,17 @@ def find_queue_item(status_payload: dict[str, Any], *, goal_id: str = GOAL_ID) -
 def assert_selected_agent_todo(
     summary: dict[str, Any],
     *,
-    compact_quota: bool = False,
+    complete_quota: bool = False,
 ) -> None:
-    item_lane = "first_executable_items" if compact_quota else "first_open_items"
+    item_lane = "first_executable_items" if complete_quota else "first_open_items"
     items = summary.get(item_lane) if isinstance(summary.get(item_lane), list) else []
-    if not items and not compact_quota:
+    if not items and not complete_quota:
         items = summary.get("items") if isinstance(summary.get("items"), list) else []
     assert [item.get("todo_id") for item in items] == [CANARY_TODO_ID], summary
     item = items[0]
-    if compact_quota:
+    if complete_quota:
         assert summary["payload_compaction"]["schema_version"] == (
-            "quota_cli_todo_summary_compaction_v0"
+            "quota_todo_summary_payload_compaction_v0"
         ), summary
         assert item["text"] == f"[P1] {CANARY_TODO_TITLE}", summary
     # The shared diagnostic projection retains each visible record in full.
@@ -228,7 +229,7 @@ def assert_bounded_delivery_state_machine_bundle(quota_payload: dict[str, Any]) 
     scheduler = quota_payload["scheduler_hint"]
     assert scheduler["action"] == "run_now", scheduler
     assert scheduler["cadence_class"] == "active_work", scheduler
-    codex_app = scheduler["codex_app"]
+    codex_app = scheduler["app_automation"]
     assert codex_app["recommended_rrule"] == "FREQ=MINUTELY;INTERVAL=3", scheduler
     assert codex_app["no_spend_for_cadence_change"] is True, scheduler
     assert codex_app["stateful_backoff"]["apply_needed"] is True, scheduler
@@ -259,7 +260,7 @@ def assert_scheduler_ack_state_machine(
     runtime_root: Path,
     quota_payload: dict[str, Any],
 ) -> dict[str, Any]:
-    codex_app = quota_payload["scheduler_hint"]["codex_app"]
+    codex_app = quota_payload["scheduler_hint"]["app_automation"]
     backoff = codex_app["stateful_backoff"]
     ack_payload = run_cli(
         registry_path,
@@ -300,7 +301,7 @@ def assert_scheduler_ack_state_machine(
         AGENT_ID,
         "--codex-app",
     )
-    steady_codex_app = steady_payload["scheduler_hint"]["codex_app"]
+    steady_codex_app = steady_payload["scheduler_hint"]["app_automation"]
     assert steady_codex_app["stateful_backoff"]["apply_needed"] is False, steady_payload
     assert steady_codex_app["stateful_backoff"]["state_status"] == "same_identity", steady_payload
     assert steady_codex_app["host_action"] == "none", steady_payload
@@ -394,9 +395,9 @@ def assert_todo_completion_successor_state_machine(
     assert routed["effective_action"] == "normal_run", routed
     assert routed["agent_lane_next_action"]["todo_id"] == successor_id, routed
     assert routed["agent_lane_next_action"]["text"] == f"[P1] {SUCCESSOR_TODO_TITLE}", routed
-    assert "title" not in routed["agent_lane_next_action"], routed
+    assert routed["agent_lane_next_action"]["title"] == SUCCESSOR_TODO_TITLE, routed
     assert routed["agent_lane_next_action"]["preserves_goal_next_action"] is True, routed
-    assert "active_state_next_action" not in routed, routed
+    assert routed["active_state_next_action"] == DURABLE_NEXT_ACTION, routed
     assert routed["goal_route_hint"]["selected_action_differs_from_durable"] is True, routed
     assert routed["goal_route_hint"]["goal_next_action_mutation"] == "none", routed
     assert routed["interaction_contract"]["mode"] == "bounded_delivery", routed
@@ -499,6 +500,7 @@ def assert_due_monitor_poll_state_machine(root: Path, *, provider: str) -> None:
         "--codex-app",
     )
     assert quota_payload["ok"] is True, quota_payload
+    assert quota_payload["schema_version"] == "loopx_turn_envelope_v1", quota_payload
     assert quota_payload["should_run"] is True, quota_payload
     assert quota_payload["decision"] == "run", quota_payload
     assert quota_payload["effective_action"] == "normal_run", quota_payload
@@ -790,7 +792,7 @@ def run_fixture_canary(root: Path, *, provider: str) -> None:
     assert CANARY_TODO_TITLE in quota_payload["recommended_action"], quota_payload
     assert_selected_agent_todo(
         quota_payload["agent_todo_summary"],
-        compact_quota=True,
+        complete_quota=True,
     )
     assert_bounded_delivery_state_machine_bundle(quota_payload)
     assert_scheduler_ack_state_machine(registry_path, runtime_root, quota_payload)

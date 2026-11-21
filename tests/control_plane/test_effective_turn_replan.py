@@ -339,8 +339,9 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
         )
         assert rc == 0, envelope
         assert envelope["replan_action_packet"]["planning_guidance"] == selected["replan_action_packet"]["planning_guidance"]
-        assert envelope["replan_action_packet"]["writeback_contract"]["vision_authoring"] == authoring
-        assert envelope["writeback"]["settlement_plan"] == plan
+        env_contract = envelope["replan_action_packet"]["writeback_contract"]
+        assert env_contract["vision_authoring_ref"] == contract["vision_authoring_ref"]
+        assert envelope["interaction_contract"]["cli_channel"]["settlement_plan"] == plan
     vision_path = tmp_path / "periodic-vision.json"
     vision = json.loads(json.dumps(authoring["minimal_example"]))
     vision["vision_patch"] = {"acceptance_summary": "Original acceptance remains open."}

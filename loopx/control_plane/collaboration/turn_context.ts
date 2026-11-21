@@ -29,7 +29,7 @@ export function projectDelegationTurnItem(value: unknown): JsonObject | null {
       || request.source_kind === "peer" && result.consumed !== true);
   const incomplete = results.filter(result => result.status !== "delivered" && result.status !== "superseded");
   // Peer returns require their requester acknowledgement. An original Chat
-  // return has a delivery receipt, not a synthetic peer-consumption receipt.
+  // return has a delivery receipt.
   const unconsumed = request.source_kind === "peer" ? results.filter(result => result.consumed !== true) : [];
   let step: string;
   if (kind === "receipt_unavailable" || row.evidence_unavailable === true) step = "recover_evidence";

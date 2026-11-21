@@ -213,7 +213,7 @@ def _lifecycle_phase(
         return PHASE_QUALIFYING
     open_count = agent_summary.get("open_count")
     if not isinstance(open_count, int) or isinstance(open_count, bool):
-        # An omitted/bounded source is not evidence that no work remains.
+
         return PHASE_QUALIFYING if milestones or guards else PHASE_STARTING
     total_open = open_count
     if not milestones and total_open == 0:

@@ -1,4 +1,4 @@
-"""Ark video transport, not a scheduler or publication owner.
+"""Ark video transport.
 
 Each call does one bounded operation. Paid POST is never retried. The durable
 submission journal allows a stopped caller to recover a known task id; an

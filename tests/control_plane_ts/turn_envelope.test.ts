@@ -26,6 +26,37 @@ import {projectQuotaDiagnostics, referenceQuotaSummaryLanes, resolveQuotaSummary
 import { controllerRequest } from "../../loopx/control_plane/turn_driver/loop_controller.ts";
 import {turnScopedCliSettlementPlan} from "../../loopx/control_plane/quota/settlement_plan.ts";
 
+test("normal-work initial navigation stays scoped while other reads keep discovery", () => {
+  const source = payload();
+  source.normal_delivery_allowed = true;
+  const request = {operation: "context_select", select: [""], list_fields: true, include_initial_read_plan: true};
+  for (const change of [null, "action", "delivery", "channel", "missing_channel"]) {
+    const context = structuredClone(source);
+    if (change === "action") context.effective_action = "wait";
+    if (change === "delivery") context.normal_delivery_allowed = false;
+    const interaction = context.interaction_contract as JsonObject;
+    if (change === "channel") (interaction.agent_channel as JsonObject).delivery_allowed = false;
+    if (change === "missing_channel") delete interaction.agent_channel;
+    const before = structuredClone(context);
+    const scoped = evaluateTurnEnvelope({...request, context, normal_work_initial_read: true});
+    if (change === null) assert.ok(scoped.initial_read_plan);
+    else {
+      assert.equal(scoped.initial_read_plan, undefined);
+      assert.equal((scoped.selections as JsonObject[])[0].pointer, "");
+      assert.ok(Array.isArray(scoped.initial_read_pointers));
+    }
+    assert.ok(evaluateTurnEnvelope({...request, context}).initial_read_plan);
+    assert.deepEqual(evaluateTurnEnvelope({...request, context, normal_work_initial_read: false}),
+      evaluateTurnEnvelope({...request, context}));
+    assert.deepEqual(context, before);
+  }
+  assert.throws(() => evaluateTurnEnvelope({...request, context: source, normal_work_initial_read: "true"}),
+    /normal_work_initial_read must be a boolean/);
+  for (const scope of [{}, {normal_work_initial_read: false}])
+    assert.throws(() => evaluateTurnEnvelope({operation: "context_select", context: null,
+      select: ["/goal_id"], recover_selection_errors: "true", ...scope}), /recover-selection-errors must be boolean/);
+});
+
 test("complete captures reuse progressive presentation only after source validation", () => {
   const source = payload();
   source.planning_horizon = {core_goal: {acceptance_contract: {outcome_requirements: {
@@ -214,8 +245,18 @@ test("operation preflight optionally shares the existing normalized session line
 
 test("Host task presentation is source-checked and keeps task and backlog facts", () => {
   const source = payload();
+  source.normal_delivery_allowed = true;
   source.future_task_data = {instructions: "Preserve the final stop. ".repeat(200), value: -0};
-  source.agent_todo_summary = {backlog_items: [{todo_id: "later", text: "Required dependency."}]};
+  source.agent_todo_summary = {
+    schema_version: "todo_summary_v0", monitor_due_items: [],
+    backlog_items: [{todo_id: "later", text: "Required dependency."}], future_attention: [],
+  };
+  source.user_todo_summary = {
+    schema_version: "todo_summary_v0", gate_open_items: [],
+    first_open_items: [{todo_id: "review", text: "Review the unpublished artifact."}],
+    payload_compaction: {schema_version: "quota_todo_summary_payload_compaction_v0",
+      compacted_lanes: {gate_open_items: {shown: 0, total: 3}}},
+  };
   const complete = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
   const envelope = buildTurnEnvelope({payload: complete, scheduler_execution_args: ""});
   const before = structuredClone(complete);
@@ -235,7 +276,11 @@ test("Host task presentation is source-checked and keeps task and backlog facts"
       else parent[key] = edit.from ? at(complete, edit.from as (string | number)[]) : edit.value;
     }
     assert.deepEqual(view.future_task_data, complete.future_task_data);
-    assert.deepEqual(view.agent_todo_summary, complete.agent_todo_summary);
+    assert.deepEqual(view.agent_todo_summary, {
+      schema_version: "todo_summary_v0",
+      backlog_items: [{todo_id: "later", text: "Required dependency."}], future_attention: [],
+    });
+    assert.deepEqual(view.user_todo_summary, complete.user_todo_summary);
     assert.deepEqual(view.goal_boundary, complete.goal_boundary);
     assert.deepEqual((view.interaction_contract as JsonObject).agent_channel,
       (complete.interaction_contract as JsonObject).agent_channel);
@@ -247,6 +292,18 @@ test("Host task presentation is source-checked and keeps task and backlog facts"
       assert.throws(() => evaluateTurnEnvelope({...request, include_model_context: invalid}), /must be a boolean/);
     assert.throws(() => evaluateTurnEnvelope({...request, payload: {...complete, reason: "tampered"},
       include_model_context: true}), /integrity mismatch/);
+  }
+  for (const variant of [
+    {...source, normal_delivery_allowed: false},
+    {...source, agent_todo_summary: {...source.agent_todo_summary as JsonObject, schema_version: "future_summary"}},
+    {...source, agent_todo_summary: {...source.agent_todo_summary as JsonObject,
+      payload_compaction: {schema_version: "future_compaction", compacted_lanes: {}}}},
+  ]) {
+    const captured = evaluateTurnEnvelope({operation: "compose_complete", payload: variant, scheduler_execution_args: ""});
+    const checked = evaluateTurnEnvelope({operation: "host_context", payload: captured, include_model_context: true,
+      complete_host_request: {schema_version: "loopx_turn_host_request_v1", turn_key: `sha256:${"b".repeat(64)}`}});
+    const edits = (checked.model_context_changes as JsonObject).changes as JsonObject[];
+    assert.equal(edits.some(edit => (edit.path as string[])[0] === "agent_todo_summary"), false);
   }
   assert.deepEqual(complete, before);
 });
@@ -451,6 +508,42 @@ test("both replan readers surface an opted-in reversal for the bound task only",
         Object.keys(explore.work_yardstick_reversal as JsonObject).map(field => prefix + field));
       const detail = evaluateTurnEnvelope({operation: "replan_view", payload: captured, source_hash, stage: "explore"});
       assert.deepEqual((detail.explore_basis as JsonObject).work_yardsticks, cues);
+      const nativeInput: JsonObject = {
+        operation: "context_delivery",
+        surface: "complete_turn",
+        scope: {goal_id: String(source.goal_id), agent_id: String(source.agent_id),
+          session_id: "session", context_epoch: "epoch"},
+        capture_id: "c".repeat(64),
+        context: {...captured, replan_read_path: "/capture/original.json"},
+        native_projection: {
+          path: "/capture/recovery.json",
+          sha256: "a".repeat(64),
+          source_path: "/capture/recovery.json",
+          command_template: "loopx --format json quota context-read --select '<pointer>'",
+          captured_decision: {path: "/capture/original.json", sha256: "c".repeat(64)},
+        },
+        consumed_pointers: {},
+        include_initial_read_plan: true,
+        observe_first_read: true,
+      };
+      const nativeResult = structuredClone(nativeInput);
+      const resolvePath = (root: unknown, path: (string | number)[]) => path.reduce<unknown>(
+        (row, key) => (row as Record<string | number, unknown>)[key], root);
+      for (const change of evaluateTurnEnvelope(nativeInput).changes as JsonObject[]) {
+        const path = change.path as (string | number)[], key = path.at(-1)!;
+        const parent = resolvePath(nativeResult, path.slice(0, -1)) as Record<string | number, unknown>;
+        if (change.remove) delete parent[key];
+        else parent[key] = structuredClone(
+          change.from ? resolvePath(nativeInput, change.from as (string | number)[]) : change.value);
+      }
+      const planSelections = (((nativeResult.initial_read_plan as JsonObject)
+        .plan as JsonObject).selections as {pointer: string}[]);
+      assert.ok(planSelections.some(row => row.pointer === `${prefix}proxy_order_reversed`));
+      assert.equal(
+        ((nativeResult.context as JsonObject).replan_action_packet as JsonObject).review,
+        undefined,
+      );
+      assert.equal(nativeResult.projected, false);
     } else {
       assert.ok(!Object.hasOwn(explore, "work_yardstick_reversal"));
       assert.equal(cuesInOpening.length, 0);
@@ -1533,12 +1626,14 @@ test("signature document fails closed to the canonical signed dimensions", () =>
 });
 
 test("unsupported facade operation is rejected", () => {
-  assert.throws(
-    () => evaluateTurnEnvelope({ operation: "leaf_helper" }),
-    (error: unknown) =>
-      error instanceof EffectRuntimeRequestError &&
-      error.message === "turn envelope operation is unsupported",
-  );
+  for (const operation of ["leaf_helper", "compaction_memory"]) {
+    assert.throws(
+      () => evaluateTurnEnvelope({ operation }),
+      (error: unknown) =>
+        error instanceof EffectRuntimeRequestError &&
+        error.message === "turn envelope operation is unsupported",
+    );
+  }
 });
 
 test("transaction boundary rejects malformed prepared facts", () => {
@@ -1852,6 +1947,10 @@ test("complete execution reads one original selection, task commitment and effec
     complete: true, selected_todo_ref: "selected_todo", selected_todo_text_verified: true};
   (interaction.cli_channel as JsonObject).delivery_workspace_causality = {
     requirement: "required", future: {empty: [], approved: false}};
+  const proof = {idempotency_key: "managed-fixture-lease", expected_version: 7};
+  source.execution_preparation = {schema_version: "execution_preparation_v0", state: "ready",
+    delivery_allowed: true, handoff_mode: "hard_lease", goal_id: source.goal_id, agent_id: source.agent_id,
+    todo_id: selected.todo_id, lease_proof: proof, lease_epoch: 3};
   const contract = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
   const envelope = buildTurnEnvelope({payload: contract, scheduler_execution_args: ""});
   const before = structuredClone({contract, envelope});
@@ -1861,6 +1960,8 @@ test("complete execution reads one original selection, task commitment and effec
   assert.equal((result.selected_todo as JsonObject).text, selected.text);
   assert.equal(result.sha256, createHash("sha256").update(String(selected.text), "utf8").digest("hex"));
   assert.equal(result.effective_action, "normal_run");
+  assert.deepEqual(result.task_lease_proof, proof);
+  assert.equal(result.task_lease_epoch, 3);
   assert.deepEqual((result.writeback as JsonObject).delivery_workspace_causality,
     (interaction.cli_channel as JsonObject).delivery_workspace_causality);
   assert.equal(result.replan_guard_scoped, true);
@@ -1895,4 +1996,51 @@ test("complete execution keeps the adaptive primary and unbound selection distin
       ? {todo_id: "primary", source: "task_orchestration_contract.primary_todo_id"} : {});
     assert.equal(result.sha256, null);
   }
+});
+
+test("attachCompleteTurnContext preserves tokenless identity and avoids rounding additions on source_edits", () => {
+  const source = payload();
+  const complete = evaluateTurnEnvelope({
+    operation: "compose_complete",
+    payload: source,
+    scheduler_execution_args: "",
+  });
+  const tokenlessAttached = evaluateTurnEnvelope({
+    operation: "attach_complete_turn_context",
+    payload: complete,
+    context_additions: {reward_memory_recall: {status: "empty", guidance: []}},
+  });
+  assert.deepEqual(
+    evaluateTurnEnvelope({operation: "complete_consumer", payload: tokenlessAttached}),
+    {ok: true},
+  );
+  const editResult = evaluateTurnEnvelope({
+    operation: "attach_complete_turn_context",
+    payload: complete,
+    context_additions: {post_attach_recall: {val: 1, big: 2 ** 80}},
+    context_addition_tokens: [
+      [["post_attach_recall", "val"], "1.0"],
+      [["post_attach_recall", "big"], "1208925819614629174706176"],
+    ],
+    source_edits: true,
+  });
+  const changes = editResult.changes as {path: (string | number)[]}[];
+  assert.ok(changes.length > 0);
+  assert.ok(changes.every(change => change.path[0] === "contract_binding"));
+  assert.throws(
+    () => evaluateTurnEnvelope({
+      operation: "attach_complete_turn_context",
+      payload: complete,
+      context_additions: {contract_binding: {}},
+    }),
+    EffectRuntimeRequestError,
+  );
+  assert.throws(
+    () => evaluateTurnEnvelope({
+      operation: "attach_complete_turn_context",
+      payload: complete,
+      context_additions: {goal_id: "overwrite"},
+    }),
+    EffectRuntimeRequestError,
+  );
 });

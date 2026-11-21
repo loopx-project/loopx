@@ -17,7 +17,7 @@ export type ActionReviewReason =
   | "apply_failed" | "inactive_proposal"
   | "operation_authorization_pending" | "operation_outcome_pending"
   | "operation_confirmation_expired" | "operation_expiry_unknown" | "team_plan_retry"
-  | "canonical_update_retry" | "canonical_update_projection_pending" | "goal_creation_retry" | "task_start_retry";
+  | "canonical_update_retry" | "canonical_update_projection_pending" | "goal_creation_retry" | "task_start_retry" | "todo_creation_retry";
 
 export type OperationReviewContent = {
   title: string;
@@ -49,7 +49,7 @@ export type OperationReviewFrame = OperationReviewFrameBase & (
       attentionKind: "authority";
       interactionMode: "confirm_reject";
       decisions: readonly ["confirm", "reject"];
-      /** Canonical transport receipt, not proof of confirmation or execution. */
+
       confirmationDeliveryVerified: boolean;
     }
   | {
@@ -94,16 +94,17 @@ export type ActionReviewPlan = ActionReviewIdentity & ActionReviewState & {
   decisionFrame?: DecisionReviewFrame;
   /** Recover this exact canonical command; generating a new preview loses its receipt identity. */
   retryOriginal?: true;
-  /** Recorded creation effects, not evidence of a completed Goal or model Turn. */
+  /** Retained Todo creation effects keep their original confirmation. */
+  prohibitRegeneration?: true;
   creationProgress?: GoalCreationProgress;
   creationOutcome?: GoalCreationOutcome;
   /** New Session routing only. Recorded Sessions recover through creationProgress;
-   * this identity decision does not certify Task acceptance or execution. */
+   *  */
   creationSession?: {managedAgentId: string};
   /** Explicit fresh creation intent; admission and effective approval are
    * independently checked before the original native Task is dispatched. */
   creationExecution?: GoalCreationExecutionReview;
-  /** Accepted dispatch bound to its original Turn. It does not establish a result. */
+  /** Accepted dispatch bound to its original Turn. */
   taskExecution?: { goalId: string; todoId: string; sessionId: string; turnId: string };
 };
 
@@ -558,6 +559,22 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
       || creationProgress.completionBasis)
     ? goalCreationOutcome(identity.proposalId, parameters ?? {}, creationProgress.todoIds) : undefined;
   const creationSteps = objectValue(objectValue(proposal.checkpoint)?.steps);
+  const retainedTodoCreate = proposal.action_kind === "todo.create" && Object.hasOwn(creationSteps ?? {}, "todo_created");
+  const createdTodo = objectValue(creationSteps?.todo_created);
+  const createReceipt = objectValue(createdTodo?.canonical_receipt);
+  const originalTodoMatches = retainedTodoCreate && textValue(createdTodo?.todo_id)
+    && createdTodo?.todo_id === createReceipt?.todo_id && textValue(parameters?.goal_id)
+    && createReceipt?.goal_id === parameters?.goal_id
+    && createReceipt?.preview_id === identity.sourceFingerprint && createReceipt.status === "applied";
+  const creationContext = objectValue(proposal.context);
+  const sameOwnerContext = !textValue(creationContext?.binding_id)
+    && (creationContext?.goal_id == null || creationContext.goal_id === parameters?.goal_id);
+  const legacyCreateMatches = originalTodoMatches && createdTodo !== null && !Object.hasOwn(createdTodo, "source")
+    && createReceipt?.schema_version === "loopx_chat_todo_receipt_v0"
+    && textValue(createReceipt.receipt_id) && textValue(createReceipt.preview_revision);
+  const legacySourceGate = proposal.status === "gated" && legacyCreateMatches && sameOwnerContext
+    && proposal.permission_classification === "durable_write"
+    && objectValue(proposal.gate)?.kind === "canonical_authority_required";
   // A persisted Session/Turn, including a malformed checkpoint, always owns
   // recovery. Never infer a new managed identity from its old creation fields.
   const creationSession = proposal.action_kind === "goal.create" && parameters?.agent_id === "codex"
@@ -576,6 +593,7 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
     ...(reviewCardFrame ? { reviewCardFrame } : {}),
     ...(decisionFrame ? { decisionFrame } : {}),
     ...(creationProgress ? { creationProgress } : {}),
+    ...(retainedTodoCreate ? { prohibitRegeneration: true as const } : {}),
     ...(creationOutcome ? { creationOutcome } : {}),
     ...(creationSession ? { creationSession } : {}),
     ...(creationExecution ? { creationExecution } : {}),
@@ -588,7 +606,9 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
   if (operationFrame?.kind === "inactive") return held("inactive", operationFrame.reason);
   // Lifecycle uses conservative fact precedence. Generic deferred proposals may
   // retain a historical gate; their existing status-based retry path is preserved.
-  if ((lifecycle && proposal.gate != null) || proposal.status === "gated") return held("gated", "authority_gate");
+  if ((lifecycle && proposal.gate != null) || (proposal.status === "gated" && !legacySourceGate)) {
+    return held("gated", "authority_gate");
+  }
   if ((lifecycle && proposal.stale != null) || proposal.status === "stale") return held("refresh", "stale_proposal");
   // Host readback may return an immutable terminal replay which never started.
   // Its acceptance id is still original, but cannot certify first-Turn startup.
@@ -609,6 +629,11 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
       return held("repair", "readback_unverified");
     }
     const taskExecution = taskExecutionReadback(proposal, receipt, identity.sourceFingerprint);
+    if (taskExecution && proposal.task_execution_dispatch_pending === true
+        && proposal.permission_classification === "durable_write" && identity.proposalId
+        && !objectValue(proposal.context)?.binding_id) {
+      return {...finish({interaction: "review", canApply: true, reason: "task_start_retry"}), retryOriginal: true};
+    }
     const completed = held("completed", "readback_verified");
     return taskExecution ? {...completed, taskExecution} : completed;
   }
@@ -621,17 +646,13 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
       && creationProgress) {
     return {...finish({interaction: "review", canApply: true, reason: "goal_creation_retry"}), retryOriginal: true};
   }
-  if (proposal.action_kind === "todo.create" && parameters?.start_execution === true
+  const taskStart = parameters?.start_execution === true;
+  if (originalTodoMatches && (taskStart || sameOwnerContext)
       && proposal.permission_classification === "durable_write" && identity.proposalId && identity.sourceFingerprint
-      && (proposal.status === "applying" || (proposal.status === "failed" && objectValue(proposal.failure)?.retry_safe === true))) {
-    const steps = objectValue(objectValue(proposal.checkpoint)?.steps);
-    const created = objectValue(steps?.todo_created);
-    const receipt = objectValue(created?.canonical_receipt);
-    if (textValue(created?.todo_id) && created?.todo_id === receipt?.todo_id
-        && textValue(parameters.goal_id) && receipt?.goal_id === parameters.goal_id
-        && receipt?.preview_id === identity.sourceFingerprint && receipt.status === "applied") {
-      return {...finish({interaction: "review", canApply: true, reason: "task_start_retry"}), retryOriginal: true};
-    }
+      && (proposal.status === "applying" || legacySourceGate
+        || (proposal.status === "failed" && objectValue(proposal.failure)?.retry_safe === true))) {
+    const reason = taskStart ? "task_start_retry" : "todo_creation_retry";
+    return {...finish({interaction: "review", canApply: true, reason}), retryOriginal: true};
   }
   const isCanonicalUpdate = basis?.schema_version === "loopx_chat_canonical_update_basis_v0"
     && textValue(basis.provider_revision) !== null && textValue(basis.registry_sha256) !== null

@@ -148,7 +148,7 @@ _TODO_OPTION_FLAGS = {field: flag for flag, field in TODO_OPTION_FIELDS}
 # field owner; other lifecycle commands retain full help until centralized.
 TODO_ACTION_FIELDS = {
     "list": frozenset({"role", "todo_id", "status", "agent_id", "todo_limit", "todo_thin", "todo_summary", "include_archived", "state_file", "project", "dry_run"}),
-    "receipt": frozenset({"operation_id"}),
+    "receipt": frozenset({"operation_id", "todo_thin"}),
     "result-read": frozenset({"todo_id"}),
     "plan": frozenset({"text", "agent_id", "project"}),
     "project-markdown": frozenset({"state_file", "execute", "provider_revision", "project"}),
@@ -324,7 +324,7 @@ def validate_todo_list_options(args: argparse.Namespace) -> None:
 def validate_todo_receipt_options(args: argparse.Namespace) -> None:
     _validate_todo_option_subset(
         args, TODO_ACTION_FIELDS["receipt"],
-        "todo receipt only accepts --goal-id, --operation-id, and --format; unsupported: ",
+        "todo receipt only accepts --goal-id, --operation-id, --thin, and --format; unsupported: ",
     )
     if not args.operation_id:
         raise ValueError("todo receipt requires --operation-id")
@@ -766,8 +766,11 @@ def validate_shared_todo_options(args: argparse.Namespace) -> None:
         raise ValueError(
             "--limit is supported only by todo list"
         )
-    if args.todo_thin and args.todo_command not in {"list", "claim"}:
-        raise ValueError("--thin is supported only by todo list and todo claim")
+    if args.todo_thin and "todo_thin" not in TODO_ACTION_FIELDS.get(args.todo_command, ()):
+        supported = ", ".join(
+            f"todo {action}" for action, fields in TODO_ACTION_FIELDS.items() if "todo_thin" in fields
+        )
+        raise ValueError(f"--thin is supported only by {supported}")
     if getattr(args, "todo_summary", False):
         if args.todo_command != "list":
             raise ValueError("--summary is supported only by todo list")

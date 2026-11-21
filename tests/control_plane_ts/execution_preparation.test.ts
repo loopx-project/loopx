@@ -90,6 +90,24 @@ test("malformed facts are rejected", () => {
   );
 });
 
+test("retired lease proof is available for writeback without admitting delivery", () => {
+  const proof = {idempotency_key: "original-attempt", expected_version: 7};
+  const retired = {status: "released", active: false, owner: "agent-a", lease_proof: proof};
+  for (const status of ["done", "deferred"]) {
+    const selected_todo = {...facts().selected_todo, status};
+    const ordinary = projectExecutionPreparation(facts({selected_todo, leases: [retired]}));
+    const writeback = (leases: unknown[]) => projectExecutionPreparation(facts({
+      selected_todo, leases, include_retired_lease_for_writeback: true,
+    }));
+    assert.equal(ordinary.retired_lease_proof, undefined);
+    assert.equal(writeback([retired]).delivery_allowed, false);
+    assert.deepEqual(writeback([retired]).retired_lease_proof, proof);
+    assert.equal(writeback([{...retired, owner: "agent-b"}]).retired_lease_proof, undefined);
+    assert.equal(writeback([retired, {...retired, owner: "agent-b"}]).retired_lease_proof, undefined);
+    assert.equal(writeback([{...retired, status: "active"}]).retired_lease_proof, undefined);
+  }
+});
+
 test("legacy facts stay readable and an old matching lease grants no new execution", () => {
   for (const mode of EXECUTION_HANDOFF_MODES) {
     assert.doesNotThrow(() => projectExecutionPreparation(facts({handoff_mode: mode})));

@@ -1,32 +1,36 @@
 /** Authenticated task commands over the existing semantic and persistence owners. */
 import type {JsonObject} from "../effect_program.ts";
 import type {AuthorityStore, AuthorityStoreReadFailure} from "./authority_store.ts";
-import {canonicalAuthoritySha256} from "./authority_store_codec.ts";
+import {canonicalAuthoritySha256, parseAuthorityCursor} from "./authority_store_codec.ts";
 import {PostgreSqlAuthorityService} from "./postgresql_authority_service.ts";
 import type {PostgreSqlAuthorityDatabase} from "./postgresql_authority_store.ts";
 import {executeCoordinationTodoClaim} from "./todo_claim.ts";
 import {executeCoordinationTodoUpdate} from "./todo_update.ts";
-import {executeCoordinationTodoCreate} from "./todo_create.ts";
+import {decodeCoordinationTodoCreateReceipt, executeCoordinationTodoCreate, COORDINATION_TODO_CREATE_RECEIPT_SCHEMA} from "./todo_create.ts";
 import {executeCoordinationTodoTerminalLifecycle, type CoordinationTodoTerminalLifecycleInput} from "./todo_terminal_lifecycle.ts";
 import {executeCanonicalTaskLeaseLifecycle} from "./task_lease_lifecycle.ts";
 import {leaseVersion, leaseEpoch} from "../work_items/task_lease_acquire.ts";
 import {TODO_DOMAIN_ITEM_SCHEMA} from "./coordination_state_contract.ts";
-import {indexCoordinationProjection, validateCoordinationTodoReadModel} from "./coordination_projection.ts";
-import {decodeRemoteAuthorityRequest, remoteAuthorityOperationId, remoteAuthorityResponse, remoteAuthoritySnapshotDigest,
+import {CoordinationProjectionRead} from "./coordination_projection.ts";
+import {GOAL_ACCEPTANCE_LIFECYCLE_OPERATION_SCHEMA, readGoalAcceptanceLifecycle, sameExactGoalRef, type WireExactGoalRef} from "../goals/acceptance_lifecycle.ts";
+import {decodeRemoteAuthorityRequest, remoteAuthorityOperationId, remoteAuthorityResponse, remoteAuthoritySnapshotDigest, REMOTE_AUTHORITY_SCOPED_READ_RESPONSE,
   type RemoteAuthorityMode, type RemoteAuthorityRequest} from "./remote_authority_contract.ts";
 
 export type RemoteAuthorityAdmission =
-  | {status: "allowed"; principal_id: string; policy_revision: string; registered_agents: readonly string[]}
+  | {status: "allowed"; principal_id: string; policy_revision: string; registered_agents: readonly string[];
+      read_scope?: {goal_ref: WireExactGoalRef; todo_ids: readonly string[];
+        todo_origins: Readonly<Record<string, string>>; receipt_operation_id?: string}}
   | {status: "rejected"; reason_code: string};
 export interface RemoteAuthorityDependencies {
   database: PostgreSqlAuthorityDatabase;
   /** One immutable, server-owned authorization decision per request. Revocation
    * affects later admissions; it never lies about an already admitted commit. */
-  admit(credential: string, request: RemoteAuthorityRequest): Promise<RemoteAuthorityAdmission>;
+  admit(credential: string, request: RemoteAuthorityRequest, mode: RemoteAuthorityMode): Promise<RemoteAuthorityAdmission>;
   now?: () => Date;
 }
 const incarnationFailure: AuthorityStoreReadFailure = {status: "unavailable",
   reason_code: "remote_authority_incarnation_changed", reason: "Rebind the authorized service scope before continuing"};
+const scopeDenied = {status: "rejected", reason_code: "remote_authority_scope_denied"} as const;
 const MAX_READ_NOTE_BYTES = 4096;
 
 /** Pin every observation and write to the admitted incarnation. The provider's
@@ -82,14 +86,78 @@ function pinnedStore(store: AuthorityStore, identity: string, admission: JsonObj
   };
 }
 
-function projectReadTodo(todo: JsonObject, includePlanning: boolean): JsonObject {
-  const fields = ["todo_id", "status", "claimed_by", "note", ...(includePlanning ? ["role", "priority"] : [])];
+function projectReadTodo(todo: JsonObject, includePlanning: boolean, includeNote: boolean): JsonObject {
+  const fields = ["todo_id", "status", "claimed_by", ...(includeNote ? ["note"] : []),
+    ...(includePlanning ? ["role", "priority"] : [])];
   const output = Object.fromEntries(fields.filter(field => Object.hasOwn(todo, field)).map(field => [field, todo[field]]));
   if (Object.hasOwn(output, "note") && Buffer.byteLength(JSON.stringify(output.note)) > MAX_READ_NOTE_BYTES) {
     delete output.note;
     output.note_omitted = true;
   }
   return output;
+}
+
+function isActiveGoal(head: JsonObject, goalRef: WireExactGoalRef): boolean {
+  const lifecycle = readGoalAcceptanceLifecycle(head, goalRef.goal_id);
+  return lifecycle?.state === "active" && sameExactGoalRef(lifecycle.goal_ref, goalRef);
+}
+
+/** Reconstruct one exact committed operation through the existing checkpoint
+ * owner. Proof is bounded by the admitted head; neither current state nor a
+ * later receipt can substitute for missing historical evidence. */
+async function readScopedTransaction(store: AuthorityStore, headCursor: string,
+  goalRef: WireExactGoalRef, operationId: string) {
+  const unavailable = {status: "unavailable", reason_code: "remote_authority_read_unavailable"} as const;
+  const receipt = await store.readReceipt(operationId);
+  if (receipt.status !== "found") return receipt.status === "missing" ||
+    receipt.reason_code === "remote_authority_operation_mismatch" ? scopeDenied : unavailable;
+  const cursor = parseAuthorityCursor(receipt.cursor);
+  if (cursor > parseAuthorityCursor(headCursor) || receipt.receipts.length !== 1) return scopeDenied;
+  const offset = cursor - 1n;
+  const page = await store.scanCommitted(offset === 0n ? null : offset.toString(), 1);
+  if (page.status !== "page" || page.transactions.length !== 1) return unavailable;
+  const transaction = page.transactions[0]!;
+  const original = receipt.receipts[0]!;
+  const digest = canonicalAuthoritySha256(original);
+  if (transaction.cursor !== receipt.cursor || transaction.provider_revision !== receipt.provider_revision ||
+      transaction.operation_id !== operationId || transaction.receipts.length !== 1 ||
+      canonicalAuthoritySha256(transaction.receipts[0]) !== digest) return unavailable;
+  if (!isActiveGoal(transaction.projection, goalRef)) return scopeDenied;
+  return {status: "found" as const, original, projection: transaction.projection, digest};
+}
+
+/** The policy selects evidence, not resource ownership. Only a successful Todo
+ * creation or the trusted first bind of existing work can prove its lifetime.
+ * A claim/update, successor activation or idempotent rebind cannot relabel it. */
+function provesTodoOrigin(proof: Extract<Awaited<ReturnType<typeof readScopedTransaction>>, {status: "found"}>,
+  goalRef: WireExactGoalRef, todoId: string): boolean {
+  const read = new CoordinationProjectionRead(proof.projection, goalRef.goal_id);
+  read.validateTodoReadModel();
+  const todo = read.todoIndex.todos.get(todoId);
+  if (!todo || proof.original.goal_id !== goalRef.goal_id) return false;
+  if (proof.original.schema_version === COORDINATION_TODO_CREATE_RECEIPT_SCHEMA) {
+    return proof.original.todo_id === todoId && canonicalAuthoritySha256(proof.original.todo) === canonicalAuthoritySha256(todo);
+  }
+  const result = proof.original.result;
+  return proof.original.schema_version === GOAL_ACCEPTANCE_LIFECYCLE_OPERATION_SCHEMA &&
+    proof.original.request_sha256 === canonicalAuthoritySha256({transition: {kind: "bind_existing", goal_ref: goalRef}}) &&
+    result !== null && typeof result === "object" && !Array.isArray(result) && (result as JsonObject).changed === true;
+}
+
+/** Authorize from the current pinned head, then prove the original transaction
+ * belonged to the same Goal lifetime. Operation access stays separate from
+ * current Todo access and never returns the original execution payload. */
+async function readScopedReceipt(store: AuthorityStore, goalRef: WireExactGoalRef,
+  todoId: string, operationId: string): Promise<JsonObject> {
+  const head = await store.loadAuthority();
+  if (head.status !== "loaded") return {status: "unavailable", reason_code: "remote_authority_read_unavailable"};
+  if (!isActiveGoal(head.head, goalRef)) return scopeDenied;
+  const current = new CoordinationProjectionRead(head.head, goalRef.goal_id);
+  current.validateTodoReadModel();
+  if (!current.todoIndex.todos.has(todoId)) return scopeDenied;
+  const proof = await readScopedTransaction(store, head.cursor, goalRef, operationId);
+  if (proof.status !== "found") return proof;
+  return {status: "found", historical_only: true, todo_id: todoId, operation_id: operationId, receipt_sha256: proof.digest};
 }
 
 /** Deliberately bounded response projection: no SQL errors, paths, arbitrary
@@ -135,9 +203,16 @@ export class RemoteAuthorityService {
       return reply({status: "rejected", reason_code: "invalid_remote_authority_mode"});
     }
     let admission: RemoteAuthorityAdmission;
-    try { admission = structuredClone(await this.#dependencies.admit(credential, request)); }
+    try { admission = structuredClone(await this.#dependencies.admit(credential, request, mode)); }
     catch { return reply({status: "unavailable", reason_code: "remote_authority_policy_unavailable"}); }
     if (admission.status !== "allowed") return reply(admission);
+    const isRead = request.operation === "read" || request.operation === "snapshot";
+    const readScope = admission.read_scope;
+    const allowedTodos = readScope && new Set(readScope.todo_ids);
+    const operationId = remoteAuthorityOperationId(request, admission.principal_id);
+    if (allowedTodos && (allowedTodos.size === 0 || request.todo_id && !allowedTodos.has(request.todo_id))) return reply(scopeDenied);
+    if (readScope && !isRead && (mode !== "recover" || request.todo_id === undefined ||
+        readScope.receipt_operation_id !== operationId)) return reply(scopeDenied);
     // Open through the established service seam with the already authenticated
     // snapshot. Never re-evaluate a different policy halfway through a request.
     const service = new PostgreSqlAuthorityService({database: this.#dependencies.database,
@@ -145,7 +220,6 @@ export class RemoteAuthorityService {
       authorizeTenant: () => ({status: "allowed"})});
     const opened = await service.openStore({...request, credential: null});
     if (opened.status !== "opened") return reply({status: "unavailable", reason_code: opened.reason_code});
-    const operationId = remoteAuthorityOperationId(request, admission.principal_id);
     // Explicitly reauthorizing a restored incarnation may recover old history.
     // The incarnation gates current access; it is not part of business intent.
     const {store_identity: admittedIdentity, ...intent} = request;
@@ -155,7 +229,13 @@ export class RemoteAuthorityService {
     const store = pinnedStore(opened.store, request.store_identity, binding, operationId);
     let dispatched = false;
     try {
-      const previous = (request.operation === "read" || request.operation === "snapshot") ? null : await store.readReceipt(operationId);
+      if (readScope && mode === "recover" && request.todo_id !== undefined) {
+        const result = await readScopedReceipt(store, readScope.goal_ref, request.todo_id, operationId);
+        return result.status === "found"
+          ? remoteAuthorityResponse(request, mode, {...result, goal_ref: readScope.goal_ref}, REMOTE_AUTHORITY_SCOPED_READ_RESPONSE)
+          : reply(result);
+      }
+      const previous = isRead ? null : await store.readReceipt(operationId);
       if (previous?.status === "found") {
         const original = previous.receipts[0];
         const recorded = original?.remote_admission as JsonObject | undefined;
@@ -163,11 +243,17 @@ export class RemoteAuthorityService {
             recorded.actor_id !== request.actor_id || recorded.request_sha256 !== binding.request_sha256) {
           return reply({status: "rejected", reason_code: "remote_authority_operation_mismatch"});
         }
-        if (mode === "recover") return reply({status: "found", operation_id: operationId,
-          provider_revision: previous.provider_revision, cursor: previous.cursor,
-          receipt_sha256: canonicalAuthoritySha256(original), historical_only: true,
-          result: commandResult(original.result && typeof original.result === "object"
-            ? original.result as JsonObject : original)});
+        if (mode === "recover") {
+          // Creation receipts store the original Todo, not command flags. Use
+          // their owner's decoder while retaining the original receipt digest.
+          const creation = request.operation === "todo_add" && original.schema_version === COORDINATION_TODO_CREATE_RECEIPT_SCHEMA
+            ? decodeCoordinationTodoCreateReceipt(original, request.todo_id) : null;
+          const historical = creation ? {...original, ...creation.fields, changed: creation.changed}
+            : original.result && typeof original.result === "object" ? original.result as JsonObject : original;
+          return reply({status: "found", operation_id: operationId,
+            provider_revision: previous.provider_revision, cursor: previous.cursor,
+            receipt_sha256: canonicalAuthoritySha256(original), historical_only: true, result: commandResult(historical)});
+        }
       } else if (previous && previous.status !== "missing") {
         return reply({status: previous.reason_code === "remote_authority_operation_mismatch" ? "rejected" : "unavailable",
           reason_code: previous.reason_code});
@@ -175,22 +261,44 @@ export class RemoteAuthorityService {
       if (mode === "recover") return reply({status: "missing", operation_id: operationId});
       const head = await store.loadAuthority();
       if (head.status !== "loaded") return reply({status: "unavailable", reason_code: "remote_authority_head_unavailable"});
-      validateCoordinationTodoReadModel(head.head, request.goal_id);
-      const index = indexCoordinationProjection(head.head, request.goal_id);
+      if (readScope && !isActiveGoal(head.head, readScope.goal_ref)) return reply(scopeDenied);
+      const projection = new CoordinationProjectionRead(head.head, request.goal_id);
+      projection.validateTodoReadModel();
+      const index = projection.coordinationIndex;
+      const provenTodos = readScope ? new Set<string>() : undefined;
+      if (readScope && provenTodos) {
+        // One request-local proof per origin, shared by Todos first bound in
+        // the same transaction. Never cache authorization across admissions.
+        const proofs = new Map<string, Awaited<ReturnType<typeof readScopedTransaction>>>();
+        for (const id of readScope.todo_ids) {
+          if (request.todo_id && request.todo_id !== id || !index.todos.has(id)) continue;
+          const origin = readScope.todo_origins[id];
+          if (!origin) continue;
+          let proof = proofs.get(origin);
+          if (!proof) { proof = await readScopedTransaction(store, head.cursor, readScope.goal_ref, origin); proofs.set(origin, proof); }
+          if (proof.status === "unavailable") return reply(proof);
+          if (proof.status === "found" && provesTodoOrigin(proof, readScope.goal_ref, id)) provenTodos.add(id);
+        }
+        if (request.todo_id ? !provenTodos.has(request.todo_id) : provenTodos.size === 0) return reply(scopeDenied);
+      }
+      const replyRead = (payload: JsonObject) => readScope
+        ? remoteAuthorityResponse(request, mode, {...payload, goal_ref: readScope.goal_ref}, REMOTE_AUTHORITY_SCOPED_READ_RESPONSE)
+        : reply({...payload, provider_revision: head.provider_revision});
       if (request.operation === "read") {
         const todo = index.todos.get(request.todo_id), lease = index.leases.get(request.todo_id);
         if (!todo) return reply({status: "missing"});
-        return reply({status: "found", provider_revision: head.provider_revision,
-          todo: projectReadTodo(todo, false),
+        return replyRead({status: "found",
+          todo: projectReadTodo(todo, false, readScope === undefined),
           lease: lease ? {...Object.fromEntries(["owner", "status", "expires_at"].filter(k => k in lease).map(k => [k, lease[k]])),
             version: leaseVersion(lease), lease_epoch: leaseEpoch(lease)} : null});
       }
       if (request.operation === "snapshot") {
+        const visible = (id: string) => (!request.todo_id || id === request.todo_id) && (!allowedTodos || allowedTodos.has(id)) && (!provenTodos || provenTodos.has(id));
         const todos = index.todo_ids
-          .filter(id => !request.todo_id || id === request.todo_id)
-          .map(id => projectReadTodo(index.todos.get(id)!, true));
+          .filter(visible)
+          .map(id => projectReadTodo(index.todos.get(id)!, true, readScope === undefined));
         const leases = index.lease_todo_ids
-          .filter(id => !request.todo_id || id === request.todo_id)
+          .filter(visible)
           .map(id => {
             const l = index.leases.get(id)!;
             return {
@@ -199,12 +307,11 @@ export class RemoteAuthorityService {
               lease_epoch: leaseEpoch(l),
             };
           });
-        return reply({
+        return replyRead({
           status: "snapshot",
-          provider_revision: head.provider_revision,
           store_identity: request.store_identity,
           goal_id: request.goal_id,
-          receipt_sha256: remoteAuthoritySnapshotDigest(request, head.provider_revision, todos, leases),
+          receipt_sha256: remoteAuthoritySnapshotDigest(request, head.provider_revision, todos, leases, readScope?.goal_ref),
           todos,
           leases,
         });
@@ -290,6 +397,7 @@ export class RemoteAuthorityService {
         expected_version: request.expected_version, ttl_seconds: request.operation === "renew" ? request.ttl_seconds : null});
       return reply({status: "result", operation_id: operationId, result: commandResult(result)});
     } catch {
+      if (readScope) return reply({status: "unavailable", reason_code: "remote_authority_read_unavailable"});
       return reply({status: dispatched ? "ambiguous" : "unavailable", operation_id: operationId,
         reason_code: dispatched ? "remote_authority_recovery_required" : "remote_authority_read_unavailable"});
     }

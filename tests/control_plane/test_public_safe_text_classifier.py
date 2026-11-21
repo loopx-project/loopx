@@ -370,7 +370,11 @@ def test_both_tiers_differ_from_the_old_rule_only_where_this_change_says() -> No
             newly_rejected.append(sample_id)
         if was_rejected and internal is None:
             newly_released.append(sample_id)
+    # One release is this change's own scope: a home-directory shaped segment
+    # inside an ordinary http(s) URL is URL syntax, so it leaves the strict
+    # publication tier only in its ``remote_location`` category.
     assert newly_released == [
+        "ordinary_public_url_home_directory_segment",
         "quoted_password_word_in_prose",
         "bearer_word_in_prose",
         "password_word_in_prose",
@@ -388,13 +392,19 @@ def test_both_tiers_differ_from_the_old_rule_only_where_this_change_says() -> No
         "raw_github_token_unlabeled",
         "private_key_block_unlabeled",
     ]
-    # Every released sample is a credential word and nothing else, so the
-    # loosening cannot carry a value.
+    # Every remaining released sample is a credential word and nothing else, so
+    # the loosening cannot carry a value; the URL sample is only a remote
+    # location.
     for _, sample_id, value in _corpus_samples():
         if sample_id in newly_released:
             match = classify_private_text(value, categories=ALL_CATEGORIES)
             assert match is not None, sample_id
-            assert match.category == CATEGORY_CREDENTIAL_WORD, sample_id
+            expected = (
+                CATEGORY_REMOTE_LOCATION
+                if sample_id == "ordinary_public_url_home_directory_segment"
+                else CATEGORY_CREDENTIAL_WORD
+            )
+            assert match.category == expected, sample_id
 
 
 # The form class is enumerated, not sampled: every prefix x credential label x

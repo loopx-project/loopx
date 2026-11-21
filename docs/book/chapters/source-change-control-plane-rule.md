@@ -64,8 +64,8 @@ problem
 一个本来可以一行的修复带上一份长期兼容承诺。
 
 本章案例属于第一类。现有
-[`decision_scope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md)
-已经规定 Gate 是 scoped authority；[State Machines](https://github.com/huangruiteng/loopx/blob/main/docs/product/core-control-plane/state-machine.md)
+[`decision_scope_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md)
+已经规定 Gate 是 scoped authority；[State Machines](https://github.com/loopx-project/loopx/blob/main/docs/product/core-control-plane/state-machine.md)
 也把 ambiguous scope 导向 repair。
 
 如果实现把它变成全局 wait，应该修实现，无需新增一个"允许全局猜测"的兼容字段。
@@ -413,11 +413,10 @@ invariant、画完协议链，通常要几个小时。换到的东西是：这�
 一个真正的 additive protocol change 可以合理地跨十几个文件；一个 implementation repair 通常
 不应该。
 
-**边界一：full validation 跑不起全套，这是设计如此。** 本仓库的 [PR 基线](https://github.com/huangruiteng/loopx/blob/main/docs/development/testing-and-quality.md) 包含 lint、type、
+**边界一：full validation 跑不起全套，这是设计如此。** 本仓库的 [PR 基线](https://github.com/loopx-project/loopx/blob/main/docs/development/testing-and-quality.md) 包含 lint、type、
 output budget smoke、`pytest` 分层、`loopx canary premerge --from-git-diff` 和 public/private
 scan；真实路径验证（例如 PostgreSQL integration）需要一个一次性隔离实例。开发阶段应当从最
-聚焦的那条命令开始，无需等最宽矩阵。完整公开 smoke fleet 的职责是宽覆盖与健康观察，不是
-每个 PR 的语义设计。
+聚焦的那条命令开始，无需等最宽矩阵。完整公开 smoke fleet 的职责是宽覆盖与健康观察。
 
 **边界二：真实路径不可用时，正确做法是报告证据缺口。** 如果影响 PostgreSQL authority 的
 改动拿不到安全的隔离实例，那么"跳过该套件"并不构成通过。此时应暂停交付并说明缺口，不能用
@@ -443,7 +442,7 @@ diff 和描述来发现，这也是为什么下一章把 PR 描述本身当成�
 推导出来。
 
 **在 Python facade 里重建 TypeScript 侧规则。** 这是本章开头提到的第二个错误。可以通过
-`loopx canary premerge --from-git-diff` 发现两侧漂移，也可以用 [TypeScript Control-Plane Migration RFC](https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/typescript-control-plane-migration-v0.md)
+`loopx canary premerge --from-git-diff` 发现两侧漂移，也可以用 [TypeScript Control-Plane Migration RFC](https://github.com/loopx-project/loopx/blob/main/docs/architecture/rfcs/typescript-control-plane-migration-v0.md)
 判断一处逻辑归谁：它是否已经是一个 domain-owned decision 或 effect receipt。如果答案是肯定的，
 改动应落在 TypeScript 侧，Python 侧只做适配或兼容投影。
 
@@ -451,8 +450,7 @@ diff 和描述来发现，这也是为什么下一章把 PR 描述本身当成�
 
 **让 renderer 修 policy。** 修改文案不能修复 source 或 authority；反过来，policy 也不应依赖 Markdown 字符串。
 
-**顺手重构所有相关模块。** 协议链跨多个 bounded context，不等于这个 PR 应当包含每一次可能的
-清理。只改本次 invariant 所要求的完整链条。
+**顺手重构所有相关模块。** 协议链跨多个 bounded context。只改本次 invariant 所要求的完整链条。
 
 **为未来 Host 增加空 adapter。** 没有真实调用方、capability 和 receipt 的 adapter 只增加
 维护面，而且它会看起来像一项已经交付的能力。

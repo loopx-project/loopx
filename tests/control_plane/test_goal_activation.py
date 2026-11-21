@@ -10,7 +10,7 @@ import threading
 
 import pytest
 
-from loopx import chat_goal_lifecycle_actions
+from loopx.chat import goal_lifecycle_actions
 from loopx.chat_action_store import ChatActionStore
 from loopx.chat_actions import ChatActionService
 from loopx.cli_commands import registry_admin
@@ -406,6 +406,39 @@ def test_controller_transitions_retain_legacy_owner_resume(
         assert _goal(global_registry)["activation"]["owner_resume_id"] == prior_resume
 
 
+def test_explicit_owner_resume_advances_epoch_while_goal_is_already_active(
+    connected_registries: tuple[Path, Path],
+) -> None:
+    source_registry, global_registry = connected_registries
+    first = set_goal_activation_state(
+        registry_path=global_registry,
+        goal_id="goal-one",
+        state="active",
+        actor_kind="owner",
+        owner_resume_action=True,
+        execute=True,
+    )
+    first_resume = _goal(source_registry)["activation"]["owner_resume_id"]
+    assert first["ok"] is True
+    assert first["changed"] is False
+    assert first["written"] is True
+    assert first["owner_resume_advanced"] is True
+    assert _goal(global_registry)["activation"]["owner_resume_id"] == first_resume
+
+    second = set_goal_activation_state(
+        registry_path=global_registry,
+        goal_id="goal-one",
+        state="active",
+        actor_kind="owner",
+        owner_resume_action=True,
+        execute=True,
+    )
+    second_resume = _goal(source_registry)["activation"]["owner_resume_id"]
+    assert second["ok"] is True and second["readback"]["verified"] is True
+    assert second_resume != first_resume
+    assert _goal(global_registry)["activation"]["owner_resume_id"] == second_resume
+
+
 def test_activation_and_agent_registration_share_source_to_global_lock_order(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -531,7 +564,7 @@ def test_stopped_goal_and_zero_compute_keep_distinct_resume_authority() -> None:
     assert stopped["automation_liveness"]["automation_action"] == "stop_goal_stopped"
     assert stopped["scheduler_hint"]["reason_code"] == "goal_stopped"
     assert (
-        stopped["scheduler_hint"]["codex_app"]["resume_trigger"]
+        stopped["scheduler_hint"]["app_automation"]["resume_trigger"]
         == "explicit Goal lifecycle resume"
     )
 
@@ -846,7 +879,7 @@ def test_owner_confirmed_lifecycle_action_rechecks_source_inside_write_lock(
             "idempotency_key": "stop-goal-one-before-lock-race",
         }
     )
-    original = chat_goal_lifecycle_actions.set_goal_activation_state
+    original = goal_lifecycle_actions.set_goal_activation_state
     source_changed = False
 
     def change_source_before_execute(**kwargs: object) -> dict[str, object]:
@@ -861,7 +894,7 @@ def test_owner_confirmed_lifecycle_action_rechecks_source_inside_write_lock(
         return original(**kwargs)
 
     monkeypatch.setattr(
-        chat_goal_lifecycle_actions,
+        goal_lifecycle_actions,
         "set_goal_activation_state",
         change_source_before_execute,
     )
@@ -906,7 +939,7 @@ def test_owner_confirmed_lifecycle_action_rechecks_route_before_execute(
             "idempotency_key": "stop-goal-one-before-execute-route-race",
         }
     )
-    original = chat_goal_lifecycle_actions.set_goal_activation_state
+    original = goal_lifecycle_actions.set_goal_activation_state
     switched_global_bytes: bytes | None = None
 
     def change_route_before_execute(**kwargs: object) -> dict[str, object]:
@@ -919,7 +952,7 @@ def test_owner_confirmed_lifecycle_action_rechecks_route_before_execute(
         return original(**kwargs)
 
     monkeypatch.setattr(
-        chat_goal_lifecycle_actions,
+        goal_lifecycle_actions,
         "set_goal_activation_state",
         change_route_before_execute,
     )
@@ -1623,7 +1656,7 @@ def test_owner_confirmed_typed_action_recovers_concurrent_same_operation_delete(
         action_store=tmp_path / "actions",
         idempotency_key="delete-goal-one-concurrently",
     )
-    original_delete = chat_goal_lifecycle_actions.delete_stopped_goal
+    original_delete = goal_lifecycle_actions.delete_stopped_goal
     delete_calls = 0
 
     def delete_between_preflight_and_execute(**kwargs: object) -> dict[str, object]:
@@ -1642,7 +1675,7 @@ def test_owner_confirmed_typed_action_recovers_concurrent_same_operation_delete(
         return current
 
     monkeypatch.setattr(
-        chat_goal_lifecycle_actions,
+        goal_lifecycle_actions,
         "delete_stopped_goal",
         delete_between_preflight_and_execute,
     )
@@ -1713,7 +1746,7 @@ def test_owner_confirmed_typed_action_records_delete_failures(
         action_store=tmp_path / "actions",
         idempotency_key=f"delete-goal-one-lock-failure-{failure_call}",
     )
-    original_delete = chat_goal_lifecycle_actions.delete_stopped_goal
+    original_delete = goal_lifecycle_actions.delete_stopped_goal
     delete_calls = 0
 
     def fail_delete(**kwargs: object) -> dict[str, object]:
@@ -1724,7 +1757,7 @@ def test_owner_confirmed_typed_action_records_delete_failures(
         return original_delete(**kwargs)
 
     monkeypatch.setattr(
-        chat_goal_lifecycle_actions,
+        goal_lifecycle_actions,
         "delete_stopped_goal",
         fail_delete,
     )

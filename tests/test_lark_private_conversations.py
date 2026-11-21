@@ -1067,6 +1067,111 @@ def source_https(monkeypatch):
     return serve
 
 
+@pytest.mark.parametrize("fault", ["none", "modified", "foreign_path", "symlink", "stopped", "revoked"])
+def test_completed_local_reply_images_use_original_turn_and_provider(ordinary, source_https, fault):  # noqa: F811
+    from hashlib import sha256
+
+    from test_chat_image_attachments import PNG_BYTES
+    from test_lark_app_image_projection import ImageIO
+
+    _, _, contexts, _, capture, fake, workspace = ordinary
+    contexts.workspace_grant = "workspace_write"
+    store, runtime, provider, transport = connect(ordinary)
+    io = ImageIO(provider)
+    transport.runner = io
+    public_url = "https://source.example/chart.png"
+    fetched, _ = source_https(lambda _: (None, "image/png", PNG_BYTES))
+    second_image = PNG_BYTES + b"second"
+    foreign = workspace.parent / "outside.png"
+    foreign.write_bytes(PNG_BYTES)
+
+    source = fake.read_text()
+    anchor = "        response = 'Visible runtime response."
+    assert source.count(anchor) == 1
+    native = (
+        "        import pathlib, re\n"
+        "        prompt = request['params']['input'][0]['text']\n"
+        "        directory = re.search(r'under (/[^\\n]+?/\\.local/loopx-reply-images/[a-f0-9]{32}) and reference', prompt)[1]\n"
+        "        directory = pathlib.Path(directory)\n"
+        "        directory.mkdir(parents=True, exist_ok=True)\n"
+        "        first = directory / 'original-first.png'\n"
+        "        second = directory / 'original-second.png'\n"
+        f"        if {fault!r} == 'foreign_path':\n"
+        f"            first = pathlib.Path({str(foreign)!r})\n"
+        f"        elif {fault!r} == 'symlink':\n"
+        f"            first.symlink_to({str(foreign)!r})\n"
+        "        else:\n"
+        f"            first.write_bytes({PNG_BYTES!r})\n"
+        f"        second.write_bytes({second_image!r})\n"
+        "        authored = f'Original answer.\\n\\n![First figure]({first})'\n"
+        f"        if {fault!r} == 'none':\n"
+        f"            authored += '\\n\\n![Public figure]({public_url})'\n"
+        "        authored += f'\\n\\n![Second figure](<{second}>)'\n"
+    )
+    fake.write_text(source.replace(anchor, native + anchor).replace(
+        '"message": "Runtime response.",', '"message": authored,', 1))
+    try:
+        source = provider.event("notes-app", "local-answer-images",
+            f"Show the requested figures, including {public_url}" if fault == "none" else "Show the requested figures")
+        assert transport.admit("notes-app", source)["status"] == "durably_accepted"
+        request = transport.core.pending()[0]
+        sid, tid, ref = (request[key] for key in ("session_id", "turn_id", "request_ref"))
+        completed = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert completed["status"] == "completed", completed
+        response = completed["response"]
+        assert str(workspace) not in json.dumps(response) and str(foreign) not in json.dumps(response)
+        first = {"name": "original-first.png", "sha256": sha256(PNG_BYTES).hexdigest()}
+        second = {"name": "original-second.png", "sha256": sha256(second_image).hexdigest()}
+        expected = [first, public_url, second] if fault == "none" else [
+            None if fault in {"foreign_path", "symlink"} else first, second]
+        assert response["answer_image_plan"] == expected
+        assert response["message"].startswith("Original answer.\n\nFirst figure")
+        assert response["message"].endswith("Second figure")
+        assert [row["text"] for row in store.messages(sid) if row["role"] == "agent"] == [response["message"]]
+
+        path = transport.root / f"{ref}.json"
+        assert transport.reconcile_request(path) == 0
+        text_only = json.loads(path.read_text())
+        assert text_only["deliveries"]["terminal"]["verified"] is True
+        assert fetched == [] and io.uploads == 0
+        assert not transport.core.read_request(ref).get("delivery_verified", False)
+        if fault == "modified":
+            (workspace / ".local/loopx-reply-images" / tid / first["name"]).write_bytes(second_image)
+        if fault == "stopped":
+            transport.admit("notes-app", provider.event("notes-app", "stop-local-media", "/stop"))
+        if fault == "revoked":
+            contexts.workspace_grant = "workspace_read"
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+                                            runner=io, cli_bin="lark-cli")
+        success = fault == "none"
+        assert restarted.reconcile_request(path) == int(success)
+        saved = json.loads(path.read_text())
+        expected_status = "delivered" if success else "unverified"
+        assert saved["answer_images"]["status"] in (
+            {expected_status, "pending"} if fault == "revoked" else {expected_status})
+        assert restarted.core.read_request(ref).get("delivery_verified", False) is success
+        sent = [row for mid, row in provider.messages.items()
+                if mid.startswith("om_out_") and row["chat_id"] == source["chat_id"]]
+        wire = json.dumps(sent, ensure_ascii=False)
+        assert str(workspace) not in wire and str(foreign) not in wire
+        assert "First figure" in wire and "Second figure" in wire
+        assert ("图片尚未核验送达" in wire) == (not success and fault not in {"stopped", "revoked"})
+        rendered_keys = []
+        for row in sent:
+            if row["msg_type"] == "post":
+                for line in json.loads(row["body"]["content"])["zh_cn"]["content"]:
+                    rendered_keys.extend(node["image_key"] for node in line if node["tag"] == "img")
+        assert [io.resources[key] for key in rendered_keys] == ([PNG_BYTES, PNG_BYTES, second_image] if success else [])
+        assert fetched == ([public_url] if success else [])
+        assert io.uploads == (3 if success else 0)
+        before = list(provider.writes)
+        assert restarted.reconcile_request(path) == 0
+        assert provider.writes == before
+        assert sum(json.loads(line).get("method") == "turn/start" for line in capture.read_text().splitlines()) == 1
+    finally:
+        runtime.close()
+
+
 @pytest.mark.parametrize("fault", ["none", "foreign_source", "unlisted_image", "changed_request",
     "corrupt_readback", "legacy_cached_readback", "upload_denied", "listed_redirect", "same_host_redirect",
     "foreign_redirect", "foreign_round_trip", "query_redirect", "article_redirect", "stopped", "stopped_after_fetch",
@@ -1455,7 +1560,7 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
         # Produce an actual legacy reply and provider receipt before installing
         # the media-only repair. The stored answer and Core are real.
         with monkeypatch.context() as legacy:
-            legacy.setattr(transport, "_deliver_completed_answer", lambda p, row, text, *, inbox:
+            legacy.setattr(transport, "_deliver_completed_answer", lambda p, row, text, *, inbox, answer_image_plan=None:
                            transport._deliver(p, row, "terminal", text, inbox=inbox))
             assert transport.reconcile_request(path) == 1
         saved = json.loads(path.read_text())
@@ -1648,10 +1753,116 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
         runtime.close()
 
 
+@pytest.mark.parametrize("fault", [
+    "none", "bad_digest", "different_turn", "symlink", "foreign_name",
+    "edited_reply", "stopped", "revoked", "unknown_upload", "unknown_send",
+])
+def test_legacy_local_reply_images_are_recovered_only_by_the_original_worker(ordinary, source_https, fault):  # noqa: F811
+    from hashlib import sha256
+
+    from loopx.capabilities.native_chat.file_discovery import reply_image_directory
+    from loopx.chat_store import _atomic_write_json
+    from test_chat_image_attachments import PNG_BYTES
+    from test_lark_app_image_projection import ImageIO
+
+    _, _, contexts, _, capture, fake, _ = ordinary
+    contexts.workspace_grant = "workspace_write"
+    store, runtime, provider, transport = connect(ordinary)
+    io = ImageIO(provider)
+    transport.runner = io
+    fetched, _ = source_https(lambda _: (None, "image/png", PNG_BYTES))
+    answer = "Original explanation.\n\nFirst figure\n\nSecond figure"
+    marker = '"message": "Runtime response.",'
+    fake.write_text(fake.read_text().replace(marker, f'"message": {answer!r},', 1))
+    try:
+        event = provider.event("notes-app", "historical-captured-images", "Read the requested figures.")
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        request = transport.core.pending()[0]
+        sid, tid, ref = (request[key] for key in ("session_id", "turn_id", "request_ref"))
+        completed = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert completed["status"] == "completed" and not completed["response"].get("answer_image_plan")
+        path = transport.root / f"{ref}.json"
+        assert transport.reconcile_request(path) == 1
+        original = json.loads(path.read_text())
+        terminal = original["deliveries"]["terminal"]
+        message_id = terminal["attempt"]["message_ref"]
+        core_before = transport.core.read_request(ref), completed, store.messages(sid)
+        assert terminal["verified"] and not terminal.get("image_keys")
+
+        private = transport.root / "historical-answer-images"
+        staged = private / reply_image_directory("f" * 32 if fault == "different_turn" else tid)
+        staged.mkdir(parents=True)
+        raw_images = [PNG_BYTES + b"first", PNG_BYTES + b"second"]
+        names = ["figure-first.png", "figure-second.png"]
+        for name, data in zip(names, raw_images, strict=True):
+            output = staged / name
+            if fault == "symlink":
+                other = staged.parent / name
+                other.write_bytes(data)
+                output.symlink_to(other)
+            else:
+                output.write_bytes(data)
+        manifest = {"binding_id": original["binding_id"], "turn_id": tid, "message_id": message_id,
+                    "answer_sha256": sha256(answer.encode()).hexdigest(),
+                    "captured_images": [{"name": name, "sha256": sha256(data).hexdigest()}
+                                        for name, data in zip(names, raw_images, strict=True)]}
+        if fault == "bad_digest":
+            (staged / names[1]).write_bytes(PNG_BYTES + b"changed")
+        if fault == "foreign_name":
+            manifest["captured_images"][0]["name"] = str(staged / names[0])
+        _atomic_write_json(private / path.name, manifest)
+
+        if fault == "edited_reply":
+            provider.messages[message_id]["body"]["content"] = '{"zh_cn":{"content":[[{"tag":"text","text":"Changed"}]]}}'
+        elif fault == "stopped":
+            transport.admit("notes-app", provider.event("notes-app", "stop-legacy-captured-images", "/stop"))
+        elif fault == "revoked":
+            contexts.workspace_grant = "workspace_read"
+        elif fault == "unknown_upload":
+            io.unknown_upload = True
+        elif fault == "unknown_send":
+            provider.lose_next_reply = True
+
+        writes = len(provider.writes)
+        def restart():
+            return LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+                                            runner=io, cli_bin="lark-cli")
+
+        worker = restart()
+        assert path not in worker.pending_body_paths()
+        assert path in worker.pending_delivery_paths()
+        assert worker.reconcile_request(path) == int(fault == "none")
+        saved = json.loads(path.read_text())
+        assert saved["deliveries"]["terminal"] == terminal
+        if fault == "none":
+            media = saved["deliveries"]["answer_images.historical"]
+            assert media["images_verified"] and io.downloads == 2
+            post = provider.messages[media["attempt"]["message_ref"]]
+            assert post["chat_id"] == event["chat_id"]
+            assert post["sender"]["id"] == provider.profile_apps["notes-app"]
+            assert [io.resources[key] for key in media["image_keys"]] == raw_images
+            assert saved["historical_answer_images"]["status"] == "delivered"
+        elif fault in {"unknown_upload", "unknown_send"}:
+            saved["historical_answer_images"]["next_check_at"] = 0
+            _atomic_write_json(path, saved)
+            io.unknown_upload = False
+        assert restart().reconcile_request(path) == 0
+        assert len(provider.writes) == writes + int(fault in {"none", "unknown_send"})
+        assert io.uploads == {"none": 2, "unknown_upload": 1, "unknown_send": 2}.get(fault, 0)
+        assert fetched == []
+        assert sum(json.loads(line).get("method") == "turn/start" for line in capture.read_text().splitlines()) == 1
+        if fault != "stopped":
+            assert core_before == (transport.core.read_request(ref), store.load_turn(sid, tid), store.messages(sid))
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("source_change", ["edited", "recalled", "recalled_before_send", "recalled_after_unavailable"])
 def test_private_delivery_keeps_retired_steward_cards_out_of_image_recovery(
-    ordinary,  # noqa: F811
+    ordinary, monkeypatch, source_change,  # noqa: F811
 ):
     from loopx.chat_store import _atomic_write_json
+    from loopx.extensions.lark import private_steward_triage
 
     store, runtime, provider, transport = connect(ordinary)
     bindings = transport.bindings
@@ -1667,10 +1878,42 @@ def test_private_delivery_keeps_retired_steward_cards_out_of_image_recovery(
         assert card in transport.pending_delivery_paths()
         assert transport.health()[binding["binding_id"]]["pending_count"] == 1
 
-        provider.messages[event["message_id"]]["content"] = "/status"
+        source = provider.messages[event["message_id"]]
+        if source_change == "edited":
+            source["content"] = "/status"
+        elif source_change == "recalled_before_send":
+            render = private_steward_triage._render
+
+            def render_then_recall(*args, **kwargs):
+                result = render(*args, **kwargs)
+                source["deleted"] = True
+                return result
+
+            monkeypatch.setattr(private_steward_triage, "_render", render_then_recall)
+        else:
+            source["deleted"] = True
+
+        if source_change == "recalled_after_unavailable":
+            route = f"/open-apis/im/v1/messages/{event['message_id']}"
+
+            def unavailable_envelope(args, cwd=None, timeout=None):
+                if route in args:
+                    return {"returncode": 1, "stdout": "", "stderr": "temporarily unavailable"}
+                return provider(args, cwd, timeout)
+
+            with monkeypatch.context() as fault:
+                fault.setattr(transport, "runner", unavailable_envelope)
+                assert transport.reconcile_request(card) == 0
+            assert "retired" not in json.loads(card.read_text())["triage"]
+            assert card in transport.pending_delivery_paths()
+            assert not provider.writes
+
         assert transport.reconcile_request(card) == 0
         retired = json.loads(card.read_text())
         assert retired["triage"]["retired"] == "original_source_changed"
+        if source_change == "recalled_before_send":
+            assert retired["triage"]["card"]
+        assert "send_started_at" not in retired["triage"]
 
         # Even an orphaned descriptor with this filename cannot turn an
         # upstream transport-only record into image or model recovery work.
@@ -2054,6 +2297,145 @@ def test_original_queue_retains_completed_answer_across_native_cleanup(tmp_path,
         assert store._event_path(row["session_id"], row["turn_id"]).read_bytes() == events_bytes
         assert result_path.read_bytes() == retained_bytes
         assert [item for item in language_server["calls"] if item[0] in {"StartCascade", "SendUserCascadeMessage", "CancelCascadeInvocation"}] == calls
+    finally:
+        fixture.close()
+
+
+def test_original_queue_recovers_long_retained_answer_without_raw_response_bloat(tmp_path, language_server, monkeypatch):  # noqa: F811 - imported pytest fixture
+    from copy import deepcopy
+    from datetime import timezone
+    from test_native_steward_private import steward
+    from loopx.capabilities.native_chat.antigravity_adapter import AntigravityAdapter
+    from loopx.capabilities.manager_context import POLICY_SCHEMA, _root, _write, pending
+    from loopx.chat_store import _read_json
+
+    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
+    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, _, workspace = next(fixture)
+    try:
+        binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+            executor_endpoint_id="antigravity", context_kind="steward")
+        complete = "Original `<loopx-review-json>` is literal.\n\n" + "完整原答复包含中文和🙂。\n" * 30000 + "Original final paragraph."
+        assert len(complete.encode("utf-8")) == 1_140_069
+        raw_answer = '<loopx-review-json>' + json.dumps({"message": complete, "proposals": [], "gate": None}) + '</loopx-review-json>'
+        language_server.update(plain_text=True, answers={0: raw_answer})
+        start = AntigravityAdapter.start_turn
+
+        def damaged_response(adapter, message, event_sink, **kwargs):
+            response = start(adapter, message, event_sink, **kwargs)
+            return {**response, "message": "Original `"}
+
+        monkeypatch.setattr(AntigravityAdapter, "start_turn", damaged_response)
+        event = provider.event("steward-app", "retained-long", "Complete original long request")
+        transport.admit("steward-app", event)
+        ref = identity_ref(binding["provider_ref"], event["message_id"])
+        row = transport.core.read_request(ref)
+        assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=15)["status"] == "completed"
+        assert transport.reconcile_request(transport.root / f"{ref}.json") == 1
+        monkeypatch.setattr(AntigravityAdapter, "start_turn", start)
+        retained = store.native_result(row["session_id"], row["turn_id"])
+        result_path = store._session_dir(row["session_id"]) / "native-results" / f"{row['turn_id']}.json"
+        cleared = deepcopy(retained["steps"])
+        for step in cleared:
+            step["status"] = "CORTEX_STEP_STATUS_CLEARED"
+            step.get("plannerResponse", {}).pop("stopReason", None)
+        language_server.update(frames=[], frame={"at": 0, "steps": cleared, "status": "CASCADE_RUN_STATUS_IDLE"})
+
+        session = store.load_session(row["session_id"])
+        turn = store.load_turn(row["session_id"], row["turn_id"])
+        context = runtime.project_contexts.session_context(session)
+        plain_proof = transport.core._original_native_result(row, session, turn, context)
+        assert plain_proof is not None and "raw_response" not in plain_proof
+        raw_proof = transport.core._original_native_result(row, session, turn, context, include_raw_response=True)
+        assert raw_proof is not None and raw_proof["raw_response"] == raw_answer
+
+        turn_bytes = store._turn_path(row["session_id"], row["turn_id"]).read_bytes()
+        events_bytes = store._event_path(row["session_id"], row["turn_id"]).read_bytes()
+        retained_bytes = result_path.read_bytes()
+        writes = len(provider.writes)
+        calls = [item for item in language_server["calls"] if item[0] in {"StartCascade", "SendUserCascadeMessage", "CancelCascadeInvocation"}]
+        with monkeypatch.context() as no_work:
+            no_work.setattr(runtime, "enqueue_turn", lambda **_: pytest.fail("Result recovery enqueued work"))
+            no_work.setattr(runtime, "resume_session_queue", lambda **_: pytest.fail("Result recovery resumed work"))
+            restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root, runner=provider, cli_bin="lark-cli")
+            restarted.reconcile()
+
+            recovered = restarted.core.read_request(ref).get("native_result_recovery")
+            assert recovered is not None
+            assert recovered["native_observation"]["observation_source"] == "retained_turn_result"
+            assert "raw_response" not in recovered["native_observation"]
+            assert recovered["native_observation"]["response"]["message"] == complete
+            assert recovered["delivery_verified"] is True
+            message = next(item for item in store.messages(row["session_id"]) if item["message_id"] == recovered["message_id"])
+            assert message["text"] == recovered["message_text"]
+            assert complete in message["text"]
+            new_writes = [text for _, text in provider.writes[writes:]]
+            assert len(new_writes) > 1
+            delivered_text = "".join(
+                re.sub(rf"^（{index}/{len(new_writes)}）\n\n", "", part)
+                for index, part in enumerate(new_writes, 1)
+            )
+            assert "Original `<loopx-review-json>` is literal." in delivered_text
+            assert delivered_text.endswith("Original final paragraph.")
+            assert delivered_text.count("完整原答复包含中文和🙂。") == 30000
+            assert delivered_text.replace("\n", "") == recovered["message_text"].replace("\n", "")
+            receipt = _read_json(transport.root / f"{ref}.json")["deliveries"][f"native_result.{row['turn_id']}"]
+            assert receipt["verified"] is True
+
+            after_writes = len(provider.writes)
+            restarted.reconcile()
+            assert len(provider.writes) == after_writes
+            assert store._turn_path(row["session_id"], row["turn_id"]).read_bytes() == turn_bytes
+            assert store._event_path(row["session_id"], row["turn_id"]).read_bytes() == events_bytes
+            assert result_path.read_bytes() == retained_bytes
+            assert [item for item in language_server["calls"] if item[0] in {"StartCascade", "SendUserCascadeMessage", "CancelCascadeInvocation"}] == calls
+
+        # Explicit include_raw_response=True paths (metadata review) still receive raw_response from retained results.
+        registry = json.loads(runtime.registry_path.read_text())
+        registry["goals"] = [{"id": "work", "repo": str(workspace), "coordination": {"registered_agents": ["worker"]}}]
+        runtime.registry_path.write_text(json.dumps(registry))
+        original_brief = {"schema_version": "collaboration_brief_v0", "Hypotheses": ["Assess this hypothesis"],
+            "Evidence": ["Original authorized evidence"], "Constraints": ["Return here; do not change frozen work"]}
+        handoff = {"schema_version": "context_handoff_v0", "goal_id": "work", "agent_id": "worker", "brief": original_brief}
+        language_server.update(plain_text=False, invalid_handoff=True, original_handoffs=handoff,
+            answers={1: "Original complete visible metadata answer."}, frames=None, frame=None)
+        meta_event = provider.event("steward-app", "retained-meta", "Ask the worker to assess metadata")
+        transport.admit("steward-app", meta_event)
+        meta_ref = identity_ref(binding["provider_ref"], meta_event["message_id"])
+        meta_row = transport.core.read_request(meta_ref)
+        meta_completed = runtime.wait_for_turn(session_id=meta_row["session_id"], turn_id=meta_row["turn_id"], timeout_sec=15)
+        assert meta_completed["status"] == "completed" and meta_completed["response"]["gate"]["kind"] == "response_metadata_invalid"
+        assert transport.reconcile_request(transport.root / f"{meta_ref}.json") == 1
+        meta_retained = store.native_result(meta_row["session_id"], meta_row["turn_id"])
+        assert meta_retained["upstream_turn_id"] == meta_completed["upstream_turn_id"]
+        # Clear live native completion for meta_event (index 1) so metadata review
+        # reads retained_result with include_raw_response=True while a later native
+        # completion provides normal live capacity.
+        language_server["inputs"].append({"text": "An unrelated later native input", "created_at": datetime.now(timezone.utc).isoformat()})
+        language_server["sent_count"] += 1
+        language_server["cleared_input_indices"] = [1]
+        brief = {"schema_version": "collaboration_brief_v0", "purpose": "Assess the original hypothesis",
+            "context": json.dumps(original_brief, ensure_ascii=False, separators=(",", ":")),
+            "constraints": ["Do not change frozen work"], "inputs": [], "acceptance": ["Return the assessment"],
+            "return_requirement": "Return to the original conversation"}
+        language_server["review_response"] = {"message": "Unverified model delivery claim", "proposals": [], "gate": None,
+            "context_handoff": [{"goal_id": "work", "agent_id": "worker", "brief": brief}]}
+        meta_session = store.load_session(meta_row["session_id"])
+        _write(_root(runtime.coordination_runtime_root) / "policy.json", {"schema_version": POLICY_SCHEMA, "sources": {
+            meta_session["channel_id"]: {"local_delivery_scope": "selected", "sender_ids": [binding["operator_ref"]],
+                "targets": [{"goal_id": "work", "agent_id": "worker"}]}}})
+        restarted.reconcile_request(transport.root / f"{meta_ref}.json")
+        meta_row = restarted.core.read_request(meta_ref)
+        assert meta_row["turn_id"] != meta_completed["turn_id"]
+        meta_recovery = meta_row["context_recovery"]
+        assert meta_recovery["metadata_review"] is True
+        assert meta_recovery["native_observation"]["observation_source"] == "retained_turn_result"
+        assert "raw_response" in meta_recovery["native_observation"]
+        reviewed = runtime.wait_for_turn(session_id=meta_row["session_id"], turn_id=meta_row["turn_id"], timeout_sec=15)
+        assert reviewed["status"] == "completed", reviewed
+        entries = pending(runtime.coordination_runtime_root, "work", "worker")["items"]
+        assert len(entries) == 1 and entries[0]["source_id"] == meta_ref
     finally:
         fixture.close()
 
@@ -3667,11 +4049,41 @@ def test_unreadable_private_delivery_does_not_hold_other_original_replies(ordina
         runtime.close()
 
 
-def test_app_messages_and_answers_reach_the_original_chat_once_without_new_execution(ordinary):  # noqa: F811
+@pytest.mark.parametrize("source_link", ["original", "negative", "larksuite", "foreign", "non_integer", "unavailable"])
+def test_app_messages_and_answers_reach_the_original_chat_once_without_new_execution(ordinary, source_link):  # noqa: F811
     store, runtime, provider, transport, original, turns, before = _app_projection_journey(ordinary)
     sid = original["session_id"]
     canonical = [message for message in store.messages(sid) if message.get("turn_id") in turns]
     requests_before = ordinary[4].read_text()
+
+    def build_link(chat_id: str, ref: str) -> str | None:
+        if source_link == "unavailable":
+            return None
+        domain = "applink.larksuite.com" if source_link == "larksuite" else "applink.feishu.cn"
+        chat = "oc_a_different_private_chat" if source_link == "foreign" else chat_id
+        index = int(ref.removeprefix("om_out_"))
+        if source_link == "original":
+            position: int | str = index
+        elif source_link in {"negative", "larksuite", "foreign"}:
+            position = -1 - index
+        else:
+            position = "1.5"
+        return f"https://{domain}/client/chat/open?openChatId={chat}&position={position}"
+
+    def with_source_links(args, cwd=None, timeout=None):
+        response = provider(args, cwd, timeout)
+        if "+messages-mget" not in args:
+            return response
+        payload = json.loads(response["stdout"])
+        for row in payload.get("data", {}).get("items", []):
+            ref = row["message_id"]
+            if ref.startswith("om_out_"):
+                link = build_link(row["chat_id"], ref)
+                if link is not None:
+                    row["message_app_link"] = link
+        return {**response, "stdout": json.dumps(payload, ensure_ascii=False)}
+
+    transport.runner = with_source_links
     try:
         _drain_app_projection(transport, lambda: len(provider.writes) >= before + len(canonical))
         projected = provider.writes[before:]
@@ -3680,6 +4092,21 @@ def test_app_messages_and_answers_reach_the_original_chat_once_without_new_execu
         for (profile, text), message in zip(projected, canonical):
             assert profile == "notes-app" and message["text"] in text
             assert ("你（App）" if message["role"] == "user" else "LoopX（App）") in text
+        journal, = (transport.root / "web-projections").glob("*.json")
+        deliveries = json.loads(journal.read_text())["deliveries"]
+        canonical_inputs = {m["turn_id"]: m["message_id"] for m in canonical if m["role"] == "user"}
+        for message in canonical:
+            current = deliveries["web." + message["message_id"]]
+            if source_link in {"original", "negative", "larksuite"} and message["role"] == "agent":
+                parent = deliveries["web." + canonical_inputs[message["turn_id"]]]
+                expected = build_link("oc_notes_app", parent["attempt"]["message_ref"])
+                assert expected is not None and current["question_link"] == expected
+                provider_message = provider.messages[current["attempt"]["message_ref"]]
+                contents = json.loads(provider_message["body"]["content"])["zh_cn"]["content"]
+                assert f"[查看对应提问]({expected})" in contents[0][0]["text"]
+            else:
+                assert "查看对应提问" not in current["text"]
+                assert "question_link" not in current
         restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
             runner=provider, cli_bin="lark-cli")
         for _ in range(3):
@@ -4230,6 +4657,175 @@ def test_app_long_input_feedback_uses_its_last_verified_post(ordinary):  # noqa:
         runtime.close()
 
 
+@pytest.mark.parametrize("question_parts", ["available", "empty", "missing_parts", "missing_attempt"])
+def test_app_long_input_mirror_delivers_answer_when_question_parts_unavailable(ordinary, question_parts):  # noqa: F811
+    from loopx.extensions.lark.post_delivery import POST_PARTS_LOCATOR, _path
+
+    store, runtime, provider, transport, original, turns, before = _app_projection_journey(ordinary)
+    text = "Long App input with complete source.\n" * 900 + "END_APP_INPUT"
+    sid = original["session_id"]
+    try:
+        status, turn = ordinary[3](f"/api/chat/sessions/{sid}/turns",
+            {"message": text, "client_turn_id": f"long-app-mirror-{question_parts}"})
+        assert status == 202
+        assert runtime.wait_for_turn(session_id=sid, turn_id=turn["turn_id"], timeout_sec=10)["status"] == "completed"
+        _drain_app_projection(transport, lambda: any("END_APP_INPUT" in body for _, body in provider.writes[before:]))
+        refs = {ref for ref, message in provider.messages.items()
+                if "Long App input" in json.dumps(message.get("body", {})) or "END_APP_INPUT" in json.dumps(message.get("body", {}))}
+        last = next(ref for ref in refs if "END_APP_INPUT" in json.dumps(provider.messages[ref]))
+
+        question, answer = [message for message in store.messages(sid) if message["turn_id"] == turn["turn_id"]]
+        journal, = (transport.root / "web-projections").glob("*.json")
+        row = json.loads(journal.read_text())
+        question_key, answer_key = ("web." + message["message_id"] for message in (question, answer))
+        question_phase = row["deliveries"][question_key]
+        assert question_phase["verified"] and answer_key not in row["deliveries"]
+        link = "https://applink.feishu.cn/client/chat/open?openChatId=oc_notes_app&position=-1"
+        provider.messages[last]["message_app_link"] = link
+        match = POST_PARTS_LOCATOR.fullmatch(question_phase["attempt"]["message_ref"])
+        assert match is not None
+        state_path = _path(transport.runtime_root, transport._inbox(row), match[1])
+        if question_parts == "empty":
+            state = json.loads(state_path.read_text())
+            state["delivery_parts"] = []
+            state_path.write_text(json.dumps(state))
+        elif question_parts == "missing_parts":
+            state = json.loads(state_path.read_text())
+            state.pop("delivery_parts", None)
+            state_path.write_text(json.dumps(state))
+        elif question_parts == "missing_attempt":
+            state = json.loads(state_path.read_text())
+            state.pop("delivery_part_attempts", None)
+            state_path.write_text(json.dumps(state))
+        frozen_parts = state_path.read_bytes()
+        original_requests = ordinary[4].read_bytes()
+        writes = len(provider.writes)
+
+        _drain_app_projection(transport, lambda: json.loads(journal.read_text())["deliveries"].get(answer_key, {}).get("verified"))
+        phase = json.loads(journal.read_text())["deliveries"][answer_key]
+        expected = "**LoopX（App）**\n\n"
+        if question_parts == "available":
+            expected += f"[查看对应提问]({link})\n\n"
+        assert provider.writes[writes:] == [("notes-app", expected + answer["text"])]
+        assert phase.get("question_link") == (link if question_parts == "available" else None)
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        for _ in range(3):
+            restarted.reconcile()
+        assert len(provider.writes) == writes + 1
+        assert state_path.read_bytes() == frozen_parts
+        assert ordinary[4].read_bytes() == original_requests
+    finally:
+        runtime.close()
+
+
+def test_app_mirror_negative_link_persists_before_send_recovers_and_downgrades(ordinary, monkeypatch):  # noqa: F811
+    import copy
+    from loopx.extensions.lark.manager_returns import prepare_app_mirror_text
+
+    store, runtime, provider, transport = connect(ordinary)
+    raw_answer = r"Result @contributor.\nDetails: <at unsupported>quoted</at>"
+    downgraded = "Result ＠contributor.\nDetails: ‹at unsupported>quoted‹/at>"
+    ordinary[-2].write_text(ordinary[-2].read_text().replace('"Runtime response."', json.dumps(raw_answer)))
+    event = provider.event("notes-app", "original-app-negative-link", "Original source conversation")
+    transport.admit("notes-app", event)
+    original = next(row for row in transport.core.pending() if row["message"] == event["content"])
+    assert runtime.wait_for_turn(session_id=original["session_id"], turn_id=original["turn_id"], timeout_sec=10)["status"] == "completed"
+    transport.reconcile()
+    sid = original["session_id"]
+    try:
+        with monkeypatch.context() as queued:
+            queued.setattr(runtime, "resume_session_queue", lambda **_: None)
+            status, turn = ordinary[3](f"/api/chat/sessions/{sid}/turns",
+                {"message": "Question needing signed position", "client_turn_id": "negative-link-pre-send"})
+        assert status == 202
+        _drain_app_projection(transport, lambda: any("Question needing signed position" in body for _, body in provider.writes))
+        question, = [m for m in store.messages(sid) if m["turn_id"] == turn["turn_id"]]
+        journal, = (transport.root / "web-projections").glob("*.json")
+        row = json.loads(journal.read_text())
+        question_key = "web." + question["message_id"]
+        question_ref = row["deliveries"][question_key]["attempt"]["message_ref"]
+        assert row["deliveries"][question_key]["verified"]
+
+        runtime.resume_session_queue(session_id=sid, work_dir=ordinary[-1], objective="")
+        assert runtime.wait_for_turn(session_id=sid, turn_id=turn["turn_id"], timeout_sec=10)["status"] == "completed"
+        _, answer = [m for m in store.messages(sid) if m["turn_id"] == turn["turn_id"]]
+        answer_key = "web." + answer["message_id"]
+        messages = transport._web_projection_messages(row)
+
+        # Reject malformed/non-integer/wrong-domain/foreign-chat links without touching the journal.
+        invalid_links = [
+            "https://applink.feishu.cn/client/chat/open?openChatId=oc_notes_app&position=1.5",
+            "https://applink.feishu.cn/client/chat/open?openChatId=oc_notes_app&position=abc",
+            "https://applink.feishu.cn/client/chat/open?openChatId=oc_notes_app&position=-",
+            "https://applink.feishu.cn/client/chat/open?openChatId=oc_notes_app&position=+1",
+            "https://applink.feishu.cn/client/chat/open?openChatId=oc_notes_app&position=",
+            "https://applink.feishu.cn/client/chat/open?openChatId=oc_notes_app&position=-1)",
+            "https://applink.feishu.cn/client/chat/open?openChatId=oc_notes_app&position=-1&extra=1",
+            "https://applink.feishu.cn/client/chat/open?openChatId=oc_other_chat&position=-1",
+            "https://applink.feishu.cn/client/thread/open?openChatId=oc_notes_app&position=-1",
+            "https://evil.example/client/chat/open?openChatId=oc_notes_app&position=-1",
+            "http://applink.feishu.cn/client/chat/open?openChatId=oc_notes_app&position=-1",
+        ]
+        for bad_link in invalid_links:
+            provider.messages[question_ref]["message_app_link"] = bad_link
+            probe_row = copy.deepcopy(row)
+            assert prepare_app_mirror_text(transport, journal, probe_row, messages, answer) == f"**LoopX（App）**\n\n{raw_answer}"
+            assert answer_key not in probe_row["deliveries"]
+
+        link = "https://applink.feishu.cn/client/chat/open?openChatId=oc_notes_app&position=-1"
+        provider.messages[question_ref]["message_app_link"] = link
+        writes_before = len(provider.writes)
+
+        # Pre-send persistence: preview outage after prepare_app_mirror_text keeps question_link on disk.
+        def fail_preview(args, cwd=None, timeout=None):
+            if "+messages-send" in args and "--dry-run" in args:
+                return {"returncode": 1, "stdout": "", "stderr": "synthetic preview outage"}
+            return provider(args, cwd, timeout)
+
+        transport.runner = fail_preview
+        transport._web_projection_scan_at = 0
+        transport.reconcile()
+        persisted = json.loads(journal.read_text())["deliveries"][answer_key]
+        assert persisted == {
+            "question_link": link,
+            "verified": False,
+            "blocker": "lark_inbox_reply_provider_preview_mismatch",
+        }
+        assert len(provider.writes) == writes_before
+
+        # Link disappears from provider before first send; restarted worker uses persisted link
+        # and plain-text presentation downgrade on the real outbox.
+        del provider.messages[question_ref]["message_app_link"]
+        provider.verify_replies = False
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        _drain_app_projection(restarted, lambda: json.loads(journal.read_text())["deliveries"][answer_key].get("attempt") is not None)
+        expected_body = f"**LoopX（App）**\n\n[查看对应提问]({link})\n\n{downgraded}"
+        assert provider.writes[writes_before:] == [("notes-app", expected_body)]
+        attempted = json.loads(journal.read_text())["deliveries"][answer_key]
+        assert attempted["question_link"] == link
+        assert attempted["text"] == expected_body
+        assert not attempted.get("verified")
+        assert not any("+chat-members-list" in call for call in provider.calls)
+
+        # Post-restart recovery readback verifies the saved attempt without resending.
+        provider.verify_replies = True
+        writes_after = list(provider.writes)
+        requests_before = ordinary[4].read_bytes()
+        recovered = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        _drain_app_projection(recovered, lambda: json.loads(journal.read_text())["deliveries"][answer_key].get("verified"))
+        recovered.reconcile()
+        final_phase = json.loads(journal.read_text())["deliveries"][answer_key]
+        assert final_phase["verified"] and final_phase["question_link"] == link
+        assert final_phase["attempt"] == attempted["attempt"]
+        assert provider.writes == writes_after
+        assert ordinary[4].read_bytes() == requests_before
+    finally:
+        runtime.close()
+
+
 def test_enabling_app_feedback_does_not_backfill_old_finished_mirrors(ordinary, monkeypatch):  # noqa: F811
     store, runtime, provider, transport, original, turns, before = _app_projection_journey(ordinary)
     transport.reaction_feedback = False
@@ -4770,6 +5366,46 @@ def test_completed_answer_delivery_does_not_prepare_another_execution(ordinary, 
             assert delivery_followup == queued_before
         packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
         assert len([row for row in packets if row["method"] == "turn/start"]) == 1
+    finally:
+        runtime.close()
+
+
+def test_private_delivery_recovers_saved_answer_after_claim_release(ordinary, monkeypatch):  # noqa: F811
+    import errno
+    from loopx import chat_store
+
+    store, runtime, provider, transport = connect(ordinary)
+    event = provider.event("notes-app", "saved-answer-original", "Complete the original request.")
+    write = chat_store._atomic_write_json
+    lost = threading.Event()
+
+    def fail_final_status(path, value, **kwargs):
+        if path.parent.name == "turns" and value.get("status") == "completed" and not lost.is_set():
+            lost.set()
+            raise OSError(errno.EIO, "Synthetic final status write failure")
+        return write(path, value, **kwargs)
+
+    monkeypatch.setattr(chat_store, "_atomic_write_json", fail_final_status)
+    try:
+        transport.admit("notes-app", event)
+        native, = transport.core.pending()
+        sid, tid = native["session_id"], native["turn_id"]
+        assert lost.wait(10)
+        worker = runtime.session_queue_threads.get(sid)
+        if worker is not None:
+            worker.join(5)
+            assert not worker.is_alive()
+        assert store.load_session(sid)["active_turn_id"] is None
+        assert store.load_turn(sid, tid)["status"] == "completing"
+        path = transport.root / f"{native['request_ref']}.json"
+        assert transport.reconcile_request(path) == 1
+        assert transport.reconcile_request(path) == 0
+        assert provider.writes == [("notes-app", "Runtime response.")]
+        assert store.load_turn(sid, tid)["status"] == "completed"
+        assert json.loads(path.read_text())["deliveries"]["terminal"]["verified"] is True
+        assert [m["text"] for m in store.messages(sid) if m["role"] == "agent"] == ["Runtime response."]
+        packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert sum(row["method"] == "turn/start" for row in packets) == 1
     finally:
         runtime.close()
 
@@ -6343,6 +6979,457 @@ def test_legacy_group_principal_and_native_home_are_not_migrated_during_observat
         runtime.close()
 
 
+@pytest.mark.parametrize("profile", ["notes-app", "steward-app"])
+def test_private_native_mention_steers_original_busy_turn(ordinary, profile):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    capture = ordinary[4]
+    try:
+        original = provider.event(profile, "mention-original", "wait for steer")
+        assert transport.admit(profile, original)["status"] == "durably_accepted"
+        first, = transport.core.pending()
+        sid, tid = first["session_id"], first["turn_id"]
+        deadline = time.monotonic() + 10
+        while not (store.load_turn(sid, tid) or {}).get("upstream_turn_id"):
+            assert time.monotonic() < deadline
+            time.sleep(.01)
+        body = "@Personal assistant\nPreserve this correction.\n\nAnd this second paragraph."
+        event = provider.event(profile, "mention-correction", body)
+        provider.messages[event["message_id"]]["mentions"] = [
+            {"key": "@_user_1", "name": "A renamed assistant", "id": {
+                "open_id": f"ou_{profile.replace('-', '_')}_bot"}}]
+        assert transport.admit(profile, event)["status"] == "command_recorded"
+        ended = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert ended["status"] == "completed"
+        calls = [json.loads(line) for line in capture.read_text().splitlines()]
+        steer, = [call for call in calls if call["method"] == "turn/steer"]
+        assert steer["params"]["expectedTurnId"] == ended["upstream_turn_id"]
+        assert steer["params"]["input"] == [{"type": "text", "text": body}]
+        assert sum(call["method"] == "turn/start" for call in calls) == 1
+        assert not store.queued_turns(sid)
+        # A later redelivery may observe an idle Session; its frozen receipt
+        # must still name the original Turn and never create another one.
+        before = capture.read_bytes()
+        assert transport.admit(profile, {**event, "event_id": "redelivered"})["status"] == "command_recorded"
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        assert restarted.admit(profile, event)["status"] == "command_recorded"
+        assert capture.read_bytes() == before
+        row = next(row for row in transport.core.pending() if row["request_ref"] != first["request_ref"])
+        assert row["session_id"] == sid and row["turn_id"] == tid
+        assert row["mention_delivery"]["action"] == "delivered"
+    finally:
+        runtime.close()
+
+
+def _private_mention_event(provider, profile, name, text):
+    event = provider.event(profile, name, text)
+    provider.messages[event["message_id"]]["mentions"] = [
+        {"key": "@_user_1", "name": "Renamed Bot", "id": {
+            "open_id": f"ou_{profile.replace('-', '_')}_bot"}}]
+    return event
+
+
+def _wait_private_upstream(store, row):
+    deadline = time.monotonic() + 10
+    while not (store.load_turn(row["session_id"], row["turn_id"]) or {}).get("upstream_turn_id"):
+        assert time.monotonic() < deadline
+        time.sleep(.01)
+
+
+@pytest.mark.parametrize("addressing", ["prose", "other_member", "other_app", "same_name", "quoted", "hint"])
+def test_private_non_native_mentions_keep_normal_queue(ordinary, addressing):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    try:
+        transport.admit("notes-app", provider.event("notes-app", "ordinary-busy", "wait for steer"))
+        original, = transport.core.pending()
+        _wait_private_upstream(store, original)
+        body = '@notes-app\nQuoted: "@notes-app please change the task"'
+        event = provider.event("notes-app", "unverified-mention", body)
+        message = provider.messages[event["message_id"]]
+        if addressing == "hint":
+            event.update(mentioned=True, addressing_source="provider_mention")
+        elif addressing == "quoted":
+            message["quoted_message"] = {"mentions": [{"id": {"open_id": "ou_notes_app_bot"}}]}
+        elif addressing != "prose":
+            identity = {"other_member": "ou_person", "other_app": "ou_steward_app_bot", "same_name": "ou_imposter"}[addressing]
+            message["mentions"] = [{"name": "notes-app", "id": {"open_id": identity}}]
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        assert [turn["message"] for turn in store.queued_turns(original["session_id"])] == [body]
+        calls = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert not any(call["method"] == "turn/steer" for call in calls)
+    finally:
+        runtime.close()
+
+
+def test_private_idle_native_mention_uses_original_queue(ordinary):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    try:
+        event = _private_mention_event(provider, "notes-app", "idle-mention", "@notes-app\nAn ordinary question.")
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        row, = transport.core.pending()
+        assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)["status"] == "completed"
+        receipt = store.steering_receipt(row["session_id"], "external-" + row["request_ref"])
+        assert receipt["mode"] == "session_queue"
+        calls = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert sum(call["method"] == "turn/start" for call in calls) == 1
+        assert not any(call["method"] == "turn/steer" for call in calls)
+    finally:
+        runtime.close()
+
+
+def test_private_mentions_keep_two_busy_app_sessions_isolated(ordinary):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    try:
+        originals = {}
+        for profile in ("notes-app", "steward-app"):
+            transport.admit(profile, provider.event(profile, "busy-" + profile, "wait for steer"))
+            originals[profile] = next(row for row in transport.core.pending() if row["message"] == "wait for steer"
+                and row["request_ref"] == identity_ref(transport._binding(profile)["provider_ref"], "om_busy-" + profile))
+            _wait_private_upstream(store, originals[profile])
+        assert originals["notes-app"]["session_id"] != originals["steward-app"]["session_id"]
+        for profile in ("notes-app", "steward-app"):
+            event = _private_mention_event(provider, profile, "adjust-" + profile, "Correction only for " + profile)
+            with ThreadPoolExecutor(max_workers=2) as calls:
+                results = list(calls.map(lambda _: transport.admit(profile, event), range(2)))
+            assert all(result["status"] == "command_recorded" for result in results)
+            row = transport.core.read_request(identity_ref(transport._binding(profile)["provider_ref"], event["message_id"]))
+            assert (row["session_id"], row["turn_id"]) == (originals[profile]["session_id"], originals[profile]["turn_id"])
+            peer = "steward-app" if profile == "notes-app" else "notes-app"
+            assert not any(message.get("text") == "Correction only for " + profile
+                for message in store.messages(originals[peer]["session_id"]))
+        captured = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert sum(call["method"] == "turn/start" for call in captured) == 2
+        assert sum(call["method"] == "turn/steer" for call in captured) == 2
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("fault", ["turn_switched", "revoked", "source_changed", "host_unavailable"])
+def test_private_mention_keeps_frozen_target_across_failed_admission(ordinary, monkeypatch, fault):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    detached = None
+    try:
+        transport.admit("notes-app", provider.event("notes-app", "fenced-busy", "wait for steer"))
+        original, = transport.core.pending()
+        sid, tid = original["session_id"], original["turn_id"]
+        _wait_private_upstream(store, original)
+        event = _private_mention_event(provider, "notes-app", "fenced-mention", "Apply only to the original Turn.")
+        provider_ref = transport._binding("notes-app")["provider_ref"]
+        admit, changed = transport.core.admit, False
+
+        def change_during_preflight(**kwargs):
+            verify = kwargs["source_preflight"]
+
+            def preflight(selected):
+                nonlocal changed, detached
+                if not changed:
+                    changed = True
+                    if fault == "turn_switched":
+                        runtime.interrupt_turn(session_id=sid, turn_id=tid)
+                        runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+                        later, _ = runtime.enqueue_turn(session_id=sid, client_turn_id="later-turn",
+                            message="wait for steer", work_dir=ordinary[-1], objective="", origin="lark")
+                        _wait_private_upstream(store, later)
+                    elif fault == "revoked":
+                        transport.bindings.disconnect(original["binding_id"], expected_revision=transport.bindings.read()["revision"])
+                    elif fault == "source_changed":
+                        provider.messages[event["message_id"]]["mentions"] = []
+                    else:
+                        with runtime.lock:
+                            detached = runtime.adapters.pop(sid)
+                verify(selected)
+
+            return admit(**{**kwargs, "source_preflight": preflight})
+
+        monkeypatch.setattr(transport.core, "admit", change_during_preflight)
+        result = transport.admit("notes-app", event)
+        assert result["status"] in {"command_recorded", "command_rejected"}
+        row = transport.core.read_request(identity_ref(provider_ref, event["message_id"]))
+        assert row["mention_capture"]["target_turn_id"] == tid
+        calls = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert not any(call["method"] == "turn/steer" for call in calls)
+        assert not store.queued_turns(sid)
+    finally:
+        if detached is not None:
+            with runtime.lock:
+                runtime.adapters[original["session_id"]] = detached
+        runtime.close()
+
+
+@pytest.mark.parametrize("phase", ["identity", "message"])
+def test_private_mention_does_not_target_turn_started_during_provider_read(ordinary, monkeypatch, phase):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    try:
+        transport.admit("notes-app", provider.event("notes-app", "intake-busy", "wait for steer"))
+        original, = transport.core.pending()
+        sid, tid = original["session_id"], original["turn_id"]
+        _wait_private_upstream(store, original)
+        event = _private_mention_event(provider, "notes-app", "slow-source-mention", "Only correct the Turn that received this.")
+        read_source = transport.bindings.resolve if phase == "identity" else transport._source_message
+        switched = False
+
+        def slow_source(*args, **kwargs):
+            nonlocal switched
+            if not switched:
+                switched = True
+                runtime.interrupt_turn(session_id=sid, turn_id=tid)
+                runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+                later, _ = runtime.enqueue_turn(session_id=sid, client_turn_id="during-source-read",
+                    message="wait for steer", work_dir=ordinary[-1], objective="", origin="lark")
+                _wait_private_upstream(store, later)
+            return read_source(*args, **kwargs)
+
+        monkeypatch.setattr(transport.bindings if phase == "identity" else transport,
+            "resolve" if phase == "identity" else "_source_message", slow_source)
+        assert transport.admit("notes-app", event)["status"] == "command_recorded"
+        row = transport.core.read_request(identity_ref(transport._binding("notes-app")["provider_ref"], event["message_id"]))
+        assert row["mention_capture"]["target_turn_id"] == tid
+        assert row["mention_delivery"]["action"] == "reject"
+        calls = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert not any(call["method"] == "turn/steer" for call in calls)
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("queued", [False, True], ids=["composer", "queued-input"])
+def test_private_steward_app_steering_delivers_once_to_the_original_turn(tmp_path, queued):
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from test_native_steward_private import steward
+
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, capture, _ = next(fixture)
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.runtime_controller = store, runtime
+    server.runtime_root, server.registry_path = store.root.parent, runtime.registry_path
+    server.selected_goal_id, server.verbose = None, False
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+
+    def request(method, path, body=None):
+        connection = http.client.HTTPConnection(*server.server_address, timeout=15)
+        try:
+            connection.request(method, path, None if body is None else json.dumps(body),
+                               headers={"Content-Type": "application/json"})
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    try:
+        event = provider.event("steward-app", "original-private-input", "wait for steer")
+        assert transport.admit("steward-app", event)["status"] == "durably_accepted"
+        original, = transport.core.pending()
+        _wait_private_upstream(store, original)
+        sid, tid = original["session_id"], original["turn_id"]
+        session_path = f"/api/chat/sessions/{sid}"
+        endpoint = f"{session_path}/turns/{tid}/steer"
+        correction = {"message": "Correct the current inspection.", "client_ingress_id": "app-correction"}
+        body = correction
+        wrong_endpoint = f"{session_path}/turns/old-turn/steer"
+        wrong_body = {**correction, "client_ingress_id": "wrong-turn"}
+        original_queued = None
+        if queued:
+            status, pending = request("POST", f"{session_path}/turns", {
+                "message": correction["message"], "client_turn_id": "queue-original", "delivery": "queue",
+            })
+            assert status == 202 and pending["status"] == "queued"
+            qid = pending["turn_id"]
+            original_queued = store.load_turn(sid, qid)
+            endpoint = wrong_endpoint = f"{session_path}/queue/{qid}/steer"
+            body = {"target_turn_id": tid, "client_ingress_id": "app-correction"}
+            wrong_body = {"target_turn_id": "old-turn", "client_ingress_id": "wrong-turn"}
+
+        status, refused = request("POST", wrong_endpoint, wrong_body)
+        assert status == 409 and refused["error_code"] == "live_steering_turn_mismatch"
+        provider.owner_ready = False
+        assert request("POST", endpoint, body)[0] == 400
+        if queued:
+            assert store.load_turn(sid, qid) == original_queued
+        else:
+            assert store.steering_receipt(sid, "app-correction") is None
+        provider.owner_ready = True
+
+        # Managed Steward admission takes the controller lock before its
+        # binding. Steering already fenced by the binding cannot wait on it.
+        with runtime.lock:
+            status, delivered = request("POST", endpoint, body)
+        assert status == 200 and delivered["turn_id"] == tid
+        completed = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert completed["status"] == "completed"
+        status, duplicate = request("POST", endpoint, body)
+        assert status == 200 and duplicate["turn_id"] == tid
+        if queued:
+            assert duplicate == delivered and delivered["queued_turn_id"] == qid
+            assert store.load_turn(sid, qid)["status"] == "completed"
+            adoption, = [row for row in store.events_after(sid, qid, None)
+                         if row["kind"] == "turn.completed"]
+            assert adoption["payload"]["steered_into_turn_id"] == tid
+        else:
+            assert delivered["created"] is True and duplicate["created"] is False
+        status, history = request("GET", session_path)
+        assert status == 200
+        entry, = [row for row in history["messages"] if row["text"] == correction["message"]]
+        assert entry["turn_id"] == (qid if queued else tid) and entry["origin"] == "web"
+
+        transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+        assert request("POST", endpoint, {**body, "client_ingress_id": "revoked-input"})[0] == 400
+        calls = [json.loads(line) for line in capture.read_text().splitlines()]
+        steer, = [call["params"] for call in calls if call["method"] == "turn/steer"]
+        assert steer["expectedTurnId"] == completed["upstream_turn_id"]
+        assert steer["input"] == [{"type": "text", "text": correction["message"]}]
+        assert sum(call["method"] == "turn/start" for call in calls) == 1
+        assert not store.queued_turns(sid)
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=2)
+        fixture.close()
+
+
+def test_private_steward_native_mention_uses_original_manager_turn(tmp_path, monkeypatch):
+    from test_native_steward_private import steward
+
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, capture, _ = next(fixture)
+    try:
+        event = provider.event("steward-app", "manager-original", "wait for interrupt")
+        assert transport.admit("steward-app", event)["status"] == "durably_accepted"
+        original, = transport.core.pending()
+        _wait_private_upstream(store, original)
+        session = store.load_session(original["session_id"])
+        assert session["steward_context"]["audience"] == "bound_owner"
+        correction = _private_mention_event(provider, "steward-app", "manager-adjust", "Correct the current inspection.")
+        assert transport.admit("steward-app", correction)["status"] == "command_recorded"
+        row = transport.core.read_request(identity_ref(binding["provider_ref"], correction["message_id"]))
+        assert row["mention_delivery"]["action"] == "delivered"
+        assert row["turn_id"] == original["turn_id"] and row["session_id"] == original["session_id"]
+        calls = [json.loads(line) for line in capture.read_text().splitlines()]
+        assert sum(call["method"] in {"thread/goal/set", "turn/start"} for call in calls) == 1
+        assert sum(call["method"] == "turn/steer" for call in calls) == 1
+        assert not store.queued_turns(original["session_id"])
+    finally:
+        runtime.close()
+        fixture.close()
+
+
+def test_private_steward_mention_requires_current_active_turn_authorization(tmp_path):
+    from test_native_steward_private import steward
+    from loopx.chat_manager_context import manager_authorization_scope_is_current
+
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, capture, _ = next(fixture)
+    try:
+        transport.admit("steward-app", provider.event("steward-app", "scope-original", "wait for interrupt"))
+        original, = transport.core.pending()
+        _wait_private_upstream(store, original)
+        sid = original["session_id"]
+        scope = store.load_session(sid)["manager_authorization_scope_id"]
+        store.update_session(sid, manager_authorization_scope_id="stale-scope")
+        assert not manager_authorization_scope_is_current(runtime.registry_path, runtime.manager_scope_resolver,
+            store.load_session(sid), "stale-scope", runtime_root=runtime.coordination_runtime_root)
+        correction = _private_mention_event(provider, "steward-app", "scope-denied", "Correct only with current authority.")
+        assert transport.admit("steward-app", correction)["status"] == "command_recorded"
+        row = transport.core.read_request(identity_ref(binding["provider_ref"], correction["message_id"]))
+        assert row["mention_delivery"]["action"] == "reject"
+        assert not any(json.loads(line)["method"] == "turn/steer" for line in capture.read_text().splitlines())
+        # A fresh explicit correction after the original scope is restored can
+        # make progress; it cannot replay the previously rejected input.
+        store.update_session(sid, manager_authorization_scope_id=scope)
+        restored = _private_mention_event(provider, "steward-app", "scope-restored", "Continue under the restored original scope.")
+        assert transport.admit("steward-app", restored)["status"] == "command_recorded"
+        row = transport.core.read_request(identity_ref(binding["provider_ref"], restored["message_id"]))
+        assert row["mention_delivery"]["action"] == "delivered" and row["turn_id"] == original["turn_id"]
+    finally:
+        runtime.close()
+        fixture.close()
+
+
+def test_private_mention_keeps_images_instead_of_steering_text_alone(ordinary):  # noqa: F811
+    from test_lark_private_images import image_runner
+    from test_chat_image_attachments import PNG_DATA_URL
+
+    store, runtime, provider, transport = connect(ordinary)
+    transport.runner = image_runner(provider)
+    try:
+        transport.admit("notes-app", provider.event("notes-app", "image-busy", "wait for steer"))
+        original, = transport.core.pending()
+        _wait_private_upstream(store, original)
+        event = _private_mention_event(provider, "notes-app", "image-adjust", "Keep the caption\n![Image](img_example)")
+        event["message_type"] = "post"
+        provider.messages[event["message_id"]]["msg_type"] = "post"
+        assert transport.admit("notes-app", event)["status"] == "command_recorded"
+        row = next(row for row in transport.core.pending() if row["request_ref"] != original["request_ref"])
+        assert row["mention_delivery"] == {"action": "reject", "error_code": "queue_steering_attachments_unavailable"}
+        assert row["attachments"][0]["data_url"] == PNG_DATA_URL
+        assert "Keep the caption" in row["message"]
+        assert not store.queued_turns(original["session_id"])
+        calls = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert not any(call["method"] == "turn/steer" for call in calls)
+        assert sum(call["method"] == "turn/start" for call in calls) == 1
+    finally:
+        runtime.close()
+
+
+def test_private_mention_lost_native_ack_waits_for_exact_readback_without_resending(ordinary, monkeypatch):  # noqa: F811
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+
+    store, runtime, provider, transport = connect(ordinary)
+    try:
+        transport.admit("notes-app", provider.event("notes-app", "uncertain-busy", "wait for steer"))
+        original, = transport.core.pending()
+        sid = original["session_id"]
+        _wait_private_upstream(store, original)
+        body = "Exact correction after an uncertain ACK."
+        event = _private_mention_event(provider, "notes-app", "uncertain-adjust", body)
+        native_steer = CodexAppServerAdapter.steer_turn
+
+        def lose_ack(adapter, *args):
+            native_steer(adapter, *args)
+            raise RuntimeError("native response was lost after the send")
+
+        monkeypatch.setattr(CodexAppServerAdapter, "steer_turn", lose_ack)
+        monkeypatch.setattr(CodexAppServerAdapter, "steering_delivery_readback", lambda *_: [])
+        assert transport.admit("notes-app", event)["status"] == "admission_deferred"
+        ref = identity_ref(transport._binding("notes-app")["provider_ref"], event["message_id"])
+        first = transport.core.read_request(ref)
+        assert first["status"] == "prepared" and first["mention_delivery"]["action"] == "unresolved"
+        capture = ordinary[4]
+        packets = [json.loads(line) for line in capture.read_text().splitlines()]
+        sent, = [call for call in packets if call["method"] == "turn/steer"]
+        before = len(packets)
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        path = restarted.root / f"{ref}.json"
+        restarted.reconcile_request(path)
+        unresolved = restarted.core.read_request(ref)
+        assert unresolved["mention_delivery"]["action"] == "unresolved"
+        assert not unresolved.get("delivery_verified")
+        assert any("送达状态待核实" in text for _, text in provider.writes)
+        # This evidence comes from the captured native request, rather than a
+        # proposed target or a new model turn. Wrong text cannot settle it.
+        visible_body = "A different correction"
+        def readback(_adapter, turn_id):
+            return [{"turnId": turn_id, "item": {"type": "userMessage",
+                "clientId": sent["params"]["clientUserMessageId"],
+                "content": [{"type": "text", "text": visible_body}]}}]
+
+        monkeypatch.setattr(CodexAppServerAdapter, "steering_delivery_readback", readback)
+        restarted.reconcile_request(path)
+        assert restarted.core.read_request(ref)["mention_delivery"]["action"] == "unresolved"
+        visible_body = body
+        restarted.reconcile_request(path)
+        settled = restarted.core.read_request(ref)
+        assert settled["mention_delivery"]["action"] == "delivered"
+        assert settled["turn_id"] == original["turn_id"] and settled["delivery_verified"]
+        assert any(text == "已送达当前回合。" for _, text in provider.writes)
+        packets = [json.loads(line) for line in capture.read_text().splitlines()]
+        assert sum(call["method"] == "turn/steer" for call in packets) == 1
+        assert sum(call["method"] == "turn/start" for call in packets) == 1
+        assert len(packets) >= before and not store.queued_turns(sid)
+    finally:
+        runtime.close()
+
+
 def test_native_private_admission_queue_other_app_stop_and_verified_delivery(ordinary):  # noqa: F811
     store, runtime, provider, transport = connect(ordinary)
     try:
@@ -7440,7 +8527,7 @@ def test_private_discovery_skips_unchanged_bodies_but_not_new_work_or_core_check
     assert "private-body-marker" not in repr(transport._delivery_discovery._completed)
     _atomic_write_json(new, {"status": "pending"})
     assert transport.pending_delivery_paths() == [new, pending]
-    clock[0] += 61
+    clock[0] += 120  # Ineligible recovery probes stagger across [60, 120)s.
     eligible["old"] = True
     assert transport.pending_delivery_paths() == [new, old, pending]
     clock[0] += 61
@@ -7611,8 +8698,11 @@ def test_private_recovery_backlog_uses_released_capacity_before_retry_delay(tmp_
 
 
 @pytest.mark.parametrize("background_slots", [0, 2])
-@pytest.mark.parametrize("origin", ["lark", "web"])
-def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_path, monkeypatch, background_slots, origin):
+@pytest.mark.parametrize("origin", ["lark", "web", "card"])
+@pytest.mark.parametrize("backlog", ["failed_turn", "sent_card", "unknown_card_send"])
+def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(
+    tmp_path, monkeypatch, background_slots, origin, backlog,
+):
     from loopx.extensions.lark import goal_topic_runtime_service as worker
 
     release_old, release_rest = threading.Event(), threading.Event()
@@ -7630,8 +8720,15 @@ def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_pat
     transport._web_projection_paths = lambda: [web] if web.exists() else []
     fresh = web if origin == "web" else tmp_path / "z-current.json"
     for index in range(slots * 3):
-        (tmp_path / f"old-{index:02}.json").write_text(json.dumps({"status": "delivered",
-            "request_ref": str(index), "session_id": "original", "turn_id": "failed"}))
+        if backlog == "failed_turn":
+            row = {"status": "delivered", "request_ref": str(index),
+                   "session_id": "original", "turn_id": "failed"}
+        else:
+            stamp = {"send_started_at": "2026-01-01T00:00:00+00:00"}
+            if backlog == "sent_card":
+                stamp["message_id"] = f"om_{index:032x}"
+            row = {"status": "captured", "triage": stamp}
+        (tmp_path / f"old-{index:02}.json").write_text(json.dumps(row))
 
     def reconcile(path):
         with changed:
@@ -7663,7 +8760,10 @@ def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_pat
         with changed:
             assert len(started) == slots
         fresh.parent.mkdir(exist_ok=True)
-        fresh.write_text(json.dumps({"status": "pending" if origin == "web" else "accepted"}))
+        fresh_row = {"status": "pending" if origin == "web" else "accepted"}
+        if origin == "card":
+            fresh_row = {"status": "captured", "triage": {"action": {"operation": "menu"}}}
+        fresh.write_text(json.dumps(fresh_row))
         step()  # Retain the new discovery while every existing slot is held.
         release_old.set()
         with changed:
@@ -7693,10 +8793,63 @@ def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_pat
     assert sum(path.name.startswith("old-") for path in started) == slots * 2 - 1
 
 
-@pytest.mark.parametrize(("initial", "body_scan_fails"), [
-    ("accepted", False), ("accepted", True), ("delivered", False),
+def test_unreadable_recovery_hint_does_not_delay_new_private_reply(tmp_path, monkeypatch):
+    from loopx.extensions.lark import goal_topic_runtime_service as worker
+
+    old = tmp_path / "old-card.json"
+    new = tmp_path / "new-reply.json"
+    old_row = {"status": "captured", "triage": {"message_id": "om_already_sent"}}
+    old.write_text(json.dumps(old_row), encoding="utf-8")
+    new.write_text(json.dumps({"status": "accepted"}), encoding="utf-8")
+    new_delivered, old_recovered = threading.Event(), threading.Event()
+    attempts = []
+    transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
+    transport.root = tmp_path
+    transport._body_discovery = PrivateDeliveryDiscovery(tmp_path)
+    transport._delivery_discovery = PrivateDeliveryDiscovery(tmp_path)
+    transport._context_recovery_probe_at = {}
+    transport._web_projection_paths = lambda: []
+    transport.core = SimpleNamespace(context_recovery_observer=lambda: lambda ref: False)
+
+    discover = transport.pending_body_paths
+
+    def discover_then_lose_old_hint():
+        paths = discover()
+        if not new_delivered.is_set():
+            assert set(paths) == {old, new}
+            old.write_bytes(b"\xff")
+        return paths
+
+    def reconcile(path):
+        attempts.append(path)
+        path.write_text(json.dumps({"status": "delivered"}), encoding="utf-8")
+        (new_delivered if path == new else old_recovered).set()
+        return 1
+
+    transport.pending_body_paths = discover_then_lose_old_hint
+    transport.reconcile_request = reconcile
+    service = worker.LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: {}, runtime_root=tmp_path,
+        runtime_controller=None, private_conversations=transport,
+    )
+
+    def drive(step, **_):
+        step()
+        assert new_delivered.wait(1), "the unreadable card held the new reply"
+        assert old.read_bytes() == b"\xff"
+        old.write_text(json.dumps(old_row), encoding="utf-8")
+        step()
+        assert old_recovered.wait(1)
+
+    monkeypatch.setattr(service._delivery_worker, "repeat", drive)
+    service._reconcile_private()
+    assert attempts == [new, old]
+
+
+@pytest.mark.parametrize(("initial", "failure"), [
+    ("accepted", None), ("accepted", "body_scan"), ("delivered", None), ("delivered", "priority_read"),
 ])
-def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, initial, body_scan_fails):
+def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, initial, failure):
     from concurrent.futures import Future
     from loopx.chat_store import _atomic_write_json, _read_json
     from loopx.extensions.lark import goal_topic_runtime_service as worker
@@ -7725,6 +8878,7 @@ def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, i
     # left no effect. A later full discovery finds eligibility, while the fast
     # body scan continues to exclude the now-delivered receipt.
     path = tmp_path / "original.json"
+    fresh = tmp_path / "new-reply.json"
     record = {"status": initial, "request_ref": "original", "session_id": "session",
               "turn_id": "turn", "event": {"message_id": "source"}, "profile": "fixture"}
     _atomic_write_json(path, record)
@@ -7742,6 +8896,10 @@ def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, i
         return attempts.count("recovery") < required_recoveries
 
     def reconcile(receipt):
+        if receipt == fresh:
+            attempts.append("fresh")
+            _atomic_write_json(receipt, {"status": "delivered"})
+            return 1
         assert receipt == path
         current = _read_json(receipt)
         if current["status"] == "accepted":
@@ -7765,7 +8923,7 @@ def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, i
     pending_body_paths = transport.pending_body_paths
 
     def scan_bodies():
-        if body_scan_fails and clock[0] == 101:
+        if failure == "body_scan" and clock[0] == 101:
             raise OSError("temporary body scan failure")
         return pending_body_paths()
 
@@ -7776,14 +8934,27 @@ def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, i
     def drive(step, **_):
         for tick in (100, 101, 102, 161, 162, 222, 223):
             clock[0] = float(tick)
+            if failure == "priority_read" and tick == 101:
+                # The full scan already found this original, and the next
+                # historical probe is backed off. Only its priority read fails.
+                assert transport._context_recovery_probe_at[path] == 160
+                path.write_bytes(b"\xff")
+                _atomic_write_json(fresh, {"status": "accepted"})
+            if failure == "priority_read" and tick == 102:
+                assert attempts == ["fresh"]
+                _atomic_write_json(path, record)
             step()
+            if failure == "priority_read" and tick == 102:
+                assert recovery_times == [102.0], "the ready historical request waited for a second discovery"
 
     monkeypatch.setattr(service._delivery_worker, "repeat", drive)
     service._reconcile_private()
     expected = ["body", "recovery"] if initial == "accepted" else ["recovery", "recovery"]
+    if failure == "priority_read":
+        expected.insert(0, "fresh")
     assert len(discoveries) >= 2
     assert attempts == expected, (attempts, discoveries)
-    if body_scan_fails:
+    if failure == "body_scan":
         assert recovery_times == [102.0]
     assert _read_json(path) == {**record, "status": "delivered"}
 
@@ -8100,7 +9271,8 @@ def test_original_reply_gets_free_worker_when_background_checks_are_due(ordinary
         runtime.close()
 
 
-def test_historical_discovery_uses_one_existing_slot_without_an_executor_backlog(tmp_path):
+@pytest.mark.parametrize("bodies_already_pending", [False, True])
+def test_historical_discovery_uses_one_existing_slot_without_an_executor_backlog(tmp_path, bodies_already_pending):
     from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
 
     scanning, release_scan, full, release_bodies = (threading.Event() for _ in range(4))
@@ -8126,15 +9298,22 @@ def test_historical_discovery_uses_one_existing_slot_without_an_executor_backlog
 
     service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=tmp_path,
         runtime_controller=None, private_conversations=Pending())
-    service.start()
-    closer = None
-    try:
-        assert scanning.wait(5)
+
+    def queue_original_requests():
         for index in range(9):
             path = tmp_path / str(index)
             path.write_text("durable original request")
             bodies.append(path)
-        service._delivery_wakeup.set()
+
+    if bodies_already_pending:
+        queue_original_requests()
+    service.start()
+    closer = None
+    try:
+        assert scanning.wait(5), "Pending bodies starved discovery of new App replies"
+        if not bodies_already_pending:
+            queue_original_requests()
+            service._delivery_wakeup.set()
         assert full.wait(4)
         assert len(calls) == 3 and len(set(calls)) == 3  # One scan plus three replies, total four.
         closer = threading.Thread(target=service.close)
@@ -8149,3 +9328,219 @@ def test_historical_discovery_uses_one_existing_slot_without_an_executor_backlog
         service._delivery_thread.join(5)
     assert not service._delivery_thread.is_alive()
     assert len(calls) == 3  # The other six durable requests were never submitted to the executor.
+
+
+def test_completed_original_reply_uses_only_free_slot_before_due_discovery(ordinary, monkeypatch):  # noqa: F811
+    from loopx.chat_store import _read_json
+    from loopx.extensions.lark import goal_topic_runtime_service as module
+
+    store, runtime, provider, transport = connect(ordinary)
+    held, release, scan, delivered = (threading.Event() for _ in range(4))
+    clock, active, scans = [0.0], [], []
+    lock = threading.Lock()
+    blockers = [transport.root.parent / f"held-{i}.json" for i in range(3)]
+    for path in blockers:
+        path.write_text("durable historical fixture")
+    body_paths, reconcile = transport.pending_body_paths, transport.reconcile_request
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(transport, "pending_body_paths", lambda: [*blockers, *body_paths()])
+    monkeypatch.setattr(transport, "is_recovery_path", lambda path: path in blockers)
+    monkeypatch.setattr(transport, "reconcile_app_feedback", None)
+    monkeypatch.setattr(transport.owner_attention, "has_enabled", lambda: False)
+    monkeypatch.setattr(transport.steward_reports, "pending", lambda: False)
+
+    def discover():
+        scans.append(clock[0])
+        if len(scans) > 1:
+            scan.set()
+            assert release.wait(12)
+        return []
+
+    def deliver(path):
+        if path in blockers:
+            with lock:
+                active.append(path)
+                if len(active) == 3:
+                    held.set()
+            assert release.wait(12)
+            return 0
+        result = reconcile(path)
+        if _read_json(path).get("deliveries", {}).get("terminal", {}).get("verified"):
+            delivered.set()
+        return result
+
+    monkeypatch.setattr(transport, "pending_delivery_paths", discover)
+    monkeypatch.setattr(transport, "reconcile_request", deliver)
+    service = module.LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=transport.runtime_root,
+        runtime_controller=runtime, private_conversations=transport,
+        profile_poller=lambda _profile, stop: stop.wait(12))
+    service.start()
+    try:
+        assert held.wait(4)
+        event = provider.event("notes-app", "only-free-slot", "Answer the original question")
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        ref = identity_ref(transport._binding("notes-app")["provider_ref"], event["message_id"])
+        request = transport.core.read_request(ref)
+        turn = runtime.wait_for_turn(session_id=request["session_id"], turn_id=request["turn_id"], timeout_sec=5)
+        assert turn["status"] == "completed"
+        clock[0] = 10.0
+        service._delivery_wakeup.set()
+        assert delivered.wait(3), "Due discovery took the only free slot ahead of the completed original reply"
+        assert scan.wait(3), "Discovery did not progress after the original reply released its slot"
+        assert not release.is_set()
+        terminal = _read_json(transport.root / f"{ref}.json")["deliveries"]["terminal"]
+        assert terminal["verified"] and terminal["text"] == turn["response"]["message"]
+        assert provider.messages[terminal["attempt"]["message_ref"]]["chat_id"] == event["chat_id"]
+        assert len(store.list_sessions()) == 1
+        packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert sum(packet["method"] == "turn/start" for packet in packets) == 1
+    finally:
+        release.set()
+        service.close()
+        service._delivery_thread.join(5)
+        runtime.close()
+
+
+def test_due_discovery_progresses_when_only_free_slot_keeps_retrying_a_body(tmp_path, monkeypatch):
+    from loopx.extensions.lark import goal_topic_runtime_service as module
+
+    held, release, discovered = (threading.Event() for _ in range(3))
+    clock, calls, scans = [0.0], [], []
+    lock = threading.Lock()
+    paths = [tmp_path / str(i) for i in range(4)]
+    for path in paths:
+        path.write_text("durable request")
+
+    class Pending:
+        def pending_body_paths(self):
+            return paths
+
+        def pending_delivery_paths(self):
+            scans.append(clock[0])
+            if len(scans) > 1:
+                discovered.set()
+                assert release.wait(12)
+            return []
+
+        def reconcile_request(self, path):
+            with lock:
+                calls.append(path)
+                if all(item in calls for item in paths):
+                    held.set()
+            if path != paths[-1]:
+                assert release.wait(12)
+            return 0  # The unsent fourth body remains durably pending.
+
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    service = module.LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=tmp_path,
+        runtime_controller=None, private_conversations=Pending())
+    service.start()
+    try:
+        assert held.wait(4)
+        clock[0] = 10.0
+        service._delivery_wakeup.set()
+        assert discovered.wait(4), "Repeated unsent-body attempts starved due App reply discovery"
+        assert not release.is_set()
+    finally:
+        release.set()
+        service.close()
+        service._delivery_thread.join(5)
+
+
+@pytest.mark.parametrize("relay_ready_initially", [False, True])
+def test_project_workspace_write_recovers_loopback_relay_auth_once_ready(
+    ordinary, monkeypatch, tmp_path, relay_ready_initially,  # noqa: F811
+):
+    from datetime import timedelta, timezone
+    from pathlib import Path
+    from loopx.capabilities.native_chat import codex_adapter as adapter_module
+    from loopx.capabilities.native_chat import external_conversations
+
+    ordinary[2].workspace_grant = "workspace_write"
+    store, runtime, provider, transport = connect(ordinary)
+    try:
+        capture, fake = ordinary[-3:-1]
+        binding = next(row for row in transport.bindings.read()["bindings"] if row["transport_ref"] == "notes-app")
+        assert binding["grant"] == "workspace_write"
+        source = fake.read_text().replace(
+            '"codexErrorInfo": "cyberPolicy"',
+            '"codexErrorInfo": {"httpConnectionFailed": {"httpStatusCode": 401}}',
+        ).replace(
+            '"private-fixture-upstream-detail"',
+            '"unexpected status 401 Unauthorized: OpenAI API fallback request could not complete., url: http://127.0.0.1:57500/v1/responses"',
+        ).replace(
+            '            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n',
+            "",
+        )
+        fake.write_text(source)
+        event = provider.event("notes-app", "relay-401", "typed terminal failure")
+        transport.admit("notes-app", event)
+        ref = identity_ref(binding["provider_ref"], event["message_id"])
+        original = transport.core.read_request(ref)
+        failed = runtime.wait_for_turn(session_id=original["session_id"], turn_id=original["turn_id"], timeout_sec=10)
+        assert failed["status"] == "failed" and failed["error_code"] == "upstream_transport_failure" and failed["delta_count"] == 0
+        transport.reconcile()
+        delivery_path = transport.root / f"{ref}.json"
+        old_notice = json.loads(delivery_path.read_text())["deliveries"]["terminal"]
+        runtime.adapters.pop(original["session_id"]).close_session()
+        Path(store.load_session(original["session_id"])["codex_home"]).mkdir(parents=True, exist_ok=True)
+        inventory = tmp_path / "relay-inventory.json"
+        inventory.write_text(json.dumps({
+            "turns": [{"id": failed["upstream_turn_id"], "status": "failed", "error": {
+                "codexErrorInfo": {"httpConnectionFailed": {"httpStatusCode": 401}},
+                "message": "unexpected status 401 Unauthorized: OpenAI API fallback request could not complete., url: http://127.0.0.1:57500/v1/responses",
+            }}],
+            "items": [{"turnId": failed["upstream_turn_id"], "item": {"type": "userMessage", "id": "user-1"}}],
+        }))
+        begin = source.index('    elif method == "thread/turns/list":')
+        end = source.index('    else:\n        result = {}', begin)
+        reader = f'''    elif method in {{"thread/turns/list", "thread/items/list"}}:
+        with open({str(inventory)!r}) as observed:
+            snapshot = json.load(observed)
+        result = {{"data": snapshot["turns" if method == "thread/turns/list" else "items"]}}
+    elif method == "thread/backgroundTerminals/list":
+        result = {{"data": []}}
+'''
+        fake.write_text((source[:begin] + reader + source[end:]).replace(
+            'if "typed terminal failure" in json.dumps(request.get("params") or {}):',
+            "if False:",
+        ))
+        clock = [datetime.now(timezone.utc) + timedelta(seconds=61)]
+
+        class AfterBackoff(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return clock[0]
+
+        ready_state = [relay_ready_initially]
+        monkeypatch.setattr(external_conversations, "datetime", AfterBackoff)
+        monkeypatch.setattr(
+            adapter_module,
+            "_loopback_relay_transport_ready",
+            lambda *_a, **_kw: (ready_state[0], int(clock[0].timestamp())),
+        )
+        from loopx.extensions.lark.private_progress import presentation_phase
+
+        worker = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+            runner=provider, cli_bin="lark-cli")
+        worker.reconcile()
+        row = worker.core.read_request(ref)
+        if not relay_ready_initially:
+            assert row["turn_id"] == original["turn_id"] and not row.get("context_recovery")
+            ready_state[0] = True
+            clock[0] += timedelta(minutes=1)
+            worker = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+                runner=provider, cli_bin="lark-cli")
+            worker.reconcile()
+            row = worker.core.read_request(ref)
+        assert row["turn_id"] != original["turn_id"]
+        assert row["context_recovery"]["routing_attempt"] == 1
+        assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)["status"] == "completed"
+        worker.reconcile()
+        delivered = json.loads(delivery_path.read_text())
+        assert delivered["deliveries"]["terminal"] == old_notice
+        assert delivered["deliveries"][presentation_phase(row, "terminal")]["verified"]
+        starts = [json.loads(line) for line in capture.read_text().splitlines() if json.loads(line).get("method") == "turn/start"]
+        assert len(starts) == 2
+    finally:
+        runtime.close()

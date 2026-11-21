@@ -75,11 +75,16 @@ packet fingerprint and requires authority confirmation. It is not Core truth.
 
 ### `decision_review_receipt_v0`
 
-The settlement layer records one of four dispositions:
+The settlement layer records one of five dispositions:
 
 - `approve`, `reject`, and `defer` exact-read an existing `user_gate` event whose
   scope is `direction:action:<proposal-packet-ref>`;
-- `no_change` requires an explicit semantic rebase receipt and creates no gate.
+- `no_change` requires an explicit no-material-change semantic rebase and creates no gate;
+- `observed` records reviewed material facts without proposing or authorizing an
+  action. It requires a material-change rebase and rejects proposal/gate references.
+
+An empty rebase cannot be settled. Reading or capturing source items alone does
+not prove semantic review; previews validate the same evidence chain before any write.
 
 The receipt proves that the evidence batch was reviewed or found immaterial. It
 allows private source cursors to advance after validated lifecycle writeback,

@@ -2034,3 +2034,276 @@ def test_visual_delivery_digest_changes_when_target_whiteboard_changes(
     assert first["source_digest"] == changed["source_digest"]
     assert first["delivery_digest"] != changed["delivery_digest"]
     assert first["command"]["command"] != changed["command"]["command"]
+
+
+def test_sync_issue_fix_explore_reports_visual_sync_when_whiteboard_target_changes_and_rows_unchanged(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    from pathlib import Path
+    import re
+    import subprocess as _subprocess
+
+    from loopx.capabilities.explore.result_log import (
+        append_explore_result_event,
+        build_explore_node_event,
+        explore_result_log_path,
+    )
+    from loopx.cli import main as loopx_cli_main
+    from loopx.cli_commands import lark_kanban as lark_kanban_cli
+    from loopx.control_plane.coordination.goal_storage_initialization import (
+        initialize_goal_storage_target,
+    )
+    from loopx.extensions.lark.presentation import explore_results as explore_results_mod
+    from loopx.extensions.lark.presentation.kanban import save_lark_kanban_board_config
+
+    runtime_root = tmp_path / "runtime"
+    loopx_dir = tmp_path / ".loopx"
+    loopx_dir.mkdir(parents=True)
+    (tmp_path / "goal.md").write_text("# Goal\n\n## Agent Todos\n", encoding="utf-8")
+    registry_path = loopx_dir / "registry.json"
+    goal = {
+        "id": "research",
+        "creation_operation_id": "goal-create:research",
+        "status": "active",
+        "repo": str(tmp_path),
+        "state_file": "goal.md",
+        "coordination": {
+            "registered_agents": ["worker"],
+            "storage_target": {
+                "schema_version": "loopx_new_goal_storage_target_v1",
+                "provider": "file",
+                "handoff_mode": "soft_claim",
+            },
+        },
+    }
+    registry_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "common_runtime_root": str(runtime_root),
+                "goals": [goal],
+            }
+        ),
+        encoding="utf-8",
+    )
+    initialize_goal_storage_target(runtime_root, goal, registry_path=registry_path)
+    append_explore_result_event(
+        explore_result_log_path(runtime_root, "research"),
+        build_explore_node_event(goal_id="research", node_id="fix_pr_lane", title="Root fix"),
+    )
+
+    kanban_config = loopx_dir / "lark-kanban.json"
+    save_lark_kanban_board_config(
+        kanban_config,
+        base_token="PUBLIC_FIXTURE_BASE",
+        table_id="tblKanban",
+        cli_bin="lark-cli",
+        identity="user",
+    )
+    explore_config = loopx_dir / "lark-explore.json"
+
+    def _write_visual_target(overview_token: str) -> None:
+        current = explore_results_mod.read_lark_explore_local_config(explore_config)
+        payload = {
+            "schema_version": "loopx_lark_explore_local_config_v0",
+            "board": {
+                "base_token": "PUBLIC_FIXTURE_BASE",
+                "tables": {"nodes": "tblN", "edges": "tblE", "findings": "tblF"},
+                "cli_bin": "lark-cli",
+                "identity": "user",
+            },
+            "visual_sinks": {
+                "canonical": {
+                    "whiteboard_token": "wb_canonical_fixture",
+                    "overview_whiteboard_token": overview_token,
+                    "view_role": "canonical",
+                    "projection_mode": "canonical_full",
+                    "stage_boards_enabled": False,
+                    "stage_capacity": 14,
+                }
+            },
+        }
+        for preserved_key in (
+            "automatic_projection_sync",
+            "result_records",
+            "result_digests",
+            "visual_delivery_digests",
+        ):
+            if isinstance(current.get(preserved_key), dict):
+                payload[preserved_key] = dict(current[preserved_key])
+        explore_results_mod.write_lark_explore_local_config(explore_config, payload)
+
+    _write_visual_target("wb_overview_v1")
+
+    row_sync_calls: list[bool] = []
+    published_markers: dict[str, str] = {}
+
+    def fake_sync_rows(*args, **kwargs):
+        row_sync_calls.append(bool(kwargs.get("execute")))
+        return {
+            "ok": True,
+            "written_rows": 1,
+            "readback": {"verified": True},
+            "records": [],
+        }
+
+    def fake_runner(args, cwd, _timeout):
+        if "+update" in args:
+            token = args[args.index("--whiteboard-token") + 1]
+            source_arg = args[args.index("--source") + 1]
+            source = (Path(cwd) / source_arg.removeprefix("@")).read_text(encoding="utf-8")
+            marker = re.search(r"LoopX delivery [0-9a-f]{20}", source)
+            assert marker is not None
+            published_markers[token] = marker.group(0)
+            return {"returncode": 0, "stdout": json.dumps({"ok": True}), "stderr": ""}
+        token = args[args.index("--whiteboard-token") + 1]
+        return {
+            "returncode": 0,
+            "stdout": json.dumps(
+                {
+                    "ok": True,
+                    "data": {
+                        "nodes": [{"text": {"text": published_markers.get(token, "")}}]
+                    },
+                }
+            ),
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(explore_results_mod, "sync_explore_results_to_lark", fake_sync_rows)
+
+    initial = explore_results_mod.sync_issue_fix_explore_on_material_change(
+        registry_path=registry_path,
+        goal_id="research",
+        execute=True,
+        external_sink_delivery_authorized=True,
+        runner=fake_runner,
+    )
+    assert initial["ok"] is True
+    assert initial["status"] == "synced"
+    assert len(row_sync_calls) == 1
+
+    monkeypatch.setattr(
+        lark_kanban_cli,
+        "sync_loopx_todos_to_lark_kanban",
+        lambda *args, **kwargs: {"ok": True},
+    )
+    monkeypatch.setattr(
+        lark_kanban_cli,
+        "resolve_extension_activation",
+        lambda *args, **kwargs: {
+            "extension_id": "loopx-lark",
+            "provider_version": "0.1.0",
+            "revision": "rev-fixture",
+            "enabled": True,
+            "doctor_verified": True,
+            "required_permissions": ["lark.projection_sink.use"],
+        },
+    )
+
+    def _run_kanban_cli(*extra: str) -> dict[str, object]:
+        capsys.readouterr()
+        rc = loopx_cli_main(
+            [
+                "--registry",
+                str(registry_path),
+                "--runtime-root",
+                str(runtime_root),
+                "--format",
+                "json",
+                "lark-kanban",
+                "sync-loopx-todos",
+                "--config-path",
+                str(kanban_config),
+                "--goal-id",
+                "research",
+                *extra,
+            ]
+        )
+        assert rc == 0
+        return json.loads(capsys.readouterr().out)
+
+    unchanged_direct = explore_results_mod.sync_issue_fix_explore_on_material_change(
+        registry_path=registry_path,
+        goal_id="research",
+        execute=False,
+    )
+    assert unchanged_direct["status"] == "unchanged"
+    assert unchanged_direct["needs_row_sync"] is False
+    assert unchanged_direct["needs_visual_sync"] is False
+
+    unchanged_cli = _run_kanban_cli()
+    assert unchanged_cli["issue_fix_explore_lark_sync"]["status"] == "unchanged"
+    assert unchanged_cli["issue_fix_explore_lark_sync"]["visual_status"] == "unchanged"
+
+    _write_visual_target("wb_overview_v2")
+
+    dry_run = explore_results_mod.sync_issue_fix_explore_on_material_change(
+        registry_path=registry_path,
+        goal_id="research",
+        execute=False,
+    )
+    assert dry_run["status"] == "would_sync"
+    assert dry_run["needs_row_sync"] is False
+    assert dry_run["needs_visual_sync"] is True
+    assert dry_run["needs_sync"] is True
+
+    suppressed = explore_results_mod.sync_issue_fix_explore_on_material_change(
+        registry_path=registry_path,
+        goal_id="research",
+        execute=True,
+        external_sink_delivery_authorized=False,
+    )
+    assert suppressed["status"] == "external_sink_suppressed"
+    assert suppressed["needs_row_sync"] is False
+    assert suppressed["needs_visual_sync"] is True
+    assert suppressed["needs_sync"] is True
+
+    cli_preview = _run_kanban_cli()
+    assert cli_preview["issue_fix_explore_lark_sync"]["status"] == "would_sync"
+    assert cli_preview["issue_fix_explore_lark_sync"]["needs_row_sync"] is False
+    assert cli_preview["issue_fix_explore_lark_sync"]["needs_visual_sync"] is True
+    assert cli_preview["issue_fix_explore_lark_sync"]["visual_status"] != "unchanged"
+
+    published = explore_results_mod.sync_issue_fix_explore_on_material_change(
+        registry_path=registry_path,
+        goal_id="research",
+        execute=True,
+        external_sink_delivery_authorized=True,
+        runner=fake_runner,
+    )
+    assert published["ok"] is True
+    assert published["status"] == "synced"
+    assert published["needs_row_sync"] is False
+    assert published["needs_visual_sync"] is True
+    assert published["needs_sync"] is True
+    assert len(row_sync_calls) == 1
+    assert published["visual_sync"]["status"] == "published"
+
+    _write_visual_target("wb_overview_v3")
+    orig_run = _subprocess.run
+
+    def _dispatch_subprocess(*args, **kwargs):
+        cmd = args[0] if args else kwargs.get("args") or []
+        if isinstance(cmd, (list, tuple)) and cmd and str(cmd[0]) == "lark-cli":
+            out = fake_runner(list(cmd), kwargs.get("cwd") or tmp_path, kwargs.get("timeout"))["stdout"]
+            return _subprocess.CompletedProcess(args=cmd, returncode=0, stdout=out, stderr="")
+        return orig_run(*args, **kwargs)
+
+    monkeypatch.setattr(_subprocess, "run", _dispatch_subprocess)
+    cli_execute = _run_kanban_cli("--execute")
+    assert cli_execute["issue_fix_explore_lark_sync"]["status"] == "synced"
+    assert cli_execute["issue_fix_explore_lark_sync"]["needs_visual_sync"] is True
+    assert cli_execute["issue_fix_explore_lark_sync"]["visual_status"] == "published"
+    assert len(row_sync_calls) == 1
+
+    settled = explore_results_mod.sync_issue_fix_explore_on_material_change(
+        registry_path=registry_path,
+        goal_id="research",
+        execute=False,
+    )
+    assert settled["status"] == "unchanged"
+    assert settled["needs_row_sync"] is False
+    assert settled["needs_visual_sync"] is False

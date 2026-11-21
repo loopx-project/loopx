@@ -15,6 +15,7 @@ from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from hashlib import sha256
+from pathlib import Path
 from typing import Any, Protocol
 
 from ...control_plane.turn_driver.codex_stdio import (
@@ -34,6 +35,9 @@ class NativeGoalTransport(Protocol):
 
 class NativeGoalEventTransport(NativeGoalTransport, Protocol):
     def next_event(self, *, timeout_sec: float) -> Mapping[str, Any] | None: ...
+
+
+_RETAINED_DECISION_BYTES = 48_000
 
 
 def _digest(value: str) -> str:
@@ -459,6 +463,65 @@ def run_native_goal_turn(
     return turn
 
 
+def run_retained_decision_turn(
+    transport: NativeGoalEventTransport,
+    config: NativeGoalConfig,
+    *,
+    capture: Path,
+    digest: str,
+    timeout_sec: float | None,
+) -> NativeGoalTurn:
+    """Preserve exact captured bytes as tool data for one ephemeral Codex turn."""
+    from ...control_plane.turn_driver.decision_capture import read_context_capture_file
+
+    config.validate()
+    if config.token_budget is not None or config.sandbox_policy is not None or config.required_skill_ids:
+        raise ValueError("retained decision turns use the fixed read-only profile")
+    if timeout_sec is not None and not 0 < timeout_sec < float("inf"):
+        raise ValueError("turn timeout must be positive")
+    if not capture.is_absolute() or capture.name != "decision.json":
+        raise ValueError("retained decision requires an absolute original decision.json path")
+    # A single retained item leaves headroom under Codex's shared retention budget.
+    if capture.lstat().st_size > _RETAINED_DECISION_BYTES:
+        raise ValueError("decision capture exceeds the 48000-byte retained input budget")
+    _, raw, _ = read_context_capture_file(str(capture), digest, private=True)
+    if len(raw) > _RETAINED_DECISION_BYTES:
+        raise ValueError("decision capture exceeds the 48000-byte retained input budget")
+    transport.request("initialize", {"clientInfo": {"name": "loopx_retained_decision", "version": "0.1.0"},
+                                     "capabilities": {"experimentalApi": True}})
+    transport.notify("initialized", {})
+    thread = _nested(transport.request("thread/start", {
+        "cwd": config.cwd, "ephemeral": True, "sandbox": "read-only", "approvalPolicy": "never",
+        "config": {"features.multi_agent": False, "features.multi_agent_v2": False,
+                   "agents.max_threads": 1, "tool_output_token_limit": _RETAINED_DECISION_BYTES},
+        **({"model": config.model} if config.model else {}),
+    }), "thread")
+    thread_id = thread.get("id")
+    if thread.get("ephemeral") is not True or not isinstance(thread_id, str) or not thread_id:
+        raise NativeGoalProtocolError("decision_retention_requires_ephemeral_thread")
+    transport.request("thread/inject_items", {"threadId": thread_id, "items": [{
+        "retention": "always",
+        "item": {"type": "function_call_output", "name": "loopx_original_decision",
+                 "output": raw.decode("utf-8")},
+    }]})
+    response = _nested(transport.request("turn/start", {
+        "threadId": thread_id, "input": [{"type": "text", "text": config.objective + "\n\n" + config.task_instruction}],
+        **({"model": config.model} if config.model else {}),
+        **({"effort": config.effort} if config.effort else {}),
+    }), "turn")
+    turn_id = response.get("id")
+    if not isinstance(turn_id, str) or not turn_id:
+        raise NativeGoalProtocolError("turn_start_id_missing")
+    turn = NativeGoalTurn(
+        thread_id=thread_id, turn_id=turn_id, response_turn_id=turn_id, goal_status="not_attached",
+        objective_sha256=_digest(config.objective), objective_chars=len(config.objective),
+        task_instruction_sha256=_digest(config.task_instruction), task_instruction_chars=len(config.task_instruction),
+        token_budget_present=False,
+        methods=["initialize", "initialized", "thread/start", "thread/inject_items", "turn/start"],
+    )
+    return wait_native_goal_turn(transport, turn, timeout_sec=timeout_sec)
+
+
 def run_native_goal_until_terminal(
     transport: NativeGoalEventTransport,
     config: NativeGoalConfig,
@@ -651,6 +714,7 @@ __all__ = [
     "run_native_goal_process_until_terminal",
     "run_native_goal_turn",
     "run_native_goal_until_terminal",
+    "run_retained_decision_turn",
     "start_native_goal_turn",
     "wait_native_goal_turn",
 ]

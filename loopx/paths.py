@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import os
 import stat
 from enum import StrEnum
@@ -218,7 +219,7 @@ def default_runtime_route() -> dict[str, object]:
     )
     # Machine configuration and extension activation can predate the first
     # Goal registry. Preserve any existing state in an owned default root;
-    # an empty directory alone does not establish a second authority.
+
     current_state, legacy_state = (
         _runtime_root_has_machine_state(root) for root in roots
     ) if not invalid else (False, False)
@@ -375,3 +376,79 @@ def rel_or_abs(path: Path, root: Path) -> str:
         return str(path.relative_to(root))
     except ValueError:
         return str(path)
+
+
+GIT_BYTE_PATH_PREFIX = "git-bytes:"
+
+
+def display_path_text(path: Path | str) -> str:
+    """Render a pathname so a UTF-8 reader can always parse the report.
+
+    ``os.fsdecode`` keeps the bytes of a name that is not valid UTF-8 as lone
+    surrogates (PEP 383). A report that printed such a name verbatim writes
+    bytes no strict UTF-8 reader accepts, and the JSON consumer then cannot
+    read the finding that named the file. An ordinary name is returned
+    unchanged; any other name keeps its exact bytes in a ``git-bytes:``
+    labelled ``repr``, the marker the issue-fix artifact already uses.
+
+    A legal name can spell the reserved label itself (``git-bytes:b"x"`` is a
+    valid POSIX filename), and writing it verbatim would make one label stand
+    for two different Git records. Such a name is escaped as well, so the label
+    space stays disjoint: an ordinary name never opens with the prefix, and two
+    escaped labels differ exactly when their byte strings do. Recover the
+    record behind a label with :func:`display_path_bytes`.
+    """
+
+    text = str(path)
+    if not text.startswith(GIT_BYTE_PATH_PREFIX) and _is_utf8(text):
+        return text
+    return f"{GIT_BYTE_PATH_PREFIX}{os.fsencode(text)!r}"
+
+
+def display_report_text(text: str) -> str:
+    """Render a diagnostic string so a UTF-8 reader can always parse it.
+
+    A message often names a file the report cannot spell.  Escaping the whole
+    sentence would hide what the finding is about, so each maximal run of
+    PEP 383 surrogate-escaped bytes is written as a ``git-bytes:`` label inside
+    the message; :func:`display_path_bytes` recovers those bytes, and ordinary
+    text keeps its original spelling.
+    """
+
+    if _is_utf8(text):
+        return text
+    parts: list[str] = []
+    run: list[str] = []
+
+    def flush() -> None:
+        if run:
+            parts.append(f"{GIT_BYTE_PATH_PREFIX}{os.fsencode(''.join(run))!r}")
+            run.clear()
+
+    for character in text:
+        if 0xDC80 <= ord(character) <= 0xDCFF:
+            run.append(character)
+        else:
+            flush()
+            parts.append(character)
+    flush()
+    return "".join(parts)
+
+
+def display_path_bytes(text: str) -> bytes:
+    """Recover the pathname bytes a display label names."""
+
+    if not text.startswith(GIT_BYTE_PATH_PREFIX):
+        return os.fsencode(text)
+    record = ast.literal_eval(text[len(GIT_BYTE_PATH_PREFIX):])
+    if not isinstance(record, (bytes, bytearray)):
+        raise ValueError("a git-bytes label must carry a bytes literal")
+    return bytes(record)
+
+
+def _is_utf8(text: str) -> bool:
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True

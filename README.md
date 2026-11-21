@@ -6,7 +6,7 @@
 
 **Start with one goal. Keep long-running agent work verifiable.**
 
-Tell the Agent you already use what you want done. LoopX preserves goals,
+Tell your agent what you want to accomplish. LoopX preserves goals,
 progress, decisions and verifiable results so work can continue across sessions.<br>
 <sub>An open, harness-neutral control plane for 24/7 always-on agents across Codex, Claude Code, DeepSeek Harness and other runtimes—scaling from local SQLite workflows to multi-agent teams.</sub>
 
@@ -17,6 +17,10 @@ progress, decisions and verifiable results so work can continue across sessions.
 [Get started](#quick-start) · [Why LoopX](#why-loopx) · [24/7 Always-On](#always-on-agents) · [See it in action](#see-loopx-in-action) · [Evidence](#evidence) · [Contribute](#contributing) · [Docs](https://loopx-project.github.io/loopx/docs/) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
 
 </div>
+
+https://github.com/user-attachments/assets/6d459488-4834-40ef-90bc-d6649c4f0ef1
+
+<p align="center"><sub><b>60-second overview</b> — one sentence sets a long-horizon goal across Codex, Claude Code, Gemini &amp; DeepSeek; LoopX keeps Todos, replanning, human sign-off, and 3% first-read session recovery verifiable across 200+ hour runs (community film by <a href="https://x.com/lemomo_ai">@lemomo_ai</a> · <a href="#see-loopx-in-action">more product recordings below</a>).</sub></p>
 
 ---
 
@@ -53,7 +57,7 @@ run? [Choose a task below](#try-loopx).
      not news. Keep both languages aligned, newest first, using verified publication
      dates (UTC). -->
 
-- **2026-11-01 · 📘 [Progressive context delivery for 24/7 agents](https://loopx-project.github.io/loopx/blog/context-delivery/)** — Compaction-cycle structured deltas and progressive views cut control-plane bytes across 213 model-facing wakes (`32.5%` single-layer progressive view; `3.0%` body / `5.0%` CLI stacked first-read entry across 112 in-cycle continuations) while preserving lossless baseline recovery ([47-day freshness postmortem](https://loopx-project.github.io/loopx/blog/five-freshness-incidents/)).
+- **2026-11-01 · 📘 [Progressive context delivery for 24/7 agents](https://loopx-project.github.io/loopx/blog/context-delivery/)** — Compaction-cycle structured deltas and progressive views cut control-plane bytes across 213 model-facing wakes (`32.5%` single-layer progressive view; `3.0%` body / `5.0%` CLI stacked first-read entry across 112 in-cycle continuations) while preserving lossless baseline recovery.
 - **2026-10-25 · 🤝 [Long-horizon agent research: collaborators welcome](https://loopx-project.github.io/loopx/blog/edgebench-feedback-and-memory/)** — Exploring **breakthroughs in long-horizon outcomes under equal budgets**, through feedback, replanning and reproducible evaluation on EdgeBench and real-world tasks. Academic labs and industry teams are welcome to collaborate, comparing outcomes and total cost. [Discuss collaboration](https://github.com/loopx-project/loopx/discussions).
 - **2026-10-20 · 🚀 [LoopX 2.0](https://github.com/loopx-project/loopx/releases/tag/v2.0.0)** — A shared TypeScript state layer and long-horizon research workbench. [Migration guide](docs/product/releases/v2.0.0.md) · [Engineering story](https://loopx-project.github.io/loopx/blog/typescript-control-plane-refactor/).
 - **2026-10-14 · 🤖 [Agentic software](https://loopx-project.github.io/loopx/blog/semantic-software-development/)** — Connecting goals, evidence and human feedback to engineering delivery.
@@ -163,7 +167,7 @@ operate 24/7 with explicit durability and human gates:
 | --- | --- | --- |
 | **Event Inbox** | Single-flight **Goal / Todo / Hard Lease** queue, async app inbox, and connected Lark / GitHub listeners | Duplicate workers mutating the same repo state; dropped human inputs mid-run |
 | **Timers & Wakeups** | **Guarded Heartbeat** and safe recurring presets (`daily-triage`, `changelog-draft`, `pr-watch`; inspect via `loopx preset list`) | Blind cron loops burning tokens when nothing changed or a gate is still waiting on a human |
-| **Memory & Compaction** | [`Decision Context`](loopx/capabilities/decision_context/README.md) source tracking, compaction-cycle **Progressive + Delta** [`context_delivery`](https://loopx-project.github.io/loopx/blog/context-delivery/) (`32.5%` view across 213 wakes; `3.0% / 5.0%` first-read entry across 112 in-cycle wakes), and optional [`Reward Memory`](loopx/capabilities/reward_memory/README.md) | Silent source staleness ([5 incidents across 253 turns / 47 days](https://loopx-project.github.io/loopx/blog/five-freshness-incidents/)); compounding prompt replay or broken deltas across compaction |
+| **Memory & Compaction** | [`Decision Context`](loopx/capabilities/decision_context/README.md) source tracking, compaction-cycle **Progressive + Delta** [`context_delivery`](https://loopx-project.github.io/loopx/blog/context-delivery/) (`32.5%` view across 213 wakes; `3.0% / 5.0%` first-read entry across 112 in-cycle wakes), and optional [`Reward Memory`](loopx/capabilities/reward_memory/README.md) | Silent source staleness; compounding prompt replay or broken deltas across compaction |
 | **Permissions & Deferred Calls** | Explicit **owner, safety, publication, and private-data gates**, isolated worktrees, and review-ready handoffs | Autonomous cron runs publishing externally, forcing merges, or leaking private context |
 | **Outbox** | Shared Workspace & Lark Goal/Decision/Evidence views surfacing genuine completions, blockers, and open gates | Fragmented terminal logs and high-noise pings that force humans to babysit runs |
 
@@ -390,14 +394,11 @@ benchmark's strict solved threshold. No score in this study equals 0.80, so
 these counts also match the study brief's >0.80 view.
 
 Against native Goal, task-level rewards improve on **23**, tie on **13**, and
-regress on **10** tasks. Strict solves match Plain Codex, so the mean gain is
-not a claim that every task improves or that more tasks are fully solved than
-Plain. Mean reward also credits partial progress.
+regress on **10** tasks. Strict solves match Plain Codex. Mean reward also credits partial progress.
 
 One effective trial per task and mode; designated replacement trials and
 unequal runtime/budgets, including longer budgets for some Heartbeat replacements.
-These are observed system results, not an equal-budget efficiency result or
-an isolated causal estimate of LoopX's effect.
+These are observed system results.
 
 [Interactive results, task comparisons and methodology](https://loopx-project.github.io/loopx/benchmarks/lhtb/)
 · [Five-arm study and limits](benchmark/LHTB/studies/five-arm-gpt56sol-max/README.md)
@@ -564,7 +565,7 @@ its own policy and authority checks before proposing a transition.
 | Session dash | Starts a live single-page panel that tracks fleet progress: sessions, their goals, and each goal's status/todo progress, with result statistics; auto-refreshes in place. | `loopx dash`, [session dash design](docs/product/surfaces/session-dash-panel-design.md) |
 | External projections | Projects todos and gates into collaboration surfaces while LoopX remains authoritative. | `loopx lark-kanban`, [Lark Kanban adapter](docs/integrations/lark-kanban-control-plane-adapter.md) |
 | Domain capabilities | Packages repeatable work lanes such as issue fixing, content operations, value connector planning, ML experiment advice, benchmark evidence, and Explore. | `loopx issue-fix`, `loopx content-ops`, `loopx value-connectors`, `loopx ml-experiment`, `loopx benchmark`, [Explore](loopx/capabilities/explore/README.md) |
-| Experimental context learning | Lets named registered agents trial provider-neutral Reward Memory through ignored, default-off project configuration. OpenViking is one provider option, not a global dependency. | `loopx reward-memory experiment-status`, [Reward Memory architecture](loopx/capabilities/reward_memory/README.md) |
+| Experimental context learning | Lets named registered agents trial provider-neutral Reward Memory through ignored, default-off project configuration. OpenViking is one provider option. | `loopx reward-memory experiment-status`, [Reward Memory architecture](loopx/capabilities/reward_memory/README.md) |
 | Governance patterns | Captures reusable routing, gate, evidence, projection, and planning shapes. | [interaction patterns](docs/concepts/interaction-pattern-catalog.md), [state model](docs/state-interaction-model.md) |
 
 The shipped primitives include lifetime goals, concrete user gates, audited safe
@@ -583,8 +584,7 @@ signals, and public/private boundary checks.
 
 The execution path is `Agent -> Capability -> Provider`; the control path
 returns `Provider readback -> Capability transition -> Kernel`. An extension is
-how an optional provider is packaged and managed, not another control-plane
-owner. See [Architecture](docs/architecture.md) and
+how an optional provider is packaged and managed. See [Architecture](docs/architecture.md) and
 [Extensions and Capabilities](docs/reference/extensions.md).
 
 </details>
@@ -599,8 +599,7 @@ owner. See [Architecture](docs/architecture.md) and
 [Anthropic's *Building always-on agents*](https://claude.com/resources/articles/building-always-on-agents)
 make persistent personal agents and sleep/wake event-driven runs a familiar product
 and architecture model. LoopX approaches that space as an open, provider-neutral
-[24/7 control plane](#always-on-agents) for agents you already run—not as a hosted
-replacement for either product.
+[24/7 control plane](#always-on-agents) for agents you already run.
 
 - **Personal agent:** use the shipped Workspace and connected Lark surfaces to
   inspect goals, steer work and resolve decisions. The
@@ -615,10 +614,9 @@ replacement for either product.
   [Reward Memory](loopx/capabilities/reward_memory/README.md), and evaluate
   candidate changes through [Explore](loopx/capabilities/explore/README.md).
   Both are optional. The link to **recursive self-improvement (RSI)** is the
-  engineering loop—propose, test, review, retain—not a claim that LoopX has
-  demonstrated autonomous model improvement or compounding capability gains.
+  engineering loop—propose, test, review, retain.
 
-A personal steward is an interaction role, not a second source of authority.
+A personal steward is an interaction role.
 Background execution still needs an available host and configured runtime.
 The [overall roadmap](docs/architecture/rfcs/loopx-overall-roadmap-v0.md)
 separates shipped foundations from the next end-to-end acceptance milestones.
@@ -876,8 +874,7 @@ long-running agent ecosystem. Our confirmed partners include:
 ## Current Status
 
 LoopX is a usable local control plane for long-running agent work and is
-entering broader adoption. It is not a full agent platform, an agent runtime, or
-an autonomous production controller.
+entering broader adoption.
 
 Today LoopX ships a durable state kernel for goals, typed todos and decision
 scopes, peer claims and leases, evidence and writeback, quota-aware scheduling,
@@ -888,9 +885,7 @@ Workspace all build on that shared control state.
 
 Support levels remain explicit. The state and CLI contracts are the stable
 center; several host integrations and advanced paths are optional, default-off,
-or experimental. LoopX does not grant credentials, approve destructive or
-production actions, publish on a user's behalf without authorization, or turn
-an unverified run into evidence of success.
+or experimental.
 
 Current investment is organized through the
 [Technical Directions map](docs/project/technical-directions.md): long-horizon

@@ -174,11 +174,18 @@ def test_original_project_has_explicit_grant_and_returns_through_requester_inbox
     assert outgoing["recipient"] == f["body"]["recipient"] and "agent_id" not in outgoing
     assert first["request_id"] not in {row["request_id"] for row in requester_agenda(f, "reviewer")["items"]}
     assert "Verified original project result." not in json.dumps(agenda)
-    result = read_inbox(f["root"], f["registry"], "delivery", "builder", caller_goal_ref=f["ref"])
+    result = read_inbox(f["root"], f["registry"], "delivery", "builder", caller_goal_ref=f["ref"],
+        turn_instance_id="turn-original-result")
     assert result["peer_returns"]["items"][0]["text"] == "Verified original project result."
     assert result["peer_returns"]["items"][0]["decision"] == "adopt"
     assert next(row for row in requester_agenda(f)["items"] if row["request_id"] == first["request_id"])["step"] == "consume_peer_result"
-    assert consume_return(f["root"], "delivery", "builder", first["request_id"], registry=f["registry"], caller_goal_ref=f["ref"])["consumed"]
+    deferred = consume_return(f["root"], "delivery", "builder", first["request_id"], registry=f["registry"],
+        caller_goal_ref=f["ref"], turn_instance_id="turn-original-result", disposition="deferred")
+    assert deferred["consumed"] is False
+    assert read_inbox(f["root"], f["registry"], "delivery", "builder", caller_goal_ref=f["ref"],
+        turn_instance_id="turn-original-result-next")["peer_returns"]["items"][0]["text"] == "Verified original project result."
+    assert consume_return(f["root"], "delivery", "builder", first["request_id"], registry=f["registry"],
+        caller_goal_ref=f["ref"], turn_instance_id="turn-original-result-next", disposition="accepted")["consumed"]
     assert "peer_returns" not in read_inbox(f["root"], f["registry"], "delivery", "builder", caller_goal_ref=f["ref"])
     assert requester_agenda(f)["outgoing_count"] == 0
     again = f["service"].publish(f["body"])
@@ -190,6 +197,51 @@ def test_original_project_has_explicit_grant_and_returns_through_requester_inbox
     assert supplied["brief"] == f["body"]["brief"]
     assert not any(p.get("method", "").startswith("thread/goal") for p in packets)
     assert not any("dynamicTools" in p.get("params", {}) for p in packets)
+
+
+@pytest.mark.parametrize(
+    ("terminal_disposition", "opposite_disposition"),
+    [("accepted", "rejected"), ("rejected", "accepted")],
+)
+def test_original_peer_terminal_disposition_rejects_a_conflicting_retry(
+    project_peer, terminal_disposition, opposite_disposition,
+):
+    from loopx.control_plane.collaboration.inbox import _root
+
+    f = project_peer
+    allow(f)
+    published = f["service"].publish(f["body"])
+    completed = f["runtime"].wait_for_turn(
+        session_id=f["session"]["session_id"], turn_id=published["turn_id"], timeout_sec=15,
+    )
+    assert completed["status"] == "completed", completed
+
+    current_turn = "turn-terminal-disposition"
+    inbox = read_inbox(f["root"], f["registry"], "delivery", "builder",
+        caller_goal_ref=f["ref"], turn_instance_id=current_turn)
+    assert [item["request_id"] for item in inbox["peer_returns"]["items"]] == [published["request_id"]]
+
+    def acknowledge(disposition):
+        return consume_return(f["root"], "delivery", "builder", published["request_id"],
+            registry=f["registry"], caller_goal_ref=f["ref"], turn_instance_id=current_turn,
+            disposition=disposition)
+
+    consumed = acknowledge(terminal_disposition)
+    assert consumed["consumed"]
+    folder = _root(f["root"]) / "replies" / published["request_id"]
+    receipt_path = folder / "conclusion.consumed.json"
+    receipt = receipt_path.read_bytes()
+    assert json.loads(receipt)["disposition"] == terminal_disposition
+
+    for conflicting in ("deferred", opposite_disposition):
+        with pytest.raises(ValueError, match="peer consumption receipt scope mismatch"):
+            acknowledge(conflicting)
+    assert acknowledge(terminal_disposition) == consumed
+    assert receipt_path.read_bytes() == receipt
+    assert not (folder / "conclusion.acknowledgement.json").exists()
+    next_inbox = read_inbox(f["root"], f["registry"], "delivery", "builder",
+        caller_goal_ref=f["ref"], turn_instance_id="turn-after-terminal-disposition")
+    assert not next_inbox.get("peer_returns", {}).get("items")
 
 
 @pytest.mark.parametrize("changed_record", ["operation", "entry"])
@@ -334,8 +386,10 @@ def test_completed_request_correction_survives_queue_loss_restart_and_retry(proj
     first = f["service"].publish(f["body"])
     original = f["runtime"].wait_for_turn(session_id=sid, turn_id=first["turn_id"], timeout_sec=15)
     assert original["status"] == "completed"
-    assert read_inbox(f["root"], f["registry"], "delivery", "builder", caller_goal_ref=f["ref"])["peer_returns"]["items"][0]["request_revision"] == 1
-    assert consume_return(f["root"], "delivery", "builder", first["request_id"], registry=f["registry"], caller_goal_ref=f["ref"])["consumed"]
+    assert read_inbox(f["root"], f["registry"], "delivery", "builder", caller_goal_ref=f["ref"],
+        turn_instance_id="turn-original-first")["peer_returns"]["items"][0]["request_revision"] == 1
+    assert consume_return(f["root"], "delivery", "builder", first["request_id"], registry=f["registry"],
+        caller_goal_ref=f["ref"], turn_instance_id="turn-original-first", disposition="accepted")["consumed"]
     assert requester_agenda(f)["outgoing_count"] == 0
     retained = {path: path.read_bytes() for path in result_paths(_root(f["root"]) / "replies" / first["request_id"])}
     view = f["service"]._view(f["service"]._entry(first["request_id"], f["body"]["recipient"]))
@@ -383,12 +437,14 @@ def test_completed_request_correction_survives_queue_loss_restart_and_retry(proj
             done = restarted.wait_for_turn(session_id=sid, turn_id=resumed["turn_id"], timeout_sec=15)
         assert done["status"] == "failed" and done["collaboration_answer"]["request_revision"] == 2
         assert service.publish(f["body"])["recovered_result"]["ok"]
-        returned = read_inbox(f["root"], f["registry"], "delivery", "builder", caller_goal_ref=f["ref"])["peer_returns"]["items"]
+        returned = read_inbox(f["root"], f["registry"], "delivery", "builder", caller_goal_ref=f["ref"],
+            turn_instance_id="turn-original-corrected")["peer_returns"]["items"]
         assert [reply["request_revision"] for reply in returned] == [2]
         assert returned[0]["decision"] == "adopt"
         assert next(row for row in requester_agenda(f)["items"] if row["request_id"] == first["request_id"])["step"] == "consume_peer_result"
         assert consume_return(f["root"], "delivery", "builder", first["request_id"], registry=f["registry"],
-            caller_goal_ref=f["ref"], result_key=returned[0].get("result_key", "conclusion"))["consumed"]
+            caller_goal_ref=f["ref"], result_key=returned[0].get("result_key", "conclusion"),
+            turn_instance_id="turn-original-corrected", disposition="accepted")["consumed"]
         assert requester_agenda(f)["outgoing_count"] == 0
         service.control(control)
         service.publish(f["body"])

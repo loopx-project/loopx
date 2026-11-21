@@ -1,7 +1,0 @@
-{
-  "command_outputs": {
-    "root": "Usage: codex [OPTIONS] [PROMPT]\n\nCommands:\n  exec\n  remote-control  Manage the app-server daemon with remote control enabled\n  resume          Resume a previous interactive session\n\nOptions:\n  --remote <ADDR>  Connect the TUI to a remote app server endpoint\n",
-    "exec": "Usage: codex exec [OPTIONS] [PROMPT]",
-    "resume": "Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]"
-  }
-}

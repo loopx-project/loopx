@@ -9,7 +9,7 @@ import {tmpdir} from "node:os";
 import {join} from "node:path";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {decodeRemoteAuthorityRequest, decodeRemoteAuthorityResponse, remoteAuthorityOperationId,
-  remoteAuthorityResponse} from "../../loopx/control_plane/coordination/remote_authority_contract.ts";
+  remoteAuthorityResponse, remoteAuthoritySnapshotDigest, REMOTE_AUTHORITY_SCOPED_READ_RESPONSE} from "../../loopx/control_plane/coordination/remote_authority_contract.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {decodeRemoteAuthorityPolicy, remoteAuthorityPolicyAdmission, readRemoteAuthorityPolicy} from "../../loopx/control_plane/coordination/remote_authority_policy.ts";
 import {RemoteAuthorityService} from "../../loopx/control_plane/coordination/remote_authority_service.ts";
@@ -74,6 +74,66 @@ test("missing-lease release responses require explicit no-op evidence", () => {
   for (const patch of [{released: true}, {changed: true}, {missing: false}, {lease: {}}, {status: "applied"}]) {
     assert.throws(() => decodeRemoteAuthorityResponse(wrap({...result, ...patch}), request, "execute"));
   }
+});
+
+test("scoped read responses require their Goal reference and exclude global authority metadata", () => {
+  const {request_id: _, ...scope} = claimRequest("a");
+  const request = decodeRemoteAuthorityRequest({...scope, operation: "read"});
+  const goal_ref = {goal_id: request.goal_id, goal_instance_id: "ginst_" + "a".repeat(32)};
+  const payload = {status: "found", goal_ref, todo: {todo_id: request.todo_id, status: "open"}, lease: null};
+  const wrap = (value: JsonObject) => remoteAuthorityResponse(request, "execute", value, REMOTE_AUTHORITY_SCOPED_READ_RESPONSE);
+  assert.deepEqual(decodeRemoteAuthorityResponse(wrap(payload), request, "execute"), wrap(payload));
+  for (const invalid of [
+    {...payload, goal_ref: {goal_id: request.goal_id}},
+    {...payload, goal_ref: {...goal_ref, goal_id: "other-goal"}},
+    {...payload, provider_revision: `${request.store_identity}:2`},
+    {...payload, cursor: "2"},
+  ]) assert.throws(() => decodeRemoteAuthorityResponse(wrap(invalid), request, "execute"));
+});
+
+test("scoped response nested records reject fields outside their read projection", () => {
+  const {request_id: _, ...scope} = claimRequest("a");
+  const goal_ref = {goal_id: scope.goal_id, goal_instance_id: "ginst_" + "a".repeat(32)};
+  const todo = {todo_id: scope.todo_id, status: "open", claimed_by: "actor-a"};
+  const lease = {owner: "actor-a", status: "active", expires_at: "2099-01-01T00:00:00Z", version: 1, lease_epoch: 1};
+  const read = decodeRemoteAuthorityRequest({...scope, operation: "read"});
+  const snapshot = decodeRemoteAuthorityRequest({...scope, operation: "snapshot"});
+  const wrap = (request: typeof read, payload: JsonObject) => remoteAuthorityResponse(request, "execute",
+    {...payload, goal_ref}, REMOTE_AUTHORITY_SCOPED_READ_RESPONSE);
+  const found = (row: JsonObject, held: JsonObject) => wrap(read, {status: "found", todo: row, lease: held});
+  const snap = (row: JsonObject, held: JsonObject) => wrap(snapshot, {status: "snapshot", goal_id: scope.goal_id,
+    store_identity: scope.store_identity, todos: [row], leases: [held],
+    receipt_sha256: remoteAuthoritySnapshotDigest(snapshot, undefined, [row], [held], goal_ref)});
+  const snapshotTodo = {...todo, role: "agent", priority: "P1"};
+  const snapshotLease = {...lease, goal_id: scope.goal_id, todo_id: scope.todo_id};
+  assert.deepEqual(decodeRemoteAuthorityResponse(found(todo, lease), read, "execute"), found(todo, lease));
+  assert.deepEqual(decodeRemoteAuthorityResponse(snap(snapshotTodo, snapshotLease), snapshot, "execute"), snap(snapshotTodo, snapshotLease));
+  for (const field of ["note", "note_omitted", "text", "idempotency_key", "provider_revision", "cursor", "unknown"]) {
+    const value = field === "note_omitted" ? true : "must-not-cross-the-read-boundary";
+    assert.throws(() => decodeRemoteAuthorityResponse(found({...todo, [field]: value}, lease), read, "execute"), `read Todo ${field}`);
+    assert.throws(() => decodeRemoteAuthorityResponse(found(todo, {...lease, [field]: value}), read, "execute"), `read lease ${field}`);
+    // A matching digest cannot authorize extra fields in a scoped snapshot.
+    assert.throws(() => decodeRemoteAuthorityResponse(snap({...snapshotTodo, [field]: value}, snapshotLease), snapshot, "execute"), `snapshot Todo ${field}`);
+    assert.throws(() => decodeRemoteAuthorityResponse(snap(snapshotTodo, {...snapshotLease, [field]: value}), snapshot, "execute"), `snapshot lease ${field}`);
+  }
+  const trusted = remoteAuthorityResponse(read, "execute", {status: "found", provider_revision: `${scope.store_identity}:3`,
+    todo: {...todo, note: "trusted v0 note"}, lease: {...lease, idempotency_key: "trusted-v0-key"}});
+  assert.deepEqual(decodeRemoteAuthorityResponse(trusted, read, "execute"), trusted);
+});
+
+test("scoped historical receipt responses expose proof for the original Todo without its execution payload", () => {
+  const request = claimRequest("a");
+  const goal_ref = {goal_id: request.goal_id, goal_instance_id: "ginst_" + "a".repeat(32)};
+  const payload = {status: "found", historical_only: true, goal_ref, todo_id: request.todo_id,
+    operation_id: remoteAuthorityOperationId(request, "principal-a"), receipt_sha256: "d".repeat(64)};
+  const wrap = (value: JsonObject) => remoteAuthorityResponse(request, "recover", value, REMOTE_AUTHORITY_SCOPED_READ_RESPONSE);
+  assert.deepEqual(decodeRemoteAuthorityResponse(wrap(payload), request, "recover"), wrap(payload));
+  for (const invalid of [
+    {...payload, todo_id: "todo_other"},
+    {...payload, historical_only: false},
+    {...payload, result: {lease: {idempotency_key: "out-of-scope"}}},
+    {...payload, cursor: "2"},
+  ]) assert.throws(() => decodeRemoteAuthorityResponse(wrap(invalid), request, "recover"));
 });
 
 test("invalid policy cannot silently broaden or retain grants", async t => {

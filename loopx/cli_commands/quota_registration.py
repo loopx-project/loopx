@@ -49,6 +49,7 @@ def register_quota_command(
             "status",
             "plan",
             "should-run",
+            "receipt",
             "context-read",
             "context-project",
             "context-hook",
@@ -62,7 +63,7 @@ def register_quota_command(
             "void-slot",
         ],
         default="status",
-        help="Use status for all groups, plan for next-turn groups, should-run for one goal, context-read for bounded original-capture recovery without a guard, context-project to present an existing digest-bound quota capture with native full/delta and a full-read fallback, context-hook for opt-in native Codex lifecycle IO, context-config for native hook/recovery configuration without installation or trust changes, monitor-poll for no-spend quiet poll evidence, scheduler-ack for successful Codex App RRULE state, scheduler-fail-current to suppress a repeated failed host update pair, spend-slot for accounting, or void-slot for a non-destructive accounting correction.",
+        help="Use status for all groups, plan for next-turn groups, should-run for one goal, receipt to read one exact committed guard without admission, context-read for bounded original-capture recovery without a guard, context-project to present an existing digest-bound quota capture with native full/delta and a full-read fallback, context-hook for opt-in native Codex lifecycle IO, context-config for native hook/recovery configuration without installation or trust changes, monitor-poll for no-spend quiet poll evidence, scheduler-ack for successful Codex App RRULE state, scheduler-fail-current to suppress a repeated failed host update pair, spend-slot for accounting, or void-slot for a non-destructive accounting correction.",
     )
     quota_parser.add_argument("--decision-file", help="Original captured decision for read-only replan-view.")
     quota_parser.add_argument("--outcome-ref", help="Exact captured acceptance outcome reference for replan-view.")
@@ -220,13 +221,13 @@ def register_quota_command(
         "--turn-envelope",
         action="store_true",
         help=(
-            "For `quota should-run`, return the additive bounded TurnEnvelope view. "
-            "The default full decision remains unchanged."
+            "Select the complete v1 work contract for quota should-run. "
+            "Context and Delta delivery remain independent."
         ),
     )
     turn_view.add_argument("--complete-turn", action="store_true",
-        help="For JSON quota should-run, explicitly consume the complete v1 Turn contract and its shared exact-Turn settlement. "
-             "The legacy --turn-envelope and unselected output keep their existing versions. Context/Delta delivery remain independent.")
+        help="Select the complete v1 work contract for JSON quota should-run "
+             "and its shared exact-Turn settlement. Context and Delta delivery remain independent.")
     capture_group = quota_parser.add_mutually_exclusive_group()
     capture_group.add_argument(
         "--decision-output-dir",
@@ -252,6 +253,7 @@ def register_quota_command(
     # immutable view after the model's lifecycle hooks establish continuity.
     quota_parser.add_argument("--defer-context-presentation", action="store_true", help=argparse.SUPPRESS)
     quota_parser.add_argument("--prepared-capture-reference", action="store_true", help=argparse.SUPPRESS)
+    quota_parser.add_argument("--prepared-claim-operation-id", help=argparse.SUPPRESS)
     from ..control_plane.turn_driver.codex_context import CONTEXT_DELIVERY_SETTINGS, DELTA_DELIVERY_SETTINGS
 
     quota_parser.add_argument("--context-delivery", choices=CONTEXT_DELIVERY_SETTINGS,
@@ -303,7 +305,7 @@ def register_quota_command(
     quota_parser.add_argument(
         "--turn-instance-id",
         help=(
-            "Stable heartbeat settlement id for `quota should-run`, "
+            "Stable heartbeat settlement id for `quota should-run`, `quota receipt`, "
             "`quota monitor-poll`, scheduler ACK/failure follow-ups, and "
             "`quota spend-slot`. The guard persists one idempotent receipt; "
             "reuse the same id through monitor writeback, scheduler handoff, "
@@ -344,6 +346,14 @@ def register_quota_command(
         choices=sorted(VALID_SLOT_SPEND_SOURCES),
         default=DEFAULT_SLOT_SPEND_SOURCE,
         help="Source label for `quota spend-slot`.",
+    )
+    quota_parser.add_argument(
+        "--delivery-workspace-path",
+        help=(
+            "Local git worktree that produced this accountable delivery for "
+            "`quota spend-slot`. Use when spend-slot runs outside the worktree; "
+            "the local path is validated but is not persisted."
+        ),
     )
     quota_parser.add_argument(
         "--void-generated-at",

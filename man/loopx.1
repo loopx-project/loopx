@@ -1,4 +1,4 @@
-.TH LOOPX 1 "" "LoopX 2.3.0" "User Commands"
+.TH LOOPX 1 "" "LoopX 2.4.0" "User Commands"
 .SH NAME
 loopx \- control-plane helper for long-running agent work
 .SH SYNOPSIS
@@ -6,6 +6,7 @@ loopx \- control-plane helper for long-running agent work
 [\fB\-\-registry\fR \fIPATH\fR]
 [\fB\-\-runtime\-root\fR \fIPATH\fR]
 [\fB\-\-format\fR \fImarkdown|json\fR]
+[\fB\-\-cli\-bin\fR \fIPROGRAM\fR]
 \fICOMMAND\fR
 [\fIARGS\fR]
 .br
@@ -163,12 +164,6 @@ Remove one exact host thread binding without unregistering its agent or peer ses
 .TP
 \fBloopx codex\-cli\-bootstrap\-message\fR
 Generate the visible Codex CLI TUI setup message.
-.TP
-\fBloopx codex\-cli\-tui\-bootstrap\-smoke\-bundle\fR
-Generate a transcript\-free Codex CLI first\-run smoke bundle.
-.TP
-\fBloopx codex\-cli\-visible\-attach\-acceptance\fR
-Check public\-safe visible Codex CLI attach evidence.
 .TP
 \fBloopx heartbeat\-prompt\fR
 Generate a guarded heartbeat automation body.

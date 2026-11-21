@@ -1,7 +1,8 @@
 from __future__ import annotations
-from .effective_action import EffectiveAction
 
+import json
 from collections.abc import Callable, Mapping
+from functools import lru_cache
 from pathlib import Path
 
 from ...file_lock import exclusive_cross_runtime_file_lock
@@ -12,6 +13,8 @@ from ...rollout_event_log import (
     rollout_event_log_path,
 )
 from ..todos.contract import normalize_todo_id, normalize_todo_replan_obligation_id
+from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from .effective_action import EffectiveAction
 from .effect_program import SettlementBindingKind, SettlementIdentity
 from .error_codes import HeartbeatReceiptIdentityConflictError
 from .settlement_workspace_causality import (
@@ -66,41 +69,56 @@ def heartbeat_receipt_request_subject(event: Mapping[str, object] | None) -> dic
         "request_id", "request_revision", "request_digest", "execution_scope_sha256")}
 
 
+@lru_cache(maxsize=256)
+def _receipt_selection(
+    facts_json: str,
+) -> tuple[int | None, tuple[SettlementBindingKind, str, str] | None]:
+    """Cache pure binding facts, never a file read, lease, clock or admission."""
+    try:
+        result = effect_runtime_result("quota.heartbeat_receipt.select", json.loads(facts_json))
+    except EffectRuntimeRejected as exc:
+        if exc.diagnostic_code == "heartbeat_receipt_identity_conflict":
+            raise HeartbeatReceiptIdentityConflictError(str(exc)) from None
+        raise ValueError(str(exc)) from None
+    index, binding = result.get("index"), result.get("binding")
+    if index is not None and (type(index) is not int or index < 0):
+        raise TypeError("TypeScript heartbeat receipt selection index mismatch")
+    if binding is None:
+        return index, None
+    if not isinstance(binding, Mapping):
+        raise TypeError("TypeScript heartbeat receipt binding shape mismatch")
+    return index, (
+        SettlementBindingKind(str(binding["binding_kind"])),
+        str(binding["binding_id"]), str(binding["effect_id"]),
+    )
+
+
+def _select_receipt_facts(
+    events: list[Mapping[str, object]],
+) -> tuple[int | None, tuple[SettlementBindingKind, str, str] | None]:
+    # Keep unknown details in the reader. Only the shared identity owner's raw
+    # fields enter this pure projection/cache; no receipt or source is cached.
+    facts = []
+    for event in events:
+        details = event.get("details")
+        facts.append({"run_id": event.get("run_id"), "details": {
+            key: details[key] for key in (
+                "todo_id", "replan_obligation_id", "settlement_effect_id",
+                "request_id", "request_revision", "request_digest", "execution_scope_sha256",
+            ) if isinstance(details, Mapping) and key in details
+        }})
+    first = events[0]
+    return _receipt_selection(json.dumps({
+        "goal_id": str(first.get("goal_id") or "").strip(),
+        "agent_id": str(first.get("agent_id") or "").strip(),
+        "events": facts,
+    }, sort_keys=True))
+
+
 def _receipt_settlement_identity(
     event: Mapping[str, object],
 ) -> tuple[SettlementBindingKind, str, str] | None:
-    details_value = event.get("details")
-    details: Mapping[str, object] = (
-        details_value if isinstance(details_value, Mapping) else {}
-    )
-    todo_id = str(details.get("todo_id") or "").strip()
-    replan_obligation_id = normalize_todo_replan_obligation_id(
-        details.get("replan_obligation_id")
-    )
-    effect_id = str(details.get("settlement_effect_id") or "").strip()
-    request_subject = heartbeat_receipt_request_subject(event)
-    if sum(bool(value) for value in (todo_id, replan_obligation_id, request_subject)) > 1:
-        raise HeartbeatReceiptIdentityConflictError(
-            "heartbeat receipt has conflicting Todo and autonomous replan bindings"
-        )
-    if effect_id and not todo_id and not replan_obligation_id and not request_subject:
-        raise HeartbeatReceiptIdentityConflictError(
-            "heartbeat receipt has an effect identity without a Todo or "
-            "autonomous replan binding; refuse to infer or upgrade it"
-        )
-    if not todo_id and not replan_obligation_id and not request_subject:
-        return None
-    identity = SettlementIdentity(
-        goal_id=str(event.get("goal_id") or "").strip(),
-        agent_id=str(event.get("agent_id") or "").strip(),
-        todo_id=todo_id or None,
-        turn_instance_id=str(event.get("run_id") or "").strip(),
-        replan_obligation_id=replan_obligation_id,
-        request_subject=request_subject,
-    )
-    if not effect_id:
-        effect_id = identity.effect_id
-    return identity.binding_kind, identity.binding_id, effect_id
+    return _select_receipt_facts([event])[1]
 
 
 def heartbeat_receipt_settlement_todo_id(
@@ -160,22 +178,13 @@ def heartbeat_receipt_pending_action_todo_id(
 
 def _effective_heartbeat_receipt(
     events: list[dict[str, object]],
-) -> dict[str, object] | None:
+) -> tuple[dict[str, object] | None, tuple[SettlementBindingKind, str, str] | None]:
     if not events:
-        return None
-    identities: dict[tuple[SettlementBindingKind, str, str], dict[str, object]] = {}
-    for event in events:
-        identity = _receipt_settlement_identity(event)
-        if identity is not None:
-            identities[identity] = event
-    if len(identities) > 1:
-        raise HeartbeatReceiptIdentityConflictError(
-            "heartbeat receipt has conflicting settlement identities for the "
-            "same goal, agent, and turn"
-        )
-    if identities:
-        return next(iter(identities.values()))
-    return events[-1]
+        return None, None
+    index, binding = _select_receipt_facts(events)
+    if index is None or index >= len(events):
+        raise TypeError("TypeScript heartbeat receipt selection did not address the supplied events")
+    return events[index], binding
 
 
 def find_heartbeat_receipt(
@@ -187,7 +196,7 @@ def find_heartbeat_receipt(
     goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, object] | None:
     events = load_rollout_events(rollout_event_log_path(runtime_root, goal_id))
-    return _effective_heartbeat_receipt(
+    event, _ = _effective_heartbeat_receipt(
         _heartbeat_receipt_events(
             events,
             goal_id=goal_id,
@@ -196,6 +205,7 @@ def find_heartbeat_receipt(
             goal_ref=goal_ref,
         )
     )
+    return event
 
 
 def ensure_turn_heartbeat_settlement_receipt(
@@ -206,6 +216,9 @@ def ensure_turn_heartbeat_settlement_receipt(
     semantic_replan_obligation_id: str | None,
     semantic_replan_capability_guard: Mapping[str, object] | None = None,
     quota_spend_source: str | None = None,
+    task_lease_proof: Mapping[str, object] | None = None,
+    task_lease_epoch: int | None = None,
+    prepared_lease_required: bool = False,
     goal_ref: Mapping[str, object] | None = None,
     before_bind: Callable[[], None] | None = None,
 ) -> dict[str, object]:
@@ -241,13 +254,12 @@ def ensure_turn_heartbeat_settlement_receipt(
             turn_instance_id=identity.turn_instance_id,
             goal_ref=goal_ref,
         )
-        effective = _effective_heartbeat_receipt(matching)
+        effective, observed = _effective_heartbeat_receipt(matching)
         expected = (
             identity.binding_kind,
             identity.binding_id,
             identity.effect_id,
         )
-        observed = _receipt_settlement_identity(effective) if effective is not None else None
         if observed is not None and observed != expected:
             raise HeartbeatReceiptIdentityConflictError(
                 "Turn heartbeat receipt belongs to another settlement identity"
@@ -266,6 +278,15 @@ def ensure_turn_heartbeat_settlement_receipt(
             # identity before transport-specific start admission. Its owner may
             # refuse admission without writing a receipt or claiming work.
             before_bind()
+        if task_lease_proof is not None and identity.todo_id is not None:
+            from .execution_preparation import prepared_lease_receipt_fields
+
+            rebound_lease_fields = prepared_lease_receipt_fields(
+                task_lease_proof, lease_epoch=task_lease_epoch,
+            )
+        else:
+            rebound_lease_fields = None
+        preserved_details: dict[str, object] = {}
         if effective is not None:
             if observed is not None:
                 effective_details = effective.get("details")
@@ -274,9 +295,15 @@ def ensure_turn_heartbeat_settlement_receipt(
                     if isinstance(effective_details, Mapping)
                     else {}
                 )
+                preserved_details = dict(effective_details)
+                lease_unchanged = rebound_lease_fields is None or (
+                    all(effective_details.get(k) == v for k, v in rebound_lease_fields.items())
+                    and (task_lease_epoch is not None or "prepared_lease_epoch" not in effective_details)
+                )
                 if not semantic_replan_guard_scoped:
-                    return effective
-                if "semantic_replan_obligation_id" in effective_details:
+                    if lease_unchanged:
+                        return effective
+                elif "semantic_replan_obligation_id" in effective_details:
                     raw_existing_guard = effective_details.get(
                         "semantic_replan_obligation_id"
                     )
@@ -305,9 +332,11 @@ def ensure_turn_heartbeat_settlement_receipt(
                         raise HeartbeatReceiptIdentityConflictError(
                             "Turn heartbeat receipt belongs to another capability guard"
                         )
-                    return effective
+                    if lease_unchanged:
+                        return effective
 
         details = {
+            **preserved_details,
             "turn_instance_id": identity.turn_instance_id,
             "todo_id": str(identity.todo_id or ""),
             "replan_obligation_id": str(identity.replan_obligation_id or ""),
@@ -316,6 +345,12 @@ def ensure_turn_heartbeat_settlement_receipt(
             "stall_observation": "not_applicable",
             "source": "loopx_turn_run_once",
         }
+        if identity.todo_id is not None and (prepared_lease_required or task_lease_proof is not None):
+            details["prepared_lease_required"] = True
+        if rebound_lease_fields is not None:
+            details.update(rebound_lease_fields)
+            if task_lease_epoch is None:
+                details.pop("prepared_lease_epoch", None)
         if semantic_replan_guard_scoped:
             details["semantic_replan_obligation_id"] = (
                 normalized_semantic_replan_obligation_id or ""
@@ -385,12 +420,12 @@ def retain_pending_heartbeat_action_selection(
             turn_instance_id=turn_instance_id,
             goal_ref=goal_ref,
         )
-        effective = _effective_heartbeat_receipt(matching)
+        effective, binding = _effective_heartbeat_receipt(matching)
         if effective is None:
             raise ValueError(
                 "identity-less heartbeat receipt is missing; rerun the original guard"
             )
-        if _receipt_settlement_identity(effective) is not None:
+        if binding is not None:
             raise HeartbeatReceiptIdentityConflictError(
                 "a settled heartbeat Turn cannot retain a different pending selection"
             )
@@ -448,6 +483,7 @@ def upgrade_identityless_heartbeat_receipt(
     summary: str,
     details: Mapping[str, object],
     goal_ref: Mapping[str, object] | None = None,
+    required_semantic_replan_obligation_id: str | None = None,
 ) -> tuple[dict[str, object], bool]:
     """Append one settlement-bound receipt after an identity-less same-turn guard.
 
@@ -461,6 +497,18 @@ def upgrade_identityless_heartbeat_receipt(
         replan_obligation_id
     )
     normalized_effect_id = str(settlement_effect_id).strip()
+    normalized_required_semantic_replan_obligation_id = (
+        normalize_todo_replan_obligation_id(
+            required_semantic_replan_obligation_id
+        )
+    )
+    if (
+        required_semantic_replan_obligation_id is not None
+        and normalized_required_semantic_replan_obligation_id is None
+    ):
+        raise HeartbeatReceiptIdentityConflictError(
+            "heartbeat receipt upgrade requires a valid semantic replan obligation"
+        )
     if bool(normalized_todo_id) == bool(normalized_replan_obligation_id):
         raise HeartbeatReceiptIdentityConflictError(
             "heartbeat receipt upgrade requires exactly one deterministic "
@@ -498,12 +546,40 @@ def upgrade_identityless_heartbeat_receipt(
             turn_instance_id=turn_instance_id,
             goal_ref=goal_ref,
         )
-        effective = _effective_heartbeat_receipt(matching)
+        effective, existing_identity = _effective_heartbeat_receipt(matching)
         if effective is None:
             raise ValueError(
                 "identity-less heartbeat receipt is missing; rerun the original guard"
             )
-        existing_identity = _receipt_settlement_identity(effective)
+        effective_details_value = effective.get("details")
+        effective_details: Mapping[str, object] = (
+            effective_details_value
+            if isinstance(effective_details_value, Mapping)
+            else {}
+        )
+        if normalized_required_semantic_replan_obligation_id is not None:
+            selected_semantic_replan_obligation_id = (
+                heartbeat_receipt_semantic_replan_obligation_id(effective)
+            )
+            if (
+                selected_semantic_replan_obligation_id
+                != normalized_required_semantic_replan_obligation_id
+            ):
+                raise HeartbeatReceiptIdentityConflictError(
+                    "heartbeat receipt semantic replan guard conflicts with the "
+                    "requested successor obligation"
+                )
+            if not (
+                effective_details.get("interaction_mode") == "autonomous_replan"
+                and effective_details.get("ok") is True
+                and effective_details.get("should_run") is True
+                and effective_details.get("must_attempt_work") is True
+                and effective_details.get("delivery_allowed") is False
+                and effective_details.get("quiet_noop_allowed") is False
+            ):
+                raise HeartbeatReceiptIdentityConflictError(
+                    "heartbeat receipt did not admit an autonomous replan successor"
+                )
         expected_identity = (
             expected_identity_value.binding_kind,
             expected_identity_value.binding_id,
@@ -536,7 +612,11 @@ def upgrade_identityless_heartbeat_receipt(
             if str(existing_details.get("settlement_effect_id") or "").strip():
                 return effective, False
 
-        corrected_details = dict(details)
+        # The effective receipt was read while holding the rollout lock. Keep
+        # fields appended by a concurrent same-Turn revision unless this
+        # correction explicitly replaces them.
+        corrected_details = dict(effective_details)
+        corrected_details.update(details)
         corrected_details.update(
             {
                 "turn_instance_id": turn_instance_id,
@@ -564,6 +644,50 @@ def upgrade_identityless_heartbeat_receipt(
         return corrected, True
 
 
+def bind_replan_successor_heartbeat_receipt(
+    runtime_root: Path,
+    *,
+    goal_id: str,
+    agent_id: str,
+    turn_instance_id: str,
+    replan_obligation_id: str,
+    goal_ref: Mapping[str, object] | None = None,
+) -> tuple[dict[str, object], bool]:
+    """Bind an identity-less admitted replan when its successor is selected.
+
+    Multi-candidate planning guards deliberately avoid binding a recommended
+    Todo.  Creating a concrete successor is nevertheless an explicit semantic
+    replan choice.  Upgrade that exact Turn to the already selected obligation
+    before the Todo mutation so later writeback and spend reuse one causal
+    identity.  The upgrade rechecks the effective guard while holding the
+    rollout lock; stale or non-admitted semantic targets fail closed.
+    """
+
+    identity = SettlementIdentity(
+        goal_id=goal_id,
+        agent_id=agent_id,
+        todo_id=None,
+        turn_instance_id=turn_instance_id,
+        replan_obligation_id=replan_obligation_id,
+    )
+    return upgrade_identityless_heartbeat_receipt(
+        runtime_root,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        turn_instance_id=turn_instance_id,
+        replan_obligation_id=replan_obligation_id,
+        settlement_effect_id=identity.effect_id,
+        status="autonomous_replan_required",
+        summary=(
+            "heartbeat quota receipt bound by explicit replan successor selection "
+            f"for turn={turn_instance_id}"
+        ),
+        details={},
+        goal_ref=goal_ref,
+        required_semantic_replan_obligation_id=replan_obligation_id,
+    )
+
+
 def requalify_bound_heartbeat_receipt(
     runtime_root: Path,
     *,
@@ -582,7 +706,7 @@ def requalify_bound_heartbeat_receipt(
 
     log_path = rollout_event_log_path(runtime_root, goal_id)
     with exclusive_cross_runtime_file_lock(log_path, operation="requalify_heartbeat_work"):
-        original = _effective_heartbeat_receipt(_heartbeat_receipt_events(
+        original, _ = _effective_heartbeat_receipt(_heartbeat_receipt_events(
             load_rollout_events(log_path), goal_id=goal_id, agent_id=agent_id,
             turn_instance_id=turn_instance_id, goal_ref=goal_ref,
         ))
@@ -604,10 +728,18 @@ def requalify_bound_heartbeat_receipt(
         if not isinstance(qualified_details, Mapping):
             raise RuntimeError("TypeScript heartbeat work qualification details missing")
         event_id = str(original.get("event_id") or "")
+        receipt_revision = str(
+            qualified_details.get("settlement_receipt_revision") or ""
+        )
+        summary = {
+            "review_guard_upgrade": "same-Turn review guard upgraded without rebinding",
+            "lease_readiness": "same-Turn lease readiness recorded without readmission",
+        }.get(receipt_revision, "same-Turn work admission requalified without rebinding")
         corrected = build_rollout_event(
             goal_id=goal_id, goal_ref=goal_ref, event_kind="quota_should_run",
-            agent_id=agent_id, todo_id=todo_id, run_id=turn_instance_id, status=status,
-            summary="same-Turn work admission requalified without rebinding",
+            agent_id=agent_id, todo_id=todo_id, run_id=turn_instance_id,
+            status=str(original.get("status") or status) if receipt_revision == "lease_readiness" else status,
+            summary=summary,
             source_event_id=event_id, caused_by=event_id, details=dict(qualified_details),
         )
         _append_rollout_event_line(log_path, corrected)
@@ -663,6 +795,8 @@ def heartbeat_receipt_view(
         # finished guard: the caller otherwise discovers the debt only when the
         # closeout cannot settle the turn and the work stays unaccounted.
         receipt["settlement_binding_owed"] = True
+        if details.get("selection_required") is True:
+            receipt["selection_required"] = True
     semantic_replan_obligation_id = (
         heartbeat_receipt_semantic_replan_obligation_id(event)
     )

@@ -1,4 +1,4 @@
-﻿"""The premerge boundary check fails on an input the scan could not read.
+"""The premerge boundary check fails on an input the scan could not read.
 
 `_public_boundary_changed_files_run` reads `scan_public_boundary`'s result, so a
 directory the scan could not list has to fail this check the way a recorded hit
@@ -16,6 +16,7 @@ import pytest
 
 from loopx.canary.premerge import (
     _public_boundary_changed_files_run,
+    _visual_review_paths,
     build_premerge_validation_gate,
     classify_premerge_surfaces,
     render_premerge_validation_gate_markdown,
@@ -217,3 +218,97 @@ def test_image_named_symlink_keeps_explicit_text_scan(tmp_path: Path) -> None:
     assert payload["ok"] is False
     assert payload["gate"]["status"] == "failed"
     assert payload["gate"]["run_failure_count"] == 1
+
+
+def _video(root: Path, name: str) -> Path:
+    # Minimal container headers, not a playable video or evidence of visual inspection.
+    headers = {
+        ".mp4": b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isommp42",
+        ".mov": b"\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  ",
+        ".webm": b"\x1a\x45\xdf\xa3\x87\x42\x82\x84webm",
+    }
+    path = root / name
+    path.write_bytes(headers[path.suffix.lower()] + b"\x00\x00\x00\x09mdat\xff")
+    return path
+
+
+@pytest.mark.parametrize("name", ["clip.mp4", "clip.MOV", "clip.webm"])
+def test_video_container_is_routed_to_visual_review_not_text_scan(tmp_path: Path, name: str) -> None:
+    _video(tmp_path, name)
+    (tmp_path / "public.md").write_text("ordinary public prose\n")
+    paths = [name, "public.md", name]
+    classification = classify_premerge_surfaces(paths, repo_root=tmp_path)
+    run = _public_boundary_changed_files_run(
+        changed_files=paths, execute=True, timeout_seconds=30, repo_root=tmp_path,
+    )
+    assert run["ok"] is True
+    assert run["selection_inputs"]["scan_paths"] == ["public.md"]
+    assert run["selection_inputs"]["visual_review_paths"] == [name]
+    assert run["selected_checks"][0]["boundary"]["scanned_files"] == 1
+    assert run["selected_checks"][0]["reason"] == (
+        "scans changed text for private material; binary media require visual review"
+    )
+    assert [hold["path"] for hold in classification["manual_holds"]] == [name]
+    assert "binary media" in classification["manual_holds"][0]["reason"]
+    assert classification["public_boundary_scan_recommended"] is True
+
+
+@pytest.mark.parametrize("name", ["clip.mp4", "clip.mov", "clip.webm"])
+def test_text_named_as_video_keeps_secret_blocking(tmp_path: Path, name: str) -> None:
+    # Even ftyp at offset four cannot turn an ordinary text prefix into a valid box size.
+    (tmp_path / name).write_text("textftyp " + "AK" + "IA" + "1234567890ABCDEF\n")
+    run = _public_boundary_changed_files_run(
+        changed_files=[name], execute=True, timeout_seconds=30, repo_root=tmp_path,
+    )
+    assert run["ok"] is False
+    assert run["selection_inputs"]["scan_paths"] == [name]
+    assert not run["selection_inputs"].get("visual_review_paths")
+    assert run["selected_checks"][0]["boundary"]["scanned_files"] == 1
+    assert f"{name}:1: credential" in run["selected_checks"][0]["stderr_tail"]
+    assert classify_premerge_surfaces([name], repo_root=tmp_path)["manual_holds"] == []
+
+
+@pytest.mark.parametrize("name", ["clip.mp4", "clip.mov", "clip.webm"])
+def test_video_only_gate_still_requires_visual_review(tmp_path: Path, name: str) -> None:
+    _video(tmp_path, name)
+    payload = _isolated_gate(tmp_path, [name])
+    assert payload["ok"] is False
+    assert payload["gate"]["status"] == "manual_review_required"
+    assert payload["gate"]["merge_gate_passed"] is False
+    assert payload["gate"]["self_merge_validation_passed"] is False
+    assert payload["gate"]["self_merge_allowed"] is False
+    assert payload["gate"]["run_failure_count"] == 0
+    assert payload["boundary_run"]["selection_inputs"]["scan_paths"] == []
+    assert payload["boundary_run"]["selection_inputs"]["visual_review_paths"] == [name]
+    check = payload["boundary_run"]["selected_checks"][0]
+    assert check["status"] == "skipped_no_text_files"
+    assert check["stdout_tail"] == "no changed text files; binary media require visual review"
+    assert name in render_premerge_validation_gate_markdown(payload)
+
+
+@pytest.mark.parametrize("body", [b"\xff\xfe", b"\x00\x00\x00\x18ftyp\xff"])
+def test_unrecognized_video_header_still_fails_closed(tmp_path: Path, body: bytes) -> None:
+    (tmp_path / "clip.mp4").write_bytes(body)
+    run = _public_boundary_changed_files_run(
+        changed_files=["clip.mp4"], execute=True, timeout_seconds=30, repo_root=tmp_path,
+    )
+    assert run["ok"] is False
+    assert not run["selection_inputs"].get("visual_review_paths")
+    assert "invalid UTF-8" in run["selected_checks"][0]["stderr_tail"]
+
+
+def test_video_route_requires_a_regular_file_not_a_symlink(tmp_path: Path) -> None:
+    target = _video(tmp_path, "target.mp4")
+    (tmp_path / "directory.mp4").mkdir()
+    try:
+        (tmp_path / "link.mp4").symlink_to(target.name)
+    except OSError:
+        pytest.skip("host does not permit creating symbolic links")
+    paths = ["directory.mp4", "link.mp4", "deleted.mp4"]
+    assert _visual_review_paths(paths, tmp_path) == []
+    assert classify_premerge_surfaces(paths, repo_root=tmp_path)["manual_holds"] == []
+    run = _public_boundary_changed_files_run(
+        changed_files=["link.mp4"], execute=True, timeout_seconds=30, repo_root=tmp_path,
+    )
+    assert run["ok"] is False
+    assert "invalid UTF-8" in run["selected_checks"][0]["stderr_tail"]

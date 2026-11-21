@@ -160,15 +160,27 @@ interface AppliedDriverRuntime {
   emitSessionEvent(session: Agent['session'], event: SessionEvent): void
   announceAgent(event: 'agent/created' | 'agent/session-start'): void
   dispose(): Promise<void>
+  /** Replay the cordis fiber-disposal sequence for one unload cause. */
+  unloadFiber(mode: 'evict' | 'direct' | 'restart'): Promise<void>
 }
 
 function appliedDriverRuntime(
   liveAgent: Agent,
   initiallyObserved: boolean,
+  options: { readonly withFiber?: boolean } = {},
 ): AppliedDriverRuntime {
   type Handler = (...args: unknown[]) => unknown
   const handlers = new Map<string, Handler[]>()
   let disposeEffect: (() => unknown) | undefined
+  // Simulates the cordis plugin fiber owning this applied Driver. `evict`
+  // mirrors dsh-hmr module replacement: the runtime leaves the registry
+  // before the fiber disposal; `direct` mirrors fiber.dispose() from user
+  // disable/uninstall or a host cascade, where the runtime is still
+  // registered when cordis emits internal/plugin for the cleared uid.
+  let runtimeRegistered = true
+  const fiber = options.withFiber
+    ? { uid: 7 as number | null, runtime: { callback: function dshLoopxPlugin() {} } }
+    : undefined
   const ctx = {
     agents: {
       get: (id: string) => String(liveAgent.id) === String(id) ? liveAgent : undefined,
@@ -176,6 +188,10 @@ function appliedDriverRuntime(
       withoutInitiator: (operation: () => Promise<unknown>) => operation(),
     },
     logger: { warn() {} },
+    ...(fiber === undefined ? {} : {
+      fiber,
+      registry: { has: (_plugin: unknown) => runtimeRegistered },
+    }),
     on(event: string, handler: Handler) {
       const registered = handlers.get(event) ?? []
       registered.push(handler)
@@ -200,6 +216,18 @@ function appliedDriverRuntime(
       }
     },
     async dispose() {
+      await disposeEffect?.()
+    },
+    async unloadFiber(mode) {
+      if (fiber === undefined) throw new Error('appliedDriverRuntime was built without a fiber')
+      if (mode === 'evict') runtimeRegistered = false
+      if (mode !== 'restart') {
+        // A disposal clears the fiber uid before the unload; a restart keeps
+        // the uid and never emits internal/plugin.
+        fiber.uid = null
+        for (const handler of handlers.get('internal/plugin') ?? []) handler(fiber)
+      }
+      if (mode === 'direct') runtimeRegistered = false
       await disposeEffect?.()
     },
   }
@@ -349,6 +377,7 @@ function runnerFixture(options: {
   readonly heartbeatTurnInstanceId?: string
   readonly heartbeatTaskBody?: string
   readonly rewardMemoryGuidance?: string
+  readonly recovery?: () => Record<string, unknown>
   readonly typedQuotaFailure?: boolean
   readonly bindingStatus?: 'bound' | 'missing' | (() => 'bound' | 'missing')
 } = {}): RunnerFixture {
@@ -365,7 +394,7 @@ function runnerFixture(options: {
     runner: async (_file, args) => {
       calls.push([...args])
       if (args.at(-1) === '--version') {
-        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 2.4.0\n', stderr: '' }
       }
       if (args.includes('resolve-agent-thread')) {
         const threadIdIndex = args.indexOf('--thread-id')
@@ -455,6 +484,9 @@ function runnerFixture(options: {
               },
             } : {}),
             scheduler_hint: schedulerHint,
+            ...(options.recovery === undefined ? {} : {
+              unsettled_host_turn_recovery: options.recovery(),
+            }),
             ...(options.rewardMemoryGuidance === undefined ? {} : {
               reward_memory_recall: {
                 schema_version: 'agent_turn_recall_v0',
@@ -520,7 +552,7 @@ function makeDriver(fixture: RunnerFixture): LoopXContinuationDriver {
 }
 
 describe('driver diagnostic records', () => {
-  it.each(['before', 'downstream'])('restores user input with a throwing Cordis exporter in the %s batch', async phase => {
+  it.each(['before', 'downstream'])('preserves user input with a throwing Cordis exporter in the %s batch', async phase => {
     const fixture = runnerFixture()
     const host = fakeAgent()
     const service = new LoggerService(new Context())
@@ -541,13 +573,15 @@ describe('driver diagnostic records', () => {
       driver.onInboxClaimed(host.agent, submitted)
       await expect(driver.onPreStep(host.agent, phase === 'before' ? [submitted, other] : [submitted],
         new AbortController().signal, next,
-      )).resolves.toEqual({ kind: 'reject' })
+      )).resolves.toEqual(phase === 'before'
+        ? { kind: 'reject' }
+        : { kind: 'enter', messages: [other] })
       expect(exporter.export).toHaveBeenCalledOnce()
-      expect(host.nextStep).toEqual([other])
+      expect(host.nextStep).toEqual(phase === 'before' ? [other] : [])
       expect(next).toHaveBeenCalledTimes(phase === 'before' ? 0 : 1)
       await expect(driver.onPreStep(host.agent, [submitted], new AbortController().signal, next))
         .resolves.toEqual({ kind: 'reject' })
-      expect(host.nextStep).toEqual([other])
+      expect(host.nextStep).toEqual(phase === 'before' ? [other] : [])
       expect(host.cancelCalls).toBe(0)
     } finally {
       removeExporter()
@@ -632,7 +666,9 @@ describe('driver diagnostic records', () => {
       driver.onInboxClaimed(host.agent, submitted)
       expect(await driver.onPreStep(host.agent, phase === 'before' ? [submitted, other] : [submitted],
         new AbortController().signal, async () => ({ kind: 'enter', messages: [submitted, other] }),
-      )).toEqual({ kind: 'reject' })
+      )).toEqual(phase === 'before'
+        ? { kind: 'reject' }
+        : { kind: 'enter', messages: [other] })
       expect(warnings[0]).toContain(`reason=${phase === 'before' ? 'competing-messages' : 'downstream-batch'} other_kinds=user`)
       expect(warnings.join('')).not.toContain('PRIVATE')
     } finally { await driver.dispose() }
@@ -671,6 +707,196 @@ describe('pre-step authority diagnostics', () => {
 })
 
 describe('same-session LoopX driver', () => {
+  it.each(['runtime-context', 'malformed-driver', 'admitted-driver'] as const)(
+    'does not infer recovery from an unrelated completed %s Turn on reopen', async kind => {
+      const fixture = runnerFixture()
+      const host = fakeAgent()
+      host.appendEvent(userSkillInvocationEvent())
+      host.appendEvent(sessionEvent('turn/end', { turn: 0, reason: { kind: 'max-tokens' } }))
+      host.appendEvent(sessionEvent('turn/start', { turn: 1 }))
+      host.appendEvent(sessionEvent('user/message', {
+        ...userMessage('completed background input'), source: kind === 'runtime-context'
+          ? { kind }
+          : kind === 'malformed-driver'
+            ? { kind: 'loopx-continuation' }
+            : { kind: 'loopx-continuation', schemaVersion: 'loopx_dsh_continuation_v0',
+                goalId, agentId, turnInstanceId: 'completed-recovery-turn' },
+      } as unknown as UserMessage))
+      host.appendEvent(sessionEvent('turn/end', { turn: 1, reason: { kind: 'completed' } }))
+      const driver = makeDriver(fixture)
+      try {
+        driver.observeAgent(host.agent)
+        if (kind === 'admitted-driver') await waitFor(() => host.nextTurn.length === 1)
+        else {
+          await new Promise<void>(resolve => setTimeout(resolve, 0))
+          expect(fixture.quotaCalls).toEqual([])
+          expect(host.nextTurn).toEqual([])
+        }
+      } finally { await driver.dispose() }
+    },
+  )
+
+  it.each(['max-tokens', 'aborted'] as const)(
+    'retains a reopened Session error pause after %s until explicit Start', async reason => {
+      const fixture = runnerFixture()
+      const host = fakeAgent()
+      host.appendEvent(userSkillInvocationEvent())
+      host.appendEvent(sessionEvent('turn/end', { turn: 0, reason: { kind: reason } }))
+      const driver = makeDriver(fixture)
+      try {
+        driver.observeAgent(host.agent)
+        driver.onSessionStart(host.agent)
+        await new Promise<void>(resolve => setTimeout(resolve, 0))
+        expect(fixture.quotaCalls).toEqual([])
+        await driver.evaluateActivatedSession({ agent: host.agent, session: host.agent.session })
+        expect(host.nextTurn).toHaveLength(1)
+      } finally { await driver.dispose() }
+    },
+  )
+
+  it.each(['user', 'runtime-context'] as const)(
+    'reconstructs an error pause using typed %s input, never message wording', async kind => {
+      const fixture = runnerFixture()
+      const host = fakeAgent()
+      host.appendEvent(userSkillInvocationEvent())
+      host.appendEvent(sessionEvent('turn/end', { turn: 0, reason: { kind: 'max-tokens' } }))
+      host.appendEvent(sessionEvent('user/message', {
+        ...userMessage('Start LoopX again'), source: { kind },
+      } as unknown as UserMessage))
+      const driver = makeDriver(fixture)
+      try {
+        driver.observeAgent(host.agent)
+        if (kind === 'user') await waitFor(() => host.nextTurn.length === 1)
+        else {
+          await new Promise<void>(resolve => setTimeout(resolve, 0))
+          expect(fixture.quotaCalls).toEqual([])
+        }
+      } finally { await driver.dispose() }
+    },
+  )
+
+  it.each([undefined, null, 'false'])(
+    'does not clear an observed recovery hold from an invalid should_run value (%s)', async invalid => {
+      const host = fakeAgent()
+      let corrupt = false
+      const fixture = runnerFixture({ shouldRun: false, schedulerMode: 'stop',
+        recovery: () => ({ schema_version: 'unsettled_host_turn_recovery_v0', state: 'attention_required' }) })
+      const driver = new LoopXContinuationDriver({ isLiveAgent: () => true,
+        runner: async (file, args, options) => {
+          const result = await fixture.runner(file, args, options)
+          if (!corrupt || !args.includes('should-run')) return result
+          return { ...result, stdout: JSON.stringify({ ...JSON.parse(result.stdout), should_run: invalid }) }
+        },
+      })
+      try {
+        host.appendEvent(userSkillInvocationEvent())
+        const capture = { agent: host.agent, session: host.agent.session }
+        const expected = { goalId, loopxAgentId: agentId }
+        await driver.evaluateActivatedSession(capture)
+        expect(driver.hasRecoveryAttention(capture, expected)).toBe(true)
+        corrupt = true
+        await driver.evaluateActivatedSession(capture)
+        expect(driver.hasRecoveryAttention(capture, expected)).toBe(true)
+        expect(host.nextTurn).toEqual([])
+      } finally { await driver.dispose() }
+    },
+  )
+
+  it.each(['nextStep', 'nextTurn'] as const)(
+    'does not let pending host context in %s undo a rejected continuation pause', async queue => {
+      const fixture = runnerFixture()
+      const host = fakeAgent()
+      const driver = makeDriver(fixture)
+      try {
+        observeActivated(driver, host)
+        await waitFor(() => host.nextTurn.length === 1)
+        const submitted = host.nextTurn.shift()!
+        host.setStatus('running')
+        driver.onInboxClaimed(host.agent, submitted)
+        const context = { ...userMessage('transient context'), source: { kind: 'runtime-context' } } as unknown as UserMessage
+        expect(await driver.onPreStep(host.agent, [submitted], new AbortController().signal, async () => {
+          host[queue].push(context)
+          return { kind: 'enter', messages: [{ ...submitted, content: [{ type: 'text', text: 'rewritten' }] }] }
+        })).toEqual({ kind: 'reject' })
+        host[queue].splice(0)
+        const calls = fixture.quotaCalls.length
+        host.setStatus('idle')
+        for (let i = 0; i < 3; i += 1) driver.onAgentStatus(host.agent, 'idle')
+        await new Promise<void>(resolve => setTimeout(resolve, 0))
+        expect(fixture.quotaCalls).toHaveLength(calls)
+        expect(host.nextTurn).toEqual([])
+        await driver.evaluateActivatedSession({ agent: host.agent, session: host.agent.session })
+        expect(host.nextTurn).toHaveLength(1)
+      } finally { await driver.dispose() }
+    },
+  )
+
+  it('retains cancellation ownership through replacement until an actual removal', async () => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const first = makeDriver(fixture)
+    observeActivated(first, host)
+    await waitFor(() => host.nextTurn.length === 1)
+    const submitted = host.nextTurn.shift()!
+    host.setStatus('running')
+    first.onInboxClaimed(host.agent, submitted)
+    await first.dispose('replacement')
+    const successor = makeDriver(fixture)
+    successor.observeAgent(host.agent)
+    await successor.dispose('removal')
+    expect(host.cancelCalls).toBe(1)
+  })
+
+  it('retains an error pause through Driver replacement and resumes only for human input or Start', async () => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const first = makeDriver(fixture)
+    observeActivated(first, host)
+    await waitFor(() => host.nextTurn.length === 1)
+    first.onAgentError(host.agent)
+    await first.dispose('replacement')
+    const calls = fixture.quotaCalls.length
+    const successor = makeDriver(fixture)
+    try {
+      successor.observeAgent(host.agent)
+      successor.onAgentStatus(host.agent, 'idle')
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+      expect(fixture.quotaCalls).toHaveLength(calls)
+      expect(host.nextTurn).toEqual([])
+      await successor.evaluateActivatedSession({ agent: host.agent, session: host.agent.session })
+      expect(host.nextTurn).toHaveLength(1)
+    } finally { await successor.dispose() }
+  })
+
+  it('clears a verified obsolete recovery hold even when the new heartbeat body cannot be read', async () => {
+    const host = fakeAgent()
+    let runnable = false
+    const fixture = runnerFixture({
+      shouldRun: () => runnable, schedulerMode: 'stop',
+      recovery: () => ({ schema_version: 'unsettled_host_turn_recovery_v0', state: runnable ? 'clear' : 'attention_required' }),
+    })
+    const driver = new LoopXContinuationDriver({
+      isLiveAgent: agent => agent === host.agent, retryDelaysMs: [0, 0],
+      runner: (file, args, options) => {
+        if (runnable && args.includes('heartbeat-prompt')) {
+          throw new LoopXCliError('transport', 'body unavailable', false)
+        }
+        return fixture.runner(file, args, options)
+      },
+    })
+    try {
+      host.appendEvent(userSkillInvocationEvent())
+      const capture = { agent: host.agent, session: host.agent.session }
+      const expected = { goalId, loopxAgentId: agentId }
+      await driver.evaluateActivatedSession(capture)
+      expect(driver.hasRecoveryAttention(capture, expected)).toBe(true)
+      runnable = true
+      await driver.evaluateActivatedSession(capture)
+      expect(driver.hasRecoveryAttention(capture, expected)).toBe(false)
+      expect(host.nextTurn).toEqual([])
+    } finally { await driver.dispose() }
+  })
+
   it('does not report a cancelled maintenance probe as a missing CLI', async () => {
     const host = fakeAgent()
     const maintenance = new AbortController()
@@ -1325,30 +1551,95 @@ describe('same-session LoopX driver', () => {
     await driver.dispose()
   })
 
-  it('rejects when a downstream pre-step replaces the canonical message', async () => {
+  it.each(['rewritten', 'missing', 'malformed replacement', 'relabeled as user'] as const)(
+    'holds a %s downstream continuation until an explicit evaluation',
+    async change => {
+      const fixture = runnerFixture()
+      const host = fakeAgent()
+      const driver = makeDriver(fixture)
+      try {
+        observeActivated(driver, host)
+        await waitFor(() => host.nextTurn.length === 1)
+        const queued = host.nextTurn.shift() as UserMessage
+        host.setStatus('running')
+        driver.onInboxClaimed(host.agent, queued)
+        const context = {
+          ...userMessage('derived host context'),
+          source: { kind: 'runtime-context' },
+        } as unknown as UserMessage
+        const rewritten: UserMessage = {
+          ...queued,
+          content: [{ type: 'text', text: 'downstream replacement' }],
+        }
+        const alteredSource = { ...queued.source, unexpected: true }
+        const malformed: UserMessage = {
+          ...queued,
+          id: randomUUID() as UserMessage['id'],
+          source: alteredSource,
+        }
+        const cases = {
+          rewritten: [rewritten],
+          missing: [context],
+          'malformed replacement': [malformed, context],
+          'relabeled as user': [{ ...queued, source: { kind: 'user' as const } }],
+        }
+
+        const decision = await driver.onPreStep(
+          host.agent, [queued], new AbortController().signal,
+          async () => ({ kind: 'enter', messages: cases[change] }),
+        )
+        expect(decision).toEqual({ kind: 'reject' })
+
+        host.setStatus('idle')
+        driver.onAgentStatus(host.agent, 'idle')
+        await new Promise<void>(resolve => setTimeout(resolve, 0))
+        expect(host.nextStep).toEqual([])
+        expect(host.nextTurn).toEqual([])
+        expect(fixture.quotaCalls).toHaveLength(2)
+
+        await expect(driver.evaluateActivatedSession({ agent: host.agent, session: host.agent.session }))
+          .resolves.toEqual({ kind: 'applied' })
+        expect(host.nextTurn).toHaveLength(1)
+        expect(fixture.quotaCalls).toHaveLength(3)
+      } finally {
+        await driver.dispose()
+      }
+    },
+  )
+
+  it('keeps a queued user message in the inbox when a downstream listener returns it too', async () => {
     const fixture = runnerFixture()
     const host = fakeAgent()
     const driver = makeDriver(fixture)
-    observeActivated(driver, host)
-    await waitFor(() => host.nextTurn.length === 1)
-    const queued = host.nextTurn.shift() as UserMessage
-    host.setStatus('running')
-    driver.onInboxClaimed(host.agent, queued)
-    const replaced = {
-      ...queued,
-      content: [{ type: 'text' as const, text: 'downstream replacement' }],
-    } satisfies UserMessage
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => host.nextTurn.length === 1)
+      const queued = host.nextTurn.shift() as UserMessage
+      host.setStatus('running')
+      driver.onInboxClaimed(host.agent, queued)
+      const human = userMessage('independent input during admission')
 
-    const decision = await driver.onPreStep(
-      host.agent,
-      [queued],
-      new AbortController().signal,
-      async () => ({ kind: 'enter', messages: [replaced] }),
-    )
+      const decision = await driver.onPreStep(
+        host.agent, [queued], new AbortController().signal, async () => {
+          host.agent.followup(human)
+          driver.onInboxInserted(host.agent, human)
+          return { kind: 'enter', messages: [human] }
+        },
+      )
+      expect(decision).toEqual({ kind: 'reject' })
+      expect(host.nextTurn).toEqual([human])
+      expect(host.nextStep).toEqual([])
 
-    expect(decision).toEqual({ kind: 'reject' })
-    expect(fixture.quotaCalls).toHaveLength(2)
-    await driver.dispose()
+      // The host consumes the queued human input before its next idle event.
+      expect(host.nextTurn.shift()).toBe(human)
+      host.setStatus('idle')
+      driver.onAgentStatus(host.agent, 'idle')
+      await waitFor(() => host.nextTurn.length === 1)
+      expect(host.nextTurn[0]?.source.kind).toBe('loopx-continuation')
+      expect(fixture.quotaCalls).toHaveLength(3)
+    } finally {
+      await driver.dispose()
+    }
   })
 
   it('rejects when a downstream pre-step adds a typed source field', async () => {
@@ -1420,6 +1711,171 @@ describe('same-session LoopX driver', () => {
     await driver.dispose()
   })
 
+  it('projects a schema or identity admission failure with one safe category', async () => {
+    const fixture = runnerFixture({ quotaTurnInstanceId: 'turn-other' })
+    const host = fakeAgent()
+    const warnings: string[] = []
+    const changes: Array<Agent['session']> = []
+    const driver = new LoopXContinuationDriver({
+      runner: fixture.runner,
+      isLiveAgent: () => true,
+      makeTurnInstanceId: () => 'turn-stable',
+      retryDelaysMs: [0, 0],
+      warn: message => warnings.push(message),
+      onAdmissionChange: session => { changes.push(session) },
+    })
+    observeActivated(driver, host)
+    await waitFor(() => warnings.length === 1)
+
+    expect(host.nextTurn).toHaveLength(0)
+    expect(driver.readContinuationAdmission({
+      agent: host.agent,
+      session: host.agent.session,
+    })).toEqual({ state: 'failed', category: 'invalid_response' })
+    expect(changes).toEqual([host.agent.session])
+    // The projection carries no raw warning text or command output.
+    expect(JSON.stringify(driver.readContinuationAdmission({
+      agent: host.agent,
+      session: host.agent.session,
+    }))).not.toContain('invalid_schema')
+    await driver.dispose()
+  })
+
+  it('projects typed authority rejections and untyped CLI exits distinctly', async () => {
+    const typed = runnerFixture({ typedQuotaFailure: true })
+    const typedHost = fakeAgent()
+    const typedDriver = new LoopXContinuationDriver({
+      runner: typed.runner,
+      isLiveAgent: () => true,
+      retryDelaysMs: [0, 0],
+    })
+    observeActivated(typedDriver, typedHost)
+    await waitFor(() => typed.quotaCalls.length === 1)
+    expect(typedDriver.readContinuationAdmission({
+      agent: typedHost.agent,
+      session: typedHost.agent.session,
+    })).toEqual({ state: 'failed', category: 'admission_rejected' })
+    await typedDriver.dispose()
+
+    const unreachable = runnerFixture({ quotaExitFailures: 3 })
+    const unreachableHost = fakeAgent()
+    const unreachableDriver = new LoopXContinuationDriver({
+      runner: unreachable.runner,
+      isLiveAgent: () => true,
+      retryDelaysMs: [0, 0],
+    })
+    observeActivated(unreachableDriver, unreachableHost)
+    await waitFor(() => unreachable.quotaCalls.length === 3)
+    expect(unreachableDriver.readContinuationAdmission({
+      agent: unreachableHost.agent,
+      session: unreachableHost.agent.session,
+    })).toEqual({ state: 'failed', category: 'cli_unreachable' })
+    await unreachableDriver.dispose()
+  })
+
+  it('keeps the projection clear for admitted, waiting, and exact-session reads', async () => {
+    const fixture = runnerFixture({ shouldRun: false, waitMinutes: 3 })
+    const host = fakeAgent()
+    const changes: Array<Agent['session']> = []
+    const driver = new LoopXContinuationDriver({
+      runner: fixture.runner,
+      isLiveAgent: () => true,
+      retryDelaysMs: [0, 0],
+      onAdmissionChange: session => { changes.push(session) },
+    })
+    observeActivated(driver, host)
+    await waitFor(() => fixture.quotaCalls.length === 1)
+
+    // A scheduler wait is an admitted outcome, not a failure.
+    expect(driver.readContinuationAdmission({
+      agent: host.agent,
+      session: host.agent.session,
+    })).toEqual({ state: 'clear' })
+    expect(changes).toEqual([])
+
+    const admittedHost = fakeAgent('another-session')
+    const admittedDriver = makeDriver(runnerFixture())
+    observeActivated(admittedDriver, admittedHost)
+    await waitFor(() => admittedHost.nextTurn.length === 1)
+    expect(admittedDriver.readContinuationAdmission({
+      agent: admittedHost.agent,
+      session: admittedHost.agent.session,
+    })).toEqual({ state: 'clear' })
+    await admittedDriver.dispose()
+
+    // A stale capture for a replaced Session never reports the latch.
+    host.replaceSession(undefined, [])
+    expect(driver.readContinuationAdmission({
+      agent: host.agent,
+      session: host.agent.session,
+    })).toEqual({ state: 'clear' })
+    await driver.dispose()
+  })
+
+  it('clears the projected failure when admission succeeds again or Pause takes over', async () => {
+    const inner = runnerFixture()
+    let quotaFailures = 3
+    const runner: FileRunner = async (file, args, options) => {
+      if (args.includes('should-run') && quotaFailures > 0) {
+        quotaFailures -= 1
+        return { exitCode: 1, stdout: '', stderr: 'transient diagnostic' }
+      }
+      return inner.runner(file, args, options)
+    }
+    const host = fakeAgent()
+    const changes: number[] = []
+    const driver = new LoopXContinuationDriver({
+      runner,
+      isLiveAgent: () => true,
+      makeTurnInstanceId: () => 'turn-stable',
+      retryDelaysMs: [0, 0],
+      onAdmissionChange: () => { changes.push(changes.length) },
+    })
+    observeActivated(driver, host)
+    await waitFor(() => driver.readContinuationAdmission({
+      agent: host.agent, session: host.agent.session,
+    }).state === 'failed')
+
+    // The GoalBar Start bridge re-runs admission; success clears the latch.
+    const receipt = await driver.evaluateActivatedSession({
+      agent: host.agent,
+      session: host.agent.session,
+    })
+    expect(receipt).toEqual({ kind: 'applied' })
+    await waitFor(() => host.nextTurn.length === 1)
+    expect(driver.readContinuationAdmission({
+      agent: host.agent, session: host.agent.session,
+    })).toEqual({ state: 'clear' })
+    expect(changes).toHaveLength(2)
+    await driver.dispose()
+
+    // Pause retires the latch together with the Goal's continuation authority.
+    const pausedFixture = runnerFixture({ heartbeatTurnInstanceId: 'turn-other' })
+    const pausedHost = fakeAgent()
+    const pausedChanges: number[] = []
+    const pausedDriver = new LoopXContinuationDriver({
+      runner: pausedFixture.runner,
+      isLiveAgent: () => true,
+      makeTurnInstanceId: () => 'turn-stable',
+      retryDelaysMs: [0, 0],
+      onAdmissionChange: () => { pausedChanges.push(pausedChanges.length) },
+    })
+    observeActivated(pausedDriver, pausedHost)
+    await waitFor(() => pausedDriver.readContinuationAdmission({
+      agent: pausedHost.agent, session: pausedHost.agent.session,
+    }).state === 'failed')
+    const pauseReceipt = await pausedDriver.cancelQueued({
+      agent: pausedHost.agent,
+      session: pausedHost.agent.session,
+    })
+    expect(pauseReceipt).toEqual({ kind: 'applied' })
+    expect(pausedDriver.readContinuationAdmission({
+      agent: pausedHost.agent, session: pausedHost.agent.session,
+    })).toEqual({ state: 'clear' })
+    expect(pausedChanges).toHaveLength(2)
+    await pausedDriver.dispose()
+  })
+
   it.each([
     ['wrong POSIX id', 'LOOPX_TURN=turn-other'],
     ['wrong PowerShell id', '$LOOPX_TURN = "turn-other"'],
@@ -1474,6 +1930,95 @@ describe('same-session LoopX driver', () => {
     await driver.dispose()
 
     expect(host.cancelCalls).toBe(1)
+  })
+
+  it('cancels a claimed automatic step when the Driver is disposed for removal', async () => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const driver = makeDriver(fixture)
+    observeActivated(driver, host)
+    await waitFor(() => host.nextTurn.length === 1)
+    const queued = host.nextTurn.shift() as UserMessage
+    host.setStatus('running')
+    driver.onInboxClaimed(host.agent, queued)
+
+    await driver.dispose('removal')
+
+    expect(host.cancelCalls).toBe(1)
+  })
+
+  it('keeps a claimed automatic step running across replacement disposal', async () => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const driver = makeDriver(fixture)
+    observeActivated(driver, host)
+    await waitFor(() => host.nextTurn.length === 1)
+    const queued = host.nextTurn.shift() as UserMessage
+    host.setStatus('running')
+    driver.onInboxClaimed(host.agent, queued)
+
+    await driver.dispose('replacement')
+
+    expect(host.cancelCalls).toBe(0)
+  })
+
+  it('retires queued future work but no running turn on replacement disposal', async () => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const driver = makeDriver(fixture)
+    observeActivated(driver, host)
+    await waitFor(() => host.nextTurn.length === 1)
+    const callsAtReplacement = fixture.calls.length
+
+    await driver.dispose('replacement')
+
+    expect(host.nextTurn).toHaveLength(0)
+    expect(host.cancelCalls).toBe(0)
+    host.setStatus('idle')
+    driver.onAgentStatus(host.agent, 'idle')
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+    expect(fixture.calls).toHaveLength(callsAtReplacement)
+  })
+
+  it('drains an admitted turn across replacement and admits freshly only after it settles', async () => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const first = makeDriver(fixture)
+    observeActivated(first, host)
+    await waitFor(() => host.nextTurn.length === 1)
+    const admitted = host.nextTurn.shift() as UserMessage
+    expect((admitted.source as { turnInstanceId?: string }).turnInstanceId)
+      .toBe('turn-stable')
+    host.setStatus('running')
+    first.onInboxClaimed(host.agent, admitted)
+    publishEvent(first, host, sessionEvent('user/message', admitted))
+    const callsBeforeReplacement = fixture.calls.length
+
+    await first.dispose('replacement')
+    expect(host.cancelCalls).toBe(0)
+
+    const second = new LoopXContinuationDriver({
+      runner: fixture.runner,
+      isLiveAgent: () => true,
+      makeTurnInstanceId: () => 'turn-fresh',
+      retryDelaysMs: [0, 0],
+    })
+    second.observeAgent(host.agent)
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+
+    // The replacement Driver admits nothing while the drained Turn runs.
+    expect(host.nextTurn).toHaveLength(0)
+    expect(fixture.calls).toHaveLength(callsBeforeReplacement)
+
+    publishEvent(second, host, turnEndEvent(1))
+    host.setStatus('idle')
+    second.onAgentStatus(host.agent, 'idle')
+    await waitFor(() => host.nextTurn.length === 1)
+    const followup = host.nextTurn.shift() as UserMessage
+    expect((followup.source as { turnInstanceId?: string }).turnInstanceId)
+      .toBe('turn-fresh')
+    await second.dispose()
+    expect(host.cancelCalls).toBe(0)
   })
 
   it('retries an untyped CLI exit twice with one stable idempotency key', async () => {
@@ -1839,7 +2384,7 @@ describe('same-session LoopX driver', () => {
     await driver.dispose()
   })
 
-  it.each(['before', 'after'])('restores competing work added %s downstream listeners with host context', async phase => {
+  it.each(['before', 'after'])('preserves independent user input %s downstream listeners with host context', async phase => {
     const fixture = runnerFixture()
     const host = fakeAgent()
     const driver = makeDriver(fixture)
@@ -1855,11 +2400,13 @@ describe('same-session LoopX driver', () => {
     const decision = await driver.onPreStep(
       host.agent, phase === 'before' ? messages : [queued, context],
       new AbortController().signal,
-      async () => ({ kind: 'enter', messages }),
+      async () => ({ kind: 'enter', messages, startsRequestSeries: true }),
     )
 
-    expect(decision).toEqual({ kind: 'reject' })
-    expect(host.nextStep).toEqual([context, human])
+    expect(decision).toEqual(phase === 'before'
+      ? { kind: 'reject' }
+      : { kind: 'enter', messages: [context, human], startsRequestSeries: true })
+    expect(host.nextStep).toEqual(phase === 'before' ? [context, human] : [])
     expect(fixture.quotaCalls).toHaveLength(phase === 'before' ? 1 : 2)
     await driver.dispose()
   })
@@ -2053,6 +2600,114 @@ describe('same-session LoopX driver', () => {
 })
 
 describe('GoalBar exact-Session Driver bridge', () => {
+  it.each(['unfinished', 'bound', 'bound-body-failure', 'different-agent', 'no-step', 'one-completion'] as const)(
+    'reconciles an original selection after Host completion on restore (%s)', async variant => {
+      const host = fakeAgent()
+      const original = 'dsh-prior-original-turn'
+      const source = {
+        kind: 'loopx-continuation', schemaVersion: 'loopx_dsh_continuation_v0',
+        goalId, agentId, turnInstanceId: original, selectionRequired: true,
+      } as const
+      host.appendEvent(userSkillInvocationEvent())
+      const completed = variant === 'unfinished' || variant === 'bound-body-failure' ? 2 : 1
+      for (let turn = 0; turn < completed; turn += 1) {
+        host.appendEvent(sessionEvent('turn/start', { turn }))
+        host.appendEvent(sessionEvent('user/message', {
+          ...userMessage('Continue the original Turn.'), source,
+        }))
+        if (variant !== 'no-step') host.appendEvent(sessionEvent('step/start', { turn, step: 0 }))
+        host.appendEvent(sessionEvent('turn/end', { turn, reason: { kind: 'completed' } }))
+      }
+      const fixture = runnerFixture()
+      const observed: string[] = []
+      let receiptBound = variant === 'bound'
+      const runner: FileRunner = async (file, args, options) => {
+        if (variant === 'bound-body-failure' && receiptBound && args.includes('heartbeat-prompt')) {
+          throw new LoopXCliError('transport', 'body unavailable after original selection', false)
+        }
+        if (!args.includes('receipt')) return fixture.runner(file, args, options)
+        observed.push(args[args.indexOf('--turn-instance-id') + 1] ?? '')
+        const identity = { goal_id: goalId, agent_id: agentId, turn_instance_id: original }
+        return {
+          exitCode: 0, stderr: '', stdout: JSON.stringify({
+            ok: true, schema_version: 'quota_receipt_readback_v0', ...identity,
+            agent_id: variant === 'different-agent' ? 'agent-other' : agentId,
+            heartbeat_receipt: { status: 'committed', turn_instance_id: original,
+              ...(receiptBound ? { settlement_identity: identity } : {
+                selection_required: true, settlement_binding_owed: true,
+              }),
+            },
+          }),
+        }
+      }
+      const driver = new LoopXContinuationDriver({
+        isLiveAgent: agent => agent === host.agent, runner, makeTurnInstanceId: () => 'fresh-turn',
+      })
+      const capture = { agent: host.agent, session: host.agent.session }
+      try {
+        driver.observeAgent(host.agent)
+        if (variant === 'no-step' || variant === 'bound' || variant === 'one-completion') {
+          await waitFor(() => host.nextTurn.length === 1)
+          expect(observed).toEqual(variant === 'no-step' ? [] : [original])
+          expect(fixture.quotaCalls[0]).toContain(variant === 'one-completion' ? original : 'fresh-turn')
+        } else {
+          await waitFor(() => observed.length === 1)
+          const exactBinding = { goalId, loopxAgentId: agentId }
+          if (variant === 'unfinished' || variant === 'bound-body-failure') {
+            await waitFor(() => driver.hasRecoveryAttention(capture, exactBinding))
+            expect(fixture.quotaCalls).toHaveLength(0)
+            expect(host.nextTurn).toHaveLength(0)
+            if (variant === 'bound-body-failure') {
+              receiptBound = true
+              await driver.evaluateActivatedSession(capture)
+              expect(driver.hasRecoveryAttention(capture, exactBinding)).toBe(false)
+              expect(host.nextTurn).toHaveLength(0)
+              expect(fixture.quotaCalls[0]).toContain('fresh-turn')
+              expect(observed).toEqual([original, original])
+              return
+            }
+            await driver.evaluateActivatedSession(capture)
+            await waitFor(() => host.nextTurn.length === 1)
+            expect(fixture.quotaCalls[0]).toContain(original)
+            expect(observed).toEqual([original, original])
+          } else {
+            await driver.dispose()
+            expect(fixture.quotaCalls).toHaveLength(0)
+          }
+        }
+      } finally {
+        await driver.dispose()
+      }
+    },
+  )
+
+  it('projects only the observed Core recovery hold for the current binding', async () => {
+    const host = fakeAgent()
+    let recoveryState = 'attention_required'
+    const { runner } = runnerFixture({
+      shouldRun: false,
+      schedulerMode: 'stop',
+      recovery: () => ({
+        schema_version: 'unsettled_host_turn_recovery_v0',
+        state: recoveryState,
+      }),
+    })
+    const driver = new LoopXContinuationDriver({ isLiveAgent: agent => agent === host.agent, runner })
+    host.appendEvent(userSkillInvocationEvent())
+    const capture = { agent: host.agent, session: host.agent.session }
+    const expected = { goalId, loopxAgentId: agentId }
+    await driver.evaluateActivatedSession(capture)
+    expect(driver.hasRecoveryAttention(capture, expected)).toBe(true)
+    expect(driver.hasRecoveryAttention(capture, { ...expected, loopxAgentId: 'different-agent' }))
+      .toBe(false)
+    expect(host.nextTurn).toHaveLength(0)
+
+    recoveryState = 'recovery_required'
+    await driver.evaluateActivatedSession(capture)
+    expect(driver.hasRecoveryAttention(capture, expected)).toBe(false)
+    await driver.dispose()
+  })
+
   it.each(['agent/created', 'agent/session-start'] as const)(
     'resets resumed Session state on %s without activating an uninvoked Session',
     async event => {
@@ -2199,6 +2854,7 @@ describe('GoalBar exact-Session Driver bridge', () => {
     const unregisterThrowing = coordinator.registerDriverBridge({
       async evaluateActivatedSession() { throw new Error('private driver failure') },
       async cancelQueued() { throw new Error('private driver failure') },
+      readContinuationAdmission() { throw new Error('private driver failure') },
     })
     await expect(coordinator.evaluateActivatedSession(capture)).resolves.toEqual({
       kind: 'unavailable',
@@ -2215,6 +2871,10 @@ describe('GoalBar exact-Session Driver bridge', () => {
       async cancelQueued() {
         calls += 1
         return { kind: 'applied' }
+      },
+      readContinuationAdmission() {
+        calls += 1
+        return { state: 'clear' }
       },
     })
     host.replaceSession(undefined, [])
@@ -2568,5 +3228,75 @@ describe('GoalBar exact-Session Driver bridge', () => {
     expect(fixture.quotaCalls).toHaveLength(1)
     await driver.dispose()
     expect(host.cancelCalls).toBe(0)
+  })
+})
+
+describe('plugin unload cause classification', () => {
+  it('keeps cancellation ownership through an actual Cordis Fiber restart and removal', async () => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const first = makeDriver(fixture)
+    observeActivated(first, host)
+    await waitFor(() => host.nextTurn.length === 1)
+    const submitted = host.nextTurn.shift()!
+    host.setStatus('running')
+    first.onInboxClaimed(host.agent, submitted)
+    await first.dispose('replacement')
+
+    const ctx = new Context()
+    ctx.reflect.provide('agents', {
+      get: (id: string) => id === host.agent.id ? host.agent : undefined,
+      list: () => [host.agent],
+      withoutInitiator: (operation: () => Promise<unknown>) => operation(),
+    } as never)
+    ctx.reflect.provide('loopxBootstrap', { state: 'ready' })
+    const observed = vi.spyOn(LoopXContinuationDriver.prototype, 'observeAgent')
+    const fiber = ctx.plugin(applyDriver)
+    try {
+      await waitFor(() => observed.mock.calls.length === 1)
+      await fiber.restart()
+      await waitFor(() => observed.mock.calls.length === 2)
+      expect(host.cancelCalls).toBe(0)
+      await fiber.dispose()
+      expect(host.cancelCalls).toBe(1)
+    } finally {
+      await fiber.dispose()
+      observed.mockRestore()
+    }
+  })
+
+  it.each([
+    ['dsh-hmr module eviction', 'evict'],
+    ['fiber restart', 'restart'],
+  ] as const)('disposes the applied Driver for replacement on %s', async (_label, mode) => {
+    const host = fakeAgent()
+    const dispose = vi.spyOn(LoopXContinuationDriver.prototype, 'dispose')
+    const runtime = appliedDriverRuntime(host.agent, false, { withFiber: true })
+    try {
+      await runtime.unloadFiber(mode)
+      expect(dispose).toHaveBeenCalledExactlyOnceWith('replacement')
+    } finally {
+      dispose.mockRestore()
+    }
+  })
+
+  it.each([
+    ['direct fiber disposal', 'direct'],
+    ['untyped legacy unload', 'plain'],
+  ] as const)('disposes the applied Driver for removal on %s', async (_label, mode) => {
+    const host = fakeAgent()
+    const dispose = vi.spyOn(LoopXContinuationDriver.prototype, 'dispose')
+    const runtime = appliedDriverRuntime(
+      host.agent,
+      false,
+      mode === 'direct' ? { withFiber: true } : {},
+    )
+    try {
+      if (mode === 'direct') await runtime.unloadFiber('direct')
+      else await runtime.dispose()
+      expect(dispose).toHaveBeenCalledExactlyOnceWith('removal')
+    } finally {
+      dispose.mockRestore()
+    }
   })
 })

@@ -11,7 +11,7 @@ chooses two independent controls:
 | `strict_receipt` | Require a passing receipt for the exact current diff at premerge |
 
 `safe_fix` permits a bounded repair only inside authority the caller already
-holds; it does not grant mutation authority. `strict_receipt` grants none.
+holds; `strict_receipt` grants none.
 Projects may enable either, both, or neither after enabling the capability.
 
 ## Configure A Goal
@@ -57,8 +57,7 @@ loopx configure-goal \
 Machine defaults use the same Dashboard preview/apply/rollback flow as other
 machine namespaces. An explicit Goal policy always wins as one complete value;
 clearing it restores live inheritance. Removing the machine namespace restores
-the capability default, where all three values are false. Neither scope grants
-file, permission, or merge authority.
+the capability default, where all three values are false.
 
 ## Protocol
 

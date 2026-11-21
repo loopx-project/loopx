@@ -19,8 +19,7 @@ LoopX. It ships four cooperating surfaces:
   control-plane state.
 
 The older [`deepseek-harness` connector](deepseek-harness-connector.md) remains
-a separate headless Turn adapter. The native plugin uses the
-`deepseek-harness-native` host surface and does not replace that connector.
+a separate headless Turn adapter.
 
 ## Route Decision
 

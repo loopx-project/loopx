@@ -25,7 +25,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 import importlib
 from pathlib import Path
-from typing import Any
 
 from ...control_plane.turn_driver.host_binding import (
     EXECUTOR_KIND_MANAGED,
@@ -37,6 +36,9 @@ from ..machine_configuration.contract import (
     MachineConfigurationNamespace,
     machine_configuration_revision,
 )
+
+Payload = dict[str, object]
+PayloadView = Mapping[str, object]
 
 # The endpoint an operator selects to run the steward on the managed executor,
 # and the endpoint the channel runs when nothing is selected. Neither name is
@@ -73,6 +75,7 @@ MODEL_FIELD = "executor_model"
 REASONING_EFFORT_FIELD = "executor_reasoning_effort"
 SELECTION_POLICY_FIELD = "selection_policy"
 ELIGIBLE_ENDPOINTS_FIELD = "eligible_endpoints"
+ENDPOINT_MODELS_FIELD = "endpoint_models"
 PREFERRED_SELECTION_POLICY = "preferred"
 PINNED_SELECTION_POLICY = "pinned"
 FLEXIBLE_SELECTION_POLICY = "flexible"
@@ -100,7 +103,7 @@ def steward_reasoning_efforts() -> tuple[str, ...]:
     return REASONING_EFFORTS
 
 
-def _optional_text(value: Any, *, field: str) -> str | None:
+def _optional_text(value: object, *, field: str) -> str | None:
     """Normalize one absent-or-selected text field.
 
     A blank value and an absent value mean the same thing -- this namespace
@@ -120,8 +123,8 @@ def _optional_text(value: Any, *, field: str) -> str | None:
 
 
 def normalize_steward_executor_machine_defaults(
-    raw: Mapping[str, Any],
-) -> dict[str, Any]:
+    raw: PayloadView,
+) -> Payload:
     """Normalize one typed steward-executor machine default, fail closed."""
 
     schema_version = str(raw.get("schema_version") or "").strip()
@@ -130,7 +133,7 @@ def normalize_steward_executor_machine_defaults(
             "steward_executor must use "
             f"{STEWARD_EXECUTOR_SCHEMA_V0} or {STEWARD_EXECUTOR_SCHEMA}"
         )
-    v1_fields = {SELECTION_POLICY_FIELD, ELIGIBLE_ENDPOINTS_FIELD}
+    v1_fields = {SELECTION_POLICY_FIELD, ELIGIBLE_ENDPOINTS_FIELD, ENDPOINT_MODELS_FIELD}
     unknown = sorted(
         set(raw)
         - {
@@ -161,7 +164,7 @@ def normalize_steward_executor_machine_defaults(
             "steward_executor.reasoning_effort must be one of "
             + ", ".join(supported_efforts)
         )
-    normalized = {
+    normalized: Payload = {
         "schema_version": schema_version,
         EXECUTOR_ENDPOINT_FIELD: endpoint,
         MODEL_FIELD: _optional_text(raw.get(MODEL_FIELD), field=MODEL_FIELD),
@@ -203,11 +206,22 @@ def normalize_steward_executor_machine_defaults(
         raise ValueError(
             "steward_executor.eligible_endpoints is only valid for flexible selection"
         )
-    return {
-        **normalized,
-        SELECTION_POLICY_FIELD: selection_policy,
-        ELIGIBLE_ENDPOINTS_FIELD: eligible_endpoints,
-    }
+    raw_ep = raw.get(ENDPOINT_MODELS_FIELD)
+    if raw_ep is not None and not isinstance(raw_ep, Mapping):
+        raise TypeError("steward_executor.endpoint_models must be an object")
+    ep_models: dict[str, dict[str, str | None]] = {}
+    for ep_key, ep_val in (raw_ep or {}).items():
+        ep = str(ep_key or "").strip()
+        if ep not in supported or not isinstance(ep_val, Mapping) or set(ep_val) - {"model", "reasoning_effort"}:
+            raise ValueError(f"steward_executor.endpoint_models.{ep or ep_key} is invalid")
+        ep_m = _optional_text(ep_val.get("model"), field=f"endpoint_models.{ep}.model")
+        ep_e = _optional_text(ep_val.get("reasoning_effort"), field=f"endpoint_models.{ep}.reasoning_effort")
+        if ep_e is not None and ep_e not in supported_efforts:
+            raise ValueError("steward_executor.endpoint_models reasoning_effort must be one of " + ", ".join(supported_efforts))
+        if ep_m is not None or ep_e is not None:
+            ep_models[ep] = {"model": ep_m, "reasoning_effort": ep_e}
+    return {**normalized, SELECTION_POLICY_FIELD: selection_policy, ELIGIBLE_ENDPOINTS_FIELD: eligible_endpoints,
+            **({ENDPOINT_MODELS_FIELD: ep_models} if ep_models else {})}
 
 
 def steward_executor_machine_configuration_namespace() -> (
@@ -258,8 +272,9 @@ def _projection(
     reasoning_effort: str | None = None,
     selection_policy: str = PREFERRED_SELECTION_POLICY,
     eligible_endpoints: list[str] | None = None,
+    endpoint_models: dict[str, dict[str, str | None]] | None = None,
     repair: str = "",
-) -> dict[str, Any]:
+) -> Payload:
     return {
         "schema_version": STEWARD_EXECUTOR_EFFECTIVE_SCHEMA,
         "status": status,
@@ -270,13 +285,14 @@ def _projection(
         REASONING_EFFORT_FIELD: reasoning_effort,
         SELECTION_POLICY_FIELD: selection_policy,
         ELIGIBLE_ENDPOINTS_FIELD: list(eligible_endpoints or []),
+        **({ENDPOINT_MODELS_FIELD: dict(endpoint_models)} if endpoint_models else {}),
         **({"repair": repair} if repair else {}),
     }
 
 
 def effective_steward_executor_defaults(
-    machine_configuration: Mapping[str, Any] | None,
-) -> dict[str, Any]:
+    machine_configuration: PayloadView | None,
+) -> Payload:
     """Resolve the steward executor defaults from one machine document.
 
     ``None``, a document that carries no steward namespace, and a malformed
@@ -311,21 +327,20 @@ def effective_steward_executor_defaults(
             "machine_configuration.namespaces.steward_executor must be an object"
         )
     normalized = normalize_steward_executor_machine_defaults(raw)
+    raw_model, raw_effort = normalized[MODEL_FIELD], normalized[REASONING_EFFORT_FIELD]
+    raw_eligible, raw_endpoint_models = normalized.get(ELIGIBLE_ENDPOINTS_FIELD), normalized.get(ENDPOINT_MODELS_FIELD)
     return _projection(
-        status="ready",
-        source="machine_configuration",
-        revision=machine_configuration_revision(normalized),
+        status="ready", source="machine_configuration", revision=machine_configuration_revision(normalized),
         executor_endpoint=str(normalized[EXECUTOR_ENDPOINT_FIELD]),
-        model=normalized[MODEL_FIELD],
-        reasoning_effort=normalized[REASONING_EFFORT_FIELD],
-        selection_policy=str(
-            normalized.get(SELECTION_POLICY_FIELD) or PREFERRED_SELECTION_POLICY
-        ),
-        eligible_endpoints=list(normalized.get(ELIGIBLE_ENDPOINTS_FIELD) or []),
+        model=raw_model if isinstance(raw_model, str) else None,
+        reasoning_effort=raw_effort if isinstance(raw_effort, str) else None,
+        selection_policy=str(normalized.get(SELECTION_POLICY_FIELD) or PREFERRED_SELECTION_POLICY),
+        eligible_endpoints=[str(item) for item in raw_eligible] if isinstance(raw_eligible, list) else [],
+        endpoint_models=dict(raw_endpoint_models) if isinstance(raw_endpoint_models, dict) and raw_endpoint_models else None,
     )
 
 
-def load_effective_steward_executor_defaults(runtime_root: Path) -> dict[str, Any]:
+def load_effective_steward_executor_defaults(runtime_root: Path) -> Payload:
     """Read this machine's steward executor default from the live store.
 
     Each namespace owns its runtime effect, so a malformed sibling cannot
