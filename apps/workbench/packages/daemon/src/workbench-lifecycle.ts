@@ -22,7 +22,7 @@ export async function serveLifecycle(socket: string, deps: {
         const reachable = await fetch(new URL('/healthz', deps.coreUrl), { signal: AbortSignal.timeout(1500) })
           .then(r => r.ok, () => false);
         return reply(200, { ok: true, service: 'loopx-workbench', instance_id: instance,
-          state: stopping ? 'stopping' : 'running', pid: process.pid, url: deps.url,
+          state: stopping ? 'stopping' : 'running', pid: process.pid, parent_pid: process.ppid, url: deps.url,
           app_dir: deps.appDir, data_dir: deps.dataDir, running_threads: deps.running(),
           core: { url: new URL(deps.coreUrl).origin, reachable } });
       }

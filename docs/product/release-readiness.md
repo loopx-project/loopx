@@ -1101,7 +1101,7 @@ hardware-sized single-wave isolated pytest shards (defaulting to
 two-thirds of host CPUs capped at 12, with optional `--durations-path`,
 `--durations-out`, and fail-closed exact-commit/tree `--resume`) and reduces
 the shards into `receipt-pytest.json` with no local paths. Keep
-`scripts/qualify-doubao-model-behavior-live.py` (`--max-workers 6` by default)
+`scripts/qualify-doubao-model-behavior-live.py` or `scripts/qualify-deepseek-model-behavior-live.py` (`--max-workers 6` by default)
 concurrent with network/CPU lanes without mutating the clean candidate tree.
 
 The `exact_release_commit_qualification_manifest_v0` contract requires the

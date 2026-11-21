@@ -39,3 +39,9 @@ test('old PID records cannot authorize a signal; absent status and stop preserve
     assert.equal(existsSync(join(state, 'launch.json')), false);
   } finally { rmSync(state, { recursive: true, force: true }); }
 });
+
+
+test('launch rejects overlong Unix socket paths before they can be silently truncated', () => {
+  assert.throws(() => launchEnvironment({}, '/tmp/' + 'x'.repeat(100), '/tmp/app'), /socket path is too long/);
+  assert.throws(() => launchEnvironment({ LOOCHAT_DATA_DIR: '/tmp/' + 'x'.repeat(100) }, '/tmp/state', '/tmp/app'), /socket path is too long/);
+});

@@ -16,10 +16,12 @@ def register_workbench_command(subparsers, add_format) -> None:
         child = actions.add_parser(action)
         child.add_argument("--state-dir", help="Reuse a Workbench state directory (or WORKBENCH_STATE_DIR).")
         if action == "start":
+            child.add_argument("--autostart", action="store_true", help="Enable current-user login startup and failure recovery (macOS/Linux).")
             child.add_argument("--workbench-dir", help="Built apps/workbench directory (or LOOPX_WORKBENCH_DIR).")
             child.add_argument("--env-file", help="Existing Workbench .env; defaults to STATE/.env.")
             child.add_argument("--port", type=int, help="HTTP port on first start (default: WORKBENCH_PORT or 8796).")
         if action == "stop":
+            child.add_argument("--disable-autostart", action="store_true", help="Stop and remove this instance's login-start registration; keep its data.")
             child.add_argument("--force", action="store_true", help="Also interrupt running agent turns.")
         add_format(child)
 
@@ -32,6 +34,11 @@ def render_workbench(payload: dict) -> str:
     core = payload.get("core")
     if core:
         lines.append(f"Core: {'reachable' if core['reachable'] else 'unavailable (Goal features need Core)'} — {core['url']}")
+    if auto := payload.get("autostart"):
+        state = "unknown" if auto.get("enabled") is None else "enabled" if auto["enabled"] else "disabled"
+        lines.append(f"Login autostart: {state}" + (f" ({auto['manager']})" if auto.get("manager") else ""))
+        if auto.get("error"):
+            lines.append(f"Autostart: {auto['error']}")
     if payload.get("access_url"):
         lines.append("The login link is private; do not share it in public logs.")
     return "\n".join(lines)
@@ -50,6 +57,8 @@ def handle_workbench_command(args, *, print_payload, output_format) -> int:
             "envFile": getattr(args, "env_file", None),
             "port": getattr(args, "port", None),
             "force": getattr(args, "force", False),
+            "autostart": getattr(args, "autostart", False),
+            "disableAutostart": getattr(args, "disable_autostart", False),
             "sourceRoot": str(root),
         }
         entry = root / "loopx/control_plane/runtime/workbench.ts"
