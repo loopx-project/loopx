@@ -602,3 +602,167 @@ def test_quota_context_config_and_hook_opt_ins_quiet_turn_and_epoch_prefetch(
     ep_out = json.loads(r_ep.stdout)["hookSpecificOutput"]
     assert ep_out["epochPrefetch"]["operator"] == "EpochReset"
     assert ep_out["epochPrefetch"]["bytes_saved"] > 0
+
+
+def test_combined_compact_direct_read_and_epoch_prefetch_generated_hook_lifecycle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Generated combined H1 hook executes both direct read and EpochReset prefetch, never silently dropping either."""
+    import os
+    import shlex
+    from loopx.cli import main
+    from loopx.control_plane.turn_driver import codex_context as ctx
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+    (repo / "tracked.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"],
+        cwd=repo, capture_output=True, check=True,
+    )
+    (repo / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+
+    capture = tmp_path / "combo-capture.json"
+    capture.write_text(json.dumps({
+        "goal_id": "g-combo",
+        "selected_todo": {"todo_id": "todo_combo", "title": "Preserve direct read and prefetch"},
+        "padding": "y" * 2048,
+    }), encoding="utf-8")
+    capture.chmod(0o600)
+    digest = hashlib.sha256(capture.read_bytes()).hexdigest()
+
+    journal_dir = tmp_path / "ctx-combo"
+    journal_dir.mkdir(mode=0o700)
+    ctx._save(journal_dir, {
+        "session_id": "s-combo",
+        "cwd": str(repo),
+        "context_epoch": "epoch-combo-1",
+        "goal_id": "g-combo",
+        "agent_id": "a1",
+        "recovery": {"path": str(capture), "sha256": digest, "command": f"loopx quota context-read --capture-file {capture}"},
+    })
+
+    ep_cfg = {
+        "enabled": True,
+        "prefetch_command": ["git", "status", "--short"],
+        "baseline_bytes": capture.stat().st_size,
+        "min_net_savings_bytes": 1,
+    }
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("LOOPX_EXECUTION_MODE", "heartbeat")
+
+    import contextlib
+    import io
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = main([
+            "--format", "json",
+            "--registry", str(tmp_path / "r.json"),
+            "--runtime-root", str(tmp_path / "rt"),
+            "quota", "context-config",
+            "--goal-id", "g-combo", "--agent-id", "a1",
+            "--context-delivery", "on", "--codex-app",
+            "--compact-direct-read", "--quiet-turn",
+            "--epoch-prefetch-json", json.dumps(ep_cfg),
+            "--codex-context-dir", str(journal_dir),
+        ])
+    assert rc == 0
+    hooks = json.loads(buf.getvalue())["native_config"]["hooks"]
+    cmd_tokens = shlex.split(hooks["SessionStart"][0]["hooks"][0]["command"])
+    worktree_root = str(Path(__file__).resolve().parents[2])
+    hook_cmd = [
+        sys.executable, "-m", "loopx.entrypoint",
+        "--registry", str(tmp_path / "absent-combo.json"),
+        "--runtime-root", str(tmp_path / "absent-combo-rt"),
+        *cmd_tokens[cmd_tokens.index("--format"):],
+    ]
+    env_clean = {k: v for k, v in os.environ.items() if k != "LOOPX_CODEX_HOOK_DIRECT_READ"}
+    env_clean["HOME"] = str(tmp_path)
+    env_clean["PYTHONPATH"] = worktree_root
+
+    # 1. PostCompact records compactDirectRead AND explicit deferral metadata for epochPrefetch.
+    r_post = subprocess.run(
+        hook_cmd,
+        input=json.dumps({"session_id": "s-combo", "cwd": str(repo), "hook_event_name": "PostCompact"}),
+        capture_output=True, text=True, env=env_clean, cwd=repo, check=True,
+    )
+    post_out = json.loads(r_post.stdout)["hookSpecificOutput"]
+    assert post_out["compactDirectRead"]["operator"] == "EpochReset"
+    assert post_out["epochPrefetch"]["configured"] is True
+    assert post_out["epochPrefetch"]["executed"] is False
+    assert post_out["epochPrefetch"]["reason"] == "post_compact_defers_to_session_start"
+
+    # 2. SessionStart(compact) runs BOTH: compactDirectRead (deduped) AND real EpochReset prefetch!
+    start_evt = {"session_id": "s-combo", "cwd": str(repo), "hook_event_name": "SessionStart", "source": "compact"}
+    r_start = subprocess.run(
+        hook_cmd, input=json.dumps(start_evt), capture_output=True, text=True,
+        env=env_clean, cwd=repo, check=True,
+    )
+    start_out = json.loads(r_start.stdout)["hookSpecificOutput"]
+    assert start_out["compactDirectRead"]["composed_with_epoch_prefetch"] is True
+    assert start_out["epochPrefetch"]["configured"] is True
+    assert start_out["epochPrefetch"]["superseded"] is False
+    assert start_out["epochPrefetch"]["composed_with_compact_direct_read"] is True
+    assert start_out["epochPrefetch"]["operator"] == "EpochReset"
+    assert start_out["epochPrefetch"]["executed"] is True
+    assert start_out["epochPrefetch"]["replayed"] is False
+    assert start_out["epochPrefetch"]["bytes_saved"] > 0
+    assert "dirty.txt" in start_out["additionalContext"]
+
+    # 3. Replay on same epoch NEVER re-executes prefetch_command.
+    r_replay = subprocess.run(
+        hook_cmd, input=json.dumps(start_evt), capture_output=True, text=True,
+        env=env_clean, cwd=repo, check=True,
+    )
+    replay_out = json.loads(r_replay.stdout)["hookSpecificOutput"]
+    assert replay_out["epochPrefetch"]["replayed"] is True
+    assert replay_out["epochPrefetch"]["executed"] is False
+    assert replay_out["epochPrefetch"]["superseded"] is False
+
+    # 3b. Direct SessionStart(compact) without prior PostCompact includes BOTH pointer payload and EpochReset output.
+    ctx._save(journal_dir, {
+        "session_id": "s-combo",
+        "cwd": str(repo),
+        "context_epoch": "epoch-combo-direct-start",
+        "goal_id": "g-combo",
+        "agent_id": "a1",
+        "recovery": {"path": str(capture), "sha256": digest, "command": f"loopx quota context-read --capture-file {capture}"},
+    })
+    r_direct_start = subprocess.run(
+        hook_cmd, input=json.dumps(start_evt), capture_output=True, text=True,
+        env=env_clean, cwd=repo, check=True,
+    )
+    direct_start_out = json.loads(r_direct_start.stdout)["hookSpecificOutput"]
+    assert direct_start_out["compactDirectRead"]["operator"] == "EpochReset"
+    assert direct_start_out["compactDirectRead"]["deduplicated"] is False
+    assert direct_start_out["epochPrefetch"]["operator"] == "EpochReset"
+    assert direct_start_out["epochPrefetch"]["executed"] is True
+    assert direct_start_out["epochPrefetch"]["superseded"] is False
+    assert "todo_combo" in direct_start_out["additionalContext"]
+    assert "dirty.txt" in direct_start_out["additionalContext"]
+
+    # 4. Failing epoch prefetch falls back cleanly to KeepRaw while preserving direct-read output.
+    ctx._save(journal_dir, {
+        "session_id": "s-combo",
+        "cwd": str(repo),
+        "context_epoch": "epoch-combo-fail",
+        "goal_id": "g-combo",
+        "agent_id": "a1",
+        "recovery": {"path": str(capture), "sha256": digest, "command": f"loopx quota context-read --capture-file {capture}"},
+    })
+    fail_ep = {"enabled": True, "prefetch_command": ["cat", str(repo / "missing-file.txt")], "baseline_bytes": 4096}
+    fail_cmd = list(hook_cmd)
+    fail_cmd[fail_cmd.index("--epoch-prefetch-json") + 1] = json.dumps(fail_ep)
+    r_fail = subprocess.run(
+        fail_cmd, input=json.dumps(start_evt), capture_output=True, text=True,
+        env=env_clean, cwd=repo, check=True,
+    )
+    fail_out = json.loads(r_fail.stdout)["hookSpecificOutput"]
+    assert fail_out["compactDirectRead"]["operator"] == "EpochReset"
+    assert fail_out["epochPrefetch"]["configured"] is True
+    assert fail_out["epochPrefetch"]["superseded"] is False
+    assert fail_out["epochPrefetch"]["operator"] == "KeepRaw"
+    assert "todo_combo" in fail_out["additionalContext"]
+    assert "Prefetch fallback notice (KeepRaw)" in fail_out["additionalContext"]

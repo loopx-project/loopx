@@ -16,6 +16,7 @@ from pathlib import Path
 
 from benchmark.runtime.codex import (
     Execution,
+    epoch_prefetch_enabled,
     explicit_context_opt_ins,
     explicit_turn_display,
     prepare_codex_home,
@@ -653,7 +654,10 @@ def run_once(env: dict[str, str]) -> dict:
         **({"context_delivery": "on"} if execution.context_delivery != "off" else {}),
         **({"compact_direct_read": True} if execution.compact_direct_read else {}),
         **({"quiet_turn": True} if execution.quiet_turn else {}),
-        **({"epoch_prefetch": True} if execution.epoch_prefetch_json is not None else {}),
+        **({"epoch_prefetch": True, "epoch_prefetch_configured": True}
+           if epoch_prefetch_enabled(execution.epoch_prefetch_json)
+           else ({"epoch_prefetch_configured": False}
+                 if execution.epoch_prefetch_json is not None else {})),
         **({"native_child_limit": execution.native_child_limit}
            if execution.native_child_limit is not None else {}),
         **({"provider_request_admission": "on"} if request_admission else {}),

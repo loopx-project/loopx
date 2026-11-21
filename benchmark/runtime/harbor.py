@@ -24,6 +24,7 @@ from .codex_offline import MODEL_CATALOG_REMOTE, CodexOffline, stage_portable_py
 from .codex import (
     DEFAULT_REPLAN_AFTER_TURNS,
     Execution,
+    epoch_prefetch_enabled,
     normalize_epoch_prefetch_json,
     turn_envelope_receipt,
 )
@@ -218,7 +219,10 @@ class BenchmarkCodex(CodexOffline):
                 **({"context_delivery": "on"} if self.execution.context_delivery != "off" else {}),
                 **({"compact_direct_read": True} if self.execution.compact_direct_read else {}),
                 **({"quiet_turn": True} if self.execution.quiet_turn else {}),
-                **({"epoch_prefetch": True} if self.execution.epoch_prefetch_json is not None else {})}
+                **({"epoch_prefetch": True, "epoch_prefetch_configured": True}
+                   if epoch_prefetch_enabled(self.execution.epoch_prefetch_json)
+                   else ({"epoch_prefetch_configured": False}
+                         if self.execution.epoch_prefetch_json is not None else {})),}
 
     def _planning_receipt(self) -> dict:
         return {"native_goal_continue": True} if self.native_goal_continue else {}
@@ -538,7 +542,7 @@ class BenchmarkCodex(CodexOffline):
         return result.return_code == 0
 
     async def _prepare_phase(
-        self, environment: BaseEnvironment, instruction: str, *, cwd: str
+        self, environment: BaseEnvironment, instruction: str, *, cwd: str, verify: bool = True,
     ) -> None:
         key, option, expected = self._replan_configuration()
         stride_args = (["--execution-stride-strategy", self.stride_strategy]
@@ -631,7 +635,8 @@ class BenchmarkCodex(CodexOffline):
         if self.execution.task_entry == "seeded-todo":
             await self._seed_phase(environment, cwd=cwd)
 
-        await self._verify_phase_configuration(environment, cwd=cwd)
+        if verify:
+            await self._verify_phase_configuration(environment, cwd=cwd)
 
     async def _verify_phase_configuration(self, environment: BaseEnvironment, *, cwd: str) -> None:
         """Read the treatment without reconfiguring a restored Goal or its queue."""
@@ -658,6 +663,22 @@ class BenchmarkCodex(CodexOffline):
             actual_yardstick = configured_state.get("execution_profile", {}).get("yardstick_enabled")
             if type(actual_yardstick) is not bool or actual_yardstick != self.execution_yardstick_enabled:
                 raise RuntimeError("execution_yardstick_enabled readback mismatch")
+            if self.execution_yardstick_enabled is True:
+                turn_context = await self._loopx(
+                    environment,
+                    ["explore", "turn-context", "--goal-id", self.goal_id, "--agent-id", self.agent_id],
+                    cwd=cwd,
+                )
+                graph_obj = turn_context.get("graph") if isinstance(turn_context.get("graph"), dict) else None
+                if (
+                    turn_context.get("graph_enabled") is not True
+                    or graph_obj is None
+                    or not isinstance(graph_obj.get("work_yardstick_capture"), dict)
+                ):
+                    raise RuntimeError(
+                        "execution_yardstick_enabled requires an active Explore evidence graph "
+                        "with work_yardstick_capture available"
+                    )
 
     def _verify_native_child_configuration(self, configured_state: dict) -> None:
         if self.execution.native_child_limit is None:

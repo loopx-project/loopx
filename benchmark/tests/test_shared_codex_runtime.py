@@ -1753,10 +1753,21 @@ def test_worker_turn_command_and_run_once_forward_h1_opt_ins_default_off(tmp_pat
     assert res_on["compact_direct_read"] is True
     assert res_on["quiet_turn"] is True
     assert res_on["epoch_prefetch"] is True
+    assert res_on["epoch_prefetch_configured"] is True
     hooks_text = (Path(e_on["LOOPX_CODEX_HOME"]) / "hooks.json").read_text()
     assert "--compact-direct-read" in hooks_text
     assert "--quiet-turn" in hooks_text
     assert "--epoch-prefetch-json" in hooks_text
+
+    # Explicitly disabled epoch_prefetch_json must NOT set epoch_prefetch=True in receipt.
+    dis_tmp = tmp_path / "dis"
+    dis_tmp.mkdir()
+    e_dis = resume_env(dis_tmp, monkeypatch)
+    e_dis.update({"LOOPX_CONTEXT_DELIVERY": "on", "LOOPX_EPOCH_PREFETCH_JSON": '{"enabled": false}'})
+    res_dis = run_once(e_dis)
+    assert res_dis["ok"]
+    assert "epoch_prefetch" not in res_dis
+    assert res_dis["epoch_prefetch_configured"] is False
 
 
 def test_harbor_h1_h2_opt_in_worker_env_and_warm_start_yardstick(tmp_path, monkeypatch):
@@ -1764,6 +1775,7 @@ def test_harbor_h1_h2_opt_in_worker_env_and_warm_start_yardstick(tmp_path, monke
     from benchmark.runtime.harbor import BenchmarkCodex
     from loopx.cli import main
 
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("LOOPX_COMPACT_DIRECT_READ", "1")
     monkeypatch.setenv("LOOPX_QUIET_TURN", "1")
     monkeypatch.setenv("LOOPX_EPOCH_PREFETCH_JSON", '{"enabled":true}')
@@ -1783,7 +1795,7 @@ def test_harbor_h1_h2_opt_in_worker_env_and_warm_start_yardstick(tmp_path, monke
         with pytest.raises(ValueError, match="execution_yardstick_enabled"):
             BenchmarkCodex(logs_dir=tmp_path / "bad", model_name="openai/fixture", **bad)
 
-    # Cold + WarmStart existing-registry configure-goal forwards --execution-yardstick-enabled cleanly.
+    # Cold Harbor H2 without active Explore Graph must fail closed instead of accepting inert yardstick=True.
     reg = tmp_path / "reg.json"
     rt = tmp_path / "rt"
     agent = BenchmarkCodex(
@@ -1813,20 +1825,41 @@ def test_harbor_h1_h2_opt_in_worker_env_and_warm_start_yardstick(tmp_path, monke
     async def noop(*a, **kw):
         return None
 
-    async def reg_missing(*a, **kw):
+    async def reg_exists(*a, **kw):
         return reg.is_file() and reg.stat().st_size > 0
 
     monkeypatch.setattr(agent, "_loopx", cli)
     monkeypatch.setattr(agent, "_write_task_document", noop)
-    monkeypatch.setattr(agent, "_registry_exists", reg_missing)
-    # Phase 1 cold bootstrap -> sets yardstick_enabled=True.
+    monkeypatch.setattr(agent, "_registry_exists", reg_exists)
+    with pytest.raises(RuntimeError, match="active Explore evidence graph"):
+        asyncio.run(agent._prepare_phase(SimpleNamespace(exec=no_pending), "Task 1", cwd=str(tmp_path)))
+
+    # Enabling Explore Graph on the Goal allows cold/existing-registry and WarmStart H2 readback to pass,
+    # verifying real `explore turn-context` exposes `graph_enabled` and `work_yardstick_capture`.
+    asyncio.run(cli(None, ["configure-goal", "--goal-id", agent.goal_id, "--explore-graph-enabled", "--execute"]))
     asyncio.run(agent._prepare_phase(SimpleNamespace(exec=no_pending), "Task 1", cwd=str(tmp_path)))
+    turn_ctx = asyncio.run(cli(None, ["explore", "turn-context", "--goal-id", agent.goal_id, "--agent-id", agent.agent_id]))
+    assert turn_ctx["graph_enabled"] is True
+    assert isinstance(turn_ctx["graph"]["work_yardstick_capture"], dict)
+
     # Reset yardstick externally, then simulate WarmStart / existing registry Phase 2 -> must re-apply!
     asyncio.run(cli(None, ["configure-goal", "--goal-id", agent.goal_id, "--no-execution-yardstick-enabled", "--execute"]))
     asyncio.run(agent._prepare_phase(SimpleNamespace(exec=no_pending), "Task 2", cwd=str(tmp_path)))
     readback = asyncio.run(cli(None, ["configure-goal", "--goal-id", agent.goal_id]))
     assert readback["after"]["execution_profile"]["yardstick_enabled"] is True
     assert any("--execution-yardstick-enabled" in c for c in calls)
+
+    # Explicit execution_yardstick_enabled=False persists cleanly without requiring Explore.
+    agent_off = BenchmarkCodex(
+        logs_dir=tmp_path / "h2-off", model_name="openai/fixture",
+        task_entry="seeded-todo", execution_yardstick_enabled=False,
+    )
+    monkeypatch.setattr(agent_off, "_loopx", cli)
+    monkeypatch.setattr(agent_off, "_write_task_document", noop)
+    monkeypatch.setattr(agent_off, "_registry_exists", reg_exists)
+    asyncio.run(agent_off._prepare_phase(SimpleNamespace(exec=no_pending), "Task off", cwd=str(tmp_path)))
+    off_readback = asyncio.run(cli(None, ["configure-goal", "--goal-id", agent_off.goal_id]))
+    assert off_readback["after"]["execution_profile"]["yardstick_enabled"] is False
 
     # Readback mismatch must fail closed.
     async def stale_cli(environment, args, **kwargs):
@@ -1837,3 +1870,105 @@ def test_harbor_h1_h2_opt_in_worker_env_and_warm_start_yardstick(tmp_path, monke
     monkeypatch.setattr(agent, "_loopx", stale_cli)
     with pytest.raises(RuntimeError, match="execution_yardstick_enabled readback mismatch"):
         asyncio.run(agent._verify_phase_configuration(SimpleNamespace(), cwd=str(tmp_path)))
+
+
+def test_sforge_worker_h2_warm_start_and_cold_explore_yardstick(tmp_path, monkeypatch):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker
+
+    monkeypatch.chdir(tmp_path)
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", str(auth_file))
+    monkeypatch.setattr("benchmark.runtime.harbor.BenchmarkCodex.install", lambda self, env: asyncio.sleep(0))
+    monkeypatch.setattr(SForgeWorker, "_warm_command", lambda *a, **kw: None)
+
+    worker = SForgeWorker(
+        SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+        profile="heartbeat-explore",
+        cwd=str(tmp_path),
+        execution_yardstick_enabled=True,
+    )
+    reg = tmp_path / "sforge-reg.json"
+    rt = tmp_path / "sforge-rt"
+    calls = []
+
+    async def cli(environment, args, **kwargs):
+        import contextlib
+        import io
+        from loopx.cli import main
+        calls.append(args)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = main(["--format", "json", "--registry", str(reg), "--runtime-root", str(rt), *args])
+        assert code == 0, buf.getvalue()
+        return json.loads(buf.getvalue())
+
+    async def noop(*a, **kw):
+        return None
+
+    async def reg_exists(*a, **kw):
+        return reg.is_file() and reg.stat().st_size > 0
+
+    class DummyEnv:
+        async def exec(self, command, **_kw):
+            if command.startswith("cat "):
+                return SimpleNamespace(return_code=0, stdout="Solve the task.\n")
+            return SimpleNamespace(return_code=1, stdout="")
+
+        async def upload_file(self, *a, **kw):
+            return None
+
+    worker.backend = SimpleNamespace(
+        exec_run=lambda *a, **kw: SimpleNamespace(exit_code=0, output=""),
+        exec_run_with_exit_code=lambda *a, **kw: SimpleNamespace(timed_out=False, exit_code=0, output=""),
+        copy_to_container=lambda *a: None,
+    )
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    worker.install_stop_hook(worker.backend, None, logs, None)
+    worker.runtime.environment = DummyEnv()
+    worker.environment = DummyEnv()
+    monkeypatch.setattr(worker.runtime, "_loopx", cli)
+    monkeypatch.setattr(worker.runtime, "_write_task_document", noop)
+    monkeypatch.setattr(worker.runtime, "_registry_exists", reg_exists)
+    worker.format_run_cmd(str(tmp_path / "prompt.md"), model="fixture", cwd=str(tmp_path))
+    assert (logs / "explore-activation.json").is_file()
+    readback = asyncio.run(cli(None, ["configure-goal", "--goal-id", worker.runtime.goal_id]))
+    assert readback["after"]["execution_profile"]["yardstick_enabled"] is True
+
+    # Simulate warm_start forwarding --execution-yardstick-enabled on restore.
+    asyncio.run(cli(None, ["configure-goal", "--goal-id", worker.runtime.goal_id, "--no-execution-yardstick-enabled", "--execute"]))
+    warm = SimpleNamespace(
+        goal_id=worker.runtime.goal_id,
+        agent_id=worker.runtime.agent_id,
+        stage=lambda *a, **kw: asyncio.sleep(0, result=()),
+        research_sidecar=False,
+        native_child_limit=None,
+        deadline_epoch=time.time() + 600,
+        verify=lambda _cwd: None,
+        source_context_dir=lambda: tmp_path / "src-ctx",
+    )
+    (tmp_path / "src-ctx").mkdir()
+    worker_warm = SForgeWorker(
+        SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+        profile="heartbeat-explore",
+        cwd=str(tmp_path),
+        task_entry="loopx-planned",
+        warm_start=warm,
+        execution_yardstick_enabled=True,
+    )
+    worker_warm.backend = worker.backend
+    logs_warm = tmp_path / "logs-warm"
+    logs_warm.mkdir()
+    worker_warm.install_stop_hook(worker_warm.backend, None, logs_warm, None)
+    worker_warm.environment = DummyEnv()
+    worker_warm.runtime.environment = DummyEnv()
+    monkeypatch.setattr(worker_warm.runtime, "_loopx", cli)
+    monkeypatch.setattr(worker_warm.runtime, "_write_task_document", noop)
+    monkeypatch.setattr(worker_warm.runtime, "_registry_exists", reg_exists)
+    worker_warm.format_run_cmd(str(tmp_path / "prompt.md"), model="fixture", cwd=str(tmp_path))
+    readback2 = asyncio.run(cli(None, ["configure-goal", "--goal-id", worker_warm.runtime.goal_id]))
+    assert readback2["after"]["execution_profile"]["yardstick_enabled"] is True

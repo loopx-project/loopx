@@ -41,6 +41,15 @@ def normalize_epoch_prefetch_json(value: Any) -> str | None:
     return json.dumps(parsed, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def epoch_prefetch_enabled(value: Any) -> bool:
+    """Return True iff normalized epoch_prefetch JSON explicitly enables the treatment."""
+    normalized = normalize_epoch_prefetch_json(value)
+    if normalized is None:
+        return False
+    decoded = json.loads(normalized)
+    return isinstance(decoded, dict) and decoded.get("enabled") is True
+
+
 @dataclass(frozen=True)
 class Execution:
     mode: str = "heartbeat"

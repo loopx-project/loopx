@@ -446,6 +446,79 @@ def _reduce_hook_lifecycle(
         raise
 
 
+def _epoch_prefetch_is_configured(state: Mapping[str, Any], event: Mapping[str, Any]) -> bool:
+    """Return True only when Stage-then-Swap EpochReset prefetch is explicitly enabled."""
+    cfg = (
+        event.get("epoch_prefetch")
+        if isinstance(event.get("epoch_prefetch"), Mapping)
+        else state.get("epoch_prefetch_policy")
+        if isinstance(state.get("epoch_prefetch_policy"), Mapping)
+        else None
+    )
+    return isinstance(cfg, Mapping) and cfg.get("enabled") is True
+
+
+def _compose_direct_read_and_epoch_prefetch(
+    direct_reply: dict[str, Any] | None,
+    prefetch_hook: dict[str, Any] | None,
+    *,
+    hook_name: Any,
+    epoch_prefetch_configured: bool,
+    recovery_needed: bool,
+    has_recovery_command: bool,
+) -> dict[str, Any] | None:
+    """Keep compact direct-read and EpochReset prefetch composition explicit in hook receipts."""
+    if direct_reply is None:
+        return prefetch_hook
+    direct_out = dict(direct_reply.get("hookSpecificOutput") or {})
+    if prefetch_hook is None:
+        if epoch_prefetch_configured:
+            reason = (
+                "post_compact_defers_to_session_start"
+                if hook_name != "SessionStart"
+                else "recovery_not_needed"
+                if not recovery_needed
+                else "missing_recovery_command"
+                if not has_recovery_command
+                else "no_prefetch_receipt"
+            )
+            direct_out["epochPrefetch"] = {
+                "schema_version": "loopx_epoch_prefetch_receipt_v0",
+                "configured": True,
+                "executed": False,
+                "replayed": False,
+                "superseded": hook_name == "SessionStart",
+                "superseded_by": "compact_direct_read" if hook_name == "SessionStart" else None,
+                "operator": "KeepRaw",
+                "status": "superseded_by_compact_direct_read"
+                if hook_name == "SessionStart"
+                else "deferred_until_session_start",
+                "reason": reason,
+            }
+        return {"hookSpecificOutput": direct_out}
+    prefetch_out = dict(prefetch_hook.get("hookSpecificOutput") or {})
+    parts = [
+        part
+        for part in (direct_out.get("additionalContext"), prefetch_out.get("additionalContext"))
+        if isinstance(part, str) and part.strip()
+    ]
+    composed: dict[str, Any] = {
+        "hookEventName": hook_name,
+        **({"additionalContext": "\n\n".join(parts)} if parts else {}),
+        "compactDirectRead": {
+            **dict(direct_out.get("compactDirectRead") or {}),
+            "composed_with_epoch_prefetch": True,
+        },
+        "epochPrefetch": {
+            **dict(prefetch_out.get("epochPrefetch") or {}),
+            "configured": True,
+            "superseded": False,
+            "composed_with_compact_direct_read": True,
+        },
+    }
+    return {"hookSpecificOutput": composed}
+
+
 def _maybe_resolve_compact_direct_read(
     root: Path,
     updated: dict[str, Any],
@@ -597,8 +670,8 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
                 raise
     except (OSError, ValueError, TypeError, RecursionError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
         recovery_needed = True
-    if direct_reply is not None:
-        return direct_reply
+    epoch_prefetch_configured = _epoch_prefetch_is_configured(state, event)
+    prefetch_hook: dict[str, Any] | None = None
     if (name == "SessionStart" and recovery_needed
             and isinstance(recovery, dict) and recovery.get("command")):
         from .epoch_prefetch import resolve_codex_context_epoch_prefetch_hook
@@ -620,6 +693,17 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
                 + CONTEXT_CAPTURE_PAGE_GUIDANCE
             ),
         )
+    if direct_reply is not None:
+        return _compose_direct_read_and_epoch_prefetch(
+            direct_reply,
+            prefetch_hook,
+            hook_name=name,
+            epoch_prefetch_configured=epoch_prefetch_configured,
+            recovery_needed=recovery_needed,
+            has_recovery_command=bool(isinstance(recovery, dict) and recovery.get("command")),
+        ) or {}
+    if (name == "SessionStart" and recovery_needed
+            and isinstance(recovery, dict) and recovery.get("command")):
         if prefetch_hook is not None:
             return prefetch_hook
         return {"hookSpecificOutput": {"hookEventName": name, "additionalContext":

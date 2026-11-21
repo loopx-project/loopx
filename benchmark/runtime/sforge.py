@@ -637,14 +637,18 @@ class SForgeWorker(CodexAgent):
                         if self.native_child_limit is None:
                             asyncio.run(self.runtime._verify_phase_configuration(self.environment, cwd=self.cwd))
                 else:
-                    asyncio.run(self.runtime._prepare_phase(self.environment, result.stdout, cwd=self.cwd))
-                if self.profile == "heartbeat-explore" and self.warm_start is None:
-                    observed = asyncio.run(self.runtime._loopx(self.environment, [
-                        "configure-goal", "--goal-id", self.runtime.goal_id,
-                        "--explore-graph-enabled", "--explore-harness-enabled",
-                        "--explore-harness-profile", "adaptive-resilient", "--execute",
-                    ], cwd=self.cwd))
-                    (self.log_dir / "explore-activation.json").write_text(json.dumps(observed))
+                    is_explore_cold = self.profile == "heartbeat-explore"
+                    asyncio.run(self.runtime._prepare_phase(
+                        self.environment, result.stdout, cwd=self.cwd, verify=not is_explore_cold,
+                    ))
+                    if is_explore_cold:
+                        observed = asyncio.run(self.runtime._loopx(self.environment, [
+                            "configure-goal", "--goal-id", self.runtime.goal_id,
+                            "--explore-graph-enabled", "--explore-harness-enabled",
+                            "--explore-harness-profile", "adaptive-resilient", "--execute",
+                        ], cwd=self.cwd))
+                        (self.log_dir / "explore-activation.json").write_text(json.dumps(observed))
+                        asyncio.run(self.runtime._verify_phase_configuration(self.environment, cwd=self.cwd))
             else:
                 asyncio.run(self.runtime._write_task_document(self.environment, result.stdout))
             if self.warm_start is not None:

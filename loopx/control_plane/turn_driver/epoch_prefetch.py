@@ -1452,6 +1452,8 @@ def resolve_codex_context_epoch_prefetch_hook(
         return None
     epoch_meta = {
         "schema_version": receipt["schema_version"],
+        "configured": True,
+        "superseded": False,
         "operator": receipt["operator"],
         "status": receipt["status"],
         "fallback_reason": receipt.get("fallback_reason"),
