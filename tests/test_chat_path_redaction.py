@@ -17,7 +17,7 @@ from loopx.chat import (
     redact_local_paths,
     redact_response_markdown,
 )
-from loopx.chat_acp import ACPStdioAdapter
+from loopx.chat.acp import ACPStdioAdapter
 from loopx.chat.status_api import ChatStatusRequestMixin
 
 

@@ -18,7 +18,7 @@ from pathlib import Path
 
 import loopx.chat as chat
 import loopx.chat_agent as chat_agent
-import loopx.chat_providers as chat_providers
+import loopx.chat.providers as chat_providers
 import loopx.chat_runtime as chat_runtime
 import pytest
 

@@ -28,7 +28,7 @@ from loopx.capabilities.project_skill_delivery import (
     PROJECT_SKILL_SURFACES,
 )
 from loopx.chat_actions import ChatActionService
-from loopx.chat_endpoints import RESERVED_AGENT_IDS, AgentEndpointRegistry
+from loopx.chat.endpoints import RESERVED_AGENT_IDS, AgentEndpointRegistry
 from loopx.chat_runtime import ChatRuntimeController
 from loopx.chat_store import ChatSessionStore
 from loopx.cli_commands._host_thread import (
