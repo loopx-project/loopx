@@ -117,6 +117,23 @@ test("a local calendar report retains its exact original Session, subscription, 
   assert.equal(admitManagedSessionTurn({
     ...input, report_settlement_recovery: frozenInspection, report_frozen_contract_recovery: frozenProof,
   }).observation_only, false);
+  const stoppedInspection = {schema_version: "loopx_turn_journal_inspection_v1", ok: true,
+    goal_matches: true, owner_matches: true, turn_key_matches: true, journal_consistent: true,
+    journal_status: "stopped", completed_phases: ["host_execute", "typed_result", "validation"],
+    recorded_effects: {host_invoked: true, state_written: false, quota_spent: false, scheduler_acknowledged: false},
+    recovery_decision: {action: "return_existing", resume_from: null, reinvoke_host: false}};
+  const stoppedProof = {turn_key: "sha256:" + "d".repeat(64), result_kind: "wait",
+    classification: "no_typed_host_result", host_attempt_count: 1,
+    generation_verified: true, saved_candidate_verified: true};
+  assert.equal(admitManagedSessionTurn({
+    ...input, report_settlement_recovery: stoppedInspection, report_frozen_contract_recovery: stoppedProof,
+  }).observation_only, false);
+  assert.equal(admitManagedSessionTurn({
+    ...input, report_todo: {...todo, status: "done", completion_turn_key: request.turn_instance_id + ".saved-candidate"},
+    report_settlement_recovery: {schema_version: "loopx_turn_journal_inspection_v1", ok: true,
+      goal_matches: true, owner_matches: true, turn_key_matches: true, journal_consistent: true,
+      journal_status: "failed", recovery_decision: {action: "continue", reinvoke_host: false, resume_from: "quota_spend"}},
+  }).observation_only, false);
   for (const invalid of [
     {...input, report_frozen_contract_recovery: frozenProof},
     {...input, report_settlement_recovery: frozenInspection, report_frozen_contract_recovery: {...frozenProof, saved_candidate_verified: false}},
@@ -124,6 +141,11 @@ test("a local calendar report retains its exact original Session, subscription, 
     {...input, report_settlement_recovery: frozenInspection, report_frozen_contract_recovery: {...frozenProof, host_attempt_count: 2}},
     {...input, report_settlement_recovery: {...frozenInspection, recorded_effects: {...frozenInspection.recorded_effects, state_written: true}}, report_frozen_contract_recovery: frozenProof},
     {...input, report_todo: {...todo, status: "done"}, report_settlement_recovery: frozenInspection, report_frozen_contract_recovery: frozenProof},
+    {...input, report_settlement_recovery: stoppedInspection, report_frozen_contract_recovery: {...stoppedProof, classification: "other"}},
+    {...input, report_settlement_recovery: stoppedInspection, report_frozen_contract_recovery: {...stoppedProof, host_attempt_count: 2}},
+    {...input, report_settlement_recovery: {...stoppedInspection, recorded_effects: {...stoppedInspection.recorded_effects, state_written: true}}, report_frozen_contract_recovery: stoppedProof},
+    {...input, report_todo: {...todo, status: "done"}, report_settlement_recovery: stoppedInspection, report_frozen_contract_recovery: stoppedProof},
+    {...input, preparing_model_context: true, report_settlement_recovery: stoppedInspection, report_frozen_contract_recovery: stoppedProof},
   ]) {
     assert.throws(() => admitManagedSessionTurn(invalid));
   }
@@ -303,6 +325,21 @@ test("a model report requires the exact live calendar window and original task, 
   assert.equal(admitStewardManagedTurn({
     ...input, report_settlement_recovery: frozenInspection, report_frozen_contract_recovery: frozenProof,
   }).observation_only, false);
+  const stoppedInspection = {schema_version: "loopx_turn_journal_inspection_v1", ok: true,
+    goal_matches: true, owner_matches: true, turn_key_matches: true,
+    journal_consistent: true, journal_status: "stopped", completed_phases: ["host_execute", "typed_result", "validation"],
+    recorded_effects: {host_invoked: true, state_written: false, quota_spent: false, scheduler_acknowledged: false},
+    recovery_decision: {action: "return_existing", reinvoke_host: false, resume_from: null}};
+  const stoppedProof = {turn_key: "sha256:" + "e".repeat(64), result_kind: "wait",
+    classification: "no_typed_host_result", host_attempt_count: 1,
+    generation_verified: true, saved_candidate_verified: true};
+  assert.equal(admitStewardManagedTurn({
+    ...input, report_settlement_recovery: stoppedInspection, report_frozen_contract_recovery: stoppedProof,
+  }).observation_only, false);
+  assert.equal(admitStewardManagedTurn({
+    ...input, report_todo: {...todo, status: "done", completion_turn_key: request.turn_instance_id + ".saved-candidate"},
+    report_settlement_recovery: recovery.report_settlement_recovery,
+  }).observation_only, false);
   for (const invalid of [
     {...input, report_frozen_contract_recovery: frozenProof},
     {...input, report_settlement_recovery: frozenInspection, report_frozen_contract_recovery: {...frozenProof, saved_candidate_verified: false}},
@@ -310,6 +347,11 @@ test("a model report requires the exact live calendar window and original task, 
     {...input, report_settlement_recovery: frozenInspection, report_frozen_contract_recovery: {...frozenProof, host_attempt_count: 2}},
     {...input, report_settlement_recovery: {...frozenInspection, recorded_effects: {...frozenInspection.recorded_effects, state_written: true}}, report_frozen_contract_recovery: frozenProof},
     {...input, report_todo: {...todo, status: "done"}, report_settlement_recovery: frozenInspection, report_frozen_contract_recovery: frozenProof},
+    {...input, report_settlement_recovery: stoppedInspection, report_frozen_contract_recovery: {...stoppedProof, classification: "other"}},
+    {...input, report_settlement_recovery: stoppedInspection, report_frozen_contract_recovery: {...stoppedProof, host_attempt_count: 2}},
+    {...input, report_settlement_recovery: {...stoppedInspection, recorded_effects: {...stoppedInspection.recorded_effects, state_written: true}}, report_frozen_contract_recovery: stoppedProof},
+    {...input, report_todo: {...todo, status: "done"}, report_settlement_recovery: stoppedInspection, report_frozen_contract_recovery: stoppedProof},
+    {...input, preparing_model_context: true, report_settlement_recovery: stoppedInspection, report_frozen_contract_recovery: stoppedProof},
   ]) assert.throws(() => admitStewardManagedTurn(invalid));
   const changed = {...input, binding: {...p.binding, goal_scope: "all_registered"},
     session: {...p.session, active_turn_id: "running", manager_authorization_scope_id: "old_scope",

@@ -624,6 +624,185 @@ class StewardTurnHost:
                 return proof, _normalize_report_kernel_candidate(parsed)
         return None
 
+    def _stopped_report_candidate_recovery(
+        self,
+        actor: Mapping[str, Any],
+        window: Mapping[str, Any],
+        original: Mapping[str, Any],
+        *,
+        key: str,
+        folder: Path,
+        root: Path,
+    ) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        """Recover a stopped report Turn only when its saved final answer already holds a valid candidate."""
+        from ...control_plane.turn_driver.host_candidate import parse_model_json
+        from ...control_plane.turn_driver.journal_store import load_turn_journal, turn_journal_path
+
+        req_path = folder / "editorial-request.json"
+        if not req_path.is_file() or not (folder / "source.json").is_file():
+            return None
+        if (folder / "editorial-response.json").exists() and not (folder / "private-generation.json").exists():
+            return None
+        try:
+            request_digest = json.loads(req_path.read_text(encoding="utf-8")).get("request_digest")
+        except (OSError, ValueError):
+            return None
+        if not isinstance(request_digest, str) or not request_digest:
+            return None
+        journal = load_turn_journal(turn_journal_path(root, goal_id=actor["goal_id"], turn_key=key))
+        if (
+            not isinstance(journal, Mapping)
+            or journal.get("status") != "stopped"
+            or journal.get("result_kind") != "wait"
+            or journal.get("host_attempt_count") != 1
+            or (journal.get("host_result") or {}).get("classification") != "no_typed_host_result"
+        ):
+            return None
+        events = self.store.events_after(actor["session_id"], original["turn_id"], None)
+        stopped_event = any(
+            row.get("kind") == "native_loopx.result"
+            and isinstance(row.get("payload"), Mapping)
+            and row["payload"].get("resume_turn_key") == key
+            and row["payload"].get("status") == "stopped"
+            and row["payload"].get("result_kind") == "wait"
+            for row in events
+        )
+        if not stopped_event:
+            return None
+        for row in reversed(events):
+            if row.get("kind") != "answer.final":
+                continue
+            message = ((row.get("payload") or {}).get("response") or {}).get("message")
+            parsed = parse_model_json(str(message or ""))
+            if not isinstance(parsed, dict) or parsed.get("result_kind") not in {"validated_progress", "validated_completion"}:
+                continue
+            editorial = parsed.get("editorial_response")
+            if not isinstance(editorial, Mapping) or editorial.get("request_digest") != request_digest:
+                continue
+            proof = {
+                "turn_key": key,
+                "result_kind": "wait",
+                "classification": "no_typed_host_result",
+                "host_attempt_count": 1,
+                "generation_verified": True,
+                "saved_candidate_verified": True,
+            }
+            return proof, dict(parsed)
+        return None
+
+    def has_recoverable_stopped_report(
+        self,
+        actor: Mapping[str, Any],
+        window: Mapping[str, Any],
+        todo: Mapping[str, Any],
+    ) -> bool:
+        """Read-only gate check before acquiring the recovery fence."""
+        if todo.get("status") != "open":
+            return False
+        original = report_turn(self.store, actor, window)
+        if not original:
+            return False
+        if any(row.get("kind") == "native_loopx.result" and (row.get("payload") or {}).get("status") == "committed"
+               for row in self.store.events_after(actor["session_id"], original["turn_id"], None)):
+            return False
+        request = original.get("loopx_request") or {}
+        turn_instance_id = request.get("turn_instance_id")
+        if not isinstance(turn_instance_id, str) or not turn_instance_id:
+            return False
+        from ...control_plane.turn_driver.journal_store import find_loopx_turn_key_by_settlement_identity
+        from ..periodic_report.private_generation import attempt_directory
+        from .steward_reports import report_service
+        reports, _ = report_service(self.controller, dict(actor))
+        folder = attempt_directory(reports.root, dict(window))
+        saved_key = find_loopx_turn_key_by_settlement_identity(
+            reports.root, goal_id=actor["goal_id"], agent_id=actor["agent_id"],
+            todo_id=todo["todo_id"], turn_instance_id=turn_instance_id + ".saved-candidate",
+        )
+        if saved_key is not None and (folder / "private-generation.json").exists():
+            return True
+        key = find_loopx_turn_key_by_settlement_identity(
+            reports.root, goal_id=actor["goal_id"], agent_id=actor["agent_id"],
+            todo_id=todo["todo_id"], turn_instance_id=turn_instance_id,
+        )
+        return bool(key is not None and self._stopped_report_candidate_recovery(
+            actor, window, original, key=key, folder=folder, root=reports.root,
+        ) is not None)
+
+    @staticmethod
+    def _build_replay_runner(normalized_candidate: Mapping[str, Any]):
+        from ...control_plane.turn_driver.host_candidate import build_result
+
+        replayed = False
+
+        def replay_frozen_candidate(native_request: Mapping[str, Any], _launch_scope: Any) -> dict[str, Any]:
+            nonlocal replayed
+            if replayed:
+                raise ValueError("frozen report candidate replay may execute at most once")
+            replayed = True
+            return build_result(native_request, dict(normalized_candidate), host_name="Codex app-server", allow_completion=True)
+
+        return replay_frozen_candidate
+
+    def _settle_stopped_report_candidate(
+        self,
+        *,
+        actor: Mapping[str, Any],
+        window: Mapping[str, Any],
+        todo: Mapping[str, Any],
+        original: Mapping[str, Any],
+        request: dict[str, Any],
+        observed: dict[str, Any] | None,
+        reports: Any,
+        owner_key: str,
+        folder: Path,
+        original_key: str,
+        stopped_proof: dict[str, Any],
+        raw_candidate: dict[str, Any],
+    ) -> dict[str, Any]:
+        from ...cli import build_parser
+        from ...cli_commands.turn import handle_turn_command
+        from ...control_plane.turn_driver import inspect_loopx_turn_journal
+        from ..periodic_report.private_generation import validate_private_generation
+
+        inspection = inspect_loopx_turn_journal(
+            reports.root, goal_id=actor["goal_id"], agent_id=actor["agent_id"],
+            turn_key=original_key, retry_failed=True,
+        )
+        admitted = self._admit(
+            request, observed=observed, settlement_recovery=inspection,
+            frozen_contract_recovery=stopped_proof,
+        )
+        if not (folder / "private-generation.json").exists():
+            reports.freeze(request, dict(raw_candidate))
+        generation = validate_private_generation(folder)
+        if raw_candidate["editorial_response"]["request_digest"] != generation["request_digest"]:
+            raise ValueError("the recovered candidate digest does not match the frozen report")
+        if not reports.delivery_current(owner_key, window):
+            raise ValueError("the original report authorization changed before settlement recovery")
+        saved_instance_id = request["turn_instance_id"] + ".saved-candidate"
+        argv = ["turn", "run-once", "--goal-id", actor["goal_id"], "--agent-id", actor["agent_id"],
+                "--project", admitted["workspace_path"], "--host", "generic-cli",
+                "--turn-instance-id", saved_instance_id, "--todo-id", todo["todo_id"], "--execute"]
+        if request.get("validation_command") is not None:
+            argv += ["--validation-command-json", json.dumps(request["validation_command"])]
+        args = build_parser().parse_args(argv)
+        args.host, args.session_scope = "codex-app-server", "agent"
+        result: dict[str, Any] = {}
+        host_runner = self._build_replay_runner(_normalize_report_kernel_candidate(raw_candidate))
+        with self._task_execution_lease(request, original["turn_id"], recovery=True) as lease:
+            handle_turn_command(
+                args, registry_path=self.controller.registry_path,
+                runtime_root_arg=str(reports.root), output_format=lambda *_a, **_kw: "json",
+                print_payload=lambda value, *_a: result.update(value), native_host_runner=host_runner,
+                native_session_binding_resolver=lambda _envelope: {
+                    "schema_version": "loopx_turn_session_binding_v0",
+                    "goal_id": actor["goal_id"], "agent_id": actor["agent_id"],
+                },
+                native_task_validator=self._report_validator(request),
+                native_completion_lease_resolver=lambda: self._task_lease_proof(request, lease),
+            )
+        return result
+
     def recover_report_settlement(self, actor: dict[str, Any], window: dict[str, Any], todo: dict[str, Any]) -> None:
         """Resume only cached, validated native effects of the original report.
 
@@ -650,13 +829,32 @@ class StewardTurnHost:
                    for row in self.store.events_after(actor["session_id"], original["turn_id"], None)):
                 return
             reports, owner_key = report_service(self.controller, actor)
-            generation = validate_private_generation(attempt_directory(reports.root, window))
-            if not reports.delivery_current(owner_key, window):
-                raise ValueError("the original report authorization changed before settlement recovery")
-            key = find_loopx_turn_key_by_settlement_identity(reports.root, goal_id=actor["goal_id"],
-                agent_id=actor["agent_id"], todo_id=todo["todo_id"], turn_instance_id=request["turn_instance_id"])
+            folder = attempt_directory(reports.root, window)
+            saved_key = find_loopx_turn_key_by_settlement_identity(
+                reports.root, goal_id=actor["goal_id"], agent_id=actor["agent_id"],
+                todo_id=todo["todo_id"], turn_instance_id=request["turn_instance_id"] + ".saved-candidate",
+            )
+            key = saved_key or find_loopx_turn_key_by_settlement_identity(
+                reports.root, goal_id=actor["goal_id"], agent_id=actor["agent_id"],
+                todo_id=todo["todo_id"], turn_instance_id=request["turn_instance_id"],
+            )
             if key is None:
                 return
+            if saved_key is None:
+                stopped_recovery = self._stopped_report_candidate_recovery(
+                    actor, window, original, key=key, folder=folder, root=reports.root,
+                )
+                if stopped_recovery is not None:
+                    result = self._settle_stopped_report_candidate(
+                        actor=actor, window=window, todo=todo, original=original, request=request,
+                        observed=observed, reports=reports, owner_key=owner_key, folder=folder,
+                        original_key=key, stopped_proof=stopped_recovery[0], raw_candidate=stopped_recovery[1],
+                    )
+                    self.store.append_event(actor["session_id"], original["turn_id"], kind="native_loopx.result", payload=result)
+                    return
+            generation = validate_private_generation(folder)
+            if not reports.delivery_current(owner_key, window):
+                raise ValueError("the original report authorization changed before settlement recovery")
             inspection = inspect_loopx_turn_journal(reports.root, goal_id=actor["goal_id"],
                 agent_id=actor["agent_id"], turn_key=key, retry_failed=True)
             contract_recovery = (
@@ -674,22 +872,11 @@ class StewardTurnHost:
             )
             def no_model(*_args):
                 raise ValueError("report settlement recovery must never invoke a model")
-            if contract_recovery is not None:
-                from ...control_plane.turn_driver.host_candidate import build_result
-
-                normalized_candidate = contract_recovery[1]
-                replayed = False
-
-                def replay_frozen_candidate(native_request: Mapping[str, Any], _launch_scope: Any) -> dict[str, Any]:
-                    nonlocal replayed
-                    if replayed:
-                        raise ValueError("frozen report candidate replay may execute at most once")
-                    replayed = True
-                    return build_result(native_request, normalized_candidate, host_name="Codex app-server", allow_completion=True)
-
-                host_runner = replay_frozen_candidate
-            else:
-                host_runner = no_model
+            host_runner = (
+                self._build_replay_runner(contract_recovery[1])
+                if contract_recovery is not None
+                else no_model
+            )
             args = build_parser().parse_args(["turn", "run-once", "--goal-id", actor["goal_id"],
                 "--agent-id", actor["agent_id"], "--project", admitted["workspace_path"],
                 "--host", "generic-cli", "--resume-turn-key", key, "--retry-failed-turn", "--execute"])
