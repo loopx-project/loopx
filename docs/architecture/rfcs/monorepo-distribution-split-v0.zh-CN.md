@@ -3730,6 +3730,8 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
   lease。受支持 writer 在共享 maintenance marker 内重新读取，并持有 Goal/source
   ownership 直到 JSON、Markdown、index 持久化；绕过 marker 的直接 provider
   写仍不属于此保证。
+  无因果链接的重复记录保留完整 typed review／capability 来源与最早准入；相同
+  obligation id 不能授权来源改写。
 - **源码证据：**CLI 测试覆盖两个本地 provider、stale/foreign proof、普通路径
   parity 与零 completion/debit；恢复测试在 JSON、Markdown、index 与 receipt
   持久化后注入中断。SourceSession 范围是 typed-owner history 加行政 CLI，

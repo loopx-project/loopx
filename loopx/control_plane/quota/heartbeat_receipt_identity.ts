@@ -20,9 +20,10 @@ import { jsonObject, requireJsonObject, requireNonEmptyString } from "../runtime
 import {nativeChildReportAdmission} from "../capabilities/native_child_admission.ts";
 import type {ReceiptBoundReplayPhase} from "./settlement_phase.ts";
 import type {ProviderEffect} from "../turn_driver/settlement_provider.ts";
+import {normalizeHeartbeatReplanObligationId, projectSemanticReplanGuard} from "./semantic_replan_guard.ts";
+export {normalizeHeartbeatReplanObligationId} from "./semantic_replan_guard.ts";
 
 const TODO_ID_PATTERN = /^todo_[a-z0-9_-]{3,64}$/;
-const REPLAN_OBLIGATION_ID_PATTERN = /^replan-[a-f0-9]{16}$/;
 /** Public diagnostic preserved from the retired Python identity rule. */
 const IDENTITY_CONFLICT_CODE = "heartbeat_receipt_identity_conflict";
 
@@ -42,15 +43,6 @@ export function optionalHeartbeatString(value: unknown): string | null {
 export function normalizeHeartbeatTodoId(value: unknown): string | null {
   const candidate = String(value ?? "").trim().toLowerCase();
   return candidate && TODO_ID_PATTERN.test(candidate) ? candidate : null;
-}
-
-export function normalizeHeartbeatReplanObligationId(
-  value: unknown,
-): string | null {
-  const candidate = String(value ?? "").trim();
-  return candidate && REPLAN_OBLIGATION_ID_PATTERN.test(candidate)
-    ? candidate
-    : null;
 }
 
 export interface HeartbeatReceiptBinding extends JsonObject {
@@ -472,6 +464,20 @@ function selectHeartbeatValidationEvent(
           if (!isDeepStrictEqual(priorPrepared, prepared)) throw receiptIdentityConflict(
             "an uncaused prepared receipt cannot redefine this Turn's original proof");
           first ??= scoped[index]!;
+        }
+        return first ?? validation;
+      }
+      if (semanticAdmission && positive && !Object.hasOwn(validationDetails, "settlement_receipt_revision")
+          && !Object.hasOwn(validation, "causality")) {
+        const originalGuard = projectSemanticReplanGuard(validationDetails);
+        let first: JsonObject | null = null;
+        for (const [index, prior] of scoped.entries()) {
+          if (index >= position) break;
+          if (heartbeatSemanticWorkAdmission(prior, identity) === null) continue;
+          if (!isDeepStrictEqual(projectSemanticReplanGuard(heartbeatReceiptDetails(prior)), originalGuard)) {
+            throw receiptIdentityConflict("an uncaused semantic receipt cannot redefine this Turn's original guard");
+          }
+          first ??= prior;
         }
         return first ?? validation;
       }

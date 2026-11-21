@@ -128,6 +128,9 @@ effect scope, never an execution lease. The supported writer rereads inside the
 shared maintenance marker and holds Goal/source ownership and the marker through
 Run JSON, Markdown and index durability. Direct provider writes bypassing that
 marker are outside this canonical writer guarantee.
+Uncaused repeated semantic admissions must retain the complete typed review or
+capability source. Exact repeats retain the earliest admission; a later receipt
+cannot change that source merely by retaining the same obligation id.
 
 `refresh-state --execution-loss-closeout` 显式关闭原 prepared Todo Turn 已失去的
 执行尝试。使用相同 Goal、Agent、Todo、Turn，提供 typed blocked / outcome_gap /
@@ -179,6 +182,8 @@ resume 仍拒绝。没有业务 lease 的 Todo-bound replan 须证明原 selecte
 maintenance marker 内重新读取，并持有 Goal/source ownership 与 marker 直到 Run
 JSON、Markdown、index 持久化完成。绕过 marker 的直接 provider 写不属于此
 canonical writer 保证。
+无因果链接的重复 semantic admission 须保留完整 typed review／capability 来源。
+完全相同的重复记录保留最早准入；后续收据不能仅凭相同 obligation id 改写来源。
 
 Newly generated heartbeat and same-Turn commands use the default v1 entry.
 Historical benchmark runs use the recorded runner and contract version.

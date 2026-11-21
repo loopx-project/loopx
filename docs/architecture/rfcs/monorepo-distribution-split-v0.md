@@ -4830,6 +4830,8 @@ view shows its independently checked result in the same conversation.
   shared maintenance marker and retains Goal/source ownership through JSON,
   Markdown and index durability; direct provider writes bypassing the marker
   remain outside that guarantee.
+  Uncaused repeats preserve the complete typed review/capability source and
+  earliest admission; the same obligation id cannot authorize a source rewrite.
 - **Source evidence:** CLI tests cover both local providers, stale/foreign
   proofs, ordinary parity and zero completion/debit. Recovery tests inject
   interruption after JSON, Markdown, index and receipt durability. SourceSession

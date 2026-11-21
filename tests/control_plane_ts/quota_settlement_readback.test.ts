@@ -3064,3 +3064,88 @@ test("semantic admission follows one causal source and cannot substitute another
   assert.throws(() => heartbeatSemanticAdmissionEvent([causal, changed], changed, identity),
     {code: "heartbeat_receipt_identity_conflict"});
 });
+
+
+for (const provider of ["file", "sqlite"] as const) {
+  test(`${provider}: uncaused scalar receipt cannot downgrade the original capability admission`, async () => {
+    const f = await todoSemanticFixture(provider);
+    try {
+      const originalDetails: JsonObject = {...f.admission.details as JsonObject};
+      delete originalDetails.semantic_replan_review_kind;
+      delete originalDetails.semantic_replan_review_stop_condition;
+      // Use the existing capability fixture's typed transport shape. A and B
+      // retain the exact same Goal, Agent, Todo, Turn, effect and obligation;
+      // the later scalar receipt has no causal authority to replace A's duty.
+      Object.assign(originalDetails, {semantic_replan_capability_id: "explore",
+        semantic_replan_gap_id: "research-composition-0123456789abcdef",
+        semantic_replan_frontier_revision: "research-composition-v0:0123456789abcdef"});
+      const original: JsonObject = {...f.admission, event_id: "original-capability-admission", details: originalDetails};
+      const later: JsonObject = {...f.admission, event_id: "uncaused-scalar-admission",
+        recorded_at: "2026-01-01T00:00:01Z"};
+      const input: JsonObject = {...request(f.root), ...todoSemanticWriteback()};
+      const authorityBefore = await f.store.loadAuthority();
+      await writeFile(f.log, JSON.stringify(original) + "\n");
+      await assert.rejects(readQuotaSettlement(input), {code: "refresh_task_lease_unavailable"},
+        "The original capability duty must use its capability owner");
+      assert.equal(Object.hasOwn(later, "causality"), false);
+      await writeFile(f.log, [original, later].map(row => JSON.stringify(row)).join("\n") + "\n");
+      await assert.rejects(readQuotaSettlement(input), (error: unknown) => error instanceof Error && "code" in error
+        && (error.code === "heartbeat_receipt_identity_conflict" || error.code === "refresh_task_lease_unavailable"),
+        "An uncaused scalar receipt must not turn an original capability duty into generic progress permission");
+      assert.deepEqual(await f.store.loadAuthority(), authorityBefore);
+    } finally {await rm(f.root, {recursive: true, force: true});}
+  });
+}
+
+
+for (const provider of ["file", "sqlite"] as const) {
+  test(`${provider}: semantic guard retains identical uncaused and causal original admissions`, async () => {
+    const f = await todoSemanticFixture(provider);
+    try {
+      const original: JsonObject = {...f.admission, event_id: "original-scalar-source"};
+      const repeated: JsonObject = {...f.admission, event_id: "identical-uncaused-source",
+        recorded_at: "2026-01-01T00:00:01Z"};
+      const causal: JsonObject = {...repeated, event_id: "causal-scalar-source",
+        details: {...repeated.details as JsonObject, settlement_receipt_revision: "lease_readiness"},
+        causality: {source_event_id: original.event_id, caused_by: original.event_id}};
+      const input: JsonObject = {...request(f.root), ...todoSemanticWriteback()};
+      for (const later of [repeated, causal]) {
+        const events = [original, later];
+        assert.deepEqual(heartbeatSemanticAdmissionEvent(events, later, identity), original);
+        await writeFile(f.log, events.map(row => JSON.stringify(row)).join("\n") + "\n");
+        const result = await readQuotaSettlement(input);
+        assert.equal((result.writeback_qualification as {payload: {ok: boolean}}).payload.ok, true);
+      }
+    } finally {await rm(f.root, {recursive: true, force: true});}
+  });
+
+  test(`${provider}: uncaused semantic source changes reject under the same obligation`, async () => {
+    const f = await todoSemanticFixture(provider);
+    try {
+      const scalar: JsonObject = {...f.admission, event_id: "original-scalar-source"};
+      const capDetails: JsonObject = {...f.admission.details as JsonObject};
+      delete capDetails.semantic_replan_review_kind;
+      delete capDetails.semantic_replan_review_stop_condition;
+      Object.assign(capDetails, {semantic_replan_capability_id: "explore",
+        semantic_replan_gap_id: "research-composition-0123456789abcdef",
+        semantic_replan_frontier_revision: "research-composition-v0:0123456789abcdef"});
+      const capability: JsonObject = {...f.admission, event_id: "original-capability-source", details: capDetails};
+      const cases: {original: JsonObject; patch: JsonObject}[] = [
+        {original: scalar, patch: {semantic_replan_review_kind: "vision_acceptance_gap"}},
+        {original: scalar, patch: {semantic_replan_review_stop_condition: "Stop at destructive owner-only decisions."}},
+        {original: capability, patch: {semantic_replan_capability_id: "research"}},
+        {original: capability, patch: {semantic_replan_gap_id: "research-composition-fedcba9876543210"}},
+        {original: capability, patch: {semantic_replan_frontier_revision: "research-composition-v0:fedcba9876543210"}},
+      ];
+      const input: JsonObject = {...request(f.root), ...todoSemanticWriteback()};
+      for (const {original, patch} of cases) {
+        const later: JsonObject = {...original, event_id: "changed-uncaused-source", recorded_at: "2026-01-01T00:00:01Z",
+          details: {...original.details as JsonObject, ...patch}};
+        await writeFile(f.log, [original, later].map(row => JSON.stringify(row)).join("\n") + "\n");
+        assert.throws(() => heartbeatSemanticAdmissionEvent([original, later], later, identity),
+          {code: "heartbeat_receipt_identity_conflict"}, JSON.stringify(patch));
+        await assert.rejects(readQuotaSettlement(input), {code: "heartbeat_receipt_identity_conflict"}, JSON.stringify(patch));
+      }
+    } finally {await rm(f.root, {recursive: true, force: true});}
+  });
+}
