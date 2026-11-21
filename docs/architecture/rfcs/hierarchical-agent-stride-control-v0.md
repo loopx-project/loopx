@@ -696,6 +696,53 @@ in the existing Stride plan and reasons. For the probe path, choose `verify`
 and use `next_probe` to compare the candidate and incumbent under matched peak
 conditions, with a prediction, minimum evidence, adoption criterion and cost bound.
 
+**Worked scheduler example.** Give the Todo 10 budget units and a hard
+deadline, with $D=1$. In this example, a 10% accepted peak-throughput gain
+over the incumbent is worth 10 utility points. The prior probability that
+the current mechanism's gain transfers to peak load is $P(T)=0.60$.
+At remaining budget $r$, `grow` earns $r$ points if $T$ holds and retains the
+incumbent at 0 points otherwise. `switch` earns $r/2$ points in either state.
+Both payoffs assume $r$ covers implementation, any switch, and final
+validation under the same acceptance criteria.
+
+The probe costs 1 unit, leaves 9 for either route, and delivers 0 immediate
+throughput points. Assume the matched peak comparison passes its correctness
+checks and returns one of two valid results. A $+$ means the candidate reaches
+at least the declared 5% gain, and a $-$ means it falls below it. Assume
+symmetric sensitivity and specificity $P(+\mid T)=P(-\mid \neg T)=q=0.90$.
+Let $p$ be the transfer probability given the evidence so far. At any
+positive remaining budget $r$, `grow` beats `switch` when $p>0.50$, since
+their expected values are $rp$ and $r/2$.
+
+| Valid probe result | Probability | Transfer probability after the result | Next choice |
+|---|---:|---:|---|
+| $+$ | 0.58 | $0.54/0.58 \approx 93.1\%$ | `grow` |
+| $-$ | 0.42 | $0.06/0.42 \approx 14.3\%$ | `switch` |
+
+| Continuation | Total budget | Expected accepted gain (points) |
+|---|---:|---:|
+| Direct `grow` | 10 | $0.60\times10=6.00$ |
+| Direct `switch` | 10 | $10/2=5.00$ |
+| `verify`, then choose | $1+9=10$ | $0.54\times9+0.42\times4.5=6.75$ |
+
+In the last row, 0.54 is the joint probability of transfer and a positive
+signal. The alternative earns 4.5 points in either state after a negative
+signal. Using prior evidence with the same 9 units gives
+$\max(0.60\times9,4.5)=5.40$. The information is worth $6.75-5.40=1.35$
+points, the budget it consumes costs $6.00-5.40=0.60$ in foregone utility,
+and the net gain over direct `grow` is 0.75 points.
+
+For symmetric accuracy $0.50\le q\le0.60$, `grow` remains optimal after
+either result, giving the information zero decision value. When $q>0.60$,
+the results fall on opposite sides of the 50% decision threshold.
+For probe cost $k$, the probabilities $P(T,+)=0.60q$ and $P(-)=0.60-0.20q$
+give expected value $(10-k)[0.60q+(0.60-0.20q)/2]=(10-k)(0.30+0.50q)$.
+With feasible follow-up work, probe when this exceeds 6.00. At $q=0.90$,
+this requires $k<2$ units. At $k=1$, it requires $q>11/15$ (about 73.3%).
+Equality gives the same expected value as direct `grow`. If a probe can
+return an inconclusive result, include that outcome's probability and its
+continuation value at the remaining budget in the comparison.
+
 In a later authorized Turn, use `decision_followthrough` and `previous_review`
 to tie the next choice to the exact candidate, workload and observed result.
 Read back all three outcomes across the trial cases.
