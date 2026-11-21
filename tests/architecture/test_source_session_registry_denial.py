@@ -200,3 +200,47 @@ def test_generic_registry_decoder_enforces_source_session_denial() -> None:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
     assert "require_runtime_compatible_project_registry" in calls
+
+
+def test_cold_snapshot_rejects_routed_source_session_registry(tmp_path: Path) -> None:
+    import json
+    from types import SimpleNamespace
+
+    from loopx.control_plane.projects.registry_codec import (
+        ProjectRegistryProtocolError,
+        SOURCE_SESSION_PROFILE_ID,
+    )
+    from loopx.presentation.goal_storage_api import GoalStorageRequestMixin
+
+    invoked_registry = tmp_path / "global" / "registry.global.json"
+    invoked_registry.parent.mkdir(mode=0o700, parents=True)
+    source_registry = tmp_path / "source" / "registry.json"
+    source_registry.parent.mkdir(mode=0o700, parents=True)
+    source_registry.write_text(
+        json.dumps(
+            {
+                "profile_id": SOURCE_SESSION_PROFILE_ID,
+                "goals": [
+                    {
+                        "id": "cold",
+                        "repo": str(tmp_path / "project"),
+                        "state_file": str(tmp_path / "project" / "STATE.md"),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    handler = GoalStorageRequestMixin()
+    handler.server = SimpleNamespace(
+        registry_path=invoked_registry,
+        runtime_root=tmp_path / "runtime",
+    )
+    with pytest.raises(ProjectRegistryProtocolError, match=SOURCE_SESSION_PROFILE_ID):
+        handler._storage_cold_snapshot(
+            "cold",
+            {},
+            {"id": "cold"},
+            tmp_path / "runtime",
+            source_registry,
+        )

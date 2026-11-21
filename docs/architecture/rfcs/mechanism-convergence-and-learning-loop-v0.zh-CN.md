@@ -299,6 +299,19 @@ soft claim/hard lease 及历史反馈仅作上下文：保留独立验证的成�
 并验证重放无副作用及新捕获拒绝。这修复既有恢复合同，不新增 owner 或 activation；
 已安装 Host、其它后端及收益仍沿各自门禁。
 
+原生故障分配与外部 worker 的 Host 观测现在共用既有
+[`typed 故障 owner`](../../../loopx/control_plane/turn_driver/host_failure.ts)。
+Python 重试表及 worker 的成功／同会话／失败选择已退役。原生错误对象创建、
+Mapping 拒绝顺序、精确整数 IO、会话 ID 解码、轮询时钟及 pending-intent witness
+仍归原适配器。Host 成功观测只确认传输，不代表 Turn 完成、ACK 或扣额许可。
+自动重试资格仍窄于显式修复后的重试；仅本次调用的查询标记不增加配置或启用，
+省略／false 保留原显式查询语义。[原 worker 检查](../../../tests/test_external_scheduler_worker.py)、
+[边界检查](../../../tests/control_plane/test_host_failure_policy_transport.py)及
+[File/SQLite managed CLI](../../../tests/test_loopx_turn_managed_step.py)保持原会话重试、
+未知／其他会话／损坏结果、拒绝优先级、丢失响应恢复和一次重放结算。改变重试
+上限会使独立 SQLite CLI 观测失败。这是源码 checkpoint，不取得已安装 worker
+采用、剩余 C1/C4/C9 切换、产品组合或验收成果及完整成本资格。
+
 重放和新捕获断言现于恢复 fixture 内执行。此前测试更新将该块放在无证据测试中：
 恢复用例未执行这些断言，普通结算则因 fixture 名称未定义而失败。将既有断言块
 移回所属作用域恢复两类检查，不改变 runtime 逻辑。File/SQLite 恢复、无副作用
