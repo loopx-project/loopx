@@ -8,9 +8,13 @@ const base = {goal_id:"archived", generated_at:"2026-01-01T00:00:00Z"};
 for (const agent_vision of [undefined, null, [], "invalid", 42]) {
   assert.equal(runRecordSchema.parse({...base, agent_vision}).agent_vision ?? null, null);
 }
-const value = {vision_patch:{vision_summary:"Retain the independently verified baseline"},
+const value = {vision_patch:{vision_summary:"Retain the independently verified baseline", future_context:"Preserve the recorded caveat"},
   path_delta:{observed_reality:"The new route failed", unresolved_questions:["Cost remains unknown"]},
-  stride_decision:{axes:{work_slice:{plan:"Compare before replacing",reason:"Preserve the counterexample"}}},
+  stride_decision:{
+    axes:{work_slice:{plan:"Compare before replacing",reason:"Preserve the counterexample"}},
+    next_probe:{scope:"Compare both original routes", future_scope:{seen:0, accepted:false}},
+    previous_review:{lesson:"The earlier record did not verify adoption", future_review:"Retain the limitation"},
+  },
   future_field:{unknown_key:"Keep future evidence readable"}};
 const parsed = runRecordSchema.parse({...base, agent_vision:value});
 assert.deepEqual(parsed.agent_vision,value);
@@ -21,7 +25,25 @@ for (const zh of [true,false]) {
   }));
   for (const text of ["Retain the independently verified baseline","The new route failed","Compare before replacing",
     "Preserve the counterexample","Keep future evidence readable","original-goal","source-a","retained-version"]) assert.ok(html.includes(text),text);
+  const [reading, raw] = html.split('<details class="research-node-provenance">');
+  for (const text of [value.vision_patch.vision_summary, value.path_delta.observed_reality,
+    value.path_delta.unresolved_questions[0], value.stride_decision.next_probe.scope, value.stride_decision.previous_review.lesson]) {
+    assert.equal(reading.split(text).length - 1, 1, `Repeat-free reading for ${text}`);
+    assert.ok(raw.includes(text), `Complete original record for ${text}`);
+  }
+  const extraFields = reading.match(/<summary>(?:其他决策字段|Additional decision fields)<\/summary>(.*?)<\/details>/s)?.[1] ?? "";
+  for (const text of ["Preserve the recorded caveat","Compare before replacing","Retain the limitation","Keep future evidence readable"]) {
+    assert.ok(extraFields.includes(text), `Additional native field remains readable: ${text}`);
+  }
+  assert.match(extraFields, /<dt>seen<\/dt><dd><span>0<\/span>/);
+  assert.match(extraFields, /<dt>accepted<\/dt><dd><span>false<\/span>/);
+  assert.deepEqual(parsed.agent_vision, value, "Reading the document does not mutate the decision");
 }
+const structuredOnly = renderToStaticMarkup(React.createElement(GoalStrategyDocument, {
+  value:{vision_patch:{vision_summary:"An entirely structured decision"}},
+  recordedAt:base.generated_at,version:"retained-version",originalGoalId:"original-goal",namespace:"source-a",zh:false,
+}));
+assert.equal((structuredOnly.match(/<details\b/g) ?? []).length, 1, "No empty additional fields disclosure");
 console.log("Native decisions preserve optional compatibility, complete fields and provenance in both languages");
 
 // The original document must survive the real source routing and schema path.
