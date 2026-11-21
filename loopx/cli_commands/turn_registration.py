@@ -356,6 +356,17 @@ def register_turn_commands(
         action="store_true",
         help="Invoke the host and commit validated writeback/quota effects.",
     )
+    run_once.add_argument(
+        "--epoch-prefetch-json",
+        type=json.loads,
+        default=None,
+        help="Opt-in Stage-then-Swap EpochReset prefetch configuration JSON (default-off).",
+    )
+    run_once.add_argument(
+        "--quiet-turn",
+        action="store_true",
+        help="Opt-in Quiet-Turn zero-tax skip metadata evaluation when Turn state is unchanged (default-off).",
+    )
     run_once.add_argument("--limit", type=int, default=5)
 
 

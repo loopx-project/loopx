@@ -387,6 +387,7 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
     raw_pages = pages
     if name == "PostToolUse" and not pages:
         return {}  # ordinary tool use neither invalidates nor rewrites the journal
+    state: dict[str, Any] = {}
     recovery = None
     try:
         with _locked(directory) as root:
@@ -450,12 +451,44 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
         recovery_needed = True
     if (name == "SessionStart" and recovery_needed
             and isinstance(recovery, dict) and recovery.get("command")):
+        from .epoch_prefetch import resolve_codex_context_epoch_prefetch_hook
+
+        prefetch_hook = resolve_codex_context_epoch_prefetch_hook(
+            directory=directory,
+            hook_name=name,
+            state=state,
+            event=event,
+            recovery=recovery,
+            lock_ctx=_locked,
+            read_state_fn=_state,
+            save_state_fn=_save,
+            continuation_text=_context_continuation_instructions(recovery["command"]),
+            raw_guidance_text=(
+                CONTEXT_CAPTURE_SELECTION_GUIDANCE
+                + _NATIVE_CONTEXT_OUTPUT_GUIDANCE
+                + "If you choose to read an entire file: "
+                + CONTEXT_CAPTURE_PAGE_GUIDANCE
+            ),
+        )
+        if prefetch_hook is not None:
+            return prefetch_hook
         return {"hookSpecificOutput": {"hookEventName": name, "additionalContext":
             "LoopX model-context baseline invalidated. Saved files remain available. "
             + _context_continuation_instructions(recovery["command"])
             + CONTEXT_CAPTURE_SELECTION_GUIDANCE
             + _NATIVE_CONTEXT_OUTPUT_GUIDANCE
             + "If you choose to read an entire file: " + CONTEXT_CAPTURE_PAGE_GUIDANCE}}
+    from .epoch_prefetch import resolve_codex_context_quiet_turn_hook
+
+    quiet_hook = resolve_codex_context_quiet_turn_hook(
+        hook_name=name,
+        state=state,
+        event=event,
+        recovery=recovery,
+        root_dir=_private_root(directory),
+    )
+    if quiet_hook is not None:
+        return quiet_hook
     return {}
 
 

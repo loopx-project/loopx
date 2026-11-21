@@ -915,6 +915,8 @@ def execute_turn_run_once(
                 goal_admission.with_launch_decision(current_launch_decision).launch_lifetime,
                 operation="turn_external_host_launch",
             ) if raw_argv is not None and goal_admission is not None else None),
+            epoch_prefetch=getattr(args, "epoch_prefetch_json", None),
+            quiet_turn=bool(getattr(args, "quiet_turn", False)),
         )
         if args.execute:
             result.update(drain_committed_turn_post_writeback_hooks(
