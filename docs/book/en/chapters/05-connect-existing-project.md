@@ -18,7 +18,7 @@ Use your actual project and current packet for commands; T1, M1, and C1 are not 
 
 ## Three different completion points {#three-completions}
 
-Installing, connecting, and delivering are not the same accomplishment. Installation asks whether the
+Installation asks whether the
 CLI and required runtime are usable. Connection asks whether work identity, state location, and execution
 route are explicit. Delivery asks whether the actual artifact meets its current acceptance conditions.
 A connected project may have no executing Turn; a successful Turn may still leave external checks or
@@ -151,8 +151,7 @@ git ls-files .loopx .loopx/goals .local
 ```
 
 Repository root, current branch, and existing changes are separate facts. Do not reset or delete valuable
-changes. In a linked worktree, identify the tree where delivery will actually happen. A clean status in
-one directory does not establish that no work happened in another.
+changes. In a linked worktree, identify the tree where delivery will actually happen.
 
 A project may already contain `.loopx/registry.json` or `.loopx/goals/`. Identify existing Goals, in-flight
 work, and state locations first. Do not copy another project's registry or overwrite useful state to
@@ -197,8 +196,7 @@ git check-ignore -v .loopx/goals/example/ACTIVE_GOAL_STATE.md
 mean the path is ignored. Tracked files are not governed by ignore rules by default. `--no-index`
 diagnoses rules without considering the index; it neither forces exclusion nor specifically handles
 nonexistent files. By default, `ls-files` lists paths in the current index. Output means tracked or staged
-content, **not necessarily a pushed commit**. No output does not prove that past commits or a remote have
-never contained sensitive material. See [Git check-ignore](https://git-scm.com/docs/git-check-ignore)
+content, **not necessarily a pushed commit**. See [Git check-ignore](https://git-scm.com/docs/git-check-ignore)
 and [Git ls-files](https://git-scm.com/docs/git-ls-files).
 
 When local state is tracked unexpectedly, inspect its contents, staging, and history before an authorized
@@ -233,8 +231,7 @@ to the implementation and regression exercises later in the book. For an existin
 installation, use the [appendix's upgrade guidance](appendix-reference.md) to identify the installation
 owner instead of layering another installation over an unexplained one.
 
-`doctor` answers more about dependencies, installation, and integration than `command -v loopx`, but it
-is not proof that every Host journey has been qualified. For the actual Effect runtime and journal
+`doctor` answers more about dependencies, installation, and integration than `command -v loopx`. For the actual Effect runtime and journal
 checkpoint path, use the deeper probe when needed:
 
 ```bash
@@ -279,8 +276,7 @@ loopx start-goal --guided --project . \
   --goal-text "Add compatible JSON output while preserving default text; deliver after validation and documentation, without automatic publication"
 ```
 
-The response is a guided transaction packet. A successful preview does not establish that Todos were
-written, an Agent was registered, or a Host started. Read the selection it currently requires and
+The response is a guided transaction packet. Read the selection it currently requires and
 continue with its exact commands; do not revive an obsolete instruction from an earlier conversation.
 
 When several Goals exist, select an exact `goal_id` from `goal_selection_gate` choices. Similar objective
@@ -325,7 +321,7 @@ when the Host is unknown rather than substituting a familiar name for observatio
 readback belong to the [Codex App](06-codex-app.md) and [Codex CLI](07-codex-cli.md) chapters; other
 adapters are indexed in the [Runtime Connector Catalog](/loopx/docs/integrations/runtime-connector-catalog/).
 Type registration, launchability here, autonomous continuation inside a process, and waking after that
-process exits are distinct conditions. An accepted argument does not prove them all.
+process exits are distinct conditions.
 
 ## 4. Accept the connection: which next step is supported now? {#connection-acceptance}
 
@@ -415,15 +411,14 @@ Internal quota accounting is also not the model supplier's actual bill.
 Local validation cannot replace M1's observation of remote C1. Registered waiting should identify its
 target, applicable revision, next observation, and termination or ongoing-watch policy, with an actually
 available execution surface. Supported boundedness choices include expiry, a resume condition, or
-explicit watch-only; one field is not the only valid choice for every Monitor.
+explicit watch-only.
 
 When G1 has not approved publication, T3 obtains no authority from green CI or T1 settlement. T2 may
 continue when it is still provably independent and its own constraints hold. A user decision can be
 required while an Agent continues different work. See [observation and scheduling](04b-budget-and-admission.md)
 and [the work graph](work-graph-and-authority.md).
 
-An unchanged observation must not impersonate delivery; it can still incur compute and network cost.
-No notification is not evidence that the external source stayed unchanged. When the Host has exited
+An unchanged observation must not impersonate delivery; it can still incur compute and network cost. When the Host has exited
 with no available waking mechanism, report the operational gap rather than calling quietness healthy waiting.
 
 ### Scene four: changed conditions call for changed judgments
@@ -456,8 +451,7 @@ For example, as a local report rather than another persisted format:
 > publication decision is still outstanding, so return the artifact for review without publishing.
 > G1's decision entrypoint comes next; once accepted and still applicable, reassess T3.
 
-Even without saying everything is complete, this report supports a handoff. “Tests green, task done”
-provides neither the scope of what was proved nor the responsibilities still outstanding.
+Even without saying everything is complete, this report supports a handoff.
 
 ## 6. Delegate onboarding to an Agent without delegating guesses about authority {#delegate-onboarding}
 

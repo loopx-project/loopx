@@ -66,7 +66,7 @@ def _finding_rows(events, todos, *, goal_id, validated: bool = False):
 def _history_rows(runtime_root, goal_id):
     """Adapt scoped canonical records without folding away earlier attempts.
 
-    This is transport adaptation, not a graph, progress or assessment owner.
+    This is transport adaptation.
     In particular, do not expose arbitrary observation payloads or materialize
     parent links as scientific supporting evidence.
     """

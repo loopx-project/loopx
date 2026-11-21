@@ -241,7 +241,7 @@ def authorized_manager_goal_ids(
     registry_path: Path | None = None,
     executor_runtime_root: Path | None = None,
 ) -> list[str]:
-    """Resolve current external read authority; a session's old Goal is not a grant.
+    """Resolve current external read authority.
 
     Evidence policy and machine executor settings may live under different roots
     when Chat storage is overridden, so callers can bind each authority explicitly.

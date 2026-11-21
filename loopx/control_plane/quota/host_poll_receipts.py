@@ -86,8 +86,8 @@ def _record_host_poll_receipt(
     if (observation["read_status"] == "unreadable"
             and not isinstance(worker_observation, dict)):
         # A missing receipt may be created by a liveness poll. An unreadable
-        # one may still contain unresolved observations. A clear is not proof
-        # of recovery either. Only an explicit worker update can replace it.
+        # one may still contain unresolved observations.
+        #  Only an explicit worker update can replace it.
         # The CLI returns recorded=false alongside its independent decision.
         raise ValueError("host poll receipt is unreadable; repair its source before updating observations")
     current = observation["receipt"]

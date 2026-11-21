@@ -103,7 +103,7 @@ def test_same_process_worker_exit_is_recovered_without_replay(tmp_path, released
     with mock.patch.object(runtime, "_start_adapter", side_effect=AssertionError("no provider")):
         runtime.recover_exited_turn(sid, tid)
         failed = store.load_turn(sid, tid)
-        assert failed["status"] == "failed" and failed["error_code"] == "runtime_error"
+        assert failed["status"] == "failed" and failed["error_code"] == "execution_worker_exited"
         assert "execution worker exited" in failed["error"]
         assert "execution may have occurred" in failed["error"]
         assert "not retried automatically" in failed["error"]
@@ -111,7 +111,8 @@ def test_same_process_worker_exit_is_recovered_without_replay(tmp_path, released
         assert [m["text"] for m in store.messages(sid) if m["role"] == "user"] == ["Keep the original request."]
         events = store.events_after(sid, tid, None)
         assert any(e["kind"] == "answer.delta" for e in events)
-        assert sum(e["kind"] == "turn.failed" for e in events) == 1
+        failure, = [e for e in events if e["kind"] == "turn.failed"]
+        assert failure["payload"]["error_code"] == failed["error_code"]
         runtime.recover_exited_turn(sid, tid)
         assert store.events_after(sid, tid, None) == events
         assert lock_holder_path(path).read_bytes() == record
@@ -136,7 +137,7 @@ def test_recovery_preserves_stop_after_the_live_service_worker_retires(tmp_path,
     holder["pid"] = process.pid
     lock_holder_path(path).write_text(json.dumps(holder))
     runtime.recover_exited_turn(sid, tid)
-    assert store.load_turn(sid, tid)["error_code"] == ("runtime_error" if released else "server_restarted")
+    assert store.load_turn(sid, tid)["error_code"] == ("execution_worker_exited" if released else "server_restarted")
     assert store.load_session(sid)["active_turn_id"] is None
 
 
@@ -182,6 +183,21 @@ def test_activation_recovers_only_unowned_execution_and_preserves_queued_input(s
     assert store.load_turn(sid, queued["turn_id"]) == before
     assert [m["text"] for m in store.messages(sid) if m["role"] == "user"] == [
         "Keep the original request.", "Original queued follow-up."]
+
+
+def test_completion_recovery_does_not_publish_under_a_live_worker(tmp_path):
+    store = ChatSessionStore(tmp_path)
+    sid = session(store)
+    turn, _ = store.create_turn(sid, client_turn_id="live", message="Still finalizing.")
+    tid = turn["turn_id"]
+    runtime = ChatRuntimeController(store=store, codex_bin="must-not-execute")
+    with try_exclusive_file_lock(store.turn_execution_lock_path(sid, tid),
+                                 agent_id="loopx-chat", operation="execute_chat_turn"):
+        store.update_turn(sid, tid, status="completing", response={"message": "Pending answer."})
+        runtime.recover_exited_turn(sid, tid)
+        assert store.load_turn(sid, tid)["status"] == "completing"
+        assert store.load_session(sid)["active_turn_id"] == tid
+        assert not any(m["role"] == "agent" for m in store.messages(sid))
 
 
 def test_activation_does_not_recover_a_live_execution_fence(services):

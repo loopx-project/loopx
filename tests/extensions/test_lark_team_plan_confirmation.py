@@ -9,7 +9,12 @@ from typing import Any
 
 import pytest
 
-from loopx.chat_action_store import ActionConflictError, ChatActionStore
+from loopx.chat_action_store import (
+    AUTHENTICATED_LARK_CARD_CALLBACK,
+    HUMAN_ACTOR_CLASS,
+    ActionConflictError,
+    ChatActionStore,
+)
 from loopx.extensions.lark.team_plan_confirmation import (
     build_team_plan_review_card,
     deliver_team_plan_review_cards,
@@ -676,6 +681,8 @@ def test_recovery_uses_the_first_durable_decision_not_a_later_click(
             "state_fingerprint": "state-alpha",
             "card_digest": manager_delivery["card_digest"],
             "confirmed_at": "2026-09-20T00:00:00Z",
+            "actor_class": HUMAN_ACTOR_CLASS,
+            "verification_kind": AUTHENTICATED_LARK_CARD_CALLBACK,
         },
     )
 

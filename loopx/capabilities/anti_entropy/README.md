@@ -55,8 +55,7 @@ Verification distinguishes diff-visible facts from workspace-derived facts:
 - **AE001/AE002 remain hard gates** in this command; **AE003 stays advisory**.
   `allow_compat_seam=true` turns a retained-but-authorized definition into an
   advisory finding, and it is never listed as retired.
-- The receipt records which sources backed the verdict; a `diff_hash` alone
-  does not prove anything about the task, the sources, or the policy.
+- The receipt records which sources backed the verdict.
 
 ## Single-Task Feedback Loop (Default-Off)
 

@@ -90,7 +90,11 @@ def test_open_validation_replan_retains_requirements_and_executes_repair(tmp_pat
         envelope = call("quota", "should-run", "--codex-app", "--turn-envelope", "--goal-id", GOAL,
             "--agent-id", AGENT, "--todo-id", TODO, "--turn-instance-id", TURN,
             )
-        delivered = next(source for source in envelope["work_context"]["sources"] if source["source"] == "goal_acceptance")
+        delivered = next(
+            source
+            for source in envelope["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+            if source["source"] == "goal_acceptance"
+        )
         assert acceptance == delivered["content"]["goal_acceptance_contract"]
         assert inspect() == before, "review admission does not rewrite acceptance"
 

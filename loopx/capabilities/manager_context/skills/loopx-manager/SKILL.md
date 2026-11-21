@@ -32,8 +32,7 @@ Use authorized current evidence for facts that could change that decision;
 distinguish authoritative observations, historical records, claims and inference.
 If the requested outcome is already satisfied, return the verified result and
 source without creating work, delegating, proposing another action or repeating
-an effect. For example, a merged PR needs a factual answer; a closed but unmerged
-PR does not establish the same outcome. This rule also applies to completed
+an effect. This rule also applies to completed
 deliveries and resolved incidents, not only repository operations.
 
 Explanation, comparison, fact checking and judgment normally need your own

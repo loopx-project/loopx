@@ -3,11 +3,11 @@
 这是一份中文短版，用来在阅读更长的产品设计文档前，先理解
 LoopX 背后的工作模型。
 
-Loop Engineering 关注的不是让一个模型进程一直活着，而是让长期
+Loop Engineering 关注的是让长期
 agent work 在多轮 executor 之间保持可恢复、可审阅、可调度。短任务里，
 一个 prompt 通常足够；长任务里，目标、人的判断、证据、成本和下一步会逐渐
 散落到聊天、代码、文档、实验和外部反馈里。LoopX 要解决的是这些状态如何
-不漂移，而不是把对话拉得更长。
+不漂移。
 
 ## 原则
 
@@ -46,8 +46,7 @@ claim、scope、capability、gate、quota 和安全边界，agent 就可以自�
 人的 reward、review 和偏好信号可以影响后续排序和规划，但不能绕过 gate、
 claim、scope、capability check、public/private boundary 或 quota。
 
-有用的 hint 仍然只是 hint。控制面的职责是把反馈转成可继承的信号，而不是
-让一次“我喜欢/不喜欢”直接变成执行权限。
+有用的 hint 仍然只是 hint。控制面的职责是把反馈转成可继承的信号。
 
 ### Evidence 要紧凑且可检查
 
@@ -63,7 +62,7 @@ transcript、benchmark trace、credential、private note 或本地路径。
 agent 有没有说话，而应该看这一轮是否产生了经过验证的状态转移。
 
 monitor-only 或 status-only 的 turn，除非发现状态变化，否则应该保持安静。
-自动化的价值是减少调度负担，而不是制造更多 review 噪音。
+自动化的价值是减少调度负担。
 
 ### Loop Agent 需要绩效审阅
 
@@ -77,8 +76,7 @@ Loop Agent 的价值不能只用单任务 benchmark 分数衡量。长期项目�
 
 ### 把“跑更久”当成产品
 
-没有更好状态管理的长 loop，只会制造更大的漂移。产品目标不是后台一直动，
-而是让长期工作可恢复、可审阅、可接手。
+没有更好状态管理的长 loop，只会制造更大的漂移。
 
 ### 用总结替代 writeback
 
@@ -108,8 +106,7 @@ Dashboard 应该投影 LoopX state，并通过 typed write 写回。它不应该
 
 ### 过度声明 benchmark uplift
 
-Benchmark 是证据，不是完整产品。单个 case 或一次 project-level review
-不能证明通用模型能力提升。LoopX 当前更应该声明可展示的窄价值：长期 agent
+Benchmark 是证据。LoopX 当前更应该声明可展示的窄价值：长期 agent
 work 更容易被检查、调度、恢复和比较。
 
 ## 最小可用 Loop

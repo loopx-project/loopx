@@ -199,10 +199,14 @@ const LABELED_CREDENTIAL_ASSIGNMENT = /\b(?:Bearer|token|password|secret)["']?\s
 // outside the internal-state policy, and the per-face URL decision is the
 // caller-migration work still open in #5136.
 const SECRET_LIKE_SHAPE = new RegExp("(?:\\bbearer\\s+[a-z0-9._~+/=-]{16,}|\\b[a-z][a-z0-9+.-]*://[^/\\s:@`'\\\"<>]+:[^/\\s@`'\\\"<>]+@[^\\s`'\\\"<>]*|\\b(?:(?:aws[_-]?)?secret[_-]?access[_-]?key|(?:access|api|secret)[_-]?key)[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]+|\\b(?:ak|sk)[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]+|(?<![a-z0-9_])(?:ak|sk)[-_=:][a-z0-9_=-]{10,}|\\bgh[pousr]_[a-z0-9]{16,}\\b|\\bgithub_pat_[a-z0-9_]{20,}|\\b(?:akia|asia)[a-z0-9]{16}\\b|\\bxox[baprs]-[a-z0-9-]{10,}|\\baiza[a-z0-9_-]{20,}|\\b(?:sk|rk)_(?:live|test)_[a-z0-9]{12,}|\\bsk-(?:proj|svcacct|admin)-[a-z0-9_-]{20,}|\\bsk-ant-[a-z0-9_-]{20,}|\\bnpm_[a-z0-9]{20,}|\\bpypi-[a-z0-9_-]{20,}|\\beyj[a-z0-9_-]{10,}\\.[a-z0-9_-]{10,}\\.[a-z0-9_-]{10,}\\b|\\b(?:access|refresh)[_-]?token[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,}|\\b(?:password|secret)[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,}|-{3,}\\s*BEGIN (?:[A-Z]+ )?PRIVATE KEY[\\s\\S]*?(?:-{3,}\\s*END (?:[A-Z]+ )?PRIVATE KEY-{3,}|$)|\\btoken[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,})", "i");
-const LOCAL_PATH_SHAPE = new RegExp("(?<![:/A-Za-z0-9])(?:/(?:Users|home|Volumes|private|tmp|var|etc|opt|srv|mnt|root|data|workspace|workspaces)/[^\\s`'\\\"<>]+|[A-Za-z]:[\\\\/][^\\s`'\\\"<>]+|\\\\\\\\[A-Za-z0-9_.-]+\\\\[^\\s`'\\\"<>]+)", "i");
+const LOCAL_PATH_SHAPE = new RegExp("(?<![:/A-Za-z0-9])(?:/{1,}(?:Users|home|Volumes|private|tmp|var|etc|opt|srv|mnt|root|data|workspace|workspaces)/(?:[^\\s`'\\\"<>]+)?|[A-Za-z]:[\\\\/](?:[^\\s`'\\\"<>]+)?|\\\\\\\\[A-Za-z0-9_.-]+\\\\[^\\s`'\\\"<>]+)", "i");
+const HTTP_URL_SURFACE = /\bhttps?:\/\/[^\s`'"<>]+/giu;
+const maskHttpUrlPaths = (value: string): string =>
+  value.replace(HTTP_URL_SURFACE, match => " ".repeat(match.length));
 export const CREDENTIAL_WORD_PATTERNS: RegExp[] = [/\bBearer\b/i, /\bpassword\b/i, /\bsecret\b/i];
+const HOME_DIRECTORY_TEXT_PATTERN = /\/Users\//;
 export const PRIVATE_TEXT_PATTERNS: RegExp[] = [
-  /\/Users\//,
+  HOME_DIRECTORY_TEXT_PATTERN,
   /\/ext[_]data\//, // Preserve the matcher without matching its own policy source.
   /lark[o]ffice/i, // Equivalent matcher avoids matching its own policy source.
   /docs\.internal/i,
@@ -359,7 +363,15 @@ function publicSafeTextGuidance(label: string): string {
 
 function validatePublicSafeText(label: string, value: string): void {
   for (const pattern of INTERNAL_STATE_PRIVATE_TEXT_PATTERNS) {
-    if (pattern.test(value)) {
+    // The local-path arms read the URL-masked text: an ordinary http(s) link
+    // may legitimately carry a /Users/ or /home/ segment, which is URL syntax
+    // rather than a home-directory reference. Publication-tier callers keep
+    // reading the raw value.
+    const candidate =
+      pattern === LOCAL_PATH_SHAPE || pattern === HOME_DIRECTORY_TEXT_PATTERN
+        ? maskHttpUrlPaths(value)
+        : value;
+    if (pattern.test(candidate)) {
       throw new EffectRuntimeRequestError(
         `${label} contains a private-looking value; ${publicSafeTextGuidance(label)}`,
       );

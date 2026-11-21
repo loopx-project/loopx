@@ -255,8 +255,8 @@ def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
                 ),
             )
     # App-server v2 exposes camel-case discriminators. Unknown/new variants
-    # retain the generic failure; message/additionalDetails are not evidence
-    # of a policy decision and may contain private upstream content.
+    # retain the generic failure; message/additionalDetails may contain private
+    # upstream content.
     known = {
         "cyberPolicy": ("cyber_policy", "Codex 上游返回了安全策略拦截，本轮未完成。"),
         "misalignmentPolicyViolation": (
@@ -593,7 +593,7 @@ def _turn_prompt(
             "describe the bounded proposal clearly so LoopX can route it through typed preview and explicit apply. "
             "For a Todo proposal include goal_id from the verified Goal directory alongside kind='todo', text, priority and rationale. "
             "If the intended Goal is unresolved, resolve it from authorized context or ask one focused question; never infer a durable target from whichever Goal the UI happens to show. "
-            "A Todo preview is not a recorded task; the host supplies its actual confirmation route. Do not invent a command or claim the write occurred. "
+            "The host supplies its actual confirmation route. Do not invent a command or claim the write occurred. "
             if not project_work and not execution_mode else ""
         )
         + protected_action_contract
@@ -1906,8 +1906,7 @@ class CodexChatAgentSession:
                         str(item.get("type") or "") if isinstance(item, dict) else ""
                     )
                     step = steps.started(item)
-                    # Transport activity does not prove a Goal read or a
-                    # successful check. The label stays typed; the step names
+                    # The label stays typed; the step names
                     # the command, tool or path through redacted fields only.
                     phase = {
                         "userMessage": "Agent 已收到消息",

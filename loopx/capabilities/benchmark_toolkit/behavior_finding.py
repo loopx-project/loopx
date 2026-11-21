@@ -1,6 +1,6 @@
 """Bounded observational findings without complete benchmark result uploads.
 
-This is a benchmark-toolkit record, not a new provider or scoring authority.
+This is a benchmark-toolkit record.
 Evidence digests are producer attestations; validation cannot verify unshared
 trajectories or turn a selected example into a population effect.
 """

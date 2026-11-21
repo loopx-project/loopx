@@ -134,6 +134,13 @@ def test_onboarding_reason_code_instruction_matches_the_strict_result_boundary(p
     assert "including when the observation is healthy" in instruction
 
 
+def test_onboarding_entry_instruction_separates_requested_and_activation_host_surface():
+    instruction = _onboarding_decision_instruction("entry")
+    assert "copy ONLY the packet's top-level host_surface" in instruction
+    assert "never from the packet's top-level host_surface" in instruction
+    assert "return null when omitted or" in instruction
+
+
 @pytest.mark.parametrize(
     "reasons", [[], ["not a token"], [f"reason_{index}" for index in range(13)]],
 )

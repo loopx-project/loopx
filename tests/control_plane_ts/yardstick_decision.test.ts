@@ -5,6 +5,7 @@ import {normalizeWorkYardstickDecision, normalizeWorkYardstickCapture, projectWo
 import {validateWorkYardstickContinuation} from "../../loopx/control_plane/work_items/yardstick_source.ts";
 import {normalizeExploreResultAttachment} from "../../loopx/control_plane/capabilities/explore_result_writeback.ts";
 import {projectExploreTurnContext} from "../../loopx/control_plane/capabilities/explore_turn_context.ts";
+import * as yardstick from "../../loopx/control_plane/work_items/yardstick_decision.ts";
 import {projectExploreMeasurementFeedback} from "../../loopx/control_plane/capabilities/explore_measurements.ts";
 
 const authoritative = {metric: "quality", unit: "points", higher_is_better: true,
@@ -305,14 +306,15 @@ test("one optional attachment reaches an ordinary task context without creating 
   const todo = {todo_id: binding.todo_id, role: "agent", claimed_by: "worker", status: "open", explore_result_node_refs: ["question"]};
   const params = {goal_id: "research", agent_id: "worker", graph_enabled: true, harness_gate: {enabled: false}, route: ["loopx"],
     plan: {}, projection: {nodes: [], findings: [finding]}, todo_id: binding.todo_id, focus_todo: todo};
-  const off = projectExploreTurnContext(params);
+  const project = (source: JsonObject) => projectExploreTurnContext(source, yardstick);
+  const off = project(params);
   assert.equal(Object.hasOwn(off.graph, "work_yardsticks"), false);
-  const on = projectExploreTurnContext({...params, yardstick_enabled: true, work_todos: [todo]});
+  const on = project({...params, yardstick_enabled: true, work_todos: [todo]});
   assert.equal(on.graph.work_yardsticks[0].source_finding_id, finding.finding_id);
   assert.equal(on.graph.work_yardsticks[0].cue, decision.next_action.reason);
   assert.equal(Object.hasOwn(on.graph.work_yardsticks[0], "authoritative"), false);
   assert.deepEqual(on.graph.work_yardsticks[0].counterevidence_refs, finding.evidence_refs);
-  const detail = projectExploreTurnContext({...params, yardstick_enabled: true, work_todos: [todo], result_node: "question"});
+  const detail = project({...params, yardstick_enabled: true, work_todos: [todo], result_node: "question"});
   assert.deepEqual(detail.graph.work_yardsticks[0].authoritative, authoritative);
   assert.deepEqual(on.harness, off.harness);
   assert.equal(on.graph.work_yardstick_capture.optional, true);
@@ -322,12 +324,12 @@ test("one optional attachment reaches an ordinary task context without creating 
     {...proxy, value: 8, candidate_ref: "candidate:b", evidence_ref: "result:screen-b"},
     {...proxy, value: 9, candidate_ref: "candidate:a", evidence_ref: "result:screen-a"},
   ]};
-  const reversedCompact = projectExploreTurnContext({...params, projection: {nodes: [], findings: [measured]},
+  const reversedCompact = project({...params, projection: {nodes: [], findings: [measured]},
     yardstick_enabled: true, work_todos: [todo]}).graph.work_yardsticks[0];
   assert.equal(reversedCompact.comparison_candidate_ref, "candidate:b");
   assert.equal(reversedCompact.proxy_order_reversed, true);
   // Unknown or unowned work cannot adopt a shared question's decision.
-  assert.equal(Object.hasOwn(projectExploreTurnContext({...params, yardstick_enabled: true,
+  assert.equal(Object.hasOwn(project({...params, yardstick_enabled: true,
     work_todos: [{...todo, claimed_by: "peer"}]}).graph, "work_yardsticks"), false);
 });
 

@@ -310,7 +310,7 @@ def project_settlement_attachment(plan: dict[str, Any], *, registry_path: Path, 
     """Compose the existing optional result option into a Todo-bound CLI plan.
 
     Registry access and hook dispatch are adapters. The typed Explore owner
-    supplies the guidance; neither the ordinary command nor obligations change.
+    supplies the guidance.
     """
     identity = plan.get("identity") or {}
     if not identity.get("todo_id") or not identity.get("agent_id"):

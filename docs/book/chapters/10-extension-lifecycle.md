@@ -94,7 +94,7 @@ identity，identity 覆盖 entrypoint 文件内容、所选 Python interpreter�
 以及 extension 自己声明的 view validator。任何一项变化都会让旧 doctor proof 失效；LoopX 自身的
 内置 validator 被刻意排除，因此升级 LoopX 不会连坐所有 extension。
 
-doctor 的状态是一条阶梯，而不是布尔值：
+Doctor 的状态是一条阶梯：
 
 ```text
 entrypoint_missing          -> identity 无法解析
@@ -198,7 +198,7 @@ loopx extension rollback loopx-text-stats --execute --format json --state-file "
 ```
 
 rollback 先按 previous revision 记录的 manifest 与入口位置 probe **当前安装的** entrypoint，通过后再
-切换。它不是任意 Git checkout 回退，而是 activation state 中已验证 revision 的生命周期转换。probe
+切换。它是 activation state 中已验证 revision 的生命周期转换。probe
 通过不证明旧版本 package 已经装回：若环境里仍是新 package，rollback 后 LoopX 记录的是旧 revision，
 实际运行的却是新代码。回滚前后应安装与目标 revision 匹配的 package，再用 `run` 读回实际行为。activation state 保留最近的 validated revision 快照，
 数量有限（当前保留 5 个）。

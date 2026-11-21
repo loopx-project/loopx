@@ -98,8 +98,7 @@ task policy, and run `quota should-run` before delivery. `--agent-scope` remains
 an explicit temporary override for detached validation or one-off automation.
 
 If profiles are configured and the requested registered peer has no profile,
-prompt generation may continue with peer identity only. Missing advisory
-metadata is not an authority failure.
+prompt generation may continue with peer identity only.
 
 ## Selection Rules
 

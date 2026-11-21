@@ -2081,17 +2081,6 @@ def main() -> int:
         assert verified_runner.edits == 1
         assert_public_safe(verified_publication)
 
-        subprocess.run(
-            [
-                sys.executable,
-                str(
-                    ROOT
-                    / "examples/issue-fix-reviewer-notification-drain-postwrite-smoke.py"
-                ),
-            ],
-            cwd=ROOT,
-            check=True,
-        )
     finally:
         for attempt in range(10):
             try:

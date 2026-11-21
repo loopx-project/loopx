@@ -205,6 +205,8 @@ def register_refresh_state_command(
         ),
     )
     refresh_state_parser.add_argument("--goal-instance-id", help=argparse.SUPPRESS)
+    refresh_state_parser.add_argument("--task-lease-idempotency-key", help=argparse.SUPPRESS)
+    refresh_state_parser.add_argument("--task-lease-expected-version", type=int, help=argparse.SUPPRESS)
     refresh_state_parser.add_argument("--completion-todo-id", help=argparse.SUPPRESS)
     refresh_state_parser.add_argument("--completion-turn-key", help=argparse.SUPPRESS)
     refresh_state_parser.add_argument(
@@ -459,7 +461,14 @@ def handle_refresh_state_command(
     outcome_update = None
     outcome_update_result = None
     goal_acceptance_preview = None
+    task_lease_proof = None
     try:
+        key = getattr(args, "task_lease_idempotency_key", None)
+        version = getattr(args, "task_lease_expected_version", None)
+        if key is not None or version is not None:
+            if key is None or not key or version is None or version < 1:
+                raise ValueError("First writeback requires the task lease key and positive version together.")
+            task_lease_proof = {"idempotency_key": key, "expected_version": version}
         inputs = parse_refresh_state_inputs(args, fmt=fmt, registry_path=registry_path)
         outcome_update = inputs.outcome_update
         agent_vision_packet = inputs.agent_vision_packet
@@ -546,6 +555,7 @@ def handle_refresh_state_command(
             dry_run=bool(args.dry_run),
             sync_global=not bool(args.no_global_sync),
             goal_ref=goal_ref,
+            task_lease_proof=task_lease_proof,
             **({"goal_acceptance_preview": goal_acceptance_preview}
                if goal_acceptance_preview is not None else {}),
         )

@@ -7,6 +7,7 @@ from typing import Any
 
 from ..control_plane.runtime.time import parse_timestamp
 from ..control_plane.todos.mutation_api import complete_goal_todo, update_goal_todo
+from .todo_source import resolve_chat_todo_source
 
 
 class ChatMonitorActionMixin:
@@ -20,9 +21,13 @@ class ChatMonitorActionMixin:
 
         goal_id = str(parameters["goal_id"])
         operation = str(parameters["operation"])
+        source = resolve_chat_todo_source(self, goal_id)
+        if basis is not None:
+            source.require_review(basis)
         if operation == "stop":
             result = complete_goal_todo(
-                registry_path=self.registry_path,
+                **source.writer_scope(),
+                routing_registry_witness=source.routing_registry_witness,
                 goal_id=goal_id,
                 todo_id=str(parameters["todo_id"]),
                 evidence="Owner stopped the continuous monitor from typed Chat action.",
@@ -35,7 +40,8 @@ class ChatMonitorActionMixin:
             )
         else:
             kwargs: dict[str, Any] = {
-                "registry_path": self.registry_path,
+                **source.writer_scope(),
+                "routing_registry_witness": source.routing_registry_witness,
                 "goal_id": goal_id,
                 "todo_id": str(parameters["todo_id"]),
                 "agent_id": str(parameters["agent_id"]),
@@ -52,6 +58,8 @@ class ChatMonitorActionMixin:
                 kwargs.update(status="open")
             else:
                 stop_condition_raw = parameters.get("stop_condition")
+                if parameters.get("task_repository"):
+                    kwargs["task_repository"] = parameters["task_repository"]
                 # Canonical intent contains the cadence, not a fresh timestamp
                 # on every retry. The TS planner derives the due date exactly
                 # once when a new operation commits; receipt recovery skips it.
@@ -108,6 +116,14 @@ class ChatMonitorActionMixin:
                         monitor_metadata=base_metadata,
                     )
             result = update_goal_todo(**kwargs)
+            if not dry_run and parameters.get("signal_scope") is not None:
+                from ..capabilities.native_chat.steward_monitor import write_steward_monitor_scope
+                target_key = str(
+                    parameters.get("target_key") or (result.get("todo") or {}).get("target_key") or ""
+                ).strip()
+                if not target_key:
+                    raise ValueError("signal_scope update requires target_key")
+                write_steward_monitor_scope(source.runtime_root, goal_id, target_key, parameters["signal_scope"])
         return result
 
     def _apply_monitor_update(

@@ -43,9 +43,13 @@ not only an apology or a one-off explanation.
      the matching durable outcome requirements through
      [outcome refinement](../loopx-project/references/outcome-refinement.md).
      Read back and reconcile affected work before dependent execution. Preserve
-     unaffected requirements; change the Goal objective only when its purpose
-     changes. Chat, a peer message, a report or Vision alone cannot update
-     acceptance. Do not invent a new approval, goal or text classifier.
+     unaffected requirements. A changed purpose or added lasting responsibility
+     in the current Goal uses its objective revision route. For an addition, keep
+     existing commitments and reconcile Todos in that Goal. Use existing creation
+     for an explicit separate Goal and reconcile scope conflicts before revising.
+     Chat, a peer message, a report or
+     Vision alone cannot update acceptance. Do not invent a new approval, goal
+     or text classifier.
    - If the corrected requirements also change the execution route, the agent
      missed the intended loop, or a product bottleneck is invisible in
      quota/status, write a bounded `goal_vision_replan_contract_v0` packet with
@@ -87,8 +91,7 @@ erase receipts or fabricate progress to escape a wait. See
 
 ## Upstream Issue Escalation
 
-A public GitHub issue is an optional final escalation, not a default side
-effect of self-repair. Consider it only when the responsible layer is a
+A public GitHub issue is an optional final escalation. Consider it only when the responsible layer is a
 reusable LoopX product, CLI, skill, installer, or control-plane gap and durable
 upstream tracking adds value beyond the local repair or PR.
 

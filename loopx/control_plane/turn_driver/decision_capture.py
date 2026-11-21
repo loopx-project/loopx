@@ -272,7 +272,7 @@ def _validate_handoff_capture_root(endpoint: Path, requested_root: Path) -> None
 
 
 def validate_handoff_socket(value: str, *, capture_root: Path | None = None) -> Path:
-    """A caller-owned local transport, not an authority or admission endpoint."""
+    """A caller-owned local transport."""
     path = Path(value)
     try:
         if (os.name != "posix" or not hasattr(socket, "AF_UNIX") or not path.is_absolute() or
@@ -396,7 +396,7 @@ def write_context_read_reference(path: Path, digest: str, *, selection: dict[str
                                  selection_paths: list[list[str | int]] | None = None,
                                  reference_file: Path | None = None,
                                  reader_argv: list[str] | None = None) -> Path:
-    """Immutable reader IO metadata, not a new identity or authority store.
+    """Immutable reader IO metadata.
 
     A short filename locates the document; only its complete stored digests are
     checked. A collision or replaced document fails closed, never overwrites.
@@ -580,8 +580,8 @@ def project_captured_context(
     The caller-owned rendezvous may supply a continuity observation. It must
     either confirm intact final input or explicitly select native lifecycle
     assumptions. Unsupported ordinary CLI clients never supply this request. Every
-    opt-in attempt saves the complete projected JSON for same-capture recovery;
-    neither malformed requests nor optimization failures rerun the guard.
+    opt-in attempt saves the complete projected JSON for same-capture recovery.
+
     A native caller may pass its already-published recovery reference, never a
     reference supplied in the external request.
     """

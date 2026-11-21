@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {resolveConversationScope, projectConversationIdentity, stewardConversationIdentity} from "../../loopx/control_plane/collaboration/conversation_scope.ts";
+import {boundConversationExecutorMatches, resolveConversationScope, projectConversationIdentity, stewardConversationIdentity} from "../../loopx/control_plane/collaboration/conversation_scope.ts";
 
 test("result review narrows runtime effects without rewriting the original grant or native store", () => {
   const context = {kind: "project_workspace", project_ref: "a".repeat(24), workspace_path: "/synthetic/project",
@@ -97,4 +97,65 @@ test("steward metadata formatting keeps the original audience with no execution 
   assert.equal(review.host_config.features.apply_patch_freeform, false);
   assert.equal(review.host_config.permissions.loopx_workspace_only_read.network.enabled, false);
   assert.throws(() => stewardConversationIdentity({context: {...context, audience: "bound_group"}, metadata_review: true}));
+});
+
+test("boundConversationExecutorMatches validates bidirectional flexible fallback", () => {
+  const row = {context_kind: "steward", audience: "owner", executor_endpoint_id: "codex"};
+  const allocation = {
+    schema_version: "manager_executor_allocation_v0",
+    selection_policy: "flexible",
+    configured_endpoint: "codex",
+    executor_endpoint: "antigravity",
+    allocation_reason: "flexible_availability_fallback",
+    configuration_revision: "rev-1",
+    eligible_endpoints: ["codex", "antigravity"],
+  };
+  const valid = {
+    agent_id: "antigravity",
+    executor_endpoint_id: "antigravity",
+    manager_executor_allocation: allocation,
+    upstream_context_history: [{agent_id: "codex", thread_id: "orig-codex-thread"}],
+  };
+  assert.equal(boundConversationExecutorMatches(row, valid), true);
+  assert.equal(boundConversationExecutorMatches(row, {...valid, upstream_context_history: []}), false);
+  assert.equal(boundConversationExecutorMatches(row, {
+    ...valid,
+    manager_executor_allocation: {...allocation, allocation_reason: "configured_preference"},
+  }), false);
+  assert.equal(boundConversationExecutorMatches({...row, audience: "group"}, valid), false);
+  assert.equal(boundConversationExecutorMatches(row, {...valid, executor_endpoint_id: "codex"}), false);
+
+  for (const [configured, migrated] of [["codex", "antigravity"], ["antigravity", "codex"]] as const) {
+    const primaryRow = {context_kind: "steward", audience: "owner", executor_endpoint_id: configured};
+    const primaryAllocation = {
+      schema_version: "manager_executor_allocation_v0",
+      selection_policy: "flexible",
+      configured_endpoint: migrated,
+      executor_endpoint: migrated,
+      allocation_reason: "flexible_primary_available",
+      configuration_revision: "rev-2",
+      eligible_endpoints: [migrated, configured],
+    };
+    const primaryMigrated = {
+      agent_id: migrated,
+      executor_endpoint_id: migrated,
+      manager_executor_allocation: primaryAllocation,
+      upstream_context_history: [{agent_id: configured, thread_id: `orig-${configured}-thread`}],
+    };
+    assert.equal(boundConversationExecutorMatches(primaryRow, primaryMigrated), true);
+    assert.equal(boundConversationExecutorMatches(primaryRow, {
+      ...primaryMigrated,
+      manager_executor_allocation: {...primaryAllocation, configured_endpoint: configured},
+    }), false);
+    assert.equal(boundConversationExecutorMatches(primaryRow, {
+      ...primaryMigrated,
+      manager_executor_allocation: {...primaryAllocation, allocation_reason: "flexible_availability_fallback"},
+    }), false);
+    assert.equal(boundConversationExecutorMatches(primaryRow, {...primaryMigrated, upstream_context_history: []}), false);
+    assert.equal(boundConversationExecutorMatches({...primaryRow, audience: "group"}, primaryMigrated), false);
+    assert.equal(boundConversationExecutorMatches(primaryRow, {
+      ...primaryMigrated,
+      manager_executor_allocation: {...primaryAllocation, selection_policy: "preferred"},
+    }), false);
+  }
 });

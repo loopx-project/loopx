@@ -34,18 +34,13 @@
       "dict_any_count": 0
     },
     "loopx/capabilities/content_ops/surface.py": {
-      "any_count": 40,
-      "dict_any_count": 0
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1700
     },
     "loopx/capabilities/issue_fix/cli.py": {
       "any_count": 5,
       "dict_any_count": 0
-    },
-    "loopx/capabilities/issue_fix/pr_lifecycle.py": {
-      "lines": 2056
-    },
-    "loopx/capabilities/native_chat/external_conversations.py": {
-      "lines": 2111
     },
     "loopx/capabilities/reward_memory/utility_reducer.py": {
       "any_count": 0,
@@ -70,9 +65,8 @@
       "lines": 2047
     },
     "loopx/chat_runtime.py": {
-      "any_count": 38,
-      "dict_any_count": 0,
-      "lines": 2524
+      "any_count": 29,
+      "dict_any_count": 0
     },
     "loopx/chat_server.py": {
       "any_count": 25,
@@ -147,9 +141,6 @@
       "any_count": 62,
       "dict_any_count": 0
     },
-    "loopx/extensions/lark/private_conversations.py": {
-      "lines": 2654
-    },
     "loopx/heartbeat_prompt.py": {
       "any_count": 17,
       "dict_any_count": 0,
@@ -168,9 +159,9 @@
       "dict_any_count": 0
     },
     "loopx/quota.py": {
-      "any_count": 219,
+      "any_count": 0,
       "dict_any_count": 0,
-      "lines": 1999
+      "lines": 1427
     },
     "loopx/slash_command_install.py": {
       "any_count": 11,

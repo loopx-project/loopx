@@ -1,7 +1,6 @@
 """Read-only content verification for explicitly registered local sources.
 
 This filesystem adapter measures bytes and uses existing Goal health diagnostics.
-It neither discovers authority from filenames nor applies software-domain rules.
 """
 from __future__ import annotations
 

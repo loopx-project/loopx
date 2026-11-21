@@ -47,7 +47,7 @@ Frontstage Pages 只验收并发布公共网站和 projection demo，保留构�
 仍由 Python Tests 承担。新合并不会中断正在运行的正式发布，只替换等待中的下一次
 发布；同一 PR 的旧验证仍会取消。
 
-本方案不是为每类 PR 维护一套测试清单，而是明确重型 job 的职责。纯前端变化不需要
+本方案是明确重型 job 的职责。纯前端变化不需要
 重跑后端持久化与崩溃恢复矩阵，但前端自己的实际构建与浏览器验收成为必需项。
 预算、静态宿主 prompt 和后端 Python/TS 逻辑暂不享受免跑；它们仍可能改变核心行为。
 新增一种豁免只需审阅其业务边界和保留的验收，不要求列举全部替代测试文件。
@@ -78,8 +78,7 @@ remain required by `checks`, as does the static lane. The existing `pytest` and
 `merge-gate` still reject any required failure, skip or missing coverage. This
 removes the full browser/TypeScript wait from Python's critical path, but allows
 up to six already-bounded Python jobs to overlap those lanes; a later browser
-failure may now coexist with running Python tests. It neither reserves hosted
-capacity nor proves a throughput improvement. `ci:full` selects all qualification,
+failure may now coexist with running Python tests. `ci:full` selects all qualification,
 without overriding failed admission; use a manual run for complete diagnostics
 of a failing revision. Older queued workflow versions keep their own policy.
 
@@ -152,8 +151,7 @@ worker 秒数、各阶段总和与最慢用例。缺失、损坏或矛盾记录�
 断言结构；子测试单独保留失败位置，不重复计时。新增 JSON 不含消息、参数、locals 或
 捕获的 IO，原 pytest 输出不变。未知类、缺失源码或诊断异常仍是证据缺口；未送达的
 报告与收集失败不在覆盖范围，不能据此完成原因归因、证明真实性或豁免完整门禁。
-并发 phase 总和不是
-runner-minutes、排队时长或 CPU 时间；不完整记录仅给出下界，环境准备与占用须结合
+不完整记录仅给出下界，环境准备与占用须结合
 job/step 时间戳。记录不进入 timing cache、不改变测试选择、不替代门禁；没有耗时
 历史时仍按原等权规则分片。
 完整 pytest node id 用 SHA-256 标识；显示名去除参数内容并限制为 256 字符。
@@ -195,7 +193,7 @@ describes the workflow topology, not how many jobs actually ran.
 
 `python_shards` 从 `checkout_sha` 对应的不可变 workflow 读取静态分片轴，当前为六片，
 不另存历史计数；不支持或不连续的拓扑直接报错，不输出猜测值。文档／前端豁免仍为零。
-它描述 workflow 拓扑，不能证明任何分片实际执行或 JUnit／coverage 已完整。
+它描述 workflow 拓扑。
 
 The merge gate requires
 success for required jobs and an explicit skip for exempt ones; failure,
@@ -294,7 +292,7 @@ coverage command runs only in shard 1, whose `lcov.info` the existing merger
 already consumes; browser coverage and acceptance receipts remain required from
 all three shards. The merger rejects missing unit coverage or incomplete browser
 acceptance. This removes two duplicate unit-coverage invocations per full or
-presentation run; it does not establish a hosted wall-time improvement.
+presentation run.
 
 旧 PR 清理独立为 CI Maintenance，保留原有来源与 head 校验，也不执行 PR 代码。
 清理成功不再显示为一次 Python Tests 成功。Dashboard 的单元覆盖率只在第 1 片

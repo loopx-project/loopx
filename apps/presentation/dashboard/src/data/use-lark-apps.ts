@@ -21,7 +21,7 @@ export function useLarkApps() {
       if (!active()) return;
       setApps(profiles);
       let next = 0;
-      // A slow profile neither holds the catalog nor other profile results.
+
       const worker = async () => {
         while (active() && next < profiles.length) {
           const profile = profiles[next++];

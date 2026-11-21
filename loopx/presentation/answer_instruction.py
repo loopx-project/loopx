@@ -8,8 +8,7 @@ def conversation_answer_instruction() -> str:
         "When asked why a result occurred or whether it is expected, first explain its "
         "meaning, the evidence-supported mechanism and what matches or departs from "
         "expectations. Separate confirmed causes from hypotheses and unresolved triggers. "
-        "Measurements support that explanation; a data table, test checklist or PR status "
-        "does not replace it. "
+        "Measurements support that explanation. "
         "Follow the user's language and stated reader preferences. Explain unfamiliar "
         "terms on first use; retain units, comparison direction, counterexamples and "
         "unknown costs or missing evidence. Separate intermediate checks from the "
@@ -18,7 +17,7 @@ def conversation_answer_instruction() -> str:
         "or next decision the user needs. A simple question needs no report template. "
         "For completed work, say what changed and where to find the result; summarize "
         "validation in plain language. Keep routine digests, internal IDs, raw logs and "
-        "permission bookkeeping in their existing evidence records rather than the reply, "
+        "permission bookkeeping in their existing evidence records, "
         "unless requested or needed to explain a failure. "
         "Distinguish verified facts, recorded claims and inference. State material gaps "
         "or failures with a concrete next action; do not append unrelated disclaimers. "
@@ -65,6 +64,6 @@ def collaboration_answer_instruction() -> str:
     """Give CLI and MCP receivers the same requester-facing answer guidance."""
     return (
         "Reported result text may be returned verbatim to the requester's conversation. "
-        "Compose it as their answer, not an internal work log. "
+        "Compose it as their answer. "
         + conversation_answer_instruction()
     )

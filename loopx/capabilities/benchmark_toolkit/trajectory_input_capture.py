@@ -32,7 +32,7 @@ def load_codex_input_observation(source_root: Path, artifact: str) -> dict[str, 
     tokenizer of an unknown/new provider model. Encoding assets may be fetched
     by tiktoken during operator registration; ordinary pack reads never tokenize.
     """
-    import tiktoken  # Optional specialized computation provider, not a state owner.
+    import tiktoken  # Optional specialized computation provider.
 
     source, source_bytes = _read(source_root, artifact)
     artifacts = [{"artifact": artifact, "artifact_sha256": hashlib.sha256(source_bytes).hexdigest()}]

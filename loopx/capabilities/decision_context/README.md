@@ -142,7 +142,7 @@ To add an observable field:
 
 The evidence packet is intended to be deterministic and auditable. The
 proposal is explicitly advisory. The review receipt settles whether the source
-material has been consumed; it is not proof of a future outcome. The outcome
+material has been consumed. The outcome
 receipt is append-only evidence; only a verified outcome may later become a
 Reward Memory candidate, and that candidate still follows Reward Memory review
 and activation.
@@ -234,8 +234,7 @@ invalid or mismatched profiles cannot call a provider. A failed recall clears
 old hits and shows the native status; restore the provider or corpus and retry.
 Use the optional retrieval controls for a one-off scope or result limit. Native
 scores apply only within that provider, not across providers or as confidence.
-The page does not enable automatic capture, host hooks, Reward Memory bindings,
-evidence settlement or execution authority. Switching between memory purposes
+Switching between memory purposes
 preserves the temporary profile, question and completed hits; an in-flight recall
 is cancelled when its pane is deactivated. Its recalled text remains private
 and untrusted; it is not a public artifact or a validated decision.
@@ -435,7 +434,7 @@ history, pagination, late edits, deletion visibility and deadlines remain provid
 contracts. Providers must support deterministic bounded replay; an unavailable
 captured revision raises a hold rather than reviewing substituted content. Use
 an explicit current-source rebase and ordinary reviewed settlement when historical
-replay is impossible. Capture health is not proof of complete decision coverage.
+replay is impossible.
 
 To stop collection, set `automatic_capture=false` and unload the host scheduler.
 Existing reviewable batches remain private and can still be prepared. To roll
@@ -491,8 +490,7 @@ The existing `max_pending_batches=N` still bounds active batches. Held history
 has a separate cap of N; new hold/restart operations stop after 2N audit records
 (at most one rollback per applicable receipt). No automatic eviction, compaction
 or repeated capacity increase is performed. At that bound, preserve/export the
-private spool and make an explicit retention decision; increasing the limit is
-not evidence consumption. A hold is explicit, not an automatic fairness policy.
+private spool and make an explicit retention decision. A hold is explicit, not an automatic fairness policy.
 It can isolate a noisy source; reserved source windows additionally prevent a
 busy source from borrowing other sources' future capacity. Neither mechanism
 replaces semantic review: a full source needs oldest-batch review or explicit

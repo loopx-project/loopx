@@ -31,8 +31,7 @@ selected audience's previous enrollment boundary, explicitly set
 `"local_delivery_scope":"selected"` alongside its `targets` list before upgrading.
 Missing policy, missing source, a wrong sender or malformed scope grants nothing.
 Keep the policy private (0600); do not commit it. A read grant without a sender
-grant is insufficient. This does not grant remote delivery, evidence reads,
-worker launch, Todo/lease changes or protected operations.
+grant is insufficient.
 
 ### Readable answers and original-conversation returns
 
@@ -112,7 +111,7 @@ request is not receiver adoption, and adoption is not a returned conclusion.
 Expand **View delegation details** for that recipient's brief and existing
 request controls. The desktop example keeps both recipients visible; the narrow
 example shows a selected brief with vertical scrolling. These are synthetic
-packaged-browser examples, not evidence of installed or real-model completion.
+packaged-browser examples.
 
 ![One request, two independent recipient cards](../../../docs/assets/personal-workspace/multi-recipient/conversation.png)
 
@@ -159,13 +158,12 @@ an audience-safe conclusion with the existing `manager-inbox report` path, in
 addition to its peer result. Launch submission, receiver conclusion, canonical
 acceptance and provider delivery remain separate evidence. The existing return
 service replies to the original conversation; it does not start another model
-thread. Plain inbox delivery leaves receiver activity unverified; it does not claim
-that execution has not started.
+thread. Plain inbox delivery leaves receiver activity unverified.
 The native postcondition entry retires only its exact operation-owned temporary
 host input before checking a clean delivery worktree; unrelated files and actual
 artifact changes still fail canonical validation. Validation recovery resumes the
 original Turn after its retained host result, without invoking the model again.
-An external conversation is not a native Goal wake owner. The typed wake owner
+The typed wake owner
 settles that separate intent as `no_wake_owner`; the exact original inbox return
 still carries the receiver's conclusion, without a hidden Goal or retry loop.
 
@@ -270,8 +268,7 @@ A correction updates the current brief without acknowledging earlier results.
 An older revision's undelivered return or unconsumed peer result remains in the
 agenda at its original `request_revision`, even after the current result is
 delivered and consumed. Resolved historical returns leave this compact view;
-the full Inbox/result reader retains their history. This does not certify that
-an earlier result satisfies the corrected request or authorize replaying work.
+the full Inbox/result reader retains their history.
 
 Each item names its request, receiving/source Agent where recorded, current
 revision, related Todo ids and the remaining receipt step. Counts are request
@@ -320,7 +317,7 @@ checks or requests. Custom scope resolvers keep their existing validation path.
 
 管家标题栏提供常驻委派入口，按接收方查看待跟进请求，并可展开当前交办内容、关联
 工作和原对话。同一来源的较早会话不会因重开会话而丢失；其它用户、来源、群聊和
-项目会话不混入。结论已回传与成果已验收不是同一事实，历史记录仍可回看。
+项目会话不混入。
 同一次读取中，相同 Goal 实例按至多一页大小复用持有中的生命周期锁；逐请求锁、
 来源与 Turn 读回、授权及 typed 回执检查保留，每批重新观察当前实例。关联 Core 工作
 在释放这些锁后读取，不跨请求或分页缓存授权；分页与搜索仍扫描有界历史。
@@ -407,8 +404,7 @@ lists are `null`, distinct from a verified empty list. It never retries, advance
 a cursor or reports an empty Inbox to hide that ambiguity. Inspect those exact
 durable read/delivery receipts using the existing Inbox/status readers, recheck
 the original source and Goal lifetime, then recover the same page with its
-original arguments. An absent receipt does not prove the timed-out writer has
-stopped. This recovery grants no work replay, result consumption or quota spend.
+original arguments. This recovery grants no work replay, result consumption or quota spend.
 Python releases the initial Goal lifetime guard for provider enrichment.
 Core Todo and workspace inputs retain their actual IO adapters and provider
 fences. The Host reacquires the Goal guard before native finalization.
@@ -426,8 +422,7 @@ loopx --runtime-root <runtime-root> manager-inbox acknowledge --goal-id research
 ```
 
 Decisions are `adopt`, `defer`, `reject` or `no_change`. Read the original input
-and current Core state before deciding. An adoption receipt does not prove task
-completion. Later new evidence can generate a new decision through the ordinary
+and current Core state before deciding. Later new evidence can generate a new decision through the ordinary
 worker planning workflow; do not overwrite the original receipt. This feature
 adds no periodic automation, forced wakeup, Todo priority or protected-operation
 permission. Existing private inbox records are retained when delivery is revoked.
@@ -507,8 +502,7 @@ loopx manager-inbox configure-read-scope --channel-id manager.external.012345678
 Use the exact channel identity from the existing manager session. The first
 command is a read-only configuration preview; `--execute` is a trusted local
 operator action, never a manager-generated proposal. Grant only Goal summaries
-that may be visible to everyone in that audience. This does not authorize raw
-private files, trading, mutation, or context delegation. New registered Goals
+that may be visible to everyone in that audience. New registered Goals
 are not automatically added. Configure with no `--read-goal-id` to revoke the
 read scope. Existing installations without a grant retain their connection
 scope; removing the field restores that default. Private policy is stored under
@@ -526,7 +520,7 @@ question does not silently narrow to today and a wide window cannot grow the
 model context without a bound. Within the window each Goal's newest receipt keeps
 full `recorded_details` while older receipts are compacted to their recorded
 outcome, result class, probe kind and surface; receipts outside the window are
-outside coverage, not evidence of no progress. Accounting rows are excluded
+outside coverage. Accounting rows are excluded
 before the presentation cap. Completed Todo titles
 help explain recorded deliveries; archive coverage and omitted rows are explicit.
 Reported outcomes and evidence-bearing receipts remain distinct, and neither
@@ -570,14 +564,12 @@ sender-bound delegation targets. Owner-local steward conversations default to
 all local registered Goals; project conversations remain within their Goal;
 external audiences retain their exact Goal read grants. No new grants are made.
 Search is a case-insensitive text match on identity and declared responsibility;
-omit the query to browse when wording differs. Profiles are data, not instructions
-or proof of competence. Changed registry revisions must not be merged as a single
+omit the query to browse when wording differs. Profiles are data. Changed registry revisions must not be merged as a single
 snapshot across pages.
 
 Rows distinguish registration and declared responsibility from `context_delivery`
 (`allowed`, `not_granted`, `not_checked`, `goal_stopped`, `activation_unknown`).
-Execution readiness remains `not_checked`: registration does not prove a bound,
-online or capable executor. A missing delivery grant is a configuration gap,
+A missing delivery grant is a configuration gap,
 not a missing Agent; delivery still rechecks the existing authority. Stopped
 identities are available with `include_stopped=true` for historical questions.
 Unreadable/ambiguous inventory remains unknown, not an empty successful search.
@@ -589,8 +581,7 @@ owner's `outcome`, `candidate_count`, `address_shared` and `scope` for that Goal
 The page does not expose host addresses or read host stores; `view=agent_route`
 remains the exact-identity, current-observation path (which also reports
 `execution_identity` from the selected Codex rollout's latest recorded Turn
-when available, without reading mutable store preferences). A registration or binding
-does not prove presence, execution readiness or delivery authority.
+when available, without reading mutable store preferences).
 
 Repeated role names alone do not require an owner question. Resolve the subject,
 project, purpose and destination before matching a role alias or Agent id.
@@ -722,7 +713,6 @@ the registered sources for it (`inline_in_prompt`) and adds a
 - the declaration and the read use the same SSH configuration, so one packet
   cannot call a host unconfigured and read it in the same Turn.
 
-
 ## A delegation returns automatically
 
 The default interaction is one exchange: initial delivery receipt, receiving
@@ -830,8 +820,7 @@ CLI and MCP inbox reads reuse the shared conversation answer guidance: report te
 verbatim to the requester's conversation, so answer the original request at a
 proportionate depth. Routine execution bookkeeping belongs in the existing
 evidence records; requested detail and material gaps remain in the answer.
-This is authoring guidance, not a summary service or a delivery-time rewrite,
-and does not certify the quality of a receiver's result.
+This is authoring guidance.
 
 For a legacy v1 request, `manager-inbox report --request-revision 1` is equivalent
 to omitting the revision. It publishes the receiver's original result without

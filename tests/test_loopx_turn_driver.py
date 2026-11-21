@@ -1772,7 +1772,7 @@ def test_scheduler_followup_binding_preserves_turn_lineage(
 ) -> None:
     payload = {
         "scheduler_hint": {
-            "codex_app": {"ack_hint": {"cli_args": ["quota", "scheduler-ack-current"]}}
+            "app_automation": {"ack_hint": {"cli_args": ["quota", "scheduler-ack-current"]}}
         }
     }
 
@@ -1783,7 +1783,7 @@ def test_scheduler_followup_binding_preserves_turn_lineage(
         source="loopx_turn_plan",
     )
 
-    ack_hint = payload["scheduler_hint"]["codex_app"]["ack_hint"]
+    ack_hint = payload["scheduler_hint"]["app_automation"]["ack_hint"]
     assert ack_hint["cli_args"][:2] == ["--registry", str(tmp_path / "registry.json")]
     assert ack_hint["route_binding"]["source"] == "loopx_turn_plan"
 
@@ -1923,8 +1923,8 @@ def test_quota_cli_projects_outer_controller_without_codex_app_action(
     hint = payload["scheduler_hint"]
     assert exit_code == 0, payload
     assert hint["execution_context"]["codex_app_applicability"] == "not_applicable"
-    assert hint["codex_app"]["applicability"] == "not_applicable"
-    assert "stateful_backoff" not in hint["codex_app"]
+    assert hint["app_automation"]["applicability"] == "not_applicable"
+    assert "stateful_backoff" not in hint["app_automation"]
     assert hint["execution_phase"]["scheduler_owner"] == "outer_controller"
     assert hint["execution_phase"]["completed"] is True
     assert hint["execution_phase"]["apply_needed"] is False
@@ -1958,7 +1958,7 @@ def test_quota_cli_without_scheduler_context_fails_closed(tmp_path: Path) -> Non
     assert exit_code == 0, payload
     assert hint["action"] == "repair_scheduler_execution_context"
     assert hint["execution_context"]["valid"] is False
-    assert hint["codex_app"]["applicability"] == "blocked_invalid_context"
+    assert hint["app_automation"]["applicability"] == "blocked_invalid_context"
 
 
 @pytest.mark.parametrize("context_delivery", ["off", "on"])
@@ -2048,8 +2048,8 @@ def test_quota_cli_codex_app_profile_is_explicit_and_applicable(
     hint = payload["scheduler_hint"]
     assert "execution_context" not in hint
     assert "execution_phase" not in hint
-    assert hint["codex_app"]["applicability"] == "applicable"
-    assert "stateful_backoff" in hint["codex_app"]
+    assert hint["app_automation"]["applicability"] == "applicable"
+    assert "stateful_backoff" in hint["app_automation"]
 
 
 def test_quota_cli_short_context_flags_preserve_all_typed_fields(

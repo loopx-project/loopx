@@ -38,11 +38,12 @@ caller's selected executable. Deep diagnosis still requires recorded module and
 console entrypoints; redirected or missing records fail. The host supplies
 the model, tools and scheduler; the wheel does not provide them or activate an
 optional capability from goal wording. `connect` and `configure-goal` remain
-available for explicit setup. Create and claim work through the existing `todo`
-commands. An ordinary managed claim
-prepares the default SQLite lease without asking the task model to manage lease
-flags. Completion carries the original captured lease generation; recovery
-refuses a renewed, released or replaced generation rather than adopting it.
+available for explicit setup. Create work through `todo add`. With an explicitly
+selected `generic-cli` v1 adapter and an independent validator, `turn run-once
+--execute` prepares a missing lease for the eligible Todo before dispatch.
+Completion and recovery use the original captured lease generation. Recovery
+refuses a renewed, released or replaced lease. The ordinary `todo claim`
+command is available for explicit preparation.
 The installed-only qualification in
 [`tests/test_core_distribution.py`](../../tests/test_core_distribution.py)
 exercises setup, independent result validation, process loss, replay and refusal.

@@ -3746,7 +3746,7 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     identity = guard["heartbeat_receipt"]["settlement_identity"]
     assert identity["todo_id"] == TODO_ID
     assert identity["effect_id"] == (f"{GOAL_ID}:{AGENT_ID}:{TODO_ID}:{TURN_ID}")
-    original_ack_hint = guard["scheduler_hint"]["codex_app"]["ack_hint"]
+    original_ack_hint = guard["scheduler_hint"]["app_automation"]["ack_hint"]
 
     complete_args = (
         "todo",
@@ -3888,9 +3888,10 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     assert _spend_run_count(runtime) == 1
 
     # A historical settlement receipt cannot issue a new scheduler operation.
-    assert settled_replay["scheduler_hint"]["action"] == "preserve_current_schedule"
-    for surface in ("app_automation", "codex_app"):
-        assert "ack_hint" not in settled_replay["scheduler_hint"][surface]
+    settled_scheduler = settled_replay["scheduler_hint"]
+    assert settled_scheduler["action"] == "preserve_current_schedule"
+    assert "codex_app" not in settled_scheduler
+    assert "ack_hint" not in settled_scheduler["app_automation"]
     assert original_ack_hint["args"]["turn_instance_id"] == TURN_ID
     assert original_ack_hint["cli_args"][-3:] == [
         "--turn-instance-id",
@@ -5659,10 +5660,12 @@ def test_pending_deferred_p0_allows_independent_p1_selection(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("renew_before_wait", [False, True])
 def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
     tmp_path: Path,
     provider: str,
     monkeypatch: pytest.MonkeyPatch,
+    renew_before_wait: bool,
 ) -> None:
     from canonical_authority_fixture import (
         isolate_sqlite_runtime,
@@ -5701,6 +5704,19 @@ def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
     assert prepared["heartbeat_receipt"]["settlement_identity"] == (
         first["heartbeat_receipt"]["settlement_identity"]
     )
+    original_proof = prepared["execution_preparation"]["lease_proof"]
+    lease_version = original_proof["expected_version"]
+    if renew_before_wait:
+        renew_rc, renewed = _run_cli(
+            registry_path, runtime, "task-lease", "renew", "--goal-id", GOAL_ID,
+            "--todo-id", TODO_ID, "--owner", AGENT_ID,
+            "--idempotency-key", original_proof["idempotency_key"],
+            "--expected-version", str(lease_version), "--ttl-seconds", "3600",
+        )
+        assert renew_rc == 0 and renewed["renewed"], renewed
+        assert renewed["lease"]["idempotency_key"] == original_proof["idempotency_key"]
+        assert renewed["lease"]["version"] > lease_version
+        lease_version = renewed["lease"]["version"]
     # This result exists before the lifecycle wait; recovery must account for
     # it without executing more work or rebinding the original Turn.
     artifact = project / "verified-before-wait.txt"
@@ -5722,6 +5738,8 @@ def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
         "--todo-id", TODO_ID,
     )
     assert inspect_rc == 0 and inspected["lease"]["status"] == "released", inspected
+    assert inspected["lease"]["version"] == lease_version
+    assert inspected["lease"]["idempotency_key"] == original_proof["idempotency_key"]
     replay_rc, replay = _run_cli(registry_path, runtime, *guard)
     assert replay_rc == 0, replay
     assert replay["effective_action"] == "unsettled_host_turn_recovery"
@@ -5776,6 +5794,15 @@ def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
     write_args = ("refresh-state", *binding, "--classification", "verified_before_wait",
         "--delivery-batch-scale", "single_surface", "--delivery-outcome", "outcome_progress",
         "--agent-vision-json", str(vision), "--no-global-sync", "--suppress-external-sinks")
+    if renew_before_wait:
+        stale_rc, stale = _run_cli(
+            registry_path, runtime, *write_args,
+            "--task-lease-idempotency-key", original_proof["idempotency_key"],
+            "--task-lease-expected-version", str(original_proof["expected_version"]), cwd=project,
+        )
+        assert stale_rc == 1 and stale["error_code"] == "refresh_task_lease_unavailable", stale
+        assert stale["appended"] is False
+        assert _classification_count(runtime, "verified_before_wait") == _spend_run_count(runtime) == 0
     rc, written = _run_cli(registry_path, runtime, *write_args, cwd=project)
     assert rc == 0, written
     rc, replayed_write = _run_cli(registry_path, runtime, *write_args, cwd=project)
@@ -6859,7 +6886,7 @@ def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
     assert plan_identity["binding_id"] == identity["binding_id"]
     assert plan_identity["replan_obligation_id"] == obligation_id
     assert plan_identity["turn_instance_id"] == turn_instance_id
-    original_scheduler_ack_args = guard["scheduler_hint"]["codex_app"][
+    original_scheduler_ack_args = guard["scheduler_hint"]["app_automation"][
         "ack_hint"
     ]["cli_args"]
     original_scheduler_ack_args = original_scheduler_ack_args[

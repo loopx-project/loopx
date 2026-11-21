@@ -278,7 +278,7 @@ def build_lark_command_runner(
         if dispatch_guard is not None:
             with dispatch_guard():
                 process = subprocess.Popen(
-                    args, cwd=str(cwd) if cwd else None, env=env, text=True,
+                    args, cwd=str(cwd) if cwd else None, env=env, text=True, encoding="utf-8",
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 )
             with process:

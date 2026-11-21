@@ -48,11 +48,11 @@ GPT 实例除 `CODEX_HOME=$HOME/.codex-gpt` 与 `--user-data-dir=.../Codex GPT` 
 - 克隆发 Apple Events 报 `Sender process is not authenticated`（错误 `-10000`），App 每 ~0.4 秒重试一次、每次泄漏一个 `SkyComputerUseService` 子进程，几分钟内打爆进程表。
 - 症状：zombie 上千、load average 400+、CLI / 测试全部 `fork: Resource temporarily unavailable`。
 
-结论：**该授权无法通过系统设置或 TCC 授权解决**（不是权限 checkbox，是发送者签名身份校验）；需要 Computer Use 时请用官方签名实例。
+需要 Computer Use 时请用官方签名实例。
 
 ### 2. 不要用 `launchctl submit` 做「延迟重启」
 
-`launchctl submit -l <label> -- ...` 会注册 **keepalive 常驻任务**：进程退出后 launchd 反复拉起（实测几十到上百次），而不是一次性的延迟执行。
+`launchctl submit -l <label> -- ...` 会注册 **keepalive 常驻任务**：进程退出后 launchd 反复拉起（实测几十到上百次）。
 
 正确做法：
 
@@ -76,7 +76,7 @@ LoopX agent 在检测到 zombie 积压（父进程不响应回收）时会强制
 
 App 启动时会重写 `config.toml` 并回填它管理的键（例如 Computer Use 的 `notify` hook、`SKY_CUA_SERVICE_PATH`）。因此：
 
-- 想禁用一个 App 级能力，优先从 App 管理方（能力目录 / 插件开关 / 服务路径）下手，而不是只删 config 行。
+- 想禁用一个 App 级能力，优先从 App 管理方（能力目录 / 插件开关 / 服务路径）下手。
 - 修改 config 前先备份，并在 App 重启后复查是否被回写。
 
 ## 验证清单
@@ -93,11 +93,11 @@ ps -Ao state= | awk 'substr($1,1,1)=="Z"{z++} END{print z+0}'   # zombie 回到�
 
 - LoopX agent（loopx-meta 等心跳）在 DS home 运行；GPT home 用于官方模型 + 开发机。
 - provider 切换（DeepSeek / 方舟 / OpenCode Go）只作用于 DS home，不碰 GPT home。
-- 本 runbook 属于操作知识，不是 LoopX capability；只有当其中的切换机制被抽象成可安装、可测试的 adapter 时，才适合升级到 `docs/integrations/`。
+- 本 runbook 属于操作知识；只有当其中的切换机制被抽象成可安装、可测试的 adapter 时，才适合升级到 `docs/integrations/`。
 
 ## 相关工具生态：CC Switch / AgentSwap / CLIProxyAPI（CPA）
 
-多 App / 多 Provider 管理不是单一工具能覆盖的。下面按「配置层 → 运行时韧性层 → 协议翻译层」三层拆解，明确边界与风险。
+下面按「配置层 → 运行时韧性层 → 协议翻译层」三层拆解，明确边界与风险。
 
 ### 配置层：CC Switch（farion1231/cc-switch）
 

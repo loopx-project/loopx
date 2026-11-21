@@ -1,4 +1,4 @@
-"""On-demand composition inputs, not a second configuration or memory store."""
+"""On-demand composition inputs."""
 
 from pathlib import Path
 from typing import Any

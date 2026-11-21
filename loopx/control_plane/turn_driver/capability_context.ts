@@ -4,7 +4,7 @@ import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts
 import {requireBoolean, requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
 import {decodeTurnSource, quotaActionSignatureDocument, turnEnvelopeActionSignatureDocument} from "../quota/turn_envelope.ts";
 
-// This is a local host-IO contract, not a new capability or authority vocabulary.
+// This is a local host-IO contract.
 // Capability providers own enablement. These rules only bound their contributions.
 const RESERVED = new Set([
   "schema_version", "turn_key", "turn_envelope", "work_contract", "source_decision_hash",

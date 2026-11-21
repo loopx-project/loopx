@@ -8,9 +8,7 @@
 实跑，以及明确的开销报告。
 
 L1 observer 观察一个长时运行的 Agent 会话，并写下独立的诊断记录；它**永远不能**
-影响该会话。本能力把这条承诺做成机器合约而不是口头规范：envelope schema 无法表达
-命令，receipt 记录 outbound endpoint 为空集，observer 故障被计数并让证据进入
-quarantined，projection 携带 `mode: read_only` 与 `authority: none`。
+影响该会话。
 
 ```mermaid
 flowchart LR
@@ -145,15 +143,14 @@ loopx reliability-diagnostics ingest  --goal-id <goal-id> --input observer.ndjso
 ```
 
 实时年龄／stall 评估应像上述 POSIX shell 示例一样，向 `--as-of` 传入带时区的当前时间。
-省略时按最后事件时间进行历史重放，最后事件年龄为零，不能证明当前仍存活。
+省略时按最后事件时间进行历史重放，最后事件年龄为零。
 
 显式 `--as-of` 必须是含 `Z` 或 UTC 偏移的 ISO-8601 时间戳。空字符串、格式错误或
 无时区的值均返回退出码 2，即使 ledger 缺失、为空或损坏；是否开启 `--with-receipt`
 不影响此校验。
 
 `status --with-receipt` 从同一次 ledger 读取返回两个现有合同；省略该选项保留原来的
-projection-only 输出，不授予控制权限，也不激活 observer。并发追加不是原子快照，
-末尾半行仍会导致 integrity 失败。接入轮询前应阅读
+projection-only 输出，不授予控制权限，也不激活 observer。接入轮询前应阅读
 [DSH/Pi 评估](../../../docs/architecture/rfcs/harness-selection-dsh-pi-v0.zh-CN.md)
 中的全量读取与身份边界。
 
@@ -172,8 +169,7 @@ parity）。启用后，`observer.ts` 只观察 `session/created`、`session/eve
 
 人工离线导出／删除／恢复演练使用
 [本地 retention 参考方案（v0）](docs/local-retention-v0.md#中文)。它保留完整 ledger 字节与
-负面完整性证据，要求冻结 writer 并由 owner 选择有限保留期限；没有实现自动 TTL，也不构成
-live 部署验收。操作 regular file 前会验证 provider 目录与 CLI 的 canonical runtime 布局一致。
+负面完整性证据，要求冻结 writer 并由 owner 选择有限保留期限；没有实现自动 TTL。操作 regular file 前会验证 provider 目录与 CLI 的 canonical runtime 布局一致。
 旧文件仍可只读回查，但必须离线核对后才能恢复追加；方案说明了升级和回退步骤，
 归属不明确时须暂停删除。冻结 writer 后一起升级 CLI 与插件。
 
@@ -218,8 +214,7 @@ projection 报告 `read` 上的重复、一次已恢复的错误、无 stall。
 不做 dashboard、不做 L2 建议、不做自动恢复、不回写 goal / todo / gate / session runtime、
 不改 `loopx status` 首屏。适配器要求外部固定 goal/session/run identity；不会通过 Driver
 或 LoopX CLI 发现绑定。本原型也不提供 matched native/L1 执行、真实 DSH host 测量，或一次合格 C1 实跑。
-bench 工具只在 synthetic 事件流上测量 observer 组件开销，不构成 live 资格。
-
+bench 工具只在 synthetic 事件流上测量 observer 组件开销。
 
 ### 精确绑定与新鲜度
 
@@ -233,5 +228,5 @@ stats 已有的八个 treatment 字段。非法参数以退出码 2 拒绝；不
 未来观测或最新观测超龄都会拒绝，并把 `stage` 设为 `unknown`；计数与信号仍是历史
 账本证据。原因码为本地读取合同的 `no_observations`、`session_identity_mismatch`、
 `run_identity_mismatch`、`integrity_not_valid`、`observation_in_future`、
-`observation_stale`。匹配只证明观测可采纳，不证明任务成功。读取不会过滤冲突运行、
+`observation_stale`。匹配只证明观测可采纳。读取不会过滤冲突运行、
 写状态、调用 provider 或启用轮询。

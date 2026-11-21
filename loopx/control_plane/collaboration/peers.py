@@ -1,7 +1,6 @@
 """Same-Goal peer consultation through the existing request and reply stores.
 
-The trusted local CLI selects registered identities, like manager-inbox read;
-this is not a remote authentication boundary or a transfer of work ownership.
+The trusted local CLI selects registered identities, like manager-inbox read.
 """
 
 from __future__ import annotations

@@ -4,7 +4,7 @@ import {discardGoalStorage, fetchGoalStorage, previewGoalStorage, recoverGoalSto
 import {useWorkspaceI18n} from "./i18n";
 
 /** Restore opaque intent from the owning server across native origin changes.
- * Neither that carrier nor cached source facts replace current source checks. */
+ *  */
 export function GoalStorageSettings({goalId, onChanged}: {goalId: string; onChanged: () => void}) {
   const {t} = useWorkspaceI18n();
   const key = `loopx-storage-preview:${goalId}`;

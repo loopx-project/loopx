@@ -278,7 +278,7 @@ def test_failed_quota_invocation_keeps_receipt_ack_and_exact_settlement(
     code, guard = _guard(project, runtime, registry)
     assert code == 0 and guard["normal_delivery_allowed"] is True, guard
     receipt = guard["heartbeat_receipt"]
-    hint_args = guard["scheduler_hint"]["codex_app"]["ack_hint"]["cli_args"]
+    hint_args = guard["scheduler_hint"]["app_automation"]["ack_hint"]["cli_args"]
 
     # Exercise the real parameter-error audit, rather than fabricating a receipt.
     code, rejected = settlement._run_cli(

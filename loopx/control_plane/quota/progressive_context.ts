@@ -39,12 +39,16 @@ function orderedSettlementSteps(plan: JsonObject | null | undefined): unknown[] 
     && Array.isArray(plan.ordered_steps) ? plan.ordered_steps : undefined;
 }
 
+export function normalWorkReadContext(context: JsonObject): boolean {
+  return context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
+    && jsonObject(jsonObject(context.interaction_contract)?.agent_channel)?.delivery_allowed === true;
+}
+
 function readySettlementIdentity(context: JsonObject, interaction: JsonObject,
     plan: JsonObject | null | undefined): JsonObject | undefined {
   const cli = jsonObject(interaction.cli_channel), prepared = jsonObject(cli?.execution_preparation);
   const identity = jsonObject(plan?.identity);
-  return context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
-    && jsonObject(interaction.agent_channel)?.delivery_allowed === true && cli?.selection_required !== true
+  return normalWorkReadContext(context) && cli?.selection_required !== true
     && prepared?.state === "ready" && typeof identity?.effect_id === "string" && identity.effect_id.length > 0
     && typeof identity.todo_id === "string" && prepared.todo_id === identity.todo_id
     && jsonObject(context.selected_todo)?.todo_id === identity.todo_id
@@ -652,7 +656,8 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
         + "Repeat --select to batch needed fields without replaying the outcome's requirements. "
         + "unread_context_index lists supporting fields not observed read in this epoch, or changed since that read. "
         + "source_blocks conservatively includes partially read current sources; this index is not a full-read gate. "
-        + "Use its source path and sha256 with quota context-read --select for each exact pointer. "
+        + "Substitute the exact pointer in context_details.command_template, or use the source path and sha256 "
+        + "with quota context-read --select. "
         + "A prior selected read, EOF or saved file does not confirm model-visible coverage or retention. "
         + "Detail reads never establish a full baseline. "
         + "Uncertain or missing necessary facts must be recovered before dependent action; Agent review is not independent acceptance."};
@@ -762,8 +767,10 @@ export function prepareProgressiveContext(request: JsonObject, plan?: JsonObject
   return contextProjectionChanges(source, {context: required.context, projected: required.projected}, values, undefined, true);
 }
 
+type InitialOpeningSplit = {controls: Map<string, string[]>; details: string[]; linkedDetail: string};
+
 function prepareInitialOpening(context: JsonObject, groups: ReturnType<typeof initialContextReadGroups>,
-    scope?: Path): {boundary: string; detail: string; controls: string[]; checkpointEntries?: string} | undefined {
+    scope?: Path): InitialOpeningSplit | undefined {
   const cli = jsonObject(jsonObject(context.interaction_contract)?.cli_channel);
   const candidate = "/selected_todo";
   if (cli?.selection_required === true && groups.opening.includes(candidate)) {
@@ -772,35 +779,55 @@ function prepareInitialOpening(context: JsonObject, groups: ReturnType<typeof in
     const controls = ["selection_required", "selection_policy_ref", "selection_command",
       "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy"]
       .map(field => pointer(["interaction_contract", "cli_channel", field]));
-    for (const control of [...controls, "/action_portfolio/selection_policy"]) {
+    for (const control of [...controls, "/action_portfolio/selection_policy",
+      "/action_portfolio/suggested_actions"]) {
       const index = groups.remaining.indexOf(control);
       if (index >= 0) groups.opening.push(...groups.remaining.splice(index, 1));
     }
-    return {boundary: candidate, detail: candidate, controls: []};
+    return {controls: new Map([[candidate, []]]), details: [candidate], linkedDetail: candidate};
   }
   if (!scope) return undefined;
   const parent = scope.slice(0, -1), detail = scope.at(-1)!;
   const body = jsonObject(at(context, parent)), boundary = pointer(parent);
-  if (!groups.opening.includes(boundary) || !body
-      || !Array.isArray(body[detail]) || !body[detail].length) return undefined;
+  const controls = new Map<string, string[]>();
+  const details: string[] = [];
+  let linkedDetail: string | undefined;
+  if (groups.opening.includes(boundary) && body && Array.isArray(body[detail]) && body[detail].length) {
+    const boundaryControls = Object.keys(body).filter(key => key !== detail).map(key => pointer([...parent, key]));
+    linkedDetail = pointer(scope);
+    details.push(linkedDetail);
+    controls.set(boundary, boundaryControls);
+    const checkpointPath = [...parent, "checkpointed_boundary_authority"];
+    const checkpoint = jsonObject(at(context, checkpointPath));
+    if (checkpoint?.schema_version === "checkpointed_boundary_authority_v0"
+        && Array.isArray(checkpoint.active_write_scope) && Number.isSafeInteger(checkpoint.active_count)
+        && Number.isSafeInteger(checkpoint.inactive_count) && Array.isArray(checkpoint.entries)
+        && checkpoint.entries.length) {
+      // Keep the current approval summary in the opening. Read the exact
+      // entries and write scope from the same capture before work.
+      const checkpointIndex = boundaryControls.indexOf(pointer(checkpointPath));
+      boundaryControls.splice(checkpointIndex, 1, ...Object.keys(checkpoint).filter(key => key !== "entries")
+        .map(key => pointer([...checkpointPath, key])));
+      details.push(pointer([...checkpointPath, "entries"]));
+    }
+  }
+  const selected = jsonObject(context.selected_todo), requested = "required_write_scopes";
+  const scopes = selected?.[requested];
+  if (groups.opening.includes(candidate) && selected?.schema_version === "quota_selected_todo_v0"
+      && Array.isArray(scopes) && scopes.length && scopes.every(value => typeof value === "string" && value)) {
+    controls.set(candidate, Object.keys(selected).filter(key => key !== requested)
+      .map(key => pointer(["selected_todo", key])));
+    // Current requested scopes need this read even when the Goal's exact
+    // write scope can carry forward from an earlier observation.
+    linkedDetail = pointer(["selected_todo", requested]);
+    details.push(linkedDetail);
+  }
+  if (!linkedDetail) return undefined;
   // Current readiness belongs with the decision. Reorder only the new pinned
   // reader, so an explicit historical initial-read cursor still replays.
   const preparation = groups.remaining.indexOf("/interaction_contract/cli_channel/execution_preparation");
   if (preparation >= 0) groups.opening.push(...groups.remaining.splice(preparation, 1));
-  const controls = Object.keys(body).filter(key => key !== detail).map(key => pointer([...parent, key]));
-  const checkpointPath = [...parent, "checkpointed_boundary_authority"];
-  const checkpoint = jsonObject(at(context, checkpointPath));
-  const opening = {boundary, detail: pointer(scope), controls};
-  if (checkpoint?.schema_version !== "checkpointed_boundary_authority_v0"
-      || !Array.isArray(checkpoint.active_write_scope) || !Number.isSafeInteger(checkpoint.active_count)
-      || !Number.isSafeInteger(checkpoint.inactive_count) || !Array.isArray(checkpoint.entries)
-      || !checkpoint.entries.length) return opening;
-  // Keep the current approval summary in the opening. The exact entries and
-  // write scope are both required from the same capture before work.
-  const checkpointIndex = controls.indexOf(pointer(checkpointPath));
-  controls.splice(checkpointIndex, 1, ...Object.keys(checkpoint).filter(key => key !== "entries")
-    .map(key => pointer([...checkpointPath, key])));
-  return {...opening, checkpointEntries: pointer([...checkpointPath, "entries"])};
+  return {controls, details, linkedDetail};
 }
 
 /** Invocation-local navigation, not captured input or a read/retention receipt.
@@ -817,8 +844,8 @@ function nativeContextReadPlan(context: JsonObject, pointers: string[],
   let {opening, remaining} = groups;
   if (openingSplit) {
     // The reader chooses the split using the actual serialized opening.
-    opening = opening.flatMap(field => field === openingSplit.boundary ? openingSplit.controls : [field]);
-    remaining = [openingSplit.detail, ...(openingSplit.checkpointEntries ? [openingSplit.checkpointEntries] : []), ...remaining];
+    opening = opening.flatMap(field => openingSplit.controls.get(field) ?? [field]);
+    remaining = [...openingSplit.details, ...remaining];
   }
   const ordinaryRows = openingSplit ? (plan.selections as ReadSelection[]).reduce((end, row, index) =>
     groups.opening.some(field => field === row.pointer || field.startsWith(row.pointer + "/"))
@@ -826,7 +853,7 @@ function nativeContextReadPlan(context: JsonObject, pointers: string[],
   // Keep the ordinary fallback in the same order as the observed selection.
   return {initial: true, plan, ...(opening.length && remaining.length
     ? {opening: select(opening), remaining: select(remaining)} : {}),
-    ...(openingSplit ? {linked_opening_detail: openingSplit.detail, ordinary_opening_rows: ordinaryRows} : {})};
+    ...(openingSplit ? {linked_opening_detail: openingSplit.linkedDetail, ordinary_opening_rows: ordinaryRows} : {})};
 }
 
 export function initialContextReadPointers(context: JsonObject, decisionFields: readonly string[]): string[] {
@@ -1003,8 +1030,8 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   const selectingBeforeWork = context.ok === true && context.should_run === true &&
     channel?.delivery_allowed === false && cli?.spend_allowed_now === false &&
     cli.spend_after_validation === false && hasUnboundActionSelection(cli);
-  const normalWork = context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
-    && (channel?.delivery_allowed === true || selectingBeforeWork);
+  const normalWork = normalWorkReadContext(context) || context.effective_action === EffectiveAction.NORMAL_RUN
+    && context.normal_delivery_allowed === true && selectingBeforeWork;
   // The same pending owner read applies before a required replan. Delivery
   // remains disabled while that review is being settled.
   const replanningBeforeWork = replanRequired && context.ok === true && context.should_run === true

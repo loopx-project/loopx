@@ -155,6 +155,17 @@ complete contract. They do **not** establish a current authority-loss bug: the
 recommendation is diagnostic, the unknown field is synthetic, and the complete
 source commitment still distinguishes both inputs. No model benefit is measured.
 
+The release-only host-prompt decision probe composes its realistic external-wait
+case through the existing complete-source TypeScript owner. Thin and brief modes
+receive one checked source instance per probe batch, including complete task and
+stop text; the scenario validator reads the source portfolio directly instead
+of constructing an old compact packet. The four small independent decision
+controls remain synthetic. The frozen raw/v0 model corpus and supported history
+readers are unchanged. This migrates qualification input, not the ordinary CLI
+writer or installed Host: provider execution remains explicitly release opt-in,
+and scripted probe passes do not qualify model behavior, settlement, accepted
+outcomes or complete cost.
+
 ### Differential context
 
 Reuse the existing context-delivery owner and immutable capture mechanism.
@@ -578,6 +589,12 @@ design, not a claim that these paths have changed.
 | `turn_driver/codex_cli.py::_prompt` and `host_candidate.py::extract_turn_authority` / `render_prompt` | Replace format-specific model inputs at the actual prompt boundary. Today ordinary Codex receives the envelope, staged replan uses extracted authority, and structured hosts use extracted authority. Shared source bytes or signatures do not prove these final inputs preserve the same obligations. Keep provider result encoding and outer effect ownership. |
 | `turn_driver/decision_capture.py` and `cli_commands/quota_capture.py` | Reuse immutable capture, validated readers and full/delta delivery. Fresh delivery and saved-capture recovery must reconstruct the same contract; do not reuse a continuity baseline for a different projection merely because its Turn identity matches. |
 | `benchmark/runtime/worker.py`, `benchmark/runtime/sessions.py` and `scripts/external_scheduler_worker.py` | Migrate the product entry they actually invoke. Keep evaluation setup and outer wake ownership; do not add benchmark-only conversion or count a managed-host test as attached-host acceptance. |
+
+The current heartbeat generator uses `interaction_contract` for target
+selection, required reads and exact Turn settlement. Saved bootstrap wrappers
+reload that generator on wake. All in-tree generation callers use this route,
+so the old envelope-specific instructions and their prompt budget allowance
+are retired. Previously captured work still uses its recorded recovery reader.
 
 Before replacing any seam, its implementation PR records source path, field or
 instruction clause, current readers, target owner, representation, recovery and

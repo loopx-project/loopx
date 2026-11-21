@@ -119,8 +119,7 @@ def restore_receipt_bound_todo_source(
     """Complete a display snapshot from the original binding's provider reader.
 
     Display lane caps cannot decide whether a committed Todo still exists.
-    This only transports provider facts to the existing decision owner; it
-    neither changes lifecycle nor substitutes a new settlement binding.
+    This only transports provider facts to the existing decision owner.
     """
     from ..todos.quota_summary import select_planning_inventory_source_items
 
@@ -130,10 +129,10 @@ def restore_receipt_bound_todo_source(
         # owner still validates the original source identity and timestamps.
         from ..todos.list_readback import list_goal_todos
 
-        source = list_goal_todos(
+        goal_todos = list_goal_todos(
             registry_path=registry_path, runtime_root_arg=str(runtime_root), goal_id=goal_id,
         )
-        todo_fields = {key: source[key] for key in ("user_todos", "agent_todos")}
+        todo_fields = {key: goal_todos[key] for key in ("user_todos", "agent_todos")}
         queue = payload.get("attention_queue") or {}
         return {**payload, "attention_queue": {**queue, "items": [
             {**row, **todo_fields,
@@ -599,6 +598,38 @@ def _apply_recovery_projection(
     )
     if attention:
         payload["effective_action"] = EffectiveAction.BLOCKED_WAIT.value
+    recovery_lease_proof: dict[str, Any] | None = None
+    if not attention and recovery.get("repair") == "monitor_poll":
+        from .execution_preparation import project_selected_todo_execution_preparation
+
+        agent_identity = payload.get("agent_identity")
+        agent_id = (
+            agent_identity.get("agent_id")
+            if isinstance(agent_identity, Mapping)
+            else payload.get("agent_id")
+        )
+        prior_todo_id = recovery.get("binding_id")
+        if (
+            isinstance(prior_todo_id, str)
+            and prior_todo_id.strip()
+            and isinstance(payload.get("goal_id"), str)
+            and payload["goal_id"].strip()
+            and isinstance(agent_id, str)
+            and agent_id.strip()
+        ):
+            preparation = project_selected_todo_execution_preparation(
+                runtime_root=runtime_root,
+                goal_id=payload["goal_id"],
+                selected_todo={"todo_id": prior_todo_id},
+                agent_id=agent_id,
+            )
+            if (
+                isinstance(preparation, Mapping)
+                and preparation.get("handoff_mode") == "hard_lease"
+                and preparation.get("state") == "ready"
+                and isinstance(preparation.get("lease_proof"), Mapping)
+            ):
+                recovery_lease_proof = dict(preparation["lease_proof"])
     interaction_contract, arbitration = _build_interaction_contract_projection(
         payload,
         agent_scope_frontier_actions=[action.value for action in AgentScopeFrontierAction],
@@ -607,6 +638,7 @@ def _apply_recovery_projection(
         turn_instance_id=current_turn_instance_id,
         runtime_root=str(runtime_root),
         registry_path=str(registry_path),
+        recovery_lease_proof=recovery_lease_proof,
     )
     agent_channel = interaction_contract.get("agent_channel")
     if isinstance(agent_channel, dict):

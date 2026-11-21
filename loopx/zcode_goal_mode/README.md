@@ -131,8 +131,7 @@ plugins or Automations.
 `pause` retains the target for explicit resume. `stop` confirms pause, clears
 the native target and closes the managed process; it preserves the session
 history and binding for a later explicit start. Read status before retrying an
-operation whose response was lost. A disconnected readback does not claim the
-native process is running. Cleanup remains available for the same registered
+operation whose response was lost. Cleanup remains available for the same registered
 identity after the LoopX Goal is stopped; execution does not.
 
 To change the selected CLI, stop first, then repeat `bind --zcode-cli ...`.
@@ -180,9 +179,7 @@ Focused validation covers quota denial/revocation, stale/replacement identity,
 negative protocol/CAS/permission cases, durable lost-receipt recovery, process
 ownership, model selection and frontend readback. Real CLI qualification uses
 an isolated database and local model substitute, with real Core and packaged
-frontend entry points. It does not establish live provider billing, Desktop
-attachment, multi-Agent collaboration or general unattended qualification.
-
+frontend entry points.
 
 ### Same-owner packaged validation
 

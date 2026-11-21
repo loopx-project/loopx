@@ -168,8 +168,7 @@ is explicitly a draft: concept identity is path-based, Markdown links form the
 graph, and `index.md` and `log.md` support progressive disclosure and history.
 
 This helps LoopX as an interchange and export shape for repository knowledge.
-It does not replace retrieval, trust, freshness, permissions, issue routing, or
-domain-state transitions. The near-term contract therefore accepts a generic
+The near-term contract therefore accepts a generic
 `knowledge_bundle` source ref and remains format-agnostic. Add a concrete OKF
 importer only when a live producer and consumer need it and the draft has
 stabilized enough to justify compatibility work.

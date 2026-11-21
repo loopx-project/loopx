@@ -219,7 +219,7 @@ def _upgrade_desktop(plan: dict[str, Any], timeout_seconds: int) -> dict[str, An
                 [str(app / "Contents/MacOS" / executable),
                  "--loopx-upgrade-prepare", f"--loopx-upgrade-request={request_id}",
                  f"--loopx-upgrade-channel={plan['channel']}"],
-                capture_output=True, text=True, timeout=timeout_seconds,
+                capture_output=True, text=True, encoding="utf-8", timeout=timeout_seconds,
             )
             result = json.loads(prepared.stdout)
             target = result.get("target") if isinstance(result, dict) else None

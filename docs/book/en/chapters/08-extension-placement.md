@@ -198,8 +198,7 @@ lifecycle, keep it in the nearest owning module.
 
 Suppose the current project needs to convert two internal states into one dict, with no external caller
 and no independent version-compatibility requirement. Turning it into a Capability or Extension would
-add manifest, doctor, and upgrade cost. Shared code may justify a helper; it does not prove a need for
-independent installation and lifecycle.
+add manifest, doctor, and upgrade cost.
 
 ### 2. Provider for an existing Capability
 
@@ -211,7 +210,7 @@ The Provider can be:
 - built-in: shipped with LoopX core;
 - extension-delivered: supplied by an independent Extension.
 
-Accessing an external system is not the only test for an Extension. A connector that shares the core
+A connector that shares the core
 release lifecycle and is always maintained by core can still be a built-in Provider.
 
 ### 3. New Capability
@@ -307,7 +306,7 @@ enables, and runs doctor themselves. A core built-in works as soon as LoopX is i
 declared into a catalog read reports `declared=true, installed=false, enabled=false, ready=false`; it
 does not become usable merely by existing.
 
-**Cost three: a public contract needs maintenance.** A new Capability needs a stable caller outcome, a real entrypoint, and validation. One Provider can satisfy these conditions. Independent installation alone is insufficient, and provider count is not a gate.
+**Cost three: a public contract needs maintenance.** A new Capability needs a stable caller outcome, a real entrypoint, and validation. One Provider can satisfy these conditions. Independent installation alone is insufficient.
 
 **Boundary one: this decision governs ownership inside the LoopX product surface, not someone else's
 repository layout.** An independently distributed provider lives in its own package or repository;
@@ -325,7 +324,7 @@ it go." Whether an outcome has value is answered by a Goal and its acceptance.
 
 ### "It calls an external API, so create a connector Capability"
 
-Transport is not the caller outcome. Find who needs the result and whether an existing Capability already
+Find who needs the result and whether an existing Capability already
 owns it.
 
 ### "Declare `[[provides]]` now and add the caller later"
@@ -340,7 +339,7 @@ or managing resources is an effect and must go through a Capability or domain co
 
 ### "Several files share code, so make an Extension"
 
-Shared code may justify a helper. It does not prove a need for independent installation and lifecycle.
+Shared code may justify a helper.
 Abstraction follows the change reason, not the file count.
 
 ## Placement used by this book

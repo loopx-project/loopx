@@ -38,7 +38,7 @@ def _nested_value(payload: dict, path: str):
 
 
 def scheduler_reset_profile_snapshot(scheduler: dict) -> dict:
-    codex_app = scheduler["codex_app"]
+    codex_app = scheduler["app_automation"]
     unchanged_poll = scheduler["unchanged_poll"]
     limits = unchanged_poll["limits"]
     return {

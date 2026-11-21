@@ -4,7 +4,7 @@
 - **交付成熟度：** Proposal
 - **作者 / 负责人：** LoopX maintainers
 - **创建：** 2026-09-26
-- **最近规范性修订：** 2026-11-17
+- **最近规范性修订：** 2026-11-19
 - **实现基线：** 发行盘点 `2f3d13ae9`；运行时装配审计 `9cae3b28939f72fa4aadab5cfe49e19bcbdab372`
 - **相关契约：** [TypeScript 控制面迁移 v0](typescript-control-plane-migration-v0.zh-CN.md)、[Extensions 参考](../../reference/extensions.md)、[Capability 目录](../../../loopx/capabilities/README.md)、[总体路线图 v0](loopx-overall-roadmap-v0.zh-CN.md)（S2、S8、S12）、[import 边界测试](../../../tests/architecture/test_control_plane_import_boundaries.py)
 - **跟踪 issue：** [#5072](https://github.com/loopx-project/loopx/issues/5072)
@@ -25,7 +25,7 @@
 
 1. **仓库保持单一 monorepo。** 一条 PR 流程、一套 CI、一个发布列车。拆成多个 Git 仓库是本 RFC 的非目标。
 2. **安装物拆成多个发行物。** 单一 `loopx` wheel 逐步替换为 `loopx-core`、`loopx-workspace` 以及 `packages/` 下的按 capability 打包；`loopx` 保留为依赖全部子包的 meta-package。
-3. **先做顶层目录重组，再做打包变更。** `loopx/chat_*` 迁入 `loopx/chat/`，`loopx/*_goal_mode/` 迁入 `loopx/hosts/`，已建立的公开 import 保留至少一个 minor 版本的兼容 re-export；内部调用方一起迁移并删除旧内部入口。
+3. **按独立打包所需重组所选依赖闭包。** `loopx/chat_*` 迁入 `loopx/chat/`，`loopx/*_goal_mode/` 迁入 `loopx/hosts/`，已建立的公开 import 保留至少一个 minor 版本的兼容 re-export；内部调用方一起迁移并删除旧内部入口。
 4. **新增一条架构测试钉住顶层增长。** `loopx/*.py` 的文件数只能减少，与现有零例外 import 边界测试并列。
 5. **仅内核安装不得在 import 阶段要求 Node.js。** TS effect runtime 对有副作用的命令仍是必需的；缺失时必须以现有的类型化 `node_unavailable` 诊断呈现，而不是安装或 import 失败。
 6. **不变：** 内核权威、CLI 兼容基线、extension 生命周期规则、公开/私有边界、全部稳定协议。
@@ -38,6 +38,15 @@ Minimal 必须执行并恢复真实的受治理任务；standard 围绕同一内
 “小”分别从安装依赖、加载代码、激活服务、模型可见上下文衡量。
 发行表定义可安装内容，不代表每条命令都必须加载。安装 standard 不授予服务激活或权限。
 现有默认值与机器强制工作义务持续生效，直到合格且明确披露的迁移改变它们。
+
+当前优先结果是可独立安装、执行任务、恢复原结果并返回证据的 core。无关目录移动、
+workspace 打包或额外模型会话不阻塞这一 core 发行物切片；完整 M3 仍保留全部发行
+验收。普通调用者提供任务与关键约束，不必先学 Vision、Quota、Lease 或方法名称。
+Host 承担记账；必要的权限、预算、不确定性与恢复决策仍在相关时可见。
+
+**10% 复杂度／90% 当前功能覆盖率**仍是未验证假设。固定版本化用户旅程分母，比较
+必要概念、必经步骤、加载／启用代码、模型读取、完整成本和已验收成果。分别报告
+仅内核与组合后的覆盖率；不能从分母删除特化旅程，也不能以代码计数代替模型收益。
 
 ## 2. 问题与动机
 
@@ -181,6 +190,16 @@ Planner 可以建议工作或 stride，所属迁移规则决定准入与义务�
 预设不能把机器强制的 `must_attempt_work` 契约变成文字 guidance。
 内核是内聚领域的集合，不是一个大文件。相邻重构应让下一次修改更局部，并保持已刻画的行为。
 
+### 必要机制与可选任务方法
+
+Core 负责合法限定工作、持久证据、停止、预算及原 attempt 恢复。Bench、workbench、
+管家围绕相同 owner 组合特化工作流；它们缺席不能阻塞无关的已授权 core 工作。
+**Yardstick 是独立可选的决策方法，不是 provider 或强制内核阶段。** 方法选择如何
+推理或衡量；provider 提供执行、存储或具体外部操作。复用既有 capability owner 和
+`yardstick_enabled`，不增加方法 registry、provider id 或开关。关闭方法不免除普通
+结果验收。保留既有记录、已配置义务、权限与默认值；移除方法／依赖须独立证明组件
+缺席、一致性与恢复。
+
 ### 发行层之上的预设
 
 | 装配 | 必需内容 | 显式可选内容 |
@@ -193,6 +212,13 @@ Planner 可以建议工作或 stride，所属迁移规则决定准入与义务�
 Minimal 是可执行装配，不是在 standard 完成全部初始化后加开关。
 不带宿主的只读 kernel library 不构成可执行预设资格。
 精确内容与首个受支持宿主/authority 组合由 D2/D5 决定。
+
+首批 **Standard** 选型提案为：`agent-turn-recall` 取回相关既有指导，`issue-fix`
+交付已验证仓库变更，`pull-request-review` 执行交付审查。保留各自既有 owner 和默认
+关闭设置；安装不授予来源访问、不启动 watcher，也不授权发布或合并。仅加载所选
+任务实现；可选指导召回缺席时，Minimal 仍保有基本恢复。Yardstick、Stride、研究／
+benchmark 机制与管家路由继续独立可选。这选定 R2 的目标，现有单体和 core 候选 wheel
+尚未实现该隔离分包组合。
 
 装配、managed/attached 模式、宿主 provider、一个/两个模型 Session、存储 provider、benchmark arm
 保持独立。Minimal 不意味着 attached，standard 不要求双模型 Session，research 不等于不受治理。
@@ -289,12 +315,20 @@ Capability 指令仅在适用时提供；authority 不能从 prompt 文字推导
 其延迟不能进入准入/结算事务。只批处理尽力而为的 telemetry；不能为满足时间目标而延迟
 authority receipt 持久化、弱化 fsync/事务保证，或缓存过期权限/租约决策。
 
+普通任务获准执行后，内置 Worker 视图省去已知为空的 Todo 摘要列表。所选任务、
+非空列表、计数、引用与来源截断信息继续可见。签名来源和原有读取入口保留完整摘要，
+供恢复与诊断使用。
+
 ### 受治理生命周期与外部副作用
 
 通过统一工作契约使用既有 Goal/Agent/work/Turn 身份、revision、lease、effect id 与 receipt。
 解析装配，校验要求和 authority，准入工作，经绑定宿主执行，验证并持久化证据，结算一次，
 再经所属 channel 交付/回读。各步骤使用既有合法迁移与重放规则；这段描述不新增竞争的 status enum
 或事务协调者。
+
+显式执行 `turn run-once --execute` 时，兼容的通用 CLI 宿主配合独立校验器，可为准入
+Todo 补齐缺失的租约。宿主复用普通领取操作，核对同一 Todo 已就绪后再派发。领取与
+派发共用同一 Turn 身份。恢复使用原尝试捕获的租约代次。
 
 Executor 崩溃、effect ACK 丢失、结果交付 ACK 丢失是不同恢复情形。
 Operation provider 必须说明某个 effect 能否核对、能否安全重试。
@@ -344,6 +378,10 @@ minimal 包含持久 shell、图像读取与 compaction。SDK minimal 还提供�
 借鉴显式边界，不引入 Cordis、上游权限默认值或新的 LoopX 模型 loop。固定来源见附录 C。
 
 ## 7. 安全、隐私与兼容
+
+普通 C1 组装和重放沿用 Explore 的共享指引及精确上下文引用。图和规划关闭时，
+空读取在加载图投影前返回既有的关闭状态。有范围的 Explore 读取在图可用且 Goal
+启用评估时加载 Yardstick。设置、证据身份和恢复继续由当前 Goal 与 Explore 负责。
 
 - **默认关闭 / 功能关闭一致性：** 缺失 `loopx-workspace` 或 capability 包时，行为等同现有 extension off state（I4）。没有命令会静默回退到另一实现。
 - **公开/私有边界：** 不变。`loopx check` 继续扫描每个包；移动文件不改变其扫描类别。
@@ -442,6 +480,8 @@ Live、性能和晋级证据分别记录。
 M0–M5 保留原发行里程碑；R0–R4 是同一计划中的运行时和旅程资格切片。
 R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，不阻塞已合格的 CLI 或 managed 任务。
 真实调用者出现前不增加闲置 provider、字段或框架。每个 PR 记录应用/推迟的相邻重构。
+
+- 检查点已移至执行台账：[Core 发现入口检查点（2026-11-19）](ledger/monorepo-distribution-split-v0/2026-11-19-core-discovery-checkpoint.zh-CN.md)。
 
 <a id="subtraction-gate"></a>
 

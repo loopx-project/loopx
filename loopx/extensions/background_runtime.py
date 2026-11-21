@@ -1,6 +1,6 @@
 """Python worker hosting only; providers retain permission and effect ownership.
 
-A live thread is not proof of provider health. Retry is explicit and applies to
+Retry is explicit and applies to
 the supplied host loop, never to an individual external/model request.
 """
 from __future__ import annotations

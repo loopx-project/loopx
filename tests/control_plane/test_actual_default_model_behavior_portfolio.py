@@ -722,6 +722,8 @@ def test_live_packet_builder_preserves_gate_and_vision_contracts(tmp_path: Path)
         "activation_state": "goal_selection_required",
         "activation_allowed": False,
         "activation_required_after_todo_write": False,
+        "host_surface": None,
+        "activation_method": None,
     }
     assert (
         onboarding_entry_semantic_contract(packets["onboarding_goal_selection_gate"])[
@@ -1890,3 +1892,42 @@ def test_portfolio_oracle_rejects_waiting_on_capability_monitor_repair(
     assert scenario["status"] == "failed"
     assert scenario["repeats_completed"] == 2
     assert "source_mismatch:decision" in scenario["failure_codes"]
+
+
+def test_portfolio_max_workers_matches_sequential_receipt(
+    tmp_path: Path,
+) -> None:
+    sources, packets = _scenario_inputs(tmp_path)
+    sequential = run_actual_default_model_behavior_portfolio(
+        packets,
+        scenario_sources=sources,
+        qualification_id="actual-default-portfolio-seq",
+        turn_actor=_turn_actor,
+        onboarding_actor=_onboarding_actor,
+        selected_todo_actor=_selected_todo_actor,
+        replan_semantic_action_actor=_replan_semantic_action_actor,
+    )
+    parallel = run_actual_default_model_behavior_portfolio(
+        packets,
+        scenario_sources=sources,
+        qualification_id="actual-default-portfolio-seq",
+        turn_actor=_turn_actor,
+        onboarding_actor=_onboarding_actor,
+        selected_todo_actor=_selected_todo_actor,
+        replan_semantic_action_actor=_replan_semantic_action_actor,
+        max_workers=4,
+    )
+    assert parallel == sequential
+
+    for bad_workers in (0, -1, True):
+        with pytest.raises(ValueError, match="max_workers"):
+            run_actual_default_model_behavior_portfolio(
+                packets,
+                scenario_sources=sources,
+                qualification_id="actual-default-portfolio-invalid-workers",
+                turn_actor=_turn_actor,
+                onboarding_actor=_onboarding_actor,
+                selected_todo_actor=_selected_todo_actor,
+                replan_semantic_action_actor=_replan_semantic_action_actor,
+                max_workers=bad_workers,
+            )

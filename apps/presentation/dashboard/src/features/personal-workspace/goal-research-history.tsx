@@ -68,10 +68,11 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const requestedCase = caseMode.goalId === goalId ? caseMode.requested : null;
   const caseReading = requestedCase ?? !preferHistory;
   const hasCases = (analysis.snapshot?.catalog.packs ?? []).some(pack => pack.case_study_summary);
-  // Preserve the saved reading during catalogue loading or failure. A
-  // successful catalogue without a study falls back to the original history.
+  // A link to a particular version stays in the case reader even when that
+  // version has no study. An unpinned visit can fall back to ordinary history.
   const awaitingRequestedCase = requestedCase === true && (analysis.loading || Boolean(analysis.readError));
-  const deferHistory = requestedCase === true && (hasCases || awaitingRequestedCase);
+  const caseViewAvailable = hasCases || awaitingRequestedCase || (requestedCase === true && analysis.location.packId !== null);
+  const deferHistory = requestedCase === true && caseViewAvailable;
   const historySource = JSON.stringify([goalId, originalGoalId, readSourceUrl]);
   const [openedHistorySource, setOpenedHistorySource] = useState<string | null>(null);
   const readHistory = active && (!deferHistory || openedHistorySource === historySource);
@@ -530,13 +531,13 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   </Fragment> : null;
   const emptyHistoryMessage = zh ? "这个 Goal 尚无研究历程" : "No research history for this Goal yet";
   const selectedStrategy = hasNativeSource && !emptySourceHistory ? strategies.selection : null;
-  const readingCase = caseReading && (hasCases || awaitingRequestedCase) && (requestedCase === true || selectedStrategy === null);
+  const readingCase = caseReading && caseViewAvailable && (requestedCase === true || selectedStrategy === null);
   const alternateReading = readingCase ? <ResearchCaseReading analysis={analysis} active={active}/>
     : selectedStrategy !== null ? <GoalSourceStrategies key={strategies.scope} goalId={goalId} originalGoalId={originalGoalId}
       sourceUrl={readSourceUrl} zh={zh} selection={selectedStrategy}
       onSelect={strategies.choose} onClose={() => strategies.choose(null)}/> : null;
   return <>
-    {hasCases || awaitingRequestedCase ? <div className="research-reading-views" role="group" aria-label={zh ? "研究视图" : "Research view"}>
+    {caseViewAvailable ? <div className="research-reading-views" role="group" aria-label={zh ? "研究视图" : "Research view"}>
       <button type="button" aria-pressed={!readingCase} onClick={() => {
         if (readingCase) {analysis.closeCitation(); setCaseMode(false);}
       }}>{zh ? "研究历程" : "Research history"}</button>

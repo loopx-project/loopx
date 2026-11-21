@@ -208,7 +208,7 @@ def test_receipt_bound_failure_hint_executes_native_without_python(
     )
     assert returncode == 0, guard
     guard = read_cli_policy_payload(json.dumps(guard), returncode=returncode)
-    hint = guard["scheduler_hint"]["codex_app"]["failure_hint"]
+    hint = guard["scheduler_hint"]["app_automation"]["failure_hint"]
     assert "--scheduler-host-facts-chunk" in hint["cli_args"]
 
     entry, env = _launcher(tmp_path, launcher, python=str(tmp_path / "python-must-not-run"))

@@ -69,8 +69,7 @@ Executable public smoke:
 python3 examples/loopx-turn-fake-host-walkthrough-smoke.py
 ```
 
-Path B is optional. It does not replace path A for Codex, Claude Code, Cursor,
-shell, Grok Build, or other cooperative hosts.
+Path B is optional.
 
 ## What a custom runtime must not do
 

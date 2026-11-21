@@ -41,22 +41,31 @@ is an independent readback and recovery entry point. A provider that still
 fails remains closed until its per-extension doctor result is repaired and the
 command passes. See [Extension lifecycle](../reference/extensions.md#runtime-lifecycle).
 
+For an archive installed with custom directories, keep the same
+`LOOPX_BIN_DIR` and `LOOPX_RELEASES_DIR` overrides when rolling back.
+Unset or empty overrides use the default locations.
+
 Do not collapse package acquisition, host-material delivery, core runtime
 activation, and enabled-extension readiness into one "installed" claim. The
 [installation guide's active-layer checklist](../guides/installing-loopx.md#verify-the-active-layers)
 names the readback and recovery command for each layer.
 
 For a pip or pipx distribution, apply delegates to that owner. For an archive
-snapshot, apply uses the public `stable` ref by default and preserves atomic
-snapshot rollback. Before replacing the launcher, `loopx update --rollback
-previous` checks that the selected release can read the current authoritative
-Todos for registered local File and SQLite Goals. If it cannot verify the read,
-the running version and Goal state stay in place. Both the registry's configured
-runtime and an explicit runtime override participate in this check. Rollback
-holds the installer's existing promotion lock through Todo checks, activation,
-Doctor and recovery. Recovery restores only the launcher installed by that
-operation, preserving a later replacement. Use a release with a matching state
-backup if older code cannot read the current data. Use `loopx update plan
+snapshot, apply uses the public `stable` ref by default. Before replacing the
+launchers, `loopx update --rollback previous` checks that the selected release
+can read the current authoritative Todos for registered local File and SQLite
+Goals. Both the registry's configured runtime and an explicit runtime override
+participate in this check. Rollback switches `loopx` and an archive-managed
+`loopx-apply-rrule` to the selected release under the installer's promotion lock.
+A selected release must provide an executable scheduler helper if the helper
+is managed by that archive installation. The lock covers Todo checks, both
+replacements, Doctor and recovery. Rollback verifies each destination against
+its original inode immediately before replacing it. A changed destination,
+an interrupted or failed switch, or a failed core Doctor triggers recovery
+only for links still owned by the rollback. A failed extension Doctor leaves
+the selected release active so the extension can be repaired.
+Use a release with a matching state backup if older code cannot read the
+current data. Use `loopx update plan
 --ref main` and `loopx update apply --ref main` only for maintainer/dev archive
 qualification. Re-running the curl installer remains a repair path when an
 archive wrapper is too broken to run its own updater.
@@ -238,8 +247,7 @@ and editable setup remain untouched. A build destination overlapping the
 source package is rejected. Explicit `bdist_wheel --skip-build` still packages
 the selected existing build; it is not a fresh-source qualification. Before
 qualifying retirement, inspect the built wheel and run its installed entry
-points outside the source checkout; a source
-test or a manually cleaned build directory alone does not prove this rule.
+points outside the source checkout.
 
 Before a recovery dispatch, inspect the existing `pypi` environment's allowed
 branch/tag refs as well as the Trusted Publisher and enabled variable:
@@ -914,7 +922,6 @@ path, and canary route rather than as a user-facing release baseline.
   published verified CI outputs after cancelling queued publication jobs.
   Windows execution, Apple Developer ID/notarization, live Lark/Bot channels
   and unavailable Harbor/SForge/PostgreSQL/NoKV environments remain unqualified.
-  This release does not claim a paired-version benchmark uplift.
 
 - `v1.3.1` on 2026-10-06 16:10 +08:00: a focused compatibility release at
   commit `7445ae360aaf330e0067959a5e0084ffd9f76de4`, adapting the renderer to
@@ -942,8 +949,7 @@ path, and canary route rather than as a user-facing release baseline.
   rendering. At the frozen source, 515 public smokes and 360 affected Python
   checks passed; the authorized DS Flash/high alternative passed all 22
   scenarios twice and six contrasts, with zero failures or skips. Earlier
-  Doubao qualification failures remain unqualified; this does not claim a
-  fresh full-tree Python sweep. Windows execution, Apple notarization,
+  Doubao qualification failures remain unqualified. Windows execution, Apple notarization,
   authenticated Host interaction, external backend execution and sustained
   SQLite qualification remain unqualified. No paired-version benchmark uplift
   or isolated Astra causal effect is claimed.
@@ -1038,6 +1044,17 @@ path, and canary route rather than as a user-facing release baseline.
   default and the readback path. Read it before replacing an existing
   installation; artifact and native-host claims remain those stated by that
   release note.
+
+- `v2.3.0` release at commit
+  `92271fe114916428be6fd36558bb7a93fbe49da8` (2026-11-09).
+  The Git `stable` ref, CLI archive and bundled macOS runtime matched the tag.
+  GitHub and PyPI carry matching Python wheel and source packages.
+  The signed desktop stable feed for this release serves Apple Silicon macOS.
+  Windows stable upgrades use the MSI or NSIS installer.
+  [Published release](https://github.com/loopx-project/loopx/releases/tag/v2.3.0),
+  [PyPI packages](https://pypi.org/project/loopx/2.3.0/#files).
+  Check the installation owner and read back an existing Goal after updating.
+  [Versioned upgrade guide](https://github.com/loopx-project/loopx/blob/v2.3.0/docs/product/releases/v2.3.0.md#upgrade).
 
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.
@@ -1271,8 +1288,7 @@ PR numbers in commit titles are navigation, not a completeness check. Confirm
 that metadata coverage reaches the whole range, resolving unmatched integration
 commits through their associated merged PRs. Check an author's earlier merged
 PR history before calling a contribution first-time. Reconcile both language
-lists and their summary counts against that verified set; a formatting gate
-does not establish source completeness. Refresh this evidence when the final
+lists and their summary counts against that verified set. Refresh this evidence when the final
 release range changes.
 
 Organize the remaining release note into the following stable groups. Omit an
@@ -1303,7 +1319,7 @@ non-empty English group, or weaken contributor attribution.
 Within each non-empty group, every material claim must carry one or more direct
 GitHub pull-request links such as
 `[#2051](https://github.com/huangruiteng/loopx/pull/2051)`. A compare link is
-still useful at the end, but it does not replace per-claim PR attribution.
+still useful at the end.
 Avoid bare PR ranges as the only evidence because ranges can hide omitted or
 unrelated changes.
 
@@ -1386,9 +1402,7 @@ available, with the following durable procedure:
 
 Record the guide URL and verified ownership/readback in the existing private
 release checkpoint. Credentials, account identifiers, private reference URLs,
-drafts, and raw evidence do not belong in public repository changes. This
-procedure authorizes neither chat/group announcements nor posts to other
-social channels; those retain their own authorization boundaries.
+drafts, and raw evidence do not belong in public repository changes.
 
 ### Final Release Body Usage Gate
 

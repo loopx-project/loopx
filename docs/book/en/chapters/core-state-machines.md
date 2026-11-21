@@ -6,14 +6,13 @@ covered Todos, claims, and authority, and chapter 03 covered the transaction ord
 This chapter is where they converge. Read in isolation, each mechanism holds up. The question here is
 the one only this chapter can answer: **how do they connect back into a single loop?**
 
-The short answer is: **LoopX is driven by cooperating state-machine families, but its highest-level model
-is not “nine machines messaging one another.” It is one
+The short answer is: **LoopX is driven by cooperating state-machine families; its highest-level model is one
 effectful Agent Loop.** The Harness interprets effect requests from an Agent or Host; bounded state
 machines such as Todo, Gate, Quota, Settlement, and Scheduler then determine the legal action for their
 part of the flow. They connect through durable facts, typed contracts, guarded transitions, and receipts
 instead of overwriting each other's state.
 
-LoopX does not advance a Goal through one giant state machine. It assigns durable work, turn decisions,
+It assigns durable work, turn decisions,
 evidence settlement, scheduling, and UI projection to state machines with explicit owners. This chapter
 establishes vocabulary and abstraction levels first, explains why the design is split this way, shows the
 cooperation loop, expands each state-machine family, and closes with the cost of the design. You can
@@ -79,7 +78,7 @@ validated observation becomes durable fact; and the receipt plus projection conn
   for changing direction. They are not one whole-object Goal state, and one completed Todo is not Goal completion.
 - **Facts and views — source / authoritative fact, derived decision, projection**: source is durable
   owner-written fact; decision is the current rule result; projection is a view for an Agent, Host, or person.
-  Not every displayed field is writable, and projection is not a second source of truth.
+  Not every displayed field is writable.
 - **Action and proof — effect request / proposal, observation, transition, evidence, receipt**: proposal
   requests an action; observation reports external fact; transition accepts legal change; evidence supports
   a judgment; receipt proves an identified commit. A request is not authority, and a tool result is not
@@ -118,7 +117,7 @@ Collapsing these concerns into `Goal.status` or allowing an Agent to replace `Go
 erase another Agent's progress. A network timeout would no longer say whether to retry, read back, or
 compensate. Display fields would also drift into becoming sources of truth.
 
-Cooperation does not mean direct messaging. The nine state-machine families connect primarily through
+The nine state-machine families connect primarily through
 four stable interfaces:
 
 1. **Source facts**: reducers / interpreters read Todo, event, lease, Vision, and receipt facts.
@@ -147,7 +146,7 @@ flowchart TD
   Facts -.-> Projection["projection<br/>Workspace / status"]
 ```
 
-This is not a sequence diagram in which state machine A calls state machine B. Source facts, typed
+Source facts, typed
 decisions, effects, observations, and receipts are what pass between stages. Each machine owns only its
 decision table and legal transitions.
 
@@ -282,8 +281,7 @@ This is why side effects are modeled separately: a model can change its mind, bu
 be rolled back by editing context. Validation, version/identity guards, reconciliation, compensation events,
 and replanning turn the error into another verifiable transition instead of an untraceable chat conclusion.
 This idempotent-recovery guarantee has a precise boundary: it applies to settlement steps with a durable
-journal, an `effect_ref`, and a provider readback resolver. It is not a promise that every external tool
-call is automatically deduplicated. Settlement fails closed when the resolver is missing, raises, or
+journal, an `effect_ref`, and a provider readback resolver. Settlement fails closed when the resolver is missing, raises, or
 returns an unknown state.
 
 ## How nine state-machine families compose one Loop
@@ -610,8 +608,7 @@ Todo, acceptance, or no-follow-up delta is `replan_noop` and cannot clear the ob
 ### Goal activation does not mean automation is enabled
 
 The typed Goal activation source has only `active` and `stopped`. `active` means that the control plane
-may continue evaluation; it does not prove that a Host heartbeat is installed or that eligible work
-currently exists. Complete onboarding still proceeds through:
+may continue evaluation. Complete onboarding still proceeds through:
 
 ```text
 project registered
@@ -639,7 +636,7 @@ transcript, or a local path breaks the public/private boundary.
 
 ## What makes LoopX a closed loop
 
-Closed-loop operation in LoopX is not “the Agent did something,” and it is not the same as `Todo=done`.
+
 A more precise definition is: **the result of an effect is validated and written back to the authoritative
 source that owns that fact, so the control plane can derive either the next legal action or a proven stop.**
 If the result remains
@@ -789,7 +786,7 @@ therefore not a state you can decide on; it has to be proven item by item.
 services, and extensions do not align to that number. What actually binds is the typed owner, the protocol
 schema, and the transition rules.
 
-**Boundary two: this map does not replace the migration boundary.** The owner in the diagram and the
+The owner in the diagram and the
 implementation language are separate dimensions. When a semantic is already carried by a TypeScript
 owner, rebuilding it in Python from this teaching map creates a second source of truth.
 
@@ -798,8 +795,7 @@ durable journal, an `effect_ref`, and a provider readback resolver carry that gu
 external call is not automatically deduplicated because this chapter mentions reconciliation; settlement
 fails closed when the resolver is missing or returns an unknown state.
 
-**Boundary four: the diagram does not go to the front line.** The diagrams here explain; they are not an
-implementation spec. Before changing a rule, confirm the current typed owner, protocol schema,
+The diagrams here explain. Before changing a rule, confirm the current typed owner, protocol schema,
 characterization fixture, and migration boundary.
 
 ## Named failures: where the handoff breaks
@@ -819,8 +815,8 @@ been replaced continuing to write. `needs_rebase` exists as the rejection path f
 while the source stays unchanged. The symptom is a persistent UI/CLI disagreement that returns to the old
 value on every refresh. Repair the source or builder, then read back.
 
-**Failure four: the reason to stop is not the same as closure.** A stopped Goal, paused quota, or blocked peer
-coordination can each stop polling; each is a legal stop, and none proves Goal closure. Only
+**Failure four:** A stopped Goal, paused quota, or blocked peer
+coordination can each stop polling; each is a legal stop. Only
 `terminal_no_followup` means "stopped because validated Goal closure was derived." Collapsing them lets a
 paused Goal look finished.
 
@@ -836,7 +832,7 @@ paused Goal look finished.
    caller handles the rejection.
 5. **Terminal is a conjunction.** Complete and closed Todo sources, no unresolved frontier, and a
    structured `no_followup` intent must all hold.
-6. **A teaching map is not an implementation spec.** Change a rule only after confirming the typed owner,
+6. Change a rule only after confirming the typed owner,
    protocol schema, characterization fixture, and migration boundary.
 
 These six answer one question: **when the mechanisms are split across nine families that can only speak

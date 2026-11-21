@@ -7,6 +7,7 @@ import re
 from typing import Any, Mapping
 
 from ..agent_registry import registered_agent_ids_for_goal
+from ..capabilities.issue_fix.repository_snapshot import _REPO_PATTERN
 from ..control_plane.content_digest import BARE_SHA256_PATTERN
 from ..control_plane.runtime.time import now_utc, parse_timestamp, utc_isoformat
 from ..control_plane.todos.contract import require_supported_todo_resume_when
@@ -40,6 +41,7 @@ class ChatActionNormalizationMixin:
             _opaque,
             _text,
         )
+        from .todo_source import resolve_chat_todo_source
 
         if action_kind == "goal.acceptance.check":
             values = self._allowed_parameters(parameters, allowed={"goal_id", "document", "prepared_by"})
@@ -360,7 +362,7 @@ class ChatActionNormalizationMixin:
                 },
             )
             goal_id = _opaque(values.get("goal_id"), field="goal_id")
-            self._goal(goal_id)
+            goal = resolve_chat_todo_source(self, goal_id).goal
             result = {
                 "goal_id": goal_id,
                 "text": _text(values.get("text"), field="text", limit=400),
@@ -370,10 +372,10 @@ class ChatActionNormalizationMixin:
             if values.get("endpoint_id"):
                 endpoint_id = _opaque(values.get("endpoint_id"), field="endpoint_id")
                 result["endpoint_id"] = endpoint_id
-                result["agent_id"] = self._resolve_goal_agent(goal_id, endpoint_id)
+                result["agent_id"] = self._resolve_goal_agent(goal_id, endpoint_id, goal=goal)
             elif values.get("agent_id"):
                 agent_id = _opaque(values.get("agent_id"), field="agent_id")
-                if agent_id not in registered_agent_ids_for_goal(self._goal(goal_id)):
+                if agent_id not in registered_agent_ids_for_goal(goal):
                     raise ProtectedActionGate(
                         "agent.bind",
                         gate={
@@ -415,7 +417,7 @@ class ChatActionNormalizationMixin:
                 },
             )
             goal_id = _opaque(values.get("goal_id"), field="goal_id")
-            self._goal(goal_id)
+            goal = resolve_chat_todo_source(self, goal_id).goal
             result: dict[str, Any] = {
                 "goal_id": goal_id,
                 "todo_id": _opaque(values.get("todo_id"), field="todo_id"),
@@ -436,10 +438,13 @@ class ChatActionNormalizationMixin:
             if "review_basis" in values:
                 basis = values["review_basis"]
                 if (operation != "edit" or not values.get("text") or not isinstance(basis, dict)
-                        or set(basis) != {"schema_version", "provider_revision", "source_authority", "registry_sha256"}
+                        or set(basis) - {"source_identity"} != {
+                            "schema_version", "provider_revision", "source_authority", "registry_sha256",
+                        }
                         or basis.get("schema_version") != "loopx_chat_canonical_update_basis_v0"
                         or any(not isinstance(x, str) or not x for x in basis.values())
-                        or not BARE_SHA256_PATTERN.fullmatch(basis["registry_sha256"])):
+                        or not BARE_SHA256_PATTERN.fullmatch(basis["registry_sha256"])
+                        or ("source_identity" in basis and not BARE_SHA256_PATTERN.fullmatch(basis["source_identity"]))):
                     raise ValueError("Task edit requires its complete current source basis")
                 result["review_basis"] = dict(basis)
             if values.get("text"):
@@ -460,7 +465,7 @@ class ChatActionNormalizationMixin:
             if values.get("endpoint_id"):
                 endpoint_id = _opaque(values["endpoint_id"], field="endpoint_id")
                 result["endpoint_id"] = endpoint_id
-                result["agent_id"] = self._resolve_goal_agent(goal_id, endpoint_id)
+                result["agent_id"] = self._resolve_goal_agent(goal_id, endpoint_id, goal=goal)
             elif values.get("agent_id"):
                 result["agent_id"] = _opaque(values["agent_id"], field="agent_id")
             if values.get("resume_when"):
@@ -756,6 +761,7 @@ class ChatActionNormalizationMixin:
                 ),
             }
         if action_kind == "monitor.create":
+            from ..capabilities.native_chat.steward_monitor import normalize_steward_monitor_scope
             values = self._allowed_parameters(
                 parameters,
                 allowed={
@@ -763,10 +769,12 @@ class ChatActionNormalizationMixin:
                     "agent_id",
                     "target",
                     "target_key",
+                    "task_repository",
                     "cadence",
                     "timezone",
                     "stop_condition",
                     "notification_rule",
+                    "signal_scope",
                 },
             )
             goal_id = _opaque(values.get("goal_id"), field="goal_id")
@@ -779,6 +787,15 @@ class ChatActionNormalizationMixin:
                 "cadence": _normalize_cadence(values.get("cadence")),
                 "timezone": _text(values.get("timezone"), field="timezone", limit=80),
             }
+            if values.get("signal_scope") is not None:
+                if not isinstance(values["signal_scope"], Mapping):
+                    raise ValueError("signal_scope must be an object")
+                result["signal_scope"] = normalize_steward_monitor_scope(values["signal_scope"])
+            if values.get("task_repository"):
+                raw_repo = _text(values["task_repository"], field="task_repository", limit=200)
+                if _REPO_PATTERN.fullmatch(raw_repo):
+                    raw_repo = f"git:github.com/{raw_repo}"
+                result["task_repository"] = raw_repo
             stop_cond_raw = values.get("stop_condition")
             if stop_cond_raw:
                 raw_text = _text(stop_cond_raw, field="stop_condition", limit=160)
@@ -794,6 +811,7 @@ class ChatActionNormalizationMixin:
                 )
             return result
         if action_kind == "monitor.update":
+            from ..capabilities.native_chat.steward_monitor import normalize_steward_monitor_scope
             values = self._allowed_parameters(
                 parameters,
                 allowed={
@@ -803,14 +821,16 @@ class ChatActionNormalizationMixin:
                     "operation",
                     "target",
                     "target_key",
+                    "task_repository",
                     "cadence",
                     "stop_condition",
                     "session_id",
                     "endpoint_id",
+                    "signal_scope",
                 },
             )
             goal_id = _opaque(values.get("goal_id"), field="goal_id")
-            self._goal(goal_id)
+            goal = resolve_chat_todo_source(self, goal_id).goal
             operation = str(values.get("operation") or "").strip().lower()
             if operation not in {"pause", "resume", "stop", "run_now", "edit"}:
                 raise ValueError(
@@ -822,14 +842,23 @@ class ChatActionNormalizationMixin:
                 "agent_id": _opaque(values.get("agent_id"), field="agent_id"),
                 "operation": operation,
             }
+            if values.get("signal_scope") is not None:
+                if not isinstance(values["signal_scope"], Mapping):
+                    raise ValueError("signal_scope must be an object")
+                result["signal_scope"] = normalize_steward_monitor_scope(values["signal_scope"])
             if values.get("endpoint_id"):
                 endpoint_id = _opaque(values["endpoint_id"], field="endpoint_id")
                 result["endpoint_id"] = endpoint_id
-                result["agent_id"] = self._resolve_goal_agent(goal_id, endpoint_id)
+                result["agent_id"] = self._resolve_goal_agent(goal_id, endpoint_id, goal=goal)
             if values.get("target"):
                 result["target"] = _text(values["target"], field="target", limit=400)
             if values.get("target_key"):
                 result["target_key"] = _opaque(values["target_key"], field="target_key")
+            if values.get("task_repository"):
+                raw_repo = _text(values["task_repository"], field="task_repository", limit=200)
+                if _REPO_PATTERN.fullmatch(raw_repo):
+                    raw_repo = f"git:github.com/{raw_repo}"
+                result["task_repository"] = raw_repo
             if values.get("cadence"):
                 result["cadence"] = _normalize_cadence(values["cadence"])
             if values.get("stop_condition"):
@@ -846,8 +875,55 @@ class ChatActionNormalizationMixin:
                 result["session_id"] = _opaque(values["session_id"], field="session_id")
             if operation == "edit" and len(result) == 4:
                 raise ValueError(
-                    "monitor edit requires target, target_key, cadence, or stop_condition"
+                    "monitor edit requires target, target_key, cadence, stop_condition, or signal_scope"
                 )
+            return result
+        if action_kind == "pr.merge":
+            values = self._allowed_parameters(
+                parameters,
+                allowed={
+                    "repository",
+                    "pr_number",
+                    "merge_method",
+                    "admin_bypass",
+                    "head_oid",
+                    "base_ref",
+                    "pr_url",
+                    "approval_review",
+                    "bypassed_gates",
+                },
+            )
+            repository = str(values.get("repository") or "").strip()
+            if not _REPO_PATTERN.fullmatch(repository):
+                raise ValueError("pr.merge repository must be <owner>/<repo>")
+            raw_num = values.get("pr_number")
+            if isinstance(raw_num, bool) or not isinstance(raw_num, int) or raw_num < 1:
+                raise ValueError("pr.merge pr_number must be a positive integer")
+            method = str(values.get("merge_method") or "squash").strip().lower()
+            if method not in {"squash", "merge", "rebase"}:
+                raise ValueError("pr.merge merge_method must be squash, merge, or rebase")
+            admin_bypass = values.get("admin_bypass", False)
+            if not isinstance(admin_bypass, bool):
+                raise ValueError("pr.merge admin_bypass must be true or false")
+            result: dict[str, Any] = {
+                "repository": repository,
+                "pr_number": raw_num,
+                "merge_method": method,
+                "admin_bypass": admin_bypass,
+            }
+            for optional_text, limit in (("head_oid", 80), ("base_ref", 160), ("pr_url", 300)):
+                if values.get(optional_text) is not None:
+                    result[optional_text] = _text(values[optional_text], field=optional_text, limit=limit)
+            if values.get("approval_review") is not None:
+                if not isinstance(values["approval_review"], Mapping):
+                    raise ValueError("pr.merge approval_review must be an object")
+                result["approval_review"] = dict(values["approval_review"])
+            if values.get("bypassed_gates") is not None:
+                if not isinstance(values["bypassed_gates"], list) or not all(
+                    isinstance(item, str) for item in values["bypassed_gates"]
+                ):
+                    raise ValueError("pr.merge bypassed_gates must be a list of gate labels")
+                result["bypassed_gates"] = [item.strip() for item in values["bypassed_gates"] if item.strip()]
             return result
         if action_kind == "gate.resolve":
             values = self._allowed_parameters(

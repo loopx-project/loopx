@@ -211,5 +211,5 @@ Preview only; follow ordered commands to mutate.
 
 ## Todo Preservation
 
-- bootstrap: `{preserve.get("force_bootstrap_default")}`; reconnect: {preserve.get("before_destructive_reconnect")}; scope change: {preserve.get("preferred_scope_change")}
+- `bootstrap --force`: `{preserve.get("force_bootstrap_default")}`; reconnect: {preserve.get("before_destructive_reconnect")}; scope change: {preserve.get("preferred_scope_change")}
 """

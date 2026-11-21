@@ -226,13 +226,11 @@ compliance and live effects. Existing sessions may retain an older copy.
 Run `uv run --extra test python -m pytest -q tests/test_repository_instruction_delivery.py`
 for root size, shared import, local routes and existing inbound anchors. Review
 a moved obligation clause by clause: owner, modality, scope, order, exceptions,
-evidence provenance, continuation and stop conditions. A link test or shorter
-file does not establish equivalence. Keep operational rules in their existing
+evidence provenance, continuation and stop conditions. Keep operational rules in their existing
 owners rather than adding another parallel policy collection.
 
 Design sources and the disposition of the earlier proposal are recorded in
 [the instruction/skill/prompt study](../research/2026-10-17-agent-instruction-skill-prompt-guidance.md).
-
 
 ### Progressive Context For Development
 
@@ -278,7 +276,7 @@ Existing sessions may retain old instructions; source edits alone do not prove
 native startup adoption or agent compliance.
 
 For product context delivery, selection, continuation and replanning have different
-information needs. A suggested `selected_todo` is not proof of an actual work choice.
+information needs.
 A qualified continuation can retain the bound work in full and make other candidates
 discoverable with exact details; a new choice must inspect what that choice needs.
 Do not implement this by filtering a full-required response in the caller. Change

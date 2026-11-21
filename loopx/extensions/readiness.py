@@ -427,7 +427,7 @@ def extension_doctor(
             else None
         ),
         # Observation, never admission evidence: failed probes revoke only this
-        # exact artifact, not another independently verified local runtime.
+        # exact artifact.
         "probed_entrypoint_identity": (
             identity_before.identity if identity_before is not None else None
         ),
