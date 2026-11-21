@@ -589,6 +589,8 @@ def test_restored_native_capture_does_not_claim_after_manual_writeback(
         "--delivery-batch-scale", "single_surface", "--delivery-outcome", "outcome_progress",
         "--delivery-boundary", "in_flight_continuation", "--progress-result-class", "advanced",
         "--progress-work-item-id", TODO, "--progress-evidence-id", "fixture:manual-result",
+        "--task-lease-idempotency-key", proof["idempotency_key"],
+        "--task-lease-expected-version", str(proof["expected_version"]),
         "--no-global-sync", "--suppress-external-sinks"]
     if spend_committed:
         refresh += ["--settle-turn", "--settlement-receipt"]
