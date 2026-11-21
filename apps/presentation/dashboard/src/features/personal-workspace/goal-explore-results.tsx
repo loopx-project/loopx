@@ -1,4 +1,4 @@
-import {WorkYardstickReadback} from "./work-yardstick-readback";
+import {ExecutionObservationReadback, WorkYardstickReadback} from "./work-yardstick-readback";
 import {exploreFindingCopy} from "./explore-finding-copy";
 import {useEffect, useRef, useState} from "react";
 import {AlertTriangle, ChevronRight, RefreshCw} from "lucide-react";
@@ -153,6 +153,7 @@ export function GoalExploreResults({goalId, originalGoalId = goalId, zh, active 
               <ul>{sections.decision![key].map((text, index) => <li key={index}>{text}</li>)}</ul>
             </div> : null)}</section> : null}
         </div> : <p className="explore-finding-raw">{selected.summary}</p>}
+        {selected.execution_observation ? <ExecutionObservationReadback observation={selected.execution_observation} zh={zh}/> : null}
         {selected.work_yardstick ? <WorkYardstickReadback capture={selected.work_yardstick} zh={zh}/> : null}
         {related.length ? <details className="explore-reader-details explore-related-measurements">
           <summary>{zh ? "同一候选的其他测量（本页）" : "Other measurements of this candidate (this page)"}</summary>

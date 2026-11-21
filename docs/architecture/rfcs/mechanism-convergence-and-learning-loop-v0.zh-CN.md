@@ -329,6 +329,19 @@ Mapping 拒绝顺序、精确整数 IO、会话 ID 解码、轮询时钟及 pend
 host Turn。因此这些服务检查不能取得普通 PostgreSQL 反馈 Turn 资格，
 也不构成本切片新增执行 profile 的理由。
 
+**源码 checkpoint：产品执行观察读回（2026-11-19）。** 已保存结论现在复用
+Explore 的执行观察 codec，保留原方法、实际方法、改向原因、候选版本、成本和
+结果引用。结论页与历史页复用同一展开式读回；现有 Lark finding Summary 同步
+展示这些源事实，缺失测量保持未知。没有执行观察的结论保持原展示与投影，错误
+候选结果关联被拒绝，失效读取不能留下旧内容，有效来源可在原页面重试。
+隔离 File/SQLite HTTP 和打包浏览器检查覆盖这些路径及桌面/窄屏，读回不改变源
+状态或执行权限。这只交付产品传输与读回，包含
+[App 图示读回指南](../../../loopx/capabilities/explore/README.md#read-execution-evidence-in-the-app)，
+并用填充的合成记录分别捕获默认桌面/窄屏和展开详情。指南也说明旧保存结论读回
+遗漏的识别方式；已安装客户端的升级与读回仍未资格化。此源码 checkpoint
+不证明模型采用或方法收益；执行融合、
+跨任务采用、预测校准与可比预算结果仍开放。正式评测不阻塞独立的实现和迁移。
+
 **源码 checkpoint：无会话读回所有权（2026-11-20）。** 无会话捕获适配器通过
 `context_select` 将正常工作初始导航交给既有 TypeScript Progressive owner，
 Python 保留发布、字节预算与 fallback。仅用于本次调用的选项保留通用选择及其

@@ -353,6 +353,24 @@ read-only quota observation. It admits no ordinary host Turn. These service
 checks therefore do not qualify an ordinary PostgreSQL feedback Turn or justify
 adding another execution profile to this slice.
 
+**Source checkpoint: product execution-observation readback (2026-11-19).** Saved
+findings reuse Explore's execution-observation codec and retain the planned and
+actual methods, deviation reason, candidate revision, costs and result reference.
+The findings and history readers share one expandable view; the existing Lark
+finding Summary presents the same recorded facts, keeping missing measurements
+unknown. Findings without observations retain their existing display and
+projection. Wrong-candidate result references are rejected, failed reads withhold
+old contents, and valid sources recover in place. Isolated File/SQLite HTTP and
+packaged desktop/narrow-browser checks qualify these paths without source-state
+or execution-authority mutations. This delivers product transport and readback,
+with an [illustrated App reading guide](../../../loopx/capabilities/explore/README.md#read-execution-evidence-in-the-app)
+and separate default desktop/narrow and expanded-detail captures from populated
+synthetic records. The guide also identifies the older saved-reader omission;
+installed-client upgrade/readback remains unqualified. This source checkpoint is
+not model adoption or method benefit. Execution convergence, cross-task adoption,
+prediction calibration and matched-budget outcomes remain open. Formal evaluation
+does not block independent implementation or migration.
+
 **Source checkpoint: stateless read ownership (2026-11-20).** The stateless capture
 adapter delegates its normal-work initial navigation to the existing TypeScript
 Progressive owner through `context_select`; Python retains publication, byte
