@@ -638,6 +638,36 @@ decision through the same `previous_review` requirement. Feature-off context
 and legacy decision references remain unchanged. This repairs feedback
 delivery; execution quality and goal benefit still require separate evidence.
 
+<a id="work-meta-goal"></a>
+
+#### Meta-goal within a Todo (proposal)
+
+A **meta-goal** covers one local decision about how to advance a Todo. It
+states what to establish about the method, measurement, or next investment,
+which choice the answer informs, and what evidence would settle the question.
+The Todo carries the deliverable, acceptance, dependencies and ownership. A
+Todo can have successive meta-goals, and a question can span Turns while it
+remains relevant.
+
+`grow`, `switch`, and `verify` are **meta-decision actions** the agent can choose
+to pursue that objective. `next_probe` specifies the first work slice and its
+prediction, minimum evidence, adoption criterion and cost bound. New evidence
+may justify a different action for the same question.
+
+For a Todo to deliver a faster scheduler with the same correctness constraints,
+the meta-goal could be to determine whether the current route's gains carry
+over to peak workloads and justify further investment. The agent could choose
+`verify` and compare the candidate and incumbent under matched peak conditions.
+Evidence of remaining headroom can support `grow`. Evidence favoring a
+different mechanism can support `switch`. Record the answer when the evidence
+supports a choice, including a decision to abandon a route. If the cost bound
+arrives with insufficient evidence, record the question as unresolved.
+
+The proposed first use would state this objective in the existing Stride plan
+and probe, and connect the observed result to the next choice through decision
+followthrough. Existing Todo authoring, Turn admission and settlement govern any
+resulting change to the work.
+
 #### An iterative strategy and engineering boundary
 
 The first strategy is **model-guided, evidence-conditioned work planning**.
