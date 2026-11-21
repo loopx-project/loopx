@@ -8,7 +8,9 @@ from typing import Any
 
 import pytest
 
+from loopx.capabilities.native_chat.conversation_bindings import ChatConversationBindings
 from loopx.capabilities.native_chat.github_pr_evidence import (
+    _normalize_graphql_pr_node,
     inspect_github_pull_request,
     parse_github_pr_target,
     summarize_github_pr_signal,
@@ -787,4 +789,320 @@ def test_summarize_pr_stalled_since_and_author_reply_detection(monkeypatch) -> N
     item = observed["items"][0]
     assert item["stalled_since"] == "2030-01-01T09:00:00Z"
     assert item["author_replied_after_request_changes"] is True
+    assert item["comments_coverage_incomplete"] is False
+    assert item["review_summary"]["comments_coverage_incomplete"] is False
     assert item["review_summary"]["latest_request_changes_review_id"] == "PRR_rc4"
+
+
+def test_observe_github_prs_backfills_evicted_author_reply_and_preserves_incomplete_coverage(
+    monkeypatch,
+) -> None:
+    head = "f" * 40
+    gpt_decl = "model_agent · gpt-6.2-sol · OpenAI (runtime_reported, max)"
+    rc_review = {
+        "id": "PRR_rc_401",
+        "author": {"__typename": "User", "login": "maintainer"},
+        "authorAssociation": "MEMBER",
+        "state": "CHANGES_REQUESTED",
+        "commit": {"oid": head},
+        "submittedAt": "2030-01-01T08:00:00Z",
+        "body": _valid_bilingual_body(head_oid=head, verdict="REQUEST_CHANGES", reviewer=gpt_decl),
+    }
+
+    def _visitor_comments(count: int, *, start_minute: int = 1, prefix_hour: str = "10") -> list[dict[str, Any]]:
+        return [
+            {
+                "createdAt": f"2030-01-01T{prefix_hour}:{start_minute + idx:02d}:00Z",
+                "authorAssociation": "NONE",
+                "author": {"__typename": "User", "login": f"visitor-{idx}"},
+            }
+            for idx in range(count)
+        ]
+
+    author_comment = {
+        "createdAt": "2030-01-01T09:00:00Z",
+        "authorAssociation": "NONE",
+        "author": {"__typename": "User", "login": "ext-contributor"},
+    }
+    maintainer_comment = {
+        "createdAt": "2030-01-01T09:30:00Z",
+        "authorAssociation": "MEMBER",
+        "author": {"__typename": "User", "login": "maintainer"},
+    }
+
+    # Normalization defaults vs pageInfo propagation.
+    plain_norm = _normalize_graphql_pr_node(_sample_pr(number=400, head_oid=head))
+    assert plain_norm["commentsHasPreviousPage"] is False
+    assert plain_norm["commentsStartCursor"] is None
+
+    # Pre-anchor comment inside truncated window proves completeness without backfill.
+    pre_anchor_summary = summarize_github_pr_signal(
+        {
+            **_sample_pr(number=400, head_oid=head, author="ext-contributor", reviews=[rc_review]),
+            "commentsHasPreviousPage": True,
+            "commentsStartCursor": "c0",
+            "comments": [
+                {"createdAt": "2030-01-01T07:30:00Z", "authorAssociation": "NONE", "author": {"login": "old-visitor"}},
+                *_visitor_comments(19),
+            ],
+        }
+    )
+    assert pre_anchor_summary["comments_coverage_incomplete"] is False
+    assert pre_anchor_summary["review_summary"]["comments_coverage_incomplete"] is False
+
+    # No exact-head REQUEST_CHANGES means comments_coverage_incomplete is always False.
+    no_rc_summary = summarize_github_pr_signal(
+        {
+            **_sample_pr(number=400, head_oid=head, author="ext-contributor", reviews=[]),
+            "commentsHasPreviousPage": True,
+            "comments": _visitor_comments(20),
+        }
+    )
+    assert no_rc_summary["comments_coverage_incomplete"] is False
+
+    def _base_node(*, updated_at: str, comments_conn: dict[str, Any]) -> dict[str, Any]:
+        node = _graphql_node(
+            _sample_pr(
+                number=401,
+                head_oid=head,
+                author="ext-contributor",
+                review_decision="CHANGES_REQUESTED",
+                reviews=[rc_review],
+            )
+        )
+        node["updatedAt"] = updated_at
+        node["comments"] = comments_conn
+        return node
+
+    external_scope = {
+        "schema_version": "steward_signal_monitor_scope_v0",
+        "include_portfolio": False,
+        "include_inbox": False,
+        "pr_filter": {
+            "exclude_drafts": True,
+            "effective_verdicts": ["REQUEST_CHANGES"],
+            "author_mode": "exclude",
+            "authors": ["maintainer"],
+            "min_stalled_hours": 24,
+        },
+    }
+
+    # 1. Snapshot 1 -> awaiting_maintainer_reply; Snapshot 2 evicts author reply into page 2 ->
+    #    backfill recovers author_replied_after_request_changes=True and identical TS result_hash.
+    snap1_node = _base_node(
+        updated_at="2030-01-01T10:19:00Z",
+        comments_conn={
+            "pageInfo": {"hasPreviousPage": False, "startCursor": "c1"},
+            "nodes": [author_comment, *_visitor_comments(19)],
+        },
+    )
+    snap2_node = _base_node(
+        updated_at="2030-01-01T10:20:00Z",
+        comments_conn={
+            "pageInfo": {"hasPreviousPage": True, "startCursor": "c20"},
+            "nodes": _visitor_comments(20),
+        },
+    )
+
+    def _observe_with(fake_runner) -> dict[str, Any]:
+        with monkeypatch.context() as mp:
+            mp.setattr("loopx.capabilities.native_chat.steward_monitor.subprocess.run", fake_runner)
+            return _observe_github_repository_prs("org/repo")
+
+    calls_snap1: list[list[str]] = []
+    repo_snap1 = _observe_with(
+        lambda cmd, **_kw: (
+            calls_snap1.append(list(cmd))
+            or subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_graphql_page([snap1_node])), stderr="")
+        )
+    )
+    assert len(calls_snap1) == 1
+    assert repo_snap1["items"][0]["author_replied_after_request_changes"] is True
+    assert repo_snap1["items"][0]["comments_coverage_incomplete"] is False
+    obs1 = ChatConversationBindings._core(
+        "collaboration.steward.monitor.signal_observation",
+        {
+            "signal_scope": external_scope,
+            "repository_snapshot": repo_snap1,
+            "observed_at": "2030-01-01T11:00:00Z",
+            "previous_hash": None,
+        },
+    )
+    assert obs1["observation_incomplete"] is False
+    assert obs1["scoped_repository_items"][0]["stalled_bucket"] == "awaiting_maintainer_reply"
+
+    calls_snap2: list[list[str]] = []
+
+    def run_snap2(cmd, **_kwargs):
+        calls_snap2.append(list(cmd))
+        if any(arg == "before=c20" for arg in cmd):
+            assert "-F" in cmd and "number=401" in cmd
+            body = {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "comments": {
+                                "pageInfo": {"hasPreviousPage": False, "startCursor": "c1"},
+                                "nodes": [author_comment],
+                            }
+                        }
+                    }
+                }
+            }
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(body), stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_graphql_page([snap2_node])), stderr="")
+
+    repo_snap2 = _observe_with(run_snap2)
+    assert len(calls_snap2) == 2
+    assert repo_snap2["items"][0]["author_replied_after_request_changes"] is True
+    assert repo_snap2["items"][0]["comments_coverage_incomplete"] is False
+    assert repo_snap2["items"][0]["review_summary"]["comments_coverage_incomplete"] is False
+    obs2 = ChatConversationBindings._core(
+        "collaboration.steward.monitor.signal_observation",
+        {
+            "signal_scope": external_scope,
+            "repository_snapshot": repo_snap2,
+            "observed_at": "2030-01-01T11:05:00Z",
+            "previous_hash": obs1["result_hash"],
+        },
+    )
+    assert obs2["result_hash"] == obs1["result_hash"]
+    assert obs2["material_change"] is False
+    assert obs2["observation_incomplete"] is False
+
+    # 2a. Maintainer (MEMBER) reply in visible page 1 (hasPreviousPage=True) requires 0 backfill calls.
+    page1_maintainer_node = _base_node(
+        updated_at="2030-01-01T10:25:00Z",
+        comments_conn={
+            "pageInfo": {"hasPreviousPage": True, "startCursor": "c20"},
+            "nodes": [maintainer_comment, *_visitor_comments(19)],
+        },
+    )
+    calls_maintainer_p1: list[list[str]] = []
+    repo_maintainer_p1 = _observe_with(
+        lambda cmd, **_kw: (
+            calls_maintainer_p1.append(list(cmd))
+            or subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_graphql_page([page1_maintainer_node])), stderr="")
+        )
+    )
+    assert len(calls_maintainer_p1) == 1
+    assert repo_maintainer_p1["items"][0]["author_replied_after_request_changes"] is False
+    assert repo_maintainer_p1["items"][0]["comments_coverage_incomplete"] is False
+    obs_maintainer_p1 = ChatConversationBindings._core(
+        "collaboration.steward.monitor.signal_observation",
+        {
+            "signal_scope": external_scope,
+            "repository_snapshot": repo_maintainer_p1,
+            "observed_at": "2030-01-01T11:10:00Z",
+            "previous_hash": obs1["result_hash"],
+        },
+    )
+    assert obs_maintainer_p1["material_change"] is True
+    assert obs_maintainer_p1["observation_incomplete"] is False
+    assert obs_maintainer_p1["scoped_repository_items"] == []
+
+    # 2b. Maintainer reply after author on backfill page 2 exits awaiting_maintainer_reply.
+    calls_maintainer_p2: list[list[str]] = []
+
+    def run_maintainer_p2(cmd, **_kwargs):
+        calls_maintainer_p2.append(list(cmd))
+        if any(arg == "before=c20" for arg in cmd):
+            body = {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "comments": {
+                                "pageInfo": {"hasPreviousPage": True, "startCursor": "c0"},
+                                "nodes": [author_comment, maintainer_comment],
+                            }
+                        }
+                    }
+                }
+            }
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(body), stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_graphql_page([snap2_node])), stderr="")
+
+    repo_maintainer_p2 = _observe_with(run_maintainer_p2)
+    assert len(calls_maintainer_p2) == 2
+    assert repo_maintainer_p2["items"][0]["author_replied_after_request_changes"] is False
+    assert repo_maintainer_p2["items"][0]["comments_coverage_incomplete"] is False
+    obs_maintainer_p2 = ChatConversationBindings._core(
+        "collaboration.steward.monitor.signal_observation",
+        {
+            "signal_scope": external_scope,
+            "repository_snapshot": repo_maintainer_p2,
+            "observed_at": "2030-01-01T11:15:00Z",
+            "previous_hash": obs1["result_hash"],
+        },
+    )
+    assert obs_maintainer_p2["material_change"] is True
+    assert obs_maintainer_p2["observation_incomplete"] is False
+    assert obs_maintainer_p2["scoped_repository_items"] == []
+
+    # 3. Backfill budget exhausted (3 pages of visitor comments, still hasPreviousPage=True) ->
+    #    comments_coverage_incomplete=True and TS retains previous_hash with observation_incomplete=True.
+    backfill_cursors: list[str] = []
+
+    def run_exhausted(cmd, **_kwargs):
+        before_args = [arg.split("=", 1)[1] for arg in cmd if arg.startswith("before=")]
+        if before_args:
+            cursor = before_args[0]
+            backfill_cursors.append(cursor)
+            next_map = {"c20": ("c70", "11"), "c70": ("c120", "12"), "c120": ("c170", "13")}
+            next_cursor, hour = next_map[cursor]
+            body = {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "comments": {
+                                "pageInfo": {"hasPreviousPage": True, "startCursor": next_cursor},
+                                "nodes": _visitor_comments(5, prefix_hour=hour),
+                            }
+                        }
+                    }
+                }
+            }
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(body), stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_graphql_page([snap2_node])), stderr="")
+
+    repo_exhausted = _observe_with(run_exhausted)
+    assert backfill_cursors == ["c20", "c70", "c120"]
+    assert repo_exhausted["status"] == "ok"
+    assert repo_exhausted["items"][0]["comments_coverage_incomplete"] is True
+    assert repo_exhausted["items"][0]["review_summary"]["comments_coverage_incomplete"] is True
+    obs_exhausted = ChatConversationBindings._core(
+        "collaboration.steward.monitor.signal_observation",
+        {
+            "signal_scope": external_scope,
+            "repository_snapshot": repo_exhausted,
+            "observed_at": "2030-01-01T11:20:00Z",
+            "previous_hash": obs1["result_hash"],
+        },
+    )
+    assert obs_exhausted == {
+        "result_hash": obs1["result_hash"],
+        "material_change": False,
+        "observation_incomplete": True,
+        "own_monitor_bookkeeping_excluded": True,
+    }
+
+    # Backfill RPC error also fails closed with comments_coverage_incomplete=True.
+    def run_backfill_error(cmd, **_kwargs):
+        if any(arg.startswith("before=") for arg in cmd):
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="rate limited")
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_graphql_page([snap2_node])), stderr="")
+
+    repo_rpc_err = _observe_with(run_backfill_error)
+    assert repo_rpc_err["status"] == "ok"
+    assert repo_rpc_err["items"][0]["comments_coverage_incomplete"] is True
+    obs_rpc_err = ChatConversationBindings._core(
+        "collaboration.steward.monitor.signal_observation",
+        {
+            "signal_scope": external_scope,
+            "repository_snapshot": repo_rpc_err,
+            "observed_at": "2030-01-01T11:25:00Z",
+            "previous_hash": obs1["result_hash"],
+        },
+    )
+    assert obs_rpc_err["observation_incomplete"] is True
+    assert obs_rpc_err["result_hash"] == obs1["result_hash"]

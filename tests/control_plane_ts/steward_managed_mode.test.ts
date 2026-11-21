@@ -881,3 +881,210 @@ test("observeStewardSignalMonitor uses stalled_since, author-reply bypass, and s
   assert.equal(at24hFromSixHour.material_change, true);
   assert.equal(at24hFromSixHour.scoped_repository_items[0].stalled_bucket, "24h_to_72h");
 });
+
+test("observeStewardSignalMonitor fails closed on comments_coverage_incomplete only for matching stalled-age PRs", () => {
+  const externalStalledScope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+    pr_filter: {
+      exclude_drafts: true,
+      effective_verdicts: ["REQUEST_CHANGES"],
+      author_mode: "exclude",
+      authors: ["alice"],
+      min_stalled_hours: 24,
+    },
+  };
+  const internalStalledScope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+    pr_filter: {
+      exclude_drafts: true,
+      effective_verdicts: ["REQUEST_CHANGES"],
+      author_mode: "include",
+      authors: ["alice"],
+      min_stalled_hours: 24,
+    },
+  };
+  const noAgeScope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+    pr_filter: {
+      exclude_drafts: true,
+      effective_verdicts: ["REQUEST_CHANGES"],
+      author_mode: "exclude",
+      authors: ["alice"],
+    },
+  };
+
+  const makeExternalPr = (overrides: Record<string, unknown> = {}) => ({
+    number: 302,
+    title: "External RC awaiting maintainer reply",
+    isDraft: false,
+    mergeable: "MERGEABLE",
+    author: {login: "ext-user"},
+    updatedAt: "2026-11-21T08:30:00Z",
+    stalled_since: "2026-11-21T07:00:00Z",
+    author_replied_after_request_changes: true,
+    comments_coverage_incomplete: false,
+    review_summary: {
+      effective_verdict: "REQUEST_CHANGES",
+      has_review_conflict: false,
+      latest_request_changes_review_id: "PRR_302",
+      stalled_since: "2026-11-21T07:00:00Z",
+      author_replied_after_request_changes: true,
+      comments_coverage_incomplete: false,
+      exact_head_reviews: [],
+    },
+    ...overrides,
+  });
+
+  const baseline = observeStewardSignalMonitor({
+    signal_scope: externalStalledScope,
+    repository_snapshot: {status: "ok", repository: "acme/widgets", items: [makeExternalPr()]},
+    observed_at: "2026-11-21T09:00:00Z",
+  });
+  assert.equal(baseline.observation_incomplete, false);
+  assert.equal(baseline.scoped_repository_items[0].stalled_bucket, "awaiting_maintainer_reply");
+
+  // Truncated comment suffix (<24h and >=24h) fails closed and preserves previous_hash,
+  // whether comments_coverage_incomplete is surfaced at top-level or inside review_summary.
+  for (const [observedAt, truncatedItem] of [
+    [
+      "2026-11-21T10:00:00Z",
+      makeExternalPr({
+        updatedAt: "2026-11-21T09:50:00Z",
+        author_replied_after_request_changes: false,
+        comments_coverage_incomplete: true,
+        review_summary: {
+          ...makeExternalPr().review_summary,
+          author_replied_after_request_changes: false,
+          comments_coverage_incomplete: true,
+        },
+      }),
+    ],
+    [
+      "2026-11-22T09:00:00Z",
+      makeExternalPr({
+        updatedAt: "2026-11-22T08:30:00Z",
+        author_replied_after_request_changes: false,
+        comments_coverage_incomplete: false,
+        review_summary: {
+          ...makeExternalPr().review_summary,
+          author_replied_after_request_changes: false,
+          comments_coverage_incomplete: true,
+        },
+      }),
+    ],
+  ] as const) {
+    const truncated = observeStewardSignalMonitor({
+      signal_scope: externalStalledScope,
+      previous_hash: baseline.result_hash,
+      repository_snapshot: {status: "ok", repository: "acme/widgets", items: [truncatedItem]},
+      observed_at: observedAt,
+    });
+    assert.deepEqual(truncated, {
+      result_hash: baseline.result_hash,
+      material_change: false,
+      observation_incomplete: true,
+      own_monitor_bookkeeping_excluded: true,
+    });
+  }
+
+  // Recovered complete coverage with bumped updatedAt yields identical hash and material_change=false.
+  const recovered = observeStewardSignalMonitor({
+    signal_scope: externalStalledScope,
+    previous_hash: baseline.result_hash,
+    repository_snapshot: {
+      status: "ok",
+      repository: "acme/widgets",
+      items: [makeExternalPr({updatedAt: "2026-11-21T10:30:00Z"})],
+    },
+    observed_at: "2026-11-21T11:00:00Z",
+  });
+  assert.equal(recovered.result_hash, baseline.result_hash);
+  assert.equal(recovered.material_change, false);
+  assert.equal(recovered.observation_incomplete, false);
+
+  // Maintainer reply with complete coverage exits awaiting_maintainer_reply.
+  const maintainerCleared = observeStewardSignalMonitor({
+    signal_scope: externalStalledScope,
+    previous_hash: baseline.result_hash,
+    repository_snapshot: {
+      status: "ok",
+      repository: "acme/widgets",
+      items: [
+        makeExternalPr({
+          author_replied_after_request_changes: false,
+          review_summary: {
+            ...makeExternalPr().review_summary,
+            author_replied_after_request_changes: false,
+          },
+        }),
+      ],
+    },
+    observed_at: "2026-11-21T11:00:00Z",
+  });
+  assert.equal(maintainerCleared.material_change, true);
+  assert.equal(maintainerCleared.observation_incomplete, false);
+  assert.deepEqual(maintainerCleared.scoped_repository_items, []);
+
+  // Non-age-filtered scopes and non-matching items are unaffected by comments_coverage_incomplete.
+  const truncatedExternal = makeExternalPr({
+    author_replied_after_request_changes: false,
+    comments_coverage_incomplete: true,
+    review_summary: {
+      ...makeExternalPr().review_summary,
+      author_replied_after_request_changes: false,
+      comments_coverage_incomplete: true,
+    },
+  });
+  const noAgeObs = observeStewardSignalMonitor({
+    signal_scope: noAgeScope,
+    repository_snapshot: {status: "ok", repository: "acme/widgets", items: [truncatedExternal]},
+    observed_at: "2026-11-21T11:00:00Z",
+  });
+  assert.equal(noAgeObs.observation_incomplete, false);
+  assert.equal(noAgeObs.scoped_repository_items.length, 1);
+
+  const internalObs = observeStewardSignalMonitor({
+    signal_scope: internalStalledScope,
+    repository_snapshot: {
+      status: "ok",
+      repository: "acme/widgets",
+      items: [
+        truncatedExternal,
+        makeExternalPr({number: 303, isDraft: true, comments_coverage_incomplete: true}),
+      ],
+    },
+    observed_at: "2026-11-21T11:00:00Z",
+  });
+  assert.equal(internalObs.observation_incomplete, false);
+  assert.deepEqual(internalObs.scoped_repository_items, []);
+
+  const externalIgnoringDraftOrApprove = observeStewardSignalMonitor({
+    signal_scope: externalStalledScope,
+    repository_snapshot: {
+      status: "ok",
+      repository: "acme/widgets",
+      items: [
+        makeExternalPr({number: 304, isDraft: true, comments_coverage_incomplete: true}),
+        makeExternalPr({
+          number: 305,
+          comments_coverage_incomplete: true,
+          review_summary: {
+            effective_verdict: "APPROVE",
+            has_review_conflict: false,
+            comments_coverage_incomplete: true,
+            exact_head_reviews: [],
+          },
+        }),
+      ],
+    },
+    observed_at: "2026-11-21T11:00:00Z",
+  });
+  assert.equal(externalIgnoringDraftOrApprove.observation_incomplete, false);
+  assert.deepEqual(externalIgnoringDraftOrApprove.scoped_repository_items, []);
+});

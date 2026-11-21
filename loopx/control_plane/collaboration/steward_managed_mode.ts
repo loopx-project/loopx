@@ -1065,7 +1065,7 @@ function filterScopedRepositoryItems(
   rawItems: unknown[],
   filter: JsonObject | null,
   observedAtValue: unknown,
-): JsonObject[] {
+): { items: JsonObject[]; observationIncomplete: boolean } {
   const minStalledHours = typeof filter?.min_stalled_hours === "number" ? filter.min_stalled_hours : null;
   let observedAtMs = NaN;
   if (minStalledHours !== null) {
@@ -1124,6 +1124,13 @@ function filterScopedRepositoryItems(
       ) {
         continue;
       }
+      // Fail closed when comment pagination did not reach the stalled anchor or a newer
+      // author/maintainer reply, so evicted replies cannot drop awaiting_maintainer_reply.
+      const commentsCoverageIncomplete = item.comments_coverage_incomplete === true
+        || reviewSummary?.comments_coverage_incomplete === true;
+      if (commentsCoverageIncomplete) {
+        return { items: [], observationIncomplete: true };
+      }
       const basisIso = rawStalledSince ?? (typeof item.updatedAt === "string" ? item.updatedAt : null);
       const basisMs = basisIso !== null ? Date.parse(basisIso) : NaN;
       const authorReplyBypass = authorReplied && authorMode === "exclude";
@@ -1141,7 +1148,7 @@ function filterScopedRepositoryItems(
       matched.push(item);
     }
   }
-  return matched;
+  return { items: matched, observationIncomplete: false };
 }
 
 /** Combine authorized local portfolio, inbox and optional repository signal
@@ -1151,15 +1158,16 @@ function filterScopedRepositoryItems(
 export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
   const previousHash = typeof params.previous_hash === "string" && params.previous_hash
     ? params.previous_hash : null;
+  const incompleteObservation: JsonObject = {
+    result_hash: previousHash,
+    material_change: false,
+    observation_incomplete: true,
+    own_monitor_bookkeeping_excluded: true,
+  };
   const signalScope = normalizeStewardSignalMonitorScope(params.signal_scope);
   const repo = params.repository_snapshot == null ? null : requireJsonObject(params.repository_snapshot, "repository signal");
   if (repo !== null && repo.status === "unavailable") {
-    return {
-      result_hash: previousHash,
-      material_change: false,
-      observation_incomplete: true,
-      own_monitor_bookkeeping_excluded: true,
-    };
+    return incompleteObservation;
   }
   const portfolio = params.portfolio_observation == null ? null
     : requireJsonObject(params.portfolio_observation, "portfolio observation");
@@ -1170,13 +1178,17 @@ export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
   const usesStalledAgeFilter = typeof rawMinStalledHours === "number"
     && Number.isFinite(rawMinStalledHours)
     && rawMinStalledHours > 0;
-  const scopedRepoItems = signalScope !== null && rawRepoItems !== null
+  const scopedResult = signalScope !== null && rawRepoItems !== null
     ? filterScopedRepositoryItems(
       rawRepoItems,
       prFilter,
       params.observed_at ?? repo?.observed_at,
     )
     : null;
+  if (scopedResult?.observationIncomplete) {
+    return incompleteObservation;
+  }
+  const scopedRepoItems = scopedResult === null ? null : scopedResult.items;
   const hashedRepoItems = signalScope !== null && scopedRepoItems !== null && usesStalledAgeFilter
     ? scopedRepoItems.map((item) => {
       const reviewSummary = jsonObject(item.review_summary);
