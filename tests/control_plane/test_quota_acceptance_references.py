@@ -212,7 +212,7 @@ def test_progressive_cli_delivers_complete_acceptance_for_selection_and_replan(t
             chunks.extend(page["content"].encode())
             if page["eof"]:
                 assert len(chunks) == page["total_bytes"]
-                return view, selected_context_values(chunks)
+                return selected_context_values(chunks)
             page = run_reader(page["next_command"])
 
     registry_path = tmp_path / "registry.json"
@@ -230,23 +230,18 @@ def test_progressive_cli_delivers_complete_acceptance_for_selection_and_replan(t
          "--document", str(document), "--expected-provider-revision", before["provider_revision"],
          "--operation-id", "source-requirements", "--execute")
     expected = call("goal-acceptance", "inspect", "--goal-id", GOAL)["goal_acceptance_contract"]
-    guard_view, guard = first_read("--turn-instance-id", "turn-acceptance-sharing")
+    guard = first_read("--turn-instance-id", "turn-acceptance-sharing")
     assert guard["/effective_action"] == "autonomous_replan_required"
     assert guard["/normal_delivery_allowed"] is False
     assert "/replan_action_packet/writeback" not in guard
-    assert "/replan_action_packet/review" not in guard
-    assert guard["/autonomous_replan_obligation/obligation_id"] == guard[
-        "/heartbeat_receipt/semantic_replan_obligation_id"
-    ]
-    sources = "/interaction_contract/agent_channel/work_context/sources/"
-    guard_owner, = (path.removesuffix("/source") for path, value in guard.items()
-                    if path.startswith(sources) and path.endswith("/source") and value == "goal_acceptance")
-    outcome_prefix = guard_owner + "/content/goal_acceptance_contract/outcome_requirements/outcomes/0"
-    assert guard[outcome_prefix + "/id"] == "export"
-    assert outcome_prefix + "/requirements" not in guard
-    command = guard_view["recovery"]["command"].split(" --offset ")[0] + f" --select {outcome_prefix}"
+    review = run_reader(guard["/replan_action_packet/review"])
+    assert review["obligation_id"] == guard["/heartbeat_receipt/semantic_replan_obligation_id"]
+    acceptance = review["acceptance_index"]
+    row, = acceptance["outcomes"]
+    assert row["id"] == "export"
+    command = acceptance["read_action_template"].replace("{outcome_ref}", row["outcome_ref"])
     original = expected["outcome_requirements"]["outcomes"][0]
-    assert selected_context_values(run_reader(command)["content"].encode())[outcome_prefix] == original
+    assert run_reader(command)["outcome"] == original
 
     # A later linked revision must reach the selected caller intact.
     index.write_text("")
@@ -264,19 +259,20 @@ def test_progressive_cli_delivers_complete_acceptance_for_selection_and_replan(t
          "--document", str(document), "--expected-provider-revision", revision,
          "--operation-id", "link-export", "--execute")
     expected = call("goal-acceptance", "inspect", "--goal-id", GOAL)["goal_acceptance_contract"]
-    _, planning = first_read("--turn-instance-id", "turn-export-planning")
+    planning = first_read("--turn-instance-id", "turn-export-planning")
     assert planning["/interaction_contract/agent_channel/delivery_allowed"] is False
     assert "/replan_action_packet/review" not in planning
-    _, selected = first_read("--todo-id", added["todo_id"], "--turn-instance-id", "turn-export-delivery")
+    selected = first_read("--todo-id", added["todo_id"], "--turn-instance-id", "turn-export-delivery")
     assert selected["/normal_delivery_allowed"] is True
     assert selected["/selected_todo/todo_id"] == added["todo_id"]
     assert "/replan_action_packet/review" not in selected
+    sources = "/interaction_contract/agent_channel/work_context/sources/"
     owner, = (path.removesuffix("/source") for path, value in selected.items()
               if path.startswith(sources) and path.endswith("/source") and value == "goal_acceptance")
     outcome = selected[owner + "/content/goal_acceptance_contract/outcome_requirements/outcomes/0"]
     assert outcome == expected["outcome_requirements"]["outcomes"][0]
     assert original["revision"] < outcome["revision"]
-    assert selected_context_values(run_reader(command)["content"].encode())[outcome_prefix] == original
+    assert run_reader(command)["outcome"] == original
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

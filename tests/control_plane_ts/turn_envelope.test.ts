@@ -477,6 +477,42 @@ test("both replan readers surface an opted-in reversal for the bound task only",
         Object.keys(explore.work_yardstick_reversal as JsonObject).map(field => prefix + field));
       const detail = evaluateTurnEnvelope({operation: "replan_view", payload: captured, source_hash, stage: "explore"});
       assert.deepEqual((detail.explore_basis as JsonObject).work_yardsticks, cues);
+      const nativeInput: JsonObject = {
+        operation: "context_delivery",
+        surface: "complete_turn",
+        scope: {goal_id: String(source.goal_id), agent_id: String(source.agent_id),
+          session_id: "session", context_epoch: "epoch"},
+        capture_id: "c".repeat(64),
+        context: {...captured, replan_read_path: "/capture/original.json"},
+        native_projection: {
+          path: "/capture/recovery.json",
+          sha256: "a".repeat(64),
+          source_path: "/capture/recovery.json",
+          command_template: "loopx --format json quota context-read --select '<pointer>'",
+          captured_decision: {path: "/capture/original.json", sha256: "c".repeat(64)},
+        },
+        consumed_pointers: {},
+        include_initial_read_plan: true,
+        observe_first_read: true,
+      };
+      const nativeResult = structuredClone(nativeInput);
+      const resolvePath = (root: unknown, path: (string | number)[]) => path.reduce<unknown>(
+        (row, key) => (row as Record<string | number, unknown>)[key], root);
+      for (const change of evaluateTurnEnvelope(nativeInput).changes as JsonObject[]) {
+        const path = change.path as (string | number)[], key = path.at(-1)!;
+        const parent = resolvePath(nativeResult, path.slice(0, -1)) as Record<string | number, unknown>;
+        if (change.remove) delete parent[key];
+        else parent[key] = structuredClone(
+          change.from ? resolvePath(nativeInput, change.from as (string | number)[]) : change.value);
+      }
+      const planSelections = (((nativeResult.initial_read_plan as JsonObject)
+        .plan as JsonObject).selections as {pointer: string}[]);
+      assert.ok(planSelections.some(row => row.pointer === `${prefix}proxy_order_reversed`));
+      assert.equal(
+        ((nativeResult.context as JsonObject).replan_action_packet as JsonObject).review,
+        undefined,
+      );
+      assert.equal(nativeResult.projected, false);
     } else {
       assert.ok(!Object.hasOwn(explore, "work_yardstick_reversal"));
       assert.equal(cuesInOpening.length, 0);

@@ -379,6 +379,7 @@ def test_confirmed_task_start_recovers_the_same_claim_and_dispatch(environment, 
 @pytest.mark.parametrize("completion_surface", ["native-cli", "external-worker"])
 def test_ordinary_goal_replans_after_first_todo_and_delivers_the_missing_section(environment, app, monkeypatch, provider, completion_surface):
     """Real creation, native CLI and authority; only the work decision is scripted."""
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
     configure, _, _, project, runtime = environment
     _, request, _ = app
     configure(provider, mode="soft_claim")
@@ -425,10 +426,7 @@ def test_ordinary_goal_replans_after_first_todo_and_delivers_the_missing_section
         assert result.returncode == 0, result.stdout + result.stderr
         return json.loads(read_cli_context_for_oracle(result.stdout)[0])
 
-    from loopx.control_plane.quota.turn_envelope import _turn_envelope_result
-    assert "review" not in decision["replan_action_packet"]
-    staged = _turn_envelope_result("replan_cli_view", payload=decision)["replan_action_packet"]
-    review = read_action(staged["review"])
+    review = read_action(decision["replan_action_packet"]["review"])
     writeback = read_action(review["next"]["writeback"])
     stride = {**writeback["stride_control"]["minimal_example"],
         "basis": "unexplained_gap", "action": "verify", "axes": {

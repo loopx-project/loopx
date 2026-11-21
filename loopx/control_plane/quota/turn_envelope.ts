@@ -2549,9 +2549,9 @@ function nativeReplanPresentation(request: JsonObject): JsonObject | undefined {
     if (projection.sha256 === undefined || request.surface !== "complete_turn" &&
         (request.surface !== "quota_packet" || Object.hasOwn(source, "schema_version") ||
           Object.hasOwn(source, "contract_binding"))) return undefined;
-    // Preserve a bound reversal in the opening, before candidate choice.
-    if (scopedReplanYardstickReversal(source)) return undefined;
   }
+  // Preserve a bound reversal in the opening, before candidate choice.
+  if (scopedReplanYardstickReversal(source)) return undefined;
   const packet = object(source.replan_action_packet);
   const review = object(object(source.autonomous_replan_obligation).replan_context);
   // Existing staged files are presentation inputs. Do not derive a new source
