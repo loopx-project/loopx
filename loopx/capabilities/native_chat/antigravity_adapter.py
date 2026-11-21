@@ -264,8 +264,13 @@ def discover_antigravity_language_server(
     execution caller without that deadline retains the existing phase limits.
     """
     source_env = os.environ if env is None else env
-    explicit_url = str(source_env.get("ANTIGRAVITY_LS_URL") or "").strip()
     explicit_token = str(source_env.get("ANTIGRAVITY_CSRF_TOKEN") or "").strip()
+    raw_url = str(
+        source_env.get("ANTIGRAVITY_LS_URL")
+        or (source_env.get("ANTIGRAVITY_LS_ADDRESS") if explicit_token else "")
+        or ""
+    ).strip()
+    explicit_url = f"http://{raw_url}" if raw_url and "://" not in raw_url else raw_url
     if explicit_url or explicit_token:
         if not explicit_url or not explicit_token:
             return None
@@ -1409,6 +1414,12 @@ class AntigravityAdapter:
             # A running status alone is not progress. Observe only this input's
             # steps, including streamed text and command output; old history or
             # a stuck RUNNING flag cannot keep an invocation alive indefinitely.
+            non_cleared_errors = [
+                index for index, step in current_steps
+                if step.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE"
+                and step.get("status") != "CORTEX_STEP_STATUS_CLEARED"
+            ]
+            first_error_index = non_cleared_errors[0] if non_cleared_errors else None
             progress = [(index, step.get("status"),
                          (step.get("plannerResponse") or {}).get("modifiedResponse")
                          or (step.get("plannerResponse") or {}).get("response"),
@@ -1416,7 +1427,17 @@ class AntigravityAdapter:
                          (step.get("runCommand") or {}).get("combinedOutput"),
                          (step.get("runCommand") or {}).get("exitCode"))
                         for index, step in current_steps
-                        if step.get("type") != "CORTEX_STEP_TYPE_ERROR_MESSAGE"]
+                        if step.get("type") != "CORTEX_STEP_TYPE_ERROR_MESSAGE"
+                        and not (
+                            first_error_index is not None
+                            and index > first_error_index
+                            and step.get("type") == "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
+                            and not (
+                                str((step.get("plannerResponse") or {}).get("modifiedResponse")
+                                    or (step.get("plannerResponse") or {}).get("response") or "").strip()
+                                or (step.get("plannerResponse") or {}).get("toolCalls")
+                            )
+                        )]
             now = time.monotonic()
             if progress and progress != previous_progress:
                 previous_progress = progress

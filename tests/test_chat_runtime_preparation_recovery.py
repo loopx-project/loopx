@@ -3,10 +3,12 @@ import json
 
 import pytest
 
+from test_antigravity_steward_adapter import language_server  # noqa: F401
 from test_chat_ordinary_project import ordinary  # noqa: F401
 from test_chat_queue_preparation import session_runtime
 from test_lark_private_conversations import connect
 from test_manager_preparation_recovery import advance_recovery_clock
+from test_native_steward_private import steward, finish  # noqa: F401
 from loopx.chat import CHAT_RESPONSE_EXAMPLE_SUFFIX
 from loopx.chat_agent import CodexChatAgentError
 from loopx.chat_store import _read_json
@@ -162,3 +164,69 @@ def test_original_project_worker_recovers_and_returns_exact_source(ordinary, mon
         assert sum(json.loads(line)["method"] == "turn/start" for line in before.decode().splitlines()) == 1
     finally:
         runtime.close()
+
+
+def test_antigravity_steward_active_cascade_resume_failed_waits_for_idle_then_recovers(
+    steward, language_server, monkeypatch,  # noqa: F811
+):
+    from loopx.capabilities.steward_executor import (
+        STEWARD_EXECUTOR_SCHEMA,
+        effective_steward_executor_defaults,
+    )
+
+    store, runtime, provider, transport, binding, _capture, _workspace = steward
+    defaults = effective_steward_executor_defaults({
+        "schema_version": "loopx_machine_configuration_v0",
+        "namespaces": {"steward_executor": {
+            "schema_version": STEWARD_EXECUTOR_SCHEMA,
+            "selection_policy": "preferred",
+            "executor_endpoint": "antigravity",
+            "eligible_endpoints": [],
+            "executor_model": "gemini-4-argon-high",
+            "executor_reasoning_effort": "high",
+        }},
+    })
+    monkeypatch.setattr(runtime, "steward_executor_defaults", lambda: defaults)
+    transport.bindings.configure(
+        transport_ref="steward-app",
+        project_ref=binding["project_ref"],
+        executor_endpoint_id="antigravity",
+        context_kind="steward",
+    )
+
+    assert transport.admit("steward-app", provider.event("steward-app", "warmup", "Warm up cascade"))["status"] == "durably_accepted"
+    warmup = transport.core.pending()[0]
+    assert finish(runtime, warmup)["status"] == "completed"
+    assert transport.reconcile() >= 1
+
+    # Simulate an active orphaned cascade while Steward's second request enters _run_turn.
+    language_server["mode"] = "running"
+    language_server["active"] = True
+    assert transport.admit("steward-app", provider.event("steward-app", "active-msg", "Daily report and monitors"))["status"] == "durably_accepted"
+    row = next(item for item in transport.core.pending() if item["request_ref"] != warmup["request_ref"])
+    failed = finish(runtime, row)
+    assert failed["status"] == "failed" and failed["error_code"] == "resume_failed"
+    assert failed["upstream_turn_id"] is None and failed["delta_count"] == 0
+    kinds = [ev["kind"] for ev in store.events_after(row["session_id"], failed["turn_id"], None)]
+    assert kinds[0] == "turn.queued" and "manager.context" in kinds[1:-1] and kinds[-1] == "turn.failed"
+    assert transport.reconcile() >= 1
+    assert transport.core.read_request(row["request_ref"])["delivery_verified"] is True
+
+    advance_recovery_clock(monkeypatch)
+    # While the cascade remains RUNNING, auto-recovery stays candidate-only and defers admission.
+    assert transport.core.context_recovery_candidate(row["request_ref"]) is True
+    transport.reconcile()
+    assert transport.core.read_request(row["request_ref"])["turn_id"] == failed["turn_id"]
+
+    # Once the cascade becomes IDLE, auto-recovery admits the single continuation and delivers.
+    language_server["active"] = False
+    language_server["mode"] = "complete"
+    transport.reconcile_request(transport.root / f"{row['request_ref']}.json")
+    current = transport.core.read_request(row["request_ref"])
+    assert current["turn_id"] != failed["turn_id"]
+    assert current["context_recovery"]["preparation_attempt"] == 1
+    assert finish(runtime, current)["status"] == "completed"
+    transport.reconcile()
+    record = _read_json(transport.root / f"{row['request_ref']}.json")
+    assert any(key.startswith("terminal.recovery.") and value.get("verified")
+               for key, value in record["deliveries"].items())
