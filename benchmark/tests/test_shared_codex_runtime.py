@@ -789,6 +789,101 @@ print(json.dumps({"id": request["id"], "error": {"code": -32603, "message": "rej
     assert not (tmp_path / "home" / "sessions").exists()
 
 
+@pytest.mark.parametrize("case", ["ok", "timeout_initialize", "timeout_hooks_list", "protocol_error", "expired"])
+def test_official_stop_hook_supports_split_pinned_two_arg_transport(tmp_path, monkeypatch, case):
+    from collections.abc import Mapping
+    from loopx.control_plane.turn_driver import codex_stdio
+    from loopx.control_plane.turn_driver.codex_stdio import NativeGoalProtocolError, StdioNativeGoalTransport
+
+    class LegacyTwoArgTransport(StdioNativeGoalTransport):
+        def request(self, method: str, params: Mapping[str, object]) -> Mapping[str, object]:
+            request_id = self._next_request_id
+            self._next_request_id += 1
+            self._send({"id": request_id, "method": method, "params": dict(params)})
+            deadline = time.monotonic() + self.response_timeout_sec
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise NativeGoalProtocolError(f"app_server_response_timeout:{method}")
+                message = self._next_message(timeout_sec=remaining)
+                if message is None:
+                    if self.process.poll() is not None:
+                        raise NativeGoalProtocolError("app_server_exited_before_response")
+                    continue
+                if message.get("id") == request_id:
+                    if message.get("error") is not None:
+                        raise NativeGoalProtocolError(f"app_server_request_failed:{method}")
+                    result = message.get("result")
+                    return result if isinstance(result, Mapping) else {}
+                if message.get("method"):
+                    self._pending_events.append(message)
+
+    monkeypatch.setattr(codex_stdio, "StdioNativeGoalTransport", LegacyTwoArgTransport)
+    env = worker_env(tmp_path)
+    binary = Path(env["CODEX_BIN"])
+    binary.write_text(f"#!{sys.executable}\n" + """
+import json, os, pathlib, sys, time
+
+home = pathlib.Path(os.environ["CODEX_HOME"])
+if "app-server" in sys.argv:
+    pathlib.Path("spawned-discovery").write_text("1")
+    for line in sys.stdin:
+        req = json.loads(line)
+        if "id" not in req:
+            continue
+        method = req["method"]
+        pathlib.Path("last-method").write_text(method)
+        case = os.environ["SPLIT_CASE"]
+        if case == "protocol_error" and method == "initialize":
+            print(json.dumps({"id": req["id"], "error": {"code": -32603, "message": "rejected"}}), flush=True)
+            continue
+        if case == f"timeout_{method.replace('/', '_')}":
+            time.sleep(60)
+        if method == "hooks/list":
+            hook_path = str((home / "hooks.json").resolve())
+            stop = json.loads((home / "hooks.json").read_text())["hooks"]["Stop"][0]["hooks"][0]
+            print(json.dumps({"id": req["id"], "result": {"data": [{"hooks": [{
+                "sourcePath": hook_path, "eventName": "stop", "handlerType": stop["type"],
+                "command": stop["command"], "matcher": None, "timeoutSec": stop["timeout"],
+                "async": False, "enabled": True, "key": "stop-0", "currentHash": "hash-0",
+            }]}]}}), flush=True)
+        else:
+            print(json.dumps({"id": req["id"], "result": {}}), flush=True)
+else:
+    sessions = home / "sessions"
+    sessions.mkdir(exist_ok=True)
+    (sessions / "session-0.jsonl").write_text("{}\\n")
+    print(json.dumps({"argv": sys.argv[1:]}))
+""")
+    env.update(LOOPX_OFFICIAL_STOP_HOOK="1", SPLIT_CASE=case)
+    started = time.time()
+    env["LOOPX_PHASE_DEADLINE_EPOCH"] = str(started + 2)
+    if case == "protocol_error":
+        with pytest.raises(NativeGoalProtocolError, match="app_server_request_failed:initialize"):
+            run_once(env)
+        return
+    if case == "expired":
+        from benchmark.runtime.native_hooks import prepare_official_stop_hook
+        home = Path(env["LOOPX_CODEX_HOME"])
+        home.mkdir(parents=True, exist_ok=True)
+        with pytest.raises(subprocess.TimeoutExpired):
+            prepare_official_stop_hook(env, home, deadline=time.monotonic() - 1)
+        assert not (tmp_path / "spawned-discovery").exists()
+        return
+    result = run_once(env)
+    if case == "ok":
+        assert result["ok"] and result["official_stop_hook_verified"] is True
+        assert result["return_code"] == 0 and "hooks.state=" in (
+            tmp_path / "logs" / "wakes" / result["turn_id"] / "stdout.jsonl"
+        ).read_text()
+        return
+    assert time.time() - started < 5
+    assert result["budget_exhausted"] and result["timed_out"] and result["host_invoked"] is False
+    assert (tmp_path / "last-method").read_text() == (
+        "initialize" if case == "timeout_initialize" else "hooks/list"
+    )
+
+
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),
                     reason="Explicit native Codex binary required; inference uses loopback only")
 @pytest.mark.parametrize("enabled", [False, True])

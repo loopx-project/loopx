@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import shlex
+import subprocess
+import time
+from collections.abc import Mapping
 from functools import partial
 from pathlib import Path
+from typing import Any
 
 
 OFFICIAL_STOP_HOOK_REASON = "Do not stop. Continue working on the implementation."
@@ -23,7 +28,7 @@ def prepare_official_stop_hook(env: dict[str, str], home: Path, *, deadline: flo
 
 def prepare_native_hooks(env: dict[str, str], home: Path, configuration: dict, *,
                          purpose: str, deadline: float | None = None) -> list[str]:
-    from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport
+    from loopx.control_plane.turn_driver.codex_stdio import NativeGoalProtocolError, StdioNativeGoalTransport
 
     content = json.dumps({"hooks": configuration})
     path = home / "hooks.json"
@@ -32,16 +37,42 @@ def prepare_native_hooks(env: dict[str, str], home: Path, configuration: dict, *
     if not path.exists():
         path.write_text(content)
         path.chmod(0o600)
+    command = [
+        env["CODEX_BIN"], "-c", "features.plugins=false",
+        "-c", "features.remote_plugin=false", "-c", "features.plugin_sharing=false",
+        "app-server", "--listen", "stdio://",
+    ]
+    if deadline is not None and deadline <= time.monotonic():
+        raise subprocess.TimeoutExpired(command, 0)
     # The native host owns keys and hashes. Discovery launches no model, and
     # discovery-only plugin overrides leave the solver configuration intact.
     with (home / f"{purpose}-hooks-stderr.log").open("a") as stderr:
         with StdioNativeGoalTransport.spawn(
-            [env["CODEX_BIN"], "-c", "features.plugins=false",
-             "-c", "features.remote_plugin=false", "-c", "features.plugin_sharing=false",
-             "app-server", "--listen", "stdio://"],
-            cwd=env["LOOPX_PROJECT"], env=env, stderr=stderr, response_timeout_sec=10,
+            command, cwd=env["LOOPX_PROJECT"], env=env, stderr=stderr, response_timeout_sec=10,
         ) as native:
-            request = native.request if deadline is None else partial(native.request, deadline=deadline)
+            supports_deadline = "deadline" in inspect.signature(native.request).parameters
+            if deadline is None:
+                request = native.request
+            elif supports_deadline:
+                request = partial(native.request, deadline=deadline)
+            else:
+                def request(method: str, params: Mapping[str, Any]) -> Mapping[str, Any]:
+                    started = time.monotonic()
+                    remaining = deadline - started
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(command, 0)
+                    rpc_timeout = 10.0
+                    caller_limited = remaining <= rpc_timeout
+                    # Split-pinned product releases expose the 2-arg transport;
+                    # cap per-RPC waiting and translate caller-budget timeouts uniformly.
+                    native.response_timeout_sec = remaining if caller_limited else rpc_timeout
+                    try:
+                        return native.request(method, params)
+                    except NativeGoalProtocolError as exc:
+                        if caller_limited and str(exc) == f"app_server_response_timeout:{method}":
+                            raise subprocess.TimeoutExpired(command, remaining) from exc
+                        raise
+
             request("initialize", {"clientInfo": {"name": "loopx_context_transport", "version": "0.1.0"},
                                    "capabilities": {"experimentalApi": True}})
             native.notify("initialized", {})
