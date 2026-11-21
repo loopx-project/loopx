@@ -154,8 +154,9 @@
       "dict_any_count": 0
     },
     "loopx/presentation/renderers/status_markdown.py": {
-      "any_count": 47,
-      "dict_any_count": 0
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1102
     },
     "loopx/quota.py": {
       "any_count": 0,
