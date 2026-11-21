@@ -454,7 +454,7 @@ def test_available_first_agent_retains_its_real_eligibility_refusal(tmp_path, re
     import threading
 
     from loopx.chat_actions import goal_workspace_ref
-    from loopx.chat_endpoints import AgentEndpointRegistry
+    from loopx.chat.endpoints import AgentEndpointRegistry
     from loopx.chat_runtime import ChatRuntimeController
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
     from loopx.chat_store import ChatSessionStore

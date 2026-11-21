@@ -46,7 +46,7 @@ from .chat_codex_goal import (
 )
 from .chat.dsh import DshChatAdapter as DshChatAdapter
 from .chat.endpoint_catalog import builtin_chat_endpoints
-from .chat_endpoints import AgentEndpointRegistry
+from .chat.endpoints import AgentEndpointRegistry
 from .control_plane.chat_turn_acceptance import managed_turn_recovery_allowed
 from .file_lock import (
     LOCK_HOLDER_DEAD, LOCK_HOLDER_LIVE, LOCK_HOLDER_RELEASED,

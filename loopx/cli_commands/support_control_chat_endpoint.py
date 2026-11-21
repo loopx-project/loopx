@@ -5,7 +5,7 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
-from ..chat_endpoints import AgentEndpointRegistry
+from ..chat.endpoints import AgentEndpointRegistry
 from ..history import load_registry
 from ..paths import resolve_runtime_root
 
