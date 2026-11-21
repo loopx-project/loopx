@@ -1139,6 +1139,24 @@ sessions retain their existing Todo-bound approval/handoff contract; this CLI
 option applies to exec conversations. Other hosts retain their adapter's
 Todo-based session contract.
 
+For a managed `turn run-once --host codex-cli --codex-operation-tools`
+invocation, set `LOOPX_CODEX_OPERATION_WORKER_USER` and
+`LOOPX_CODEX_OPERATION_WORKER_HOME` to opt into Linux process isolation. The
+Core launcher needs root authority to start the app server as the named
+unprivileged Worker. Provision the absolute Worker home and its `.codex`
+directory with mode `0700` and Worker ownership. Configure model access in
+that account. The Core environment is excluded, and the app server starts
+without supplementary groups or the ability to gain privileges on exec.
+
+Use a read-only sandbox and omit a Core-provided MCP server. The Core runtime
+root and owning project registry directory must be private, Core-owned
+physical directories with protected ancestors. The Worker profile is bound
+to the native session.
+Core rechecks current Goal authority at durable writeback, and the existing
+Turn journal keeps its original effect identity and recovery rules. This
+profile protects local LoopX writeback. Additional business write endpoints
+need their own credentials and authorization checks.
+
 Use a new `turn_instance_id` for each new iteration. Reuse the same id only for
 an explicit replay or failed-Turn recovery. The context policy controls Host
 memory, while the TurnEnvelope and durable LoopX frontier remain the sole
