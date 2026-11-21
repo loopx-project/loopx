@@ -7072,6 +7072,103 @@ def test_private_steward_app_steering_delivers_once_to_the_original_turn(tmp_pat
         fixture.close()
 
 
+def test_private_steward_app_recovers_queued_steering_after_restart(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+    from loopx.capabilities.native_chat.queued_admission import steer_queued_web_turn
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+    from test_native_steward_private import steward
+
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, _, capture, _ = next(fixture)
+    observer = None
+    try:
+        runtime.codex_home = tmp_path / "original-codex-home"
+        runtime.codex_home.mkdir()
+        inventory = tmp_path / "thread-items.json"
+        inventory.write_text("[]")
+        fake = Path(runtime.codex_bin)
+        source = fake.read_text()
+        original_inventory = '    elif method in {"thread/items/list", "thread/backgroundTerminals/list"}:'
+        assert original_inventory in source
+        fake.write_text(source.replace(original_inventory, f'''    elif method == "thread/items/list":
+        with open({str(inventory)!r}) as file:
+            result = {{"data": json.load(file)}}
+    elif method == "thread/backgroundTerminals/list":'''))
+
+        event = provider.event("steward-app", "cold-original", "wait for steer")
+        assert transport.admit("steward-app", event)["status"] == "durably_accepted"
+        original, = transport.core.pending()
+        _wait_private_upstream(store, original)
+        sid, tid = original["session_id"], original["turn_id"]
+        message = "Follow the correction on this Turn."
+        pending, _ = runtime.enqueue_turn(session_id=sid, client_turn_id="cold-queued", message=message,
+            work_dir=None, objective="", origin="web")
+        qid = pending["turn_id"]
+        attempt = dict(session_id=sid, queued_turn_id=qid, expected_turn_id=tid,
+                       client_ingress_id="cold-ack")
+        original_steer = CodexAppServerAdapter.steer_turn
+
+        def lose_response(adapter, *args):
+            original_steer(adapter, *args)
+            raise RuntimeError("response lost after accepting the correction")
+
+        monkeypatch.setattr(CodexAppServerAdapter, "steer_turn", lose_response)
+        with pytest.raises(RuntimeError, match="live_steering_delivery_unresolved"):
+            steer_queued_web_turn(runtime, **attempt)
+        completed = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert completed["status"] == "completed"
+        held = store.load_turn(sid, qid)
+        assert held["_queue_steering"]["status"] == "pending"
+        runtime.adapters.pop(sid).close_session()
+        observer = ChatRuntimeController(
+            store=ChatSessionStore(store.root.parent, startup_maintenance=False),
+            codex_bin=runtime.codex_bin, project_contexts=runtime.project_contexts,
+            registry_path=runtime.registry_path,
+        )
+        observer.codex_home = runtime.codex_home
+        observer.manager_scope_resolver = runtime.manager_scope_resolver
+        calls = [json.loads(line) for line in capture.read_text().splitlines()]
+        sent, = [call["params"] for call in calls if call["method"] == "turn/steer"]
+        for wrong in ([], [{"turnId": completed["upstream_turn_id"], "item": {
+            "type": "userMessage", "clientId": sent["clientUserMessageId"],
+            "content": [{"type": "text", "text": "Different text"}],
+        }}]):
+            inventory.write_text(json.dumps(wrong))
+            with pytest.raises(RuntimeError, match="live_steering_delivery_unresolved"):
+                steer_queued_web_turn(observer, **attempt)
+            assert store.load_turn(sid, qid) == held
+            assert store.claim_next_queued_turn(sid) is None
+        inventory.write_text(json.dumps([{"turnId": completed["upstream_turn_id"], "item": {
+            "type": "userMessage", "clientId": sent["clientUserMessageId"], "content": sent["input"],
+        }}]))
+        observer.codex_home = tmp_path / "different-codex-home"
+        with pytest.raises(RuntimeError, match="live_steering_delivery_unresolved"):
+            steer_queued_web_turn(observer, **attempt)
+        assert store.load_turn(sid, qid) == held
+        observer.codex_home = runtime.codex_home
+        delivered = steer_queued_web_turn(observer, **attempt)
+        assert delivered["status"] == "delivered" and delivered["turn_id"] == tid
+        assert delivered["queued_turn_id"] == qid
+        assert steer_queued_web_turn(observer, **attempt) == delivered
+        assert not observer.adapters and not store.claim_next_queued_turn(sid)
+        assert store.load_turn(sid, qid)["status"] == "completed"
+        after = [json.loads(line) for line in capture.read_text().splitlines()]
+        observed = [call["params"] for call in after if call["method"] == "thread/items/list"]
+        assert len(observed) == 3 and all(call["threadId"] == sent["threadId"]
+            and call["turnId"] == sent["expectedTurnId"] for call in observed)
+        assert [call for call in after if call["method"] in {"thread/start", "thread/resume", "thread/fork",
+            "turn/start", "turn/steer"}] == [call for call in calls if call["method"] in {
+                "thread/start", "thread/resume", "thread/fork", "turn/start", "turn/steer"}]
+        assert sum(row["kind"] == "turn.steered" for row in store.events_after(sid, tid, None)) == 1
+    finally:
+        if observer is not None:
+            observer.close()
+        fixture.close()
+
+
 def test_private_steward_native_mention_uses_original_manager_turn(tmp_path, monkeypatch):
     from test_native_steward_private import steward
 
