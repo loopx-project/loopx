@@ -1148,3 +1148,345 @@ def route(params):
     assert "read_action" not in json.dumps(gov_json)
     assert "next_cli_actions" not in json.dumps(gov_json)
     assert str(tmp_path) not in json.dumps(gov_json)
+
+
+def test_scoped_signal_monitor_antigravity_inline_replan_isolates_native_result(
+    steward, tmp_path, monkeypatch,
+) -> None:
+    import contextlib
+    from loopx.capabilities.native_chat.antigravity_adapter import AntigravityAdapter
+    from loopx.chat_manager import steward_machine_defaults
+    from loopx.configure_goal import configure_goal
+    from test_chat_manager_model_adoption import configure
+    import loopx.capabilities.native_chat.steward_monitor as monitor_mod
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    store, runtime, _, transport, binding, _, _ = steward
+    sid, managed = original(steward)
+    storage(runtime, "sqlite")
+    plan = managed.prepare(binding["binding_id"], session_id=sid)["plan"]
+    actor = managed.prepare(
+        binding["binding_id"],
+        session_id=sid,
+        expected_plan_id=plan["plan_id"],
+        execute=True,
+    )["actor"]
+    session = store.load_session(sid)
+
+    assert configure_goal(
+        registry_path=runtime.registry_path,
+        goal_id=actor["goal_id"],
+        execution_replan_after_turns=1,
+        execute=True,
+    )["ok"]
+
+    configure(runtime.coordination_runtime_root, model="gpt-6.2-sol", effort="xhigh", endpoint="codex", policy="flexible")
+    defaults = steward_machine_defaults(runtime)
+    orig_thread = session["upstream_thread_id"]
+    turn_switch, _ = store.create_turn(sid, client_turn_id="ag-fallback-switch", message="Switch to Antigravity")
+    store.update_turn(sid, turn_switch["turn_id"], status="queued")
+    store.update_session(sid, status="ready", active_turn_id=turn_switch["turn_id"], agent_model_id="gpt-6.2-sol")
+    session = store.load_session(sid)
+    store.update_session(
+        sid,
+        status="ready",
+        active_turn_id=turn_switch["turn_id"],
+        expected_upstream_thread_id=orig_thread,
+        agent_id="antigravity",
+        executor_endpoint_id="antigravity",
+        adapter_kind="antigravity_ls",
+        upstream_mode="default",
+        upstream_thread_id="ag-cascade-replan-1",
+        agent_model_id="gemini-4-carbon-high",
+        agent_reasoning_effort="high",
+        manager_executor_allocation={
+            "schema_version": "manager_executor_allocation_v0",
+            "selection_policy": "flexible",
+            "allocation_reason": "flexible_availability_fallback",
+            "executor_endpoint": "antigravity",
+            "executor_endpoint_source": "flexible_pool",
+            "executor_endpoint_default_reason": "",
+            "configured_endpoint": "codex",
+            "eligible_endpoints": ["codex", "antigravity"],
+            "configuration_revision": defaults["configuration_revision"],
+            "available": True,
+            "model": "gemini-4-carbon-high",
+            "model_source": "vendor_default",
+            "reasoning_effort": "high",
+            "configured_model": "gpt-6.2-sol",
+            "configured_reasoning_effort": "xhigh",
+        },
+        upstream_context_history=[
+            *(session.get("upstream_context_history") or []),
+            {
+                "thread_id": orig_thread,
+                "manager_context_version": session.get("manager_context_version"),
+                "agent_id": "codex",
+                "agent_model_id": "gpt-6.2-sol",
+            },
+        ],
+    )
+    store.update_turn(sid, turn_switch["turn_id"], status="completed")
+    store.update_session(sid, active_turn_id=None)
+    if sid in runtime.adapters:
+        runtime.adapters.pop(sid).close_session()
+
+    monitor = StewardMonitor(runtime)
+    enable_plan = monitor.configure(binding["binding_id"], operation="enable")["plan"]
+    monitor.configure(
+        binding["binding_id"],
+        operation="enable",
+        execute=True,
+        expected_plan_id=enable_plan["plan_id"],
+    )
+    default_watch = monitor.current(actor)
+    edit_local_watch(
+        runtime,
+        actor,
+        default_watch["todo_id"],
+        "--next-due-at",
+        (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
+    )
+    actions = transport.core.actions
+    preview = actions.preview({
+        "action_kind": "monitor.create",
+        "summary": "Track mergeable approved PRs on acme/widgets and send one aggregated report",
+        "normalized_parameters": {
+            "goal_id": actor["goal_id"],
+            "agent_id": actor["agent_id"],
+            "target": "Track mergeable approved PRs on acme/widgets and emit one aggregated report.",
+            "target_key": "steward-gpt-mergeable-pr-monitor",
+            "task_repository": "acme/widgets",
+            "cadence": "every_2_hours",
+            "timezone": "Asia/Shanghai",
+            "stop_condition": "watch_only",
+            "signal_scope": {
+                "schema_version": "steward_signal_monitor_scope_v0",
+                "include_portfolio": False,
+                "include_inbox": False,
+                "pr_filter": {
+                    "exclude_drafts": True,
+                    "exclude_conflicting": True,
+                    "effective_verdicts": ["APPROVE"],
+                    "required_approver_declarations": ["GPT", "OpenAI"],
+                },
+            },
+        },
+        "context": {"kind": "goal", "goal_id": actor["goal_id"]},
+        "idempotency_key": "create-gpt-mergeable-pr-ag-replan",
+    })
+    assert preview["status"] == "preview_ready"
+    created_todo_id = actions.apply(preview["proposal_id"])["proposal"]["receipt"]["resource_ids"]["todo_id"]
+
+    recorded_invocations: list[tuple[str, str]] = []
+
+    class _EmittingAntigravityAdapter(AntigravityAdapter):
+        def healthcheck(self) -> bool:
+            return not self._closed
+
+        def interrupt_turn(self, turn_id: str | None = None) -> None:
+            return None
+
+        def start_turn(self, message: str, event_sink=None, **_kwargs):
+            guard = self._launch_guard() if self._launch_guard is not None else contextlib.nullcontext()
+            with guard:
+                marker = "Steward governance replan context (data):"
+                is_gov = marker in message
+                idx = len(recorded_invocations) + 1
+                upstream_id = f"agy_turn_{'replan' if is_gov else 'primary'}_{idx}"
+                recorded_invocations.append(("governance" if is_gov else "primary", upstream_id))
+                if is_gov:
+                    ctx = json.loads(message.split(marker, 1)[1].lstrip().splitlines()[0])
+                    recent = (ctx.get("review") or {}).get("recent_evidence") or [{}]
+                    ev_ref = recent[0].get("evidence_ref", "replan-evidence-inline")
+                    todo_delta = [
+                        "retain:" + r["todo_id"]
+                        for r in (ctx.get("open_agent_todos") or [])[:4]
+                        if isinstance(r, dict) and r.get("todo_id")
+                    ]
+                    sc = (ctx.get("writeback") or {}).get("stride_control")
+                    vision = {
+                        "schema_version": "goal_vision_replan_contract_v0",
+                        "state": "active",
+                        "vision_patch": {
+                            "vision_summary": "Maintain private steward PR monitoring and reports.",
+                            "acceptance_summary": "Aggregate matching PR signals cleanly without notification spam.",
+                        },
+                        "todo_delta": todo_delta,
+                        "path_delta": {
+                            "schema_version": "goal_path_delta_v0",
+                            "outcome": "replan",
+                            "prior_assumption": "Steward monitor followups execute continuously without inline replan.",
+                            "observed_reality": "Periodic review became due after first settled turn and cleared inline.",
+                            "retained": ["All scoped monitor subscriptions"],
+                            "changed": ["Recorded evidence-linked baseline for steward followups"],
+                            "evidence_refs": [ev_ref],
+                        },
+                    }
+                    if isinstance(sc, dict) and sc.get("reference_context_id"):
+                        vision["stride_decision"] = {
+                            "schema_version": sc["schema_version"],
+                            "strategy_version": sc["strategy_version"],
+                            "reference_context_id": sc["reference_context_id"],
+                            "reference_obligation_id": sc["reference_obligation_id"],
+                            "basis": "supported_progress",
+                            "action": "verify",
+                            "axes": {
+                                "work_slice": {"plan": "Complete inline replan and queued report.", "reason": "Clear review gate cleanly."},
+                                "route_distance": {"plan": "Keep scoped monitor pipeline unchanged.", "reason": "Existing filter matches goal."},
+                                "validation_scope": {"plan": "Verify replan writeback and queued delivery.", "reason": "Confirm single-turn recovery."},
+                            },
+                            "next_probe": {
+                                "scope": "Run blocked monitor followup triage.",
+                                "prediction": "Advancement commits after inline replan.",
+                                "adoption_criterion": "Followup todo closes with queued report.",
+                                "cost_bound": "One inline governance turn plus followup.",
+                                "minimum_evidence": "Committed replan event and delivery json.",
+                            },
+                        }
+                    raw_body = json.dumps({
+                        "result_kind": "replan_required",
+                        "classification": "steward_periodic_review_settled",
+                        "summary": "Settled steward autonomous periodic review inline.",
+                        "next_action": "Continue scoped PR monitor advancement.",
+                        "delivery_batch_scale": "implementation",
+                        "delivery_outcome": "outcome_progress",
+                        "work_evidence": ["Reviewed recent settled turns and retained active monitor scope"],
+                        "validation_evidence": ["Checked replan writeback contract and open monitor todos"],
+                        "path_delta_mode": "material_replan",
+                        "agent_vision_json": json.dumps(vision),
+                    }, ensure_ascii=False)
+                else:
+                    raw_body = json.dumps({
+                        "result_kind": "validated_completion",
+                        "classification": "steward_scoped_pr_report",
+                        "summary": "Prepared aggregated mergeable PR report.",
+                        "next_action": "Await next monitor cadence.",
+                        "delivery_batch_scale": "implementation",
+                        "delivery_outcome": "outcome_progress",
+                        "work_evidence": ["Synthesized aggregated report for matching PR"],
+                        "validation_evidence": ["steward_monitor_snapshot_v0 scoped cleanly"],
+                        "path_delta_mode": "unchanged",
+                        "vision_unchanged_reason": "Scoped steward monitor report.",
+                        "steward_owner_report": "## 可直接合并 PR\n- #9102 Mergeable PR (GPT-5.4 APPROVE)",
+                    }, ensure_ascii=False)
+
+                parsed_msg = json.loads(raw_body)
+                if event_sink is not None:
+                    event_sink("turn.started", {"upstream_turn_id": upstream_id, "threadId": self.cascade_id})
+                    event_sink("agent.phase", {"method": "item/started", "label": upstream_id})
+                    event_sink("answer.delta", {"text": raw_body})
+                    event_sink("turn.native_result", {
+                        "thread_id": self.cascade_id,
+                        "start_step_index": idx * 10,
+                        "total_steps": idx * 10 + 2,
+                        "steps": [{"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE"}],
+                        "upstream_turn_id": upstream_id,
+                    })
+                    event_sink("answer.final", {"response": {"message": raw_body, "summary": parsed_msg["summary"]}})
+                return {"message": raw_body}
+
+    def fake_start(cls, *, work_dir, objective, resume_thread_id=None, history=None,
+                   runtime_profile="restricted", team_plan_context=None, executor_model=None,
+                   env=None, hard_timeout_sec=None):
+        return _EmittingAntigravityAdapter(
+            work_dir=work_dir,
+            objective=objective,
+            cascade_id=resume_thread_id or "ag-cascade-replan-1",
+            ls_url="http://127.0.0.1:1",
+            csrf_token="tok",
+            model_id=(executor_model or {}).get("model") or "gemini-4-carbon-high",
+            model_placeholder="MODEL_PLACEHOLDER_M427",
+            reasoning_effort="high",
+            runtime_profile=runtime_profile,
+        )
+
+    monkeypatch.setattr(AntigravityAdapter, "start", classmethod(fake_start))
+
+    def _pr_item(number: int) -> dict:
+        return {
+            "number": number,
+            "title": f"Mergeable PR #{number}",
+            "url": f"https://github.com/acme/widgets/pull/{number}",
+            "headRefOid": f"head{number}",
+            "isDraft": False,
+            "mergeable": "MERGEABLE",
+            "updatedAt": "2026-11-20T09:00:00Z",
+            "author": {"login": "alice"},
+            "checks_summary": {"state": "SUCCESS", "total": 1, "passing": 1, "failing": 0, "pending": 0},
+            "bypassed_gates": [],
+            "review_summary": {
+                "effective_verdict": "APPROVE",
+                "has_review_conflict": False,
+                "stale_review_count": 0,
+                "exact_head_reviews": [{
+                    "author_login": "bob",
+                    "reviewer_declaration": "GPT-5.4",
+                    "verdict": "APPROVE",
+                    "valid_verdict_review": True,
+                    "state": "APPROVED",
+                }],
+            },
+        }
+
+    # Turn 1: settle first advancement so periodic_review_due threshold=1 is reached.
+    edit_local_watch(
+        runtime,
+        actor,
+        created_todo_id,
+        "--next-due-at",
+        (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat(),
+    )
+    monkeypatch.setattr(monitor_mod, "_observe_github_repository_prs", lambda repo: {
+        "status": "ok", "repository": repo, "items": [_pr_item(9101)],
+    })
+    assert finish(runtime, pump_steward_monitors(runtime)[0])["status"] == "completed"
+    runtime._steward_monitor_next_check.clear()
+    first_adv = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert first_adv["response"]["native_loopx"]["status"] == "committed"
+
+    # Turn 2: inline .replan + resumed primary advancement on AntigravityAdapter must keep sole native_result.
+    edit_local_watch(
+        runtime,
+        actor,
+        created_todo_id,
+        "--next-due-at",
+        (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat(),
+    )
+    monkeypatch.setattr(monitor_mod, "_observe_github_repository_prs", lambda repo: {
+        "status": "ok", "repository": repo, "items": [_pr_item(9102)],
+    })
+    assert finish(runtime, pump_steward_monitors(runtime)[0])["status"] == "completed"
+
+    invocations_before_turn2 = len(recorded_invocations)
+    runtime._steward_monitor_next_check.clear()
+    second_turns = pump_steward_monitors(runtime)
+    assert len(second_turns) == 1
+    second_done = finish(runtime, second_turns[0])
+    assert second_done["status"] == "completed", second_done
+    assert second_done["response"]["native_loopx"]["status"] == "committed", second_done
+    assert second_done["response"]["steward_owner_report_queued"] is True
+
+    turn2_invocations = recorded_invocations[invocations_before_turn2:]
+    assert [kind for kind, _ in turn2_invocations] == ["governance", "primary"]
+    primary_upstream_id = turn2_invocations[1][1]
+
+    replan_events = [
+        row["payload"] for row in store.events_after(sid, second_done["turn_id"], None)
+        if row.get("kind") == "native_loopx.replan_result"
+    ]
+    assert len(replan_events) == 1
+    assert replan_events[0]["status"] == "committed"
+    assert replan_events[0]["result_kind"] == "replan_required"
+
+    retained_native = store.native_result(sid, second_done["turn_id"])
+    assert retained_native["upstream_turn_id"] == primary_upstream_id
+
+    turn2_events = store.events_after(sid, second_done["turn_id"], None)
+    deltas = [row["payload"]["text"] for row in turn2_events if row.get("kind") == "answer.delta"]
+    finals = [row["payload"] for row in turn2_events if row.get("kind") == "answer.final"]
+    phases = [row["payload"]["label"] for row in turn2_events if row.get("kind") == "agent.phase"]
+    assert turn2_invocations[0][1] in phases and primary_upstream_id in phases
+    assert len(deltas) == 1 and "## 可直接合并 PR" in deltas[0]
+    assert not any("steward_periodic_review_settled" in text or "replan_required" in text for text in deltas)
+    assert len(finals) == 1 and "## 可直接合并 PR" in str(finals[0])
