@@ -7,14 +7,194 @@ wheel tests exercise the same Python and TypeScript build.
 """
 from __future__ import annotations
 
+import atexit
+from collections import deque
 import json
 import os
 from datetime import datetime
 from pathlib import Path
+import selectors
 import subprocess
 import tempfile
+import threading
+import time
 
 import loopx
+
+
+_WORKER_LOCK = threading.Lock()
+_WORKERS: dict[tuple[int, str, bool], _CanonicalAuthorityWorker] = {}
+_SHUTDOWN_REGISTERED = False
+_WORKER_REQUEST_TIMEOUT_SECONDS = 45.0
+
+
+class _CanonicalAuthorityWorker:
+    """Persistent Node worker for disposable canonical authority fixture setups."""
+
+    def __init__(self, key: tuple[int, str, bool]) -> None:
+        self.key = key
+        self.call_lock = threading.Lock()
+        self._stderr_tail: deque[str] = deque(maxlen=64)
+        self._process = self._spawn(Path(key[1]))
+
+    @staticmethod
+    def _build_script(package: Path) -> str:
+        module = package / "control_plane/coordination/file_authority_store.ts"
+        provider_module = module.parent / "local_authority_provider.ts"
+        fence_module = package / "control_plane/coordination/legacy_writer_fence.ts"
+        codec_module = package / "control_plane/coordination/authority_store_codec.ts"
+        return (
+            "import {createInterface} from 'node:readline';"
+            f"import {{FileAuthorityStore}} from {json.dumps(module.as_uri())};"
+            f"import {{selectLocalSqliteAuthority,openLocalAuthorityStore}} from {json.dumps(provider_module.as_uri())};"
+            f"import {{engageLegacyCoordinationWriterFence}} from {json.dumps(fence_module.as_uri())};"
+            f"import {{canonicalAuthoritySha256}} from {json.dumps(codec_module.as_uri())};"
+            "const rl=createInterface({input:process.stdin,crlfDelay:Infinity});"
+            "for await(const line of rl){"
+            "if(!line)continue;"
+            "try{"
+            "const req=JSON.parse(line);"
+            "let result;"
+            "if(req.op==='init'){"
+            "if(req.provider==='sqlite')await selectLocalSqliteAuthority(req.root,req.goal,true);"
+            "const store=await openLocalAuthorityStore(req.root,req.goal);"
+            "result=await store.commitAuthority({expected_provider_revision:null,operation_id:'canonical-fixture',"
+            "events:[],next_projection:req.projection,receipts:[]});"
+            "const fence=await engageLegacyCoordinationWriterFence({schema_version:'loopx_legacy_coordination_writer_fence_engage_request_v0',"
+            "runtime_root:req.root,goal_id:req.goal,state_path:req.state_path,fence:{schema_version:'loopx_legacy_coordination_writer_fence_v0',"
+            "state:'engaged',goal_id:req.goal,fence_id:'canonical-fixture',source_version:'canonical-fixture',"
+            "source_projection_sha256:canonicalAuthoritySha256(req.projection),expected_shadow_provider_revision:result.provider_revision}});"
+            "if(fence.status!=='applied')throw new Error(JSON.stringify(fence));"
+            "}else if(req.op==='advance'){"
+            "const store=await openLocalAuthorityStore(req.root,req.goal);"
+            "const head=await store.loadAuthority();"
+            "if(head.status!=='loaded')throw new Error(JSON.stringify(head));"
+            "result=await store.commitAuthority({expected_provider_revision:head.provider_revision,"
+            "operation_id:req.operation_id,events:[],next_projection:req.projection,receipts:[]});"
+            "}else{throw new Error('unsupported canonical fixture op');}"
+            "process.stdout.write(JSON.stringify({ok:true,result})+'\\n');"
+            "}catch(err){"
+            "const msg=err instanceof Error?(err.stack||err.message):String(err);"
+            "process.stdout.write(JSON.stringify({ok:false,error:msg})+'\\n');"
+            "}}"
+        )
+
+    def _spawn(self, package: Path) -> subprocess.Popen[bytes]:
+        self._stderr_tail.clear()
+        proc = subprocess.Popen(
+            ["node", "--no-warnings", "--experimental-strip-types", "--input-type=module", "-e", self._build_script(package)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+        assert proc.stderr is not None
+
+        def _drain_stderr() -> None:
+            try:
+                for raw_line in iter(proc.stderr.readline, b""):
+                    self._stderr_tail.append(raw_line.decode("utf-8", errors="replace").rstrip())
+            except OSError:
+                pass
+
+        threading.Thread(target=_drain_stderr, daemon=True).start()
+        return proc
+
+    def _read_line(self, timeout_seconds: float) -> bytes:
+        stdout = self._process.stdout
+        assert stdout is not None
+        deadline = time.monotonic() + timeout_seconds
+        chunks = bytearray()
+        selector = selectors.DefaultSelector()
+        selector.register(stdout, selectors.EVENT_READ)
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("canonical authority worker timed out waiting for response")
+                events = selector.select(remaining)
+                if not events:
+                    raise TimeoutError("canonical authority worker timed out waiting for response")
+                chunk = os.read(stdout.fileno(), 65536)
+                if not chunk:
+                    raise EOFError("canonical authority worker closed stdout")
+                chunks.extend(chunk)
+                if b"\n" in chunk:
+                    line, _rest = bytes(chunks).split(b"\n", 1)
+                    return line
+        finally:
+            selector.close()
+
+    def request(self, payload: dict[str, object]) -> dict:
+        encoded = (json.dumps(payload) + "\n").encode("utf-8")
+        with self.call_lock:
+            for attempt in range(2):
+                if self._process.poll() is not None:
+                    self.close()
+                    self._process = self._spawn(Path(self.key[1]))
+                try:
+                    assert self._process.stdin is not None
+                    self._process.stdin.write(encoded)
+                    self._process.stdin.flush()
+                    raw_line = self._read_line(_WORKER_REQUEST_TIMEOUT_SECONDS)
+                except (BrokenPipeError, EOFError, OSError):
+                    self.close()
+                    if attempt == 0:
+                        self._process = self._spawn(Path(self.key[1]))
+                        continue
+                    stderr_text = "\n".join(self._stderr_tail)
+                    raise AssertionError(f"canonical authority worker failed after respawn: {stderr_text}")
+                except TimeoutError:
+                    self.close()
+                    raise
+                response = json.loads(raw_line.decode("utf-8"))
+                if not response.get("ok"):
+                    raise AssertionError(response.get("error") or "\n".join(self._stderr_tail))
+                return response["result"]
+        raise AssertionError("unreachable")
+
+    def close(self) -> None:
+        proc = self._process
+        for stream in (proc.stdin, proc.stdout, proc.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+        if proc.poll() is None:
+            try:
+                proc.wait(timeout=1.5)
+            except subprocess.TimeoutExpired:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=1.5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+
+
+def _shutdown_canonical_fixture_workers() -> None:
+    current_pid = os.getpid()
+    with _WORKER_LOCK:
+        owned = [key for key in _WORKERS if key[0] == current_pid]
+        workers = [_WORKERS.pop(key) for key in owned]
+    for worker in workers:
+        worker.close()
+
+
+def _get_canonical_authority_worker(package: Path) -> _CanonicalAuthorityWorker:
+    global _SHUTDOWN_REGISTERED
+    sqlite_enabled = "--experimental-sqlite" in os.environ.get("NODE_OPTIONS", "").split()
+    key = (os.getpid(), str(package), sqlite_enabled)
+    with _WORKER_LOCK:
+        if not _SHUTDOWN_REGISTERED:
+            atexit.register(_shutdown_canonical_fixture_workers)
+            _SHUTDOWN_REGISTERED = True
+        worker = _WORKERS.get(key)
+        if worker is None:
+            worker = _CanonicalAuthorityWorker(key)
+            _WORKERS[key] = worker
+        return worker
 
 
 def assert_todo_read_unchanged(current, previous):
@@ -63,31 +243,15 @@ def initialize_canonical_authority(runtime_root: Path, goal_id: str, projection:
     if provider not in ("file", "sqlite"):
         raise ValueError("Canonical local fixtures support File/SQLite only; PostgreSQL requires its service-owned fixture")
     package = Path(loopx.__file__).resolve().parent
-    module = package / "control_plane/coordination/file_authority_store.ts"
-    fence_module = package / "control_plane/coordination/legacy_writer_fence.ts"
-    codec_module = package / "control_plane/coordination/authority_store_codec.ts"
-    script = (
-        f"import {{FileAuthorityStore}} from {json.dumps(module.as_uri())};"
-        f"import {{selectLocalSqliteAuthority,openLocalAuthorityStore}} from {json.dumps((module.parent / 'local_authority_provider.ts').as_uri())};"
-        f"import {{engageLegacyCoordinationWriterFence}} from {json.dumps(fence_module.as_uri())};"
-        f"import {{canonicalAuthoritySha256}} from {json.dumps(codec_module.as_uri())};"
-        "import {join} from 'node:path';let input='';for await(const chunk of process.stdin)input+=chunk;"
-        "const request=JSON.parse(input);"
-        "if(request.provider==='sqlite')await selectLocalSqliteAuthority(request.root,request.goal,true);"
-        "const store=await openLocalAuthorityStore(request.root,request.goal);"
-        "const result=await store.commitAuthority({expected_provider_revision:null,operation_id:'canonical-fixture',"
-        "events:[],next_projection:request.projection,receipts:[]});"
-        "const fence=await engageLegacyCoordinationWriterFence({schema_version:'loopx_legacy_coordination_writer_fence_engage_request_v0',"
-        "runtime_root:request.root,goal_id:request.goal,state_path:request.state_path,fence:{schema_version:'loopx_legacy_coordination_writer_fence_v0',"
-        "state:'engaged',goal_id:request.goal,fence_id:'canonical-fixture',source_version:'canonical-fixture',"
-        "source_projection_sha256:canonicalAuthoritySha256(request.projection),expected_shadow_provider_revision:result.provider_revision}});"
-        "if(fence.status!=='applied')throw new Error(JSON.stringify(fence));process.stdout.write(JSON.stringify(result));"
-    )
-    process = subprocess.run(["node", "--no-warnings", "--experimental-strip-types", "--input-type=module", "-e", script],
-        input=json.dumps({"root": str(runtime_root), "goal": goal_id, "projection": projection, "state_path": str(state_path), "provider": provider}),
-        capture_output=True, text=True, check=False, timeout=45)
-    assert process.returncode == 0, process.stderr
-    result = json.loads(process.stdout)
+    worker = _get_canonical_authority_worker(package)
+    result = worker.request({
+        "op": "init",
+        "root": str(runtime_root),
+        "goal": goal_id,
+        "projection": projection,
+        "state_path": str(state_path),
+        "provider": provider,
+    })
     assert result["status"] == "applied", result
     return result
 
@@ -114,26 +278,15 @@ def advance_canonical_fixture_authority(
     Consumer fixtures may author a later synthetic state, but must not replace
     storage bytes, reset lineage, re-import Markdown or re-engage its fence.
     """
-    module = Path(loopx.__file__).resolve().parent / "control_plane/coordination/local_authority_provider.ts"
-    script = (
-        f"import {{openLocalAuthorityStore}} from {json.dumps(module.as_uri())};"
-        "let input='';for await(const chunk of process.stdin)input+=chunk;"
-        "const request=JSON.parse(input);"
-        "const store=await openLocalAuthorityStore(request.root,request.goal);"
-        "const head=await store.loadAuthority();"
-        "if(head.status!=='loaded')throw new Error(JSON.stringify(head));"
-        "const result=await store.commitAuthority({expected_provider_revision:head.provider_revision,"
-        "operation_id:request.operation_id,events:[],next_projection:request.projection,receipts:[]});"
-        "process.stdout.write(JSON.stringify(result));"
-    )
-    process = subprocess.run(
-        ["node", "--no-warnings", "--experimental-strip-types", "--input-type=module", "-e", script],
-        input=json.dumps({"root": str(runtime_root), "goal": goal_id,
-                         "projection": projection, "operation_id": operation_id}),
-        capture_output=True, text=True, check=False, timeout=45,
-    )
-    assert process.returncode == 0, process.stderr
-    result = json.loads(process.stdout)
+    package = Path(loopx.__file__).resolve().parent
+    worker = _get_canonical_authority_worker(package)
+    result = worker.request({
+        "op": "advance",
+        "root": str(runtime_root),
+        "goal": goal_id,
+        "projection": projection,
+        "operation_id": operation_id,
+    })
     assert result["status"] == "applied", result
     return result
 

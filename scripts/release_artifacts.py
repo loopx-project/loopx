@@ -41,7 +41,9 @@ def load_identity(project_root: Path) -> ReleaseIdentity:
     try:
         # The tool can inspect its own checkout: loading its package would run
         # the very initializer whose version must remain inert.
-        reader = runpy.run_path(str(Path(__file__).resolve().parents[1] / "loopx/release_metadata.py"))
+        reader = runpy.run_path(
+            str(Path(__file__).resolve().parents[1] / "loopx/control_plane/testing/release_metadata.py")
+        )
         return ReleaseIdentity(**reader["checkout_release_metadata"](project_root))
     except (OSError, SyntaxError, ValueError) as exc:
         raise ReleaseArtifactError(str(exc)) from exc
