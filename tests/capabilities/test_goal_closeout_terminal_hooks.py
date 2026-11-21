@@ -615,3 +615,94 @@ def test_archive_without_hook_keeps_success_for_unusable_state_file(
     assert result["closeout"]["status"] == "not_configured", result
     assert result["closeout"]["ledger_recorded"] is False
     assert not (archive_path / GOAL_CLOSEOUT_LEDGER_FILENAME).exists()
+
+
+def _two_goal_global_registry(tmp_path: Path) -> tuple[Path, Path]:
+    runtime_root = tmp_path / "runtime"
+    project = tmp_path / "project"
+    project.mkdir()
+    global_registry = runtime_root / "registry.global.json"
+    _write_json(
+        global_registry,
+        {
+            "schema_version": "0.1",
+            "registry_role": "global-local",
+            "goals": [
+                {
+                    "id": "retired-first",
+                    "display_name": "First retired fixture",
+                    "repo": str(project),
+                    "source_registry": str(tmp_path / "missing" / "registry.json"),
+                    "state_file": "ACTIVE_GOAL_STATE.md",
+                },
+                {
+                    "id": "retired-second",
+                    "display_name": "Second retired fixture",
+                    "repo": str(project),
+                    "state_file": "ACTIVE_GOAL_STATE.md",
+                },
+            ],
+        },
+    )
+    return runtime_root, global_registry
+
+
+def test_retire_keeps_committed_receipt_when_hook_preparation_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from loopx.lifecycle import goal_closeout
+
+    runtime_root, global_registry = _two_goal_global_registry(tmp_path)
+
+    def _broken_configuration(root: Path):
+        raise RuntimeError("hook preparation failed after commit")
+
+    monkeypatch.setattr(
+        goal_closeout,
+        "goal_closeout_configuration",
+        _broken_configuration,
+    )
+
+    result = retire_global_registry_goals(
+        runtime_root_override=str(runtime_root),
+        goal_ids=["retired-first", "retired-second"],
+        execute=True,
+    )
+    assert result["ok"] is True, result
+    assert result["wrote"] is True, result
+    assert result["global_goal_count_after"] == 0
+    assert not (runtime_root / "registry.global.json").read_text(encoding="utf-8").count(
+        '"retired'
+    )
+    # Both removed records still report their own diagnostic; one unusable
+    # preparation does not hide the other or the retirement itself.
+    assert [item["status"] for item in result["closeouts"]] == [
+        "preparation_error",
+        "preparation_error",
+    ], result
+    assert all(item["ledger_recorded"] is False for item in result["closeouts"])
+    assert not (runtime_root / "closeout").exists()
+
+
+def test_retire_without_hook_ignores_unusable_state_file(tmp_path: Path) -> None:
+    runtime_root, global_registry = _two_goal_global_registry(tmp_path)
+    payload = json.loads(global_registry.read_text(encoding="utf-8"))
+    for goal in payload["goals"]:
+        # A stale alias raises on expansion; with no hook configured nothing
+        # may resolve it, and the retirement receipt must stay successful.
+        goal["state_file"] = "~loopx-retired-operator/goals/stale/ACTIVE_GOAL_STATE.md"
+    _write_json(global_registry, payload)
+
+    result = retire_global_registry_goals(
+        runtime_root_override=str(runtime_root),
+        goal_ids=["retired-first", "retired-second"],
+        execute=True,
+    )
+    assert result["ok"] is True, result
+    assert result["wrote"] is True, result
+    assert result["global_goal_count_after"] == 0
+    assert [item["status"] for item in result["closeouts"]] == [
+        "not_configured",
+        "not_configured",
+    ], result
+    assert not (runtime_root / "closeout").exists()

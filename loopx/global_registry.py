@@ -18,7 +18,12 @@ from .control_plane.projects.contract import validate_project_record_bindings
 from .control_plane.projects.registry_codec import load_registry
 from .control_plane.runtime.time import now_local_iso
 from .file_lock import exclusive_cross_runtime_file_lock
-from .paths import global_registry_path, resolve_runtime_root, select_default_runtime_root
+from .paths import (
+    global_registry_path,
+    resolve_runtime_root,
+    select_default_runtime_root,
+    validate_goal_id_path_segment,
+)
 from .registry import read_json, registry_goals
 from .registry_writability import is_write_denied_error, probe_registry_write_path
 
@@ -488,13 +493,92 @@ def _global_goal_path(
     value = goal.get(field)
     if not value:
         return None
-    path = Path(str(value)).expanduser()
+    try:
+        path = Path(str(value)).expanduser()
+    except (OSError, RuntimeError):
+        # An alias that no longer expands cannot name a live path; the record
+        # keeps the raw value so a later reader sees what was declared.
+        return None
     if path.is_absolute():
         return path
     repo = goal.get("repo")
     if repo:
         return Path(str(repo)).expanduser() / path
     return global_path.parent / path
+
+
+def _retire_closeout_payload(
+    *,
+    runtime_root: Path,
+    retired_goal: dict[str, Any],
+    global_path: Path,
+) -> dict[str, Any]:
+    """Run the retire hook after the committed removal, best effort only.
+
+    The Goal is already gone from the registry, so nothing here may raise past
+    the retirement receipt. With no command configured the record's declared
+    path is never resolved, and one unusable record cannot stop the others.
+    """
+
+    from .lifecycle.goal_closeout import (
+        GOAL_CLOSEOUT_LEDGER_SCHEMA_VERSION,
+        goal_closeout_configuration,
+        run_goal_closeout,
+    )
+
+    goal_id = str(retired_goal.get("id") or "").strip()
+    unconfigured = {
+        "schema_version": GOAL_CLOSEOUT_LEDGER_SCHEMA_VERSION,
+        "goal_id": goal_id,
+        "trigger": "retire-global-goal",
+        "terminal_reason": "retired",
+        "status": "not_configured",
+        "ledger_recorded": False,
+    }
+    try:
+        try:
+            validate_goal_id_path_segment(goal_id)
+        except ValueError:
+            # Let the shared executor report the invalid id as it always has.
+            return run_goal_closeout(
+                runtime_root=runtime_root,
+                goal_id=goal_id,
+                repo=None,
+                state_file=None,
+                terminal_reason="retired",
+                trigger="retire-global-goal",
+            )
+        configuration, configuration_error = goal_closeout_configuration(runtime_root)
+        if configuration_error is None and not (configuration or {}).get("command"):
+            return unconfigured
+        state_file = _global_goal_path(
+            retired_goal,
+            "state_file",
+            global_path=global_path,
+        )
+        if state_file is None:
+            state_file = runtime_root / "goals" / goal_id / "ACTIVE_GOAL_STATE.md"
+        goal_runtime_dir = runtime_root / "goals" / goal_id
+        repo = retired_goal.get("repo")
+        return run_goal_closeout(
+            runtime_root=runtime_root,
+            goal_id=goal_id,
+            repo=str(repo) if repo else None,
+            state_file=str(state_file),
+            terminal_reason="retired",
+            trigger="retire-global-goal",
+            ledger_dir=(
+                goal_runtime_dir
+                if goal_runtime_dir.is_dir()
+                else runtime_root / "closeout" / goal_id
+            ),
+        )
+    except Exception as exc:  # the terminal command already finished
+        return {
+            **unconfigured,
+            "status": "preparation_error",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
 
 
 def _retire_global_registry_reduction(
@@ -661,40 +745,16 @@ def retire_global_registry_goals(
 
     closeouts: list[dict[str, Any]] = []
     if execute:
-        from .lifecycle.goal_closeout import run_goal_closeout
-
         for retired_goal in receipt.get("retired_goals", []):
-            goal_id = str(retired_goal.get("id") or "").strip()
-            if not goal_id:
+            if not str(retired_goal.get("id") or "").strip():
                 continue
-            # Reuse the registry path rule so a relative ``state_file`` reaches
-            # the hook as the absolute path its consumer contract requires.
-            state_file = _global_goal_path(
-                retired_goal,
-                "state_file",
-                global_path=global_path,
-            )
-            if state_file is None:
-                state_file = runtime_root / "goals" / goal_id / "ACTIVE_GOAL_STATE.md"
-            goal_runtime_dir = runtime_root / "goals" / goal_id
-            closeout_ledger_dir = (
-                goal_runtime_dir
-                if goal_runtime_dir.is_dir()
-                else runtime_root / "closeout" / goal_id
-            )
+            # The removal is committed. Each record prepares its own inputs, so
+            # one unusable path stays a per-record diagnostic.
             closeouts.append(
-                run_goal_closeout(
+                _retire_closeout_payload(
                     runtime_root=runtime_root,
-                    goal_id=goal_id,
-                    repo=(
-                        str(retired_goal.get("repo"))
-                        if retired_goal.get("repo")
-                        else None
-                    ),
-                    state_file=str(state_file),
-                    terminal_reason="retired",
-                    trigger="retire-global-goal",
-                    ledger_dir=closeout_ledger_dir,
+                    retired_goal=retired_goal,
+                    global_path=global_path,
                 )
             )
 
