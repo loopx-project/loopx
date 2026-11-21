@@ -255,6 +255,36 @@ def test_local_managed_session_reuses_native_turn_and_declared_validation(
         service.submit(sid, agent_id=actor["agent_id"], operation_id="local-native-1", todo_id="todo_other")
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_native_preparer_declining_a_claim_keeps_the_native_refusal(steward, tmp_path, monkeypatch, provider):
+    from loopx.control_plane.turn_driver import codex_execution_preparation
+
+    service, session, actor, _, _, capture = managed_fixture(steward, tmp_path, monkeypatch, provider)
+    store, runtime, *_ = steward
+    original_calls = capture.read_bytes()
+    preparation_states = []
+    monkeypatch.setattr(
+        codex_execution_preparation,
+        "compact_execution_preparation_request",
+        lambda decision: preparation_states.append(decision["execution_preparation"]["state"]),
+    )
+    sid = session["session_id"]
+    accepted, _ = service.submit(sid, agent_id=actor["agent_id"], operation_id="native-declines-claim")
+    finish(runtime, accepted)
+    assert preparation_states == ["claim_required"]
+    results = [
+        event["payload"] for event in store.events_after(sid, accepted["turn_id"], None)
+        if event["kind"] == "native_loopx.result"
+    ]
+    result, = results
+    assert result["ok"] is False
+    assert result["error"] == "LoopX Turn route is not host executable"
+    assert "claim_command" not in result
+    assert not any(result["effects"].values())
+    calls = [json.loads(row) for row in capture.read_bytes()[len(original_calls):].splitlines()]
+    assert not any(call["method"] == "turn/start" for call in calls)
+
+
 @pytest.mark.parametrize("fault", ["busy", "queued", "attached", "foreign_goal", "stopped_goal", "private", "native_goal", "unregistered", "host_closed"])
 def test_local_managed_session_denials_never_launch_or_accept(steward, tmp_path, monkeypatch, fault):
     service, session, actor, todo_id, _, capture = managed_fixture(steward, tmp_path, monkeypatch)

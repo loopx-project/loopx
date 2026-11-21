@@ -139,7 +139,7 @@ def handle_turn_command(
             preparation_error = "execution preparation did not make the same Todo ready"
 
             def execution_preparer(decision: Mapping[str, Any]) -> str | None:
-                return builtin_execution_preparation_claim(
+                prepared_todo = builtin_execution_preparation_claim(
                     decision,
                     agent_id=args.agent_id,
                     registry_path=registry_path.expanduser().resolve(),
@@ -150,6 +150,13 @@ def handle_turn_command(
                     admit_start=admit_preparation,
                     on_claim=record_claim,
                 )
+                if prepared_todo is None and preparation_admission is None:
+                    refusal = unconsumed_preparation_refusal(
+                        decision, goal_id=args.goal_id, agent_id=args.agent_id,
+                    )
+                    if refusal is not None:
+                        raise refusal
+                return prepared_todo
 
         resume_instance = getattr(args, "resume_turn_instance_id", None)
         if resume_instance is not None:
@@ -363,27 +370,6 @@ def handle_turn_command(
                             or (decision.get("selected_todo") or {}).get("todo_id") != prepared_todo
                             or decision.get("normal_delivery_allowed") is not True):
                         raise ValueError(preparation_error)
-                else:
-                    refusal = unconsumed_preparation_refusal(decision)
-                    if refusal is not None:
-                        # The advertised claim was not consumed, so this route
-                        # stays blocked. Refuse with the typed action boundary
-                        # instead of the generic not-host-executable rejection
-                        # a bounded caller would otherwise retry identically.
-                        blocked_plan = build_loopx_turn_plan(
-                            decision, host=args.host, execution_mode=args.execution_mode,
-                            scheduler_owner=args.scheduler_owner, session_binding=session_binding,
-                            turn_instance_id=args.turn_instance_id, iteration_context_policy=args.iteration_context,
-                            session_scope=args.session_scope, goal_ref=goal_ref,
-                        )
-                        transaction = blocked_plan.get("transaction")
-                        if isinstance(transaction, dict):
-                            transaction.pop("settlement_plan", None)
-                        blocked_plan.update(mode="run_once", status="execution_preparation_required",
-                                            execute=True, executed=False, **refusal)
-                        project_preparation_effects(blocked_plan)
-                        print_payload(blocked_plan, output_format(args), _render_loopx_turn_plan_markdown)
-                        return 1
             # Operation-equipped app-server sessions retain their Todo-bound
             # approval/handoff contract; this option controls exec conversation reuse.
             session_scope = (args.session_scope if args.host in {"codex-cli", "codex-app-server"}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -44,7 +45,7 @@ def _decision(*, state: str = "claim_required", host_execution_allowed: bool = T
             "reason_code": "task_lease_missing",
             "claim": {
                 "command": "loopx todo claim",
-                "command_line": "loopx todo claim --goal-id " + GOAL + " --thin",
+                "command_line": shlex.join(["loopx", *advertised, "--thin"]),
                 "cli_args": advertised if cli_args is None else cli_args,
                 "host_execution_allowed": host_execution_allowed,
                 "postcondition": (
@@ -324,11 +325,12 @@ def test_unconsumed_preparation_refusal_names_the_advertised_claim() -> None:
         unconsumed_preparation_refusal,
     )
 
-    refusal = unconsumed_preparation_refusal(_decision())
+    decision = _decision()
+    refusal = unconsumed_preparation_refusal(decision, goal_id=GOAL, agent_id=AGENT)
     assert refusal is not None
-    assert refusal["reason_code"] == "turn_execution_preparation_claim_not_consumed"
-    assert refusal["todo_id"] == TODO
-    assert refusal["claim_command"].startswith("loopx todo claim")
+    assert refusal.code == "turn_execution_preparation_claim_not_consumed"
+    assert refusal.payload["todo_id"] == TODO
+    assert refusal.payload["claim_command"] == decision["execution_preparation"]["claim"]["command_line"]
 
 
 def test_unconsumed_preparation_refusal_leaves_other_states_alone() -> None:
@@ -336,16 +338,36 @@ def test_unconsumed_preparation_refusal_leaves_other_states_alone() -> None:
         unconsumed_preparation_refusal,
     )
 
-    assert unconsumed_preparation_refusal(_decision(state="ready")) is None
-    assert unconsumed_preparation_refusal({"ok": True}) is None
-    without_command = _decision()
-    without_command["execution_preparation"]["claim"] = {"host_execution_allowed": False}
-    refusal = unconsumed_preparation_refusal(without_command)
-    assert refusal is not None and "claim_command" not in refusal
+    assert unconsumed_preparation_refusal(_decision(state="ready"), goal_id=GOAL, agent_id=AGENT) is None
+    assert unconsumed_preparation_refusal({"ok": True}, goal_id=GOAL, agent_id=AGENT) is None
 
 
+@pytest.mark.parametrize(
+    "decision, goal_id, agent_id, altered_command", [
+        (_decision(host_execution_allowed=False), GOAL, AGENT, None),
+        (_decision(todo_id="todo_other"), GOAL, AGENT, None),
+        (_decision(), "goal-other", AGENT, None),
+        (_decision(), GOAL, "agent-b", None),
+        (_decision(), GOAL, AGENT, "loopx todo claim --goal-id goal-other --thin"),
+    ],
+)
+def test_unconsumed_preparation_refusal_never_advertises_an_unverified_claim(
+    decision, goal_id, agent_id, altered_command,
+) -> None:
+    from loopx.control_plane.turn_driver.codex_execution_preparation import (
+        unconsumed_preparation_refusal,
+    )
+    if altered_command:
+        decision["execution_preparation"]["claim"]["command_line"] = altered_command
+    refusal = unconsumed_preparation_refusal(decision, goal_id=goal_id, agent_id=agent_id)
+    assert refusal is not None
+    assert "claim_command" not in refusal.payload and "next_step" not in refusal.payload
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("output_format", ["default", "json"])
 def test_run_once_refuses_typed_when_the_builtin_claim_is_not_consumed(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path, monkeypatch, provider: str, output_format: str,
 ) -> None:
     import contextlib
     import io
@@ -355,30 +377,50 @@ def test_run_once_refuses_typed_when_the_builtin_claim_is_not_consumed(
     from test_loopx_turn_codex_cli import _fake_codex
     from test_loopx_turn_driver import _write_live_fixture
 
-    project, runtime, registry = _write_live_fixture(tmp_path, handoff_mode="hard_lease")
+    project, runtime, registry = _write_live_fixture(
+        tmp_path, provider=provider, handoff_mode="hard_lease",
+    )
     native, marker = _fake_codex(tmp_path)
     monkeypatch.setenv("FAKE_CODEX_LOG", str(marker))
-    declined: list[int] = []
+    declined = []
     monkeypatch.setattr(
         codex_execution_preparation,
         "builtin_execution_preparation_claim",
-        lambda *args, **kwargs: declined.append(1) or None,
+        lambda decision, **kwargs: declined.append(decision["execution_preparation"]["state"]),
     )
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         code = main([
-            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "--registry", str(registry), "--runtime-root", str(runtime),
+            *(["--format", "json"] if output_format == "json" else []),
             "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
             "--host", "codex-cli", "--project", str(project), "--codex-bin", str(native),
             "--codex-sandbox", "read-only", "--no-global-sync", "--iteration-context", "fresh",
             "--timeout-seconds", "15", "--execute",
         ])
-    packet = json.loads(output.getvalue())
-    assert code == 1, packet
-    assert declined == [1], packet
-    assert packet.get("status") == "execution_preparation_required", packet
-    assert packet["reason_code"] == "turn_execution_preparation_claim_not_consumed"
-    assert "todo claim" in packet["claim_command"]
-    effects = packet.get("effects") or {}
-    assert not effects.get("quota_spent") and not effects.get("state_written")
+    rendered = output.getvalue()
+    claim_command = (
+        "loopx todo claim --goal-id loopx-turn-fixture --todo-id todo_fixture0001 "
+        "--agent-id codex-fixture --claimed-by codex-fixture --thin"
+    )
+    assert code == 1, rendered
+    assert declined == ["claim_required"], rendered
+    if output_format == "json":
+        packet = json.loads(rendered)
+        assert packet["schema_version"] == "loopx_turn_execution_v0"
+        assert packet["ok"] is False and packet["executed"] is False
+        assert packet["status"] == "execution_preparation_required"
+        assert packet["error_code"] == "turn_execution_preparation_claim_not_consumed"
+        assert packet["claim_command"] == claim_command
+        assert "execution_preparation.state is ready" in packet["next_step"]
+        assert not any(packet["effects"].values())
+        assert "journal_ref" not in packet
+    else:
+        assert rendered.startswith("# LoopX Turn Run Once\n")
+        assert "- status: execution_preparation_required" in rendered
+        assert "- reason: turn_execution_preparation_claim_not_consumed" in rendered
+        assert f"- claim_command: {claim_command}" in rendered
+        assert "execution_preparation.state is ready" in rendered
+        assert "- host_invoked: False" in rendered
+        assert "- quota_spent: False" in rendered
     assert not marker.exists(), "the Host must not be invoked on a refused preparation"

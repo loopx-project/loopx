@@ -259,6 +259,14 @@ def render_loopx_turn_execution_markdown(payload: dict[str, object]) -> str:
             f"- quota_spent: {effects.get('quota_spent')}",
             *_turn_start_observation_lines(payload),
             *([f"- error: {payload['error']}"] if payload.get("error") else []),
+            *(
+                [
+                    f"- reason: {payload['error_code']}",
+                    *([f"- claim_command: {payload['claim_command']}",
+                       f"- next_step: {payload['next_step']}"] if payload.get("claim_command") else []),
+                ]
+                if payload.get("status") == "execution_preparation_required" else []
+            ),
             *([f"- journal_readback: {journal_observation.get('status')}",
                f"- recorded_effects: {journal_observation.get('recorded_effects')}",
                f"- recovery_from: {(journal_observation.get('recovery_decision') or {}).get('resume_from')}",

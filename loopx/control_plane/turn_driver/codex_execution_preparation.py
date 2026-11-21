@@ -181,6 +181,16 @@ class ExecutionPreparationClaimFailed(ValueError):
     }
 
 
+class UnconsumedExecutionPreparationClaim(ValueError):
+    """The builtin adapter could not prepare a required managed claim."""
+
+    code = "turn_execution_preparation_claim_not_consumed"
+
+    def __init__(self, recovery: Mapping[str, str]) -> None:
+        super().__init__("The builtin CLI did not claim the Todo required to run this Turn.")
+        self.payload = {"status": "execution_preparation_required", "executed": False, **recovery}
+
+
 def _exact_identity(value: object) -> str | None:
     """Keep a decision identity exact; display normalization cannot stand in for it."""
     if isinstance(value, str) and value and value == value.strip():
@@ -188,29 +198,9 @@ def _exact_identity(value: object) -> str | None:
     return None
 
 
-def builtin_execution_preparation_claim(
-    decision: Mapping[str, Any],
-    *,
-    agent_id: str,
-    registry_path: Path,
-    runtime_root: Path,
-    cwd: Path,
-    turn_instance_id: str | None = None,
-    goal_ref: Mapping[str, object] | None = None,
-    runner: CommandRunner | None = None,
-    timeout: float = 30,
-    admit_start: Callable[[SettlementIdentity], bool] | None = None,
-    on_claim: Callable[[Mapping[str, Any]], None] | None = None,
-) -> str | None:
-    """Execute the exact ordinary claim a decision advertised for a Host.
-
-    The decision stays the owner of readiness: this adapter runs only the
-    claim the decision already published as Host-executable, then the caller
-    re-reads the same decision and must observe the same Todo ready.  A
-    preparation this adapter does not recognise is left untouched so its
-    original typed wait keeps its meaning.
-    """
-
+def _builtin_claim_identity(
+    decision: Mapping[str, Any], agent_id: str,
+) -> tuple[str, str, str, list[str]] | None:
     preparation = decision.get("execution_preparation")
     selected = decision.get("selected_todo")
     if not isinstance(preparation, Mapping) or not isinstance(selected, Mapping):
@@ -236,10 +226,6 @@ def builtin_execution_preparation_claim(
     decision_agent_id = (
         _exact_identity(declared_agent) if declared_agent is not None else identity_agent_id
     )
-    expected_claim = [
-        "todo", "claim", "--goal-id", goal_id, "--todo-id", todo_id,
-        "--agent-id", caller_agent_id, "--claimed-by", caller_agent_id,
-    ]
     if (
         preparation.get("schema_version") != "execution_preparation_v0"
         or preparation.get("delivery_allowed") is not False
@@ -255,12 +241,41 @@ def builtin_execution_preparation_claim(
         or preparation_agent_id != caller_agent_id
         or (selected_agent is not None and selected_agent_id != caller_agent_id)
         or (identity_agent is not None and identity_agent_id != caller_agent_id)
-        or claim.get("cli_args") != expected_claim
-        or not registry_path.is_absolute()
-        or not runtime_root.is_absolute()
-        or not cwd.is_absolute()
     ):
         return None
+    expected_claim = [
+        "todo", "claim", "--goal-id", goal_id, "--todo-id", todo_id,
+        "--agent-id", caller_agent_id, "--claimed-by", caller_agent_id,
+    ]
+    if claim.get("cli_args") != expected_claim:
+        return None
+    return goal_id, caller_agent_id, todo_id, expected_claim
+
+
+def builtin_execution_preparation_claim(
+    decision: Mapping[str, Any],
+    *,
+    agent_id: str,
+    registry_path: Path,
+    runtime_root: Path,
+    cwd: Path,
+    turn_instance_id: str | None = None,
+    goal_ref: Mapping[str, object] | None = None,
+    runner: CommandRunner | None = None,
+    timeout: float = 30,
+    admit_start: Callable[[SettlementIdentity], bool] | None = None,
+    on_claim: Callable[[Mapping[str, Any]], None] | None = None,
+) -> str | None:
+    """Execute the exact ordinary claim a decision advertised for a Host.
+
+    The decision stays the owner of readiness: this adapter runs only the
+    claim the decision already published as Host-executable, then the caller
+    re-reads the same decision and must observe the same Todo ready.
+    """
+    claim_identity = _builtin_claim_identity(decision, agent_id)
+    if claim_identity is None or not all(path.is_absolute() for path in (registry_path, runtime_root, cwd)):
+        return None
+    goal_id, caller_agent_id, todo_id, expected_claim = claim_identity
     heartbeat = decision.get("heartbeat_receipt")
     # Resolve one Turn identity before reading a receipt or running the claim.
     # The transaction plan applies the same normalization, so a padded or
@@ -360,34 +375,29 @@ def builtin_execution_preparation_claim(
     return todo_id
 
 
-def unconsumed_preparation_refusal(decision: Mapping[str, Any]) -> dict[str, Any] | None:
-    """Typed refusal when an advertised preparation claim was not consumed.
-
-    The builtin run-once bridge only executes the exact ordinary claim a
-    decision published as Host-executable.  When it declines, the caller must
-    not be sent back into the generic not-host-executable rejection: that
-    route stays blocked and identical retries never invoke the Host.  Surface
-    the advertised claim and a typed reason so a bounded caller can act.
-    """
-
+def unconsumed_preparation_refusal(
+    decision: Mapping[str, Any], *, goal_id: str, agent_id: str,
+) -> UnconsumedExecutionPreparationClaim | None:
+    """Surface only a claim the exact builtin adapter could accept."""
     preparation = decision.get("execution_preparation")
     if not isinstance(preparation, Mapping) or preparation.get("state") != "claim_required":
         return None
-    claim = preparation.get("claim")
-    command = claim.get("command_line") if isinstance(claim, Mapping) else None
-    refusal: dict[str, Any] = {
-        "reason_code": "turn_execution_preparation_claim_not_consumed",
-        "todo_id": preparation.get("todo_id"),
-        "message": (
-            "This should-run decision advertised a managed claim before work, but the "
-            "builtin run-once preparation did not consume it, so the Turn route stays "
-            "blocked. Execute the advertised claim or repair why it was not consumed; "
-            "retrying this route repeats the same refusal without invoking the Host."
-        ),
-    }
-    if isinstance(command, str) and command.strip():
-        refusal["claim_command"] = command
-    return refusal
+    recovery: dict[str, str] = {}
+    identity = _builtin_claim_identity(decision, agent_id)
+    if identity is not None and identity[0] == goal_id:
+        _, _, todo_id, argv = identity
+        command = shlex.join(["loopx", *argv, "--thin"])
+        if preparation["claim"].get("command_line") == command:
+            recovery = {
+                "todo_id": todo_id,
+                "claim_command": command,
+                "next_step": (
+                    "Use the same registry and runtime options for the claim. "
+                    "Rerun quota should-run for the same Goal, agent, Todo, and Turn, "
+                    "and continue only when execution_preparation.state is ready."
+                ),
+            }
+    return UnconsumedExecutionPreparationClaim(recovery)
 
 
 def _native_claim_operation_id(request: Mapping[str, Any]) -> str:
