@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import hashlib
 import json
 import re
@@ -1619,17 +1621,24 @@ def refresh_state_run(
                     )
                 ):
                     writeback_candidate = None
-                    if normalized_delivery_boundary == "semantic_closeout":
+                    if (
+                        normalized_delivery_boundary == "semantic_closeout"
+                        and completion_todo_id is None
+                        and completion_turn_key is None
+                        and not isinstance(record.get("delivery_workspace"), Mapping)
+                    ):
                         # Project the final Run without replacing its observed
                         # work identity, semantic delta or recovery metadata.
+                        # Completion and workspace writebacks retain their
+                        # existing business operation owner.
                         writeback_run = {
                             field: record[field]
                             for field in (
-                                "goal_id", "agent_id", "todo_id", "turn_instance_id",
+                                "generated_at", "goal_id", "agent_id", "todo_id", "turn_instance_id",
                                 "settlement_identity", "classification", "delivery_outcome",
                                 "delivery_batch_scale", "delivery_boundary", "progress_observation",
                                 "agent_vision", "vision_checkpoint", "autonomous_replan_ack",
-                                "refresh_recovery",
+                                "refresh_recovery", "blocked_retry",
                             )
                             if field in record
                         }

@@ -578,8 +578,8 @@ function semanticWritebackCandidate(requestedProof: JsonObject | null = null): J
       completion_todo_id: null, completion_turn_key: null,
       run: {goal_id: identity.goal_id, agent_id: identity.agent_id, todo_id: identity.todo_id,
         turn_instance_id: identity.turn_instance_id, settlement_identity: settlementIdentityPayload(identity),
-        classification: "turn_run_once", delivery_outcome: "outcome_progress", delivery_boundary: "semantic_closeout",
-        progress_observation: null, agent_vision: vision, vision_checkpoint: checkpoint, autonomous_replan_ack: null,
+        classification: "turn_run_once", generated_at: "2026-01-01T00:01:00Z", blocked_retry: null,
+        delivery_outcome: "outcome_progress", delivery_boundary: "semantic_closeout", progress_observation: null, agent_vision: vision, vision_checkpoint: checkpoint, autonomous_replan_ack: null,
         refresh_recovery: refreshRecovery(decodeRefreshRetry(retry)!, null, false, undefined, false)}}};
 }
 
@@ -703,6 +703,88 @@ for (const provider of ["file", "sqlite"] as const) {
         await assert.rejects(readQuotaSettlement({...request(f.root), ...semanticWritebackCandidate({
           idempotency_key: changed.lease.idempotency_key, expected_version: changed.lease.version})}),
           {code: "refresh_task_lease_unavailable"});
+      } finally {await rm(f.root, {recursive: true, force: true});}
+    }
+  });
+}
+
+
+function missingPreparedVisionWriteback(wait: JsonObject | null = null): JsonObject {
+  const original = semanticWritebackCandidate({idempotency_key: originalKey, expected_version: 120});
+  const candidate = original.writeback_candidate as JsonObject, run = candidate.run as JsonObject;
+  const progress = wait === null ? null : {schema_version: "typed_progress_observation_v0", work_item_id: identity.todo_id,
+    result_class: "blocked", blocker_id: "blocker:verified", fingerprint: "abcdef0123456789", evidence_ids: ["evidence:verified-blocker"]};
+  const outcome = wait === null ? "outcome_progress" : "outcome_gap";
+  const retry = {...original.refresh_retry as JsonObject, vision: null, unchanged_reason: "Prior route remains.",
+    delivery_outcome: outcome, progress_observation: progress};
+  const checkpoint = buildVisionCheckpoint({schema_version: VISION_REFRESH_REQUEST_SCHEMA, phase: "finalize",
+    agent_id: identity.agent_id, agent_vision: null, existing_agent_vision: null,
+    vision_unchanged_reason: retry.unchanged_reason, delivery_outcome: outcome,
+    active_state_next_action_would_update: false, delivery_boundary: "semantic_closeout", todo_id: identity.todo_id,
+    completion_todo_id: null, autonomous_replan_recorded: false, blocked_retry: wait});
+  return {refresh_retry: retry, writeback_candidate: {...candidate, run: {...run, agent_vision: null,
+    delivery_outcome: outcome, progress_observation: progress, blocked_retry: wait, vision_checkpoint: checkpoint,
+    refresh_recovery: refreshRecovery(decodeRefreshRetry(retry)!, null, false, undefined, false)}}};
+}
+
+for (const provider of ["file", "sqlite"] as const) {
+  test(`${provider}: active prepared writeback preserves the owner's negative checkpoint and obligations`, async () => {
+    const wait = {schema_version: "quota_blocked_retry_v0", source: "todo", todo_id: identity.todo_id,
+      resume_when: "resume_at:2026-01-01T00:06:00Z", observed_at: "2026-01-01T00:01:00Z", due_at: "2026-01-01T00:06:00Z"};
+    const f = await receiptFixture([preparedReceipt], "hard_lease", currentLease, {provider,
+      seedTodo: {...todo(identity.todo_id!), claimed_by: identity.agent_id, task_class: "advancement_task", resume_when: wait.resume_when}});
+    try {
+      const payload = missingPreparedVisionWriteback(wait), candidate = payload.writeback_candidate as JsonObject;
+      const run = candidate.run as JsonObject, checkpoint = run.vision_checkpoint as JsonObject;
+      const input = {...request(f.root), ...payload}, before = structuredClone(payload);
+      const logBefore = await readFile(f.log), authorityBefore = await f.store.loadAuthority();
+      assert.deepEqual(checkpoint, {schema_version: "vision_checkpoint_v0", agent_id: identity.agent_id,
+        required: true, satisfied: false, decision: "missing_required", triggers: [], delivery_boundary: "semantic_closeout",
+        missing_baseline: true, rejected_unchanged_reason: "Prior route remains.", required_resolution: ["write_vision_patch"]});
+      const result = await readQuotaSettlement(input);
+      assert.deepEqual((result.writeback_qualification as {result: {value: JsonObject}}).result.value, {
+        step_kind: "durable_writeback", effect_ref: `${identity.effect_id}#durable_writeback`, delivery_boundary: "semantic_closeout",
+        original_prepared: originalPrepared, selected_obligation_id: null});
+      assert.equal(checkpoint.satisfied, false);
+      assert.equal(result.resume_lease_qualification, undefined);
+      for (const patch of [{required: false}, {satisfied: true}, {decision: "patched"}, {missing_baseline: false},
+        {rejected_unchanged_reason: "Different decision"}, {required_resolution: []},
+        {required_resolution: ["record_unchanged_reason"]}, {unqualified_components: []},
+        {continuity_basis: {kind: "existing_vision_unchanged", vision_generated_at: "foreign-baseline"}}]) {
+        await assert.rejects(readQuotaSettlement({...input, writeback_candidate: {...candidate,
+          run: {...run, vision_checkpoint: {...checkpoint, ...patch}}}}), {code: "refresh_task_lease_unavailable"}, JSON.stringify(patch));
+      }
+      for (const field of ["satisfied", "required", "triggers", "missing_baseline", "rejected_unchanged_reason", "required_resolution"]) {
+        const omitted = {...checkpoint}; delete omitted[field];
+        await assert.rejects(readQuotaSettlement({...input, writeback_candidate: {...candidate,
+          run: {...run, vision_checkpoint: omitted}}}), {code: "refresh_task_lease_unavailable"}, `missing ${field}`);
+      }
+      await assert.rejects(readQuotaSettlement({...input, writeback_candidate: {...candidate,
+        run: {...run, vision_checkpoint: null}}}), {code: "refresh_task_lease_unavailable"});
+      // The independent frontier annotation is retained as data. It cannot
+      // change the builder's false decision or the five-field operation scope.
+      const annotated = {...checkpoint, acceptance_gaps: [{kind: "vision_checkpoint_missing", source: "latest_vision_checkpoint",
+        agent_id: identity.agent_id, decision: "missing_required", missing_baseline: true}]};
+      const annotatedInput = {...input, writeback_candidate: {...candidate, run: {...run, vision_checkpoint: annotated}}};
+      const annotatedBefore = structuredClone(annotatedInput);
+      const annotatedResult = await readQuotaSettlement(annotatedInput);
+      assert.deepEqual((annotatedResult.writeback_qualification as {result: {value: JsonObject}}).result.value,
+        (result.writeback_qualification as {result: {value: JsonObject}}).result.value);
+      assert.deepEqual(annotatedInput, annotatedBefore);
+      assert.deepEqual(payload, before);
+      assert.deepEqual(await readFile(f.log), logBefore);
+      assert.deepEqual(await f.store.loadAuthority(), authorityBefore);
+    } finally {await rm(f.root, {recursive: true, force: true});}
+  });
+
+  test(`${provider}: retired writeback still rejects the same negative checkpoint`, async () => {
+    for (const retirement of [completed, {...completed, event_kind: "todo_supersede", event_id: "supersede-original", status: "done"}]) {
+      const f = await receiptFixture([preparedReceipt, retirement], "hard_lease", {...currentLease, status: "released"},
+        {provider, seedTodo: {...todo(identity.todo_id!, "done"), claimed_by: null}});
+      try {
+        const payload = missingPreparedVisionWriteback(), candidate = payload.writeback_candidate as JsonObject;
+        await assert.rejects(readQuotaSettlement({...request(f.root), ...payload,
+          writeback_candidate: {...candidate, requested_proof: null}}), {code: "refresh_task_lease_unavailable"});
       } finally {await rm(f.root, {recursive: true, force: true});}
     }
   });

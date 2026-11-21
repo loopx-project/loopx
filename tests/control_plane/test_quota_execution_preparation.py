@@ -1331,6 +1331,10 @@ def _writeback_guard_fixture(
     state_path.write_text("# Fixture\n", encoding="utf-8")
     runtime = tmp_path / "runtime"
     registry = tmp_path / "registry.json"
+    fixture_todo = {
+        **_todo(),
+        "continuation_policy": "same_agent_non_delivery",
+    }
     write_fixture_registry(
         project=project,
         runtime_root=runtime,
@@ -1351,7 +1355,7 @@ def _writeback_guard_fixture(
         build_todo_runtime_shadow_projection(
             goal_id=GOAL,
             handoff_mode="hard_lease",
-            todos=[_todo()],
+            todos=[fixture_todo],
             leases=[lease],
         ),
         state_path=state_path,
@@ -1382,18 +1386,29 @@ def _writeback_guard_fixture(
             "quota", "should-run", "--codex-app", "--context-delivery", "off",
             "--goal-id", GOAL, "--agent-id", AGENT, "--todo-id", TODO,
             "--turn-instance-id", turn_instance_id,
-            "--task-lease-idempotency-key", str(proof["idempotency_key"]),
-            "--task-lease-expected-version", str(proof["expected_version"]),
             registry_path=registry, runtime_root=runtime, cwd=project,
         )
-        assert code == 0 and packet["execution_preparation"]["state"] == "ready", packet
+        assert code == 0 and packet["execution_preparation"]["state"] == "ready", json.dumps(
+            packet, ensure_ascii=False, indent=2,
+        )
     settlement = read_heartbeat_settlement(
         runtime, goal_id=GOAL, agent_id=AGENT, todo_id=TODO,
         turn_instance_id=turn_instance_id, registry_path=registry,
     )
     assert settlement is not None
     assert settlement.identity.value is not None
+    assert settlement.identity.value.goal_id == GOAL
+    assert settlement.identity.value.agent_id == AGENT
+    assert settlement.identity.value.todo_id == TODO
     assert settlement.identity.value.turn_instance_id == turn_instance_id
+    if not legacy_no_epoch_receipt:
+        assert settlement.prepared_lease == {
+            "prepared_lease_key_sha256": hashlib.sha256(
+                str(lease["idempotency_key"]).encode("utf-8")
+            ).hexdigest(),
+            "prepared_lease_version": lease["version"],
+            "prepared_lease_epoch": lease["lease_epoch"],
+        }
     return {
         "project": project, "runtime": runtime, "registry": registry,
         "state": state_path, "turn": turn_instance_id, "proof": proof,
@@ -1437,6 +1452,7 @@ def _run_real_semantic_writeback(
 
 
 def _writeback_side_effect_snapshot(context: dict[str, object]) -> dict[str, object]:
+    from loopx.file_lock import lock_holder_path
     from loopx.control_plane.quota.settlement import read_heartbeat_settlement
     from loopx.rollout_event_log import rollout_event_log_path
 
@@ -1450,7 +1466,20 @@ def _writeback_side_effect_snapshot(context: dict[str, object]) -> dict[str, obj
     )
     assert settlement is not None
     runs = context["runtime"] / "goals" / goal_id / "runs"
+    index_holder = lock_holder_path(runs / "index.jsonl")
     receipt_log = rollout_event_log_path(context["runtime"], goal_id)
+    run_files: dict[str, bytes] = {}
+    if runs.exists():
+        for path in runs.rglob("*"):
+            if not path.is_file():
+                continue
+            if path == index_holder:
+                released_holder = json.loads(path.read_text(encoding="utf-8"))
+                assert released_holder["schema_version"] == "file_lock_holder_v0"
+                assert isinstance(released_holder.get("released_at"), str)
+                assert released_holder["released_at"]
+                continue
+            run_files[str(path.relative_to(runs))] = path.read_bytes()
     return {
         "authority": read_canonical_todos_if_promoted(
             runtime_root=context["runtime"], goal_id=goal_id, include_leases=True,
@@ -1460,10 +1489,7 @@ def _writeback_side_effect_snapshot(context: dict[str, object]) -> dict[str, obj
         "original_sha256": settlement.original_prepared_receipt_sha256,
         "goal_file": context["state"].read_bytes(),
         "receipt_log": receipt_log.read_bytes(),
-        "run_files": {
-            str(path.relative_to(runs)): path.read_bytes()
-            for path in runs.rglob("*") if path.is_file()
-        } if runs.exists() else {},
+        "run_files": run_files,
     }
 
 

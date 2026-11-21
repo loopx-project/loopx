@@ -794,8 +794,57 @@ class StewardTurnHost:
                 "--host", "generic-cli", "--resume-turn-key", key, "--retry-failed-turn", "--execute"])
             args.host, args.session_scope = "codex-app-server", "agent"
             result: dict[str, Any] = {}
-            with (self._task_execution_lease(request, original["turn_id"], recovery=True)
-                    if todo["status"] == "open" else nullcontext(None)) as lease:
+            from ...cli_commands.turn_rendering import build_turn_error_payload, render_readonly_settlement_recovery
+            from ...control_plane.goals.goal_ref_validation import exact_goal_ref
+            from ...control_plane.quota.execution_preparation import RefreshTaskLeaseUnavailable
+            from ...control_plane.quota.effect_program import SettlementIdentity
+            from ...control_plane.quota.settlement import read_heartbeat_settlement
+            from ...control_plane.turn_driver.journal_store import load_loopx_turn_plan_from_journal
+
+            with ExitStack() as recovery_leases:
+                try:
+                    lease = (recovery_leases.enter_context(self._task_execution_lease(
+                        request, original["turn_id"], recovery=True)) if todo["status"] == "open" else None)
+                except RefreshTaskLeaseUnavailable as rejected:
+                    planned = {"transaction": {"turn_key": key}}
+                    # This invocation stopped before the native executor. Historical
+                    # effects are carried separately by the original journal.
+                    planned = {**planned, "effects": {name: False for name in
+                        ("host_invoked", "state_written", "quota_spent", "scheduler_acknowledged")}}
+                    failure = build_turn_error_payload(planned, rejected,
+                        turn_command="run-once", journal_readback=inspection)
+                    goal_ref = (exact_goal_ref(actor["goal_id"], actor["goal_instance_id"])
+                        if actor.get("goal_instance_id") is not None else None)
+                    try:
+                        original_plan = load_loopx_turn_plan_from_journal(reports.root,
+                            goal_id=actor["goal_id"], agent_id=actor["agent_id"], turn_key=key)
+                        failure = build_turn_error_payload({**original_plan, "effects": planned["effects"]}, rejected,
+                            turn_command="run-once", journal_readback=inspection)
+                        identity = SettlementIdentity.from_runtime_payload(
+                            original_plan["transaction"]["settlement_plan"]["identity"])
+                        readback = read_heartbeat_settlement(reports.root,
+                            goal_id=identity.goal_id, agent_id=identity.agent_id, todo_id=identity.todo_id,
+                            turn_instance_id=identity.turn_instance_id, replan_obligation_id=identity.replan_obligation_id,
+                            registry_path=self.controller.registry_path,
+                            goal_ref=goal_ref, include_readonly_recovery=True)
+                        recovery = readback.settlement_recovery if readback is not None else None
+                        if not isinstance(recovery, Mapping):
+                            raise ValueError("the original read-only settlement recovery could not be read")
+                        failure["settlement_recovery"] = render_readonly_settlement_recovery(recovery,
+                            registry_path=self.controller.registry_path, runtime_root=reports.root)
+                    except (OSError, ValueError, RuntimeError, KeyError, TypeError) as read_error:
+                        # Keep the original typed refusal authoritative. Missing
+                        # recovery evidence grants no guessed command or permission.
+                        failure["settlement_recovery_error"] = str(read_error)
+                    failure["status"] = "failed"
+                    rejected.payload = failure
+                    rejected.report_recovery_context = {"request": request, "window": window,
+                        "original_turn_id": original["turn_id"]}
+                    if not any(row.get("kind") == "native_loopx.result" and row.get("payload") == failure
+                            for row in self.store.events_after(actor["session_id"], original["turn_id"], None)):
+                        self.store.append_event(actor["session_id"], original["turn_id"],
+                            kind="native_loopx.result", payload=failure)
+                    raise
                 handle_turn_command(args, registry_path=self.controller.registry_path,
                     runtime_root_arg=str(reports.root), output_format=lambda *_a, **_kw: "json",
                     print_payload=lambda value, *_a: result.update(value), native_host_runner=host_runner,
@@ -803,6 +852,7 @@ class StewardTurnHost:
                         "goal_id": actor["goal_id"], "agent_id": actor["agent_id"]},
                     native_task_validator=self._report_validator(request),
                     **({"native_completion_lease_resolver": lambda: self._task_lease_proof(request, lease)} if lease else {}))
+
             # Retain the historical outer failure. The actual native owner
             # supplies the new event; no status or publication proof is forged.
             self.store.append_event(actor["session_id"], original["turn_id"], kind="native_loopx.result", payload=result)

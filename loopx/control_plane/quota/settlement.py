@@ -193,6 +193,7 @@ class QuotaSettlementReadback:
     original_prepared_receipt_sha256: str | None = None
     native_task_lease_cleanup: dict[str, Any] | None = None
     writeback_qualification: SettlementResult[dict[str, Any]] | None = None
+    settlement_recovery: dict[str, Any] | None = None
 
 
 def render_owed_host_command(argv: list[str]) -> str:
@@ -409,7 +410,12 @@ def _read_heartbeat_settlement_payload(
             if exc.diagnostic_code == "refresh_task_lease_unavailable":
                 from .execution_preparation import RefreshTaskLeaseUnavailable
 
-                raise RefreshTaskLeaseUnavailable(str(exc)) from None
+                rejected = RefreshTaskLeaseUnavailable(str(exc))
+                rejected.payload = {"original_ts_refusal": {
+                    "kind": exc.error_kind, "code": exc.diagnostic_code,
+                    "message": str(exc), "details": list(exc.details),
+                }}
+                raise rejected from exc
             raise ValueError(str(exc)) from None
 
     if source_admission is not None:
@@ -512,6 +518,7 @@ def read_heartbeat_settlement(
     writeback_candidate: Mapping[str, Any] | None = None,
     include_record_bodies: bool = True,
     tolerate_malformed_history: bool = False,
+    include_readonly_recovery: bool = False,
 ) -> QuotaSettlementReadback | None:
     """Read one complete heartbeat settlement through the TS domain owner."""
 
@@ -539,6 +546,7 @@ def read_heartbeat_settlement(
             **({"pending_closeout": True} if pending_closeout else {}),
             **({"refresh_retry": refresh_retry} if refresh_retry is not None else {}),
             **({"borrow_source_admission": True} if borrow_source_admission else {}),
+            **({"include_readonly_recovery": True} if include_readonly_recovery else {}),
             **(
                 {"heartbeat_reentry_guard": heartbeat_reentry_guard}
                 if heartbeat_reentry_guard is not None
@@ -628,4 +636,5 @@ def read_heartbeat_settlement(
             _readback_result(payload["writeback_qualification"])
             if "writeback_qualification" in payload else None
         ),
+        settlement_recovery=_optional_readback_record(payload.get("settlement_recovery")),
     )

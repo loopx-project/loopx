@@ -6,7 +6,7 @@ import test, { type TestContext } from "node:test";
 
 import { EffectRuntimeConflictError, EffectRuntimeRequestError } from "../../loopx/control_plane/effect_runtime_errors.ts";
 import { commitTurnJournal } from "../../loopx/control_plane/turn_driver/turn_journal_effects.ts";
-import { findTurnJournalBySettlement, readTurnJournalCapabilities, readTurnTerminalCloseoutProvider } from "../../loopx/control_plane/turn_driver/turn_journal_query.ts";
+import { findTurnJournalBySettlement, readTurnJournalCapabilities, readTurnTerminalCloseoutProvider, readTurnJournalRecoveryLocator } from "../../loopx/control_plane/turn_driver/turn_journal_query.ts";
 import {settlementIdentity, type JsonObject} from "../../loopx/control_plane/effect_program.ts";
 
 const phases = ["host_execute", "typed_result", "validation", "durable_writeback", "quota_spend", "scheduler_apply", "scheduler_ack"];
@@ -297,4 +297,31 @@ test("invalid UTF-8 cannot be normalized into readable history", async t => {
   const { root, path } = await fixture(t);
   await writeFile(path, Buffer.concat([Buffer.from('{"comment":"'), Buffer.from([0xff]), Buffer.from('"}') ]));
   await assert.rejects(lookup(root), /unreadable/);
+});
+
+
+test("settlement lookup optionally binds the original GoalRef without changing its historical default", async t => {
+  const {root, path} = await fixture(t);
+  await writeFile(path, JSON.stringify(journal(goalRefA)));
+  assert.deepEqual(await lookup(root), {turn_key: key});
+  assert.deepEqual(await findTurnJournalBySettlement({runtime_root: root, ...selector, goal_ref: goalRefA}), {turn_key: key});
+  assert.deepEqual(await findTurnJournalBySettlement({runtime_root: root, ...selector, goal_ref: goalRefB}), {turn_key: null});
+  await writeFile(path, JSON.stringify(journal()));
+  assert.deepEqual(await findTurnJournalBySettlement({runtime_root: root, ...selector, goal_ref: goalRefA}), {turn_key: null});
+  for (const ref of [null, {goal_id: "goal"}, {...goalRefA, goal_id: "other-goal"}]) {
+    await assert.rejects(findTurnJournalBySettlement({runtime_root: root, ...selector, goal_ref: ref}), EffectRuntimeRequestError);
+  }
+});
+
+test("read-only recovery locator does not lend a Source journal to the original alias owner", async t => {
+  const {root, path} = await fixture(t);
+  const original = settlementIdentity(selector);
+  await writeFile(path, JSON.stringify(journal()));
+  assert.equal(await readTurnJournalRecoveryLocator(root, original, {kind: "alias"}), key);
+  await writeFile(path, JSON.stringify(journal(goalRefA)));
+  assert.equal(await readTurnJournalRecoveryLocator(root, original, {kind: "alias"}), null);
+  await writeFile(path, JSON.stringify(journal(goalRefB)));
+  assert.equal(await readTurnJournalRecoveryLocator(root, original, {kind: "alias"}), null);
+  await writeFile(path, "{truncated");
+  await assert.rejects(readTurnJournalRecoveryLocator(root, original, {kind: "alias"}), {code: "journal_readback_conflict"});
 });

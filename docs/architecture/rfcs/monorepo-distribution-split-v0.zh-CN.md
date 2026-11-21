@@ -3726,12 +3726,23 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
   receipt/Goal/Todo/Turn、当前 generation、progress 与 Vision/checkpoint。
   Exact supersede 只允许原 semantic writeback，business resume 仍拒绝。
   无业务 lease 的 Todo-bound replan 须证明 selected obligation 与语义证据；
-  要求 preparation 却缺少原 positive proof 时拒绝。该 scope 不授予 execution
+  要求 preparation 却缺少原 positive proof 时拒绝。持有 exact live preparation
+  的普通 typed blocked gap 保留 Vision owner 的真实 negative checkpoint，
+  包括 `missing_required`，不宣称验收满足。所有 builder-owned 字段及其存在性
+  必须与实际输入一致；独立追加的 acceptance-gap 诊断仅供读取，不授予权限。
+  Accountable delivery、retired writeback 与无业务 obligation discharge 保留
+  satisfied checkpoint 要求。该 scope 不授予 execution
   lease。受支持 writer 在共享 maintenance marker 内重新读取，并持有 Goal/source
   ownership 直到 JSON、Markdown、index 持久化；绕过 marker 的直接 provider
   写仍不属于此保证。
   无因果链接的重复记录保留完整 typed review／capability 来源与最早准入；相同
   obligation id 不能授权来源改写。
+- **恢复回读：**frozen report 保留 typed 原租约拒绝。默认关闭的可选 settlement
+  attachment 核验原 owner、identity 与 journal 后，仅提供 journal 与 task-lease
+  检查命令；证据缺失或冲突时不提供命令。receiver 记录幂等的本地提示与同一
+  health packet；检查不授予 execution 或行政写权限。现代 positive prepared
+  admission 可以说明既有显式行政收尾及其独立的当前 control-writer 要求；
+  有限 legacy 证据仅支持检查。
 - **源码证据：**CLI 测试覆盖两个本地 provider、stale/foreign proof、普通路径
   parity 与零 completion/debit；恢复测试在 JSON、Markdown、index 与 receipt
   持久化后注入中断。SourceSession 范围是 typed-owner history 加行政 CLI，

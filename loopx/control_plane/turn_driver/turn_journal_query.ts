@@ -207,6 +207,7 @@ async function queryTurnJournal(
   runtimeRootValue: unknown,
   identity: JournalAddress | BoundSettlementIdentity,
   goalRef: ExactGoalRef | null,
+  legacyOnly = false,
 ): Promise<JournalEvidence | null> {
   const runtimeRoot = requireNonEmptyString(runtimeRootValue, "runtime_root");
   if (!isAbsolute(runtimeRoot) || runtimeRoot.includes("\0")) {
@@ -250,7 +251,7 @@ async function queryTurnJournal(
       goalRef,
       parsed.numbers,
     );
-    if (evidence === null) continue;
+    if (evidence === null || (legacyOnly && parseTurnJournalGoalBinding(evidence.journal).kind !== "legacy")) continue;
     if (matched !== null) journalConflict("LoopX Turn settlement identity matched multiple journals");
     matched = evidence;
   }
@@ -265,8 +266,24 @@ export async function findTurnJournalBySettlement(params: JsonObject): Promise<{
     request_subject: params.request_subject as import("../effect_program.ts").ExecutionRequestSubject | undefined,
     turn_instance_id: requireNonEmptyString(params.turn_instance_id, "turn_instance_id"),
   }));
-  const evidence = await queryTurnJournal(params.runtime_root, identity, null);
+  const goalRef = Object.hasOwn(params, "goal_ref") ? decodeGoalRef(params.goal_ref) : null;
+  if (goalRef !== null && goalRef.goalId.value !== identity.goal_id) {
+    throw new EffectRuntimeRequestError("Turn journal query GoalRef conflicts with its settlement identity");
+  }
+  const evidence = await queryTurnJournal(params.runtime_root, identity, goalRef);
   return { turn_key: evidence?.turn_key ?? null };
+}
+
+/** A recovery inspection uses its original parsed owner. Historical lookup
+ * keeps its wildcard default; this locator never lends another Goal lifetime. */
+export async function readTurnJournalRecoveryLocator(
+  runtimeRoot: string,
+  identity: SettlementIdentity,
+  owner: QuotaAccountingOwner,
+): Promise<string | null> {
+  const evidence = await queryTurnJournal(runtimeRoot, identity,
+    owner.kind === "exact_source" ? owner.goalRef : null, owner.kind === "alias");
+  return evidence?.turn_key ?? null;
 }
 
 export async function findTurnJournalByInstance(params: JsonObject): Promise<{ turn_key: string | null }> {

@@ -2916,25 +2916,29 @@ function todoSemanticWriteback(): JsonObject {
       completion_todo_id: null, completion_turn_key: null,
       run: {goal_id: goalId, agent_id: agentId, todo_id: todoId, turn_instance_id: turnId,
         settlement_identity: settlementIdentityPayload(identity), classification: "turn_run_once",
-        delivery_outcome: "outcome_progress", delivery_boundary: "semantic_closeout", progress_observation: progress,
+        generated_at: "2026-01-01T00:01:00Z", blocked_retry: null, delivery_outcome: "outcome_progress", delivery_boundary: "semantic_closeout", progress_observation: progress,
         agent_vision: vision, vision_checkpoint: checkpoint,
         autonomous_replan_ack: {schema_version: "autonomous_replan_ack_v0", recorded: true, semantic_delta: semantic},
         refresh_recovery: refreshRecovery(decodeRefreshRetry(retry)!, null, false, undefined, false)}}};
 }
 
-async function todoSemanticFixture(provider: "file" | "sqlite", seedTodo?: JsonObject, leases: JsonObject[] = []) {
+async function todoSemanticFixture(provider: "file" | "sqlite", seedTodo?: JsonObject, leases: JsonObject[] = [],
+  additionalTodos: JsonObject[] = []) {
   const root = await fixture({guard: false});
   const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
   const admission = todoSemanticAdmission();
   await writeFile(log, JSON.stringify(admission) + "\n");
   const {projection, todo} = await import("./shadow_file_fixture.ts");
+  const {authorityUnicodeCompare} = await import("../../loopx/control_plane/coordination/authority_store_codec.ts");
+  const allTodos = [seedTodo ?? {...todo(todoId), claimed_by: agentId}, ...additionalTodos]
+    .sort((left, right) => authorityUnicodeCompare(String(left.todo_id), String(right.todo_id)));
   const store = provider === "sqlite"
     ? new (await import("../../loopx/control_plane/coordination/sqlite_authority_store.ts")).SqliteAuthorityStore(
       join(root, "authority", "sqlite-v0"), goalId)
     : new (await import("../../loopx/control_plane/coordination/file_authority_store.ts")).FileAuthorityStore(
       join(root, "authority", "file-v0"), goalId);
   assert.equal((await store.commitAuthority({operation_id: "seed-semantic-authority", expected_provider_revision: null,
-    next_projection: {...projection([seedTodo ?? {...todo(todoId), claimed_by: agentId}], leases), goal_id: goalId},
+    next_projection: {...projection(allTodos, leases), goal_id: goalId},
     events: [], receipts: []})).status, "applied");
   if (provider === "sqlite") {
     const observed = await store.storeIdentity();
@@ -2994,7 +2998,7 @@ for (const provider of ["file", "sqlite"] as const) {
       const scaledResult = await readQuotaSettlement({...input, refresh_retry: scaled,
         writeback_candidate: {...candidate, run: {...run, delivery_batch_scale: "single_surface"}}});
       assert.equal((scaledResult.writeback_qualification as any).payload.ok, true);
-      for (const patch of [{external_delivery: {suppress: true, resume_key: null}},
+      for (const patch of [{external_delivery: {suppress: false, resume_key: "a".repeat(64)}},
         {workspace_requested: true}, {checkpoint_read_context_id: "checkpoint:foreign"}]) {
         const changedRetry = {...retry, ...patch};
         await assert.rejects(readQuotaSettlement({...input, refresh_retry: changedRetry,
@@ -3146,6 +3150,269 @@ for (const provider of ["file", "sqlite"] as const) {
           {code: "heartbeat_receipt_identity_conflict"}, JSON.stringify(patch));
         await assert.rejects(readQuotaSettlement(input), {code: "heartbeat_receipt_identity_conflict"}, JSON.stringify(patch));
       }
+    } finally {await rm(f.root, {recursive: true, force: true});}
+  });
+}
+
+
+function todoBlockedSemanticWriteback(wait: JsonObject): JsonObject {
+  const input = todoSemanticWriteback(), candidate = input.writeback_candidate as JsonObject;
+  const run = candidate.run as JsonObject;
+  const progress = {schema_version: "typed_progress_observation_v0", work_item_id: todoId, result_class: "blocked",
+    blocker_id: "blocker:verified", fingerprint: "abcdef0123456789", evidence_ids: ["evidence:verified-blocker"]};
+  const retry = {...input.refresh_retry as JsonObject, vision: null, delivery_outcome: "outcome_gap", progress_observation: progress};
+  const checkpoint = buildVisionCheckpoint({schema_version: VISION_REFRESH_REQUEST_SCHEMA, phase: "finalize",
+    agent_id: agentId, agent_vision: null, existing_agent_vision: null, vision_unchanged_reason: null,
+    delivery_outcome: "outcome_gap", active_state_next_action_would_update: false,
+    delivery_boundary: "semantic_closeout", todo_id: todoId, completion_todo_id: null,
+    autonomous_replan_recorded: true, blocked_retry: wait});
+  return {refresh_retry: retry, writeback_candidate: {...candidate, run: {...run, agent_vision: null,
+    delivery_outcome: "outcome_gap", progress_observation: progress, blocked_retry: wait, vision_checkpoint: checkpoint,
+    autonomous_replan_ack: {schema_version: "autonomous_replan_ack_v0", recorded: true, semantic_delta: {
+      schema_version: "replan_semantic_delta_v0", accepted: true,
+      outcomes: ["new_concrete_blocker"], satisfying_outcomes: ["new_concrete_blocker"],
+      required_any_of: ["new_surface", "new_hypothesis", "new_probe_family", "new_runnable_successor",
+        "coverage_backed_exploration_exhausted", "new_concrete_blocker", "coverage_backed_no_followup"],
+      observation_fingerprint: progress.fingerprint}},
+    refresh_recovery: refreshRecovery(decodeRefreshRetry(retry)!, null, false, undefined, false)}}};
+}
+
+for (const provider of ["file", "sqlite"] as const) {
+  test(`${provider}: first writeback keeps external policy separate and NextAction journal only`, async () => {
+    const f = await todoSemanticFixture(provider);
+    try {
+      const original = todoSemanticWriteback(), candidate = original.writeback_candidate as JsonObject;
+      const run = candidate.run as JsonObject;
+      const authorityBefore = await f.store.loadAuthority(), logBefore = await readFile(f.log);
+      for (const suppress of [false, true]) {
+        const retry = {...original.refresh_retry as JsonObject, external_delivery: {suppress, resume_key: null},
+          mutation: {autonomous_replan_recorded: true, next_action: "Record the next useful step", next_action_basis: "verified-result"}};
+        const result = await readQuotaSettlement({...request(f.root), refresh_retry: retry,
+          writeback_candidate: {...candidate, run: {...run,
+            refresh_recovery: refreshRecovery(decodeRefreshRetry(retry)!, null, false, undefined, false)}}});
+        const qualified = result.writeback_qualification as {result: {value: JsonObject}; payload: {ok: boolean}};
+        assert.equal(qualified.payload.ok, true);
+        assert.deepEqual(Object.keys(qualified.result.value).sort(), ["delivery_boundary", "effect_ref", "original_prepared",
+          "selected_obligation_id", "step_kind"]);
+        assert.equal((result.external_delivery as JsonObject).authorized, !suppress);
+        assert.equal(Object.hasOwn(qualified.result.value, "authorized"), false);
+        assert.equal(Object.hasOwn(qualified.result.value, "current_task_lease_proof"), false);
+      }
+      assert.deepEqual(await f.store.loadAuthority(), authorityBefore);
+      assert.deepEqual(await readFile(f.log), logBefore);
+    } finally {await rm(f.root, {recursive: true, force: true});}
+  });
+
+  test(`${provider}: blocked semantic writeback uses the actual clock and raw canonical wait`, async () => {
+    const {todo} = await import("./shadow_file_fixture.ts");
+    const selected = {...todo(todoId), task_class: "advancement_task", claimed_by: agentId,
+      resume_when: "resume_at:2026-01-01T00:06:00Z"};
+    const f = await todoSemanticFixture(provider, selected);
+    try {
+      const wait = {schema_version: "quota_blocked_retry_v0", source: "todo", todo_id: todoId,
+        resume_when: selected.resume_when, observed_at: "2026-01-01T00:01:00Z", due_at: "2026-01-01T00:06:00Z"};
+      const payload = todoBlockedSemanticWriteback(wait), candidate = payload.writeback_candidate as JsonObject;
+      const run = candidate.run as JsonObject;
+      const input = {...request(f.root), ...payload};
+      const result = await readQuotaSettlement(input);
+      assert.equal((result.writeback_qualification as {payload: {ok: boolean}}).payload.ok, true);
+      assert.equal(Object.hasOwn(selected, "resume_condition"), false);
+      assert.equal(Object.hasOwn(selected, "resume_ready"), false);
+      for (const patch of [{generated_at: undefined}, {generated_at: "2026-01-01T00:02:00Z"},
+        {generated_at: "2026-01-01T00:00:00Z"}, {generated_at: "2026-01-01T00:01:00"},
+        {blocked_retry: null}, {blocked_retry: {...wait, todo_id: "todo_foreign"}},
+        {blocked_retry: {...wait, observed_at: "2026-01-01T00:00:00Z"}},
+        {blocked_retry: {...wait, due_at: "2026-01-01T00:07:00Z", resume_when: "resume_at:2026-01-01T00:07:00Z"}}]) {
+        await assert.rejects(readQuotaSettlement({...input, writeback_candidate: {...candidate, run: {...run, ...patch}}}),
+          {code: "refresh_task_lease_unavailable"}, JSON.stringify(patch));
+      }
+      const advanced = todoSemanticWriteback(), advancedCandidate = advanced.writeback_candidate as JsonObject;
+      await assert.rejects(readQuotaSettlement({...request(f.root), ...advanced, writeback_candidate: {...advancedCandidate,
+        run: {...advancedCandidate.run as JsonObject, blocked_retry: wait}}}), {code: "refresh_task_lease_unavailable"});
+    } finally {await rm(f.root, {recursive: true, force: true});}
+  });
+
+  test(`${provider}: blocked semantic writeback checks the complete canonical dependency graph`, async () => {
+    const {todo} = await import("./shadow_file_fixture.ts");
+    const waiting = {...todo(todoId), task_class: "advancement_task", claimed_by: agentId, resume_when: "todo_done:todo_dependency"};
+    const target = {...todo("todo_dependency"), task_class: "advancement_task", resume_when: "todo_done:todo_tail"};
+    const wait = {schema_version: "quota_blocked_causal_wait_v0", source: "todo", todo_id: todoId,
+      resume_when: waiting.resume_when, observed_at: "2026-01-01T00:01:00Z",
+      waiting_todo: {todo_id: todoId, role: "agent", status: "open", task_class: "advancement_task", archive_state: "active",
+        resume_when: waiting.resume_when, resume_ready: false},
+      target_todo: {todo_id: "todo_dependency", role: "agent", status: "open", task_class: "advancement_task", archive_state: "active",
+        resume_when: target.resume_when, resume_ready: false}};
+    for (const cyclic of [false, true]) {
+      const tail = {...todo("todo_tail"), task_class: "advancement_task",
+        ...(cyclic ? {resume_when: "todo_done:todo_dependency"} : {})};
+      const f = await todoSemanticFixture(provider, waiting, [], [target, tail]);
+      try {
+        const input = {...request(f.root), ...todoBlockedSemanticWriteback(wait)};
+        if (cyclic) await assert.rejects(readQuotaSettlement(input), {code: "refresh_task_lease_unavailable"},
+          "The waiting Todo must not qualify a cycle hidden beyond its direct target");
+        else assert.equal(((await readQuotaSettlement(input)).writeback_qualification as {payload: {ok: boolean}}).payload.ok, true);
+      } finally {await rm(f.root, {recursive: true, force: true});}
+    }
+  });
+}
+
+
+for (const provider of ["file", "sqlite"] as const) {
+  test(`${provider}: no-business semantic writeback cannot discharge a negative checkpoint`, async () => {
+    const {todo} = await import("./shadow_file_fixture.ts");
+    const waiting = {...todo(todoId), task_class: "advancement_task", claimed_by: agentId,
+      resume_when: "resume_at:2026-01-01T00:06:00Z"};
+    const f = await todoSemanticFixture(provider, waiting);
+    try {
+      const wait = {schema_version: "quota_blocked_retry_v0", source: "todo", todo_id: todoId,
+        resume_when: waiting.resume_when, observed_at: "2026-01-01T00:01:00Z", due_at: "2026-01-01T00:06:00Z"};
+      const original = todoBlockedSemanticWriteback(wait), candidate = original.writeback_candidate as JsonObject;
+      const run = candidate.run as JsonObject;
+      const retry = {...original.refresh_retry as JsonObject, unchanged_reason: "Prior route remains."};
+      const checkpoint = buildVisionCheckpoint({schema_version: VISION_REFRESH_REQUEST_SCHEMA, phase: "finalize",
+        agent_id: agentId, agent_vision: null, existing_agent_vision: null, vision_unchanged_reason: retry.unchanged_reason,
+        delivery_outcome: "outcome_gap", active_state_next_action_would_update: false, delivery_boundary: "semantic_closeout",
+        todo_id: todoId, completion_todo_id: null, autonomous_replan_recorded: true, blocked_retry: wait});
+      assert.equal(checkpoint.satisfied, false);
+      assert.equal(checkpoint.decision, "missing_required");
+      await assert.rejects(readQuotaSettlement({...request(f.root), refresh_retry: retry,
+        writeback_candidate: {...candidate, run: {...run, vision_checkpoint: checkpoint,
+          refresh_recovery: refreshRecovery(decodeRefreshRetry(retry)!, null, false, undefined, false)}}}),
+        {code: "refresh_task_lease_unavailable"});
+    } finally {await rm(f.root, {recursive: true, force: true});}
+  });
+}
+
+
+async function recoveryJournalFixture(root: string, goalRef?: JsonObject): Promise<{path: string; key: string}> {
+  const key = `sha256:${"c".repeat(64)}`;
+  const directory = join(root, "goals", goalId, "turns");
+  await mkdir(directory, {recursive: true});
+  const path = join(directory, `${"c".repeat(64)}.json`);
+  await writeFile(path, JSON.stringify({schema_version: "loopx_turn_journal_v0", goal_id: goalId, turn_key: key,
+    status: "in_progress", completed_phases: [], plan: {...(goalRef === undefined ? {} : {goal_ref: goalRef}),
+      turn_envelope: {goal_id: goalId, agent_id: agentId, action: {selected_todo: {todo_id: todoId}}},
+      transaction: {turn_key: key, turn_instance_id: turnId, ...(goalRef === undefined ? {} : {goal_ref: goalRef}),
+        settlement_plan: {schema_version: "quota_settlement_plan_v1", identity: settlementIdentityPayload(identity)}}}}));
+  return {path, key};
+}
+
+test("read-only settlement recovery attaches only verified inspection addresses and original evidence", async () => {
+  const root = await fixture();
+  try {
+    const journal = await recoveryJournalFixture(root);
+    const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
+    const before = await readFile(journal.path), logBefore = await readFile(log);
+    const ordinary = await readQuotaSettlement(request(root));
+    assert.equal(Object.hasOwn(ordinary, "settlement_recovery"), false);
+    const disabled = await readQuotaSettlement(request(root, {include_readonly_recovery: false}));
+    assert.deepEqual(disabled, ordinary);
+    assert.equal(JSON.stringify(disabled).length, JSON.stringify(ordinary).length);
+    const result = await readQuotaSettlement(request(root, {include_readonly_recovery: true}));
+    const recovery = requireJsonObject(result.settlement_recovery, "fixture recovery");
+    assert.deepEqual(Object.keys(recovery).sort(), ["instruction", "next_cli_actions_argv", "original_settlement_readback", "required", "settlement_identity"]);
+    assert.equal(recovery.required, true);
+    assert.deepEqual(recovery.settlement_identity, settlementIdentityPayload(identity));
+    assert.deepEqual(recovery.original_settlement_readback, {identity: ordinary.identity, settlement: ordinary.settlement,
+      progress: ordinary.progress, replay_phase: ordinary.replay_phase, original_prepared_receipt: ordinary.original_prepared_receipt,
+      original_prepared_event_id: ordinary.original_prepared_event_id, original_prepared_receipt_sha256: ordinary.original_prepared_receipt_sha256});
+    assert.ok(JSON.stringify(recovery.original_settlement_readback).length < JSON.stringify(ordinary).length);
+    assert.deepEqual(recovery.next_cli_actions_argv, [
+      ["turn", "inspect-journal", "--goal-id", goalId, "--agent-id", agentId, "--turn-key", journal.key],
+      ["task-lease", "inspect", "--goal-id", goalId, "--todo-id", todoId]]);
+    assert.equal(String(recovery.instruction).includes("refresh-state --execution-loss-closeout"), false);
+    assert.deepEqual(await readFile(journal.path), before);
+    assert.deepEqual(await readFile(log), logBefore);
+    const snapshot = await readQuotaSettlementSnapshot(root, goalId);
+    assert.throws(() => readQuotaSettlementFromSnapshot(request(root, {include_readonly_recovery: true}), snapshot), /live journal read/);
+    for (const incompatible of [{resume_lease_candidate: {requested_proof: null}}, {writeback_candidate: {}},
+      {native_task_lease_cleanup: cleanupRequest}, {infer_turn_instance_id: true}, {allow_unbound_binding: true},
+      {resolve_original_binding: true}, {pending_closeout: true}, {refresh_retry: {}}, {heartbeat_reentry_guard: {}},
+      {spend_precheck: true}, {tolerate_malformed_history: true}, {agent_id: null}, {todo_id: null},
+      {turn_instance_id: null}, {replan_obligation_id: selectedWritebackObligation}, {todo_id: " todo_settlement "}]) {
+      await assert.rejects(readQuotaSettlement(request(root, {include_readonly_recovery: true, ...incompatible})));
+    }
+    await assert.rejects(readQuotaSettlement(request(root, {include_readonly_recovery: "true"})));
+    await writeFile(journal.path, "{truncated");
+    assert.deepEqual(await readQuotaSettlement(request(root)), ordinary);
+    assert.deepEqual(await readQuotaSettlement(request(root, {include_readonly_recovery: false})), ordinary);
+    await assert.rejects(readQuotaSettlement(request(root, {include_readonly_recovery: true})), {code: "journal_readback_conflict"});
+    await rm(journal.path);
+    await assert.rejects(readQuotaSettlement(request(root, {include_readonly_recovery: true})), {code: "refresh_task_lease_unavailable"});
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test("read-only recovery describes administrative requirements only for original modern positive epoch admission", async () => {
+  for (const epoch of [50, undefined]) {
+    const root = await fixture();
+    try {
+      await recoveryJournalFixture(root);
+      const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
+      const original: JsonObject = {schema_version: "loopx_rollout_event_v0", event_kind: "quota_should_run", event_id: "original-modern",
+        goal_id: goalId, agent_id: agentId, run_id: turnId, status: "normal_run", details: {todo_id: todoId,
+          selected_todo_id: todoId, settlement_effect_id: identity.effect_id, closeout_required: true,
+          ok: true, should_run: true, must_attempt_work: true, delivery_allowed: true, quiet_noop_allowed: false,
+          prepared_lease_required: true, prepared_lease_key_sha256: "a".repeat(64), prepared_lease_version: 119,
+          ...(epoch === undefined ? {} : {prepared_lease_epoch: epoch})}};
+      await writeFile(log, JSON.stringify(original) + "\n");
+      const recovery = requireJsonObject((await readQuotaSettlement(request(root, {include_readonly_recovery: true}))).settlement_recovery,
+        "fixture recovery");
+      assert.equal(String(recovery.instruction).includes("refresh-state --execution-loss-closeout"), epoch !== undefined);
+      if (epoch !== undefined) assert.match(String(recovery.instruction), /current registered control writer and exact current active lease\/CAS/);
+      assert.deepEqual((recovery.next_cli_actions_argv as string[][]).map(argv => argv.slice(0, 2)), [["turn", "inspect-journal"], ["task-lease", "inspect"]]);
+    } finally {await rm(root, {recursive: true, force: true});}
+  }
+});
+
+test("read-only recovery preserves the original Source lifetime and never falls back to an alias journal", async () => {
+  const goalRef = {goal_id: goalId, goal_instance_id: instanceA};
+  const root = await fixture({goalRef});
+  try {
+    const journal = await recoveryJournalFixture(root, goalRef);
+    await withSourceAdmission(root, instanceA, instanceA, async binding => {
+      const input = request(root, {...binding, borrow_source_admission: true, include_readonly_recovery: true});
+      const result = await readQuotaSettlement(input);
+      assert.deepEqual((result.settlement_recovery as JsonObject).goal_ref, goalRef);
+      await recoveryJournalFixture(root);
+      await assert.rejects(readQuotaSettlement(input), {code: "refresh_task_lease_unavailable"});
+      await recoveryJournalFixture(root, {goal_id: goalId, goal_instance_id: instanceB});
+      await assert.rejects(readQuotaSettlement(input), {code: "refresh_task_lease_unavailable"});
+    });
+    assert.ok(journal.path);
+  } finally {await rm(root, {recursive: true, force: true});}
+  const alias = await fixture();
+  try {
+    await recoveryJournalFixture(alias, goalRef);
+    await assert.rejects(readQuotaSettlement(request(alias, {include_readonly_recovery: true})), {code: "refresh_task_lease_unavailable"});
+  } finally {await rm(alias, {recursive: true, force: true});}
+});
+
+for (const provider of ["file", "sqlite"] as const) {
+  test(`${provider}: exact active preparation cannot pass an accountable negative checkpoint`, async () => {
+    const {todo} = await import("./shadow_file_fixture.ts");
+    const leaseKey = "exact-active-accountable";
+    const lease: JsonObject = {schema_version: "task_lease_v0", goal_id: goalId, todo_id: todoId, owner: agentId,
+      status: "active", idempotency_key: leaseKey, version: 120, lease_epoch: 50,
+      acquired_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:01:00Z", expires_at: "2099-01-01T00:00:00Z"};
+    const f = await todoSemanticFixture(provider, {...todo(todoId), claimed_by: agentId, task_class: "advancement_task"}, [lease]);
+    try {
+      const positive = {...f.admission, details: {todo_id: todoId, selected_todo_id: todoId, settlement_effect_id: identity.effect_id,
+        closeout_required: true, prepared_lease_required: true, prepared_lease_key_sha256: createHash("sha256").update(leaseKey).digest("hex"),
+        prepared_lease_version: 119, prepared_lease_epoch: 50, ok: true, should_run: true,
+        must_attempt_work: true, delivery_allowed: true, quiet_noop_allowed: false}};
+      await writeFile(f.log, JSON.stringify(positive) + "\n");
+      const original = todoSemanticWriteback(), candidate = original.writeback_candidate as JsonObject, run = candidate.run as JsonObject;
+      const retry = {...original.refresh_retry as JsonObject, vision: null, unchanged_reason: "Prior route remains."};
+      const checkpoint = buildVisionCheckpoint({schema_version: VISION_REFRESH_REQUEST_SCHEMA, phase: "finalize",
+        agent_id: agentId, agent_vision: null, existing_agent_vision: null, vision_unchanged_reason: retry.unchanged_reason,
+        delivery_outcome: "outcome_progress", active_state_next_action_would_update: false, delivery_boundary: "semantic_closeout",
+        todo_id: todoId, completion_todo_id: null, autonomous_replan_recorded: true, blocked_retry: null});
+      assert.equal(checkpoint.decision, "missing_required");
+      assert.equal(checkpoint.satisfied, false);
+      await assert.rejects(readQuotaSettlement({...request(f.root), refresh_retry: retry, writeback_candidate: {...candidate,
+        requested_proof: {idempotency_key: leaseKey, expected_version: 120}, run: {...run, agent_vision: null,
+          vision_checkpoint: checkpoint, refresh_recovery: refreshRecovery(decodeRefreshRetry(retry)!, null, false, undefined, false)}}}),
+        {code: "refresh_task_lease_unavailable"});
     } finally {await rm(f.root, {recursive: true, force: true});}
   });
 }

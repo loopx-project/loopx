@@ -4826,12 +4826,28 @@ view shows its independently checked result in the same conversation.
   original semantic writeback; business resume still rejects it. A Todo-bound
   replan without a business lease proves its selected obligation and semantic
   evidence. Required preparation without an original positive proof rejects.
+  An ordinary typed blocked gap with exact live preparation preserves the
+  Vision owner's genuine negative checkpoint, including `missing_required`;
+  it does not claim satisfied acceptance. Every builder-owned field and its
+  presence must match the actual inputs. Independently appended acceptance-gap
+  diagnostics remain read-only and grant no authority. Accountable delivery,
+  retired writeback and no-business obligation discharge retain their satisfied
+  checkpoint requirements.
   The scope grants no execution lease. The supported writer rereads inside the
   shared maintenance marker and retains Goal/source ownership through JSON,
   Markdown and index durability; direct provider writes bypassing the marker
   remain outside that guarantee.
   Uncaused repeats preserve the complete typed review/capability source and
   earliest admission; the same obligation id cannot authorize a source rewrite.
+- **Recovery readback:** a frozen report retains the typed original-lease
+  refusal. An optional, default-off settlement attachment verifies its original
+  owner, identity and journal before providing journal and task-lease inspection
+  commands. Missing or conflicting evidence withholds the commands. The
+  receiver records an idempotent local notice and the same health packet;
+  inspection grants no execution or administrative write authority. Modern
+  positive prepared admission may explain the existing explicit administrative
+  closeout and its separate current-control-writer requirement; bounded legacy
+  evidence supports inspection only.
 - **Source evidence:** CLI tests cover both local providers, stale/foreign
   proofs, ordinary parity and zero completion/debit. Recovery tests inject
   interruption after JSON, Markdown, index and receipt durability. SourceSession

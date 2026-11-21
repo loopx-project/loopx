@@ -123,7 +123,13 @@ generation, typed progress, Vision and checkpoint. Exact supersession permits
 only that original Turn's semantic writeback; business resume still rejects it.
 A Todo-bound replan with no business lease must prove its original selected
 obligation and actual semantic evidence. Required preparation without a positive
-original proof is rejected. Qualification returns only the durable-writeback
+original proof is rejected. An ordinary typed blocked gap with exact live
+preparation may record the Vision owner's actual `missing_required` negative
+checkpoint. All builder-owned fields and their presence must match the actual
+inputs; separately appended acceptance-gap diagnostics remain read-only and
+grant no authority. Accountable delivery, retired writeback and no-business
+obligation discharge retain their satisfied-checkpoint requirements.
+Qualification returns only the durable-writeback
 effect scope, never an execution lease. The supported writer rereads inside the
 shared maintenance marker and holds Goal/source ownership and the marker through
 Run JSON, Markdown and index durability. Direct provider writes bypassing that
@@ -131,6 +137,19 @@ marker are outside this canonical writer guarantee.
 Uncaused repeated semantic admissions must retain the complete typed review or
 capability source. Exact repeats retain the earliest admission; a later receipt
 cannot change that source merely by retaining the same obligation id.
+
+`quota.settlement.read` may request `include_readonly_recovery: true`, disabled
+by default and mutually exclusive with operation-qualification requests. It
+requires the original Goal owner, Agent, Todo and Turn plus a verified journal
+binding. The `settlement_recovery` attachment preserves the original settlement
+readback and provides only `turn inspect-journal` and `task-lease inspect` argv.
+Missing or conflicting evidence withholds these actions. It exposes no execution
+proof, lease claim, reactivation or administrative-closeout argv. Only verified
+modern positive prepared admission may explain the existing explicit closeout's
+separate current-control-writer requirement; legacy evidence supports inspection
+only. A frozen-report receiver retains its typed lease refusal, publishes an
+idempotent local notice and exposes the same failure packet in health. Reading
+the attachment or repeating the notice performs no business or accounting work.
 
 `refresh-state --execution-loss-closeout` 显式关闭原 prepared Todo Turn 已失去的
 执行尝试。使用相同 Goal、Agent、Todo、Turn，提供 typed blocked / outcome_gap /
@@ -178,12 +197,27 @@ Todo/Turn/effect、Goal owner、当前 canonical generation、typed progress、V
 与 checkpoint。Exact supersede 只允许原 Turn 的 semantic writeback，business
 resume 仍拒绝。没有业务 lease 的 Todo-bound replan 须证明原 selected obligation
 与实际语义证据；要求 preparation 却缺少 positive original proof 时拒绝。返回值
-仅为 durable-writeback effect scope，不授予 execution lease。受支持 writer 在共享
+仅为 durable-writeback effect scope，不授予 execution lease。持有 exact live
+preparation 的普通 typed blocked gap 可以记录 Vision owner 的真实
+`missing_required` negative checkpoint；所有 builder-owned 字段及其存在性须与
+实际输入一致。独立追加的 acceptance-gap 诊断仅供读取，不授予权限。
+Accountable delivery、retired writeback 与无业务 obligation discharge 保留
+satisfied checkpoint 要求。受支持 writer 在共享
 maintenance marker 内重新读取，并持有 Goal/source ownership 与 marker 直到 Run
 JSON、Markdown、index 持久化完成。绕过 marker 的直接 provider 写不属于此
 canonical writer 保证。
 无因果链接的重复 semantic admission 须保留完整 typed review／capability 来源。
 完全相同的重复记录保留最早准入；后续收据不能仅凭相同 obligation id 改写来源。
+
+`quota.settlement.read` 可请求默认关闭的 `include_readonly_recovery: true`，
+与操作资格请求互斥。它要求原 Goal owner、Agent、Todo、Turn 及已验证的 journal
+binding。`settlement_recovery` attachment 保留原结算回读，仅提供
+`turn inspect-journal` 与 `task-lease inspect` argv；证据缺失或冲突时不提供操作。
+它不输出 execution proof、lease claim、reactivation 或行政收尾 argv。只有已验证
+的现代 positive prepared admission 可以说明既有显式收尾所需的独立当前
+control-writer 要求；legacy 证据仅支持检查。frozen-report receiver 保留 typed
+租约拒绝，记录幂等本地提示，并在 health 暴露同一 failure packet。读取 attachment
+或重复提示不执行任何业务或记账。
 
 Newly generated heartbeat and same-Turn commands use the default v1 entry.
 Historical benchmark runs use the recorded runner and contract version.
