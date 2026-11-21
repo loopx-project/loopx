@@ -7,6 +7,7 @@ from ...runtime.time import parse_timestamp
 
 from ..goal_vision_read_model import latest_agent_vision_from_runs as latest_agent_vision_from_runs
 
+from ...todos.contract import normalize_todo_replan_obligation_id
 from ...work_items.autonomous_replan_ack import (
     compact_autonomous_replan_ack,
     latest_autonomous_replan_ack_for_projection,
@@ -329,6 +330,68 @@ def latest_replan_ack_feedback_from_status_payload(
         if isinstance(feedback, dict):
             return feedback
     return None
+
+
+def resolve_replan_ack_history_state(
+    status_payload: dict[str, Any],
+    *,
+    goal_id: str,
+    agent_id: str | None,
+    neutral_classifications: set[str],
+    receipt_bound_replan_obligation_id: str | None,
+) -> tuple[
+    dict[str, Any] | None,
+    list[dict[str, Any]] | None,
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+]:
+    """Resolve current ACK, scoped history, fresher rejection feedback, and prior rearm ACK."""
+
+    latest_agent_replan_ack, scoped_ack_history = receipt_bound_replan_ack_history(
+        status_payload,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        neutral_classifications=neutral_classifications,
+        receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
+    )
+    latest_replan_ack_feedback = latest_replan_ack_feedback_from_status_payload(
+        status_payload,
+        goal_id=goal_id,
+        agent_id=agent_id,
+    )
+    ack_time = parse_timestamp((latest_agent_replan_ack or {}).get("generated_at"))
+    feedback_time = parse_timestamp(
+        (latest_replan_ack_feedback or {}).get("generated_at")
+    )
+    if ack_time is not None and feedback_time is not None and ack_time >= feedback_time:
+        latest_replan_ack_feedback = None
+    prior_rearm_ack = None
+    if receipt_bound_replan_obligation_id and latest_agent_replan_ack is None:
+        candidate_prior_ack = latest_autonomous_replan_ack_from_status_payload(
+            status_payload,
+            goal_id=goal_id,
+            agent_id=agent_id,
+            neutral_classifications=neutral_classifications,
+        )
+        raw_delta = (
+            candidate_prior_ack.get("semantic_delta")
+            if isinstance(candidate_prior_ack, dict)
+            else None
+        )
+        semantic_delta = (
+            cast(dict[str, Any], raw_delta) if isinstance(raw_delta, dict) else {}
+        )
+        if (
+            normalize_todo_replan_obligation_id(semantic_delta.get("obligation_id"))
+            != receipt_bound_replan_obligation_id
+        ):
+            prior_rearm_ack = candidate_prior_ack
+    return (
+        latest_agent_replan_ack,
+        scoped_ack_history,
+        latest_replan_ack_feedback,
+        prior_rearm_ack,
+    )
 
 
 def latest_lane_recommendation_from_status(

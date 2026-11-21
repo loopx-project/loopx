@@ -120,27 +120,49 @@ def execute_turn_run_once(
         task_lease_proof = execution_context.get("task_lease_proof") or None
         task_lease_epoch = execution_context.get("task_lease_epoch")
         rebound_lease_active = False
-        if (
-            args.execute
-            and getattr(args, "resume_turn_key", None)
-            and native_completion_lease_resolver is not None
-            and selected_todo.get("todo_id")
-        ):
-            resolved_lease = dict(native_completion_lease_resolver())
-            if resolved_lease.get("task_lease_idempotency_key") is not None:
-                rebound_proof = {
-                    "idempotency_key": resolved_lease["task_lease_idempotency_key"],
-                    "expected_version": resolved_lease["task_lease_expected_version"],
-                }
-                task_lease_epoch = read_active_task_lease_epoch(
-                    runtime_root=runtime_root,
-                    goal_id=args.goal_id,
-                    todo_id=str(selected_todo["todo_id"]),
-                    agent_id=args.agent_id,
-                    requested_proof=rebound_proof,
-                )
-                task_lease_proof = rebound_proof
-                rebound_lease_active = True
+        cached_completion_lease: dict[str, Any] | None = None
+
+        def resolve_completion_lease() -> dict[str, Any]:
+            nonlocal cached_completion_lease
+            if cached_completion_lease is None:
+                if native_completion_lease_resolver is not None:
+                    cached_completion_lease = dict(native_completion_lease_resolver())
+                else:
+                    proof = execution_context.get("task_lease_proof") or {}
+                    cached_completion_lease = {
+                        "task_lease_idempotency_key": proof.get("idempotency_key"),
+                        "task_lease_expected_version": proof.get("expected_version"),
+                    }
+            return dict(cached_completion_lease)
+
+        def rebind_resumed_task_lease(*, bind_receipt: bool = True) -> None:
+            nonlocal task_lease_proof, task_lease_epoch, rebound_lease_active
+            if (
+                rebound_lease_active
+                or not args.execute
+                or not getattr(args, "resume_turn_key", None)
+                or native_completion_lease_resolver is None
+                or not selected_todo.get("todo_id")
+            ):
+                return
+            resolved_lease = resolve_completion_lease()
+            if resolved_lease.get("task_lease_idempotency_key") is None:
+                return
+            rebound_proof = {
+                "idempotency_key": resolved_lease["task_lease_idempotency_key"],
+                "expected_version": resolved_lease["task_lease_expected_version"],
+            }
+            task_lease_epoch = read_active_task_lease_epoch(
+                runtime_root=runtime_root,
+                goal_id=args.goal_id,
+                todo_id=str(selected_todo["todo_id"]),
+                agent_id=args.agent_id,
+                requested_proof=rebound_proof,
+            )
+            task_lease_proof = rebound_proof
+            rebound_lease_active = True
+            if bind_receipt:
+                bind_heartbeat_settlement_receipt()
         transaction = (
             payload.get("transaction")
             if isinstance(payload.get("transaction"), Mapping)
@@ -352,8 +374,8 @@ def execute_turn_run_once(
             effect_ref: str,
         ) -> dict[str, object]:
             require_effect_ref(effect_ref, SettlementStepKind.DURABLE_WRITEBACK)
-            if args.execute and rebound_lease_active:
-                bind_heartbeat_settlement_receipt()
+            if args.execute and completion_todo_id is None:
+                rebind_resumed_task_lease(bind_receipt=True)
             refresh = refresh_candidate(result, completion_todo_id=completion_todo_id,
                 completion_turn_key=completion_turn_key)
             if refresh.get("ok") and (
@@ -427,10 +449,7 @@ def execute_turn_run_once(
                 agent_id=args.agent_id,
                 completion_delivery_workspace=completion_delivery_workspace,
                 completion_validation_workspace_path=delivery_workspace_path,
-                **(dict(native_completion_lease_resolver()) if native_completion_lease_resolver else {
-                    "task_lease_idempotency_key": execution_context.get("task_lease_proof", {}).get("idempotency_key"),
-                    "task_lease_expected_version": execution_context.get("task_lease_proof", {}).get("expected_version"),
-                }),
+                **resolve_completion_lease(),
             )
             if completion.get("ok") is not True:
                 return completion
@@ -493,10 +512,10 @@ def execute_turn_run_once(
             effect_ref: str,
         ) -> dict[str, object]:
             require_effect_ref(effect_ref, SettlementStepKind.DURABLE_WRITEBACK)
-            if args.execute and rebound_lease_active:
-                bind_heartbeat_settlement_receipt()
             prior = completion_readback()
             if prior is None:
+                if args.execute:
+                    rebind_resumed_task_lease(bind_receipt=True)
                 # A rejected attachment must not leave the Todo completed.
                 # The primary writer still rechecks the same capability owner
                 # before commit; this preview authorizes no later effects.
@@ -813,6 +832,7 @@ def execute_turn_run_once(
             if settlement_identity.request_subject is not None:
                 require_current_request_operation(request_locator, settlement_identity,
                     registry_path=registry_path, runtime_root=runtime_root, workspace=project)
+            rebind_resumed_task_lease(bind_receipt=False)
             bind_heartbeat_settlement_receipt()
 
         managed_cadence = managed_cadence_start(

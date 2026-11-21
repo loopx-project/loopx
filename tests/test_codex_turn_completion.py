@@ -510,3 +510,130 @@ def test_builtin_codex_advertises_explicit_completion_without_promoting_progress
 ):
     kinds = codex_cli_result_schema()["properties"]["result_kind"]["enum"]
     assert "validated_completion" in kinds and "validated_progress" in kinds
+
+
+def test_resumed_turn_rebinds_updated_lease_once_without_rereading_after_retire(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(
+        tmp_path, provider="sqlite", handoff_mode="hard_lease"
+    )
+    goal_id, agent_id, todo_id = "loopx-turn-fixture", "codex-fixture", "todo_fixture0001"
+    # Keep a second open Todo so completion_writeback handles non-terminal completion.
+    add_goal_todo(
+        registry_path=registry,
+        goal_id=goal_id,
+        runtime_root_arg=str(runtime),
+        role="agent",
+        text="Follow-up verification task",
+        task_class="advancement_task",
+        action_kind="fixture",
+    )
+    code, claim = _cli(
+        registry, runtime, "todo", "claim", "--goal-id", goal_id,
+        "--todo-id", todo_id, "--agent-id", agent_id, "--claimed-by", agent_id,
+    )
+    assert code == 0, claim
+    lease_argv = ("task-lease", "inspect", "--goal-id", goal_id, "--todo-id", todo_id)
+    code, inspection = _cli(registry, runtime, *lease_argv)
+    assert code == 0 and inspection["active"] is True, inspection
+    lease = inspection["lease"]
+    adapter = SimpleNamespace(
+        controller=SimpleNamespace(registry_path=registry, coordination_runtime_root=runtime)
+    )
+    host_calls, lease_reads = [], []
+
+    def resolve_lease():
+        lease_reads.append(lease["lease_epoch"])
+        return StewardTurnHost._task_lease_proof(
+            adapter, {"actor": {"goal_id": goal_id}, "todo_id": todo_id}, lease
+        )
+
+    def host(request, launch_lifetime):
+        with launch_lifetime():
+            host_calls.append(request["turn_key"])
+            (project / "completion-artifact.txt").write_text("completed", encoding="utf-8")
+        return {
+            "schema_version": "loopx_turn_result_v0",
+            "turn_key": request["turn_key"],
+            "result_kind": "validated_completion",
+            "completed_phases": ["host_execute", "typed_result"],
+            "classification": "fixture_completion",
+            "recommended_action": "Continue with the remaining Todo.",
+            "next_action": "Inspect the next Todo.",
+            "delivery_batch_scale": "implementation",
+            "delivery_outcome": "outcome_progress",
+            "vision_unchanged_reason": "The remaining Goal is unchanged.",
+            "work_evidence": ["artifact:completion-artifact"],
+            "validation_evidence": ["check:artifact-contents"],
+        }
+
+    _, validation = _completion_host_and_validation_scripts()
+    base = [
+        "turn", "run-once", "--host", "generic-cli", "--goal-id", goal_id,
+        "--agent-id", agent_id, "--project", str(project), "--no-global-sync",
+        "--validation-command-json", json.dumps([sys.executable, "-c", validation]),
+        "--execute",
+    ]
+
+    def invoke(*extra: str):
+        args = build_parser().parse_args([*base, *extra])
+        args.host, args.session_scope = "codex-app-server", "agent"
+        result: dict = {}
+        exit_code = handle_turn_command(
+            args,
+            registry_path=registry,
+            runtime_root_arg=str(runtime),
+            output_format=lambda *_args, **_kwargs: "json",
+            print_payload=lambda value, *_args: result.update(value),
+            native_host_runner=host,
+            native_completion_lease_resolver=resolve_lease,
+            native_session_binding_resolver=lambda _: {
+                "schema_version": "loopx_turn_session_binding_v0",
+                "goal_id": goal_id,
+                "agent_id": agent_id,
+            },
+        )
+        return exit_code, result
+
+    complete = turn_run_once.write_turn_validated_completion
+    monkeypatch.setattr(
+        turn_run_once,
+        "write_turn_validated_completion",
+        lambda **_kwargs: (_ for _ in ()).throw(OSError("interrupted before completion")),
+    )
+    code, failed = invoke("--todo-id", todo_id)
+    journal = _turn_journal(runtime)
+    assert code == 1 and journal["status"] == "in_progress", failed
+    assert lease_reads == [1]
+
+    # Renew the active lease (epoch 2) before resuming from durable_writeback.
+    code, released = _cli(
+        registry, runtime, "task-lease", "release", "--goal-id", goal_id,
+        "--todo-id", todo_id, "--owner", agent_id,
+        "--idempotency-key", lease["idempotency_key"],
+        "--expected-version", str(lease["version"]),
+    )
+    assert code == 0, released
+    code, reclaimed = _cli(
+        registry, runtime, "todo", "claim", "--goal-id", goal_id,
+        "--todo-id", todo_id, "--agent-id", agent_id, "--claimed-by", agent_id,
+        "--claim-operation-id", "todo-claim:renewed-epoch-2",
+    )
+    assert code == 0, reclaimed
+    code, renewed_inspection = _cli(registry, runtime, *lease_argv)
+    assert code == 0 and renewed_inspection["active"] is True
+    lease = renewed_inspection["lease"]
+    assert lease["lease_epoch"] == 2
+
+    monkeypatch.setattr(turn_run_once, "write_turn_validated_completion", complete)
+    code, resumed = invoke("--resume-turn-key", journal["turn_key"], "--retry-failed-turn")
+    assert code == 0 and resumed["status"] == "committed", resumed
+    assert lease_reads == [1, 2]
+    assert _cli(registry, runtime, *lease_argv)[1]["active"] is False
+
+    code, replay = invoke("--resume-turn-key", journal["turn_key"])
+    assert code == 0 and replay["replayed"] is True, replay
+    assert lease_reads == [1, 2]
+    assert host_calls == [journal["turn_key"]]
