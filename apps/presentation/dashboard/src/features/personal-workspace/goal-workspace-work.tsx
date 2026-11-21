@@ -7,6 +7,14 @@ import {localizedSessionStatus, useWorkspaceI18n} from "./i18n";
 import {CompletedTaskLane} from "./completed-task-lane";
 import {boundedLength, todoCreateRequest, todoTextLimit} from "./workspace-action-form";
 import {useGoalWorkBrowse} from "./goal-work-browse";
+import { deriveGoalWorkerRoster } from "./collaboration-status";
+import {
+  GoalWorkerRosterStrip,
+  WorkerNowLine,
+  WorkerProgressBadge,
+  WorkerScopeTag,
+  WorkerStateBadge,
+} from "./worker-roster";
 import "./goal-workspace-work.css";
 
 const glyphs = {running_observed: Play, needs_you: Hand, open: Circle, waiting_dependency: Clock, blocked: CircleAlert, deferred: Clock, done: CircleCheck};
@@ -131,7 +139,16 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
   const [railTab, setRailTab] = useState<"work" | "activity">("work");
   const todos = useMemo(() => new Map(goal.agentTodos.map(todo => [todo.todoId, todo])), [goal.agentTodos]);
   const rows = useMemo(() => new Map(digest.work.rows.map(row => [row.todoId, row])), [digest]);
-  const attention = userTodos.filter(todo => todo.goalId === goal.goalId);
+  const attention = useMemo(() => userTodos.filter(todo => todo.goalId === goal.goalId), [userTodos, goal.goalId]);
+  const workspaceLocale = zh ? "zh-CN" : "en";
+  const roster = useMemo(
+    () => deriveGoalWorkerRoster({ goal, digest, items, userTodos: attention, locale: workspaceLocale }),
+    [goal, digest, items, attention, workspaceLocale],
+  );
+  const rosterById = useMemo(
+    () => new Map(roster.workers.map((worker) => [worker.agentId, worker])),
+    [roster.workers],
+  );
   const ownerName = (id: string | null) => id === null ? (zh ? "未分配" : "Unassigned") : goal.agentLanes?.find(lane => lane.agentId === id)?.label ?? id;
   const owners = [...new Set([...(goal.agentLanes ?? []).map(lane => lane.agentId), ...digest.work.rows.flatMap(row => row.ownerId ?? [])])];
   const matchesOwner = (id: string) => owner === "all" || (rows.get(id)?.ownerId ?? "") === owner;
@@ -223,16 +240,36 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
           </div> : null}
           {!readOnly ? <AddTask goal={goal} proposals={proposals} onPreview={onPreview} onSelect={select}/> : null}
         </header>
-        <OwnerWorkGroups hidden={lens !== "owner"}>{digest.work.groups.map(group => <section className="goal-owner-group" key={group.ownerId ?? ""} data-owner-id={group.ownerId ?? ""}>
-          <header><h3>{ownerName(group.ownerId)}</h3><span>{group.todoIds.length} {zh ? "项任务" : "tasks"} · {group.todoIds.filter(id => rows.get(id)?.displayClass === group.displayClass).length} {goalWorkClassLabel(group.displayClass, zh)}</span>
-            {!readOnly && group.ownerId && onOpenAgentConversation ? <button type="button" className="goal-owner-conversation" data-agent-id={group.ownerId} aria-label={zh ? `与 ${ownerName(group.ownerId)} 对话` : `Talk to ${ownerName(group.ownerId)}`} onClick={() => onOpenAgentConversation(group.ownerId!)}>{zh ? "工作记录" : "Work conversation"}</button> : null}
+        {roster.workers.length > 1 || (!digest.work.groups.length && roster.workers.length > 0) ? (
+          <GoalWorkerRosterStrip
+            roster={roster}
+            locale={workspaceLocale}
+            readOnly={readOnly}
+            summaryOnly={lens === "owner" && digest.work.groups.length > 0}
+            onOpenAgentConversation={onOpenAgentConversation}
+          />
+        ) : null}
+        <OwnerWorkGroups hidden={lens !== "owner"}>{digest.work.groups.map(group => {
+          const ownerEntry = group.ownerId ? rosterById.get(group.ownerId) : undefined;
+          return <section className="goal-owner-group" key={group.ownerId ?? ""} data-owner-id={group.ownerId ?? ""} data-roster-state={ownerEntry?.state}>
+          <header>
+            <div className="pw-owner-header-top">
+              {ownerEntry ? <WorkerStateBadge state={ownerEntry.state} locale={workspaceLocale} /> : null}
+              <h3>{ownerName(group.ownerId)}</h3>
+              {ownerEntry ? <WorkerScopeTag scope={ownerEntry.scope} /> : null}
+              {ownerEntry ? <WorkerProgressBadge progress={ownerEntry.progress} /> : null}
+              <span className="pw-owner-header-count">{group.todoIds.length} {zh ? "项任务" : "tasks"} · {group.todoIds.filter(id => rows.get(id)?.displayClass === group.displayClass).length} {goalWorkClassLabel(group.displayClass, zh)}</span>
+              {!readOnly && group.ownerId && onOpenAgentConversation ? <button type="button" className="goal-owner-conversation" data-agent-id={group.ownerId} aria-label={zh ? `与 ${ownerName(group.ownerId)} 对话` : `Talk to ${ownerName(group.ownerId)}`} onClick={() => onOpenAgentConversation(group.ownerId!)}>{zh ? "工作记录" : "Work conversation"}</button> : null}
+            </div>
+            {ownerEntry?.now ? <WorkerNowLine now={ownerEntry.now} /> : null}
           </header>
           {group.todoIds.slice(0, 3).map(id => task(id))}
           {group.todoIds.length > 3 ? <RemainingWork key={group.ownerId ?? ""} selectedTodoId={group.todoIds.slice(3).includes(selectedTodoId ?? "") ? selectedTodoId : null}
             label={zh ? `其余 ${group.todoIds.length - 3} 项任务` : `${group.todoIds.length - 3} more tasks`}>
             {group.todoIds.slice(3).map(id => task(id))}
           </RemainingWork> : null}
-        </section>)}
+        </section>;
+        })}
         </OwnerWorkGroups>
         {visited.has("board") || lens === "board" ? <div hidden={lens !== "board"}>{board}</div> : null}
         {visited.has("map") || lens === "map" ? <div hidden={lens !== "map"}>{map}</div> : null}

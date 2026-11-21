@@ -1,0 +1,358 @@
+/* Swarm-inspired Worker Roster glyphs, scope tags, progress pills, and single-line Now focus. */
+
+.pw-roster-ring {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: 12px;
+  height: 12px;
+  box-sizing: border-box;
+  border-radius: 50%;
+}
+
+.pw-roster-ring.is-working {
+  border: 1.5px solid color-mix(in srgb, var(--pw-green) 28%, transparent);
+  color: var(--pw-green);
+}
+
+.pw-roster-ring.is-working::before {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.pw-roster-ring.is-working::after {
+  content: "";
+  position: absolute;
+  inset: -1.5px;
+  border: 1.5px solid transparent;
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: pw-spin 1s linear infinite;
+}
+
+.pw-roster-ring.is-waiting {
+  border: 1.5px solid var(--pw-muted);
+  background: transparent;
+}
+
+.pw-roster-ring.is-lease_expired {
+  border: 1.5px dashed var(--pw-amber);
+  background: transparent;
+}
+
+.pw-roster-ring.is-needs_decision {
+  border: 1.5px solid color-mix(in srgb, var(--pw-red) 45%, transparent);
+  background: transparent;
+}
+
+.pw-roster-ring.is-needs_decision::before {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  background: var(--pw-red);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pw-roster-ring.is-working::after {
+    animation: none;
+  }
+}
+
+.pw-roster-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.pw-roster-state.is-working {
+  background: var(--pw-green-bg);
+  color: var(--pw-green);
+}
+
+.pw-roster-state.is-waiting {
+  background: var(--pw-hover);
+  color: var(--pw-muted);
+}
+
+.pw-roster-state.is-lease_expired {
+  background: var(--pw-amber-bg);
+  color: var(--pw-amber);
+}
+
+.pw-roster-state.is-needs_decision {
+  background: var(--pw-red-bg);
+  color: var(--pw-red);
+}
+
+.pw-roster-scope {
+  display: inline-block;
+  max-width: min(340px, 100%);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 7px;
+  border: 1px solid var(--pw-line);
+  border-radius: 5px;
+  background: var(--pw-card);
+  color: var(--pw-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+}
+
+.pw-roster-progress {
+  display: inline-block;
+  flex: none;
+  padding: 2px 7px;
+  border: 1px solid var(--pw-line);
+  border-radius: 5px;
+  background: var(--pw-bg);
+  color: var(--pw-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pw-roster-now,
+.personal-detail-card .pw-roster-now {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+  min-width: 0;
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  color: var(--pw-muted);
+}
+
+.pw-roster-now-key {
+  flex: none;
+  color: var(--pw-faint);
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+
+.pw-roster-now-key::after {
+  content: ":";
+}
+
+.pw-roster-now-text {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--pw-text);
+}
+
+.pw-roster-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--pw-line);
+  border-radius: 8px;
+  background: var(--pw-card);
+  min-width: 0;
+}
+
+.pw-roster-panel.is-compact {
+  padding: 10px 0 0;
+  border: 0;
+  border-top: 1px solid var(--pw-line);
+  border-radius: 0;
+  background: transparent;
+}
+
+.pw-roster-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  min-width: 0;
+}
+
+.pw-roster-counts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pw-roster-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0;
+}
+
+.pw-roster-row {
+  display: grid;
+  gap: 4px;
+  padding: 8px 0;
+  border-top: 1px solid var(--pw-line);
+  min-width: 0;
+}
+
+.pw-roster-row-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-width: 0;
+}
+
+.pw-roster-name {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  font-weight: 600;
+  color: var(--pw-text);
+}
+
+.pw-roster-state-text {
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  color: var(--pw-muted);
+  white-space: nowrap;
+}
+
+.pw-roster-row[data-roster-state="working"] .pw-roster-state-text {
+  color: var(--pw-green);
+}
+
+.pw-roster-row[data-roster-state="lease_expired"] .pw-roster-state-text {
+  color: var(--pw-amber);
+}
+
+.pw-roster-row[data-roster-state="needs_decision"] .pw-roster-state-text {
+  color: var(--pw-red);
+}
+
+.pw-roster-row .pw-roster-jump,
+.goal-overview .pw-roster-row .pw-roster-jump {
+  margin-left: auto;
+  min-height: 30px;
+  padding: 3px 10px;
+  border: 1px solid var(--pw-line);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--pw-muted);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  cursor: pointer;
+}
+
+.pw-roster-chips {
+  list-style: none;
+  margin: 0;
+  padding: 6px 0 0;
+  border-top: 1px solid var(--pw-line);
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pw-roster-chip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-width: 0;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--pw-line);
+  border-radius: 6px;
+  background: var(--pw-bg);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  box-sizing: border-box;
+}
+
+.pw-roster-chip-name {
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--pw-text);
+}
+
+.pw-roster-chip[data-roster-state="working"] .pw-roster-state-text {
+  color: var(--pw-green);
+}
+
+.pw-roster-chip[data-roster-state="lease_expired"] .pw-roster-state-text {
+  color: var(--pw-amber);
+}
+
+.pw-roster-chip[data-roster-state="needs_decision"] .pw-roster-state-text {
+  color: var(--pw-red);
+}
+
+.pw-roster-chip .pw-roster-chip-jump,
+.goal-overview .pw-roster-chip .pw-roster-chip-jump {
+  margin-left: auto;
+  min-height: 26px;
+  padding: 1px 8px;
+  border: 1px solid var(--pw-line);
+  border-radius: 4px;
+  background: var(--pw-card);
+  color: var(--pw-muted);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  cursor: pointer;
+}
+
+.pw-roster-chip .pw-roster-chip-jump:hover,
+.goal-overview .pw-roster-chip .pw-roster-chip-jump:hover {
+  border-color: var(--pw-line-strong);
+  background: var(--pw-hover);
+  color: var(--pw-text);
+}
+
+.pw-roster-row .pw-roster-jump:hover {
+  border-color: var(--pw-line-strong);
+  background: var(--pw-hover);
+  color: var(--pw-text);
+}
+
+.pw-roster-row .pw-roster-jump:focus-visible {
+  outline: 2px solid var(--pw-blue);
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  .pw-roster-panel {
+    padding: 10px;
+  }
+
+  .pw-roster-scope {
+    max-width: 100%;
+  }
+
+  .pw-roster-row .pw-roster-jump {
+    margin-left: 0;
+  }
+}

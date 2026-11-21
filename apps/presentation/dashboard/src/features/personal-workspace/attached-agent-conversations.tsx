@@ -3,6 +3,8 @@ import {ExternalLink, Keyboard} from "lucide-react";
 import {AttachedConversationTimeline, type ConversationRecord, type ContentPage} from "./attached-conversation-record";
 import {composerKeyAction} from "./composer-keyboard";
 import {ContextHelp} from "./context-help";
+import {deriveAttachedWorkerStatus} from "./collaboration-status";
+import {WorkerNowLine, WorkerScopeTag, WorkerStateBadge} from "./worker-roster";
 import "./attached-agent-conversations.css";
 
 export type Binding = {agent_id: string; thread_id: string; binding_ref: string};
@@ -91,8 +93,8 @@ async function readVisiblePage(params: URLSearchParams, current: () => boolean):
 }
 
 /** Remount on binding changes so history, live readers and pending input cannot cross Sessions. */
-export function AttachedConversation({goalId, binding, zh, reconnect}: {
-  goalId: string; binding: Binding; zh: boolean; reconnect: () => void;
+export function AttachedConversation({goalId, binding, agentLabel, hostSurfaces, zh, reconnect}: {
+  goalId: string; binding: Binding; agentLabel?: string; hostSurfaces?: readonly string[]; zh: boolean; reconnect: () => void;
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
@@ -509,13 +511,28 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
     ? (zh ? "无法验证原会话的绑定或访问权限。" : "This conversation's binding or access could not be verified.")
     : error;
   const connectionError = connectionMessage ? <p role="alert">{connectionMessage} <button type="button" onClick={reconnect}>{zh ? "重新连接" : "Reconnect"}</button></p> : null;
+  const attachedStatus = deriveAttachedWorkerStatus({
+    agentId: binding.agent_id,
+    label: agentLabel,
+    connected: snapshot?.connected,
+    canReply: snapshot?.can_reply,
+    activeTurn: activeRevision !== null,
+    liveActive,
+    bindingRejected: bindingReadRejected,
+    bindingError: error,
+    turnModel,
+    hostSurfaces,
+    locale: zh ? "zh-CN" : "en",
+  });
   return <div className="attached-conversation-content">
 
       {recoveryError ? <p role="alert">{recoveryError} <button type="button" disabled={sending} onClick={nextReply}>{zh ? "已在原 App 核对，清理本页回执" : "Checked in original App; clear this receipt"}</button></p> : null}
       {sendNotice ? <p role="status">{sendNotice}</p> : null}
-        <div className="attached-connection-status"><div>
+        <div className="attached-connection-status"><div className="attached-connection-meta">
           <div className="attached-conversation-source">
-            Codex App <ContextHelp label={zh ? "原会话来源与更新" : "Original conversation source and updates"}>
+            <WorkerStateBadge state={attachedStatus.state} locale={zh ? "zh-CN" : "en"} />
+            <WorkerScopeTag scope={attachedStatus.scope} />
+            <span>Codex App</span> <ContextHelp label={zh ? "原会话来源与更新" : "Original conversation source and updates"}>
               <p>{zh ? "已保存消息与工具记录自动更新；实时内容来自原宿主。" : "Saved messages and tools update automatically; live content comes from the original host."}</p>
             </ContextHelp>
           </div>
@@ -523,6 +540,7 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
             <span>{connectionStatus}</span>
             {activeRevision !== null ? <>{" · "}<span>{turnProfile}</span></> : null}
           </p> : null}
+          <WorkerNowLine now={attachedStatus.now} />
         </div>
         <button type="button" className="attached-conversation-open" aria-label={zh ? "在 Codex App 中打开" : "Open in Codex App"}
           title={zh ? "在 Codex App 中打开" : "Open in Codex App"} aria-disabled={opening} aria-busy={opening} onClick={() => void openOriginal()}><ExternalLink size={18} aria-hidden="true" /></button></div>

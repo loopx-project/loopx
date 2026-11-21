@@ -1,13 +1,192 @@
-.personal-collaboration { margin-top: 12px; border: 1px solid var(--color-border, #ebebeb); border-radius: 6px; padding: 12px 16px; overflow-wrap: anywhere; }
-.personal-collaboration header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
-.personal-collaboration header span, .personal-collaboration-status { font-size: var(--text-caption); line-height: var(--leading-caption); opacity: .75; }
-.personal-collaboration-status { display: flex; flex-wrap: wrap; gap: 8px 16px; }
-.personal-collaboration summary { cursor: pointer; min-height: 44px; display: list-item; align-content: center; }
-.personal-collaboration h4 { margin: 12px 0 4px; font-size: var(--text-body); line-height: var(--leading-body); }
-.personal-collaboration p { white-space: pre-wrap; }
-.personal-collaboration ul { padding-left: 20px; }
+.pw-collab-roster-summary {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--pw-line);
+  border-radius: 8px;
+  background: var(--pw-bg);
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pw-collab-roster-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  min-width: 0;
+}
+
+.pw-collab-roster-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.pw-collab-roster-list li {
+  display: grid;
+  grid-template-columns: 12px auto auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--pw-line);
+  min-width: 0;
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+}
+
+.pw-collab-roster-agent {
+  font-weight: 600;
+  color: var(--pw-text);
+  white-space: nowrap;
+}
+
+.pw-collab-roster-state-text {
+  color: var(--pw-muted);
+  white-space: nowrap;
+}
+
+.pw-collab-roster-list li[data-roster-state="working"] .pw-collab-roster-state-text {
+  color: var(--pw-green);
+}
+
+.pw-collab-roster-list li[data-roster-state="lease_expired"] .pw-collab-roster-state-text {
+  color: var(--pw-amber);
+}
+
+.pw-collab-roster-list li[data-roster-state="needs_decision"] .pw-collab-roster-state-text {
+  color: var(--pw-red);
+}
+
+.pw-collab-roster-now {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--pw-muted);
+}
+
+.personal-collaboration {
+  margin-top: 10px;
+  border: 1px solid var(--pw-line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: var(--pw-card);
+  overflow-wrap: anywhere;
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.personal-collaboration[data-roster-state="needs_decision"] {
+  border-color: color-mix(in srgb, var(--pw-red) 32%, var(--pw-line));
+}
+
+.personal-collaboration[data-roster-state="lease_expired"] {
+  border-color: color-mix(in srgb, var(--pw-amber) 36%, var(--pw-line));
+}
+
+.personal-collaboration[data-roster-state="working"] {
+  border-color: color-mix(in srgb, var(--pw-green) 28%, var(--pw-line));
+}
+
+.personal-collaboration header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px 12px;
+  min-width: 0;
+}
+
+.pw-collab-title-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 220px;
+}
+
+.pw-collab-title-group strong {
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  color: var(--pw-text);
+  overflow-wrap: anywhere;
+}
+
+.pw-collab-meta-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pw-collab-owner-label {
+  color: var(--pw-muted);
+  white-space: nowrap;
+}
+
+.personal-collaboration header span,
+.personal-collaboration-status {
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+}
+
+.personal-collaboration-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+  color: var(--pw-muted);
+}
+
+.pw-collab-reason {
+  margin: 0;
+  color: var(--pw-text);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+}
+
+.personal-collaboration summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: list-item;
+  align-content: center;
+  color: var(--pw-text);
+  font-size: var(--text-caption);
+  font-weight: 500;
+}
+
+.personal-collaboration h4 {
+  margin: 12px 0 4px;
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+}
+
+.personal-collaboration p {
+  white-space: pre-wrap;
+}
+
+.personal-collaboration .pw-roster-now {
+  white-space: nowrap;
+}
+
+.personal-collaboration ul {
+  padding-left: 20px;
+}
+
 .personal-collaboration small { display: block; font-family: var(--font-mono); font-size: var(--text-caption); line-height: var(--leading-caption); }
-.personal-collaboration summary:focus-visible { outline: 2px solid var(--color-link, #0070f3); outline-offset: 2px; }
+
+.personal-collaboration summary:focus-visible {
+  outline: 2px solid var(--pw-blue);
+  outline-offset: 2px;
+}
+
 .personal-request-control { border-top: 1px solid var(--pw-line); margin-top: 16px; padding-top: 12px; }
 .personal-request-control form, .personal-request-control label { display: grid; gap: 6px; }
 .personal-request-control form { gap: 12px; margin-top: 12px; }
@@ -21,3 +200,31 @@
 .personal-request-control button:disabled { opacity: .5; cursor: default; }
 .personal-request-control :is(button, input, textarea):focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
 .personal-request-control :is(input, textarea) { padding: 8px 10px; border: 1px solid var(--pw-line-strong); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); font: inherit; }
+
+@media (max-width: 640px) {
+  .pw-collab-roster-list li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+  }
+
+  .pw-collab-roster-list .pw-roster-progress {
+    order: 2;
+    margin-left: auto;
+  }
+
+  .pw-collab-roster-list .pw-roster-scope {
+    order: 5;
+    max-width: 100%;
+  }
+
+  .pw-collab-roster-list .pw-collab-roster-now {
+    flex: 1 0 100%;
+    order: 10;
+  }
+
+  .pw-collab-meta-group {
+    width: 100%;
+  }
+}
