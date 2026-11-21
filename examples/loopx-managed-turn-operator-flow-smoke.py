@@ -28,7 +28,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.chat_dsh import DshChatAdapter  # noqa: E402
+from loopx.chat.dsh import DshChatAdapter  # noqa: E402
 from loopx.chat_manager import manager_channel_binding  # noqa: E402
 from loopx.control_plane.operator_provider import (  # noqa: E402
     operator_provider_environ,
