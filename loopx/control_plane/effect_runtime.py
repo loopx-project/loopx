@@ -23,7 +23,11 @@ from pathlib import Path
 from threading import Lock
 from typing import IO, Any, Literal, TypeAlias
 
-from ..file_lock import process_is_alive
+from ..file_lock import (
+    _effect_file_identity_from_fd,
+    _remove_created_effect_file,
+    process_is_alive,
+)
 from .runtime.file_reads import iter_binary_file_reads
 from .runtime.private_permissions import protect_private_path, require_private_path
 from .runtime.node_probe import (
@@ -1276,12 +1280,6 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
     while time.monotonic() < lock_deadline:
         try:
             descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            with os.fdopen(descriptor, "w", encoding="utf-8") as lock_file:
-                lock_file.write(f"{os.getpid()}\n")
-                lock_file.flush()
-                os.fsync(lock_file.fileno())
-            acquired = True
-            break
         except FileExistsError:
             existing = _read_info(info_path, fingerprint=fingerprint)
             if existing is not None:
@@ -1299,6 +1297,19 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
             except OSError:
                 pass
             time.sleep(STARTUP_POLL_SECONDS)
+        else:
+            identity = None
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8") as lock_file:
+                    identity = _effect_file_identity_from_fd(lock_file.fileno())
+                    lock_file.write(f"{os.getpid()}\n")
+                    lock_file.flush()
+                    os.fsync(lock_file.fileno())
+            except BaseException:
+                _remove_created_effect_file(lock, identity)
+                raise
+            acquired = True
+            break
     if not acquired:
         existing = _read_info(info_path, fingerprint=fingerprint)
         if existing is not None:

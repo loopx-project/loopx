@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -1084,6 +1085,66 @@ def test_dead_startup_lock_is_reclaimed_without_waiting_for_age_timeout(
     assert replacement["ready"] is True
     assert time.monotonic() - started_at < 3
     effect_runtime.effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
+
+
+@pytest.mark.parametrize("replace_lock", [False, True], ids=["owned-lock", "replacement-lock"])
+def test_failed_startup_lock_publication_allows_recovery(
+    tmp_path: Path,
+    monkeypatch,
+    replace_lock: bool,
+) -> None:
+    runtime_dir = tmp_path / "runtime"
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
+    fingerprint = effect_runtime._runtime_fingerprint()
+    info_path = effect_runtime._runtime_info_path(fingerprint)
+    lock = runtime_dir / f"start-{fingerprint[:16]}.lock"
+    replacement = tmp_path / "replacement.lock"
+    replacement_owner = f" {os.getpid()}\n"
+    if replace_lock:
+        replacement.write_text(replacement_owner, encoding="utf-8")
+    stat_path = Path.stat
+    fsync = os.fsync
+    failed_sync = False
+
+    def fail_lock_sync(descriptor: int) -> None:
+        nonlocal failed_sync
+        try:
+            lock_stat = stat_path(lock)
+        except FileNotFoundError:
+            fsync(descriptor)
+            return
+        if os.path.samestat(os.fstat(descriptor), lock_stat):
+            failed_sync = True
+            raise OSError(errno.ENOSPC, "synthetic startup lock sync failure")
+        fsync(descriptor)
+
+    def observe_path(path: Path, *args, **kwargs):
+        if path == lock and failed_sync and replacement.exists():
+            replacement.replace(lock)
+        return stat_path(path, *args, **kwargs)
+
+    with monkeypatch.context() as failing_io:
+        failing_io.setattr(os, "fsync", fail_lock_sync)
+        failing_io.setattr(Path, "stat", observe_path)
+        with pytest.raises(effect_runtime.EffectRuntimeStartupError) as failure:
+            effect_runtime.effect_runtime_result("runtime.ping", {}, retry_safe=False)
+
+    assert failure.value.diagnostic_code == "runtime_request_failed"
+    assert isinstance(failure.value.__cause__, OSError)
+    assert failure.value.__cause__.errno == errno.ENOSPC
+    assert not info_path.exists()
+    if replace_lock:
+        assert lock.read_text(encoding="utf-8") == replacement_owner
+        return
+
+    assert not lock.exists()
+    try:
+        recovered = effect_runtime.effect_runtime_result("runtime.ping", {}, retry_safe=False)
+        assert recovered["ready"] is True
+    finally:
+        if info_path.exists():
+            effect_runtime.effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
+    assert not lock.exists()
 
 
 def test_live_startup_lock_is_not_reclaimed_after_age_threshold(
