@@ -189,7 +189,8 @@ def register_turn_commands(
         help=(
             "JSON argv array for a typed generic host adapter. The adapter reads "
             "the Turn request from stdin and emits one result JSON object; shell "
-            "parsing is never used."
+            "parsing is never used. Omit this on journal recovery that needs no "
+            "new host invocation."
         ),
     )
     run_once.add_argument(

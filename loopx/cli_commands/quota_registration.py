@@ -221,13 +221,13 @@ def register_quota_command(
         "--turn-envelope",
         action="store_true",
         help=(
-            "For `quota should-run`, return the additive bounded TurnEnvelope view. "
-            "The default full decision remains unchanged."
+            "Select the complete v1 work contract for quota should-run. "
+            "Context and Delta delivery remain independent."
         ),
     )
     turn_view.add_argument("--complete-turn", action="store_true",
-        help="For JSON quota should-run, explicitly consume the complete v1 Turn contract and its shared exact-Turn settlement. "
-             "The legacy --turn-envelope and unselected output keep their existing versions. Context/Delta delivery remain independent.")
+        help="Select the complete v1 work contract for JSON quota should-run "
+             "and its shared exact-Turn settlement. Context and Delta delivery remain independent.")
     capture_group = quota_parser.add_mutually_exclusive_group()
     capture_group.add_argument(
         "--decision-output-dir",
@@ -253,6 +253,7 @@ def register_quota_command(
     # immutable view after the model's lifecycle hooks establish continuity.
     quota_parser.add_argument("--defer-context-presentation", action="store_true", help=argparse.SUPPRESS)
     quota_parser.add_argument("--prepared-capture-reference", action="store_true", help=argparse.SUPPRESS)
+    quota_parser.add_argument("--prepared-claim-operation-id", help=argparse.SUPPRESS)
     from ..control_plane.turn_driver.codex_context import CONTEXT_DELIVERY_SETTINGS, DELTA_DELIVERY_SETTINGS
 
     quota_parser.add_argument("--context-delivery", choices=CONTEXT_DELIVERY_SETTINGS,

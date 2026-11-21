@@ -41,9 +41,9 @@ binding facts，并且必须返回带 PostgreSQL 标签、且 identity 与 selec
   lease、receipt 或 promotion。
 
 默认 profile 是路由决策，不是迁移。已有 Markdown state、writer fence、
-qualification gate 以及 File/SQLite 显式 promotion hold 均保持不变。在 shared-
-authority RFC 的 D2 证据和 owner approval 完成前，SQLite 仍是 opt-in 的
-qualified candidate；PostgreSQL 仍是独立的 service-provider qualification 路径。
+qualification gate 以及 File/SQLite 显式 promotion hold 均保持不变。已有 Goal
+切换到 SQLite 需要审核后的迁移。PostgreSQL 仍是独立的 service-provider
+qualification 路径。
 
 ## 验证
 
@@ -55,15 +55,15 @@ contract；PostgreSQL 的真实服务器 qualification 仍是独立 gate。
 
 保存计划、执行和断点恢复的操作见[审核后的晋升与恢复](reviewed-coordination-promotion.zh-CN.md)。
 
-## 正常写入退役与大版本升级提案
+## 2.0 写入与迁移边界
 
-完整双语支持矩阵与 PR 顺序见
-[provider reference 的兼容截止提案](local-authority-provider-selection.md#proposed-compatibility-cutoff-and-release-sequence)。
-这是一份提案，未改变当前安装行为或宣布发布。
+完整支持矩阵见 [2.0 兼容边界](local-authority-provider-selection.md#20-compatibility-cutoff-and-release-sequence)。
 
-当前未晋升 Markdown Goal、v0 target-only 设置和显式关闭 canonical creation
-仍受支持。建议在 **2.0** 统一要求正常写入前具备 canonical authority；已有
-canonical File 不必改为 SQLite，明确 provider 和两种 ownership policy 保持。
+正常写入要求 canonical authority。未迁移 Markdown Goal 的正常写入返回
+`canonical_authority_required`。v0 target-only 设置和显式关闭 canonical creation
+的偏好仍可检查，创建新 Goal 前需要审核并启用 canonical creation。没有
+`goal_storage` 设置时，新 Goal 默认使用 SQLite 和 `hard_lease`。已有 canonical
+File 或 SQLite Goal 保留其 provider 和支持的 ownership policy。
 已有 canonical store 若仍用 `legacy` policy，先审核保留 claim 的 policy 迁移，
 不重复晋升或强制切换 provider。
 只读检查、审核迁移、受支持旧备份/格式/原回执恢复与永久 Markdown 展示保留。

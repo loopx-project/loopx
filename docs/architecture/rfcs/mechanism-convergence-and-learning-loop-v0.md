@@ -315,6 +315,24 @@ one finding and receipt, spends once, and checks effect-free replay plus rejecte
 new capture. This repairs the existing recovery contract without a new owner or
 activation; installed Hosts, other backends and benefit retain their own gates.
 
+Native failure allocation and the external worker's Host observation now share
+the existing [`typed failure owner`](../../../loopx/control_plane/turn_driver/host_failure.ts).
+The Python retry table and worker success/same-session/failure selection are
+retired. Native error construction, Mapping refusal order, exact integer IO,
+session-ID decoding, polling clocks and the pending-intent witness remain with
+their existing adapters. An observed Host success is transport confirmation,
+not Turn completion, an ACK or permission to spend. Automatic eligibility stays
+narrower than explicit repaired retry; the invocation-only query marker adds no
+setting or activation, and omission/false retains the existing explicit query.
+The [original worker](../../../tests/test_external_scheduler_worker.py),
+[boundary checks](../../../tests/control_plane/test_host_failure_policy_transport.py)
+and [File/SQLite managed CLI](../../../tests/test_loopx_turn_managed_step.py)
+preserve original-session retry, unknown/foreign/malformed outcomes, refusal
+precedence, lost-response recovery and once-only replay. A changed retry ceiling
+fails the independent SQLite CLI observation. This source checkpoint does not
+qualify installed worker adoption, the remaining C1/C4/C9 cutover, product
+composition or accepted outcomes and full cost.
+
 The replay and new-capture assertions execute inside the recovery fixture.
 An earlier test update put that block in the no-evidence test: the recovery
 cases skipped those assertions, while ordinary settlement failed on undefined
@@ -334,6 +352,18 @@ is separately qualified through real TLS, restricted roles, task lifecycle and
 read-only quota observation. It admits no ordinary host Turn. These service
 checks therefore do not qualify an ordinary PostgreSQL feedback Turn or justify
 adding another execution profile to this slice.
+
+**Source checkpoint: stateless read ownership (2026-11-20).** The stateless capture
+adapter delegates its normal-work initial navigation to the existing TypeScript
+Progressive owner through `context_select`; Python retains publication, byte
+budgets and fallback. The invocation-only option leaves generic selection and
+its validation order unchanged. Captured File/SQLite sources preserve their
+original preparation and settlement facts after a later claim; selected display,
+off and digest-refusal paths have immutable-base/current-candidate controls.
+Existing wide-scope and note-reuse test callers carry the original captured lease
+proof into their manual writeback, retaining pagination, recovery and once-only
+settlement assertions. This retires a duplicate read classifier; full C1/C4/C9
+cutover, installed/native adoption and method/outcome benefit remain open.
 
 The first task needs an actual feedback or method-choice requirement. Reuse complete existing paths; real consumers must demonstrate gaps before repairing them rather than manufacturing a failure for the example. Experiments, training and procedural publication retain original authority. This document allocates neither another lane's quota nor a prescribed PR count.
 

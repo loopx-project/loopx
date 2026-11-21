@@ -442,8 +442,8 @@ def test_manager_prompt_uses_the_window_source_health_rows_as_guidance():
 
     The rows ship as data in every Turn; without a matching sentence the answer
     only reads remote_evidence, and a source that was declared but contributed
-    nothing stays an unexplained gap. The wording also keeps the coverage effect
-    explicitly guidance rather than a machine-checked obligation.
+    nothing stays an unexplained gap. The prompt identifies the coverage effect
+    as guidance.
     """
 
     assert "evidence_window.source_health carries one typed row per declared source" in (
@@ -451,7 +451,9 @@ def test_manager_prompt_uses_the_window_source_health_rows_as_guidance():
     )
     assert "including the local source" in MANAGER_AGENT_OBJECTIVE
     assert "next_action as the repair" in MANAGER_AGENT_OBJECTIVE
-    assert "not a machine-checked obligation" in MANAGER_AGENT_OBJECTIVE
+    assert "Read coverage_effect as guidance about what that gap can support" in (
+        MANAGER_AGENT_OBJECTIVE
+    )
 
 
 def test_manager_reporting_guidance_scopes_diagnostics_to_the_requested_answer():

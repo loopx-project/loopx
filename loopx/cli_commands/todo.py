@@ -7,6 +7,7 @@ from functools import partial
 from operator import itemgetter
 from pathlib import Path
 
+from ..cli_runtime import report_json_text
 from ..command_invocation import cli_option_args, loopx_cli_argv
 from ..control_plane.agents.workspace_guard import capture_delivery_workspace
 from ..control_plane.capability_hooks import PostWritebackHookRegistration
@@ -15,6 +16,16 @@ from ..control_plane.coordination.local_authority import (
     local_authority_is_promoted,
 )
 from ..control_plane.effect_runtime import effect_runtime_result
+from ..control_plane.quota.effect_program import SettlementBindingKind
+from ..control_plane.quota.settlement import (
+    SettlementFailureKind,
+    SettlementIdentity,
+    read_heartbeat_settlement,
+    settlement_result_payload,
+)
+from ..control_plane.quota.heartbeat_receipt import (
+    bind_replan_successor_heartbeat_receipt,
+)
 from ..control_plane.goals.first_party_host_admission import (
     FirstPartyHostGoalAdmission,
     capture_first_party_host_goal_ref,
@@ -23,11 +34,6 @@ from ..control_plane.goals.source_session_registry_state import exact_goal_ref
 from ..control_plane.goals.task_planning import (
     build_task_planning_packet,
     render_task_planning_packet,
-)
-from ..control_plane.quota.settlement import (
-    SettlementIdentity,
-    read_heartbeat_settlement,
-    settlement_result_payload,
 )
 from ..control_plane.todos.completion_result import read_completion_result
 from ..control_plane.todos.list_readback import list_goal_todos
@@ -146,6 +152,67 @@ def _thin_claim_projection(payload: dict[str, object], route: Sequence[str]) -> 
     }
 
 
+def _thin_claim_overlap_advisories(payload: dict[str, object], route: Sequence[str]) -> None:
+    """Link long peer scope lists to the immutable claim receipt."""
+    advisories = payload.get("integration_overlap_advisories")
+    goal_id = payload.get("goal_id")
+    operation_id = payload.get("claim_operation_id")
+    if (
+        not isinstance(goal_id, str) or not goal_id
+        or not isinstance(operation_id, str) or not operation_id
+        or not isinstance(advisories, list) or not advisories
+        or any(not isinstance(row, dict) or not isinstance(row.get("write_scopes"), list)
+               for row in advisories)
+    ):
+        return
+    compact = {
+        "integration_overlap_advisories": [
+            {**{key: value for key, value in row.items() if key != "write_scopes"},
+             "write_scope_count": len(row["write_scopes"])}
+            for row in advisories
+        ],
+        "integration_overlap_detail_command": shlex.join([
+            *route, "todo", "receipt", "--goal-id", goal_id, "--operation-id", operation_id, "--thin",
+        ]),
+    }
+    original = {"integration_overlap_advisories": advisories}
+    if len(report_json_text(compact).encode("utf-8")) < len(report_json_text(original).encode("utf-8")):
+        payload.update(compact)
+
+
+def _thin_claim_receipt(payload: dict[str, object], goal_id: str, operation_id: str) -> None:
+    """Project historical overlap advice from the exact canonical claim receipt."""
+    if payload.get("status") == "found":
+        records = payload.get("receipts")
+        receipt = records[0] if isinstance(records, list) and len(records) == 1 else None
+        result = receipt.get("result") if isinstance(receipt, dict) else None
+        if (
+            not isinstance(receipt, dict)
+            or receipt.get("schema_version") != "loopx_coordination_todo_claim_receipt_v0"
+            or receipt.get("goal_id") != goal_id
+            or receipt.get("operation_id") != operation_id
+            or not isinstance(result, dict)
+            or result.get("claim_operation_id") != operation_id
+            or result.get("execution_managed") is not True
+            or not isinstance(result.get("todo_id"), str)
+            or not result["todo_id"]
+            or not isinstance(result.get("integration_overlap_advisories"), list)
+        ):
+            raise ValueError(
+                "todo receipt --thin requires an exact managed claim receipt with overlap advice. "
+                "Omit --thin for the full receipt."
+            )
+        payload["receipts"] = [{
+            **receipt,
+            "result": {
+                "claim_operation_id": operation_id,
+                "todo_id": result["todo_id"],
+                "integration_overlap_advisories": result["integration_overlap_advisories"],
+            },
+        }]
+    payload["thin"] = True
+
+
 def handle_todo_command(
     args: argparse.Namespace,
     *,
@@ -169,6 +236,7 @@ def handle_todo_command(
             format_name=format_name,
             list_reader=list_goal_todos,
         )
+    output_format = format_name or str(getattr(args, "format", None) or "markdown")
     renderer = render_todo_markdown
     if args.todo_command == "plan":
         renderer = render_task_planning_packet
@@ -214,6 +282,8 @@ def handle_todo_command(
             )
         elif args.todo_command == "receipt":
             validate_todo_receipt_options(args)
+            if args.todo_thin and output_format != "json":
+                raise ValueError("todo receipt --thin requires --format json")
             runtime_root = resolve_runtime_root(
                 load_registry(registry_path), runtime_root_arg
             )
@@ -240,6 +310,8 @@ def handle_todo_command(
                 "command": "receipt",
                 **result,
             }
+            if args.todo_thin:
+                _thin_claim_receipt(payload, args.goal_id, args.operation_id)
         elif args.todo_command == "result-read":
             validate_todo_result_read_options(args)
             registry = load_registry(registry_path)
@@ -274,35 +346,8 @@ def handle_todo_command(
                 registry_path=registry_path,
                 runtime_root_arg=runtime_root_arg,
             )
-            successor_settlement = None
-            if replan_obligation_id and args.turn_instance_id:
-                runtime_root = resolve_runtime_root(
-                    load_registry(registry_path), runtime_root_arg
-                )
-                successor_settlement = read_heartbeat_settlement(
-                    runtime_root,
-                    goal_id=args.goal_id,
-                    agent_id=args.claimed_by,
-                    todo_id=None,
-                    turn_instance_id=args.turn_instance_id,
-                    resolve_original_binding=True,
-                    registry_path=registry_path,
-                    goal_ref=goal_ref,
-                )
-                if successor_settlement is None or successor_settlement.identity.value is None:
-                    raise ValueError(
-                        "replan successor requires the original admitted Turn binding"
-                    )
-                if successor_settlement.identity.failure is not None:
-                    raise ValueError(successor_settlement.identity.failure.reason)
-                selected = (successor_settlement.semantic_replan_guard or {}).get(
-                    "selected_obligation_id"
-                )
-                if selected != replan_obligation_id:
-                    raise ValueError(
-                        "replan successor does not match the original Turn obligation"
-                    )
-            payload = add_goal_todo(
+            add_todo = partial(
+                add_goal_todo,
                 operation_id=args.operation_id,
                 registry_path=registry_path,
                 runtime_root_arg=runtime_root_arg,
@@ -350,8 +395,81 @@ def handle_todo_command(
                     if value is not None
                 },
                 **_todo_path_args(args),
-                dry_run=bool(args.dry_run),
             )
+            successor_settlement = None
+            runtime_root = None
+            if replan_obligation_id and args.turn_instance_id and not args.dry_run:
+                # A failed Todo validation must not leave an otherwise ordinary
+                # Turn receipt irreversibly bound to a successor that was never
+                # created. Preview through the same mutation owner first.
+                preview = add_todo(dry_run=True)
+                if preview.get("ok") is not True:
+                    raise ValueError(
+                        str(
+                            preview.get("error")
+                            or "replan successor could not be validated"
+                        )
+                    )
+                runtime_root = resolve_runtime_root(
+                    load_registry(registry_path), runtime_root_arg
+                )
+                successor_settlement = read_heartbeat_settlement(
+                    runtime_root,
+                    goal_id=args.goal_id,
+                    agent_id=args.claimed_by,
+                    todo_id=None,
+                    turn_instance_id=args.turn_instance_id,
+                    resolve_original_binding=True,
+                    registry_path=registry_path,
+                    goal_ref=goal_ref,
+                )
+                if (
+                    successor_settlement is not None
+                    and successor_settlement.identity.value is None
+                    and successor_settlement.identity.failure is not None
+                    and successor_settlement.identity.failure.kind
+                    is SettlementFailureKind.RECEIPT_UNBOUND
+                ):
+                    bind_replan_successor_heartbeat_receipt(
+                        runtime_root,
+                        goal_id=args.goal_id,
+                        agent_id=args.claimed_by,
+                        turn_instance_id=args.turn_instance_id,
+                        replan_obligation_id=replan_obligation_id,
+                        goal_ref=goal_ref,
+                    )
+                    successor_settlement = read_heartbeat_settlement(
+                        runtime_root,
+                        goal_id=args.goal_id,
+                        agent_id=args.claimed_by,
+                        todo_id=None,
+                        turn_instance_id=args.turn_instance_id,
+                        resolve_original_binding=True,
+                        registry_path=registry_path,
+                        goal_ref=goal_ref,
+                    )
+                if successor_settlement is None or successor_settlement.identity.value is None:
+                    raise ValueError(
+                        "replan successor requires the original admitted Turn binding"
+                    )
+                if successor_settlement.identity.failure is not None:
+                    raise ValueError(successor_settlement.identity.failure.reason)
+                identity = successor_settlement.identity.value
+                if (
+                    identity.binding_kind is not SettlementBindingKind.AUTONOMOUS_REPLAN
+                    or identity.replan_obligation_id != replan_obligation_id
+                ):
+                    raise ValueError(
+                        "replan successor has a different settlement identity"
+                    )
+                selected = (successor_settlement.semantic_replan_guard or {}).get(
+                    "selected_obligation_id"
+                )
+                if selected != replan_obligation_id:
+                    raise ValueError(
+                        "replan successor does not match the original Turn obligation"
+                    )
+            payload = add_todo(dry_run=bool(args.dry_run))
             if replan_obligation_id and payload.get("ok"):
                 payload["replan_transition"] = {
                     "schema_version": "replan_successor_transition_v0",
@@ -365,6 +483,7 @@ def handle_todo_command(
                     if successor_settlement is None:
                         payload["host_action"] = "end_current_heartbeat"
                     else:
+                        assert runtime_root is not None
                         identity = successor_settlement.identity.value
                         assert identity is not None
                         payload["settlement_identity"] = identity.as_dict()
@@ -454,6 +573,8 @@ def handle_todo_command(
                     payload.pop(internal, None)
                 if args.todo_thin:
                     _thin_claim_projection(payload, route)
+                    if output_format == "json":
+                        _thin_claim_overlap_advisories(payload, route)
         elif args.todo_command == "update":
             validate_todo_update_options(args)
             update_operation = partial(
@@ -820,7 +941,6 @@ def handle_todo_command(
             post_writeback_projection_builder=post_writeback_projection_builder,
             admission_factory=FirstPartyHostGoalAdmission,
         )
-    output_format = format_name or str(getattr(args, "format", None) or "markdown")
     print_payload(
         payload,
         output_format,

@@ -1,5 +1,6 @@
-"""Settlement remains executable and signed through the opt-in compact view."""
+"""Verify historical settlement signatures and the current C1 CLI plan."""
 from copy import deepcopy
+import shlex
 
 import pytest
 
@@ -11,7 +12,7 @@ from loopx.control_plane.quota.turn_envelope import (
 from tests.test_turn_envelope import _full_decision
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, TURN_ID,
-    _configure_read_only_todo, _run_cli, _run_generated_cli,
+    _classification_count, _configure_read_only_todo, _run_cli, _run_generated_cli,
     _spend_run_count, _write_fixture, _initialize_fixture_authority,
 )
 
@@ -91,31 +92,37 @@ def test_absent_plan_is_not_invented_for_historical_or_unbound_packets():
     ("--runtime-profile", "generic_cli"),
     ("--runtime-profile", "codex_app_ssh_goal"),
 ])
-def test_generated_json_commands_settle_original_turn_once(tmp_path, profile_args):
+def test_generated_c1_commands_settle_original_turn_once(tmp_path, profile_args):
     project, runtime, registry = _write_fixture(tmp_path / "quoted inputs")
     _configure_read_only_todo(project)
     _initialize_fixture_authority(project, runtime)
-    args = ("quota", "should-run", *profile_args, "--goal-id", GOAL_ID,
-            "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
-            "--turn-instance-id", TURN_ID, )
-    rc, full = _run_cli(registry, runtime, *args)
-    assert rc == 0, full
-    rc, envelope = _run_cli(registry, runtime, *args, "--turn-envelope")
-    assert rc == 0, envelope
-    assert envelope["schema_version"] == "loopx_turn_envelope_v0"
-    plan = envelope["writeback"]["settlement_plan"]
-    assert plan == full["interaction_contract"]["cli_channel"]["settlement_plan"]
-    assert plan["identity"] == full["heartbeat_receipt"]["settlement_identity"]
+    binding = (
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID,
+    )
+    args = ("quota", "should-run", *profile_args, *binding)
+    rc, default = _run_cli(registry, runtime, *args)
+    assert rc == 0 and default["schema_version"] == "loopx_turn_envelope_v1", default
+    rc, alias = _run_cli(registry, runtime, *args, "--turn-envelope")
+    assert rc == 0 and alias["schema_version"] == "loopx_turn_envelope_v1", alias
+    plan = alias["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert plan == default["interaction_contract"]["cli_channel"]["settlement_plan"]
+    identity = default["heartbeat_receipt"]["settlement_identity"]
+    assert plan["identity"] == alias["heartbeat_receipt"]["settlement_identity"] == identity
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
     assert [step["kind"] for step in plan["ordered_steps"]] == [
         "validation", "durable_writeback", "quota_spend", "terminal_closeout",
     ]
     assert plan["ordered_steps"][-1]["conditional"] is True
     assert plan["host_handoff"]["inside_agent_settlement"] is False
-    spend_command = plan["ordered_steps"][2]["command_template"]
-    rc, premature = _run_generated_cli(spend_command, registry_path=registry)
+    spend = plan["ordered_steps"][2]
+    assert spend["owner"] == "runtime" and "command_template" not in spend
+    rc, premature = _run_cli(registry, runtime, "quota", "spend-slot", *binding,
+        "--slots", "1", "--source", "heartbeat", "--execute")
     assert rc != 0, premature
     assert _spend_run_count(runtime) == 0
     writeback = plan["ordered_steps"][1]["command_template"]
+    assert {"--settle-turn", "--settlement-receipt"} <= set(shlex.split(writeback))
     # A validated exclusion advances research without claiming the objective is met.
     # The same negative result is not a blocker merely because a candidate failed.
     guidance = plan["ordered_steps"][1]["precondition"]
@@ -140,18 +147,16 @@ def test_generated_json_commands_settle_original_turn_once(tmp_path, profile_arg
     assert _spend_run_count(runtime) == 0
     writeback = writeback.replace("<validated_progress>", "validated_exclusion").replace(
         "<scale>", "single_surface").replace("<outcome>", "outcome_progress")
-    writeback += " --progress-result-class advanced --progress-evidence-id exclusion-proof"
-    rc, refreshed = _run_generated_cli(
-        writeback + " --delivery-boundary in_flight_continuation --no-global-sync --suppress-external-sinks",
-        registry_path=registry,
-    )
-    assert rc == 0, refreshed
-    # Recovery instructions must also execute verbatim, with no format repair.
-    owed_command = refreshed["settlement_owed"]["command"]
-    for replay, command in ((False, owed_command), (True, spend_command)):
-        rc, spent = _run_generated_cli(command, registry_path=registry)
-        assert rc == 0, spent
-        assert spent["settlement_result"]["ok"] is True
-        if replay:
-            assert spent["idempotent_replay"] is True
-    assert _spend_run_count(runtime) == 1
+    writeback += (" --progress-result-class advanced --progress-evidence-id exclusion-proof"
+                  " --delivery-boundary in_flight_continuation --no-global-sync --suppress-external-sinks")
+    for replay in (False, True):
+        rc, settled = _run_generated_cli(writeback, registry_path=registry)
+        assert rc == 0 and settled["settlement_progress"]["state"] == "settled", settled
+        assert settled["settlement_identity"] == identity
+        receipts = settled["settlement_result"]["receipts"]
+        assert [item["step_kind"] for item in receipts] == ["validation", "durable_writeback", "quota_spend"]
+        assert all(item["status"] == "committed" and item["effect_id"] == identity["effect_id"]
+                   for item in receipts)
+        assert settled.get("idempotent_replay", False) is replay
+        assert _classification_count(runtime, "validated_exclusion") == 1
+        assert _spend_run_count(runtime) == 1

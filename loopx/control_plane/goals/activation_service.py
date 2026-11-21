@@ -271,6 +271,7 @@ def set_goal_activation_state(
     runtime_root_override: str | None = None,
     expected_state_fingerprint: str | None = None,
     actor_kind: str | None = None,
+    owner_resume_action: bool = False,
     execute: bool = False,
 ) -> dict[str, Any]:
     """Preview or apply one reversible Goal activation transition."""
@@ -280,6 +281,13 @@ def set_goal_activation_state(
         raise ValueError("goal id is required")
     actor = normalize_owner_controller_actor(actor_kind, required=execute)
     target_state = normalize_goal_activation_state(state)
+    if owner_resume_action and not (
+        target_state is GoalActivationState.ACTIVE
+        and actor is OwnerControllerActorKind.OWNER
+    ):
+        raise ValueError(
+            "owner resume action requires active state and the owner actor"
+        )
     authority_route = _source_and_target(
         registry_path=registry_path,
         goal_id=normalized_goal_id,
@@ -313,6 +321,7 @@ def set_goal_activation_state(
     )
     before_state = goal_activation_state(source_goal)
     changed = before_state is not target_state
+    write_required = changed or owner_resume_action
     actor_label = actor.value if actor is not None else "owner"
     default_reason = (
         f"Stopped by {actor_label}"
@@ -335,6 +344,8 @@ def set_goal_activation_state(
         "before_state": before_state.value,
         "after_state": target_state.value,
         "changed": changed,
+        "owner_resume_action": owner_resume_action,
+        "owner_resume_advanced": False,
         "written": False,
         "partial_write": False,
         "source_registry": str(source_registry),
@@ -350,8 +361,8 @@ def set_goal_activation_state(
         "actor_kind": actor.value if actor is not None else None,
         "readback": {
             "schema_version": GOAL_ACTIVATION_READBACK_SCHEMA_VERSION,
-            "status": "not_executed" if changed else "not_required",
-            "verified": not changed,
+            "status": "not_executed" if write_required else "not_required",
+            "verified": not write_required,
         },
     }
     if (
@@ -476,14 +487,17 @@ def set_goal_activation_state(
                 )
                 return payload
             owner_resume_id = goal_owner_resume_id(locked_goal)
-            if changed:
+            if write_required:
                 # Preserve the owner resume across later lifecycle writes.
-                # Mint it inside the source lock for an actual owner resume.
+                # Mint it inside the source lock for an actual owner resume,
+                # including an explicit host resume while the LoopX Goal is
+                # already active. Ordinary guard entry never sets this flag.
                 if (
                     target_state is GoalActivationState.ACTIVE
                     and actor is OwnerControllerActorKind.OWNER
                 ):
                     owner_resume_id = uuid4().hex
+                    payload["owner_resume_advanced"] = True
                 if owner_resume_id is not None:
                     proposed_activation["owner_resume_id"] = owner_resume_id
                 locked_goal["activation"] = proposed_activation
@@ -520,7 +534,9 @@ def set_goal_activation_state(
     payload["ok"] = bool(sync_ok and readback.get("verified"))
     payload["partial_write"] = bool(payload["written"] and not payload["ok"])
     payload["projection_reconciled"] = bool(
-        not changed and registries_are_distinct and readback.get("verified")
+        not write_required
+        and registries_are_distinct
+        and readback.get("verified")
     )
     if not payload["ok"]:
         payload["error"] = "goal activation shared registry readback did not verify"
@@ -594,8 +610,8 @@ def authority_upgrade_registries(registry_path: Path, runtime_root_arg: str | No
     return sorted(path for path in paths if path.exists())
 
 
-# Upgrade-only IO reuses the lifecycle service and codec transactions. The
-# typed migration decoder is not another normal activation decision owner.
+# Upgrade-only IO reuses the lifecycle service and codec transactions.
+
 def upgrade_goal_activation_registries(
     paths: list[Path], *, execute: bool,
 ) -> dict[str, Any]:

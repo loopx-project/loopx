@@ -5,56 +5,39 @@ computed `quota should-run` decision. It gives an agent the next action and its
 safety contract without replaying every diagnostic lane in the full quota
 payload.
 
-This page describes the current versioned representation. The
-[unified-contract RFC](../../architecture/rfcs/controller-executor-unified-contract-v0.md)
-proposes replacing the live quota/envelope format choice with one complete
-contract, including differential delivery. Historical captures retain their
-original schema and signature. The explicit complete-v1 Host entry below does
-not switch existing quota or v0 consumers to the proposed unified default.
-The proposed composition point precedes capture and encoding. Today's action
-signature compares its registered projection; equality alone does not establish
-complete source-clause preservation or qualify the unified contract.
+This page documents the historical representation and its current read and
+recovery boundaries. New quota decisions with an interaction contract compose
+the complete v1 source before capture and encoding. Historical captures retain
+their original schema and signature. An action signature compares its
+registered projection; complete source-clause preservation requires its own
+verification.
 The RFC's [C1 caller replacement](../../architecture/rfcs/controller-executor-unified-contract-v0.md#c1-caller-replacement-and-cutover-unit)
 also covers the direct Turn producer and final host prompts. Quota CLI output
-parity alone does not qualify those consumers. Historical v0 decoding remains
-separate from switching new admissions to a future unified version.
+parity alone cannot qualify those consumers.
 
-中文：本页记录当前版本。[统一契约提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
-的终态是一份包含差分交付能力的完整契约，取消线上 quota/envelope 格式选择；
-历史捕获保留原 schema 与签名。下述显式完整 v1 Host 入口不将既有 quota 或 v0
-消费者切换到提案的统一默认。
-提议的组合点位于 capture 与编码之前。当前 action signature 比较其注册投影；
-仅签名相等不能证明完整来源条款得到保留，也不能验收统一契约。
+中文：本页记录历史版本及当前读回与恢复边界。包含交互契约的新 quota 决策在捕获
+与编码前组合完整 v1 来源。历史捕获保留原 schema 和签名。动作签名比较其注册投影，
+完整来源条款的保留需要独立验证。
 RFC 的 [C1 消费链替换](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md#c1-消费链替换与切换单元)
-还覆盖直接生产契约的 Turn 入口和最终 host prompt；仅 quota CLI 输出等价不能验收
-这些消费者。历史 v0 解码与新准入切换到未来统一版本分别处理。
+也覆盖直接组合契约的 Turn 入口和最终 Host prompt，这两处分别验收。
 
-Preview it explicitly:
+### Complete v1 Host entry / 完整 v1 Host 入口
 
-```bash
-loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id> --turn-envelope
-```
-
-### Explicit complete-v1 Host entry / 显式完整 v1 Host 入口
-
-A Host that consumes the existing complete contract can select `--complete-turn`
-on JSON `quota should-run`. It composes `loopx_turn_envelope_v1` before capture;
-the saved source retains original work, acceptance, Stop, required-read and
-permission facts. Ordinary progressive/Delta navigation may be returned instead
-of the full document. Follow its pinned reader without rerunning admission.
+JSON `quota should-run` composes `loopx_turn_envelope_v1` before capture. The
+saved source retains original work, acceptance, Stop, required reads and
+permission facts. When progressive or Delta delivery returns navigation,
+follow its pinned reader for the same admission.
 
 ```bash
 loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id> \
-  --turn-instance-id <turn-id> --complete-turn --decision-output-dir ./complete-001
+  --turn-instance-id <turn-id> --decision-output-dir ./complete-001
 ```
 
-The flag is mutually exclusive with legacy `--turn-envelope`. Omitting it keeps
-the existing quota/v0 behavior, including App callers. Context delivery is
-independent: `--context-delivery off` returns the complete v1 document without
-progressive presentation; it does not undo the explicit version choice.
-An older CLI rejects the new flag before guard execution. Omit it to roll back;
-existing complete captures remain readable through their original digest-bound
-`quota context-read`/`context-project` recovery.
+`--turn-envelope` and `--complete-turn` remain mutually exclusive inputs
+for saved commands. Both use v1 in the current CLI. With no independent
+Delta request, `--context-delivery off` returns the complete inline v1
+document. Read existing captures with their original digest-bound
+`quota context-read` or `context-project` recovery.
 
 `quota context-project` checks a saved complete decision before presenting it
 as current context, including with Delta alone or with context delivery off.
@@ -78,22 +61,17 @@ the original `settlement_owed` recovery instead of a second debit. Contract
 composition failure preserves the decided receipt and available original
 capture, reports failure, and grants no work or automatic retry.
 
-`heartbeat-prompt --thin --complete-turn` preserves the selection on its guard
-and same-Turn selection commands. External benchmark heartbeat adapters may
-explicitly select `--complete-turn` on their runner too; other profiles reject
-it. This developer protocol adds no settings owner, model request, child worker,
-permission or execution allowance. User task time requirements remain task
-context; the caller's private current deadline and runtime guidance are not new
-model context. Actual live adoption and efficiency still require separate proof.
+Newly generated heartbeat and same-Turn commands use the default v1 entry.
+Historical benchmark runs use the recorded runner and contract version.
+User task time requirements remain task context. Caller-private deadlines
+and runtime guidance stay with the caller. Live Host adoption and efficiency
+require separate verification.
 
-中文：只有显式选择 `--complete-turn` 才让 JSON guard 在 capture 前生成完整 v1；
-未选择的 quota/App 与旧 `--turn-envelope` 行为保留，两种版本选项互斥。
-渐进/差分交付独立控制；关闭上下文交付时仍返回已显式选择的完整 v1 文档。
-读取按原摘要绑定的分页，不为补读重新准入。原验收、Stop、权限、必要读取与用户
-任务时间要求保留；不会把调用方私有当前倒计时或常驻 runtime 指导新增到模型输入。
-可执行的原 Todo 结算计划复用同一 typed owner，合并为一条写回并保留原 effect id，
-不把未 ready 的准备或错误回执转成授权。部分失败只沿原 `settlement_owed` 恢复。
-旧 CLI 在 guard 前拒绝新选项，回滚时移除该选项；旧完整 capture 仍用原 reader。
+中文：JSON guard 在 capture 前组合完整 v1 来源。新生成的 heartbeat 和同 Turn
+命令直走默认入口，旧命令仍可传入两个互斥别名之一。渐进与差分交付独立控制，
+分页按原摘要读回原准入。保留原验收、Stop、权限、必读和用户任务时间要求。
+原 Todo 计划保留 effect id，原结算由同一 typed owner 投影为一条写回命令。
+部分失败沿原 `settlement_owed` 恢复。
 
 `quota context-project` 先校验已保存的完整决定，再将它呈现为当前上下文。仅开启差分
 或关闭上下文交付时同样校验。来源校验失败或中断时，返回的摘要绑定
@@ -112,7 +90,7 @@ reentering the same Turn:
 
 ```bash
 loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id> \
-  --turn-instance-id <turn-id> --turn-envelope --decision-output-dir ./guard-001
+  --turn-instance-id <turn-id> --decision-output-dir ./guard-001
 cat ./guard-001/decision.json
 ```
 
@@ -139,8 +117,8 @@ the CLI reports that boundary rather than claiming rollback. An empty capture
 directory is not a usable decision. Omit the option to disable capture; remove
 unneeded local captures through ordinary file management.
 
-When both capture and `--turn-envelope` are requested, `detail_ref.full_decision`
-points to the saved file using a quoted POSIX `cat --` command. A file-capable host
+In a historical v0 capture, `detail_ref.full_decision` points to the saved
+file using a quoted POSIX `cat --` command. A file-capable host
 can read `detail_ref.captured_decision.path` directly instead. The typed projector
 includes the expected Goal/Agent/Turn and a reference to the existing canonical
 source-decision hash (a hash of the JSON value, not the formatted file bytes).
@@ -149,9 +127,8 @@ not verify file integrity or make saved admission current. Missing, malformed,
 or mismatched files require recovery, never automatic guard replay. Consumers already referring to `full_decision`, such as compacted capability
 context and peer diagnostics, now read this same observation. Scheduler-specific
 legacy detail requests are unchanged. Replan obligations and fresh selection/lease/quota checks retain their existing owners.
-Without capture, the historical full-decision route remains available. Enabling
-capture does not enable TurnEnvelope or change admission/settlement defaults.
-This opt-in detail link does not change action-signature coverage.
+Historical readers use the capture's recorded route and action-signature
+coverage. New CLI captures use the complete v1 source described above.
 
 中文：同时开启短包和完整 decision 保存时，详情入口读取本次保存的文件，不再
 为补读上下文重跑 guard。读取前核对身份和源哈希；旧观察不提供新的执行权限。
@@ -540,8 +517,8 @@ operations retain their existing authority and validation.
 For repeated host-owned guards, `--decision-output-root ./private-decisions`
 allocates a unique child directory per invocation below an **existing** directory.
 It is mutually exclusive with `--decision-output-dir`; both require an explicit
-Turn ID. The returned Todo selection command retains the root and requested
-`--turn-envelope` projection, so choosing work never overwrites the first read.
+Turn ID. The returned Todo selection command retains the root and explicit
+context delivery options. Each selection saves a distinct capture.
 Other repair/replan guard commands still require the caller to retain those
 transport flags. A saved decision is not permission to skip revalidation.
 
@@ -555,23 +532,21 @@ loopx --format json heartbeat-prompt --thin --runtime-profile generic_cli \
   --decision-output-root ./private-decisions
 ```
 
-Capture and display are independent. `--decision-output-root` saves complete
-decisions; `--decision-handoff-socket` optionally holds their output for a
-caller-owned checkpoint. Neither enables TurnEnvelope. This corrects the old
-renderer behavior where requesting capture also selected the short dispatcher.
-Existing capture callers that intentionally want the short view must now add
-`--turn-envelope` to `heartbeat-prompt`; the generated guard and thin regeneration
-command retain that explicit choice. Quota's existing explicit flag is unchanged.
+Capture and context delivery are independent. `--decision-output-root` saves
+the complete decision. `--decision-handoff-socket` can hold its output for a
+caller-owned checkpoint. Explicit `--context-delivery off` retains the complete
+inline contract when no independent Delta delivery is requested.
 
-With that display opt-in, execute its guard, read the short action/contract/writeback fields, and use
-`detail_ref.full_decision` to read the **same invocation** when selection, replan,
-an `agent_context.detail_ref` or truncation requires detail. Replan history remains with the
-existing owner; this option neither invents another history store nor chooses a
-strategy. The renderer rejects full/compact/brief modes, missing Turn identity,
-native Goal-owned Turns and invalid roots. Stable bootstrap prompts cannot pin a
-Turn. Omit `--turn-envelope` to use the ordinary dispatcher, including when
-checkpoint capture remains enabled. Captured files retain the full decision in
-both display modes.
+New bootstrap, guard, selection and settlement-recovery commands use the
+complete v1 source. Saved callers can still pass `--turn-envelope` or
+`--complete-turn` to the current CLI under their existing input restrictions.
+Saved captures and their original read commands retain the recorded version
+and digest. Follow the original capture for selection, replan or required
+detail. A persistent bootstrap binds each Turn on wake.
+
+当前生成的 bootstrap、guard、选择和结算恢复命令统一使用完整 v1 来源。原先
+保存的两个别名仍可按原输入限制使用，原捕获和读回命令保留其版本与摘要。
+捕获与交付方式独立，显式关闭上下文交付后仍使用完整契约。
 
 Capability planning context stays inline under the existing context owner's
 3 KiB bound, including when the envelope exceeds its diagnostic budget. Read it
@@ -618,20 +593,15 @@ diagnostic remain unchanged. This is an output qualification, not a full-cost SL
 
 中文：捕获和模型输入投影独立。`--decision-output-root` 仅保存完整决策，
 `--decision-handoff-socket` 仅保留检查点交接；二者均不隐式开启 TurnEnvelope。
-此前捕获目录同时启用短包的行为已修正。需要短包的调用者须对
-`heartbeat-prompt` 显式传 `--turn-envelope`；省略该开关时仍使用普通输入，
-选择、结算、身份与完整私有捕获不变。旧运行的实际输入与设置不得追溯改写。
+历史 Short 使用曾交付 v0 的产品版本，并保留原请求与捕获。当前 C1 中
+`--turn-envelope` 是完整契约的兼容别名，已有实验按其记录版本解释。
 
-This is Python filesystem/command transport under the existing quota/context
-owner, not a new capability or Python decision rule. The shared benchmark
-heartbeat worker has a separate default-off `turn_envelope` option documented in
-[its runtime guide](../../../benchmark/runtime/RUNTIME.md). Native `/goal`, Turn
-driver, installed App automations, frontend and Lark are not switched by this
-research-runner setting. Real local worker/renderer/selection/settlement tests
-qualify transport; model token/IO costs, decision quality and long-run adoption
-still require a separately pinned experiment. Capture grants no additional
-read/write/lease authority. Keep captures private; disable the option in the
-next run and use ordinary file management to remove unneeded records.
+The benchmark heartbeat worker verifies a historical `turn_envelope` request
+against the pinned CLI's v0 response before launching a model. Its read-only
+preview and eligibility are recorded in the wake receipt. See the [runtime
+guide](https://github.com/loopx-project/loopx/blob/main/benchmark/runtime/RUNTIME.md) for supported configurations.
+Model cost, decision quality and long-run adoption require a separately pinned
+experiment. A capture carries its original read and recovery scope.
 
 Whole-Goal requirements and selected work have different sources. After final
 delivery admission, the shared typed interaction owner adds these pre-work reads
@@ -1385,9 +1355,10 @@ diagnostic targets, not permission to truncate fields or hard per-section caps:
 Counts include JSON property names, delimiters and UTF-8 text. Their sum equals
 the measured final packet; dividing each by `envelope_utf8_bytes` gives its
 share. Diagnostic detail is emitted only on overflow, not every normal Turn.
-Use the existing `quota should-run --turn-envelope` or `turn plan` JSON output
-to inspect the breakdown. Record a public-safe reproduction and compare each
-section with the same fixture on the baseline before changing its owner.
+Use `turn plan` JSON to inspect its breakdown. For a historical quota v0
+comparison, use `quota should-run --turn-envelope` with the recorded CLI
+version. Record a public-safe reproduction and compare each section with the
+same fixture on the baseline before changing its owner.
 First remove repeated presentation or move non-actionable detail to an existing
 cold read. Never trim write scope, executable arguments, signatures or required
 reads to silence a warning, and do not simply raise the target. The cold-read
@@ -1400,7 +1371,8 @@ automatic Todo, new authority, or permission to spend an extra Turn.
 
 中文：TurnEnvelope 超出 8 KiB 后产生可分析的 warning，不再仅因大小中断合法
 Turn。按最终 UTF-8 字节数统计各部分占比，先压缩重复展示内容，再检查对应规则
-所属模块；不得截断权限、签名或执行指令，也不应单纯提高预算掩盖增长。
+所属模块。历史 quota v0 对照使用原记录的 CLI 版本。不得截断权限、签名或执行
+指令，也不应单纯提高预算掩盖增长。
 身份、权限、签名和执行配额仍是硬门禁；仓库的体积与语义回归检查仍阻止交付。
 
 Hot-path fields may use explicit references when the inline value would only

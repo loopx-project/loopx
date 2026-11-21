@@ -72,7 +72,7 @@ CASES = [
     Case('monitor_route_material_guard_removed', (('loopx/control_plane/scheduler/monitor_successor.ts', replacement(
         'if ((agentTodo || userTodo) && !material)', 'if (false)')),),
          'tests/control_plane_ts/monitor_successor.test.ts', 'invalid successor intent is rejected'),
-    Case('monitor_route_rewrites_fingerprint', (('loopx/control_plane/quota/monitor_poll_commit.ts', replacement(
+    Case('monitor_route_rewrites_fingerprint', (('loopx/control_plane/quota/monitor_poll_codec.ts', replacement(
         '  monitorSuccessorIntent(result);', '  Object.assign(result, monitorSuccessorIntent(result));')),),
          'tests/control_plane_ts/quota_monitor_poll_commit.test.ts', 'preserves the legacy pending observation fingerprint'),
     Case('governance_exclusion_ignored', (('loopx/control_plane/goals/shared_goal_work.ts', replacement(
@@ -153,8 +153,8 @@ CASES.extend([
         "            if False and normalized_next_action:  # DELIBERATE MUTANT: bypass source recheck.")),),
          "tests/control_plane/test_next_action_writeback.py::test_final_commit_rechecks_relevant_source_facts[task]"),
     Case("public_refresh_writes_owned_paragraph", (("loopx/state_refresh.py", replacement(
-        "if not dry_run:\n                runs_dir.mkdir(parents=True, exist_ok=True)\n                json_path, markdown_path = reserve_unique_run_paths(runs_dir, generated_at)",
-        "if not dry_run:\n                resolved_state_file.write_text(\n                    current_text + \"\\n- \" + normalized_next_action, encoding=\"utf-8\"\n                )\n                runs_dir.mkdir(parents=True, exist_ok=True)\n                json_path, markdown_path = reserve_unique_run_paths(runs_dir, generated_at)")),),
+        "runs_dir.mkdir(parents=True, exist_ok=True)\n                json_path, markdown_path = reserve_unique_run_paths(runs_dir, generated_at)",
+        "resolved_state_file.write_text(\n                    current_text + \"\\n- \" + normalized_next_action, encoding=\"utf-8\"\n                )\n                runs_dir.mkdir(parents=True, exist_ok=True)\n                json_path, markdown_path = reserve_unique_run_paths(runs_dir, generated_at)")),),
          WRITER_TEST + "test_public_refresh_step_does_not_write_owned_paragraph"),
     Case("fence_unshared_state_lock", ((COORDINATION + "legacy_writer_fence.ts", replacement(
         "withFileMutationLock(statePath, () =>",

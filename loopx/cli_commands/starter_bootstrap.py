@@ -57,6 +57,9 @@ def handle_new_project_prompt_command(
 def handle_agent_onboard_command(
     args: argparse.Namespace,
     print_payload: PrintPayload,
+    *,
+    runtime_root_arg: str | None = None,
+    explicit_project_registry: Path | None = None,
 ) -> int:
     if bool(getattr(args, "list_agent_types", False)):
         print_payload(build_agent_type_catalog(), args.format, render_agent_type_catalog_markdown)
@@ -78,6 +81,8 @@ def handle_agent_onboard_command(
             cli_bin=args.cli_bin,
             task_text=args.task_text,
             available_capabilities=args.available_capabilities,
+            runtime_root_arg=runtime_root_arg,
+            explicit_project_registry=explicit_project_registry,
         )
     except AgentTypeError as exc:
         print_payload(exc.to_payload(), args.format, render_agent_onboarding_markdown)
@@ -91,6 +96,7 @@ def handle_loopx_bootstrap_command_pack_command(
     print_payload: PrintPayload,
     *,
     runtime_root_arg: str | None = None,
+    explicit_project_registry: Path | None = None,
 ) -> int:
     payload = build_loopx_bootstrap_command_pack(
         project=Path(args.project),
@@ -105,6 +111,7 @@ def handle_loopx_bootstrap_command_pack_command(
         capability_route=args.capability_route,
         fine_grained=bool(args.fine_grained),
         runtime_root_arg=runtime_root_arg,
+        explicit_project_registry=explicit_project_registry,
     )
     if bool(getattr(args, "message_only", False)):
         print(str(payload.get("message") or ""))
@@ -147,5 +154,7 @@ def handle_starter_bootstrap_command(
     if handler is handle_start_goal_command:
         return handler(args, print_payload, runtime_root_arg=args.runtime_root)
     if handler is handle_loopx_bootstrap_command_pack_command:
+        return handler(args, print_payload, runtime_root_arg=args.runtime_root)
+    if handler is handle_agent_onboard_command:
         return handler(args, print_payload, runtime_root_arg=args.runtime_root)
     return handler(args, print_payload)

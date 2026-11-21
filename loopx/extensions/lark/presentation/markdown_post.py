@@ -20,7 +20,7 @@ from typing import Any
 def normalize_lark_markdown_emphasis(text: str) -> str:
     """Repair paired strong spans at provider punctuation boundaries only.
 
-    This deliberately is not a new Markdown parser. The provider still owns
+    The provider still owns
     Markdown rendering. Escapes, code, link destinations, unmatched markers and
     triple-star runs remain opaque, rather than guessing their meaning.
     """

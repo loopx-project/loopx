@@ -5,6 +5,11 @@ from pathlib import Path
 
 import pytest
 
+from loopx.control_plane.effect_runtime import EffectRuntimeRejected
+from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+from loopx.control_plane.testing.action_portfolio_scenarios import (
+    external_wait_fallback_scenario_source,
+)
 from loopx.control_plane.testing.host_prompt_behavior import cases, probe_messages, run_probe
 
 
@@ -76,6 +81,57 @@ def test_oracle_boundary_allows_version_preconditions_but_rejects_answer_leakage
     assert json.loads(ScriptedClient().next_final_content(messages)) == ANSWERS[0]
     with pytest.raises(AssertionError):
         ScriptedClient().next_final_content(probe_messages("thin", cases()[0]))
+
+
+def test_fallback_probe_delivers_one_complete_source_to_both_prompt_modes(monkeypatch):
+    source = external_wait_fallback_scenario_source()
+    stop = "保留完整材料和原权限。" * 60 + "\nStop when the original authority is revoked."
+    task = source["selected_todo"]["text"] + "\n" + "不得遗漏验收要求。" * 60
+    source["goal_boundary"]["stop_condition"] = stop
+    source["selected_todo"]["text"] = task
+    monkeypatch.setattr(
+        "loopx.control_plane.testing.host_prompt_behavior.external_wait_fallback_scenario_source",
+        lambda: source,
+    )
+
+    class CompleteSourceClient(ScriptedClient):
+        def __init__(self):
+            super().__init__()
+            self.fallbacks = []
+
+        def next_final_content(self, messages):
+            packet = sent_packet(messages)
+            if packet.get("selected_todo", {}).get("todo_id") == "todo_external_wait_fallback":
+                assert_complete_turn_decision(packet)
+                assert packet["goal_boundary"]["stop_condition"] == stop
+                assert packet["selected_todo"]["text"] == task
+                self.fallbacks.append(packet)
+            return super().next_final_content(messages)
+
+    client = CompleteSourceClient()
+    report = run_probe(client, repeats=1)
+    assert report["qualification_passed"]
+    assert client.count == report["provider_call_count"] == 10
+    assert len(client.fallbacks) == 2
+    assert client.fallbacks[0] == client.fallbacks[1]
+    assert source["goal_boundary"]["stop_condition"] == stop
+    assert source["selected_todo"]["text"] == task
+
+
+@pytest.mark.parametrize("reserved", [
+    {"schema_version": "unknown_source_version"}, {"contract_binding": {}},
+])
+def test_unknown_source_binding_is_rejected_before_provider_call(monkeypatch, reserved):
+    source = external_wait_fallback_scenario_source()
+    source.update(reserved)
+    monkeypatch.setattr(
+        "loopx.control_plane.testing.host_prompt_behavior.external_wait_fallback_scenario_source",
+        lambda: source,
+    )
+    client = ScriptedClient()
+    with pytest.raises(EffectRuntimeRejected, match="reserved version/binding"):
+        run_probe(client, repeats=1)
+    assert client.count == 0
 
 
 @pytest.mark.parametrize("mutation", [

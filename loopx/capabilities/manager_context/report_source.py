@@ -1,7 +1,6 @@
 """Local portfolio IO for periodic-report, through the original scoped reader.
 
-This is an evidence source, not a scheduler, editorial agent or publication
-owner. Collection is explicit. No subscription, artifact or cursor is written.
+Collection is explicit. No subscription, artifact or cursor is written.
 """
 from __future__ import annotations
 

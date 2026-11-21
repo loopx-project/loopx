@@ -178,7 +178,7 @@ export function resolveConversationScope(input: Record<string, unknown>): Conver
     // is different and must not be manufactured by an observation adapter.
     return {kind: "unavailable", goal_ids: [], private_conversation: false};
   }
-  if (goal === "loopx-manager" && (input.origin === undefined || input.origin === "lark" || input.origin === "external" || input.origin === "web")) {
+  if (goal === "loopx-manager" && (input.origin === undefined || input.origin === "lark" || input.origin === "external" || input.origin === "web" || input.origin === "native_loopx")) {
     try {
       const selected = stewardConversationIdentity({context: input.steward_context});
       if (channel === selected.channel_id) {
@@ -220,15 +220,21 @@ export function resolveConversationScope(input: Record<string, unknown>): Conver
 export function boundConversationExecutorMatches(row: Record<string, unknown>, session: Record<string, unknown>): boolean {
   if (session.agent_id === row.executor_endpoint_id && session.executor_endpoint_id === row.executor_endpoint_id) return true;
   const allocation = session.manager_executor_allocation as Record<string, unknown> | undefined;
+  const configured = row.executor_endpoint_id;
+  if (configured !== "antigravity" && configured !== "codex") return false;
+  const fallback = configured === "antigravity" ? "codex" : "antigravity";
+  const flexiblePoolMatch =
+    (allocation?.configured_endpoint === configured && allocation.allocation_reason === "flexible_availability_fallback")
+    || (allocation?.configured_endpoint === fallback && allocation.allocation_reason === "flexible_primary_available");
   return row.context_kind === "steward" && row.audience !== "group"
-    && row.executor_endpoint_id === "antigravity" && session.agent_id === "codex"
-    && session.executor_endpoint_id === "codex" && allocation?.schema_version === "manager_executor_allocation_v0"
-    && allocation.selection_policy === "flexible" && allocation.configured_endpoint === "antigravity"
-    && allocation.executor_endpoint === "codex" && allocation.allocation_reason === "flexible_availability_fallback"
+    && session.agent_id === fallback && session.executor_endpoint_id === fallback
+    && allocation?.schema_version === "manager_executor_allocation_v0"
+    && allocation.selection_policy === "flexible"
+    && allocation.executor_endpoint === fallback && flexiblePoolMatch
     && typeof allocation.configuration_revision === "string" && allocation.configuration_revision.length > 0
     && Array.isArray(allocation.eligible_endpoints) && allocation.eligible_endpoints.length === 2
     && allocation.eligible_endpoints.includes("antigravity") && allocation.eligible_endpoints.includes("codex")
     && Array.isArray(session.upstream_context_history) && session.upstream_context_history.some(value =>
-      value && typeof value === "object" && !Array.isArray(value) && (value as Record<string, unknown>).agent_id === "antigravity"
+      value && typeof value === "object" && !Array.isArray(value) && (value as Record<string, unknown>).agent_id === configured
       && typeof (value as Record<string, unknown>).thread_id === "string");
 }

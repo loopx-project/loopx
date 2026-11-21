@@ -138,6 +138,18 @@ flowchart TD
 
 D/E are proposed capabilities, not model calls performed during each synchronous view assembly. Current work authority, capture IO, shared TypeScript projection, exact codec, and host delivery remain with their existing owners.
 
+#### Downward harness co-design: receipt-gated sampling-stack primitives (`KeepRaw` / `FoldToReceipt` / `EpochReset`)
+
+To eliminate mid-trajectory cache-busting dynamic working-set rewrites while keeping historical promotion verifiable, the shared TypeScript projection owner (`progressive_context.ts` + `context_delivery.ts` + `turn_envelope.ts`) formalizes downward harness co-design through **three receipt-gated sampling-stack primitives** (a proposed contract with `Proposal` maturity and `default-off` execution):
+
+| Primitive | Legal precondition | Prefix & KV-cache effect | Working-set & authority rule |
+| --- | --- | --- | --- |
+| `KeepRaw` | Default intra-epoch state for active obligations, unverified probes, open candidates, or ineligible ranges (§5.2) | **Monotonic append-only:** appends new eligible spans strictly at the tail of the current prefix, preserving **100% prefix KV-cache stability** across consecutive steps | Zero mid-trajectory deletion, reordering, or summary rewriting of already emitted spans |
+| `FoldToReceipt` | Candidate meets §5.2 eligibility **and** holds a deterministic settlement, capture, or verification receipt binding outcome, revision, failure cause, and exact source ref | Marks the verified historical unit folded and **queues** its compact receipt/summary entry for the next `EpochReset`, never mutating the already emitted live prefix mid-epoch | Working-set promotion is strictly **receipt-backed**; unverified model prose, self-reports, or unconfirmed proxy claims cannot trigger folding |
+| `EpochReset` | Explicit quiescent, settlement, session-resume, or compaction checkpoint (`decision_capture` + `context_delivery` epoch advance) where accumulated folded savings clear cold-prefill break-even | **Sole** transition permitted to rebase the canonical prefix (`epoch + 1`), compacting queued `FoldToReceipt` entries into a fresh immutable base prefix | Preserves original captures and exact readback refs; resets warm KV-cache prefix explicitly rather than silently mid-stride |
+
+Between any two `EpochReset` boundaries, the prefix preceding the monotonic append tail stays byte-identical (`100%` prefix KV-cache hit preservation). Upward policy layers (`{KeepRaw, FoldToReceipt, EpochReset} × {grow, switch, verify}` in [Joint Target, Yardstick and Stride Decisions](target-yardstick-stride-decisions-v0.md#policy-evolution)) may propose these transitions, while the deterministic projection owner enforces receipt verification, eligibility checks, and epoch invariance.
+
 ### 5.2 Historical eligibility
 
 V0 candidates come from existing typed attempt/result/evidence facts and bounded sources, not completion inferred from strings such as “done” or “old logs.” A candidate must meet all of the following:
@@ -202,7 +214,7 @@ The following is necessary to extend a current-turn capture into history across 
 - **Deletion and invalidation:** Declare reference validity scope and duration at publication. Normal cleanup must not break that promise early. If the owner cannot honor it, shorten the promise or do not enable that view. Explicit user deletion, revocation, and corruption must immediately affect source and summary visibility; preserving a summary cannot bypass them. An unreadable source cannot remain labeled fully expandable. Remove optional summaries; handle required dependencies under existing rules.
 - **Locator limitation:** With the current path-bound reader, a path is the locator for that profile. Do not claim transparent cross-machine recovery or automatic relocation before validating migration.
 - **Deduplication boundary:** Equal content hashes do not authorize visible reference reuse across users, Goals, or permission boundaries.
-- **Cache key:** Include scope/visibility, exact ordered sources and digests, and policy/generation versions. Do not rewrite stable summaries every turn and cause needless prefix changes.
+- **Cache key:** Include scope/visibility, exact ordered sources and digests, epoch boundary identity, and policy/generation versions. Maintain monotonic `KeepRaw` append stability within an epoch and defer dynamic working-set rewriting until an explicit `EpochReset` checkpoint so prefix KV-cache reuse stays intact across steps.
 - **Historical truth versus current applicability:** “R1 failed then” can remain true. Moving the current task from R2 to R3 requires revalidation of selection and applicability, not treating an old failure as current state or rewriting originals merely because time passed.
 - **One level first:** Future summaries of summaries must trace coverage to leaves. V0 does not implement a general DAG/GC framework.
 
@@ -218,7 +230,7 @@ Recommended observation points are the existing ended-attempt/recorded-result li
 
 ### 5.7 Composition with exact delivery
 
-The order is fixed: complete sources → legal view selection/summary → validated working view → exact full/delta → host.
+The order is fixed: complete sources and verification receipts → legal `KeepRaw` / receipt-gated `FoldToReceipt` selection → epoch-frozen working view (or explicit `EpochReset` rebase) → exact full/delta → host.
 
 The exact codec can reconstruct a derived view containing summaries; it cannot prove those summaries equivalent to original facts. A summary file cannot set host retained/complete evidence, and invalidation cannot re-run guard, create a new attempt, or repeat settlement. [LX4]
 
@@ -299,7 +311,7 @@ Measure separately:
 
 1. Independently accepted outcomes, omitted constraints, incorrect revision references, repeated failed approaches, and human intervention.
 2. LoopX projection bytes/estimated tokens, actual host input, and observable coverage; mark invisible portions unknown.
-3. Provider usage for every execution/summary/retry call: cached and uncached input, output, and later input caused by readback. Avoid counting the same usage twice.
+3. Provider usage for every execution/summary/retry call: explicitly separate `cached_prefix_tokens` (warm KV-cache hits along stable `KeepRaw` prefixes) from `uncached_input_tokens` (cold-prefill starts, cache-TTL misses, or `EpochReset` prefix rebuilds), output tokens, and later input caused by readback. Report cold-versus-warm KV-cache regimes separately and avoid counting the same usage twice.
 4. Summary preparation, reads, retries, overall wall time, and tail latency.
 5. Source disk use, retention duration, and cleanup/recovery overhead.
 

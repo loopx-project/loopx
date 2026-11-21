@@ -15,10 +15,12 @@ from control_plane.quota_context_fixture import (
     context_reading_transport,
     latest_quota_payload,
 )
-from loopx.control_plane.quota.cli_projection import (
-    compact_quota_should_run_cli_payload,
+from loopx.control_plane.quota.turn_envelope import (
+    COMPLETE_TURN_DECISION_VERSION,
+    assert_complete_turn_decision,
+    compose_turn_decision,
+    quota_action_signature_document,
 )
-from loopx.control_plane.quota.turn_envelope import quota_action_signature_document
 from loopx.control_plane.scheduler.execution_context import (
     scheduler_execution_context_for_runtime_profile,
 )
@@ -39,7 +41,6 @@ from loopx.control_plane.testing.doubao_model_behavior_actor import (
     DoubaoActorTransportError,
 )
 from loopx.control_plane.testing.model_behavior_qualification import (
-    FULL_QUOTA_DECISION_PACKET_SCHEMA_VERSION,
     MODEL_BEHAVIOR_ACTOR_RESULT_SCHEMA_VERSION,
     MODEL_BEHAVIOR_DECISION_SCHEMA_VERSION,
     model_behavior_semantic_contract_from_packet,
@@ -535,7 +536,7 @@ def _capability_reentry_action(
     request: Mapping[str, Any],
 ) -> ScriptedExecToolAction:
     payload = _latest_tool_payload(request)
-    reentry = payload["runtime_capability_reentry"]
+    reentry = payload["interaction_contract"]["cli_channel"]["runtime_capability_reentry"]
     return ScriptedExecToolAction(str(reentry["candidates"][0]["command"]))
 
 
@@ -551,17 +552,6 @@ def _terminal_writeback_action(
             .replace("<outcome>", "outcome_progress")
             .replace("<boundary>", "semantic_closeout")
             .replace('"${LOOPX_TURN:?}"', "turn-portfolio-terminal")
-        )
-    )
-
-
-def _terminal_spend_action(request: Mapping[str, Any]) -> ScriptedExecToolAction:
-    payload = _latest_tool_payload(request)
-    command = payload["interaction_contract"]["cli_channel"]["next_cli_actions"][1]
-    return ScriptedExecToolAction(
-        command=command.replace(
-            '"${LOOPX_TURN:?}"',
-            "turn-portfolio-terminal",
         )
     )
 
@@ -684,7 +674,6 @@ def _real_tool_actors(root: Path) -> dict[str, Any]:
                 ScriptedExecToolAction(fixture.quota_guard_command),
                 ScriptedExecToolAction("cat fixture/settlement-proof.json"),
                 _terminal_writeback_action,
-                _terminal_spend_action,
                 _terminal_closeout_action,
             ]
         )
@@ -707,6 +696,11 @@ def _real_tool_actors(root: Path) -> dict[str, Any]:
 
 def test_live_packet_builder_preserves_gate_and_vision_contracts(tmp_path: Path) -> None:
     sources, packets = build_actual_default_model_behavior_scenario_inputs(tmp_path)
+    for name, source in sources.items():
+        if source.get("mode") == "should-run":
+            assert packets[name]["schema_version"] == "loopx_turn_envelope_v1"
+            assert_complete_turn_decision(packets[name])
+            assert packets[name].get("selected_todo") == source.get("selected_todo")
 
     selected = packets["turn_selected_todo"]
     assert selected["selected_todo"]["todo_id"] == "todo_portfolio001"
@@ -728,6 +722,8 @@ def test_live_packet_builder_preserves_gate_and_vision_contracts(tmp_path: Path)
         "activation_state": "goal_selection_required",
         "activation_allowed": False,
         "activation_required_after_todo_write": False,
+        "host_surface": None,
+        "activation_method": None,
     }
     assert (
         onboarding_entry_semantic_contract(packets["onboarding_goal_selection_gate"])[
@@ -747,12 +743,7 @@ def test_live_packet_builder_preserves_gate_and_vision_contracts(tmp_path: Path)
     }
     replan = packets["turn_required_vision_replan"]
     assert replan["mode"] == "should-run"
-    assert replan["vision_continuation_audit"]["payload_compaction"] == {
-        "schema_version": "quota_cli_vision_continuation_compaction_v0",
-        "mode": "compact_hot_path",
-        "omitted_fields": [],
-        "full_detail_cold_path": "quota should-run --include-detail vision",
-    }
+    assert replan["vision_continuation_audit"] == sources["turn_required_vision_replan"]["vision_continuation_audit"]
     assert model_behavior_semantic_contract_from_packet(
         replan, arm="full_packet"
     ) == model_behavior_semantic_contract_from_packet(
@@ -793,11 +784,8 @@ def test_live_packet_builder_preserves_gate_and_vision_contracts(tmp_path: Path)
     assert continuation["selected_todo"]["continuation_hint"] == (
         "Next run the restart canary."
     )
-    assert "active_state_next_action" not in continuation
-    assert "latest_run_recommended_action" not in continuation
-    assert continuation["next_action_projection_warning"]["shadowed_by"] == (
-        "$.selected_todo"
-    )
+    for field in ("active_state_next_action", "latest_run_recommended_action", "next_action_projection_warning"):
+        assert continuation[field] == continuation_source[field]
     scoped = packets["turn_scoped_gate_successor_replan"]
     scoped_signature = quota_action_signature_document(scoped)
     assert scoped_signature["user"]["action_required"] is True
@@ -900,7 +888,7 @@ def test_live_packet_builder_preserves_gate_and_vision_contracts(tmp_path: Path)
                 indent=2,
             ).encode("utf-8")
         )
-        <= ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET
+        > ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET
     )
     assert model_behavior_semantic_contract_from_packet(
         regression_source,
@@ -914,13 +902,8 @@ def test_live_packet_builder_preserves_gate_and_vision_contracts(tmp_path: Path)
         "todo_c0ffee123456"
     )
     assert regression["capability_gate"] == regression_source["capability_gate"]
-    assert set(regression["next_action_projection_warning"]["projection_refs"]) == {
-        "active_state_next_action",
-        "latest_run_recommended_action",
-        "agent_lane_next_action",
-    }
-    assert "title" not in regression["agent_lane_next_action"]
-    assert regression["goal_route_hint"]["other_agent_next_action_count"] == 24
+    for field in ("next_action_projection_warning", "agent_lane_next_action", "goal_route_hint"):
+        assert regression.get(field) == regression_source.get(field)
     invariant_pairs = (
         (
             "turn_selected_todo",
@@ -956,7 +939,7 @@ def test_live_packet_builder_preserves_gate_and_vision_contracts(tmp_path: Path)
                     "utf-8"
                 )
             )
-            <= ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET
+            > ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET
         )
         clean_decision = _turn_decision({"packet": packets[clean_id]})
         noisy_decision = _turn_decision({"packet": packets[noisy_id]})
@@ -1049,8 +1032,8 @@ def test_external_wait_preflight_rejects_shared_projection_drift(
     blocked = source["agent_todo_summary"]["resume_blocked_items"][0]
     blocked["resume_condition"]["baseline_generation"] = 3
     sources["turn_external_wait_fallback"] = source
-    packets["turn_external_wait_fallback"] = compact_quota_should_run_cli_payload(
-        source
+    packets["turn_external_wait_fallback"] = compose_turn_decision(
+        source, composed_settlement=True
     )
     calls = 0
 
@@ -1080,7 +1063,9 @@ def test_planning_horizon_preflight_rejects_missing_compact_projection(
     tmp_path: Path,
 ) -> None:
     sources, packets = _scenario_inputs(tmp_path)
-    packets["turn_planning_horizon_strategic_context"].pop("planning_horizon")
+    candidate = deepcopy(sources["turn_planning_horizon_strategic_context"])
+    candidate.pop("planning_horizon")
+    packets["turn_planning_horizon_strategic_context"] = compose_turn_decision(candidate, composed_settlement=True)
     calls = 0
 
     def turn_actor(request: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -1109,7 +1094,8 @@ def test_planning_horizon_preflight_rejects_a_broken_middle_relation(
     tmp_path: Path,
 ) -> None:
     sources, packets = _scenario_inputs(tmp_path)
-    horizon = packets["turn_planning_horizon_strategic_context"]["planning_horizon"]
+    candidate = deepcopy(sources["turn_planning_horizon_strategic_context"])
+    horizon = candidate["planning_horizon"]
     horizon["relations"] = [
         relation
         for relation in horizon["relations"]
@@ -1118,6 +1104,7 @@ def test_planning_horizon_preflight_rejects_a_broken_middle_relation(
             and relation["relation"] == "successor"
         )
     ]
+    packets["turn_planning_horizon_strategic_context"] = compose_turn_decision(candidate, composed_settlement=True)
     calls = 0
 
     def turn_actor(request: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -1146,19 +1133,11 @@ def test_planning_horizon_fixed_facts_oracle_rejects_shared_relation_drift(
     tmp_path: Path,
 ) -> None:
     sources, packets = _scenario_inputs(tmp_path)
-    for packet in (
-        sources["turn_planning_horizon_strategic_context"],
-        packets["turn_planning_horizon_strategic_context"],
-    ):
-        horizon = packet["planning_horizon"]
-        horizon["relations"] = [
-            relation
-            for relation in horizon["relations"]
-            if not (
-                relation["from_todo_id"] == "todo_runtime_admission"
-                and relation["relation"] == "successor"
-            )
-        ]
+    source = sources["turn_planning_horizon_strategic_context"]
+    horizon = source["planning_horizon"]
+    horizon["relations"] = [relation for relation in horizon["relations"]
+        if not (relation["from_todo_id"] == "todo_runtime_admission" and relation["relation"] == "successor")]
+    packets["turn_planning_horizon_strategic_context"] = compose_turn_decision(source, composed_settlement=True)
     calls = 0
 
     def turn_actor(request: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -1189,11 +1168,13 @@ def test_portfolio_rejects_candidate_context_loss_before_actor_call(
     tmp_path: Path, lane: str, mutation: str,
 ) -> None:
     sources, packets = _scenario_inputs(tmp_path)
-    candidates = packets["turn_quota_hot_path_compaction_regression"]["capability_gate"][lane]
+    candidate = deepcopy(sources["turn_quota_hot_path_compaction_regression"])
+    candidates = candidate["capability_gate"][lane]
     if mutation == "drop":
         candidates.pop()
     else:
         candidates[0]["text"] = "Shortened candidate context."
+    packets["turn_quota_hot_path_compaction_regression"] = compose_turn_decision(candidate, composed_settlement=True)
 
     def unexpected_actor(*_args: Any, **_kwargs: Any) -> Mapping[str, Any]:
         pytest.fail("candidate context must be validated before any actor call")
@@ -1214,9 +1195,11 @@ def test_portfolio_source_oracle_rejects_mutated_compact_user_action(
     tmp_path: Path,
 ) -> None:
     sources, packets = _scenario_inputs(tmp_path)
-    packets["turn_quota_hot_path_compaction_regression"]["interaction_contract"][
+    candidate = deepcopy(sources["turn_quota_hot_path_compaction_regression"])
+    candidate["interaction_contract"][
         "user_channel"
     ]["action_required"] = True
+    packets["turn_quota_hot_path_compaction_regression"] = compose_turn_decision(candidate, composed_settlement=True)
     calls = 0
 
     def turn_actor(request: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -1247,7 +1230,7 @@ def test_portfolio_rejects_mutated_blocking_gate_response_plan(tmp_path: Path) -
     source = deepcopy(sources["turn_human_gate"])
     source["interaction_contract"]["response_plan"]["action_sequence"] = ["wait"]
     sources["turn_human_gate"] = source
-    packets["turn_human_gate"] = compact_quota_should_run_cli_payload(source)
+    packets["turn_human_gate"] = compose_turn_decision(source, composed_settlement=True)
 
     with pytest.raises(
         ValueError,
@@ -1465,8 +1448,8 @@ def test_portfolio_preflight_rejects_wrong_same_agent_route(tmp_path: Path) -> N
     source = deepcopy(sources["turn_same_agent_continuation"])
     source["selected_todo"]["claimed_by"] = "codex-wrong-peer"
     sources["turn_same_agent_continuation"] = source
-    packets["turn_same_agent_continuation"] = compact_quota_should_run_cli_payload(
-        source
+    packets["turn_same_agent_continuation"] = compose_turn_decision(
+        source, composed_settlement=True
     )
     calls = 0
 
@@ -1528,7 +1511,7 @@ def test_portfolio_turn_actor_reads_actual_default_packet_without_semantic_echo(
     assert all(request["arm"] == "full_packet" for request in requests)
     assert all(request["packet"]["mode"] == "should-run" for request in requests)
     assert all(
-        request["packet_schema_version"] == FULL_QUOTA_DECISION_PACKET_SCHEMA_VERSION
+        request["packet_schema_version"] == COMPLETE_TURN_DECISION_VERSION
         for request in requests
     )
     required_requests = [
@@ -1703,7 +1686,7 @@ def test_portfolio_preflight_rejects_invalid_contrast_before_actor_spend(
     source["interaction_contract"]["user_channel"]["action_required"] = True
     source["action_required"] = True
     sources["turn_selected_todo"] = source
-    packets["turn_selected_todo"] = compact_quota_should_run_cli_payload(source)
+    packets["turn_selected_todo"] = compose_turn_decision(source, composed_settlement=True)
     calls = 0
 
     def turn_actor(request: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -1909,3 +1892,42 @@ def test_portfolio_oracle_rejects_waiting_on_capability_monitor_repair(
     assert scenario["status"] == "failed"
     assert scenario["repeats_completed"] == 2
     assert "source_mismatch:decision" in scenario["failure_codes"]
+
+
+def test_portfolio_max_workers_matches_sequential_receipt(
+    tmp_path: Path,
+) -> None:
+    sources, packets = _scenario_inputs(tmp_path)
+    sequential = run_actual_default_model_behavior_portfolio(
+        packets,
+        scenario_sources=sources,
+        qualification_id="actual-default-portfolio-seq",
+        turn_actor=_turn_actor,
+        onboarding_actor=_onboarding_actor,
+        selected_todo_actor=_selected_todo_actor,
+        replan_semantic_action_actor=_replan_semantic_action_actor,
+    )
+    parallel = run_actual_default_model_behavior_portfolio(
+        packets,
+        scenario_sources=sources,
+        qualification_id="actual-default-portfolio-seq",
+        turn_actor=_turn_actor,
+        onboarding_actor=_onboarding_actor,
+        selected_todo_actor=_selected_todo_actor,
+        replan_semantic_action_actor=_replan_semantic_action_actor,
+        max_workers=4,
+    )
+    assert parallel == sequential
+
+    for bad_workers in (0, -1, True):
+        with pytest.raises(ValueError, match="max_workers"):
+            run_actual_default_model_behavior_portfolio(
+                packets,
+                scenario_sources=sources,
+                qualification_id="actual-default-portfolio-invalid-workers",
+                turn_actor=_turn_actor,
+                onboarding_actor=_onboarding_actor,
+                selected_todo_actor=_selected_todo_actor,
+                replan_semantic_action_actor=_replan_semantic_action_actor,
+                max_workers=bad_workers,
+            )

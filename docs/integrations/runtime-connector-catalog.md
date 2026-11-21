@@ -104,8 +104,7 @@ original response/idle/hard deadline. Waiting for another native writer consumes
 that allowance before acquiring the Goal fence; there is no separate one-second
 ceiling on a healthy send. Backpressure or an interrupted partial send cancels and reaps the same
 native peer and drains the writer before releasing the fence; it cannot leave
-a sender to deliver that Turn after Stop. This is a dispatch timeout, not proof
-of non-acceptance or permission to replay. Successful large and Unicode inputs
+a sender to deliver that Turn after Stop. This is a dispatch timeout. Successful large and Unicode inputs
 retain the full original text stream; no new input-size truncation is applied.
 If current admission consumes the remaining request deadline before a writer
 starts, the Session owner still retires that same peer inside the launch fence.
@@ -177,7 +176,7 @@ creates no model Turn or quota debit.
 
 This full decision callback is qualified for executable legacy local, source
 and source-to-global routes. Source-session admission retains its separate
-lifecycle-only boundary; this qualification does not enable its CLI execution.
+lifecycle-only boundary.
 Benchmark `plain`, `native-goal` and `loopx-goal` modes keep their existing owners
 and are outside this quota callback. Restoring an archived checkpoint uses the
 destination Goal's current guard, without importing the source Goal's claims,
@@ -267,9 +266,7 @@ guessed or rebound, and the durable attempt is never rewritten by this upgrade.
 
 普通存活轮询可以创建缺失的回执，但不能覆盖无法读取的回执。损坏的 JSON、
 UTF-8、schema 或 Goal 关联仍保留在原位置，观察写入明确失败，当前 quota 判断
-正常返回，页面继续显示未知。原 worker 可从持久 attempt 恢复观测，
-但这不证明原操作已经结束，
-也不允许再次派发。
+正常返回，页面继续显示未知。原 worker 可从持久 attempt 恢复观测。
 新观测绑定完整 source Goal 和原注册表路径，正常同步到 global 后仍可显示原
 Agent、义务和观测时间。同步时间变化不改变该来源；来源、实例、配置或运行环境
 真正变化时仍显示过期/未知。旧记录沿用原关联检查，不把缺失的来源证明补造成权限。

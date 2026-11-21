@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..capabilities.progress_review.context import external_progress_review_context
 from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.effect_program import SettlementIdentity
 from ..control_plane.quota.error_codes import HeartbeatReceiptIdentityConflictError
@@ -20,7 +21,7 @@ from ..control_plane.quota.heartbeat_receipt import (
 )
 from ..file_lock import LockAcquireTimeoutError
 from ..rollout_event_log import RolloutAppendPreconditionChanged
-from .quota_capture import native_context_activation
+from .quota_presentation import is_undeclared_json_quota_caller
 
 if TYPE_CHECKING:
     from .quota_action_selection import RequestedQuotaActionSelection
@@ -53,7 +54,9 @@ def dispatch_quota_turn_start_hooks(
     runtime_root_arg: str | None,
     lark_turn_start_hook_dispatcher: Callable[..., dict[str, object]] | None = None,
 ) -> tuple[dict[str, object] | None, bool]:
-    quota_module._export("validate_quota_command_context_request")(args)
+    _, scheduler_context, _ = quota_module._export(
+        "validate_quota_command_context_request"
+    )(args)
     if args.quota_command != "should-run":
         return None, False
     preview = bool(getattr(args, "dry_run", False))
@@ -98,7 +101,7 @@ def dispatch_quota_turn_start_hooks(
         # hooks observe existing context without recording reads or delivery.
         model_read = (
             not getattr(args, "scheduler_observation", False)
-            and native_context_activation(args)["progressive_enabled"]
+            and not is_undeclared_json_quota_caller(args, scheduler_context)
         )
         context_dispatch = dispatch_turn_start_hooks(
             (
@@ -370,21 +373,18 @@ def execute_quota_should_run(
         agent_id=args.agent_id,
         todo_id=args.todo_id,
     )
-    progressive = (
+    complete_context = (
         not getattr(args, "scheduler_observation", False)
-        and native_context_activation(args)["progressive_enabled"]
+        and not is_undeclared_json_quota_caller(args, scheduler_context)
     )
     payload = export("build_live_quota_should_run_decision")(
         status_payload,
         goal_id=args.goal_id,
         agent_id=args.agent_id,
-        inline_goal_source=progressive,
+        inline_goal_source=complete_context,
         available_capabilities=args.available_capabilities,
         include_scheduler_detail="scheduler" in detail_sections,
-        include_agent_todo_detail=(
-            "agent-todos" in detail_sections
-            and not bool(getattr(args, "turn_envelope", False))
-        ),
+        include_agent_todo_detail="agent-todos" in detail_sections,
         codex_app_current_rrule=args.app_automation_current_rrule,
         registry_path=registry_path,
         runtime_root=runtime_root,
@@ -394,6 +394,7 @@ def execute_quota_should_run(
         bounded_research_frontier_projector=export(
             "project_live_explore_composition_frontier"
         ),
+        progress_review_context_reader=external_progress_review_context,
         receipt_bound_todo_id=action_selection.receipt_bound_todo_id,
         requested_action_todo_id=action_selection.requested_todo_id_for_decision,
         receipt_bound_replan_obligation_id=(
@@ -406,9 +407,7 @@ def execute_quota_should_run(
         interaction_projection_hooks=interaction_projection_hooks,
         turn_start_hook_dispatch=turn_start_hook_dispatch,
         turn_context_projector=context_projector,
-        context_navigation=(
-            progressive and not bool(getattr(args, "turn_envelope", False))
-        ),
+        context_navigation=complete_context,
         goal_ref=goal_ref,
     )
     execution.payload = payload
@@ -471,6 +470,7 @@ def execute_quota_should_run(
                 turn_instance_id=heartbeat_turn_id,
                 existing=execution.heartbeat_receipt_existing,
                 goal_ref=goal_ref,
+                scheduler_execution_context=context.scheduler_context,
             )
         else:
             (

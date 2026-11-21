@@ -299,7 +299,7 @@ export function projectReceiptBoundWait(value: unknown): JsonObject {
       request.replay_phase === "settlement_pending" &&
       progress?.schema_version === "quota_settlement_progress_v0";
   if (completedSettlement && writebackRequired) {
-    const reason = "The original Todo's completion is verified, but its Turn still owes durable writeback and settlement. Record only the validated original result, then spend once for that same identity. Inspect existing effects before retrying; do not repeat completed work, invent a successor, or rebind this Turn.";
+    const reason = "The original Todo's completion is verified, but its Turn still owes durable writeback and settlement. Inspect existing effects before retrying. Use the returned command to record only the validated original result and settle that same identity. Do not repeat completed work, invent a successor, or rebind this Turn.";
     return boundRecovery(request, "durable_writeback", reason);
   }
   if (todo.archive_state !== "active" && !completedSettlement) return {status: "none"};
@@ -336,7 +336,7 @@ export function projectReceiptBoundWait(value: unknown): JsonObject {
       writebackRequired && request.replay_phase === "open" &&
       admittedBusinessResult(request) && externalWait &&
       !runnableTimerAtAdmission(request, todo, resumeWhen!)) {
-    const reason = "The original admitted Turn still owes durable writeback. Its later external wait cannot discard that identity. Inspect existing effects and record only the validated original result, then settle once under the original identity. Keep the wait unchanged; do not repeat business work, select a successor, or invent a retry clock.";
+    const reason = "The original admitted Turn still owes durable writeback. Its later external wait cannot discard that identity. Inspect existing effects, then use the returned command to record only the validated original result and settle that same identity. Keep the wait unchanged. Do not repeat business work, select a successor, or invent a retry clock.";
     return boundRecovery(request, "durable_writeback", reason);
   }
   if (!["open", "deferred"].includes(String(todo.status)) ||

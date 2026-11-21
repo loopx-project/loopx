@@ -163,7 +163,7 @@ def apply_context_machine_options(
     if command == "should-run" and args.format == "json":
         args._progressive_context_runtime = str(runtime_root.expanduser().resolve())
     if command != "context-read" and not enabled:
-        return  # Stateless presentation needs neither a journal nor native setup.
+        return
     if (heartbeat and explicit != "on" and any(getattr(args, field, False) for field in ("brief", "compact", "full"))
             and not any(getattr(args, field, None) for field in ("codex_context_dir", "codex_context_root",
                 "decision_output_dir", "decision_output_root", "decision_handoff_socket"))):

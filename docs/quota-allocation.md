@@ -1205,7 +1205,10 @@ an external-evidence observation, or a due `continuous_monitor` todo selected
 by `work_lane_contract.obligation=attempt_due_monitor`. For due monitor todos,
 pass `--todo-id` or `--target-key` plus a public `--result-hash`; unchanged
 polls update `last_checked_at`, `next_due_at`, and
-`consecutive_no_change` without appending `quota_slot_spent`:
+`consecutive_no_change` without appending `quota_slot_spent`.
+For an `attempt_due_monitor` lane, a target key identifies the selected Todo.
+To observe another due Monitor claimed by the same Agent, supply its exact
+`--todo-id`. Existing User gates and Turn bindings still apply.
 
 ```bash
 loopx quota monitor-poll --goal-id <GOAL_ID> \
@@ -1798,6 +1801,11 @@ trigger uses a fresh Turn identity to evaluate the live frontier; it never
 re-executes or spends for the closed Turn. Native Goal runtimes continue to that
 fresh guard instead of blocking the Goal. Explicit Goal stop or quota pause
 still takes precedence. Actual fresh-Turn waits retain their existing backoff.
+New scheduler decisions expose App cadence, applicability, and follow-up
+commands only under `scheduler_hint.app_automation`. This includes shutdown,
+minimum-interval waits, and the explicit unavailable state for schedulers owned
+outside the App. A saved decision retains its original representation. Older
+Codex state still uses its recorded state key when it is the selected authority.
 For Codex App and local schedulers, `recommended_interval_minutes` is the next
 target interval. For Codex App heartbeats, `recommended_rrule` is emitted only
 when `app_automation.stateful_backoff.apply_needed=true`; if the desired RRULE is
@@ -1823,10 +1831,16 @@ CLI-produced ACK hints bind that argument vector to the exact registry and
 effective runtime root that produced `quota should-run`. Hosts must execute the
 complete vector; stripping its leading global options can route a
 project-launched ACK into project-local scheduler state instead of the shared
-control plane. `fallback_hint.cli_args` receives the same registry binding, and
-its `--turn-instance-id` value is always the reference the current host shell can
-expand: `"${LOOPX_TURN:?}"` on POSIX and `$LOOPX_TURN` on native Windows, so a
-PowerShell host does not replay an empty Turn. When the decision is
+control plane. `fallback_hint.cli_args` receives the same registry and runtime
+root bindings. The bridge reads `scheduler_hint.app_automation` from the
+complete decision. It accepts a legacy `codex_app` packet from an earlier CLI
+version. An executable-bound guard also passes its selected CLI to the
+bridge. When that installation ships an executable POSIX fallback launcher
+beside the CLI, the command also names that launcher. For older saved commands
+without a runtime root, the registry route supplies it. When the Turn is still
+expressed as a shell variable, the
+fallback's `--turn-instance-id` uses `"${LOOPX_TURN:?}"` on POSIX and
+`$LOOPX_TURN` on native Windows. When the decision is
 heartbeat-receipted, ACK, failure, and fallback hints also bind the originating
 concrete `turn_instance_id`, and `fallback_hint.route_binding.turn_instance_bound`
 records whether that binding is present. The follow-up rebuilds the same
@@ -2107,7 +2121,7 @@ Codex turn actually consumes quota. The smallest public-safe event is
 ```
 
 The public fixture is
-[`examples/quota-slot-spend-event.example.json`](https://github.com/huangruiteng/loopx/blob/main/examples/quota-slot-spend-event.example.json).
+[`examples/quota-slot-spend-event.example.json`](https://github.com/loopx-project/loopx/blob/main/examples/quota-slot-spend-event.example.json).
 
 Validation rule:
 

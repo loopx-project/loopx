@@ -28,13 +28,6 @@ def agent_runtime_model_for_goal(goal: Mapping[str, Any] | None) -> AgentRuntime
     return AgentRuntimeModel.PEER_V1
 
 
-def agent_identity_is_peer(agent_identity: Mapping[str, Any] | None) -> bool:
-    return bool(
-        isinstance(agent_identity, Mapping)
-        and agent_identity.get("agent_model") == AgentRuntimeModel.PEER_V1.value
-    )
-
-
 def normalized_peer_agent_ids(values: Iterable[Any]) -> list[str]:
     agents = sorted(
         {

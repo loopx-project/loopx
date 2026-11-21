@@ -439,7 +439,9 @@ def test_inline_reentry_reads_gates_changed_after_choice_receipt(
 
 
 @pytest.mark.parametrize("discovery", [False, True])
-def test_first_inline_result_has_matching_turn_envelope(tmp_path, discovery):
+def test_first_inline_result_binds_the_complete_replan_contract(tmp_path, discovery):
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_selected_todo_replan_fixture(project, registry)
     _initialize_fixture_authority(project, runtime, provider="sqlite")
@@ -450,17 +452,22 @@ def test_first_inline_result_has_matching_turn_envelope(tmp_path, discovery):
     if discovery:
         rc, first = _run_cli(registry, runtime, *guard)
         assert rc == 0 and first["interaction_contract"]["cli_channel"]["selection_required"]
-    rc, envelope = _run_cli(registry, runtime, *guard,
+    rc, decision = _run_cli(registry, runtime, *guard,
                             "--todo-id", SELECTED_REPLAN_TODO_ID, "--turn-envelope")
-    assert rc == 0, envelope
-    assert envelope["action_signature"]["matches"] is True
-    contract = envelope["contract_capsule"]["interaction_contract"]
+    assert rc == 0, decision
+    assert_complete_turn_decision(decision)
+    contract = decision["interaction_contract"]
     assert contract["mode"] == "autonomous_replan"
-    assert envelope["action"]["must_attempt"] is True
-    assert envelope["contract_capsule"]["execution_obligation"]["kind"] == "autonomous_replan_required"
-    binding = envelope["writeback"]["replan_settlement_contract"]["settlement_binding"]
+    assert contract["agent_channel"]["must_attempt"] is True
+    assert contract["agent_channel"]["delivery_allowed"] is False
+    assert decision["execution_obligation"]["kind"] == "autonomous_replan_required"
+    channel = contract["cli_channel"]
+    binding = channel["replan_settlement_contract"]["settlement_binding"]
     assert binding == {"kind": "todo", "id": SELECTED_REPLAN_TODO_ID, "cli_argument": "--todo-id"}
-    assert envelope["writeback"]["spend_allowed_now"] is False
+    identity = channel["settlement_plan"]["identity"]
+    assert identity == decision["heartbeat_receipt"]["settlement_identity"]
+    assert identity["todo_id"] == SELECTED_REPLAN_TODO_ID and identity["turn_instance_id"] == turn
+    assert channel["spend_allowed_now"] is False
     assert _heartbeat_receipt_count(runtime, turn) == (3 if discovery else 1)
     assert _spend_run_count(runtime) == 0
 

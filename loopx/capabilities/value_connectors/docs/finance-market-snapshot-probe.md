@@ -41,5 +41,4 @@ or private portfolio, provide investment advice, trade, or start a continuous
 watch.
 
 Historical source and freshness findings remain lineage only under the
-`finance_market_snapshot_probe_packet_v0` evidence id. They are not a current
-source recommendation or proof that any provider endpoint is safe to automate.
+`finance_market_snapshot_probe_packet_v0` evidence id.

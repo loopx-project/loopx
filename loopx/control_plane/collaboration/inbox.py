@@ -603,15 +603,3 @@ def reply_status(root, row, *, include_result_key=None, observe_result=None):
             item["verification"] = "reconciled_after_restart"
         result.append(item)
     return result
-
-
-def prior_result_delivered(path, reply):
-    """Ordered transport: a newer update cannot race an uncertain earlier send."""
-    from ..effect_runtime import effect_runtime_result
-
-    previous = reply.get("previous_result_key")
-    state_path = path.with_name(previous + ".delivery.json") if previous else None
-    delivery = _read(state_path) if state_path and state_path.exists() else None
-    return effect_runtime_result("collaboration.result.delivery_ready", {
-        "result": reply, "previous_delivery": delivery,
-    })["ready"]

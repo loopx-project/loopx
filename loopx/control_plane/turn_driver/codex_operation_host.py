@@ -25,6 +25,7 @@ from ..goals.first_party_host_admission import (
 from . import managed_operation_host as operations
 from .codex_cli import (
     _checked_prompt_context,
+    collaboration_mcp_turn_environment,
     normalize_codex_stdio_mcp_server,
     prepare_codex_cli_input,
     normalize_codex_result,
@@ -112,12 +113,16 @@ def run_codex_operation_host(
         model=model, reasoning_effort=reasoning_effort,
         confirmed_operation_id=confirmed_operation_id,
     )
+    mcp_turn_environment = collaboration_mcp_turn_environment(
+        mcp_server, turn_key=request["turn_key"], lineage=lineage, project=project,
+    )
     host_config = (
         {
             "mcp_servers": {
                 mcp_server["name"]: {
                     "command": mcp_server["command"][0],
                     "args": mcp_server["command"][1:],
+                    **({"env": mcp_turn_environment} if mcp_turn_environment else {}),
                     "enabled": True,
                     "required": True,
                     "default_tools_approval_mode": "approve",

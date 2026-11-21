@@ -33,6 +33,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -628,10 +629,11 @@ def _host_attempt(state: dict[str, Any], scope: str) -> dict[str, Any]:
 
 
 def _host_result(result: CappedProcessResult, attempt: dict[str, Any], now: float) -> dict[str, Any] | None:
-    """Consume only the configured Host's content-free failure receipt."""
+    """Decode native IO; the typed owner qualifies success and same-session failure."""
+    from loopx.control_plane.effect_runtime import effect_runtime_result
     from loopx.control_plane.turn_driver.codex_sessions import _valid_session_id
     from loopx.control_plane.turn_driver.host_failure import (
-        build_host_failure_record, normalize_host_failure_record,
+        normalize_host_failure_record,
     )
 
     try:
@@ -646,23 +648,29 @@ def _host_result(result: CappedProcessResult, attempt: dict[str, Any], now: floa
                   if session.get("binding_scope") == "agent" and isinstance(candidate, str) else None)
     if session_id != candidate:
         session_id = None
-    same_session = not attempt.get("session_id") or attempt["session_id"] == session_id
-    if (result.failure_kind is None and result.returncode == 0 and receipt.get("ok") is True
-            and not receipt.get("timed_out") and not receipt.get("error_kind")
-            and "host_failure" not in receipt and session_id and same_session):
+    # Native record decoding retains the existing Mapping API and error
+    # ordering. No provider prose or unbounded receipt fields cross the RPC.
+    try:
+        native_failure = normalize_host_failure_record(receipt.get("host_failure"))
+    except (ValueError, TypeError):
+        native_failure = None
+    count = attempt["attempt"]
+    observed = effect_runtime_result("host_failure.observe", {
+        "session_id": session_id, "prior_session_id": attempt.get("session_id") or None,
+        "ok": receipt.get("ok") if type(receipt.get("ok")) is bool else None,
+        "timed_out": bool(receipt.get("timed_out")), "error_kind": bool(receipt.get("error_kind")),
+        "has_host_failure": "host_failure" in receipt, "native_failure": native_failure,
+        "transport_ok": result.failure_kind is None, "exit_zero": result.returncode == 0,
+        "attempt_text": format(Decimal(int(count)), "f") if isinstance(count, int) and not isinstance(count, bool) else None,
+    })
+    if not isinstance(observed, dict) or "failure" not in observed:
+        raise RuntimeError("Native Host observation is unavailable")
+    failure = observed["failure"]
+    if failure is None:
         return None
-    kind = "unknown"
-    if (result.failure_kind is None and result.returncode != 0 and receipt.get("ok") is False
-            and not receipt.get("timed_out") and not receipt.get("error_kind") and same_session):
-        try:
-            failure = normalize_host_failure_record(receipt.get("host_failure"))
-            if failure["attempt"] == 1:
-                kind = failure["kind"]
-        except (ValueError, TypeError):
-            pass
-    failure = build_host_failure_record(kind, attempt=attempt["attempt"])
+    failure["attempt"] = count
     return {**attempt, "status": "failed", "host_failure": failure,
-            "session_id": attempt.get("session_id") or session_id,
+            "session_id": observed["session_id"],
             "not_before": now + failure.get("retry", {}).get("backoff_seconds", 0)}
 
 

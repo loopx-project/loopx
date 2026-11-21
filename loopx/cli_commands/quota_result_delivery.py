@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Mapping
-from os import getenv
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.error_codes import (
     QuotaCommandValidationError,
     QuotaDecisionTransportError,
 )
 from ..control_plane.turn_driver.decision_capture import (
+    context_capture_read_command,
     project_captured_context,
 )
 from .quota_capture import (
@@ -24,11 +23,11 @@ from .quota_capture import (
     native_context_activation,
     progressive_context_or_current,
     project_native_quota_context,
+    quota_context_surface,
     settlement_capture_failure_view,
 )
 from .quota_presentation import (
-    _compose_explicit_turn_context,
-    _project_native_cli_settlement,
+    compose_quota_work_contract,
     _project_quota_cli_payload,
     _quota_renderer,
     project_scheduler_observation,
@@ -82,9 +81,9 @@ def prepare_quota_result_context(
     *,
     registry_path: Path,
     heartbeat_turn_id: str | None,
-    capture_directory: Path | None,
+    attach_recall: bool = True,
 ) -> tuple[dict[str, object], dict[str, Any]]:
-    """Prepare current settlement and capability binding before publishing it."""
+    """Resolve presentation and optionally attach recall before composition."""
     try:
         activation = native_context_activation(args)
     except QuotaCommandValidationError:
@@ -92,26 +91,7 @@ def prepare_quota_result_context(
             raise
         # Keep the original diagnostic on a refused guard.
         activation = {"progressive_enabled": False, "enabled": False}
-    if args.quota_command == "should-run":
-        if (
-            args.format == "json"
-            and capture_directory is not None
-            and activation["progressive_enabled"]
-            and activation.get("scenario") == "codex_app_heartbeat"
-            and (
-                getenv("CODEX_THREAD_ID")
-                or getattr(args, "prepared_capture_reference", False)
-            )
-            and (
-                getattr(args, "codex_context_dir", None)
-                or getattr(args, "codex_context_root", None)
-            )
-            and not getattr(args, "turn_envelope", False)
-            and payload.get("ok") is True
-            and payload.get("effective_action") == EffectiveAction.NORMAL_RUN.value
-            and payload.get("normal_delivery_allowed") is True
-        ):
-            payload = _project_native_cli_settlement(payload)
+    if attach_recall and args.quota_command == "should-run":
         attach_reward_memory_recall_after_should_run(
             payload,
             quota_command=args.quota_command,
@@ -195,10 +175,11 @@ def emit_quota_result(
     capture_sha256: str | None = None
     saved_decision = payload
 
-    def record_capture(decision: dict[str, object], digest: str) -> None:
+    def record_capture(decision: dict[str, object], digest: str | None) -> None:
         nonlocal saved_decision, capture_sha256
         saved_decision = decision
-        capture_sha256 = digest
+        if digest is not None:
+            capture_sha256 = digest
 
     try:
         return _publish_quota_result(
@@ -245,7 +226,7 @@ def _publish_quota_result(
     capture_directory: Path | None,
     detail_sections: frozenset[str],
     print_payload: PrintPayload,
-    record_capture: Callable[[dict[str, object], str], None],
+    record_capture: Callable[[dict[str, object], str | None], None],
 ) -> int:
     from ..command_invocation import current_loopx_cli_argv
 
@@ -274,7 +255,7 @@ def _publish_quota_result(
             args,
             registry_path=registry_path,
             heartbeat_turn_id=heartbeat_turn_id,
-            capture_directory=capture_directory,
+            attach_recall=False,
         )
     # Compose optional capability guidance after recovery has chosen the plan,
     # before capture/compaction. The quota decision owner stays capability-neutral.
@@ -325,19 +306,64 @@ def _publish_quota_result(
         quota_module._export("attach_host_poll_receipt")(
             context.status_payload, args, payload, registry_path=registry_path,
         )
+    record_capture(payload, None)
     native_context = context_delivery_enabled and bool(
         getattr(args, "codex_context_dir", None)
         or getattr(args, "codex_context_root", None)
     )
     scheduler_context = context.scheduler_context if context is not None else None
-    payload = _compose_explicit_turn_context(
+    if (capture_directory is not None and args.quota_command == "should-run"
+            and isinstance(payload.get("interaction_contract"), Mapping)):
+        # Bind the existing immutable reader route before signing. Its sidecar
+        # receives the final byte digest after publication, avoiding a self-hash.
+        source = capture_directory / "decision.json"
+        payload = {**payload, "detail_ref": {
+            **payload.get("detail_ref", {}),
+            "full_decision": context_capture_read_command(source, "",
+                reference_file=source.with_suffix(".reader.json"), reader_argv=reader_argv),
+        }}
+    pre_contract_decision = payload
+    payload = compose_quota_work_contract(
         payload,
         args,
         scheduler_context=scheduler_context,
         capture_directory=capture_directory,
-        native_context=native_context,
         record_capture=record_capture,
     )
+    if args.quota_command == "should-run":
+        from ..control_plane.quota.turn_envelope import (
+            COMPLETE_TURN_DECISION_VERSION,
+            attach_complete_turn_context,
+        )
+
+        if payload.get("schema_version") == COMPLETE_TURN_DECISION_VERSION:
+            hook_target = dict(payload)
+            attach_reward_memory_recall_after_should_run(
+                hook_target,
+                quota_command=args.quota_command,
+                heartbeat_turn_id=heartbeat_turn_id,
+                registry_path=registry_path,
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+                decision=pre_contract_decision,
+            )
+            additions = {
+                key: value
+                for key, value in hook_target.items()
+                if key not in payload
+            }
+            if additions:
+                payload = attach_complete_turn_context(payload, additions)
+        else:
+            attach_reward_memory_recall_after_should_run(
+                payload,
+                quota_command=args.quota_command,
+                heartbeat_turn_id=heartbeat_turn_id,
+                registry_path=registry_path,
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+                decision=pre_contract_decision,
+            )
     captured_digest = capture_decision(
         capture_directory,
         payload,
@@ -406,10 +432,6 @@ def _publish_quota_result(
             else None
         ),
     )
-    if args.quota_command == "should-run" and "host_poll_receipt" in captured_payload:
-        # Legacy envelope presentation omits this source field. Preserve its
-        # existing visible receipt by copying the observation, not polling.
-        payload["host_poll_receipt"] = captured_payload["host_poll_receipt"]
     succeeded = bool(payload.get("ok"))
     # Handoff releases the immutable original before any presentation. Native
     # actual-input observation owns its projection when explicitly selected;
@@ -430,9 +452,7 @@ def _publish_quota_result(
             capture_id=delivery_request[1],
             goal_id=decision_identity[0],
             agent_id=decision_identity[1],
-            surface="turn_envelope"
-            if getattr(args, "turn_envelope", False)
-            else "quota_packet",
+            surface=quota_context_surface(captured_payload),
         )
     if (
         not deferred_context

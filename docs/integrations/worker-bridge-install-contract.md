@@ -27,9 +27,7 @@ tool output must not enter public status or evidence artifacts.
 
 For an active-user collaboration lane, request a writable feed mount and use
 the pull-based commands documented by the returned
-`active_user_intervention_channel_contract`. This channel does not expose hidden
-tests, expected solutions, evaluator answers, credentials, or private project
-material, and it does not authorize score or leaderboard claims.
+`active_user_intervention_channel_contract`.
 
 The same `worker-bridge` surface also carries the provider-neutral
 [`attached Agent session broker`](attached-agent-session-broker.md). That
@@ -43,7 +41,7 @@ archaeology in
 [Git history](https://github.com/loopx-project/loopx/tree/54d42da44283bb414b24f71d16642c25cbcaf5dd/deprecate/benchmark-legacy),
 outside the working tree.
 New benchmark work should start from the
-[`benchmark/`](https://github.com/huangruiteng/loopx/blob/main/benchmark/README.md) research workspace and keep runner and
+[`benchmark/`](https://github.com/loopx-project/loopx/blob/main/benchmark/README.md) research workspace and keep runner and
 verifier semantics benchmark-native.
 
 ## Validation

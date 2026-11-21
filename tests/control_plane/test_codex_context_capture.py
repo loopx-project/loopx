@@ -23,7 +23,7 @@ from loopx.control_plane.turn_driver.decision_capture import read_context_read_r
 from test_quota_settlement_cli import AGENT_ID, GOAL_ID, TODO_ID, _spend_run_count, _write_fixture
 from tests.control_plane.codex_checkpoint_fixture import (
     local_inference_provider, delivered_context as _delivered, last_context_page as _last_page,
-    reference_metadata_oracle,
+    native_process_continuation, reference_metadata_oracle,
 )
 from tests.control_plane.test_heartbeat_envelope_transport import private_handoff  # noqa: F401 -- shared private socket fixture
 from tests.control_plane.test_codex_context_boundary import _app_server, _configure_provider, _input_text, _native_fixture
@@ -36,9 +36,9 @@ pytestmark = pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"
     (host, surface, failed, False, False) for host, surface in [("exec", "quota_packet"), ("app_server", "turn_envelope"),
                                                 ("code_mode", "quota_packet"), ("code_mode", "turn_envelope")]
     for failed in [False, True]
-] + [("benchmark", surface, False, False, False) for surface in ("quota_packet", "turn_envelope")]
-  + [(host, surface, False, True, False) for host in ("benchmark", "code_mode")
-     for surface in ("quota_packet", "turn_envelope")]
+] + [("benchmark", surface, False, False, False) for surface in ("quota_packet", "complete_turn")]
+  + [("benchmark", surface, False, True, False) for surface in ("quota_packet", "complete_turn")]
+  + [("code_mode", surface, False, True, False) for surface in ("quota_packet", "turn_envelope")]
   + [("code_mode", surface, False, True, True) for surface in ("quota_packet", "turn_envelope")])
 def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None, shared_root=False, checkpoint_handoff=False, handoff_socket=None, native_pragma=False, native_read_batch=2, native_history_tokens=None, resume_loss=None, bounded_pages=False, ssh_goal=False, reader_output_bytes=None, recovery_resume=False, working_brief=False):
     # Real worker qualification follows returned cursors; output budgets can
@@ -140,14 +140,14 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         "--decision-output-root", str(root), "--context-delivery", "on", *host_args, context_option, str(lifecycle)]
     if handoff_socket:
         command += ["--decision-handoff-socket", handoff_socket]
-    if surface == "turn_envelope":
-        command.append("--turn-envelope")
+    display_args = {"turn_envelope": ["--turn-envelope"], "complete_turn": ["--complete-turn"]}.get(surface, [])
+    command.extend(display_args)
     generated_guard = None
     if shared_root:
         generated = subprocess.run([*cli, "--registry", str(registry), "--runtime-root", str(runtime),
             "--format", "json", "heartbeat-prompt", "--thin",
             "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--decision-output-root", str(root),
-            "--context-delivery", "on", *host_args, context_option, str(lifecycle), *(["--turn-envelope"] if surface == "turn_envelope" else [])],
+            "--context-delivery", "on", *host_args, context_option, str(lifecycle), *display_args],
             capture_output=True, text=True, timeout=15)
         assert generated.returncode == 0, generated.stderr or generated.stdout
         prompt = json.loads(generated.stdout)
@@ -245,6 +245,10 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     def response(request, number, message):
         nonlocal command, root
         phase = stages["phase"]
+        if phase in {"cold_ready", "warm_ready", "cold_read", "warm_read", "resume_read", "recovered"}:
+            pending = native_process_continuation(request, number, code_mode=host == "code_mode")
+            if pending is not None:
+                return pending
         if bounded_pages and phase in {"cold_read", "warm_read", "resume_read", "recovered"}:
             page = _last_page(request)
             assert page and page["ok"], page
@@ -549,7 +553,8 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             project_hooks = project / ".codex/hooks.json"
             project_hooks.write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [{
                 "type": "command", "command": shlex.join(["touch", str(unrelated)])}]}]}}))
-            env.update(LOOPX_CONTEXT_DELIVERY="on", LOOPX_TURN_ENVELOPE=str(int(surface == "turn_envelope")),
+            # Current benchmark delivery exercises default and explicit Complete.
+            env.update(LOOPX_CONTEXT_DELIVERY="on", LOOPX_COMPLETE_TURN=str(int(surface == "complete_turn")),
                 LOOPX_EXECUTION_MODE="heartbeat", LOOPX_ITERATION_CONTEXT="resume",
                 LOOPX_TASK_ENTRY="seeded-todo", LOOPX_TASK_STAGE="execute",
                 LOOPX_CODEX_HOME=str(home), LOOPX_PROJECT=str(project), LOOPX_SHARED_SKILLS=str(skills),
@@ -700,8 +705,13 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     assert not (workspace / "traces").exists()
     projection = Path(wires["warm"]["recovery"]["path"])
     assert hashlib.sha256(projection.read_bytes()).hexdigest() == wires["warm"]["recovery"]["sha256"]
-    current = prepare_context_delivery(json.loads(projection.read_bytes()), scope={k: wires["warm"]["target"][k] for k in ("goal_id", "agent_id", "session_id", "context_epoch")},
-        capture_id=wires["warm"]["target"]["capture_id"], surface=surface)
+    captured = json.loads(projection.read_bytes())
+    complete = captured.get("schema_version") == "loopx_turn_envelope_v1"
+    if host == "benchmark":
+        assert complete
+    delivery_surface = "complete_turn" if complete else surface
+    current = prepare_context_delivery(captured, scope={k: wires["warm"]["target"][k] for k in ("goal_id", "agent_id", "session_id", "context_epoch")},
+        capture_id=wires["warm"]["target"]["capture_id"], surface=delivery_surface)
     baseline = wires["cold"]
     if resumed and qualified_resume and not resume_loss:
         assert wires["warm"]["base"] == baseline["target"]
@@ -713,12 +723,12 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         assert current["target"]["context_epoch"] != baseline["target"]["context_epoch"]
         baseline = prepare_context_delivery(baseline["context"], scope={
             k: current["target"][k] for k in ("goal_id", "agent_id", "session_id", "context_epoch")},
-            capture_id=baseline["target"]["capture_id"], surface=surface)
+            capture_id=baseline["target"]["capture_id"], surface=delivery_surface)
         assert baseline["target"] == wires["warm"]["base"]
     restored = restore_context_delivery(wires["warm"], baseline=baseline, current=current)
     assert restored["context"] == current["context"] and restored["mode"] == wires["warm"]["mode"]
     for document in (wires["cold"]["context"], current["context"]):
-        context = (document["work_context"] if surface == "turn_envelope" else
+        context = (document["work_context"] if delivery_surface == "turn_envelope" else
                    document["interaction_contract"]["agent_channel"]["work_context"])
         selected = next(source["content"]["todo"] for source in context["sources"]
                         if source["source"] == "selected_todo")
@@ -772,7 +782,7 @@ def test_native_generated_large_page_configuration(tmp_path, monkeypatch, surfac
         bounded_pages=True, native_pragma=True, native_read_batch=1, recovery_resume=True)
 
 
-@pytest.mark.parametrize("surface", ["quota_packet", "turn_envelope"])
+@pytest.mark.parametrize("surface", ["quota_packet", "complete_turn"])
 @pytest.mark.parametrize("loss", ["replace", "unqualified_profile"])
 def test_native_worker_resume_history_change_reads_current_full(tmp_path, monkeypatch, surface, loss):
     test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch,
@@ -781,7 +791,8 @@ def test_native_worker_resume_history_change_reads_current_full(tmp_path, monkey
 
 @pytest.mark.parametrize("host,surface,hook_loss", [
     (host, surface, loss) for host in ("code_mode", "benchmark")
-    for surface, loss in (("quota_packet", "missing"), ("turn_envelope", "killed"))
+    for surface, loss in (("quota_packet", "missing"),
+        ("complete_turn" if host == "benchmark" else "turn_envelope", "killed"))
 ])
 def test_native_missing_hook_recovers_from_persistent_cli_route(tmp_path, monkeypatch, host, surface, hook_loss):
     test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch,
@@ -822,7 +833,7 @@ def test_native_bounded_command_chain_recovers_with_unknown_history_limit(tmp_pa
         native_read_batch=1, bounded_pages=True)
 
 
-@pytest.mark.parametrize("surface", ["quota_packet", "turn_envelope"])
+@pytest.mark.parametrize("surface", ["quota_packet", "complete_turn"])
 def test_native_benchmark_context_keeps_checkpoint_handoff(tmp_path, monkeypatch, surface):
     test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch,
         "benchmark", surface, False, True, True, "missing", checkpoint_handoff=True)

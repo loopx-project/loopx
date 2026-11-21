@@ -69,7 +69,7 @@ import { GoalOverview, goalOverviewAttentionId } from "./goal-overview";
 import { GoalVitals, GoalVitalsSkeleton, type GoalVitalRegion } from "./goal-masthead";
 import { GoalWorkspacePanels } from "./goal-workspace-panels";
 import {GoalWorkBrowseProvider, readGoalWorkBrowse, type GoalWorkBrowseState} from "./goal-work-browse";
-import { localizedGoalState, localizedSessionStatus, useWorkspaceI18n, type WorkspaceTranslate } from "./i18n";
+import { localizedSessionStatus, useWorkspaceI18n, type WorkspaceTranslate } from "./i18n";
 import {returnedAnswerStart} from "./message-reading";
 import type {
   PersonalWorkspaceCallbacks,
@@ -869,7 +869,6 @@ export function PersonalWorkspacePage({
   model,
   researchApi,
   readOnly: sourceReadOnly = false,
-  typedActionsRevision = 0,
   selectedAgentId: controlledAgentId,
   selectedAgentModelId,
   selectedAgentModelReadback,
@@ -1833,10 +1832,21 @@ export function PersonalWorkspacePage({
       // not have a Turn to revisit.
       .filter(proposal => proposal.actionKind !== "todo.create" || proposal.status !== "applied"
         || Boolean(proposal.reviewPlan?.taskExecution));
-    const restored = Object.fromEntries(restoreable.map((proposal) => [proposal.previewId, proposal]));
     const previousIds = restoredProposalIdsRef.current;
-    restoredProposalIdsRef.current = new Set(Object.keys(restored));
-    setProposals((current) => ({...Object.fromEntries(Object.entries(current).filter(([id]) => !previousIds.has(id))), ...restored}));
+    restoredProposalIdsRef.current = new Set(restoreable.map(proposal => proposal.previewId));
+    setProposals((current) => {
+      const next = Object.fromEntries(Object.entries(current).filter(([id]) => !previousIds.has(id)));
+      for (const proposal of restoreable) {
+        const previous = current[proposal.previewId];
+        // The stored confirmation outlives a failed dispatch attempt.
+        // Keep the local reason until readback observes a different confirmation.
+        const retryError = proposal.reviewPlan?.retryOriginal && previous?.reviewPlan?.retryOriginal
+          && previous.actionKind === proposal.actionKind && previous.goalId === proposal.goalId
+          && previous.updatedAt === proposal.updatedAt ? previous.errorMessage : undefined;
+        next[proposal.previewId] = retryError ? { ...proposal, errorMessage: retryError } : proposal;
+      }
+      return next;
+    });
     // The manager conversation shows the cards this channel offered: a team
     // plan the steward proposed from here is confirmed here, instead of the
     // owner hunting for the Goal whose workspace happens to hold the card.
@@ -2141,7 +2151,7 @@ export function PersonalWorkspacePage({
       : null;
     const lifecycleChange = options.lifecycleProjection ?? inferredLifecycleChange;
     setActionFeedback(t("feedback.applying", { title: proposal.title }));
-    const applying = { ...proposal, reviewPlan: proposal.reviewPlan ? { ...proposal.reviewPlan, interaction: "pending" as const, reason: "apply_pending" as const, canApply: false as const } : undefined, status: "applying" as const };
+    const applying = { ...proposal, errorMessage: undefined, reviewPlan: proposal.reviewPlan ? { ...proposal.reviewPlan, interaction: "pending" as const, reason: "apply_pending" as const, canApply: false as const } : undefined, status: "applying" as const };
     setProposals((current) => ({ ...current, [proposal.previewId]: applying }));
     if (showDrawer) setSelection({ item: applying, kind: "proposal" });
     let applyingSelection = selectionRevision.current;
@@ -2207,7 +2217,7 @@ export function PersonalWorkspacePage({
       setActionFeedback(completedActionFeedback(applied, t));
       // Keep the success receipt visible for reviewed actions. Direct actions
       // surface the same result through the persistent feedback receipt.
-      if (applied.actionKind === "todo.create" || applied.actionKind === "goal.create") {
+      if (applied.actionKind === "todo.create" || applied.actionKind === "goal.create" || applied.actionKind === "team.plan") {
         await callbacks.onRefresh?.();
       }
       if (applied.actionKind === "goal.lifecycle" && (applied.lifecycleOperation === "delete" || (applied.lifecycleOperation === "stop" && !options.keepGoalSelected))) {
@@ -2649,7 +2659,6 @@ export function PersonalWorkspacePage({
     }
   }
 
-  const selectedAgentLabel = agents.find((agent) => agent.agentId === selectedAgentId)?.label ?? selectedAgentId;
 
 
   async function selectImages(files: FileList | readonly File[] | null) {

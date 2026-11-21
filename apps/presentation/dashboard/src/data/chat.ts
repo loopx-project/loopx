@@ -16,7 +16,6 @@ import {
   type CollaborationReadback,
   type LoopXModeSettings,
   type TodoApplyResult,
-  type TodoPreview,
 } from "./chat-model.js";
 import type {DelegationPreflight} from "./delegation-preflight.js";
 
@@ -471,6 +470,7 @@ export const typedActionProposalSchema = z.object({
   validation_evidence: z.array(z.string().refine((value) => value.trim().length > 0, "Validation evidence must be non-blank text")),
   available_transitions: z.array(z.enum(["apply", "cancel", "regenerate", "reject", "defer"])),
   status: z.enum(["preview_ready", "applying", "gated", "failed", "rejected", "deferred", "cancelled", "stale", "applied"]),
+  task_execution_dispatch_pending: z.literal(true).optional(),
   receipt: z.record(z.string(), z.unknown()).nullable(),
   stale: z.record(z.string(), z.unknown()).nullable(),
   gate: z.record(z.string(), z.unknown()).nullable().optional(),

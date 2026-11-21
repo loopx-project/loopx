@@ -564,3 +564,46 @@ def test_an_answer_without_a_team_plan_is_never_annotated() -> None:
         response=response,
         projector=lambda _preview: {"proposal_id": "unused"},
     ) == response
+
+
+def test_codex_adapter_delivers_current_team_preview_context(tmp_path) -> None:
+    """The host's context must reach the native response parser, then clear."""
+    import json
+    from types import SimpleNamespace
+
+    from loopx.capabilities.native_chat.codex_adapter import (
+        CodexAppServerAdapter,
+        native_turn_response,
+    )
+
+    raw = "<loopx-review-json>" + json.dumps({
+        "message": "Review the proposed team", "proposals": [_plan()],
+    }) + "</loopx-review-json>"
+
+    class Session(SimpleNamespace):
+        def send(self, _message, **_kwargs):
+            return native_turn_response(
+                self, raw, output_schema=None, reply_image_turn_id=None,
+            )
+
+    session = Session(work_dir=tmp_path)
+    adapter = CodexAppServerAdapter(session)
+    context = {
+        "resolve_registered_agents": lambda goal_id: (
+            ["agent-alpha"] if goal_id == "team-plan-fixture" else None
+        ),
+        "supported_action_kinds": ["implement"],
+    }
+    adapter.team_plan_context = context
+    response = adapter.start_turn("Plan the intake team", lambda *_: None)
+    assert response["proposals"][0]["preview"]["goal_id"] == "team-plan-fixture"
+    assert response["proposals"][0]["preview"]["applies"] is False
+
+    # A later Turn without authorized host facts cannot inherit an old reader.
+    adapter.team_plan_context = None
+    assert adapter.start_turn("Continue", lambda *_: None)["proposals"] == []
+    # Scope denial also preserves the answer while withholding the proposal.
+    adapter.team_plan_context = {**context, "resolve_registered_agents": lambda _: None}
+    denied = adapter.start_turn("Plan another team", lambda *_: None)
+    assert denied["message"] == response["message"]
+    assert denied["proposals"] == []

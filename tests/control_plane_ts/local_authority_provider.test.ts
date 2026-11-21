@@ -23,7 +23,6 @@ import {
   legacyCoordinationWriterFencePath,
 } from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
 import {acknowledgeLocalCoordinationTodoArchive, archiveLocalCoordinationTodos} from "../../loopx/control_plane/coordination/local_authority_runtime.ts";
-import {listLocalCoordinationTodos} from "../../loopx/control_plane/coordination/local_authority_read.ts";
 
 for (const [fault, source, reason] of [
   ["database_missing", "sqlite_v0", "local_authority_provider_missing"],
@@ -112,6 +111,7 @@ function providerCalls(directory: string, revision: string, dryRun: boolean) {
   // witness; keep it out of legacy requests, which intentionally reject it.
   const witnessed = {...input, registry_source: {path: join(directory, "registry.json"),
     sha256: createHash("sha256").update("{}").digest("hex")}};
+  const sourceBound = {...witnessed, expected_registry_sha256: witnessed.registry_source.sha256};
   type Entrypoint = {[K in keyof typeof runtime]: typeof runtime[K] extends
     (value: unknown) => Promise<unknown> ? K : never}[keyof typeof runtime];
   // A new exported runtime action must deliberately enter this failure matrix.
@@ -138,10 +138,12 @@ function providerCalls(directory: string, revision: string, dryRun: boolean) {
       {...updateInput, schema_version: runtime.LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA, todo: {}},
       {...updateInput, registry_source: witnessed.registry_source,
         schema_version: runtime.LOCAL_COORDINATION_TODO_CREATE_WITNESSED_REQUEST_SCHEMA, todo: {}},
-      {...witnessed, schema_version: runtime.LOCAL_COORDINATION_TODO_CREATE_REVIEWED_REQUEST_SCHEMA, todo: {}}],
+      {...witnessed, schema_version: runtime.LOCAL_COORDINATION_TODO_CREATE_REVIEWED_REQUEST_SCHEMA, todo: {}},
+      {...sourceBound, schema_version: "loopx_local_coordination_todo_create_request_v3", todo: {}}],
     claimLocalCoordinationTodo: [
       {...input, schema_version: runtime.LOCAL_COORDINATION_TODO_CLAIM_REQUEST_SCHEMA},
-      {...witnessed, schema_version: runtime.LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA}],
+      {...witnessed, schema_version: runtime.LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA},
+      {...sourceBound, schema_version: "loopx_local_coordination_todo_claim_request_v3", manage_execution: true}],
     updateLocalCoordinationTodo: [
       {...updateInput, schema_version: "loopx_local_coordination_todo_update_request_v0"},
       {...updateInput, schema_version: "loopx_local_coordination_todo_update_request_v1", planning_intent: {status: "blocked"}},

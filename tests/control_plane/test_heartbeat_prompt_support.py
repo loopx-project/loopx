@@ -90,8 +90,11 @@ def test_native_profile_long_routes_retain_one_complete_settlement_contract() ->
         "selection_command", "settlement_plan.ordered_steps", "next_cli_actions",
         "identities/effect ids and actual outcomes", "Preserve command flags",
         "truthful evidence", "ambiguous effects need readback/recovery",
-        "retain original and cumulative outcome requirements",
-        "root continuation, budget or stop criteria",
+        "Add this Goal's lasting duties to its objective and Todo",
+        "Explicit new Goals use creation",
+        "Flag scope conflicts",
+        "keeping cumulative requirements",
+        "root continuation, budget and stops",
     ):
         assert obligation in body, obligation
 
@@ -434,6 +437,25 @@ def test_sizing_guidance_survives_prompt_compaction(mode: str) -> None:
     assert "--fine-grained" not in payload["quota_guard_command"]
 
 
+@pytest.mark.parametrize("mode", ["full", "compact", "brief", "thin"])
+def test_heartbeat_scopes_project_skill_to_material_changes(mode: str) -> None:
+    body = build_heartbeat_prompt(
+        goal_id="goal-work-guidance", agent_id="agent-a",
+        runtime_profile="codex_app_heartbeat", **{mode: True},
+    )["task_body"]
+    assert "Direct user requests use loopx-project" not in body
+    for obligation in (
+        "Material Goal or acceptance changes use loopx-project",
+        "Add this Goal's lasting duties to its objective and Todo",
+        "Explicit new Goals use creation",
+        "Refine acceptance via inline goal_acceptance (inspect if absent), keeping cumulative requirements",
+        "Routine steps need no outcome",
+        "selection_command",
+        "settlement_plan.ordered_steps",
+    ):
+        assert obligation in body, obligation
+
+
 @pytest.mark.parametrize("mode", ["full", "compact", "brief", "thin", "envelope"])
 @pytest.mark.parametrize("profile", ["generic_cli", "codex_app_heartbeat"])
 def test_timed_wait_guidance_survives_prompt_compaction(mode: str, profile: str, tmp_path: Path) -> None:
@@ -568,3 +590,53 @@ def test_exact_heartbeat_requires_agent_and_receipt_producing_profile() -> None:
             runtime_profile="codex_cli",
             turn_instance_id="turn-exact",
         )
+
+
+def test_antigravity_app_heartbeat_prompt_guides_inplace_schedule_patrol_within_budget() -> None:
+    for mode in ("full", "compact", "brief", "thin"):
+        for scope_chars in (0, 320):
+            for explicit_route in (False, True):
+                for reward_memory_enabled in (False, True):
+                    profile = {"scope_summary": "x" * scope_chars} if scope_chars else None
+                    route = (
+                        {"registry_path": "/fixture/registry.json", "runtime_root": "/fixture/runtime"}
+                        if explicit_route
+                        else {}
+                    )
+                    payload = build_heartbeat_prompt(
+                        goal_id="reward-memory-budget-fixture",
+                        agent_id="worker-a",
+                        registered_agents=["worker-a"],
+                        agent_profile=profile,
+                        runtime_profile="antigravity_app",
+                        reward_memory_enabled=reward_memory_enabled,
+                        **route,
+                        **{mode: True},
+                    )
+                    body = str(payload["task_body"])
+                    assert payload["interface_budget"]["within_budget"] is True, (
+                        mode,
+                        scope_chars,
+                        explicit_route,
+                        reward_memory_enabled,
+                    )
+                    assert "automation_update" not in body, mode
+                    assert "DurationSeconds=max(180, interval*60)" in body, mode
+                    assert 'TimerCondition="any"' in body, mode
+                    assert "3->6->10" in body, mode
+                    assert ".worktrees/" in body, mode
+                    assert "manage_task" in body, mode
+                    assert "do not re-arm" in body, mode
+                    assert "pause_or_delete_current_heartbeat" in body, mode
+
+    codex_payload = build_heartbeat_prompt(
+        goal_id="loopx-meta",
+        agent_id="codex-side-bypass",
+        registered_agents=["codex-side-bypass"],
+        runtime_profile="codex_app_heartbeat",
+        thin=True,
+    )
+    codex_body = str(codex_payload["task_body"])
+    assert "automation_update" in codex_body
+    assert 'TimerCondition="any"' not in codex_body
+    assert "DurationSeconds=max(180, interval*60)" not in codex_body

@@ -44,7 +44,7 @@ def replan_evidence_rows(runs: Iterable[Mapping[str, Any]], *, goal_id: str, age
 
     if history_newest_first is not None and not isinstance(history_newest_first, bool):
         raise ValueError("history_newest_first must be a boolean or unknown")
-    # Carrier order is an IO fact, not a timestamp-based policy. Keep the wire
+    # Carrier order is an IO fact. Keep the wire
     # rows in their original order so ordinary evidence/reference parity holds.
     # Arbitrary iterables supply no causal positions unless the caller knows
     # their order; real indexes are append ordered, compact history is newest first.

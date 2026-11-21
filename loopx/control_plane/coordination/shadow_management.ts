@@ -158,7 +158,7 @@ function validBinding(value: unknown, digest: string, goal: string, exactIdentit
     && /^file:[1-9][0-9]*:[0-9a-f]{24}$/.test(String(value.bootstrap_provider_revision))
     && (!exactIdentity || sameGoalRef(value.goal_ref, value.goal_ref, goal));
 }
-function decodeState(value: unknown, root: string, goal: string): ShadowManagementState {
+function decodeState(value: unknown, _root: string, goal: string): ShadowManagementState {
   const fail = () => { throw new ShadowManagementError("shadow_management_state_invalid"); };
   if (!exact(value, ["schema_version", "goal_id", "source_root_digest", "status", "binding", "operation", "previous_operation_id", "result"])) return fail();
   const exactIdentity = value.schema_version === SHADOW_MANAGEMENT_EXACT_STATE_SCHEMA;

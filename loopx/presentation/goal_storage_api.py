@@ -147,8 +147,7 @@ class GoalStorageRequestMixin:
     ) -> tuple[Path, dict[str, object], dict[str, object]]:
         from ..control_plane.coordination.authority_source_capture import build_runtime_shadow_source_snapshot
         from ..control_plane.goals.state_resolution import resolve_goal_state
-        from ..control_plane.projects.registry_codec import load_registry
-        from ..registry import find_registry_goal
+        from ..registry import find_registry_goal, load_registry
 
         if source_registry != Path(self.server.registry_path).resolve():
             registry = load_registry(source_registry)

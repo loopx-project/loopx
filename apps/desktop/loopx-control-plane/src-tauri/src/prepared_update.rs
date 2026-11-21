@@ -75,6 +75,8 @@ pub(crate) fn save(
     if !matches!(channel, "main" | "stable") || semver::Version::parse(version).is_err() {
         return Err(INVALID.into());
     }
+    #[cfg(target_os = "macos")]
+    crate::macos_update::qualify_candidate(channel, version, bytes)?;
     fs::create_dir_all(root).map_err(|_| INVALID)?;
     let old = metadata(root).ok().flatten();
     let value = json!({"schema_version":"desktop_prepared_update_v1", "channel":channel,
@@ -156,6 +158,8 @@ fn read(
     let signature = Signature::decode(std::str::from_utf8(&signature).map_err(|_| INVALID)?)
         .map_err(|_| INVALID)?;
     key.verify(&bytes, &signature, true).map_err(|_| INVALID)?;
+    #[cfg(target_os = "macos")]
+    crate::macos_update::qualify_candidate(channel, version, &bytes)?;
     Ok(Some(PreparedUpdate {
         version: version.into(),
         signature: value["signature"].as_str().ok_or(INVALID)?.into(),

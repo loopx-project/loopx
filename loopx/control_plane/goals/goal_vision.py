@@ -200,24 +200,3 @@ def normalize_goal_vision_packet(
         merge_patch=False,
         require_path_delta_for_durable_change=False,
     )
-
-
-def normalize_goal_vision_update(
-    packet: dict[str, Any],
-    *,
-    goal_id: str,
-    agent_id: str | None,
-    existing_agent_vision: dict[str, Any] | None,
-    merge_patch: bool,
-    require_path_delta_for_durable_change: bool,
-) -> dict[str, Any]:
-    """Compatibility entry point for the TS-owned Vision preflight."""
-
-    return prepare_vision_refresh(
-        packet,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        existing_agent_vision=existing_agent_vision,
-        merge_patch=merge_patch,
-        require_path_delta_for_durable_change=require_path_delta_for_durable_change,
-    )

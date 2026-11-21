@@ -108,8 +108,7 @@ is not available, and follow the [skill registration guide](getting-started.md#c
 If one agent implements while another reviews, retain separate ownership and
 return the review evidence to the shared task. The
 [Claude implementation / Codex review example](../product/use-cases/cross-runtime/cross-runtime-impl-review-demo.md)
-shows the roles and acceptance boundary. Switching the executor does not grant
-it another agent's identity or the user's merge authority.
+shows the roles and acceptance boundary.
 
 ## DeepSeek Harness: choose the native plugin or SDK connector
 
@@ -161,8 +160,7 @@ input. Reject the abstraction if it makes the callers harder to understand.
 This is an illustrative target, not a finding about your repository.
 
 Keep each result in its original Goal and PR so review feedback can change the
-next decision. A passing suite alone does not establish improved maintainability;
-explain the structural benefit and its costs. If later work requires a pending
+next decision. Explain the structural benefit and its costs. If later work requires a pending
 review, use the existing wait rather than starting overlapping changes.
 The [Chinese walkthrough](first-bugfix-loop.zh-CN.md#continuous-refactoring)
 contains the same task in Chinese.
@@ -184,8 +182,7 @@ goal. Ask me to select the prior agent identity if a takeover is needed.
 Continue only the authorized task and verify the result before writing back.
 ```
 
-A transcript saying “done” is not a substitute for current tests, review or
-accepted evidence. See [long-task operations](../operations/long-task-cadence-policy.md)
+See [long-task operations](../operations/long-task-cadence-policy.md)
 for waiting, budgets and continuation.
 
 If work appears stuck, distinguish a host that is unavailable from a task that
@@ -212,8 +209,7 @@ Agent turns consume the host's model allowance and the project's test, build
 or external-service resources. Recurring checks add wakeup work even when no
 patch is produced. Cost depends on cadence, context size, retries and provider
 terms; this guide does not establish a fixed price or a saving. Use existing
-quota and scheduled/event-driven waits. A shell `while true` or a more frequent
-heartbeat does not establish better outcomes.
+quota and scheduled/event-driven waits.
 
 For examples rather than setup, explore the
 [public application scenarios](https://loopx-project.github.io/loopx/blog/application-scenarios/)

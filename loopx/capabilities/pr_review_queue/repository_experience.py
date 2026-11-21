@@ -2,7 +2,7 @@
 
 Placement: pull-request-review owns these public source files and this file/lexical
 adapter. reward_memory owns qualification, scope, recall and the TS delivery
-decision. This adapter is not a configurable provider, store or decision owner.
+decision.
 """
 from __future__ import annotations
 

@@ -1,5 +1,6 @@
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
+import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import {
   goalPathSegment,
   heartbeatReceiptStatus,
@@ -32,6 +33,8 @@ const FAILURE_CLASSIFICATION = "quota_scheduler_host_update_failure";
 export interface SchedulerHeartbeatFollowupRequest extends JsonObject {
   schema_version: typeof SCHEDULER_HEARTBEAT_FOLLOWUP_REQUEST_SCHEMA;
   runtime_root: string;
+  registry_path: string | null;
+  goal_ref: JsonObject | null;
   turn_instance_id: string | null;
   require_heartbeat_receipt: boolean;
   before: JsonObject;
@@ -81,6 +84,28 @@ function requestObject(value: unknown): SchedulerHeartbeatFollowupRequest {
   goalPathSegment(hostFacts.goal_id);
   requireNonEmptyString(hostFacts.agent_id, "agent_id");
   followupOperation(hostFacts);
+  const rawGoalRef = input.goal_ref;
+  let goalRef: JsonObject | null = null;
+  if (rawGoalRef !== undefined && rawGoalRef !== null) {
+    const parsed = parseExactGoalRef(rawGoalRef);
+    if (parsed.kind === "invalid") {
+      throw new EffectRuntimeRequestError(
+        `scheduler follow-up goal_ref is invalid: ${parsed.issue}`,
+        "scheduler_followup_goal_ref_invalid",
+      );
+    }
+    goalRef = {
+      goal_id: parsed.value.goalId.value,
+      goal_instance_id: parsed.value.goalInstanceId.value,
+    };
+    if (goalRef.goal_id !== String(hostFacts.goal_id)) {
+      throw new EffectRuntimeRequestError(
+        "scheduler follow-up goal_ref does not match goal_id",
+        "scheduler_followup_goal_ref_mismatch",
+      );
+    }
+  }
+  const registryPath = optionalText(input.registry_path);
   const turnInstanceId = optionalText(input.turn_instance_id);
   const requireReceipt = input.require_heartbeat_receipt === undefined
     ? turnInstanceId !== null
@@ -94,6 +119,8 @@ function requestObject(value: unknown): SchedulerHeartbeatFollowupRequest {
   return {
     schema_version: SCHEDULER_HEARTBEAT_FOLLOWUP_REQUEST_SCHEMA,
     runtime_root: runtimeRoot,
+    registry_path: registryPath,
+    goal_ref: goalRef,
     turn_instance_id: turnInstanceId,
     require_heartbeat_receipt: requireReceipt,
     before: requireJsonObject(input.before ?? {}, "before"),
@@ -341,6 +368,7 @@ export async function evaluateSchedulerHeartbeatFollowup(
       goalId: String(facts.goal_id),
       agentId: String(facts.agent_id),
       turnInstanceId: String(request.turn_instance_id),
+      goalRef: request.goal_ref,
     });
     if (status !== "fresh") return receiptFailure(request, status);
   }
@@ -351,6 +379,10 @@ export async function evaluateSchedulerHeartbeatFollowup(
     heartbeatReceiptTurnInstanceId: request.require_heartbeat_receipt
       ? request.turn_instance_id
       : null,
+    // A manual ACK carries no Turn fence, but a captured Goal lifetime still
+    // owns the state and replay scope it may write.
+    heartbeatReceiptGoalRef: request.goal_ref,
+    registryPath: request.registry_path,
   });
   const receiptStatus = commitReceiptFailureStatus(commit);
   if (receiptStatus !== null) return receiptFailure(request, receiptStatus);

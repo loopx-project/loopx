@@ -153,43 +153,32 @@ def test_generated_commands_stay_on_candidate_through_once_only_settlement(
         "--no-global-sync", "--suppress-external-sinks",
     ]
     spend_step = steps["quota_spend"]
-    if handoff_mode == "hard_lease":
-        assert plan["schema_version"] == "quota_settlement_plan_v2"
-        assert spend_step["owner"] == "runtime"
-        assert "command_template" not in spend_step
-        assert all("spend-slot" not in shlex.split(action) for action in channel["next_cli_actions"])
-        assert {"--settle-turn", "--settlement-receipt"} <= set(refresh_argv)
-    else:
-        assert spend_step["owner"] == "agent"
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
+    assert plan["identity"] == identity
+    assert spend_step["owner"] == "runtime"
+    assert "command_template" not in spend_step
+    assert all("spend-slot" not in shlex.split(action) for action in channel["next_cli_actions"])
+    assert {"--settle-turn", "--settlement-receipt"} <= set(refresh_argv)
 
-    refreshed = run(refresh_argv)
-    assert refreshed["vision_checkpoint"]["satisfied"]
-    if handoff_mode == "hard_lease":
-        assert refreshed["settlement_result"]["ok"]
-        receipts = refreshed["settlement_result"]["receipts"]
-        assert [receipt["step_kind"] for receipt in receipts] == [
-            "validation", "durable_writeback", "quota_spend",
-        ]
-        assert all(
-            receipt["effect_id"] == identity["effect_id"] and receipt["status"] == "committed"
-            for receipt in receipts
-        )
-        assert refreshed["quota_spend"]["appended"]
-        first = refreshed
-        settle_argv = refresh_argv
-    else:
-        assert cli._spend_run_count(runtime) == 0
-        settle_argv = shlex.split(refreshed["settlement_owed"]["command"])
-        assert settle_argv[0] == program
-        first = run(settle_argv)
+    first = run(refresh_argv)
+    assert first["vision_checkpoint"]["satisfied"]
+    assert first["settlement_result"]["ok"]
+    receipts = first["settlement_result"]["receipts"]
+    assert [receipt["step_kind"] for receipt in receipts] == [
+        "validation", "durable_writeback", "quota_spend",
+    ]
+    assert all(
+        receipt["effect_id"] == identity["effect_id"] and receipt["status"] == "committed"
+        for receipt in receipts
+    )
+    assert first["quota_spend"]["appended"]
+    assert first["settlement_identity"] == identity
     assert first["settlement_progress"]["state"] == "settled" and first["appended"]
     assert cli._spend_run_count(runtime) == 1
-    replay = run(settle_argv)
+    replay = run(refresh_argv)
     assert replay["idempotent_replay"] and not replay["appended"]
-    assert first["settlement_identity"] == identity
-    if handoff_mode == "hard_lease":
-        assert replay["settlement_identity"] == identity
-        assert replay["settlement_result"] == first["settlement_result"]
+    assert replay["settlement_identity"] == identity
+    assert replay["settlement_result"] == first["settlement_result"]
     assert cli._spend_run_count(runtime) == 1
     assert cli._classification_count(runtime, "validated_progress") == 1
     if lease:

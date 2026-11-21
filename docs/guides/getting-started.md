@@ -471,7 +471,7 @@ Install one shared local checkout when you want to develop LoopX itself
 or test a live canary wrapper:
 
 ```bash
-git clone https://github.com/huangruiteng/loopx ~/loopx
+git clone https://github.com/loopx-project/loopx ~/loopx
 ~/loopx/scripts/install-local.sh
 loopx doctor
 ```
@@ -1037,7 +1037,7 @@ The dashboard should answer, before raw log drill-down:
 - what boundary cannot be crossed yet.
 
 See
-[apps/presentation/dashboard/README.md](https://github.com/huangruiteng/loopx/blob/main/apps/presentation/dashboard/README.md).
+[apps/presentation/dashboard/README.md](https://github.com/loopx-project/loopx/blob/main/apps/presentation/dashboard/README.md).
 
 ## Public / Private Boundary
 
@@ -1110,7 +1110,7 @@ that omits dashboard validation; the runtime evidence records that skip.
 
 Start here:
 
-- [Documentation index](https://github.com/huangruiteng/loopx/blob/main/docs/README.md)
+- [Documentation index](https://github.com/loopx-project/loopx/blob/main/docs/README.md)
 - [Showcase catalog](../showcases/README.md)
 - [State interaction model](../state-interaction-model.md)
 - [Interaction pattern catalog](../concepts/interaction-pattern-catalog.md)
@@ -1121,10 +1121,10 @@ Start here:
 - [Heartbeat automation prompt](../heartbeat-automation-prompt.md)
 - [Long-task cadence hint](../operations/long-task-cadence-policy.md)
 - [Public/private boundary](../public-private-boundary.md)
-- [Benchmark research workspace](https://github.com/huangruiteng/loopx/blob/main/benchmark/README.md)
+- [Benchmark research workspace](https://github.com/loopx-project/loopx/blob/main/benchmark/README.md)
 - [Dashboard status contract](../status-data-contract.md)
 - [Codex peer task orchestration](../integrations/codex-subagent-orchestration.md)
-- [DeepSWE research practice](https://github.com/huangruiteng/loopx/blob/main/benchmark/deepswe/README.md)
+- [DeepSWE research practice](https://github.com/loopx-project/loopx/blob/main/benchmark/deepswe/README.md)
 
 ## Command Reference
 

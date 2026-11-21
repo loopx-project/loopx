@@ -223,19 +223,32 @@ def test_quota_delivers_coverage_context_and_minimal_replan_action() -> None:
     }
     assert context["coverage_ledger"][0]["surface_id"] == "surface-existing"
     assert 0 < len(action["planning_guidance"]) <= 3
-    assert {key: value for key, value in action.items() if key != "planning_guidance"} == {
+    assert {
+        key: value for key, value in action.items()
+        if key not in {"planning_guidance", "writeback_contract"}
+    } == {
         "schema_version": "replan_action_packet_v0",
         "decision": "replan_required",
         "obligation_id": obligation["obligation_id"],
         "uncovered_frontier": context["uncovered_frontier"],
         "required_outcome": "semantic_delta",
-        "writeback_contract": {},
         "allowed_terminal": [
             "exploration_exhausted",
             "blocked",
             "no_followup",
         ],
     }
+    no_followup = action["writeback_contract"]["no_followup_requirements"]
+    assert no_followup["cli_args"] == [
+        "--progress-result-class", "no_followup",
+        "--progress-coverage-scope-id", "<coverage-scope-id>",
+        "--progress-evidence-id", "<evidence-id>",
+        "--agent-vision-json", "<file>",
+    ]
+    assert no_followup["vision_fields"] == {
+        "state": "no_followup", "path_delta.outcome": "stop",
+    }
+    assert no_followup["preserve"] == ["vision_patch"]
     assert payload["interaction_contract"]["agent_channel"][
         "primary_action"
     ] == "produce one typed outcome from the host-projected replan action packet"

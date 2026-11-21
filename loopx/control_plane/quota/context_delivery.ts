@@ -359,7 +359,7 @@ function groupCurrentValues(delta: Exclude<Delta, {value: unknown} | {from: Path
 }
 
 type SourceComparison = {identity: ReturnType<typeof contextSourceIdentity>;
-  before: Path; after: Path; values?: ProjectionSourceValues};
+  before: Path; after: Path; immutableSource: JsonObject; values?: ProjectionSourceValues};
 
 function changeTree(before: unknown, after: unknown, forced: Path[], preserveFileNumbers = false,
     source?: SourceComparison): Delta | null {
@@ -370,8 +370,15 @@ function changeTree(before: unknown, after: unknown, forced: Path[], preserveFil
   const copy = <T>(value: T): T => source?.values ? value : clone(value);
   const literal = (value: unknown, path: Path): Delta => {
     const result = {value: copy(value)};
-    if (source?.values && typeof value === "number")
-      source.values.set(result, new Map([["value", [...source.after, ...path]]]));
+    if (source?.values && typeof value === "number") {
+      // A staged view can place a number at a new path. The bridge can copy
+      // from that path only when it already holds the value in the capture.
+      const originalPath = [...source.after, ...path];
+      const captured = originalPath.reduce<unknown>((node, key) =>
+        node !== null && typeof node === "object" && Object.hasOwn(node, key)
+          ? (node as Record<string | number, unknown>)[key] : undefined, source.immutableSource);
+      if (Object.is(captured, value)) source.values.set(result, new Map([["value", originalPath]]));
+    }
     return result;
   };
   const identity = (value: unknown, path: Path, side: "before" | "after"): string => source
@@ -598,7 +605,7 @@ export function fileNavigationPaths(context: JsonObject): Path[] {
 /** Shared encoding within one presentation transaction; callers publish once
  * against their original source so numeric facts never round-trip through JS. */
 export function encodeContextDelivery(request: JsonObject, legacyQuotaFields: readonly string[],
-    values: ProjectionSourceValues, fileNavigation: Path[] = []): JsonObject {
+    values: ProjectionSourceValues, fileNavigation: Path[] = [], immutableSource = request): JsonObject {
   const context = requireJsonObject(request.context, "current projection");
   const identity = contextSourceIdentity(request, request.source_number_tokens);
   const surface = surfaceOf(request.surface ?? "work_context"), target = targetBinding(request, context, surface);
@@ -626,7 +633,7 @@ export function encodeContextDelivery(request: JsonObject, legacyQuotaFields: re
   // The presentation owner may require navigation without opening the base.
   // This does not turn file continuity into confirmed model delivery.
   const changes = changeTree(prior, context, fileBacked ? fileNavigation : after.paths, fileBacked,
-    {identity, before: ["baseline", "context"], after: ["context"],
+    {identity, before: ["baseline", "context"], after: ["context"], immutableSource,
       ...(request.source_edits === true ? {values} : {})});
   const delta: JsonObject = {schema_version: VERSION, mode: "delta", target, base: binding,
     ancestry: Number(depth) + 1, changes,
@@ -688,7 +695,7 @@ export function restoreContextDelivery(request: JsonObject, legacyQuotaFields: r
     const before = freshPaths(context, surface, legacyQuotaFields, base), after = freshPaths(currentContext, surface, legacyQuotaFields, target);
     if (!fileBacked && (!before.valid || !after.valid)) return fallback();
     const currentChanges = (paths: Path[]) => changeTree(context, currentContext, paths, fileBacked,
-      {identity, before: ["baseline", "context"], after: ["current", "context"],
+      {identity, before: ["baseline", "context"], after: ["current", "context"], immutableSource: request,
         ...(request.source_edits === true ? {values} : {})});
     const wireIdentity = contextProjectionIdentity(request, {changes: delivery.changes}, request.source_number_tokens, values);
     const matches = (changes: ReturnType<typeof changeTree>) =>

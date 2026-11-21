@@ -314,7 +314,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     requestAnimationFrame(() => {if (closedAt === citeGeneration.current) origin?.focus();});
   };
   return {readOnly: currentSnapshot?.execution_enabled === false || (Boolean(readSourceUrl) && currentSnapshot?.execution_enabled !== true), sourceScope, readUsageComparison, citation, citationBusy, citationError, sourcePanel, readCitation, readUsageTurn, retryCitation, closeCitation, onCitationLocationChange, goalId, zh, location, snapshot: currentSnapshot, pack: readingPack, requestPack: pack, savedOriginal, readError, error, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
-    studyNavigation, close: () => {invalidateCitation(); navigate(false); requestAnimationFrame(() => trigger.current?.focus());}, select: (id: string) => navigate(location.open, id, true)};
+    studyNavigation, close: () => {invalidateCitation(); navigate(false); requestAnimationFrame(() => trigger.current?.focus());}, select: (id: string | null) => navigate(location.open, id, true)};
 }
 type Controller = ReturnType<typeof useResearchAnalysis>;
 
@@ -385,14 +385,18 @@ function AnalysisContinuation({pack: p, analysis: a}: {pack: Pack; analysis: Con
   </section>;
 }
 
-function AnalysisReadState({analysis: a}: {analysis: Controller}) {
+function AnalysisReadState({analysis: a, onBrowseStudies}: {analysis: Controller; onBrowseStudies?: () => void}) {
   const error = a.readError || a.snapshot?.originalReadError;
   if (error) return <div className="analysis-read-error" role="alert">
     {a.snapshot?.originalReadError && !a.readError ? <span>{a.zh ? "已保存原文暂不可读，当前语言的分析状态仍保留。" : "The saved original could not be read. The current language’s analysis state is preserved."}</span> :
-    <span>{a.pack ? (a.zh ? "刷新失败，保留上次结果。" : "Refresh failed. Showing the last result.")
+    <span>{onBrowseStudies ? (a.zh ? "无法读取链接指定的解读。" : "The linked study version could not be read.")
+      : a.pack ? (a.zh ? "刷新失败，保留上次结果。" : "Refresh failed. Showing the last result.")
       : (a.zh ? "暂时无法读取分析。" : "Analysis could not be read.")}</span>}
     <button type="button" disabled={a.loading} aria-label={a.zh ? "重试读取" : "Retry reading"} onClick={() => void a.read().catch(() => undefined)}>
       <RefreshCw size={14} aria-hidden/>{a.loading ? (a.zh ? "正在重试…" : "Retrying…") : (a.zh ? "重试" : "Retry")}</button>
+    {onBrowseStudies ? <button type="button" disabled={a.loading} onClick={onBrowseStudies}>
+      {a.zh ? "查看已保存的解读" : "Browse saved studies"}
+    </button> : null}
     <ContextHelp label={a.zh ? "读取详情" : "Read details"}><p>{error}</p></ContextHelp>
   </div>;
   if (!a.pack && a.loading && (!a.snapshot || a.snapshot.catalog.packs.length > 0)) return <div className="analysis-read-loading" role="status" aria-label={a.zh ? "正在读取分析" : "Reading analysis"}>
@@ -419,24 +423,38 @@ export function ResearchReportSummary({analysis: a}: {analysis: Controller}) {
 }
 
 export function ResearchCaseReading({analysis: a, active}: {analysis: Controller; active: boolean}) {
+  const reader = useRef<HTMLElement>(null);
+  const focusAfterBrowse = useRef(false);
   const packs = (a.snapshot?.catalog.packs ?? []).filter(p => p.case_study_summary);
   const p = a.pack;
   const firstStudy = packs[0]?.pack_id;
   useEffect(() => {
-    const hash = window.location.hash;
-    if (!a.loading && !a.readError && p && !p.case_study && firstStudy
-        && !(hash.startsWith(caseChapterHashPrefix) && hash.includes("~"))) a.select(firstStudy);
-  }, [a.loading, a.readError, p?.pack_id, Boolean(p?.case_study), firstStudy]);
-  return <section className="research-case-reader" aria-label={a.zh ? "案例解读" : "Case study"}>
+    if (!a.loading && !a.readError && a.location.packId === null && p && !p.case_study && firstStudy
+        && !window.location.hash.startsWith(caseChapterHashPrefix)) a.select(firstStudy);
+  }, [a.loading, a.readError, a.location.packId, p?.pack_id, Boolean(p?.case_study), firstStudy]);
+  useLayoutEffect(() => {
+    if (!focusAfterBrowse.current || a.loading || (!p?.case_study && !a.readError)) return;
+    focusAfterBrowse.current = false;
+    if (document.activeElement === document.body) {
+      reader.current?.querySelector<HTMLElement>("select, h2, .analysis-read-error button")?.focus({preventScroll: true});
+    }
+  }, [a.loading, a.readError, Boolean(p?.case_study)]);
+  const browseStudies = a.readError && !p && a.location.packId !== null ? () => {
+    focusAfterBrowse.current = true;
+    a.select(null);
+  } : undefined;
+  return <section ref={reader} className="research-case-reader" aria-label={a.zh ? "案例解读" : "Case study"}>
     {packs.length > 1 || (packs.length === 1 && !p?.case_study) ? <header className="case-reader-toolbar"><label>{a.zh ? "解读版本" : "Study version"}
       <select aria-label={a.zh ? "选择解读版本" : "Select study version"} value={p?.case_study ? p.pack_id : ""} onChange={e => a.select(e.target.value)}>
         {!p?.case_study ? <option value="">{a.zh ? "选择已保存的解读" : "Choose a saved study"}</option> : null}
         {packs.map(pack => <option key={pack.pack_id} value={pack.pack_id}>{pack.title}</option>)}
       </select></label></header> : null}
-    <AnalysisReadState analysis={a}/>
+    <AnalysisReadState analysis={a} onBrowseStudies={browseStudies}/>
     {p?.case_study ? <ResearchCaseStudy key={`${p.pack_id}:${p.analysis_key}`} study={p.case_study} zh={a.zh} historical={p.applicability !== "current"} active={active}
       scope={p.scope} navigation={a.studyNavigation(p.pack_id)} onCitation={a.readCitation}
-      onCitationLocationChange={a.onCitationLocationChange}/> : !a.loading && !a.readError ? <p>{a.zh ? "选择一份解读，阅读问题背景、策略差异、关键转折与证据。" : "Choose a study to read its background, approaches, turning points and evidence."}</p> : null}
+      onCitationLocationChange={a.onCitationLocationChange}/> : !a.loading && !a.readError && p ? <p role="status">
+        {a.zh ? "此版本没有已保存的案例解读。" : "This version has no saved case study."}
+      </p> : null}
     <ResearchCitationPanel analysis={a}/>
   </section>;
 }

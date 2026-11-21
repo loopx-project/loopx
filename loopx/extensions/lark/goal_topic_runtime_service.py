@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import partial
 import hashlib
 import logging
 from pathlib import Path
@@ -14,7 +15,7 @@ import shutil
 from subprocess import Popen
 import threading
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from ...chat_manager import MANAGER_AGENT_OBJECTIVE
 from ...file_lock import try_exclusive_file_lock
@@ -31,10 +32,60 @@ from .team_plan_confirmation import (
     handle_lark_review_callback_for_profile,
 )
 
+if TYPE_CHECKING:
+    from ...chat_actions import ChatActionService
+    from ...chat_runtime import ChatRuntimeController
+    from .private_conversations import LarkPrivateConversations
 
-SnapshotProvider = Callable[[], Mapping[str, Any]]
+
+Payload = dict[str, object]
+PayloadView = Mapping[str, object]
+SnapshotProvider = Callable[[], PayloadView]
 ProfilePoller = Callable[[str, threading.Event], None]
-ManagerRouteReconciler = Callable[[Mapping[str, Any]], Mapping[str, Any]]
+ManagerRouteReconciler = Callable[[PayloadView], PayloadView]
+
+
+class _DeliveryWorker(Protocol):
+    thread: threading.Thread
+    def start(self) -> object: ...
+    def repeat(
+        self, step: Callable[[], float | None], *, interval_seconds: float,
+        on_error: Callable[[], None] | None = None, wait: Callable[[float], object] | None = None,
+    ) -> None: ...
+    def close(self, *, timeout: float = 2) -> None: ...
+
+
+@runtime_checkable
+class _DeliveryTaskProvider(Protocol):
+    def pending(self) -> bool: ...
+    def reconcile(self) -> int: ...
+
+
+@runtime_checkable
+class _AttentionProvider(Protocol):
+    def has_enabled(self) -> bool: ...
+    def reconcile(self) -> int: ...
+
+
+@runtime_checkable
+class _IngressObserver(Protocol):
+    def observe(self, *, cancelled: Callable[[], bool]) -> list[str]: ...
+
+
+def _as_int(value: object) -> int:
+    if isinstance(value, (int, float)):
+        return int(value)
+    return int(value) if isinstance(value, str) and value else 0
+
+
+def _default_health(updated_at: str | None = None) -> Payload:
+    health: Payload = {
+        "status": "starting", "event_count": 0, "replied_count": 0,
+        "last_event_status": None, "error_code": None, "restart_count": 0,
+    }
+    if updated_at is not None:
+        health["updated_at"] = updated_at
+    return health
 
 
 @dataclass(frozen=True)
@@ -59,14 +110,16 @@ MessageConsumer = tuple[threading.Event, Popen[str], threading.Event]
 class LarkGoalTopicRuntimeService:
     """Own one event-consumer worker per reusable Lark App profile."""
 
+    _LISTENER_SNAPSHOT_TTL_SECONDS = 5.0
+
     def __init__(
         self,
         *,
         snapshot_provider: SnapshotProvider,
         runtime_root: str | Path,
-        runtime_controller: Any,
-        action_service: Any | None = None,
-        private_conversations: Any | None = None,
+        runtime_controller: ChatRuntimeController,
+        action_service: ChatActionService | None = None,
+        private_conversations: LarkPrivateConversations | None = None,
         profile_poller: ProfilePoller | None = None,
         manager_route_reconciler: ManagerRouteReconciler | None = None,
     ) -> None:
@@ -78,9 +131,16 @@ class LarkGoalTopicRuntimeService:
         self._profile_poller = profile_poller or self._poll_profile
         self.manager_route_reconciler = manager_route_reconciler
         self._lock = threading.Lock()
+        self._listener_snapshot_cond = threading.Condition(threading.Lock())
+        self._listener_snapshot_in_flight = False
+        self._listener_snapshot_value: PayloadView | None = None
+        self._listener_snapshot_at = 0.0
+        self._listener_snapshot_generation = 0
         self._workers: dict[str, ProfileWorker] = {}
+        self._retiring_workers: set[threading.Thread] = set()
         self._message_consumers: dict[str, MessageConsumer] = {}
-        self._health: dict[str, dict[str, Any]] = {}
+        self._default_home = Path.home()
+        self._health: dict[str, Payload] = {}
         self._closed = threading.Event()
         self._delivery_wakeup = threading.Event()
         self._startup_thread: threading.Thread | None = None
@@ -89,8 +149,12 @@ class LarkGoalTopicRuntimeService:
         self._profile_refresh_sequence = 0
         self._observed_profile_refresh_sequence = 0
         self._delivery_thread: threading.Thread | None = None
-        self._delivery_worker = HostedWorker(target=self._reconcile_private, stop=self._closed,
-            name="loopx-lark-private-delivery", retry_seconds=5)
+        self._delivery_worker: _DeliveryWorker = HostedWorker(
+            target=self._reconcile_private,
+            stop=self._closed,
+            name="loopx-lark-private-delivery",
+            retry_seconds=5,
+        )
 
     def start(self) -> None:
         """Discover existing bindings without blocking the HTTP readiness path."""
@@ -100,9 +164,7 @@ class LarkGoalTopicRuntimeService:
                 return
             if self._startup_thread is None:
                 self._startup_thread = threading.Thread(
-                    target=self._refresh_on_start,
-                    name="loopx-lark-startup",
-                    daemon=True,
+                    target=self._refresh_on_start, name="loopx-lark-startup", daemon=True
                 )
                 self._startup_thread.start()
             if self.private_conversations is not None:
@@ -120,63 +182,51 @@ class LarkGoalTopicRuntimeService:
         attempted: dict[Path, int] = {}
         ready: dict[Path, None] = {}
         attention: Future[int] | None = None
-        attention_due = 0.0
         reports: Future[int] | None = None
-        reports_due = 0.0
         feedback: Future[int] | None = None
-        feedback_due = 0.0
         discovery: Future[list[Path]] | None = None
-        discovery_due = 0.0
-        discovery_yielded = False
         ingress: Future[list[str]] | None = None
+        attention_due = reports_due = feedback_due = discovery_due = 0.0
+        discovery_yielded = False
         ingress_due = time.monotonic() + 60
         wakeup_scope = getattr(self.runtime_controller, "turn_release_wakeup", None)
         # Older/custom controllers retain polling. One local hint wakes the
-        # existing scanner; it is neither a queue nor a delivery receipt.
+        # existing scanner.
         with ThreadPoolExecutor(max_workers=4, thread_name_prefix="loopx-lark-private-reply") as pool, \
                 (wakeup_scope(self._delivery_wakeup) if callable(wakeup_scope) else nullcontext()):
+            def finish_job(
+                job: Future[int] | None, due: float, cooldown: float, warning: str
+            ) -> tuple[Future[int] | None, float]:
+                if job is None or not job.done():
+                    return job, due
+                try:
+                    job.result()
+                except Exception:
+                    logging.getLogger(__name__).warning(warning)
+                return None, time.monotonic() + cooldown
+
             def step() -> None:
                 nonlocal attempted, ready, attention, attention_due, reports, reports_due
                 nonlocal ingress, ingress_due, feedback, feedback_due, discovery, discovery_due, discovery_yielded
                 # Clear BEFORE scanning: an arrival during the scan must also
                 # wake the following wait, rather than disappear in that gap.
                 self._delivery_wakeup.clear()
-                if feedback is not None and feedback.done():
-                    try:
-                        feedback.result()
-                    except Exception:
-                        logging.getLogger(__name__).warning("App input reaction reconciliation is pending")
-                    feedback = None
-                    feedback_due = time.monotonic() + 5
-                if reports is not None and reports.done():
-                    try:
-                        reports.result()
-                    except Exception:
-                        logging.getLogger(__name__).warning("Original private report delivery is pending")
-                    reports = None
-                    reports_due = time.monotonic() + 30
+                feedback, feedback_due = finish_job(feedback, feedback_due, 5, "App input reaction reconciliation is pending")
+                reports, reports_due = finish_job(reports, reports_due, 30, "Original private report delivery is pending")
                 if ingress is not None and ingress.done():
                     try:
                         for profile in ingress.result():
                             with self._lock:
                                 worker = self._workers.get(profile)
                                 current = self._message_consumers.get(profile)
-                                if (
-                                    worker is not None and worker[2].owner_binding_id
-                                    and current is not None and current[0] is worker[0]
-                                ):
+                                if (worker is not None and worker[2].owner_binding_id
+                                        and current is not None and current[0] is worker[0]):
                                     self._disconnect_message_consumer(current)
                     except Exception:
                         logging.getLogger(__name__).warning("Private Chat source observation is unavailable")
                     ingress = None
                     ingress_due = time.monotonic() + 60
-                if attention is not None and attention.done():
-                    try:
-                        attention.result()
-                    except Exception:
-                        logging.getLogger(__name__).warning("Owner notification reconciliation is pending")
-                    attention = None
-                    attention_due = time.monotonic() + 30
+                attention, attention_due = finish_job(attention, attention_due, 30, "Owner notification reconciliation is pending")
                 for path, future in list(pending.items()):
                     if not future.done():
                         continue
@@ -213,13 +263,16 @@ class LarkGoalTopicRuntimeService:
                     active_background = sum(job is not None for job in (feedback, reports, attention, ingress, discovery))
                     discovery_ready = (callable(body_paths) and discovery is None
                         and time.monotonic() >= discovery_due)
-                    owner_attention = getattr(transport, "owner_attention", None)
+                    raw_owner_attention = getattr(transport, "owner_attention", None)
+                    owner_attention = raw_owner_attention if isinstance(raw_owner_attention, _AttentionProvider) else None
                     attention_ready = (owner_attention is not None and attention is None
                         and time.monotonic() >= attention_due and owner_attention.has_enabled())
-                    observer = getattr(transport, "ingress", None)
+                    raw_observer = getattr(transport, "ingress", None)
+                    observer = raw_observer if isinstance(raw_observer, _IngressObserver) else None
                     ingress_ready = (observer is not None and ingress is None
                         and time.monotonic() >= ingress_due)
-                    report_provider = getattr(transport, "steward_reports", None)
+                    raw_report_provider = getattr(transport, "steward_reports", None)
+                    report_provider = raw_report_provider if isinstance(raw_report_provider, _DeliveryTaskProvider) else None
                     reports_ready = (report_provider is not None and reports is None
                         and time.monotonic() >= reports_due and report_provider.pending())
                     if report_provider is not None and reports is None and time.monotonic() >= reports_due:
@@ -262,12 +315,17 @@ class LarkGoalTopicRuntimeService:
                         discovery = pool.submit(transport.pending_delivery_paths)
                         discovery.add_done_callback(lambda _: self._delivery_wakeup.set())
                         discovery_yielded = False
-                    if reports_ready and len(pending) + int(feedback is not None) + int(attention is not None or attention_ready) + int(ingress is not None or ingress_ready) + int(discovery is not None) < 4 and not self._closed.is_set():
+                    if (reports_ready and report_provider is not None and not self._closed.is_set()
+                            and len(pending) + int(feedback is not None) + int(attention is not None or attention_ready) + int(ingress is not None or ingress_ready) + int(discovery is not None) < 4):
                         reports = pool.submit(report_provider.reconcile)
-                    if attention_ready and len(pending) + int(feedback is not None) + int(reports is not None) + int(ingress is not None or ingress_ready) + int(discovery is not None) < 4 and not self._closed.is_set():
+                    if (attention_ready and owner_attention is not None and not self._closed.is_set()
+                            and len(pending) + int(feedback is not None) + int(reports is not None) + int(ingress is not None or ingress_ready) + int(discovery is not None) < 4):
                         attention = pool.submit(owner_attention.reconcile)
-                    if ingress_ready and len(pending) + int(feedback is not None) + int(reports is not None) + int(attention is not None) + int(discovery is not None) < 4 and not self._closed.is_set():
-                        ingress = pool.submit(getattr(transport, "observe_ingress", observer.observe), cancelled=self._closed.is_set)
+                    if (ingress_ready and observer is not None and not self._closed.is_set()
+                            and len(pending) + int(feedback is not None) + int(reports is not None) + int(attention is not None) + int(discovery is not None) < 4):
+                        raw_observe = getattr(transport, "observe_ingress", observer.observe)
+                        observe_fn: Callable[..., list[str]] = raw_observe if callable(raw_observe) else observer.observe
+                        ingress = pool.submit(observe_fn, cancelled=self._closed.is_set)
                     app_feedback = getattr(transport, "reconcile_app_feedback", None)
                     # Optional feedback uses one slot in this same bounded
                     # pool and leaves capacity for canonical body deliveries.
@@ -282,26 +340,69 @@ class LarkGoalTopicRuntimeService:
                 on_error=lambda: logging.getLogger(__name__).warning(
                     "Private Chat delivery discovery is pending"))
 
-    def _admit_private(self, profile: str, event: dict[str, Any], *,
-                       expected_binding_id: str | None = None) -> dict[str, Any]:
-        if self._closed.is_set():
+    def _admit_private(self, profile: str, event: Payload, *,
+                       expected_binding_id: str | None = None) -> Payload:
+        conversations = self.private_conversations
+        if conversations is None or self._closed.is_set():
             raise RuntimeError("Lark conversation service is closed")
-        options = {"expected_binding_id": expected_binding_id} if expected_binding_id is not None else {}
-        result = self.private_conversations.admit(profile, event, defer_background_stop=True, **options)
+        if expected_binding_id is not None:
+            result = conversations.admit(
+                profile, event, defer_background_stop=True, expected_binding_id=expected_binding_id
+            )
+        else:
+            result = conversations.admit(profile, event, defer_background_stop=True)
         # Admission owns persistence and authorization. Only after it returns
         # may the existing reply worker look for its durable work; duplicates
         # and denied inputs still cannot manufacture a pending journal entry.
         self._delivery_wakeup.set()
-        return result
+        return dict(result)
 
     def _handle_private_steward_callback(
-        self, profile: str, event: Mapping[str, Any], action: Mapping[str, Any],
-    ) -> Mapping[str, Any]:
+        self, profile: str, event: PayloadView, action: PayloadView,
+    ) -> PayloadView:
         if self.private_conversations is None or self._closed.is_set():
             raise ValueError("private Steward callback route is unavailable")
         result = capture_callback(self.private_conversations, profile, event, action)
         self._delivery_wakeup.set()
         return result
+
+    def _invalidate_listener_snapshot(self) -> int:
+        with self._listener_snapshot_cond:
+            self._listener_snapshot_generation += 1
+            self._listener_snapshot_value = None
+            self._listener_snapshot_at = 0.0
+            self._listener_snapshot_cond.notify_all()
+            return self._listener_snapshot_generation
+
+    def _seed_listener_snapshot(self, generation: int, snapshot: PayloadView) -> None:
+        with self._listener_snapshot_cond:
+            if self._listener_snapshot_generation == generation and not self._closed.is_set():
+                self._listener_snapshot_value = snapshot
+                self._listener_snapshot_at = time.monotonic()
+
+    def _read_listener_snapshot(self) -> PayloadView:
+        with self._listener_snapshot_cond:
+            while self._listener_snapshot_in_flight:
+                self._listener_snapshot_cond.wait()
+            if (
+                not self._closed.is_set()
+                and self._listener_snapshot_value is not None
+                and time.monotonic() - self._listener_snapshot_at < self._LISTENER_SNAPSHOT_TTL_SECONDS
+            ):
+                return self._listener_snapshot_value
+            generation = self._listener_snapshot_generation
+            self._listener_snapshot_in_flight = True
+        try:
+            fresh = self.snapshot_provider()
+        finally:
+            with self._listener_snapshot_cond:
+                self._listener_snapshot_in_flight = False
+                self._listener_snapshot_cond.notify_all()
+        with self._listener_snapshot_cond:
+            if self._listener_snapshot_generation == generation and not self._closed.is_set():
+                self._listener_snapshot_value = fresh
+                self._listener_snapshot_at = time.monotonic()
+        return fresh
 
     def _refresh_on_start(self) -> None:
         while not self._closed.is_set():
@@ -345,32 +446,20 @@ class LarkGoalTopicRuntimeService:
     def _now() -> str:
         return datetime.now(timezone.utc).isoformat()
 
-    def _update_health(self, profile: str, **updates: Any) -> None:
+    def _update_health(self, profile: str, **updates: object) -> None:
         with self._lock:
-            current = dict(
-                self._health.get(
-                    profile,
-                    {
-                        "status": "starting",
-                        "event_count": 0,
-                        "replied_count": 0,
-                        "last_event_status": None,
-                        "error_code": None,
-                        "restart_count": 0,
-                    },
-                )
+            current = dict(self._health.get(profile) or _default_health())
+            current["event_count"] = _as_int(current.get("event_count")) + _as_int(
+                updates.pop("event_count", 0)
             )
-            current["event_count"] = int(current.get("event_count") or 0) + int(
-                updates.pop("event_count", 0) or 0
-            )
-            current["replied_count"] = int(current.get("replied_count") or 0) + int(
-                updates.pop("replied_count", 0) or 0
+            current["replied_count"] = _as_int(current.get("replied_count")) + _as_int(
+                updates.pop("replied_count", 0)
             )
             current.update(updates)
             current["updated_at"] = self._now()
             self._health[profile] = current
 
-    def health_snapshot(self) -> dict[str, dict[str, Any]]:
+    def health_snapshot(self) -> dict[str, Payload]:
         """Return content-free listener health keyed by safe profile reference."""
 
         with self._lock:
@@ -410,7 +499,30 @@ class LarkGoalTopicRuntimeService:
         identity = config.get("bot_app_id") or profile
         return str(config.get("consumer_ref") or hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32])
 
-    def _listener_configs(self, snapshot: Mapping[str, Any]) -> tuple[dict[str, dict[str, str]], set[str]]:
+    def _consumer_lease_dir(self) -> Path:
+        """Keep unpatched consumer lease paths scoped to construction HOME."""
+        home_func = getattr(Path.home, "__func__", None)
+        unpatched = (
+            home_func is not None
+            and home_func.__module__.startswith("pathlib")
+            and home_func.__name__ == "home"
+        )
+        home = self._default_home if unpatched else Path.home()
+        return home / ".loopx" / "lark-consumers"
+
+    @staticmethod
+    def _stop_consumer_process(consumer: MessageConsumer | None) -> None:
+        if consumer is None:
+            return
+        consumer_stop, process, _requested = consumer
+        consumer_stop.set()
+        if process.poll() is None:
+            try:
+                process.terminate()
+            except OSError:
+                pass
+
+    def _listener_configs(self, snapshot: PayloadView) -> tuple[dict[str, dict[str, str]], set[str]]:
         from . import goal_topic_runtime as runtime
 
         profiles = runtime._active_profile_configs(snapshot)
@@ -428,7 +540,8 @@ class LarkGoalTopicRuntimeService:
             cli_bin = config["cli_bin"]
             if cli_bin not in apps_by_cli:
                 try:
-                    apps_by_cli[cli_bin] = inventory(cli_bin=cli_bin)
+                    raw_apps = inventory(cli_bin=cli_bin)
+                    apps_by_cli[cli_bin] = {str(k): str(v) for k, v in raw_apps.items()} if isinstance(raw_apps, Mapping) else None
                 except (OSError, LarkCliUnavailableError):
                     apps_by_cli[cli_bin] = None
             apps = apps_by_cli[cli_bin]
@@ -439,20 +552,18 @@ class LarkGoalTopicRuntimeService:
             if app_id:
                 # Fence the original profile and the resolved App on both
                 # sides of a private binding change.
-                profiles[profile] = {
-                    **config,
-                    "bot_app_id": app_id,
-                    "consumer_ref": self._consumer_lease_key(profile, config),
-                }
+                profiles[profile] = {**config, "bot_app_id": app_id, "consumer_ref": self._consumer_lease_key(profile, config)}
         return profiles, unavailable
 
     @staticmethod
     def _listener_snapshot(
-        snapshot: Mapping[str, Any],
+        snapshot: PayloadView,
         profile_configs: Mapping[str, Mapping[str, str]],
-    ) -> Mapping[str, Any]:
+    ) -> PayloadView:
         payload = snapshot.get("target_payload")
-        targets = payload.get("targets") if isinstance(payload, Mapping) else None
+        if not isinstance(payload, Mapping):
+            return snapshot
+        targets = payload.get("targets")
         if not isinstance(targets, Mapping):
             return snapshot
         resolved = dict(targets)
@@ -472,16 +583,9 @@ class LarkGoalTopicRuntimeService:
         return {**snapshot, "target_payload": {**payload, "targets": resolved}}
 
     def _profile_worker_fingerprint(
-        self,
-        snapshot: Mapping[str, Any],
-        profile: str,
-        profile_config: Mapping[str, str],
+        self, snapshot: PayloadView, profile: str, profile_config: Mapping[str, str]
     ) -> ProfileWorkerFingerprint:
-        callback_chats = (
-            tuple(active_profile_chat_ids(snapshot, profile))
-            if self.action_service is not None
-            else ()
-        )
+        callback_chats = tuple(active_profile_chat_ids(snapshot, profile)) if self.action_service is not None else ()
         app_id = str(profile_config.get("bot_app_id") or "")
         binding_id = str(profile_config.get("binding_id") or "")
         owner_binding_id = binding_id if app_id and profile_config.get("audience") == "owner" else ""
@@ -505,6 +609,9 @@ class LarkGoalTopicRuntimeService:
         # integrations that patch its entrypoints keep working during the move.
         from . import goal_topic_runtime as runtime
 
+        with self._lock:
+            worker = self._workers.get(profile)
+            managed_worker = worker is not None and worker[0] is stop
         restart_count = 0
         try:
             while not stop.is_set():
@@ -516,49 +623,39 @@ class LarkGoalTopicRuntimeService:
                 )
                 try:
 
-                    def answer(
-                        route: Mapping[str, Any], text: str
-                    ) -> Mapping[str, Any]:
+                    def answer(route: PayloadView, text: str) -> PayloadView:
                         effective_route = route
-                        if (
-                            route.get("conversation_kind") == "manager"
-                            and route.get("native_mention") is not True
-                            and self.manager_route_reconciler is not None
-                        ):
+                        if (route.get("conversation_kind") == "manager"
+                                and route.get("native_mention") is not True
+                                and self.manager_route_reconciler is not None):
                             try:
                                 effective_route = self.manager_route_reconciler(route)
                             except Exception as exc:
                                 raise runtime.LarkGoalTopicTurnFailed(
-                                    "manager_channel_route_reconcile_failed",
-                                    session_turn_effect(route),
+                                    "manager_channel_route_reconcile_failed", session_turn_effect(route)
                                 ) from exc
                         snapshot = self.snapshot_provider()
                         contexts = snapshot.get("goal_contexts")
                         contexts = contexts if isinstance(contexts, Mapping) else {}
-                        context = contexts.get(
-                            str(effective_route.get("goal_id") or "")
-                        )
+                        context = contexts.get(str(effective_route.get("goal_id") or ""))
                         context = context if isinstance(context, Mapping) else {}
                         answer_result = runtime.answer_lark_goal_topic(
-                            route=effective_route,
-                            text=text,
+                            route=effective_route, text=text,
                             work_dir=str(context.get("work_dir") or self.runtime_root),
-                            objective=str(
-                                context.get("objective")
-                                or effective_route.get("goal_id")
-                                or ""
-                            ),
+                            objective=str(context.get("objective") or effective_route.get("goal_id") or ""),
                             runtime_controller=self.runtime_controller,
                         )
                         if isinstance(answer_result, Mapping):
-                            response_text = str(
-                                answer_result.get("response_text") or ""
-                            )
-                            proposal_ids = list(
-                                answer_result.get("proposal_ids") or []
+                            response_text = str(answer_result.get("response_text") or "")
+                            raw_proposals = answer_result.get("proposal_ids")
+                            proposal_ids = (
+                                [str(item) for item in raw_proposals]
+                                if isinstance(raw_proposals, Iterable)
+                                and not isinstance(raw_proposals, (str, bytes, Mapping))
+                                else []
                             )
                         else:
-                            response_text = answer_result
+                            response_text = str(answer_result)
                             proposal_ids = []
                         effect_receipt = answer_result.get("effect_receipt") if isinstance(answer_result, Mapping) else None
                         return {
@@ -567,25 +664,17 @@ class LarkGoalTopicRuntimeService:
                             "proposal_ids": proposal_ids,
                         }
 
-                    def deliver_proposals(
-                        route: Mapping[str, Any], proposal_ids: list[str]
-                    ) -> Mapping[str, Any]:
+                    def deliver_proposals(route: PayloadView, proposal_ids: list[str]) -> PayloadView:
                         return deliver_team_plan_review_cards_from_runtime(
-                            proposal_ids=proposal_ids,
-                            manager_route=route,
-                            runtime_controller=self.runtime_controller,
-                            runtime_root=self.runtime_root,
+                            proposal_ids=proposal_ids, manager_route=route,
+                            runtime_controller=self.runtime_controller, runtime_root=self.runtime_root,
                         )
 
-                    def handle_review_callback(
-                        event: Mapping[str, Any],
-                    ) -> Mapping[str, Any]:
+                    def handle_review_callback(event: PayloadView) -> PayloadView:
                         action = event.get("action_value")
                         if isinstance(action, Mapping) and action.get("schema_version") == TRIAGE_CARD_ACTION:
                             return self._handle_private_steward_callback(profile, event, action)
-                        profile_config = runtime._active_profile_configs(
-                            self.snapshot_provider()
-                        ).get(profile)
+                        profile_config = runtime._active_profile_configs(self.snapshot_provider()).get(profile)
                         if isinstance(action, Mapping) and action.get("schema_version") == OPERATION_CARD_ACTION_SCHEMA_VERSION:
                             if not profile_config or profile_config.get("bot_app_id") != expected_app:
                                 raise ValueError("Lark operation callback App changed")
@@ -594,24 +683,21 @@ class LarkGoalTopicRuntimeService:
                             owner_root = getattr(self.runtime_controller, "coordination_runtime_root", None)
                             if not isinstance(owner_root, Path):
                                 raise ValueError("Lark operation callback coordination owner is unavailable")
-                            return handle_goal_channel_operation_callback(
-                                event, runtime_root=owner_root,
-                                action_store_root=owner_root / "chat" / "actions",
+                            op_callback = (
+                                partial(handle_goal_channel_operation_callback, runner=self.private_conversations.runner)
+                                if self.private_conversations is not None
+                                else handle_goal_channel_operation_callback
+                            )
+                            return op_callback(
+                                event, runtime_root=owner_root, action_store_root=owner_root / "chat" / "actions",
                                 profile_app_id=expected_app, profile=profile,
                                 cli_bin=profile_config.get("cli_bin") or "lark-cli",
-                                **({"runner": self.private_conversations.runner}
-                                   if self.private_conversations is not None else {}),
                             )
                         if self.action_service is None:
-                            raise ValueError(
-                                "Lark manager review callbacks require Chat actions"
-                            )
+                            raise ValueError("Lark manager review callbacks require Chat actions")
                         return handle_lark_review_callback_for_profile(
-                            event,
-                            action_service=self.action_service,
-                            action_store_root=self.runtime_root
-                            / "chat"
-                            / "actions",
+                            event, action_service=self.action_service,
+                            action_store_root=self.runtime_root / "chat" / "actions",
                             profile_config=profile_config,
                         )
 
@@ -620,9 +706,7 @@ class LarkGoalTopicRuntimeService:
                     if profile in unavailable:
                         # A new subprocess must acquire locks for a fresh App
                         # observation. Only an already running pipe may stay.
-                        self._update_health(
-                            profile, status="retrying", error_code="lark_profile_inventory_unavailable"
-                        )
+                        self._update_health(profile, status="retrying", error_code="lark_profile_inventory_unavailable")
                         stop.wait(5)
                         continue
                     profile_config = profile_configs.get(profile)
@@ -633,9 +717,14 @@ class LarkGoalTopicRuntimeService:
                     # to the same committed discovery.
                     with self._lock:
                         worker = self._workers.get(profile)
-                        if worker is None or worker[0] is not stop:
+                        if managed_worker:
+                            if worker is None or worker[0] is not stop:
+                                break
+                            expected_app = worker[2].transport.app_id
+                        elif worker is not None and worker[0] is not stop:
                             break
-                        expected_app = worker[2].transport.app_id
+                        else:
+                            expected_app = str(profile_config.get("bot_app_id") or "")
                     if str(profile_config.get("bot_app_id") or "") != expected_app:
                         self.refresh()
                         continue
@@ -646,10 +735,12 @@ class LarkGoalTopicRuntimeService:
                     # A group-only connection must not pick up private work
                     # read before a newly added owner binding. A provider with
                     # no separate group route still owns its private admission.
-                    private_admitter = self._admit_private if self.private_conversations is not None and (
-                        isinstance(private_binding, Mapping)
-                        or profile not in runtime._active_group_profile_configs(snapshot)
-                    ) else None
+                    private_admitter: Callable[[str, Payload], PayloadView] | None = (
+                        self._admit_private if self.private_conversations is not None and (
+                            isinstance(private_binding, Mapping)
+                            or profile not in runtime._active_group_profile_configs(snapshot)
+                        ) else None
+                    )
                     bound_owner = (
                         private_admitter is not None
                         and isinstance(binding_id, str) and bool(binding_id)
@@ -660,7 +751,9 @@ class LarkGoalTopicRuntimeService:
                         self.private_conversations is not None and profile_supports_cards(profile_config)
                     )
                     if bound_owner:
-                        def admit_bound_private(profile_name: str, event: dict[str, Any]) -> dict[str, Any]:
+                        assert isinstance(binding_id, str)
+
+                        def admit_bound_private(profile_name: str, event: Payload) -> Payload:
                             # An event read by the old stream cannot follow a
                             # same-App rebind while it waits for admission.
                             return self._admit_private(profile_name, event, expected_binding_id=binding_id)
@@ -668,7 +761,7 @@ class LarkGoalTopicRuntimeService:
                         private_admitter = admit_bound_private
 
                     def start_consumer(args: list[str]) -> Popen[str]:
-                        process = runtime._default_process_factory(args)
+                        process: Popen[str] = runtime._default_process_factory(args)
                         if args[3:6] == ["event", "consume", "im.message.receive_v1"]:
                             with self._lock:
                                 worker = self._workers.get(profile)
@@ -688,56 +781,51 @@ class LarkGoalTopicRuntimeService:
                     # A legacy/shared consumer holds both identities: wait for
                     # the old process and fence new aliases on other servers.
                     with ExitStack() as leases:
+                        lease_dir = self._consumer_lease_dir()
                         acquired = [leases.enter_context(try_exclusive_file_lock(
-                            Path.home() / ".loopx" / "lark-consumers" / key,
+                            lease_dir / key,
                             operation="lark_event_consumer")) for key in sorted(digests)]
                         if any(lease is None for lease in acquired):
-                            self._update_health(
-                                profile,
-                                status="standby",
-                                error_code="lark_event_consumer_owned_elsewhere",
-                            )
+                            self._update_health(profile, status="standby", error_code="lark_event_consumer_owned_elsewhere")
                             stop.wait(5)
                             continue
 
-                        def listener_snapshot() -> Mapping[str, Any]:
-                            current = self.snapshot_provider()
+                        def listener_snapshot() -> PayloadView:
+                            current = self._read_listener_snapshot()
                             with self._lock:
                                 # Reuse the same observations used to admit
                                 # each worker. A successful refresh adds new
                                 # aliases without replacing this message pipe.
-                                apps = {
-                                    name: {"bot_app_id": worker[2].transport.app_id}
-                                    for name, worker in self._workers.items()
-                                }
+                                apps = {name: {"bot_app_id": worker[2].transport.app_id} for name, worker in self._workers.items()}
                             # The pipe's identity is fixed for its lifetime.
                             # Fresh target/Topic bindings still gate dispatch.
                             apps[profile] = {"bot_app_id": expected_app}
                             return self._listener_snapshot(current, apps)
 
                         def capture(route: Mapping[str, object]) -> dict[str, object]:
-                            return runtime.capture_topic_mention(
-                                route, self.runtime_controller
-                            )
+                            return runtime.capture_topic_mention(route, self.runtime_controller)
 
                         def register_callback_stream(stream: TeamPlanReviewCallbackStream) -> None:
-                            streams = self.private_conversations.steward_callback_streams
+                            conversations = self.private_conversations
+                            if conversations is None:
+                                return
+                            streams = conversations.steward_callback_streams
                             key = (profile, app_id)
                             streams[key] = stream
                             leases.callback(streams.pop, key, None)
 
-                        process_options = {"process_factory": start_consumer} if self.private_conversations is not None else {}
+                        stream_call = (
+                            partial(runtime.stream_lark_goal_topic_profile, process_factory=start_consumer)
+                            if self.private_conversations is not None
+                            else runtime.stream_lark_goal_topic_profile
+                        )
                         try:
-                            result = runtime.stream_lark_goal_topic_profile(
-                                profile=profile,
-                                snapshot_provider=listener_snapshot,
-                                stop=stop,
-                                runtime_root=self.runtime_root,
-                                answer=answer,
+                            result = stream_call(
+                                profile=profile, snapshot_provider=listener_snapshot, stop=stop,
+                                runtime_root=self.runtime_root, answer=answer,
                                 # Recheck binding eligibility per event, including
                                 # events drained from an old provider connection.
-                                capture_mention=capture,
-                                private_admitter=private_admitter,
+                                capture_mention=capture, private_admitter=private_admitter,
                                 proposal_deliverer=deliver_proposals,
                                 callback_availability_sink=register_callback_stream if private_steward_callbacks else None,
                                 review_callback_handler=(
@@ -747,10 +835,7 @@ class LarkGoalTopicRuntimeService:
                                     )
                                     else None
                                 ),
-                                health_sink=lambda update: self._update_health(
-                                    profile, **dict(update)
-                                ),
-                                **process_options,
+                                health_sink=lambda update: self._update_health(profile, **dict(update)),
                             )
                         finally:
                             with self._lock:
@@ -759,38 +844,21 @@ class LarkGoalTopicRuntimeService:
                                     del self._message_consumers[profile]
                     if result.get("status") == "configuration_removed":
                         self._update_health(
-                            profile,
-                            status="inactive",
-                            error_code="lark_route_configuration_removed",
-                            restart_count=restart_count,
+                            profile, status="inactive", error_code="lark_route_configuration_removed", restart_count=restart_count
                         )
                         break
                     if stop.is_set():
                         break
                     restart_count += 1
                     error_code = result.get("error_code")
-                    requested_disconnect = (
-                        reconnect_requested.is_set()
-                        and error_code == "lark_event_source_disconnected"
-                    )
+                    requested_disconnect = reconnect_requested.is_set() and error_code == "lark_event_source_disconnected"
                     self._update_health(
-                        profile,
-                        status="retrying",
-                        error_code=(
-                            None
-                            if result.get("ok") is True or requested_disconnect
-                            else str(error_code or "lark_event_listener_failed")
-                        ),
-                        restart_count=restart_count,
+                        profile, status="retrying", restart_count=restart_count,
+                        error_code=None if result.get("ok") is True or requested_disconnect else str(error_code or "lark_event_listener_failed"),
                     )
                 except Exception:
                     restart_count += 1
-                    self._update_health(
-                        profile,
-                        status="retrying",
-                        error_code="lark_event_listener_failed",
-                        restart_count=restart_count,
-                    )
+                    self._update_health(profile, status="retrying", error_code="lark_event_listener_failed", restart_count=restart_count)
                 stop.wait(min(5.0, 0.25 * (2 ** min(restart_count, 4))))
             current_thread = threading.current_thread()
             with self._lock:
@@ -811,7 +879,8 @@ class LarkGoalTopicRuntimeService:
                 worker = self._workers.get(profile)
                 if worker is not None and worker[1] is current_thread:
                     self._workers.pop(profile, None)
-            if not self._closed.is_set():
+                self._retiring_workers.discard(current_thread)
+            if managed_worker and not self._closed.is_set():
                 try:
                     reconfigured = profile in runtime._active_profile_configs(
                         self.snapshot_provider()
@@ -833,7 +902,9 @@ class LarkGoalTopicRuntimeService:
                 return False
             self._profile_refresh_sequence += 1
             sequence = self._profile_refresh_sequence
+        snapshot_generation = self._invalidate_listener_snapshot()
         snapshot = self.snapshot_provider()
+        self._seed_listener_snapshot(snapshot_generation, snapshot)
         profile_configs, unavailable = self._listener_configs(snapshot)
         with self._lock:
             if self._closed.is_set():
@@ -879,53 +950,39 @@ class LarkGoalTopicRuntimeService:
                 ):
                     desired[profile] = previous
             stale = (set(self._workers) - set(desired)) | {
-                profile
-                for profile in set(self._workers) & set(desired)
-                if self._workers[profile][2] != desired[profile]
+                profile for profile in set(self._workers) & set(desired) if self._workers[profile][2] != desired[profile]
             }
             for profile in stale:
                 stop, thread, previous = self._workers[profile]
-                replacement = desired.get(profile)
+                next_fingerprint = desired.get(profile)
                 consumer = self._message_consumers.get(profile)
-                if (
-                    replacement is not None
-                    and previous.transport == replacement.transport
-                    and consumer is not None
-                    and consumer[0] is stop
-                ):
+                if (next_fingerprint is not None and previous.transport == next_fingerprint.transport
+                        and consumer is not None and consumer[0] is stop):
                     # Group routes still own their queued messages. The old
                     # private admission closure fences its revoked binding
                     # while the same worker drains under the existing App lease.
                     if self._disconnect_message_consumer(consumer):
-                        self._workers[profile] = (stop, thread, replacement)
+                        self._workers[profile] = (stop, thread, next_fingerprint)
                     continue
                 self._workers.pop(profile)
+                if thread.is_alive():
+                    self._retiring_workers.add(thread)
                 stop.set()
+                if consumer is not None and consumer[0] is stop:
+                    self._stop_consumer_process(consumer)
             missing = set(desired) - set(self._workers)
             for profile in sorted(missing):
                 stop = threading.Event()
-                self._health[profile] = {
-                    "status": "starting",
-                    "event_count": 0,
-                    "replied_count": 0,
-                    "last_event_status": None,
-                    "error_code": None,
-                    "restart_count": 0,
-                    "updated_at": self._now(),
-                }
+                self._health[profile] = _default_health(updated_at=self._now())
                 thread = threading.Thread(
-                    target=self._profile_poller,
-                    args=(profile, stop),
-                    name=f"loopx-lark-{profile}",
-                    daemon=True,
+                    target=self._profile_poller, args=(profile, stop), name=f"loopx-lark-{profile}", daemon=True
                 )
                 self._workers[profile] = (stop, thread, desired[profile])
                 thread.start()
         return bool(unavailable)
 
-    def _resume_session_queues(self, snapshot: Mapping[str, Any]) -> None:
-        binding_payloads = snapshot.get("binding_payloads")
-        contexts = snapshot.get("goal_contexts")
+    def _resume_session_queues(self, snapshot: PayloadView) -> None:
+        binding_payloads, contexts = snapshot.get("binding_payloads"), snapshot.get("goal_contexts")
         if isinstance(binding_payloads, Mapping) and isinstance(contexts, Mapping):
             for goal_id, payload in binding_payloads.items():
                 if not isinstance(payload, Mapping):
@@ -934,9 +991,7 @@ class LarkGoalTopicRuntimeService:
                     if self._closed.is_set():
                         return
                     raw_routing = binding.get("routing")
-                    routing: Mapping[str, Any] = (
-                        raw_routing if isinstance(raw_routing, Mapping) else {}
-                    )
+                    routing: PayloadView = raw_routing if isinstance(raw_routing, Mapping) else {}
                     if routing.get("ingress_mode") != "session_queue":
                         continue
                     context = contexts.get(str(goal_id))
@@ -944,10 +999,7 @@ class LarkGoalTopicRuntimeService:
                     session_id = str(binding.get("session_id") or "")
                     work_dir = str(context.get("work_dir") or "")
                     try:
-                        has_queued_turns = bool(
-                            session_id
-                            and self.runtime_controller.store.queued_turns(session_id)
-                        )
+                        has_queued_turns = bool(session_id and self.runtime_controller.store.queued_turns(session_id))
                     except KeyError:
                         has_queued_turns = False
                     if has_queued_turns and work_dir:
@@ -958,8 +1010,7 @@ class LarkGoalTopicRuntimeService:
                             if self._closed.is_set():
                                 return
                             self.runtime_controller.resume_session_queue(
-                                session_id=session_id,
-                                work_dir=resolved_work_dir,
+                                session_id=session_id, work_dir=resolved_work_dir,
                                 objective=MANAGER_AGENT_OBJECTIVE
                                 if routing.get("conversation_kind") == "manager"
                                 else str(context.get("objective") or goal_id),
@@ -971,16 +1022,31 @@ class LarkGoalTopicRuntimeService:
 
     def close(self) -> None:
         self._closed.set()
+        self._invalidate_listener_snapshot()
         self._delivery_wakeup.set()
+        current_thread = threading.current_thread()
         with self._lock:
             if self._refresh_retry is not None:
                 self._refresh_retry.cancel()
                 self._refresh_retry = None
             workers = list(self._workers.values())
             self._workers.clear()
-        for stop, _thread, _fingerprint in workers:
-            stop.set()
-        for _stop, thread, _fingerprint in workers:
+            retiring = list(self._retiring_workers)
+            self._retiring_workers.clear()
+            consumers = list(self._message_consumers.values())
+            for stop, _thread, _fingerprint in workers:
+                stop.set()
+            for consumer in consumers:
+                self._stop_consumer_process(consumer)
+        threads = [
+            thread
+            for thread in (
+                *(thread for _stop, thread, _fingerprint in workers),
+                *retiring,
+            )
+            if thread is not None and thread is not current_thread
+        ]
+        for thread in threads:
             thread.join(timeout=3)
         self._delivery_worker.close(timeout=3)
 

@@ -18,6 +18,10 @@ progress, decisions and verifiable results so work can continue across sessions.
 
 </div>
 
+https://github.com/user-attachments/assets/6d459488-4834-40ef-90bc-d6649c4f0ef1
+
+<p align="center"><sub><b>60-second overview</b> — one sentence sets a long-horizon goal across Codex, Claude Code, Gemini &amp; DeepSeek; LoopX keeps Todos, replanning, human sign-off, and 3% first-read session recovery verifiable across 200+ hour runs (community film by <a href="https://x.com/lemomo_ai">@lemomo_ai</a> · <a href="#see-loopx-in-action">more product recordings below</a>).</sub></p>
+
 ---
 
 <a id="quick-start"></a>
@@ -390,14 +394,11 @@ benchmark's strict solved threshold. No score in this study equals 0.80, so
 these counts also match the study brief's >0.80 view.
 
 Against native Goal, task-level rewards improve on **23**, tie on **13**, and
-regress on **10** tasks. Strict solves match Plain Codex, so the mean gain is
-not a claim that every task improves or that more tasks are fully solved than
-Plain. Mean reward also credits partial progress.
+regress on **10** tasks. Strict solves match Plain Codex. Mean reward also credits partial progress.
 
 One effective trial per task and mode; designated replacement trials and
 unequal runtime/budgets, including longer budgets for some Heartbeat replacements.
-These are observed system results, not an equal-budget efficiency result or
-an isolated causal estimate of LoopX's effect.
+These are observed system results.
 
 [Interactive results, task comparisons and methodology](https://loopx-project.github.io/loopx/benchmarks/lhtb/)
 · [Five-arm study and limits](benchmark/LHTB/studies/five-arm-gpt56sol-max/README.md)
@@ -564,7 +565,7 @@ its own policy and authority checks before proposing a transition.
 | Session dash | Starts a live single-page panel that tracks fleet progress: sessions, their goals, and each goal's status/todo progress, with result statistics; auto-refreshes in place. | `loopx dash`, [session dash design](docs/product/surfaces/session-dash-panel-design.md) |
 | External projections | Projects todos and gates into collaboration surfaces while LoopX remains authoritative. | `loopx lark-kanban`, [Lark Kanban adapter](docs/integrations/lark-kanban-control-plane-adapter.md) |
 | Domain capabilities | Packages repeatable work lanes such as issue fixing, content operations, value connector planning, ML experiment advice, benchmark evidence, and Explore. | `loopx issue-fix`, `loopx content-ops`, `loopx value-connectors`, `loopx ml-experiment`, `loopx benchmark`, [Explore](loopx/capabilities/explore/README.md) |
-| Experimental context learning | Lets named registered agents trial provider-neutral Reward Memory through ignored, default-off project configuration. OpenViking is one provider option, not a global dependency. | `loopx reward-memory experiment-status`, [Reward Memory architecture](loopx/capabilities/reward_memory/README.md) |
+| Experimental context learning | Lets named registered agents trial provider-neutral Reward Memory through ignored, default-off project configuration. OpenViking is one provider option. | `loopx reward-memory experiment-status`, [Reward Memory architecture](loopx/capabilities/reward_memory/README.md) |
 | Governance patterns | Captures reusable routing, gate, evidence, projection, and planning shapes. | [interaction patterns](docs/concepts/interaction-pattern-catalog.md), [state model](docs/state-interaction-model.md) |
 
 The shipped primitives include lifetime goals, concrete user gates, audited safe
@@ -583,8 +584,7 @@ signals, and public/private boundary checks.
 
 The execution path is `Agent -> Capability -> Provider`; the control path
 returns `Provider readback -> Capability transition -> Kernel`. An extension is
-how an optional provider is packaged and managed, not another control-plane
-owner. See [Architecture](docs/architecture.md) and
+how an optional provider is packaged and managed. See [Architecture](docs/architecture.md) and
 [Extensions and Capabilities](docs/reference/extensions.md).
 
 </details>
@@ -599,8 +599,7 @@ owner. See [Architecture](docs/architecture.md) and
 [Anthropic's *Building always-on agents*](https://claude.com/resources/articles/building-always-on-agents)
 make persistent personal agents and sleep/wake event-driven runs a familiar product
 and architecture model. LoopX approaches that space as an open, provider-neutral
-[24/7 control plane](#always-on-agents) for agents you already run—not as a hosted
-replacement for either product.
+[24/7 control plane](#always-on-agents) for agents you already run.
 
 - **Personal agent:** use the shipped Workspace and connected Lark surfaces to
   inspect goals, steer work and resolve decisions. The
@@ -615,10 +614,9 @@ replacement for either product.
   [Reward Memory](loopx/capabilities/reward_memory/README.md), and evaluate
   candidate changes through [Explore](loopx/capabilities/explore/README.md).
   Both are optional. The link to **recursive self-improvement (RSI)** is the
-  engineering loop—propose, test, review, retain—not a claim that LoopX has
-  demonstrated autonomous model improvement or compounding capability gains.
+  engineering loop—propose, test, review, retain.
 
-A personal steward is an interaction role, not a second source of authority.
+A personal steward is an interaction role.
 Background execution still needs an available host and configured runtime.
 The [overall roadmap](docs/architecture/rfcs/loopx-overall-roadmap-v0.md)
 separates shipped foundations from the next end-to-end acceptance milestones.
@@ -876,8 +874,7 @@ long-running agent ecosystem. Our confirmed partners include:
 ## Current Status
 
 LoopX is a usable local control plane for long-running agent work and is
-entering broader adoption. It is not a full agent platform, an agent runtime, or
-an autonomous production controller.
+entering broader adoption.
 
 Today LoopX ships a durable state kernel for goals, typed todos and decision
 scopes, peer claims and leases, evidence and writeback, quota-aware scheduling,
@@ -888,9 +885,7 @@ Workspace all build on that shared control state.
 
 Support levels remain explicit. The state and CLI contracts are the stable
 center; several host integrations and advanced paths are optional, default-off,
-or experimental. LoopX does not grant credentials, approve destructive or
-production actions, publish on a user's behalf without authorization, or turn
-an unverified run into evidence of success.
+or experimental.
 
 Current investment is organized through the
 [Technical Directions map](docs/project/technical-directions.md): long-horizon

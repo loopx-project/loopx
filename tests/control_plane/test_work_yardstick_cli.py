@@ -7,6 +7,7 @@ import hashlib
 from datetime import datetime, timezone
 from itertools import groupby
 import json
+from pathlib import Path
 import shlex
 
 import pytest
@@ -584,17 +585,18 @@ def test_yardstick_opening_keeps_the_current_cue_with_a_multi_page_write_scope(t
     assert guidance == graph["work_yardstick_capture"]["guidance"]
     assert cue == graph["work_yardsticks"][0] and cue["todo_id"] == TODO_ID
 
-    _, reference = read_context_read_reference(opening["reference_file"])
-    assert reference["sha256"] == hashlib.sha256(original).hexdigest()
+    expected_sha256 = hashlib.sha256(original).hexdigest()
+    assert opening["sha256"] == opening["navigation"]["recovery"]["sha256"] == expected_sha256
+    assert Path(opening["navigation"]["recovery"]["path"]) == saved
     chunks = [content]
     offset = len(content.encode())
     page = opening
     while not page["eof"]:
         assert page["next_offset"] == offset
         words = shlex.split(page["next_command"])
+        assert words[words.index("--capture-sha256") + 1] == expected_sha256
         page = run(project, runtime, path, *words[words.index("quota"):])
-        _, follow = read_context_read_reference(page["reference_file"])
-        assert follow["path"] == reference["path"] and follow["sha256"] == reference["sha256"]
+        assert page["sha256"] == expected_sha256
         assert page["offset"] == offset
         chunks.append(page["content"])
         offset += len(page["content"].encode())

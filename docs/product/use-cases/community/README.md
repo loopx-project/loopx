@@ -25,7 +25,7 @@ use to reproduce the failure, fix it, and show you the result.
 
 The assistant uses the LoopX entry to connect the project and track the work.
 If the entry does not appear, check how the skill was installed for that
-assistant and reopen it. A setup preview does not mean work has started. If
+assistant and reopen it. If
 the host cannot activate continuation, ask the assistant to explain the
 missing step before relying on it to resume.
 

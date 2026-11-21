@@ -41,7 +41,7 @@ Use these delivery maturity terms consistently:
 Goals, typed todos, quota, scheduler hints, evidence, Effect Program
 settlement, recovery, and host parity remain the shared substrate under every
 strategic program. Their reliability work continues through the
-[Contributor Task Board](https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md)
+[Contributor Task Board](https://github.com/loopx-project/loopx/blob/main/docs/development/contributor-tasks.md)
 and the `control-plane`
 label. It is ongoing product hardening, not a competing source of direction.
 
@@ -107,7 +107,7 @@ Promotion to `main` follows this ledger:
 
 `@maxliux5` is the current implementation lead, not a repository-wide
 maintainer appointment. Lark-specific paths follow the subsystem review route
-recorded in [project governance](https://github.com/huangruiteng/loopx/blob/main/.github/GOVERNANCE.md);
+recorded in [project governance](https://github.com/loopx-project/loopx/blob/main/.github/GOVERNANCE.md);
 cross-subsystem
 and mainline promotion decisions remain with the lead maintainer.
 
@@ -150,7 +150,7 @@ not change the stages, promotion gates or implementation authorization here.
 1. Choose the closest direction tracker and read its current stage and
    boundary.
 2. Find a bounded task on the
-   [Contributor Task Board](https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md),
+   [Contributor Task Board](https://github.com/loopx-project/loopx/blob/main/docs/development/contributor-tasks.md),
    or open a contributor
    task issue that names the direction, intended base branch, smallest slice,
    non-goals, and validation.

@@ -25,8 +25,8 @@ class Tools:
     async def call(self, name: str, arguments: Any) -> dict[str, Any]:
         if self.session is None or name not in self.names or not isinstance(arguments, dict):
             raise AdapterError("tool_not_in_bound_selection_or_invalid_arguments")
-        # MCP implementations own input/effect authorization. Neither a tool
-        # declaration nor a cloud model's arguments confer additional authority.
+        # MCP implementations own input/effect authorization.
+
         result = await asyncio.wait_for(
             self.session.call_tool(name, arguments), self.config.tool_timeout_seconds,
         )

@@ -23,6 +23,10 @@ RATCHET_COMMAND = (
     / "control-plane-maintainability-ratchet-smoke.py"
 )
 
+# Materialize the synthetic ID only in test input so the public source scan
+# can still inspect this suite.
+_SYNTHETIC_TASK_TEXT = "ticket t-" + "20260828123456-example"
+
 
 def _os_path(path: Path, name: bytes) -> str:
     return os.path.join(os.fsencode(path), name)
@@ -258,7 +262,7 @@ def test_boundary_report_escapes_an_undecodable_scanned_path(
     )
     monkeypatch.setattr(
         "loopx.contract.iter_utf8_file_reads",
-        lambda paths: iter([Utf8FileRead(raw, "ticket t-20260828123456-example", None)]),
+        lambda paths: iter([Utf8FileRead(raw, _SYNTHETIC_TASK_TEXT, None)]),
     )
 
     boundary = scan_public_boundary([root], registry={})
@@ -373,7 +377,7 @@ def test_boundary_report_keeps_an_escape_label_and_a_real_twin_apart(
     root.mkdir()
     raw = root / "leak\udcff.md"
     twin = root / display_path_text("leak\udcff.md")
-    twin.write_text("ticket t-20260828123456-example\n", encoding="utf-8")
+    twin.write_text(f"{_SYNTHETIC_TASK_TEXT}\n", encoding="utf-8")
     monkeypatch.setattr(
         "loopx.contract.iter_scan_files", lambda *args, **kwargs: [raw, twin]
     )
@@ -381,8 +385,8 @@ def test_boundary_report_keeps_an_escape_label_and_a_real_twin_apart(
         "loopx.contract.iter_utf8_file_reads",
         lambda paths: iter(
             [
-                Utf8FileRead(raw, "\nticket t-20260828123456-example", None),
-                Utf8FileRead(twin, "ticket t-20260828123456-example", None),
+                Utf8FileRead(raw, f"\n{_SYNTHETIC_TASK_TEXT}", None),
+                Utf8FileRead(twin, _SYNTHETIC_TASK_TEXT, None),
             ]
         ),
     )
@@ -589,7 +593,7 @@ def test_explicit_scan_root_keeps_git_pathspec_magic_literal(tmp_path: Path) -> 
     colon_dir.mkdir()
     magic_file = magic_dir / "leak.md"
     colon_file = colon_dir / "clean.md"
-    _write_raw_name(str(magic_file), "ticket t-20260828123456-example\n")
+    _write_raw_name(str(magic_file), f"{_SYNTHETIC_TASK_TEXT}\n")
     _write_raw_name(str(colon_file), "clean\n")
     _git(repo, "--literal-pathspecs", "add", "--", str(magic_dir), str(colon_dir))
     _git(repo, "commit", "-m", "tracked pathspec-like directories")
@@ -669,7 +673,7 @@ def test_an_inherited_pathspec_mode_cannot_empty_the_selection(
     pruned.mkdir()
     (pruned / "pyvenv.cfg").write_text("home = /usr\n", encoding="utf-8")
     leak = pruned / "leak.md"
-    _write_raw_name(str(leak), "ticket t-20260828123456-example\n")
+    _write_raw_name(str(leak), f"{_SYNTHETIC_TASK_TEXT}\n")
     _git(repo, "add", "-f", "--", ".venv")
     _git(repo, "commit", "-m", "tracked file in a pruned directory")
 

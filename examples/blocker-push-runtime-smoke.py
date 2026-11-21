@@ -218,7 +218,7 @@ def main() -> int:
         assert "state=operator_gate" not in compact_prompt, prompt
         assert "Normal turns use CLI `interaction_contract`" in compact_prompt, prompt
         assert "`user_channel.notify` controls OUTPUT only" in compact_prompt, prompt
-        assert "NOTIFY=show; DONT_NOTIFY=no output" in compact_prompt, prompt
+        assert "NOTIFY=show; DONT_NOTIFY: no chat text. Return any required host quiet result in full" in compact_prompt, prompt
         assert "Due/peer work is not a user prompt" in compact_prompt, prompt
         assert "Missing NOTIFY action: user Todo unprojected" in compact_prompt, prompt
         # The bootstrap rule is shared from heartbeat.rules after #4201; assert the

@@ -17,6 +17,7 @@ from loopx.chat_store import ChatSessionStore
 from loopx.capabilities.manager_context import pending
 from loopx.capabilities.manager_context.inspection import ManagerInspection, CONTEXT_TOOL_NAME
 from loopx.capabilities.manager_context.roundtrip import drain, reply_status
+from loopx.control_plane.collaboration.peers import read_inbox
 from tests.control_plane.canonical_authority_fixture import (
     empty_todo_display,
     initialize_canonical_source_fixture,
@@ -261,7 +262,9 @@ def test_project_chat_nested_cli_handoff_returns_once_after_restart(project, mon
         cli("reviewer", "acknowledge", "--request-id", cid, "--decision", "adopt", "--reason", "Independent source check")
         cli("reviewer", "report", "--request-id", cid, "--reply-text", "Corrected free cash flow is 25. Periods are not comparable.")
         assert "Corrected free cash flow is 25" in json.dumps(cli("coordinator", "read"))
-        cli("coordinator", "acknowledge-return", "--request-id", cid)
+        read_inbox(root, registry, "research", "coordinator", turn_instance_id="turn-peer")
+        cli("coordinator", "acknowledge-return", "--request-id", cid,
+            "--turn-instance-id", "turn-peer", "--disposition", "accepted")
         cli("coordinator", "report", "--request-id", request_id, "--reply-text",
             "Adopted the peer finding: corrected cash flow is 25; no growth inference across different periods.")
         assert not pending(root, "other", "unrelated")["items"]

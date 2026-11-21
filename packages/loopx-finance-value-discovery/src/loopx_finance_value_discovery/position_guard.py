@@ -1,6 +1,6 @@
 """Read-only financial assessment of one filled position episode.
 
-This is a financial reducer, not a monitor scheduler or venue adapter. Inputs
+This is a financial reducer. Inputs
 and outputs contain private normalized account facts and must stay private.
 """
 

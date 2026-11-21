@@ -1,6 +1,6 @@
 import type {TrajectorySolverUsage} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
 
-/** Presentation arithmetic over one already-qualified capture, not a ledger. */
+/** Presentation arithmetic over one already-qualified capture. */
 export function researchUsageRows(usage: TrajectorySolverUsage) {
   const complete = usage.turns.map(turn => ({...turn, incomplete: false}));
   const partial = [...(usage.interrupted_turns ?? [])];

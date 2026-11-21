@@ -209,8 +209,9 @@ def register_start_goal_command(subparsers: argparse._SubParsersAction) -> None:
         "--thread-id",
         help=(
             "Stable opaque host thread id used to reuse the bound agent lane. "
-            "Codex App defaults to CODEX_THREAD_ID and Trae App to "
-            "TRAECLI_THREAD_ID when available."
+            "Codex App defaults to CODEX_THREAD_ID, Trae App to "
+            "TRAECLI_THREAD_ID, and Antigravity to ANTIGRAVITY_CONVERSATION_ID "
+            "(or <user_information> Conversation ID) when available."
         ),
     )
     start_goal_parser.add_argument(

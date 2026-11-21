@@ -268,8 +268,8 @@ def handle_task_lease_command(
         }
     if payload.get("ok") is not True:
         # Presentation only: retain every native refusal and explicit proof.
-        # An exact read is useful for both grammar and semantic failures; it
-        # neither chooses another owner nor retries a mutation with new proof.
+        # An exact read is useful for both grammar and semantic failures.
+
         route_args = [*loopx_cli_argv()[1:], f"--registry={registry_path}", "--format", "json"]
         if runtime_root_arg is not None:
             route_args.append(f"--runtime-root={runtime_root_arg}")

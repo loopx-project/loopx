@@ -543,7 +543,9 @@ def assert_inherited_maintainability_red_is_advisory_only() -> None:
             {
                 "ok": False,
                 "status": "failed",
-                "command": "python3 examples/control_plane/control-plane-maintainability-ratchet-smoke.py",
+                "returncode": 1,
+                "normalized": {"script": "examples/control_plane/control-plane-maintainability-ratchet-smoke.py"},
+                "maintainability_failure_paths": ["loopx/status.py"],
                 "stdout_tail": (
                     "- unreviewed finding: dependency_debt:loopx.status->"
                     "loopx.presentation path=loopx/status.py"
@@ -567,7 +569,9 @@ def assert_inherited_maintainability_red_is_advisory_only() -> None:
             {
                 "ok": False,
                 "status": "failed",
-                "command": "python3 examples/control_plane/control-plane-maintainability-ratchet-smoke.py",
+                "returncode": 1,
+                "normalized": {"script": "examples/control_plane/control-plane-maintainability-ratchet-smoke.py"},
+                "maintainability_failure_paths": ["loopx/status.py"],
                 "stdout_tail": (
                     "- unreviewed finding: dependency_debt:loopx.status->"
                     "loopx.presentation path=loopx/status.py"
@@ -588,7 +592,9 @@ def assert_inherited_maintainability_red_is_advisory_only() -> None:
             {
                 "ok": False,
                 "status": "failed",
-                "command": "python3 examples/control_plane/control-plane-maintainability-ratchet-smoke.py",
+                "returncode": 1,
+                "normalized": {"script": "examples/control_plane/control-plane-maintainability-ratchet-smoke.py"},
+                "maintainability_failure_paths": ["loopx/status.py"],
                 "stdout_tail": (
                     "- unreviewed finding: oversized_decision_function:"
                     "loopx.status:new_hot_path path=loopx/status.py"

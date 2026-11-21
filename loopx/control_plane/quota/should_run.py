@@ -296,8 +296,7 @@ def _apply_selected_todo_guards(
             and no_executable_work
         ):
             # An empty generic Goal recommendation cannot replace the owner's
-            # current acceptance scope with another paid work attempt. A local
-            # accepted scope also does not certify the entire Goal as complete.
+            # current acceptance scope with another paid work attempt.
             # Original receipt recovery, admitted replan and actual independent
             # work retain their own routes; this only removes new empty delivery.
             prepared.normal_delivery_allowed = False
