@@ -706,3 +706,84 @@ def test_retire_without_hook_ignores_unusable_state_file(tmp_path: Path) -> None
         "not_configured",
     ], result
     assert not (runtime_root / "closeout").exists()
+
+
+def test_stop_runs_closeout_for_committed_transition_when_projection_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from loopx.control_plane.goals import activation_service
+
+    runtime_root = tmp_path / "runtime"
+    project = tmp_path / "project"
+    source_registry = project / ".loopx" / "registry.json"
+    _write_json(
+        source_registry,
+        {
+            "schema_version": "0.1",
+            "common_runtime_root": str(runtime_root),
+            "goals": [
+                {
+                    "id": "projected-stop",
+                    "display_name": "Projected stop fixture",
+                    "repo": str(project),
+                    "quota": {"compute": 1, "allowed_slots": 4, "spent_slots": 0},
+                }
+            ],
+        },
+    )
+    synced = sync_project_registry_to_global(
+        registry_path=source_registry,
+        runtime_root_override=str(runtime_root),
+        goal_id="projected-stop",
+        dry_run=False,
+    )
+    assert synced["ok"] is True
+    global_registry = runtime_root / "registry.global.json"
+    payload_path = tmp_path / "payloads.jsonl"
+    _configure_closeout(runtime_root, payload_path)
+
+    real_sync = activation_service.sync_project_registry_to_global
+    failures = {"remaining": 1}
+
+    def _flaky_sync(**kwargs):
+        if failures["remaining"]:
+            failures["remaining"] -= 1
+            return {
+                "ok": False,
+                "error": "shared registry write is temporarily unavailable",
+                "recommended_action": "rerun loopx sync-global --goal-id projected-stop",
+            }
+        return real_sync(**kwargs)
+
+    monkeypatch.setattr(
+        activation_service, "sync_project_registry_to_global", _flaky_sync
+    )
+
+    first = set_goal_activation_state(
+        registry_path=global_registry,
+        goal_id="projected-stop",
+        state="stopped",
+        actor_kind="owner",
+        execute=True,
+    )
+    # The projection failed, but the source stop committed and the hook still
+    # ran once for that committed transition.
+    assert first["ok"] is False, first
+    assert first["partial_write"] is True, first
+    assert first["written"] is True, first
+    assert first["closeout"]["status"] == "success", first
+    assert len(_ledger(runtime_root, "projected-stop")) == 1
+
+    second = set_goal_activation_state(
+        registry_path=global_registry,
+        goal_id="projected-stop",
+        state="stopped",
+        actor_kind="owner",
+        execute=True,
+    )
+    assert second["ok"] is True, second
+    assert second["projection_reconciled"] is True, second
+    assert "closeout" not in second
+    # The retry reconciles the projection without a second hook invocation.
+    assert len(_ledger(runtime_root, "projected-stop")) == 1
+    assert len(payload_path.read_text(encoding="utf-8").splitlines()) == 1
