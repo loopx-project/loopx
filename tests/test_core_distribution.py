@@ -128,6 +128,16 @@ def _run(python, arguments, cwd, *, environment=None, expected=0):
     return result
 
 
+def _resume_without_adapter(arguments, turn_key, *, needs_validator):
+    omit = {"--host-adapter-command-json", "--host-adapter-request-schema"}
+    if not needs_validator:
+        omit.add("--validation-command-json")
+    return [
+        argument for index, argument in enumerate(arguments)
+        if argument not in omit and (index == 0 or arguments[index - 1] not in omit)
+    ] + ["--resume-turn-key", turn_key]
+
+
 def test_installed_core_identity_help_and_unavailable_workspace(core_python, tmp_path):
     script = '''import importlib.util as u,json,loopx
 from pathlib import Path
@@ -689,7 +699,8 @@ def test_installed_core_executes_checks_and_replays_once(core_python, task, chec
     assert history["ok"] is True
     result = json.loads(_run(core_python, arguments, workspace).stdout)
     key = _assert_committed(core_python, workspace, runtime, result)
-    replay = json.loads(_run(core_python, [*arguments, "--resume-turn-key", key], workspace).stdout)
+    resume = _resume_without_adapter(arguments, key, needs_validator=False)
+    replay = json.loads(_run(core_python, resume, workspace).stdout)
     _assert_committed(core_python, workspace, runtime, replay)
     assert replay["effects"]["host_invoked"] is False
     assert replay["effects"]["state_written"] is False
@@ -716,6 +727,9 @@ def test_installed_core_recovers_confirmed_result_after_process_loss(
     )
     pause = workspace / "pause-validator"
     pause.touch()
+    adapter = workspace / "original-adapter.py"
+    adapter.write_text(HOST_SOURCE)
+    arguments[arguments.index("--host-adapter-command-json") + 1] = json.dumps([core_python, "-I", str(adapter)])
     process = subprocess.Popen(_command(core_python, arguments), cwd=workspace,
         env=_environment(core_python), stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, text=True)
@@ -744,8 +758,10 @@ def test_installed_core_recovers_confirmed_result_after_process_loss(
             process.wait(timeout=10)
         pause.unlink(missing_ok=True)
         process.communicate(timeout=10)
+    adapter.unlink()
     assert not journal.get("quota_spend")
     assert _spends(runtime) == 0
+    resume = _resume_without_adapter(arguments, journal["turn_key"], needs_validator=True)
     if lease_change:
         todo_id = journal["plan"]["work_contract"]["selected_todo"]["todo_id"]
         prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
@@ -754,8 +770,7 @@ def test_installed_core_recovers_confirmed_result_after_process_loss(
         _run(core_python, [*prefix, "task-lease", lease_change, "--goal-id", GOAL,
             "--todo-id", todo_id, "--owner", AGENT, "--idempotency-key", lease["idempotency_key"],
             "--expected-version", str(lease["version"])], workspace)
-        rejected = json.loads(_run(core_python, [*arguments, "--resume-turn-key", journal["turn_key"]],
-            workspace, expected=1).stdout)
+        rejected = json.loads(_run(core_python, resume, workspace, expected=1).stdout)
         assert rejected["status"] == "failed"
         assert rejected["effects"]["host_invoked"] is False
         assert rejected["effects"]["state_written"] is False
@@ -766,11 +781,39 @@ def test_installed_core_recovers_confirmed_result_after_process_loss(
         assert readback["todo"]["status"] == "open"
         assert (workspace / "host-invocations").read_text().splitlines() == ["called"]
         return
-    result = json.loads(_run(core_python, [*arguments, "--resume-turn-key", journal["turn_key"]], workspace).stdout)
+    journal_path = runtime / "goals" / GOAL / "turns" / f"{journal['turn_key'].removeprefix('sha256:')}.json"
+    before = journal_path.read_bytes()
+    replay = _resume_without_adapter(arguments, journal["turn_key"], needs_validator=False)
+    missing_validator = json.loads(_run(core_python, replay, workspace, expected=1).stdout)
+    assert missing_validator["status"] == "unavailable"
+    assert "--validation-command-json" in missing_validator["reason"]
+    assert all(value is False for value in missing_validator["effects"].values())
+    assert journal_path.read_bytes() == before
+    result = json.loads(_run(core_python, resume, workspace).stdout)
     _assert_committed(core_python, workspace, runtime, result)
     assert result["effects"]["host_invoked"] is False
-    replay = json.loads(_run(core_python, [*arguments, "--resume-turn-key", journal["turn_key"]], workspace).stdout)
-    assert replay["effects"]["quota_spent"] is False
+    settled = json.loads(_run(core_python, replay, workspace).stdout)
+    assert settled["replayed"] is True and all(value is False for value in settled["effects"].values())
+    assert (workspace / "host-invocations").read_text().splitlines() == ["called"]
+
+
+def test_installed_core_resume_without_adapter_refuses_new_host_attempt(core_python, task):
+    workspace, runtime, _, arguments = task
+    host_script = workspace / "invalid-adapter.py"
+    host_script.write_text(HOST_SOURCE.replace("'result_kind':'validated_completion'", "'result_kind':'invalid'"))
+    arguments[arguments.index("--host-adapter-command-json") + 1] = json.dumps([core_python, "-I", str(host_script)])
+    launch = json.loads(_run(core_python, arguments, workspace, expected=1).stdout)
+    assert launch["validation_stage"] == "host_result_contract" and launch["effects"]["host_invoked"] is True
+    key = launch["resume_turn_key"]
+    journal = runtime / "goals" / GOAL / "turns" / f"{key.removeprefix('sha256:')}.json"
+    before = journal.read_bytes()
+    recovery = _resume_without_adapter(arguments, key, needs_validator=True)
+    refused = json.loads(_run(core_python, [*recovery, "--retry-failed-turn"], workspace, expected=1).stdout)
+    assert refused["status"] == "unavailable"
+    assert "--host-adapter-command-json" in refused["reason"]
+    assert all(value is False for value in refused["effects"].values())
+    assert journal.read_bytes() == before
+    assert _spends(runtime) == 0
     assert (workspace / "host-invocations").read_text().splitlines() == ["called"]
 
 
