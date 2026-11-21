@@ -527,60 +527,11 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
         Only a proven non-delivery restores FIFO eligibility. A lost native
         acknowledgement keeps the original input durably reserved.
         """
+        from .capabilities.native_chat.queued_admission import steer_queued_turn
+
         self._require_steering_session(session_id)
-        return self._steer_queued_turn(session_id=session_id, queued_turn_id=queued_turn_id,
+        return steer_queued_turn(self, session_id=session_id, queued_turn_id=queued_turn_id,
             expected_turn_id=expected_turn_id, client_ingress_id=client_ingress_id)
-
-    def _steer_queued_turn(
-        self, *, session_id: str, queued_turn_id: str, expected_turn_id: str,
-        client_ingress_id: str, admitted_steward: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        from .capabilities.native_chat.queued_admission import steer_admitted_web_turn
-        from .control_plane.chat_turn_acceptance import plan_queued_chat_steering
-
-        ingress_id = "queue-steer-" + hashlib.sha256(
-            json.dumps([session_id, queued_turn_id, client_ingress_id]).encode()
-        ).hexdigest()[:40]
-        with self.store.queue_steering_lock(session_id, queued_turn_id):
-            session = self.store.load_session(session_id)
-            turn = self.store.load_turn(session_id, queued_turn_id)
-            if session is None or turn is None:
-                raise KeyError("chat turn was not found")
-            if admitted_steward is not None and any(session.get(key) != admitted_steward.get(key) for key in (
-                "steward_context", "project_context", "channel_id", "goal_id", "agent_id",
-                "executor_endpoint_id", "manager_authorization_scope_id",
-            )):
-                raise ValueError("bound Session changed before queue steering")
-            active = self.store.load_turn(session_id, str(session.get("active_turn_id") or "")) if session.get("active_turn_id") else None
-
-            def plan(phase):
-                return plan_queued_chat_steering(session, turn, active,
-                    self.store.steering_receipt(session_id, ingress_id),
-                    ingress_id=ingress_id, operation_id=client_ingress_id, target=expected_turn_id, phase=phase,
-                    web_origin_only=admitted_steward is not None)
-
-            decision = plan("prepare")
-            if decision["action"] in {"dispatch", "unresolved"}:
-                if decision["action"] == "dispatch":
-                    turn = self.store.write_queue_steering(session_id, turn, decision)
-                try:
-                    if admitted_steward is not None:
-                        steer_admitted_web_turn(self, session, expected_turn_id=expected_turn_id,
-                            client_ingress_id=ingress_id, message=turn["message"], queued_turn_id=queued_turn_id)
-                    else:
-                        self.steer_active_turn(session_id=session_id, expected_turn_id=expected_turn_id,
-                            client_ingress_id=ingress_id, message=turn["message"], _queued_turn_id=queued_turn_id)
-                except Exception:
-                    # The durable ingress, including absence before any send,
-                    # owns the outcome. Exception wording cannot release work.
-                    pass
-                decision = plan("settle")
-            self.store.write_queue_steering(session_id, turn, decision)
-            if decision["action"] != "complete":
-                raise RuntimeError(decision["error_code"])
-            return {"session_id": session_id, "queued_turn_id": queued_turn_id,
-                "turn_id": expected_turn_id, "client_ingress_id": client_ingress_id,
-                "status": "delivered"}
 
     def steer_active_turn(
         self, *, session_id: str, client_ingress_id: str, message: str,
