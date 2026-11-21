@@ -25,9 +25,10 @@ Turn planning, default host selection, dispatch and delegation readiness use
 the machine store independently of `CODEX_HOME` and Goal-local credentials.
 When both machine roots contain state, a managed Turn or confirmation callback
 can resolve the credential only if its bound runtime selects one of those two
-roots. Specify `--host dsh` and the intended machine `--runtime-root` for a
-standalone managed Turn in that situation. Explicit machine credential APIs
-retain their root parameter for operating an isolated machine store.
+roots. An alias in a parent directory of a valid root resolves to the same
+machine directory. For a standalone managed Turn, specify `--host dsh` and the
+intended machine `--runtime-root`. Explicit machine credential APIs retain
+their root parameter for operating an isolated machine store.
 
 This corrects the previous behavior where isolated Goal runtimes missed an
 already configured machine credential, and parser defaults consulted only the
@@ -41,7 +42,9 @@ interpreter separately from credential availability.
 有效的机器凭证会按既有规则选择 `dsh`。显式 host 选择保持优先，
 DSH SDK 是否安装仍按实际执行的 Python 环境检查。
 两个默认机器目录同时存在时，已绑定其中一个目录的托管 Turn 和卡片回调读取该目录
-的凭证。任意项目目录中的凭证文件仍不能覆盖机器凭证。
+的凭证。有效机器目录的上级路径存在别名时，仍按实际目录匹配。单独运行托管 Turn 时，
+请同时指定 `--host dsh` 和对应机器目录的 `--runtime-root`。
+任意项目目录中的凭证文件仍不能覆盖机器凭证。
 
 The directory is mode `0700` and the file is mode `0600`, written atomically.
 It is deliberately **not** part of `machine/configuration.json`: that document

@@ -422,8 +422,8 @@ def operator_provider_environ(
             if route["status"] == RuntimeRouteStatus.CONFLICT:
                 bound_root = bound_runtime_root.expanduser().resolve()
                 if bound_root in {
-                    Path(str(route["target_runtime_root"])),
-                    Path(str(route["legacy_runtime_root"])),
+                    Path(str(route["target_runtime_root"])).resolve(),
+                    Path(str(route["legacy_runtime_root"])).resolve(),
                 }:
                     runtime_root = bound_root
             elif route["status"] != RuntimeRouteStatus.INVALID:
