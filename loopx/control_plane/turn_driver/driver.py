@@ -198,73 +198,26 @@ def _session_plan(
     iteration_context_policy: str,
     session_scope: str = "agent",
 ) -> tuple[dict[str, Any], str | None]:
-    identity_fields = session_identity_fields(session_scope)
-    if lineage.get("request_binding_id") and iteration_context_policy == "fresh":
-        identity_fields = ("goal_id", "agent_id")
-    context_policy = {
-        "schema_version": LOOPX_ITERATION_CONTEXT_POLICY_SCHEMA_VERSION,
-        "mode": iteration_context_policy,
-        "scope": "iteration",
-        **({"binding_scope": session_scope} if session_scope != "todo" else {}),
-    }
-    host_route = route in {
-        LoopXTurnRoute.READY_FOR_HOST,
-        LoopXTurnRoute.REPAIR_REQUIRED,
-        LoopXTurnRoute.REPLAN_REQUIRED,
-    }
-    if not host_route:
-        return {
-            "schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
-            "action": "none",
-            "binding_status": "not_applicable",
-            "context_policy": context_policy,
-        }, None
-    if (not all(lineage.get(field) for field in (*identity_fields, "action_hash"))
-            or not (lineage.get("todo_id") or lineage.get("replan_obligation_id") or lineage.get("request_binding_id"))):
-        return {
-            "schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
-            "action": "reject",
-            "binding_status": "missing_turn_lineage",
-        }, "host-bound routes require goal, agent, todo, and action-hash lineage"
+    """Transport both real callers to the single TypeScript session policy.
 
-    if iteration_context_policy == "fresh":
-        return {
-            "schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
-            "action": "start_new",
-            "binding_status": (
-                "existing_binding_ignored" if session_binding else "not_found"
-            ),
-            "context_policy": context_policy,
-        }, None
-
+    Keep invalid-scope exception precedence and Python's historical scalar
+    encoding. Neither this codec nor the persisted session-key helper selects
+    whether a Host starts, resumes or rejects a conversation.
+    """
+    session_identity_fields(session_scope)
     binding = dict(session_binding or {})
-    if not binding:
-        return {
-            "schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
-            "action": "start_new",
-            "context_policy": context_policy,
-        }, None
-    if binding.get("schema_version") != LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION:
-        return {
-            "schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
-            "action": "reject",
-            "binding_status": "unsupported_schema",
-        }, "unsupported LoopX Turn session binding schema"
-
-    actual = {field: str(binding.get(field) or "") for field in identity_fields}
-    expected = {field: lineage[field] for field in identity_fields}
-    if actual != expected:
-        return {
-            "schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
-            "action": "reject",
-            "binding_status": "identity_mismatch",
-        }, "session binding does not match the current " + ", ".join(identity_fields)
-    return {
-        "schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
-        "action": "resume",
-        "binding_status": "compatible",
-        "context_policy": context_policy,
-    }, None
+    result = _turn_envelope_result(
+        "session_plan", route=route.value, lineage=dict(lineage),
+        # Only presence and the schema token cross this boundary. Unrelated
+        # provider fields (including non-JSON metadata) are never decision input.
+        session_binding=({"schema_version": binding.get("schema_version")
+                          if isinstance(binding.get("schema_version"), str) else None}
+                         if binding else {}),
+        binding_identity_text={field: str(binding.get(field) or "")
+                               for field in ("goal_id", "agent_id", "todo_id")},
+        iteration_context_policy=iteration_context_policy, session_scope=session_scope,
+    )
+    return result["session"], result["error"]
 
 
 def reconcile_failed_turn_session_request(
