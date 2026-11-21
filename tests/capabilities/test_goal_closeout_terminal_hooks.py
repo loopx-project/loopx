@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import sys
 import pytest
@@ -786,4 +787,84 @@ def test_stop_runs_closeout_for_committed_transition_when_projection_fails(
     assert "closeout" not in second
     # The retry reconciles the projection without a second hook invocation.
     assert len(_ledger(runtime_root, "projected-stop")) == 1
+    assert len(payload_path.read_text(encoding="utf-8").splitlines()) == 1
+
+
+
+def test_stop_runs_closeout_when_shared_registry_writer_raises_eio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An EIO from the shared-registry writer must not erase the stop."""
+
+    from loopx import global_registry as global_registry_module
+
+    runtime_root = tmp_path / "runtime"
+    project = tmp_path / "project"
+    source_registry = project / ".loopx" / "registry.json"
+    _write_json(
+        source_registry,
+        {
+            "schema_version": "0.1",
+            "common_runtime_root": str(runtime_root),
+            "goals": [
+                {
+                    "id": "eio-stop",
+                    "display_name": "EIO stop fixture",
+                    "repo": str(project),
+                    "quota": {"compute": 1, "allowed_slots": 4, "spent_slots": 0},
+                }
+            ],
+        },
+    )
+    synced = sync_project_registry_to_global(
+        registry_path=source_registry,
+        runtime_root_override=str(runtime_root),
+        goal_id="eio-stop",
+        dry_run=False,
+    )
+    assert synced["ok"] is True
+    global_registry = runtime_root / "registry.global.json"
+    payload_path = tmp_path / "payloads.jsonl"
+    _configure_closeout(runtime_root, payload_path)
+
+    real_write = global_registry_module.write_json
+    failures = {"remaining": 1}
+
+    target = global_registry.resolve()
+
+    def _flaky_write(path, payload):
+        if failures["remaining"] and Path(path).resolve() == target:
+            failures["remaining"] -= 1
+            raise OSError(errno.EIO, "Input/output error")
+        return real_write(path, payload)
+
+    monkeypatch.setattr(global_registry_module, "write_json", _flaky_write)
+
+    first = set_goal_activation_state(
+        registry_path=global_registry,
+        goal_id="eio-stop",
+        state="stopped",
+        actor_kind="owner",
+        execute=True,
+    )
+    # The projection raised, but the committed source stop keeps its receipt
+    # and still dispatches the configured hook exactly once.
+    assert first["written"] is True, first
+    assert first["ok"] is False, first
+    assert first["partial_write"] is True, first
+    assert first["global_sync"]["error_kind"] == "global_sync_failed", first
+    assert first["closeout"]["status"] == "success", first
+    assert len(_ledger(runtime_root, "eio-stop")) == 1
+
+    second = set_goal_activation_state(
+        registry_path=global_registry,
+        goal_id="eio-stop",
+        state="stopped",
+        actor_kind="owner",
+        execute=True,
+    )
+    assert second["ok"] is True, second
+    assert second["projection_reconciled"] is True, second
+    assert "closeout" not in second
+    assert len(_ledger(runtime_root, "eio-stop")) == 1
     assert len(payload_path.read_text(encoding="utf-8").splitlines()) == 1
