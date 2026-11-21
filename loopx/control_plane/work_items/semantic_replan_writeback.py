@@ -38,6 +38,7 @@ from .autonomous_replan_obligation import (
 )
 from .progress_observation import guarded_replan_transition_delta, semantic_delta_from_writeback
 from .lifecycle_recovery import attach_receipt_replan_context
+from .replan_context_codec import project_todo_stride_meta_goal, recorded_stride_meta_goal, replan_history_from_status
 from .replan_semantics_codec import project_replan_semantics
 from ..effect_runtime import effect_runtime_request_scope
 from .repair_delta import (
@@ -318,6 +319,7 @@ def qualify_replan_writeback(
     external_progress_review: Mapping[str, Any] | None = None,
     effective_turn_cadence: dict[str, Any] | None = None,
     guard_scoped: bool = False,
+    settlement_todo_id: str | None = None,
     guard_semantic_replan_obligation_id: str | None = None,
     capability_evidence: CapabilityReplanEvidence | None = None,
     guard_capability: Mapping[str, Any] | None = None,
@@ -339,6 +341,9 @@ def qualify_replan_writeback(
     """
 
     safe_agent_id = str(agent_id or "").strip()
+    meta_goal = recorded_stride_meta_goal({"agent_vision": agent_vision})
+    if meta_goal is not None and not (safe_agent_id and guard_scoped and guard_semantic_replan_obligation_id):
+        raise ValueError("A Todo meta-goal requires an admitted Stride review")
     if not safe_agent_id:
         return None, None
     todo_projection = todo_fields if todo_fields is not None else parse_active_state_todos(
@@ -484,6 +489,19 @@ def qualify_replan_writeback(
         agent_vision=agent_vision,
         history_runs=newest_first_runs,
     )
+    if meta_goal is not None and semantic_delta.get("accepted") is True:
+        todo_id = str(meta_goal["todo_id"])
+        matches = [item for item in agent_todo_completion_items if item.get("todo_id") == todo_id]
+        if len(matches) != 1:
+            raise ValueError("The Todo targeted by the meta-goal is missing or ambiguous")
+        assert agent_vision is not None
+        project_todo_stride_meta_goal(
+            goal_id=goal_id, agent_id=safe_agent_id, todo_id=todo_id, goal_ref=goal_ref,
+            runs=replan_history_from_status(status_payload, goal_id),
+            history_newest_first=not bool(status_payload.get("registry") and status_payload.get("runtime_root")),
+            proposal=agent_vision["stride_decision"], todo_delta=agent_vision.get("todo_delta"),
+            todo=matches[0], settlement_todo_id=settlement_todo_id,
+        )
     if (
         "coverage_backed_no_followup"
         in set(semantic_delta.get("outcomes") or [])
@@ -515,6 +533,7 @@ def enforce_open_replan_writeback(
     completion_todo_id: str | None = None,
     completion_turn_key: str | None = None,
     guard_scoped: bool = False,
+    settlement_todo_id: str | None = None,
     guard_semantic_replan_obligation_id: str | None = None,
     receipt_bound_guard_recorded_at: str | None = None,
     receipt_bound_guard_turn_instance_id: str | None = None,
@@ -552,6 +571,7 @@ def enforce_open_replan_writeback(
         completion_turn_key=completion_turn_key,
         todo_fields=todo_fields,
         guard_scoped=guard_scoped,
+        settlement_todo_id=settlement_todo_id,
         guard_semantic_replan_obligation_id=guard_semantic_replan_obligation_id,
         capability_evidence=capability_evidence,
         guard_capability=guard_capability,
@@ -691,6 +711,7 @@ def qualify_refresh_replan_writeback(
         completion_todo_id=completion_todo_id,
         completion_turn_key=completion_turn_key,
         guard_scoped=settlement_guard_scoped,
+        settlement_todo_id=settlement_todo_id,
         todo_fields=todo_fields,
         guard_semantic_replan_obligation_id=(
             settlement_guard_semantic_replan_obligation_id
@@ -702,6 +723,10 @@ def qualify_refresh_replan_writeback(
         replan_source_route=replan_source_route, replan_explore_reader=replan_explore_reader,
         goal_ref=goal_ref,
     )
+    if recorded_stride_meta_goal({"agent_vision": agent_vision}) is not None and (
+        not semantic_delta or "fresh_vision_path_outcome" not in semantic_delta.get("satisfying_outcomes", [])
+    ):
+        raise ValueError("A Todo meta-goal requires a fresh, accepted Stride path decision")
     if semantic_delta:
         if semantic_delta.get("retirement") and delivery_outcome != "outcome_gap":
             raise ValueError("capability duty retirement requires outcome_gap; it is not delivery progress")

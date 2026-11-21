@@ -126,13 +126,17 @@ function isAccountingRow(row: JsonObject): boolean {
 }
 
 /** Preserve historical references even when a record fails work qualification. */
-function workEvidenceRef(row: JsonObject): string {
+function settledTodoEvidenceRef(row: JsonObject): string | null {
   const source = objectOrNull(row._source_facts);
-  if (row.progress_observation !== null || isAccountingRow(row)) return historicalEvidenceRef(row);
   const identity = recordedTodoIdentity(row);
-  if (!identity) return historicalEvidenceRef(row);
+  if (!identity) return null;
   const goalRef = objectOrNull(source?.goal_ref);
   return "replan-evidence-" + digest([readableEvidenceRow(row), identity, goalRef?.goal_instance_id ?? null]);
+}
+
+function workEvidenceRef(row: JsonObject): string {
+  if (row.progress_observation !== null || isAccountingRow(row)) return historicalEvidenceRef(row);
+  return settledTodoEvidenceRef(row) ?? historicalEvidenceRef(row);
 }
 
 function evidenceFactsKey(row: JsonObject): string {
@@ -215,6 +219,12 @@ function recordedDecision(row: JsonObject): JsonObject | null {
   catch { return null; }
   const identity = objectOrNull(source.settlement_identity)!;
   const autonomous = identity.binding_kind === "autonomous_replan";
+  const metaGoal = objectOrNull(stride?.meta_goal);
+  const todoDelta = objectOrNull(source.agent_vision)?.todo_delta;
+  if (metaGoal && ((!autonomous && metaGoal.todo_id !== row.todo_id) ||
+      !Array.isArray(todoDelta) || !todoDelta.includes(`retain:${metaGoal.todo_id}`))) {
+    return null;
+  }
   const decision = {history_evidence_ref: "replan-evidence-" + digest(readableEvidenceRow(row)),
     generated_at: row.generated_at, todo_id: autonomous ? null : row.todo_id, turn_instance_id: identity.turn_instance_id,
     ...(autonomous ? {replan_obligation_id: source.replan_obligation_id} : {}),
@@ -259,6 +269,117 @@ function plannedObservationTodo(row: JsonObject, targets: ReadonlySet<string>): 
   return todo !== null && targets.has(todo) ? todo : null;
 }
 
+function eligibleMetaGoalTodo(todo: JsonObject, goal: string, agent: string): boolean {
+  return todo.role === "agent" && todo.status === "open" &&
+    (todo.goal_id == null || todo.goal_id === goal) &&
+    (todo.claimed_by == null || todo.claimed_by === "" || todo.claimed_by === agent);
+}
+
+type MetaGoalDecision = {row: JsonObject; decision: JsonObject; stride: JsonObject; goal: JsonObject};
+
+function metaGoalTodoId(row: JsonObject): unknown {
+  const vision = objectOrNull(objectOrNull(row._source_facts)?.agent_vision);
+  return objectOrNull(objectOrNull(vision?.stride_decision)?.meta_goal)?.todo_id;
+}
+
+function metaGoalDecisions(scoped: JsonObject[], todoIds: ReadonlySet<unknown>): Map<unknown, MetaGoalDecision> {
+  const latest = new Map<unknown, MetaGoalDecision>();
+  const seen = new Set<unknown>();
+  for (const row of scoped) {
+    const todoId = metaGoalTodoId(row);
+    if (!todoIds.has(todoId) || seen.has(todoId) || !acceptedDecisionSource(row)) continue;
+    seen.add(todoId);
+    const decision = recordedDecision(row);
+    const stride = objectOrNull(decision?.stride_decision);
+    const goal = objectOrNull(stride?.meta_goal);
+    if (!decision || !stride || !goal) {
+      throw new EffectRuntimeRequestError("Recorded Todo meta-goal is unavailable; reread the original decision");
+    }
+    latest.set(todoId, {row, decision, stride, goal});
+  }
+  return latest;
+}
+
+function metaGoalWorkEvidence(scoped: JsonObject[], todoId: unknown, after: JsonObject): {ref: string; row: JsonObject}[] {
+  const position = Number(objectOrNull(after._source_facts)?.history_position);
+  return scoped.flatMap(row => {
+    const order = Number(objectOrNull(row._source_facts)?.history_position);
+    if (order <= position || observationTodo(row) !== todoId || isAccountingRow(row) ||
+        acceptedDecisionSource(row) || hasConflictingTodoSettlement(row) ||
+        !MATERIAL_DELIVERY_OUTCOMES.some(outcome => outcome === row.delivery_outcome)) return [];
+    const ref = settledTodoEvidenceRef(row);
+    return ref ? [{ref, row}] : [];
+  });
+}
+
+function metaGoalEvidencePreview(recorded: MetaGoalDecision, scoped: JsonObject[]): JsonObject[] {
+  if (recorded.goal.resolution) return [];
+  return metaGoalWorkEvidence(scoped, recorded.goal.todo_id, recorded.row).slice(0, 6)
+    .map(({ref, row}) => ({evidence_ref: ref, generated_at: row.generated_at, delivery_outcome: row.delivery_outcome,
+      result_class: objectOrNull(row.progress_observation)?.result_class ?? null}));
+}
+
+function metaGoalView(recorded: MetaGoalDecision): JsonObject {
+  return {decision_ref: recorded.decision.evidence_ref, generated_at: recorded.decision.generated_at,
+    agent_id: recorded.row.agent_id, meta_goal: recorded.goal,
+    action: recorded.stride.action, next_probe: recorded.stride.next_probe};
+}
+
+function todoMetaGoal(request: JsonObject, scoped: JsonObject[], goal: string, agent: string | null): JsonObject {
+  const todoId = identifier(request.todo_id, "meta-goal Todo");
+  const decision = normalizeRecordedStrideDecision(request.proposal);
+  const proposed = objectOrNull(decision?.meta_goal);
+  const previous = metaGoalDecisions(scoped, new Set([todoId])).get(todoId);
+  if (!proposed) {
+    if (!previous) return {current: null};
+    const current = metaGoalView(previous);
+    if (request.include_evidence === true) {
+      const refs = previous.goal.evidence_refs as string[];
+      current.evidence = refs.map(ref => {
+        const row = scoped.find(row => row.todo_id === todoId && row.agent_id === previous.row.agent_id &&
+          !isAccountingRow(row) && !hasConflictingTodoSettlement(row) && settledTodoEvidenceRef(row) === ref);
+        return row ? {evidence_ref: ref, generated_at: row.generated_at,
+          summary: row.recommended_action ?? row.health_check ?? row.classification ?? null} : {evidence_ref: ref};
+      });
+      current.subsequent_evidence = metaGoalEvidencePreview(previous,
+        scoped.filter(row => row.agent_id === previous.row.agent_id));
+    }
+    return {current};
+  }
+
+  const todo = requireJsonObject(request.todo, "canonical meta-goal Todo");
+  if (!agent || proposed.todo_id !== todoId || todo.todo_id !== todoId || !eligibleMetaGoalTodo(todo, goal, agent) ||
+      request.settlement_todo_id != null && request.settlement_todo_id !== todoId ||
+      !Array.isArray(request.todo_delta) || !request.todo_delta.includes(`retain:${todoId}`)) {
+    throw new EffectRuntimeRequestError("A meta-goal requires the current open Agent Todo, retained in the Stride decision");
+  }
+  if (!previous || previous.goal.resolution) {
+    if (proposed.previous_decision_ref) throw new EffectRuntimeRequestError("Start a new meta-goal without a previous decision reference");
+    return {current: null};
+  }
+  if (proposed.previous_decision_ref !== previous.decision.evidence_ref ||
+      proposed.objective !== previous.goal.objective || proposed.resolution_criterion !== previous.goal.resolution_criterion) {
+    throw new EffectRuntimeRequestError("Carry forward the current Todo meta-goal and its exact previous decision reference");
+  }
+  const refs = proposed.evidence_refs as string[];
+  if (decision!.action !== previous.stride.action && refs.length === 0) {
+    throw new EffectRuntimeRequestError("Changing a meta-decision action requires subsequent evidence for the same Todo");
+  }
+  const allowed = new Set(metaGoalWorkEvidence(scoped, todoId, previous.row).map(({ref}) => ref));
+  if (refs.some(ref => !allowed.has(ref))) {
+    throw new EffectRuntimeRequestError("Meta-goal evidence must come from subsequent settled work on the same Todo");
+  }
+  return {current: metaGoalView(previous)};
+}
+
+function projectTodoMetaGoals(rows: JsonObject[], request: JsonObject, goal: string, agent: string): JsonObject[] {
+  if (!rows.some(row => metaGoalTodoId(row) !== undefined)) return [];
+  const scoped = orderedDecisionRows(rows, request.goal_facts);
+  const eligible = objects(request.todo_items, "Todo source").filter(todo => eligibleMetaGoalTodo(todo, goal, agent));
+  return [...metaGoalDecisions(scoped, new Set(eligible.map(todo => todo.todo_id))).values()]
+    .slice(0, 6).map(recorded => ({...metaGoalView(recorded), evidence: metaGoalEvidencePreview(recorded, scoped)}));
+}
+
 /** Reserve one source-ordered observation per displayed planned Todo before
  * filling the remaining slots. Repetition on one work item must not hide all
  * followthrough on another; the cap is presentation, never evidence eligibility. */
@@ -288,6 +409,7 @@ function workResultUse(scoped: JsonObject[]): JsonObject | null {
   const followed: JsonObject[] = [];
   const seen = new Set<string>();
   const legacyResultRefs = new Map<string, string>();
+  let hasMetaGoal = false;
   for (const row of [...scoped].reverse()) {
     if (isAccountingRow(row)) continue;
     const source = objectOrNull(row._source_facts)!;
@@ -296,12 +418,17 @@ function workResultUse(scoped: JsonObject[]): JsonObject | null {
       if (!decision) { origin.clear(); proposed.clear(); continue; }
       const id = String(decision.evidence_ref), targets = plannedTodoIds(source);
       const path = decision.path_delta as JsonObject;
-      const review = objectOrNull(objectOrNull(decision.stride_decision)?.previous_review);
-      const refs = [...(path.evidence_refs as string[]),
-        ...(Array.isArray(review?.evidence_refs) ? review.evidence_refs as string[] : [])]
-        .map(ref => pending.has(ref) ? ref : legacyResultRefs.get(ref) ?? ref)
-        .filter(ref => pending.has(ref));
+      const stride = objectOrNull(decision.stride_decision);
+      const review = objectOrNull(stride?.previous_review);
+      const metaGoal = objectOrNull(stride?.meta_goal);
+      if (metaGoal) hasMetaGoal = true;
+      const pathRefs = [...(path.evidence_refs as string[]),
+        ...(Array.isArray(review?.evidence_refs) ? review.evidence_refs as string[] : [])];
       for (const todo of targets) {
+        const metaRefs = metaGoal?.todo_id === todo ? metaGoal.evidence_refs as string[] : [];
+        const refs = [...pathRefs, ...metaRefs]
+          .map(ref => pending.has(ref) ? ref : legacyResultRefs.get(ref) ?? ref)
+          .filter(ref => pending.has(ref));
         origin.set(todo, id);
         // A newer plan for the same work replaces its unexecuted proposal,
         // not the source evidence still waiting for attributable followthrough.
@@ -324,6 +451,8 @@ function workResultUse(scoped: JsonObject[]): JsonObject | null {
     // citation matches multiple formerly collapsed rows, use that alias once.
     const legacyRef = historicalEvidenceRef(row);
     if (!legacyResultRefs.has(legacyRef)) legacyResultRefs.set(legacyRef, ref);
+    const settledRef = hasMetaGoal ? settledTodoEvidenceRef(row) : null;
+    if (settledRef) legacyResultRefs.set(settledRef, ref);
     if (seen.has(ref)) continue;
     seen.add(ref);
     const adoption = proposed.get(todo);
@@ -366,6 +495,7 @@ function reviewEvidence(rows: JsonObject[], request: JsonObject): JsonObject {
   const targets = new Set(plannedTodoIds(source));
   const citations = refs.map(ref => {
     const matches = scoped.filter(row => workEvidenceRef(row) === ref || historicalEvidenceRef(row) === ref
+      || (!isAccountingRow(row) && !hasConflictingTodoSettlement(row) && settledTodoEvidenceRef(row) === ref)
       || (objectOrNull(row.progress_observation)?.evidence_ids as unknown[] | undefined)?.includes(ref));
     const subsequent = matches.filter(row => {
       const facts = objectOrNull(row._source_facts)!;
@@ -609,7 +739,8 @@ export async function projectReplanContextSnapshot(value: unknown): Promise<Json
 export function projectReplanContext(value: unknown): JsonObject {
   const request = requireJsonObject(value, "replan context request");
   if (request.operation === "validate") return validateReplanContext(request.context);
-  if (request.operation !== "project" && request.operation !== "resolve" && request.operation !== "review_evidence") {
+  if (request.operation !== "project" && request.operation !== "resolve" && request.operation !== "review_evidence" &&
+      request.operation !== "todo_meta_goal") {
     throw new EffectRuntimeRequestError("unsupported replan context operation");
   }
   const goal = identifier(request.goal_id, "goal_id");
@@ -639,6 +770,9 @@ export function projectReplanContext(value: unknown): JsonObject {
     if (!agent) throw new EffectRuntimeRequestError("review evidence requires agent_id");
     return reviewEvidence(rows, request);
   }
+  if (request.operation === "todo_meta_goal") {
+    return todoMetaGoal(request, orderedDecisionRows(rows, request.goal_facts), goal, agent);
+  }
   rows.sort((a, b) => Number(b.observed_at) - Number(a.observed_at) ||
     JSON.stringify(readableEvidenceRow(a)).localeCompare(JSON.stringify(readableEvidenceRow(b))));
   // Unpaired accounting can still explain a failure. It never contributes
@@ -656,7 +790,10 @@ export function projectReplanContext(value: unknown): JsonObject {
     if (!agent) throw new EffectRuntimeRequestError("evidence resolution requires agent_id");
     const ref = identifier(request.evidence_ref, "evidence_ref");
     const legacy = rows.find(row => historicalEvidenceRef(row) === ref);
+    const settled = rows.find(row => !isAccountingRow(row) && !hasConflictingTodoSettlement(row) &&
+      settledTodoEvidenceRef(row) === ref);
     const match = unique.get(ref) ?? (legacy && {...readableEvidenceRow(legacy), evidence_ref: ref})
+      ?? (settled && {...readableEvidenceRow(settled), evidence_ref: ref})
       ?? rows.map(recordedDecision).find(decision => decision?.evidence_ref === ref);
     if (!match) throw new EffectRuntimeRequestError(
       "evidence reference is unavailable in this Goal and Agent history window; refresh replan_context",
@@ -751,10 +888,13 @@ export function projectReplanContext(value: unknown): JsonObject {
   const exploreBasis = strideStrategy !== "off" ? projectStrideExploreBasis(request.explore_context, goal, agent) : null;
   const followthrough = agent
     ? decisionFollowthrough(rows, request.goal_facts, request.from_full_index === true, request.todo_items) : null;
+  const todoMetaGoals = agent && strideStrategy !== "off" && request.todo_items != null
+    ? projectTodoMetaGoals(rows, request, goal, agent) : [];
   const contextId = "replan-context-" + digest({goal, agent, obligationId, core, ledger, shown, frontier,
     ...(evidenceReadTemplate ? {evidence_read_action_template: evidenceReadTemplate} : {}),
     ...(strideStrategy !== "off" ? {stride_strategy: strideStrategy} : {}),
     ...(followthrough ? {decision_followthrough: followthrough} : {}),
+    ...(todoMetaGoals.length ? {todo_meta_goals: todoMetaGoals} : {}),
     ...(exploreBasis ? {explore_basis: exploreBasis} : {})});
   const context: JsonObject = {
     schema_version: CONTEXT_SCHEMA, context_id: contextId, goal_id: goal, agent_id: agent,
@@ -769,6 +909,7 @@ export function projectReplanContext(value: unknown): JsonObject {
   };
   if (strideStrategy !== "off") context.stride_strategy = strideStrategy;
   if (followthrough) context.decision_followthrough = followthrough;
+  if (todoMetaGoals.length) context.todo_meta_goals = todoMetaGoals;
   if (exploreBasis) context.explore_basis = exploreBasis;
   // Source-replayed supplemental pages qualify a proposal, not a new admission
   // context. They must not change the original context or bounded basis IDs.

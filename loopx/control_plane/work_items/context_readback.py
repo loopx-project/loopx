@@ -98,6 +98,42 @@ def _user_context(
         "todos": inventory["todos"]}
 
 
+def attach_stride_meta_goal_context(
+    payload: dict[str, Any], *, status_payload: dict[str, Any],
+    registry_goal: dict[str, Any] | None, runtime_root: Path,
+) -> None:
+    if registry_goal is None or not payload.get("should_run") or not payload.get("normal_delivery_allowed"):
+        return
+    selected = payload.get("selected_todo")
+    agent = (payload.get("agent_identity") or {}).get("agent_id")
+    goal_id = payload.get("goal_id")
+    channel = (payload.get("interaction_contract") or {}).get("agent_channel") or {}
+    context = channel.get("work_context")
+    if not agent or not goal_id or not isinstance(context, dict) or not isinstance(selected, dict):
+        return
+    todo_id = selected.get("todo_id")
+    if not isinstance(todo_id, str) or not any(
+        lane.get("agent_id") == agent and lane.get("has_stride_meta_goal") is True
+        for goal in (status_payload.get("run_history") or {}).get("goals", []) if goal.get("id") == goal_id
+        for lane in (goal.get("semantic_history") or {}).get("agents", [])
+    ):
+        return
+    from ...capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
+    from .replan_context_codec import read_todo_stride_meta_goal
+
+    profile = resolve_todo_replan_cadence_goal(registry_goal, runtime_root).get("execution_profile") or {}
+    if profile.get("stride_strategy", "off") == "off":
+        return
+    try:
+        record = read_todo_stride_meta_goal(runtime_root=runtime_root, goal_id=goal_id,
+            todo_id=todo_id, agent_id=agent, goal_ref=payload.get("goal_ref"))
+    except (ValueError, OSError, RuntimeError):
+        context["stride_meta_goal"] = {"unavailable": True}
+        return
+    if record is not None and not record["meta_goal"].get("resolution"):
+        context["stride_meta_goal"] = record
+
+
 def attach_work_context(payload: dict[str, Any], *, registry_path: Path,
                         runtime_root: Path, hook_dispatch: dict[str, Any] | None,
                         context_navigation: bool = False,

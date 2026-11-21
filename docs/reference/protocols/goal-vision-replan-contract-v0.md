@@ -804,6 +804,48 @@ not improved model decisions or net efficiency.
 任务缺失、关闭、改由他人认领或关联改变时旧页失效。未携带任务 ID 的全局页面保持
 原契约；任务范围只改变证据相关性，不授予准入或强制选题。
 
+### Todo meta-goal / Todo 内的元目标
+
+An admitted Stride review can attach `agent_vision.stride_decision.meta_goal`
+to one open Agent Todo it retains in `todo_delta`. If the Turn is bound to a
+Todo, use that Todo's exact ID. The optional object contains `todo_id`,
+`objective`, `resolution_criterion`, and `evidence_refs`. Start a question
+with empty references. The enclosing Stride `action` and `next_probe` express
+the chosen response and the first work slice.
+
+An open meta-goal follows the Todo across ordinary Turns in
+`work_context.stride_meta_goal`. In the next applicable Stride review, carry
+the same objective and criterion with `previous_decision_ref` from
+`todo_meta_goals`. Cite the exact references to subsequent work on that Todo
+when changing the action or recording a `resolution`. The journal's append
+order and the settled work identity qualify the references, including evidence
+against a route. Omission preserves the last recorded question. A resolution
+ends the question, and a later review can start another one on the same Todo.
+All authored text and refs share the existing Vision budget.
+
+Read the latest question, action, probe and cited evidence in the App's Task
+Request details or with `loopx --format json todo list --goal-id <goal> --todo-id
+<todo>`. The exact CLI read also provides recent eligible source refs under
+`subsequent_evidence` for an open question. Use `loopx --format json history --goal-id <goal> --agent-id <agent>
+--evidence-ref <ref>` to resolve the exact decision and each cited source row.
+The references document which evidence the Agent cites for its choice.
+Execution, Goal acceptance and gain follow their existing evidence contracts.
+
+在已准入的 Stride 复盘中，Agent 可用 `agent_vision.stride_decision.meta_goal`
+为 `todo_delta` 中保留的一项开放 Todo 声明元目标。如果 Turn 已绑定 Todo，使用该 Todo 的
+精确 ID。首次写入 `todo_id`、`objective`、`resolution_criterion` 和空的 `evidence_refs`。
+外层的 `action` 和 `next_probe` 表达所选元决策动作及首个工作切片。
+
+普通工作 Turn 通过 `work_context.stride_meta_goal` 接续未决目标。复盘时从
+`todo_meta_goals` 取得 `previous_decision_ref`，沿用原目标和证据条件。改变动作或写入
+`resolution` 时，引用该 Todo 后续工作的精确证据。系统核对日志追加顺序和已结算工作身份，
+并保留反证。省略字段则沿用上次记录。元目标收口后，可在后续复盘中为同一 Todo 提出新问题。
+字段与引用计入已有 Vision 预算。
+
+在 App 的任务要求详情或用 `todo list --todo-id` 回读元目标、动作、探针及证据，
+用 `history --evidence-ref` 回读原决策和原证据。引用记录的是 Agent 作出选择所用的证据，
+实际执行、Goal 验收和收益沿用各自的证据契约。
+
 ### Source-bound comparison selection
 
 With Explore planning and `evidence_conditioned_v1` enabled, the existing

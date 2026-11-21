@@ -230,6 +230,51 @@ def validate_replan_context(context: Any) -> dict[str, Any]:
         raise ValueError(str(exc)) from None
 
 
+def recorded_stride_meta_goal(run: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """Presence in a journal row only. TypeScript qualifies identity and evidence."""
+    vision = run.get("agent_vision")
+    stride = vision.get("stride_decision") if isinstance(vision, Mapping) else None
+    meta_goal = stride.get("meta_goal") if isinstance(stride, Mapping) else None
+    return meta_goal if isinstance(meta_goal, Mapping) else None
+
+
+def project_todo_stride_meta_goal(
+    *, goal_id: str, agent_id: str | None, todo_id: str, goal_ref: Mapping[str, Any] | None,
+    runs: Iterable[Mapping[str, Any]], history_newest_first: bool,
+    **fields: Any,
+) -> dict[str, Any] | None:
+    from .replan_history_codec import project_replan_request
+
+    try:
+        result = project_replan_request({
+            "operation": "todo_meta_goal", "obligation": None, "goal_id": goal_id,
+            "agent_id": agent_id, "todo_id": todo_id, "goal_facts": {"goal_ref": goal_ref},
+            "rows": replan_evidence_rows(runs, goal_id=goal_id, agent_id=agent_id,
+                include_decisions=True, history_newest_first=history_newest_first),
+            **fields,
+        }, method="work_item.replan_context")
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from None
+    return cast(dict[str, Any] | None, result.get("current"))
+
+
+def read_todo_stride_meta_goal(
+    *, runtime_root: Path, goal_id: str, todo_id: str, agent_id: str | None = None,
+    goal_ref: Mapping[str, Any] | None = None, include_evidence: bool = False,
+) -> dict[str, Any] | None:
+    from ...history import load_index_snapshot, validate_goal_id_path_segment
+
+    goal_id = validate_goal_id_path_segment(goal_id)
+    runs = load_index_snapshot(runtime_root / "goals" / goal_id / "runs" / "index.jsonl",
+        include_artifact_status=False).records
+    if not any((recorded_stride_meta_goal(run) or {}).get("todo_id") == todo_id for run in runs):
+        return None
+    return project_todo_stride_meta_goal(
+        goal_id=goal_id, agent_id=agent_id, todo_id=todo_id, goal_ref=goal_ref,
+        runs=runs, history_newest_first=False, include_evidence=include_evidence,
+    )
+
+
 def replay_stride_review_evidence(
     *, context: Mapping[str, Any], review: Mapping[str, Any], runs: Iterable[Mapping[str, Any]],
 ) -> dict[str, Any]:

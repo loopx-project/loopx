@@ -1046,6 +1046,9 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   if (!attentionSources.length) include(...requiredReadsPath);
   const work = ["interaction_contract", "agent_channel", "work_context"];
   include(...work, "instruction");
+  if (normalWork && object(channel?.work_context)?.stride_meta_goal) {
+    include(...work, "stride_meta_goal");
+  }
   if (deferredReentry) {
     // Surface the owner's reopen and same-Turn guard before the long read.
     for (const field of admissionFields) include("interaction_contract", "cli_channel", field);

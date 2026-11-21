@@ -1148,11 +1148,13 @@ def build_live_quota_should_run_decision(
         registry_path=registry_path,
         runtime_root=runtime_root,
     )
-    from ..work_items.context_readback import attach_work_context
+    from ..work_items.context_readback import attach_work_context, attach_stride_meta_goal_context
 
     attach_work_context(payload, registry_path=registry_path, runtime_root=runtime_root,
         hook_dispatch=turn_start_hook_dispatch, context_navigation=context_navigation,
         inline_goal_source=inline_goal_source)
+    attach_stride_meta_goal_context(payload, status_payload=decision_status_payload,
+        registry_goal=registered_goal, runtime_root=runtime_root)
     return payload
 
 

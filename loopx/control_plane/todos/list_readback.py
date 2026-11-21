@@ -118,4 +118,19 @@ def list_goal_todos(
         from .goal_todo_projection import observe_todo_acceptance
         payload = observe_todo_acceptance(payload, result["canonical_acceptance"],
             registry_path=source_registry, goal_id=goal_id)
+    item = payload.get("todo")
+    if normalized_todo_id and isinstance(item, dict) and item.get("role") == "agent":
+        from ..work_items.replan_context_codec import read_todo_stride_meta_goal
+
+        instance = goal.get("goal_instance_id")
+        try:
+            meta_goal = read_todo_stride_meta_goal(
+                runtime_root=runtime_root, goal_id=goal_id, todo_id=normalized_todo_id,
+                agent_id=normalized_agent_id, include_evidence=True,
+                goal_ref={"goal_id": goal_id, "goal_instance_id": instance} if instance else None,
+            )
+        except (ValueError, OSError, RuntimeError):
+            meta_goal = {"unavailable": True}
+        if meta_goal is not None:
+            payload["todo"] = {**item, "stride_meta_goal": meta_goal}
     return payload
