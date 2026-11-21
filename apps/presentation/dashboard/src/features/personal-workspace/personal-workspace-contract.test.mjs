@@ -234,7 +234,6 @@ assert.match(status, /function withoutGoal/, "Status projection can remove a del
 assert.match(page, /applied\.reviewPlan\?\.interaction !== "completed"/, "Non-applied typed action results never project as successful Goal deletion");
 assert.match(page, /t\("feedback\.stale"\)/, "Stale Goal deletion remains visible with a localized actionable error");
 assert.match(page, /activityTimeLabel\(item\.output\.createdAt,\s*locale,\s*t\)/, "Files render locale-aware human-readable output timestamps");
-assert.match(drawer, /selection\.kind === "run" \|\| selection\.kind === "proposal" \|\| selection\.kind === "schedule"/, "Advanced diagnostics only appears on objects with actionable runtime details");
 
 for (const field of ["agentId", "todoId", "runId", "safePreview"]) {
   assert.match(model, new RegExp(`${field}\\??:`), `Output exposes ${field}`);

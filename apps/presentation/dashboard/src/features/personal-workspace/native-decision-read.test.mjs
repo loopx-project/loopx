@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import React from "react";
 import {renderToStaticMarkup} from "react-dom/server";
 import {runRecordSchema} from "../../data/status";
+import {ContextDrawer} from "./context-drawer";
 import {GoalStrategyDocument} from "./goal-source-strategies";
+import {WorkspaceI18nProvider} from "./i18n";
 import {projectGoalSourceStatus} from "../../../../../../loopx/control_plane/presentation/goal_source_links.ts";
 const base = {goal_id:"archived", generated_at:"2026-01-01T00:00:00Z"};
 for (const agent_vision of [undefined, null, [], "invalid", 42]) {
@@ -72,3 +74,53 @@ for (const workspaceId of ["original-solver", "case-a"]) {
   }
 }
 console.log("Native source decisions preserve original identities through alias and non-alias projection, schema and renderer");
+
+const run = {
+  runId: "execution-1",
+  goalId: "archived",
+  goalTitle: "Benchmark case",
+  agentId: "worker",
+  agentLabel: "Worker",
+  status: "completed",
+  title: "Original execution",
+  latestActivity: "Recorded an assessment",
+  completedSteps: 1,
+  totalSteps: 1,
+};
+const archivedGoal = {
+  goalId: run.goalId,
+  sourceAccess: {label: "Retained snapshot", original_goal_id: "original-solver"},
+  sourceRunHistory: {total: 1, recent: [{...base, agent_vision: value}]},
+};
+const renderDrawer = (selection, goals = []) => renderToStaticMarkup(
+  React.createElement(WorkspaceI18nProvider, null, React.createElement(ContextDrawer, {
+    agents: [], callbacks: {}, goals, onClose: () => {}, selection,
+  })),
+);
+const diagnosticsTrigger = /<button[^>]+class="personal-diagnostics-trigger"/;
+const archivedDrawer = renderDrawer({kind: "run", item: run}, [archivedGoal]);
+assert.match(archivedDrawer, /class="personal-detail-card personal-source-run-history"/);
+assert.ok(archivedDrawer.includes(value.vision_patch.vision_summary));
+assert.doesNotMatch(archivedDrawer, /personal-run-drawer-tabs/);
+assert.doesNotMatch(archivedDrawer, diagnosticsTrigger, "Archived records have their own provenance");
+
+const currentDrawer = renderDrawer({kind: "run", item: run});
+assert.match(currentDrawer, /personal-run-drawer-tabs/);
+assert.match(currentDrawer, diagnosticsTrigger, "Current executions retain live diagnostics");
+
+const proposalDrawer = renderDrawer({
+  kind: "proposal",
+  item: {goalId: run.goalId, previewId: "preview-1", title: "Apply a change", actionKind: "goal.lifecycle", status: "ready", fields: []},
+});
+assert.match(proposalDrawer, diagnosticsTrigger);
+const scheduleDrawer = renderDrawer({
+  kind: "schedule",
+  item: {goalId: run.goalId, scheduleId: "schedule-1", label: "Refresh the report", scheduleKind: "heartbeat"},
+});
+assert.match(scheduleDrawer, diagnosticsTrigger);
+const outputDrawer = renderDrawer({
+  kind: "output",
+  item: {goalId: run.goalId, outputId: "output-1", title: "Assessment notes", safePreview: "Recorded evidence"},
+});
+assert.doesNotMatch(outputDrawer, diagnosticsTrigger);
+console.log("Archived executions expose source provenance and live drawers retain diagnostics where applicable");
