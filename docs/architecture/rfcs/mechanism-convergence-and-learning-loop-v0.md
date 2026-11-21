@@ -315,6 +315,24 @@ one finding and receipt, spends once, and checks effect-free replay plus rejecte
 new capture. This repairs the existing recovery contract without a new owner or
 activation; installed Hosts, other backends and benefit retain their own gates.
 
+Native failure allocation and the external worker's Host observation now share
+the existing [`typed failure owner`](../../../loopx/control_plane/turn_driver/host_failure.ts).
+The Python retry table and worker success/same-session/failure selection are
+retired. Native error construction, Mapping refusal order, exact integer IO,
+session-ID decoding, polling clocks and the pending-intent witness remain with
+their existing adapters. An observed Host success is transport confirmation,
+not Turn completion, an ACK or permission to spend. Automatic eligibility stays
+narrower than explicit repaired retry; the invocation-only query marker adds no
+setting or activation, and omission/false retains the existing explicit query.
+The [original worker](../../../tests/test_external_scheduler_worker.py),
+[boundary checks](../../../tests/control_plane/test_host_failure_policy_transport.py)
+and [File/SQLite managed CLI](../../../tests/test_loopx_turn_managed_step.py)
+preserve original-session retry, unknown/foreign/malformed outcomes, refusal
+precedence, lost-response recovery and once-only replay. A changed retry ceiling
+fails the independent SQLite CLI observation. This source checkpoint does not
+qualify installed worker adoption, the remaining C1/C4/C9 cutover, product
+composition or accepted outcomes and full cost.
+
 The replay and new-capture assertions execute inside the recovery fixture.
 An earlier test update put that block in the no-evidence test: the recovery
 cases skipped those assertions, while ordinary settlement failed on undefined

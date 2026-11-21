@@ -272,6 +272,8 @@ export function createEffectRuntimeHandlers(
       lazyHandler(() => import("./turn_driver/turn_journal.ts"), ({interpretTurnJournal}) => (params) => interpretTurnJournal(turnJournalInspectionRequest(params))),
     ],
     ["host_failure.retry", lazyHandler(() => import("./turn_driver/host_failure.ts"), ({hostFailureRetryRequest}) => hostFailureRetryRequest)],
+    ["host_failure.record", lazyHandler(() => import("./turn_driver/host_failure.ts"), ({hostFailureRecordRequest}) => hostFailureRecordRequest)],
+    ["host_failure.observe", lazyHandler(() => import("./turn_driver/host_failure.ts"), ({hostFailureObservationRequest}) => hostFailureObservationRequest)],
     ["turn.controller", lazyHandler(() => import("./turn_driver/loop_controller.ts"), ({controllerRequest}) => controllerRequest)],
     ["turn_journal.write", lazyHandler(() => import("./turn_driver/turn_journal_effects.ts"), ({commitTurnJournal}) => commitTurnJournal)],
     ["turn_journal.find_settlement", lazyHandler(() => import("./turn_driver/turn_journal_query.ts"), ({findTurnJournalBySettlement}) => findTurnJournalBySettlement)],
