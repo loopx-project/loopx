@@ -46,8 +46,9 @@ CHAT_TURN_SCHEMA_VERSION = "loopx_chat_turn_state_v1"
 CHAT_EVENT_SCHEMA_VERSION = "loopx_chat_event_v1"
 CHAT_MESSAGE_SCHEMA_VERSION = "loopx_chat_message_v1"
 CHAT_INGRESS_SCHEMA_VERSION = "loopx_chat_ingress_receipt_v1"
-CHAT_SESSION_MODE_MANAGED = "managed_runtime"
-CHAT_SESSION_MODE_ATTACHED = "attached_host"
+CHAT_SESSION_MODES = ("managed_runtime", "attached_host")
+CHAT_SESSION_MODE_MANAGED = CHAT_SESSION_MODES[0]
+CHAT_SESSION_MODE_ATTACHED = CHAT_SESSION_MODES[1]
 RESUMABLE_SESSION_STATES = {"ready", "busy", "stale", "resuming"}
 TERMINAL_TURN_STATES = {"completed", "interrupted", "timed_out", "failed"}
 TERMINAL_EVENT_KINDS = {"turn.completed", "turn.failed", "turn.interrupted"}
@@ -297,10 +298,7 @@ class ChatSessionStore(ChatEventStreamMixin, ChatIngressStore):
             or normalized_mode != CHAT_SESSION_MODE_MANAGED
         ):
             raise ValueError("codex_home must be an absolute managed Codex home")
-        if normalized_mode not in {
-            CHAT_SESSION_MODE_MANAGED,
-            CHAT_SESSION_MODE_ATTACHED,
-        }:
+        if normalized_mode not in CHAT_SESSION_MODES:
             raise ValueError("session_mode must be managed_runtime or attached_host")
         normalized_host_surface = (
             _opaque_id(host_surface, field="host_surface") if host_surface else None
