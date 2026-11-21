@@ -420,7 +420,7 @@ def quota_rollout_details(
     )
     details: dict[str, object] = {
         "command": "quota",
-        "quota_command": args.quota_command,
+        "quota_command": getattr(args, "quota_command", ""),
         "ok": bool(payload.get("ok")),
         "should_run": bool(payload.get("should_run")),
         "appended": bool(payload.get("appended")),
