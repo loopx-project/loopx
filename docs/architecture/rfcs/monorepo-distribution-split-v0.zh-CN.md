@@ -3707,6 +3707,21 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
   provider owner。保留原 identity/prepared proof，独立核验当前 control writer，
   仅记录 blocked 免扣额证据。不可变 Run 在同一 store identity 内恢复缺失尾部；
   重放仍须 fresh control proof。普通写回与纯历史回读保留各自边界。
+- **恢复权限：**原 prepared admission 不被后续收据或 native resume 替换。
+  同 generation 的 remaining execution effects 使用单一 TS owner 的 ephemeral 当前 CAS
+  资格，不重写原 proof/version；不同 generation 的 frozen report 不能取得旧
+  Turn 业务完成权。每个 effect 边界重新读取对应 owner 的 authority，
+  失去执行的原 Turn 仍以原 admission 对比当前 control writer 做免扣额收尾。
+  仅 alias 的 legacy prepared Turn binding 保留有限兼容，不据此证明行政 work
+  admission。pending terminal effect 与已提交重放复用既有 journal/settlement
+  owner：只执行原剩余 effect、修复已证明缺失的收据，或不执行新 effect 而返回
+  原结果。durable writeback 被接受后，pending quota spend 使用既有记账 owner
+  与 journal 授权的恢复，不请求 execution authority 或重跑业务 effect。
+  TS-owned cleanup 在 admitted Turn 欠收尾时保留原 lease；frozen-report 恢复
+  核验并续租同一 generation。selection-recovery governance probe 不获取
+  报告业务 lease；既有 TS admission 允许报告后，才在 preparation 前获取。
+  历史 generation 冲突拒绝，已核验因果链接保留
+  原 prepared revision。
 - **源码证据：**CLI 测试覆盖两个本地 provider、stale/foreign proof、普通路径
   parity 与零 completion/debit；恢复测试在 JSON、Markdown、index 与 receipt
   持久化后注入中断。SourceSession 范围是 typed-owner history 加行政 CLI，

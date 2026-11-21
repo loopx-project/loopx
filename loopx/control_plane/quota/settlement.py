@@ -186,6 +186,11 @@ class QuotaSettlementReadback:
     admission_event_id: str | None = None
     prepared_lease: dict[str, Any] | None = None
     prepared_lease_required: bool = False
+    resume_lease_qualification: dict[str, Any] | None = None
+    original_prepared_receipt: dict[str, Any] | None = None
+    original_prepared_event_id: str | None = None
+    original_prepared_receipt_sha256: str | None = None
+    native_task_lease_cleanup: dict[str, Any] | None = None
 
 
 def render_owed_host_command(argv: list[str]) -> str:
@@ -399,6 +404,10 @@ def _read_heartbeat_settlement_payload(
         except EffectRuntimeRejected as exc:
             if exc.diagnostic_code == "heartbeat_receipt_identity_conflict":
                 raise HeartbeatReceiptIdentityConflictError(str(exc)) from None
+            if exc.diagnostic_code == "refresh_task_lease_unavailable":
+                from .execution_preparation import RefreshTaskLeaseUnavailable
+
+                raise RefreshTaskLeaseUnavailable(str(exc)) from None
             raise ValueError(str(exc)) from None
 
     if source_admission is not None:
@@ -496,6 +505,8 @@ def read_heartbeat_settlement(
     source_admission: Mapping[str, Any] | None = None,
     borrow_source_admission: bool = False,
     heartbeat_reentry_guard: dict[str, Any] | None = None,
+    resume_lease_candidate: Mapping[str, Any] | None = None,
+    native_task_lease_cleanup: Mapping[str, Any] | None = None,
     include_record_bodies: bool = True,
     tolerate_malformed_history: bool = False,
 ) -> QuotaSettlementReadback | None:
@@ -528,6 +539,16 @@ def read_heartbeat_settlement(
             **(
                 {"heartbeat_reentry_guard": heartbeat_reentry_guard}
                 if heartbeat_reentry_guard is not None
+                else {}
+            ),
+            **(
+                {"resume_lease_candidate": dict(resume_lease_candidate)}
+                if resume_lease_candidate is not None
+                else {}
+            ),
+            **(
+                {"native_task_lease_cleanup": dict(native_task_lease_cleanup)}
+                if native_task_lease_cleanup is not None
                 else {}
             ),
         },
@@ -589,4 +610,9 @@ def read_heartbeat_settlement(
         admission_event_id=_optional_readback_text(payload.get("admission_event_id")),
         prepared_lease=_optional_readback_record(payload.get("prepared_lease")),
         prepared_lease_required=payload.get("prepared_lease_required") is True,
+        resume_lease_qualification=_optional_readback_record(payload.get("resume_lease_qualification")),
+        original_prepared_receipt=_optional_readback_record(payload.get("original_prepared_receipt")),
+        original_prepared_event_id=_optional_readback_text(payload.get("original_prepared_event_id")),
+        original_prepared_receipt_sha256=_optional_readback_text(payload.get("original_prepared_receipt_sha256")),
+        native_task_lease_cleanup=_optional_readback_record(payload.get("native_task_lease_cleanup")),
     )

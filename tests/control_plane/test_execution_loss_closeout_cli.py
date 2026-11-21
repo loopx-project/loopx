@@ -636,6 +636,187 @@ def test_administrative_subtype_without_complete_proof_cannot_settle(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("source_profile", [False, True])
+def test_replacement_preparation_cannot_erase_original_or_require_third_generation(
+    tmp_path, monkeypatch, capsys, provider, source_profile,
+):
+    from loopx.control_plane.quota.heartbeat_receipt import ensure_turn_heartbeat_settlement_receipt
+    from loopx.control_plane.quota.error_codes import HeartbeatReceiptIdentityConflictError
+
+    context = _fixture(tmp_path, monkeypatch, capsys, provider, source_profile=source_profile)
+    original = _readback(context)
+    original_prepared = deepcopy(original.prepared_lease)
+    assert original_prepared is not None
+    before = _unchanged_state(context)
+    before_bind_calls = []
+    current = context["current_lease"]
+    with pytest.raises(HeartbeatReceiptIdentityConflictError):
+        ensure_turn_heartbeat_settlement_receipt(
+            context["runtime"], original.identity.value,
+            semantic_replan_guard_scoped=False, semantic_replan_obligation_id=None,
+            task_lease_proof={"idempotency_key": current["idempotency_key"],
+                              "expected_version": current["version"]},
+            task_lease_epoch=current["lease_epoch"], goal_ref=context["goal_ref"],
+            before_bind=lambda: before_bind_calls.append(True),
+        )
+    assert before_bind_calls == []
+    assert _unchanged_state(context) == before
+    assert _readback(context).prepared_lease == original_prepared
+    code, closed = context["cli"](*_closeout_args(context))
+    assert code == 0 and closed["settlement_progress"]["no_spend"] is True, closed
+    run = json.loads(Path(closed["json_path"]).read_text())
+    assert run["execution_loss_closeout"]["original_prepared"] == original_prepared
+    assert _lease(context) == current
+    _assert_no_completion_or_debit(context)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_same_generation_renewal_is_not_a_mutation_of_original_prepared_receipt(
+    tmp_path, monkeypatch, capsys, provider,
+):
+    from loopx.control_plane.quota.heartbeat_receipt import ensure_turn_heartbeat_settlement_receipt
+    from loopx.control_plane.quota.error_codes import HeartbeatReceiptIdentityConflictError
+
+    context = _fixture(tmp_path, monkeypatch, capsys, provider, source_profile=False, replace=False)
+    original = _readback(context)
+    lease = context["original_lease"]
+    renewed = task_lease.renew_task_lease(
+        registry_path=context["registry"], runtime_root=context["runtime"],
+        goal_id=context["goal_id"], todo_id=context["todo"], owner=OWNER,
+        idempotency_key=lease["idempotency_key"], expected_version=lease["version"],
+    )
+    assert renewed["ok"] is True, renewed
+    current = _lease(context)
+    assert current["idempotency_key"] == lease["idempotency_key"]
+    assert current["lease_epoch"] == lease["lease_epoch"]
+    assert current["version"] > lease["version"]
+    before = _unchanged_state(context)
+    with pytest.raises(HeartbeatReceiptIdentityConflictError):
+        ensure_turn_heartbeat_settlement_receipt(
+            context["runtime"], original.identity.value,
+            semantic_replan_guard_scoped=False, semantic_replan_obligation_id=None,
+            task_lease_proof={"idempotency_key": current["idempotency_key"],
+                              "expected_version": current["version"]},
+            task_lease_epoch=current["lease_epoch"],
+        )
+    assert _unchanged_state(context) == before
+    replayed = ensure_turn_heartbeat_settlement_receipt(
+        context["runtime"], original.identity.value,
+        semantic_replan_guard_scoped=False, semantic_replan_obligation_id=None,
+        task_lease_proof={"idempotency_key": lease["idempotency_key"],
+                          "expected_version": lease["version"]},
+        task_lease_epoch=lease["lease_epoch"],
+    )
+    assert replayed["details"]["prepared_lease_version"] == lease["version"]
+    assert _unchanged_state(context) == before
+    assert _readback(context).prepared_lease == original.prepared_lease
+    _assert_no_completion_or_debit(context)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_direct_publication_uses_causal_original_after_readiness_revision(
+    tmp_path, monkeypatch, capsys, provider,
+):
+    context = _fixture(tmp_path, monkeypatch, capsys, provider, source_profile=False, replace=False)
+    original = _readback(context)
+    lease = context["original_lease"]
+    renewed = task_lease.renew_task_lease(
+        registry_path=context["registry"], runtime_root=context["runtime"],
+        goal_id=context["goal_id"], todo_id=context["todo"], owner=OWNER,
+        idempotency_key=lease["idempotency_key"], expected_version=lease["version"],
+    )
+    assert renewed["ok"] is True, renewed
+    current = _lease(context)
+    code, guarded = context["cli"](*_guard_args(context))
+    assert code == 0 and guarded["normal_delivery_allowed"] is True, guarded
+    effective = _readback(context)
+    assert effective.heartbeat_receipt["details"]["settlement_receipt_revision"] == "lease_readiness"
+    assert effective.heartbeat_receipt["details"]["prepared_lease_version"] == current["version"]
+    assert effective.original_prepared_receipt == original.original_prepared_receipt
+    assert effective.prepared_lease == original.prepared_lease
+    before = _unchanged_state(context)
+    before_bind_calls = []
+    with pytest.raises(HeartbeatReceiptIdentityConflictError):
+        ensure_turn_heartbeat_settlement_receipt(
+            context["runtime"], original.identity.value,
+            semantic_replan_guard_scoped=False, semantic_replan_obligation_id=None,
+            task_lease_proof={"idempotency_key": current["idempotency_key"],
+                              "expected_version": current["version"]},
+            task_lease_epoch=current["lease_epoch"],
+            before_bind=lambda: before_bind_calls.append(True),
+        )
+    assert before_bind_calls == []
+    for proof in (None, {"idempotency_key": lease["idempotency_key"],
+                         "expected_version": lease["version"]}):
+        replayed = ensure_turn_heartbeat_settlement_receipt(
+            context["runtime"], original.identity.value,
+            semantic_replan_guard_scoped=False, semantic_replan_obligation_id=None,
+            task_lease_proof=proof, task_lease_epoch=lease["lease_epoch"],
+        )
+        assert replayed == effective.heartbeat_receipt
+        assert _unchanged_state(context) == before
+    assert _readback(context).original_prepared_receipt == original.original_prepared_receipt
+    _assert_no_completion_or_debit(context)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_source_resume_qualification_preserves_enclosing_admission_on_success_and_refusal(
+    tmp_path, monkeypatch, capsys, provider,
+):
+    from loopx.control_plane.quota.accounting_admission import quota_accounting_admission
+    from loopx.control_plane.quota.execution_preparation import (
+        RefreshTaskLeaseUnavailable, guard_first_writeback_execution,
+        read_turn_execution_lease_qualification,
+    )
+    from loopx.file_lock import cross_runtime_lock_witness
+
+    context = _fixture(tmp_path, monkeypatch, capsys, provider, replace=False)
+    original = _readback(context)
+    lease = context["original_lease"]
+    proof = {"idempotency_key": lease["idempotency_key"], "expected_version": lease["version"]}
+    before = _unchanged_state(context)
+    # This exercises the actual helper/guard under Source admission. The
+    # generic Source native producer remains unavailable; no mock grants it.
+    with quota_accounting_admission(
+        runtime_root=context["runtime"], registry_path=context["registry"],
+        goal_id=context["goal_id"], goal_ref=context["goal_ref"], operation="resume-borrow-regression",
+    ) as admission:
+        assert admission is not None
+        witnesses = deepcopy(admission["locks"])
+        for offered in (proof, {**proof, "expected_version": proof["expected_version"] + 1}, proof):
+            kwargs = dict(runtime_root=context["runtime"], registry_path=context["registry"],
+                identity=original.identity.value, requested_proof=offered,
+                goal_ref=context["goal_ref"], source_admission=admission)
+            if offered == proof:
+                qualified = read_turn_execution_lease_qualification(**kwargs)
+                assert qualified.resume_lease_qualification["source"] == "active"
+            else:
+                with pytest.raises(RefreshTaskLeaseUnavailable):
+                    read_turn_execution_lease_qualification(**kwargs)
+            for witness in witnesses:
+                assert cross_runtime_lock_witness(Path(witness["target"])) == {
+                    key: value for key, value in witness.items() if key != "role"
+                }
+        # Use the actual locked source fact rather than a generic registry read.
+        locked_goal = next(goal for goal in load_project_registry(context["registry"])["goals"]
+            if goal["id"] == context["goal_id"])
+        with guard_first_writeback_execution(
+            runtime_root=context["runtime"], registry_path=context["registry"],
+            goal_id=context["goal_id"], todo_id=context["todo"], agent_id=OWNER,
+            requested_proof=proof, settlement=original, locked_goal=locked_goal,
+            goal_ref=context["goal_ref"], source_admission=admission,
+        ):
+            qualified = read_turn_execution_lease_qualification(**{**kwargs, "requested_proof": proof})
+            assert qualified.resume_lease_qualification["state"] == "ready"
+        for witness in witnesses:
+            assert cross_runtime_lock_witness(Path(witness["target"])) == {
+                key: value for key, value in witness.items() if key != "role"
+            }
+    assert _unchanged_state(context) == before
+    _assert_no_completion_or_debit(context)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_current_original_generation_keeps_ordinary_blocked_closeout_semantics(
     tmp_path, monkeypatch, capsys, provider,
 ):

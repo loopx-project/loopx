@@ -576,17 +576,19 @@ class FirstPartyHostGoalAdmission:
             raise FirstPartyHostRuntimeRejected("goal_authority_unavailable") from exc
 
     @contextmanager
-    def _legacy_lifetime(self, *, operation: str, launch: bool) -> Iterator[None]:
+    def _legacy_lifetime(
+        self, *, operation: str, launch: bool, registry_lock_timeout: float | None = None,
+    ) -> Iterator[None]:
         with ExitStack() as scope:
             if self.legacy_source_admission is not None:
                 # Activation writes source then global projection under these
                 # same locks. A failed mirror sync must not hide a source stop.
                 scope.enter_context(self.legacy_source_admission._legacy_lifetime(
-                    operation=operation, launch=launch,
+                    operation=operation, launch=launch, registry_lock_timeout=registry_lock_timeout,
                 ))
             try:
                 transaction = scope.enter_context(project_registry_transaction(
-                    self.registry_path, operation=operation,
+                    self.registry_path, operation=operation, timeout_seconds=registry_lock_timeout,
                 ))
             except (OSError, TypeError, ValueError) as exc:
                 raise FirstPartyHostRuntimeRejected("goal_authority_unavailable") from exc

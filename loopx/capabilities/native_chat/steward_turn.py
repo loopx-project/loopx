@@ -509,8 +509,60 @@ class StewardTurnHost:
     def _task_execution_lease(self, request: Mapping[str, Any], turn_id: str, *, recovery: bool = False,
                               admission_retry: bool = False, claim_args: list[str] | None = None):
         """Both generation and cached validation use the original Todo owner."""
+        from ...control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission
+        from ...control_plane.goals.goal_ref_validation import exact_goal_ref
+        from ...control_plane.quota.settlement import read_heartbeat_settlement
         from .steward_commands import native_command
+        request = {**request, "actor": dict(request["actor"])}
         actor = request["actor"]
+        # The admitted actor retains its original Goal lifetime. Current
+        # admission can check that reference, never supply a replacement.
+        goal_ref = (exact_goal_ref(actor["goal_id"], actor["goal_instance_id"])
+            if actor.get("goal_instance_id") is not None else None)
+        admission = FirstPartyHostGoalAdmission.for_plan(
+            registry_path=self.controller.registry_path, goal_id=actor["goal_id"],
+            planned_goal_ref=goal_ref, agent_id=actor["agent_id"])
+
+        def require_original_goal():
+            admission.require_running(operation="native_task_execution_lifetime_check")
+
+        require_original_goal()
+
+        def settlement_readback():
+            require_original_goal()
+            return read_heartbeat_settlement(self.controller.coordination_runtime_root,
+                goal_id=actor["goal_id"], agent_id=actor["agent_id"], todo_id=request["todo_id"],
+                turn_instance_id=request["turn_instance_id"], registry_path=self.controller.registry_path,
+                goal_ref=goal_ref)
+
+        def cleanup_readback(*, source_admission=None, fenced=False):
+            from ...control_plane.turn_driver.journal_store import find_loopx_turn_key_by_settlement_identity
+            if not fenced:
+                require_original_goal()
+            journal = find_loopx_turn_key_by_settlement_identity(
+                self.controller.coordination_runtime_root, goal_id=actor["goal_id"],
+                agent_id=actor["agent_id"], todo_id=request["todo_id"],
+                turn_instance_id=request["turn_instance_id"])
+            return read_heartbeat_settlement(self.controller.coordination_runtime_root,
+                goal_id=actor["goal_id"], agent_id=actor["agent_id"], todo_id=request["todo_id"],
+                turn_instance_id=request["turn_instance_id"], registry_path=self.controller.registry_path,
+                goal_ref=goal_ref, source_admission=source_admission,
+                borrow_source_admission=source_admission is not None,
+                native_task_lease_cleanup={"schema_version": "native_task_lease_cleanup_request_v0",
+                    "recovery": recovery, "admission_retry": admission_retry,
+                    "resume_turn_key_present": request.get("resume_turn_key") is not None,
+                    "original_journal_present": journal is not None})
+
+        def cleanup_disposition(readback):
+            disposition = readback.native_task_lease_cleanup if readback is not None else None
+            if (not isinstance(disposition, Mapping)
+                    or disposition.get("schema_version") != "native_task_lease_cleanup_v0"
+                    or disposition.get("disposition") not in {"release", "retain", "unconfirmed"}):
+                raise RuntimeError("the native task lease cleanup disposition could not be read")
+            if disposition["disposition"] == "unconfirmed":
+                raise ValueError("the original Turn closeout could not be verified before lease release")
+            return disposition["disposition"]
+
         if claim_args is not None:
             operation_id = f"todo-claim:native-turn:{turn_id}"
             claim = native_command(self.controller, [*claim_args, "--claim-operation-id", operation_id])
@@ -522,29 +574,76 @@ class StewardTurnHost:
             if not isinstance(lease, dict):
                 raise ValueError("native task preparation could not read back its original lease")
         else:
-            retained = native_command(self.controller, ["task-lease", "inspect", "--goal-id", actor["goal_id"],
-                "--todo-id", request["todo_id"]]).get("lease")
+            inspected = native_command(self.controller, ["task-lease", "inspect", "--goal-id", actor["goal_id"],
+                "--todo-id", request["todo_id"]])
+            retained = inspected.get("lease")
             version = retained["version"] if retained else 0
-            suffix = (".validation-recovery." + str(version) if recovery else
-                ".admission-retry." + turn_id if admission_retry else
-                ".admission-retry" if request.get("resume_turn_key") else "")
-            lease = native_command(self.controller, ["task-lease", "acquire", "--goal-id", actor["goal_id"],
-                "--todo-id", request["todo_id"], "--owner", actor["agent_id"],
-                "--idempotency-key", request["turn_instance_id"] + suffix, "--ttl-seconds", "3600",
-                "--expected-version", str(version)])["lease"]
+            if recovery:
+                from ...control_plane.quota.execution_preparation import read_turn_execution_lease_qualification
+                original = settlement_readback()
+                if original is None or original.identity.value is None:
+                    raise ValueError("the original report settlement identity is unavailable")
+                qualified = read_turn_execution_lease_qualification(
+                    runtime_root=self.controller.coordination_runtime_root,
+                    registry_path=self.controller.registry_path, identity=original.identity.value,
+                    requested_proof=({"idempotency_key": retained["idempotency_key"],
+                        "expected_version": version} if retained else None), goal_ref=goal_ref)
+                qualification = qualified.resume_lease_qualification or {}
+                if qualification.get("state") != "ready":
+                    raise ValueError("the original task execution lease is unavailable for settlement recovery")
+                # The shared TS owner qualifies original generation continuity.
+                # The canonical lifecycle owner renews that exact holder with CAS.
+                proof = qualification["current_task_lease_proof"]
+                lease = native_command(self.controller, ["task-lease", "renew", "--goal-id", actor["goal_id"],
+                    "--todo-id", request["todo_id"], "--owner", actor["agent_id"],
+                    "--idempotency-key", proof["idempotency_key"], "--ttl-seconds", "3600",
+                    "--expected-version", str(proof["expected_version"])])["lease"]
+            else:
+                suffix = (".admission-retry." + turn_id if admission_retry else
+                    ".admission-retry" if request.get("resume_turn_key") else "")
+                lease = native_command(self.controller, ["task-lease", "acquire", "--goal-id", actor["goal_id"],
+                    "--todo-id", request["todo_id"], "--owner", actor["agent_id"],
+                    "--idempotency-key", request["turn_instance_id"] + suffix, "--ttl-seconds", "3600",
+                    "--expected-version", str(version)])["lease"]
         try:
             yield lease
         finally:
-            # Completion retires this lease. Never release a later owner's.
+            # Completion retires this lease. An unsettled exact Turn keeps its
+            # original generation available for the existing recovery owners.
+            # Never release a later owner's or a different Goal instance's.
             try:
                 retained = native_command(self.controller, ["task-lease", "inspect", "--goal-id", actor["goal_id"],
                     "--todo-id", request["todo_id"]]).get("lease")
                 if retained and retained.get("status") == "active":
-                    proof = self._task_lease_proof(request, lease)
-                    native_command(self.controller, ["task-lease", "release", "--goal-id", actor["goal_id"],
-                        "--todo-id", request["todo_id"], "--owner", actor["agent_id"],
-                        "--idempotency-key", proof["task_lease_idempotency_key"],
-                        "--expected-version", str(proof["task_lease_expected_version"])])
+                    self._task_lease_proof(request, lease)
+                    if cleanup_disposition(cleanup_readback()) == "release":
+                        from ...control_plane.quota.accounting_admission import quota_accounting_admission
+                        from ...file_lock import exclusive_cross_runtime_file_lock
+                        from ...rollout_event_log import rollout_event_log_path
+                        # Requalification owns rollout before index/Goal. Never
+                        # wait for rollout in the inverse order: retain instead.
+                        with quota_accounting_admission(
+                            runtime_root=self.controller.coordination_runtime_root,
+                            registry_path=self.controller.registry_path, goal_id=actor["goal_id"],
+                            goal_ref=goal_ref, operation="native_task_execution_release") as source_admission:
+                            lifetime = (nullcontext() if admission.source_profile else admission._legacy_lifetime(
+                                operation="native_task_execution_release", launch=False, registry_lock_timeout=0))
+                            with lifetime:
+                                if admission.source_profile:
+                                    # Quota already holds this original source
+                                    # guard. Reuse its pure owner check, not a
+                                    # second acquisition of the same lifetime.
+                                    admission._decision("require_current")
+                                with exclusive_cross_runtime_file_lock(
+                                    rollout_event_log_path(self.controller.coordination_runtime_root, actor["goal_id"]),
+                                    operation="native_task_execution_release", timeout_seconds=0):
+                                    original = cleanup_readback(source_admission=source_admission, fenced=True)
+                                    if cleanup_disposition(original) == "release":
+                                        proof = self._task_lease_proof(request, lease)
+                                        native_command(self.controller, ["task-lease", "release", "--goal-id", actor["goal_id"],
+                                            "--todo-id", request["todo_id"], "--owner", actor["agent_id"],
+                                            "--idempotency-key", proof["task_lease_idempotency_key"],
+                                            "--expected-version", str(proof["task_lease_expected_version"])])
             except (OSError, ValueError, RuntimeError):
                 self.store.append_event(actor["session_id"], turn_id, kind="native_loopx.task_lease_release_unconfirmed",
                     payload={"todo_id": request["todo_id"], "lease_epoch": lease["lease_epoch"]})
@@ -1080,7 +1179,7 @@ class StewardTurnHost:
         report_context = ""
         governance_work = False
         managed_answer = ""
-        managed_lease, managed_lease_request = None, None
+        report_lease, managed_lease, managed_lease_request = None, None, None
         preparation_status = None
         steward_actions_state: dict[str, Any] = {"context_handoff": None, "user_actions": [], "validation_error": None}
 
@@ -1278,8 +1377,9 @@ class StewardTurnHost:
         # The kernel records the actual app-server host and independent profile.
         args.host, args.session_scope = "codex-app-server", "agent"
         result: dict[str, Any] = {}
-        with ExitStack() as managed_leases, (self._task_execution_lease(request, turn_id,
-                admission_retry=bool(selection_recovery)) if report_work else nullcontext(None)) as report_lease:
+        with ExitStack() as managed_leases:
+            if report_work and not selection_recovery:
+                report_lease = managed_leases.enter_context(self._task_execution_lease(request, turn_id))
             if not report_work and request.get("todo_id") and not request.get("resume_turn_key"):
                 # The selected Task's existing lease must precede the kernel's
                 # delivery guard. Taking it in the model callback is too late:
@@ -1328,6 +1428,12 @@ class StewardTurnHost:
                     selection_recovery = probe
                 governance_work = False
             if report_work:
+                if report_lease is None:
+                    # Governance admission selects its own Turn. Acquire the
+                    # report's business lease only after its typed continuation
+                    # is admitted, before collecting and executing that report.
+                    report_lease = managed_leases.enter_context(self._task_execution_lease(
+                        request, turn_id, admission_retry=bool(selection_recovery)))
                 # Portfolio collection can take minutes and legitimately see
                 # registry updates. Finish it before the native driver captures
                 # its launch witness; retain the launch fence and fresh source

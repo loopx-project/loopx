@@ -6,7 +6,8 @@ import test, { type TestContext } from "node:test";
 
 import { EffectRuntimeConflictError, EffectRuntimeRequestError } from "../../loopx/control_plane/effect_runtime_errors.ts";
 import { commitTurnJournal } from "../../loopx/control_plane/turn_driver/turn_journal_effects.ts";
-import { findTurnJournalBySettlement, readTurnJournalCapabilities } from "../../loopx/control_plane/turn_driver/turn_journal_query.ts";
+import { findTurnJournalBySettlement, readTurnJournalCapabilities, readTurnTerminalCloseoutProvider } from "../../loopx/control_plane/turn_driver/turn_journal_query.ts";
+import {settlementIdentity, type JsonObject} from "../../loopx/control_plane/effect_program.ts";
 
 const phases = ["host_execute", "typed_result", "validation", "durable_writeback", "quota_spend", "scheduler_apply", "scheduler_ack"];
 const selector = { goal_id: "goal", agent_id: "actor", todo_id: "todo_task", turn_instance_id: "turn-7" };
@@ -50,6 +51,49 @@ const capabilities = (
     settlement_identity,
     ...(goal_ref === undefined ? {} : { goal_ref }),
   });
+
+test("terminal provider reuses the actual journal and settlement owners without altering their files", async t => {
+  const {root, path, directory} = await fixture(t);
+  const expected = settlementIdentity(selector);
+  const terminalRef = `${identity.effect_id}#terminal_closeout`;
+  const canonicalTodo = {todo_id: selector.todo_id, status: "open", no_followup: true,
+    completion_continuation: null, successor_todo_ids: []};
+  const pending = (): JsonObject => ({...journal(), status: "in_progress", completed_phases: phases.slice(0, 5),
+    host_result: {turn_key: key, result_kind: "validated_completion"},
+    writeback: {ok: true, appended: true, effect_ref: `${identity.effect_id}#durable_writeback`},
+    quota_spend: {ok: true, appended: true, effect_ref: `${identity.effect_id}#quota_spend`},
+    effect_attempts: {terminal_closeout: {status: "prepared", effect_ref: terminalRef}}});
+  const read = (effect_ref: string | null = null, turn_key = key) => readTurnTerminalCloseoutProvider(
+    root, expected, {kind: "alias"}, {turn_key, effect_ref}, canonicalTodo);
+  await writeFile(path, JSON.stringify(pending()));
+  const before = await readFile(path), files = await readdir(directory);
+  const terminal = await read();
+  assert.equal(terminal?.step_kind, "terminal_closeout");
+  assert.equal(terminal?.action, "resolve_prepared");
+  assert.equal(terminal?.effect_ref, terminalRef);
+  assert.deepEqual(await read(terminalRef), terminal);
+  await assert.rejects(read(`${identity.effect_id}#durable_writeback`), {code: "refresh_task_lease_unavailable"});
+  await assert.rejects(read(null, `sha256:${"b".repeat(64)}`), {code: "refresh_task_lease_unavailable"});
+  assert.deepEqual(await readFile(path), before);
+  assert.deepEqual(await readdir(directory), files);
+  const completedTerminal = {...pending(), terminal_closeout: {ok: true, appended: true,
+    completion: {todo_id: selector.todo_id, continuation: "no_followup"}}};
+  delete (completedTerminal as JsonObject).effect_attempts;
+  for (const changed of [
+    {...pending(), host_result: {turn_key: key, result_kind: "outcome_progress"}},
+    {...pending(), quota_spend: {ok: false, appended: false}},
+    completedTerminal,
+    journal(),
+  ]) {
+    await writeFile(path, JSON.stringify(changed));
+    assert.equal(await read(), null);
+  }
+  const sourcePending = pending();
+  (sourcePending.plan as JsonObject).goal_ref = goalRefA;
+  ((sourcePending.plan as JsonObject).transaction as JsonObject).goal_ref = goalRefA;
+  await writeFile(path, JSON.stringify(sourcePending));
+  await assert.rejects(read(), {code: "refresh_task_lease_unavailable"});
+});
 
 test("missing history is a read-only observation", async t => {
   const { root, directory } = await fixture(t);

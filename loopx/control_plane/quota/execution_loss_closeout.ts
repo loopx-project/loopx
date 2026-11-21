@@ -21,8 +21,9 @@ import {EXECUTION_LOSS_CLOSEOUT_SCHEMA, isExecutionLossCloseout} from "./executi
 import {parseExactGoalRef} from "../goals/goal_instance_identity.ts";
 import {canonicalTaskLease, canonicalLeaseTodoFact} from "../coordination/task_lease_state.ts";
 import {decodeTaskLeaseProof} from "../coordination/task_lease_proof.ts";
-import {heartbeatPreparedLease, heartbeatReceiptBinding, heartbeatReceiptDetails, heartbeatReceiptFactFromEvent}
+import {heartbeatReceiptBinding, heartbeatReceiptDetails, heartbeatReceiptFactFromEvent}
   from "./heartbeat_receipt_identity.ts";
+import {heartbeatPreparedWorkAdmission} from "./heartbeat_receipt_identity.ts";
 import {nativeChildReportAdmission} from "../capabilities/native_child_admission.ts";
 import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 import {projectProgressDelta} from "../work_items/progress_delta.ts";
@@ -72,12 +73,12 @@ export function qualifyReceiptBoundExecutionLossCloseout(value: unknown): JsonOb
   }
   const details = heartbeatReceiptDetails(receipt), fact = heartbeatReceiptFactFromEvent(receipt);
   const originalBinding = heartbeatReceiptBinding(identity.goal_id, identity.agent_id, fact);
-  const prepared = heartbeatPreparedLease(details);
+  const prepared = heartbeatPreparedWorkAdmission(receipt, identity);
   if (receipt.schema_version !== "loopx_rollout_event_v0" || receipt.event_kind !== "quota_should_run"
       || receipt.goal_id !== identity.goal_id || receipt.agent_id !== identity.agent_id
       || receipt.run_id !== identity.turn_instance_id || fact.todo_id !== identity.todo_id
       || originalBinding?.binding_kind !== "todo" || originalBinding.binding_id !== identity.todo_id
-      || fact.settlement_effect_id !== identity.effect_id || fact.closeout_required !== true
+      || (fact.settlement_effect_id !== null && fact.settlement_effect_id !== identity.effect_id) || fact.closeout_required !== true
       || !prepared || prepared.prepared_lease_epoch === undefined
       || (Object.hasOwn(details, "prepared_lease_required") && details.prepared_lease_required !== true)
       || (details.semantic_replan_obligation_id != null && details.semantic_replan_obligation_id !== "")
@@ -300,7 +301,8 @@ export async function commitExecutionLossCloseout(value: unknown): Promise<JsonO
         goal_id: identity.goal_id, agent_id: identity.agent_id, todo_id: identity.todo_id,
         turn_instance_id: identity.turn_instance_id, infer_turn_instance_id: false, allow_unbound_binding: false,
       }, owner, snapshot);
-      const receipt = requireJsonObject(readback.heartbeat_receipt, "original heartbeat receipt");
+      const receipt = jsonObject(readback.original_prepared_receipt);
+      if (receipt === null) reject("the original Turn's positive prepared admission is unavailable");
       requireQuotaOwnerProjection(owner, receipt.goal_ref, "original heartbeat receipt");
       if (jsonObject(readback.identity)?.failure != null) reject("original settlement identity could not be verified");
       const existingBytes = optionalBytes(jsonPath);

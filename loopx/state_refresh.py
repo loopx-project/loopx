@@ -1620,6 +1620,8 @@ def refresh_state_run(
                         requested_proof=task_lease_proof,
                         settlement=settlement_readback,
                         locked_goal=current_goal if normalized_next_action else None,
+                        goal_ref=goal_ref,
+                        source_admission=source_admission,
                     ))
                 if settlement_readback is not None:
                     persist_external_delivery_pause(

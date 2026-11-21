@@ -86,6 +86,36 @@ ABA guarantee; mixed/malformed source ownership never falls back to legacy.
 Identity conflicts return pure original settlement readback, without another
 work guard. Omitting the flag retains the ordinary writer and recovery rules.
 
+Native resume does not republish a current lease as the original prepared
+proof. The positive prepared admission event remains the original source even
+after later review or readiness receipts. Remaining execution effects may use a freshly
+verified current CAS proof only within the same execution generation, under the
+existing lease owner: the key and epoch remain equal and the version does not
+decrease. Exact legacy-proof compatibility retains its existing limited scope
+and provides no ABA guarantee. A different generation cannot complete the old
+Turn, including a frozen report; it requires execution-loss closeout or a fresh
+Turn through the existing C1 owner. Every effect boundary rereads its owning authority;
+retired authority is usable only for the original Turn's proven post-completion
+writeback or its verified pending terminal-receipt repair. A conditional terminal
+effect after writeback and spend uses the existing journal/settlement owner and
+exact effect reference; an active proof may execute that remaining original
+effect, while a canonical completed Todo permits only receipt repair. Committed
+replay returns the existing result without asking for a lease or executing an
+effect. After durable writeback is accepted, a pending quota spend is accounting
+under the existing receipt/writeback/quota owner. Its journal-authorized recovery
+does not request an execution lease or repeat host, completion or writeback work;
+it still freshly validates the original accounting authority. Cleanup retains
+the original task lease while its admitted Turn owes closeout and releases it
+only when the TS settlement owner confirms eligibility. Frozen-report recovery
+qualifies and renews that same generation; a replacement lease cannot recover
+the old business. Report selection recovery runs its governance probe before
+acquiring a report execution lease; the existing TS admission must permit the
+report before its preparation acquires that lease. The probe's evidence remains
+unchanged. Conflicting prepared generations in one identity's history are rejected;
+validated causal links retain the original proof even on older revisions without
+a revision marker. Direct receipt publication permits exact replay and rejects any
+change to already prepared fields before appending a receipt.
+
 `refresh-state --execution-loss-closeout` 显式关闭原 prepared Todo Turn 已失去的
 执行尝试。使用相同 Goal、Agent、Todo、Turn，提供 typed blocked / outcome_gap /
 semantic_closeout 证据及当前 control writer 的确切租约 key/version。TS owner 在真实
@@ -103,6 +133,28 @@ writer proof；纯历史结算回读不依赖当前租约。历史冲突或损�
 SourceSession 沿原 GoalRef；未激活项目保留既有稳定 runtime/Goal alias 语义，不新增
 incarnation 或 ABA 保证，混合及非法 ownership 不回退。identity conflict 返回原结算
 的纯 readback，不再运行 work guard。省略该 flag 保持普通 writer 与 recovery 规则。
+
+Native resume 不把当前租约重新发布为原 prepared proof。后续 review/readiness 收据
+不能取代最初的 positive prepared admission。既存 remaining execution effects 只能通过现有
+租约 owner 在同一 execution generation 下使用 freshly verified 当前 CAS proof：
+key 与 epoch 保持相同，version 不降低。Legacy exact-proof 兼容保留原有限边界，
+不提供 ABA 保证。不同 generation 不能完成旧 Turn，即便已有 frozen report；
+恢复使用 execution-loss closeout 或既有 C1 owner 下的 fresh Turn。每个 effect
+边界均重新读取对应 owner 的 authority；retired proof 只支持原 Turn 已证明 completion 后尚余的
+writeback 或已核验的 pending terminal receipt 修复。writeback 与 spend 后的条件
+terminal effect 复用既有 journal/settlement owner 及 exact effect ref：active 原
+generation proof 只能执行该剩余 effect；canonical Todo 已完成时只能修复收据。
+已提交重放直接返回原结果，不请求租约或执行 effect。durable writeback 已被接受后，
+尚欠的 quota spend 由既有 receipt/writeback/quota owner 负责记账。journal 授权的
+恢复不请求 execution lease，也不重跑 host、completion 或 writeback；仍须 freshly
+核验原记账 authority。cleanup 在原 admitted Turn 欠收尾时保留原 task lease，
+仅在 TS settlement owner 确认资格后释放。frozen-report 恢复核验并续租同一
+generation；replacement lease 不能恢复旧业务。报告 selection recovery 先执行
+governance probe；既有 TS admission 允许报告后，才在报告 preparation 前获取
+业务 execution lease，保留原 probe 证据。同 identity 历史中的不同
+prepared generation 均拒绝；旧收据没有 revision 标记时，已核验的因果链接仍保留
+原 proof。Direct receipt publication 只允许 exact replay，任何已准备字段变化都
+必须在追加收据前拒绝。
 
 Newly generated heartbeat and same-Turn commands use the default v1 entry.
 Historical benchmark runs use the recorded runner and contract version.

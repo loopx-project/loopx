@@ -125,6 +125,7 @@ def build_turn_settlement_resolvers(
     require_effect_ref: Callable[[str, SettlementStepKind], None],
     append_settlement_event: Callable[..., None],
     finish_explore_delivery: Callable[[dict[str, object]], dict[str, object]],
+    qualify_terminal_closeout: Callable[[str], None] | None = None,
 ) -> tuple[
     Callable[[], dict[str, object] | None],
     Callable[[str], dict[str, object]],
@@ -297,6 +298,8 @@ def build_turn_settlement_resolvers(
                 effect_ref,
                 SettlementStepKind.TERMINAL_CLOSEOUT,
             )
+            if qualify_terminal_closeout is not None:
+                qualify_terminal_closeout(effect_ref)
             readback = read_heartbeat_settlement(
                 runtime_root,
                 goal_id=settlement_identity.goal_id,
@@ -322,6 +325,8 @@ def build_turn_settlement_resolvers(
                     "reason": "Todo state does not prove terminal no-followup",
                 }
             if event is None:
+                if qualify_terminal_closeout is not None:
+                    qualify_terminal_closeout(effect_ref)
                 append_settlement_event(
                     {"ok": True, "appended": True},
                     event_kind="todo_complete",

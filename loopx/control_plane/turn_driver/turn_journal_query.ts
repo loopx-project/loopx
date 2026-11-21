@@ -9,6 +9,7 @@ import {
   SETTLEMENT_IDENTITY_SCHEMA_VERSION,
   SCOPED_SETTLEMENT_IDENTITY_SCHEMA_VERSION,
   type BoundSettlementIdentity,
+  type SettlementIdentity,
   type JsonObject,
 } from "../effect_program.ts";
 import { EffectRuntimeConflictError, EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
@@ -23,11 +24,17 @@ import { jsonObject, parseJsonSource, parsedSourceNumberTokens, requireJsonObjec
 import {
   interpretTurnJournal,
   parseTurnJournalGoalBinding,
+  transactionPhases,
+  type TurnJournalInspection,
 } from "./turn_journal.ts";
+import type {QuotaAccountingOwner} from "../quota/source_admission.ts";
+import type {ProviderEffect} from "./settlement_provider.ts";
 
 interface JournalEvidence {
   turn_key: string;
   observed_capabilities: string[] | null;
+  journal: JsonObject;
+  inspection: TurnJournalInspection;
 }
 
 function decodeIdentity(value: unknown): BoundSettlementIdentity {
@@ -136,11 +143,64 @@ function evidenceForJournal(
   }
   return {
     turn_key: turnKey,
+    journal,
+    inspection,
     observed_capabilities: inspection.replay_legal
       ? observedCapabilities(turnPlanWorkSource(plan ?? {}, sourceNumberTokens(journal,
         parsedSourceNumberTokens(journal, numbers)).filter(({path}) => path[0] === "plan" && path[1] === "work_contract")
         .map(({path, token}) => [path.slice(2), token])).work) : null,
   };
+}
+
+/** Resolve only the original journal's next terminal provider. The enclosing
+ * quota reader already owns source admission; this helper opens no owner and
+ * returns the existing settlement reducer's effect rather than a new grant. */
+export async function readTurnTerminalCloseoutProvider(
+  runtimeRoot: string,
+  identity: SettlementIdentity,
+  owner: QuotaAccountingOwner,
+  context: {turn_key: string; effect_ref: string | null},
+  todo: JsonObject,
+): Promise<ProviderEffect | null> {
+  if (identity.binding_kind !== "todo") return null;
+  const evidence = await queryTurnJournal(runtimeRoot, identity,
+    owner.kind === "exact_source" ? owner.goalRef : null);
+  if (evidence === null || evidence.turn_key !== context.turn_key) {
+    throw new EffectRuntimeRequestError("Terminal provider journal does not match this Turn",
+      "refresh_task_lease_unavailable");
+  }
+  const {journal, inspection} = evidence;
+  const goalBinding = parseTurnJournalGoalBinding(journal);
+  if (owner.kind === "alias" && goalBinding.kind !== "legacy") {
+    throw new EffectRuntimeRequestError("Terminal provider cannot cross Goal ownership",
+      "refresh_task_lease_unavailable");
+  }
+  if (inspection.recovery_decision.action !== "continue"
+      || inspection.recovery_decision.reinvoke_host
+      || !inspection.completed_phases.includes("quota_spend")
+      || jsonObject(journal.host_result)?.result_kind !== "validated_completion") return null;
+  const [{projectCompletionEvidence}, {reduceTurnSettlementTransaction, TURN_SETTLEMENT_TRANSACTION_SCHEMA_VERSION}] = await Promise.all([
+    import("../todos/read_projection.ts"), import("./settlement.ts"),
+  ]);
+  const intent = projectCompletionEvidence({operation: "intent", todo, expected_todo_id: identity.todo_id});
+  if (intent.continuation !== "no_followup") return null;
+  const transaction = jsonObject(jsonObject(journal.plan)?.transaction);
+  const reduction = reduceTurnSettlementTransaction({schema_version: TURN_SETTLEMENT_TRANSACTION_SCHEMA_VERSION,
+    transaction_plan: transaction, transaction_phases: transactionPhases,
+    completed_phases: inspection.completed_phases, committed_effect_id: identity.effect_id,
+    writeback_payload: journal.writeback ?? null, quota_spend_payload: journal.quota_spend ?? null,
+    terminal_closeout_required: true, terminal_closeout_payload: journal.terminal_closeout ?? null,
+    effect_attempts: journal.effect_attempts ?? {}, turn_result_kind: "validated_completion"});
+  if (reduction.decision !== "execute" || reduction.provider_effects.length !== 1) return null;
+  const effect = reduction.provider_effects[0]!;
+  if (effect.step_kind !== "terminal_closeout"
+      || (effect.action !== "prepare_and_execute" && effect.action !== "resolve_prepared"
+        && effect.action !== "execute_prepared")) return null;
+  if (context.effect_ref !== null && context.effect_ref !== effect.effect_ref) {
+    throw new EffectRuntimeRequestError("Terminal provider reference differs from this Turn's next effect",
+      "refresh_task_lease_unavailable");
+  }
+  return effect;
 }
 
 async function queryTurnJournal(

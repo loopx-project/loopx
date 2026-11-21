@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 
-import { settlementIdentity, settlementIdentityPayload } from "../../loopx/control_plane/effect_program.ts";
+import { settlementIdentity, settlementIdentityPayload, type JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import {
   createEffectRuntimeHandlers,
   dispatchEffectRuntimeMethod,
@@ -25,6 +25,9 @@ import { BLOCKED_WAIT_REQUEST_SCHEMA, prepareBlockedWait } from "../../loopx/con
 import { evaluateTodoResumeConditions, TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION } from "../../loopx/control_plane/todos/resume_condition.ts";
 import {
   projectSemanticReplanGuard,
+  projectNativeTaskLeaseCleanup,
+  NATIVE_TASK_LEASE_CLEANUP_REQUEST_SCHEMA,
+  NATIVE_TASK_LEASE_CLEANUP_SCHEMA,
   QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
   readQuotaSettlement,
   readQuotaSettlementFromSnapshot,
@@ -52,6 +55,118 @@ const identity = settlementIdentity({
   agent_id: agentId,
   todo_id: todoId,
   turn_instance_id: turnId,
+});
+const cleanupRequest = {schema_version: NATIVE_TASK_LEASE_CLEANUP_REQUEST_SCHEMA,
+  recovery: false, admission_retry: false, resume_turn_key_present: false, original_journal_present: false};
+
+test("native cleanup distinguishes proven release, owed closeout and unconfirmed receipt authority", () => {
+  const bound = (details: JsonObject, phase = "open"): JsonObject => ({found: true,
+    identity: {result: {value: settlementIdentityPayload(identity), failure: null}},
+    heartbeat_receipt: {details}, replay_phase: phase});
+  const failed = (kind: string): JsonObject => ({found: true,
+    identity: {result: {value: null, failure: {kind}}}, replay_phase: null});
+  const result = (disposition: string, reason: string) => ({schema_version: NATIVE_TASK_LEASE_CLEANUP_SCHEMA,
+    disposition, reason});
+  assert.deepEqual(projectNativeTaskLeaseCleanup(failed("receipt_missing"), cleanupRequest),
+    result("release", "fresh_pre_admission_missing"));
+  for (const flag of ["recovery", "admission_retry", "resume_turn_key_present", "original_journal_present"]) {
+    assert.deepEqual(projectNativeTaskLeaseCleanup(failed("receipt_missing"), {...cleanupRequest, [flag]: true}),
+      result("unconfirmed", "original_identity_unconfirmed"));
+  }
+  assert.deepEqual(projectNativeTaskLeaseCleanup(failed("receipt_unbound"), {...cleanupRequest, recovery: true}),
+    result("release", "receipt_unbound"));
+  for (const details of [{settlement_receipt_revision: "turn_reservation"},
+    {settlement_receipt_revision: "turn_reservation", closeout_required: false}]) {
+    assert.deepEqual(projectNativeTaskLeaseCleanup(bound(details), cleanupRequest),
+      result("release", "original_reservation_without_closeout"));
+  }
+  for (const revision of ["work_admission", "lease_readiness", "identity_upgrade"]) {
+    assert.deepEqual(projectNativeTaskLeaseCleanup(bound({settlement_receipt_revision: revision,
+      closeout_required: true}), cleanupRequest), result("retain", "original_turn_owes_closeout"));
+    for (const required of [undefined, false, null, "true", 1]) {
+      assert.equal(projectNativeTaskLeaseCleanup(bound({settlement_receipt_revision: revision,
+        closeout_required: required}), cleanupRequest).disposition, "unconfirmed");
+    }
+  }
+  for (const details of [{closeout_required: true}, {closeout_required: false},
+    {settlement_receipt_revision: "unknown", closeout_required: true},
+    ...[true, null, "false", 0].map(required => ({settlement_receipt_revision: "turn_reservation", closeout_required: required}))]) {
+    assert.equal(projectNativeTaskLeaseCleanup(bound(details), cleanupRequest).disposition, "unconfirmed");
+  }
+  assert.deepEqual(projectNativeTaskLeaseCleanup(bound({}, "settled"), cleanupRequest),
+    result("release", "original_turn_settled"));
+  assert.equal(projectNativeTaskLeaseCleanup({...failed("identity_mismatch"), replay_phase: "settled"}, cleanupRequest)
+    .disposition, "unconfirmed");
+  assert.equal(projectNativeTaskLeaseCleanup({found: false}, cleanupRequest).disposition, "unconfirmed");
+  assert.throws(() => projectNativeTaskLeaseCleanup(bound({}), {...cleanupRequest, original_journal_present: null}));
+  assert.throws(() => projectNativeTaskLeaseCleanup(bound({}), {...cleanupRequest, closeout_required: false}));
+});
+
+test("native cleanup attachment preserves B3 original proof and borrowed Source ownership", async () => {
+  for (const exact of [false, true]) {
+    const root = await fixture(exact ? {goalRef: {goal_id: goalId, goal_instance_id: instanceA}} : {});
+    try {
+      const path = join(root, "goals", goalId, "rollout-event-log.jsonl");
+      const reservation = JSON.parse((await readFile(path, "utf8")).trim());
+      reservation.details = {...reservation.details, closeout_required: false};
+      const original = {...reservation, event_id: "cleanup-admitted", status: "normal_run",
+        details: {...reservation.details, settlement_receipt_revision: "work_admission", closeout_required: true,
+          prepared_lease_required: true, prepared_lease_key_sha256: "a".repeat(64),
+          prepared_lease_version: 119, prepared_lease_epoch: 50,
+          ok: true, should_run: true, must_attempt_work: true, delivery_allowed: true, quiet_noop_allowed: false},
+        causality: {source_event_id: reservation.event_id, caused_by: reservation.event_id}};
+      await writeFile(path, [reservation, original].map(row => JSON.stringify(row)).join("\n") + "\n");
+      const before = await readFile(path);
+      const inspect = async (binding: Record<string, unknown> = {}) => {
+        const ordinaryRequest = request(root, {...binding, ...(exact ? {borrow_source_admission: true} : {})});
+        const ordinary = await readQuotaSettlement(ordinaryRequest);
+        assert.equal(Object.hasOwn(ordinary, "native_task_lease_cleanup"), false);
+        const requested = await readQuotaSettlement({...ordinaryRequest, native_task_lease_cleanup: cleanupRequest});
+        assert.deepEqual(requested.native_task_lease_cleanup, {schema_version: NATIVE_TASK_LEASE_CLEANUP_SCHEMA,
+          disposition: "retain", reason: "original_turn_owes_closeout"});
+        const rest = {...requested}; delete rest.native_task_lease_cleanup;
+        assert.deepEqual(rest, ordinary);
+        assert.deepEqual(requested.original_prepared_receipt, original);
+        assert.equal(requested.original_prepared_event_id, original.event_id);
+        assert.deepEqual(await readQuotaSettlement(ordinaryRequest), ordinary);
+      };
+      if (exact) await withSourceAdmission(root, instanceA, instanceA, inspect);
+      else {
+        await inspect();
+        const snapshot = await readQuotaSettlementSnapshot(root, goalId);
+        const projected = readQuotaSettlementFromSnapshot({...request(root), native_task_lease_cleanup: cleanupRequest}, snapshot);
+        assert.equal((projected.native_task_lease_cleanup as JsonObject).disposition, "retain");
+      }
+      assert.deepEqual(await readFile(path), before);
+    } finally {await rm(root, {recursive: true, force: true});}
+  }
+});
+
+test("native cleanup is an explicit read and cannot mix with resume or settlement admission", async () => {
+  const root = await fixture({guard: false});
+  try {
+    const snapshot = await readQuotaSettlementSnapshot(root, goalId);
+    const requested = readQuotaSettlementFromSnapshot({...request(root), native_task_lease_cleanup: cleanupRequest}, snapshot);
+    assert.deepEqual(requested.native_task_lease_cleanup, {schema_version: NATIVE_TASK_LEASE_CLEANUP_SCHEMA,
+      disposition: "release", reason: "fresh_pre_admission_missing"});
+    for (const incompatible of [{infer_turn_instance_id: true}, {allow_unbound_binding: true},
+      {resolve_original_binding: true}, {pending_closeout: true}, {refresh_retry: {}},
+      {agent_id: null}, {todo_id: null}, {turn_instance_id: null},
+      {replan_obligation_id: "replan-0000000000000001"}, {heartbeat_reentry_guard: {}},
+      {spend_precheck: true}, {tolerate_malformed_history: true},
+      {resume_lease_candidate: {requested_proof: null}}]) {
+      assert.throws(() => readQuotaSettlementFromSnapshot({...request(root), ...incompatible,
+        native_task_lease_cleanup: cleanupRequest}, snapshot));
+    }
+  } finally {await rm(root, {recursive: true, force: true});}
+  const settledRoot = await fixture({writeback: true, spend: true, completion: true});
+  try {
+    const compact = await readQuotaSettlement({...request(settledRoot), include_record_bodies: false,
+      native_task_lease_cleanup: cleanupRequest});
+    assert.equal(compact.heartbeat_receipt, null);
+    assert.deepEqual(compact.native_task_lease_cleanup, {schema_version: NATIVE_TASK_LEASE_CLEANUP_SCHEMA,
+      disposition: "release", reason: "original_turn_settled"});
+  } finally {await rm(settledRoot, {recursive: true, force: true});}
 });
 
 test("semantic replan guard distinguishes legacy, none, and exact selection", () => {
@@ -783,6 +898,23 @@ async function withSourceAdmission<T>(
   }
 }
 
+test("exact Source resume cannot become not_required from missing prepared admission", async () => {
+  const root = await fixture({goalRef: {goal_id: goalId, goal_instance_id: instanceA}});
+  try {
+    const {FileAuthorityStore} = await import("../../loopx/control_plane/coordination/file_authority_store.ts");
+    const {projection, todo} = await import("./shadow_file_fixture.ts");
+    const head = {...projection([{...todo(todoId), claimed_by: agentId}], [], "soft_claim"), goal_id: goalId};
+    const store = new FileAuthorityStore(join(root, "authority", "file-v0"), goalId);
+    const seeded = await store.commitAuthority({operation_id: "seed-source-no-prepared",
+      expected_provider_revision: null, next_projection: head, events: [], receipts: []});
+    assert.equal(seeded.status, "applied", JSON.stringify(seeded));
+    await withSourceAdmission(root, instanceA, instanceA, async binding => {
+      await assert.rejects(readQuotaSettlement(request(root, {...binding, borrow_source_admission: true,
+        resume_lease_candidate: {requested_proof: null}})), {code: "refresh_task_lease_unavailable"});
+    });
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
 test("scoped supersede settles only its exact Turn and never terminal acceptance", async t => {
   const cases = [
     {name: "original tuple", expected: "settled", patch: {}},
@@ -881,6 +1013,16 @@ test("settlement progress requires both effects and exact receipts", async t => 
         const events = (await readFile(path, "utf8")).trim().split("\n").map(line => JSON.parse(line));
         await writeFile(path, events.filter(event => event.event_kind !== entry.remove).map(event => JSON.stringify(event)).join("\n") + "\n");
       }
+      if (entry.state === "settled") {
+        const path = join(root, "goals", goalId, "rollout-event-log.jsonl");
+        const events = (await readFile(path, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+        const guard = events.find(event => event.event_kind === "quota_should_run")!;
+        guard.status = "normal_run";
+        Object.assign(guard.details, {closeout_required: true, prepared_lease_required: true,
+          prepared_lease_key_sha256: "a".repeat(64), prepared_lease_version: 119, prepared_lease_epoch: 50,
+          ok: true, should_run: true, must_attempt_work: true, delivery_allowed: true, quiet_noop_allowed: false});
+        await writeFile(path, events.map(event => JSON.stringify(event)).join("\n") + "\n");
+      }
       const result = await readQuotaSettlement(request(root));
       assert.deepEqual(result.progress, {
         schema_version: "quota_settlement_progress_v0", state: entry.state,
@@ -891,7 +1033,10 @@ test("settlement progress requires both effects and exact receipts", async t => 
       const expected = {...result};
       if (entry.state === "settled") {
         assert.ok(result.writeback_run && result.spend_run && result.heartbeat_receipt);
-        for (const field of ["writeback_run", "spend_run", "heartbeat_receipt",
+        assert.ok(result.original_prepared_receipt);
+        assert.equal(controls.original_prepared_event_id, "event-guard");
+        assert.equal(controls.original_prepared_receipt_sha256, result.original_prepared_receipt_sha256);
+        for (const field of ["writeback_run", "spend_run", "heartbeat_receipt", "original_prepared_receipt",
           "writeback_event", "spend_event", "completion_event"]) expected[field] = null;
         for (const field of ["writeback", "spend", "delivery", "settlement"]) {
           const original = result[field] as {result: {value: unknown}};

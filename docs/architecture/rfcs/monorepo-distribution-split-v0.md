@@ -4800,6 +4800,26 @@ view shows its independently checked result in the same conversation.
   and records only blocked no-spend evidence. Its immutable Run recovers
   missing tails within the same store identity; replay requires a fresh control
   proof. Ordinary writeback and pure historical readback keep their boundaries.
+- **Resume authority:** later receipts and native resume do not replace the
+  original prepared admission. Remaining execution effects in the same generation use
+  ephemeral current-CAS qualification from the single TS owner without
+  rewriting original proof/version; a different generation's frozen report
+  gains no old-Turn business completion authority. Every effect rereads its owning
+  authority, and execution-loss no-spend closeout still
+  compares the original admission with the current control writer.
+  Alias-only legacy prepared Turn bindings retain their bounded compatibility;
+  they do not certify administrative work admission. Pending terminal effects
+  and committed replay reuse the existing journal/settlement owner: execute
+  only the original remaining effect, repair a proven missing receipt, or
+  return existing results without a new effect. After accepted durable writeback,
+  pending quota spend uses the existing accounting owner and journal-authorized
+  recovery without requesting execution authority or repeating business effects.
+  TS-owned cleanup retains an admitted Turn's original lease while closeout is
+  owed; frozen-report recovery qualifies and renews that same generation.
+  Selection-recovery governance probes acquire no report business lease;
+  existing TS admission must permit the report before its preparation acquires one.
+  Historical generation conflicts
+  reject, and validated causal links preserve the original prepared revision.
 - **Source evidence:** CLI tests cover both local providers, stale/foreign
   proofs, ordinary parity and zero completion/debit. Recovery tests inject
   interruption after JSON, Markdown, index and receipt durability. SourceSession
