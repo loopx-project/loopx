@@ -24,8 +24,6 @@ GOAL_ID = "public-no-clone-release-goal"
 AGENT_ID = "codex-side-bypass"
 FIRST_RUN_COMMANDS = (
     "codex-cli-bootstrap-message",
-    "codex-cli-tui-bootstrap-smoke-bundle",
-    "codex-cli-visible-attach-acceptance",
 )
 
 
@@ -85,8 +83,6 @@ def assert_docs() -> None:
         "Codex CLI No-Clone Release Verification",
         "scripts/install-from-github.sh",
         "codex-cli-bootstrap-message",
-        "codex-cli-tui-bootstrap-smoke-bundle",
-        "codex-cli-visible-attach-acceptance",
         "Current archive route: **qualified as the recovery fallback, with one boundary**.",
         "network access to GitHub archive endpoints",
         "same-TUI automation is not the default path",
@@ -138,8 +134,6 @@ def assert_installed_release(
 
     assert (release_dir / "docs" / "product" / "runtimes" / "codex-cli" / "codex-cli-first-run-rehearsal.md").exists()
     assert (release_dir / "docs" / "product" / "runtimes" / "codex-cli" / "codex-cli-no-clone-release-verification.md").exists()
-    fixture_dir = release_dir / "examples" / "fixtures" / "codex-cli-visible-proof"
-    assert fixture_dir.exists(), fixture_dir
 
     message = run(
         [
@@ -175,61 +169,6 @@ def assert_installed_release(
     assert "quota should-run" in normalized_message, message
     assert "settlement_plan.ordered_steps" in normalized_message, message
     assert "raw Codex transcripts" in normalized_message, message
-
-    bundle = json.loads(
-        run(
-            [
-                str(installed),
-                "--format",
-                "json",
-                "codex-cli-tui-bootstrap-smoke-bundle",
-                "--project",
-                str(fresh_repo),
-                "--goal-id",
-                GOAL_ID,
-                "--agent-id",
-                AGENT_ID,
-            ],
-            env=runtime_env,
-            cwd=fresh_repo,
-        ).stdout
-    )
-    assert bundle["schema_version"] == "codex_cli_tui_bootstrap_smoke_bundle_v0", bundle
-    assert bundle["boundary"]["runs_codex"] is False, bundle
-    assert bundle["boundary"]["requires_loopx_repo_clone"] is False, bundle
-    assert bundle["boundary"]["spends_loopx_quota"] is False, bundle
-    assert str(fresh_repo) in bundle["message_only_command"], bundle
-
-    acceptance = json.loads(
-        run(
-            [
-                str(installed),
-                "--format",
-                "json",
-                "codex-cli-visible-attach-acceptance",
-                "--project",
-                str(fresh_repo),
-                "--goal-id",
-                GOAL_ID,
-                "--agent-id",
-                AGENT_ID,
-                "--fixture",
-                str(fixture_dir / "codex-visible-resume-help.public.json"),
-                "--proof-fixture",
-                str(fixture_dir / "visible-resume-proof.public.json"),
-                "--idle-fixture",
-                str(fixture_dir / "runtime-idle-visible-resume.public.json"),
-            ],
-            env=runtime_env,
-            cwd=fresh_repo,
-        ).stdout
-    )
-    assert acceptance["decision"] == "visible_surface_spike_passed_not_same_tui", acceptance
-    assert acceptance["accepted_for_visible_later_turn"] is True, acceptance
-    assert acceptance["accepted_for_same_tui_automation"] is False, acceptance
-    assert acceptance["boundary"]["runs_codex"] is False, acceptance
-    assert acceptance["boundary"]["reads_raw_transcripts"] is False, acceptance
-    assert acceptance["boundary"]["reads_session_files"] is False, acceptance
 
     assert not codex_called_marker.exists(), codex_called_marker
 

@@ -56,7 +56,7 @@
 | [LoopX 整体路线总纲 v0：产品、协作、技术与交付](loopx-overall-roadmap-v0.zh-CN.md) | 已接受 | 无 | [4 条](ledger/loopx-overall-roadmap-v0/) |
 | [Manager runtime profile v0 / 管家运行模式 v0](manager-runtime-profile-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：机制收敛与经验复用闭环（v0）](mechanism-convergence-and-learning-loop-v0.zh-CN.md) | 已接受 | 无 | — |
-| [RFC：Monorepo 发行拆分与小内核运行时装配（v0）](monorepo-distribution-split-v0.zh-CN.md) | 已接受 | 无 | — |
+| [RFC：Monorepo 发行拆分与小内核运行时装配（v0）](monorepo-distribution-split-v0.zh-CN.md) | 已接受 | 无 | [1 条](ledger/monorepo-distribution-split-v0/) |
 | [RFC：Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Agent 判断与可选独立评估——以 Jev 为候选方案（v0）](optional-semantic-assistance-jev-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：结果后记忆效用归因 v0](post-outcome-memory-utility-attribution-v0.zh-CN.md) | 已接受 | 无 | — |
@@ -78,6 +78,8 @@
 | --- | --- | --- | --- |
 | [RFC：个人事项持续跟进（v0）](personal-follow-through-v0.zh-CN.md) | 已被替代 | 无; superseded by [Capable Agent Manager and Semantic Work Handoff](capable-manager-semantic-handoff-v0.md) | [1 条](ledger/personal-follow-through-v0/) |
 
-## 已退役（Retired 或 Rejected） (0)
+## 已退役（Retired 或 Rejected） (1)
 
-_无_
+| RFC | 头部状态 | 替代 / 关闭 | Ledger |
+| --- | --- | --- | --- |
+| [RFC：上下文压缩时的稀疏工作记忆（v0）](sparse-compaction-working-memory-v0.zh-CN.md) | 已退役 | 无 | [2 条](ledger/sparse-compaction-working-memory-v0/) |

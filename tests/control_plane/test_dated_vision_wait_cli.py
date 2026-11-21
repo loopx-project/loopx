@@ -231,7 +231,9 @@ def test_watch_only_monitor_preserves_dated_successor_wait(
     args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL, "--agent-id", AGENT,
             "--available-capability", "network", "--available-capability", "external_evidence_poll",
             "--turn-instance-id")
-    rc, first = cli(registry, runtime, *args, "watch-first")
+    details = ("--include-detail", "agent-todos") if scenario == "unproven" else ()
+    saved_alias = ("--turn-envelope",) if details else ()
+    rc, first = cli(registry, runtime, *args, "watch-first", *details, *saved_alias)
     assert rc == 0, first
     if scenario == "successor_due":
         assert first["effective_action"] == "successor_replan_required"
@@ -257,9 +259,14 @@ def test_watch_only_monitor_preserves_dated_successor_wait(
             assert guard["vision_wait_state"]["resume_when"] == FUTURE
     else:
         assert first["heartbeat_receipt"]["stall_observation"] == "appended"
-        rc, replay = cli(registry, runtime, *args, "watch-first")
+        rc, replay = cli(registry, runtime, *args, "watch-first", *details)
         assert rc == 0, replay
         assert replay["heartbeat_receipt"]["status"] == "replayed"
+        assert first["heartbeat_receipt"]["event_id"] == replay["heartbeat_receipt"]["event_id"]
+        for guard in (first, replay):
+            assert guard["effective_action"] == "monitor_quiet_skip"
+            assert guard["vision_wait_state"]["resume_when"] == resume
+            assert "settlement_identity" not in guard["heartbeat_receipt"]
     assert state.read_bytes() == original
     runs = [json.loads(line) for line in index.read_text().splitlines()]
     assert not any(run.get("classification") == "quota_slot_spent" for run in runs)

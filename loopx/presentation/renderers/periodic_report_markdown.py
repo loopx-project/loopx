@@ -36,7 +36,7 @@ def _visibility(item: Mapping[str, Any]) -> str:
 
 
 def periodic_report_source_url(value: object, *, _legacy_source_links: bool = False) -> str | None:
-    """A display link is an unchanged HTTP URL, not evidence of access or trust."""
+    """A display link is an unchanged HTTP URL."""
     if _legacy_source_links:
         # Read-only reconstruction of an already frozen pre-fix artifact.
         raw = _safe(value, maximum=500)

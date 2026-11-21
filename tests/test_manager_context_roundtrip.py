@@ -136,6 +136,34 @@ def test_frozen_private_reply_projects_original_text_without_mutating_model_inpu
     assert {str(p): p.read_bytes() for p in store.root.rglob("*") if p.is_file()} == before
 
 
+def test_saved_answer_reads_only_its_original_question_and_exact_answer(frozen_private_reply, private_snapshot):
+    store, session, turn, _, _, _, source_text, _ = frozen_private_reply
+    sid, tid = session["session_id"], turn["turn_id"]
+    answer = store.append_message(sid, role="agent", text="The saved answer", turn_id=tid)
+    store.append_message(sid, role="agent", text="Later answer from the same Turn", turn_id=tid)
+    no_turn = store.append_message(sid, role="agent", text="An older saved answer without a Turn")
+    other_session = store.create_session(goal_id="notes", agent_id="codex", adapter_kind="codex_app_server",
+                                         upstream_thread_id="another-conversation")
+    foreign = store.append_message(other_session["session_id"], role="agent", text="An answer from another Session")
+    journal = store.sessions_root / sid / "messages.jsonl"
+    before = journal.read_bytes()
+
+    response = private_snapshot(report_message_id=answer["message_id"])
+    assert response["session"]["session_id"] == sid
+    assert response["report_message_id"] == answer["message_id"]
+    assert response["active_turn"] is None
+    question, saved = response["messages"]
+    assert question["reply_context"]["source_text"] == source_text
+    assert saved == answer
+    assert private_snapshot(report_message_id=answer["message_id"], turn_id=tid) == response
+    assert private_snapshot(report_message_id=answer["message_id"], turn_id="unrelated-turn")["messages"] == []
+    assert private_snapshot(report_message_id=no_turn["message_id"])["messages"] == [no_turn]
+    for unavailable in (foreign["message_id"], question["message_id"]):
+        assert private_snapshot(report_message_id=unavailable)["messages"] == []
+    private_snapshot(report_message_id=answer["message_id"], message_limit=200, expected_status=400)
+    assert journal.read_bytes() == before
+
+
 def test_history_pages_reuse_unchanged_journal_but_reread_provider_receipts(
         frozen_private_reply, private_snapshot, monkeypatch):
     store, session, turn, request, *_ = frozen_private_reply
@@ -675,6 +703,50 @@ def test_other_chat_host_cannot_delay_original_host_return(flow, explicit_source
     assert len(sent) == len(returned) == 1
     assert returned[0]["turn_id"] == turn["turn_id"]
     assert reply_status(root, receipt)[0]["status"] == "delivered"
+
+
+def test_original_return_survives_transient_goal_marker_release_failure(flow, monkeypatch):
+    import errno
+
+    from loopx.control_plane.collaboration.goal_instance_scope import collaboration_goal_scope
+    from loopx.control_plane.goals.source_session_registry_state import guard_path
+    from loopx.file_lock import _effect_mutation_lock_path
+
+    root, registry, _, create = flow
+    store = ChatSessionStore(root / "source-chat")
+    session, turn, receipt = create(external=True, source_store=store)
+    request_id = receipt["request_id"]
+    acknowledge(root, "research", "worker", request_id, "adopt", "Accepted the original request")
+    report(root, "research", "worker", request_id, "conclusion", "The original request is complete.")
+    marker = _effect_mutation_lock_path(guard_path(registry, "research"))
+    retire = Path.replace
+    failed = False
+
+    def fail_once(path, target):
+        nonlocal failed
+        if path == marker and not failed:
+            failed = True
+            raise OSError(errno.ENOSPC, "simulated transient failure retiring the goal marker")
+        return retire(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_once)
+    with collaboration_goal_scope(registry, goal_id="research", agents=("worker",)):
+        assert marker.exists()
+    assert failed
+
+    calls = []
+
+    def sender(route, original_session, original_turn, text):
+        calls.append((route["return_message_id"], original_session["session_id"], original_turn["turn_id"]))
+        return {"reply_verified": True, "idempotency_key": "fixture-confirmation"}
+
+    assert drain(root, registry, store, sender) == 1
+    assert reply_status(root, receipt)[0]["status"] == "delivered"
+    assert drain(root, registry, store, sender) == 0
+    messages = [item for item in store.messages(session["session_id"]) if item.get("origin") == "manager_followup"]
+    assert len(messages) == 1
+    assert calls == [(messages[0]["message_id"], session["session_id"], turn["turn_id"])]
+    assert not marker.exists()
 
 
 def test_exact_return_skips_other_host_before_admission(flow):
@@ -2646,3 +2718,109 @@ def test_explicit_channel_return_completes_transcript_only_without_sender(flow):
     ]
     assert len(returned) == 1 and returned[0]["turn_id"] == turn["turn_id"]
     assert reply_status(root, receipt)[0]["status"] == "delivered"
+
+
+def test_return_scan_cache_skips_unchanged_terminal_records_and_invalidates_on_change(flow, monkeypatch):
+    from loopx.capabilities.manager_context import roundtrip
+
+    root, registry, store, create = flow
+    _, _, r1 = create()
+    _, _, r2 = create()
+    for rid in (r1["request_id"], r2["request_id"]):
+        acknowledge(root, "research", "worker", rid, "adopt", "Checked")
+        report(root, "research", "worker", rid, "conclusion", f"Conclusion for {rid[:8]}.")
+
+    cache = roundtrip._TerminalReturnScanCache()
+    assert drain(root, registry, store, None, scan_cache=cache) == 2
+
+    scan_batches = []
+    original_rpc = roundtrip.effect_runtime_result
+
+    def spy_rpc(name, payload, *args, **kwargs):
+        if name == "manager.return_delivery.transact" and payload.get("phase") == "scan":
+            scan_batches.append([(row["request_id"], row["result_key"]) for row in payload["candidates"]])
+        return original_rpc(name, payload, *args, **kwargs)
+
+    monkeypatch.setattr(roundtrip, "effect_runtime_result", spy_rpc)
+
+    # First scan with cache sees both terminal .delivery.json files once and caches them.
+    assert drain(root, registry, store, None, scan_cache=cache) == 0
+    assert len(scan_batches) == 1 and len(scan_batches[0]) == 2
+
+    # Subsequent scan skips TS scan completely for unchanged terminal records.
+    scan_batches.clear()
+    assert drain(root, registry, store, None, scan_cache=cache) == 0
+    assert scan_batches == []
+
+    # Direct drain() without scan_cache retains default-off full-scan parity.
+    assert drain(root, registry, store, None) == 0
+    assert len(scan_batches) == 1 and len(scan_batches[0]) == 2
+
+    # Modifying r1's delivery file invalidates only r1 while leaving r2 cached.
+    deliv1 = _root(root) / "replies" / r1["request_id"] / "conclusion.delivery.json"
+    saved1 = json.loads(deliv1.read_text())
+    deliv1.write_text(json.dumps({**saved1, "touched": True}))
+    scan_batches.clear()
+    assert drain(root, registry, store, None, scan_cache=cache) == 0
+    assert scan_batches == [[(r1["request_id"], "conclusion")]]
+
+    # Re-warmed r1 is cached again; unlinking r1 invalidates only r1 immediately.
+    scan_batches.clear()
+    assert drain(root, registry, store, None, scan_cache=cache) == 0
+    assert scan_batches == []
+    deliv1.unlink()
+    assert drain(root, registry, store, None, scan_cache=cache) == 1
+    assert scan_batches == [[(r1["request_id"], "conclusion")]]
+
+
+def test_return_scan_gates_predecessor_blocked_followups_without_locking_or_caching(flow, monkeypatch):
+    from loopx.capabilities.manager_context import roundtrip
+
+    root, registry, store, create = flow
+    _, _, receipt = create(external=True)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Checked")
+    report(root, "research", "worker", rid, "conclusion", "Initial external conclusion.")
+    report(root, "research", "worker", rid, "conclusion", "Follow-up update.", update_id="u1")
+
+    t0 = datetime(2026, 11, 20, 2, 0, 0, tzinfo=timezone.utc)
+    cache = roundtrip._TerminalReturnScanCache()
+
+    deliver_calls = []
+    rpc_phases = []
+    orig_deliver = roundtrip._deliver_return
+    orig_rpc = roundtrip.effect_runtime_result
+
+    def spy_deliver(*args, **kwargs):
+        deliver_calls.append(args[1].name)
+        return orig_deliver(*args, **kwargs)
+
+    def spy_rpc(name, payload, *args, **kwargs):
+        if name == "manager.return_delivery.transact":
+            rpc_phases.append((payload.get("phase"), payload.get("result_key")))
+        return orig_rpc(name, payload, *args, **kwargs)
+
+    monkeypatch.setattr(roundtrip, "_deliver_return", spy_deliver)
+    monkeypatch.setattr(roundtrip, "effect_runtime_result", spy_rpc)
+
+    # Tick 1: conclusion fails without sender -> retry_pending; follow-up is gated before _deliver_return.
+    assert drain(root, registry, store, None, now=t0, scan_cache=cache) == 1
+    assert deliver_calls == ["conclusion.json"]
+
+    # Tick 2 during retry backoff: neither entry invokes _deliver_return or "prepare" RPC.
+    deliver_calls.clear()
+    rpc_phases.clear()
+    assert drain(root, registry, store, None, now=t0 + timedelta(seconds=2), scan_cache=cache) == 0
+    assert deliver_calls == []
+    assert rpc_phases == [("scan", None)]
+
+    # Tick 3 once backoff elapses: conclusion delivers; Tick 4 delivers follow-up; then both cache as terminal.
+    def sender(*_):
+        return {"reply_verified": True, "idempotency_key": "sha256:followup-proof"}
+    t2 = t0 + timedelta(seconds=15)
+    assert drain(root, registry, store, sender, now=t2, scan_cache=cache) == 1
+    assert drain(root, registry, store, sender, now=t2, scan_cache=cache) == 1
+    assert drain(root, registry, store, sender, now=t2, scan_cache=cache) == 0
+    rpc_phases.clear()
+    assert drain(root, registry, store, sender, now=t2, scan_cache=cache) == 0
+    assert rpc_phases == []

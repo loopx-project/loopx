@@ -46,6 +46,7 @@ def _load_exports() -> None:
     )
     from .canary import handle_canary_command, register_canary_commands
     from .authority_archive import handle_authority_archive_command, register_authority_archive_command
+    from .postgres import handle_postgres_command, register_postgres_commands
     from .coordination_shadow import (
         handle_coordination_shadow_command,
         register_coordination_shadow_command,
@@ -94,42 +95,11 @@ def _load_exports() -> None:
     )
     from .starter_bootstrap import (
         handle_codex_cli_bootstrap_message_command,
-        handle_codex_cli_exec_handoff_command,
-        handle_codex_cli_tui_bootstrap_smoke_bundle_command,
         handle_loopx_bootstrap_command_pack_command,
         handle_new_project_prompt_command,
         handle_starter_bootstrap_command,
     )
     from .starter_bootstrap_registration import register_starter_bootstrap_commands
-    from .starter_scheduler import (
-        handle_codex_cli_local_scheduler_exec_command,
-        handle_codex_cli_local_scheduler_tick_command,
-        handle_starter_scheduler_command,
-        register_starter_scheduler_commands,
-    )
-    from .starter_session_runtime import (
-        handle_codex_cli_runtime_idle_detector_command,
-        handle_codex_cli_session_probe_command,
-        handle_codex_cli_visible_session_proof_command,
-        handle_starter_session_runtime_command,
-        register_starter_session_runtime_commands,
-    )
-    from .starter_visible_driver import (
-        handle_codex_cli_local_driver_plan_command,
-        handle_codex_cli_visible_driver_plan_command,
-        handle_codex_cli_visible_driver_run_command,
-        handle_starter_visible_driver_command,
-        register_starter_visible_driver_commands,
-    )
-    from .starter_visible_pilot import (
-        handle_codex_cli_bounded_visible_pilot_adapter_command,
-        handle_codex_cli_one_message_loop_pilot_command,
-        handle_codex_cli_visible_attach_acceptance_command,
-        handle_codex_cli_visible_first_response_capture_plan_command,
-        handle_codex_cli_visible_local_driver_pilot_command,
-        handle_starter_visible_pilot_command,
-        register_starter_visible_pilot_commands,
-    )
     from .summary_all import handle_summary_all_command, register_summary_all_command
     from .status import (
         handle_check_command,
@@ -174,23 +144,8 @@ __all__ = [
     "handle_capability_command",
     "handle_extension_command",
     "handle_check_command",
-    "handle_codex_cli_bounded_visible_pilot_adapter_command",
     "handle_codex_cli_bootstrap_message_command",
-    "handle_codex_cli_exec_handoff_command",
     "handle_loopx_bootstrap_command_pack_command",
-    "handle_codex_cli_visible_first_response_capture_plan_command",
-    "handle_codex_cli_local_driver_plan_command",
-    "handle_codex_cli_local_scheduler_exec_command",
-    "handle_codex_cli_local_scheduler_tick_command",
-    "handle_codex_cli_one_message_loop_pilot_command",
-    "handle_codex_cli_runtime_idle_detector_command",
-    "handle_codex_cli_session_probe_command",
-    "handle_codex_cli_tui_bootstrap_smoke_bundle_command",
-    "handle_codex_cli_visible_attach_acceptance_command",
-    "handle_codex_cli_visible_local_driver_pilot_command",
-    "handle_codex_cli_visible_driver_run_command",
-    "handle_codex_cli_visible_driver_plan_command",
-    "handle_codex_cli_visible_session_proof_command",
     "handle_diagnose_command",
     "handle_demo_command",
     "handle_doctor_command",
@@ -210,6 +165,7 @@ __all__ = [
     "handle_dash_command",
     "handle_project_lifecycle_command",
     "handle_project_command",
+    "handle_postgres_command",
     "handle_pr_review_command",
     "handle_deepresearch_command",
     "handle_quota_command",
@@ -221,10 +177,6 @@ __all__ = [
     "handle_status_command",
     "handle_starter_command",
     "handle_starter_bootstrap_command",
-    "handle_starter_scheduler_command",
-    "handle_starter_session_runtime_command",
-    "handle_starter_visible_driver_command",
-    "handle_starter_visible_pilot_command",
     "handle_summary_all_command",
     "handle_support_control_command",
     "handle_authority_shadow_command",
@@ -243,6 +195,7 @@ __all__ = [
     "register_canary_commands",
     "register_coordination_shadow_command",
     "register_authority_archive_command",
+    "register_postgres_commands",
     "register_capability_commands",
     "register_extension_commands",
     "register_doctor_command",
@@ -269,10 +222,6 @@ __all__ = [
     "register_slash_commands_command",
     "register_starter_commands",
     "register_starter_bootstrap_commands",
-    "register_starter_scheduler_commands",
-    "register_starter_session_runtime_commands",
-    "register_starter_visible_driver_commands",
-    "register_starter_visible_pilot_commands",
     "register_summary_all_command",
     "register_status_commands",
     "register_support_control_commands",

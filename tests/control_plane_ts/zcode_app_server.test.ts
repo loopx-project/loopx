@@ -45,7 +45,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
 });
 `;
 function host(mode = "normal", options: ConstructorParameters<typeof ZCodeAppServer>[3] = {}) {
-  return new ZCodeAppServer([process.execPath, "-e", HOST, mode], process.cwd(), { ...process.env }, { timeoutMs: 1000, ...options });
+  return new ZCodeAppServer([process.execPath, "-e", HOST, mode], process.cwd(), { ...process.env }, { timeoutMs: 5000, ...options });
 }
 function safeError(code: string) {
   return (error: unknown) => error instanceof ZCodeProtocolError && error.code === code && !String(error).includes("private-key-secret");

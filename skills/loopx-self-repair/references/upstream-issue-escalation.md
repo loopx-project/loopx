@@ -81,7 +81,7 @@ the fingerprint marker:
 
 ```bash
 gh issue list \
-  --repo huangruiteng/loopx \
+  --repo loopx-project/loopx \
   --state all \
   --search "$fingerprint in:body" \
   --limit 20 \
@@ -100,7 +100,7 @@ Verify authentication and create only after every earlier gate passes:
 ```bash
 gh auth status
 gh issue create \
-  --repo huangruiteng/loopx \
+  --repo loopx-project/loopx \
   --title "$title" \
   --body-file "$draft_file"
 ```

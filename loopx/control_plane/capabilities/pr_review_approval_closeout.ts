@@ -9,6 +9,7 @@ import {parseIsoTimestamp} from "../runtime_timestamp.ts";
 type ReviewState = "PENDING" | "COMMENTED" | "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED";
 type Opinion = {id: number; login: string; state: ReviewState; head: string; time: number};
 type Review = Opinion & {submittedAt: string | null; url: string};
+type ProviderOpinion = Opinion & {source: JsonObject; conclusion: JsonObject};
 const states = new Set<ReviewState>(["PENDING", "COMMENTED", "APPROVED", "CHANGES_REQUESTED", "DISMISSED"]);
 // GitHub associations, not a reviewer-name allowlist or evidence of approval.
 const repositoryReviewers = new Set(["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"]);
@@ -32,38 +33,82 @@ function effectiveOpinions<T extends Opinion>(reviews: readonly T[], author: str
   return [...latest.values()];
 }
 
-/** Submitted review activity covers duplicate work, independently of whether
- * its body earns a qualified approval. Comments here are formal review events;
+/** Submitted review activity establishes account-level evidence. Model coverage
+ * also requires a qualified conclusion. Comments here are formal review events;
  * issue comments do not enter this history. Dismissal retires only that actor. */
-function independentReview(reviews: readonly (Opinion & {source: JsonObject})[],
-  complete: boolean, author: string | null, head: string): JsonObject | undefined {
-  if (!complete || !author) return;
-  const latest = new Map<string, Opinion & {source: JsonObject}>();
+function independentReviewEvidence(reviews: readonly ProviderOpinion[],
+  complete: boolean, author: string | null, head: string, includeCoverage: boolean): JsonObject {
+  if (!complete || !author) return {};
+  const latest = new Map<string, ProviderOpinion>();
+  const submitted: ProviderOpinion[] | null = includeCoverage ? [] : null;
   const seen = new Set<number>();
   for (const row of reviews) {
     const source = row.source;
     const id = source.review_id;
     if (typeof id !== "number" || !Number.isSafeInteger(id) || id <= 0 || seen.has(id)
-      || !row.login || row.login !== row.login.trim()) return;
+      || !row.login || row.login !== row.login.trim()) return {};
     seen.add(id);
     if (row.state === "PENDING") continue;
-    const submitted = typeof source.submitted_at === "string" ? parseIsoTimestamp(source.submitted_at) : null;
-    if (!submitted || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(row.head)) return;
-    const candidate = {...row, id, time: submitted.getTime()};
+    const submittedAt = typeof source.submitted_at === "string" ? parseIsoTimestamp(source.submitted_at) : null;
+    if (!submittedAt || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(row.head)) return {};
+    const candidate = {...row, id, time: submittedAt.getTime()};
+    submitted?.push(candidate);
     const previous = latest.get(row.login);
     if (!previous || candidate.time > previous.time || candidate.time === previous.time && id > previous.id) {
       latest.set(row.login, candidate);
     }
   }
-  const selected = [...latest.values()].filter(row => row.login !== author && row.head === head
+  const qualifies = (row: ProviderOpinion) => row.login !== author && row.head === head
     && row.state !== "DISMISSED" && row.source.is_bot === false
     && typeof row.source.association === "string" && repositoryReviewers.has(row.source.association)
-    && typeof row.source.url === "string"
-    && row.source.url.trim()).sort((a, b) => b.time - a.time || b.id - a.id)[0];
-  if (selected) return {reviewer: selected.login, association: selected.source.association,
+    && typeof row.source.url === "string" && Boolean(row.source.url.trim());
+  const active = [...latest.values()].filter(qualifies).sort((a, b) => b.time - a.time || b.id - a.id);
+  const selected = active[0];
+  const evidence: JsonObject = {};
+  if (selected) evidence.independent_review = {
+    reviewer: selected.login, association: selected.source.association,
     state: selected.state, head_oid: head, review_id: selected.id, url: selected.source.url,
     submitted_at: selected.source.submitted_at, source_complete: true,
-    grants_approval: false, grants_merge_authority: false};
+    grants_approval: false, grants_merge_authority: false,
+  };
+  if (submitted) {
+    const logins = new Set(active.map(row => row.login));
+    const coverage = new Map<string, {
+      formalState?: ReviewState;
+      formalReviewIds: number[];
+      commentedReviewIds: Map<string, number>;
+    }>();
+    // Keep the latest qualified comment for each attributable family.
+    // Process oldest first so an opinion change retires the prior coverage.
+    for (const row of submitted.sort((a, b) => a.time - b.time || a.id - b.id)) {
+      if (!logins.has(row.login)) continue;
+      if (row.head !== head || row.state === "DISMISSED") {
+        coverage.delete(row.login);
+        continue;
+      }
+      const formal = row.state !== "COMMENTED";
+      let account = coverage.get(row.login);
+      if (!account || (formal && account.formalState !== undefined && account.formalState !== row.state)) {
+        account = {formalReviewIds: [], commentedReviewIds: new Map()};
+        coverage.set(row.login, account);
+      }
+      if (formal) account.formalState = row.state;
+      if (!qualifies(row)) continue;
+      if (formal && row.conclusion.valid === true) {
+        account.formalReviewIds.push(row.id);
+      } else if (!formal && (row.conclusion.valid === true || row.source.review_body_valid === true)) {
+        const family = row.source.review_model_family;
+        if (typeof family === "string" && family) {
+          account.commentedReviewIds.set(family, row.id);
+        }
+      }
+    }
+    evidence.independent_review_activity_ids = active.map(row => row.id);
+    evidence.independent_coverage_review_ids = [...coverage.values()].flatMap(
+      ({formalReviewIds, commentedReviewIds}) => [...formalReviewIds, ...commentedReviewIds.values()],
+    );
+  }
+  return evidence;
 }
 
 /** Bodies are qualified by the adapter; history precedence has one typed owner.
@@ -81,8 +126,9 @@ export function selectPrReviewConclusion(value: unknown): JsonObject {
     if (typeof row.head !== "string" || typeof row.login !== "string") return fail("review identity must be strings");
     // The adapter supplies newest-first rows; equal-time ties retain its order.
     const id = history.length - index;
-    conclusions.set(id, requireJsonObject(row.conclusion, "qualified review conclusion"));
-    return {id, login: row.login.toLowerCase(), state, head: row.head.toLowerCase(), time: row.time, source: row};
+    const conclusion = requireJsonObject(row.conclusion, "qualified review conclusion");
+    conclusions.set(id, conclusion);
+    return {id, login: row.login.toLowerCase(), state, head: row.head.toLowerCase(), time: row.time, source: row, conclusion};
   });
   const author = typeof request.author === "string" ? request.author.toLowerCase() : null;
   const head = requireNonEmptyString(request.head, "current head").toLowerCase();
@@ -94,8 +140,9 @@ export function selectPrReviewConclusion(value: unknown): JsonObject {
     || conclusions.get(row.id)!.valid === true && conclusions.get(row.id)!.verdict === "REQUEST_CHANGES"))
     ?? effective.find(row => row.head === head && conclusions.get(row.id)!.valid === true)
     ?? effective[0] ?? reviews[0];
-  const independent = independentReview(reviews, request.reviews_complete === true, author, head);
-  return {index: history.length - selected.id, ...(independent ? {independent_review: independent} : {})};
+  return {index: history.length - selected.id,
+    ...independentReviewEvidence(reviews, request.reviews_complete === true, author, head,
+      request.include_independent_coverage === true)};
 }
 
 export function planPrReviewApprovalCloseout(value: unknown): JsonObject {

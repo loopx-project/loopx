@@ -729,3 +729,18 @@ def test_acp_stdio_stream_hides_encoded_windows_unicode_case_alias(tmp_path):
         for kind, payload in events
         if kind == "answer.final"
     ] == ["[local-path]"]
+
+
+def test_redact_local_paths_preserves_bare_root_examples():
+    samples = [
+        r"A path ending with a slash, `C:\`, is code.",
+        "A Unix prefix example, `/Users/`, is code.",
+    ]
+    for sample in samples:
+        for protected in ((), ["/custom/project"]):
+            assert redact_local_paths(sample, protected_paths=protected) == sample
+            assert redact_response_markdown(sample, protected_paths=protected) == sample
+            stream = VisibleResponseStreamFilter(protected_paths=protected)
+            assert stream.feed(sample[:12]) + stream.feed(sample[12:]) + stream.finish() == sample
+    assert redact_local_paths(r"Real path C:\Users\alice\repo") == "Real path [local-path]"
+    assert redact_local_paths("Real path /Users/alice/repo") == "Real path [local-path]"

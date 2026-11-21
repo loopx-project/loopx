@@ -132,28 +132,55 @@ def test_generated_commands_stay_on_candidate_through_once_only_settlement(
     assert guard["decision"] == "run", guard
     identity = guard["heartbeat_receipt"]["settlement_identity"]
     assert identity["todo_id"] == cli.TODO_ID and identity["turn_instance_id"] == cli.TURN_ID
-    commands = {s["kind"]: s["command_template"] for s in channel["settlement_plan"]["ordered_steps"]}
-    for command in [*channel["next_cli_actions"], *commands.values()]:
+    plan = channel["settlement_plan"]
+    steps = {step["kind"]: step for step in plan["ordered_steps"]}
+    commands = [step["command_template"] for step in steps.values() if step["owner"] == "agent"]
+    for command in [*channel["next_cli_actions"], *commands]:
         assert shlex.split(command)[0] == program
     for read in guard["interaction_contract"]["agent_channel"].get("required_reads", []):
         assert shlex.split(read["command"])[0] != "loopx"
 
-    refresh = commands["durable_writeback"].replace("<validated_progress>", "validated_progress")
-    refresh = refresh.replace("<scale>", "implementation").replace("<outcome>", "outcome_progress")
-    refreshed = run([
+    refresh = (
+        steps["durable_writeback"]["command_template"]
+        .replace("<validated_progress>", "validated_progress")
+        .replace("<scale>", "implementation")
+        .replace("<outcome>", "outcome_progress")
+    )
+    refresh_argv = [
         *shlex.split(refresh), "--vision-state", "vision_on_track",
         "--vision-summary", "Continue eligible work.",
         "--vision-acceptance", "The original runtime settles its selected work once.",
         "--no-global-sync", "--suppress-external-sinks",
-    ])
-    assert refreshed["vision_checkpoint"]["satisfied"]
-    owed = refreshed["settlement_owed"]["command"]
-    assert shlex.split(owed)[0] == program
-    first, replay = run(shlex.split(owed)), run(shlex.split(owed))
-    assert first["settlement_progress"]["state"] == "settled" and first["appended"]
-    assert replay["idempotent_replay"] and not replay["appended"]
+    ]
+    spend_step = steps["quota_spend"]
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
+    assert plan["identity"] == identity
+    assert spend_step["owner"] == "runtime"
+    assert "command_template" not in spend_step
+    assert all("spend-slot" not in shlex.split(action) for action in channel["next_cli_actions"])
+    assert {"--settle-turn", "--settlement-receipt"} <= set(refresh_argv)
+
+    first = run(refresh_argv)
+    assert first["vision_checkpoint"]["satisfied"]
+    assert first["settlement_result"]["ok"]
+    receipts = first["settlement_result"]["receipts"]
+    assert [receipt["step_kind"] for receipt in receipts] == [
+        "validation", "durable_writeback", "quota_spend",
+    ]
+    assert all(
+        receipt["effect_id"] == identity["effect_id"] and receipt["status"] == "committed"
+        for receipt in receipts
+    )
+    assert first["quota_spend"]["appended"]
     assert first["settlement_identity"] == identity
+    assert first["settlement_progress"]["state"] == "settled" and first["appended"]
     assert cli._spend_run_count(runtime) == 1
+    replay = run(refresh_argv)
+    assert replay["idempotent_replay"] and not replay["appended"]
+    assert replay["settlement_identity"] == identity
+    assert replay["settlement_result"] == first["settlement_result"]
+    assert cli._spend_run_count(runtime) == 1
+    assert cli._classification_count(runtime, "validated_progress") == 1
     if lease:
         released = run([
             *prefix, "task-lease", "release", "--goal-id", cli.GOAL_ID,

@@ -119,8 +119,11 @@ def test_turn_milestone_intent_is_replay_stable(
     author_candidate = (
         "import json, shlex, subprocess\n"
         f"candidate = {candidate!r}\n"
+        f"expected_schema = {'loopx_turn_model_context_v0' if host_kind == 'dsh' else 'loopx_turn_host_request_v1'!r}\n"
         "def authored_candidate(request):\n"
-        "    assert request['schema_version'] == 'loopx_turn_host_request_v1'\n"
+        "    assert request['schema_version'] == expected_schema\n"
+        "    if expected_schema == 'loopx_turn_model_context_v0':\n"
+        "        assert request['source_schema_version'] == 'loopx_turn_host_request_v1'\n"
         "    packet = request['detail_ref']['replan_action_packet']\n"
         "    review = json.loads(subprocess.check_output(\n"
         "        shlex.split(packet['review']), text=True))\n"

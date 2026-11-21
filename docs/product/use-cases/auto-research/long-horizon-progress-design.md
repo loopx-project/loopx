@@ -156,8 +156,7 @@ The default graph shows explicit source relations and parent grouping distinctly
 Any later inferred association stays in the on-demand analysis layer with its
 sources, method revision and uncertainty; it does not silently become a source
 edge. Same-checkpoint lineage, matched comparison, implementation inheritance
-and actual adoption are different facts. Neither `supports` nor `leads_to` is a
-catch-all for them. Record existing exact identities in the sidecar until a real
+and actual adoption are different facts. Record existing exact identities in the sidecar until a real
 caller and accepted contract justify extending the vocabulary.
 
 Before launching a new study that claims relationship-informed decision quality,
@@ -174,8 +173,7 @@ reading check:
    isolated nodes, rejected writes, delayed backfills and changed-input limitations.
    If that view remains defective, report product acceptance open; do not treat
    screenshots or a private custom rendering as the shipped journey.
-3. Inspect the receiver's next action separately. A relation being present or
-   cited proves neither adoption nor a more useful experiment. Keep unsupported
+3. Inspect the receiver's next action separately. Keep unsupported
    inferences and no-next-opportunity cases visible. Graph classification versus
    runtime penalty, Portfolio proxy versus native transfer, and checkpoint capture
    versus actual wake input supply three distinct diagnostic questions; select
@@ -263,8 +261,7 @@ lift. Preserve the common denominator and the research owner's resource-weighted
 and episode-count views, including failures, incomplete work and abstentions.
 Do not silently discard unobservable baseline work. Human/model/tool cost,
 elapsed/active/wait time and assessment overhead retain their units and coverage;
-unknown cost is not zero. Existing usage owners provide interval costs; subtracting
-unqualified rolling totals is not an alternative ledger.
+unknown cost is not zero. Existing usage owners provide interval costs.
 
 ## Synthetic example: exclusion, implementation and outcome diverge
 

@@ -23,9 +23,11 @@ from .doubao_model_behavior_actor import (
     DOUBAO_MODEL_ENV,
     DoubaoActorTransport,
     _direct_ark_transport,
+    _direct_deepseek_transport,
 )
 from .model_tool_behavior import (
     _module_reader_tokens,
+    DeepSeekExecToolClient,
     QuotaToolContext,
     is_context_read_command,
     LoopxCliExecutionError,
@@ -54,6 +56,7 @@ REPLAN_SEMANTIC_ACTION_BEHAVIOR_RECEIPT_SCHEMA_VERSION = (
 REPLAN_SEMANTIC_ACTION_BEHAVIOR_MAX_CALLS = 7
 REPLAN_SEMANTIC_ACTION_NATIVE_READ_MAX_CALLS = 3
 _NATIVE_CONTEXT_READ_KINDS = frozenset({"context_read", "replan_context_read"})
+_MAX_HOST_TOOL_ERROR_OUTPUT_CHARS = 8192
 
 
 class _HostToolError(RuntimeError):
@@ -1760,7 +1763,8 @@ def _run_qualification_loop(
                               exit_code=exc.exit_code, error_code=exc.code)
             _append_tool_response(state, tool_call=tool_call, output=json.dumps({
                 "error_code": exc.code, "exit_code": exc.exit_code,
-                "output": exc.output[:4096], "truncated": len(exc.output) > 4096,
+                "output": exc.output[:_MAX_HOST_TOOL_ERROR_OUTPUT_CHARS],
+                "truncated": len(exc.output) > _MAX_HOST_TOOL_ERROR_OUTPUT_CHARS,
             }))
             continue
         except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
@@ -1797,16 +1801,21 @@ class DoubaoReplanSemanticActionBehaviorActor:
     def __init__(
         self,
         *,
-        api_key: str,
+        api_key: str = "",
         model: str = DOUBAO_2_1_PRO_MODEL,
         timeout_seconds: float = 90.0,
         transport: DoubaoActorTransport = _direct_ark_transport,
+        client: DoubaoExecToolClient | None = None,
     ) -> None:
-        self._client = DoubaoExecToolClient(
-            api_key=api_key,
-            model=model,
-            timeout_seconds=timeout_seconds,
-            transport=transport,
+        self._client = (
+            client
+            if client is not None
+            else DoubaoExecToolClient(
+                api_key=api_key,
+                model=model,
+                timeout_seconds=timeout_seconds,
+                transport=transport,
+            )
         )
 
     @classmethod
@@ -1828,6 +1837,24 @@ class DoubaoReplanSemanticActionBehaviorActor:
             model=values.get(DOUBAO_MODEL_ENV, DOUBAO_2_1_PRO_MODEL),
             timeout_seconds=timeout_seconds,
             transport=transport,
+        )
+
+    @classmethod
+    def from_deepseek_environment(
+        cls,
+        *,
+        environ: Mapping[str, str] | None = None,
+        transport: DoubaoActorTransport = _direct_deepseek_transport,
+        timeout_seconds: float = 90.0,
+        model: str | None = None,
+    ) -> DoubaoReplanSemanticActionBehaviorActor:
+        return cls(
+            client=DeepSeekExecToolClient.from_environment(
+                environ=environ,
+                transport=transport,
+                timeout_seconds=timeout_seconds,
+                model=model,
+            )
         )
 
     def qualify(

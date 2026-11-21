@@ -1,7 +1,7 @@
 """Read-only steward synthesis over an already admitted notification.
 
 Selection, provider permission and receipts remain with their current owners.
-This adapter uses the existing Chat turn and steward allocation, not a scheduler.
+This adapter uses the existing Chat turn and steward allocation.
 """
 from __future__ import annotations
 

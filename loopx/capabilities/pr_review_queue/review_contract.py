@@ -8,6 +8,7 @@ from .review_body import (
     AUTHOR_OWNED_APPROVAL_FALLBACK_TITLE,
     AUTHOR_OWNED_REQUEST_CHANGES_FALLBACK_TITLE,
     REQUIRED_FINAL_SECTIONS,
+    REVIEWER_DECLARATION_SOURCES,
     REVIEW_SECTION_TITLES,
     review_body_requirements,
 )
@@ -16,7 +17,7 @@ from .architecture_assessment import ARCHITECTURE_ASSESSMENT
 from .visual_assessment import VISUAL_ASSESSMENT
 
 # Increment when review requirements change without changing the packet shape.
-REVIEW_POLICY_REVISION = 26
+REVIEW_POLICY_REVISION = 27
 
 # Agent-consumed prose is observable behavior even when JSON shape is stable.
 # Reuse the existing semantic verdicts; this is evidence within the same review.
@@ -271,7 +272,7 @@ SCOPE_COVERAGE_ASSESSMENT = {
 # so a gap here makes the result unpublishable rather than blocking the author.
 REVIEWER_DECLARATION = {
     "actor_kinds": ["model_agent", "human_operator"],
-    "declaration_sources": ["runtime_reported", "self_reported"],
+    "declaration_sources": list(REVIEWER_DECLARATION_SOURCES),
     "fields": ["actor_kind", "declaration_source"],
     "model_agent_fields": ["declared_model", "declared_provider"],
     "body_marker": "Reviewer:",
@@ -279,7 +280,8 @@ REVIEWER_DECLARATION = {
         "Every result names who wrote it. actor_kind is model_agent or human_operator. "
         "A model_agent gives declared_model and declared_provider in ordinary "
         "product-family wording, and the published body repeats actor_kind, model and "
-        "provider on exactly one visible `Reviewer:` line, so a reader on another host "
+        "provider as separate fields on exactly one visible `Reviewer:` line "
+        "(for example, `Reviewer: model_agent · MODEL · PROVIDER · self_reported`), so a reader on another host "
         "or organization can tell a model wrote the review and weigh it without private "
         "context. declaration_source records whether the host runtime reported the "
         "identity or the reviewer stated it; a reviewer that cannot observe its exact "

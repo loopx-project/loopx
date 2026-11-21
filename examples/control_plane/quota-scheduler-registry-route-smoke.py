@@ -112,10 +112,10 @@ def main() -> None:
             "external_write",
             "--codex-app-current-rrule",
             "FREQ=MINUTELY;INTERVAL=3",
-            "--turn-envelope",
             cwd=project,
         )
-        ack_cli_args = decision["scheduler"]["codex_app"]["ack_cli_args"]
+        assert decision["schema_version"] == "loopx_turn_envelope_v1", decision
+        ack_cli_args = decision["scheduler_hint"]["app_automation"]["ack_hint"]["cli_args"]
         assert ack_cli_args[:4] == [
             "--registry",
             str(global_registry.resolve()),
@@ -148,7 +148,7 @@ def main() -> None:
             "--codex-app",
             cwd=project,
         )
-        stateful = follow_up["scheduler_hint"]["codex_app"]["stateful_backoff"]
+        stateful = follow_up["scheduler_hint"]["app_automation"]["stateful_backoff"]
         assert stateful["state_status"] == "same_identity", follow_up
 
     print("quota scheduler registry route smoke passed")

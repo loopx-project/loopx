@@ -152,7 +152,9 @@ def test_local_wait_and_user_gates_preserve_only_verified_independent_work(publi
     host.run()
     assert not host.counts.exists()
 
-    update(goal, gate, "--unblocks-todo-id", waiting)
+    second_gated = add(goal, "Validate another gated artifact after owner approval.",
+        "--task-class", "advancement_task", "--action-kind", "validate", "--status", "blocked")
+    update(goal, gate, "--unblocks-todo-id", second_gated)
     fresh = guard(goal)
     assert fresh["should_run"] is True and fresh["requires_user_action"] is True
     assert fresh["selected_todo"]["todo_id"] == independent

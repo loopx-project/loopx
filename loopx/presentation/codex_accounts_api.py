@@ -29,8 +29,8 @@ class CodexAccountService:
         self.provider = provider_module.NativeAccounts(runtime_root)
         self.watcher = self._new_observer(provider_module)
         self.error = None
-        # Rehydrate an explicitly enabled observer after an App restart. The
-        # absent/default-off path neither creates state nor reads native auth.
+        # Rehydrate an explicitly enabled observer after an App restart.
+
         try:
             if start_observer:
                 self._reconcile_observer()

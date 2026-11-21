@@ -21,6 +21,7 @@ from ..extensions.runtime import (
     run_standalone_extension,
 )
 from ..extensions.scaffold import scaffold_extension
+from ..paths import effective_runtime_root
 
 PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
@@ -61,10 +62,14 @@ def _render(payload: dict[str, object]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _state_file(args: argparse.Namespace, runtime_root_arg: str | None) -> Path:
+def _state_file(
+    args: argparse.Namespace, runtime_root_arg: str | None, *, registry_path: Path,
+) -> Path:
     override = getattr(args, "extension_state_file", None)
     if override:
         return Path(override).expanduser()
+    if runtime_root_arg is None:
+        runtime_root_arg = str(effective_runtime_root(registry_path, None))
     return default_extension_state_file(runtime_root_arg)
 
 
@@ -201,13 +206,14 @@ def _load_json_object(path_text: str) -> dict[str, object]:
 def handle_extension_command(
     args: argparse.Namespace,
     *,
+    registry_path: Path,
     runtime_root_arg: str | None,
     output_format: FormatSelector,
     print_payload: PrintPayload,
 ) -> int | None:
     if args.command != "extension":
         return None
-    state_file = _state_file(args, runtime_root_arg)
+    state_file = _state_file(args, runtime_root_arg, registry_path=registry_path)
     try:
         if args.extension_command == "init":
             payload = scaffold_extension(

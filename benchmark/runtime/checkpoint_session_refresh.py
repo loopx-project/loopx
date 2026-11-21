@@ -6,7 +6,6 @@ without resetting research, native opportunities, phase budget or authority.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 
@@ -49,27 +48,12 @@ def _prepare_fresh_replan(env, session, wake, declaration):
 
     unit = Path(declaration["root"])
     manifest = effect_runtime_result("runtime.checkpoint_artifacts", {
-        "action": "read_basis", "root": str(unit), "expected_sha256": declaration["sha256"]}, large_local_snapshot=True)
-    metadata = manifest["point_metadata"]
-    component = metadata.get("held_decision_component_id")
-    if component not in {entry["id"] for entry in manifest["components"]}:
-        raise ValueError("fresh replan requires a sealed pre-decision packet")
-    packet_path = unit / "components" / component
-    if packet_path.resolve(strict=True) != packet_path:
-        raise ValueError("fresh replan packet must be a physical sealed member")
-    raw = packet_path.read_bytes()
-    if hashlib.sha256(raw).hexdigest() != metadata.get("decision_sha256"):
-        raise ValueError("fresh replan pending packet digest differs")
-    packet = json.loads(raw)
-    selected = effect_runtime_result("runtime.checkpoint_artifacts", {
-        "action": "select_replan", "quota": packet,
-        "goal_id": metadata["loopx_state"]["goal_id"],
-        "agent_id": metadata["loopx_state"]["agent_id"],
-        "turn_instance_id": packet["heartbeat_receipt"]["turn_instance_id"]}, large_local_snapshot=True)
-    if selected.get("capture") is not True or selected != (
-            metadata.get("replan") or metadata.get("operator_metadata", {}).get("replan")):
+        "action": "read_basis", "root": str(unit), "expected_sha256": declaration["sha256"],
+        "include_pending_replan": True}, large_local_snapshot=True)
+    pending = manifest["pending_replan"]
+    if pending is None:
         raise ValueError("fresh replan requires the original pending decision boundary")
-    basis = {"decision_sha256": metadata["decision_sha256"], "pending_replan": selected}
+    basis = {"decision_sha256": pending["decision_sha256"], "pending_replan": pending["intent"]}
     attempt = Path(env["LOOPX_WARM_START"]).parent / "context-refresh" / "pre-replan.json"
     # A lost launch reply is recovered only by the session owner's original
     # output. Re-admitting an advanced fork would hide that outcome.

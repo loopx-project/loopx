@@ -21,8 +21,7 @@ OpenViking PR / Issue Fix agent 能跨 turn 完成选题、复现、修复、发
   `no_followup`。它可以提出下一步，但最终仍由 Kernel 的 authority、workspace、quota 和
   lease 合同决定是否执行。
 - **Repository / GitHub 仍是外部事实源**。代码、issue、checks、review、mergeability 与
-  terminal PR state 不因被写进 LoopX 就改变。LoopX 保存的是有 provenance 的紧凑状态，
-  不是 GitHub 的镜像。
+  terminal PR state 不因被写进 LoopX 就改变。LoopX 保存的是有 provenance 的紧凑状态。
 
 可以把这套关系概括为：
 
@@ -31,7 +30,7 @@ OpenViking PR / Issue Fix agent 能跨 turn 完成选题、复现、修复、发
 
 ## 一、先分清四种对象
 
-“垂域状态扩展”“capability”和“extension”经常被混为一谈。它们在 LoopX 中不是一回事。
+“垂域状态扩展”“capability”和“extension”经常被混为一谈。
 
 | 对象 | 回答的问题 | Issue-Fix 中的例子 | 不拥有的东西 |
 | --- | --- | --- | --- |
@@ -40,8 +39,7 @@ OpenViking PR / Issue Fix agent 能跨 turn 完成选题、复现、修复、发
 | Product capability | 为调用方完成什么稳定结果？ | 从公开 issue 推进到 focused PR 和明确 terminal outcome | 长期保存全部语义、隐式扩大权限 |
 | Provider extension | 哪个可选实现来提供外部读取、发送、归档或记忆？ | Lark notification sink、OpenViking semantic-preference provider | capability 的产品语义、Kernel 的控制权 |
 
-因此，`loopx/domain_packs/issue_fix.py` 是 **Issue-Fix 垂域状态的内建状态适配层**；它不是
-一个可独立启停的 LoopX extension。`loopx/capabilities/issue_fix/` 是产品能力实现；
+因此，`loopx/domain_packs/issue_fix.py` 是 **Issue-Fix 垂域状态的内建状态适配层**；`loopx/capabilities/issue_fix/` 是产品能力实现；
 `loopx/extensions/` 才是 provider 的注册、启停、doctor 和兼容边界。
 
 一个 provider 可以缺席而 capability 仍然成立。例如 OpenViking Memory 未配置时，
@@ -74,7 +72,7 @@ dashboard、handoff 和多 agent 协作不需要 import Issue-Fix 代码。
 ### Claim、lease 与 authority 不能下沉到领域状态
 
 `claimed_by` 只是软路由；并发写入需要 `(goal_id, todo_id)` 粒度的 `task_lease_v0`，
-repository delivery 还要通过 workspace guard。二者都不等于权限：
+repository delivery 还要通过 workspace guard。
 
 - lease 解决“两个 peer 会不会同时写同一任务”；
 - write scope 解决“这个任务声明要改哪些相对路径”；
@@ -148,7 +146,7 @@ Issue-Fix 向 Kernel 返回有限几种 transition：
 | newer repair commit 已覆盖反馈且 threads 全 resolved | `monitor_continuation` | 等待 re-review，不重复生成 patch |
 | PR `MERGED` 或 `CLOSED` | `no_followup` / terminal transition | 完成 monitor，恢复显式 successor 或记录 no-follow-up |
 
-这里最重要的设计是：**domain transition 不是直接执行指令**。它只是生成 typed proposal；
+它只是生成 typed proposal；
 todo writer、gate scope、quota、authority 与 scheduler 仍会再次检查。
 
 ## 五、以一次 OpenViking Issue-Fix 运行为例
@@ -228,8 +226,7 @@ metadata；CI pending 只继续 monitor，CI failure 和未处理的 changes req
 lifecycle bucket 聚合，Kernel 只调度非空 bucket 的一个 monitor；真正的 patch 仍是独立的一次性
 advancement todo。`pr-lifecycle --execute-transition --goal-id <goal> --claimed-by <agent>`
 通过通用 Todo API 完成这笔物化事务；`--monitor-cadence` 控制调度周期，缺省为 `30m`。
-相同 bucket membership 的安静重放保持幂等，后续 cadence 推进由 monitor poll lane 负责，而不是
-反复执行 PR lifecycle transition。创建该 monitor 的 issue-fix Agent 会跨 turn 保持为
+相同 bucket membership 的安静重放保持幂等，后续 cadence 推进由 monitor poll lane 负责。创建该 monitor 的 issue-fix Agent 会跨 turn 保持为
 `claimed_by` owner；其他 peer 未获得显式 Todo lifecycle authority 时不能更新、retire、重开或
 poll 该 monitor。给出公开 PR URL 时，`--execute-transition` 会自动读取紧凑的
 公开 metadata；只有确定性 fixture 才需要显式传 `--metadata-json`。
@@ -240,7 +237,7 @@ poll 该 monitor。给出公开 PR URL 时，`--execute-transition` 会自动读
 追加幂等 rollout event，写回 compact run history，并按显式 `resume_when=pr_merged:...` 恢复
 successor；没有后续价值时记录 structured no-follow-up。
 
-下一次 heartbeat 重新从 Kernel source state 开始，而不是从上一段对话继续猜。这就是长程任务
+下一次 heartbeat 重新从 Kernel source state 开始。这就是长程任务
 能够在模型上下文、线程和 executor 都变化后仍然继续的关键。
 
 ## 六、一次 transition 的三份不同证据
@@ -300,7 +297,7 @@ idempotency key 和 exact row/result-id readback，失败则保留 retry/success
 
 ## 九、把同样模式扩展到新的垂域
 
-新增垂域状态时，先回答下面九个问题，而不是先建目录：
+新增垂域状态时，先回答下面九个问题：
 
 1. **领域对象是谁？** 定义稳定 identity，例如 `repo + issue_ref`，禁止从 prose 猜 key。
 2. **外部事实源是谁？** 明确哪些字段来自 GitHub、数据库、仓库或人工决定。

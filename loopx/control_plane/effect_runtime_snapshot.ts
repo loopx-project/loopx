@@ -27,7 +27,7 @@ async function privateFile(path: string, flags: number): Promise<FileHandle> {
   if (process.platform === "win32") {
     const python = process.env.LOOPX_EFFECT_RUNTIME_PYTHON_BIN;
     if (!python || !isAbsolute(python)) throw new Error("private snapshot ACL helper unavailable");
-    // Fixed package-owned Win32 IO, not a caller-supplied executable or decision owner.
+    // Fixed package-owned Win32 IO.
     const helper = fileURLToPath(new URL("./runtime/private_permissions.py", import.meta.url));
     await new Promise<void>((resolve, reject) => {
       execFile(python, [helper, "--verify-snapshot", path],

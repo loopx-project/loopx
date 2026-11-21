@@ -41,8 +41,17 @@
 Fidelity 是关于组合的证据，不是第四种 Stride 动作。保持原计划合法，
 没有变化的 Turn 不必补造 `grow` 记录。方向也可以直接使用权威评测，不配置代理。
 
-新增普通 Turn 与 yardstick 行为初始显式关闭。现有 Stride 默认值、配置的周期复盘、
-验收、预算和宿主续跑语义保持。本 RFC 不批准自动工具执行、benchmark 协议改动，
+在沿同一 owner 推进的向上模型—Harness 协同设计中（§5.9），本 RFC 将向下的受回执门控
+上下文采样栈原语 `{KeepRaw, FoldToReceipt, EpochReset}`
+（见[历史工作集策略](history-working-set-context-policy-v0.zh-CN.md#51-单一投影-owner)）
+与步幅动作 `{grow, switch, verify}` 统一在两阶段策略演进路线中：**Phase 1** 采用
+冻结模型非参数元策略（`KL-UCB` arm 选择、有界批屏障 `add/revise/retire` 记忆演化、
+Semantic Duplicate Gate 及受保护控制/根因守卫）；只有在匹配预算证据支持转向学习型
+预算分配时，才进入 **Phase 2** Checkpoint-Forked `Segment Flow-GRPO`（基于 $O(1)$
+确定性状态投影的 $\Delta T$ 单步幅 rollout）。
+
+新增普通 Turn、yardstick 与向上协同设计行为初始显式关闭。现有 Stride 默认值、配置的周期复盘、
+验收、预算和宿主续跑语义保持。本 RFC 不批准自动工具执行、benchmark 协议改动、学习型策略部署，
 也不允许 Agent 自行改变验收。
 
 ## 2. 问题与动机
@@ -62,6 +71,16 @@ Agent 联合发现 target 和局部 yardstick，便宜地搜索，再用真实�
 fidelity 检查比例分别为 58% / 21%，kernel 为 73% / 33%；尺子成本占真实评测的
 比例分别为 4% / 29% 和 2% / 18%。这是论文结果，且 target/task 的分母不同，
 不能作为 LoopX 收益预测。
+
+联合研究决策同样直接耦合上下文保留与长程学习稳定性：在确定性回执生成前就过早折叠探索过程，
+会丢弃 `verify` 或 `switch` 所需的反面证据；反之，无边界保留原文或在 epoch 中途改写前缀，
+则会侵蚀剩余预算 $B$ 并破坏前缀 KV-cache 复用（见[历史工作集策略 §5.1](history-working-set-context-policy-v0.zh-CN.md#51-单一投影-owner)）。
+在策略学习层面，[AgentFlow](https://arxiv.org/abs/2510.05592) 表明静态轨迹上的离线监督微调
+（SFT）在长程分布偏移下会出现分布坍缩，而在线闭环分片优化（`Flow-GRPO`）可保持工具反馈探索；
+朴素纯终局多轮强化学习则会沿百轮轨迹出现线性信用分配衰减，而 [HELIX](https://arxiv.org/abs/2608.13951)
+则证明从同一状态分叉的已验证兄弟轨迹组可在不混淆起点的前提下分离真实因果收益。这些证据共同驱动
+我们在同一类型化 owner 后构建 `{KeepRaw, FoldToReceipt, EpochReset} × {grow, switch, verify}`
+的两阶段演进路线（§5.9）。
 
 ### 不变量
 
@@ -425,9 +444,9 @@ Bellman 表达式不会提供状态转移模型；事后峰值不能成为决策
 
 | 阶段 | 下一项有用结果 | 保留的边界 |
 | --- | --- | --- |
-| 当前模型试验 | 固定版本的有界规划策略改变实际工作，并改善 §8.7 对照结果。 | 沿用 Stride/Yardstick/Explore owner 和普通响应；不以第二个 controller session 或数值 fidelity 引擎为前置。 |
-| 校准预期 | 将事前预测关联实际方法、耗时、后继状态与终局结果，在留出 episode 上改善预测/校准。 | 领域 provider 负责测量含义；估计不是验收、权限或编造的反事实标签。 |
-| 学习预算分配 | 学习型策略在匹配完整预算和迁移测试中胜过已资格确认的当前模型策略。 | 在同一工作决策边界替换策略实现；Core 保留准入、预算、身份与结算。 |
+| 当前模型试验（Phase 1 入口） | 固定版本的有界规划策略改变实际工作，并改善 §8.7 对照结果。 | 沿用 Stride/Yardstick/Explore owner 和普通响应；不以第二个 controller session 或数值 fidelity 引擎为前置。 |
+| 校准预期（Phase 1 非参数元策略） | 将事前预测关联实际方法、耗时、后继状态与终局结果，在留出 episode 上改善预测/校准。 | 领域 provider 负责测量含义；估计不是验收、权限或编造的反事实标签。 |
+| 学习预算分配（Phase 2 门控升级） | 学习型策略在匹配完整预算和迁移测试中胜过已资格确认的 Phase 1 冻结模型策略。 | 在同一工作决策边界替换策略实现；Core 保留准入、预算、身份与结算。 |
 
 通过已有 provenance/followthrough 记录决策当时可见的状态与证据、选择和实际方法、
 资源消耗、后继观察/状态及后续成果。已选动作日志可以训练预测，却不揭示未选动作的结果。
@@ -462,6 +481,46 @@ profile 保留真实 workload revision 与 evaluator。既有 typed 比较 owner
 适用的声明 subject；producer 所在位置及路径/字节内容相等不证明执行等价。
 普通 current-work 证据还保留原提交时间与 canonical prefix 边界；旧记录延迟写入
 不能变成新 decision 的未引用证据，已显式引用并验证的历史仍可使用。
+
+#### 向上模型—Harness 协同设计：`{KeepRaw, FoldToReceipt, EpochReset} × {grow, switch, verify}` 两阶段演进路线（提案）
+
+为使上下文经济学与研究期限决策保持同一归属，向上协同设计在同一类型化 `control_plane/work_items`
+决策边界之上统一向下的受回执门控采样栈原语（[历史工作集策略 §5.1](history-working-set-context-policy-v0.zh-CN.md#51-单一投影-owner)
+中的 `{KeepRaw, FoldToReceipt, EpochReset}`）与研究步幅动作（`{grow, switch, verify}`）。
+确定性内核守卫会拒绝跨层非法组合（例如在未形成结算/验证回执前对活跃未验证探针执行
+`FoldToReceipt`，或静默在 epoch 中途改写前缀）。以下协同策略机制均保持 `Proposal` 成熟度并默认关闭，
+不向 M1 增加运行时或训练循环：
+
+1. **Phase 1 — 冻结模型非参数元策略（Frozen-Model Non-Parametric Meta-Policy）：**
+   严格保持基座模型权重冻结，同时为反事实归因记录动作分配概率与回执：
+   - **`KL-UCB` arm 选择：** 基于匹配的同状态反事实价值估计与 KL 上置信界指标，在离散的
+     `(target–yardstick, stride, context-stack)` arm 之间选择，遵守从总预算 $B$ 倒排的确认窗口
+     与多证据 Yardstick 保真度约束（§5.4、§5.8）。
+   - **有界批屏障 `add / revise / retire` 记忆演化：** 仅在显式批屏障处更新过程性/情景性经验
+     （不改动当前 epoch 内活跃前缀），且严格限定为类型化的 `add`（经核验的新洞见）、`revise`
+     （收窄适用范围或补充反证）与 `retire`（已被替代或失效的经验），并受
+     [结果后记忆效用归因](post-outcome-memory-utility-attribution-v0.zh-CN.md)门控。
+   - **Semantic Duplicate Gate：** 在准入新候选探针或人工提示前规范化动作/探针/门禁指纹
+     （`actor + target/operation + resource/scope_key + boundary_rules`），优先复用现役
+     incumbent、既有授权或已有证据链，防止重复发起等价探针或冗余 Todo。
+   - **受保护控制与根因守卫：** 确定性内核检查强制保护已验证 incumbent（`proxy_order_reversed`
+     与 suspect 围栏），禁止无独立确定性回执的 `FoldToReceipt` 晋升，严格分离局部代理涨分与
+     权威终局验收，并执行根因认证守卫（要求失败到通过或差分不变量证明，禁止通过放松测试或硬编码走捷径）。
+2. **Phase 2 — Checkpoint-Forked `Segment Flow-GRPO`：** 仅在 Phase 1 建立经校准的基线、且匹配预算下的证据
+   证明需要转向学习型分配器后才可进入：
+   - **规避离线 SFT 坍缩与线性信用分配衰减：** 不在静态日志上做离线行为克隆（如
+     [AgentFlow](https://arxiv.org/abs/2510.05592) 所示，离线 SFT 在分布偏移下会发生坍缩），
+     也不对数百轮完整轨迹做稀疏终局 RL（信用分配随长度线性衰减）；Phase 2 围绕与
+     `KeepRaw` / `EpochReset` 边界对齐的有界**单步幅片段（$\Delta T$）**执行在环（in-the-loop）优化。
+   - **基于 $O(1)$ 确定性状态投影的 Checkpoint 分叉 $\Delta T$ rollout：** 直接从静默确定性
+     checkpoint（`AuthorityStore` + `decision_capture` + 冻结前缀状态）分叉出匹配的兄弟接续，
+     通过当前 Goal/Todo/incumbent/预算/yardstick 前沿的 $O(1)$ 确定性状态投影启动，而不重放冗长原始日志；
+     在共享同一 checkpoint $s$ 的已验证兄弟 rollout 组内计算相对优势（`Segment Flow-GRPO`，参考
+     [HELIX](https://arxiv.org/abs/2608.13951) 兄弟轨迹分组与[研究计划 §6.2](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#62-效率)），
+     同时保持势函数目标一致性（`[E7]`），并将准入、预算与权威评分留在学习器写边界之外。
+   - **晋升门禁：** Phase 2 保持研究态（默认关闭），唯有在完整成本记账下（$\Delta J(B \mid s_0) > 0$，
+     含 cached 与 uncached 前缀 token 及 checkpoint/评测计算成本）于留出任务上超越已资格化的 Phase 1
+     元策略后，方可在同一 Core 边界下替换策略实现。
 
 ## 6. 替代方案与设计选择
 
@@ -596,6 +655,9 @@ Explore evidence 可用；开启该设置不启动工作或自动开启其他 ca
 关闭后移除普通 Turn 的新增提示，并在主提交前拒绝新 capture；历史 finding
 及成功的精确重放仍可读。
 
+Explore 读取在图可用且设置已开启时加载 Yardstick 投影。普通 C1 使用共享指引和
+精确引用读取捕获的上下文。选中或重放既有决策时仍绑定原始来源。
+
 既有 Research finding reader 展示记录的目标、成果/代理指标、来源、下一步和成本边界。
 普通 task-scoped Explore context 只投影该 Todo 当前目标、下一选择短提示和反证引用。
 既有 question-scoped 扩读命令返回完整决策、精确 profile 的反馈和前次执行归属；
@@ -662,6 +724,7 @@ fence。普通主提交已经成功的附件恢复，继续遵守原有延迟交
 | E6 | [Multi-fidelity Bayesian Optimisation](https://proceedings.mlr.press/v70/kandasamy17a.html)，§§1–3 | 区分廉价近似与目标结果；GP/fidelity 假设用于程序搜索前需要验证。 |
 | E7 | [Policy invariance under reward transformations](https://people.eecs.berkeley.edu/~russell/papers/icml99-shaping.pdf)，§3 | 势函数 shaping 在其假设下保持目标；任意里程碑奖励没有这个保证。 |
 | E8 | [EdgeBench 适配器契约](../../../benchmark/edgebench/README.md)、[反馈与记忆分析](https://loopx-project.github.io/loopx/blog/zh/edgebench-feedback-and-memory/)及第 4 节源码 owner | Native 协议、起点/接续的区分与当前 M1 接缝；说明 pilot 的动机，不是新的实测收益。 |
+| E9 | [AgentFlow](https://arxiv.org/abs/2510.05592) 与 [HELIX](https://arxiv.org/abs/2608.13951) | 为以在环单步幅 `Segment Flow-GRPO` 替代离线 SFT（避免分布坍缩）及从共享 checkpoint 分叉已验证兄弟轨迹分组提供研究动机。均为作者报告结果；未在 LoopX M1 中实现或取得资格。 |
 
 论文中回退的有利观测不代表无后悔保证：失败造尺子已经消耗预算。
 每 target 与每 task 的通过率单位不同；候选选择和重复 fidelity 检验限制统计解释。

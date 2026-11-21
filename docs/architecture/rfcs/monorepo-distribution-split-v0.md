@@ -4,7 +4,7 @@
 - **Delivery maturity:** Proposal
 - **Authors / owners:** LoopX maintainers
 - **Created:** 2026-09-26
-- **Last normative revision:** 2026-10-29
+- **Last normative revision:** 2026-11-19
 - **Implementation baseline:** packaging inventory `2f3d13ae9`; runtime composition audit `9cae3b28939f72fa4aadab5cfe49e19bcbdab372`
 - **Related contracts:** [TypeScript Control-Plane Migration v0](typescript-control-plane-migration-v0.md), [Extensions reference](../../reference/extensions.md), [Capability catalog](../../../loopx/capabilities/README.md), [Overall Roadmap v0](loopx-overall-roadmap-v0.md) (S2, S8, S12), [import-boundary tests](../../../tests/architecture/test_control_plane_import_boundaries.py)
 - **Tracking issue:** [#5072](https://github.com/loopx-project/loopx/issues/5072)
@@ -35,7 +35,7 @@ retain their original baselines.
    wheel is replaced over time by `loopx-core`, `loopx-workspace`, and
    per-capability packages under `packages/`, with `loopx` retained as a
    meta-package that depends on all of them.
-3. **Top-level regrouping happens before any packaging change.** `loopx/chat_*`
+3. **Regroup the selected dependency closure as needed for independent packaging.** `loopx/chat_*`
    moves to `loopx/chat/`, `loopx/*_goal_mode/` moves to `loopx/hosts/`, with
    compatibility re-exports for established public imports for at least one minor
    release. Internal-only callers move together and the old internal entry is deleted.
@@ -62,6 +62,20 @@ activated services and model-visible context. The package table defines what
 can be installed, not what every command must load. Installing standard grants
 no service activation or permission. Existing defaults and machine-enforced
 work obligations remain until a qualified, explicitly disclosed migration.
+
+The immediate outcome is an independently installed core that executes a task,
+recovers its original result and returns evidence. Unrelated directory moves,
+workspace packaging or another model session do not block that core-artifact
+slice; full M3 retains its complete distribution acceptance. Ordinary callers
+supply a task and consequential constraints, without first learning Vision,
+Quota, Lease or method names. The host carries bookkeeping; relevant permission,
+budget, uncertainty and recovery decisions remain visible when needed.
+
+The **10% complexity / 90% current-function coverage** target remains an unproven
+hypothesis. Fix a versioned journey denominator and compare necessary concepts,
+mandatory steps, loaded/activated code, model reads, complete costs and accepted
+outcomes. Report kernel-only and assembled coverage; do not drop specialized
+journeys from the denominator or treat code counts as model benefit.
 
 ## 2. Problem and motivation
 
@@ -269,6 +283,19 @@ contract into prose guidance. The kernel is a cohesive set of domains, not one
 large file. The adjacent refactor should localize the next change and preserve
 characterized behavior.
 
+### Required mechanisms and optional task methods
+
+Core owns legal scoped work, durable evidence, stop, budget and original-attempt
+recovery. Bench, workbench and manager compose specialized workflows around the
+same owners. Their absence must not block unrelated authorized core work.
+**Yardstick is an independently optional decision method, not a provider or a
+mandatory kernel stage.** Methods choose how to reason or measure; providers
+supply execution, storage or concrete external operations. Reuse existing
+capability owners and `yardstick_enabled`; add no method registry, provider id
+or enable switch. Ordinary result validation remains required when a method is
+off. Existing records, configured obligations, authority and defaults survive;
+method/dependency removal needs its own absence, parity and recovery evidence.
+
 ### Presets over the distribution tiers
 
 | Composition | Required content | Explicit optional content |
@@ -282,6 +309,16 @@ content is not an activation list. Minimal is an executable composition, not a
 flag applied after standard fully initializes. A host-free read-only kernel
 library does not qualify that executable preset. Exact contents and the first
 supported host/authority combination are D2/D5 decisions.
+
+The initial proposed **Standard** selection is `agent-turn-recall` for relevant
+prior guidance, `issue-fix` for validated repository changes, and
+`pull-request-review` for delivery review. These retain their existing capability
+owners and default-off settings; installation grants no source access, starts
+no watcher and authorizes no publication or merge. Load only the selected task's
+implementation. Basic recovery stays in Minimal without advisory recall.
+Yardstick, Stride, research/benchmark machinery and manager routing remain
+separate optional additions. This selects the R2 target; the current monolithic
+and core-candidate wheels do not yet implement that isolated package selection.
 
 Keep composition, managed/attached mode, host provider, one/two model sessions,
 storage provider and benchmark arm independent. Minimal does not imply attached,
@@ -419,6 +456,11 @@ contract explicitly requires their receipt. Batch best-effort telemetry only;
 do not defer authoritative receipt persistence, weaken fsync/transaction
 guarantees or cache stale permission/lease decisions to meet a timing target.
 
+For an admitted ordinary task, the built-in Worker view omits known empty
+Todo summary lanes. The selected task, nonempty lanes, counts, references and
+upstream truncation remain visible. The signed source and original reader
+retain the complete summaries for recovery and diagnosis.
+
 ### Governed lifecycle and external effects
 
 Use existing Goal/Agent/work/Turn identities, revisions, leases, effect ids and
@@ -428,12 +470,25 @@ and persist evidence, settle once, then deliver/read back through the owning
 channel. Each step uses its existing legal transitions and replay rules;
 this description adds no competing status enum or transaction coordinator.
 
+An explicit `turn run-once --execute` with a compatible generic CLI adapter
+and an independent validator can prepare an eligible Todo's missing lease.
+The Host reuses the ordinary claim and reads back that same Todo before
+dispatch. The claim and launch share one Turn identity. Recovery uses the
+lease generation captured by the original attempt.
+
 An executor crash, a lost effect acknowledgement and a lost result-delivery
 acknowledgement are different recovery cases. An operation provider must expose
 whether an effect can be reconciled and retried safely. Unknown external state
 holds further dependent effects for readback or intervention; “not observed”
 does not mean “not executed.” Device idempotency, physical interlocks and
 compensation remain provider responsibilities, not invented kernel guarantees.
+
+After a generic CLI result is durably recorded, the original Turn can resume
+validation or settlement without the adapter command or its request schema.
+The caller retains the approved workspace and supplies the independent checker
+if validation is pending. An already settled Turn reads back its saved result.
+If the recovery owner requires a Host attempt, the caller must supply the
+adapter before admission can advance.
 
 Model cancellation, process termination and confirmed device stop are separate
 facts. A stopped model must not produce a “device stopped” claim without device
@@ -488,6 +543,13 @@ Borrow the explicit boundaries, without adopting Cordis, upstream permission
 defaults or a new LoopX model loop. Pinned sources are in Appendix C.
 
 ## 7. Safety, privacy, and compatibility
+
+Ordinary C1 composition and replay use shared Explore guidance and exact
+context references. An empty read with graph and planning disabled returns
+the existing disabled view before loading the graph projector. A scoped
+Explore read loads Yardstick when its graph is available and the Goal enables
+evaluation. Settings, evidence identities, and recovery remain with the
+current Goal and Explore owners.
 
 - **Default-off / feature-off parity:** absent `loopx-workspace` or capability
   packages behave like the existing extension off state (I4). No command
@@ -610,6 +672,97 @@ journey qualification slices in this same plan. R0 can ship before directory
 moves; it does not qualify the kernel. R3/R4 are optional and do not block a
 qualified CLI or managed task. No unused provider, field or framework is added
 ahead of its real caller. Report the applied/deferred adjacent refactor in each PR.
+
+- Checkpoint moved to the execution ledger: [Core discovery checkpoint (2026-11-19)](ledger/monorepo-distribution-split-v0/2026-11-19-core-discovery-checkpoint.md).
+
+<a id="subtraction-gate"></a>
+
+### Subtraction Gate & Anti-Context-Gravity Rules
+
+Empirical measurements at `main@f15ebdd16b` and on C1 PR `#8266` (`+26,672 / -4,561`
+across `289` files, net `+22,111` LOC) show that module splitting and execution
+unification fail to shrink the repository unless every delivery slice passes an
+explicit subtraction gate (paired with [the Controller RFC subtraction gate](controller-executor-unified-contract-v0.md#subtraction-gate)).
+
+#### 1. Why "unification" PRs grew net LOC (four measured drivers)
+
+In `#8266`, net code and documentation expanded across every layer:
+
+- **Append-only bilingual RFC and ledger logs (`+9,564` net lines in `docs/`):**
+  `+9,715 / -151` under `docs/`, including `+7,749` across `14` files in
+  `docs/architecture/rfcs/ledger/` and `+1,218 / -35` in RFC/annex diffs (`+5,874`
+  in `2026-10-30-c1-source-convergence.{md,zh-CN.md}` alone), turning chronological
+  logs into pseudo-proof.
+- **Combinatorial old × new mode matrix tests (`+9,976` net lines in `tests/`):**
+  `+12,074 / -2,098` across `142` test files multiplying full fixtures over
+  `loopx_turn_envelope_v0`, `--context-delivery off`, and the unified schema.
+- **Additive compatibility adapters in runtime/CLI (`+2,236` net lines in `loopx/`):**
+  `+4,224 / -1,988` across `92` files adding shims (`raw_quota_turn_view`,
+  `compose_turn_decision_with_raw_envelope`, `--context-delivery off` branches in
+  `loopx/cli_commands/quota.py`, `quota_presentation.py`, `quota_capture.py`, and
+  `quota_context_reader.py`) that reconstruct legacy `v0`/ordinary views instead of
+  retiring replaced producers.
+- **Cross-language Python ↔ TS wrapper duplication:** `loopx/cli_commands/`
+  (`+1,639 / -645`), `loopx/control_plane/*.py` (`+1,167 / -685`), and
+  `loopx/control_plane/*.ts` (`+1,080 / -532`) retaining Python orchestration
+  wrappers alongside TypeScript owners.
+
+Open unification PRs `#8484` (`+1,979 / -174`, `41` files) and `#7568`
+(`+6,230 / -349`, `56` files) exhibit the same additive-facade bias, in contrast
+to focused spec updates (`#8749`, `+538 / -2`, merged) and the structural/CI
+burden tracked under `#5072` and `#8787`.
+
+#### 2. Context gravity vs. scar-preserving subtraction
+
+At `main@f15ebdd16b`, tracked code/script files total `~1.79M` LOC (`1,785,239`
+lines across `loopx/`: `1,864` files / `~658k` LOC; `tests/`: `1,956` files /
+`~727k` LOC; `examples/`: `688` files / `~204k` LOC; plus `apps/`, `packages/`,
+`scripts/`, and `benchmark/`), alongside `152` files (`~11.5k` LOC) under
+`docs/architecture/rfcs/ledger/` and `~3,990` lines of historical Appendix A
+diaries in this RFC.
+
+- **Context gravity:** Placed inside a `1.79M`-LOC tree, frontier models treat
+  stale top-level files, historical flags, and transitional shims as fixed
+  infrastructure and wrap new facades around them rather than deleting old paths.
+- **Scar-preserving subtraction:** LoopX's durable moat is not line count or
+  wrapper breadth; it is **four irreplaceable kernel invariants** — (1) exclusive
+  leases and writer/generation fencing, (2) default-deny authority and ACL/scope
+  isolation, (3) once-only idempotent settlement receipts, and (4) same-origin
+  counterfactual checkpoints and evaluation ledgers — plus its
+  **failure-counterexample test corpus**. Small-kernel splits must preserve those
+  invariants and failure counterexamples while actively deleting dead pilots,
+  top-level wrappers, and unreferenced scripts.
+
+#### 3. Concrete retirement backlog and ratchet rules
+
+1. **Pre-Turn pilot CLI retirement.** [#8884](https://github.com/loopx-project/loopx/pull/8884)
+   retired 15 superseded pilot commands and four flat `loopx/codex_cli_*.py`
+   modules, and lowered the top-level budget from 127 to 124. The live
+   `codex-cli-bootstrap-message` and `turn_driver/codex_cli.py` still have callers.
+2. **Remaining top-level `chat_*` and `*_goal_mode` migrations.** M1 places
+   the internal action normalization and Goal lifecycle action modules under
+   `loopx/chat/`. This removes two flat names and lowers the budget from 124
+   to 122. M1 still needs to migrate the remaining Chat modules under I3.
+   M2 still moves host mode packages under `loopx/hosts/`. Each net removal
+   lowers [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json)
+   by the same count in that PR. The Core wheel already excludes both Chat
+   paths, so this move reduces the source directory count.
+3. **Unreferenced `examples/` scripts and source-text-pinning smokes.** Prune
+   unreferenced scripts under `examples/` (`200` unreferenced `.py` scripts /
+   `45,504` LOC; `209` scripts / `47,325` LOC across `.py/.sh/.mjs/.js/.ts` on
+   `main@f15ebdd16b`) and retire the `14` `examples/cli-*-command-modularization-smoke.py`
+   files that pin internal Python import/helper text instead of shipped CLI
+   invariants per [good-smokes](../../development/good-smokes.md).
+4. **Bounded RFC and ledger discipline.** Retain Appendix A below as frozen
+   historical context only; new normative specifications and `ledger/` entries
+   must be compact boundary, invariant, retirement, and evidence tables rather than
+   multi-thousand-line chronological logs.
+5. **Exit-gated compatibility views and I3 shims.** Beyond I3's bounded one-minor
+   public-import window, any transitional `v0` projection (`loopx_turn_envelope_v0`,
+   `raw_quota_turn_view`), `legacy_fallback` path, or off-mode flag
+   (`--context-delivery off`) must name its active consumer and deletion
+   milestone. Distribution or mechanism convergence is incomplete until duplicate
+   producers and combinatorial flags are retired.
 
 ## 12. Open decisions
 
@@ -4619,3 +4772,27 @@ view shows its independently checked result in the same conversation.
   overhead or complete-cost benefit, actual-model adoption, full D2/D5,
   R1/M3, Goal completion or C1 default cutover. Preserve earlier checkpoints,
   failures, budgets and acceptance requirements.
+
+
+### 2026-11-16 — Standalone lifecycle commands reach the existing owner
+
+- **Gap:** standalone Core bundled the existing Goal activation implementation
+  but omitted `goal-lifecycle` from selected CLI loading. A supported stop/resume
+  request fell through to the intentionally absent full CLI before reaching its
+  owner.
+- **Delta:** select only the existing command, registrar and handler. Actor,
+  source identity, expected fingerprint, preview, partial-write readback and
+  errors remain on the original activation service and typed state owner.
+  Unrelated commands and top-level help retain lazy loading; App and messaging
+  controls retain their existing owner.
+- **Ownership boundary:** the existing native outer-controller guard now
+  recognizes lifecycle execution for its managed Goal. Owner/controller labels
+  cannot bypass that guard; preview, other Goals and ordinary execution remain
+  available. The same guard protects selected and full CLI entrypoints.
+- **Source evidence:** owner-only command help, complete-parser comparison,
+  source stop/resume and anonymous/stale-fingerprint refusal regressions protect
+  V2/V3 reachability and ordinary CLI parity. Planned activation timestamps are
+  validated independently rather than compared across separate invocations.
+- **Boundary:** this is a source wiring repair. Installed Core and composition
+  qualification, interrupted original-Task recovery, complete context/closure,
+  actual models, costs, full R1/M3 and C1 cutover remain separate acceptance.

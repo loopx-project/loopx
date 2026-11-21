@@ -10,7 +10,6 @@ import pytest
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 ARCHIVE_SMOKES = (
     Path("examples/codex-cli-packaged-install-smoke.py"),
-    Path("examples/codex-cli-tui-bootstrap-smoke-bundle-smoke.py"),
     Path("examples/release/codex-cli-no-clone-release-verification-smoke.py"),
 )
 

@@ -72,10 +72,12 @@ export function GoalReportReviews({goalId, sourceId, zh, focusTodoId, refreshKey
   const [error, setError] = useState("");
   const [textOnly, setTextOnly] = useState(false);
   const generation = useRef(0);
+  const completedRead = useRef(0);
   const navigation = useRef("");
   const selectedId = useRef<string | null>(focusTodoId ?? null);
   const focus = useResultCatalogFocus();
   const storageKey = JSON.stringify(["loopx-report-reading", sourceId ?? location.origin, goalId]);
+  const pendingFocus = useRef<{scope: string; row?: string} | null>(null);
   function rememberSelection(todoId?: string) {
     selectedId.current = todoId ?? null;
     try {
@@ -92,10 +94,23 @@ export function GoalReportReviews({goalId, sourceId, zh, focusTodoId, refreshKey
       try {saved = sessionStorage.getItem(storageKey);} catch { /* Reading works without storage. */ }
       selectedId.current = focusTodoId ?? saved;
       setReading(selectedId.current); setRows([]); setLoaded(false); setTextOnly(false);
+      if (selectedId.current) pendingFocus.current = {scope: storageKey};
     }
     void load();
-    return () => {generation.current++; focus.cancel();};
+    return () => {generation.current++;};
   }, [goalId, sourceId, focusTodoId, refreshKey]);
+  useEffect(() => {focus.cancel();}, [storageKey]);
+  useEffect(() => {
+    const target = pendingFocus.current;
+    // Navigation can start a newer read before this render receives its busy state.
+    // Consume focus only after that read has committed its readable or error view.
+    if (!target || busy || (!loaded && !error) || completedRead.current !== generation.current) return;
+    if (target.scope !== storageKey) {pendingFocus.current = null; return;}
+    if (target.row ? reading !== null : reading === null) return;
+    pendingFocus.current = null;
+    if (target.row) focus.row(target.row);
+    else focus.reader();
+  }, [busy, loaded, error, reading, rows, storageKey]);
 
   async function read(todoId: string, current: number) {
     const value = await readReportReview(goalId, todoId);
@@ -121,16 +136,17 @@ export function GoalReportReviews({goalId, sourceId, zh, focusTodoId, refreshKey
       if (selectedId.current) await read(selectedId.current, current);
     } catch {
       if (current === generation.current) setError(zh ? "材料或审阅状态暂不可读，请重试。" : "Material or review state is unavailable. Retry the read.");
-    } finally {if (current === generation.current) setBusy(false);}
+    } finally {if (current === generation.current) {completedRead.current = current; setBusy(false);}}
   }
   async function select(row: ReportReviewRow) {
     const current = ++generation.current;
     setReading(row.todo_id); setSelected(null); setTextOnly(false);
     rememberSelection(row.todo_id);
-    setBusy(true); setError(""); focus.reader();
+    pendingFocus.current = {scope: storageKey};
+    setBusy(true); setError("");
     try {await read(row.todo_id, current);}
     catch {if (current === generation.current) setError(zh ? "原版本已不可读取，请重试。" : "The original edition cannot be read. Retry.");}
-    finally {if (current === generation.current) setBusy(false);}
+    finally {if (current === generation.current) {completedRead.current = current; setBusy(false);}}
   }
   const label = (row: ReportReviewRow) => row.superseded_by ? (zh ? "已有修订" : "Superseded")
     : row.status === "done" ? (zh ? "审阅已处理" : "Review handled")
@@ -140,9 +156,10 @@ export function GoalReportReviews({goalId, sourceId, zh, focusTodoId, refreshKey
   const html = selected?.artifacts.find(item => item.renderer_id === "html_artifact_v0");
   const htmlView = useMemo(() => html ? inertReportHtml(html.content, zh) : "", [html?.content, zh]);
   function returnToCatalog() {
+    pendingFocus.current = {scope: storageKey, row: reading ?? undefined};
     generation.current++; setReading(null); setSelected(null); setBusy(false); setError("");
+    completedRead.current = generation.current;
     rememberSelection();
-    if (reading) focus.row(reading);
   }
   const attention: WorkspaceAttention | null = selected ? {goalId, sourceId, todoId: selected.review.todo_id,
     text: selected.review.title, blocking: false, decisionSource: "todo", details: {...attentionDetails(selected.todo),
@@ -152,7 +169,10 @@ export function GoalReportReviews({goalId, sourceId, zh, focusTodoId, refreshKey
     <header data-result-reader={reading ? "" : undefined} tabIndex={reading ? -1 : undefined}>{reading ? <ResultCatalogReturn zh={zh} onReturn={returnToCatalog}/> : <h3>{zh ? "审阅材料" : "Review materials"}</h3>}
       <div className="report-review-tools"><ContextHelp label={zh ? "审阅与验收范围" : "Review scope"}>
       <p>{zh ? "阅读不会完成验收。每份材料的审阅分别记录；处理材料不等于整个 Goal 验收通过。反馈回到负责 Agent 的原工作对话。页面版保留静态目录；外部来源可从文字版打开。" : "Reading does not accept a result. Each edition has its own review; handling it does not accept the entire Goal. Feedback returns to its responsible Agent's work conversation. Page view keeps the static index; open external sources from text view."}</p>
-    </ContextHelp><button type="button" disabled={busy} onClick={() => void load()}><RefreshCw size={14}/>{zh ? "刷新" : "Refresh"}</button></div></header>
+    </ContextHelp><button type="button" disabled={busy} onClick={() => {
+      if (reading) pendingFocus.current = {scope: storageKey};
+      void load();
+    }}><RefreshCw size={14}/>{zh ? "刷新" : "Refresh"}</button></div></header>
     {busy ? <p role="status">{zh ? "正在读取材料…" : "Reading material…"}</p> : null}
     {error ? <p role="alert">{error}</p> : null}
     <nav data-result-catalog tabIndex={-1} hidden={Boolean(reading)} aria-label={zh ? "材料目录" : "Material catalog"}>

@@ -41,7 +41,7 @@
 交接、等待和外部状态变化。LoopX 把这些过程中的目标、工作队列、权限、证据和恢复条件
 放进项目拥有的控制面。
 
-本书不复制 LoopX CLI reference，也不要求读者成为 Kernel 核心贡献者。它提供一条稳定的
+它提供一条稳定的
 学习路径，让外部开发者能够判断：
 
 - 当前任务只需要一次普通会话，还是需要持久 Goal；
@@ -70,15 +70,14 @@ Extension 只是可独立版本化和交付的一种路径。
 - 正文格式：Markdown；
 - 站点生成器：MkDocs Material；
 - 在线发布：GitHub Pages；
-- LoopX 发布锚点：`v2.3.0`；
+- LoopX 发布锚点：`v2.4.0`；
 - 运行时前提：Python 3.11+ 与 Node.js 22.22.3+。
 
 协议解释以 LoopX 官方公开合同为事实源。易变化的命令仍以对应发布物、官方文档和当前
-`--help` 为准；本书负责教学顺序与心智模型，不成为另一份完整命令参考。
+`--help` 为准；本书负责教学顺序与心智模型。
 
 `v0.5.4` 已把 Effect Program、Turn settlement、Todo completion、quota delivery routing、
 workspace causality 与 scheduler state 等关键语义放到 typed TypeScript owner 后面。Python CLI
-仍负责迁移期 transport、兼容投影、外部 Provider 调用和部分持久化写回；这不是两套可独立演进的
-控制面。当前 `main` 的后续迁移阶段以
+仍负责迁移期 transport、兼容投影、外部 Provider 调用和部分持久化写回。当前 `main` 的后续迁移阶段以
 [TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/)
 为准，不应倒推为 `v0.5.4` 已发布行为。

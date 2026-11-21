@@ -135,6 +135,12 @@ provides observation transport; optional model/runtime providers retain their
 adapters. Finance-specific metrics stay in the finance/research capability and
 arrive as audience-safe artifact/claim projections, never kernel rules.
 
+[Cross-person shared access](shared-goal-authority-state-provider-v0.md#cross-person-shared-access) owns
+authorization, evidence versions and return. This workspace extends L1/L2
+to show the conclusion, uncertainty, challenge or revision, exact source/version,
+independent check, receiver adoption and pending decision. Render audience-scoped
+projections from the resource owners. Research judgments stay with the domain.
+
 ```mermaid
 flowchart LR
   W[Existing work / Turn / peer / acceptance owners] --> P[Typed audience-scoped presentation projection]

@@ -57,8 +57,7 @@ def _material_transition(run: Mapping[str, Any], channel: str) -> bool:
 def build_trajectory_hygiene_summary(history: Mapping[str, Any]) -> dict[str, Any]:
     """Build training-hygiene proxies from compact history metadata only.
 
-    The summary intentionally does not claim that compact run history is a model
-    training trajectory. It measures controller density and attribution gaps so
+    It measures controller density and attribution gaps so
     maintainers can decide whether a separate learning projection is warranted.
     """
 

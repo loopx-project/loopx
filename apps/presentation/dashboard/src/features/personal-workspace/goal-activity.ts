@@ -156,7 +156,7 @@ export function goalHostSurfaces(goal: Pick<GoalActivityInput, "boundHostSurface
   return Array.from(new Set([...(goal.boundHostSurfaces ?? []), ...attached]));
 }
 
-/** Local presentation counts, not a Goal execution verdict. A missing lane
+/** Local presentation counts. A missing lane
  * cannot erase another lane's observed execution or recent completed turn. */
 export function goalObservationGaps(goal: Pick<GoalActivityInput, "hostThreadActivity">) {
   const observation = goal.hostThreadActivity;

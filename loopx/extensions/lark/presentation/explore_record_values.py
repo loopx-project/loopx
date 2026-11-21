@@ -63,7 +63,7 @@ def _finding_summary(finding: Mapping[str, Any]) -> str:
     summary = str(finding.get("summary") or "")
     capture = finding.get("work_yardstick")
     if not isinstance(capture, Mapping):
-        return summary
+        return "\n".join(part for part in (summary, _execution_summary(finding)) if part)
     # Projection only: the canonical event/typed owner has validated this
     # declaration. A Lark row does not upgrade it to acceptance or authority.
     decision = capture["decision"]
@@ -78,7 +78,34 @@ def _finding_summary(finding: Mapping[str, Any]) -> str:
     if decision["counterevidence_refs"]:
         details.append("Proxy counterevidence: " + ", ".join(decision["counterevidence_refs"]))
     details.append("Recorded research decision; fidelity and acceptance remain independently assessed.")
-    return "\n".join([summary, *details])
+    recorded = "\n".join([summary, *details])
+    execution = _execution_summary(finding)
+    return recorded + ("\n" + execution if execution else "")
+
+
+def _execution_summary(finding: Mapping[str, Any]) -> str:
+    observation = finding.get("execution_observation")
+    if not isinstance(observation, Mapping):
+        return ""
+    # These source facts were validated by Explore. Missing quantities remain
+    # unknown; the projection neither certifies adoption nor assesses utility.
+    def measured(field: str) -> str:
+        value = observation[field]
+        return "not measured" if value is None else str(value)
+    details = [
+        f"Planned -> executed method: {observation['planned_method_id']} -> {observation['executed_method_id']}",
+        f"Elapsed / limit seconds: {measured('elapsed_seconds')} / {measured('limit_seconds')}",
+        f"Search iterations: {measured('search_iterations')}",
+        f"Termination reason: {measured('stop_reason')}",
+        f"Input revision: {observation['input_revision']}",
+        f"Executed candidate SHA-256: {observation['candidate_sha256']}",
+    ]
+    if observation.get("change_reason"):
+        details.append(f"Reason for change: {observation['change_reason']}")
+    if observation.get("result_ref"):
+        details.append(f"Result for this candidate: {observation['result_ref']}")
+    details.append("Source-recorded execution; method benefit and acceptance remain independently assessed.")
+    return "\n".join(details)
 
 
 def _finding_record_values(finding: Mapping[str, Any], *, goal_id: str, source_id: str) -> dict[str, Any]:

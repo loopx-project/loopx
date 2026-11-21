@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Port diagnostics are independent of the test host's real listeners and installed tools.
+echo "$*" >> "$LOOCHAT_FAKE_STATE/ss.log"
+MODE=empty
+[ ! -f "$LOOCHAT_FAKE_STATE/ports" ] || MODE="$(cat "$LOOCHAT_FAKE_STATE/ports")"
+case "$MODE" in
+  unavailable) exit 127 ;;
+  occupied) echo 'LISTEN 0 128 127.0.0.1:8787 0.0.0.0:* users:(("other",pid=12345,fd=3))' ;;
+  empty) exit 0 ;;
+esac

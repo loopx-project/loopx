@@ -330,8 +330,8 @@ def test_true_user_gate_still_blocks_required_non_delivery_work() -> None:
     assert contract["agent_channel"]["must_attempt"] is False
     assert contract["response_plan"]["action_sequence"] == ["notify", "wait"]
     assert hint["action"] == "backoff_waiting_for_user"
-    assert hint["codex_app"]["recommended_interval_minutes"] == 30
-    assert hint["codex_app"]["example_progression_minutes"] == [30, 60]
+    assert hint["app_automation"]["recommended_interval_minutes"] == 30
+    assert hint["app_automation"]["example_progression_minutes"] == [30, 60]
 
 
 def test_human_gate_respects_a_tighter_continuous_monitor_deadline(
@@ -371,8 +371,8 @@ def test_human_gate_respects_a_tighter_continuous_monitor_deadline(
 
     assert hint["action"] == "backoff_waiting_for_user"
     assert hint["cadence_class"] == "human_gate"
-    assert hint["codex_app"]["recommended_interval_minutes"] == 3
-    assert hint["codex_app"]["example_progression_minutes"] == [3]
+    assert hint["app_automation"]["recommended_interval_minutes"] == 3
+    assert hint["app_automation"]["example_progression_minutes"] == [3]
     assert hint["cold_path_detail"]["cadence_context"]["cap_minutes"] == 3
     assert hint["reset_policy"]["app_automation_initial_interval_minutes"] == 3
 
@@ -548,10 +548,10 @@ def test_blocked_peer_coordination_uses_stateful_backoff() -> None:
 
     assert hint["action"] == "backoff_until_reassigned"
     assert hint["cadence_class"] == "peer_coordination_wait"
-    assert hint["codex_app"]["host_action"] == "update_current_heartbeat_rrule"
-    assert hint["codex_app"]["stateful_backoff"]["apply_needed"] is True
-    assert hint["codex_app"]["recommended_interval_minutes"] == 10
-    assert hint["codex_app"]["example_progression_minutes"] == [10, 20, 30, 60]
+    assert hint["app_automation"]["host_action"] == "update_current_heartbeat_rrule"
+    assert hint["app_automation"]["stateful_backoff"]["apply_needed"] is True
+    assert hint["app_automation"]["recommended_interval_minutes"] == 10
+    assert hint["app_automation"]["example_progression_minutes"] == [10, 20, 30, 60]
     assert hint["unchanged_poll"]["final_quota_replan_check_enabled"] is True
 
 
@@ -659,6 +659,7 @@ def test_primary_instruction_adapter_preserves_pinned_python_views():
             if name in {f"precedence-{i}" for i in range(8)} else
             [{"goal_id": "other", "label": "Unscoped backlog"}] if name == "candidate-edge-9" else []
         )
+        expected.setdefault("workspace_repair_action", None)
         assert primary_action_instruction_facts(case["payload"]) == expected, name
 
 

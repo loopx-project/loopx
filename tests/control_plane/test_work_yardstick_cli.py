@@ -7,6 +7,7 @@ import hashlib
 from datetime import datetime, timezone
 from itertools import groupby
 import json
+from pathlib import Path
 import shlex
 
 import pytest
@@ -584,17 +585,18 @@ def test_yardstick_opening_keeps_the_current_cue_with_a_multi_page_write_scope(t
     assert guidance == graph["work_yardstick_capture"]["guidance"]
     assert cue == graph["work_yardsticks"][0] and cue["todo_id"] == TODO_ID
 
-    _, reference = read_context_read_reference(opening["reference_file"])
-    assert reference["sha256"] == hashlib.sha256(original).hexdigest()
+    expected_sha256 = hashlib.sha256(original).hexdigest()
+    assert opening["sha256"] == opening["navigation"]["recovery"]["sha256"] == expected_sha256
+    assert Path(opening["navigation"]["recovery"]["path"]) == saved
     chunks = [content]
     offset = len(content.encode())
     page = opening
     while not page["eof"]:
         assert page["next_offset"] == offset
         words = shlex.split(page["next_command"])
+        assert words[words.index("--capture-sha256") + 1] == expected_sha256
         page = run(project, runtime, path, *words[words.index("quota"):])
-        _, follow = read_context_read_reference(page["reference_file"])
-        assert follow["path"] == reference["path"] and follow["sha256"] == reference["sha256"]
+        assert page["sha256"] == expected_sha256
         assert page["offset"] == offset
         chunks.append(page["content"])
         offset += len(page["content"].encode())
@@ -1030,6 +1032,79 @@ def test_later_plain_measurement_cannot_replace_cited_decision_evidence(tmp_path
     assert "candidate:a" in page["content"]
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_ordinary_execution_keeps_method_feedback_without_redeclaring_choice(tmp_path, provider):
+    project, runtime, path = setup(tmp_path, provider=provider)
+    source = tmp_path / "choice.json"
+    source.write_text(json.dumps(attachment()))
+    first = refresh(project, runtime, path, "choice", source, "--delivery-boundary", "in_flight_continuation")
+    original = first["explore_result_delivery"]
+    run(project, runtime, path, *_projected_cli_args(first["settlement_owed"]["command"], turn_instance_id="choice"))
+
+    # The declared direct check produces a real candidate and result. Its
+    # ordinary finding omits a decision and has no quantitative measurement.
+    artifact = project / "direct-result.json"
+    artifact.write_text(json.dumps({"correct": True, "accepted_score": 8}, sort_keys=True))
+    candidate = json.loads(artifact.read_bytes())
+    assert candidate["correct"] and candidate["accepted_score"] == 8
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    observed = attachment()
+    observed.pop("work_yardstick_decision")
+    observed.update(node_id=original["node_id"], evidence_refs=["result:direct"],
+                    observation="The direct check returned the correct candidate with score 8")
+    observed["execution_observation"] = dict(schema_version="explore_execution_observation_v0",
+        candidate_sha256=digest, input_revision="inputs-v1", planned_method_id="method:direct", executed_method_id="method:direct",
+        change_reason=None, elapsed_seconds=None, limit_seconds=None, search_iterations=1, stop_reason="verified",
+        evidence_refs=["result:direct"], result_ref="result:direct", result_candidate_sha256=digest, exit_code=0)
+    result_file = tmp_path / "ordinary-result.json"
+    result_file.write_text(json.dumps(observed))
+    second = refresh(project, runtime, path, "execute", result_file, "--delivery-boundary", "in_flight_continuation")
+    result = second["explore_result_delivery"]
+    cue = context(runtime, path)["graph"]["work_yardsticks"][0]
+    assert cue["source_finding_id"] == original["finding_id"]
+    assert cue["next_action"] == decision()["next_action"]
+    expected = dict(source_finding_id=original["finding_id"], result_finding_id=result["finding_id"],
+        proposed_method_id="method:direct", executed_method_id="method:direct", change_reason=None,
+        candidate_sha256=digest, evidence_refs=["result:direct"], recorded_planned_method_matches=True)
+    assert cue["previous_decision_followthrough"] == expected
+
+    # Recovery returns the same finding and never changes the prior choice.
+    log = explore_result_log_path(runtime, GOAL_ID)
+    before = log.read_bytes()
+    replay = run(project, runtime, path, "refresh-state", *binding("execute"), "--classification", "validated_change",
+        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--delivery-boundary", "in_flight_continuation", "--explore-result-json", str(result_file),
+        "--no-global-sync", "--suppress-external-sinks")
+    assert replay["explore_result_delivery"]["finding_id"] == result["finding_id"]
+    assert log.read_bytes() == before
+    run(project, runtime, path, *_projected_cli_args(second["settlement_owed"]["command"], turn_instance_id="execute"))
+
+    # A subsequent choice consumes the actual feedback while the earlier
+    # execution keeps its own record, rather than being copied into a decision.
+    follow = attachment()
+    follow.update(node_id=original["node_id"], evidence_refs=["result:direct"])
+    follow["work_yardstick_decision"].update(prior_finding_id=original["finding_id"], counterevidence_refs=[], proxy=None)
+    follow["work_yardstick_decision"]["next_action"] = dict(method_id="method:confirm",
+        reason="Retain the correct direct result and independently confirm its result", cost_bound="One remaining check")
+    source.write_text(json.dumps(follow))
+    third = refresh(project, runtime, path, "next-choice", source, "--delivery-boundary", "in_flight_continuation")
+    revised = context(runtime, path)["graph"]["work_yardsticks"][0]
+    assert revised["source_finding_id"] == third["explore_result_delivery"]["finding_id"]
+    assert revised["next_action"]["method_id"] == "method:confirm"
+    assert revised["previous_decision_followthrough"] == expected
+    assert hashlib.sha256(artifact.read_bytes()).hexdigest() == revised["previous_decision_followthrough"]["candidate_sha256"]
+    run(project, runtime, path, *_projected_cli_args(third["settlement_owed"]["command"], turn_instance_id="next-choice"))
+
+    config = json.loads(path.read_text())
+    config["goals"][0]["execution_profile"]["yardstick_enabled"] = False
+    path.write_text(json.dumps(config))
+    assert "work_yardsticks" not in context(runtime, path)["graph"]
+    rows = _result_rows(runtime, GOAL_ID, path)
+    actual = next(row for row in rows if row["finding_id"] == result["finding_id"])
+    assert actual["execution_observation"]["candidate_sha256"] == digest and "work_yardstick" not in actual
+    assert "recorded_order" not in actual  # Public history keeps its original wire.
+
+
 def test_sqlite_current_work_to_ordinary_turn_to_concrete_action_and_readback(tmp_path):
     project, runtime, path = setup(tmp_path)
     source = tmp_path / "capture.json"
@@ -1132,7 +1207,7 @@ def test_work_yardstick_successor_remains_current_after_clock_rollback(tmp_path,
 
     project, runtime, path = setup(tmp_path, provider=provider)
     source = tmp_path / "finding.json"
-    wall_time = datetime.now(timezone.utc).replace(microsecond=100002)
+    wall_time = datetime.now(timezone.utc).replace(microsecond=100000)
 
     class AttachmentClock(datetime):
         @classmethod
@@ -1156,15 +1231,34 @@ def test_work_yardstick_successor_remains_current_after_clock_rollback(tmp_path,
     first = record("before-clock-change", attachment())
     run(project, runtime, path, "quota", "spend-slot", *binding("before-clock-change"),
         "--slots", "1", "--source", "heartbeat", "--execute")
+    artifact = project / "verified-candidate.json"
+    artifact.write_text(json.dumps({"correct": True, "accepted_score": 8}, sort_keys=True))
+    assert json.loads(artifact.read_bytes())["correct"]
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    observed = attachment()
+    observed.pop("work_yardstick_decision")
+    observed.update(node_id=first["explore_result_delivery"]["node_id"], evidence_refs=["result:direct"])
+    observed["execution_observation"] = dict(schema_version="explore_execution_observation_v0",
+        candidate_sha256=digest, input_revision="inputs-v1", planned_method_id="method:direct", executed_method_id="method:direct",
+        change_reason=None, elapsed_seconds=None, limit_seconds=None, search_iterations=1, stop_reason="verified",
+        evidence_refs=["result:direct"], result_ref="result:direct", result_candidate_sha256=digest, exit_code=0)
+    wall_time = wall_time.replace(microsecond=100002)
+    execution = record("execution-before-clock-change", observed)
+    before = context(runtime, path)["graph"]["work_yardsticks"][0]["previous_decision_followthrough"]
+    assert before["result_finding_id"] == execution["explore_result_delivery"]["finding_id"]
+    assert before["candidate_sha256"] == hashlib.sha256(artifact.read_bytes()).hexdigest()
+    run(project, runtime, path, "quota", "spend-slot", *binding("execution-before-clock-change"),
+        "--slots", "1", "--source", "heartbeat", "--execute")
     changed = attachment()
     changed["work_yardstick_decision"]["prior_finding_id"] = first["explore_result_delivery"]["finding_id"]
     changed["work_yardstick_decision"]["target"]["summary"] = "Follow the validated successor"
     wall_time = wall_time.replace(microsecond=100001)
     second = record("after-clock-change", changed)
-    assert second["explore_result_recorded_at"] < first["explore_result_recorded_at"]
+    assert second["explore_result_recorded_at"] < execution["explore_result_recorded_at"]
     cue = context(runtime, path)["graph"]["work_yardsticks"][0]
     assert cue["source_finding_id"] == second["explore_result_delivery"]["finding_id"]
     assert cue["target"]["summary"] == "Follow the validated successor"
+    assert cue["previous_decision_followthrough"] == before
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -1209,12 +1303,30 @@ def test_committed_pending_capture_recovers_after_disable_without_new_authority(
         patch.setattr(writer, "append_explore_result_events", unavailable)
         rc, failed = run_refresh(command)
     assert rc == 1 and failed["appended"] and failed["explore_result_delivery"]["primary_committed"]
-    run(project, runtime, path, "quota", "spend-slot", *binding(turn), "--slots", "1", "--source", "heartbeat", "--execute")
-    # Work continues while the old graph delivery is pending. Its later exact
-    # replay must retain history without replacing this newer target.
+    rc, premature = _run_cli(path, runtime, "quota", "spend-slot", *binding(turn),
+        "--slots", "1", "--source", "heartbeat", "--execute", cwd=project)
+    assert rc == 1 and not premature.get("quota_spent"), premature
+    assert _spend_run_count(runtime) == 0
+    assert "settlement_owed" not in failed and "quota_settlement_writeback" not in failed
+    config = json.loads(path.read_text())
+    config["goals"][0]["execution_profile"]["yardstick_enabled"] = False
+    path.write_text(json.dumps(config))
+    rc, repaired = _run_cli(path, runtime, *command, cwd=project)
+    assert rc == 0, repaired
+    assert repaired["receipt_repaired"] and repaired["explore_result_delivery"]["ok"]
+    assert repaired["explore_result_recorded_at"] == failed["explore_result_recorded_at"]
+    run(project, runtime, path, *_projected_cli_args(repaired["settlement_owed"]["command"], turn_instance_id=turn))
+    assert _spend_run_count(runtime) == 1
+    assert "work_yardsticks" not in context(runtime, path)["graph"]
+    config = json.loads(path.read_text())
+    config["goals"][0]["execution_profile"]["yardstick_enabled"] = True
+    path.write_text(json.dumps(config))
+    # The original Turn must finish recovery before the next one starts. Its
+    # later readback-only replay retains history without replacing a new target.
     newer_source = tmp_path / "newer.json"
     newer = attachment()
     newer["work_yardstick_decision"]["target"]["summary"] = "Use the updated current target"
+    newer["work_yardstick_decision"]["prior_finding_id"] = context(runtime, path)["graph"]["work_yardsticks"][0]["source_finding_id"]
     newer_source.write_text(json.dumps(newer))
     run(project, runtime, path, "quota", "should-run", "--codex-app", *binding("turn-newer"))
     wall_time = wall_time.replace(microsecond=100002)
@@ -1226,6 +1338,7 @@ def test_committed_pending_capture_recovers_after_disable_without_new_authority(
     path.write_text(json.dumps(config))
     recovered = run(project, runtime, path, *command)
     assert recovered["idempotent_replay"] and recovered["explore_result_delivery"]["ok"]
+    assert _spend_run_count(runtime) == 1
     assert recovered["explore_result_recorded_at"] == failed["explore_result_recorded_at"]
     assert parse_timestamp(recovered["explore_result_recorded_at"]) < parse_timestamp(latest["explore_result_recorded_at"])
     events = load_explore_result_events(explore_result_log_path(runtime, GOAL_ID))
@@ -1340,12 +1453,23 @@ def test_pending_cited_decision_keeps_original_evidence_after_recovery(tmp_path,
         failed = json.loads(capsys.readouterr().out)
     assert rc == 1 and failed["appended"] and failed["explore_result_delivery"]["primary_committed"]
     assert ("explore_result_source_snapshot" in failed) is not legacy_source
-    run(project, runtime, path, *_projected_cli_args(failed["settlement_owed"]["command"], turn_instance_id=turn))
-    late = {**plain, "node_id": first["node_id"], "evidence_refs": refs[1:],
-        "measurements": [{**plain["measurements"][1], "value": 99}]}
-    retain("duplicate-during-attachment-outage", late)
+    rc, premature = _run_cli(path, runtime, "quota", "spend-slot", *binding(turn),
+        "--slots", "1", "--source", "heartbeat", "--execute", cwd=project)
+    assert rc == 1 and not premature.get("quota_spent"), premature
+    assert _spend_run_count(runtime) == 1  # Only the earlier preview settled.
+    assert "settlement_owed" not in failed and "quota_settlement_writeback" not in failed
+    # A same-work finding can arrive during recovery without admitting or
+    # spending another Turn. It cannot replace the captured decision evidence.
+    late = tmp_path / "late-preview.json"
+    late.write_text(json.dumps([{**plain["measurements"][1], "value": 99}]))
+    run(project, runtime, path, "explore", "finding", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--finding-id", "late-preview", "--node", first["node_id"],
+        "--title", "Repeated preview during attachment recovery", "--measurements-json", str(late),
+        "--evidence-ref", refs[1])
     recovered = run(project, runtime, path, *command)
-    assert recovered["idempotent_replay"] and recovered["explore_result_delivery"]["ok"]
+    assert recovered["receipt_repaired"] and recovered["explore_result_delivery"]["ok"]
+    run(project, runtime, path, *_projected_cli_args(recovered["settlement_owed"]["command"], turn_instance_id=turn))
+    assert _spend_run_count(runtime) == 2
     cue = context(runtime, path)["graph"]["work_yardsticks"][0]
     comparison = cue["search_comparison"]
     print(json.dumps({"provider": provider, "comparison": comparison}), flush=True)
@@ -1393,7 +1517,7 @@ def test_pending_cited_decision_keeps_original_evidence_after_recovery(tmp_path,
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("decision_entry", ["finding", "refresh"])
-def test_delayed_committed_measurement_keeps_its_original_work_window(
+def test_replayed_committed_measurement_keeps_its_original_work_window(
         tmp_path, monkeypatch, capsys, provider, decision_entry):
     from loopx.cli import main
     import loopx.capabilities.explore.result_writeback as writer
@@ -1420,8 +1544,15 @@ def test_delayed_committed_measurement_keeps_its_original_work_window(
         code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", *command])
         partial = json.loads(capsys.readouterr().out)
     assert code == 1 and partial["appended"] and partial["explore_result_delivery"]["primary_committed"]
-    run(project, runtime, registry, "quota", "spend-slot", *binding(turn), "--slots", "1",
-        "--source", "heartbeat", "--execute")
+    code, premature = _run_cli(registry, runtime, "quota", "spend-slot", *binding(turn),
+        "--slots", "1", "--source", "heartbeat", "--execute", cwd=project)
+    assert code == 1 and not premature.get("quota_spent"), premature
+    assert _spend_run_count(runtime) == 0
+    assert "settlement_owed" not in partial and "quota_settlement_writeback" not in partial
+    recovered = run(project, runtime, registry, *command)
+    assert recovered["receipt_repaired"] and recovered["explore_result_delivery"]["ok"]
+    run(project, runtime, registry, *_projected_cli_args(recovered["settlement_owed"]["command"], turn_instance_id=turn))
+    assert _spend_run_count(runtime) == 1
     current = attachment()
     current["work_yardstick_decision"].update(proxy=None, counterevidence_refs=[])
     current["work_yardstick_decision"]["target"]["summary"] = "New target after the earlier primary"
@@ -1442,6 +1573,7 @@ def test_delayed_committed_measurement_keeps_its_original_work_window(
     assert before["search_comparison"]["goal"]["preferred_candidate_ref"] == "candidate:a"
     replay = run(project, runtime, registry, *command)
     assert replay["idempotent_replay"] and replay["explore_result_delivery"]["ok"]
+    assert _spend_run_count(runtime) == 1
     after = context(runtime, registry)["graph"]["work_yardsticks"][0]
     assert after["source_finding_id"] == before["source_finding_id"]
     assert after["search_comparison"] == before["search_comparison"]

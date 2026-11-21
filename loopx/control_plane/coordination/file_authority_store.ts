@@ -55,7 +55,7 @@ interface VerifiedDocument {
 }
 const verifiedDocuments = new Map<string, {view: VerifiedDocument; bytes: number}>();
 // Only identical immutable input bytes share in-flight verification. Failed
-// proofs are removed too; neither a path nor a pending promise grants authority.
+// proofs are removed too.
 const pendingVerification = new Map<string, Promise<FileAuthorityJournal>>();
 
 function documentDigest(raw: Uint8Array): string {

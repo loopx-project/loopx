@@ -7,6 +7,11 @@ compiled the language rule, two compiled the identity rule, and two listed the
 supporting kinds -- and the two kind-literals differed only in member order, which
 a value-keyed duplicate scan reads as two unrelated values.
 
+The document schema tag and the item-visibility pair are the fourth and fifth
+decisions: ``adapters.py`` and ``audience.py`` each stated both.  The bindings,
+archive and renderer faces read the schema through ``adapters``, so that name
+stays a re-export of the owner's object rather than moving away.
+
 Two layers matter here because they catch different regressions.  A name-keyed scan,
 like the semantic inventory, is blind to a copy that renames the binding, and
 `re.compile` constants never enter the inventory budgets at all, so nothing in
@@ -38,8 +43,14 @@ OWNER_PATH = "loopx/capabilities/periodic_report/field_shapes.py"
 
 CONSUMERS: dict[str, tuple[str, ...]] = {
     "loopx/capabilities/periodic_report/adapters.py": (
+        "DOCUMENT_SCHEMA",
+        "ITEM_VISIBILITIES",
         "REPORT_LANGUAGE_PATTERN",
         "SUPPORTING_CONTENT_KINDS",
+    ),
+    "loopx/capabilities/periodic_report/audience.py": (
+        "DOCUMENT_SCHEMA",
+        "ITEM_VISIBILITIES",
     ),
     "loopx/capabilities/periodic_report/project_progress.py": (
         "REPORT_LANGUAGE_PATTERN",
@@ -53,7 +64,15 @@ CONSUMERS: dict[str, tuple[str, ...]] = {
 DECLARED_DISTINCT_SITES: dict[str, int] = {
     "loopx/capabilities/periodic_report/incremental.py": 1,
 }
-RETIRED_LOCAL_NAMES = ("_IDENTITY_RE", "_LANGUAGE_RE", "_SUPPORTING_CONTENT_KINDS", "_ID")
+RETIRED_LOCAL_NAMES = (
+    "_IDENTITY_RE",
+    "_LANGUAGE_RE",
+    "_SUPPORTING_CONTENT_KINDS",
+    "_ID",
+    "_DOCUMENT_SCHEMA",
+    "_VISIBILITIES",
+    "_ITEM_VISIBILITIES",
+)
 
 def _rel(path: pathlib.PurePath) -> str:
     """Normalize a scanned site to the "/" spelling the tables in this file use.
@@ -136,6 +155,18 @@ def _set_definitions(members: frozenset[str]) -> list[str]:
     return sorted(sites)
 
 
+def _string_constant_sites(value: str) -> list[str]:
+    """Sites stating this exact string literal, at any depth and in any binding."""
+
+    sites: set[str] = set()
+    for path in _package_sources():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and node.value == value:
+                sites.add(_rel(path.relative_to(REPO_ROOT)))
+    return sorted(sites)
+
+
 def _consumer(rel: str) -> ModuleType:
     stem = pathlib.Path(rel).stem
     return __import__(f"loopx.capabilities.periodic_report.{stem}", fromlist=["_"])
@@ -184,6 +215,23 @@ def test_supporting_kinds_are_listed_once_including_reordered_copies(
     )
 
 
+def test_document_schema_is_stated_once_in_the_package(owner: ModuleType) -> None:
+    sites = _string_constant_sites(owner.DOCUMENT_SCHEMA)
+    assert sites == [OWNER_PATH], (
+        f"the document schema tag is stated in {sites}; only {OWNER_PATH} may state it"
+    )
+
+
+def test_item_visibilities_are_listed_once_including_reordered_copies(
+    owner: ModuleType,
+) -> None:
+    sites = _set_definitions(owner.ITEM_VISIBILITIES)
+    assert sites == [OWNER_PATH], (
+        f"ITEM_VISIBILITIES members are listed in {sites}; "
+        "a copy that only reorders the members counts as a second owner too"
+    )
+
+
 @pytest.mark.parametrize("rel", sorted(CONSUMERS), ids=sorted(CONSUMERS))
 def test_consumers_hold_the_owner_objects_not_copies(rel: str, owner: ModuleType) -> None:
     module = _consumer(rel)
@@ -197,12 +245,18 @@ def test_consumers_hold_the_owner_objects_not_copies(rel: str, owner: ModuleType
 def test_each_consumer_uses_the_owner_name_beyond_the_import(rel: str) -> None:
     """An import that is never used would leave the local decision in place."""
 
-    lines = (PACKAGE / pathlib.Path(rel).name).read_text(encoding="utf-8").splitlines()
+    path = PACKAGE / pathlib.Path(rel).name
+    source = path.read_text(encoding="utf-8")
+    import_lines: set[int] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            import_lines.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+    lines = source.splitlines()
     for attribute in CONSUMERS[rel]:
         used = [
             line
-            for line in lines
-            if attribute in line and not line.lstrip().startswith(("from ", "import "))
+            for number, line in enumerate(lines, start=1)
+            if attribute in line and number not in import_lines
         ]
         assert used, f"{rel} imports {attribute} but never applies it"
 
@@ -336,3 +390,94 @@ def test_incremental_face_keeps_its_own_wider_rule(owner: ModuleType) -> None:
     assert not owner.REPORT_IDENTITY_PATTERN.fullmatch(accepted_by_incremental), (
         "the two rules no longer differ; remove the declaration above and migrate it"
     )
+
+
+def test_visibility_face_in_adapters_reads_the_owner(owner: ModuleType) -> None:
+    from loopx.capabilities.periodic_report import adapters
+
+    for visibility in sorted(owner.ITEM_VISIBILITIES):
+        accepted = adapters._normalize_item(
+            {
+                "item_id": "item1",
+                "title": "t",
+                "summary": "s",
+                "content_kind": "progress",
+                "visibility": visibility,
+            },
+            label="item",
+        )
+        assert accepted["visibility"] == visibility
+    with pytest.raises(ValueError, match="visibility is invalid"):
+        adapters._normalize_item(
+            {"item_id": "item1", "title": "t", "summary": "s", "visibility": "bogus"},
+            label="item",
+        )
+
+
+def _audience_document(owner: ModuleType, visibility: str) -> dict:
+    return {
+        "schema_version": owner.DOCUMENT_SCHEMA,
+        "sections": [
+            {
+                "section_id": "section1",
+                "items": [
+                    {
+                        "source_id": "source1",
+                        "item_id": "item1",
+                        "visibility": visibility,
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def test_document_faces_in_audience_read_the_owner(owner: ModuleType) -> None:
+    from loopx.capabilities.periodic_report import audience
+
+    for visibility in sorted(owner.ITEM_VISIBILITIES):
+        items = audience._normalized_document_items(
+            _audience_document(owner, visibility)
+        )
+        assert [item["visibility"] for item in items] == [visibility]
+    wrong_schema = _audience_document(owner, "primary")
+    wrong_schema["schema_version"] = "periodic_report_document_v1"
+    with pytest.raises(ValueError, match="document must use"):
+        audience._normalized_document_items(wrong_schema)
+    with pytest.raises(ValueError, match="visibility is invalid"):
+        audience._normalized_document_items(_audience_document(owner, "bogus"))
+
+
+def test_audience_policy_accepts_exactly_the_owner_visibilities(
+    owner: ModuleType,
+) -> None:
+    from loopx.capabilities.periodic_report import audience
+
+    def policy(visibilities: list[str]) -> dict:
+        return {
+            "schema_version": audience.AUDIENCE_POLICY_SCHEMA,
+            "eligible_visibilities": visibilities,
+            "recipients": [{"recipient_id": "team1", "owned_domains": ["core"]}],
+        }
+
+    for visibility in sorted(owner.ITEM_VISIBILITIES):
+        normalized = audience.normalize_periodic_report_audience_policy(
+            policy([visibility])
+        )
+        assert normalized["eligible_visibilities"] == [visibility]
+    with pytest.raises(ValueError, match="primary or supporting"):
+        audience.normalize_periodic_report_audience_policy(policy(["bogus"]))
+
+
+def test_external_schema_faces_read_the_owner_through_the_adapters_reexport(
+    owner: ModuleType,
+) -> None:
+    from loopx.capabilities.periodic_report import adapters, archive, bindings
+    from loopx.presentation.renderers import (
+        periodic_report_html,
+        periodic_report_markdown,
+    )
+
+    assert adapters.DOCUMENT_SCHEMA is owner.DOCUMENT_SCHEMA
+    for module in (bindings, archive, periodic_report_html, periodic_report_markdown):
+        assert module.DOCUMENT_SCHEMA is owner.DOCUMENT_SCHEMA, module.__name__

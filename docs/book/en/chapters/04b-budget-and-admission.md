@@ -1,6 +1,6 @@
 # Bounded spending and external observation
 
-After T1 finishes, M1 may still await CI for C1 and G1 may still await a publication decision. Remaining budget does not justify repeatedly invoking a model; no message does not prove the external world is unchanged. Separate whether to act, when to look again, who observes, and when to reconsider the route.
+After T1 finishes, M1 may still await CI for C1 and G1 may still await a publication decision. Remaining budget does not justify repeatedly invoking a model. Separate whether to act, when to look again, who observes, and when to reconsider the route.
 
 ## Separate five responsibilities {#observation-owners}
 
@@ -25,7 +25,7 @@ The following is a **hypothetical faulty policy**, not a claim that current impl
 | 11:00 | M1 | M1's second unchanged observation | Switch again and start counting again |
 | 11:30 | M1 and M2 are each due | Update each observation independently | Depends on processing order rather than actual stagnation |
 
-The problem is not a high threshold; it is conflating different targets. Preserve each Monitor's identity and count instead of repeatedly lowering the threshold. Conversely, without a usable Host executing due observations, correct counters remain static records: that is a liveness gap, not no-change evidence.
+Conflating different targets. Preserve each Monitor's identity and count instead of repeatedly lowering the threshold. Conversely, without a usable Host executing due observations, correct counters remain static records: that is a liveness gap, not no-change evidence.
 
 ## Choose an observation frequency while waiting for CI {#running-wait}
 
@@ -61,7 +61,7 @@ When T1 discovers a real dependency, record a specific target such as `monitor_c
 
 Independent T2 in the work graph does not let a Turn already bound to T1 rebind itself. Complete the original Turn's required blocked writeback and closeout, then let later admission select new work. **Turn closeout, Todo waiting and next-turn selection are three different facts.**
 
-The [Turn chapter's wait sequence](03-one-turn.md#wait-closeout) explains this path with an explicit test from main `f49b4a00…`, labeled separately from older release promises. It checks no duplicate debit, no forced Monitor poll, and retained waiting/validation declarations. It is not a universal scheduling order for all Hosts.
+The [Turn chapter's wait sequence](03-one-turn.md#wait-closeout) explains this path with an explicit test from main `f49b4a00…`, labeled separately from older release promises. It checks no duplicate debit, no forced Monitor poll, and retained waiting/validation declarations.
 
 ## Cadence backoff versus route replanning
 

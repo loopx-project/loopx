@@ -3,8 +3,7 @@
 Status: public-safe field pattern for connector-backed content operations.
 
 This note turns the Agent-Reach value-explorer experiments into one reusable
-LoopX source profile inside the broader connector source map. It is not a hard
-dependency on Agent-Reach and it does not grant permission to publish. It
+LoopX source profile inside the broader connector source map. It
 describes how a LoopX agent can use Agent-Reach as a source router, then let
 LoopX own evidence, gates, drafts, monitors, and handoff state.
 

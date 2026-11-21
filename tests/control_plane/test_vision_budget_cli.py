@@ -312,7 +312,7 @@ def test_authoring_example_material_closeout_has_no_missing_path_replan(tmp_path
         registry, runtime, vision_path=path, check=True,
         dry_run=False, autonomous_replan_recorded=False,
     ))
-    assert result["vision_checkpoint"]["satisfied"] is True
+    assert result["vision_checkpoint"]["satisfied"] is (omitted != "wait")
     quota = fixture.run_quota(registry, runtime)
     gaps = quota["goal_frontier_projection"]["acceptance_gaps"]
     outcome_gaps = [g for g in gaps if g["kind"] == "vision_outcome_checkpoint_required"]

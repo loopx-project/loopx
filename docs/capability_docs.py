@@ -12,7 +12,7 @@ from loopx.extensions.manifest import load_extension_manifest
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-REPOSITORY_BLOB_ROOT = "https://github.com/huangruiteng/loopx/blob/main"
+REPOSITORY_BLOB_ROOT = "https://github.com/loopx-project/loopx/blob/main"
 MARKDOWN_LINK = re.compile(
     r'(?P<prefix>!?\[[^\]\n]*\]\()(?P<dest><[^>\n]+>|[^)\s\n]+)(?P<suffix>(?:\s+["\'][^)\n]*["\'])?\))'
 )

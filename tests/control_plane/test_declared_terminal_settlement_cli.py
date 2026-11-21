@@ -130,7 +130,9 @@ def test_declared_leased_completion_writeback_spend_terminal_and_replay(
     completion_command = recovery["ordered_steps"][0]["command_template"]
     assert "--project" in recovery["ordered_steps"][1]["command_template"]
     assert "--state-file" in recovery["ordered_steps"][1]["command_template"]
-    assert "--project" not in recovery["ordered_steps"][2]["command_template"]
+    assert "--settle-turn" in recovery["ordered_steps"][1]["command_template"]
+    assert recovery["ordered_steps"][2]["owner"] == "runtime"
+    assert "command_template" not in recovery["ordered_steps"][2]
     assert "--no-follow-up" not in shlex.split(completion_command)
     assert completion_command in render_todo_markdown(premature)
     completion_command = completion_command.replace("<validated evidence>", complete_args[-1])

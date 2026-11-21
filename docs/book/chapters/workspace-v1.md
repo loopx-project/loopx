@@ -4,7 +4,7 @@
 
 ## 一个界面看起来正常的下午 {#pause-readback}
 
-以下是合成诊断情境，不是一次已核实的生产事故。
+以下是合成诊断情境。
 
 ```text
 14:02  operator 打开 Workspace。Manager 总览显示 3 个 Goal，"执行中"车道有两张卡片。
@@ -30,15 +30,13 @@
 
 Workspace 呈现和发起受治理的动作，但 Goal、Todo、Gate、事件、配置和回执仍然由控制面事实源拥有。这带来三个不可避免的后果：
 
-- **投影会滞后。** 页面上的状态是某个时刻的读模型；在你看到它和它被生成之间，源状态可能已经变化。
-- **HTTP 成功不是写入完成。** 请求被接受和执行完成是两件事，中间可能被 Gate 拦下、被 stale 检查拒绝。
-- **按钮不是独立的授权者。** Goal stop/resume 由 owner 权限与已审核 fingerprint 校验；Todo 操作由生命周期规则校验；自动 Turn 的可运行性再由 quota decision 判断。
+- **投影会滞后。** 页面上的状态是某个时刻的读模型；在你看到它和它被生成之间，源状态可能已经变化。请求被接受和执行完成是两件事，中间可能被 Gate 拦下、被 stale 检查拒绝。 Goal stop/resume 由 owner 权限与已审核 fingerprint 校验；Todo 操作由生命周期规则校验；自动 Turn 的可运行性再由 quota decision 判断。
 
-所以本章的全部内容可以压成一句：**Workspace 是观察和发起动作的入口，不是一套新的事实源。**
+所以本章的全部内容可以压成一句：**Workspace 是观察和发起动作的入口。**
 
 ## 先确认运行时，再看页面
 
-页面出现不等于控制面健康。先核对版本和诊断，再启动或复用服务；`dashboard --no-open` 不是纯粹的状态查询：
+先核对版本和诊断，再启动或复用服务；`dashboard --no-open` 不是纯粹的状态查询：
 
 ```bash
 loopx --version
@@ -53,7 +51,7 @@ curl -fsS http://127.0.0.1:8767/chat/ >/dev/null
 curl -fsS http://127.0.0.1:8767/status.json
 ```
 
-`loopx dashboard` 同时提供打包后的 Workspace、状态投影和 Agent Chat。若相同版本的桌面壳已经启动了服务，它会复用通过 capability fingerprint 验证的进程，而不是启动第二套事实源。**端口只是默认值**；自动化检查应读取命令输出，不要把默认 URL 当成永久合同。
+`loopx dashboard` 同时提供打包后的 Workspace、状态投影和 Agent Chat。若相同版本的桌面壳已经启动了服务，它会复用通过 capability fingerprint 验证的进程。**端口只是默认值**；自动化检查应读取命令输出，不要把默认 URL 当成永久合同。
 
 打开 Workspace 后，先做三项对应检查：
 
@@ -65,7 +63,7 @@ curl -fsS http://127.0.0.1:8767/status.json
 
 ## 把页面读回控制面问题
 
-Manager 的四条 lane 是 operator 投影，不是四种新的 Todo 状态：
+Manager 的四条 lane 是 operator 投影：
 
 | Lane | 实际含义 |
 |---|---|
@@ -94,7 +92,7 @@ Workspace 中的 Goal、Todo、Heartbeat、Monitor 与设置变更遵循同一�
 typed preview -> human or policy review -> governed apply -> verified receipt -> refreshed projection
 ```
 
-**Preview** 冻结规范化参数、影响范围和当前 revision。**Apply** 只能执行仍然匹配该 preview 的动作；状态已经变化时应返回 stale 或 Gate，而不是悄悄套用旧决定。**Receipt 与 readback** 才证明写入完成——按钮点击或 HTTP 成功本身都不够。
+**Preview** 冻结规范化参数、影响范围和当前 revision。**Apply** 只能执行仍然匹配该 preview 的动作；状态已经变化时应返回 stale 或 Gate。**Receipt 与 readback** 才证明写入完成——按钮点击或 HTTP 成功本身都不够。
 
 以暂停 Goal 为例，第一条命令只预览：
 
@@ -146,7 +144,7 @@ Workspace 的 Lark / 飞书设置可以把一个 Goal 连接到具体 Topic 和�
 loopx lark-inbox drain --goal-id <goal-id> --agent-id <agent-id>
 ```
 
-Disconnect 只移除该 Goal 的 Topic route，不删除 Goal、Session、历史或其他连接。消息到达也不代表 Agent 获得发送、仓库写入或生产权限；这些动作继续通过各自的 Gate 与 Provider readback。
+Disconnect 只移除该 Goal 的 Topic route，不删除 Goal、Session、历史或其他连接。这些动作继续通过各自的 Gate 与 Provider readback。
 
 ## 一次生成与持续投递是两条授权链
 
@@ -158,7 +156,7 @@ loopx periodic-report inspect-profile --preset weekly --format json
 
 回执中的 `active` 与 `generation_allowed` 应同时为 `true`。内置 weekly profile 没有 schedule，也没有 sink，因此**一次生成不会创建周期任务或发送消息**。
 
-持续报告是另一条授权链：自定义 profile 声明 cadence，Host Automation 负责唤醒；机器或 Goal subscription 的 `enabled: true` 与显式 `route_ref` 构成持续投递授权。暂停 Automation、禁用 profile 或关闭 subscription 会停止对应路径。报告生成成功不等于外部发送成功；Provider、发送身份、route 和消息 readback 仍需分别验证。
+持续报告是另一条授权链：自定义 profile 声明 cadence，Host Automation 负责唤醒；机器或 Goal subscription 的 `enabled: true` 与显式 `route_ref` 构成持续投递授权。暂停 Automation、禁用 profile 或关闭 subscription 会停止对应路径。Provider、发送身份、route 和消息 readback 仍需分别验证。
 
 ## 代价与边界
 
@@ -168,9 +166,9 @@ loopx periodic-report inspect-profile --preset weekly --format json
 
 **代价三：需要理解四层"已启用"的区别。** 把它们压成一个开关会误判能力可用性，而分清它们需要额外的心智负担。
 
-**边界一：Workspace 不拥有事实。** 界面损坏不能证明控制面仍健康，也不能证明它已经停止。先区分 source、runtime 与 projection；只有源状态和运行条件确认正常时，才把故障限定为显示恢复，而不是通过界面手改状态。它也不构成 Stage 2C authority——shared-authority provider 的资格与提升由独立的 shadow 与 conformance 流程决定，不由某个操作面出现而成立。
+**边界一：Workspace 不拥有事实。** 先区分 source、runtime 与 projection；只有源状态和运行条件确认正常时，才把故障限定为显示恢复。它也不构成 Stage 2C authority——shared-authority provider 的资格与提升由独立的 shadow 与 conformance 流程决定。
 
-**边界二：桌面更新的范围有限。** 更新只能来自固定官方 feed；macOS 使用 updater signature 与 ad-hoc code signing，不应描述为 notarized。回退安装也不承诺逆转未来不兼容的 Goal schema。
+**边界二：桌面更新的范围有限。** 更新只能来自固定官方 feed；macOS 使用 updater signature 与 ad-hoc code signing，不应描述为 notarized。
 
 **边界三：CLI 更新不能修复原生壳缺陷。** 浏览器 / PWA 用户继续使用 CLI update 流程；桌面壳的启动器或 updater 问题需要桌面侧处理。
 
@@ -193,5 +191,3 @@ loopx periodic-report inspect-profile --preset weekly --format json
 3. **点击不构成授权。** Owner 操作由对应 Goal lifecycle 接受，Todo 由其生命周期校验，自动 Turn 由当前 quota contract 准入；页面不重新授予任何一种权限。
 4. **四种"已启用"需要分别证明。** 它们可以互为前提，但不能把一个开关的值当成所有条件均已满足。
 5. **消息到达不扩大权限。** Capture scope 与 ingress mode 都不授予新的写权限。
-
-这五条回答同一个问题：**当界面告诉你"一切正常"时，凭什么相信它？**

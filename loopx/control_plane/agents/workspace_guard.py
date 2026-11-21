@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, cast
 
 from hashlib import sha256
@@ -435,6 +436,18 @@ def observe_goal_local_workspace(
     return {"workspace": snapshot, **project_goal_write_scopes(str(root), scopes)}
 
 
+def workspace_guard_missing_task_repository(
+    guard: Mapping[str, object] | None,
+) -> bool:
+    """Return whether the workspace guard fired only on a Goal-repo fallback."""
+    return (
+        isinstance(guard, Mapping)
+        and guard.get("current_workspace") == "foreign_git_worktree"
+        and guard.get("repository_source") == "goal.repo"
+        and not guard.get("task_repository")
+    )
+
+
 def build_agent_workspace_guard(
     goal: dict[str, Any],
     agent_identity: dict[str, Any] | None,
@@ -521,6 +534,17 @@ def build_agent_workspace_guard(
                 current_workspace = "canonical_checkout"
     if not current_workspace:
         return None
+    required_action = (
+        "create or switch to an independent git worktree/branch for this peer lane, "
+        "then rerun quota should-run with the same --agent-id before editing files"
+    )
+    if not task_repository and current_workspace == "foreign_git_worktree":
+        required_action = (
+            "if this Todo intentionally targets the current repository, run loopx todo update "
+            "--task-repository <credential-free-git-identity>; otherwise create or switch "
+            "to an independent worktree of the Goal repository; then rerun quota "
+            "should-run with the same --agent-id before editing files"
+        )
     payload = {
         "schema_version": AGENT_WORKSPACE_GUARD_SCHEMA_VERSION,
         "source": "quota.should-run",
@@ -534,10 +558,7 @@ def build_agent_workspace_guard(
             "peer delivery with repository writes is not running from an independent "
             "worktree; normal delivery must move before repository edits"
         ),
-        "required_action": (
-            "create or switch to an independent git worktree/branch for this peer lane, "
-            "then rerun quota should-run with the same --agent-id before editing files"
-        ),
+        "required_action": required_action,
     }
     if task_repository:
         payload["task_repository"] = task_repository

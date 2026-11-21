@@ -25,7 +25,7 @@ loopx configure-goal --goal-id example --clear-capability-improvement-configurat
 ```
 
 未配置默认 off。mode 为 off 或 bounded；发现预算 1–30 分钟（默认 5），最多
-试用提议 0–2 个（默认 1）。它们只约束建议工作，不是 quota 预留或已消费证明。
+试用提议 0–2 个（默认 1）。它们只约束建议工作。
 Todo、租约、quota、能力／provider readiness 与受保护操作仍由原 owner 准入。
 改变该意图不启用其它能力。非法配置在落盘前拒绝；损坏的已存配置显示 invalid，
 建议失败不阻塞工作，并可显式清除恢复。
@@ -33,7 +33,7 @@ Todo、租约、quota、能力／provider readiness 与受保护操作仍由原 
 ## 渐进式披露
 
 普通唤醒没有明确 Goal 缺口时返回 `no_goal_gap`，建议继续当前工作；不遍历目录、
-不查询 provider、不创建任务。replan 标签只披露上下文，不证明存在能力缺口。
+不查询 provider、不创建任务。replan 标签只披露上下文。
 显式冷路径可提供公开安全的稳定缺口引用，以及最多八条原 owner 的候选观察：
 
 ```sh
@@ -45,7 +45,7 @@ loopx agent-context --goal-id example --agent-id coordinator --phase before_plan
 优先建议检查适用且已启用的直接能力。否则，试用提议要求明确适用性、关闭状态、
 配置 owner 引用、效果基线与回滚引用。缺失／未知或试用预算为零时继续当前工作；
 未给候选时可在预算内进行有界发现。引用和调用者观察**不认证执行授权**；行动前
-仍读回原 owner。建议不授予 provider 调用、安装、配置变更、交易、签名或转账。
+仍读回原 owner。
 
 ### 经同一规划入口消费试用反馈
 
@@ -73,8 +73,7 @@ loopx agent-context --goal-id example --agent-id coordinator --phase before_plan
 
 后续独立且没有反馈的候选仍可使用；已启用直接候选在反馈校验前优先选中，
 关闭策略时跳过反馈。这个确定性建议 consumer 不认证回执或持久化重试门禁。
-digest 只标识声明，不认证真实性。重命名 revision 不证明试用改进，原准入与
-效果评审仍须执行。记录、退役与回滚保留原 owner。
+digest 只标识声明，不认证真实性。记录、退役与回滚保留原 owner。
 
 范围细化参考
 [Rethinking the Evaluation of Harness Evolution for Agents](https://arxiv.org/html/2607.12227v3)：

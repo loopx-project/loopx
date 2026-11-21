@@ -12,7 +12,11 @@ import hashlib
 import json
 from pathlib import Path
 
-from loopx.chat_action_store import ChatActionStore
+from loopx.chat_action_store import (
+    AUTHENTICATED_LARK_CARD_CALLBACK,
+    HUMAN_ACTOR_CLASS,
+    ChatActionStore,
+)
 from loopx.chat_actions import ChatActionService
 
 GOAL_ID = "goal-operation-fixture"
@@ -37,6 +41,7 @@ def service(
     )
     registry = project / ".loopx" / "registry.json"
     registry.parent.mkdir()
+    from loopx.control_plane.goals.activation import build_goal_activation
     registry.write_text(
         json.dumps(
             {
@@ -45,6 +50,11 @@ def service(
                         "id": goal_id,
                         "repo": str(project),
                         "state_file": "ACTIVE_GOAL_STATE.md",
+                        "activation": build_goal_activation(
+                            state="active",
+                            updated_at="2026-01-01T00:00:00Z",
+                            reason="fixture active",
+                        ),
                         "coordination": {
                             "registered_agents": ["finance-fixture-agent"]
                         },
@@ -184,6 +194,8 @@ def confirmation(
         "confirmation_digest": str(operation["confirmation_digest"]),
         "card_digest": str(delivered["card_digest"]),
         "confirmed_at": datetime.now(timezone.utc).isoformat(),
+        "actor_class": HUMAN_ACTOR_CLASS,
+        "verification_kind": AUTHENTICATED_LARK_CARD_CALLBACK,
     }
 
 

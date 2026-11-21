@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from ..coordination.goal_storage_initialization import initialize_goal_storage_target
+from ..effect_program import SETTLEMENT_RECEIPT_SCHEMA_VERSION
 from ...heartbeat_prompt import build_heartbeat_prompt
 from ...control_plane.todos.mutation_api import add_goal_todo, complete_goal_todo
 from ..quota.turn_envelope import quota_action_signature_document
@@ -21,8 +22,10 @@ from .doubao_model_behavior_actor import (
     DOUBAO_MODEL_ENV,
     DoubaoActorTransport,
     _direct_ark_transport,
+    _direct_deepseek_transport,
 )
 from .model_tool_behavior import (
+    DeepSeekExecToolClient,
     QuotaToolContext,
     DoubaoExecToolClient,
     QUOTA_FIRST_TOOL_INSTRUCTION,
@@ -654,6 +657,8 @@ def _quota_contract(packet: Mapping[str, Any]) -> dict[str, Any]:
         for item in settlement_plan.get("ordered_steps", [])
         if isinstance(item, Mapping)
     ]
+    spend = next((item for item in settlement_plan.get("ordered_steps", [])
+                  if isinstance(item, Mapping) and item.get("kind") == "quota_spend"), {})
     contract = {
         "decision": "execute",
         "selected_todo_id": selected.get("todo_id"),
@@ -670,22 +675,38 @@ def _quota_contract(packet: Mapping[str, Any]) -> dict[str, Any]:
         or not contract["delivery_allowed"]
         or contract["quiet_noop_allowed"]
         or ordered_steps != _EXPECTED_RECEIPT_STEPS
+        or settlement_plan.get("schema_version") != "quota_settlement_plan_v2"
+        or spend.get("owner") != "runtime"
+        or "command_template" in spend
     ):
-        raise ValueError("real quota packet did not expose terminal settlement v1")
+        raise ValueError("real quota packet did not expose runtime-owned terminal settlement")
     return contract
 
 
-def _settlement_receipt_steps(payload: Mapping[str, Any]) -> list[str]:
+def _settlement_receipt_steps(
+    payload: Mapping[str, Any], state: _QualificationState,
+) -> list[str]:
     settlement = payload.get("settlement_result")
     if not isinstance(settlement, Mapping) or settlement.get("ok") is not True:
         raise _TerminalToolViolation("settlement result is missing or failed")
     receipts = settlement.get("receipts")
     if not isinstance(receipts, list):
         raise _TerminalToolViolation("settlement receipts are missing")
+    identity = payload.get("settlement_identity")
+    heartbeat = (state.quota_packet or {}).get("heartbeat_receipt")
+    original = heartbeat.get("settlement_identity") if isinstance(heartbeat, Mapping) else None
+    effect_id = identity.get("effect_id") if isinstance(identity, Mapping) else None
+    if settlement.get("failure") is not None or not isinstance(original, Mapping) or identity != original or not isinstance(effect_id, str) or not effect_id or any(
+        not isinstance(item, Mapping)
+        or item.get("schema_version") != SETTLEMENT_RECEIPT_SCHEMA_VERSION
+        or item.get("status") != "committed"
+        or item.get("effect_id") != effect_id
+        for item in receipts
+    ):
+        return []
     return [
         str(item.get("step_kind"))
         for item in receipts
-        if isinstance(item, Mapping) and item.get("status") == "committed"
     ]
 
 
@@ -918,7 +939,7 @@ def _execute_todo_completion(
         if not _matches_identity(tokens, state):
             raise _TerminalToolViolation("completion_identity_mismatch")
     payload = _execute_cli(command, state)
-    receipt_steps = _settlement_receipt_steps(payload)
+    receipt_steps = _settlement_receipt_steps(payload, state)
     expected_steps = _EXPECTED_RECEIPT_STEPS if terminal else _EXPECTED_RECEIPT_STEPS[:1]
     if receipt_steps != expected_steps:
         raise _TerminalToolViolation("terminal_closeout_receipt_mismatch" if terminal
@@ -964,30 +985,20 @@ def _execute_terminal_cli(
                     if payload.get("error_code") == "progress_observation_invalid_arguments"
                     else "fixture_unchanged_cli_rejection")
             return json.dumps(payload, ensure_ascii=False, sort_keys=True), kind
-        receipt_steps = _settlement_receipt_steps(payload)
-        if receipt_steps != _EXPECTED_RECEIPT_STEPS[:2]:
+        receipt_steps = _settlement_receipt_steps(payload, state)
+        if receipt_steps != _EXPECTED_RECEIPT_STEPS[:3]:
             raise _TerminalToolViolation("writeback_receipt_mismatch")
         state.writeback_committed = True
+        state.spend_committed = True
         state.receipt_steps = receipt_steps
         kind = "durable_writeback"
         output = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     elif command_kind == "quota" and command_action == "spend-slot":
         if not state.writeback_committed:
             raise _TerminalToolViolation("quota_spend_before_writeback")
-        if not tokens or not _matches_identity(tokens, state):
-            raise _TerminalToolViolation("quota_spend_identity_mismatch")
-        if "--execute" not in tokens or argument_value(
-            tokens, "--source"
-        ) != "heartbeat":
-            raise _TerminalToolViolation("quota_spend_contract_mismatch")
-        payload = _execute_cli(command, state)
-        receipt_steps = _settlement_receipt_steps(payload)
-        if receipt_steps != _EXPECTED_RECEIPT_STEPS[:3]:
-            raise _TerminalToolViolation("quota_spend_receipt_mismatch")
-        state.spend_committed = True
-        state.receipt_steps = receipt_steps
-        kind = "quota_spend"
-        output = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        # The current complete plan makes this a runtime-owned writeback
+        # effect. A model must not issue a second debit after that receipt.
+        raise _TerminalToolViolation("quota_spend_contract_mismatch")
     elif command_kind == "todo" and command_action == "complete":
         return _execute_todo_completion(command, tokens, state)
     else:
@@ -1042,16 +1053,21 @@ class DoubaoTerminalSettlementToolBehaviorActor:
     def __init__(
         self,
         *,
-        api_key: str,
+        api_key: str = "",
         model: str = DOUBAO_2_1_PRO_MODEL,
         timeout_seconds: float = 90.0,
         transport: DoubaoActorTransport = _direct_ark_transport,
+        client: DoubaoExecToolClient | None = None,
     ) -> None:
-        self._client = DoubaoExecToolClient(
-            api_key=api_key,
-            model=model,
-            timeout_seconds=timeout_seconds,
-            transport=transport,
+        self._client = (
+            client
+            if client is not None
+            else DoubaoExecToolClient(
+                api_key=api_key,
+                model=model,
+                timeout_seconds=timeout_seconds,
+                transport=transport,
+            )
         )
 
     @classmethod
@@ -1075,6 +1091,24 @@ class DoubaoTerminalSettlementToolBehaviorActor:
             transport=transport,
         )
 
+    @classmethod
+    def from_deepseek_environment(
+        cls,
+        *,
+        environ: Mapping[str, str] | None = None,
+        transport: DoubaoActorTransport = _direct_deepseek_transport,
+        timeout_seconds: float = 90.0,
+        model: str | None = None,
+    ) -> DoubaoTerminalSettlementToolBehaviorActor:
+        return cls(
+            client=DeepSeekExecToolClient.from_environment(
+                environ=environ,
+                transport=transport,
+                timeout_seconds=timeout_seconds,
+                model=model,
+            )
+        )
+
     def qualify(
         self,
         *,
@@ -1094,6 +1128,8 @@ class DoubaoTerminalSettlementToolBehaviorActor:
                         "identity and settlement plan. A later same-Turn "
                         "settlement_plan supplies remaining commands and authoring "
                         "schema; use committed receipts to choose the next step. "
+                        "The runtime commits quota_spend with durable_writeback; "
+                        "observe those receipts and do not issue another spend. "
                         "A receipt without command templates does not replace "
                         "that plan. "
                         f"{QUOTA_FIRST_TOOL_INSTRUCTION}"

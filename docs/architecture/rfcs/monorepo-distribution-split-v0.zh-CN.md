@@ -4,7 +4,7 @@
 - **交付成熟度：** Proposal
 - **作者 / 负责人：** LoopX maintainers
 - **创建：** 2026-09-26
-- **最近规范性修订：** 2026-10-29
+- **最近规范性修订：** 2026-11-19
 - **实现基线：** 发行盘点 `2f3d13ae9`；运行时装配审计 `9cae3b28939f72fa4aadab5cfe49e19bcbdab372`
 - **相关契约：** [TypeScript 控制面迁移 v0](typescript-control-plane-migration-v0.zh-CN.md)、[Extensions 参考](../../reference/extensions.md)、[Capability 目录](../../../loopx/capabilities/README.md)、[总体路线图 v0](loopx-overall-roadmap-v0.zh-CN.md)（S2、S8、S12）、[import 边界测试](../../../tests/architecture/test_control_plane_import_boundaries.py)
 - **跟踪 issue：** [#5072](https://github.com/loopx-project/loopx/issues/5072)
@@ -25,7 +25,7 @@
 
 1. **仓库保持单一 monorepo。** 一条 PR 流程、一套 CI、一个发布列车。拆成多个 Git 仓库是本 RFC 的非目标。
 2. **安装物拆成多个发行物。** 单一 `loopx` wheel 逐步替换为 `loopx-core`、`loopx-workspace` 以及 `packages/` 下的按 capability 打包；`loopx` 保留为依赖全部子包的 meta-package。
-3. **先做顶层目录重组，再做打包变更。** `loopx/chat_*` 迁入 `loopx/chat/`，`loopx/*_goal_mode/` 迁入 `loopx/hosts/`，已建立的公开 import 保留至少一个 minor 版本的兼容 re-export；内部调用方一起迁移并删除旧内部入口。
+3. **按独立打包所需重组所选依赖闭包。** `loopx/chat_*` 迁入 `loopx/chat/`，`loopx/*_goal_mode/` 迁入 `loopx/hosts/`，已建立的公开 import 保留至少一个 minor 版本的兼容 re-export；内部调用方一起迁移并删除旧内部入口。
 4. **新增一条架构测试钉住顶层增长。** `loopx/*.py` 的文件数只能减少，与现有零例外 import 边界测试并列。
 5. **仅内核安装不得在 import 阶段要求 Node.js。** TS effect runtime 对有副作用的命令仍是必需的；缺失时必须以现有的类型化 `node_unavailable` 诊断呈现，而不是安装或 import 失败。
 6. **不变：** 内核权威、CLI 兼容基线、extension 生命周期规则、公开/私有边界、全部稳定协议。
@@ -38,6 +38,15 @@ Minimal 必须执行并恢复真实的受治理任务；standard 围绕同一内
 “小”分别从安装依赖、加载代码、激活服务、模型可见上下文衡量。
 发行表定义可安装内容，不代表每条命令都必须加载。安装 standard 不授予服务激活或权限。
 现有默认值与机器强制工作义务持续生效，直到合格且明确披露的迁移改变它们。
+
+当前优先结果是可独立安装、执行任务、恢复原结果并返回证据的 core。无关目录移动、
+workspace 打包或额外模型会话不阻塞这一 core 发行物切片；完整 M3 仍保留全部发行
+验收。普通调用者提供任务与关键约束，不必先学 Vision、Quota、Lease 或方法名称。
+Host 承担记账；必要的权限、预算、不确定性与恢复决策仍在相关时可见。
+
+**10% 复杂度／90% 当前功能覆盖率**仍是未验证假设。固定版本化用户旅程分母，比较
+必要概念、必经步骤、加载／启用代码、模型读取、完整成本和已验收成果。分别报告
+仅内核与组合后的覆盖率；不能从分母删除特化旅程，也不能以代码计数代替模型收益。
 
 ## 2. 问题与动机
 
@@ -181,6 +190,16 @@ Planner 可以建议工作或 stride，所属迁移规则决定准入与义务�
 预设不能把机器强制的 `must_attempt_work` 契约变成文字 guidance。
 内核是内聚领域的集合，不是一个大文件。相邻重构应让下一次修改更局部，并保持已刻画的行为。
 
+### 必要机制与可选任务方法
+
+Core 负责合法限定工作、持久证据、停止、预算及原 attempt 恢复。Bench、workbench、
+管家围绕相同 owner 组合特化工作流；它们缺席不能阻塞无关的已授权 core 工作。
+**Yardstick 是独立可选的决策方法，不是 provider 或强制内核阶段。** 方法选择如何
+推理或衡量；provider 提供执行、存储或具体外部操作。复用既有 capability owner 和
+`yardstick_enabled`，不增加方法 registry、provider id 或开关。关闭方法不免除普通
+结果验收。保留既有记录、已配置义务、权限与默认值；移除方法／依赖须独立证明组件
+缺席、一致性与恢复。
+
 ### 发行层之上的预设
 
 | 装配 | 必需内容 | 显式可选内容 |
@@ -193,6 +212,13 @@ Planner 可以建议工作或 stride，所属迁移规则决定准入与义务�
 Minimal 是可执行装配，不是在 standard 完成全部初始化后加开关。
 不带宿主的只读 kernel library 不构成可执行预设资格。
 精确内容与首个受支持宿主/authority 组合由 D2/D5 决定。
+
+首批 **Standard** 选型提案为：`agent-turn-recall` 取回相关既有指导，`issue-fix`
+交付已验证仓库变更，`pull-request-review` 执行交付审查。保留各自既有 owner 和默认
+关闭设置；安装不授予来源访问、不启动 watcher，也不授权发布或合并。仅加载所选
+任务实现；可选指导召回缺席时，Minimal 仍保有基本恢复。Yardstick、Stride、研究／
+benchmark 机制与管家路由继续独立可选。这选定 R2 的目标，现有单体和 core 候选 wheel
+尚未实现该隔离分包组合。
 
 装配、managed/attached 模式、宿主 provider、一个/两个模型 Session、存储 provider、benchmark arm
 保持独立。Minimal 不意味着 attached，standard 不要求双模型 Session，research 不等于不受治理。
@@ -289,6 +315,10 @@ Capability 指令仅在适用时提供；authority 不能从 prompt 文字推导
 其延迟不能进入准入/结算事务。只批处理尽力而为的 telemetry；不能为满足时间目标而延迟
 authority receipt 持久化、弱化 fsync/事务保证，或缓存过期权限/租约决策。
 
+普通任务获准执行后，内置 Worker 视图省去已知为空的 Todo 摘要列表。所选任务、
+非空列表、计数、引用与来源截断信息继续可见。签名来源和原有读取入口保留完整摘要，
+供恢复与诊断使用。
+
 ### 受治理生命周期与外部副作用
 
 通过统一工作契约使用既有 Goal/Agent/work/Turn 身份、revision、lease、effect id 与 receipt。
@@ -296,10 +326,18 @@ authority receipt 持久化、弱化 fsync/事务保证，或缓存过期权限/
 再经所属 channel 交付/回读。各步骤使用既有合法迁移与重放规则；这段描述不新增竞争的 status enum
 或事务协调者。
 
+显式执行 `turn run-once --execute` 时，兼容的通用 CLI 宿主配合独立校验器，可为准入
+Todo 补齐缺失的租约。宿主复用普通领取操作，核对同一 Todo 已就绪后再派发。领取与
+派发共用同一 Turn 身份。恢复使用原尝试捕获的租约代次。
+
 Executor 崩溃、effect ACK 丢失、结果交付 ACK 丢失是不同恢复情形。
 Operation provider 必须说明某个 effect 能否核对、能否安全重试。
 外部状态未知时，后续依赖操作须等待回读或人工干预；“未观测到”不等于“未执行”。
 设备幂等、物理联锁与补偿归 provider 负责，不能虚构为内核保证。
+
+通用 CLI 的结果持久化后，原 Turn 可继续验收或结算，无需重新提供适配器命令及其请求版本。
+调用方仍使用已批准的工作区，验收未完成时提供独立检查命令。已结算的 Turn 回读已保存结果。
+恢复流程判定需要再次启动宿主时，调用方须提供适配器，准入才能继续。
 
 模型取消、进程终止、设备确认停止是不同事实。模型停止不能在缺少设备证据时生成
 “设备已停止”声明。需要持续监督的 provider，在 effect 尚未解决时不能卸载。
@@ -344,6 +382,10 @@ minimal 包含持久 shell、图像读取与 compaction。SDK minimal 还提供�
 借鉴显式边界，不引入 Cordis、上游权限默认值或新的 LoopX 模型 loop。固定来源见附录 C。
 
 ## 7. 安全、隐私与兼容
+
+普通 C1 组装和重放沿用 Explore 的共享指引及精确上下文引用。图和规划关闭时，
+空读取在加载图投影前返回既有的关闭状态。有范围的 Explore 读取在图可用且 Goal
+启用评估时加载 Yardstick。设置、证据身份和恢复继续由当前 Goal 与 Explore 负责。
 
 - **默认关闭 / 功能关闭一致性：** 缺失 `loopx-workspace` 或 capability 包时，行为等同现有 extension off state（I4）。没有命令会静默回退到另一实现。
 - **公开/私有边界：** 不变。`loopx check` 继续扫描每个包；移动文件不改变其扫描类别。
@@ -442,6 +484,72 @@ Live、性能和晋级证据分别记录。
 M0–M5 保留原发行里程碑；R0–R4 是同一计划中的运行时和旅程资格切片。
 R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，不阻塞已合格的 CLI 或 managed 任务。
 真实调用者出现前不增加闲置 provider、字段或框架。每个 PR 记录应用/推迟的相邻重构。
+
+- 检查点已移至执行台账：[Core 发现入口检查点（2026-11-19）](ledger/monorepo-distribution-split-v0/2026-11-19-core-discovery-checkpoint.zh-CN.md)。
+
+<a id="subtraction-gate"></a>
+
+### 减法门禁与反上下文重力规则
+
+`main@f15ebdd16b` 与 C1 PR `#8266`（跨 `289` 个文件 `+26,672 / -4,561`，净增 `+22,111` 行）的
+实测显示：除非每次交付都通过显式的减法门禁，否则模块拆分与执行统一并不能缩小仓库体量
+（与 [Controller RFC 减法门禁](controller-executor-unified-contract-v0.zh-CN.md#subtraction-gate) 配套）。
+
+#### 1. “统一”PR 为何反而推高净代码量（四类实测驱动因素）
+
+在 `#8266` 中，代码与文档的净增分布在每一层：
+
+- **只增不减的双语 RFC 与台账日志（`docs/` 净增 `+9,564` 行）：** `docs/` 下 `+9,715 / -151`，
+  包含 `14` 个 `docs/architecture/rfcs/ledger/` 文件的 `+7,749` 行与 RFC/附录的 `+1,218 / -35` 行
+  （仅 `2026-10-30-c1-source-convergence.{md,zh-CN.md}` 即占 `+5,874` 行），把流水账当成收敛证据。
+- **旧 × 新模式组合矩阵测试（`tests/` 净增 `+9,976` 行）：** 跨 `142` 个测试文件 `+12,074 / -2,098`，
+  围绕 `loopx_turn_envelope_v0`、`--context-delivery off` 与统一 schema 乘积式扩写端到端 fixture。
+- **运行时与 CLI 增补兼容适配层（`loopx/` 净增 `+2,236` 行）：** 跨 `92` 个文件 `+4,224 / -1,988`，
+  在 `loopx/cli_commands/quota.py`、`quota_presentation.py`、`quota_capture.py` 与
+  `quota_context_reader.py` 增补重构旧 `v0`/普通视图的 shim（如 `raw_quota_turn_view`、
+  `compose_turn_decision_with_raw_envelope`、`--context-delivery off` 分支），而非退役旧 producer。
+- **跨语言 Python ↔ TS 包装重复：** `loopx/cli_commands/`（`+1,639 / -645`）、
+  `loopx/control_plane/*.py`（`+1,167 / -685`）与 `loopx/control_plane/*.ts`（`+1,080 / -532`）
+  在 TypeScript owner 旁保留 Python 编排包装。
+
+开放中的统一 PR `#8484`（`+1,979 / -174`，`41` 文件）与 `#7568`（`+6,230 / -349`，`56` 文件）
+同样体现该叠层模式；而聚焦规范收敛的 `#8749`（`+538 / -2`，已合入）及 `#5072`、`#8787` 则
+直面目录拆分与 CI 负载问题。
+
+#### 2. 上下文重力 vs. 保留伤疤的减法
+
+在 `main@f15ebdd16b` 上，仓库受跟踪代码/脚本总计约 `1.79M` 行（`1,785,239` 行，其中 `loopx/`
+`1,864` 文件 / 约 `658k` 行、`tests/` `1,956` 文件 / 约 `727k` 行、`examples/` `688` 文件 /
+约 `204k` 行，以及 `apps/`、`packages/`、`scripts/`、`benchmark/`），外加 `docs/architecture/rfcs/ledger/`
+的 `152` 个文件（约 `11.5k` 行）和本文附录 A 约 `3,990` 行的历史流水记录。
+
+- **上下文重力：** 模型置身于 `1.79M` 行体量的代码树时，倾向于假定既有顶层文件、历史开关和
+  过渡投影不可移除，从而在其外层包上兼容门面而不是化简。
+- **保留伤疤的减法：** LoopX 的核心护城河不是行数或包装厚度，而是**四项不可替代的内核不变量**——
+  （1）排他租约与写入/代际围栏、（2）默认拒绝的权限与 ACL/受众隔离、（3）一次性幂等结算回执、
+  （4）同源反事实检查点与评估台账——再加上**失败反例测试集**。小内核拆分必须在完整保护这些
+  不变量与失败反例的前提下，主动删除过时 pilot、顶层包装与无引用脚本。
+
+#### 3. 具名退役清单与棘轮规则
+
+1. **退役 Turn 前置 pilot CLI。** [#8884](https://github.com/loopx-project/loopx/pull/8884)
+   已退役 15 个被替代的试验命令和四个顶层 `loopx/codex_cli_*.py` 模块，顶层预算从 127 降至 124。
+   `codex-cli-bootstrap-message` 与 `turn_driver/codex_cli.py` 仍有现役调用方。
+2. **迁移剩余顶层 `chat_*` 和 `*_goal_mode`。** M1 将动作规范化和 Goal 生命周期动作两个内部模块
+   放入 `loopx/chat/`，移除两个顶层名字，预算由 124 降至 122。M1 剩余 Chat 模块仍按 I3 迁移，
+   M2 继续把宿主模式包迁入 `loopx/hosts/`。每次净减少都在同一 PR 中等量调低
+   [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json)。
+   Core wheel 原已排除这两类 Chat 路径，这次减少的是源码顶层模块数量。
+3. **清理无引用 `examples/` 与源码文本绑定式 smoke。** 清理 `examples/` 中无引用脚本（`main@f15ebdd16b`
+   实测 `200` 个无引用 `.py` / `45,504` 行；按 `.py/.sh/.mjs/.js/.ts` 计为 `209` 个 / `47,325` 行），
+   并依 [good-smokes](../../development/good-smokes.md) 退役 `14` 个绑定内部 Python 符号而非已交付
+   CLI 不变量的 `examples/cli-*-command-modularization-smoke.py`。
+4. **约束 RFC 与台账体量。** 下方附录 A 仅作历史冻结保留；后续规范修订与 `ledger/` 条目须使用
+   紧凑的边界、不变量、退役与实证表，不再写入数千行按日流水账。
+5. **兼容视图与 I3 shim 强制设退出门禁。** 在 I3 约定的单个 minor 版本公开 import 窗口之外，
+   任何过渡性 `v0` 投影（`loopx_turn_envelope_v0`、`raw_quota_turn_view`）、`legacy_fallback`
+   路径或关闭模式开关（`--context-delivery off`）都必须具名活跃消费者与删除里程碑。在重复
+   producer 与组合开关删除前，拆包或机制收敛均未完成。
 
 ## 12. 未决决策
 
@@ -3575,3 +3683,23 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
   current-C1 实际组合；不证明完整 process／network 闭包、自然进程
   drain、实测 overhead 或完整成本收益、真实模型采用、完整 D2/D5、R1/M3、
   Goal 完成或 C1 默认切换。保留既有 checkpoints、失败、预算和验收要求。
+
+
+### 2026-11-16 — 独立发行包的生命周期命令到达原 owner
+
+- **缺口：**独立 Core 已包含原 Goal activation 实现，但 selected CLI loading
+  未选入 `goal-lifecycle`。支持的 stop／resume 请求在到达 owner 前，落入有意
+  省略的完整 CLI。
+- **增量：**仅选入既有命令、registrar 与 handler。Actor、source identity、
+  expected fingerprint、preview、partial-write 读回与错误继续由原 activation
+  service 和 typed state owner 持有。无关命令及顶层 help 保持 lazy loading；
+  App 与消息控制继续使用既有 owner。
+- **写入归属边界：**既有 native outer-controller guard 现在识别其受管 Goal 的
+  生命周期执行。Owner／controller 标签不能绕过该 guard；preview、其他 Goal
+  与普通执行继续可用。同一个 guard 保护 selected 及完整 CLI 入口。
+- **源码证据：**仅加载命令 owner 的 help、完整 parser 对照、源码 stop／resume、
+  anonymous 与 stale-fingerprint 拒绝回归，保护 V2/V3 入口可达性及普通 CLI
+  parity。计划 activation 的时间戳独立校验，不在不同调用之间比较相等。
+- **边界：**本次是源码接线修复。Installed Core 与组合资格、被中断原 Task 的
+  恢复、完整 context／closure、真实模型、成本、完整 R1/M3 及 C1 cutover 仍是
+  独立验收。

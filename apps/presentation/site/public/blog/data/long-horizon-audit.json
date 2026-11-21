@@ -160,7 +160,9 @@
   "stride_context_on_off_comparison": {
     "snapshot_cst": "2026-11-12 22:40 CST",
     "benchmark": "EdgeBench",
-    "design": "Controlled two-arm comparison under fixed Explore + Stride: Explore + Stride + context-on (progressive reading and compaction-cycle structured delta enabled) vs Explore + Stride + context-off (both disabled).",
+    "design": "Descriptive snapshot of scores reported as Context ON and OFF. Four pairs list durations within 15 minutes of 18 hours, with no more than 15 minutes between arms. Six pairs are historical or have incomplete or unverified durations. Public evidence does not establish common treatment, budget, version or evaluator across the ten pairs.",
+    "source_url": "https://github.com/loopx-project/loopx/blob/4a15d6e6fe0148f801ed40d7bfd9d5e5025274a5/apps/presentation/site/public/blog/data/long-horizon-audit.json#L160",
+    "prior_public_ann_url": "https://github.com/loopx-project/loopx/blob/9ff3b5a7628da7f7c6776bb4e1eeb011aa47eca0/apps/presentation/site/public/blog/context-delivery/index.html#L225-L239",
     "summary": {
       "total_tasks": 10,
       "context_on_ahead_or_edge": 7,
@@ -170,8 +172,8 @@
       "duration_matched_context_off_wins": 1
     },
     "reconciliation_notes": [
-      "ANN uses the Stride-enabled pair from the historical seven-arm cohort (Explore + Stride + context-on 7,159 QPS vs Explore + Stride + context-off 3,746 QPS); the ablation section separately records the without-Stride Explore pair (6,020 vs 5,766 QPS).",
-      "Grid reflects the completed ~18h Explore pair within 15m tolerance (context-on 2,197 at 17h57m vs context-off 2,311 at 17h59m); the ablation section retains an earlier unmatched-duration Historical Grid counterexample (Off 2054 < On+Stride 2088)."
+      "The aggregate reports historical ANN as ON 7,159 and OFF 3,746 QPS with both active durations unverified. The earlier public table confirms the ON value but does not list the OFF value. Its 6,020 and 5,766 QPS belong to a different Explore pair without Stride.",
+      "This table reports the near-18h Grid pair (ON 2,197 at 17h57m, OFF 2,311 at 17h59m). The ablation section retains an earlier unequal-duration Grid observation (OFF 2,054, ON plus Stride 2,088)."
     ],
     "tasks": [
       {
@@ -190,14 +192,14 @@
         "context_off_valid": 17,
         "winner_explore": "context-on",
         "delta_label": "+35 (+77.8%)",
-        "note_en": "Matched ~18h (both within 15m tolerance).",
-        "note_zh": "等时长约 18h（均在 15m 容差内）。"
+        "note_en": "Both listed durations are within 15 minutes of 18 hours.",
+        "note_zh": "两臂列出的时长均在 18 小时前后 15 分钟内。"
       },
       {
         "task": "Grid",
         "direction": "lower",
         "metric_label_en": "Total cost",
-        "metric_label_zh": "原生总分",
+        "metric_label_zh": "总代价",
         "cohort_group": "matched_18h",
         "context_on_duration": "17h57m",
         "context_off_duration": "17h59m",
@@ -209,8 +211,8 @@
         "context_off_valid": 13,
         "winner_explore": "context-on",
         "delta_label": "-114 (-4.9%, +2.35 pts)",
-        "note_en": "Matched ~18h within 15m tolerance (same-session continuation on context-on).",
-        "note_zh": "等时长约 18h（容差内免补；context-on 沿同会话续跑）。"
+        "note_en": "Two near-18h reported durations. The aggregate records a same-session continuation on the ON side.",
+        "note_zh": "两臂列出的时长均接近 18 小时，汇总记录 ON 在原会话续跑。"
       },
       {
         "task": "Rust",
@@ -228,8 +230,8 @@
         "context_off_valid": 10,
         "winner_explore": "context-on-edge",
         "delta_label": "+0.0044 (tied / slight edge)",
-        "note_en": "Matched 17h57m each; context-on holds slight native edge.",
-        "note_zh": "等时长均为 17h57m；context-on 原生分微弱占先。"
+        "note_en": "Both durations are listed as 17h57m. ON leads in native score and ties at two decimal places on the /100 scale.",
+        "note_zh": "两臂均列为 17h57m。ON 原生分微弱占先，百分制保留两位小数时持平。"
       },
       {
         "task": "Portfolio",
@@ -247,8 +249,8 @@
         "context_off_valid": 17,
         "winner_explore": "context-off",
         "delta_label": "-25.82 pts (OFF wins)",
-        "note_en": "Matched 18h00m counterexample with corrected evaluator; all evaluations drained.",
-        "note_zh": "修正评测器下的等时长 18h 反例；两 Explore 臂全部评分排空。"
+        "note_en": "OFF leads. The aggregate lists 18h00m on both sides and reports a corrected evaluator with all evaluations drained.",
+        "note_zh": "OFF 领先。汇总列出两臂均为 18h00m，并记录修正后的评测器与全部已完成的评分。"
       },
       {
         "task": "ANN",
@@ -266,8 +268,8 @@
         "context_off_valid": 4,
         "winner_explore": "context-on",
         "delta_label": "+3,413 QPS (+91.1%, +33.51 pts)",
-        "note_en": "Corresponding Explore + Stride pair from the historical seven-arm ANN cohort; active solver intervals unverified.",
-        "note_zh": "历史七臂中同开 Stride 的对应两臂配置；原生执行区间尚待核实。"
+        "note_en": "Historical ANN pair as labeled in the aggregate. Both durations and the OFF score remain unverified by the cited earlier public table.",
+        "note_zh": "沿用汇总中的历史 ANN 配对标签。所引旧版公开表无法核对两臂时长及 OFF 分数。"
       },
       {
         "task": "FFmpeg",

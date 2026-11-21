@@ -34,7 +34,7 @@ public/private scan；完整公开 smoke fleet 是另一回事。更慢的是真
 authority 的改动需要一个一次性隔离实例，跑完整套件是分钟到十几分钟量级。每个 PR 都等最宽矩阵，
 代价会摊到所有贡献者身上。
 
-**跑得多不等于覆盖对。** 一百个命令如果都落在同一层，结论仍然只有一层。开头情境中的检查覆盖的是内存中的规则与静态约束，仍需补充受影响后端的证据。
+一百个命令如果都落在同一层，结论仍然只有一层。开头情境中的检查覆盖的是内存中的规则与静态约束，仍需补充受影响后端的证据。
 
 **有些结论需要人工判断。** 自动检查可以提示默认行为变化是否有说明，但披露是否准确、证据是否覆盖真实影响，仍需要 review。
 
@@ -56,7 +56,7 @@ authority 的改动需要一个一次性隔离实例，跑完整套件是分钟�
 
 ## 六层质量证据
 
-[Testing and Quality](https://github.com/huangruiteng/loopx/blob/main/docs/development/testing-and-quality.md)
+[Testing and Quality](https://github.com/loopx-project/loopx/blob/main/docs/development/testing-and-quality.md)
 定义了 LoopX 当前的质量分层。本书按外部贡献者的任务重新组织如下。
 
 ### 1. Unit 与 Contract
@@ -73,7 +73,7 @@ ambiguous scope -> typed repair
 explicit global scope -> global gate
 ```
 
-这层最适合证明具体 invariant，但不证明 CLI、projection 与 scheduler 已正确串联。
+这层最适合证明具体 invariant。
 
 ### 2. Focused deterministic smoke
 
@@ -315,7 +315,7 @@ git diff --check
 loopx check --scan-path <changed-doc-or-directory>
 ```
 
-协议文档若改变 shipped behavior，还应运行对应 contract/smoke；"只改 Markdown"不代表行为风险为零。
+协议文档若改变 shipped behavior，还应运行对应 contract/smoke。
 
 ### Python 规则 PR
 
@@ -523,7 +523,7 @@ What remains owner-held?
 ## 关联 Issue 与公开任务
 
 非 trivial 工作优先关联
-[Contributor Task Board](https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md)
+[Contributor Task Board](https://github.com/loopx-project/loopx/blob/main/docs/development/contributor-tasks.md)
 或 GitHub Issue：
 
 - 在开始大改前声明准备处理的 slice；
@@ -574,7 +574,7 @@ ownership 与 receipt。共享同一套新规则的多个 provider 互相一致�
 记录可重放命令或脚本调用、真实受影响后端、不可变 fixture 指纹、退出状态与归一化观测指纹。
 
 需要说明的是，这条要求在实现上被投影成 review packet 里的一项检查，而 packet 测试只证明要求
-被投影，并不证明 reviewer 真的执行了它，更不证明产品无缺陷。这正是它为什么必须和"默认行为
+被投影。这正是它为什么必须和"默认行为
 披露"归为同一类：**这类义务的最后一个执行者是 review，绝非 CI。**
 
 ## 两个真实社区贡献案例
@@ -731,7 +731,7 @@ Projection/Docs/fixtures 与 Extension 等贡献面会有不同的最近验证�
 1. **每一项验证都要对应一个具名风险。** 对应不上的命令属于惯例，构不成本 PR 的证据。
 2. **期望值先于实现。** 从当前输出反推的断言只能做 characterization，不能作为 correctness
    authority。
-3. **跳过不等于通过。** 拿不到隔离环境时，正确动作是报告证据缺口并暂停交付。
+3. 拿不到隔离环境时，正确动作是报告证据缺口并暂停交付。
 4. **默认行为变化有三件必做：重命名 smoke、更新 docs/release note、点名受影响 lane。**
    漏掉第一件的测试仍然是绿的，这正是它危险的原因。
 5. **merged、released、deployed、observed 是四种状态。** 不能用前一种的证据宣称后一种。

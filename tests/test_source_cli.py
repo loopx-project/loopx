@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 import tests.source_cli as source_cli
 from tests.source_cli import (
@@ -64,3 +65,16 @@ def test_source_cli_launches_through_the_host_entry() -> None:
     completed = run_source_cli(["--version"])
     assert completed.returncode == 0
     assert completed.stdout.strip()
+
+
+def test_bootstrap_displays_failure_reason_in_default_output(tmp_path: Path) -> None:
+    completed = run_source_cli(
+        [
+            "bootstrap", "--project", str(tmp_path), "--goal-id", "initial-goal",
+            "--fork-goal", "different-goal", "--dry-run",
+        ],
+        check=False,
+    )
+
+    assert completed.returncode == 1
+    assert "--fork-goal cannot be combined with a different --goal-id" in completed.stdout

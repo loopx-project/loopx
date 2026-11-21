@@ -1,12 +1,21 @@
 """HTTP transport for original Session Tasks and the existing persisted queue."""
 
+from functools import partial
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from ...chat_store import CHAT_STORE_SCHEMA_VERSION
+from ...status_server import is_loopback_host
 
 
 class ChatQueueRequestMixin:
+    def _project_queue_reply_history(
+        self,
+        store: Any,
+        session: dict[str, Any],
+        rows: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        return rows
     def _managed_native_turn(self, session_id: str, *, execute: bool = False) -> None:
         from .steward_managed_mode import ManagedSessionTurn
         service = ManagedSessionTurn(self.server.runtime_controller)
@@ -63,7 +72,12 @@ class ChatQueueRequestMixin:
                 self._session_context(session)
             rows: list[dict[str, Any]] = []
             for turn in store.queued_turns(session_id, strict=True, include_reserved=True):
-                text = str(turn.get("message") or "")
+                # Reuse history's exact admission/source checks before truncating;
+                # a preview cannot decode a partial context envelope.
+                original = {"role": "user", "origin": turn.get("origin"),
+                            "turn_id": turn["turn_id"], "text": str(turn.get("message") or "")}
+                visible = self._project_queue_reply_history(store, session, [original])[0]
+                text = visible.get("reply_context", {}).get("source_text", original["text"])
                 rows.append({
                     "turn_id": turn["turn_id"],
                     "created_at": turn["created_at"],
@@ -109,7 +123,12 @@ class ChatQueueRequestMixin:
             for key in body:
                 if not isinstance(body[key], str) or not body[key] or len(body[key]) > 160:
                     raise ValueError("invalid queue steering identity")
-            result = self.server.runtime_controller.steer_queued_turn(session_id=session_id,
+            controller = self.server.runtime_controller
+            steer = controller.steer_queued_turn
+            if is_loopback_host(str(self.server.server_address[0])):
+                from .queued_admission import steer_queued_web_turn
+                steer = partial(steer_queued_web_turn, controller)
+            result = steer(session_id=session_id,
                 queued_turn_id=queued_turn_id, expected_turn_id=body["target_turn_id"],
                 client_ingress_id=body["client_ingress_id"])
             self._send_json({"ok": True, **result})

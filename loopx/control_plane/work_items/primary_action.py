@@ -4,6 +4,7 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from ...state_projection import next_action_resolution_trace
+from ..agents.workspace_guard import workspace_guard_missing_task_repository
 from ..todos.contract import TODO_TASK_CLASS_ADVANCEMENT
 from ..todos.todo_semantics import todo_item_is_actionable_open, todo_item_task_class
 from .autonomous_replan_obligation import todo_lifecycle_settlement_obligation
@@ -58,6 +59,7 @@ def primary_action_instruction_facts(payload: dict[str, Any]) -> dict[str, Any]:
     packet = obj(payload.get("replan_action_packet"))
     writeback = obj(packet.get("writeback_contract"))
     contract = obj(payload.get("task_orchestration_contract"))
+    guard = obj(payload.get("workspace_guard"))
     lifecycle = todo_lifecycle_settlement_obligation(payload)
     return {
         "goal_id": goal_id,
@@ -106,6 +108,11 @@ def primary_action_instruction_facts(payload: dict[str, Any]) -> dict[str, Any]:
                           if isinstance(contract.get("eligible_peer_lanes"), list) else 0},
         "contract_obligation": str(obj(payload.get("execution_obligation"))["contract_obligation"])
             if obj(payload.get("execution_obligation")).get("contract_obligation") else None,
+        "workspace_repair_action": (
+            protocol_action_text(guard.get("required_action"), limit=320)
+            if workspace_guard_missing_task_repository(guard)
+            else None
+        ),
     }
 
 

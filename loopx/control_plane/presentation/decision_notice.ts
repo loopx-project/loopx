@@ -23,7 +23,7 @@ export function validateDecisionNoticeReferences(input: JsonObject): JsonObject 
 }
 
 /** Read-only content selection. Callers supply public-safe, bounded projection
- * fields; this neither resolves a gate nor authorizes an operation. */
+ * fields; */
 export function projectDecisionNotice(input: JsonObject): JsonObject {
   const items: JsonObject[] = [];
   const incomplete: JsonObject[] = [];

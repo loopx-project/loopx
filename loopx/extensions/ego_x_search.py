@@ -1,6 +1,5 @@
 """Bounded X discovery through the existing, explicitly configured Ego reader.
 
-This source-specific transport is not a research planner or an account owner.
 It shares the reader's URL, origin, live-control, deadline and recovery fences.
 """
 from __future__ import annotations

@@ -86,7 +86,7 @@ contract. Before removing or combining a smoke:
 
 名称相似或 setup 相同，并不能证明两个 smoke 保护同一合同。删除或合并前，应分别写明
 不变量、公开入口、反例、运行频率和定向 profile；把完全相同内容和直接嵌套执行当作
-审阅候选，而不是自动删除指令。可以复用 canary harness 中的 fixture 或 subprocess
+审阅候选。可以复用 canary harness 中的 fixture 或 subprocess
 setup，但不要因此合并不同的语义断言。去掉 smoke 调用另一个 smoke 的 wrapper，让每
 个合同只运行一次且仍可独立选择，最后重跑聚焦入口以及 fleet/catalog 检查，确认清单
 没有覆盖缺口。

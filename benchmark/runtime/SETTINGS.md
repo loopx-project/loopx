@@ -20,7 +20,7 @@ use matched repetitions to test its effect.
 | --- | --- | --- |
 | Task entry | LoopX modes: loopx-planned | Record planned or seeded for every arm |
 | Explore | Off in heartbeat-resume; on in heartbeat-explore | Keep resume as the reference |
-| Turn envelope | Off; a checkpoint handoff enables capture on fresh_replan execute wakes and receipts record `turn_envelope_source: checkpoint_handoff` | Enable only in its ablation; read the effective receipt, not the opt-in flag |
+| Quota input | Current C1 product sources return the complete v1 contract on ordinary and explicit Complete wakes | Historical Short needs a verified v0 product response before model launch |
 | Native-Goal continuation | Off: a native Goal that declares completion ends the worker; a Goal still active at the budget edge is recorded as `native_goal_outcome: budget_exhausted` with exit 0 | `native_goal_continue: true` / `--native-goal-continue` starts continuation Goals until 300 s before the budget edge (native-goal profile only) |
 | Replan cadence | 6 settled effective work Turns | Use explicit completed-Todo cadence or another Turn count for ablation |
 | Iteration context | Harbor: fresh; EdgeBench heartbeat: resume | Freeze the provider and context within a comparison |
@@ -48,7 +48,7 @@ These are recommendations, not automatically launched experiments.
 | Reference | `--worker heartbeat-resume --task-entry loopx-planned --replan-after-turns 6` | Planned entry with effective-turn replanning |
 | Seeded | Replace only `--task-entry` with `seeded-todo` | Does initial task decomposition help? |
 | Explore | Replace only `--worker` with `heartbeat-explore` | Are recorded evidence and subsequent route choices useful? |
-| Short envelope | Add `--turn-envelope` | Does progressive context loading reduce overhead without losing decisions? |
+| Historical Short envelope | Use the recorded product and runner revisions with `--turn-envelope`; the current worker verifies v0 before launch | Does short input with reachable original detail reduce overhead while preserving decisions? |
 | Todo cadence | Replace `--replan-after-turns 6` with `--replan-after-todos 3` | How do units and thresholds change interruptions? This is a combined ablation. |
 | No LoopX | `--worker official`; omit LoopX-specific flags | What is the net effect of the whole LoopX treatment? |
 
@@ -93,11 +93,13 @@ configuration unchanged.
 
 ## Readback and interpretation
 
-TurnEnvelope projections reuse the validated checkpoint declaration. An explicit
-opt-in records `turn_envelope_source=explicit`; a known `fresh_replan` declaration
-for heartbeat records `checkpoint_handoff`. Omitting `trigger` means after-wake
-capture and does not imply TurnEnvelope. A programmatic guest path without
-declaration bytes records capture configuration only: it cannot prove a trigger.
+The Short setting in the install profile records the request. Before a model
+starts, the worker records the read-only quota preview's expected version,
+observed version and eligibility in `quota_input_contract`. The wake records
+`turn_envelope_source=explicit` after v0 qualification. A `fresh_replan` checkpoint
+preloads a different view and is incompatible with this Short launch. An omitted
+trigger means after-wake capture. Interpret saved attempts against their pinned
+source and recorded carrier.
 For the Harbor adapter, pass the same validated `checkpoint_request` bytes with
 their `checkpoint_request_path` when projecting that known configuration. SForge
 forwards the exact bytes it stages. The worker's individual wake receipt remains

@@ -7,7 +7,7 @@ import test from "node:test";
 import {nativeChildReportAdmission} from "../../loopx/control_plane/capabilities/native_child_admission.ts";
 import {settlementIdentity, settlementIdentityPayload} from "../../loopx/control_plane/effect_program.ts";
 import {QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA, readQuotaSettlement} from "../../loopx/control_plane/quota/settlement_readback.ts";
-import {heartbeatWorkRequalification} from "../../loopx/control_plane/quota/heartbeat_receipt_identity.ts";
+import {heartbeatWorkRequalification, projectHeartbeatReceiptSelection} from "../../loopx/control_plane/quota/heartbeat_receipt_identity.ts";
 
 const proof = {
   ok: true, should_run: true, must_attempt_work: true,
@@ -17,6 +17,25 @@ const goalId = "native-report-fixture";
 const agentId = "generic-coordinator";
 const turnId = "turn-native-report";
 const todoId = "todo_source_validation";
+
+test("Python receipt selection transports the shared binding without rewriting its effect", () => {
+  const event = {run_id: turnId, details: {todo_id: todoId}};
+  const originalEffect = `${goalId}:${agentId}:${todoId}:${turnId}`;
+  const select = (events: unknown[]) => projectHeartbeatReceiptSelection({goal_id: goalId, agent_id: agentId, events});
+  assert.deepEqual(select([]), {index: null, binding: null});
+  assert.deepEqual(select([{run_id: turnId}]), {index: 0, binding: null});
+  assert.deepEqual(select([event, {run_id: turnId}]), {
+    index: 0, binding: {binding_kind: "todo", binding_id: todoId, effect_id: originalEffect},
+  });
+  assert.deepEqual(select([event, {...event, details: {...event.details, settlement_effect_id: originalEffect}}]), {
+    index: 1, binding: {binding_kind: "todo", binding_id: todoId, effect_id: originalEffect},
+  });
+  assert.deepEqual(select([{...event, details: {...event.details, settlement_effect_id: "declared-wrong-effect"}}]), {
+    index: 0, binding: {binding_kind: "todo", binding_id: todoId, effect_id: "declared-wrong-effect"},
+  });
+  assert.throws(() => select([event, {...event, details: {todo_id: "todo_other_validation"}}]), /conflicting settlement identities/);
+  assert.throws(() => select([{...event, details: {todo_id: "todo_BAD_ID"}}]), /not a legal Todo id/);
+});
 
 test("committed work admission, not status spelling, admits a report", () => {
   for (const status of ["normal_run", "turn_run_once", "autonomous_replan_required", "future_work_label"]) {
@@ -199,14 +218,14 @@ test("same-binding reentry appends only explicit work qualification and preserve
       pending_action_selection: {todo_id: todoId}, closeout_required: false,
     }};
     await writeFile(log, JSON.stringify(original) + "\n");
-    const current = {...event.details, semantic_replan_obligation_id: "",
+    const current = {...event.details, semantic_replan_obligation_id: "", quota_spend_source: "visible-goal",
       delivery_workspace_causality: {requirement: "not_required"}, ignored_caller_fact: true};
     const readback = await readQuotaSettlement({...request, heartbeat_reentry_guard: current});
     assert.equal(readback.native_child_admission.report_permission, "not_admitted");
     const qualification = readback.heartbeat_reentry_qualification;
     assert.equal(qualification.append, true);
     assert.deepEqual(qualification.details, {...original.details, ...proof,
-      closeout_required: true, settlement_receipt_revision: "work_admission"});
+      closeout_required: true, settlement_receipt_revision: "work_admission", quota_spend_source: "visible-goal"});
     // A readback cannot commit or grant work by itself.
     assert.equal((await readQuotaSettlement(request)).native_child_admission.report_permission, "not_admitted");
     const corrected = {...original, event_id: "event-qualified", status: "normal_run",
@@ -259,18 +278,50 @@ test("a retained binding cannot replace fresh same-Todo executable selection", a
   } finally {await rm(root, {recursive: true, force: true});}
 });
 
+test("one prepared Turn admits only renewal of its original lease generation", async () => {
+  const {root, identity, event} = await fixture();
+  try {
+    const originalDetails = {...event.details, prepared_lease_key_sha256: "a".repeat(64),
+      prepared_lease_version: 3, prepared_lease_epoch: 2};
+    const original = {...event, details: originalDetails};
+    const renewal = {...originalDetails, prepared_lease_version: 4};
+    assert.deepEqual(heartbeatWorkRequalification(original, renewal, identity, "open", false), {
+      append: true,
+      details: {...renewal, settlement_receipt_revision: "lease_readiness"},
+    });
+    for (const changed of [
+      {prepared_lease_epoch: 3},
+      {prepared_lease_key_sha256: "b".repeat(64)},
+      {prepared_lease_epoch: undefined},
+    ]) {
+      const replacement = Object.fromEntries(Object.entries({...renewal, ...changed})
+        .filter(([, value]) => value !== undefined));
+      assert.throws(() => heartbeatWorkRequalification(original, replacement, identity, "open", false),
+        /original task lease generation/);
+      assert.equal(heartbeatWorkRequalification(original, replacement, identity, "settlement_pending", false).append, false);
+      assert.equal(heartbeatWorkRequalification(original, replacement, identity, "open", true).append, false);
+    }
+    const {prepared_lease_epoch: _, ...historicalDetails} = originalDetails;
+    const historical = {...event, details: historicalDetails};
+    assert.equal(heartbeatWorkRequalification(historical, historicalDetails, identity, "open", false).append, false);
+    assert.throws(() => heartbeatWorkRequalification(historical, renewal, identity, "open", false),
+      /original task lease generation/);
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
 test("work requalification fails closed on binding and semantic guard conflicts", async () => {
   const {root, identity, event} = await fixture();
   try {
     const original = {...event, details: {...event.details, delivery_allowed: false,
-      semantic_replan_obligation_id: "replan-0000000000000001"}};
+      semantic_replan_obligation_id: "replan-0000000000000001", quota_spend_source: "visible-goal"}};
     for (const changed of [
       {todo_id: "todo_other_validation"}, {settlement_effect_id: "different-effect"},
       {replan_obligation_id: "replan-0000000000000002"},
       {semantic_replan_obligation_id: "replan-0000000000000002"},
+      {quota_spend_source: "heartbeat"}, {quota_spend_source: "unexpected"},
     ]) {
       assert.throws(() => heartbeatWorkRequalification(original, {...event.details, ...changed},
-        identity, "open", false), /binding|guard|conflicting/);
+        identity, "open", false), /binding|guard|conflicting|spend source/);
     }
   } finally {await rm(root, {recursive: true, force: true});}
 });

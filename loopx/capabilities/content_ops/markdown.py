@@ -47,7 +47,8 @@ def render_content_ops_exploration_plan_markdown(payload: dict[str, Any]) -> str
                 )
     validation = payload.get("validation")
     if isinstance(validation, Mapping):
-        errors = validation.get("errors") if isinstance(validation.get("errors"), list) else []
+        raw_errors = validation.get("errors")
+        errors = raw_errors if isinstance(raw_errors, list) else []
         lines.extend(
             [
                 "",
@@ -58,6 +59,8 @@ def render_content_ops_exploration_plan_markdown(payload: dict[str, Any]) -> str
                 f"- error_count: `{len(errors)}`",
             ]
         )
+    if payload.get("error"):
+        lines.extend(["", "## Error", "", str(payload.get("error"))])
     return "\n".join(lines) + "\n"
 
 
@@ -162,11 +165,8 @@ def render_content_ops_packet_aggregation_markdown(payload: dict[str, Any]) -> s
             )
     validation = payload.get("validation")
     if isinstance(validation, Mapping):
-        errors = (
-            validation.get("errors")
-            if isinstance(validation.get("errors"), list)
-            else []
-        )
+        raw_errors = validation.get("errors")
+        errors = raw_errors if isinstance(raw_errors, list) else []
         lines.extend(
             [
                 "",
@@ -259,11 +259,8 @@ def render_content_ops_walkthrough_artifact_markdown(payload: dict[str, Any]) ->
             )
     validation = payload.get("validation")
     if isinstance(validation, Mapping):
-        errors = (
-            validation.get("errors")
-            if isinstance(validation.get("errors"), list)
-            else []
-        )
+        raw_errors = validation.get("errors")
+        errors = raw_errors if isinstance(raw_errors, list) else []
         lines.extend(
             [
                 "",
@@ -443,7 +440,8 @@ def render_content_ops_preview_markdown(payload: dict[str, Any]) -> str:
             )
     validation = payload.get("validation")
     if isinstance(validation, Mapping):
-        errors = validation.get("errors") if isinstance(validation.get("errors"), list) else []
+        raw_errors = validation.get("errors")
+        errors = raw_errors if isinstance(raw_errors, list) else []
         lines.extend(
             [
                 "",
@@ -453,4 +451,6 @@ def render_content_ops_preview_markdown(payload: dict[str, Any]) -> str:
                 f"- error_count: `{len(errors)}`",
             ]
         )
+    if payload.get("error"):
+        lines.extend(["", "## Error", "", str(payload.get("error"))])
     return "\n".join(lines) + "\n"

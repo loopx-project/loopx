@@ -383,8 +383,7 @@ def session_usage_baseline(
         if last_usage is None or last_usage["source_snapshot_id"] != usage["source_snapshot_id"]:
             snapshot_first_booked_at = row.get("generated_at")
             binding_recorded = False
-        # Unknown or malformed binding metadata is not evidence of an old
-        # producer either; any marker keeps this snapshot on the strict path.
+                #  any marker keeps this snapshot on the strict path.
         binding_recorded = binding_recorded or "codex_usage_binding" in row
         last_usage = usage
     if last_usage is None:

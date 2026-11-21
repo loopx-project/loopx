@@ -64,7 +64,7 @@ read current source state
 
 Showcase 的价值不是给出可复制的 prompt，而是证明这个 transaction shape 能在多轮之后
 仍保留正确的 identity、authority、evidence 和 recovery。仓库中的
-`docs/showcases/showcase-catalog.json` 只是公开证据目录，不是隐藏的工作流模板。
+`docs/showcases/showcase-catalog.json` 只是公开证据目录。
 
 Auto ML 还说明同一轮可以消费两个可选 read model：Explore Graph 提供与当前候选相关的
 正负证据 lineage，Explore Harness 提供基于 todo、scope 和资源容量的 analysis-only
@@ -124,12 +124,10 @@ LoopX packet 则让当前 Turn 不依赖模型记住完整项目过程。Codex A
 Packet 有三个明确的非目标：
 
 - 它不是 canonical state，不能被当作长期写入源；
-- 它不是 authority，显示某项工作不代表可以越过 gate 或 workspace guard；
-- 它不是历史摘要，长 rationale 应留在 evidence artifact，只通过紧凑 ref 进入本轮。
 
 ## 一次 Codex App 交互的真实路径
 
-下面不是概念伪代码，而是公开 CLI 的真实调用路径。任务文本、goal id 和 agent id 都使用占位符，读者可以在自己的测试仓库中复现。
+下面是公开 CLI 的真实调用路径。任务文本、goal id 和 agent id 都使用占位符，读者可以在自己的测试仓库中复现。
 
 ### 0. 用户只表达目标
 
@@ -326,7 +324,7 @@ loopx quota spend-slot \
   --agent-id <agent-id>
 ```
 
-Spend 是“这轮已形成有效控制面推进”的账，不是“模型被唤醒过”的计数器。dry-run、read-only poll、monitor quiet skip、scheduler ACK 都不应该先花配额。
+Spend 是“这轮已形成有效控制面推进”的账。dry-run、read-only poll、monitor quiet skip、scheduler ACK 都不应该先花配额。
 
 ## 为什么 App automation 不是主循环本身
 
@@ -506,7 +504,7 @@ return {
 
 #### 3. Heartbeat prompt 是 host contract 编译器
 
-`loopx/heartbeat_prompt.py::build_heartbeat_prompt` 不是 scheduler。它把 goal、peer identity 和可用能力编译成 host 可执行的 prompt：
+它把 goal、peer identity 和可用能力编译成 host 可执行的 prompt：
 
 ```python
 if not (full or compact or brief or thin):
@@ -526,7 +524,7 @@ quota_spend_command = render_quota_spend_command(...)
 refresh_state_command = render_refresh_state_command(...)
 ```
 
-核心不是字符串拼接，而是身份约束：多 peer goal 缺少 `agent_id` 时直接失败。否则 claim、workspace guard、quota 和 spend 都无法归因。
+核心是身份约束：多 peer goal 缺少 `agent_id` 时直接失败。否则 claim、workspace guard、quota 和 spend 都无法归因。
 
 #### 4. Quota 把很多局部判断收敛成一个执行决定
 
@@ -582,11 +580,11 @@ effective_action = _effective_action(...)
 
 ### “LoopX 是另一个 agent runtime”
 
-不是。LoopX 可以向 host 提供 prompt、调度建议和状态协议，但不替 Codex App 或 CLI 执行模型 turn。
+LoopX 可以向 host 提供 prompt、调度建议和状态协议，但不替 Codex App 或 CLI 执行模型 turn。
 
 ### “Heartbeat 每次触发都必须做事”
 
-不是。`interaction_contract` 可以要求等待、quiet no-op、monitor poll 或 self-repair。是否执行由当前状态决定。
+`interaction_contract` 可以要求等待、quiet no-op、monitor poll 或 self-repair。是否执行由当前状态决定。
 
 ### “P0 被用户 gate 卡住，整个 goal 就停止”
 
@@ -594,7 +592,7 @@ effective_action = _effective_action(...)
 
 ### “Supervisor 就是主 agent”
 
-不是。当前 peer 模型没有 primary/side 的运行时层级。可选 supervisor 是 equal peer
+当前 peer 模型没有 primary/side 的运行时层级。可选 supervisor 是 equal peer
 上的观察和 proposal overlay；第 9 讲用它演示规则设计，第 11 讲说明它与其他扩展能力
 如何复用同一个 kernel。
 

@@ -19,7 +19,7 @@ def test_status_owner_imports_canonically_and_has_no_legacy_module():
     code = """
 import importlib.util
 from loopx.chat.status_api import ChatStatusRequestMixin, goal_read_runtime_root
-from loopx.chat.todo_detail import goal_read_runtime_root as todo_runtime_root
+from loopx.chat.todo_source import goal_read_runtime_root as todo_runtime_root
 from loopx.chat_server import ChatRequestHandler
 
 assert issubclass(ChatRequestHandler, ChatStatusRequestMixin)
@@ -44,7 +44,7 @@ assert importlib.util.find_spec('loopx.chat_status_api') is None
 def test_registry_patch_reaches_already_imported_todo_consumer(
     monkeypatch, tmp_path, source_bound, controller_root, expected,
 ):
-    from loopx.chat.todo_detail import goal_read_runtime_root
+    from loopx.chat.todo_source import goal_read_runtime_root
 
     registry_path = tmp_path / "registry.json"
     calls = []

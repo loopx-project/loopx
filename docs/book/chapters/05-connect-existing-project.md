@@ -5,7 +5,7 @@
 
 沿用[贯穿任务](00-reading-guide.md#running-example)：A 实现兼容的 JSON 输出 T1，B 补文档 T2，
 M1 观察 CI，G1 保留维护者的 schema／发布决定，T3 在条件满足后交付。
-这是合成教学任务，不是已经运行成功的项目记录。命令使用你的真实项目与当前 packet；
+这是合成教学任务。命令使用你的真实项目与当前 packet；
 T1、M1、C1 等代号不是 CLI id，也不能当作 API payload。
 
 !!! tip "快速阅读路线"
@@ -16,7 +16,7 @@ T1、M1、C1 等代号不是 CLI id，也不能当作 API payload。
 
 ## 先分清三个完成点 {#three-completions}
 
-安装完成、接入完成、工作完成不是同一句话。安装回答 CLI 与所需 runtime 是否可用；
+安装回答 CLI 与所需 runtime 是否可用；
 接入回答工作归属、状态位置与运行路径是否明确；交付回答实际产物是否满足当前验收。
 接入成功可以暂时没有执行中的 Turn；一轮成功也可以仍在等待外部检查或批准。
 
@@ -30,14 +30,14 @@ T1、M1、C1 等代号不是 CLI id，也不能当作 API payload。
 `.loopx/registry.json` 与 `.loopx/goals/<goal-id>/ACTIVE_GOAL_STATE.md`）；`loopx status` 能显示
 active state 与当前 frontier；再次连接按精确 `goal_id` 复用已有 Goal 而不是覆盖；新接入的执行者使用
 fresh `agent_id`，除非用户明确授权 takeover；`.loopx/` 与 `.loopx/goals/` 不进入 Git。这些本地状态
-是控制面状态，不是项目源码。
+是控制面状态。
 
-因此，本章不是把所有命令连成一段可以盲目粘贴的脚本。读取、预览和执行分段进行，
+读取、预览和执行分段进行，
 每次只在前一步给出足够依据后继续。出现拒绝时先理解所保护的条件，不为让教程跑通而绕过检查。
 
 ## 一、准备：确认项目，保护已有状态 {#prepare-project}
 
-从你准备管理的 Git 项目根目录开始，不是从 LoopX 的源码目录开始。在目标仓库根目录打开你正在使用的 Agent 开发工具，把下面提示词中的目标和 Host 改成自己的
+从你准备管理的 Git 项目根目录开始。在目标仓库根目录打开你正在使用的 Agent 开发工具，把下面提示词中的目标和 Host 改成自己的
 情况后直接发送：
 
 ```text
@@ -74,7 +74,7 @@ fresh `agent_id`，除非用户明确授权 takeover；`.loopx/` 与 `.loopx/goa
     明确写“尚未接入完成”。
 ```
 
-这份提示词不是把控制权交给 Agent。它把可执行工作委托给 Agent，同时把以下决定留给你：
+它把可执行工作委托给 Agent，同时把以下决定留给你：
 
 - 多个 Goal 中选择哪一个；
 - 是否 takeover 已有 Agent identity；
@@ -142,7 +142,7 @@ git ls-files .loopx .loopx/goals .local
 
 项目可能已经包含 `.loopx/registry.json` 或 `.loopx/goals/`。先识别已有 Goal、在途工作和状态位置，
 不要复制其他项目的 registry，也不要为了得到一个空白起点覆盖旧状态。
-下面是常见布局示意，不是所有 authority、租约和日志的完整物理位置：
+下面是常见布局示意：
 
 ```text
 your-project/
@@ -181,7 +181,6 @@ git check-ignore -v .loopx/goals/example/ACTIVE_GOAL_STATE.md
 默认情况下已跟踪文件不受忽略规则支配；`--no-index` 用于不考虑 index 而诊断规则，
 不是“强制忽略”，也不是专门处理尚不存在的文件。
 `ls-files` 默认显示当前 index 中的路径；有输出说明路径被跟踪或暂存，**不单独证明已经推送**。
-没有输出也不证明旧提交或远端从未包含敏感材料。
 依据见 [Git check-ignore](https://git-scm.com/docs/git-check-ignore) 与
 [Git ls-files](https://git-scm.com/docs/git-ls-files)。
 
@@ -215,7 +214,7 @@ loopx doctor
 已有 pip、pipx 或 archive 安装则按[附录升级说明](appendix-reference.md)确认安装 owner，
 不要在不清楚来源时叠加另一个安装。
 
-`doctor` 比 `command -v loopx` 多回答依赖、安装和集成状态，但不是所有 Host 路径都已验证的证明。
+`doctor` 比 `command -v loopx` 多回答依赖、安装和集成状态。
 需要验证实际 Effect runtime 与 journal checkpoint 路径时再使用：
 
 ```bash
@@ -245,9 +244,9 @@ loopx registry
 loopx status
 ```
 
-对于已有项目，应先读取当前连接，按现有路径续接，而不是为了重试一项任务重复连接。
+对于已有项目，应先读取当前连接，按现有路径续接。
 `connect` / `bootstrap` 登记 Goal 并写 active state；首连不会替调用方生成一套 onboarding Todo。
-没有可执行工作时，下一步是确认实际任务与工作边界，不是凭空增加配额。
+没有可执行工作时，下一步是确认实际任务与工作边界。
 
 ### Guided packet 是计划，不是执行回执
 
@@ -258,7 +257,7 @@ loopx start-goal --guided --project . \
   --goal-text "增加兼容的 JSON 输出，保留默认文本输出；验证和文档完成后交付，不自动发布"
 ```
 
-返回的是 guided transaction packet。预览成功不证明 Todo 已写、Agent 已注册或 Host 已启动。
+返回的是 guided transaction packet。
 读取 packet 当前要求补齐的选择，按照其提供的精确命令继续；不要从旧对话恢复一条已过时的执行指令。
 
 存在多个 Goal 时，在 `goal_selection_gate` 的 choices 中选择精确 `goal_id`；目标文本相似不能作为
@@ -281,7 +280,7 @@ true，`global_sync.ok` 为 true，且 `registration_readback.verified` 为 true
 
 ### Host 选择不是能力授予
 
-已知实际 Host 时显式传入；以下二选一，不是依次激活两个 Host：
+已知实际 Host 时显式传入；以下二选一：
 
 ```bash
 # Codex App
@@ -299,7 +298,6 @@ loopx start-goal --guided --project . \
 不要用一个熟悉的名称代替探测。具体激活与读回分别见 [Codex App](06-codex-app.md) 和
 [Codex CLI](07-codex-cli.md)，其他适配器见 [Runtime Connector Catalog](/loopx/docs/integrations/runtime-connector-catalog/)。
 类型注册、当前可启动、进程内自主继续、进程退出后可再次唤醒，是不同条件。
-一个参数被接受不证明这些条件都已成立。
 
 ## 四、接入验收：现在可以进入哪一步？ {#connection-acceptance}
 
@@ -314,8 +312,7 @@ git status --short
 git ls-files .loopx .loopx/goals .local
 ```
 
-它们不请求完成 Todo 或扣减交付配额，但“读取”不承诺整个进程完全无 IO：
-可能涉及 runtime 启动等支持动作。若环境有严格隔离要求，应按所用入口、provider 和设置单独确认。
+它们不请求完成 Todo 或扣减交付配额。若环境有严格隔离要求，应按所用入口、provider 和设置单独确认。
 不要把所有名称带有“检查”的命令归入同一种无副作用类别。
 
 准备进入本轮时，使用当前 Host 规定的准入路径，例如：
@@ -327,7 +324,7 @@ loopx quota should-run --goal-id <goal-id> --agent-id <agent-id>
 读取完整 interaction contract、selected Todo、权限、workspace 与后续指令，不能只取一个
 `should_run` 布尔值。尤其 `--codex-app` 的相关准入路径可以创建 heartbeat receipt；
 它与单纯列举现状不同，不应在诊断脚本中无限重复。
-`refresh-state`、获取/续租、结算和 scheduler ACK 也都是各自有条件的操作，不是通用查询。
+`refresh-state`、获取/续租、结算和 scheduler ACK 也都是各自有条件的操作。
 
 | 四问 | 接入验收需要的答案 |
 | --- | --- |
@@ -341,11 +338,11 @@ loopx quota should-run --goal-id <goal-id> --agent-id <agent-id>
 > 项目连接与身份已读回，私有状态未进入当前 index。Host 激活尚未确认，所以只完成接入准备，
 > 还没有第一次执行。下一步按 CLI 章节中的当前 activation packet 启动并读回；不会宣称 T1 已交付。
 
-这是一份本地操作报告的**教学示意**，不是产品返回类型。对外分享时去掉私有路径、目标内容和凭据。
+这是一份本地操作报告的**教学示意**。对外分享时去掉私有路径、目标内容和凭据。
 
 ## 五、从接入走到第一份交付 {#first-delivery}
 
-完成 Host 章节后回到这里。目标不是让界面显示“正在运行”，而是完成一个足以独立验证的小工作段。
+完成 Host 章节后回到这里。目标是完成一个足以独立验证的小工作段。
 不要把本节的推演称为真实 Host 的端到端测试；实际验收必须来自自己的运行结果。
 
 ### 第一幕：让 A 做 T1，而不是让它拥有整个发布流程
@@ -381,8 +378,8 @@ G1 没有批准发布时，T3 不能因 CI 通过或 T1 已结算而获得权限
 可以在自身约束满足后继续。用户需要回答问题与 Agent 可以继续另一项工作可以同时成立。
 具体判断见[观察与调度](04b-budget-and-admission.md)和[工作图](work-graph-and-authority.md)。
 
-无变化的观察不应冒充交付；它仍可能有计算和网络成本。没有收到通知也不是外部世界没有变化的证据。
-若 Host 已退出且没有可用唤醒机制，应报告运行缺口，而不是把 quiet 状态解释为健康等待。
+无变化的观察不应冒充交付；它仍可能有计算和网络成本。
+若 Host 已退出且没有可用唤醒机制，应报告运行缺口。
 
 ### 第四幕：条件改变，更新受影响的判断
 
@@ -391,7 +388,7 @@ G1 没有批准发布时，T3 不能因 CI 通过或 T1 已结算而获得权限
 对象、scope 与条件，不能只看“approved”这个词。
 
 若维护者同时修改了目标或验收，应走已有 planning/replan 和决定入口，将变化与当前工作关联。
-书中的 C1/C2 是解释适用性的例子，不是在声明已有一个统一的 Goal intent-version schema。
+书中的 C1/C2 是解释适用性的例子。
 修改目标的权限不能由 Agent 为了凑齐“完成”而自行产生。
 
 ### 第五幕：把结果返回给需要验收的人
@@ -403,7 +400,7 @@ T3 的当前条件均有证据后，重新判断下一步。交付一个可审�
 以及接下来由谁决定或行动。链接到了产物、工作内部已结算、收件人实际得到结果、Goal 已接受，
 这些事实分别核对，不能把其中任一项自动提升为全部完成。
 
-下面是本地交付报告的示意，而不是额外持久化格式：
+下面是本地交付报告的示意：
 
 > JSON 输出与文档已在 C2 完成；列出的兼容检查及 C2 的 CI 支持当前实现结论。
 > 已有工作写回与结算可追溯。维护者的发布决定仍未完成，因此返回待审阅产物，不执行发布。
@@ -414,7 +411,7 @@ T3 的当前条件均有证据后，重新判断下一步。交付一个可审�
 
 ## 六、让 Agent 帮你接入，但不给它猜测权限 {#delegate-onboarding}
 
-可以把以下提示交给已在项目里工作的 Agent。它是委托示例，不是机器强制执行的新协议。
+可以把以下提示交给已在项目里工作的 Agent。它是委托示例。
 已有明确授权的普通操作可按其范围完成，不要求每个命令都再次打断用户；身份接管、权限扩大、
 外部发布和破坏性操作不能从模糊目标中推断出来。
 

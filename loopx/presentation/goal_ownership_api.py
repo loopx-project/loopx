@@ -96,7 +96,7 @@ class GoalOwnershipRequestMixin:
                 plan_sha256=digest,
                 execute=execute,
             )
-            # Project facts, not a second decision rule; the CLI and App use the
+            # Project facts; the CLI and App use the
             # same plan, backup, source witness, CAS and original receipt owner.
             payload = {
                 key: result[key]

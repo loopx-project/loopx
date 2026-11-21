@@ -91,7 +91,7 @@ default surface should read from the compressed fields first.
   debugging needs exact handles.
 - `claim`, `quota`, `scope`, and `handoff` should appear as detail chips,
   tooltips, or diagnostic rows unless they require user action.
-- A user gate is not a generic "owner gate"; it must show the concrete decision
+- A user gate must show the concrete decision
   and the consequence of approving, rejecting, or deferring.
 - Evidence should be compact by default and link to audit details. Raw logs,
   private traces, local paths, and sensitive material must not appear in public

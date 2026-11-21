@@ -6,13 +6,15 @@ from pathlib import Path
 import pytest
 
 from canonical_authority_fixture import initialize_canonical_source_fixture
-from loopx.contract import check_contract
+from loopx.cli_runtime import report_json_text
+from loopx.contract import check_contract, display_report_value
 from loopx.control_plane.goals.contract_health import (
     contract_error_diagnostic,
     contract_error_views,
     project_contract_health_for_goal,
 )
 from loopx.control_plane.quota.decision_summary import goal_status_health_ok
+from loopx.history import RunHistoryAudit
 from loopx.control_plane.quota.should_run import (
     _apply_missing_state_health_guidance,
 )
@@ -225,6 +227,98 @@ def test_registry_goal_problem_keeps_its_goal_owner(tmp_path: Path) -> None:
     assert diagnostic["goal_id"] == GOAL_A_LONG
     status = {"contract": contract, "global_registry": {"ok": True}}
     assert goal_status_health_ok(status, goal_id=GOAL_A, fallback=False) is True
+
+
+@pytest.mark.parametrize("goal_id", ["goal-byte\udcff", "git-bytes:literal"])
+def test_selected_goal_health_matches_raw_id_before_display_projection(
+    tmp_path: Path, goal_id: str,
+) -> None:
+    """A display label must not remove the scope that selected the error."""
+
+    registry_path = tmp_path / ".loopx" / "registry.json"
+    registry_path.parent.mkdir()
+    registry_path.write_text(
+        json.dumps({"goals": [{"id": goal_id}]}), encoding="utf-8"
+    )
+    runtime_root = tmp_path / "runtime"
+    audit = RunHistoryAudit(
+        registry_path=registry_path.resolve(),
+        runtime_root=runtime_root.resolve(),
+        goal_id=goal_id,
+        activation_state_filter=None,
+        include_runtime_goals=True,
+        goal_count=0,
+        run_count=0,
+        goals=(),
+    )
+
+    class Snapshot:
+        def read(self, **_kwargs: object) -> dict[str, list[object]]:
+            return {"todo_contract_rows": []}
+
+    contract = check_contract(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        scan_roots=[],
+        limit=5,
+        goal_id_filter=goal_id,
+        include_public_boundary_scan=False,
+        history_audit=audit,
+        todo_snapshot=Snapshot(),  # type: ignore[arg-type]
+    )
+
+    assert contract["ok"] is False
+    assert contract["goal_errors"][goal_id]
+    status = {"contract": contract, "global_registry": {"ok": True}}
+    assert (
+        goal_status_health_ok(status, goal_id=goal_id, fallback=True)
+        is False
+    )
+
+    projected = display_report_value(contract)
+    report = report_json_text(projected)
+    decoded = json.loads(report.encode("utf-8").decode("utf-8"))
+    # Identity keeps its own spelling; only the JSON writer escapes the code
+    # points a UTF-8 stream cannot carry. A display label would rename it.
+    assert list(decoded["goal_errors"]) == [goal_id]
+    assert decoded["error_diagnostics"][0]["goal_id"] == goal_id
+    assert decoded["ok"] is False
+
+
+def test_two_goal_identities_survive_the_report_boundary() -> None:
+    """Display shorthand must not fold two Goals into one report key."""
+
+    undecodable_id = "goal-byte\udcff"
+    lookalike_id = "goal-bytegit-bytes:" + repr(b"\xff")
+    views = contract_error_views(
+        [
+            contract_error_diagnostic(
+                code="goal_error",
+                message=f"{goal_id}: malformed state",
+                goal_id=goal_id,
+            )
+            for goal_id in (undecodable_id, lookalike_id)
+        ]
+    )
+    contract = {**views, "ok": False}
+
+    assert set(contract["goal_errors"]) == {undecodable_id, lookalike_id}
+    projected = display_report_value(contract)
+    report = report_json_text(projected)
+    decoded = json.loads(report.encode("utf-8").decode("utf-8"))
+
+    # The producer's two identities stay two keys a consumer can tell apart.
+    assert set(decoded["goal_errors"]) == {undecodable_id, lookalike_id}
+    assert [item["goal_id"] for item in decoded["error_diagnostics"]] == [
+        undecodable_id,
+        lookalike_id,
+    ]
+    # The display sentence may spell both the same way; the identity fields
+    # above are what must stay apart.
+    for goal_id in (undecodable_id, lookalike_id):
+        selected = project_contract_health_for_goal(decoded, goal_id=goal_id)
+        assert selected["ok"] is False
+        assert selected["goal_errors"][goal_id]
 
 
 def test_selected_goal_health_keeps_global_errors_fail_closed() -> None:

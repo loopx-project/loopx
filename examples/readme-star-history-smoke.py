@@ -101,6 +101,7 @@ def main() -> int:
     readme_sections = {
         ROOT / "README.md": ("## Current Status", "## Star History", "## License"),
         ROOT / "README.zh-CN.md": ("## 当前状态", "## Star 趋势", "## License"),
+        ROOT / "README.ja.md": ("## 現在のステータス", "## Star の推移", "## ライセンス"),
     }
     for readme, sections in readme_sections.items():
         text = readme.read_text(encoding="utf-8")

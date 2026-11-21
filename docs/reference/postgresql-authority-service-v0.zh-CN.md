@@ -42,6 +42,28 @@ head 和 receipt 历史。期望 identity 错误时不会写入。如果 Postgre
 `COMMIT` 后丢失响应，结果为 `ambiguous`；服务必须先重新读取 metadata 再重试，
 不能猜测轮换是否已经生效。
 
+## 历史保留与合成种子
+
+PostgreSQL schema v1 在游标 1、65、129 等位置追加检查点，其余新提交保留增量。
+历史扫描从覆盖请求游标的检查点或保留的 v0 完整投影开始，校验游标连续性和投影
+摘要。事件与回执继续绑定原提交。
+
+由管理员执行 `loopx postgres setup --execute`。从 v0 升级时传入数据库现有的
+`--store-identity`。安装保留完整投影历史，将原 journal 的表级 `SELECT` 和
+`INSERT` 授权延续到检查点，继承这些授权的组成员也可继续使用。同一数据库事务完成
+显式 `--runtime-role` 配置与格式切换。使用自定义列级授权的部署应显式配置运行角色，
+已建成的 v1 库也可用原 identity 和 `--runtime-role` 配置角色。升级前验证备份并停止
+旧调用方，在隔离恢复库以受限角色读取历史并验证新检查点追加后再决定是否启用。
+回退到 v0 需要使用经验证的 v0 备份。
+
+`loopx postgres local-to-pg-seed --goal-id <synthetic-goal>` 从合成 File 或 SQLite
+状态预览脱敏种子，预览期间不连接目标。可通过 `--output` 创建私有文件或复用内容
+完全相同的普通文件。内容不同或路径是符号链接时，命令在连接目标前失败。使用
+`--execute` 时通过 `LOOPX_POSTGRES_URL` 传入已配置的受限连接，可选
+`--store-identity` 固定目标库身份。种子写入空目标 Goal，原样重试（含同一
+`--output`）可读回原提交回执。种子从游标 1 开始，仅用于合成数据。完整历史的
+导出、核验或恢复使用 journal 归档。
+
 ## 验证
 
 公开 synthetic fixture 是

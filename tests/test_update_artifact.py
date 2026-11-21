@@ -26,6 +26,12 @@ import json,runpy,sys
 module=runpy.run_path(sys.argv[1])
 value=json.load(sys.stdin)
 assert module['validate_manifest'](value)==value
+profile = module['PUBLIC_DEFAULT_CONTRACT']
+assert module['validate_manifest']({**value, 'default_contract':profile})['default_contract']==profile
+for invalid in [None, {}, {'surface':'complete_turn','schema_version':'loopx_turn_envelope_v1'}, {'surface':'unknown'}]:
+    try:module['validate_manifest']({**value,'default_contract':invalid})
+    except ValueError:pass
+    else:raise AssertionError('unqualified contract accepted by bootstrap')
 for invalid in ['A'*64,'a'*63,'a'*65,'sha256:'+('a'*64),'a'*63+'g']:
     try:module['validate_manifest']({**value,'sha256':invalid})
     except ValueError:pass
@@ -89,6 +95,45 @@ def server(body: bytes):
 def manifest(body: bytes, url: str):
     return {"schema_version": update.RUNTIME_ARTIFACT_SCHEMA_VERSION, "source_revision": "a" * 40,
         "package_version": "1.2.3", "channel": "main", "size": len(body), "sha256": hashlib.sha256(body).hexdigest(), "urls": [url]}
+
+
+@pytest.mark.parametrize("profile", [None, {}, {"surface": "future"},
+    {"surface": "complete_turn", "schema_version": "loopx_turn_envelope_v1",
+     "interaction_schema_version": "loopx_interaction_contract_v0"}])
+def test_unqualified_default_stops_before_download_or_activation(monkeypatch, profile):
+    descriptor = {**manifest(b"runtime", "https://publisher.invalid/runtime"), "default_contract": profile}
+    calls = []
+    monkeypatch.setattr(update, "download_artifact", lambda *_a, **_kw: calls.append("download"))
+    monkeypatch.setattr(update, "run_installer", lambda *_a, **_kw: calls.append("activate"))
+    with pytest.raises(ValueError, match="unqualified for public adoption"):
+        update.install_artifact(descriptor, env={}, timeout_seconds=10)
+    assert calls == []
+
+
+def test_qualified_scope_and_historical_metadata_remain_readable():
+    historical = manifest(b"runtime", "https://publisher.invalid/runtime")
+    assert update.validate_manifest(historical) == historical
+    current = {**historical, "default_contract": dict(update.PUBLIC_DEFAULT_CONTRACT)}
+    assert update.validate_manifest(current) == current
+
+
+def test_archive_contract_mismatch_stops_before_installer(tmp_path, monkeypatch):
+    archive = tmp_path / "runtime.tar.gz"
+    identity = json.dumps({"source_revision": "a" * 40, "package_version": "1.2.3",
+                           "default_contract": {"surface": "complete_turn"}}).encode()
+    with tarfile.open(archive, "w:gz") as target:
+        for name, content in [("runtime-artifact.json", identity), ("scripts/install-local.sh", b"exit 99\n")]:
+            member = tarfile.TarInfo(name)
+            member.size = len(content)
+            target.addfile(member, io.BytesIO(content))
+    descriptor = {**manifest(archive.read_bytes(), "https://publisher.invalid/runtime"),
+                  "default_contract": dict(update.PUBLIC_DEFAULT_CONTRACT)}
+    monkeypatch.setattr(update, "download_artifact", lambda *_a, **_kw: archive)
+    calls = []
+    monkeypatch.setattr(update, "run_installer", lambda *_a, **_kw: calls.append("activate"))
+    with pytest.raises(ValueError, match="default contract disagrees"):
+        update.install_artifact(descriptor, env={}, timeout_seconds=10)
+    assert calls == []
 
 
 def test_redirects_cannot_weaken_source_tls():

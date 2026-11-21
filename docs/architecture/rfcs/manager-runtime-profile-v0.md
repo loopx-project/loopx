@@ -53,7 +53,17 @@ These defaults do not change ordinary Goal Chat models or grant other Agents too
   sandbox. Trusted-owner remains limited to the existing verified owner audience. Governed
   Task execution, workspace filesystem grants and native managed steward identity preparation
   retain their existing Codex owner; selecting Antigravity does not widen those contracts.
-  Argon tiers must be offered by the local account and match the requested reasoning effort.
+  Registered Argon and Carbon tiers must be offered by the local account and match the
+  `reasoning_effort` (`low`, `medium`, or `high`). Model discovery reads the same
+  account metadata without opening a cascade; an unavailable catalog is an explicit error,
+  not a static list of supposedly available models. Antigravity's default remains Argon;
+  operators who want another offered tier (such as Carbon `gemini-4-carbon-high`) for an
+  endpoint on a specific machine configure it explicitly via top-level `executor_model` or
+  optional per-endpoint `endpoint_models` entries on `steward_executor_machine_defaults_v1`.
+  Ordered `eligible_endpoints` and bidirectional flexible failover between `codex` and
+  `antigravity` route exhausted Codex stewards onto the configured fallback endpoint (and back
+  to Codex once restored) with model-isolated reasoning effort and native steward monitor/report
+  parity on the qualified fallback Session.
   A missing original cascade fails resume without silently starting a replacement. Stop waits
   for the native cascade to become idle; timeout or partial output is not successful completion.
   During execution, native `IDLE` alone is not completion: it can appear between input, tool
@@ -131,6 +141,32 @@ owner-private bindings reuse Core's fresh audience/resource verification before 
 reusing a host; no channel-name inference, persisted proof or manager-specific ACL replaces it.
 A revoked binding or changed App/owner stops admission.
 
+Saving machine defaults does not move an existing steward to another executor endpoint.
+The original private conversation's model menu offers **Apply to this conversation** for
+the saved preferred/pinned executor, model and reasoning effort. Its preview opens no
+native thread. Apply requires an idle Session with no active or reserved queued work,
+registered worker, parked native work or answer-review route. It prepares the selected
+host without dispatching a model Turn, after closing the old idle transport and capturing
+the complete visible history. When only the Codex model or reasoning effort changes
+and the current working checkpoint is available, apply reuses the model-resume path
+to verify and continue the same native thread without reinjecting history. If that
+checkpoint fails verification, apply stops before closing the original transport.
+An executor migration restores the visible history on the new native thread.
+Only provider-observed model and effort can be committed to the same Session.
+The source binding remains unchanged;
+Core verifies its live owner, source and resource grant again, and subsequent inputs use
+the explicitly accepted Session allocation with retained original native provenance.
+
+The Session store checks the original identity, selected binding, saved configuration,
+queue and captured transcript again under its publication locks. A changed source,
+revoked owner, new queued input, returned message or unconfirmed host setting rejects
+publication and closes the unpublished transport. Canonical history and queued work
+remain available for recovery. After a lost response, read the actual Session first:
+an already applied allocation needs no second preparation. The menu displays that actual
+executor/model readback; saving defaults, preparing a host, executing a model Turn and
+installing the changed service remain distinct observations. Other conversations,
+ordinary model settings and flexible quota recovery retain their existing owners.
+
 This slice implements only the private-owner M1 journey in
 [capable-manager-semantic-handoff-v0](capable-manager-semantic-handoff-v0.md), targeting A1–A3/A12.
 It does not implement the M2 collaboration request, the M3 outbox, or treat manager Session fields
@@ -156,8 +192,9 @@ delivery. Follow [roadmap](loopx-overall-roadmap-v0.md) R2 for those remaining q
 4. A profile change rotates the upstream thread while preserving the LoopX Session and visible
    history.
 5. An unrelated machine-configuration change does not rotate the thread.
-6. A non-Codex endpoint fails closed for `trusted_owner` and recommends selecting Codex or
-   restoring `restricted`.
+6. Codex and Antigravity support the verified private owner's `trusted_owner` profile while
+   retaining their native permission and approval boundaries. An unsupported endpoint fails
+   closed and recommends a supported executor or restoring `restricted`.
 7. Desktop and mobile Dashboard show the effective profile; invalid configuration shows its
    fallback state.
 8. An external audience without an existing scoped grant remains `read-only` and exposes the
