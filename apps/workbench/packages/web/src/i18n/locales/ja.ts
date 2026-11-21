@@ -1177,6 +1177,8 @@ export const ja: Messages = {
   "agentLogin.cancel": "ログインをキャンセル",
   "agentLogin.waitingBadge": "コード入力待ち",
   "agentLogin.keepHint": "折りたたんだりページを離れてもログインは10分間保持されます。",
+  'agentLogin.required': (name: string) => `${name} にログインしていません`,
+  'agentLogin.go': 'ログイン',
   'agentLogin.title': (name: string) => `${name} にログイン`,
 
   'agentAccount.needsLogin': 'ログインが必要',

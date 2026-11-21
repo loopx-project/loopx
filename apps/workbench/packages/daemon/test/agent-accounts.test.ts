@@ -287,3 +287,38 @@ test('agy account API treats empty optional configuration as absent without chan
     }
   } finally { writeFileSync(settings, original[0]); writeFileSync(mcp, original[1]); }
 });
+
+test('signed-out model catalog offers typed login recovery and publishes models for the same account', async () => {
+  const home = join(root, 'recovery-home');
+  const config = join(home, '.gemini', 'antigravity-cli');
+  mkdirSync(config, { recursive: true });
+  const id = 'agy-recovery';
+  const command = [process.execPath, fileURLToPath(new URL('./fixtures/fake-agy.mjs', import.meta.url))];
+  await registry.add({ id, adapter: 'agy', command, env: { HOME: home, LOOCHAT_AGY_HOME: config, FAKE_AGY_LOGIN_REQUIRED: '1' } });
+  const denied = await api(`/api/agents/${id}/models`);
+  assert.equal(denied.status, 409, 'agent login must not invalidate the Workbench token');
+  assert.deepEqual(await denied.json(), { error: 'Antigravity is not signed in', code: 'agent_login_required' });
+  const events: any[] = [];
+  const off = manager.subscribe(event => { if (event.type === 'agent.modelsChanged') events.push(event); });
+  try {
+    const login = await (await api(`/api/agents/${id}/login`, 'POST')).json() as any;
+    const sessionPath = `/api/agents/${id}/login/${login.id}`;
+    await waitFor(async () => (await api(sessionPath)).json() as any, state => state.status === 'waiting');
+    await api(sessionPath, 'POST', { code: 'test-agy-code' });
+    await waitFor(() => events, list => list.some(event => event.data.agent === id && event.data.models.length > 0));
+    const response = await api(`/api/agents/${id}/models`);
+    assert.equal(response.status, 200);
+    assert.ok((await response.json() as any[]).some(model => model.id === 'fast-low'));
+    assert.equal(registry.get(id).account, 'agy-new@example.com');
+  } finally { off(); }
+});
+
+test('non-authentication model failures retain their error meaning', async () => {
+  const command = [process.execPath, fileURLToPath(new URL('./fixtures/fake-agy.mjs', import.meta.url))];
+  await registry.add({ id: 'agy-network-error', adapter: 'agy', command, env: { FAKE_AGY_MODELS_ERROR: 'upstream timed out; please check your connection' } });
+  const response = await api('/api/agents/agy-network-error/models');
+  assert.equal(response.status, 500);
+  const body = await response.json() as any;
+  assert.equal(body.code, undefined);
+  assert.match(body.error, /upstream timed out/);
+});

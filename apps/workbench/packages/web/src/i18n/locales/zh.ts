@@ -1179,6 +1179,8 @@ export const zh = {
   "agentLogin.cancel": "取消登录",
   "agentLogin.waitingBadge": "等待验证码",
   "agentLogin.keepHint": "收起或离开页面不会取消登录，10 分钟内可回来继续输入。",
+  'agentLogin.required': (name: string) => `${name} 尚未登录`,
+  'agentLogin.go': '去登录',
   'agentLogin.title': (name: string) => `登录 ${name}`,
 
   'agentAccount.needsLogin': '待登录',

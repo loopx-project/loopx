@@ -15995,3 +15995,9 @@ button.steward-brief-stat:hover { background: var(--hover, rgba(31, 30, 28, 0.08
 
 /* wb-sessions: the grey line above the composer while the desktop app still wakes this conversation. */
 .loopx-driven { margin: 0 4px 6px; font-size: 12px; line-height: 1.45; color: var(--muted); }
+
+/* Recover a signed-out model catalog in the workspace, without an error-colored modal. */
+.agent-login-recovery { width: min(var(--content-w), calc(100% - 32px)); margin: 4px auto 0; }
+.agent-login-required { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.agent-login-required button { flex: none; }
+.agent-login-recovery .agent-login-panel { margin: 8px 0 0; }

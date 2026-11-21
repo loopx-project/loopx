@@ -9,14 +9,15 @@ import { IconCheck, IconCopy, IconExternal } from './icons';
  * (including the remote desktop pane) stays interactive. Collapsing or leaving the page keeps
  * the daemon login session alive; only the explicit cancel action terminates it.
  */
-export function AgentLoginPanel({ api, agent, initial, onState, onReload, onCollapse, onDismiss }: {
+export function AgentLoginPanel({ api, agent, initial, onState, onReload, onCollapse, onDismiss, onSuccess }: {
   api: Api;
-  agent: AgentInfo;
+  agent: Pick<AgentInfo, 'id' | 'label'>;
   initial: AgentLogin;
   onState: (next: AgentLogin) => void;
   onReload: () => Promise<void> | void;
   onCollapse: () => void;
   onDismiss: () => void;
+  onSuccess?: () => void;
 }) {
   const [login, setLogin] = useState(initial);
   const [code, setCode] = useState('');
@@ -25,6 +26,7 @@ export function AgentLoginPanel({ api, agent, initial, onState, onReload, onColl
   const [copied, setCopied] = useState(false);
   const reload = useRef(onReload); reload.current = onReload;
   const notify = useRef(onState); notify.current = onState;
+  const success = useRef(onSuccess); success.current = onSuccess;
   const active = ['starting', 'waiting', 'submitting'].includes(login.status);
   const codeOrUrl = login.input === 'code-or-url';
 
@@ -42,7 +44,7 @@ export function AgentLoginPanel({ api, agent, initial, onState, onReload, onColl
         if (!alive) return;
         update(next);
         setError('');
-        if (next.status === 'success') await reload.current();
+        if (next.status === 'success') { await reload.current(); success.current?.(); }
         if (['starting', 'waiting', 'submitting'].includes(next.status)) timer = setTimeout(poll, 1000);
       } catch (e) {
         if (!alive) return;

@@ -1,3 +1,4 @@
+import { HttpError } from '../errors.js';
 import { AGY_AUTH_ENV, copyAgyAccount, startAgyLogin } from './agy-account.js';
 import type { WorkMode } from './types.js';
 import { cliDiagnostic } from './diagnostics.js';
@@ -502,6 +503,8 @@ export class AgyAdapter implements AgentAdapter {
     forkInto: false,
     quota: true,
   };
+  onModelsChanged?: (models: ModelOption[]) => void;
+  private modelGeneration = 0;
   private modelCache: { at: number; models: ModelOption[] } | null = null;
   private readonly commandCache = new Map<string, { at: number; value: Promise<{ cli: AgyCliCommand[]; list: SlashCommand[] }> }>();
 
@@ -525,8 +528,10 @@ export class AgyAdapter implements AgentAdapter {
   startLogin(onSuccess: (account?: string) => Promise<void>) {
     return startAgyLogin(this.command, this.env, async account => {
       this.modelCache = null;
+      this.modelGeneration++;
       this.commandCache.clear();
       await onSuccess(account);
+      void this.models(true).catch(() => {});
     });
   }
 
@@ -548,14 +553,24 @@ export class AgyAdapter implements AgentAdapter {
   }
 
   async models(refresh = false): Promise<ModelOption[]> {
-    if (refresh) this.modelCache = null;
+    if (refresh) { this.modelCache = null; this.modelGeneration++; }
     if (this.modelCache && Date.now() - this.modelCache.at < MODELS_TTL_MS) return this.modelCache.models;
+    const generation = this.modelGeneration;
     const [bin, ...base] = this.command;
     const stdout = await new Promise<string>((resolve, reject) => {
-      execFile(bin, [...base, 'models'], { timeout: 30_000, env: { ...process.env, ...this.env } }, (err, out) => (err ? reject(err) : resolve(out)));
+      execFile(bin, [...base, 'models'], { timeout: 30_000, env: { ...process.env, ...this.env } }, (err, out, stderr) => {
+        if (!err) { resolve(out); return; }
+        // Native signed-out diagnostic only; network, quota and process errors retain their meaning.
+        if (/^\s*(?:Error:\s*)?Please sign in to view available models\.(?: Launch the CLI without arguments to sign in\.)?\s*$/m.test(stderr)) {
+          reject(new HttpError(409, 'Antigravity is not signed in', { code: 'agent_login_required' }));
+        } else reject(err);
+      });
     });
     const models = parseAgyModels(stdout);
-    if (models.length > 0) this.modelCache = { at: Date.now(), models };
+    if (generation === this.modelGeneration) {
+      if (models.length > 0) this.modelCache = { at: Date.now(), models };
+      if (refresh) this.onModelsChanged?.(models);
+    }
     return models;
   }
 

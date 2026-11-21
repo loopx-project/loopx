@@ -1,3 +1,4 @@
+import { AgentLoginRecovery, needsAgentLogin } from './components/AgentLoginRecovery';
 import { GitPanel } from './components/GitPanel';
 import { SettingsPage, type SettingsGroup } from './components/SettingsPage';
 import { AssistantSettingsPage, assistantTitle } from './components/AssistantSettingsPage';
@@ -813,6 +814,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const [writingBusy, setWritingBusy] = useState(false);
   const [draftPermission, setDraftPermission] = useState('auto_edit');
   const modelPreferences = useModelPreferences(api, error => setError(message(error)));
+  const [modelLogin, setModelLogin] = useState<{ agent: string; label: string; key: string; client: Api; scope: Api } | null>(null);
   const [modelsByAgent, setModelsByAgent] = useState<Record<string, ModelOption[]>>(() => (keepThreads ? cachedModels(hostId) ?? {} : {}));
   const draftCaps = agents.find(agent => agent.id === draftAgent)?.capabilities;
   const goalCap = goalCaps.find(cap => cap.agent === draftAgent);
@@ -1493,6 +1495,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
                 const { agent, models } = ev.data as { agent: string; models: ModelOption[] };
                 modelVersions.current[agent] = (modelVersions.current[agent] ?? 0) + 1;
                 setModelsByAgent(previous => ({ ...previous, [agent]: models }));
+                setModelLogin(current => current?.scope === api && current.client === api && current.key === agent ? null : current);
               } else refresh();
             },
             ctrl.signal,
@@ -1759,6 +1762,16 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const activeAgent = selected?.agent ?? draftTeamDefinition?.entryAgent ?? draftAgent;
   const activeCwd = selected?.cwd ?? draftCwd;
   const commandsKey = `${activeAgent}\n${activeCwd}`;
+  const acceptModelCatalog = (agent: string, list: ModelOption[]) => {
+    setModelsByAgent(previous => ({ ...previous, [agent]: list }));
+    setModelLogin(current => current?.scope === api && current.key === agent ? null : current);
+  };
+  const handleModelError = (error: unknown, agent: string, client = api, key = agent, report = true) => {
+    if (!needsAgentLogin(error)) { if (report) handleError(error); return; }
+    modelVersions.current[key] = (modelVersions.current[key] ?? 0) + 1;
+    setModelsByAgent(previous => { const next = { ...previous }; delete next[key]; return next; });
+    setModelLogin({ agent, key, client, scope: api, label: agents.find(item => item.id === key)?.label ?? remoteAgents.find(item => item.id === key)?.label ?? agent });
+  };
   const lastFocusModelRefresh = useRef<{ agent: string; at: number } | null>(null);
   const refreshActiveModels = useCallback((force = false) => {
     if (!api || !activeAgent || document.hidden) return;
@@ -1770,9 +1783,9 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     void api
       .models(activeAgent, force)
       .then((list) => {
-        if ((modelVersions.current[activeAgent] ?? 0) === version) setModelsByAgent(prev => ({ ...prev, [activeAgent]: list }));
+        if ((modelVersions.current[activeAgent] ?? 0) === version) acceptModelCatalog(activeAgent, list);
       })
-      .catch(error => { if (force) handleError(error); });
+      .catch(error => { if ((modelVersions.current[activeAgent] ?? 0) === version) handleModelError(error, activeAgent, api, activeAgent, force); });
   }, [api, activeAgent]);
 
   // Models of an agent other than the thread's own, for choosing what its members start with.
@@ -1783,9 +1796,11 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     const version = modelVersions.current[agent] ?? 0;
     // An instance of another machine is asked there, under the id it has on that machine.
     const remote = remoteAgents.find((a) => a.id === agent);
-    (remote && token ? new Api(token, '', remote.host).models(agent.slice(0, -(remote.host.length + 1)), refresh) : api.models(agent, refresh)).then((list) => {
-      if ((modelVersions.current[agent] ?? 0) === version) setModelsByAgent(prev => ({ ...prev, [agent]: list }));
-    }).catch(error => { if (refresh) handleError(error); }).finally(() => { modelsAsked.current.delete(agent); });
+    const client = remote && token ? new Api(token, '', remote.host) : api;
+    const id = remote && token ? agent.slice(0, -(remote.host.length + 1)) : agent;
+    client.models(id, refresh).then((list) => {
+      if ((modelVersions.current[agent] ?? 0) === version) acceptModelCatalog(agent, list);
+    }).catch(error => { if ((modelVersions.current[agent] ?? 0) === version) handleModelError(error, id, client, agent, refresh); }).finally(() => { modelsAsked.current.delete(agent); });
   };
 
   // Models for that agent, loaded once per agent.
@@ -1795,9 +1810,9 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     api
       .models(activeAgent)
       .then((list) => {
-        if ((modelVersions.current[activeAgent] ?? 0) === version) setModelsByAgent(prev => ({ ...prev, [activeAgent]: list }));
+        if ((modelVersions.current[activeAgent] ?? 0) === version) acceptModelCatalog(activeAgent, list);
       })
-      .catch(handleError);
+      .catch(error => { if ((modelVersions.current[activeAgent] ?? 0) === version) handleModelError(error, activeAgent); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, activeAgent]);
 
@@ -3182,6 +3197,14 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         )}
 
         {demo && (showcase ? showcase.notice(selectedId, extWant) : <DemoBar compact={compact} onConnect={askToConnect} />)}
+
+        {modelLogin?.scope === api && <AgentLoginRecovery key={`${modelLogin.key}:${hostId ?? 'local'}`}
+          api={modelLogin.client} agent={{ id: modelLogin.agent, label: modelLogin.label }} onRecovered={list => {
+            modelVersions.current[modelLogin.key] = (modelVersions.current[modelLogin.key] ?? 0) + 1;
+            setModelsByAgent(previous => ({ ...previous, [modelLogin.key]: list }));
+            setModelLogin(current => current === modelLogin ? null : current);
+            void reloadAgents().catch(handleError);
+          }} />}
 
         {error && (
           <div className="banner" role="alert">

@@ -37,6 +37,11 @@ if (process.env.FAKE_AGY_ACCOUNT_CHECK === '1') {
 }
 
 if (args[0] === 'models') {
+  if (process.env.FAKE_AGY_MODELS_ERROR) { process.stderr.write(process.env.FAKE_AGY_MODELS_ERROR + '\n'); process.exit(1); }
+  if (process.env.FAKE_AGY_LOGIN_REQUIRED === '1' && !existsSync(join(process.env.HOME, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'))) {
+    process.stderr.write('Fetching available models...\nError: Please sign in to view available models. Launch the CLI without arguments to sign in.\n'); process.exit(1);
+  }
+
   if (process.env.FAKE_HANDOVER_QUOTA) { process.stdout.write('gemini-pro\tGemini Pro\nclaude-sonnet\tClaude Sonnet\n'); process.exit(0); }
   process.stderr.write('Fetching available models...\n');
   process.stdout.write('fast-low\tFast (Low)\nfast-high\tFast (High)\nnot a model line\nbig-thinking\tBig (Thinking)\n');
