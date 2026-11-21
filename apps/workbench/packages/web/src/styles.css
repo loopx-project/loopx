@@ -483,6 +483,24 @@
   --shadow-selected: inset 0 0 0 1px #a98d7f;
 }
 
+/* Only the Codex light composer shares its canvas. Other palettes and dark mode
+   retain their existing surface, queue fill and material. */
+:root[data-palette='codex'][data-theme='light'] .composer-box {
+  background: var(--bg);
+  border-color: var(--border);
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+:root[data-palette='codex'][data-theme='light'] .composer-context,
+:root[data-palette='codex'][data-theme='light'] .queue-item {
+  background: transparent;
+}
+:root[data-palette='codex'][data-theme='light'] .queue {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
 /* "claude" pins three tokens of its own, for the same reason: the hairline (#e4e4e4), the grey a
    selected sidebar row wears (#e1e1e1) and the placeholder grey (#787878), each measured. */
 [data-palette='claude']:not([data-palette='paper']) {
