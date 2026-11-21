@@ -437,6 +437,22 @@ export function registerManagedClaimExecutionConformance(provider: string, facto
       "coordination_operation_identity_mismatch", "other changed intent remains rejected");
     assert.deepEqual(await loaded(store), before);
   });
+  test(`${provider} managed execution: reviewed replay preserves the original unreviewed claim`, async t => {
+    const {store, request} = await setup(t);
+    const reviewed = {...request, expected_provider_revision: (await loaded(store)).provider_revision};
+    const accepted = await claim(store, request);
+    assert.equal(accepted.status, "applied");
+    const before = await loaded(store);
+    const replay = await claim(store, reviewed);
+    assert.equal(replay.status, "replayed");
+    assert.deepEqual(replay.lease, accepted.lease);
+    assert.deepEqual(replay.original_receipt, accepted.original_receipt);
+    assert.equal((await claim(store, {...reviewed, claimed_by: "agent-b", actor_agent_id: "agent-b"})).reason_code,
+      "coordination_operation_identity_mismatch");
+    assert.equal((await claim(store, reviewed, async () => false)).reason_code, "authority_source_changed");
+    assert.equal((await claim(store, {...reviewed, now: new Date("2026-09-13T12:00:00Z")})).status, "failed");
+    assert.deepEqual(await loaded(store), before, "historical replay never renews the lease or writes a new claim");
+  });
   test(`${provider} managed execution: completion releases once and the original Turn closes without new execution`, async t => {
     const {store, request} = await setup(t);
     assert.equal((await claim(store, request)).status, "applied");

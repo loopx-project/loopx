@@ -335,6 +335,18 @@ read-only quota observation. It admits no ordinary host Turn. These service
 checks therefore do not qualify an ordinary PostgreSQL feedback Turn or justify
 adding another execution profile to this slice.
 
+**Source checkpoint: stateless read ownership (2026-11-20).** The stateless capture
+adapter delegates its normal-work initial navigation to the existing TypeScript
+Progressive owner through `context_select`; Python retains publication, byte
+budgets and fallback. The invocation-only option leaves generic selection and
+its validation order unchanged. Captured File/SQLite sources preserve their
+original preparation and settlement facts after a later claim; selected display,
+off and digest-refusal paths have immutable-base/current-candidate controls.
+Existing wide-scope and note-reuse test callers carry the original captured lease
+proof into their manual writeback, retaining pagination, recovery and once-only
+settlement assertions. This retires a duplicate read classifier; full C1/C4/C9
+cutover, installed/native adoption and method/outcome benefit remain open.
+
 The first task needs an actual feedback or method-choice requirement. Reuse complete existing paths; real consumers must demonstrate gaps before repairing them rather than manufacturing a failure for the example. Experiments, training and procedural publication retain original authority. This document allocates neither another lane's quota nor a prescribed PR count.
 
 ## 12. Consequential choices to confirm

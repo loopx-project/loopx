@@ -207,7 +207,7 @@ the chart. Show one finding at a time with its declared status and full text;
 keep all findings selectable and failed or tentative counts visible. Preserve
 the exact finding event on reload and Back, including an earlier judgment later
 revised under the same finding identity. Period selection opens the original
-event from that period; Offer the whole recorded history in place
+event from that period; current-state projection does not replace its text. Offer the whole recorded history in place
 and through the existing return action, without letting it bury the chosen text.
 When opening a specific finding, put its parent question in accessible contextual
 help rather than another collapsed title row. Opening a route's question still

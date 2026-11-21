@@ -20,6 +20,7 @@ from ..work_items.autonomous_replan_obligation import (
 from .effect_program import SettlementIdentity
 from .effective_action import EffectiveAction
 from .error_codes import HeartbeatReceiptIdentityConflictError
+from .execution_preparation import quota_prepared_lease_receipt_fields
 from .heartbeat_receipt import (
     heartbeat_receipt_view,
     requalify_bound_heartbeat_receipt,
@@ -545,6 +546,13 @@ def quota_rollout_details(
         )
     if workspace_causality:
         details.update(delivery_workspace_causality_event_fields(workspace_causality))
+    details.update(quota_prepared_lease_receipt_fields(
+        agent_channel.get("execution_preparation"),
+        todo_id=todo_id,
+        selected_todo_id=details["selected_todo_id"],
+        agent_id=getattr(args, "agent_id", None),
+        delivery_admitted=closeout_required,
+    ))
     return details
 
 

@@ -1,3 +1,4 @@
+import copy
 import json
 import subprocess
 import sys
@@ -200,7 +201,10 @@ def test_installed_cli_keeps_full_source_deadline_after_compaction(tmp_path, mon
     assert summary["frontier_deadline"]["identity"] == "todo_monitor_23"
     assert summary["frontier_deadline"]["next_due_at"] == "2099-01-01T00:01:00+00:00"
     if role == "agent":
-        assert "monitor_open_items" not in summary  # CLI omits this diagnostic lane entirely.
+        from loopx.control_plane.quota.cli_projection import compact_quota_should_run_cli_payload
+        assert len(summary["monitor_open_items"]) >= 1
+        displayed = compact_quota_should_run_cli_payload(copy.deepcopy(packet))["agent_todo_summary"]
+        assert "monitor_open_items" not in displayed  # CLI display omits this diagnostic lane.
     else:
         assert all(row["todo_id"] != "todo_monitor_23" for row in summary["gate_open_items"])
     assert packet["scheduler_hint"]["cold_path_detail"]["frontier_recheck"][

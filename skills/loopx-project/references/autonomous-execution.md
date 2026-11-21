@@ -113,7 +113,8 @@ explicit user stops, quota and Core/host stop boundaries also remain binding.
 Routine public repo publication is a boundary decision, not a standing operator
 gate: when existing user authority and repository rules permit the step,
 validation passes, and the public/private boundary scan is clean, commit, push,
-and PR creation can proceed without asking again. An old chat, trust setting. Keep private/company-internal material and credentials out of public artifacts.
+and PR creation can proceed without asking again. An old chat, trust setting,
+status or review command does not grant new execution authority. Keep private/company-internal material and credentials out of public artifacts.
 Stop the affected path when it exceeds current authorization or would disclose
 protected material; authorized private reads and recovery may continue.
 Destructive Git and production retain explicit authorization requirements, and
@@ -140,7 +141,8 @@ result. Size the work by the task, evidence and risk, not tool calls, file count
 or heartbeat interval. Related implementation, research, validation and writeback
 may form one coherent effort; a focused correction can also be sufficient.
 One operation or writeback alone is not a reason to stop. Budget, scope, explicit
-stop conditions, settlement and replan requirements still apply.
+stop conditions, settlement and replan requirements still apply; this guidance
+does not authorize a new Todo, lease, direction or external action.
 
 When you tell the user a connected LoopX plan, top-todo list, priority
 stack, or route change, treat that as a writeback trigger, not chat memory. If
@@ -186,14 +188,14 @@ Only setup metadata work with no admitted delivery may use a state-only refresh
 when needed. After admitted delivery, an optional state-only refresh follows its
 settlement; never append another accountable progress record after spend. Exact
 receipt-bound monitor settlement uses its projected monitor actions and does not
-refresh/spend; Quiet skips,
+refresh/spend; an auxiliary poll does not replace admitted work. Quiet skips,
 preflight failures and pure dry runs do not spend. Preserve owed settlement
 according to the current terminal/recovery contract. Continuation or settlement
 guidance must not override an explicit no-spend stop. If execution is not
 permitted, retain unsettled state and do not claim settlement is complete.
 
 Keep the same registered `--agent-id` envelope. Use the current plan's authorized
-progress scope; Run
+progress scope; `--progress-scope goal` is not a transfer of Goal ownership. Run
 accountable writeback from the delivery worktree, or preserve its attribution with
 `--delivery-workspace-path <delivery-worktree>` when projecting from elsewhere.
 After settlement read back the receipts and current quota; obey the returned

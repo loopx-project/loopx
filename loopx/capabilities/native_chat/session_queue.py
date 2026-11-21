@@ -6,6 +6,14 @@ import threading
 from ...chat_store import CHAT_SESSION_MODE_ATTACHED, TERMINAL_TURN_STATES
 
 
+def _is_observation_only_monitor_turn(turn: dict[str, Any] | None) -> bool:
+    """Return True only for native no-model monitor turns."""
+    if not isinstance(turn, dict) or turn.get("loopx_execution") is not True:
+        return False
+    request = turn.get("loopx_request")
+    return isinstance(request, dict) and request.get("work_kind") == "monitor"
+
+
 def drain_session_queue(controller: Any, *, session_id: str, work_dir: Path, objective: str) -> None:
     wakeup = threading.Event()
     with controller.turn_release_wakeup(wakeup):
@@ -76,19 +84,20 @@ def _drain_session_queue_events(controller: Any, *, session_id: str, work_dir: P
                     # normal preparation and execution fences below.
                     turn = active
                 else:
-                    with controller.lock:
-                        attached = controller.adapters.get(session_id)
-                    if attached is None or not attached.healthcheck():
-                        try:
-                            controller._ensure_adapter(
-                                session,
-                                work_dir=work_dir,
-                                objective=objective,
-                            )
-                        except Exception as exc:
-                            controller._fail_queue_preparation(session_id, active_turn_id, exc)
-                        else:
-                            continue
+                    if not _is_observation_only_monitor_turn(active):
+                        with controller.lock:
+                            attached = controller.adapters.get(session_id)
+                        if attached is None or not attached.healthcheck():
+                            try:
+                                controller._ensure_adapter(
+                                    session,
+                                    work_dir=work_dir,
+                                    objective=objective,
+                                )
+                            except Exception as exc:
+                                controller._fail_queue_preparation(session_id, active_turn_id, exc)
+                            else:
+                                continue
                     active = controller.store.load_turn(session_id, active_turn_id)
                     if active and active.get("status") not in TERMINAL_TURN_STATES:
                         controller.closed.wait(0.05)
@@ -132,11 +141,16 @@ def _drain_session_queue_events(controller: Any, *, session_id: str, work_dir: P
                 current = controller.store.load_session(session_id)
                 if current is None or current.get("active_turn_id") != turn_id:
                     return
-                adapter = controller._ensure_adapter(
-                    current,
-                    work_dir=work_dir,
-                    objective=objective,
-                )
+                if _is_observation_only_monitor_turn(turn):
+                    from .steward_monitor import StewardObservationAdapter
+
+                    adapter: Any = StewardObservationAdapter(current.get("upstream_thread_id"))
+                else:
+                    adapter = controller._ensure_adapter(
+                        current,
+                        work_dir=work_dir,
+                        objective=objective,
+                    )
                 if (controller.store.load_session(session_id) or {}).get("active_turn_id") != turn_id:
                     return
             except Exception as exc:

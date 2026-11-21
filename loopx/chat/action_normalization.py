@@ -6,11 +6,12 @@ from datetime import timedelta
 import re
 from typing import Any, Mapping
 
-from .agent_registry import registered_agent_ids_for_goal
-from .control_plane.content_digest import BARE_SHA256_PATTERN
-from .control_plane.runtime.time import now_utc, parse_timestamp, utc_isoformat
-from .control_plane.todos.contract import require_supported_todo_resume_when
-from .registry import registry_goals
+from ..agent_registry import registered_agent_ids_for_goal
+from ..capabilities.issue_fix.repository_snapshot import _REPO_PATTERN
+from ..control_plane.content_digest import BARE_SHA256_PATTERN
+from ..control_plane.runtime.time import now_utc, parse_timestamp, utc_isoformat
+from ..control_plane.todos.contract import require_supported_todo_resume_when
+from ..registry import registry_goals
 
 
 _AUTHORITY_PRINCIPAL = re.compile(r"^[a-z][a-z0-9._-]{0,30}:[A-Za-z0-9._:-]{1,200}$")
@@ -33,13 +34,14 @@ class ChatActionNormalizationMixin:
     ) -> dict[str, Any]:
         # Imported lazily to retain the compatibility helpers in chat_actions
         # without introducing a module initialization cycle.
-        from .chat_actions import (
+        from ..chat_actions import (
             ProtectedActionGate,
             _digest,
             _normalize_cadence,
             _opaque,
             _text,
         )
+        from .todo_source import resolve_chat_todo_source
 
         if action_kind == "goal.acceptance.check":
             values = self._allowed_parameters(parameters, allowed={"goal_id", "document", "prepared_by"})
@@ -174,15 +176,15 @@ class ChatActionNormalizationMixin:
                 "agent_session",
                 "managed_turn",
             }:
-                from .control_plane.collaboration.goal_instance_scope import (
+                from ..control_plane.collaboration.goal_instance_scope import (
                     collaboration_goal_scope,
                 )
-                from .control_plane.effect_runtime import (
+                from ..control_plane.effect_runtime import (
                     EffectRuntimeRejected,
                     effect_runtime_result,
                 )
-                from .control_plane.goals.activation import goal_is_stopped
-                from .thread_agent_binding import resolve_registry_thread_agent_binding
+                from ..control_plane.goals.activation import goal_is_stopped
+                from ..thread_agent_binding import resolve_registry_thread_agent_binding
 
                 try:
                     executor = dict(
@@ -227,7 +229,7 @@ class ChatActionNormalizationMixin:
                         raise ValueError("agent operation Goal is stopped")
                     origin_goal_ref = scope.current_goal_ref
                     if executor["kind"] == "managed_turn":
-                        from .control_plane.collaboration.operation_handoff import (
+                        from ..control_plane.collaboration.operation_handoff import (
                             managed_operation_binding_current,
                         )
 
@@ -260,8 +262,8 @@ class ChatActionNormalizationMixin:
                 raise ValueError("source route selection requires a managed executor")
             source_route = None
             if managed_source:
-                from .control_plane.effect_runtime import effect_runtime_result
-                from .thread_agent_binding import (
+                from ..control_plane.effect_runtime import effect_runtime_result
+                from ..thread_agent_binding import (
                     collect_accepted_bindings,
                     resolve_thread_agent_binding,
                 )
@@ -360,7 +362,7 @@ class ChatActionNormalizationMixin:
                 },
             )
             goal_id = _opaque(values.get("goal_id"), field="goal_id")
-            self._goal(goal_id)
+            goal = resolve_chat_todo_source(self, goal_id).goal
             result = {
                 "goal_id": goal_id,
                 "text": _text(values.get("text"), field="text", limit=400),
@@ -370,10 +372,10 @@ class ChatActionNormalizationMixin:
             if values.get("endpoint_id"):
                 endpoint_id = _opaque(values.get("endpoint_id"), field="endpoint_id")
                 result["endpoint_id"] = endpoint_id
-                result["agent_id"] = self._resolve_goal_agent(goal_id, endpoint_id)
+                result["agent_id"] = self._resolve_goal_agent(goal_id, endpoint_id, goal=goal)
             elif values.get("agent_id"):
                 agent_id = _opaque(values.get("agent_id"), field="agent_id")
-                if agent_id not in registered_agent_ids_for_goal(self._goal(goal_id)):
+                if agent_id not in registered_agent_ids_for_goal(goal):
                     raise ProtectedActionGate(
                         "agent.bind",
                         gate={
@@ -415,7 +417,7 @@ class ChatActionNormalizationMixin:
                 },
             )
             goal_id = _opaque(values.get("goal_id"), field="goal_id")
-            self._goal(goal_id)
+            goal = resolve_chat_todo_source(self, goal_id).goal
             result: dict[str, Any] = {
                 "goal_id": goal_id,
                 "todo_id": _opaque(values.get("todo_id"), field="todo_id"),
@@ -436,10 +438,13 @@ class ChatActionNormalizationMixin:
             if "review_basis" in values:
                 basis = values["review_basis"]
                 if (operation != "edit" or not values.get("text") or not isinstance(basis, dict)
-                        or set(basis) != {"schema_version", "provider_revision", "source_authority", "registry_sha256"}
+                        or set(basis) - {"source_identity"} != {
+                            "schema_version", "provider_revision", "source_authority", "registry_sha256",
+                        }
                         or basis.get("schema_version") != "loopx_chat_canonical_update_basis_v0"
                         or any(not isinstance(x, str) or not x for x in basis.values())
-                        or not BARE_SHA256_PATTERN.fullmatch(basis["registry_sha256"])):
+                        or not BARE_SHA256_PATTERN.fullmatch(basis["registry_sha256"])
+                        or ("source_identity" in basis and not BARE_SHA256_PATTERN.fullmatch(basis["source_identity"]))):
                     raise ValueError("Task edit requires its complete current source basis")
                 result["review_basis"] = dict(basis)
             if values.get("text"):
@@ -460,7 +465,7 @@ class ChatActionNormalizationMixin:
             if values.get("endpoint_id"):
                 endpoint_id = _opaque(values["endpoint_id"], field="endpoint_id")
                 result["endpoint_id"] = endpoint_id
-                result["agent_id"] = self._resolve_goal_agent(goal_id, endpoint_id)
+                result["agent_id"] = self._resolve_goal_agent(goal_id, endpoint_id, goal=goal)
             elif values.get("agent_id"):
                 result["agent_id"] = _opaque(values["agent_id"], field="agent_id")
             if values.get("resume_when"):
@@ -583,7 +588,7 @@ class ChatActionNormalizationMixin:
                 if values.get(field):
                     result[field] = _text(values[field], field=field, limit=1000)
             if "permission" in values or "start_execution" in values:
-                from .control_plane.effect_runtime import effect_runtime_result
+                from ..control_plane.effect_runtime import effect_runtime_result
                 result.update(effect_runtime_result("goal.creation.execution.normalize", values))
             if result.get("open_session") is False and result.get("start_execution"):
                 # start_execution queues the original task as the first Turn of the Session the
@@ -721,10 +726,10 @@ class ChatActionNormalizationMixin:
                 raise ValueError("heartbeat edit requires a configuration change")
             return result
         if action_kind == "team.plan":
-            from .control_plane.todos.contract import (
+            from ..control_plane.todos.contract import (
                 TODO_ACTION_KIND_ADVANCEMENT_VALUES,
             )
-            from .control_plane.work_items.governed_transition_proposal import (
+            from ..control_plane.work_items.governed_transition_proposal import (
                 validate_steward_team_plan_preview,
             )
 
@@ -756,6 +761,7 @@ class ChatActionNormalizationMixin:
                 ),
             }
         if action_kind == "monitor.create":
+            from ..capabilities.native_chat.steward_monitor import normalize_steward_monitor_scope
             values = self._allowed_parameters(
                 parameters,
                 allowed={
@@ -768,6 +774,7 @@ class ChatActionNormalizationMixin:
                     "timezone",
                     "stop_condition",
                     "notification_rule",
+                    "signal_scope",
                 },
             )
             goal_id = _opaque(values.get("goal_id"), field="goal_id")
@@ -780,9 +787,13 @@ class ChatActionNormalizationMixin:
                 "cadence": _normalize_cadence(values.get("cadence")),
                 "timezone": _text(values.get("timezone"), field="timezone", limit=80),
             }
+            if values.get("signal_scope") is not None:
+                if not isinstance(values["signal_scope"], Mapping):
+                    raise ValueError("signal_scope must be an object")
+                result["signal_scope"] = normalize_steward_monitor_scope(values["signal_scope"])
             if values.get("task_repository"):
                 raw_repo = _text(values["task_repository"], field="task_repository", limit=200)
-                if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", raw_repo):
+                if _REPO_PATTERN.fullmatch(raw_repo):
                     raw_repo = f"git:github.com/{raw_repo}"
                 result["task_repository"] = raw_repo
             stop_cond_raw = values.get("stop_condition")
@@ -800,6 +811,7 @@ class ChatActionNormalizationMixin:
                 )
             return result
         if action_kind == "monitor.update":
+            from ..capabilities.native_chat.steward_monitor import normalize_steward_monitor_scope
             values = self._allowed_parameters(
                 parameters,
                 allowed={
@@ -814,10 +826,11 @@ class ChatActionNormalizationMixin:
                     "stop_condition",
                     "session_id",
                     "endpoint_id",
+                    "signal_scope",
                 },
             )
             goal_id = _opaque(values.get("goal_id"), field="goal_id")
-            self._goal(goal_id)
+            goal = resolve_chat_todo_source(self, goal_id).goal
             operation = str(values.get("operation") or "").strip().lower()
             if operation not in {"pause", "resume", "stop", "run_now", "edit"}:
                 raise ValueError(
@@ -829,17 +842,21 @@ class ChatActionNormalizationMixin:
                 "agent_id": _opaque(values.get("agent_id"), field="agent_id"),
                 "operation": operation,
             }
+            if values.get("signal_scope") is not None:
+                if not isinstance(values["signal_scope"], Mapping):
+                    raise ValueError("signal_scope must be an object")
+                result["signal_scope"] = normalize_steward_monitor_scope(values["signal_scope"])
             if values.get("endpoint_id"):
                 endpoint_id = _opaque(values["endpoint_id"], field="endpoint_id")
                 result["endpoint_id"] = endpoint_id
-                result["agent_id"] = self._resolve_goal_agent(goal_id, endpoint_id)
+                result["agent_id"] = self._resolve_goal_agent(goal_id, endpoint_id, goal=goal)
             if values.get("target"):
                 result["target"] = _text(values["target"], field="target", limit=400)
             if values.get("target_key"):
                 result["target_key"] = _opaque(values["target_key"], field="target_key")
             if values.get("task_repository"):
                 raw_repo = _text(values["task_repository"], field="task_repository", limit=200)
-                if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", raw_repo):
+                if _REPO_PATTERN.fullmatch(raw_repo):
                     raw_repo = f"git:github.com/{raw_repo}"
                 result["task_repository"] = raw_repo
             if values.get("cadence"):
@@ -858,7 +875,7 @@ class ChatActionNormalizationMixin:
                 result["session_id"] = _opaque(values["session_id"], field="session_id")
             if operation == "edit" and len(result) == 4:
                 raise ValueError(
-                    "monitor edit requires target, target_key, cadence, or stop_condition"
+                    "monitor edit requires target, target_key, cadence, stop_condition, or signal_scope"
                 )
             return result
         if action_kind == "pr.merge":
@@ -877,7 +894,7 @@ class ChatActionNormalizationMixin:
                 },
             )
             repository = str(values.get("repository") or "").strip()
-            if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+            if not _REPO_PATTERN.fullmatch(repository):
                 raise ValueError("pr.merge repository must be <owner>/<repo>")
             raw_num = values.get("pr_number")
             if isinstance(raw_num, bool) or not isinstance(raw_num, int) or raw_num < 1:

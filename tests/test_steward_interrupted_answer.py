@@ -463,6 +463,17 @@ def test_timeout_presentation_does_not_trust_unknown_diagnostic_text(info):
     assert "NATIVE_PRIVATE_SENTINEL" not in text and "期间原生助手记录了调用错误" not in text
 
 
+def test_worker_exit_reply_distinguishes_lost_execution_from_unknown_errors():
+    from loopx.extensions.lark.manager_context import manager_failure_reply
+
+    code, text = manager_failure_reply({"error_code": "execution_worker_exited", "error": "NATIVE_PRIVATE_SENTINEL"})
+    assert code == "execution_worker_exited"
+    assert "执行任务" in text and "原请求和会话已保留" in text and "不会自动重跑" in text
+    unknown, generic = manager_failure_reply({"error_code": "runtime_error", "error": "execution worker exited"})
+    assert unknown == "processing_failed" and "执行任务" not in generic
+    assert "NATIVE_PRIVATE_SENTINEL" not in text
+
+
 @pytest.mark.parametrize("source_code", ["response_timeout", "antigravity_step_error", "unknown"])
 def test_native_error_labels_preserve_shared_admission_failure_category(source_code):
     from loopx.extensions.lark.manager_context import manager_failure_reply
@@ -1210,6 +1221,10 @@ def test_original_worker_answers_interrupted_steward_question_once(tmp_path, lan
 
     monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
     monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("LOOPX_CHAT_CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
     fixture = steward.__wrapped__(tmp_path)
     store, runtime, provider, transport, binding, capture, workspace = next(fixture)
     try:

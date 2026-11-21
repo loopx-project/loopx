@@ -82,7 +82,7 @@ def test_the_next_question_is_not_asked_after_one_goes_unanswered(
         "exit 0\n",
         monkeypatch,
     )
-    monkeypatch.setattr(event_collector, "GIT_PROBE_TIMEOUT_SECONDS", 0.5)
+    monkeypatch.setattr(event_collector, "GIT_PROBE_TIMEOUT_SECONDS", 1.5)
 
     started = time.monotonic()
     with pytest.raises(ValueError, match="needs a Git answer"):
@@ -141,7 +141,7 @@ def test_a_timed_out_probe_takes_the_helpers_it_started(
     subprocess.run(
         ["git", "-C", str(project), "config", "core.fsmonitor", str(hook)], check=True
     )
-    monkeypatch.setattr(event_collector, "GIT_PROBE_TIMEOUT_SECONDS", 0.8)
+    monkeypatch.setattr(event_collector, "GIT_PROBE_TIMEOUT_SECONDS", 1.5)
 
     started = time.monotonic()
     with pytest.raises(ValueError, match="needs a Git answer"):

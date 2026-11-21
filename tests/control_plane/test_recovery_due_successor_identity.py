@@ -229,11 +229,16 @@ def test_interrupted_binding_survives_new_due_successor(
     assert _spend_run_count(runtime) == 0
 
     before = state.read_bytes()
+    lease_proof = reentry["execution_preparation"]["lease_proof"]
     refresh_args = (
         "refresh-state",
         "--goal-id",
         GOAL_ID,
         *old_binding,
+        "--task-lease-idempotency-key",
+        lease_proof["idempotency_key"],
+        "--task-lease-expected-version",
+        str(lease_proof["expected_version"]),
         "--classification",
         "local_stop_closeout",
         "--delivery-batch-scale",

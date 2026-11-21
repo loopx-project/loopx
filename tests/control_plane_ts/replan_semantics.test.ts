@@ -38,8 +38,10 @@ test("open-work review guidance does not require configured checks or outcome de
       assert.deepEqual(retired, ordinary);
       assert.deepEqual(current, ordinary, "default review and its authority do not depend on an outcome declaration");
       const guidance = (ordinary.planning_guidance as string[]).join(" ");
-      for (const clause of ["even with open Todos", "revisable planning choices", "never forces a pivot"]) {
-        assert.ok(guidance.includes(clause));
+      for (const clause of ["even with open Todos",
+        "Todo order and provisional agent-created candidate rules are revisable",
+        "A due review can keep the path or reorder or replace unfinished work", "never forces a pivot"]) {
+        assert.ok(guidance.includes(clause), clause);
       }
     }
   }
@@ -58,7 +60,12 @@ test("autonomous checkpoints reuse owner review while ordinary checkpoints keep 
       const guidance = (projection.planning_guidance as string[]).join(" ");
       for (const clause of ["original intent", "every requirement", "full marginal cost",
         "Before no_followup, review unmet acceptance", "reasonable in-scope next step remains, continue or replan",
-        "evidence and judgment in existing Vision/path_delta", "budget or stops", "planning grant no authority",
+        "existing Vision/path_delta for evidence, judgment and justified no-change", "budget or stops", "planning grant no authority",
+        "direct user changes to this Goal's purpose or lasting duties", "Keep commitments. Reconcile its Todos.",
+        "Explicit new Goals use creation", "Distinguish scope conflicts, evidence gaps and stale display",
+        "Read only missing context", "No polls or per-Turn revision receipts",
+        "Continue authorized work. Proposing forces no question", "owner apply and each peer's adoption",
+        "Proposals and adoption grant no authority",
         "never forces a pivot", "do not invent work or consume budget merely to stay active"]) {
         assert.ok(guidance.includes(clause), clause);
       }

@@ -16,7 +16,8 @@ the control plane or change the installed runtime.
 
 For owner-authorized reads of existing runtimes, shared access lives in
 `loopx.control_plane.status.goal_source`. Native status and Explore owners retain
-their semantics; Connection (`local` or a configured `ssh` alias) is independent of
+their semantics; this Python IO provider adds neither decisions nor lifecycle
+authority. Connection (`local` or a configured `ssh` alias) is independent of
 environment (`host` or a container pinned by its full physical id), so a remote
 container uses the same reader. It never starts a container, tunnel or worker.
 
@@ -588,7 +589,7 @@ order only, without changing Goal priority, lifecycle or execution.
 
 The existing TypeScript ordering functions remain the semantic owner. The
 Python presentation adapter validates and atomically stores the list under a
-file lock; Existing same-origin
+file lock; it is not a capability configuration namespace. Existing same-origin
 browser preferences migrate only when the durable source has no value. An old
 origin's inaccessible browser storage cannot be recovered automatically. Read
 or save failure keeps the current page usable and displays unsaved feedback;

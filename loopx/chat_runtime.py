@@ -100,6 +100,9 @@ SERVER_RESTARTED_MESSAGE = (
     "Your conversation is saved; this turn was not retried automatically. "
     "You can continue with a follow-up in this session."
 )
+WORKER_EXITED_CODE = "execution_worker_exited"
+BEFORE_DISPATCH_CODE = "execution_worker_exited_before_dispatch"
+BEFORE_DISPATCH_MESSAGE = "The LoopX Chat worker exited before the original request was dispatched."
 WORKER_EXITED_MESSAGE = (
     "The LoopX Chat execution worker exited before this turn finished. "
     "Your conversation is saved; execution may have occurred. "
@@ -473,20 +476,13 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
             self.resume_session(session_id=session_id, work_dir=work_dir, objective=objective)
             return self.store.load_turn(session_id, str(accepted.turn["turn_id"])) or accepted.turn, accepted.created
         if accepted.dispatch_required:
-            try:
-                with commit():
-                    self._start_accepted_turn_worker(
-                        session_id=session_id, turn_id=str(accepted.turn["turn_id"]), message=message,
-                        attachments=attachments or [], adapter=adapter, loopx_execution=loopx_execution)
-            except Exception:
-                with self.lock:
-                    has_live_worker = any(
-                        sid == session_id and not done.is_set()
-                        for (sid, _), done in self.turn_done_events.items()
-                    )
-                if not has_live_worker:
-                    self._drop_owned_adapter(session_id, adapter)
-                raise
+            # The session owns the prepared adapter. A retry can select it
+            # before registering its worker, so a failed dispatch attempt only
+            # releases its own worker slot.
+            with commit():
+                self._start_accepted_turn_worker(
+                    session_id=session_id, turn_id=str(accepted.turn["turn_id"]), message=message,
+                    attachments=attachments or [], adapter=adapter, loopx_execution=loopx_execution)
         return accepted.turn, accepted.created
 
     def _start_accepted_turn_worker(
@@ -764,16 +760,23 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
                 # Stop deliberately retires the execution worker before its
                 # caller commits `interrupted`; a free fence is expected here.
                 return
-            if managed_turn_recovery_allowed(
-                session, turn, managed=bool(session and session.get("session_mode") == CHAT_SESSION_MODE_MANAGED),
-                owner_dead=True,
-            ):
+            managed = bool(session and session.get("session_mode") == CHAT_SESSION_MODE_MANAGED)
+            if (managed and turn and turn.get("status") == "completing"
+                    and not turn.get("completion_id")):
+                # All response effects preceded the durable reservation. Finish its
+                # idempotent transcript/events under the original execution fence;
+                # the running service can recover it without a restart or replay.
+                self.store.finalize_managed_turn_completion(session_id, turn_id)
+                return
+            if managed_turn_recovery_allowed(session, turn, managed=managed, owner_dead=True):
                 code, message = (("server_restarted", SERVER_RESTARTED_MESSAGE)
-                                 if state == LOCK_HOLDER_DEAD else ("runtime_error", WORKER_EXITED_MESSAGE))
-                self._fail_turn(
-                    session_id, turn_id, code, message,
-                    status="failed", expected_statuses={"starting", "running", "interrupting"},
-                )
+                                 if state == LOCK_HOLDER_DEAD else (WORKER_EXITED_CODE, WORKER_EXITED_MESSAGE))
+                statuses = {"starting", "running", "interrupting"}
+                if (session and session.get("steward_context") and turn and turn.get("status") == "starting"
+                        and turn.get("execution_dispatch") == "pending"):
+                    code, message = BEFORE_DISPATCH_CODE, BEFORE_DISPATCH_MESSAGE
+                    statuses = {"starting"}  # A concurrent stop must win over replay.
+                self._fail_turn(session_id, turn_id, code, message, status="failed", expected_statuses=statuses)
             else:
                 # An earlier recovery may have persisted the exact failed result
                 # and then lost its event, message or claim write. The typed
@@ -782,7 +785,9 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
                 self.store.complete_recovered_terminalization(
                     session_id, turn_id, session, turn,
                     recovery_messages={"server_restarted": SERVER_RESTARTED_MESSAGE,
-                                       "runtime_error": WORKER_EXITED_MESSAGE},
+                                       WORKER_EXITED_CODE: WORKER_EXITED_MESSAGE,
+                                       BEFORE_DISPATCH_CODE: BEFORE_DISPATCH_MESSAGE,
+                                       "runtime_error": WORKER_EXITED_MESSAGE},  # Legacy exact record.
                 )
 
     def _run_turn(
@@ -808,6 +813,7 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
         # Turn was never dispatched, so the single-flight guard must be given
         # back here rather than left holding the key, which would make every
         # later dispatch of this same Turn a silent no-op.
+        phase = "start"
         try:
             with try_exclusive_file_lock(
                 self.store.turn_execution_lock_path(session_id, turn_id),
@@ -821,6 +827,7 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
                     expected_statuses={"queued"},
                     status="starting",
                     started_at=utc_now(),
+                    **({"execution_dispatch": "pending"} if isinstance(adapter, CodexAppServerAdapter) else {}),
                 )
                 if started_turn is None:
                     with self.lock:
@@ -831,6 +838,7 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
                 # Reuse one code revision across this worker's typed decisions.
                 # This caches no Session, Turn or authority facts: each checkpoint
                 # still reads current state, including after a long provider wait.
+                phase = "execute_or_finalize"
                 with effect_runtime_request_scope():
                     retry_binding: dict[str, str] = {}
                     while self._run_started_turn(
@@ -839,6 +847,12 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
                         loopx_execution=loopx_execution, retry_binding=retry_binding,
                     ):
                         pass
+        except OSError as exc:
+            # The queue will reconcile this Turn. Keep a correlated diagnostic
+            # without logging exception text (which may contain private paths).
+            logging.getLogger(__name__).warning(
+                "Chat worker I/O failure: turn=%s phase=%s errno=%s", turn_id, phase, exc.errno)
+            raise
         finally:
             self._release_done_event(key, done_event)
 
@@ -911,6 +925,7 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
             if kind == "native_goal.status":
                 self.store.update_session(session_id, native_goal=payload)
 
+        completion_reserved = False
         try:
             if execution_ended():
                 return
@@ -952,6 +967,10 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
                     if conversation_scope(session)["kind"] == "owner_goal"
                     else None
                 )
+            else:
+                from .capabilities.native_chat.antigravity_adapter import AntigravityAdapter
+                if isinstance(adapter, AntigravityAdapter):
+                    adapter._steward_report_reader = None
             native_command = None if current_turn.get("origin") == "peer" else parse_native_goal_command(message)
             if native_command is not None:
                 validate_goal_chat(session, attachments)
@@ -976,6 +995,12 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
             if team_plan_context is not None:
                 adapter.team_plan_context = team_plan_context
             if execution_ended():
+                return
+            # Seal against replay before invoking anything that can execute the
+            # original input, even if it never reports an upstream Turn ID.
+            if current_turn.get("execution_dispatch") == "pending" and self.store.update_turn(
+                    session_id, turn_id, expected_statuses={"starting", "running"},
+                    execution_dispatch="committed") is None:
                 return
             if native_loopx:
                 from .capabilities.native_chat.steward_turn import StewardTurnHost
@@ -1123,6 +1148,7 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
             )
             if completed_turn is None:
                 return
+            completion_reserved = True
             if adapter.upstream_thread_id != str((self.store.load_session(session_id) or {}).get("upstream_thread_id") or ""):
                 self.store.update_session(session_id, upstream_thread_id=adapter.upstream_thread_id)
             if not native_loopx and scope.get("bound_steward") is True:
@@ -1166,6 +1192,16 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
                             last_error_code="transport_disconnected",
                         )
         except Exception as exc:  # noqa: BLE001 - preserve compact runtime failure.
+            if isinstance(exc, OSError) and (self.store.load_turn(session_id, turn_id) or {}).get("execution_dispatch") == "pending":
+                # The exact execution-fence owner will reconcile this I/O loss
+                # with the durable dispatch marker instead of a generic failure.
+                raise
+            if completion_reserved and isinstance(exc, OSError):
+                # The answer already exists. Its lifecycle owner can finish
+                # publication without turning this into an execution failure.
+                logging.getLogger(__name__).warning(
+                    "Chat worker I/O failure: turn=%s phase=publish_saved_answer errno=%s", turn_id, exc.errno)
+                return
             event_buffer.close()
             self._fail_turn(session_id, turn_id, "runtime_error", str(exc), status="failed")
         finally:

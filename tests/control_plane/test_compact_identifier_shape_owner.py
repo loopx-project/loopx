@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from loopx import chat_action_normalization, chat_actions, chat_action_store, domain_state
+from loopx import chat_actions, chat_action_store, domain_state
+from loopx.chat import action_normalization
 from loopx.capabilities.benchmark_toolkit import integrity
 from loopx.capabilities.context_providers import service_ownership
 from loopx.capabilities.decision_context import packets, profile, sources
@@ -254,10 +255,10 @@ def test_a_principal_reference_is_a_different_question_and_stays_separate() -> N
     # ``^[a-z][a-z0-9._-]{0,30}:<opaque>$`` embeds the same body behind a required
     # family prefix. Merging them would either widen the opaque id to accept a
     # prefix it never allowed or narrow a principal to a bare id.
-    principal = chat_action_normalization._AUTHORITY_PRINCIPAL
+    principal = action_normalization._AUTHORITY_PRINCIPAL
     assert principal.fullmatch("codex:thread-1")
     assert not principal.fullmatch("thread-1")
     assert PUBLIC_OPAQUE_ID.fullmatch("thread-1")
     assert OPAQUE_SHAPE not in (
-        REPOSITORY_ROOT / "loopx/chat_action_normalization.py"
+        REPOSITORY_ROOT / "loopx/chat/action_normalization.py"
     ).read_text(encoding="utf-8")

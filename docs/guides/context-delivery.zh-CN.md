@@ -52,7 +52,7 @@ flowchart TD
 [`prepareProgressiveContextDelivery`](../../loopx/control_plane/quota/progressive_context.ts)
 开始，使用[精确 codec](../../loopx/control_plane/quota/context_delivery.ts)，文件、锁和原生
 生命周期 IO 留给 [Codex adapter](../../loopx/control_plane/turn_driver/codex_context.py)。
-一次共享准备调用。
+一次共享准备调用，不证明所有最终消费者已经迁移。
 
 ### 三种复用分别看
 
@@ -210,7 +210,7 @@ journal，限制权限并拒绝不安全路径。不要把原始 capture、本�
 未来扩大默认采用范围必须同时有**明确版本的 DeepSeek 模型与强模型**的可比效果、完整成本
 证据。每个模型内部固定条件分别比较，不能合并结果掩盖某一个模型退步。本指南提供
 方案。
-这些标准约束现有范围化默认的扩展；
+这些标准约束现有范围化默认的扩展；已交付的默认行为本身不证明双模型对照通过。
 
 ### 最小判别研究
 

@@ -717,6 +717,7 @@ def interaction_next_cli_actions(
     turn_instance_id: str | None = None,
     runtime_root: str | None = None,
     registry_path: str | None = None,
+    recovery_lease_proof: Mapping[str, object] | None = None,
 ) -> list[str]:
     if unadmitted_action_selection(payload):
         return [_selection_recovery_command(
@@ -730,6 +731,7 @@ def interaction_next_cli_actions(
         scheduler_execution_context=scheduler_execution_context, capability_reentry=capability_reentry,
         capability_reentry_resolved=capability_reentry_resolved, settlement_plan=settlement_plan,
         turn_instance_id=turn_instance_id, runtime_root=runtime_root, registry_path=registry_path,
+        recovery_lease_proof=recovery_lease_proof,
     )
 
 
@@ -762,7 +764,7 @@ def _successor_replan_required_cli_actions(
     goal_id: str,
     lifecycle_actor_args: str,
     typed_quota_guard: str,
-    settlement_plan: Mapping[str, object],
+    settlement_plan: Mapping[str, object] | None,
     scheduler_args: str,
     settlement_args: str,
     scoped_cli_args: str,
@@ -840,6 +842,7 @@ def _admitted_interaction_next_cli_actions(
     turn_instance_id: str | None = None,
     runtime_root: str | None = None,
     registry_path: str | None = None,
+    recovery_lease_proof: Mapping[str, object] | None = None,
 ) -> list[str]:
     goal_id = str(payload.get("goal_id") or "<GOAL_ID>")
     command_prefix = selection.render_cli_command_prefix(runtime_root=runtime_root, registry_path=registry_path)
@@ -1072,6 +1075,7 @@ def _admitted_interaction_next_cli_actions(
             lifecycle_actor_args=lifecycle_actor_args,
             typed_quota_guard=typed_quota_guard,
             turn_instance_id=turn_instance_id,
+            lease_proof=recovery_lease_proof,
         )
     if mode == "autonomous_replan":
         return build_autonomous_replan_cli_actions(
@@ -1445,6 +1449,7 @@ def _build_interaction_cli_channel(
     turn_instance_id: str | None = None,
     runtime_root: str | None = None,
     registry_path: str | None = None,
+    recovery_lease_proof: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     if selection_recovery_required:
         return selection.action_selection_recovery_cli_channel(_selection_recovery_command(
@@ -1479,6 +1484,7 @@ def _build_interaction_cli_channel(
             turn_instance_id=turn_instance_id,
             runtime_root=runtime_root,
             registry_path=registry_path,
+            recovery_lease_proof=recovery_lease_proof,
         ),
         "spend_allowed_now": False,
         "spend_after_validation": spend_after_selection,
@@ -1774,6 +1780,7 @@ def _build_interaction_contract_projection(
     turn_instance_id: str | None = None,
     runtime_root: str | None = None,
     registry_path: str | None = None,
+    recovery_lease_proof: Mapping[str, object] | None = None,
 ) -> tuple[InteractionContractPacket, SchedulerArbitration]:
     execution_obligation = payload.get("execution_obligation")
     if not isinstance(execution_obligation, dict):
@@ -1875,6 +1882,7 @@ def _build_interaction_contract_projection(
             turn_instance_id=turn_instance_id,
             runtime_root=runtime_root,
             registry_path=registry_path,
+            recovery_lease_proof=recovery_lease_proof,
         ),
     }
     if turn_binding_required:

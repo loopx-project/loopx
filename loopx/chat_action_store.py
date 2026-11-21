@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -166,7 +167,11 @@ class ChatActionStore:
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.root, 0o700)
         if not self.path.exists():
-            atomic_write_json(self.path, self._empty_payload())
+            with exclusive_file_lock(
+                self.path, agent_id="loopx-chat", operation="initialize_chat_action_store"
+            ):
+                if not self.path.exists():
+                    atomic_write_json(self.path, self._empty_payload())
         os.chmod(self.path, 0o600)
 
     @staticmethod
@@ -292,6 +297,87 @@ class ChatActionStore:
             }
             self._write(payload)
             return proposal
+
+    def replay_or_reuse_preview(
+        self,
+        *,
+        action_kind: str,
+        context: Mapping[str, Any],
+        normalized_parameters: Mapping[str, Any],
+        idempotency_key: str,
+        shared_fields: tuple[str, ...],
+        reusable_states: set[str],
+        matches_review_basis: Callable[[object], bool] | None = None,
+        require_exact_context: bool = False,
+        summary: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Resolve an accepted request or bind it to an equivalent pending review."""
+        if summary is not None:
+            _safe_json_value(_bounded_text(summary, field="summary"), path="preview.summary")
+        key = normalize_idempotency_key(idempotency_key)
+        request = _safe_json_value({
+            "action_kind": action_kind,
+            "context": context,
+            "normalized_parameters": normalized_parameters,
+        })
+        digest = _canonical_digest(request)
+
+        def matches_scope(row: dict[str, Any]) -> bool:
+            row_context = row.get("context")
+            return (
+                row.get("action_kind") == action_kind and isinstance(row_context, dict)
+                and all(row_context.get(field) == value for field, value in context.items())
+            )
+
+        with exclusive_file_lock(
+            self.path, agent_id="loopx-chat", operation="reuse_chat_action_preview"
+        ):
+            payload = self._read()
+            proposals = payload["proposals"]
+            bindings = payload["idempotency"]
+            if key in bindings:
+                binding = bindings[key]
+                row = proposals.get(binding["proposal_id"])
+                if not isinstance(row, dict):
+                    raise ValueError("typed Chat action idempotency index is inconsistent")
+                # Original previews already carry their full normalized request.
+                # Reused previews keep the later request's identity in the index.
+                previous_digest = binding.get("reused_request_digest")
+                if previous_digest is not None:
+                    same_request = previous_digest == digest
+                else:
+                    same_request = row["normalized_parameters"] == request["normalized_parameters"] and (
+                        not require_exact_context or row.get("context") == request["context"]
+                    )
+                if not matches_scope(row) or not same_request:
+                    raise ActionConflictError("idempotency key already belongs to another preview")
+                return row
+
+            if not reusable_states or matches_review_basis is None:
+                return None
+            pending = max(
+                (
+                    row for row in proposals.values()
+                    if isinstance(row, dict) and row.get("status") in reusable_states
+                    and matches_scope(row)
+                    and isinstance(row.get("normalized_parameters"), dict)
+                    and all(
+                        row["normalized_parameters"].get(field) == normalized_parameters[field]
+                        for field in shared_fields
+                    )
+                    and matches_review_basis(row.get("expected_state_fingerprint"))
+                ),
+                key=lambda row: (row.get("updated_at") or "", row["proposal_id"]),
+                default=None,
+            )
+            if pending is None:
+                return None
+            bindings[key] = {
+                "proposal_id": pending["proposal_id"],
+                "reused_request_digest": digest,
+            }
+            self._write(payload)
+            return pending
 
     def record_review_card_delivery(
         self,

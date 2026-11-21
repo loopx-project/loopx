@@ -863,7 +863,7 @@ source retains a command for replay, but the inline context is not a separate
 `required_reads` obligation. It contains at most three recent nodes/findings
 and, in planning mode, three suggested Todo branches, plus structured commands
 for detail or evidence recording. The read folds existing history but bounds
-the returned context; The agent chooses
+the returned context; it does not claim to reduce history IO. The agent chooses
 evidence-backed work; planner suggestions do not require branching on every
 turn or recording empty ceremonial nodes. Use the detail command when the
 short view is insufficient.
@@ -887,7 +887,8 @@ repeated findings on the same question. An explicit `--todo-id` prioritizes that
 open, own-or-unclaimed task's canonical question links and measurement groups
 ahead of the independent planner's suggestions. Quota and managed-turn callers
 carry their explicit task selection into this read automatically. Other results
-remain available through the same bounded pages; Without a task scope, evidence-only mode retains
+remain available through the same bounded pages; an absent link does not imply
+that no evidence exists. Without a task scope, evidence-only mode retains
 recency ordering. These reads do not alter planner scores, graph state, claims
 or quota, and neither mode is enabled by supplying a task id.
 The dashboard's saved-evidence reader also pages through history; the CLI
@@ -939,7 +940,8 @@ uncertainty. These decision guidelines introduce no adoption/writeback gate,
 automatic successor or spawn permission. A context read does not prove that the
 model adopted the evidence or improved its result.
 
-`spawn_allowed=false` retains analysis-only planning.
+Mode selection does not grant spawn, claim, lease, execution, quota or external
+publication authority. `spawn_allowed=false` retains analysis-only planning.
 Feature-off adds no Explore hook or evidence reads. Turning off preserves all
 recorded evidence and existing display state.
 
@@ -1527,10 +1529,11 @@ Editing a profile or composition setting in the form or JSON preserves mode
 inheritance; only an explicit mode choice creates a mode override.
 
 Turn context, planning, quota/history, Todo settlement, native completion and
-material-refresh readers use the same mode owner. machine
+material-refresh readers use the same mode owner. Evidence does not grant external publication authority; machine
 activation retains local projection without enabling a sink. Profile, research
 scope, spawn permission, leases, quota and host continuation remain separately
-owned.
+owned. Enabled configuration alone does not prove evidence adoption or better
+outcomes.
 
 Native research completion retains the graph lock and, when inheriting, the
 device-configuration lock until its transaction finishes. Inherited planning

@@ -470,6 +470,12 @@ and persist evidence, settle once, then deliver/read back through the owning
 channel. Each step uses its existing legal transitions and replay rules;
 this description adds no competing status enum or transaction coordinator.
 
+An explicit `turn run-once --execute` with a compatible generic CLI adapter
+and an independent validator can prepare an eligible Todo's missing lease.
+The Host reuses the ordinary claim and reads back that same Todo before
+dispatch. The claim and launch share one Turn identity. Recovery uses the
+lease generation captured by the original attempt.
+
 An executor crash, a lost effect acknowledgement and a lost result-delivery
 acknowledgement are different recovery cases. An operation provider must expose
 whether an effect can be reconciled and retried safely. Unknown external state
@@ -660,13 +666,7 @@ moves; it does not qualify the kernel. R3/R4 are optional and do not block a
 qualified CLI or managed task. No unused provider, field or framework is added
 ahead of its real caller. Report the applied/deferred adjacent refactor in each PR.
 
-### Core discovery checkpoint — 2026-11-19
-
-| Boundary | Delivered delta / evidence | Still open |
-| --- | --- | --- |
-| V1/V3, capability discovery | Benchmark package exports resolve their selected existing owner on demand, retaining all 199 public symbols and their order; explicit star imports still request all. Help/list/detail succeed with benchmark execution implementations unavailable, no Node, process launch, network or state writes. | Does not remove benchmark files from the wheel or qualify absent-capability installation. |
-| Metadata and active consumers | The same catalog and all 25 details are byte-identical to the frozen `main@e235cde9c` workload; 53 CLI help/list/detail/unknown-id observations match. Discovery loads 2 benchmark children instead of 28, and 298 LoopX modules instead of 326. Existing benchmark semantics and canonical export identities remain unchanged. | Import counts are not latency, total cost, model benefit or full D2/D5 closure. |
-| Acceptance and continuation | 52 installed-core discovery/execution/context/recovery cases pass on the rebuilt artifact; 383 selected consumer cases and 43 architecture/documentation cases pass separately. No new state owner, provider id, activation toggle or top-level module. | Keep R1/M3 and V1–V5/V10 open; continue capability package isolation and selected Standard delivery. Public-channel C1 qualification remains with its release owner. |
+- Checkpoint moved to the execution ledger: [Core discovery checkpoint (2026-11-19)](ledger/monorepo-distribution-split-v0/2026-11-19-core-discovery-checkpoint.md).
 
 <a id="subtraction-gate"></a>
 
@@ -728,23 +728,18 @@ diaries in this RFC.
 
 #### 3. Concrete retirement backlog and ratchet rules
 
-1. **Pre-Turn pilot CLI subcommands and top-level modules.** Retire the `15`
-   superseded pre-Turn `codex-cli-*` pilot/proof subcommands replaced by
-   `loopx turn` (`turn_driver/codex_cli.py`), `start-goal`, and `codex_app`
-   heartbeat (`14` with zero non-pilot callers plus `codex-cli-session-probe`
-   referenced only as a hint in `loopx/project_prompt.py`), along with the `4`
-   top-level `loopx/codex_cli_*.py` modules (`3,767` LOC) and `6`
-   `loopx/cli_commands/starter_*.py` wrappers (`859` LOC). Keep live
-   `codex-cli-bootstrap-message` and `turn_driver/codex_cli.py`.
-2. **Remaining top-level `chat_*` and `*_goal_mode` migrations with strict
-   downward ratchet.** Complete M1/M2 by migrating the remaining `20` top-level
-   `loopx/chat_*.py` modules (`20,562` LOC) into `loopx/chat/` and the `9`
-   `loopx/*_goal_mode/` directories (`59` files / `17,655` lines; `33` `.py` /
-   `7,062` LOC) into `loopx/hosts/`. Every PR deleting or moving top-level
-   modules must ratchet `max_top_level_modules` in
-   [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json)
-   (currently `127`) strictly downward; keeping permanent top-level shim files
-   that freeze the count does not clear M1/M2.
+1. **Pre-Turn pilot CLI retirement.** [#8884](https://github.com/loopx-project/loopx/pull/8884)
+   retired 15 superseded pilot commands and four flat `loopx/codex_cli_*.py`
+   modules, and lowered the top-level budget from 127 to 124. The live
+   `codex-cli-bootstrap-message` and `turn_driver/codex_cli.py` still have callers.
+2. **Remaining top-level `chat_*` and `*_goal_mode` migrations.** M1 places
+   the internal action normalization and Goal lifecycle action modules under
+   `loopx/chat/`. This removes two flat names and lowers the budget from 124
+   to 122. M1 still needs to migrate the remaining Chat modules under I3.
+   M2 still moves host mode packages under `loopx/hosts/`. Each net removal
+   lowers [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json)
+   by the same count in that PR. The Core wheel already excludes both Chat
+   paths, so this move reduces the source directory count.
 3. **Unreferenced `examples/` scripts and source-text-pinning smokes.** Prune
    unreferenced scripts under `examples/` (`200` unreferenced `.py` scripts /
    `45,504` LOC; `209` scripts / `47,325` LOC across `.py/.sh/.mjs/.js/.ts` on
