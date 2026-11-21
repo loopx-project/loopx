@@ -2080,3 +2080,56 @@ test("a steward session migrated via flexible_primary_available preserves web an
     assert.throws(() => resolveBoundConversation({...webPacket, session: {...migratedSession, ...invalid}}));
   }
 });
+
+
+test("antigravity and flexible-pool steward sessions recover pre-dispatch resume_failed even when failure notice receipt is unknown", () => {
+  const codexBinding = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: [], executor_endpoint_id: "codex"};
+  const configured = planConversationBinding({...request, binding: codexBinding}).state;
+  const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
+  const context = resolveBoundConversation({current: configured, binding_id: row.binding_id,
+    observation, available_projects: [project], ...source}).context;
+  const primaryAllocation = {schema_version: "manager_executor_allocation_v0", selection_policy: "flexible",
+    configured_endpoint: "antigravity", executor_endpoint: "antigravity", configuration_revision: "revision-2",
+    allocation_reason: "flexible_primary_available", eligible_endpoints: ["antigravity", "codex"]};
+  const session = {session_id: "original", goal_id: "loopx-manager", agent_id: "antigravity",
+    executor_endpoint_id: "antigravity", upstream_mode: "default", status: "ready",
+    upstream_thread_id: "antigravity-native", active_turn_id: null,
+    channel_id: `manager.external.native.${row.binding_id}.${source.source_ref}`, steward_context: context,
+    manager_executor_allocation: primaryAllocation, upstream_context_history: [{agent_id: "codex", thread_id: "original-codex"}]};
+  const ref = "f".repeat(24);
+  const failed = {session_id: "original", turn_id: "prep-failed", client_turn_id: `external-${ref}`,
+    message: "Compare repository execution value", origin: "lark", status: "failed", delta_count: 0, response: null,
+    upstream_turn_id: null, started_at: null, first_event_at: null, error_code: "resume_failed",
+    error: "The previous Agent conversation could not be restored.", completed_at: "2026-01-01T00:00:00Z"};
+  const proof = {kind: "core_runtime_preparation_failure", session_id: "original", turn_id: failed.turn_id,
+    events: [{event_id: "queued", kind: "turn.queued", delivery_mode: "session_queue"},
+      {event_id: "failed", kind: "turn.failed", error_code: failed.error_code, message: failed.error}]};
+  const packet = {
+    request: {request_ref: ref, command: null, status: "accepted", delivery_verified: false,
+      message: failed.message, origin: "lark", binding_id: row.binding_id, session_id: "original",
+      turn_id: failed.turn_id, source},
+    binding: codexBinding,
+    current_session: session,
+    context_recovery: {version: 23, failed_turn: failed, observed_at: "2026-01-01T00:02:00Z",
+      source_verified: true, steering_observed: false, stop_observed: false, attachments_present: false,
+      native_result_present: false, queued_input_present: false, later_equivalent_input_present: false,
+      preparation_scope_available: true, preparation_observation: proof, failure_notice_receipt_unknown: true},
+  };
+  const plan = planBoundConversationRequest(packet);
+  assert.equal(plan.recovery_candidate, true);
+  assert.equal(plan.recovery_eligible, true);
+  assert.equal(plan.preparation_attempt, 1);
+  assert.equal(plan.client_turn_id, `external-${ref}-recovery-23-preparation-1`);
+  // Receipt-unknown tolerance stays strictly pre-dispatch; post-dispatch or non-preparation failures remain rejected.
+  assert.equal(planBoundConversationRequest({...packet,
+    context_recovery: {...packet.context_recovery, failure_notice_receipt_unknown: false}}).recovery_candidate, false);
+  for (const postDispatch of [
+    {started_at: "2026-01-01T00:00:01Z"},
+    {upstream_turn_id: "native-1"},
+    {delta_count: 1},
+    {error_code: "response_timeout", started_at: "2026-01-01T00:00:01Z", upstream_turn_id: "native-1"},
+  ]) {
+    assert.equal(planBoundConversationRequest({...packet,
+      context_recovery: {...packet.context_recovery, failed_turn: {...failed, ...postDispatch}}}).recovery_candidate, false);
+  }
+});
