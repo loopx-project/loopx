@@ -243,6 +243,24 @@ test("operation preflight optionally shares the existing normalized session line
   assert.deepEqual(complete, before);
 });
 
+test("a native write directory agrees with both captured work scopes", () => {
+  const scope = "reports/**";
+  const source = payload();
+  (source.goal_boundary as JsonObject).write_scope = [scope];
+  (source.selected_todo as JsonObject).required_write_scopes = [scope];
+  const request = {operation: "host_dispatch_context",
+    complete_host_request: {schema_version: "loopx_turn_host_request_v1", turn_key: `sha256:${"a".repeat(64)}`}};
+  const capture = () => evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
+  const complete = capture();
+  assert.deepEqual(evaluateTurnEnvelope({...request, payload: complete, required_write_scope: scope}),
+    evaluateTurnEnvelope({...request, payload: complete}));
+  assert.throws(() => evaluateTurnEnvelope({...request, payload: complete, required_write_scope: "src/**"}),
+    /write directory must match the admitted task and goal scope/);
+  (source.selected_todo as JsonObject).required_write_scopes = [];
+  assert.throws(() => evaluateTurnEnvelope({...request, payload: capture(), required_write_scope: scope}),
+    /write directory must match the admitted task and goal scope/);
+});
+
 test("Host task presentation is source-checked and keeps task and backlog facts", () => {
   const source = payload();
   source.normal_delivery_allowed = true;

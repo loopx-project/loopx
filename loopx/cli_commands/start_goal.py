@@ -14,6 +14,7 @@ from ..bootstrap_command_pack import (
     render_start_goal_guided_markdown,
 )
 from ..control_plane.effect_runtime import (
+    EffectRuntimeNodeProbeError,
     EffectRuntimeStartupError,
     MINIMUM_NODE_VERSION_TEXT,
 )
@@ -69,8 +70,13 @@ _EFFECT_RUNTIME_STARTUP_DEFAULT_REMEDIATION = (
 def _effect_runtime_startup_recommended_action(
     diagnostic_code: str,
     message: str,
+    *,
+    guided: bool,
 ) -> str:
     node_action = node_probe_remediation(diagnostic_code)
+    if not guided:
+        action = node_action or "Check the Node.js launcher on PATH, then run `loopx doctor --deep`."
+        return f"{action} Then repeat the original command."
     if node_action is not None:
         return f"{node_action} Then retry `loopx start-goal --guided`."
     if diagnostic_code == "invalid_idle_timeout":
@@ -86,12 +92,13 @@ def _effect_runtime_startup_recommended_action(
 
 def _effect_runtime_startup_failure_payload(
     exc: EffectRuntimeStartupError,
+    *,
+    guided: bool = True,
 ) -> dict[str, object]:
     diagnostic_code = getattr(exc, "diagnostic_code", "runtime_startup_failed")
-    return {
+    payload: dict[str, object] = {
         "ok": False,
-        "schema_version": "loopx_start_goal_guided_v0",
-        "error": "LoopX TypeScript control-plane runtime is unavailable",
+        "error": "LoopX TypeScript control-plane runtime is unavailable" if guided else str(exc),
         "diagnostic_code": diagnostic_code,
         "runtime_requirement": {
             "runtime": "node",
@@ -101,17 +108,22 @@ def _effect_runtime_startup_failure_payload(
         "recommended_action": _effect_runtime_startup_recommended_action(
             diagnostic_code,
             str(exc),
+            guided=guided,
         ),
     }
+    if guided:
+        payload["schema_version"] = "loopx_start_goal_guided_v0"
+    return payload
 
 
-def _render_start_goal_markdown(payload: dict[str, object]) -> str:
+def _render_start_goal_markdown(payload: dict[str, object], *, guided: bool = True) -> str:
     if payload.get("ok") is not False:
         message = payload.get("message")
         if isinstance(message, str):
             return message
         return render_start_goal_guided_markdown(payload)
-    lines = ["# Guided Start Goal", "", f"- error: `{payload.get('error')}`"]
+    heading = "# Guided Start Goal" if guided else "# Start Goal"
+    lines = [heading, "", f"- error: `{payload.get('error')}`"]
     for field in (
         "error_code",
         "diagnostic_code",
@@ -178,15 +190,44 @@ def add_capability_route_argument(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def register_start_goal_command(subparsers: argparse._SubParsersAction) -> None:
+def register_start_goal_command(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     start_goal_parser = subparsers.add_parser(
         "start-goal",
-        help="Preview a guided /loopx <goal text> start transaction without mutating state.",
+        help="Preview a guided goal or execute its first checked task locally.",
     )
-    start_goal_parser.add_argument(
+    start_mode = start_goal_parser.add_mutually_exclusive_group()
+    start_mode.add_argument(
         "--guided",
         action="store_true",
-        help="Required for now: render the guided dry-run transaction packet.",
+        help="Render the guided read-only transaction packet.",
+    )
+    start_mode.add_argument(
+        "--execute",
+        action="store_true",
+        help="Start one checked task in a fresh local project with an independent check.",
+    )
+    start_goal_parser.add_argument(
+        "--retry-failed-turn",
+        action="store_true",
+        help="With the original --execute request, resume its saved first Turn without rerunning the worker.",
+    )
+    start_goal_parser.add_argument(
+        "--host",
+        dest="execution_host",
+        choices=("codex-cli", "generic-cli"),
+        help="Executor for --execute. Select codex-cli to use the installed Codex CLI.",
+    )
+    start_goal_parser.add_argument(
+        "--write-dir",
+        help="Project-relative directory the first Codex task may write. The check runs independently.",
+    )
+    start_goal_parser.add_argument(
+        "--host-adapter-command-json",
+        help="Approved JSON argv for a v1 generic CLI adapter when executing the first task.",
+    )
+    start_goal_parser.add_argument(
+        "--validation-command-json",
+        help="Approved JSON argv for a separate independent check when executing the first task.",
     )
     start_goal_parser.add_argument("--project", default=".", help="Project directory to inspect.")
     start_goal_parser.add_argument("--goal-id", help="Goal id. Defaults to <project-name>-goal.")
@@ -362,12 +403,34 @@ def handle_start_goal_command(
     print_payload: PrintPayload,
     *,
     runtime_root_arg: str | None = None,
+    explicit_registry: Path | None = None,
 ) -> int:
+    if getattr(args, "execute", False):
+        from .start_goal_managed import execute_managed_start, render_managed_start_markdown
+
+        try:
+            payload = execute_managed_start(args, runtime_root_arg=runtime_root_arg,
+                                            explicit_registry=explicit_registry)
+        except EffectRuntimeNodeProbeError as exc:
+            payload = _effect_runtime_startup_failure_payload(exc, guided=False)
+        except (OSError, RuntimeError, ValueError) as exc:
+            payload = {"ok": False, "error": str(exc)}
+        else:
+            print_payload(payload, args.format, render_managed_start_markdown)
+            return 0 if payload["ok"] else 1
+        print_payload(payload, args.format, lambda failure: _render_start_goal_markdown(failure, guided=False))
+        return 1
+    if getattr(args, "retry_failed_turn", False) or any(getattr(args, name, None) is not None for name in (
+        "execution_host", "host_adapter_command_json", "validation_command_json", "write_dir",
+    )):
+        print_payload({"ok": False, "error": "Host, check and retry options require start-goal --execute."},
+                      args.format, _render_start_goal_markdown)
+        return 2
     if not bool(getattr(args, "guided", False)):
         payload = {
             "ok": False,
             "schema_version": "loopx_start_goal_guided_v0",
-            "error": "`loopx start-goal` currently requires --guided",
+            "error": "`loopx start-goal` requires --guided or --execute",
             "suggested_command": "loopx start-goal --guided --goal-text '<goal text>'",
         }
         print_payload(payload, args.format, _render_start_goal_markdown)

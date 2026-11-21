@@ -567,6 +567,7 @@ def _dispatch_common_command(
 
 		return handle_start_goal_command(
 			args, print_payload, runtime_root_arg=args.runtime_root,
+			explicit_registry=registry_path if registry_was_configured else None,
 		)
 	if args.command in {"bootstrap-command-pack", "agent-onboard"}:
 		from .cli_commands.starter_bootstrap import (

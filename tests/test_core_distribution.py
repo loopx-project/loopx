@@ -849,3 +849,426 @@ def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_pytho
     assert model_input["source_decision_hash"] == original["contract_binding"]["content_hash"]
     assert replay["replayed"] is True and all(value is False for value in replay["effects"].values())
     assert len(log.read_text().splitlines()) == 1 and _spends(runtime) == 1
+
+
+def test_installed_core_starts_one_checked_task_from_goal_text(core_python, tmp_path, monkeypatch):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project = tmp_path / "first-work"
+    project.mkdir()
+    objective = "生成并独立检查从零到七的平方值。"
+    adapter = HOST_SOURCE.replace("request=json.load(sys.stdin)\n",
+        f"request=json.load(sys.stdin)\nassert {objective!r} in json.dumps(request,ensure_ascii=False)\n")
+    arguments = ["--format", "json", "start-goal", "--project", str(project),
+        "--goal-text", objective, "--execute", "--host-adapter-command-json",
+        json.dumps([core_python, "-I", "-c", adapter]), "--validation-command-json",
+        json.dumps([core_python, "-I", "-c", VALIDATOR_SOURCE])]
+    empty_path = tmp_path / "no-node"
+    empty_path.mkdir()
+    environment = {"PATH": str(empty_path)}
+    refused = json.loads(_run(core_python, arguments, tmp_path, environment=environment, expected=1).stdout)
+    assert refused["ok"] is False and refused["diagnostic_code"] == "node_unavailable"
+    assert refused["runtime_requirement"]["runtime"] == "node"
+    assert "Node.js" in refused["recommended_action"] and "original command" in refused["recommended_action"]
+    markdown = _run(core_python, ["--format", "markdown", *arguments[2:]],
+                    tmp_path, environment=environment, expected=1).stdout
+    assert "Install or activate Node.js" in markdown and "repeat the original command" in markdown
+    assert not list(project.iterdir())
+
+    first = json.loads(_run(core_python, arguments, tmp_path).stdout)
+    assert first["status"] == "committed" and first["validation"]["status"] == "passed"
+    assert first["goal_id"] == "first-work-goal" and first["agent_id"] == "local-worker"
+    assert first["effects"]["host_invoked"] and first["effects"]["quota_spent"]
+    runtime = project / ".loopx/runtime"
+    registry = project / ".loopx/registry.json"
+    readback = json.loads(_run(core_python, ["--registry", str(registry), "--format", "json",
+        "todo", "list", "--goal-id", first["goal_id"], "--todo-id", first["todo_id"]], project).stdout)
+    assert readback["todo"]["status"] == "done"
+    assert json.loads((project / "squares.json").read_text()) == [0, 1, 4, 9, 16, 25, 36, 49]
+    repeated = json.loads(_run(core_python, arguments, tmp_path).stdout)
+    assert repeated["replayed"] and repeated["resume_turn_key"] == first["resume_turn_key"]
+    assert repeated["todo_id"] == first["todo_id"]
+    assert all(value is False for value in repeated["effects"].values())
+    rendered = _run(core_python, ["--format", "markdown", *arguments[2:]], tmp_path).stdout
+    assert "Task completed and checked." in rendered and "artifact:squares.json" in rendered
+    assert "quota_spent" not in rendered and "turn_instance_id" not in rendered
+    changed = list(arguments)
+    changed[changed.index("--goal-text") + 1] = "Start an unrelated task."
+    registry_before = registry.read_bytes()
+    denied = json.loads(_run(core_python, changed, tmp_path, expected=1).stdout)
+    assert "already connected" in denied["error"]
+    assert registry.read_bytes() == registry_before
+    assert (project / "host-invocations").read_text().splitlines() == ["called"]
+    spends = runtime / "goals" / first["goal_id"] / "runs/index.jsonl"
+    assert spends.read_text().count("quota_slot_spent") == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("write", [False, True], ids=["read-only", "write-report"])
+def test_installed_core_starts_and_replays_a_checked_codex_goal(core_python, tmp_path, monkeypatch, provider, write):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.host_process_fixture import write_python_host_fixture
+    from tests.test_loopx_turn_codex_cli import _fake_codex
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime = tmp_path / "inventory", tmp_path / "runtime"
+    project.mkdir()
+    (project / "inventory.json").write_text("[2, 6, 11]", encoding="utf-8")
+    _configure_first_goal_storage(core_python, project, runtime, provider)
+    objective = "Read the inventory and independently check the total."
+    check = """import json,pathlib,sys
+record = json.load(sys.stdin)
+expected = sum(json.loads(pathlib.Path('inventory.json').read_text()))
+assert record['summary'] == f'Inventory total: {expected}'
+assert record['result_kind'] == 'validated_completion'
+"""
+    if write:
+        check += "assert pathlib.Path('reports/total.txt').read_text() == str(expected)\n"
+    command = ["--runtime-root", str(runtime), "--format", "json", "start-goal", "--execute",
+        "--host", "codex-cli", "--project", str(project), "--goal-text", objective,
+        "--validation-command-json", json.dumps([core_python, "-I", "-c", check])]
+    if write:
+        command += ["--write-dir", "reports"]
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    node = shutil.which("node")
+    assert node is not None
+    fake, log = _fake_codex(tmp_path)
+    environment = {
+        "PATH": os.pathsep.join([str(binaries), str(Path(core_python).parent), str(Path(node).parent), os.defpath]),
+        "CODEX_HOME": str(home),
+        "FAKE_CODEX_LOG": str(log),
+    }
+    missing = json.loads(_run(core_python, command, tmp_path, environment=environment, expected=1).stdout)
+    assert "Codex CLI executable is unavailable" in missing["error"]
+    assert not (project / ".loopx").exists() and not log.exists()
+
+    source = fake if os.name != "nt" else fake.with_suffix(".py")
+    behavior = [f"assert {objective!r} in prompt",
+                "total = sum(json.loads(pathlib.Path('inventory.json').read_text()))"]
+    if write:
+        behavior.extend([
+            "import tomllib",
+            "settings = tomllib.loads('\\n'.join(args[i+1] for i,a in enumerate(args) if a == '-c'))",
+            "profile = settings['permissions'][settings['default_permissions']]",
+            "assert profile['extends'] == ':read-only' and settings['approval_policy'] == 'never'",
+            "assert profile['filesystem'] == {str(pathlib.Path('reports').resolve()): 'write'}",
+            "assert '--sandbox' not in args and '--strict-config' in args and '--ignore-rules' in args",
+            "task = json.loads(prompt.split('Turn request:\\n', 1)[1])['task_context']",
+            "assert task['goal_boundary']['write_scope'] == ['reports/**']",
+            "pathlib.Path('reports').mkdir()",
+            "pathlib.Path('reports/total.txt').write_text(str(total))",
+        ])
+    else:
+        behavior.append("assert args[args.index('--sandbox') + 1] == 'read-only'")
+    behavior.append(
+        "result.update(result_kind='validated_completion', summary=f'Inventory total: {total}', "
+        "work_evidence=['artifact:inventory.json'], validation_evidence=['check:inventory-total'])"
+    )
+    executable = write_python_host_fixture(binaries / "codex", source.read_text(encoding="utf-8").replace(
+        "result.update(json.loads(os.environ.get(\"FAKE_CODEX_RESULT_FIELDS\", \"{}\")))",
+        "\n".join(behavior),
+    ))
+    if write:
+        for scope in (".loopx/runtime", ".", "../outside", "two words"):
+            denied = json.loads(_run(core_python, [*command[:-1], scope], tmp_path,
+                environment=environment, expected=1).stdout)
+            assert "--write-dir must" in denied["error"]
+        scoped_runtime = list(command)
+        scoped_runtime[1] = str(project / "reports/runtime")
+        denied = json.loads(_run(core_python, scoped_runtime, tmp_path, environment=environment, expected=1).stdout)
+        assert "separate from the goal and runtime state" in denied["error"]
+        (project / "reports").mkdir()
+        mutable = write_python_host_fixture(project / "reports/checker", "raise SystemExit(0)\n")
+        scoped_checker = list(command)
+        scoped_checker[scoped_checker.index("--validation-command-json") + 1] = json.dumps([str(mutable)])
+        denied = json.loads(_run(core_python, scoped_checker, tmp_path, environment=environment, expected=1).stdout)
+        assert "Keep the independent checker outside" in denied["error"]
+        mutable.unlink()
+        mutable.with_suffix(".py").unlink(missing_ok=True)
+        (project / "reports").rmdir()
+        assert not (project / ".loopx").exists() and not log.exists()
+    # Stop after the native result is durable and before the independent check.
+    interrupted = os.name == "posix"
+    if interrupted:
+        command_with_fault = _command(core_python, command)
+        command_with_fault[3] = """import os, signal
+from loopx.control_plane.turn_driver import command_validation
+def interrupt_validator(*args, **kwargs):
+    return lambda *_: os.kill(os.getpid(), signal.SIGKILL)
+command_validation.build_loopx_turn_command_validator = interrupt_validator
+""" + command_with_fault[3]
+        stopped = subprocess.run(command_with_fault, cwd=tmp_path, env=_environment(core_python, environment),
+            capture_output=True, text=True, timeout=90)
+        assert stopped.returncode == -signal.SIGKILL, (stopped.stdout, stopped.stderr)
+        (journal,) = [path for path in (runtime / "goals/inventory-goal/turns").glob("*.json")
+                      if not path.name.endswith(".lock.holder.json")]
+        recorded = json.loads(journal.read_text())
+        assert recorded["host_result"]["summary"] == "Inventory total: 19"
+        assert "typed_result" in recorded["completed_phases"]
+        executable.unlink()
+
+    first = json.loads(_run(core_python, command, tmp_path, environment=environment).stdout)
+    assert first["status"] == "committed" and first["validation"]["status"] == "passed"
+    assert first["result_kind"] == "validated_completion"
+    assert first["effects"]["host_invoked"] is (not interrupted)
+    assert first["effects"]["quota_spent"]
+    registry = project / ".loopx/registry.json"
+    registry_bytes = registry.read_bytes()
+    receipt = json.loads(_run(core_python, ["--registry", str(registry), "--runtime-root", str(runtime),
+        "--format", "json", "todo", "list", "--goal-id", first["goal_id"], "--todo-id", first["todo_id"]],
+        project, environment=environment).stdout)
+    assert receipt["todo"]["status"] == "done"
+    executable.unlink(missing_ok=True)
+    replay = json.loads(_run(core_python, command, tmp_path, environment=environment).stdout)
+    assert replay["replayed"] and replay["resume_turn_key"] == first["resume_turn_key"]
+    assert replay["todo_id"] == first["todo_id"] and not any(replay["effects"].values())
+    different = list(command)
+    if write:
+        different[-1] = "different-report"
+    else:
+        different[different.index("--host") + 1] = "generic-cli"
+        different += ["--host-adapter-command-json", json.dumps([core_python])]
+    denied = json.loads(_run(core_python, different, tmp_path, environment=environment, expected=1).stdout)
+    assert "already connected" in denied["error"] and registry.read_bytes() == registry_bytes
+    assert len(log.read_text().splitlines()) == 1
+    assert (runtime / "goals" / first["goal_id"] / "runs/index.jsonl").read_text().count("quota_slot_spent") == 1
+
+
+@pytest.mark.parametrize("invalid", ["missing-validator", "invalid-adapter", "owned-goal"])
+def test_installed_core_start_goal_preflights_before_creation(core_python, tmp_path, invalid):
+    arguments = ["--format", "json", "start-goal", "--project", str(tmp_path),
+        "--goal-text", "Produce a checked report.", "--execute"]
+    environment = None
+    if invalid == "owned-goal":
+        arguments += ["--goal-id", "native-owned-goal", "--host-adapter-command-json", json.dumps([core_python]),
+                      "--validation-command-json", json.dumps([core_python])]
+        environment = {"LOOPX_KUNLUNCODE_OUTER_CONTROLLER": "1", "LOOPX_KUNLUNCODE_OUTER_GOAL_ID": "native-owned-goal"}
+    elif invalid == "missing-validator":
+        arguments += ["--host-adapter-command-json", json.dumps([core_python])]
+    else:
+        arguments += ["--host-adapter-command-json", "[]",
+                      "--validation-command-json", json.dumps([core_python])]
+    refused = json.loads(_run(core_python, arguments, tmp_path, expected=1, environment=environment).stdout)
+    assert refused["ok"] is False
+    if invalid == "owned-goal":
+        assert refused["error_code"] == "kunluncode_outer_controller_write_owned"
+    assert not (tmp_path / ".loopx").exists()
+
+
+@pytest.mark.parametrize("unavailable_option", ["--host-adapter-command-json", "--validation-command-json"])
+def test_installed_core_first_task_can_retry_after_correcting_an_unavailable_program(
+    core_python, tmp_path, monkeypatch, unavailable_option,
+):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    arguments = ["--format", "json", "start-goal", "--project", str(tmp_path),
+        "--goal-text", "Produce and independently check the squares from zero to seven.", "--execute",
+        "--host-adapter-command-json", json.dumps([core_python, "-I", "-c", HOST_SOURCE]),
+        "--validation-command-json", json.dumps([core_python, "-I", "-c", VALIDATOR_SOURCE])]
+    unavailable = list(arguments)
+    unavailable[unavailable.index(unavailable_option) + 1] = json.dumps([str(tmp_path / "missing.exe")])
+
+    refused = json.loads(_run(core_python, unavailable, tmp_path, expected=1).stdout)
+    assert not (tmp_path / ".loopx").exists()
+    assert not (tmp_path / "host-invocations").exists()
+    assert unavailable_option in refused["error"] and "unavailable" in refused["error"]
+
+    result = json.loads(_run(core_python, arguments, tmp_path).stdout)
+    assert result["status"] == "committed" and result["validation"]["status"] == "passed"
+    assert json.loads((tmp_path / "squares.json").read_text()) == [0, 1, 4, 9, 16, 25, 36, 49]
+    assert (tmp_path / "host-invocations").read_text().splitlines() == ["called"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="uses POSIX project-relative executable resolution")
+def test_installed_core_first_task_uses_project_tools_and_replays_after_they_are_removed(
+    core_python, tmp_path, monkeypatch,
+):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project = tmp_path / "project"
+    scripts = project / "tools"
+    scripts.mkdir(parents=True)
+    runner, check = scripts / "fixture-task-runner", scripts / "fixture-task-check"
+    for path, source in ((runner, HOST_SOURCE), (check, VALIDATOR_SOURCE)):
+        path.write_text("#!/usr/bin/env python3\n" + source)
+        path.chmod(0o700)
+    environment = {"PATH": "tools" + os.pathsep + os.environ["PATH"]}
+    arguments = ["--format", "json", "start-goal", "--project", str(project),
+        "--goal-text", "Produce and independently check the squares from zero to seven.", "--execute",
+        "--host-adapter-command-json", json.dumps(["./tools/fixture-task-runner"]),
+        "--validation-command-json", json.dumps(["fixture-task-check"])]
+
+    first = json.loads(_run(core_python, arguments, tmp_path, environment=environment).stdout)
+    assert first["status"] == "committed" and first["validation"]["status"] == "passed"
+    runner.unlink()
+    check.unlink()
+    replay = json.loads(_run(core_python, arguments, tmp_path, environment=environment).stdout)
+    assert replay["replayed"] and replay["resume_turn_key"] == first["resume_turn_key"]
+    assert not any(replay["effects"].values())
+    assert (project / "host-invocations").read_text().splitlines() == ["called"]
+
+
+def _configure_first_goal_storage(core_python, project, runtime, provider):
+    setup = '''import sys
+from pathlib import Path
+from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
+from loopx.capabilities.machine_configuration.contract import MACHINE_CONFIGURATION_SCHEMA
+from loopx.capabilities.machine_configuration.store import configure_machine_configuration
+configuration={'schema_version':MACHINE_CONFIGURATION_SCHEMA,'namespaces':{'goal_storage':{
+'schema_version':'loopx_goal_storage_defaults_v1','new_goal_provider':sys.argv[2],
+'canonical_creation':True,'new_goal_handoff_mode':'hard_lease'}}}
+arguments={'runtime_root':Path(sys.argv[1]),'configuration':configuration,
+'registry':build_builtin_machine_configuration_registry()}
+preview=configure_machine_configuration(**arguments)
+result=configure_machine_configuration(**arguments,execute=True,expected_plan_revision=preview['plan_revision'])
+assert result['readback_verified']
+'''
+    configured = subprocess.run([core_python, "-I", "-c", setup, str(runtime), provider], cwd=project,
+        env=_environment(core_python), capture_output=True, text=True, timeout=45)
+    assert configured.returncode == 0, configured.stderr
+
+
+@pytest.mark.skipif(os.name != "posix", reason="uses a stand-alone executable checker")
+@pytest.mark.parametrize("provider", ["sqlite", "file"])
+def test_installed_core_retries_saved_first_turn(core_python, tmp_path, monkeypatch, provider):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project = tmp_path / "first-work"
+    project.mkdir()
+    runtime = project / ".loopx/runtime"
+    registry = project / ".loopx/registry.json"
+    check = tmp_path / "independent-check"
+    index = runtime / "goals/first-work-goal/runs/index.jsonl"
+    checker_source = VALIDATOR_SOURCE.replace("json.load(sys.stdin)",
+        "json.load(sys.stdin)\nwith pathlib.Path('checker-invocations').open('a') as f:f.write('checked\\n')")
+    check.write_text(f"#!{core_python}\n{checker_source}")
+    check.chmod(0o700)
+    parts = HOST_SOURCE.split("json.dump({", 1)
+    adapter = f"{parts[0]}pathlib.Path({str(check)!r}).unlink()\njson.dump({{{parts[1]}"
+    arguments = ["--format", "json", "start-goal", "--project", str(project),
+        "--goal-text", "Produce and independently check the first report.", "--execute",
+        "--host-adapter-command-json", json.dumps([core_python, "-I", "-c", adapter]),
+        "--validation-command-json", json.dumps([str(check)])]
+    retry = [*arguments, "--retry-failed-turn"]
+
+    def run(argv, expected=0):
+        return json.loads(_run(core_python, argv, project, expected=expected).stdout)
+
+    refused = run(retry, expected=1)
+    assert "No matching first Turn" in refused["error"]
+    assert not list(project.iterdir())
+    if provider == "file":
+        _configure_first_goal_storage(core_python, project, runtime, provider)
+    first = run(arguments, expected=1)
+    key, todo_id = first["resume_turn_key"], first["todo_id"]
+    assert first["validation"]["status"] == "inconclusive"
+    assert first["effects"]["host_invoked"] and not first["effects"]["quota_spent"]
+    assert "--retry-failed-turn" in first["recommended_action"]
+    assert not (project / "checker-invocations").exists()
+    assert not index.exists() or "quota_slot_spent" not in index.read_text()
+    original_checker = f"#!{core_python}\n{checker_source}"
+    check.write_text(original_checker)
+    check.chmod(0o700)
+    markdown = _run(core_python, ["--format", "markdown", *arguments[2:]], project, expected=1).stdout
+    assert key in markdown and "with --retry-failed-turn" in markdown
+    plain = run(arguments, expected=1)
+    assert plain["replayed"] and not any(plain["effects"].values())
+    assert not (project / "checker-invocations").exists()
+
+    changed = list(retry)
+    changed[changed.index("--validation-command-json") + 1] = json.dumps([str(check), "different-command"])
+    refused = run(changed, expected=1)
+    assert "No matching first Turn" in refused["error"]
+    assert not (project / "checker-invocations").exists()
+    before_registry = registry.read_bytes()
+    recovered = run(retry)
+    assert recovered["status"] == "committed" and recovered["validation"]["status"] == "passed"
+    assert recovered["resume_turn_key"] == key and recovered["todo_id"] == todo_id
+    assert recovered["turn_instance_id"] == first["turn_instance_id"]
+    assert recovered["effects"]["quota_spent"] and not recovered["effects"]["host_invoked"]
+    readback = run(["--registry", str(registry), "--format", "json",
+        "todo", "list", "--goal-id", first["goal_id"], "--todo-id", todo_id])
+    assert readback["todo"]["status"] == "done"
+    assert readback["authority_read"]["source_authority"] == f"{provider}_v0"
+    replay = run(retry)
+    assert replay["replayed"] and not any(replay["effects"].values())
+    assert replay["todo_id"] == todo_id and replay["resume_turn_key"] == key
+    assert registry.read_bytes() == before_registry
+    assert (project / "host-invocations").read_text().splitlines() == ["called"]
+    assert (project / "checker-invocations").read_text().splitlines() == ["checked"]
+    assert index.read_text().count("quota_slot_spent") == 1
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX SIGKILL")
+@pytest.mark.parametrize("provider", ["sqlite", "file"])
+@pytest.mark.parametrize("phase", ["registration", "initial-source"])
+def test_installed_core_recovers_first_goal_publication(core_python, tmp_path, monkeypatch, provider, phase):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project = tmp_path / "first-work"
+    project.mkdir()
+    runtime = project / ".loopx/runtime"
+    registry = project / ".loopx/registry.json"
+    state = project / ".loopx/goals/first-work-goal/ACTIVE_GOAL_STATE.md"
+    if provider == "file":
+        _configure_first_goal_storage(core_python, project, runtime, provider)
+    arguments = ["--format", "json", "start-goal", "--project", str(project),
+        "--goal-text", "Produce and independently check the first report.", "--execute",
+        "--host-adapter-command-json", json.dumps([core_python, "-I", "-c", HOST_SOURCE]),
+        "--validation-command-json", json.dumps([core_python, "-I", "-c", VALIDATOR_SOURCE])]
+    hook = """import os,signal
+def kill_after(effect):
+    def run(*args, **kwargs):
+        effect(*args, **kwargs)
+        os.kill(os.getpid(), signal.SIGKILL)
+    return run
+"""
+    if phase == "registration":
+        hook += """from loopx.control_plane.projects.registry_codec import ProjectRegistryTransaction
+ProjectRegistryTransaction.commit=kill_after(ProjectRegistryTransaction.commit)
+"""
+    else:
+        hook += """from loopx import bootstrap
+bootstrap.atomic_write_state_text=kill_after(bootstrap.atomic_write_state_text)
+"""
+    command = _command(core_python, arguments)
+    command[3] = hook + command[3]
+    interrupted = subprocess.run(command, cwd=project, env=_environment(core_python),
+        capture_output=True, text=True, timeout=90)
+    assert interrupted.returncode == -signal.SIGKILL, (interrupted.stdout, interrupted.stderr)
+    before = registry.read_bytes()
+    (goal,) = json.loads(before)["goals"]
+    assert goal["id"] == "first-work-goal" and goal["coordination"]["storage_target"]["provider"] == provider
+    assert state.exists() == (phase == "initial-source")
+    assert not (project / "host-invocations").exists()
+
+    _configure_first_goal_storage(core_python, project, runtime, "file" if provider == "sqlite" else "sqlite")
+    changed = list(arguments)
+    changed[changed.index("--goal-text") + 1] = "Start an unrelated task."
+    denied = json.loads(_run(core_python, changed, project, expected=1).stdout)
+    assert "already connected" in denied["error"] and registry.read_bytes() == before
+    assert state.exists() == (phase == "initial-source")
+    assert not (project / "host-invocations").exists()
+
+    recovered = json.loads(_run(core_python, arguments, project).stdout)
+    assert recovered["status"] == "committed" and recovered["validation"]["status"] == "passed"
+    assert recovered["turn_instance_id"] == goal["creation_operation_id"]
+    assert state.is_file() and registry.read_bytes() == before
+    readback = json.loads(_run(core_python, ["--registry", str(registry), "--format", "json",
+        "todo", "list", "--goal-id", goal["id"], "--todo-id", recovered["todo_id"]], project).stdout)
+    assert readback["todo"]["status"] == "done"
+    assert readback["authority_read"]["source_authority"] == f"{provider}_v0"
+    assert json.loads((project / "squares.json").read_text()) == [0, 1, 4, 9, 16, 25, 36, 49]
+    replay = json.loads(_run(core_python, arguments, project).stdout)
+    assert replay["todo_id"] == recovered["todo_id"] and replay["resume_turn_key"] == recovered["resume_turn_key"]
+    assert replay["replayed"] and not any(replay["effects"].values())
+    assert (project / "host-invocations").read_text().splitlines() == ["called"]
+    assert (runtime / "goals/first-work-goal/runs/index.jsonl").read_text().count("quota_slot_spent") == 1

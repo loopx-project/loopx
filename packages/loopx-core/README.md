@@ -16,9 +16,60 @@ uv pip install --python /tmp/loopx-core-env/bin/python /tmp/loopx-core-dist/loop
 /tmp/loopx-core-env/bin/loopx doctor --installation-only --deep --format json
 ```
 
-Python 3.11+ is required. Import and help do not need Node. Executing governed
-tasks requires a qualified Node runtime (22.22.3+ and the existing SQLite
-reliability checks), an explicitly selected host and its own prerequisites.
+For a fresh project with Codex CLI on PATH and an approved independent check,
+start a read-only task from the goal text. The existing Codex installation
+supplies the model and login.
+
+```sh
+loopx start-goal --execute --host codex-cli --project . \
+  --goal-text "Read the inventory and check the total." \
+  --validation-command-json '["./check-inventory"]'
+```
+
+Use an existing project check that independently verifies the result. A
+Codex CLI installation with permission-profile support can also write a first
+artifact in a selected directory.
+
+```sh
+loopx start-goal --execute --host codex-cli --project . --write-dir reports \
+  --goal-text "Write a checked inventory total to reports/total.txt." \
+  --validation-command-json '["./check-inventory-report"]'
+```
+
+Keep the checker and its verification rules outside the writable directory.
+The Codex filesystem sandbox allows writes in that directory. Core keeps the
+registration, task state and settlement outside the write grant. Repeat the
+same directory and check when recovering the original task.
+
+A configured generic CLI caller can still supply its approved v1 adapter.
+
+```sh
+loopx start-goal --execute --project . --goal-text "Create and check an inventory report." \
+  --host-adapter-command-json "$adapter_argv" --validation-command-json "$validator_argv"
+```
+
+Core registers the local Goal and worker, creates one task, then runs the
+existing checked Turn. It checks for the selected Codex binary and checks the
+configured command paths before the first registration on POSIX. For generic
+adapter and check commands on Windows it checks absolute paths. Correct an
+unavailable program in the launch configuration and repeat the same goal.
+Repeat the original invocation after an interruption, including during
+registration. It continues the saved attempt or returns the checked result.
+If the worker finished but the independent check did not pass, the command
+retains the worker's result and reports the original Turn key. Once the checker
+is ready, repeat the same command with `--retry-failed-turn`. This continues
+checking and settling the original Turn without rerunning the worker or
+registering new work. Repeating a completed retry returns the existing receipt.
+The `--guided` route remains available for an existing project or an interactive
+host.
+
+Python 3.11+ is required. Import and help work before Node is installed.
+A fresh `status` read and governed tasks use the TypeScript runtime. On a cold
+start with missing or unsupported Node, the first task reports
+`node_unavailable` before creating Goal state. Install or activate Node.js
+22.22.3+ on PATH, run `loopx doctor --deep`, and repeat the same start command.
+Execution also requires the existing SQLite reliability checks and the selected
+host's prerequisites.
 Use the existing `turn run-once --host generic-cli` entry, a separate validation
 command, `turn inspect-journal` and `--resume-turn-key` for execution and recovery.
 Start with one natural-language goal in your existing model host:
