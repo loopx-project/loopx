@@ -87,6 +87,46 @@ curl -fsSL "https://raw.githubusercontent.com/loopx-project/loopx/$ref/apps/work
 
 各家 agent CLI 要自己装好并登录，LooChat 只调用这台机器上现有的。
 
+### 统一启动命令
+
+安装支持此命令的 LoopX CLI，并安装、构建同版本 Workbench 后：
+
+```bash
+loopx workbench start
+loopx workbench status
+loopx workbench stop
+```
+
+`start` 在后台启动 Workbench，输出访问地址和私密登录链接。重复执行复用已有实例；
+`status` 只读检查实际服务及 Core 连通性，不创建配置、不签发登录链接。
+`stop` 保留配置和会话数据，存在运行中的 Agent 时拒绝停止；明确要中断时使用
+`loopx workbench stop --force`。Core 仍独立管理，以上命令不会启动、替换或停止 Core。
+Core 不可达会明确提示，普通 Agent 会话仍可使用；连通性不代表 Goal 功能已验收。
+
+默认数据目录与 `scripts/workbench.sh` 相同：
+`${XDG_STATE_HOME:-~/.local/state}/loochat-workbench`。
+可以用 `WORKBENCH_STATE_DIR` 或每次传入 `--state-dir` 指定已有目录。
+`start --port 8796`、`--workbench-dir /path/to/apps/workbench`、
+`--env-file /path/to/workbench.env` 可选择端口、已构建应用和已有配置；
+成功启动后保存这些选择，停止后再次启动沿用。应用依次从显式目录、
+`LOOPX_WORKBENCH_DIR`、已保存目录、`LOOCHAT_HOME`、CLI 源码目录和默认安装目录查找。
+依赖或构建缺失时给出准备命令，不自动下载安装。
+
+原有脚本或 systemd 正在管理的实例不会被接管或停止。迁移时先用原启动方式正常停止，
+再指定同一数据和配置，例如安装器的默认目录：
+
+```bash
+loopx workbench start --state-dir ~/.local/state/loochat --env-file ~/.config/loochat/.env
+loopx workbench status --state-dir ~/.local/state/loochat
+loopx workbench stop --state-dir ~/.local/state/loochat
+```
+
+systemd 实例继续使用原服务管理也完全可行，不要让两种启动方式同时管理同一数据。
+CLI 管理使用独立的私有 Unix socket，不开放浏览器或远程 relay 的停服接口；
+旧 PID 文件不授予停止权限。后台日志在状态目录的 `daemon.log`；
+启动失败先看日志，修正配置后重试。异常中断留下 `lifecycle.lock` 时，先确认没有进行中的
+启动，再移除该锁目录重试。命令支持 `--format json`，但 `start` 输出包含登录链接，勿公开。
+
 ### 从源码开发
 
 ```bash

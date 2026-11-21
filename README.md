@@ -233,6 +233,11 @@ contract](docs/reference/protocols/lark-manager-context-authority-v0.md).
 loopx dashboard
 ```
 
+For the optional [Workbench](apps/workbench/README.md#统一启动命令), use
+`loopx workbench start`, `loopx workbench status`, and `loopx workbench stop`
+after installing its separate application. These commands preserve its data and
+leave independently managed Core services running.
+
 `loopx dashboard` is the supported browser/PWA launch path. You can also download
 native desktop previews from the [current release](https://github.com/loopx-project/loopx/releases/latest);
 they reuse the same loopback services and Goal state. Apple Silicon macOS supports
