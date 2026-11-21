@@ -73,12 +73,17 @@ def test_saved_replan_reads_keep_original_authority(tmp_path, monkeypatch, provi
                 "source": "goal_acceptance", "content": {"status": "loaded", "goal_acceptance_contract": distinct},
             })
             source["precision_fixture"] = {"exact_integer": 2**53 + 1, "exact_float": 1.0}
+            source.pop("schema_version", None)
+            source.pop("contract_binding", None)
             capture = tmp_path / "precision-source.json"
             reader_path = capture
             write_decision_capture(capture, source)
         if entry == "staged":
             capture = tmp_path / "already-staged.json"
-            write_decision_capture(capture, _turn_envelope_result("replan_cli_view", payload=source))
+            staged_view = _turn_envelope_result("replan_cli_view", payload=source)
+            staged_view.pop("schema_version", None)
+            staged_view.pop("contract_binding", None)
+            write_decision_capture(capture, staged_view)
         selected_raw = capture.read_bytes()
 
         def snapshot():
@@ -105,7 +110,7 @@ from loopx.control_plane.effect_runtime import EffectRuntimeStartupError
 from loopx.entrypoint import main
 original = turn_envelope._turn_envelope_result
 def fail(operation, **kwargs):
-    if operation == 'context_delivery' and (kwargs.get('native_projection') or {}).get('captured_decision_path'):
+    if operation == 'context_delivery' and (kwargs.get('native_projection') or {}).get('captured_decision'):
         marker.write_text('context_delivery')
         raise EffectRuntimeStartupError('synthetic presentation outage', diagnostic_code='synthetic_fixture')
     return original(operation, **kwargs)
