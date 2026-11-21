@@ -106,3 +106,20 @@ def test_persistent_canonical_worker_reuses_and_auto_respawns_once(tmp_path, mon
     assert second["status"] == "applied"
     assert worker._process.pid != original_pid
     assert worker._process.poll() is None
+
+
+def test_canonical_worker_reaps_silent_child_without_retry(tmp_path, monkeypatch):
+    import canonical_authority_fixture as fixture_mod
+
+    worker_type = fixture_mod._CanonicalAuthorityWorker
+    monkeypatch.setattr(fixture_mod, "_WORKER_REQUEST_TIMEOUT_SECONDS", 0.25)
+    monkeypatch.setattr(worker_type, "_build_script", staticmethod(lambda _: "process.stdin.resume();"))
+    worker = worker_type((os.getpid(), str(tmp_path), False))
+    original_process = worker._process
+    try:
+        with pytest.raises(TimeoutError, match="timed out waiting for response"):
+            worker.request({"op": "silent"})
+        assert worker._process is original_process
+        assert original_process.poll() is not None
+    finally:
+        worker.close()

@@ -9,15 +9,15 @@ from __future__ import annotations
 
 import atexit
 from collections import deque
+from contextlib import suppress
 import json
 import os
 from datetime import datetime
 from pathlib import Path
-import selectors
+from queue import Empty, SimpleQueue
 import subprocess
 import tempfile
 import threading
-import time
 
 import loopx
 
@@ -34,7 +34,6 @@ class _CanonicalAuthorityWorker:
     def __init__(self, key: tuple[int, str, bool]) -> None:
         self.key = key
         self.call_lock = threading.Lock()
-        self._stderr_tail: deque[str] = deque(maxlen=64)
         self._process = self._spawn(Path(key[1]))
 
     @staticmethod
@@ -80,50 +79,55 @@ class _CanonicalAuthorityWorker:
         )
 
     def _spawn(self, package: Path) -> subprocess.Popen[bytes]:
-        self._stderr_tail.clear()
         proc = subprocess.Popen(
             ["node", "--no-warnings", "--experimental-strip-types", "--input-type=module", "-e", self._build_script(package)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            bufsize=0,
         )
-        assert proc.stderr is not None
+        stdout, stderr = proc.stdout, proc.stderr
+        assert stdout is not None and stderr is not None
+        responses: SimpleQueue[bytes | OSError] = SimpleQueue()
+        stderr_tail: deque[str] = deque(maxlen=64)
+        self._responses = responses
+        self._stderr_tail = stderr_tail
+
+        # Windows select() accepts sockets only. Drain the anonymous pipes in
+        # readers owned by this child, and apply the deadline to the queue.
+        def _drain_stdout() -> None:
+            try:
+                for line in stdout:
+                    if not line.endswith(b"\n"):
+                        break
+                    responses.put(line)
+            except OSError as exc:
+                responses.put(exc)
+            else:
+                responses.put(b"")
 
         def _drain_stderr() -> None:
-            try:
-                for raw_line in iter(proc.stderr.readline, b""):
-                    self._stderr_tail.append(raw_line.decode("utf-8", errors="replace").rstrip())
-            except OSError:
-                pass
+            with suppress(OSError):
+                for raw_line in stderr:
+                    stderr_tail.append(raw_line.decode("utf-8", errors="replace").rstrip())
 
-        threading.Thread(target=_drain_stderr, daemon=True).start()
+        self._readers = (
+            threading.Thread(target=_drain_stdout, daemon=True),
+            threading.Thread(target=_drain_stderr, daemon=True),
+        )
+        for reader in self._readers:
+            reader.start()
         return proc
 
     def _read_line(self, timeout_seconds: float) -> bytes:
-        stdout = self._process.stdout
-        assert stdout is not None
-        deadline = time.monotonic() + timeout_seconds
-        chunks = bytearray()
-        selector = selectors.DefaultSelector()
-        selector.register(stdout, selectors.EVENT_READ)
         try:
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError("canonical authority worker timed out waiting for response")
-                events = selector.select(remaining)
-                if not events:
-                    raise TimeoutError("canonical authority worker timed out waiting for response")
-                chunk = os.read(stdout.fileno(), 65536)
-                if not chunk:
-                    raise EOFError("canonical authority worker closed stdout")
-                chunks.extend(chunk)
-                if b"\n" in chunk:
-                    line, _rest = bytes(chunks).split(b"\n", 1)
-                    return line
-        finally:
-            selector.close()
+            response = self._responses.get(timeout=timeout_seconds)
+        except Empty:
+            raise TimeoutError("canonical authority worker timed out waiting for response") from None
+        if isinstance(response, OSError):
+            raise response
+        if not response:
+            raise EOFError("canonical authority worker closed stdout")
+        return response
 
     def request(self, payload: dict[str, object]) -> dict:
         encoded = (json.dumps(payload) + "\n").encode("utf-8")
@@ -137,16 +141,16 @@ class _CanonicalAuthorityWorker:
                     self._process.stdin.write(encoded)
                     self._process.stdin.flush()
                     raw_line = self._read_line(_WORKER_REQUEST_TIMEOUT_SECONDS)
-                except (BrokenPipeError, EOFError, OSError):
+                except TimeoutError:
+                    self.close()
+                    raise
+                except (EOFError, OSError):
                     self.close()
                     if attempt == 0:
                         self._process = self._spawn(Path(self.key[1]))
                         continue
                     stderr_text = "\n".join(self._stderr_tail)
                     raise AssertionError(f"canonical authority worker failed after respawn: {stderr_text}")
-                except TimeoutError:
-                    self.close()
-                    raise
                 response = json.loads(raw_line.decode("utf-8"))
                 if not response.get("ok"):
                     raise AssertionError(response.get("error") or "\n".join(self._stderr_tail))
@@ -155,12 +159,9 @@ class _CanonicalAuthorityWorker:
 
     def close(self) -> None:
         proc = self._process
-        for stream in (proc.stdin, proc.stdout, proc.stderr):
-            if stream is not None:
-                try:
-                    stream.close()
-                except OSError:
-                    pass
+        if proc.stdin is not None:
+            with suppress(OSError):
+                proc.stdin.close()
         if proc.poll() is None:
             try:
                 proc.wait(timeout=1.5)
@@ -171,6 +172,14 @@ class _CanonicalAuthorityWorker:
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.wait()
+        # Exit closes the child's pipe ends so the readers can finish before
+        # this process closes its buffered streams or starts a new child.
+        for reader in self._readers:
+            reader.join()
+        for stream in (proc.stdout, proc.stderr):
+            if stream is not None:
+                with suppress(OSError):
+                    stream.close()
 
 
 def _shutdown_canonical_fixture_workers() -> None:
