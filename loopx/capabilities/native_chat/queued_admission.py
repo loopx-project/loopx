@@ -67,6 +67,41 @@ def enqueue_turn(controller: Any, *, session_id: str, client_turn_id: str, messa
     return turn, created
 
 
+def steer_web_turn(controller: Any, *, session_id: str, expected_turn_id: str,
+                   client_ingress_id: str, message: str) -> tuple[dict[str, Any], bool]:
+    """Apply the loopback App's steering input to its existing private Session."""
+    session = controller.store.load_session(session_id)
+    saved = (session or {}).get("steward_context") or {}
+    if saved.get("audience") != "bound_owner":
+        return controller.steer_active_turn(session_id=session_id, expected_turn_id=expected_turn_id,
+                                            client_ingress_id=client_ingress_id, message=message)
+    contexts = controller.project_contexts
+    bindings = contexts.conversation_bindings
+    if bindings is None or controller.registry_path is None:
+        raise ValueError("bound steward authority is unavailable")
+
+    from ...chat_manager_context import manager_authorization_scope_id_for_registry
+
+    # Reuse the local Web source grant. Keep its binding fence through the
+    # exact-Turn receipt and native delivery, including concurrent revocation.
+    with bindings.input_context(saved, origin="web", session=session, store=controller.store) as selected:
+        fresh = controller.store.load_session(session_id)
+        if fresh is None or fresh.get("status") == "closed":
+            raise KeyError("chat session was not found")
+        if any(fresh.get(key) != session.get(key) for key in
+               ("steward_context", "project_context", "channel_id", "goal_id", "agent_id", "executor_endpoint_id")):
+            raise ValueError("bound Session changed before input admission")
+        contexts.runtime_context(fresh, selected)
+        scope = manager_authorization_scope_id_for_registry(controller.registry_path,
+            selected["context"]["goal_ids"], runtime_root=controller.coordination_runtime_root,
+            channel_id=fresh["channel_id"])
+        if scope is None or scope != fresh.get("manager_authorization_scope_id"):
+            raise ValueError("bound steward authorization changed before steering")
+        with controller.store.steering_delivery_lock(session_id, client_ingress_id):
+            return controller._steer_active_turn(session=fresh, session_id=session_id, expected_turn_id=expected_turn_id,
+                client_ingress_id=client_ingress_id, message=message, _queued_turn_id=None, origin="web")
+
+
 def deliver_native_mention(
     controller, *, session_id: str, ingress_id: str, target_turn_id: str | None,
     binding_matches: bool, text_only: bool, may_deliver_new: bool,

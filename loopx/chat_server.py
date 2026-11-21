@@ -9,6 +9,7 @@ import time
 import uuid
 from collections.abc import Callable, Mapping
 import webbrowser
+from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -1086,7 +1087,12 @@ class ChatRequestHandler(
                 raise ValueError("a message of 1–12000 characters is required")
             if not isinstance(ingress_id, str) or not ingress_id.strip():
                 raise ValueError("client_ingress_id is required")
-            turn, created = self.server.runtime_controller.steer_active_turn(
+            controller = self.server.runtime_controller
+            steer = controller.steer_active_turn
+            if is_loopback_host(str(self.server.server_address[0])):
+                from .capabilities.native_chat.queued_admission import steer_web_turn
+                steer = partial(steer_web_turn, controller)
+            turn, created = steer(
                 session_id=session_id, expected_turn_id=turn_id,
                 client_ingress_id=ingress_id, message=message,
             )
