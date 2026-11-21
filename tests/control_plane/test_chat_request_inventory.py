@@ -229,7 +229,7 @@ def test_read_and_adoption_still_owe_conclusion_and_queued_return_stays_visible(
 
 
 
-def test_terminal_return_with_wrong_message_stays_unfinished_on_both_surfaces(api, capsys):
+def test_terminal_return_reconciles_only_matching_original_message(api, capsys):
     import json
 
     from loopx.cli import main
@@ -243,8 +243,11 @@ def test_terminal_return_with_wrong_message_stays_unfinished_on_both_surfaces(ap
                 "adopt", "Check the requested artifact", registry=fixture["registry"], caller_goal_ref=fixture["ref"])
     report(fixture["runtime"], route["goal_id"], route["agent_id"], request_id,
            "conclusion", "The requested artifact passed.", registry=fixture["registry"], caller_goal_ref=fixture["ref"])
-    drain(fixture["runtime"], fixture["registry"], server.chat_store,
-          lambda *_: pytest.fail("a local return must not use an external sender"))
+    def drain_returns():
+        return drain(fixture["runtime"], fixture["registry"], server.chat_store,
+                     lambda *_: pytest.fail("a local return must not use an external sender"))
+
+    assert drain_returns() == 1
 
     def cli_agenda():
         capsys.readouterr()
@@ -268,20 +271,52 @@ def test_terminal_return_with_wrong_message_stays_unfinished_on_both_surfaces(ap
     unrelated = server.chat_store.append_message(session_id, role="assistant", text="Another result",
                                                   turn_id=turn["turn_id"], origin="manager_followup")
     assert unrelated["message_id"] != message_id
-    for corrupted in ({"message_id": unrelated["message_id"]}, {}):
-        incorrect = {key: value for key, value in json.loads(original).items() if key != "message_id"}
-        receipt.write_text(json.dumps({**incorrect, **corrupted}))
-        unchanged = receipt.read_bytes()
+    journal = server.chat_store.root / "sessions" / session_id / "messages.jsonl"
+    original_journal = journal.read_bytes()
+
+    def assert_recovery():
         http, pending = _inventory(api, session_id)
         assert http == 200 and pending["pending_count"] == 1
         row, = pending["rows"]
         assert row["request_id"] == request_id
+        assert row["agenda"]["step"] == "recover_evidence"
         assert row["returns"][0]["status"] == "explicit_unverified"
         assert row["returns"][0]["error"] == "manager_return_payload_conflict"
         agenda, = cli_agenda()
-        assert agenda["request_id"] == request_id and agenda["step"] == "await_return_delivery"
-        assert agenda["returns"][0]["status"] == "explicit_unverified"
+        assert agenda["request_id"] == request_id and agenda["step"] == "recover_evidence"
+        assert agenda["returns"][0]["error"] == "manager_return_payload_conflict"
+
+    def change_message(**changes):
+        modified = []
+        for line in original_journal.splitlines(keepends=True):
+            row = json.loads(line)
+            if row["message_id"] == message_id:
+                line = (json.dumps({**row, **changes}) + "\n").encode()
+            modified.append(line)
+        return b"".join(modified)
+
+    for corrupted, mismatch in (({"message_id": unrelated["message_id"]}, {"turn_id": turn["turn_id"]}),
+                                ({}, {"text": "A different result in the correct Turn"})):
+        incorrect = {key: value for key, value in json.loads(original).items() if key != "message_id"}
+        receipt.write_text(json.dumps({**incorrect, **corrupted}))
+        unchanged = receipt.read_bytes()
+        assert_recovery()
+        changed_journal = change_message(**mismatch)
+        journal.write_bytes(changed_journal)
+        assert drain_returns() == 0
+        assert_recovery()
+        assert journal.read_bytes() == changed_journal
         assert receipt.read_bytes() == unchanged
+
+        journal.write_bytes(original_journal)
+        assert drain_returns() == 1
+        assert drain_returns() == 0
+        assert cli_agenda() == []
+        recovered = _inventory(api, session_id, view="history")[1]
+        assert recovered["pending_count"] == 0
+        assert recovered["rows"][0]["returns"][0]["status"] == "delivered"
+        assert receipt.read_bytes() == unchanged
+        assert journal.read_bytes() == original_journal
     receipt.write_bytes(original)
     assert cli_agenda() == []
     restored = _inventory(api, session_id, view="history")[1]

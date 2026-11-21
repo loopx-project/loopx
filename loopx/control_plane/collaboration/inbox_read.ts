@@ -13,7 +13,8 @@ import {jsonObject, requireJsonObject, requireNonEmptyString, requireStringLiter
 import {decideCollaborationLifecycle} from "./goal_instance_lifecycle.ts";
 import {inspectCollaborationInboxReceipts, projectReceiverFollowthrough} from "./inbox_receipts.ts";
 import {recordControlledRequestRead} from "./request_control.ts";
-import {planCollaborationResult, returnMessageId} from "./result_publication.ts";
+import {planCollaborationResult} from "./result_publication.ts";
+import {confirmedTerminalReturn, terminalReturnIdentityConflict, TERMINAL_RETURN_READBACK_SUFFIX} from "./terminal_return_readback.ts";
 import {CONVERSATION_ENTRY_SCHEMA, normalizeOriginalConversationRecipient, verifyOriginalConversationReturnRoute} from "./semantic_request.ts";
 import {projectDelegationTurnContext, projectDelegationTurnItem, projectDelegationTurnItems} from "./turn_context.ts";
 import {isNativeChildResultCursor, nativeChildResultInbox} from "../capabilities/native_child_result_inbox.ts";
@@ -362,10 +363,19 @@ function replyStatuses(root: string, row: JsonObject): JsonObject[] {
         || error !== null && (typeof error !== "string" || !DELIVERY_ERRORS.has(error))) {
       status = "explicit_unverified"; error = "delivery_state_unreadable";
     }
-    if (status === "delivered" && phase === "conclusion" && row.source_kind !== "peer"
-        && state.message_id !== returnMessageId(requestId(row.request_id), key)) {
-      return {...identity, status: "explicit_unverified", created_at: reply.created_at ?? null,
-        delivered_at: null, error: "manager_return_payload_conflict"};
+    if (status === "delivered" && row.source_kind !== "peer"
+        && terminalReturnIdentityConflict(state, requestId(row.request_id), key)) {
+      let deliveredAt: string | null = null;
+      try {
+        const readback = observe(join(folder, key + TERMINAL_RETURN_READBACK_SUFFIX));
+        if (readback.state === "read") {
+          const route = readRecord(join(root, "roundtrips", requestId(row.request_id) + ".json"));
+          deliveredAt = confirmedTerminalReturn(readback.value as JsonObject, state, reply, route);
+        }
+      } catch (failure) { if (!recordFailure(failure)) throw failure; }
+      return {...identity, status: deliveredAt === null ? "explicit_unverified" : "delivered",
+        created_at: reply.created_at ?? null, delivered_at: deliveredAt,
+        error: deliveredAt === null ? "manager_return_payload_conflict" : null};
     }
     return {...identity, status, created_at: reply.created_at ?? null,
       delivered_at: typeof state.delivered_at === "string" && [...state.delivered_at].length <= 80 ? state.delivered_at : null,
@@ -374,7 +384,7 @@ function replyStatuses(root: string, row: JsonObject): JsonObject[] {
 }
 function agendaResults(root: string, row: JsonObject, returns = replyStatuses(root, row)): JsonObject[] {
   const folder = join(root, "replies", requestId(row.request_id));
-  const statuses = new Map(returns.map(status => [status.result_key ?? status.phase, status.status]));
+  const statuses = new Map(returns.map(status => [status.result_key ?? status.phase, status]));
   const replies = resultKeys(folder).map(key => ({key, reply: readRecord(join(folder, key + ".json"))}));
   // Reuse immutable request-local observations; each result still goes through
   // the publication validator and its current delivery/consumption readback.
@@ -382,7 +392,9 @@ function agendaResults(root: string, row: JsonObject, returns = replyStatuses(ro
   return replies.flatMap(({key, reply}) => {
     if (reply.phase !== "conclusion") return [];
     if (!inspectResult(root, row, key, reply, observations)) fail("delegation result identity unavailable");
-    return [{result_key: key, request_revision: reply.request_revision ?? 1, status: statuses.get(key),
+    const delivery = statuses.get(key);
+    return [{result_key: key, request_revision: reply.request_revision ?? 1, status: delivery?.status,
+      ...(delivery?.error === "manager_return_payload_conflict" ? {error: delivery.error} : {}),
       consumed: row.source_kind === "peer" && returnConsumed(root, key, row, reply, row.source_agent_id)}];
   });
 }

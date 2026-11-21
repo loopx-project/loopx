@@ -117,11 +117,18 @@ export function OriginalProjectRequests({sessionId, refreshKey}: {sessionId: str
   </div>;
 }
 
+function returnNeedsVerification(row: ConversationRequest) {
+  return row.agenda?.step === "recover_evidence"
+    && row.returns.some(delivery => delivery.phase === "conclusion" && delivery.error === "manager_return_payload_conflict");
+}
+
 function requestStage(row: ConversationRequest, zh: boolean) {
   if (!row.unfinished) return row.control_state === "cancelled" ? (zh ? "已取消" : "Cancelled")
     : (zh ? "已回传" : "Returned");
   switch (row.agenda?.step) {
-    case "recover_evidence": return zh ? "待恢复" : "Readback unavailable";
+    case "recover_evidence": return returnNeedsVerification(row)
+      ? (zh ? "回传待核对" : "Return needs verification")
+      : (zh ? "待恢复" : "Readback unavailable");
     case "reconcile_reservation": return zh ? "取消待收尾" : "Cancellation settling";
     case "await_return_delivery": return zh ? "待送达" : "Awaiting delivery";
     case "consume_peer_result": case "await_peer_consumption": return zh ? "结果待核对" : "Result awaiting readback";
@@ -182,7 +189,9 @@ function OriginalRequest({row, zh, revision, active}: {row: ConversationRequest;
     }).catch(() => {if (!abort.signal.aborted) {setMessages(null); setError(true);}});
     return () => abort.abort();
   }, [open, active, row.source_session_id, row.source_turn_id, revision]);
-  return <details onToggle={event => {focusOnRead.current = event.currentTarget.open; setOpen(event.currentTarget.open);}}><summary>{zh ? "原对话" : "Original conversation"}</summary>
+  return <details onToggle={event => {focusOnRead.current = event.currentTarget.open; setOpen(event.currentTarget.open);}}><summary>{returnNeedsVerification(row)
+      ? (zh ? "核对原对话" : "Check original conversation")
+      : (zh ? "原对话" : "Original conversation")}</summary>
     <div ref={content} tabIndex={-1}>{error ? <p role="alert">{zh ? "原对话暂时无法读取，请重新打开重试。" : "Original conversation unavailable. Reopen to retry."}</p>
         : messages ? messages.map(message => <article key={message.message_id}>
           <strong>{message.role === "user" ? (zh ? "你" : "You") : "LoopX"}</strong><MarkdownText text={message.reply_context?.source_text ?? message.text}/>
