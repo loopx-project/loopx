@@ -20,7 +20,7 @@ import time
 
 from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.file_lock import exclusive_file_lock, write_json_atomic
-from .checkpoint_worker import _worker_lock
+from benchmark.runtime.docker_checkpoint import _worker_lock
 from .cli_source_probe import _archive_response, source_goal_control
 
 

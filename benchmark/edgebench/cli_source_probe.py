@@ -16,7 +16,7 @@ import re
 import tarfile
 import tempfile
 
-from .checkpoint_worker import _guest_path
+from benchmark.runtime.docker_checkpoint import _guest_path
 
 
 def _canonical(value):

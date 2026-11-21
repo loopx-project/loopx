@@ -20,7 +20,7 @@ import tempfile
 import time
 
 from .checkpoint_controller import _remaining
-from .checkpoint_worker import _archive_component, _guest_path
+from benchmark.runtime.docker_checkpoint import _archive_component, _guest_path
 
 
 def file_inventory(root: Path) -> list[dict]:

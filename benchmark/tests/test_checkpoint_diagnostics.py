@@ -17,7 +17,8 @@ import docker
 import pytest
 
 from benchmark.edgebench import checkpoint_supervisor as supervisor_module
-from benchmark.edgebench import checkpoint_worker as worker_module
+from benchmark.edgebench import checkpoint_worker as edgebench_worker
+from benchmark.runtime import docker_checkpoint as worker_module
 from loopx.control_plane.effect_runtime import effect_runtime_result, restart_effect_runtime
 
 
@@ -130,7 +131,7 @@ def test_failed_capture_replies_once_after_releasing_source(
     def native_capture(*args, **kwargs):
         pytest.fail("A failed source probe must not reach native capture")
 
-    monkeypatch.setattr(worker_module, "capture", native_capture)
+    monkeypatch.setattr(edgebench_worker, "capture", native_capture)
     malformed_root = tmp_path / "synthetic-private-path"
     malformed_root.mkdir()
     if fault == "directory":

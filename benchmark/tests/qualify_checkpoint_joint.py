@@ -67,7 +67,7 @@ def require_one_pass(report):
 
 
 def _stage_source_configuration(container, native, destination):
-    from benchmark.edgebench.checkpoint_worker import _archive
+    from benchmark.runtime.docker_checkpoint import _archive
 
     # The source guest can be root while its controller is an ordinary user.
     # Read only the bound config through the existing daemon archive seam;
@@ -233,7 +233,7 @@ def main():
                 # The real source writer may be root. Its private pytest
                 # directory is intentionally unreadable to this controller;
                 # stage only the declared result through the daemon seam.
-                from benchmark.edgebench.checkpoint_worker import _archive
+                from benchmark.runtime.docker_checkpoint import _archive
                 report = _archive(container, "/qualification/context-delivery-source.json",
                                   output / "source-context-result.json")
                 report.chmod(0o600)

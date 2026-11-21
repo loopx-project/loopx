@@ -21,7 +21,7 @@ def test_scheduler_continuation_clock_reaches_both_host_capture_paths(tmp_path, 
     import docker
     from benchmark.edgebench import checkpoint_supervisor as host
     from benchmark.edgebench.checkpoint_controller import _phase_budget
-    from benchmark.edgebench.checkpoint_worker import _archive
+    from benchmark.runtime.docker_checkpoint import _archive
     from benchmark.runtime.layout import _PHASE_DEADLINE
 
     client = docker.from_env()

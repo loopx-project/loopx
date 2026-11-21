@@ -41,8 +41,8 @@ def terminal_components(declaration: dict, workspace: str) -> list[dict[str, str
     ))
     # Let the shared transport reject aliases/overlaps before launch, rather
     # than silently dropping an explicit external research participant.
-    from benchmark.edgebench.checkpoint_worker import _validate_request
-    _validate_request({"container_id": "0" * 64, "components": components,
+    from benchmark.runtime.docker_checkpoint import validate_worker_request
+    validate_worker_request({"container_id": "0" * 64, "components": components,
                        "phase_deadline_path": _PHASE_DEADLINE})
     return components
 
@@ -54,7 +54,7 @@ def _scheduler_components_at_barrier(container, components, stage, *, deadline):
     import docker
     from benchmark.runtime.layout import _ACTIVE_PHASE_DEADLINE
     from benchmark.runtime.scheduler import phase_state_name, read_phase_deadline
-    from .checkpoint_worker import _archive
+    from benchmark.runtime.docker_checkpoint import _archive
 
     root = PurePosixPath(_CONTROL, "scheduler-state.json")
     if {"id": "terminal_scheduler", "source_path": str(root)} not in components:
@@ -150,7 +150,7 @@ class FailurePreservation:
             self.receipt.update(capture_succeeded=True, capture=point)
         except Exception as error:
             # No remote message, output, account information or token is retained.
-            from .checkpoint_worker import capture_failure_fields
+            from benchmark.runtime.docker_checkpoint import capture_failure_fields
 
             self.receipt.update(capture_failure_fields(error))
         finally:

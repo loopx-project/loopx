@@ -452,7 +452,7 @@ def test_terminal_phase_discovery_follows_only_the_admitted_predecessors(tmp_pat
             raise FileNotFoundError(remote)
         destination.write_bytes(files[remote])
         return destination
-    monkeypatch.setattr("benchmark.edgebench.checkpoint_worker._archive", archive)
+    monkeypatch.setattr("benchmark.runtime.docker_checkpoint._archive", archive)
     components = terminal_components({"components": []}, "/data")
     if fault:
         with pytest.raises((ValueError, FileNotFoundError)):

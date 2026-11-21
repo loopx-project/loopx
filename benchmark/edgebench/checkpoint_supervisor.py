@@ -12,12 +12,13 @@ import time
 from pathlib import Path
 
 from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError
+from benchmark.runtime.docker_checkpoint import (
+    _archive, _guest_path, capture_failure_fields, qualify_export_storage, validate_worker_request,
+)
 from benchmark.runtime.layout import _ACTIVE_PHASE_DEADLINE, _PHASE_DEADLINE
 
 from .checkpoint_controller import _controller
-from .checkpoint_worker import (
-    _archive, _guest_path, _validate_request, capture_failure_fields, capture_worker, qualify_export_storage,
-)
+from .checkpoint_worker import capture_worker
 
 
 class CheckpointSupervisor:
@@ -36,8 +37,10 @@ class CheckpointSupervisor:
             from .terminal_capture import FailurePreservation
             if terminal_receipt is None or terminal_receipt.exists():
                 raise ValueError("Terminal preservation requires a fresh private receipt")
-            _validate_request({"container_id": "0" * 64, "components": terminal_components,
-                               "phase_deadline_path": phase_deadline_path})
+            validate_worker_request({
+                "container_id": "0" * 64, "components": terminal_components,
+                "phase_deadline_path": phase_deadline_path,
+            })
             self.preservation = FailurePreservation(self, terminal_components, terminal_receipt)
         self.token = None
         self.stop = threading.Event()
