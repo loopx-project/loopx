@@ -73,7 +73,6 @@ from .control_plane.todos.todo_semantics import (
 )
 from .execution_profile import execution_profile_outcome_floor, outcome_floor_threshold
 from .presentation.renderers.quota_event_markdown import (
-    render_quota_monitor_poll_markdown as _render_quota_monitor_poll_markdown,
     render_quota_slot_preview_markdown as render_quota_slot_preview_markdown,
 )
 from .presentation.renderers.quota_markdown import (
@@ -1030,7 +1029,7 @@ def _attach_auxiliary_monitor_settlement_resume(
         goal_id=identity.goal_id, agent_id=identity.agent_id, todo_id=identity.todo_id,
         turn_instance_id=identity.turn_instance_id, replan_obligation_id=identity.replan_obligation_id,
         command_prefix=prefix, scoped_cli_args=scoped_args, lifecycle_actor_args="",
-        quota_spend_source=str(progress["quota_spend_source"]), goal_ref=goal_ref,
+        quota_spend_source=str(progress["quota_spend_source"]), goal_ref=goal_ref, composed_settlement=True,
     )
     ordered_steps = _dict_items(plan.as_dict().get("ordered_steps"))
     result["settlement_resume"] = {
@@ -1151,7 +1150,7 @@ def record_quota_monitor_poll(
         ).get("todo")
     effective_todo_id = normalized_observation_todo_id or (normalized_receipt_todo_id if not target_key else None)
     result: dict[str, object] = record_quota_monitor_poll_for_decision(
-        before, status_payload, goal_id=safe_goal_id, render_markdown=_render_quota_monitor_poll_markdown,
+        before, status_payload, goal_id=safe_goal_id,
         after_decision=should_run, registry_path=registry_path, execute=execute, source=source,
         reason_summary=reason_summary, agent_id=agent_id, settlement_todo_id=normalized_receipt_todo_id,
         auxiliary_settlement_todo=auxiliary_settlement_todo, todo_id=effective_todo_id,
@@ -1166,6 +1165,7 @@ def record_quota_monitor_poll(
         task_lease_expected_version=task_lease_expected_version, use_current_task_lease=use_current_task_lease,
         turn_instance_id=turn_instance_id, status_reloader=status_reloader, goal_ref=goal_ref,
         recovery_effect_id=recovery_effect_id,
+        todo_id_explicit=normalized_requested_todo_id is not None,
     )
     continuation = result.get("turn_continuation")
     if (

@@ -1213,7 +1213,7 @@ main blocker or keeps following a stale local-only benchmark staging todo.
 - a typed machine-configuration namespace is about to change; the built-in
   namespaces are `change_quality_qualification`, `codex_chat`, `context_delivery`,
   `explore_harness`, `goal_storage`, `manager_runtime`, `periodic_report`, `pull_request_review`,
-  `steward_executor`, and `todo_replan_cadence`. The public catalog returned by
+  `steward_executor`, `steward_memory`, and `todo_replan_cadence`. The public catalog returned by
   `loopx machine-config describe` is authoritative, so this inventory has to stay
   complete rather than approximate;
 - `goal_storage` carries the storage target a newly created Goal is fixed to
@@ -1246,6 +1246,12 @@ main blocker or keeps following a stale local-only benchmark staging todo.
   authority, and it precedes the Chat service environment rather than replacing
   it, so a machine-local decision is editable in the Dashboard and readable from
   `loopx machine-config inspect`;
+- `steward_memory` carries the default-off isolated OpenViking memory setting
+  (`enabled`, `user_space`, `auto_recall`, and `recall_timeout_seconds` from `1`
+  to `15`) for verified owner private Steward conversations. It stores no
+  credentials (`OPENVIKING_*` stays in the Chat host environment and is scrubbed
+  from worker environments) and never leaks into group chats, project
+  conversations, or worker Agents;
 - `loopx machine-config preview` returns a `plan_revision` for the exact
   envelope, namespace patch, removal, or rollback that would be applied;
 - a Goal-level override and a live machine default may both be in scope.

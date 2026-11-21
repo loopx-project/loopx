@@ -169,7 +169,7 @@ safe filesystem/lock diagnostic code, such as `mutation_lock_timeout`,
 `io_is_directory`, or Windows `io_permission_denied` for an occupied locator
 directory, instead of only an exit status. The message does not echo
 locator paths, tokens or Node stack traces. Inspect the named local ownership
-or filesystem problem before retrying; It does not identify every possible
+or filesystem problem before retrying. It does not identify every possible
 startup crash: an exit without a typed envelope remains `runtime_exited_before_ready`.
 
 中文：启动 locator 发布失败会返回既有文件系统/锁诊断码，不回显路径、token 或
@@ -278,7 +278,7 @@ wheel instead exposes an additive `package_fingerprint` in the existing
 `loopx_runtime_identity_v1`: SHA-256 over its actual RECORD-owned LoopX package
 files, including Python, TypeScript and frontend assets. Editable, unowned,
 redirected or incomplete packages cannot claim this fingerprint. It distinguishes
-same-version artifacts for local service reuse; Both services capture their identity at startup, so
+same-version artifacts for local service reuse. Both services capture their identity at startup, so
 an in-place upgrade cannot make an old process report the replacement's identity.
 An unqualified install fails before the helper stops an existing service.
 

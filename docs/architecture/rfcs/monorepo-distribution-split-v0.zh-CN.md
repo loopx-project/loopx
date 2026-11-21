@@ -326,6 +326,10 @@ authority receipt 持久化、弱化 fsync/事务保证，或缓存过期权限/
 再经所属 channel 交付/回读。各步骤使用既有合法迁移与重放规则；这段描述不新增竞争的 status enum
 或事务协调者。
 
+显式执行 `turn run-once --execute` 时，兼容的通用 CLI 宿主配合独立校验器，可为准入
+Todo 补齐缺失的租约。宿主复用普通领取操作，核对同一 Todo 已就绪后再派发。领取与
+派发共用同一 Turn 身份。恢复使用原尝试捕获的租约代次。
+
 Executor 崩溃、effect ACK 丢失、结果交付 ACK 丢失是不同恢复情形。
 Operation provider 必须说明某个 effect 能否核对、能否安全重试。
 外部状态未知时，后续依赖操作须等待回读或人工干预；“未观测到”不等于“未执行”。
@@ -477,13 +481,7 @@ M0–M5 保留原发行里程碑；R0–R4 是同一计划中的运行时和旅�
 R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，不阻塞已合格的 CLI 或 managed 任务。
 真实调用者出现前不增加闲置 provider、字段或框架。每个 PR 记录应用/推迟的相邻重构。
 
-### Core 发现入口检查点 — 2026-11-19
-
-| 边界 | 交付增量／证据 | 仍未完成 |
-| --- | --- | --- |
-| V1/V3，能力发现 | Benchmark 包公开符号按需解析到所选既有 owner，保留全部 199 个符号及顺序；显式星号导入仍请求全部。执行实现不可用且无 Node 时，帮助／列表／详情仍可用，无进程启动、网络或状态写入。 | 未从 wheel 删除 benchmark 文件，也不验收 capability 分包缺席安装。 |
-| 元数据与活跃调用方 | 同冻结 `main@e235cde9c` workload 的目录和全部 25 项详情逐字节一致；53 项 CLI 帮助／列表／详情／未知 id 观察一致。发现入口的 benchmark 子模块从 28 降到 2，LoopX 模块从 326 降到 298。保留 benchmark 语义及公开符号的 canonical 对象身份。 | Import 数量不代表时延、完整成本、模型收益或完整 D2/D5 闭包。 |
-| 验收与继续方向 | 重建发行物通过 52 项安装 core 发现／执行／上下文／恢复用例；383 项所选消费方与 43 项架构／文档用例分别通过。没有新增状态 owner、provider id、启用开关或顶层模块。 | R1/M3 与 V1–V5/V10 继续开放；下一步仍是 capability 分包隔离与所选 Standard 交付。公开渠道 C1 资格仍归既有 release owner。 |
+- 检查点已移至执行台账：[Core 发现入口检查点（2026-11-19）](ledger/monorepo-distribution-split-v0/2026-11-19-core-discovery-checkpoint.zh-CN.md)。
 
 <a id="subtraction-gate"></a>
 

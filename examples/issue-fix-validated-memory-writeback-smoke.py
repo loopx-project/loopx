@@ -32,6 +32,47 @@ from loopx.capabilities.issue_fix.repository_memory_provider import (  # noqa: E
 )
 
 
+def _resolve_recovery_ref(repo_root: Path) -> str | None:
+    symbolic = subprocess.run(
+        ["git", "symbolic-ref", "--quiet", "HEAD"],
+        cwd=repo_root,
+        text=True,
+        stdout=subprocess.PIPE,
+        check=False,
+    ).stdout.strip()
+    if symbolic:
+        return symbolic
+    candidates = subprocess.run(
+        [
+            "git",
+            "for-each-ref",
+            "--points-at",
+            "HEAD",
+            "--format=%(refname)",
+            "refs/heads",
+            "refs/remotes",
+            "refs/tags",
+        ],
+        cwd=repo_root,
+        text=True,
+        stdout=subprocess.PIPE,
+        check=False,
+    ).stdout.splitlines()
+    valid = [
+        ref.strip()
+        for ref in candidates
+        if ref.strip() and 4 <= len(ref.strip()) <= 80
+    ]
+    for preferred in ("refs/remotes/origin/main", "refs/heads/main"):
+        if preferred in valid:
+            return preferred
+    for prefix in ("refs/heads/", "refs/remotes/", "refs/tags/"):
+        for ref in valid:
+            if ref.startswith(prefix):
+                return ref
+    return None
+
+
 REVISION = subprocess.run(
     ["git", "rev-parse", "HEAD"],
     cwd=ROOT,
@@ -39,13 +80,7 @@ REVISION = subprocess.run(
     stdout=subprocess.PIPE,
     check=True,
 ).stdout.strip()
-RECOVERY_REF = subprocess.run(
-    ["git", "symbolic-ref", "--quiet", "HEAD"],
-    cwd=ROOT,
-    text=True,
-    stdout=subprocess.PIPE,
-    check=False,
-).stdout.strip() or "refs/remotes/origin/main"
+RECOVERY_REF = _resolve_recovery_ref(ROOT)
 OBSERVED_AT = "2026-07-11T08:40:00+08:00"
 
 
@@ -700,6 +735,34 @@ def main() -> int:
             ),
             encoding="utf-8",
         )
+        repo_path = ROOT
+        recovery_ref = RECOVERY_REF
+        if recovery_ref is None:
+            # Detached HEAD with no matching ref: bind an isolated local ref without mutating ROOT.
+            repo_path = tmp / "detached-recovery-repo"
+            subprocess.run(
+                ["git", "clone", "--quiet", "--shared", "--no-checkout", str(ROOT), str(repo_path)],
+                check=True,
+            )
+            remotes = subprocess.run(
+                ["git", "remote"],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                check=True,
+            ).stdout.splitlines()
+            for name in [item.strip() for item in remotes if item.strip()]:
+                url = subprocess.run(
+                    ["git", "remote", "get-url", name],
+                    cwd=ROOT,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    check=True,
+                ).stdout.strip()
+                action = "set-url" if name == "origin" else "add"
+                subprocess.run(["git", "remote", action, name, url], cwd=repo_path, check=True)
+            recovery_ref = "refs/heads/smoke-recovery"
+            subprocess.run(["git", "update-ref", recovery_ref, REVISION], cwd=repo_path, check=True)
         command = [
             sys.executable,
             "-m",
@@ -724,9 +787,9 @@ def main() -> int:
             str(config_path),
             "--write-repository-memory",
             "--repo-path",
-            str(ROOT),
+            str(repo_path),
             "--repository-ref",
-            RECOVERY_REF,
+            recovery_ref,
             "--generated-at",
             OBSERVED_AT,
         ]

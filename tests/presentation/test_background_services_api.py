@@ -33,6 +33,7 @@ def host(tmp_path, monkeypatch):
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.verbose = False
     server.codex_account_service = CodexAccountService(tmp_path, start_observer=False)
+    (tmp_path / "registry.json").write_text('{"schema_version": 1, "goals": []}', encoding="utf-8")
     server.manager_return_service = ReturnService(tmp_path / "runtime", tmp_path / "registry.json",
         ChatSessionStore(tmp_path / "runtime"), lambda *_: pytest.fail("No send is authorized"))
     server.lark_goal_topic_runtime = LarkGoalTopicRuntimeService(

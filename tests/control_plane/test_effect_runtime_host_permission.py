@@ -184,7 +184,10 @@ def test_failed_guard_keeps_host_recovery_without_runtime_presentation(
         assert payload["ok"] is False and payload["should_run"] is False
         assert payload["error_code"] == "quota_runtime_permission_denied"
     else:
-        assert "- ok: `False`" in output
+        assert "# LoopX Turn Envelope" in output
+        assert '"ok":false' in output
+        assert '"should_run":false' in output
+        assert '"error_code":"quota_runtime_permission_denied"' in output
     assert registry.read_text() == "{}"
 
 

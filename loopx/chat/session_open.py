@@ -853,7 +853,7 @@ class ChatSessionLifecycleMixin:
             if (
                 defaults.get("status") != "ready"
                 or defaults.get("selection_policy") != "flexible"
-                or defaults.get("executor_endpoint") != "antigravity"
+                or defaults.get("executor_endpoint") not in {"antigravity", "codex"}
                 or set(defaults.get("eligible_endpoints") or []) != {"antigravity", "codex"}
                 or defaults.get("configuration_revision") != allocation.get("configuration_revision")
             ):

@@ -241,7 +241,7 @@ issue body、raw check log、凭据或本地路径。GitHub 仍是权威来源�
 ## Showcase B：Multi-Agent 研究团队
 
 研究协作复用 Goal、Todo、claim、lease、证据与独立验收。角色只声明自己的研究工作与
-写入边界；
+写入边界；创建任务或发送消息不等于启动 worker，也不授予实验、推广或发布权限。
 
 当前可运行示例见
 [managed research team](../../../examples/managed-research-team/README.md)，

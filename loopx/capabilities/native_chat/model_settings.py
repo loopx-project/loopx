@@ -133,14 +133,16 @@ def inspect_agent_model_options(controller: ChatRuntimeController, agent_id: str
             },
         }
     if agent_id == "antigravity":
-        from .antigravity_adapter import ANTIGRAVITY_DEFAULT_MODEL, ANTIGRAVITY_MODEL_OPTIONS
+        from .antigravity_adapter import ANTIGRAVITY_DEFAULT_MODEL, offered_antigravity_model_options
+        options = offered_antigravity_model_options()
         return {
             "agent_id": agent_id,
             "supported": True,
             "model": {
                 "id": "model",
                 "label": "Model",
-                "selected": ANTIGRAVITY_DEFAULT_MODEL,
+                "selected": (ANTIGRAVITY_DEFAULT_MODEL
+                             if any(item["id"] == ANTIGRAVITY_DEFAULT_MODEL for item in options) else None),
                 "options": [
                     {
                         "value": str(item["id"]),
@@ -154,7 +156,7 @@ def inspect_agent_model_options(controller: ChatRuntimeController, agent_id: str
                             if isinstance(effort, dict) and effort.get("reasoning_effort")
                         ],
                     }
-                    for item in ANTIGRAVITY_MODEL_OPTIONS
+                    for item in options
                 ],
             },
         }

@@ -11,6 +11,7 @@ from loopx.control_plane.quota.cli_projection import (
 from loopx.control_plane.quota.turn_envelope import (
     build_turn_envelope,
 )
+from test_complete_turn_decision import _resign_contract, _source_digest
 from test_replan_host_context_projection import _quota_payload
 
 
@@ -239,6 +240,7 @@ def test_real_guard_capture_and_recovery_preserve_vision_before_effects(
     invalid["goal_frontier_projection"]["vision_continuation_audit"][
         "required"
     ] = not audit["required"]
+    invalid, _ = _resign_contract(invalid)
     invalid_path = tmp_path / "invalid.json"
     invalid_path.write_text(json.dumps(invalid))
     rc, refused = _run_cli(
@@ -249,7 +251,27 @@ def test_real_guard_capture_and_recovery_preserve_vision_before_effects(
         "--decision-file",
         str(invalid_path),
         "--source-hash",
-        build_turn_envelope(invalid)["action_signature"]["source_decision_hash"],
+        _source_digest(invalid),
+        "--replan-stage",
+        "review",
+        cwd=project,
+    )
+    assert rc != 0 and "Vision audit reference" in json.dumps(refused)
+    historical = {
+        key: value
+        for key, value in invalid.items()
+        if key not in {"schema_version", "contract_binding"}
+    }
+    invalid_path.write_text(json.dumps(historical))
+    rc, refused = _run_cli(
+        registry,
+        runtime,
+        "quota",
+        "replan-view",
+        "--decision-file",
+        str(invalid_path),
+        "--source-hash",
+        _source_digest(historical),
         "--replan-stage",
         "review",
         cwd=project,

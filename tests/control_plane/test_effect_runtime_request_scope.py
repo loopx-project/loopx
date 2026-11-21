@@ -232,6 +232,7 @@ def test_common_command_dispatch_defines_one_effect_runtime_request(
         *,
         registry_path: Path,
         allow_missing_registry: bool,
+        registry_was_configured: bool | None = None,
     ) -> int:
         assert registry_path == Path("registry.json")
         assert allow_missing_registry is False

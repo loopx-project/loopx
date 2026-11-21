@@ -704,9 +704,10 @@ def render_bootstrap_markdown(payload: dict[str, Any]) -> str:
         f"- state_action: `{payload.get('state_action')}`",
         f"- execution_profile: `{execution_profile_text}`",
         f"- global_sync: `{(payload.get('global_sync') or {}).get('wrote')}`",
-        "",
-        "## Actions",
     ]
+    if error := payload.get("error"):
+        lines.extend(["", "## Error", str(error)])
+    lines.extend(["", "## Actions"])
     for action in payload.get("actions") or []:
         lines.append(f"- `{action.get('path')}`: {action.get('action')} ({action.get('goal', '')})")
 

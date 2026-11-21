@@ -18,7 +18,7 @@ LoopX Core 仍是生命周期和动作权限的唯一 authority。
 
 - 项目状态和信源文档各自变化；
 - 旧判断可能已经过期；
-- 语义召回可以找到线索
+- 语义召回可以找到线索，但不能证明当前事实；
 - 模型建议容易被误当成事实；
 - 如果决策和后续结果没有关联，就难以校准下一次决策。
 
@@ -432,7 +432,7 @@ hold 是显式恢复操作，默认来源窗口则阻止高频来源借走其他
 
 #### 来源新鲜度合同
 
-profile 已启用、`loopx doctor` 健康或已有结算投影。
+profile 已启用、`loopx doctor` 健康或已有结算投影，都不代表来源是新鲜的。
 每个 `prepare-evidence` / `prepare-review` 组装结果，以及每次 `capture` /
 `capture-status` 输出，都携带 `source_freshness`（`decision_source_freshness_v0`）：
 每个已启用来源一行，包含 `last_read_at`（最近一次**成功**读取）、`staleness_seconds`、

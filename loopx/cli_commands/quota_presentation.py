@@ -9,12 +9,41 @@ from ..control_plane.quota.turn_envelope import COMPLETE_TURN_DECISION_VERSION
 from ..control_plane.scheduler.execution_context import SchedulerExecutionContextResolution
 
 
+UNDECLARED_JSON_COMPLETE_TURN_OPTIONS = (
+    "complete_turn",
+    "turn_envelope",
+    "codex_context_dir",
+    "codex_context_root",
+    "prepared_capture_reference",
+    "defer_context_presentation",
+    "decision_handoff_socket",
+)
+
+
+def is_undeclared_json_quota_caller(
+    args: argparse.Namespace,
+    scheduler_context: Mapping[str, object] | SchedulerExecutionContextResolution | None,
+) -> bool:
+    """Return True when a JSON caller uses the currently qualified public quota packet."""
+    return (
+        getattr(args, "format", None) == "json"
+        and scheduler_context is None
+        and not any(
+            getattr(args, option, None)
+            for option in UNDECLARED_JSON_COMPLETE_TURN_OPTIONS
+        )
+    )
+
+
 def compose_quota_work_contract(payload: dict[str, object], args: argparse.Namespace, *,
                                    scheduler_context: Mapping[str, object] | SchedulerExecutionContextResolution | None,
                                    capture_directory: Path | None,
                                    record_capture: Callable[[dict[str, object], str], None] | None = None) -> dict[str, object]:
-    """Compose every decided should-run source once before capture and display."""
+    """Compose Complete Turn sources before capture and display."""
     if args.quota_command != "should-run" or not isinstance(payload.get("interaction_contract"), Mapping):
+        return payload
+    if is_undeclared_json_quota_caller(args, scheduler_context):
+        # Undeclared JSON callers use the currently qualified public quota packet.
         return payload
     from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
     from ..control_plane.quota.error_codes import QuotaDecisionTransportError
@@ -121,6 +150,7 @@ def _project_quota_cli_payload(
     from ..control_plane.quota.cli_projection import (
         compact_quota_monitor_poll_cli_payload,
         compact_quota_plan_cli_payload,
+        compact_quota_should_run_cli_payload,
     )
 
     reject_retired_quota_format(payload)
@@ -138,6 +168,18 @@ def _project_quota_cli_payload(
         # its unavailable runtime. Decided refusals still need signed views.
         # Keep the decided diagnostic, including its original recovery/receipt.
         return payload
+    if args.quota_command == "should-run":
+        if captured_decision_path is not None and "vision" not in detail_sections:
+            from ..control_plane.quota.turn_envelope import project_captured_replan_cli_view
+
+            payload = project_captured_replan_cli_view(payload, captured_decision_path=captured_decision_path)
+        return compact_quota_should_run_cli_payload(
+            payload,
+            include_todo_summary_detail="agent-todos" in detail_sections,
+            include_user_todo_summary_detail="user-todos" in detail_sections,
+            include_goal_boundary_detail="goal-boundary" in detail_sections,
+            include_vision_detail="vision" in detail_sections,
+        )
     if args.quota_command in {"status", "plan"}:
         return compact_quota_plan_cli_payload(payload, detail_sections=detail_sections)
     if args.quota_command == "monitor-poll":

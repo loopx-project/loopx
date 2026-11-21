@@ -6,7 +6,6 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 import re
-import sys
 
 
 def main() -> None:

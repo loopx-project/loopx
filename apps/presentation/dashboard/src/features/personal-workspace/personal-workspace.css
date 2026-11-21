@@ -1562,7 +1562,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
      It must not consume the title and runtime diagnostics' reading width. */
   .personal-channel-header[data-goal-selected="false"] { grid-template-columns: 36px minmax(0, 1fr); }
   .personal-channel-header[data-goal-selected="false"] .personal-channel-title { grid-column: 2; }
-  .personal-channel-header[data-goal-selected="false"] .personal-channel-title h1 { white-space: nowrap; }
+  .personal-channel-header[data-goal-selected="false"] .personal-channel-title h1 { white-space: normal; overflow-wrap: anywhere; text-wrap: pretty; }
   .personal-channel-header[data-goal-selected="false"] > .personal-goal-tabs { grid-row: 3; grid-column: 2 / -1; }
   .personal-channel-header[data-goal-selected="false"] .personal-channel-actions { grid-row: 4; grid-column: 1 / -1; width: 100%; flex-wrap: wrap; }
   .personal-channel-header[data-goal-selected="false"] .personal-agent-select { flex: 1 1 130px; width: auto; max-width: 100%; }

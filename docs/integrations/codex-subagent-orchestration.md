@@ -546,7 +546,8 @@ not arbitrary manifest scripts or external plugins.
 | `after_delegate_result` | Host receipt reconciliation → journal `host_result.agent_context` → executor result `agent_context` | Reconcile bounded native receipts. Read delegation operation receipts explicitly when that separate source is needed, then validate original evidence and accept/defer/reject. |
 
 Planning guidance does not require two persistent Todos. Managed automatic
-child-lane admission still requires its existing prerequisites; Disabling the capability
+child-lane admission still requires its existing prerequisites; this change
+does not grant spawning rights or force concurrency. Disabling the capability
 omits the context. Model preferences alone do not enable it.
 
 For a native-tool host such as a Codex App session, the LoopX project skill reads

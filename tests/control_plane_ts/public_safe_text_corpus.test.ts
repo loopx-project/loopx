@@ -30,6 +30,14 @@ interface CorpusSample {
   note?: string;
 }
 
+interface LocalPathShape {
+  id: string;
+  value: string;
+  public_safe_local_path: boolean;
+  publication_tier_path: boolean;
+  classify_path: boolean;
+}
+
 interface Corpus {
   schema_version: string;
   contract_signals: Record<string, string>;
@@ -37,6 +45,7 @@ interface Corpus {
   public_safe: CorpusSample[];
   private_looking: CorpusSample[];
   internal_state_prose: CorpusSample[];
+  local_path_shapes: LocalPathShape[];
 }
 
 const corpus = JSON.parse(readFileSync(CORPUS_PATH, "utf8")) as Corpus;
@@ -94,6 +103,24 @@ test("vision checkpoint rejects every private-looking corpus sample", () => {
 test("vision checkpoint accepts the internal-state prose corpus", () => {
   for (const sample of corpus.internal_state_prose) {
     assert.doesNotThrow(() => checkpoint(render(sample.template)), sample.id);
+  }
+});
+
+test("local path shapes keep the internal tier and publication tier aligned", () => {
+  // Python's owner-parity test drives the same rows through
+  // find_public_safe_local_path, find_private_text_match and
+  // classify_private_text. Here the two TypeScript pattern sets are pinned to
+  // the same expected verdicts, including the deliberate difference on the
+  // boundary-assignment and 2+ leading-slash forms.
+  for (const sample of corpus.local_path_shapes) {
+    const internal = INTERNAL_STATE_PRIVATE_TEXT_PATTERNS.some((pattern) =>
+      pattern.test(sample.value),
+    );
+    const publication = PRIVATE_TEXT_PATTERNS.some((pattern) =>
+      pattern.test(sample.value),
+    );
+    assert.equal(internal, sample.classify_path, sample.id);
+    assert.equal(publication, sample.publication_tier_path, sample.id);
   }
 });
 

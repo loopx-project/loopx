@@ -570,8 +570,10 @@ effective_action = _effective_action(...)
 
 #### 读完这一段应能回答
 
+1. 为什么 `start-goal` 成功返回不等于已经执行 agent turn？
 2. 为什么 connected 的判定不能只看 `.loopx/registry.json` 是否存在？
 3. 多 peer heartbeat 为什么必须显式携带 `agent_id`？
+4. `should_run=True` 时，哪几类动作仍然不是正常 delivery？
 5. 哪一层负责建议 host cadence，哪一层真正触发模型？
 
 ## 常见误解

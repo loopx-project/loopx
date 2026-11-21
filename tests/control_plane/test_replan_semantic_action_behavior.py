@@ -1607,3 +1607,14 @@ def test_prose_intent_without_typed_action_is_rejected(tmp_path: Path) -> None:
     assert receipt["qualification_passed"] is False
     assert receipt["failure_code"] == "model_returned_without_semantic_action"
     assert receipt["tool_call_count"] == 0
+
+
+@requires_draft_shell
+def test_real_tool_loop_preserves_writeback_rejection_recovery_under_deep_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deep_root = tmp_path / ("deep-" + "x" * 64)
+    deep_root.mkdir(parents=True)
+    test_real_tool_loop_selects_composition_gap_and_creates_bound_successor(
+        deep_root, monkeypatch, "off",
+    )

@@ -94,13 +94,19 @@ def _accepted_closed_vision_and_successor(
     assert guard["decision"] == "autonomous_replan_required"
     todo_id = guard["selected_todo"]["todo_id"]
     bound_guard = _run_cli([*guard_args, "--todo-id", todo_id])
-    review = json.loads(subprocess.check_output(
-        shlex.split(bound_guard["replan_action_packet"]["review"]), text=True,
-    ))
-    writeback = json.loads(subprocess.check_output(
-        shlex.split(review["next"]["writeback"]), text=True,
-    ))
-    assert writeback["obligation_id"] == bound_guard["replan_action_packet"]["obligation_id"]
+    packet = bound_guard["replan_action_packet"]
+    if "review" in packet:
+        review = json.loads(subprocess.check_output(
+            shlex.split(packet["review"]), text=True,
+        ))
+        writeback = json.loads(subprocess.check_output(
+            shlex.split(review["next"]["writeback"]), text=True,
+        ))
+        assert writeback["obligation_id"] == packet["obligation_id"]
+        stride_decision = writeback["stride_control"]["minimal_example"]
+    else:
+        stride_decision = packet["stride_control"]["minimal_example"]
+        assert stride_decision["reference_obligation_id"] == packet["obligation_id"]
 
     successor_vision = {
         "schema_version": "goal_vision_replan_contract_v0",
@@ -117,7 +123,7 @@ def _accepted_closed_vision_and_successor(
             "evidence_refs": ["fixture:accepted-closed-vision"],
             "changed": ["Finish the remaining fixture Todo."],
         },
-        "stride_decision": writeback["stride_control"]["minimal_example"],
+        "stride_decision": stride_decision,
     }
     vision_path = project / "successor-vision.json"
     vision_path.write_text(json.dumps(successor_vision), encoding="utf-8")
@@ -131,6 +137,13 @@ def _accepted_closed_vision_and_successor(
     assert ack["recorded"] is True
     assert ack["semantic_delta"]["accepted"] is True
     assert "fresh_vision_path_outcome" in ack["semantic_delta"]["outcomes"]
+    spent = _run_cli([
+        "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "quota", "spend-slot", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", todo_id, "--turn-instance-id", turn_id,
+        "--slots", "1", "--source", "heartbeat", "--execute",
+    ])
+    assert spent["appended"] is True
 
 
 def _enable_weekly_report(registry: Path) -> None:
@@ -225,7 +238,7 @@ def test_canonical_turn_does_not_reclose_superseded_stage_on_replay(
         ).read_text(encoding="utf-8").splitlines()
     ]
     assert sum(row.get("classification") == "fixture_completion" for row in rows) == 1
-    assert sum(row.get("classification") == "quota_slot_spent" for row in rows) == 1
+    assert sum(row.get("classification") == "quota_slot_spent" for row in rows) == 2
     if enabled:
         assert replay["terminal_post_writeback_hooks"]["intents"] == []
         assert {
@@ -302,7 +315,7 @@ def test_terminal_hook_retries_original_source_after_later_canonical_todo(
         ).read_text(encoding="utf-8").splitlines()
     ]
     assert sum(row.get("classification") == "fixture_completion" for row in rows) == 1
-    assert sum(row.get("classification") == "quota_slot_spent" for row in rows) == 1
+    assert sum(row.get("classification") == "quota_slot_spent" for row in rows) == 2
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -420,7 +433,7 @@ def test_malformed_optional_todo_source_recovers_on_exact_turn_replay(
         ).read_text(encoding="utf-8").splitlines()
     ]
     assert sum(row.get("classification") == "fixture_completion" for row in rows) == 1
-    assert sum(row.get("classification") == "quota_slot_spent" for row in rows) == 1
+    assert sum(row.get("classification") == "quota_slot_spent" for row in rows) == 2
 
 
 def _public_closed_current_vision_args(
