@@ -413,7 +413,8 @@ def render_quantitative_planning_markdown(payload: dict[str, object]) -> str | N
         for op in ops:
             if isinstance(op, dict):
                 lines.append(
-                    f"- `{op.get('operator_id')}` (stage=`{op.get('stage')}`, gate=`{op.get('enabled_gate')}`, "
+                    f"- `{op.get('operator_id')}` (role=`{op.get('operator_role')}`, "
+                    f"stage=`{op.get('stage')}`, gate=`{op.get('enabled_gate')}`, "
                     f"quiet=`{op.get('quiet_turn_policy')}`): {op.get('lightweight_guidance')}"
                 )
         lines.append("")

@@ -30,8 +30,15 @@ export const QUIET_TURN_POLICIES = [
 ] as const;
 export type QuietTurnPolicy = (typeof QUIET_TURN_POLICIES)[number];
 
+export const METHODOLOGY_OPERATOR_ROLES = [
+  "advisory_cue",
+  "required_due_decision",
+] as const;
+export type MethodologyOperatorRole = (typeof METHODOLOGY_OPERATOR_ROLES)[number];
+
 export interface StageMethodologyOperatorDescriptor {
   operator_id: string;
+  operator_role: MethodologyOperatorRole;
   stage: LoopxControlStage;
   companion_stages: readonly LoopxControlStage[];
   enabled_gate: string;
@@ -40,7 +47,7 @@ export interface StageMethodologyOperatorDescriptor {
   typed_transition_schema: string;
   lightweight_guidance: string;
   rollback_contract: "stateless_disable_preserves_history";
-  advisory_only: true;
+  advisory_only: boolean;
   grants_execution_authority: false;
 }
 
@@ -67,6 +74,7 @@ const FORBIDDEN_AUTHORITY_KEYS = new Set([
 export const BUILTIN_STAGE_METHODOLOGY_OPERATORS: readonly StageMethodologyOperatorDescriptor[] = [
   {
     operator_id: "work_yardstick",
+    operator_role: "advisory_cue",
     stage: "execute_verify",
     companion_stages: ["compile_context", "writeback_settle", "feedback_evolve"],
     enabled_gate: "explore.yardstick_enabled",
@@ -81,6 +89,7 @@ export const BUILTIN_STAGE_METHODOLOGY_OPERATORS: readonly StageMethodologyOpera
   },
   {
     operator_id: "stride_review",
+    operator_role: "required_due_decision",
     stage: "feedback_evolve",
     companion_stages: ["compile_context", "writeback_settle"],
     enabled_gate: "goal.stride_strategy",
@@ -90,11 +99,12 @@ export const BUILTIN_STAGE_METHODOLOGY_OPERATORS: readonly StageMethodologyOpera
     lightweight_guidance:
       "At an admitted replan boundary, compare continuing vs. switching routes by complete marginal cost and decisive evidence.",
     rollback_contract: "stateless_disable_preserves_history",
-    advisory_only: true,
+    advisory_only: false,
     grants_execution_authority: false,
   },
   {
     operator_id: "scoped_yardstick_fidelity",
+    operator_role: "advisory_cue",
     stage: "execute_verify",
     companion_stages: ["compile_context", "feedback_evolve"],
     enabled_gate: "explore.yardstick_enabled",
@@ -109,6 +119,7 @@ export const BUILTIN_STAGE_METHODOLOGY_OPERATORS: readonly StageMethodologyOpera
   },
   {
     operator_id: "budgeted_continuation",
+    operator_role: "advisory_cue",
     stage: "feedback_evolve",
     companion_stages: ["admission", "compile_context"],
     enabled_gate: "explore.budgeted_continuation",
@@ -123,6 +134,7 @@ export const BUILTIN_STAGE_METHODOLOGY_OPERATORS: readonly StageMethodologyOpera
   },
   {
     operator_id: "counterfactual_continuation",
+    operator_role: "advisory_cue",
     stage: "feedback_evolve",
     companion_stages: ["execute_verify"],
     enabled_gate: "explore.counterfactual_continuation",
@@ -137,6 +149,7 @@ export const BUILTIN_STAGE_METHODOLOGY_OPERATORS: readonly StageMethodologyOpera
   },
   {
     operator_id: "evolutionary_population",
+    operator_role: "advisory_cue",
     stage: "feedback_evolve",
     companion_stages: ["compile_context", "execute_verify"],
     enabled_gate: "explore.evolutionary_population",
@@ -262,6 +275,7 @@ export function evaluateMethodologyActivation(params: {
   enabled: unknown;
   quiet_turn_policy?: QuietTurnPolicy;
   trigger_active?: boolean;
+  due_obligation_active?: boolean;
   required_scope?: Record<string, unknown>;
 }): {active: boolean; reason: "disabled" | "missing_scope" | "quiet_turn" | "active"} {
   if (params.enabled !== true) {
@@ -275,6 +289,12 @@ export function evaluateMethodologyActivation(params: {
     }
   }
   if (params.quiet_turn_policy === "silent_when_untriggered" && params.trigger_active === false) {
+    return {active: false, reason: "quiet_turn"};
+  }
+  if (
+    params.quiet_turn_policy === "due_obligation_only" &&
+    (params.due_obligation_active === false || params.trigger_active === false)
+  ) {
     return {active: false, reason: "quiet_turn"};
   }
   return {active: true, reason: "active"};
@@ -493,6 +513,8 @@ function inspectTreeForInvariants(
     for (const [key, child] of Object.entries(row)) {
       if (FORBIDDEN_AUTHORITY_KEYS.has(key)) {
         violations.push(`${path}.${key}: methodology operator cannot emit authority/gate field`);
+      } else if (path !== "$" && key === "grants_execution_authority" && child === true) {
+        violations.push(`${path}.${key}: methodology operator cannot grant execution authority`);
       }
       inspectTreeForInvariants(child, `${path}.${key}`, violations, depth + 1);
     }
@@ -515,7 +537,8 @@ export function verifyMethodologyOperatorOutput(params: {
   const violations: string[] = [];
   const {operator_id, output} = params;
   const maxBytes = params.max_bytes ?? 65_536;
-  const requireAdvisory = params.require_advisory_flags ?? true;
+  const descriptor = BUILTIN_STAGE_METHODOLOGY_OPERATORS.find(op => op.operator_id === operator_id);
+  const requireAdvisory = params.require_advisory_flags ?? (descriptor ? descriptor.advisory_only : true);
 
   if (requireAdvisory) {
     if (output.advisory_only !== true) {
@@ -524,6 +547,8 @@ export function verifyMethodologyOperatorOutput(params: {
     if (output.grants_execution_authority !== false) {
       violations.push("$.grants_execution_authority: must be explicitly false");
     }
+  } else if (output.grants_execution_authority === true) {
+    violations.push("$.grants_execution_authority: methodology operator cannot grant execution authority");
   }
   inspectTreeForInvariants(output, "$", violations, 0);
   const encoded = JSON.stringify(output);
@@ -549,7 +574,6 @@ export function assertMethodologyOperatorOutput<T extends JsonObject>(
     operator_id: operatorId,
     output,
     max_bytes: maxBytes,
-    require_advisory_flags: true,
   });
   if (!report.valid) {
     throw new EffectRuntimeRequestError(
@@ -604,10 +628,18 @@ export function verifyMethodologyOperatorOutputHandler(params: JsonObject): Json
         : (() => {
             throw new EffectRuntimeRequestError("max_bytes requires a positive integer");
           })();
+  const requireAdvisoryFlags =
+    row.require_advisory_flags === undefined
+      ? undefined
+      : typeof row.require_advisory_flags === "boolean"
+        ? row.require_advisory_flags
+        : (() => {
+            throw new EffectRuntimeRequestError("require_advisory_flags requires a boolean");
+          })();
   return verifyMethodologyOperatorOutput({
     operator_id: row.operator_id.trim(),
     output,
     max_bytes: maxBytes,
-    require_advisory_flags: row.require_advisory_flags !== false,
+    ...(requireAdvisoryFlags === undefined ? {} : {require_advisory_flags: requireAdvisoryFlags}),
   }) as unknown as JsonObject;
 }

@@ -393,11 +393,17 @@ All six long-horizon decision and quantitative research methodologies —
 `evolutionary_population` — share the single TypeScript control-plane kernel in
 [`stage_methodology_operator_catalog_v0`](../../../docs/reference/protocols/stage-methodology-operator-contract-v0.md).
 Every operator enforces strict boolean/invocation gating (zero cold-path prompt
-tax when off or untriggered), canonical replay-prefix isolation (blocking late
+tax when off or untriggered, including `due_obligation_only` silence when a
+due obligation is inactive), canonical replay-prefix isolation (blocking late
 replays and tied/unparseable clocks), exact scope-tuple isolation, explicit
 `null` preservation, bounded hot-path cues with `omitted_count` +
-`details_command`, and runtime-verified `advisory_only: true` /
-`grants_execution_authority: false`:
+`details_command`, and runtime non-escalation verification across distinct
+`operator_role` values (`advisory_cue` requiring `advisory_only: true` /
+`grants_execution_authority: false`, vs. `stride_review`'s
+`required_due_decision` with `advisory_only: false` /
+`grants_execution_authority: false` on Core-persisted `stride_decision_v2`
+while still rejecting `grants_execution_authority: true` and forbidden
+authority keys anywhere in the payload):
 
 ```sh
 # Inspect registered 5-stage methodology operators & anti-entropy invariants

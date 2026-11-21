@@ -50,6 +50,8 @@ canonical state loaders; dashboard readers reuse the same output verifier.
 1. **Strict Feature-Off & Quiet-Turn Isolation (`evaluateMethodologyActivation`)**:
    Requires `enabled === true` (never truthy `"true"` or `1`). Suppresses cues
    when `quiet_turn_policy === "silent_when_untriggered"` and `trigger_active === false`,
+   when `quiet_turn_policy === "due_obligation_only"` and
+   (`due_obligation_active === false` or `trigger_active === false`),
    or when any `required_scope` key is blank.
 2. **Canonical Prefix & Replay-Precedence Guards (`normalizeCanonicalSourceSnapshot`, `selectCanonicalEvidenceWindow`, `isHistoricalReplayPrecedingCurrent`)**:
    Validates lowercase 64-hex SHA-256 digests (`isValidContentSha256`) through
@@ -67,24 +69,29 @@ canonical state loaders; dashboard readers reuse the same output verifier.
    Slices hot-path arrays to `maxItems`, returning exact `omitted_count` and an
    optional `details_command`.
 5. **Runtime Non-Escalation Output Verifier (`verifyMethodologyOperatorOutput`, `assertMethodologyOperatorOutput`)**:
-   Asserts `advisory_only: true`, `grants_execution_authority: false`, zero
-   forbidden authority fields (`should_run`, `normal_delivery_allowed`,
-   `lease_granted`, `gate_override`, `admin_bypass`, `execution_authorized`),
-   finite numbers (rejecting `NaN`/`Infinity`), no control characters, and a
-   64 KiB UTF-8 payload cap.
+   Separates `operator_role` across `advisory_cue` (`advisory_only: true`,
+   requiring `output.advisory_only === true` and `output.grants_execution_authority === false`)
+   and `required_due_decision` (`stride_review`, `advisory_only: false`,
+   `grants_execution_authority: false` — accepting Core-persisted `stride_decision_v2`
+   decisions without synthetic advisory flags while still rejecting
+   `grants_execution_authority: true`). Always rejects forbidden authority
+   fields (`should_run`, `normal_delivery_allowed`, `lease_granted`,
+   `gate_override`, `admin_bypass`, `execution_authorized`) at any nesting depth,
+   non-finite numbers (`NaN`/`Infinity`), control characters, and payloads
+   exceeding the 64 KiB UTF-8 cap.
 
 ## Built-In Operator Catalog (`stage_methodology_operator_catalog_v0`)
 
 Inspect registered operators via `loopx --format json explore methodology-operators [--stage <stage>]`:
 
-| `operator_id` | Primary Stage | Companion Stages | Transition Schema |
-| --- | --- | --- | --- |
-| `work_yardstick` | `execute_verify` | `compile_context`, `writeback_settle`, `feedback_evolve` | `work_yardstick_decision_v0` |
-| `stride_review` | `feedback_evolve` | `compile_context`, `writeback_settle` | `stride_decision_v2` |
-| `scoped_yardstick_fidelity` | `execute_verify` | `compile_context`, `feedback_evolve` | `scoped_yardstick_fidelity_v0` |
-| `budgeted_continuation` | `feedback_evolve` | `admission`, `compile_context` | `budgeted_continuation_plan_v0` |
-| `counterfactual_continuation` | `feedback_evolve` | `execute_verify` | `counterfactual_continuation_eval_v0` |
-| `evolutionary_population` | `feedback_evolve` | `compile_context`, `execute_verify` | `evolutionary_population_plan_v0` |
+| `operator_id` | `operator_role` | Primary Stage | Companion Stages | Transition Schema |
+| --- | --- | --- | --- | --- |
+| `work_yardstick` | `advisory_cue` | `execute_verify` | `compile_context`, `writeback_settle`, `feedback_evolve` | `work_yardstick_decision_v0` |
+| `stride_review` | `required_due_decision` | `feedback_evolve` | `compile_context`, `writeback_settle` | `stride_decision_v2` |
+| `scoped_yardstick_fidelity` | `advisory_cue` | `execute_verify` | `compile_context`, `feedback_evolve` | `scoped_yardstick_fidelity_v0` |
+| `budgeted_continuation` | `advisory_cue` | `feedback_evolve` | `admission`, `compile_context` | `budgeted_continuation_plan_v0` |
+| `counterfactual_continuation` | `advisory_cue` | `feedback_evolve` | `execute_verify` | `counterfactual_continuation_eval_v0` |
+| `evolutionary_population` | `advisory_cue` | `feedback_evolve` | `compile_context`, `execute_verify` | `evolutionary_population_plan_v0` |
 
 ## Quantitative & Search Operator Schemas
 

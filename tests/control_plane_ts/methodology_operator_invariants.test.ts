@@ -63,6 +63,37 @@ test("Bug Class 1: strict feature-off & quiet-turn silence reject truthy non-boo
     }),
     {active: true, reason: "active"},
   );
+  assert.deepEqual(
+    evaluateMethodologyActivation({
+      enabled: true,
+      quiet_turn_policy: "due_obligation_only",
+      due_obligation_active: false,
+    }),
+    {active: false, reason: "quiet_turn"},
+  );
+  assert.deepEqual(
+    evaluateMethodologyActivation({
+      enabled: true,
+      quiet_turn_policy: "due_obligation_only",
+      trigger_active: false,
+    }),
+    {active: false, reason: "quiet_turn"},
+  );
+  assert.deepEqual(
+    evaluateMethodologyActivation({
+      enabled: true,
+      quiet_turn_policy: "due_obligation_only",
+      due_obligation_active: true,
+    }),
+    {active: true, reason: "active"},
+  );
+  assert.deepEqual(
+    evaluateMethodologyActivation({
+      enabled: true,
+      quiet_turn_policy: "due_obligation_only",
+    }),
+    {active: true, reason: "active"},
+  );
 });
 
 test("Bug Class 2: canonical evidence window blocks late replays, tied clocks, and post-prefix uncited injections", () => {
@@ -197,10 +228,16 @@ test("Bug Class 5: 5-stage operator catalog completeness and non-escalation outp
   assert.deepEqual(catalog.stages, [...LOOPX_CONTROL_STAGES]);
   assert.equal(BUILTIN_STAGE_METHODOLOGY_OPERATORS.length, 6);
   for (const op of BUILTIN_STAGE_METHODOLOGY_OPERATORS) {
-    assert.equal(op.advisory_only, true);
     assert.equal(op.grants_execution_authority, false);
     assert.equal(op.rollback_contract, "stateless_disable_preserves_history");
     assert.ok(op.lightweight_guidance.length > 20 && op.lightweight_guidance.length <= 240);
+    if (op.operator_id === "stride_review") {
+      assert.equal(op.operator_role, "required_due_decision");
+      assert.equal(op.advisory_only, false);
+    } else {
+      assert.equal(op.operator_role, "advisory_cue");
+      assert.equal(op.advisory_only, true);
+    }
   }
 
   const executeStageOps = listStageMethodologyOperators({stage: "execute_verify"});
@@ -215,6 +252,74 @@ test("Bug Class 5: 5-stage operator catalog completeness and non-escalation outp
     output: {advisory_only: true, grants_execution_authority: false, score: 0.75, unknown_cost: null},
   });
   assert.equal(clean.valid, true);
+
+  const missingAdvisory = verifyMethodologyOperatorOutput({
+    operator_id: "scoped_yardstick_fidelity",
+    output: {score: 0.75},
+  });
+  assert.equal(missingAdvisory.valid, false);
+  assert.deepEqual(missingAdvisory.violations, [
+    "$.advisory_only: must be explicitly true",
+    "$.grants_execution_authority: must be explicitly false",
+  ]);
+
+  const coreStrideDecision = {
+    schema_version: "stride_decision_v2",
+    strategy_version: "evidence_conditioned_v1",
+    reference_context_id: "replan-context-1234",
+    reference_obligation_id: "replan-abcd1234abcd1234",
+    basis: "uncertain_evidence",
+    action: "verify",
+    axes: {
+      work_slice: {plan: "Complete check.", reason: "Resolve uncertainty."},
+      route_distance: {plan: "Keep current route.", reason: "No counterexample yet."},
+      validation_scope: {plan: "Verify positive and negative cases.", reason: "Independent check."},
+    },
+    next_probe: {
+      scope: "One bounded check",
+      prediction: "Distinguish candidates",
+      adoption_criterion: "Pass acceptance",
+      cost_bound: "One turn",
+      minimum_evidence: "Verified run",
+    },
+  };
+  const strideClean = verifyMethodologyOperatorOutput({
+    operator_id: "stride_review",
+    output: coreStrideDecision,
+  });
+  assert.equal(strideClean.valid, true);
+  assert.deepEqual(strideClean.violations, []);
+
+  const strideRootAuthority = verifyMethodologyOperatorOutput({
+    operator_id: "stride_review",
+    output: {...coreStrideDecision, grants_execution_authority: true},
+  });
+  assert.equal(strideRootAuthority.valid, false);
+  assert.deepEqual(strideRootAuthority.violations, [
+    "$.grants_execution_authority: methodology operator cannot grant execution authority",
+  ]);
+
+  const strideNestedAuthority = verifyMethodologyOperatorOutput({
+    operator_id: "stride_review",
+    output: {
+      ...coreStrideDecision,
+      axes: {
+        ...coreStrideDecision.axes,
+        work_slice: {
+          ...coreStrideDecision.axes.work_slice,
+          should_run: true,
+          grants_execution_authority: true,
+          nested: {admin_bypass: true},
+        },
+      },
+    },
+  });
+  assert.equal(strideNestedAuthority.valid, false);
+  assert.deepEqual(strideNestedAuthority.violations, [
+    "$.axes.work_slice.should_run: methodology operator cannot emit authority/gate field",
+    "$.axes.work_slice.grants_execution_authority: methodology operator cannot grant execution authority",
+    "$.axes.work_slice.nested.admin_bypass: methodology operator cannot emit authority/gate field",
+  ]);
 
   const nestedAuthority = verifyMethodologyOperatorOutput({
     operator_id: "scoped_yardstick_fidelity",

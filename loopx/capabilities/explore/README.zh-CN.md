@@ -219,7 +219,7 @@ loopx explore finding --goal-id GOAL --node <id> --evidence-ref result:b \
 
 ### 五阶段方法论算子与量化研究规划
 
-LoopX 的六类长程决策与量化研究方法论（`work_yardstick`、`stride_review`、`scoped_yardstick_fidelity`、`budgeted_continuation`、`counterfactual_continuation` 与 `evolutionary_population`）统一构建在 [`stage_methodology_operator_catalog_v0`](../../../docs/reference/protocols/stage-methodology-operator-contract-v0.md) 单内核之上：严格布尔门控与静默轮零提示词税、canonical 重放前缀与延迟重放防污染、精确比较域元组隔离、未知值 `null` 不转零、热路径有界裁剪（附 `omitted_count` 与 `details_command`），以及运行时强制校验 `advisory_only: true` 与 `grants_execution_authority: false`：
+LoopX 的六类长程决策与量化研究方法论（`work_yardstick`、`stride_review`、`scoped_yardstick_fidelity`、`budgeted_continuation`、`counterfactual_continuation` 与 `evolutionary_population`）统一构建在 [`stage_methodology_operator_catalog_v0`](../../../docs/reference/protocols/stage-methodology-operator-contract-v0.md) 单内核之上：严格布尔门控与静默轮零提示词税（含 `due_obligation_only` 在无到期义务或未触发时的静默）、canonical 重放前缀与延迟重放防污染、精确比较域元组隔离、未知值 `null` 不转零、热路径有界裁剪（附 `omitted_count` 与 `details_command`），以及按 `operator_role` 区分的运行时非提权校验（五类 `advisory_cue` 算子强制 `advisory_only: true` 与 `grants_execution_authority: false`；`stride_review` 标为 `required_due_decision`，`advisory_only: false`、`grants_execution_authority: false`，放行 Core 落盘的 `stride_decision_v2` 且同样在任意嵌套层级拒绝 `grants_execution_authority: true` 与禁止的权限字段）：
 
 ```sh
 # 查看已注册的五阶段方法论算子及反熵不变量

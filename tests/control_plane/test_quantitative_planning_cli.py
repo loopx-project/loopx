@@ -12,8 +12,10 @@ import sys
 
 import pytest
 
+from loopx.capabilities.explore.quantitative_planning import verify_methodology_operator_output
 from loopx.capabilities.explore.turn_context import explore_turn_context
 from loopx.presentation.explore_results_api import _result_rows
+from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID,
     GOAL_ID,
@@ -592,3 +594,230 @@ def test_stateless_planning_cli_commands_end_to_end(tmp_path: Path) -> None:
         other_checkpoint[key]["checkpoint_id"] = "ckpt:independent"
     accepted = counterfactual([clean, other_checkpoint])
     assert accepted["counts"]["valid_pairs"] == 2
+
+
+def test_due_stride_review_core_persisted_decision_passes_methodology_verifier(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    config = json.loads(registry_path.read_text(encoding="utf-8"))
+    config["goals"][0]["quota"]["allowed_slots"] = 12
+    registry_path.write_text(json.dumps(config), encoding="utf-8")
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
+
+    def call(*args: str, expected_code: int = 0) -> dict:
+        code, result = _run_cli(registry_path, runtime, *args, cwd=project)
+        assert code == expected_code, json.dumps(result, indent=2)
+        return result
+
+    call(
+        "configure-goal", "--goal-id", GOAL_ID,
+        "--execution-replan-after-turns", "2",
+        "--execution-stride-strategy", "evidence_conditioned_v1",
+        "--execute",
+    )
+    for index in range(2):
+        turn = f"stride-turn-{index}"
+        guard = call(
+            "quota", "should-run", "--codex-app",
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn,
+        )
+        assert guard["selected_todo"]["todo_id"] == TODO_ID
+        call(
+            "refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+            "--todo-id", TODO_ID, "--turn-instance-id", turn,
+            "--classification", "validated_progress",
+            "--delivery-batch-scale", "implementation",
+            "--delivery-outcome", "outcome_progress",
+            "--delivery-boundary", "in_flight_continuation",
+            "--no-global-sync", "--suppress-external-sinks",
+        )
+        call(
+            "quota", "spend-slot", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+            "--todo-id", TODO_ID, "--turn-instance-id", turn,
+            "--slots", "1", "--source", "heartbeat", "--execute",
+        )
+
+    due_guard = call(
+        "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", "stride-due",
+    )
+    obligation = due_guard["autonomous_replan_obligation"]
+    successor = call(
+        "todo", "add", "--goal-id", GOAL_ID, "--role", "agent",
+        "--claimed-by", AGENT_ID, "--text", "Validate a new independent source",
+        "--task-class", "advancement_task", "--action-kind", "validate",
+        "--target-key", "independent-source", "--replan-obligation-id", obligation["obligation_id"],
+    )
+    reread = call(
+        "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--todo-id", successor["todo_id"], "--turn-instance-id", "stride-due",
+    )
+    control = reread["replan_action_packet"]["stride_control"]
+    assert control["required_on_periodic_review"] is True
+
+    # Core refuses omission of stride_decision when due.
+    refused = call(
+        "refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--replan-obligation-id", obligation["obligation_id"],
+        "--turn-instance-id", "stride-due",
+        "--classification", "typed_blocker_writeback",
+        "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_gap",
+        "--progress-result-class", "blocked",
+        "--progress-blocker-id", "fixture:blocked-source",
+        "--progress-evidence-id", "fixture:blocked-source-evidence",
+        "--no-global-sync", "--suppress-external-sinks",
+        expected_code=1,
+    )
+    assert refused.get("appended") is not True
+    assert "stride_decision" in refused["error"]
+
+    stride_decision = {
+        "schema_version": "stride_decision_v2",
+        "strategy_version": "evidence_conditioned_v1",
+        "reference_context_id": control["reference_context_id"],
+        "reference_obligation_id": obligation["obligation_id"],
+        "basis": "uncertain_evidence",
+        "action": "verify",
+        "axes": {
+            "work_slice": {
+                "plan": "Complete the independent source validation.",
+                "reason": "One complete check resolves the pending evidence question.",
+            },
+            "route_distance": {
+                "plan": "Retain the current delivery route while checking its source.",
+                "reason": "No result yet supports replacing the route.",
+            },
+            "validation_scope": {
+                "plan": "Check the source result and a contrary case.",
+                "reason": "Both cases distinguish a usable source from a false lead.",
+            },
+        },
+        "next_probe": {
+            "scope": "One bounded independent source validation.",
+            "prediction": "The source supports the original acceptance.",
+            "adoption_criterion": "Adopt only if the checked source meets acceptance.",
+            "cost_bound": "One source and its contrary case before replanning.",
+            "minimum_evidence": "A checked result and a contrary-case result.",
+        },
+    }
+    vision_path = tmp_path / "stride_vision.json"
+    vision_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "goal_vision_replan_contract_v0",
+                "state": "vision_patch_proposed",
+                "vision_patch": {
+                    "acceptance_summary": "The original delivery remains open while the new source is validated.",
+                },
+                "path_delta": {
+                    "schema_version": "goal_path_delta_v0",
+                    "outcome": "replan",
+                    "prior_assumption": "The first source was sufficient.",
+                    "observed_reality": "Need one independent verification before completion.",
+                    "retained": ["Original acceptance boundary"],
+                    "changed": ["Validate the independent source first"],
+                    "evidence_refs": ["evidence:independent-source-review"],
+                },
+                "stride_decision": stride_decision,
+                "todo_delta": [f"create:{successor['todo_id']}"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    accepted = call(
+        "refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--replan-obligation-id", obligation["obligation_id"],
+        "--turn-instance-id", "stride-due",
+        "--agent-vision-json", str(vision_path),
+        "--classification", "bounded_replan_progress",
+        "--delivery-batch-scale", "implementation",
+        "--delivery-outcome", "outcome_progress",
+        "--no-global-sync", "--suppress-external-sinks",
+    )
+    assert accepted["autonomous_replan_ack"]["semantic_delta"]["accepted"] is True
+    persisted = json.loads(Path(accepted["json_path"]).read_text(encoding="utf-8"))
+    persisted_decision = persisted["agent_vision"]["stride_decision"]
+    assert "advisory_only" not in persisted_decision
+    assert "grants_execution_authority" not in persisted_decision
+
+    # 1. Catalog distinguishes stride_review as required_due_decision (advisory_only=False)
+    catalog = call("explore", "methodology-operators")
+    by_id = {row["operator_id"]: row for row in catalog["operators"]}
+    assert by_id["stride_review"]["operator_role"] == "required_due_decision"
+    assert by_id["stride_review"]["advisory_only"] is False
+    assert by_id["stride_review"]["grants_execution_authority"] is False
+    for adv_id in (
+        "work_yardstick",
+        "scoped_yardstick_fidelity",
+        "budgeted_continuation",
+        "counterfactual_continuation",
+        "evolutionary_population",
+    ):
+        assert by_id[adv_id]["operator_role"] == "advisory_cue"
+        assert by_id[adv_id]["advisory_only"] is True
+
+    # 2. Core-persisted stride_decision_v2 passes both RPC and direct TS verifier cleanly
+    verified = verify_methodology_operator_output(
+        operator_id="stride_review",
+        output=persisted_decision,
+    )
+    assert verified["valid"] is True, verified
+    assert verified["violations"] == []
+
+    # 3. Any nested/root authority escalation on stride_decision_v2 still fails, and quiet due_obligation stays silent
+    escalated_root = verify_methodology_operator_output(
+        operator_id="stride_review",
+        output={**persisted_decision, "grants_execution_authority": True},
+    )
+    assert escalated_root["valid"] is False
+    assert any("grants_execution_authority" in v for v in escalated_root["violations"])
+
+    escalated_nested = verify_methodology_operator_output(
+        operator_id="stride_review",
+        output={
+            **persisted_decision,
+            "axes": {
+                **persisted_decision["axes"],
+                "work_slice": {
+                    **persisted_decision["axes"]["work_slice"],
+                    "should_run": True,
+                    "nested": {"admin_bypass": True, "grants_execution_authority": True},
+                },
+            },
+        },
+    )
+    assert escalated_nested["valid"] is False
+    assert len(escalated_nested["violations"]) == 3
+
+    repo_root = Path(__file__).resolve().parents[2]
+    ts_script = """
+    import assert from 'node:assert/strict';
+    import {
+      evaluateMethodologyActivation,
+      verifyMethodologyOperatorOutput,
+    } from './loopx/control_plane/capabilities/stage_methodology_operator.ts';
+    const decision = JSON.parse(process.argv[1]);
+    const direct = verifyMethodologyOperatorOutput({operator_id: 'stride_review', output: decision});
+    assert.equal(direct.valid, true);
+    assert.deepEqual(direct.violations, []);
+    assert.deepEqual(
+      evaluateMethodologyActivation({enabled: true, quiet_turn_policy: 'due_obligation_only', due_obligation_active: false}),
+      {active: false, reason: 'quiet_turn'},
+    );
+    """
+    proc = subprocess.run(
+        [
+            "node", "--no-warnings", "--experimental-strip-types", "--input-type=module",
+            "-e", ts_script, json.dumps(persisted_decision),
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
