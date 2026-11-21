@@ -197,6 +197,109 @@ def observe_codex_session_tail(
     }
 
 
+def collect_context_policy_telemetry(
+    runtime_root: Path | None = None,
+    *,
+    goal_id: str | None = None,
+    context_dir: Path | None = None,
+    usage: dict | None = None,
+) -> dict:
+    """Collect {KeepRaw, FoldToReceipt, EpochReset}, prefetch, quiet-turn, and cold/warm KV telemetry."""
+    operator_counts = {"KeepRaw": 0, "FoldToReceipt": 0, "EpochReset": 0}
+    quiet_turn_skips = 0
+    prefetch_latency_ms = 0
+    prefetch_bytes = 0
+    prefetch_bytes_saved = 0
+    round_trips_saved = 0
+    seen_receipts: set[str] = set()
+
+    def _consume_prefetch(entry: object) -> None:
+        nonlocal prefetch_latency_ms, prefetch_bytes, prefetch_bytes_saved, round_trips_saved
+        if not isinstance(entry, dict):
+            return
+        receipt_id = entry.get("receipt_sha256")
+        if isinstance(receipt_id, str) and receipt_id:
+            if receipt_id in seen_receipts:
+                return
+            seen_receipts.add(receipt_id)
+        op = entry.get("operator")
+        if op in operator_counts:
+            operator_counts[op] += 1
+        if isinstance(entry.get("latency_ms"), int) and entry["latency_ms"] >= 0:
+            prefetch_latency_ms += entry["latency_ms"]
+        if isinstance(entry.get("retained_bytes"), int) and entry["retained_bytes"] >= 0:
+            prefetch_bytes += entry["retained_bytes"]
+        if isinstance(entry.get("bytes_saved"), int) and entry["bytes_saved"] >= 0:
+            prefetch_bytes_saved += entry["bytes_saved"]
+        if isinstance(entry.get("round_trips_saved"), int) and entry["round_trips_saved"] >= 0:
+            round_trips_saved += entry["round_trips_saved"]
+
+    def _consume_quiet(entry: object) -> None:
+        nonlocal quiet_turn_skips
+        if isinstance(entry, dict) and entry.get("skipped") is True:
+            quiet_turn_skips += 1
+
+    if runtime_root is not None and goal_id:
+        turns_dir = Path(runtime_root) / "goals" / goal_id / "turns"
+        if turns_dir.is_dir():
+            for path in sorted(turns_dir.glob("*.json")):
+                try:
+                    journal = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                if isinstance(journal, dict):
+                    _consume_prefetch(journal.get("epoch_prefetch"))
+                    _consume_quiet(journal.get("quiet_turn"))
+
+    if context_dir is not None:
+        session_file = Path(context_dir) / "session.json"
+        if session_file.is_file():
+            try:
+                session_data = json.loads(session_file.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                session_data = {}
+            if isinstance(session_data, dict):
+                _consume_prefetch(session_data.get("epoch_prefetch"))
+                _consume_quiet(session_data.get("quiet_turn"))
+
+    cold = {"requests": 0, "uncached_prefix_kv_tokens": 0, "cached_prefix_kv_tokens": 0}
+    warm = {"requests": 0, "uncached_prefix_kv_tokens": 0, "cached_prefix_kv_tokens": 0}
+    if isinstance(usage, dict):
+        coverage = usage.get("request_coverage")
+        requests = coverage.get("requests") if isinstance(coverage, dict) else None
+        if isinstance(requests, list):
+            for req in requests:
+                if not isinstance(req, dict):
+                    continue
+                inp = req.get("input_tokens")
+                cached = req.get("cached_input_tokens")
+                if not isinstance(inp, int) or not isinstance(cached, int) or inp < cached:
+                    continue
+                uncached = inp - cached
+                bucket = cold if (cached == 0 or req.get("cache_regime") == "cold") else warm
+                bucket["requests"] += 1
+                bucket["uncached_prefix_kv_tokens"] += uncached
+                bucket["cached_prefix_kv_tokens"] += cached
+        elif isinstance(usage.get("input_tokens"), int) and isinstance(usage.get("cached_input_tokens"), int):
+            cached = usage["cached_input_tokens"]
+            uncached = max(0, usage["input_tokens"] - cached)
+            bucket = cold if cached == 0 else warm
+            bucket["requests"] = int(usage.get("completed_turns") or 1)
+            bucket["uncached_prefix_kv_tokens"] = uncached
+            bucket["cached_prefix_kv_tokens"] = cached
+
+    return {
+        "schema_version": "loopx_context_policy_telemetry_v0",
+        "operator_counts": operator_counts,
+        "quiet_turn_skips": quiet_turn_skips,
+        "prefetch_latency_ms": prefetch_latency_ms,
+        "prefetch_bytes": prefetch_bytes,
+        "prefetch_bytes_saved": prefetch_bytes_saved,
+        "round_trips_saved": round_trips_saved,
+        "prefix_kv": {"cold": cold, "warm": warm},
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     """Print one bounded observation for an explicitly selected rollout."""
     parser = argparse.ArgumentParser(

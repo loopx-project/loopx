@@ -511,3 +511,76 @@ def restore_context_delivery(
         current=dict(current))
     result = _turn_envelope_result("context_recovery", **source, source_edits=True)
     return _apply_context_projection_changes(source, result)
+
+
+def plan_stage_then_swap_prefetch(
+    *,
+    epoch_prefetch: Any = None,
+) -> dict[str, Any]:
+    """Validate default-off Stage-then-Swap EpochReset prefetch configuration via TS."""
+    return _turn_envelope_result(
+        "stage_then_swap_plan",
+        epoch_prefetch=dict(epoch_prefetch) if isinstance(epoch_prefetch, Mapping) else epoch_prefetch,
+    )
+
+
+def evaluate_epoch_prefetch_swap(
+    *,
+    epoch_prefetch: Mapping[str, Any],
+    context_epoch: str,
+    reclaimed_turns: int = 0,
+    dropped_failures: int = 0,
+    failure_facts: list[str] | tuple[str, ...] = (),
+    open_obligations: list[str] | tuple[str, ...] = (),
+    source_ref: Mapping[str, str] | None = None,
+    exit_code: int | None = None,
+    timed_out: bool = False,
+    truncated: bool = False,
+    raw_bytes_read: int = 0,
+    prefetched_output: str = "",
+    baseline_bytes: int | None = None,
+    latency_ms: int = 0,
+    error_observation: str | None = None,
+) -> dict[str, Any]:
+    """Evaluate bounded prefetch output and anti-whitewashing receipt via TS."""
+    payload: dict[str, Any] = {
+        "epoch_prefetch": dict(epoch_prefetch),
+        "context_epoch": context_epoch,
+        "reclaimed_turns": reclaimed_turns,
+        "dropped_failures": dropped_failures,
+        "failure_facts": list(failure_facts),
+        "open_obligations": list(open_obligations),
+        "source_ref": dict(source_ref) if source_ref is not None else None,
+        "exit_code": exit_code,
+        "timed_out": timed_out,
+        "truncated": truncated,
+        "raw_bytes_read": raw_bytes_read,
+        "prefetched_output": prefetched_output,
+        "baseline_bytes": baseline_bytes,
+        "latency_ms": latency_ms,
+    }
+    if error_observation:
+        payload["error_observation"] = error_observation
+    return _turn_envelope_result("stage_then_swap_evaluate", **payload)
+
+
+def evaluate_quiet_turn(
+    *,
+    enabled: bool = True,
+    quiet_noop_allowed: bool = True,
+    state_changed: bool | None = None,
+    current_state_digest: str | None = None,
+    previous_state_digest: str | None = None,
+) -> dict[str, Any]:
+    """Evaluate Quiet-Turn zero-tax skip metadata via TS."""
+    payload: dict[str, Any] = {
+        "enabled": enabled,
+        "quiet_noop_allowed": quiet_noop_allowed,
+    }
+    if state_changed is not None:
+        payload["state_changed"] = state_changed
+    if current_state_digest is not None:
+        payload["current_state_digest"] = current_state_digest
+    if previous_state_digest is not None:
+        payload["previous_state_digest"] = previous_state_digest
+    return _turn_envelope_result("quiet_turn_evaluate", **payload)

@@ -17,6 +17,10 @@ from .factorial_contrast import (
     build_benchmark_factorial_contrasts,
     build_benchmark_metric_delta,
 )
+from .token_capacity import (
+    CONTEXT_POLICY_EFFORT_TELEMETRY_FIELDS,
+    normalize_operator_counts,
+)
 
 Payload = dict[str, object]
 PayloadView = Mapping[str, object]
@@ -204,25 +208,26 @@ def _countability(value: object) -> dict[str, bool]:
     return result
 
 
-def _effort(value: object) -> dict[str, float | int]:
+def _effort(value: object) -> Payload:
     if value in (None, {}):
         return {}
     if not isinstance(value, Mapping):
         raise TypeError("effort must be an object")
     view = _as_map(value)
+    int_fields = (
+        "duration_ms",
+        "agent_steps",
+        "goal_turns",
+        "token_count",
+        *CONTEXT_POLICY_EFFORT_TELEMETRY_FIELDS,
+    )
     _reject_unknown_fields(
         view,
-        allowed={
-            "duration_ms",
-            "agent_steps",
-            "goal_turns",
-            "token_count",
-            "estimated_cost_usd",
-        },
+        allowed={*int_fields, "estimated_cost_usd", "operator_counts"},
         field="effort",
     )
-    result: dict[str, float | int] = {}
-    for field in ("duration_ms", "agent_steps", "goal_turns", "token_count"):
+    result: Payload = {}
+    for field in int_fields:
         if field in view:
             result[field] = _non_negative_int(view[field], field=f"effort.{field}")
     if "estimated_cost_usd" in view:
@@ -230,6 +235,12 @@ def _effort(value: object) -> dict[str, float | int]:
             view["estimated_cost_usd"],
             field="effort.estimated_cost_usd",
             non_negative=True,
+        )
+    if "operator_counts" in view:
+        result["operator_counts"] = normalize_operator_counts(
+            view["operator_counts"],
+            field="effort.operator_counts",
+            validate_int=lambda v, f: _non_negative_int(v, field=f),
         )
     return result
 

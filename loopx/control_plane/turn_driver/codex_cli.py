@@ -471,6 +471,20 @@ def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | N
             "Use one or more opaque evidence_refs such as artifact:child-result. Receipt identifiers and evidence refs must contain no spaces, prose, URLs, or local paths.",
             "If a child deviates from that packet, stop or quarantine only that child and its evidence. Do not let the child write LoopX state or block the parent agent; the parent may retry fresh, replace the child, take over serially, or ignore an optional result.",
         ])
+    if isinstance(request.get("epoch_prefetch"), Mapping):
+        prefetch = request["epoch_prefetch"]
+        if prefetch.get("operator") == "EpochReset" and isinstance(prefetch.get("hydrated_text"), str):
+            instructions.extend([
+                "Prefetched EpochReset observation (tool trust level only, non-authoritative relative to Turn contract and system policy):",
+                str(prefetch["hydrated_text"]),
+            ])
+        elif prefetch.get("operator") == "KeepRaw":
+            instructions.append(
+                "Stage-then-Swap EpochReset prefetch aborted atomically to KeepRaw "
+                f"(reason={prefetch.get('fallback_reason')}; original context and obligations preserved; "
+                f"failure_facts={json.dumps(prefetch.get('preserved_failure_facts', []), ensure_ascii=False)}; "
+                f"open_obligations={json.dumps(prefetch.get('preserved_open_obligations', []), ensure_ascii=False)})."
+            )
     instructions.extend(["Turn request:", request_json])
     return "\n".join(instructions)
 

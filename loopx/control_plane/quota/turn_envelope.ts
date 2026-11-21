@@ -16,6 +16,11 @@ import {omitUnboundExploreResultWriteback, referenceExploreResultDelivery,
   referenceExploreResultWriteback} from "../capabilities/explore_context_delivery.ts";
 import {prepareContextDelivery, restoreContextDelivery} from "./context_delivery.ts";
 import {updateNativeContextLifecycle} from "./native_context_lifecycle.ts";
+import {
+  evaluateEpochPrefetchSwap,
+  evaluateQuietTurn,
+  planStageThenSwapPrefetch,
+} from "./stage_then_swap.ts";
 import {contextProjectionChanges, contextProjectionIdentity, contextProjectionRetainFields,
   contextSourceIdentity, omitEmptyTaskTodoLanes, projectQuotaDiagnostics, referenceQuotaSummaryLanes, resolveQuotaSummaryLanes,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
@@ -2829,6 +2834,9 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       checkedContextPresentationPlan(request), readyWriteScope(requireJsonObject(request.context, "current projection")));
   }
   if (operation === "native_context_lifecycle") return updateNativeContextLifecycle(request);
+  if (operation === "stage_then_swap_plan") return planStageThenSwapPrefetch(request);
+  if (operation === "stage_then_swap_evaluate") return evaluateEpochPrefetchSwap(request);
+  if (operation === "quiet_turn_evaluate") return evaluateQuietTurn(request);
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
   if (operation === "bind_capture") return bindTurnDecisionCapture(request);
   if (operation === "scoped_settlement_identity") return {identity: turnEnvelopeScopedSettlementIdentity(

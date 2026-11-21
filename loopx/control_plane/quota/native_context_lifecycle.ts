@@ -47,8 +47,14 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
   const invalidate = () => {
     // Reset is idempotent while already invalid. Pre/PostCompact and the
     // subsequent SessionStart(compact) therefore do not rotate three epochs.
-    if (!state.context_epoch || state.candidate || state.pending || fileEpochCurrent)
+    if (!state.context_epoch || state.candidate || state.pending || fileEpochCurrent) {
+      const previousEpoch = state.context_epoch;
       state.context_epoch = requireNonEmptyString(request.new_epoch, "new native context epoch");
+      if (state.context_epoch !== previousEpoch) {
+        delete state.epoch_prefetch;
+        delete state.quiet_turn;
+      }
+    }
     delete state.candidate;
     delete state.pending;
     delete state.active_call; // retire legacy diagnostic-call binding

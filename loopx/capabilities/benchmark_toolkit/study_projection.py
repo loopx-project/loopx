@@ -35,6 +35,7 @@ from .runtime_observation import (
     BENCHMARK_RUNTIME_OBSERVATION_SCHEMA_VERSION,
     build_benchmark_runtime_observation,
 )
+from .token_capacity import aggregate_context_policy_effort
 
 Payload = dict[str, object]
 PayloadView = Mapping[str, object]
@@ -1007,6 +1008,7 @@ def _effort_aggregate(rows: Sequence[PayloadView]) -> Payload:
             "mean": statistics.fmean(values) if values else None,
             "median": statistics.median(values) if values else None,
         }
+    output.update(aggregate_context_policy_effort(rows))
     return output
 
 
