@@ -1081,16 +1081,23 @@ def test_failed_request_readback_distinguishes_contradiction_from_unavailable_hi
     monkeypatch.setattr(session, "_write", write)
     default_proof = failed_request_readback(session, "failed")
     marked_proof = failed_request_readback(session, "failed", include_contradiction=True)
+    detailed_proof = failed_request_readback(
+        session, "failed", include_contradiction=True, contradiction_detail=True,
+    )
     if case == "valid":
         expected = {"thread_id": "original-thread", "turn_id": "failed",
             "only_original_user_item": True, "codex_error_info": "other"}
-        assert default_proof == expected and marked_proof == expected
+        assert default_proof == expected and marked_proof == expected and detailed_proof == expected
     elif case in {"answer", "completed", "active", "policy"}:
         assert default_proof is None
         assert marked_proof == {"contradicted": True}
+        assert detailed_proof == (
+            {"contradicted": True, "in_progress": True} if case == "active" else {"contradicted": True}
+        )
     else:
         assert default_proof is None
         assert marked_proof is None
+        assert detailed_proof is None
 
 
 @pytest.mark.parametrize("newer_state", ["contradicted", "empty"])

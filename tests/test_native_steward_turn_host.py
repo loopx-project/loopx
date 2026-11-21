@@ -1271,3 +1271,96 @@ def test_native_steward_advancement_and_report_run_on_qualified_antigravity_fall
     assert adv_done["response"].get("steward_user_action_receipts")
     assert guards == [("AntigravityAdapter", True), ("AntigravityAdapter", False)]
     assert capture.read_bytes() == before_codex
+
+
+def test_report_failure_proof_lock_and_contradiction_lifecycle(tmp_path):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from loopx.capabilities.native_chat.report_failure_proof import (
+        REPORT_FAILURE_PROOF,
+        contradict_report_failure,
+        is_report_failure_contradicted,
+        read_retained_report_failure,
+        retain_report_failure,
+    )
+    from loopx.capabilities.periodic_report.cadence_journal import admit_cadence_window
+    from loopx.capabilities.periodic_report.private_generation import attempt_directory
+    from loopx.file_lock import exclusive_file_lock
+
+    subscription = {
+        "enabled": True,
+        "profile_preset": "portfolio-progress",
+        "effective_revision": "sha256:" + "1" * 64,
+        "schedule": {
+            "schema_version": "periodic_report_schedule_v0",
+            "schedule_id": "daily-report",
+            "timezone": "UTC",
+            "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+            "start_date": "2026-01-01",
+        },
+    }
+    window = admit_cadence_window(
+        runtime_root=tmp_path,
+        goal_id="goal-1",
+        agent_id="agent-1",
+        subscription=subscription,
+        now=datetime(2026, 1, 2, 10, tzinfo=timezone.utc),
+    )["window"]
+    original = {
+        "origin": "native_loopx",
+        "loopx_execution": True,
+        "status": "completed",
+        "session_id": "sess-1",
+        "turn_id": "chat-turn-1",
+        "upstream_turn_id": "codex-turn-1",
+        "loopx_request": {
+            "actor": {"session_id": "sess-1", "goal_id": "goal-1", "agent_id": "agent-1"},
+            "work_kind": "report",
+            "report_window_id": window["window_id"],
+            "report_subscription_revision": window["subscription_revision"],
+            "turn_instance_id": "report." + window["window_id"],
+        },
+        "response": {
+            "native_loopx": {
+                "status": "failed",
+                "result_kind": "host_failure",
+                "host_failure": {"retryable": False, "kind": "unknown"},
+            }
+        },
+    }
+    store = SimpleNamespace(load_turn=lambda sid, tid: original if (sid, tid) == ("sess-1", "chat-turn-1") else None)
+    folder = attempt_directory(tmp_path, window)
+    folder.mkdir(parents=True)
+    proof_path = folder / REPORT_FAILURE_PROOF
+    valid_proof = {"thread_id": "thread-1", "turn_id": "codex-turn-1", "only_original_user_item": True}
+
+    # Held generation.lock blocks un-locked writes; generation_locked=True writes under caller's held lock.
+    with exclusive_file_lock(folder / "generation.lock", operation="busy"):
+        retain_report_failure(tmp_path, store, original, window, valid_proof)
+        assert not proof_path.exists()
+        retain_report_failure(tmp_path, store, original, window, valid_proof, generation_locked=True)
+        assert read_retained_report_failure(tmp_path, original, window) is True
+        assert is_report_failure_contradicted(tmp_path, original, window) is False
+
+    # Contradiction invalidates the retained proof and cannot be overwritten back by retain_report_failure.
+    with exclusive_file_lock(folder / "generation.lock", operation="busy"):
+        contradict_report_failure(tmp_path, store, original, window, {"contradicted": True, "turn_id": "codex-turn-1"})
+        assert read_retained_report_failure(tmp_path, original, window) is True
+        contradict_report_failure(
+            tmp_path, store, original, window, {"contradicted": True, "turn_id": "codex-turn-1"},
+            generation_locked=True,
+        )
+    assert read_retained_report_failure(tmp_path, original, window) is False
+    assert is_report_failure_contradicted(tmp_path, original, window) is True
+    assert json.loads(proof_path.read_text(encoding="utf-8"))["provider_thread_id"] == "thread-1"
+    retain_report_failure(tmp_path, store, original, window, valid_proof)
+    assert read_retained_report_failure(tmp_path, original, window) is False
+    assert is_report_failure_contradicted(tmp_path, original, window) is True
+
+    # Symlink proof paths are never read or overwritten.
+    proof_path.unlink()
+    proof_path.symlink_to("foreign-target")
+    contradict_report_failure(tmp_path, store, original, window, {"contradicted": True, "turn_id": "codex-turn-1"})
+    assert proof_path.is_symlink()
+    assert read_retained_report_failure(tmp_path, original, window) is False
+    assert is_report_failure_contradicted(tmp_path, original, window) is False

@@ -509,6 +509,7 @@ def failed_request_readback(
     turn_id: str,
     *,
     include_contradiction: bool = False,
+    contradiction_detail: bool = False,
 ) -> dict[str, Any] | None:
     """Observe a historical pre-execution failure without resuming it.
 
@@ -521,8 +522,16 @@ def failed_request_readback(
     """
     deadline = time.monotonic() + session.response_timeout_sec
 
-    def contradicted() -> dict[str, Any] | None:
-        return {"contradicted": True} if include_contradiction else None
+    def contradicted(*, in_progress: bool = False, target_in_progress: bool = False) -> dict[str, Any] | None:
+        if not include_contradiction:
+            return None
+        if contradiction_detail and in_progress:
+            return {
+                "contradicted": True,
+                "in_progress": True,
+                **({"target_in_progress": True} if target_in_progress else {}),
+            }
+        return {"contradicted": True}
 
     def terminal() -> dict[str, Any] | None:
         turns = list(session._control_items("thread/turns/list", {
@@ -531,11 +540,18 @@ def failed_request_readback(
         ids = [item.get("id") for item in turns]
         if not ids:
             return None
-        if (any(not isinstance(value, str) or not value for value in ids)
-                or len(set(ids)) != len(ids)
-                or any(item.get("status") not in {"completed", "failed", "interrupted"} for item in turns)):
+        if any(not isinstance(value, str) or not value for value in ids) or len(set(ids)) != len(ids):
             return contradicted()
         selected = next((item for item in turns if item["id"] == turn_id), None)
+        if any(item.get("status") not in {"completed", "failed", "interrupted"} for item in turns):
+            if selected and selected.get("status") == "completed":
+                return contradicted()
+            return contradicted(
+                in_progress=True,
+                target_in_progress=bool(
+                    selected and selected.get("status") not in {"completed", "failed", "interrupted"}
+                ),
+            )
         if not selected:
             return None
         if selected.get("status") == "interrupted" and selected.get("error") is None and ids[0] == turn_id:
@@ -886,7 +902,8 @@ class CodexAppServerAdapter:
                                    model_auth_home: Path | None = None,
                                    runtime_root: Path | None = None,
                                    consumer: str = "worker",
-                                   include_contradiction: bool = False) -> dict[str, Any] | None:
+                                   include_contradiction: bool = False,
+                                   contradiction_detail: bool = False) -> dict[str, Any] | None:
         """Read persisted native metadata/items; create no native conversation.
 
         The initialized stdio client is not a listener or a model runner. It
@@ -920,10 +937,25 @@ class CodexAppServerAdapter:
                 elif read_only_review:
                     proof = interrupted_result_readback(native, turn_id)
                 else:
-                    proof = failed_request_readback(native, turn_id, include_contradiction=include_contradiction)
+                    proof = failed_request_readback(
+                        native,
+                        turn_id,
+                        include_contradiction=include_contradiction,
+                        contradiction_detail=contradiction_detail,
+                    )
                 if proof is not None:
                     if proof.get("contradicted") is True:
-                        return {"contradicted": True, "thread_id": thread_id, "turn_id": turn_id}
+                        contradiction: dict[str, Any] = {
+                            "contradicted": True,
+                            "thread_id": thread_id,
+                            "turn_id": turn_id,
+                        }
+                        if contradiction_detail:
+                            if proof.get("in_progress") is True:
+                                contradiction["in_progress"] = True
+                            if proof.get("target_in_progress") is True:
+                                contradiction["target_in_progress"] = True
+                        return contradiction
                     if proof.get("codex_error_info") == "usageLimitExceeded":
                         # Reuse the optional provider's TS availability owner;
                         #  Absence fails closed.

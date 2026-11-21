@@ -740,8 +740,10 @@ report attempt records that observation under its generation lock. The record
 binds the original Chat and Codex Turns, the report window and subscription
 revision, and the original native result digest. A later independent period
 queries live Codex history first after the existing journal, generation and
-delivery checks pass: readable counter-evidence holds the original window even
-if a retained proof exists, and the retained proof is used only when Codex
+delivery checks pass: readable counter-evidence durably invalidates that Turn's
+retained proof under the generation lock and holds the original window across
+subsequent history outages unless fresh same-Turn evidence explains the
+contradiction, and an un-contradicted retained proof is used only when Codex
 history is unavailable. Quota continuation for the original period still
 requires a live observation. Missing or mismatched evidence still leaves a
 window held when the original failure cannot be verified.

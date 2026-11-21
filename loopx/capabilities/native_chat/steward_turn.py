@@ -12,11 +12,9 @@ from contextlib import contextmanager, ExitStack, nullcontext
 from datetime import datetime, timezone
 import hashlib
 import json
-import logging
 from pathlib import Path
 import re
 import shlex
-import subprocess
 import time
 from typing import Any
 
@@ -25,9 +23,14 @@ from ...control_plane.goals.activation import goal_is_stopped
 from ...control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
 from ...file_lock import exclusive_file_lock
 from .report_failure_proof import (
+    is_report_failure_contradicted,
+    probe_report_failure,
     read_retained_report_failure,
     report_failure_binding,
+    resolve_report_quota_observation,
     retain_report_failure,
+    valid_report_failure_proof,
+    verify_report_window_failure,
 )
 from .steward_managed_mode import ManagedSessionTurn, ManagedTaskValidationUnavailable, StewardManagedMode
 
@@ -68,9 +71,6 @@ def _same_report_validator_command(frozen_cmd: Any, request_cmd: Any) -> bool:
         and frozen_cmd[1] == "-c" and request_cmd[1] == "-c"
         and frozen_cmd[2] == request_cmd[2] and frozen_cmd[2].startswith(_REPORT_VALIDATOR_PREFIX)
         and frozen_cmd[2].endswith("))"))
-
-
-_LOG = logging.getLogger(__name__)
 
 
 def native_steward_client_id(actor: Mapping[str, Any], turn_instance_id: str) -> str:
@@ -464,55 +464,20 @@ class StewardTurnHost:
 
     def _report_failure_probe(
         self, original: Mapping[str, Any], *, include_contradiction: bool = False,
+        contradiction_detail: bool = False, swallow_probe_errors: bool | None = None,
     ) -> tuple[list[str], dict[str, Any] | None] | None:
-        result = (original.get("response") or {}).get("native_loopx") or {}
-        request = original.get("loopx_request") or {}
-        upstream_turn_id = original.get("upstream_turn_id")
-        if (original.get("status") != "completed" or request.get("work_kind") != "report"
-                or result.get("result_kind") != "host_failure" or not upstream_turn_id):
-            return None
-        from ...chat_agent import CodexChatAgentError
-        from .codex_adapter import CodexAppServerAdapter
-        from .codex_context import checked_session_home
-        session = self.store.load_session(original["session_id"])
-        if not session:
-            return None
-        if isinstance(upstream_turn_id, str) and upstream_turn_id.startswith("agy_turn_"):
-            return None
-        if not session.get("codex_home") or not session.get("upstream_thread_id"):
-            return None
-        history = session.get("upstream_context_history") or []
-        if not isinstance(history, list) or any(not isinstance(item, dict)
-                or not isinstance(item.get("thread_id"), str) or not item["thread_id"]
-                for item in history):
-            return None
-        # Context replacement retains native provenance on this same Session.
-        # Read the original refusal there; exclude non-Codex cascades.
-        raw_threads = [
-            *([session["upstream_thread_id"]] if session.get("agent_id") != "antigravity" else []),
-            *(item["thread_id"] for item in reversed(history) if item.get("agent_id") != "antigravity"),
-        ]
-        threads = list(dict.fromkeys(raw_threads))
-        if not threads:
-            return None
-        try:
-            proof = CodexAppServerAdapter.failed_request_observation(codex_bin=self.controller.codex_bin,
-                codex_home=Path(session["codex_home"]), thread_ids=threads,
-                model_auth_home=checked_session_home(self.controller.codex_home, session),
-                turn_id=upstream_turn_id, include_contradiction=include_contradiction)
-        except (CodexChatAgentError, OSError, ValueError, RuntimeError, subprocess.SubprocessError):
-            if not include_contradiction:
-                return None
-            proof = None
-        return threads, proof
+        return probe_report_failure(
+            self.controller, self.store, original,
+            include_contradiction=include_contradiction,
+            contradiction_detail=contradiction_detail,
+            swallow_probe_errors=swallow_probe_errors,
+        )
 
     @staticmethod
     def _valid_report_failure_proof(
         original: Mapping[str, Any], threads: Sequence[str], proof: Mapping[str, Any] | None,
     ) -> bool:
-        return (isinstance(proof, Mapping) and proof.get("contradicted") is not True
-            and proof.get("turn_id") == original["upstream_turn_id"] and proof.get("thread_id") in threads
-            and proof.get("only_original_user_item") is True and bool(proof.get("codex_error_info")))
+        return valid_report_failure_proof(original, threads, proof)
 
     def report_failure_observation(self, original: Mapping[str, Any]) -> dict[str, Any] | None:
         """Read the original native failure without starting or resuming work."""
@@ -559,18 +524,14 @@ class StewardTurnHost:
         threads, proof = probed
         return proof if self._valid_report_failure_proof(original, threads, proof) else None
 
-    def report_window_failure_verified(self, original: Mapping[str, Any], window: dict[str, Any]) -> bool:
+    def report_window_failure_verified(
+        self, original: Mapping[str, Any], window: dict[str, Any], *, generation_locked: bool = False,
+    ) -> bool:
         """Query live provider history first; fall back to retained proof only if unavailable."""
-        probed = self._report_failure_probe(original, include_contradiction=True)
-        if probed is None:
-            return False
-        threads, proof = probed
-        if proof is not None:
-            if proof.get("contradicted") is True or not self._valid_report_failure_proof(original, threads, proof):
-                return False
-            self._try_retain_report_failure(original, window, proof)
-            return True
-        return self.retained_report_failure_observation(original, window)
+        return verify_report_window_failure(
+            self.controller, self.store, original, window,
+            probe_fn=self._report_failure_probe, generation_locked=generation_locked,
+        )
 
     @staticmethod
     def _report_failure_binding(original: Mapping[str, Any], window: dict[str, Any]) -> dict[str, str] | None:
@@ -580,16 +541,16 @@ class StewardTurnHost:
         """Scope retained provider evidence to the same failure and cadence window."""
         return read_retained_report_failure(self.controller.coordination_runtime_root, original, window)
 
-    def _retain_report_failure_observation(self, original: Mapping[str, Any], window: dict[str, Any],
-                                           proof: Mapping[str, Any]) -> None:
-        retain_report_failure(self.controller.coordination_runtime_root, self.store, original, window, proof)
+    def report_failure_contradicted(self, original: Mapping[str, Any], window: dict[str, Any]) -> bool:
+        """Return True when a prior live observation contradicted this Turn's failure proof."""
+        return is_report_failure_contradicted(self.controller.coordination_runtime_root, original, window)
 
-    def _try_retain_report_failure(self, original: Mapping[str, Any], window: dict[str, Any],
-                                   proof: Mapping[str, Any]) -> None:
-        try:
-            self._retain_report_failure_observation(original, window, proof)
-        except (OSError, ValueError, TypeError, KeyError):
-            _LOG.warning("An original report's terminal failure proof could not be retained")
+    def _retain_report_failure_observation(self, original: Mapping[str, Any], window: dict[str, Any],
+                                           proof: Mapping[str, Any], *, generation_locked: bool = False) -> None:
+        retain_report_failure(
+            self.controller.coordination_runtime_root, self.store, original, window, proof,
+            generation_locked=generation_locked,
+        )
 
     def report_quota_request(self, original: Mapping[str, Any], *,
                              report_window: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -597,9 +558,12 @@ class StewardTurnHost:
         request = original.get("loopx_request") or {}
         if request.get("report_quota_recovery") is not None or request.get("report_timeout_recovery") is not None:
             return None
-        proof = self.report_failure_observation(original)
-        if proof is not None and report_window is not None:
-            self._try_retain_report_failure(original, report_window, proof)
+        direct_probe = getattr(self.report_failure_observation, "__func__", None) is _DEFAULT_REPORT_FAILURE_OBSERVATION
+        proof = resolve_report_quota_observation(
+            self.controller, self.store, original, report_window=report_window,
+            probe_fn=self._report_failure_probe if direct_probe else None,
+            fallback_observe_fn=None if direct_probe else self.report_failure_observation,
+        )
         if (not proof or proof.get("only_original_user_item") is not True
                 or proof.get("codex_error_info") != "usageLimitExceeded" or proof.get("quota_available") is not True):
             return None
@@ -2045,3 +2009,6 @@ class StewardTurnHost:
             **({"context_handoff": committed_handoff} if committed_handoff else {}),
             **({"steward_owner_report_queued": True} if owner_report else {}),
             **({"steward_user_action_receipts": user_action_receipts} if user_action_receipts else {})}
+
+
+_DEFAULT_REPORT_FAILURE_OBSERVATION = StewardTurnHost.report_failure_observation

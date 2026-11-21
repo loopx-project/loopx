@@ -135,7 +135,9 @@ class StewardReports:
             and (turn.get("status") in {"failed", "interrupted", "timed_out"}
                 or native.get("status") == "failed"))
 
-    def _failed_without_generation(self, actor: dict[str, Any], window: dict[str, Any]) -> bool:
+    def _failed_without_generation(
+        self, actor: dict[str, Any], window: dict[str, Any], *, generation_locked: bool = False,
+    ) -> bool:
         """Read a terminal report failure under the original execution fence.
 
         The cadence owner holds the generation fence. This proves only that
@@ -208,7 +210,9 @@ class StewardReports:
                 inspection = interpret_turn_journal_projection(journal, goal_id=goal_id, agent_id=agent_id, turn_key=key)
                 return (inspection.get("journal_consistent") is True
                     and inspection.get("completed_phases") == []
-                    and StewardTurnHost(self.controller).report_window_failure_verified(turn, window))
+                    and StewardTurnHost(self.controller).report_window_failure_verified(
+                        turn, window, generation_locked=generation_locked,
+                    ))
 
     def _cancel_failed_window(self, actor: dict[str, Any], window: dict[str, Any],
                               failure: dict[str, str], *, cadence_locked: bool = False) -> None:
@@ -407,7 +411,9 @@ class StewardReports:
         admitted = admit_cadence_window(runtime_root=self.root, goal_id=actor["goal_id"],
             agent_id=actor["agent_id"], subscription=subscription, now=datetime.now(timezone.utc),
             subscription_resolver=lambda: self.subscription(owner_key, expected_actor=actor),
-            can_replace_failed_window=lambda window: self._failed_without_generation(actor, window))
+            can_replace_failed_window=lambda window: self._failed_without_generation(
+                actor, window, generation_locked=True,
+            ))
         if admitted["status"] != "pending":
             return None, False
         window = admitted["window"]
