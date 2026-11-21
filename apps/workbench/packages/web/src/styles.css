@@ -24,8 +24,6 @@
   /* The top bar on a wide screen: frosted, but far less see-through than the phone's bands. */
   --glass-bar: 80%;
   --glass-bar-blur: 14px;
-  /* On a wide screen the composer's own soft shadow does the same job, following its round corners. */
-  --glass-halo: 0 10px 40px rgba(31, 30, 28, 0.11), 0 2px 8px rgba(31, 30, 28, 0.05);
   --thread-peek-width: min(560px, 44vw);
   --z-thread-peek: 40;
   --z-desk-spread: 44;
@@ -194,7 +192,6 @@
     --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 20px rgba(0, 0, 0, 0.25);
     --glass-rim: inset 0 0 0 1px rgba(255, 255, 255, 0.066), inset 0 1px 1px rgba(255, 255, 255, 0.12);
     --glass-lift: 0 2px 10px rgba(0, 0, 0, 0.2);
-    --glass-halo: 0 10px 40px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
     color-scheme: dark;
   }
 }
@@ -257,7 +254,6 @@
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 20px rgba(0, 0, 0, 0.25);
   --glass-rim: inset 0 0 0 1px rgba(255, 255, 255, 0.066), inset 0 1px 1px rgba(255, 255, 255, 0.12);
   --glass-lift: 0 2px 10px rgba(0, 0, 0, 0.2);
-  --glass-halo: 0 10px 40px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
   color-scheme: dark;
 }
 
@@ -2370,8 +2366,9 @@ html.list-open body {
   flex-direction: column;
   border: 1px solid var(--border);
   border-radius: 22px;
-  background: var(--surface);
-  box-shadow: var(--shadow-card);
+  position: relative;
+  background: var(--bg);
+  box-shadow: none;
 }
 
 /* Which agent and directory: a quiet strip on top of the card. */
@@ -2383,7 +2380,7 @@ html.list-open body {
   padding: 4px 10px;
   border-bottom: 1px solid var(--border);
   border-radius: 22px 22px 0 0;
-  background: var(--surface-2);
+  background: transparent;
   font-size: 13px;
 }
 
@@ -7263,7 +7260,8 @@ div.file-card:hover { background: var(--surface); }
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 8px 10px 0;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
 }
 
 .queue-item {
@@ -7273,7 +7271,7 @@ div.file-card:hover { background: var(--surface); }
   min-height: 34px;
   padding: 0 4px 0 8px;
   border-radius: var(--radius-sm);
-  background: var(--surface-2);
+  background: transparent;
   font-size: 13.5px;
 }
 
@@ -14727,12 +14725,11 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
 .command-menu, .coord-mention-menu, .action-sheet-card { border: 1px solid transparent; background: var(--glass-lighting), var(--glass-bg); box-shadow: var(--glass-pop-shadow); -webkit-backdrop-filter: var(--glass-filter); backdrop-filter: var(--glass-filter); }
 /* Single-line fields share the buttons' pill, so a row of controls reads as one family. */
 .field input, .field-inline input, .auto-setting-line input, .personal-setting-line input, .general-select { border-radius: var(--radius-pill); padding-inline: 16px; }
-.glass-control, .topbar .menu-btn, .topbar-actions, .composer-box { border: 1px solid transparent; background: var(--glass-lighting), var(--glass-bg); box-shadow: var(--glass-shadow); -webkit-backdrop-filter: var(--glass-filter); backdrop-filter: var(--glass-filter); }
+.glass-control, .topbar .menu-btn, .topbar-actions { border: 1px solid transparent; background: var(--glass-lighting), var(--glass-bg); box-shadow: var(--glass-shadow); -webkit-backdrop-filter: var(--glass-filter); backdrop-filter: var(--glass-filter); }
 .glass-control { border-radius: var(--radius-pill); }
 .topbar-actions { border-radius: var(--radius-pill); padding: 2px 4px; }
 @media (max-width: 899.98px) { .topbar-actions { padding: 0 2px; } }
 .topbar-actions .icon-btn { background: transparent; border: 0; box-shadow: none; }
-.composer-box { position: relative; }
 
 /* Glass needs a backdrop: the scroller spans the chrome, while its padding keeps the first
    and last lines clear at rest. No extra rounded container is drawn around the top bar. */
@@ -14773,7 +14770,7 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
    it): a notice or the read-only handover note stacked over the box takes no part. The slot's children
    sit above both layers, and a menu opening upward from the box still covers what is above it. The wide
    screen draws neither: a band there reads as a grey bar with square corners around a round box, so the
-   box gets a soft shadow of its own instead. */
+   opaque field keeps its own hairline boundary instead. */
 .main:has(> .composer-slot) { --composer-clear: 48px; }
 .composer-slot > :not(.action-sheet) { position: relative; z-index: 1; }
 .composer-slot::before, .composer-slot::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: calc(var(--chat-composer-h, 0px) + 40px); pointer-events: none; }
@@ -14792,7 +14789,6 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
 }
 @media (min-width: 900px) {
   .composer-slot::before, .composer-slot::after { display: none; }
-  .composer-box { box-shadow: var(--glass-rim), var(--glass-halo); }
 }
 /* The docked selection menu hides the box but not the slot, which stays as tall as the box with its
    notes: the edge would wash a bare stretch of the thread above the menu. The menu is glass itself. */
@@ -14833,21 +14829,20 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
   .menu-float { min-width: min(280px, calc(100vw - 24px)); }
 }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .glass-control, .topbar .menu-btn, .topbar-actions, .composer-box, .menu-panel, .pop-panel.anchored-pop, .selection-menu, .settings-actions, .round-btn, .jump-btn, .pet-summon, .command-menu, .coord-mention-menu, .action-sheet-card { background: var(--surface); }
+  .glass-control, .topbar .menu-btn, .topbar-actions, .menu-panel, .pop-panel.anchored-pop, .selection-menu, .settings-actions, .round-btn, .jump-btn, .pet-summon, .command-menu, .coord-mention-menu, .action-sheet-card { background: var(--surface); }
   .main:has(> .composer-slot) > .topbar::before { display: none; }
   .main:has(> .composer-slot) > .topbar::after { background: linear-gradient(var(--bg) calc(100% - 30px), transparent); }
   .composer-slot::before { display: none; }
   .composer-slot::after { background: linear-gradient(transparent, var(--bg) 40px); }
 }
 @media (prefers-reduced-transparency: reduce) {
-  .glass-control, .topbar .menu-btn, .topbar-actions, .composer-box, .menu-panel, .pop-panel.anchored-pop, .selection-menu, .settings-actions, .round-btn, .jump-btn, .pet-summon, .command-menu, .coord-mention-menu, .action-sheet-card { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .glass-control, .topbar .menu-btn, .topbar-actions, .menu-panel, .pop-panel.anchored-pop, .selection-menu, .settings-actions, .round-btn, .jump-btn, .pet-summon, .command-menu, .coord-mention-menu, .action-sheet-card { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
   .main:has(> .composer-slot) > .topbar::before { display: none; }
   .main:has(> .composer-slot) > .topbar::after { background: linear-gradient(var(--bg) calc(100% - 30px), transparent); -webkit-backdrop-filter: none; backdrop-filter: none; }
   .composer-slot::before { display: none; }
   .composer-slot::after { background: linear-gradient(transparent, var(--bg) 40px); }
 }
-/* A wide screen draws the composer solid: an opaque card with its soft halo, and the conversation
-   ends above it instead of sliding under a translucent box. With no status area above it, the top bar
+/* On a wide screen the conversation ends above the opaque input field. With no status area above it, the top bar
    is frosted across its whole row: mostly the page's colour over a strong blur, so what scrolls
    under it shows only as a soft shadow and never runs into the title, fading out below the row. */
 @media (min-width: 900px) {
@@ -14859,7 +14854,6 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
     padding-bottom: var(--composer-clear);
     scroll-padding-bottom: var(--composer-clear);
   }
-  .composer-box { background: var(--surface); border-color: var(--border); box-shadow: var(--glass-halo); -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
 @media (min-width: 900px) and (prefers-reduced-transparency: reduce) {
   .main:has(> .composer-slot) > .topbar::after { background: var(--bg); }
