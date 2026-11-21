@@ -332,7 +332,9 @@ def _hard_lease_execution_bound(
         and current_proof is not None
         and current_proof.get("idempotency_key") == requested_proof.get("idempotency_key")
         and isinstance(current_proof.get("expected_version"), int)
+        and not isinstance(current_proof.get("expected_version"), bool)
         and isinstance(requested_proof.get("expected_version"), int)
+        and not isinstance(requested_proof.get("expected_version"), bool)
         and current_proof["expected_version"] >= requested_proof["expected_version"]
     ):
         proof = current_proof

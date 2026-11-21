@@ -217,10 +217,18 @@ def test_failed_capture_discloses_the_already_recorded_poll(
     runtime, registry, count, _ = _worker_fixture(tmp_path, monkeypatch, provider)
     original_capture = quota_capture.capture_decision
 
-    def failed_publication(directory, payload, *, args, native_context):
+    replace_calls = 0
+
+    def failed_publication(directory, payload, *, args, native_context, record_capture=None):
+        nonlocal replace_calls
         # Only the capture publisher fails; admission and receipt IO are real.
-        with patch.object(quota_capture.os, "replace", side_effect=OSError("synthetic capture outage")):
-            original_capture(directory, payload, args=args, native_context=native_context)
+        with patch.object(quota_capture.os, "replace", side_effect=OSError("synthetic capture outage")) as mocked_replace:
+            try:
+                return original_capture(
+                    directory, payload, args=args, native_context=native_context, record_capture=record_capture,
+                )
+            finally:
+                replace_calls += mocked_replace.call_count
 
     monkeypatch.setattr(quota_capture, "capture_decision", failed_publication)
     monkeypatch.setattr(quota_result_delivery, "capture_decision", failed_publication)
@@ -232,7 +240,9 @@ def test_failed_capture_discloses_the_already_recorded_poll(
                  "--record-host-poll", "--decision-output-dir", str(capture),
                  "--context-delivery", "off"])
     failed = json.loads(capsys.readouterr().out)
+    assert replace_calls == 1
     assert code == 1 and failed["status"] == "decision_transport_failed"
+    assert "error_class" not in failed and "Decision capture failed" in failed["reason"]
     assert failed["should_run"] is False and "captured_decision" not in failed
     assert failed["heartbeat_receipt"]["turn_instance_id"] == "capture-failure"
     receipt = receipt_path_for_goal({"id": GOAL}, tmp_path / "project" / "ACTIVE_GOAL_STATE.md")
