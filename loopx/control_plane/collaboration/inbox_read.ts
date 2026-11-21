@@ -13,7 +13,7 @@ import {jsonObject, requireJsonObject, requireNonEmptyString, requireStringLiter
 import {decideCollaborationLifecycle} from "./goal_instance_lifecycle.ts";
 import {inspectCollaborationInboxReceipts, projectReceiverFollowthrough} from "./inbox_receipts.ts";
 import {recordControlledRequestRead} from "./request_control.ts";
-import {planCollaborationResult} from "./result_publication.ts";
+import {planCollaborationResult, returnMessageId} from "./result_publication.ts";
 import {CONVERSATION_ENTRY_SCHEMA, normalizeOriginalConversationRecipient, verifyOriginalConversationReturnRoute} from "./semantic_request.ts";
 import {projectDelegationTurnContext, projectDelegationTurnItem, projectDelegationTurnItems} from "./turn_context.ts";
 import {isNativeChildResultCursor, nativeChildResultInbox} from "../capabilities/native_child_result_inbox.ts";
@@ -362,14 +362,19 @@ function replyStatuses(root: string, row: JsonObject): JsonObject[] {
         || error !== null && (typeof error !== "string" || !DELIVERY_ERRORS.has(error))) {
       status = "explicit_unverified"; error = "delivery_state_unreadable";
     }
+    if (status === "delivered" && phase === "conclusion" && row.source_kind !== "peer"
+        && state.message_id !== returnMessageId(requestId(row.request_id), key)) {
+      return {...identity, status: "explicit_unverified", created_at: reply.created_at ?? null,
+        delivered_at: null, error: "manager_return_payload_conflict"};
+    }
     return {...identity, status, created_at: reply.created_at ?? null,
       delivered_at: typeof state.delivered_at === "string" && [...state.delivered_at].length <= 80 ? state.delivered_at : null,
       error, ...(state.verification === "reconciled_after_restart" ? {verification: state.verification} : {})};
   });
 }
-function agendaResults(root: string, row: JsonObject): JsonObject[] {
+function agendaResults(root: string, row: JsonObject, returns = replyStatuses(root, row)): JsonObject[] {
   const folder = join(root, "replies", requestId(row.request_id));
-  const statuses = new Map(replyStatuses(root, row).map(status => [status.result_key ?? status.phase, status.status]));
+  const statuses = new Map(returns.map(status => [status.result_key ?? status.phase, status.status]));
   const replies = resultKeys(folder).map(key => ({key, reply: readRecord(join(folder, key + ".json"))}));
   // Reuse immutable request-local observations; each result still goes through
   // the publication validator and its current delivery/consumption readback.
@@ -545,15 +550,23 @@ export async function readCollaborationInbox(params: JsonObject): Promise<JsonOb
     const rows = params.rows.map(row => requireJsonObject(row, "inbox request"));
     const items = rows.map(row => receiptState(root, row));
     if (params.include_agenda !== true) return {items};
-    return {items, agenda_items: rows.map((request, index) => {
+    const returnItems: JsonObject[][] = [];
+    const agendaItems = rows.map((request, index) => {
       const links = linksReceipt(root, request);
-      let results: JsonObject[] = [], unavailable = links.unavailable;
-      try { results = agendaResults(root, request); }
-      catch (error) { if (!recordFailure(error)) throw error; unavailable = true; }
+      let returns: JsonObject[] = [], results: JsonObject[] = [], unavailable = links.unavailable;
+      try {
+        returns = replyStatuses(root, request);
+        results = agendaResults(root, request, returns);
+      } catch (error) {
+        if (!recordFailure(error)) throw error;
+        unavailable = true;
+      }
+      returnItems.push(returns);
       return projectDelegationTurnItem({direction: "outgoing", request: {...request,
         purpose: jsonObject(request.brief)?.purpose ?? ""}, receipt: items[index],
       todo_ids: links.value.todo_ids ?? [], evidence_unavailable: unavailable, results});
-    })};
+    });
+    return {items, agenda_items: agendaItems, return_items: returnItems};
   }
   const scope = requireJsonObject(params.scope, "Goal scope");
   const conversation = scope.profile_id === "original_conversation_v0";

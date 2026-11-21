@@ -228,6 +228,67 @@ def test_read_and_adoption_still_owe_conclusion_and_queued_return_stays_visible(
     assert historical["rows"][0]["request_id"] == rid and not historical["rows"][0]["unfinished"]
 
 
+
+def test_terminal_return_with_wrong_message_stays_unfinished_on_both_surfaces(api, capsys):
+    import json
+
+    from loopx.cli import main
+
+    _, _, route = _source(api)
+    _, fixture, server = api
+    request_id = route["request_id"]
+    root = _root(fixture["runtime"])
+    session_id = route["session_id"]
+    acknowledge(fixture["runtime"], route["goal_id"], route["agent_id"], request_id,
+                "adopt", "Check the requested artifact", registry=fixture["registry"], caller_goal_ref=fixture["ref"])
+    report(fixture["runtime"], route["goal_id"], route["agent_id"], request_id,
+           "conclusion", "The requested artifact passed.", registry=fixture["registry"], caller_goal_ref=fixture["ref"])
+    drain(fixture["runtime"], fixture["registry"], server.chat_store,
+          lambda *_: pytest.fail("a local return must not use an external sender"))
+
+    def cli_agenda():
+        capsys.readouterr()
+        code = main(["--registry", str(fixture["registry"]), "--runtime-root", str(fixture["runtime"]),
+                     "--format", "json", "manager-inbox", "read", "--goal-id", route["goal_id"],
+                     "--agent-id", route["agent_id"]])
+        assert code == 0
+        return json.loads(capsys.readouterr().out)["unfinished_delegations"]["items"]
+
+    receipt = root / "replies" / request_id / "conclusion.delivery.json"
+    original = receipt.read_bytes()
+    confirmed = _inventory(api, session_id, view="history")[1]
+    assert confirmed["pending_count"] == 0 and confirmed["rows"][0]["returns"][0]["status"] == "delivered"
+    assert cli_agenda() == []
+
+    message_id = json.loads(original)["message_id"]
+    messages = server.chat_store.messages(session_id)
+    assert next(row for row in messages if row["message_id"] == message_id)["turn_id"] == route["turn_id"]
+    turn, _ = server.chat_store.create_turn(session_id, client_turn_id="other-return",
+                                             message="Another original conversation Turn", origin="web")
+    unrelated = server.chat_store.append_message(session_id, role="assistant", text="Another result",
+                                                  turn_id=turn["turn_id"], origin="manager_followup")
+    assert unrelated["message_id"] != message_id
+    for corrupted in ({"message_id": unrelated["message_id"]}, {}):
+        incorrect = {key: value for key, value in json.loads(original).items() if key != "message_id"}
+        receipt.write_text(json.dumps({**incorrect, **corrupted}))
+        unchanged = receipt.read_bytes()
+        http, pending = _inventory(api, session_id)
+        assert http == 200 and pending["pending_count"] == 1
+        row, = pending["rows"]
+        assert row["request_id"] == request_id
+        assert row["returns"][0]["status"] == "explicit_unverified"
+        assert row["returns"][0]["error"] == "manager_return_payload_conflict"
+        agenda, = cli_agenda()
+        assert agenda["request_id"] == request_id and agenda["step"] == "await_return_delivery"
+        assert agenda["returns"][0]["status"] == "explicit_unverified"
+        assert receipt.read_bytes() == unchanged
+    receipt.write_bytes(original)
+    assert cli_agenda() == []
+    restored = _inventory(api, session_id, view="history")[1]
+    assert restored["snapshot_digest"] == confirmed["snapshot_digest"]
+    assert restored["rows"] == confirmed["rows"]
+
+
 def test_revision_and_cancellation_reuse_current_control_and_preserve_history(api):
     control, _, route = _source(api)
     current = control()[1]["view"]
